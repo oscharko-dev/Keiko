@@ -68,9 +68,7 @@ const BODY = `
     <input class="dlg-input" placeholder="placeholder" />
     <input class="dlg-input" aria-invalid="true" placeholder="error" />
     <textarea class="dlg-input dlg-textarea" placeholder="ph"></textarea>
-    <div class="dlg-current-file"><span class="mono">file.ts</span></div>
     <div class="dlg-error">error text</div>
-    <div class="dlg-agent-warning">warning</div>
   </div>
   <div class="dlg-foot">
     <button class="dlg-btn">Cancel</button>
@@ -314,7 +312,6 @@ const PROBES = [
   [".attach-rejection-alert", ["color", "backgroundColor"]],
   [".source-limit-alert", ["color", "backgroundColor"]],
   [".dlg-error", ["color"]],
-  [".dlg-agent-warning", ["color"]],
   [".wf-dialog-error", ["color", "backgroundColor"]],
   // tree rows / cmdk
   [".tr-row", ["color"]],

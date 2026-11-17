@@ -1995,7 +1995,6 @@ describe("hybrid grounded ask — HTML-manual citation metadata projection", () 
     // The opaque `open.target` handle is a base64 lineage-id token — it must never embed the raw
     // manual origin/path in plaintext, unlike `targetSummary.originSummary`, which is a SEPARATE,
     // intentionally safe field that legitimately carries the bare origin for citation-label display
-    // (see docs-browser.test.ts:346, where the same origin string is an expected wire value).
     // mutation: dropping the classification/redaction step would leak the raw origin into `target`.
     const open = manualCitation?.htmlManual?.open;
     const target = open?.state === "available" ? open.target : "";

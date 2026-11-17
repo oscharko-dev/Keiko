@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "84b17bca0cebce399d6334bd6a79c112d60d0328907999c617f194a5059d8dc7"
+    "catalogDigest": "6509174c5fc0196166e671ad0b597d608b2f6d60ab091e915a45e0887afbddd2"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 708,
-    "proofCount": 731,
-    "resolvedProofCount": 731,
-    "failureClassCount": 404,
+    "operationCount": 709,
+    "proofCount": 732,
+    "resolvedProofCount": 732,
+    "failureClassCount": 405,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -613,6 +613,7 @@
         "indexing.start.accepted",
         "indexing.start.refused",
         "knowledge.citation.editor-target",
+        "knowledge.citation.manual-check",
         "knowledge.documents.operation",
         "knowledge.log.sink-failed",
         "knowledge.requirement-trace.applied",
@@ -903,6 +904,7 @@
   ],
   "failureClassScenarios": {
     "knowledge-citation-editor-target": ["memory-knowledge.dependency-failure"],
+    "knowledge-citation-manual-check": ["memory-knowledge.dependency-failure"],
     "mcp-authorization": ["tools-workflows.dependency-failure"],
     "chat-tool-transcript": ["bff.dependency-failure"],
     "chat-tool-authority": ["editor-delivery.dependency-failure"],
@@ -2829,6 +2831,9 @@
     ],
     "knowledge.citation.editor-target.line": [
       "packages/keiko-server/src/knowledge-citation-editor-activity.test.ts"
+    ],
+    "knowledge.citation.manual-check.line": [
+      "packages/keiko-server/src/html-manual-citation-route.test.ts"
     ],
     "knowledge.documents.operation.line": [
       "packages/keiko-server/src/chat-tool-turn-coverage.test.ts",

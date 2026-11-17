@@ -13,7 +13,6 @@ import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { Footer } from "./Footer";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import { pickChatModelId, resolveSelectedModelId, useChatSession } from "./hooks/useChatSession";
-import { chooseDefaultModel } from "./modals/NewWindowDialog";
 import * as api from "@/lib/api";
 import { isConversationEligibleModel } from "@/lib/types";
 import type { Chat, ChatResponse, ModelCapability } from "@/lib/types";
@@ -247,23 +246,6 @@ describe("resolveSelectedModelId tri-state readiness", () => {
     expect(
       resolveSelectedModelId("cold-chat", [unreadyModel("cold-chat"), chatModel("qwen-chat")]),
     ).toBe("qwen-chat");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// AC #4 — chooseDefaultModel (NewWindowDialog)
-// ---------------------------------------------------------------------------
-
-describe("chooseDefaultModel (AC #4)", () => {
-  it("returns empty string when model list is empty", () => {
-    expect(chooseDefaultModel([])).toBe("");
-  });
-
-  it("returns the first model id, not any placeholder", () => {
-    const first = chatModel("real-first-model");
-    const second = chatModel("example-chat-model");
-    // AC #4: the old code preferred "example-chat-model"; the new code uses first
-    expect(chooseDefaultModel([first, second])).toBe("real-first-model");
   });
 });
 

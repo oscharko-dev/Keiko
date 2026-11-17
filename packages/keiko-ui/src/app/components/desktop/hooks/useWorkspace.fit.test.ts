@@ -24,7 +24,7 @@ function appWindow(patch: Partial<AppWindow>): AppWindow {
     w: 664,
     h: 420,
     z: 1,
-    cfg: {},
+    cfg: { runId: "run-existing", workflow: "verify" },
     max: false,
     zoom: 1,
     ...patch,

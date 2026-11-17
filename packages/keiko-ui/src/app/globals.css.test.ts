@@ -3892,12 +3892,7 @@ describe("Issue #1296 — AI/agent component set (Design System 0.4.0)", () => {
   });
 
   it("routes the agent-run tool/result/input/summary cards through --ai-tool-surface", () => {
-    for (const sel of [
-      "\n.arun-meter {",
-      "\n.arun-summary {",
-      "\n.arun-result-card {",
-      "\n.arun-input {",
-    ]) {
+    for (const sel of ["\n.arun-meter {", "\n.arun-summary {", "\n.arun-result-card {"]) {
       const block = cssBlock(sel);
       expect(block, `${sel} must consume --ai-tool-surface`).toContain("var(--ai-tool-surface)");
       expect(block, `${sel} must not keep the raw --inset primitive`).not.toContain("var(--inset)");

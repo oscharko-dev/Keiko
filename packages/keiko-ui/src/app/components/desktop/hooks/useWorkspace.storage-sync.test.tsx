@@ -31,7 +31,7 @@ function win(patch: Partial<AppWindow> & Pick<AppWindow, "id">): AppWindow {
     w: 360,
     h: 320,
     z: 1,
-    cfg: {},
+    cfg: { runId: "run-existing", workflow: "verify" },
     max: false,
     zoom: 1,
     ...patch,

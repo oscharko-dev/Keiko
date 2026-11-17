@@ -5232,8 +5232,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.arun-result-card pre,
-.arun-input pre {
+.arun-result-card pre {
   margin: 0;
   overflow: auto;
   max-height: 220px;
@@ -5242,19 +5241,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   font-size: 11.5px;
   line-height: 1.55;
   white-space: pre;
-}
-.arun-input {
-  flex: none;
-  border: 1px solid var(--border-subtle);
-  border-radius: 9px;
-  padding: 7px 9px;
-  background: var(--ai-tool-surface);
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-.arun-input summary {
-  cursor: pointer;
-  color: var(--text-faint);
 }
 .arun-kv,
 .arun-check-row {

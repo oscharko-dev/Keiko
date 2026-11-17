@@ -291,14 +291,6 @@
       "types": "./dist/discussion-intelligence.d.ts",
       "import": "./dist/discussion-intelligence.js"
     },
-    "./runtime/documentation-browser": {
-      "types": "./dist/documentation-browser.d.ts",
-      "import": "./dist/documentation-browser.js"
-    },
-    "./runtime/documentation-manual-proposal": {
-      "types": "./dist/documentation-manual-proposal.d.ts",
-      "import": "./dist/documentation-manual-proposal.js"
-    },
     "./runtime/editor-agent": {
       "types": "./dist/editor-agent.d.ts",
       "import": "./dist/editor-agent.js"

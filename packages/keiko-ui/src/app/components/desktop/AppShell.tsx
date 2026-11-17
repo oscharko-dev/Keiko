@@ -1638,7 +1638,7 @@ const TOOL_TYPES: readonly WindowType[] = COMMAND_TOOL_TYPES;
 export function opensDirectlyFromPalette(type: WindowType): boolean {
   // The documentation browser opens straight into its working surface (empty location input); it has
   // no required pre-creation config, so it skips the New Window dialog like the connector.
-  return type === "connector" || type === "docbrowser";
+  return type === "connector";
 }
 
 function focusCreatedWindow(id: string): void {

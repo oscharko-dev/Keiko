@@ -22,7 +22,7 @@ function remoteWindows(): AppWindow[] {
     z: 1,
     max: false,
     zoom: 1,
-    cfg: { title: "Private window canary" },
+    cfg: { runId: "run-existing", workflow: "verify", title: "Private window canary" },
   };
   return [
     {
@@ -77,7 +77,10 @@ afterEach(() => {
 function expectLocalGeometry(): void {
   expect(latest?.wins?.[0]).toMatchObject({ x: -0, y: -0, w: 1280, h: 720, max: true });
   expect(latest?.wins?.[0]?.prev).toEqual(remoteWindows()[0]?.prev);
-  expect(latest?.wins?.[1]).toEqual({ ...remoteWindows()[1], cfg: {} });
+  expect(latest?.wins?.[1]).toEqual({
+    ...remoteWindows()[1],
+    cfg: { runId: "run-existing", workflow: "verify" },
+  });
   expect(diagnostic).toHaveBeenCalledWith(
     "Workspace maximized geometry fitted to local viewport.",
     {

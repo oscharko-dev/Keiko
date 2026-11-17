@@ -3079,12 +3079,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "editor.fileHistory.deleteFailed": "Der Wiederherstellungspunkt konnte nicht gelöscht werden.",
   "editor.fileHistory.sizeDelta": "Größenänderung: {delta}",
   "editor.fileHistory.entryLabel": "Wiederherstellungspunkt {sequence}, {origin}, {timestamp}",
-  "agentLauncher.mode.governedAssist.label": "Um Genehmigung bitten",
-  "agentLauncher.mode.supervisedCoding.label": "Überwachter Workspace",
-  "agentLauncher.mode.autonomousDelivery.label": "Vollzugriff",
 
-  "agentRunWidget.autonomyMode": "Effektive Autonomie: {mode}",
-  "agentRunWidget.executionUnavailable": "Connector- und Delivery-Ausführung nicht verfügbar",
   "attachment.rejection.deliveryRefused":
     "Das Bild konnte nicht sicher gespeichert oder für die Übertragung autorisiert werden. Füge es erneut hinzu und versuche es noch einmal.",
   "attachment.imagesDelivered": "Bilder an das ausgewählte Modell übertragen",
@@ -3161,9 +3156,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "agentRunWidget.error.loadReport": "Lauf-Bericht konnte nicht geladen werden.",
   "agentRunWidget.error.cancelRun": "Lauf konnte nicht abgebrochen werden.",
   "agentRunWidget.error.applyRun": "Lauf konnte nicht übernommen werden.",
-  "agentRunWidget.empty.title": "Der Agentenlauf ist nicht konfiguriert.",
-  "agentRunWidget.empty.body":
-    "Öffnen Sie ein neues Agent-Fenster über den Launcher, um einen Workflow zu starten.",
+  "agentRunWidget.empty.title": "Details zum Agentenlauf sind nicht verfügbar.",
   "agentRunWidget.costClassTitle": "Modell-Kostenklasse",
   "agentRunWidget.runIdLabel": "Lauf {id}",
   "agentRunWidget.meter.elapsed": "Laufzeit",
@@ -3172,7 +3165,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "agentRunWidget.meter.tokens": "{tokens} Token",
   "agentRunWidget.meter.latency": "Latenz",
   "agentRunWidget.perm.noWorkspace": "kein Arbeitsbereich",
-  "agentRunWidget.runInput.summary": "Lauf-Eingabe",
   "agentRunWidget.log.ariaLabel": "Lauf-Ereignisse",
   "agentRunWidget.log.connecting": "Verbindung zu Lauf-Ereignissen wird hergestellt…",
   "agentRunWidget.log.waiting": "Warten auf Lauf-Ereignisse…",
@@ -3638,139 +3630,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "promptEnhancer.action.copy": "Gerenderten Prompt kopieren",
   "promptEnhancer.empty.ariaLabel": "Leerer Zustand der Prompt-Verbesserung",
   "promptEnhancer.empty.message": "Noch kein verbesserter Prompt.",
-
-  "documentationBrowser.reason.preview-available.title": "Lokale Dokumentation erreichbar",
-  "documentationBrowser.reason.preview-available.detail":
-    "Dieser Loopback-Dokumentationsserver hat geantwortet. Als Nächstes kann eine Live-Vorschau geöffnet werden.",
-  "documentationBrowser.reason.rendering-deferred.title": "Zur Prüfung geöffnet",
-  "documentationBrowser.reason.rendering-deferred.detail":
-    "Keiko kann zu diesem Handbuch navigieren. Inline-Rendering folgt in einer späteren Version; es wurde nichts gecrawlt, indiziert oder an den Chat angehängt.",
-  "documentationBrowser.reason.frame-embedding-refused.title": "Seite verweigert Einbettung",
-  "documentationBrowser.reason.frame-embedding-refused.detail":
-    "Diese Seite verweigert die Einbettung über X-Frame-Options oder frame-ancestors. Keiko umgeht die Einbettungsrichtlinie der Website nicht.",
-  "documentationBrowser.reason.authentication-required.title": "Anmeldung erforderlich",
-  "documentationBrowser.reason.authentication-required.detail":
-    "Diese Dokumentation erfordert eine Authentifizierung. Keiko erfasst oder wiederholt Ihre Zugangsdaten nicht.",
-  "documentationBrowser.reason.authentication-required.action":
-    "Öffnen Sie das Handbuch in Ihrer eigenen Browsersitzung und versuchen Sie es anschließend mit einer zugänglichen Seite erneut.",
-  "documentationBrowser.reason.proxy-or-firewall-blocked.title":
-    "Durch Netzwerkrichtlinie blockiert",
-  "documentationBrowser.reason.proxy-or-firewall-blocked.detail":
-    "Ein Proxy oder eine Firewall hat diese Anfrage blockiert. Keiko respektiert die Netzwerkrichtlinie Ihrer Organisation und umgeht sie nicht.",
-  "documentationBrowser.reason.proxy-or-firewall-blocked.action":
-    "Bestätigen Sie, dass die Adresse durch Ihre Netzwerkrichtlinie erlaubt ist, und versuchen Sie es erneut.",
-  "documentationBrowser.reason.host-unreachable.title": "Host nicht gefunden",
-  "documentationBrowser.reason.host-unreachable.detail":
-    "Die Adresse konnte nicht aufgelöst werden. Prüfen Sie den Hostnamen und Ihre Verbindung.",
-  "documentationBrowser.reason.host-unreachable.action":
-    "Prüfen Sie die Adresse und versuchen Sie es erneut.",
-  "documentationBrowser.reason.request-timed-out.title": "Zeitüberschreitung der Anfrage",
-  "documentationBrowser.reason.request-timed-out.detail":
-    "Die Dokumentation hat nicht innerhalb des gesteuerten Zeitlimits geantwortet.",
-  "documentationBrowser.reason.request-timed-out.action":
-    "Versuchen Sie es erneut oder prüfen Sie, ob der Server läuft.",
-  "documentationBrowser.reason.content-too-large.title": "Dokument zu groß",
-  "documentationBrowser.reason.content-too-large.detail":
-    "Dieses Dokument überschreitet die gesteuerte Größenbegrenzung für die Prüfung.",
-  "documentationBrowser.reason.unsupported-scheme.title": "Nicht unterstützte Adresse",
-  "documentationBrowser.reason.unsupported-scheme.detail":
-    "Der Dokumentationsbrowser öffnet HTTP-, HTTPS- und lokale Dateiadressen. Diese Adresse verwendet ein nicht unterstütztes Schema.",
-  "documentationBrowser.reason.unsupported-external-target.title":
-    "Öffentliche Adresse nicht geöffnet",
-  "documentationBrowser.reason.unsupported-external-target.detail":
-    "Dies ist eine öffentliche Internetadresse. Der Dokumentationsbrowser ist für lokale und Intranet-Handbücher vorgesehen und öffnet in dieser Version keine öffentlichen Websites.",
-  "documentationBrowser.reason.local-file-scope-unavailable.title":
-    "Außerhalb des genehmigten Umfangs",
-  "documentationBrowser.reason.local-file-scope-unavailable.detail":
-    "Diese lokale Datei liegt außerhalb des genehmigten Dokumentationsumfangs.",
-  "documentationBrowser.reason.browser-backend-unavailable.title":
-    "Vorschau-Backend nicht verfügbar",
-  "documentationBrowser.reason.browser-backend-unavailable.detail":
-    "Es ist kein lokales Browser-Backend konfiguriert, daher ist keine Live-Vorschau verfügbar. Ziele können weiterhin klassifiziert werden.",
-  "documentationBrowser.reason.invalid-target.title": "Ungültige Adresse",
-  "documentationBrowser.reason.invalid-target.detail":
-    "Dies sieht nicht wie eine gültige Dokumentationsadresse aus.",
-  "documentationBrowser.reason.navigation-failed.title":
-    "Dokumentation konnte nicht geöffnet werden",
-  "documentationBrowser.reason.navigation-failed.detail":
-    "Die Dokumentation konnte nicht geöffnet werden.",
-  "documentationBrowser.reason.navigation-failed.action": "Bitte versuchen Sie es erneut.",
-  "documentationBrowser.proposal.not-evaluated.title": "Nicht geprüft",
-  "documentationBrowser.proposal.not-evaluated.detail": "Keiko hat dieses Ziel noch nicht geprüft.",
-  "documentationBrowser.proposal.likely-manual.title": "Sieht wie ein indizierbares Handbuch aus",
-  "documentationBrowser.proposal.likely-manual.detail":
-    "Keiko hat dies als statisches HTML-Handbuch erkannt. Prüfen Sie vor der Genehmigung den nachfolgenden Umfang.",
-  "documentationBrowser.proposal.probable-manual.title":
-    "Dies könnte ein indizierbares Handbuch sein",
-  "documentationBrowser.proposal.probable-manual.detail":
-    "Prüfen Sie den vorgeschlagenen Umfang sorgfältig vor der Genehmigung — Keiko ist sich nicht vollständig sicher.",
-  "documentationBrowser.proposal.requires-local-file-approval.title":
-    "Lokales Handbuch — Dateizugriff erforderlich",
-  "documentationBrowser.proposal.requires-local-file-approval.detail":
-    "Dies sieht wie ein lokales HTML-Handbuch aus. Durch die Genehmigung erhält Keiko Zugriff, es aus Ihrem genehmigten lokalen Dateiumfang zu indizieren.",
-  "documentationBrowser.proposal.unsupported.title": "Nicht zur Indizierung angeboten",
-  "documentationBrowser.proposal.unsupported.detail":
-    "Keiko indiziert diese Zielklasse nicht. Öffentliche Websites und nicht unterstützte Schemas sind ausgeschlossen.",
-  "documentationBrowser.proposal.denied.title": "Dieses Ziel kann nicht indiziert werden",
-  "documentationBrowser.proposal.denied.detail":
-    "Die Adresse wurde abgelehnt. Keiko indiziert keine Ziele mit Zugangsdaten.",
-  "documentationBrowser.proposal.authentication-required.title": "Anmeldung erforderlich",
-  "documentationBrowser.proposal.authentication-required.detail":
-    "Dieses Handbuch erfordert eine Authentifizierung, die Keiko nicht erfasst. Öffnen Sie stattdessen eine zugängliche Seite.",
-  "documentationBrowser.proposal.already-indexed.title": "Bereits in einem Knowledge Pod",
-  "documentationBrowser.proposal.already-indexed.detail":
-    "Ein Knowledge Pod deckt dieses Handbuch bereits ab. Öffnen Sie den vorhandenen Pod, statt ein Duplikat zu erstellen.",
-  "documentationBrowser.proposal.degraded.title": "Kein statisches Handbuch",
-  "documentationBrowser.proposal.degraded.detail":
-    "Dies sieht wie eine dynamische oder interaktive Seite aus. Versuchen Sie die Startseite des Handbuchs, beispielsweise index.html.",
-  "documentationBrowser.confidence.high": "Hohe Zuverlässigkeit",
-  "documentationBrowser.confidence.medium": "Mittlere Zuverlässigkeit",
-  "documentationBrowser.confidence.low": "Niedrige Zuverlässigkeit — sorgfältig prüfen",
-  "documentationBrowser.deniedLinkClass.cross-origin": "andere Websites",
-  "documentationBrowser.deniedLinkClass.outside-path-prefix": "Seiten außerhalb dieses Abschnitts",
-  "documentationBrowser.deniedLinkClass.unsupported-scheme": "Nicht-Web-Links",
-  "documentationBrowser.deniedLinkClass.credentialed-url": "Links mit Zugangsdaten",
-  "documentationBrowser.deniedLinkClass.path-traversal": "Path-Traversal-Links",
-  "documentationBrowser.error.unexpected": "Unerwarteter Fehler.",
-  "documentationBrowser.error.empty": "Geben Sie eine zu öffnende Dokumentationsadresse ein.",
-  "documentationBrowser.scope.podName": "Name des Knowledge Pods",
-  "documentationBrowser.scope.scope": "Umfang",
-  "documentationBrowser.scope.limits": "Grenzen",
-  "documentationBrowser.scope.limitsValue":
-    "bis zu {maxPages} Seiten, Tiefe {maxDepth}, keine Weiterleitungen",
-  "documentationBrowser.scope.pages": "Seiten",
-  "documentationBrowser.scope.pagesValue":
-    "Noch nicht erfasst — wird während der Indizierung gezählt.",
-  "documentationBrowser.scope.excluded": "Ausgeschlossen",
-  "documentationBrowser.scope.robots": "Robots",
-  "documentationBrowser.scope.robotsValue": "Keiko beachtet die robots.txt der Website.",
-  "documentationBrowser.proposal.existingPodReference": "Referenz des vorhandenen Pods:",
-  "documentationBrowser.consent.ariaLabel": "Einwilligung zur Indizierung",
-  "documentationBrowser.consent.createPod": "Knowledge Pod aus diesem Handbuch erstellen",
-  "documentationBrowser.consent.viewPods": "Ihre Knowledge Pods anzeigen",
-  "documentationBrowser.action.cancel": "Abbrechen",
-  "documentationBrowser.action.dismiss": "Schließen",
-  "documentationBrowser.action.open": "Öffnen",
-  "documentationBrowser.action.reload": "Neu laden",
-  "documentationBrowser.action.prepareIndexing": "Indizierung vorbereiten",
-  "documentationBrowser.approved.title": "Zur Indizierung genehmigt",
-  "documentationBrowser.approved.prefix": "Keiko indiziert",
-  "documentationBrowser.approved.suffix":
-    "über die gesteuerte lokale Indizierungspipeline. Es wurde noch nichts gecrawlt; die Indizierung läuft als separater gesteuerter Schritt und bleibt auf diesem Gerät.",
-  "documentationBrowser.status.opening": "Dokumentation wird geöffnet…",
-  "documentationBrowser.empty.instructions":
-    "Geben Sie eine lokale oder Intranet-Dokumentationsadresse ein und wählen Sie Öffnen",
-  "documentationBrowser.indexing.checking": "Handbuch wird geprüft…",
-  "documentationBrowser.indexing.recordingConsent": "Ihre Einwilligung wird aufgezeichnet…",
-  "documentationBrowser.indexing.proposalAriaLabel": "Indizierungsvorschlag",
-  "documentationBrowser.field.address": "Dokumentationsadresse",
-  "documentationBrowser.field.addressPlaceholder": "https://intranet/handbuch oder file:///…",
-  "documentationBrowser.navigation.ariaLabel": "Dokumentationsnavigation",
-  "documentationBrowser.currentTarget": "Aktuelles Ziel:",
-  "documentationBrowser.indexing.eligibleNote":
-    "Prüfen Sie, ob dies wie ein indizierbares Handbuch aussieht — Sie genehmigen, bevor etwas indiziert wird.",
-  "documentationBrowser.indexing.ineligibleNote":
-    "Öffnen Sie ein lokales oder Intranet-Handbuch, um seine Indizierbarkeit zu prüfen.",
 
   "gitDelivery.state.ready-to-execute": "Bereit zur Ausführung",
   "gitDelivery.state.waiting-for-approval": "Warten auf Genehmigung",
@@ -4511,10 +4370,11 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die zitierte Quelle konnte nicht geöffnet werden. Prüfe die Quelle in ihrem Knowledge Pod und versuche es erneut.",
   "grounded.manual.name": "HTML-Handbuch",
   "grounded.manual.evidence": "HTML-Handbuchbeleg",
-  "grounded.manual.openManual": "Handbuch öffnen",
-  "grounded.manual.openPage": "Seite öffnen",
-  "grounded.manual.opened": "Geöffnet",
-  "grounded.manual.failed": "Öffnen fehlgeschlagen",
+  "grounded.manual.checkSource": "Quelle prüfen",
+  "grounded.manual.checkPage": "Seite prüfen",
+  "grounded.manual.checking": "Quelle wird geprüft…",
+  "grounded.manual.verified": "Quelle geprüft",
+  "grounded.manual.failed": "Quellenprüfung fehlgeschlagen",
   "grounded.manual.reason.source-metadata-unavailable": "Quelle nicht verfügbar",
   "grounded.manual.reason.citation-lineage-mismatch": "Quellenangabe stimmt nicht überein",
   "grounded.manual.reason.target-outside-approved-scope": "Außerhalb des freigegebenen Umfangs",

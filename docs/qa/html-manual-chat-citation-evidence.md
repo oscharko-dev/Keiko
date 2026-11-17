@@ -1,5 +1,7 @@
 # HTML Manual Chat Citations - closure evidence (Epic #1854)
 
+> Historical evidence. PR #4448 retired the standalone Documentation Browser and its indexing proposal and approval routes. Chat now checks existing HTML citations in place. The Knowledge Pod source and refresh contracts are documented in ADR-0113.
+
 Local closure evidence for Epic #1854 and child issues #1878, #1879, #1880, #1881, #1882,
 and #1883. This record is body-free: it names implementation surfaces, behavioral guarantees,
 and gate outcomes, but does not include manual bodies, raw crawled pages, private filesystem

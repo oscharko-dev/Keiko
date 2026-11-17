@@ -35686,6 +35686,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "knowledge.citation.manual-check",
+    category: "search",
+    owner: "keiko-server",
+    emitter: "html-manual-citation-navigation.handleCheckHtmlManualCitation",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["verified", "unavailable"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["knowledge-citation-manual-check"],
+    proofIds: ["knowledge.citation.manual-check.line"],
+    releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "outcome",
+        values: ["unavailable"],
+      },
+    ],
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "knowledge.documents.operation",
     category: "search",
     owner: "keiko-server",

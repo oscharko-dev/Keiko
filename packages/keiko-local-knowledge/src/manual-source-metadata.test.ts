@@ -1,7 +1,7 @@
 // Direct unit tests for manual-source-metadata.ts (Epic #1854 citation-reopen scope boundary).
 //
 // The existing coverage of this module was entirely incidental — through manual-pod.test.ts,
-// docs-browser.test.ts, and local-knowledge-grounded-qa.rescue.test.ts — and only ever exercised
+// html-manual-citation-route.test.ts, and local-knowledge-grounded-qa.rescue.test.ts — and only ever exercised
 // well-formed fixtures produced by the real crawler. This file exercises
 // resolveHtmlManualCitationTarget / httpTarget / localTarget / isWithinApprovedHttpPath directly,
 // including adversarial `relativePath` shapes (absolute / protocol-relative URLs) that a future
@@ -24,7 +24,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 
 import { createCapsule } from "./capsule-lifecycle.js";
 import { insertDocumentRow } from "./discovery/persist.js";

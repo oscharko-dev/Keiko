@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "84b17bca0cebce399d6334bd6a79c112d60d0328907999c617f194a5059d8dc7",
+    "catalogDigest": "6509174c5fc0196166e671ad0b597d608b2f6d60ab091e915a45e0887afbddd2",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -37160,6 +37160,46 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "knowledge.citation.manual-check",
+        "category": "search",
+        "owner": "keiko-server",
+        "emitter": "html-manual-citation-navigation.handleCheckHtmlManualCitation",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["verified", "unavailable"]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "diagnosticWhen": [
+          {
+            "field": "outcome",
+            "values": ["unavailable"]
+          }
+        ],
+        "analyzerProjection": "timeline",
+        "failureClasses": ["knowledge-citation-manual-check"],
+        "proofIds": ["knowledge.citation.manual-check.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/html-manual-citation-navigation.ts:32",
+        "emitterSites": ["packages/keiko-server/src/html-manual-citation-navigation.ts:138"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "knowledge.documents.operation",
         "category": "search",
         "owner": "keiko-server",
@@ -51647,6 +51687,27 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "knowledge-citation-manual-check",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": ["knowledge.citation.manual-check"],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["knowledge.citation.manual-check"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["knowledge.citation.manual-check"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["knowledge.citation.manual-check"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "mcp-authorization",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -63434,8 +63495,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 404,
-      "completeClassCount": 404,
+      "supportedClassCount": 405,
+      "completeClassCount": 405,
       "completeness": "complete",
       "classes": [
         {
@@ -103079,6 +103140,56 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "knowledge-citation-manual-check",
+          "requirementContract": "knowledge-citation-manual-check",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["end"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": ["knowledge.citation.manual-check"],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "knowledge.citation.manual-check",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["knowledge.citation.manual-check"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "knowledge.citation.manual-check",
+              "owner": "keiko-server",
+              "category": "search",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["knowledge.citation.manual-check.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "knowledge-citation-reconciliation",
           "requirementContract": "knowledge-citation-reconciliation",
           "productSurfaces": ["keiko-server"],
@@ -124227,6 +124338,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "knowledge.citation.manual-check",
+      "category": "search",
+      "site": "packages/keiko-server/src/html-manual-citation-navigation.ts:35",
+      "package": "keiko-server"
+    },
+    {
       "op": "knowledge.documents",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/knowledge-tool-execution.ts:105",
@@ -124722,7 +124839,7 @@
     {
       "op": "retrieval-activity.tryBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2622",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2607",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126156,6 +126273,7 @@
     "jira.template.metadata",
     "jump",
     "knowledge.citation.editor-target",
+    "knowledge.citation.manual-check",
     "knowledge.documents",
     "knowledge.documents.operation",
     "knowledge.log.sink-failed",

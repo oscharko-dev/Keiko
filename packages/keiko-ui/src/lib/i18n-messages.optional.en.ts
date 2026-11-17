@@ -2915,12 +2915,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "editor.fileHistory.deleteFailed": "The restore point could not be deleted.",
   "editor.fileHistory.sizeDelta": "Size change: {delta}",
   "editor.fileHistory.entryLabel": "Restore point {sequence}, {origin}, {timestamp}",
-  "agentLauncher.mode.governedAssist.label": "Ask for approval",
-  "agentLauncher.mode.supervisedCoding.label": "Supervised workspace",
-  "agentLauncher.mode.autonomousDelivery.label": "Full access",
 
-  "agentRunWidget.autonomyMode": "Effective autonomy: {mode}",
-  "agentRunWidget.executionUnavailable": "Connector and delivery execution unavailable",
   "attachment.rejection.deliveryRefused":
     "The image could not be stored or authorized for delivery. Add it again and retry.",
   "attachment.imagesDelivered": "Images delivered to the selected model",
@@ -2997,8 +2992,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "agentRunWidget.error.loadReport": "Unable to load run report.",
   "agentRunWidget.error.cancelRun": "Unable to cancel run.",
   "agentRunWidget.error.applyRun": "Unable to apply run.",
-  "agentRunWidget.empty.title": "Agent run is not configured.",
-  "agentRunWidget.empty.body": "Open a new Agent window from the launcher to start a workflow.",
+  "agentRunWidget.empty.title": "Agent run details unavailable.",
   "agentRunWidget.costClassTitle": "Model cost class",
   "agentRunWidget.runIdLabel": "run {id}",
   "agentRunWidget.meter.elapsed": "Elapsed",
@@ -3007,7 +3001,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "agentRunWidget.meter.tokens": "{tokens} tok",
   "agentRunWidget.meter.latency": "Latency",
   "agentRunWidget.perm.noWorkspace": "no workspace",
-  "agentRunWidget.runInput.summary": "Run input",
   "agentRunWidget.log.ariaLabel": "Run events",
   "agentRunWidget.log.connecting": "Connecting to run events…",
   "agentRunWidget.log.waiting": "Waiting for run events…",
@@ -3450,130 +3443,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "promptEnhancer.action.copy": "Copy rendered prompt",
   "promptEnhancer.empty.ariaLabel": "Prompt enhancement empty state",
   "promptEnhancer.empty.message": "No enhanced prompt yet.",
-
-  "documentationBrowser.reason.preview-available.title": "Local documentation reachable",
-  "documentationBrowser.reason.preview-available.detail":
-    "This loopback documentation server responded. A live preview can be opened next.",
-  "documentationBrowser.reason.rendering-deferred.title": "Opened for inspection",
-  "documentationBrowser.reason.rendering-deferred.detail":
-    "Keiko can navigate to this manual. Inline rendering arrives in a later release; nothing has been crawled, indexed, or attached to chat.",
-  "documentationBrowser.reason.frame-embedding-refused.title": "Page refused embedding",
-  "documentationBrowser.reason.frame-embedding-refused.detail":
-    "This page sets X-Frame-Options or frame-ancestors to refuse embedding. Keiko does not bypass the site's embedding policy.",
-  "documentationBrowser.reason.authentication-required.title": "Sign-in required",
-  "documentationBrowser.reason.authentication-required.detail":
-    "This documentation requires authentication. Keiko does not collect or replay your credentials.",
-  "documentationBrowser.reason.authentication-required.action":
-    "Open the manual in your own browser session, then retry with an accessible page.",
-  "documentationBrowser.reason.proxy-or-firewall-blocked.title": "Blocked by network policy",
-  "documentationBrowser.reason.proxy-or-firewall-blocked.detail":
-    "A proxy or firewall blocked this request. Keiko respects your organization's network policy and will not route around it.",
-  "documentationBrowser.reason.proxy-or-firewall-blocked.action":
-    "Confirm the address is permitted by your network policy, then try again.",
-  "documentationBrowser.reason.host-unreachable.title": "Host not found",
-  "documentationBrowser.reason.host-unreachable.detail":
-    "The address could not be resolved. Check the host name and your connection.",
-  "documentationBrowser.reason.host-unreachable.action": "Verify the address and retry.",
-  "documentationBrowser.reason.request-timed-out.title": "Request timed out",
-  "documentationBrowser.reason.request-timed-out.detail":
-    "The documentation did not respond within the governed time limit.",
-  "documentationBrowser.reason.request-timed-out.action":
-    "Retry, or confirm the server is running.",
-  "documentationBrowser.reason.content-too-large.title": "Document too large",
-  "documentationBrowser.reason.content-too-large.detail":
-    "This document exceeds the governed size limit for inspection.",
-  "documentationBrowser.reason.unsupported-scheme.title": "Unsupported address",
-  "documentationBrowser.reason.unsupported-scheme.detail":
-    "The documentation browser opens http, https, and local file addresses. This address uses a scheme it does not open.",
-  "documentationBrowser.reason.unsupported-external-target.title": "Public address not opened",
-  "documentationBrowser.reason.unsupported-external-target.detail":
-    "This is a public internet address. The documentation browser is for local and intranet manuals and does not open public sites in this release.",
-  "documentationBrowser.reason.local-file-scope-unavailable.title": "Outside approved scope",
-  "documentationBrowser.reason.local-file-scope-unavailable.detail":
-    "This local file is outside the approved documentation scope.",
-  "documentationBrowser.reason.browser-backend-unavailable.title": "Preview backend unavailable",
-  "documentationBrowser.reason.browser-backend-unavailable.detail":
-    "A local browser backend is not configured, so a live preview is unavailable. Targets can still be classified.",
-  "documentationBrowser.reason.invalid-target.title": "Invalid address",
-  "documentationBrowser.reason.invalid-target.detail":
-    "That does not look like a valid documentation address.",
-  "documentationBrowser.reason.navigation-failed.title": "Could not open documentation",
-  "documentationBrowser.reason.navigation-failed.detail": "The documentation could not be opened.",
-  "documentationBrowser.reason.navigation-failed.action": "Please try again.",
-  "documentationBrowser.proposal.not-evaluated.title": "Not evaluated",
-  "documentationBrowser.proposal.not-evaluated.detail": "Keiko has not checked this target yet.",
-  "documentationBrowser.proposal.likely-manual.title": "Looks like an indexable manual",
-  "documentationBrowser.proposal.likely-manual.detail":
-    "Keiko recognized this as a static HTML manual. Review the scope below before approving.",
-  "documentationBrowser.proposal.probable-manual.title": "This may be an indexable manual",
-  "documentationBrowser.proposal.probable-manual.detail":
-    "Review the proposed scope carefully before approving — Keiko is not fully certain.",
-  "documentationBrowser.proposal.requires-local-file-approval.title":
-    "Local manual — needs file access",
-  "documentationBrowser.proposal.requires-local-file-approval.detail":
-    "This looks like a local HTML manual. Approving grants Keiko access to index it from your approved local file scope.",
-  "documentationBrowser.proposal.unsupported.title": "Not offered for indexing",
-  "documentationBrowser.proposal.unsupported.detail":
-    "Keiko does not index this target class. Public sites and unsupported schemes are excluded.",
-  "documentationBrowser.proposal.denied.title": "Cannot index this target",
-  "documentationBrowser.proposal.denied.detail":
-    "The address was rejected. Keiko does not index credentialed targets.",
-  "documentationBrowser.proposal.authentication-required.title": "Sign-in required",
-  "documentationBrowser.proposal.authentication-required.detail":
-    "This manual requires authentication Keiko will not collect. Open an accessible page instead.",
-  "documentationBrowser.proposal.already-indexed.title": "Already in a Knowledge Pod",
-  "documentationBrowser.proposal.already-indexed.detail":
-    "A Knowledge Pod already covers this manual. Open the existing pod instead of creating a duplicate.",
-  "documentationBrowser.proposal.degraded.title": "Not a static manual",
-  "documentationBrowser.proposal.degraded.detail":
-    "This looks like a dynamic or action page. Try the manual's start page — for example its index.html.",
-  "documentationBrowser.confidence.high": "High confidence",
-  "documentationBrowser.confidence.medium": "Fair confidence",
-  "documentationBrowser.confidence.low": "Low confidence — review carefully",
-  "documentationBrowser.deniedLinkClass.cross-origin": "other sites",
-  "documentationBrowser.deniedLinkClass.outside-path-prefix": "pages outside this section",
-  "documentationBrowser.deniedLinkClass.unsupported-scheme": "non-web links",
-  "documentationBrowser.deniedLinkClass.credentialed-url": "links carrying credentials",
-  "documentationBrowser.deniedLinkClass.path-traversal": "path-traversal links",
-  "documentationBrowser.error.unexpected": "Unexpected error.",
-  "documentationBrowser.error.empty": "Enter a documentation address to open.",
-  "documentationBrowser.scope.podName": "Knowledge Pod name",
-  "documentationBrowser.scope.scope": "Scope",
-  "documentationBrowser.scope.limits": "Limits",
-  "documentationBrowser.scope.limitsValue":
-    "up to {maxPages} pages, depth {maxDepth}, no redirects",
-  "documentationBrowser.scope.pages": "Pages",
-  "documentationBrowser.scope.pagesValue": "Not yet sampled — counted during indexing.",
-  "documentationBrowser.scope.excluded": "Excluded",
-  "documentationBrowser.scope.robots": "Robots",
-  "documentationBrowser.scope.robotsValue": "Keiko will honor the site's robots.txt.",
-  "documentationBrowser.proposal.existingPodReference": "Existing pod reference:",
-  "documentationBrowser.consent.ariaLabel": "Indexing consent",
-  "documentationBrowser.consent.createPod": "Create Knowledge Pod from this manual",
-  "documentationBrowser.consent.viewPods": "View your Knowledge Pods",
-  "documentationBrowser.action.cancel": "Cancel",
-  "documentationBrowser.action.dismiss": "Dismiss",
-  "documentationBrowser.action.open": "Open",
-  "documentationBrowser.action.reload": "Reload",
-  "documentationBrowser.action.prepareIndexing": "Prepare for indexing",
-  "documentationBrowser.approved.title": "Approved for indexing",
-  "documentationBrowser.approved.prefix": "Keiko will index",
-  "documentationBrowser.approved.suffix":
-    "through the governed local indexing pipeline. Nothing has been crawled yet; indexing runs as a separate governed step and stays on this device.",
-  "documentationBrowser.status.opening": "Opening documentation…",
-  "documentationBrowser.empty.instructions":
-    "Enter a local or intranet documentation address and press Open",
-  "documentationBrowser.indexing.checking": "Checking for a manual…",
-  "documentationBrowser.indexing.recordingConsent": "Recording your consent…",
-  "documentationBrowser.indexing.proposalAriaLabel": "Indexing proposal",
-  "documentationBrowser.field.address": "Documentation address",
-  "documentationBrowser.field.addressPlaceholder": "https://intranet/handbook or file:///…",
-  "documentationBrowser.navigation.ariaLabel": "Documentation navigation",
-  "documentationBrowser.currentTarget": "Current target:",
-  "documentationBrowser.indexing.eligibleNote":
-    "Check whether this looks like an indexable manual — you approve before anything is indexed.",
-  "documentationBrowser.indexing.ineligibleNote":
-    "Open a local or intranet manual to check whether it can be indexed.",
 
   "gitDelivery.state.ready-to-execute": "Ready to execute",
   "gitDelivery.state.waiting-for-approval": "Waiting for approval",
@@ -4287,10 +4156,11 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The cited source could not be opened. Check the source in its Knowledge Pod and try again.",
   "grounded.manual.name": "HTML manual",
   "grounded.manual.evidence": "HTML manual evidence",
-  "grounded.manual.openManual": "Open manual",
-  "grounded.manual.openPage": "Open page",
-  "grounded.manual.opened": "Opened",
-  "grounded.manual.failed": "Open failed",
+  "grounded.manual.checkSource": "Check source",
+  "grounded.manual.checkPage": "Check page",
+  "grounded.manual.checking": "Checking source…",
+  "grounded.manual.verified": "Source verified",
+  "grounded.manual.failed": "Source check failed",
   "grounded.manual.reason.source-metadata-unavailable": "Source unavailable",
   "grounded.manual.reason.citation-lineage-mismatch": "Citation mismatch",
   "grounded.manual.reason.target-outside-approved-scope": "Outside approved scope",

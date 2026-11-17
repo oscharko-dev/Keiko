@@ -23,7 +23,6 @@ export type WindowType =
   | "files"
   | "editor"
   | "browser"
-  | "docbrowser"
   | "terminal"
   | "commands"
   | "runtime"
@@ -435,23 +434,6 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
         def: "",
         optional: true,
         placeholderKey: "window.placeholder.url",
-      },
-    ],
-  },
-  docbrowser: {
-    titleKey: "window.type.docbrowser.title",
-    icon: "file",
-    descKey: "window.type.docbrowser.desc",
-    w: 480,
-    h: 360,
-    config: [
-      {
-        key: "target",
-        labelKey: "window.field.documentationAddress",
-        type: "text",
-        def: "",
-        optional: true,
-        placeholderKey: "window.placeholder.documentationAddress",
       },
     ],
   },
