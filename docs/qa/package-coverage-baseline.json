@@ -42,7 +42,7 @@
       }
     },
     "keiko-contracts": {
-      "files": 276,
+      "files": 279,
       "uncoveredFiles": 5,
       "uncoveredLines": 1100,
       "totalLines": 15445,
@@ -66,7 +66,7 @@
       }
     },
     "keiko-evaluations": {
-      "files": 83,
+      "files": 95,
       "uncoveredFiles": 0,
       "uncoveredLines": 33,
       "totalLines": 1555,
@@ -90,7 +90,7 @@
       }
     },
     "keiko-git": {
-      "files": 9,
+      "files": 11,
       "uncoveredFiles": 0,
       "uncoveredLines": 6,
       "totalLines": 271,
@@ -246,7 +246,7 @@
       }
     },
     "keiko-security": {
-      "files": 57,
+      "files": 58,
       "uncoveredFiles": 0,
       "uncoveredLines": 18,
       "totalLines": 887,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 1215,
+      "files": 1303,
       "uncoveredFiles": 0,
       "uncoveredLines": 5038,
       "totalLines": 67638,
@@ -270,7 +270,7 @@
       }
     },
     "keiko-tool-catalog": {
-      "files": 22,
+      "files": 23,
       "uncoveredFiles": 0,
       "uncoveredLines": 4,
       "totalLines": 595,
@@ -282,7 +282,7 @@
       }
     },
     "keiko-tools": {
-      "files": 72,
+      "files": 74,
       "uncoveredFiles": 0,
       "uncoveredLines": 403,
       "totalLines": 4988,
