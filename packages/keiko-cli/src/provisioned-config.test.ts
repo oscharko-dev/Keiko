@@ -79,9 +79,13 @@ function fixture(content: string | null = configText()): Fixture {
         running: overrides.running ?? false,
         securityLogSink: { write: (event): void => void events.push(event) },
       });
-      // Every adoption, whatever its outcome, leaves exactly one line that names that outcome:
-      // a decision recorded twice, or not at all, cannot be reconstructed from the log.
-      const recorded = events.slice(before).map((event) => event.extra?.outcome);
+      // Every adoption, whatever its outcome, leaves exactly one adoption line that names that
+      // outcome: a decision recorded twice, or not at all, cannot be reconstructed from the log.
+      // Other layers keep their own evidence on the same sink (a failed rename records itself).
+      const recorded = events
+        .slice(before)
+        .filter((event) => event.op === "cli.lifecycle.provisioned-config")
+        .map((event) => event.extra?.outcome);
       expect(recorded).toEqual([outcome]);
       return outcome;
     },
@@ -89,7 +93,10 @@ function fixture(content: string | null = configText()): Fixture {
 }
 
 function lastLine(subject: Fixture): Record<string, unknown> {
-  const line = formatActivityLogProofLine(subject.events.at(-1) ?? {});
+  const adoption = subject.events.filter(
+    (event) => event.op === "cli.lifecycle.provisioned-config",
+  );
+  const line = formatActivityLogProofLine(adoption.at(-1) ?? {});
   expect(line).not.toContain(SECRET);
   expect(line).not.toContain(subject.source);
   return expectActivityLogProof("cli.lifecycle.provisioned-config.outcome", line);

@@ -40,7 +40,11 @@ it("leaves no plaintext candidate behind when the gateway loader cannot be loade
   });
 
   expect(result.outcome).toBe("write-failed");
-  expect(events.map((event) => event.extra?.outcome)).toEqual(["write-failed"]);
+  expect(
+    events
+      .filter((event) => event.op === "cli.lifecycle.provisioned-config")
+      .map((event) => event.extra?.outcome),
+  ).toEqual(["write-failed"]);
   expect(readdirSync(join(stateDir, "ui"))).toEqual(["keiko.config.json"]);
   expect(readFileSync(join(stateDir, "ui", "keiko.config.json"), "utf8")).toBe("current");
 });
