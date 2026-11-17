@@ -757,7 +757,7 @@ describe("CommitComposer — keyboard", () => {
 describe("CommitComposer — unresolved conflicts (#4445)", () => {
   it.each([
     ["en", /Resolve conflicted files or abort the operation in Git/u],
-    ["de", /Löse die Konflikte oder brich den Vorgang in Git ab/u],
+    ["de", /Lösen Sie die Konflikte oder brechen Sie den Vorgang in Git ab/u],
   ] as const)(
     "announces recovery in %s without preview or generation",
     async (locale, guidance) => {

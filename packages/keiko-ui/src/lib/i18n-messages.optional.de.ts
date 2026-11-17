@@ -6374,7 +6374,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Das Repository oder die Pull-Request-Nummer hat sich seit der letzten Vorschau geändert. Vorschau erneut abrufen, bevor Sie genehmigen oder übernehmen.",
   "gitClientWindow.ui.changesAndHistory": "Änderungen und Verlauf",
   "gitClientWindow.ui.resolveConflicts":
-    "Löse die Konflikte oder brich den Vorgang in Git ab. Vormerken, Zurücknehmen, Commit-Vorschau, Entwurfserstellung, Commit und Sync sind bis dahin nicht verfügbar.",
+    "Lösen Sie die Konflikte oder brechen Sie den Vorgang in Git ab. Vormerken, Zurücknehmen, Commit-Vorschau, Entwurfserstellung, Commit und Sync sind bis dahin nicht verfügbar.",
   "gitClientWindow.ui.stageAll": "Alle vormerken",
   "gitClientWindow.ui.unstageAll": "Alle zurücknehmen",
   "gitClientWindow.ui.noChanges": "Keine Änderungen",
@@ -6632,7 +6632,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.ui.recent": "Zuletzt verwendet",
   "gitClientWindow.ui.error": "Fehler",
   "gitClientWindow.ui.commitSigningRecovery":
-    "Git konnte diesen Commit nicht signieren. Prüfe den Signaturschlüssel (user.signingKey) und das Signaturformat (gpg.format) des Repositorys. Stelle sicher, dass Keiko das Signaturprogramm ausführen kann (gpg für OpenPGP oder ssh-keygen für SSH). Klicke danach erneut auf Commit.",
+    "Git konnte diesen Commit nicht signieren. Prüfen Sie den Signaturschlüssel (user.signingKey) und das Signaturformat (gpg.format) des Repositorys. Stellen Sie sicher, dass Keiko das Signaturprogramm ausführen kann (gpg für OpenPGP oder ssh-keygen für SSH). Klicken Sie danach erneut auf Commit.",
   "figmaJson.ui.qiSource": "QI-Quelle",
   "figmaJson.ui.retry": "Erneut versuchen",
   "chatHistoryPanel.ui.conversations": "Konversationen",

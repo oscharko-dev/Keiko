@@ -776,3 +776,8 @@ original renderer.
 The nine original updater cases passed again in the Linux arm64 gates container with Node 26.13.1
 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The three records bind the conflict recovery strings in
 both optional catalogs. The committed captures retain their original renderer's typography.
+
+The review of #4444 and #4445 aligned the German conflict and signing instructions with the
+formal address used by Git Sync. All nine original updater cases passed again in the same Linux
+environment. The three records incorporate the new German catalog digest and the generation time
+where recorded.
