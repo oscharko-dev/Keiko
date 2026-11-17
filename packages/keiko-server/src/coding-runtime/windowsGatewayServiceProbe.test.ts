@@ -192,4 +192,118 @@ describe("Windows gateway service probe", () => {
       stderr.mockRestore();
     }
   });
+
+  describe("Repair", () => {
+    it("offers no repair without a native install port", () => {
+      const probe = createWindowsGatewayServiceProbe({
+        helperPath: HELPER,
+        helperSha256: PIN,
+        activityLog: silentLog,
+        runStatus: () => Promise.resolve(10),
+      });
+      expect(probe.repair).toBeUndefined();
+    });
+
+    it("runs the native install with the pin and answers from a fresh status", async () => {
+      const statuses = [10, 0];
+      const installs: string[][] = [];
+      const probe = createWindowsGatewayServiceProbe({
+        helperPath: HELPER,
+        helperSha256: PIN,
+        activityLog: silentLog,
+        runStatus: () => Promise.resolve(statuses.shift() ?? 0),
+        runInstall: (path, pin) => {
+          installs.push([path, pin]);
+          return Promise.resolve(0);
+        },
+      });
+      await settled(probe);
+      expect(probe.unavailableReason()).toBe("gateway-service-absent");
+      expect(await probe.repair?.("00000000-0000-4000-8000-000000000001")).toBe("ready");
+      expect(installs).toEqual([[HELPER, PIN]]);
+      expect(probe.unavailableReason()).toBeUndefined();
+    });
+
+    it.each([
+      [20, "declined"],
+      [24, "failed"],
+      [10, "failed"],
+      [99, "failed"],
+      [null, "failed"],
+    ] as const)("maps install result %s to %s", async (exitCode, outcome) => {
+      const probe = createWindowsGatewayServiceProbe({
+        helperPath: HELPER,
+        helperSha256: PIN,
+        activityLog: silentLog,
+        runStatus: () => Promise.resolve(10),
+        runInstall: () => Promise.resolve(exitCode),
+      });
+      expect(await probe.repair?.("00000000-0000-4000-8000-000000000001")).toBe(outcome);
+    });
+
+    it("answers busy while a repair waits for Windows approval", async () => {
+      let approve: (code: number | null) => void = () => undefined;
+      const probe = createWindowsGatewayServiceProbe({
+        helperPath: HELPER,
+        helperSha256: PIN,
+        activityLog: silentLog,
+        runStatus: () => Promise.resolve(10),
+        runInstall: () =>
+          new Promise((resolve) => {
+            approve = resolve;
+          }),
+      });
+      const first = probe.repair?.("00000000-0000-4000-8000-000000000001");
+      expect(await probe.repair?.("00000000-0000-4000-8000-000000000002")).toBe("busy");
+      approve(0);
+      expect(await first).toBe("ready");
+    });
+
+    it("persists a body-free repair line under the request correlation", async () => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-gateway-repair-"));
+      const sink = createActivityLogSink(root);
+      try {
+        const results = [20, 25];
+        const probe = createWindowsGatewayServiceProbe({
+          helperPath: HELPER,
+          helperSha256: PIN,
+          activityLog: sink,
+          runStatus: () => Promise.resolve(10),
+          runInstall: () => Promise.resolve(results.shift() ?? 0),
+        });
+        await probe.repair?.("00000000-0000-4000-8000-000000000003");
+        await probe.repair?.("00000000-0000-4000-8000-000000000004");
+        const raw = readPersistedActivityLog(root);
+        expect(raw).not.toContain("customer");
+        const [declined, failed] = persistedActivityLogLines(
+          raw,
+          "coding-runtime.windows-gateway-service.repair",
+        );
+        expect(
+          expectActivityLogProof(
+            "coding-runtime.windows-gateway-service.repair.real-sink-line",
+            declined ?? "",
+          ),
+        ).toMatchObject({
+          level: "info",
+          correlationId: "00000000-0000-4000-8000-000000000003",
+          outcome: "declined",
+          helperSha256: PIN,
+        });
+        expect(
+          expectActivityLogProof(
+            "coding-runtime.windows-gateway-service.repair.real-sink-line",
+            failed ?? "",
+          ),
+        ).toMatchObject({
+          level: "warn",
+          errorKind: "unavailable",
+          outcome: "failed",
+          exitClass: "native-failure",
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
 });

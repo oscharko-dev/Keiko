@@ -766,6 +766,9 @@ describe("keiko update CLI", () => {
       },
     ]);
     expect(c.out()).toContain("Update apply result: restart-required");
+    // The restart is the one remaining step; it also brings the Windows runtime gateway along.
+    expect(c.out()).toContain("Next step: run `keiko restart`");
+    expect(c.out()).toContain("the restart also updates the runtime gateway");
     expect(output(c)).not.toContain("SECRET_TOKEN");
     expect(output(c)).not.toContain("/Users/private");
   });
@@ -870,6 +873,9 @@ describe("keiko update CLI", () => {
       "Portable-managed one-click updates run through the Keiko update window.",
     );
     expect(output(c)).toContain("download the latest release asset manually");
+    // One-step Windows update: no separate `keiko gateway-service repair` after the update.
+    expect(output(c)).toContain("updates its Windows runtime gateway by itself");
+    expect(output(c)).not.toContain("keiko gateway-service");
     expect(output(c)).not.toContain("Update session: started");
     expect(output(c)).not.toContain("npm install");
   });

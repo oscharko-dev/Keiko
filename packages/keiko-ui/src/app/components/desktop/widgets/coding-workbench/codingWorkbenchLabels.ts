@@ -736,10 +736,28 @@ export function gatewayServiceMessageKey(
   return reason === undefined ? undefined : GATEWAY_SERVICE_MESSAGE_KEYS.get(reason);
 }
 
+// The broker states the Workbench's Repair resolves: the service is missing, stopped, stale or
+// unreadable. An unqualified build has no helper to install, so no Repair is offered for it.
+const REPAIRABLE_GATEWAY_SERVICE_REASONS: ReadonlySet<string> = new Set([
+  "gateway-service-absent",
+  "gateway-service-stopped",
+  "gateway-service-stale",
+  "gateway-service-unknown",
+]);
+
+/** Whether the Workbench offers Repair for this unavailable reason. */
+export function gatewayServiceRepairable(reason: string | undefined): boolean {
+  return reason !== undefined && REPAIRABLE_GATEWAY_SERVICE_REASONS.has(reason);
+}
+
 // Present the server's first failed prerequisite, without guessing an OS or package lane (#4412).
+// The server names the installation kind when it knows it (npm or desktop package), so the
+// sentence names the one step for that kind.
 const RUNTIME_ACTIVATION_MESSAGE_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map([
   ["runtime-disabled", "codingWorkbench.runtime.disabled"],
   ["platform-unqualified", "codingWorkbench.runtime.platformUnqualified"],
+  ["npm-runtime-package-missing", "codingWorkbench.runtime.npmRuntimePackageMissing"],
+  ["portable-runtime-unverified", "codingWorkbench.runtime.portableRuntimeUnverified"],
   ["dev-lane-refused", "codingWorkbench.runtime.developmentRefused"],
   ["payload-missing", "codingWorkbench.runtime.payloadMissing"],
   ["payload-unapproved", "codingWorkbench.runtime.payloadUnapproved"],

@@ -264,10 +264,13 @@ function releaseEligibilityApplyGuard(
 
 function portableCliApplyGuard(status: UpdateSessionStatus): string | undefined {
   if (!isPortableManagedInstallMode(status.installMode)) return undefined;
+  // The desktop update's native handoff needs the running Keiko's launch identity and shutdown
+  // trigger, which only the in-app attempt holds (ADR-0121 D5); the CLI therefore points there.
   return [
     "Portable-managed one-click updates run through the Keiko update window.",
     "Open Keiko and use Review updates to apply, retry, inspect remediation,",
     "or download the latest release asset manually.",
+    "Keiko then relaunches the new version and updates its Windows runtime gateway by itself.",
   ].join(" ");
 }
 

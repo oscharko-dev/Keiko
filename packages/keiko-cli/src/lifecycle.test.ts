@@ -27,7 +27,12 @@ import {
   type SecurityLogEvent,
 } from "@oscharko-dev/keiko-security";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
-import { resolveExternalOpener, runLifecycleCli, safeKillProcess } from "./lifecycle.js";
+import {
+  resolveExternalOpener,
+  runLifecycleCli,
+  safeKillProcess,
+  type LifecycleCliDeps,
+} from "./lifecycle.js";
 import {
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
   INSTALL_LAYOUT_OVERRIDES_ENV,
@@ -51,6 +56,8 @@ async function runLifecycle(
       : { verifyLaunchIdentity: (): boolean => true };
   return runLifecycleCli(args[0], args[1], args[2], args[3], {
     openExternal: vi.fn(),
+    // Hermetic: the real Windows gateway setup resolves the installed helper.
+    setUpGatewayService: () => Promise.resolve(undefined),
     ...syntheticIdentity,
     ...deps,
   });
@@ -1667,6 +1674,59 @@ describe("runLifecycleCli", () => {
       expect(JSON.stringify(events)).not.toContain("attacker");
     },
   );
+
+  describe("Windows gateway setup", () => {
+    function healthyWindowsStart(
+      root: string,
+      setUpGatewayService: NonNullable<LifecycleCliDeps["setUpGatewayService"]>,
+      healthy = true,
+    ): Promise<number> {
+      const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+      return runLifecycle(
+        "start",
+        ["--no-open", "--start-timeout", "1"],
+        makeIo().io,
+        {},
+        {
+          cwd: root,
+          platform: () => "win32",
+          spawnFn: () => child,
+          fetchImpl: () =>
+            healthy
+              ? Promise.resolve(
+                  Response.json(
+                    { version: SDK_VERSION, launchId: readCurrentLaunchId(root) },
+                    { status: 200 },
+                  ),
+                )
+              : Promise.reject(new Error("connection refused")),
+          isProcessAlive: () => healthy,
+          isPortAvailable: () => Promise.resolve(true),
+          killProcess: vi.fn(),
+          killWindowsTree: () => "succeeded",
+          sleep: () => Promise.resolve(),
+          setUpGatewayService,
+        },
+      );
+    }
+
+    it("sets up the gateway once the UI answered healthy, without changing the exit code", async () => {
+      const root = makeRoot();
+      const setUp = vi.fn<NonNullable<LifecycleCliDeps["setUpGatewayService"]>>(() =>
+        Promise.resolve("declined"),
+      );
+      expect(await healthyWindowsStart(root, setUp)).toBe(0);
+      expect(setUp).toHaveBeenCalledTimes(1);
+      expect(setUp.mock.calls[0]?.[0]).toMatchObject({ stateDir: join(root, ".keiko") });
+    });
+
+    it("does not ask for Windows approval when the start failed", async () => {
+      const root = makeRoot();
+      const setUp = vi.fn(() => Promise.resolve("installed" as const));
+      expect(await healthyWindowsStart(root, setUp, false)).toBe(1);
+      expect(setUp).not.toHaveBeenCalled();
+    });
+  });
 
   it("records normalized layout evidence before evaluating lifecycle state", async () => {
     const root = makeRoot();

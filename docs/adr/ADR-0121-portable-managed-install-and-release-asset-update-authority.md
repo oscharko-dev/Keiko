@@ -295,6 +295,17 @@ safe to defer. A failed download, verification, staging, activation, relaunch, o
 must fail closed and preserve the current working install when safe. This is failure recovery, not a
 user-facing rollback feature.
 
+**Platform services follow the update (one-step Windows setup, 2026-11-17).** An update is not
+complete for coding work while the Windows `KeikoRuntimeGateway` service still runs the previous
+release's helper. The relaunch that ends a governed update, the first launch after setup and the
+manual re-download fallback all end in the same managed `keiko start`, which, once the UI answered
+healthy, brings the service to the new helper through the existing idempotent native install
+(ADR-0043 D19): one UAC prompt when the helper pin changed, none otherwise, and never before the
+restart proof. The CLI keeps refusing portable `keiko update apply`, because only the in-app attempt
+holds the running UI's launch identity and shutdown trigger that the native handoff needs; its
+refusal names Review updates and says that the gateway follows. A package-manager `keiko update
+apply` ends with `keiko restart`, which runs the same step.
+
 The manual re-download fallback is part of the same portable-managed authority rather than a second
 update channel. If a user opens a newer portable release asset while an older attested managed
 install exists, the launcher may validate the clicked package locally, stop the running Keiko UI,
@@ -1346,3 +1357,8 @@ Security review for implementation under this ADR must cover:
   installation. The launcher also shows the failure box of a start that ended non-zero, from a
   closed reason note, every such end leaves one `portable.launch.failed` line, and the first-start
   bound is stated.
+- **2026-11-17 — One-step Windows setup:** Amended D5. The relaunch that completes an update, the
+  first launch and the manual re-download fallback bring the Windows `KeikoRuntimeGateway` service
+  to the new helper after the healthy start (ADR-0043 D19), at most one UAC prompt per helper pin.
+  Portable `keiko update apply` stays refused and now says that the gateway follows the in-app
+  update; a package-manager apply ends with `keiko restart`, which runs the same step.

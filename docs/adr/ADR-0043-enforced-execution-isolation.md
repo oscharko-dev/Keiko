@@ -52,6 +52,10 @@ D18 also gains the sweep of stale tree entries a crashed supervisor left (2026-1
 per-user lock that serializes concurrent runs' grant edits (2026-11-09). D19 also pins the
 Windows npm runtime package's own supervisor (proposed 2026-11-09, pending repository-owner approval).
 
+1.10 — One-step Windows setup amends D19 (2026-11-17): a healthy `keiko start` installs or repairs
+the broker itself, at most one UAC prompt per helper pin, so installing and updating Keiko brings
+the service along; the Workbench offers Repair instead of a terminal command.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -1007,8 +1011,21 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
   time while the single instance serves another tree; the SCM check of the server PID follows, so a
   squatted pipe learns the caller's identity and can never act as the caller.
 - **Updates.** A helper that changes between releases leaves the installed digest stale, and the
-  launch refuses until `repair` runs, at one UAC prompt per change. There is no self-update: that
-  would need a verified signature chain the Windows releases do not have yet.
+  launch refuses until the service is repaired, at one UAC prompt per change. The repair is part of
+  installing and updating Keiko (one-step Windows setup, 2026-11-17): every healthy `keiko start`
+  on Windows — the first launch of a desktop install, the relaunch that completes an in-app update,
+  a manual-ZIP upgrade, and `keiko start`/`keiko restart` of an npm install — reads the broker state
+  and, when it is not ready, runs the same idempotent `--gateway-service-install <pin>` with the
+  release or npm helper (`gateway-service-setup.ts`). It runs only after the UI answered healthy,
+  so a pending approval never delays the start or an update's restart proof, and it never changes
+  the start's exit code. Keiko asks at most once per helper pin: the pin of the last automatic
+  attempt is recorded in `<stateDir>/gateway-service-setup.json`, so a declined approval is not
+  repeated at every launch, and a new Keiko version asks once again. The dev lane keeps its
+  explicit `--dev-lane` command; an operator who installs the service through MDM sets
+  `KEIKO_GATEWAY_SERVICE_SETUP=manual`. This is not unattended elevation: Windows asks the human
+  through UAC, and only the digest-checked native helper runs elevated. There is still no silent
+  self-update of the service: that would need a verified signature chain the Windows releases do
+  not have yet.
 - **Removal.** Uninstall refuses while a durable deny guard remains, because such a guard may still
   protect a live tree and removing it could widen that tree's access. Clearing a guard whose tree
   is known to be gone remains the open recovery work D18 names, so uninstall stays refused until
@@ -1017,7 +1034,11 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
 - **Visibility.** A Windows runtime with a pin reports the broker state on each readiness read,
   because the broker starts delayed after boot and can be installed while Keiko runs. A broker that
   is not ready makes the runtime unavailable with a closed `gateway-service-*` reason, and the
-  Workbench names the command to run. The launch stays fail-closed regardless of the last reading.
+  Workbench offers one Repair action for an absent, stopped, stale or unreadable broker instead of a
+  terminal command. Repair (`POST /api/coding-workbench/runtime/gateway-service/repair`, behind
+  the paired app session) runs the same native install through a verified private copy of the
+  helper, answers a closed outcome (`ready`, `declined`, `failed`, `unavailable`, `busy`; one prompt
+  at a time) and re-reads the state. The launch stays fail-closed regardless of the last reading.
   `keiko uninstall` names the service when its folder exists; it does not remove it, because removal
   needs an administrator.
 - **Standard users.** Status and launch read the running broker's image path from the service
@@ -1036,7 +1057,11 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
 Every action records body-free lifecycle evidence as `cli.gateway-service.*`, with its closed `lane`
 (`release-qualified`, `portable-evaluation`, `dev-checkout` or `npm-runtime-package`), and a change
 of broker state records `coding-runtime.windows-gateway-service`, including the helper digest,
-runtime origin and honest evidence class when composed by the runtime owner. The lifecycle is
+runtime origin and honest evidence class when composed by the runtime owner. The automatic setup
+after a start records `cli.gateway-service.setup` with its closed `outcome` (`ready`, `installed`,
+`declined`, `failed`, `deferred`, `no-helper`, `disabled`, `record-unavailable`), the prior state and
+the lane; the Workbench's Repair records `coding-runtime.windows-gateway-service.repair` under the
+request correlation with its outcome, exit class and helper digest. The lifecycle is
 qualified on the disposable runner by `test-windows-gateway-scm.ps1`, which installs through the
 product path instead of `New-Service`.
 

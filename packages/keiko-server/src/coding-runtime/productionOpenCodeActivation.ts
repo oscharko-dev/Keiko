@@ -54,6 +54,7 @@ import {
 import {
   discoverDevLaneOpenCode,
   discoverNpmLaneOpenCode,
+  npmLaneRuntimePackageExpected,
   type DevLaneName,
   type DevLaneOpenCodeDiscovery,
   type DevLaneOpenCodeRefusalReason,
@@ -74,6 +75,8 @@ import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorks
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
 import {
   discoverPortableOpenCode,
+  installWindowsGatewayService,
+  portableInstallLayoutPresent,
   readWindowsGatewayServiceStatus,
 } from "./productionPortableCodingRuntime.js";
 import {
@@ -173,6 +176,49 @@ const CODING_RUNTIME_DEV_LANE_REFUSED_OPERATION = defineActivityLogOperation({
   proofIds: ["coding-runtime.dev-lane.refused.emitted-line"],
   releaseImpact: "patch",
 });
+
+// #4068: no lane offered a runtime. The line names the installation kind Keiko found, so a support
+// report shows why the Workbench told an npm install to use the desktop package.
+const CODING_RUNTIME_UNQUALIFIED_INSTALL_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.install.unqualified",
+  // An availability fact about this installation, like the gateway state; not a process lifecycle.
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionOpenCodeActivation.recordUnqualifiedInstall",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "platform-unqualified",
+        "npm-runtime-package-missing",
+        "portable-runtime-unverified",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-dev-lane"],
+  proofIds: ["coding-runtime.install.unqualified.emitted-line"],
+  releaseImpact: "minor",
+});
+
+function recordUnqualifiedInstall(
+  activityLog: ServerLogSink,
+  reason: "platform-unqualified" | "npm-runtime-package-missing" | "portable-runtime-unverified",
+): void {
+  activityLog.write(
+    activityLogEvent(
+      CODING_RUNTIME_UNQUALIFIED_INSTALL_OPERATION,
+      { level: "warn", correlationId: UNKNOWN_CORRELATION_ID, errorKind: "unavailable" },
+      { reason },
+    ),
+  );
+}
 
 export interface ProductionOpenCodeActivationInput {
   readonly historyCapture?: ProductionOpenCodeBackendInput["historyCapture"];
@@ -463,6 +509,9 @@ export function windowsGatewayServiceFacts(
           origin: runtimeVersionFacts(portable).origin,
           activityLog: input.activityLog ?? processServerLogSink(),
           runStatus: readWindowsGatewayServiceStatus,
+          // The Workbench's Repair is the person's explicit choice for every origin, the dev lane
+          // included; Windows still asks through UAC.
+          runInstall: installWindowsGatewayService,
         }),
       };
 }
@@ -537,7 +586,22 @@ function resolveRuntime(
     recordDevLaneDiscovery(activityLog, npmLane, "npm-runtime-package");
     return devLaneRuntime(npmLane);
   }
-  return devLaneRuntime(discovery);
+  const unavailableReason = unqualifiedInstallReason(host);
+  recordUnqualifiedInstall(activityLog, unavailableReason);
+  return { unavailableReason };
+}
+
+/**
+ * No lane offered a runtime. The Workbench names the one step for the installation kind it found
+ * (#4068): a desktop package whose bundled runtime did not verify, an npm installation without the
+ * runtime package for this computer, or neither (a checkout or an unsupported platform).
+ */
+function unqualifiedInstallReason(
+  host: Pick<ProductionOpenCodeActivationInput, "env" | "platform" | "arch">,
+): "platform-unqualified" | "npm-runtime-package-missing" | "portable-runtime-unverified" {
+  if (portableInstallLayoutPresent(host)) return "portable-runtime-unverified";
+  if (npmLaneRuntimePackageExpected(host)) return "npm-runtime-package-missing";
+  return "platform-unqualified";
 }
 
 function recordDevLaneDiscovery(

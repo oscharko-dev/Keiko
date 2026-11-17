@@ -157,15 +157,16 @@ const CLI_GATEWAY_SERVICE_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-type GatewayServiceState = ActivityLogFields<
+export type GatewayServiceState = ActivityLogFields<
   typeof CLI_GATEWAY_SERVICE_COMPLETED_OPERATION
 >["state"];
-type GatewayServiceFailure = ActivityLogFields<
+export type GatewayServiceFailure = ActivityLogFields<
   typeof CLI_GATEWAY_SERVICE_FAILED_OPERATION
 >["reason"];
+export type { GatewayServiceLane };
 
 // The exit codes of the native --gateway-service-* commands (gateway_install.h).
-const NATIVE_STATES: Readonly<Record<number, GatewayServiceState>> = {
+export const NATIVE_STATES: Readonly<Record<number, GatewayServiceState>> = {
   0: "ready",
   10: "absent",
   11: "stopped",
@@ -173,7 +174,7 @@ const NATIVE_STATES: Readonly<Record<number, GatewayServiceState>> = {
   13: "state-unknown",
 };
 
-const NATIVE_FAILURES: Readonly<Record<number, GatewayServiceFailure>> = {
+export const NATIVE_FAILURES: Readonly<Record<number, GatewayServiceFailure>> = {
   20: "elevation-declined",
   21: "source-mismatch",
   22: "target-unsafe",
@@ -364,14 +365,14 @@ function failedEvent(
   );
 }
 
-async function defaultResolveHelper(
+export async function defaultResolveHelper(
   env: Readonly<Record<string, string | undefined>>,
   lane: GatewayServiceLane,
 ): Promise<WindowsGatewayHelper | undefined> {
   return resolveWindowsGatewayHelper(await loadServer(), env, lane);
 }
 
-function defaultRunHelper(helperPath: string, args: readonly string[]): Promise<number> {
+export function defaultRunHelper(helperPath: string, args: readonly string[]): Promise<number> {
   return new Promise((resolve, reject) => {
     const child = spawn(helperPath, [...args], {
       stdio: "ignore",
@@ -385,7 +386,7 @@ function defaultRunHelper(helperPath: string, args: readonly string[]): Promise<
   });
 }
 
-function helperArguments(action: GatewayServiceAction, pin: string): readonly string[] {
+export function helperArguments(action: GatewayServiceAction, pin: string): readonly string[] {
   if (action === "status") return ["--gateway-service-status", pin];
   if (action === "uninstall") return ["--gateway-service-uninstall"];
   return ["--gateway-service-install", pin];

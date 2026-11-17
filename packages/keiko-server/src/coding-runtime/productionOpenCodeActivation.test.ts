@@ -240,6 +240,62 @@ describe("production OpenCode activation", () => {
     });
   });
 
+  // #4068: an npm installation on Windows has no runtime package (none is published yet), and the
+  // Workbench told the person only that no supported runtime exists. The reason now names the
+  // installation kind, so the sentence names the one step: the desktop package.
+  it("names an npm installation that lacks this computer's runtime package", () => {
+    const prefix = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-npm-win-")));
+    roots.push(prefix);
+    const keikoRoot = join(prefix, "node_modules", "@oscharko-dev", "keiko");
+    mkdirSync(join(keikoRoot, "dist", "cli"), { recursive: true });
+    writeFileSync(join(keikoRoot, "package.json"), '{"name":"@oscharko-dev/keiko"}');
+    writeFileSync(join(keikoRoot, "dist", "cli", "index.js"), "");
+    const activity: ServerLogEvent[] = [];
+
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { KEIKO_CLI_BIN_PATH: join(keikoRoot, "dist", "cli", "index.js"), KEIKO_UI_PORT: "1983" },
+        { activity, platform: "win32", arch: "x64" },
+      ),
+    );
+
+    expect(result.unavailableReason).toBe("npm-runtime-package-missing");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.install.unqualified.emitted-line",
+        formatActivityLogProofLine(activity.at(-1) ?? {}),
+      ),
+    ).toMatchObject({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      level: "warn",
+      errorKind: "unavailable",
+      reason: "npm-runtime-package-missing",
+    });
+  });
+
+  it("names a desktop installation whose bundled runtime did not verify", () => {
+    const resourceRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-portable-")));
+    roots.push(resourceRoot);
+    const appRoot = join(resourceRoot, "app");
+    mkdirSync(join(appRoot, "dist", "cli"), { recursive: true });
+    writeFileSync(join(appRoot, "package.json"), '{"name":"@oscharko-dev/keiko"}');
+    writeFileSync(join(appRoot, "dist", "cli", "index.js"), "");
+    const activity: ServerLogEvent[] = [];
+
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { KEIKO_CLI_BIN_PATH: join(appRoot, "dist", "cli", "index.js"), KEIKO_UI_PORT: "1983" },
+        { activity, platform: "linux", arch: "x64" },
+      ),
+    );
+
+    expect(result.unavailableReason).toBe("portable-runtime-unverified");
+    expect(activity.at(-1)).toMatchObject({
+      op: "coding-runtime.install.unqualified",
+      extra: { reason: "portable-runtime-unverified" },
+    });
+  });
+
   it("classifies a tampered dev-lane payload separately from routine unavailability", () => {
     const staged = devLaneFixture();
     const activity: ServerLogEvent[] = [];
