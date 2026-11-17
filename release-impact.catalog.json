@@ -4498,7 +4498,7 @@
       "releaseNoteBullets": [
         "Chat models are activated in Settings > Models, one at a time or with Activate all, and can be deactivated there again. Keiko no longer sends a check to every model at startup, so a shared gateway does not load models nobody uses. After each start, activate the model you want to use before sending. #4450",
         "Administrators can build Keiko as one folder from the portable release archive. It starts without installation or download and keeps its data in .keiko-standalone in the user's home folder. A team gateway configuration placed beside the start files is adopted at start. The folder package is not published with this release. #4455",
-        "On Windows, the Coding Workbench says that this build cannot start coding runs instead of suggesting a reinstall. A checkout registered under another spelling of the same folder opens, and a failed checkout names a missing registration or a Git problem. #4404 #4410 #4068",
+        "On Windows, a healthy start of an installed Keiko sets up the Windows runtime gateway service with one Windows approval, the Coding Workbench offers Repair when the service is missing or stopped, and a full uninstall removes it. A Windows npm installation without the coding runtime package points to the Windows desktop package instead of a reinstall. A checkout registered under another spelling of the same folder opens, and a failed checkout names a missing registration or a Git problem. #4454 #4404 #4410 #4068",
         "Knowledge Pods without indexed chunks say so instead of reporting complete embedding. Chats connected only to Knowledge Pods show Knowledge evidence with their own citation and reference counts. Citations of verified Knowledge text sources open in the Editor. #4448 #4443",
         "The standalone Documentation Browser and the Agent preset launcher are retired. HTML citations keep their page and section labels and their source check. Canvas controls stay available in fullscreen. #4448"
       ],
@@ -4508,7 +4508,7 @@
         "reviewedAt": "2026-11-17",
         "humanApproved": true,
         "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4455#6954262338",
-        "rationale": "The repository owner authorized stable Keiko 1.5.2 for the standalone folder package, the bundled #4448 Windows QA follow-up and the fixable Windows user findings in one pull request. The protected dev checks, resolved reviews, and exact-commit release workflow govern publication. Windows Coding package qualification remains tracked in #4068; standalone archives are built locally and are not published with this release."
+        "rationale": "The repository owner authorized stable Keiko 1.5.2 for the standalone folder package, the bundled #4448 Windows QA follow-up, the contributor's one-step Windows gateway setup from #4454 (included at the owner's request) and the fixable Windows user findings in one pull request. The protected dev checks, resolved reviews, and exact-commit release workflow govern publication. Windows Coding package qualification remains tracked in #4068; standalone archives are built locally and are not published with this release."
       }
     }
   ]

@@ -772,9 +772,6 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "runtime-start-failed",
   "runtime-turn-expired",
   "runtime-turn-failed",
-  // #4404: a Windows installation asked for a Coding run; the Windows runtime gateway is not
-  // published for this version, so the Workbench says so instead of asking for a reinstall.
-  "windows-runtime-unpublished",
   // #4346: an operator still sets the retired `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS`, which
   // Keiko no longer reads because it does not cap prompt tokens.
   "retired-setting-ignored",

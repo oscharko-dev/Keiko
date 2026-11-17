@@ -608,15 +608,29 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Reparatur wurde nicht abgeschlossen. Aktualisiere die Task Workspaces und versuche es erneut.",
   "codingWorkbench.setup.findingUnknown": "sein Zustand konnte nicht erneut verifiziert werden",
   "codingWorkbench.gatewayService.absent":
-    "Coding-Läufe brauchen das Windows-Runtime-Gateway, das nicht installiert ist. Führe im Terminal aus: keiko gateway-service install. Windows fragt einmal nach der Freigabe.",
+    "Coding-Läufe brauchen das Windows-Runtime-Gateway, das nicht installiert ist. Wähle Reparieren; Windows fragt einmal nach der Freigabe.",
   "codingWorkbench.gatewayService.stopped":
-    "Das Windows-Runtime-Gateway ist gestoppt. Es startet kurz nach dem Windows-Start. Bleibt das so, führe im Terminal aus: keiko gateway-service repair",
+    "Das Windows-Runtime-Gateway ist gestoppt. Es startet kurz nach dem Windows-Start. Bleibt das so, wähle Reparieren.",
   "codingWorkbench.gatewayService.stale":
-    "Das Windows-Runtime-Gateway passt nicht zu dieser Keiko-Version. Führe im Terminal aus: keiko gateway-service repair. Windows fragt einmal nach der Freigabe.",
+    "Das Windows-Runtime-Gateway passt nicht zu dieser Keiko-Version. Wähle Reparieren; Windows fragt einmal nach der Freigabe.",
   "codingWorkbench.gatewayService.unknown":
-    "Keiko konnte den Zustand des Windows-Runtime-Gateways nicht lesen. Führe im Terminal aus: keiko gateway-service status",
+    "Keiko konnte den Zustand des Windows-Runtime-Gateways nicht lesen. Wähle Reparieren, um es neu einzurichten.",
+  "codingWorkbench.gatewayService.repair": "Reparieren",
+  "codingWorkbench.gatewayService.repairing":
+    "Warte auf die Freigabe durch Windows. Erscheint kein Dialog, sieh in der Taskleiste nach dem Schild-Symbol.",
+  "codingWorkbench.gatewayService.repairReady": "Das Windows-Runtime-Gateway ist bereit.",
+  "codingWorkbench.gatewayService.repairDeclined":
+    "Die Freigabe durch Windows wurde abgelehnt, deshalb wurde nichts geändert. Wähle Reparieren, um erneut zu fragen.",
+  "codingWorkbench.gatewayService.repairFailed":
+    "Das Windows-Runtime-Gateway konnte nicht repariert werden. Versuch es erneut mit Reparieren; schlägt es weiter fehl, starte Keiko neu.",
+  "codingWorkbench.gatewayService.repairUnavailable":
+    "Diese Keiko-Installation kann das Windows-Runtime-Gateway nicht selbst reparieren. Installiere Keiko mit keiko-windows-x64-setup.exe von der Keiko-Release-Seite.",
+  "codingWorkbench.gatewayService.repairBusy":
+    "Eine Reparatur wartet bereits auf die Freigabe durch Windows.",
   "codingWorkbench.gatewayService.unqualified":
     "Dieser Keiko-Build kann unter Windows keine Coding-Läufe starten. Sie brauchen das Windows-Runtime-Gateway, das nur ein freigegebenes Keiko-Paket nutzen kann. Ein anderes Repository zu wählen, ändert daran nichts.",
+  "codingWorkbench.gatewayService.managedOutside":
+    "Coding-Läufe brauchen unter Windows das Windows-Runtime-Gateway, einen Systemdienst, den dieses Keiko nicht einrichtet. Chat und die anderen Fenster funktionieren wie gewohnt.",
   "codingWorkbench.installVolume.notLocal":
     "Coding-Läufe können nicht starten, weil Keiko in einem Netzwerkordner oder einem umgeleiteten Ordner installiert ist. Installiere Keiko auf einem lokalen Laufwerk dieses Computers.",
   "codingWorkbench.installVolume.unverified":
@@ -627,6 +641,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Coding-Läufe sind in der Konfiguration dieser Installation deaktiviert. Bitte den Betreiber, die Coding-Runtime zu aktivieren und Keiko neu zu starten.",
   "codingWorkbench.runtime.platformUnqualified":
     "Keiko hat für diese Installation keine unterstützte Coding-Runtime gefunden. Installiere das Keiko-Paket für diesen Computer mit der zugehörigen Runtime und starte Keiko neu.",
+  "codingWorkbench.runtime.npmRuntimePackageMissing":
+    "Dieses Keiko wurde mit npm installiert, und das Coding-Runtime-Paket für diesen Computer fehlt. Installiere stattdessen das Keiko-Desktop-Paket für diesen Computer (unter Windows: keiko-windows-x64-setup.exe von der Keiko-Release-Seite); es bringt die Coding-Runtime mit.",
+  "codingWorkbench.runtime.portableRuntimeUnverified":
+    "Diese Keiko-Desktop-Installation konnte ihre mitgelieferte Coding-Runtime nicht prüfen. Aktualisiere Keiko über „Updates prüfen“ oder lade keiko-windows-x64-setup.exe erneut von der Keiko-Release-Seite.",
   "codingWorkbench.runtime.developmentRefused":
     "Die Entwicklungs-Runtime konnte für diesen Checkout nicht aktiviert werden. Prüfe das Dev-Setup und den Ablehnungsgrund im Aktivitätsprotokoll und starte Keiko danach neu.",
   "codingWorkbench.runtime.payloadMissing":

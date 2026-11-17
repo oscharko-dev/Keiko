@@ -9,6 +9,7 @@ import {
   writeInstallLayoutOverrideEvidenceWithFactory,
 } from "./install-layout.js";
 import { runLifecycleCli } from "./lifecycle.js";
+import { PORTABLE_MANAGEMENT_ENV } from "./portable-management.js";
 import {
   activateMacosPortableRuntime,
   type MacosRuntimeActivationFn,
@@ -171,11 +172,6 @@ interface PortableRawOptions {
   readonly inPlace: boolean;
   readonly provisionedConfig: string | undefined;
 }
-
-// The declaration the server's install-mode detection reads (keiko-server
-// update-portable-install-mode.ts, PORTABLE_MANAGEMENT_ENV). Duplicated on purpose: the CLI must
-// not load the server module graph to learn one name; each side's tests pin the literal.
-const PORTABLE_MANAGEMENT_ENV = "KEIKO_PORTABLE_MANAGEMENT";
 
 const USAGE = `Usage:
   keiko portable setup  [--target TARGET] [--portable-root PATH] [--managed-root PATH] [--state-dir PATH] [--dry-run]

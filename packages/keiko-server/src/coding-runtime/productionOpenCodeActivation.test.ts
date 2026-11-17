@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { ServerLogEvent } from "../observability/index.js";
 import { makeOwnerPrivateDirectory } from "../test-support/owner-private-fixture.js";
 import {
@@ -128,33 +127,6 @@ describe("production OpenCode activation", () => {
     expect(result.runtimeVersion).toBeUndefined();
   });
 
-  it("names the Windows answer, not a reinstall, when a Windows installation has no runtime", () => {
-    // #4404, #4410: a Windows npm installation found no runtime package and the Workbench told the
-    // person to install the Keiko package with its runtime, which no published Windows package has.
-    const records: ServerDiagnosticRecord[] = [];
-    const result = resolveProductionOpenCodeActivation({
-      ...activationInput(
-        { KEIKO_UI_PORT: "1983", KEIKO_CLI_BIN_PATH: "C:\\nonexistent\\entry.js" },
-        { withSecureRead: true, platform: "win32", arch: "x64" },
-      ),
-      diagnostics: {
-        record: (record: ServerDiagnosticRecord): void => {
-          records.push(record);
-        },
-      },
-    });
-    expect(result.ports).toBeUndefined();
-    expect(result.unavailableReason).toBe("windows-runtime-unpublished");
-    expect(result.runtimeVersion).toBeUndefined();
-    // The support report shows why: one routine, body-free observation, not a failure.
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      operation: "coding-runtime.activation.unavailable",
-      diagnosticOutcome: "routine",
-      code: "reason=windows-runtime-unpublished",
-    });
-  });
-
   it("keeps the install-the-runtime answer for a macOS installation without a runtime package", () => {
     const result = resolveProductionOpenCodeActivation(
       activationInput(
@@ -275,6 +247,62 @@ describe("production OpenCode activation", () => {
       level: "warn",
       errorKind: "unavailable",
       extra: { lane: "npm-runtime-package", reason: "payload-missing" },
+    });
+  });
+
+  // #4068: an npm installation on Windows has no runtime package (none is published yet), and the
+  // Workbench told the person only that no supported runtime exists. The reason now names the
+  // installation kind, so the sentence names the one step: the desktop package.
+  it("names an npm installation that lacks this computer's runtime package", () => {
+    const prefix = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-npm-win-")));
+    roots.push(prefix);
+    const keikoRoot = join(prefix, "node_modules", "@oscharko-dev", "keiko");
+    mkdirSync(join(keikoRoot, "dist", "cli"), { recursive: true });
+    writeFileSync(join(keikoRoot, "package.json"), '{"name":"@oscharko-dev/keiko"}');
+    writeFileSync(join(keikoRoot, "dist", "cli", "index.js"), "");
+    const activity: ServerLogEvent[] = [];
+
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { KEIKO_CLI_BIN_PATH: join(keikoRoot, "dist", "cli", "index.js"), KEIKO_UI_PORT: "1983" },
+        { activity, platform: "win32", arch: "x64" },
+      ),
+    );
+
+    expect(result.unavailableReason).toBe("npm-runtime-package-missing");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.install.unqualified.emitted-line",
+        formatActivityLogProofLine(activity.at(-1) ?? {}),
+      ),
+    ).toMatchObject({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      level: "warn",
+      errorKind: "unavailable",
+      reason: "npm-runtime-package-missing",
+    });
+  });
+
+  it("names a desktop installation whose bundled runtime did not verify", () => {
+    const resourceRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-portable-")));
+    roots.push(resourceRoot);
+    const appRoot = join(resourceRoot, "app");
+    mkdirSync(join(appRoot, "dist", "cli"), { recursive: true });
+    writeFileSync(join(appRoot, "package.json"), '{"name":"@oscharko-dev/keiko"}');
+    writeFileSync(join(appRoot, "dist", "cli", "index.js"), "");
+    const activity: ServerLogEvent[] = [];
+
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { KEIKO_CLI_BIN_PATH: join(appRoot, "dist", "cli", "index.js"), KEIKO_UI_PORT: "1983" },
+        { activity, platform: "linux", arch: "x64" },
+      ),
+    );
+
+    expect(result.unavailableReason).toBe("portable-runtime-unverified");
+    expect(activity.at(-1)).toMatchObject({
+      op: "coding-runtime.install.unqualified",
+      extra: { reason: "portable-runtime-unverified" },
     });
   });
 
@@ -417,6 +445,41 @@ describe("production OpenCode activation", () => {
 
     // The fixture supervisor answers no known broker state, on Windows and on a POSIX host alike.
     expect(result.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
+    expect(result.windowsGatewayService?.repair).toBeTypeOf("function");
+  });
+
+  // ADR-0121 D9: the standalone folder package declares itself managed outside the app, and such an
+  // installation sets up no system service, so the Workbench offers no Repair there. An unreadable
+  // declaration fails closed the same way; `user-local` keeps Keiko's own Repair.
+  it.each(["organization-managed", "machine-managed", "not-a-known-mode"])(
+    "offers no Windows gateway Repair for a launch managed outside the app (%s)",
+    (management) => {
+      const staged = devLaneFixture("windows-x64");
+      const result = resolveProductionOpenCodeActivation(
+        activationInput(
+          { ...staged.env, KEIKO_UI_PORT: "1983", KEIKO_PORTABLE_MANAGEMENT: management },
+          { platform: "win32", arch: "x64", stateDir: join(staged.root, "runtime-state") },
+        ),
+      );
+
+      expect(result.windowsGatewayService?.unavailableReason()).toBe(
+        "gateway-service-managed-outside",
+      );
+      expect(result.windowsGatewayService?.repair).toBeUndefined();
+    },
+  );
+
+  it("keeps the Windows gateway Repair for a user-local launch", () => {
+    const staged = devLaneFixture("windows-x64");
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { ...staged.env, KEIKO_UI_PORT: "1983", KEIKO_PORTABLE_MANAGEMENT: "user-local" },
+        { platform: "win32", arch: "x64", stateDir: join(staged.root, "runtime-state") },
+      ),
+    );
+
+    expect(result.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
+    expect(result.windowsGatewayService?.repair).toBeTypeOf("function");
   });
 
   it("has no Windows gateway fact for a macOS dev lane", () => {

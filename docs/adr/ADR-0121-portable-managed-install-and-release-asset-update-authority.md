@@ -296,6 +296,17 @@ safe to defer. A failed download, verification, staging, activation, relaunch, o
 must fail closed and preserve the current working install when safe. This is failure recovery, not a
 user-facing rollback feature.
 
+**Platform services follow the update (one-step Windows setup, 2026-11-17).** An update is not
+complete for coding work while the Windows `KeikoRuntimeGateway` service still runs the previous
+release's helper. The relaunch that ends a governed update, the first launch after setup and the
+manual re-download fallback all end in the same managed `keiko start`, which, once the UI answered
+healthy, brings the service to the new helper through the existing idempotent native install
+(ADR-0043 D19): one UAC prompt when the helper pin changed, none otherwise, and never before the
+restart proof. The CLI keeps refusing portable `keiko update apply`, because only the in-app attempt
+holds the running UI's launch identity and shutdown trigger that the native handoff needs; its
+refusal names Review updates and says that the gateway follows. A package-manager `keiko update
+apply` ends with `keiko restart`, which runs the same step.
+
 The manual re-download fallback is part of the same portable-managed authority rather than a second
 update channel. If a user opens a newer portable release asset while an older attested managed
 install exists, the launcher may validate the clicked package locally, stop the running Keiko UI,
@@ -1179,8 +1190,12 @@ to the UI process. Install-mode detection reads that declaration (closed values 
 disposition before it judges any registration. The app therefore states that the install is
 managed outside the app and makes no registry or release request (`update-preflight.test.ts` pins
 that for this disposition); it never offers the portable setup, whose
-instruction would lead the person to the installation this form exists to avoid. A new version
-arrives as a new folder.
+instruction would lead the person to the installation this form exists to avoid. The same
+declaration keeps the one-step Windows setup of ADR-0043 D19 away: the start sets up no
+`KeikoRuntimeGateway` service and asks for no approval, and the Coding Workbench offers no Repair.
+It says instead that Coding runs on Windows need that system service, which this Keiko does not set
+up (`gateway-service-managed-outside`). Windows Coding therefore still never runs without the broker;
+an administrator who installs it separately enables it. A new version arrives as a new folder.
 
 **Provisioned configuration.** An administrator may place one `keiko.config.json` beside the start
 files. `keiko start --provisioned-config PATH` adopts it as the gateway configuration whenever its
@@ -1428,5 +1443,12 @@ Security review for implementation under this ADR must cover:
   installation. It repacks the reviewed portable archive unchanged, starts it with
   `keiko portable launch --in-place` (no managed setup, no registration, state in
   `~/.keiko-standalone`), reports itself through the existing `portable-it-managed` disposition
-  and adopts an administrator's `keiko.config.json` with `keiko start --provisioned-config`. D1 to
-  D8 are unchanged; the operating system's download checks and D7 are not relaxed.
+  and adopts an administrator's `keiko.config.json` with `keiko start --provisioned-config`. Its
+  management declaration also keeps the one-step Windows gateway setup away: no service, no UAC
+  prompt, no Repair (`gateway-service-managed-outside`). D1 to D8 are unchanged; the operating
+  system's download checks and D7 are not relaxed.
+- **2026-11-17 — One-step Windows setup:** Amended D5. The relaunch that completes an update, the
+  first launch and the manual re-download fallback bring the Windows `KeikoRuntimeGateway` service
+  to the new helper after the healthy start (ADR-0043 D19), at most one UAC prompt per helper pin.
+  Portable `keiko update apply` stays refused and now says that the gateway follows the in-app
+  update; a package-manager apply ends with `keiko restart`, which runs the same step.

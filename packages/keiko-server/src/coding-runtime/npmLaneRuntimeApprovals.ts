@@ -61,10 +61,15 @@ const HELPER_MACOS_X64 = {
   helperSizeBytes: 18_160,
 } as const;
 
-// Built on Windows with MSVC and `/Brepro` (#4068), so identical sources yield these exact bytes.
+// The Windows release build (owner decision 2026-11-17, "Ja, umstellen"): the portable release's
+// secure-read image, built by the release workflow with MSVC 14.51 and `/Brepro` at
+// `1906b6a5f28a…` from the unchanged helper source tree. The npm package and the desktop package now
+// carry the same Windows helper and supervisor bytes. The earlier local MSVC 14.44 build
+// (`1318171b…`) is no longer approved; no package with it was ever published.
 const HELPER_WINDOWS_X64 = {
-  helperSha256: "1318171b0544702ef5f0f9f201084767b3182279c99012278812a5dfe27ede4d",
+  helperSha256: "65cc98c377f0e82494c54a1dd68a5be85fcd7b80272679638579aff23f4ab9e6",
   helperSizeBytes: 129_024,
+  helperSourceCommit: "1906b6a5f28a4ec51fa93a18a3affade7194a126",
 } as const;
 
 const RUNTIME_SUPERVISOR_WINDOWS_X64: NpmLaneRuntimeSupervisorApproval = Object.freeze({
@@ -111,8 +116,8 @@ export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
 
 /**
  * The published Windows 1.5.0 artifact set (#4404), independently authenticated with the existing
- * portable-release key. Its supervisor and OpenCode are the same approved bytes as the npm lane;
- * its secure-read image is a different build of the same source. Keep the npm pin unchanged.
+ * portable-release key. Its supervisor, secure-read image and OpenCode are the same approved bytes
+ * as the npm lane (one set of Windows native bytes for both install kinds, 2026-11-17).
  * Source: v1.5.0/windows-x64-portable-manifest.json, release metadata 446705441, commit
  * 1906b6a5f28a4ec51fa93a18a3affade7194a126. These pins permit the existing functional broker lane;
  * they are not Authenticode or platform-qualification evidence.
@@ -120,8 +125,6 @@ export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
 export const WINDOWS_PORTABLE_RUNTIME_APPROVAL: CodingRuntimeArtifactApproval = Object.freeze({
   ...SHARED,
   ...HELPER_WINDOWS_X64,
-  helperSha256: "65cc98c377f0e82494c54a1dd68a5be85fcd7b80272679638579aff23f4ab9e6",
-  helperSourceCommit: "1906b6a5f28a4ec51fa93a18a3affade7194a126",
   executableTreeSha256: NPM_LANE_RUNTIME_APPROVALS["windows-x64"].executableTreeSha256,
   sbomSha256: NPM_LANE_RUNTIME_APPROVALS["windows-x64"].sbomSha256,
   runtimeSupervisor: RUNTIME_SUPERVISOR_WINDOWS_X64,

@@ -15,7 +15,9 @@ Workbench lists its coding models, and every attempt to start a run shows:
 > active.
 
 `GET /api/coding-workbench/runtime/readiness` answers `runtimeAvailable: false` with
-`runtimeUnavailableReason: "platform-unqualified"`.
+`runtimeUnavailableReason: "npm-runtime-package-missing"` on a computer that has an approved
+runtime package (macOS, Windows) and `"platform-unqualified"` elsewhere. The Workbench then says
+that Keiko was installed with npm and names the desktop package for this computer.
 
 **Root Cause**
 
@@ -27,7 +29,8 @@ npm package carries neither, so until 1.1.2 an npm installation could never star
 
 1. `npx keiko support export`, then `npx keiko support analyze <report.json>` on the report path it prints.
 2. Look for `coding-runtime.dev-lane.activated` with `lane: "npm-runtime-package"`. When it is
-   absent, no runtime package is installed.
+   absent, no runtime package is installed, and `coding-runtime.install.unqualified` names the
+   installation kind Keiko found (`reason: "npm-runtime-package-missing"`).
 3. `coding-runtime.dev-lane.refused` with `lane: "npm-runtime-package"` means a runtime package is
    installed and failed verification; `reason` names the first failed check
    (`payload-tampered`, `secure-read-helper-stale`, `native-helper-directory-untrusted`, …).
@@ -73,10 +76,11 @@ a developer and qualification override, not the remedy for a customer installati
 The npm lane is digest-verified, not platform-signed: the readiness answer reports
 `runtimeEvidenceClass: "functional-not-platform-qualified"`, and on macOS the engine runs without
 the Endpoint Security containment a signed desktop package adds. Windows and Linux installations
-use the desktop packages. A Windows installation without any runtime answers
-`runtimeUnavailableReason: "windows-runtime-unpublished"` and the Workbench says that this Keiko
-build cannot start coding runs on Windows: no published Windows package carries a runtime that may
-start runs yet, so reinstalling does not help (#4404, #4410; qualification is tracked in #4068).
+use the desktop packages: the Windows coding-runtime package
+(`@oscharko-dev/keiko-coding-runtime-win32-x64`) is not published yet, so a Windows npm
+installation cannot start coding runs. Install `keiko-windows-x64-setup.exe` from the Keiko release
+page instead; it brings the runtime and sets up the Windows runtime gateway service on its first
+launch (one Windows approval).
 
 **Prevention**
 

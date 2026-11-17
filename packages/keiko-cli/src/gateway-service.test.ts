@@ -41,7 +41,7 @@ function deps(exitCode: number | undefined, calls: string[][] = []): GatewayServ
     platform: "win32",
     resolveHelper: (): Promise<WindowsGatewayHelper> =>
       Promise.resolve({ helperPath: HELPER, helperSha256: PIN }),
-    runHelper: (_path, args): Promise<number> => {
+    runHelper: (_helper, args): Promise<number> => {
       calls.push([...args]);
       return exitCode === undefined
         ? Promise.reject(new Error(`spawn failed for ${HELPER}`))
@@ -60,6 +60,22 @@ describe("keiko gateway-service", () => {
     const { io } = makeIo();
     expect(await runGatewayServiceCli([action], io, {}, deps(0, calls))).toBe(0);
     expect(calls).toEqual([args]);
+  });
+
+  // ADR-0121 D9 keeps the automatic setup and the Workbench Repair away from an installation
+  // managed outside the app; an administrator's explicit command still installs the broker there.
+  it("runs an explicit install in an installation managed outside the app", async () => {
+    const calls: string[][] = [];
+    const { io } = makeIo();
+    expect(
+      await runGatewayServiceCli(
+        ["install"],
+        io,
+        { KEIKO_PORTABLE_MANAGEMENT: "organization-managed" },
+        deps(0, calls),
+      ),
+    ).toBe(0);
+    expect(calls).toEqual([["--gateway-service-install", PIN]]);
   });
 
   it("removes the service without a pin and treats an absent service as success", async () => {

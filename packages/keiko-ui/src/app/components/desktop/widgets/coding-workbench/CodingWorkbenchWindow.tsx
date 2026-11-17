@@ -19,6 +19,7 @@ import { useCodingTaskSession, type CodingTaskSession } from "./useCodingTaskSes
 import { usePromptDeliveryNotice } from "./usePromptDeliveryNotice";
 import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
 import { CodingWorkbenchSchedules } from "./CodingWorkbenchSchedules";
+import { CodingWorkbenchGatewayRepair } from "./CodingWorkbenchGatewayRepair";
 import { CodingTaskForkNotice } from "./CodingTaskForkNotice";
 import {
   CodingWorkbenchDeliveryReview,
@@ -1520,6 +1521,12 @@ function WorkbenchContent({ alert, workbenchLabel, ...columns }: WorkbenchConten
         <WorkbenchHeader columns={columns} />
         <div className={styles.body}>
           <WorkbenchAlert message={alert} failure={visibleAlertFailure(state)} />
+          {state.runtime.value?.runtimeAvailable === false ? (
+            <CodingWorkbenchGatewayRepair
+              reason={state.runtime.value.runtimeUnavailableReason}
+              onRepaired={columns.actions.refreshRuntime}
+            />
+          ) : null}
           <WorkbenchStatusNotice state={state} />
           <WorkbenchColumns {...columns} />
         </div>

@@ -45,7 +45,9 @@ function approvedRuntime(): CatalogRuntime {
 }
 
 describe("npm-lane runtime approvals", () => {
-  it("adds the authenticated public Windows artifact without changing the npm image", () => {
+  // Owner decision 2026-11-17 ("Ja, umstellen"): the npm lane carries the portable release's Windows
+  // helper instead of a separate local build, so both install kinds share one set of native bytes.
+  it("pins one set of Windows native bytes for the npm and the desktop package", () => {
     expect(WINDOWS_PORTABLE_RUNTIME_APPROVAL).toMatchObject({
       helperSha256: "65cc98c377f0e82494c54a1dd68a5be85fcd7b80272679638579aff23f4ab9e6",
       helperSizeBytes: 129_024,
@@ -64,11 +66,19 @@ describe("npm-lane runtime approvals", () => {
         sourceTreeSha256: "ab0ad9d08504dc28eb81acdf6e4869bd69200eeebc83771df60085330ca27748",
       },
     });
-    expect(NPM_LANE_RUNTIME_APPROVALS["windows-x64"].helperSha256).toBe(
+    const npm = NPM_LANE_RUNTIME_APPROVALS["windows-x64"];
+    for (const field of [
+      "helperSha256",
+      "helperSizeBytes",
+      "helperSourceCommit",
+      "helperSourceTreeSha256",
+    ] as const) {
+      expect(npm[field], field).toBe(WINDOWS_PORTABLE_RUNTIME_APPROVAL[field]);
+    }
+    expect(WINDOWS_PORTABLE_RUNTIME_APPROVAL.runtimeSupervisor).toBe(npm.runtimeSupervisor);
+    // The retired local MSVC 14.44 build approves nothing any more.
+    expect(npm.helperSha256).not.toBe(
       "1318171b0544702ef5f0f9f201084767b3182279c99012278812a5dfe27ede4d",
-    );
-    expect(WINDOWS_PORTABLE_RUNTIME_APPROVAL.runtimeSupervisor).toBe(
-      NPM_LANE_RUNTIME_APPROVALS["windows-x64"].runtimeSupervisor,
     );
   });
   it.each(Object.entries(NPM_LANE_RUNTIME_APPROVALS))(
