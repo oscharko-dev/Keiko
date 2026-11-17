@@ -1,4 +1,5 @@
 import { workspaceStorageArgs } from "./support/workspace-storage.js";
+import { activateChatModel } from "./support/chat-model-activation.js";
 // Voice Dialogue browser smoke. Drives the REAL app composer in headless Chromium through the documented
 // Studio path (Left Rail → Chat History → New). It proves the colleague-like dialogue surface renders
 // and starts the Realtime WebRTC transport from the single Voice Dialogue switch:
@@ -33,14 +34,6 @@ const CHAT_MODEL_ID = "e2e-chat-model";
 const PROVIDER_CANONICAL_TURN_ID_PATTERN = /^client-turn-[0-9a-f]{32}-[0-9a-f]{64}$/u;
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const tempProjects: string[] = [];
-
-async function verifyChatModel(request: APIRequestContext): Promise<void> {
-  const response = await request.post("/api/gateway/readiness", {
-    headers: MUTATION_HEADERS,
-    data: { modelId: CHAT_MODEL_ID, options: { probes: ["chat"] } },
-  });
-  expect(response.ok(), await response.text().catch(() => "")).toBe(true);
-}
 
 declare global {
   interface Window {
@@ -1026,7 +1019,7 @@ async function dialogueTurnFlow(page: Page, request: APIRequestContext): Promise
 
 async function voiceMemoryCaptureFlow(page: Page, request: APIRequestContext): Promise<void> {
   const since = Date.now() - 1_000;
-  await verifyChatModel(request);
+  await activateChatModel(request);
   await page.addInitScript(
     fakeRealtimeInit({ emitTranscript: true, transcript: MEMORY_CAPTURE_TRANSCRIPT }),
   );

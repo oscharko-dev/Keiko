@@ -6,10 +6,14 @@ import { join } from "node:path";
 import type { ChatConnectedScope } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { connectedScopeFingerprint } from "../../packages/keiko-ui/src/app/components/desktop/hooks/workspaceScopeIdentity.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
+import { activateChatModel } from "./support/chat-model-activation.js";
 
 const HEADERS = { "X-Keiko-CSRF": "1" };
 const fixtureRoots: string[] = [];
 test.use({ viewport: { width: 1800, height: 1000 } });
+test.beforeEach(async ({ request }): Promise<void> => {
+  await activateChatModel(request);
+});
 test.afterEach(() => {
   for (const root of fixtureRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });

@@ -111,7 +111,7 @@ describe("adoption of a provisioned gateway configuration", () => {
     expect(readFileSync(subject.configPath, "utf8")).toBe(configText());
     // The marker is the digest of the provisioned file and nothing else.
     expect(readFileSync(subject.markerPath, "utf8")).toBe(
-      `${createHash("sha256").update(configText()).digest("hex")}\n`,
+      `${createHash("sha256").update(readFileSync(subject.source)).digest("hex")}\n`,
     );
     if (process.platform !== "win32") {
       expect(statSync(subject.configPath).mode & 0o777).toBe(0o600);
