@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "693b5c151f82cecbe39322de8f7b3c4a75d2eb9383535ac3ce7b36b547fe49f6",
+    "catalogDigest": "cabb4d10e7b04fc83eac2c30ee6d8b317ec189c3258ae31a4e6ad9940d4b7f81",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -5265,6 +5265,63 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/lifecycle-native-activity.ts:11",
         "emitterSites": ["packages/keiko-cli/src/lifecycle-native-activity.ts:51"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "cli.lifecycle.provisioned-config",
+        "category": "diagnostic",
+        "owner": "keiko-cli",
+        "emitter": "provisioned-config.emitProvisionedConfig",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "adopted",
+              "unchanged",
+              "deferred-running",
+              "overridden",
+              "absent",
+              "invalid",
+              "too-large",
+              "refused-link",
+              "read-failed",
+              "write-failed"
+            ]
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 64
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "process-lifecycle",
+        "diagnosticWhen": [
+          {
+            "field": "outcome",
+            "values": ["invalid", "too-large", "refused-link", "read-failed", "write-failed"]
+          }
+        ],
+        "failureClasses": ["provisioned-config-adoption"],
+        "proofIds": ["cli.lifecycle.provisioned-config.outcome"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-cli/src/provisioned-config.ts:75",
+        "emitterSites": ["packages/keiko-cli/src/provisioned-config.ts:123"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -52854,6 +52911,32 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "provisioned-config-adoption",
+        "requiredProductSurfaces": ["keiko-cli"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": ["cli.lifecycle.provisioned-config"],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["cli.lifecycle.provisioned-config"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["cli.lifecycle.provisioned-config"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["cli.lifecycle.provisioned-config"],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "error-kind",
+          "loss-state"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "windows-gateway-service",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -63390,8 +63473,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 404,
-      "completeClassCount": 404,
+      "supportedClassCount": 405,
+      "completeClassCount": 405,
       "completeness": "complete",
       "classes": [
         {
@@ -108294,6 +108377,62 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "provisioned-config-adoption",
+          "requirementContract": "provisioned-config-adoption",
+          "productSurfaces": ["keiko-cli"],
+          "lifecycleTransitions": ["end"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": ["cli.lifecycle.provisioned-config"],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "cli.lifecycle.provisioned-config",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["cli.lifecycle.provisioned-config"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "cli.lifecycle.provisioned-config",
+              "owner": "keiko-cli",
+              "category": "diagnostic",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "process-lifecycle",
+              "safeContextFields": [
+                {
+                  "name": "failureKind",
+                  "type": "string",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["cli.lifecycle.provisioned-config.outcome"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "read-only-child-run",
           "requirementContract": "read-only-child-run",
           "productSurfaces": ["keiko-server"],
@@ -118806,6 +118945,12 @@
       "package": "keiko-cli"
     },
     {
+      "op": "cli.lifecycle.provisioned-config",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/provisioned-config.ts:78",
+      "package": "keiko-cli"
+    },
+    {
       "op": "cli.lifecycle.stop-escalated",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/ui-process-stop.ts:63",
@@ -125581,6 +125726,7 @@
     "cli.lifecycle.browser-handoff",
     "cli.lifecycle.health",
     "cli.lifecycle.native-owner",
+    "cli.lifecycle.provisioned-config",
     "cli.lifecycle.stop-escalated",
     "cli.lifecycle.stop-escalation-failed",
     "cli.lifecycle.stop-request-failed",

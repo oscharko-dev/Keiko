@@ -5,7 +5,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { createServer as createNetServer } from "node:net";
 import { get as httpGet } from "node:http";
 import { homedir as defaultHomedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
@@ -42,6 +42,7 @@ import {
 import { LauncherError } from "./launcher-platforms.js";
 import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";
 import { emitBrowserHandoff } from "./lifecycle-browser-activity.js";
+import { adoptProvisionedConfig, provisionedConfigMessage } from "./provisioned-config.js";
 import { emitLifecycleHealth } from "./lifecycle-health-activity.js";
 import { emitNativeUiOwnership } from "./lifecycle-native-activity.js";
 import {
@@ -101,7 +102,13 @@ type SleepFn = (ms: number) => Promise<void>;
 type ProcessKiller = (pid: number, signal?: NodeJS.Signals | 0) => void;
 type BrowserOpener = (url: string) => void | Promise<void>;
 type PortAvailabilityFn = (host: string, port: number) => Promise<boolean>;
-type LifecycleFlag = "--port" | "--host" | "--state-dir" | "--start-timeout" | "--stop-timeout";
+type LifecycleFlag =
+  | "--port"
+  | "--host"
+  | "--state-dir"
+  | "--start-timeout"
+  | "--stop-timeout"
+  | "--provisioned-config";
 type LifecycleFlagSetter = (raw: RawLifecycleOptions, value: string) => void;
 
 const KEIKO_PROCESS_TITLE = "Keiko";
@@ -121,6 +128,9 @@ const LIFECYCLE_FLAG_SETTERS: Readonly<Record<LifecycleFlag, LifecycleFlagSetter
   },
   "--stop-timeout": (raw, value) => {
     raw.stopTimeoutRaw = value;
+  },
+  "--provisioned-config": (raw, value) => {
+    raw.provisionedConfigRaw = value;
   },
 };
 
@@ -158,12 +168,16 @@ function launchIdForStart(env: EnvSource, io: CliIo): string | undefined {
 
 const USAGE = `Usage:
   keiko start [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH] [--open|--no-open]
+              [--provisioned-config PATH]
   keiko stop [--state-dir PATH]
   keiko restart [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH] [--open|--no-open]
+              [--provisioned-config PATH]
   keiko status [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH]
 
 Manages the local Keiko UI process. Runtime state is written to .keiko/ by default.
 Start and restart open an authenticated browser session by default; --no-open opts out.
+--provisioned-config adopts an administrator's keiko.config.json as the gateway configuration
+whenever that file is new or changed; it replaces the current configuration as a whole.
 `;
 
 interface LifecycleOptions {
@@ -173,6 +187,8 @@ interface LifecycleOptions {
   readonly startTimeoutMs: number;
   readonly stopTimeoutMs: number;
   readonly openBrowser: boolean;
+  /** Absolute path of an administrator-provisioned gateway configuration to adopt at start. */
+  readonly provisionedConfig?: string | undefined;
 }
 
 interface RawLifecycleOptions {
@@ -182,6 +198,7 @@ interface RawLifecycleOptions {
   startTimeoutRaw?: string | undefined;
   stopTimeoutRaw?: string | undefined;
   openBrowser?: boolean | undefined;
+  provisionedConfigRaw?: string | undefined;
 }
 
 export interface LifecycleCliDeps {
@@ -334,6 +351,9 @@ function buildLifecycleOptions(
     startTimeoutMs,
     stopTimeoutMs,
     openBrowser: raw.openBrowser !== false,
+    ...(raw.provisionedConfigRaw === undefined
+      ? {}
+      : { provisionedConfig: resolve(cwd, raw.provisionedConfigRaw) }),
   };
 }
 
@@ -1256,6 +1276,27 @@ function clearStaleShutdownRequest(stateDir: string, io: CliIo): boolean {
   }
 }
 
+// Adoption never stops a start: a configuration that cannot be adopted leaves the current one in
+// force, the activity line records why, and the person reads one sentence about it.
+function applyProvisionedConfig(
+  options: LifecycleOptions,
+  io: CliIo,
+  env: EnvSource,
+  deps: Pick<LifecycleRuntimeDeps, "securityLogSink">,
+  running: boolean,
+): void {
+  if (options.provisionedConfig === undefined) return;
+  const { outcome } = adoptProvisionedConfig({
+    sourcePath: options.provisionedConfig,
+    stateDir: options.stateDir,
+    env,
+    running,
+    securityLogSink: deps.securityLogSink,
+  });
+  const message = provisionedConfigMessage(outcome);
+  if (message !== undefined) io.out(`${message}\n`);
+}
+
 async function cmdStart(
   options: LifecycleOptions,
   io: CliIo,
@@ -1266,13 +1307,19 @@ async function cmdStart(
   const running = runningPidRecord(options, deps.isProcessAlive, deps.securityLogSink);
   if (running !== undefined) {
     const nextAction = await handleStaleRunning(options, io, deps, running);
-    if (nextAction !== "start") return nextAction;
+    if (nextAction !== "start") {
+      applyProvisionedConfig(options, io, env, deps, true);
+      return nextAction;
+    }
   }
 
   if (!(await ensureStartPortAvailable(options, io, deps))) return startFailed(deps, "port-in-use");
   if (!clearStaleShutdownRequest(options.stateDir, io)) {
     return startFailed(deps, "stale-shutdown-request");
   }
+  // After the "already running" and port checks: no Keiko of this state directory holds the
+  // configuration in memory now, so the adopted file is the one the UI process reads at boot.
+  applyProvisionedConfig(options, io, env, deps, false);
 
   const pairingSecret = resolveLauncherPairingSecret(env);
   const launchId = launchIdForStart(env, io);

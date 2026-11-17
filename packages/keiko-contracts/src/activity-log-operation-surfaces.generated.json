@@ -67,6 +67,7 @@
   "cli.lifecycle.browser-handoff": "ui",
   "cli.lifecycle.health": "ui",
   "cli.lifecycle.native-owner": "ui",
+  "cli.lifecycle.provisioned-config": "runtime-packages",
   "cli.lifecycle.stop-escalated": "ui",
   "cli.lifecycle.stop-escalation-failed": "ui",
   "cli.lifecycle.stop-request-failed": "ui",

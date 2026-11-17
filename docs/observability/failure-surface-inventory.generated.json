@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "693b5c151f82cecbe39322de8f7b3c4a75d2eb9383535ac3ce7b36b547fe49f6"
+    "catalogDigest": "cabb4d10e7b04fc83eac2c30ee6d8b317ec189c3258ae31a4e6ad9940d4b7f81"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 707,
-    "proofCount": 730,
-    "resolvedProofCount": 730,
-    "failureClassCount": 404,
+    "operationCount": 708,
+    "proofCount": 731,
+    "resolvedProofCount": 731,
+    "failureClassCount": 405,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -829,6 +829,7 @@
         "cli.gateway-service.failed",
         "cli.gateway-service.started",
         "cli.install-layout.normalized",
+        "cli.lifecycle.provisioned-config",
         "cli.support.export.failed",
         "cli.uninstall.completed",
         "cli.uninstall.failed",
@@ -936,6 +937,7 @@
     "chat-turn": ["bff.dependency-failure"],
     "cli-audit": ["runtime-packages.dependency-failure"],
     "cli-gateway-service": ["runtime-packages.dependency-failure"],
+    "provisioned-config-adoption": ["runtime-packages.dependency-failure"],
     "windows-gateway-service": ["tools-workflows.dependency-failure"],
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
@@ -1548,6 +1550,9 @@
     "cli.lifecycle.native-owner.outcome": [
       "packages/keiko-cli/src/lifecycle-diagnostics.test.ts",
       "packages/keiko-cli/src/lifecycle-native-activity.test.ts"
+    ],
+    "cli.lifecycle.provisioned-config.outcome": [
+      "packages/keiko-cli/src/provisioned-config.test.ts"
     ],
     "cli.lifecycle.stop-escalated.disposition": [
       "packages/keiko-cli/src/ui-process-stop.activity-log-proof.test.ts"

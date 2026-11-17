@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 404,
-  "completeClassCount": 404,
+  "supportedClassCount": 405,
+  "completeClassCount": 405,
   "completeness": "complete",
   "classes": [
     {
@@ -44511,6 +44511,62 @@
             "causeChain": false
           },
           "proofIds": ["process.started.runtime", "process.started.configuration"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "provisioned-config-adoption",
+      "requirementContract": "provisioned-config-adoption",
+      "productSurfaces": ["keiko-cli"],
+      "lifecycleTransitions": ["end"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": ["cli.lifecycle.provisioned-config"],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "cli.lifecycle.provisioned-config",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["cli.lifecycle.provisioned-config"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "cli.lifecycle.provisioned-config",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "process-lifecycle",
+          "safeContextFields": [
+            {
+              "name": "failureKind",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["cli.lifecycle.provisioned-config.outcome"],
           "replayReferences": [],
           "missingObligations": []
         }

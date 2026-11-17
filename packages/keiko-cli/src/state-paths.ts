@@ -766,6 +766,7 @@ export function classifyPid(
 //     credentials/*.vault, *.key            legacy provider credential custody
 //     ui/keiko-ui.db[-wal|-shm|.corrupt.*]  keiko-server  store/paths.ts (UI_DB_FILENAME)
 //     ui/keiko.config.json                   keiko-server  deps.ts (model-gateway config)
+//     ui/provisioned-config.json            provisioned-config.ts (digest of the adopted admin config)
 //     ui/credentials/provider-*.vault|*.key keiko-server  credentialVault.ts
 //     ui/credentials/atlassian-*             keiko-server  atlassian credential stores
 //     memory/keiko-memory.db[-wal|-shm|.*]  keiko-memory-vault paths.ts (MEMORY_DB_FILENAME)
@@ -801,7 +802,9 @@ export const RUNTIME_STATE_FILE_MODE = 0o600;
 const UI_DB_FILENAME = "keiko-ui.db"; // keiko-server/src/store/paths.ts
 const MEMORY_DB_FILENAME = "keiko-memory.db"; // keiko-memory-vault/src/paths.ts
 const CAPSULES_DB_FILENAME = "capsules.db"; // keiko-local-knowledge/src/store-paths.ts
-const GATEWAY_CONFIG_FILENAME = "keiko.config.json"; // keiko-server/src/deps.ts
+export const GATEWAY_CONFIG_FILENAME = "keiko.config.json"; // keiko-server/src/deps.ts
+// The SHA-256 of the administrator-provisioned config last adopted here (provisioned-config.ts).
+export const PROVISIONED_CONFIG_MARKER_FILENAME = "provisioned-config.json";
 const CREDENTIALS_SUBDIR = "credentials"; // keiko-server/src/credentialVault.ts (CREDENTIALS_SUBDIR)
 const MEMORY_SUBDIR = "memory"; // keiko-memory-vault/src/paths.ts (MEMORY_DIR_NAME)
 const LOCAL_KNOWLEDGE_SUBDIR = "local-knowledge"; // keiko-local-knowledge store-paths.ts (SUBSYSTEM_DIR)
@@ -1071,7 +1074,10 @@ const credentialsSubtree: OwnedSubtree = {
 const uiDataSubtree: OwnedSubtree = {
   category: "ui-database",
   whole: false,
-  ownsFile: (name) => name === GATEWAY_CONFIG_FILENAME || isSqliteFamily(UI_DB_FILENAME, name),
+  ownsFile: (name) =>
+    name === GATEWAY_CONFIG_FILENAME ||
+    name === PROVISIONED_CONFIG_MARKER_FILENAME ||
+    isSqliteFamily(UI_DB_FILENAME, name),
   childSubtree: (name) => (name === CREDENTIALS_SUBDIR ? credentialsSubtree : undefined),
 };
 

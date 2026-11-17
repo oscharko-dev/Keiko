@@ -55,6 +55,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-cli", emitterPrefix: "lifecycle-native-activity", surface: "ui" },
   { owner: "keiko-cli", emitterPrefix: "portable-launch-failure", surface: "lifecycle-crash" },
   { owner: "keiko-cli", emitterPrefix: "process-activity-log", surface: "lifecycle-crash" },
+  { owner: "keiko-cli", emitterPrefix: "provisioned-config", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "security-log", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "support", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "support-query-evidence", surface: "runtime-packages" },
