@@ -884,6 +884,13 @@ type ChatBubbleMarkdownProps = {
 // parser/render defect degrades this one bubble to plain text instead of crashing the view.
 function ChatBubbleMarkdown(props: ChatBubbleMarkdownProps): ReactNode {
   const { message, isUser, streaming } = props;
+  // Knowledge citations carry document lineage, not a repository path (#4443). Until the source
+  // has a governed text-open target, keep its prose filenames neutral; PDF/manual controls use
+  // their existing citation authority independently of repository references.
+  const openRepositoryReference =
+    message.groundedAnswer?.groundingKind === "local-knowledge"
+      ? undefined
+      : props.openRepositoryReference;
   if (carriesOwnAssessment(message)) {
     return (
       <AssessedAnswerBody
@@ -891,7 +898,7 @@ function ChatBubbleMarkdown(props: ChatBubbleMarkdownProps): ReactNode {
         messageId={message.id}
         repositoryRoots={props.repositoryRoots}
         repositoryEvidence={props.repositoryEvidence}
-        openRepositoryReference={props.openRepositoryReference}
+        openRepositoryReference={openRepositoryReference}
         citationPreview={props.citationPreview}
       />
     );
@@ -903,7 +910,7 @@ function ChatBubbleMarkdown(props: ChatBubbleMarkdownProps): ReactNode {
       diagnosticCorrelationId={message.id}
       repositoryRoots={props.repositoryRoots}
       repositoryEvidence={props.repositoryEvidence}
-      openRepositoryReference={props.openRepositoryReference}
+      openRepositoryReference={openRepositoryReference}
       citationPreview={props.citationPreview}
       streaming={streaming}
       trailing={streaming ? <span className="ai-stream-cursor" aria-hidden="true" /> : undefined}

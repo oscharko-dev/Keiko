@@ -139,6 +139,51 @@ function makeMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
   };
 }
 
+function syntheticKnowledgeTextCitation(): LocalKnowledgeEvidenceCitation {
+  return {
+    stableId: "synthetic-citation",
+    marker: "[1]",
+    label: "Companion - Übersicht.txt",
+    source: "Synthetic Quartz Pod",
+    score: 0.9,
+    lexicalSupport: "weak",
+    lineage: {
+      capsuleId: makeCapsuleId("cap-synthetic-quartz"),
+      sourceId: "source-synthetic" as LocalKnowledgeEvidenceCitation["lineage"]["sourceId"],
+      documentId: "document-synthetic" as LocalKnowledgeEvidenceCitation["lineage"]["documentId"],
+      chunkId: "chunk-synthetic" as LocalKnowledgeEvidenceCitation["lineage"]["chunkId"],
+    },
+  };
+}
+
+function syntheticKnowledgeTextAnswer(): Extract<
+  GroundedAnswer,
+  { readonly groundingKind: "local-knowledge" }
+> {
+  return {
+    groundingKind: "local-knowledge",
+    userMessageId: "knowledge-user",
+    assistantMessageId: "knowledge-assistant",
+    content: "The exact current marker in [Companion - Übersicht.txt] is Juniper-151-Dawn [1].",
+    citations: [syntheticKnowledgeTextCitation()],
+    uncertainty: [{ kind: "entailment-unavailable", claim: "Support could not be verified." }],
+    omittedCount: 0,
+    elapsedMs: 1,
+    noEvidence: false,
+    contextPack: {
+      kind: "local-knowledge",
+      scopeKind: "capsule",
+      scopeId: "cap-synthetic-quartz",
+      scopeLabel: "Synthetic Quartz Pod",
+      capsuleCount: 1,
+      sourceCount: 1,
+      citationCount: 1,
+      referenceBudget: 1,
+      referencesUsed: 1,
+    },
+  };
+}
+
 function makeProject(path: string): ProjectWithAvailability {
   return {
     path,
@@ -5010,6 +5055,110 @@ describe("ChatWindow message copy", () => {
     expect(
       screen.getByText("Opened packages/keiko-harness/src/context.ts in editor."),
     ).toHaveAttribute("role", "status");
+  });
+
+  it.each([false, true])(
+    "keeps Knowledge-only filenames neutral instead of opening an unrelated task root (assessment=%s)",
+    async (assessment) => {
+      const user = userEvent.setup();
+      const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-unrelated" }));
+      const answer = syntheticKnowledgeTextAnswer();
+      const content = assessment
+        ? `${answer.content}\n<assessment>Check [Companion - Übersicht.txt].</assessment>`
+        : answer.content;
+      const reports: ClientDiagnosticMeta[] = [];
+      setClientDiagnosticWriter((_message, meta) => {
+        if (meta !== undefined) reports.push(meta);
+      });
+      try {
+        renderWindow(
+          makeSession({
+            activeChat: makeChat({
+              localKnowledgeScope: {
+                kind: "capsule",
+                capsuleId: makeCapsuleId("cap-synthetic-quartz"),
+                connectedAtMs: 1,
+              },
+            }),
+            messages: [
+              makeMessage({
+                id: "knowledge-assistant",
+                role: "assistant",
+                content,
+                groundedAnswer: { ...answer, content },
+              }),
+            ],
+          }),
+          { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
+        );
+        await waitFor(() =>
+          expect(document.querySelector('[data-role="assistant"]')).toHaveTextContent(
+            "Companion - Übersicht.txt",
+          ),
+        );
+        if (assessment) await screen.findByRole("note", { name: /own assessment/i });
+        const reference = screen.queryAllByRole("button", {
+          name: "Open Companion - Übersicht.txt in editor",
+        });
+        for (const button of reference) await user.click(button);
+        expect(openEditorFile).not.toHaveBeenCalled();
+        expect(reference).toHaveLength(0);
+        expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it("keeps verified repository prose active in a mixed Knowledge and repository answer", async () => {
+    const user = userEvent.setup();
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor-repository" }));
+    const scope = {
+      kind: "directory" as const,
+      root: "/synthetic/repository",
+      relativePaths: ["src"],
+      connectedAtMs: 1,
+    };
+    const knowledge = syntheticKnowledgeTextAnswer();
+    const groundedAnswer: GroundedAnswer = {
+      groundingKind: "hybrid",
+      userMessageId: "user-mixed",
+      assistantMessageId: "assistant-mixed",
+      content: "Check [src/demo.ts] for the implementation.",
+      citations: [
+        {
+          scopePath: "src/demo.ts",
+          stableId: "repository-citation",
+          score: 1,
+          lineRange: undefined,
+          sourceScopeFingerprint: connectedScopeFingerprint(scope),
+        },
+      ],
+      knowledgeCitations: knowledge.citations,
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 1,
+      contextPack: {
+        kind: "hybrid",
+        folderSourceCount: 1,
+        connectorSourceCount: 1,
+        folder: repositoryTestContextSummary(),
+        knowledge: knowledge.contextPack,
+      },
+    };
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({ connectedScopes: [scope] }),
+        messages: [
+          makeMessage({ role: "assistant", content: groundedAnswer.content, groundedAnswer }),
+        ],
+      }),
+      { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Open src/demo.ts in editor · Cited evidence" }),
+    );
+    expect(openEditorFile).toHaveBeenCalledWith({ root: scope.root, path: "src/demo.ts" });
   });
 
   it("surfaces a clear status when repository references have no connected root", async () => {
