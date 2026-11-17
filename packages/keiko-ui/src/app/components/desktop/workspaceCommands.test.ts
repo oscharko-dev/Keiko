@@ -118,7 +118,12 @@ describe("workspace command registry", () => {
     expect(surviving).toEqual(expect.objectContaining({ group: "App", label: "App tab.close" }));
   });
 
-  it("keeps the launcher grid sourced from the window launcher order", () => {});
+  it("keeps the launcher grid sourced from the window launcher order", () => {
+    // The Agent preset launcher and the standalone Documentation Browser are retired (#4448), so
+    // neither is offered as a new window any more.
+    expect(WINDOW_LAUNCHER_TYPES).toEqual(["chat", "connector", "files", "editor"]);
+    expect(appCommandWindowTypes().cards).toBe(WINDOW_LAUNCHER_TYPES);
+  });
 
   it("exposes the Coding Workbench through the palette tool list, not the card grid (#2476)", () => {
     // The Coding Workbench is a singleton tool, so it reaches the palette via the idempotent tool seam

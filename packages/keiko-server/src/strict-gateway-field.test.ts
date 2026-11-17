@@ -1152,7 +1152,7 @@ describe("strict LiteLLM field twin", () => {
       );
       expect(refused.status).toBe(400);
       expect(JSON.stringify(refused.body)).toContain("CONVERSATION_MODEL_NOT_READY");
-      expect(log.chatModels.length).toBe(beforeActivation);
+      expect(log.chatModels).toHaveLength(beforeActivation);
 
       await activateFieldModel(deps, "qwen-chat");
       const asked = await handleGroundedAsk(
