@@ -1166,13 +1166,43 @@ function rejectedReplacement(
   return { ok: false };
 }
 
+/**
+ * The reason a run's controller is aborted with when its Authority Envelope's time runs out
+ * (`armRunExpiry`, #4130). A person's Stop aborts the controller without a reason.
+ */
+export class RunEnvelopeDeadlineReached extends Error {
+  public constructor() {
+    super("run-envelope-deadline-reached");
+    this.name = "RunEnvelopeDeadlineReached";
+  }
+}
+
+/** Aborts a run's controller because its envelope's time ran out. */
+export function abortAtEnvelopeDeadline(controller: AbortController): void {
+  controller.abort(new RunEnvelopeDeadlineReached());
+}
+
+function abortedAtEnvelopeDeadline(record: ProductionRuntimeRunRecord): boolean {
+  return (
+    record.controller.signal.aborted &&
+    record.controller.signal.reason instanceof RunEnvelopeDeadlineReached
+  );
+}
+
+/**
+ * A turn the envelope deadline aborted ended at the run's own bound, not at a person's Stop (#4130):
+ * the turn port reports any aborted wait as `cancelled`, which would settle the run without a cause,
+ * or as `cancelled` although nobody stopped it. Reported as `failed`, the settlement reads the
+ * exhausted envelope (`envelope-duration-exhausted`), as for a turn wait that ran out (W9, #4068).
+ */
 async function terminalCompletion(
   record: ProductionRuntimeRunRecord,
   runId: string,
   diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<CodingRuntimeTaskOutcome> {
   try {
-    const outcome = await record.turnPort.waitForTerminal(runId, record.controller.signal);
+    const waited = await record.turnPort.waitForTerminal(runId, record.controller.signal);
+    const outcome = waited === "cancelled" && abortedAtEnvelopeDeadline(record) ? "failed" : waited;
     if (outcome === "failed") recordFailedTerminal(record, runId, diagnostics);
     if (outcome !== "succeeded" || record.waitForPendingMutations === undefined) return outcome;
     const idle = await record.waitForPendingMutations(record.controller.signal);
@@ -1241,16 +1271,18 @@ function recordRuntimeDispatchFailure(
 }
 
 /**
- * A turn whose wait ran out of the run's envelope duration ended at the run's own bound, which the
- * settlement records as `envelope-duration-exhausted` with its `timeout` error kind; it stays on
- * the timeline as a routine observation instead of an `internal` failure (W9, #4068).
+ * A turn whose wait ran out of the run's envelope duration, or that the envelope deadline aborted
+ * (#4130), ended at the run's own bound, which the settlement records as
+ * `envelope-duration-exhausted` with its `timeout` error kind; it stays on the timeline as a routine
+ * observation instead of an `internal` failure (W9, #4068).
  */
 function recordFailedTerminal(
   record: ProductionRuntimeRunRecord,
   runId: string,
   diagnostics: ServerDiagnosticSink | undefined,
 ): void {
-  if (record.turnPort.turnWaitExpired?.(runId) !== true) {
+  const expired = record.turnPort.turnWaitExpired?.(runId) === true;
+  if (!expired && !abortedAtEnvelopeDeadline(record)) {
     recordRuntimeDispatchFailure(diagnostics, runId, "terminal-failed");
     return;
   }

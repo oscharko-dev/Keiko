@@ -119,6 +119,7 @@ import {
 import { createProductionRuntimeQuestionPort } from "./productionCodingRuntimeQuestionPort.js";
 import { createProductionRuntimePermissionPort } from "./productionCodingRuntimePermissionPort.js";
 import {
+  abortAtEnvelopeDeadline,
   createProductionRuntimeOperationGuard,
   createProductionRuntimeManager,
   createProductionRuntimeTaskDispatcher,
@@ -1335,7 +1336,7 @@ function armRunExpiry(
   }
   const delayMs = Number.isFinite(nowMs) ? Math.max(0, deadlineMs - nowMs) : 0;
   const timeout = setTimeout(() => {
-    controller.abort();
+    abortAtEnvelopeDeadline(controller);
   }, delayMs);
   timeout.unref();
   controller.signal.addEventListener(
