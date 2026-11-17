@@ -4086,6 +4086,321 @@ describe("ChatWindow message copy", () => {
       within(prompt as HTMLElement).queryByRole("button", { name: /apply in editor/i }),
     ).toBeNull();
   });
+  it.each([false, true])(
+    "keeps ungrounded streaming Knowledge prose neutral through settlement (assessment=%s)",
+    async (assessment) => {
+      const user = userEvent.setup();
+      const answer = syntheticKnowledgeTextAnswer();
+      const content = assessment
+        ? `${answer.content}\n<assessment>Check [Companion - Übersicht.txt].</assessment>`
+        : answer.content;
+      const message = makeMessage({ role: "assistant", id: answer.assistantMessageId, content });
+      const session = makeSession({
+        activeChat: makeChat({
+          localKnowledgeScope: {
+            kind: "capsule",
+            capsuleId: makeCapsuleId("cap-synthetic-quartz"),
+            connectedAtMs: 1,
+          },
+        }),
+        sending: true,
+        sendStatus: "streaming",
+        streamingAssistantMessage: message,
+      });
+      const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "wrong-root" }));
+      const reports: ClientDiagnosticMeta[] = [];
+      setClientDiagnosticWriter((_text, meta) => {
+        if (meta !== undefined) reports.push(meta);
+      });
+      try {
+        const view = render(
+          <ChatSessionProvider value={session}>
+            <ChatWindow
+              linkedRoot="/synthetic/unrelated-task-worktree"
+              openEditorFile={openEditorFile}
+            />
+          </ChatSessionProvider>,
+        );
+        await waitFor(() =>
+          expect(document.querySelector('[data-role="assistant"]')).toHaveTextContent(
+            "Companion - Übersicht.txt",
+          ),
+        );
+        const controls = screen.queryAllByRole("button", {
+          name: /^Open Companion - Übersicht.txt in editor/u,
+        });
+        for (const button of controls) await user.click(button);
+        expect(controls).toHaveLength(0);
+        expect(openEditorFile).not.toHaveBeenCalled();
+        expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+        view.rerender(
+          <ChatSessionProvider
+            value={{
+              ...session,
+              sending: false,
+              sendStatus: "completed",
+              streamingAssistantMessage: undefined,
+              messages: [{ ...message, groundedAnswer: { ...answer, content } }],
+            }}
+          >
+            <ChatWindow
+              linkedRoot="/synthetic/unrelated-task-worktree"
+              openEditorFile={openEditorFile}
+            />
+          </ChatSessionProvider>,
+        );
+        if (assessment) await screen.findByRole("note", { name: /own assessment/i });
+        expect(document.querySelector('[data-role="assistant"]')).toHaveTextContent(
+          "Companion - Übersicht.txt",
+        );
+        expect(
+          screen.queryAllByRole("button", { name: /^Open Companion - Übersicht.txt in editor/u }),
+        ).toHaveLength(0);
+        expect(openEditorFile).not.toHaveBeenCalled();
+        expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it("restores ordinary repository navigation only after an ungrounded stream settles", async () => {
+    const user = userEvent.setup();
+    const message = makeMessage({
+      role: "assistant",
+      id: "stream-repository",
+      content: "Read [src/demo.ts].",
+    });
+    const session = makeSession({
+      activeChat: makeChat({
+        connectedScopes: [
+          {
+            kind: "directory",
+            root: "/synthetic/repository",
+            relativePaths: ["src"],
+            connectedAtMs: 1,
+          },
+        ],
+      }),
+      sending: true,
+      sendStatus: "streaming",
+      streamingAssistantMessage: message,
+    });
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "repository-editor" }));
+    const reports: ClientDiagnosticMeta[] = [];
+    setClientDiagnosticWriter((_text, meta) => {
+      if (meta !== undefined) reports.push(meta);
+    });
+    try {
+      const view = render(
+        <ChatSessionProvider value={session}>
+          <ChatWindow openEditorFile={openEditorFile} />
+        </ChatSessionProvider>,
+      );
+      const controls = screen.queryAllByRole("button", { name: "Open src/demo.ts in editor" });
+      for (const button of controls) await user.click(button);
+      expect(controls).toHaveLength(0);
+      expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+      expect(openEditorFile).not.toHaveBeenCalled();
+      view.rerender(
+        <ChatSessionProvider
+          value={{
+            ...session,
+            sending: false,
+            sendStatus: "completed",
+            streamingAssistantMessage: undefined,
+            messages: [message],
+          }}
+        >
+          <ChatWindow openEditorFile={openEditorFile} />
+        </ChatSessionProvider>,
+      );
+      expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+      await user.click(screen.getByRole("button", { name: "Open src/demo.ts in editor" }));
+      expect(openEditorFile).toHaveBeenCalledExactlyOnceWith({
+        root: "/synthetic/repository",
+        path: "src/demo.ts",
+      });
+      expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([
+        { reason: "absent", outcome: "opened", rootCount: 1, matchCount: 0 },
+      ]);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it("preserves a fingerprint-attributed repository citation during streaming", async () => {
+    const user = userEvent.setup();
+    const scope = {
+      kind: "directory" as const,
+      root: "/synthetic/repository",
+      relativePaths: ["src"],
+      connectedAtMs: 1,
+    };
+    const groundedAnswer: GroundedAnswer = {
+      groundingKind: "connected-context",
+      userMessageId: "u",
+      assistantMessageId: "a",
+      content: "Read [src/demo.ts].",
+      citations: [
+        {
+          scopePath: "src/demo.ts",
+          stableId: "repo-citation",
+          score: 1,
+          lineRange: undefined,
+          sourceScopeFingerprint: connectedScopeFingerprint(scope),
+        },
+      ],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 1,
+      contextPack: repositoryTestContextSummary(),
+    };
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "repository-editor" }));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({ connectedScopes: [scope] }),
+        sending: true,
+        sendStatus: "streaming",
+        streamingAssistantMessage: makeMessage({
+          role: "assistant",
+          id: "a",
+          content: groundedAnswer.content,
+          groundedAnswer,
+        }),
+      }),
+      { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Open src/demo.ts in editor · Cited evidence" }),
+    );
+    expect(openEditorFile).toHaveBeenCalledExactlyOnceWith({
+      root: scope.root,
+      path: "src/demo.ts",
+    });
+  });
+
+  it.each([false, true])(
+    "keeps persisted ungrounded Knowledge replies neutral (explicit repository=%s)",
+    async (mixed) => {
+      const user = userEvent.setup();
+      const scope = {
+        kind: "directory" as const,
+        root: "/synthetic/repository",
+        relativePaths: ["src"],
+        connectedAtMs: 1,
+      };
+      const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "wrong-root" }));
+      const reports: ClientDiagnosticMeta[] = [];
+      setClientDiagnosticWriter((_text, meta) => {
+        if (meta !== undefined) reports.push(meta);
+      });
+      try {
+        renderWindow(
+          makeSession({
+            activeChat: makeChat({
+              localKnowledgeScopes: [
+                {
+                  kind: "capsule",
+                  capsuleId: makeCapsuleId("cap-synthetic-quartz"),
+                  connectedAtMs: 1,
+                },
+              ],
+              connectedScopes: mixed ? [scope] : [],
+            }),
+            messages: [
+              makeMessage({
+                role: "assistant",
+                content: "Read [Companion - Übersicht.txt] and [src/demo.ts].",
+              }),
+            ],
+          }),
+          { linkedRoot: "/synthetic/unrelated-task-worktree", openEditorFile },
+        );
+        const controls = screen.queryAllByRole("button", {
+          name: /^Open (Companion - Übersicht.txt|src\/demo.ts).*in editor/u,
+        });
+        for (const button of controls) await user.click(button);
+        expect(controls).toHaveLength(0);
+        expect(document.querySelector('[data-role="assistant"]')).toHaveTextContent(
+          "Companion - Übersicht.txt",
+        );
+        expect(openEditorFile).not.toHaveBeenCalled();
+        expect(reports.flatMap((entry) => entry.citationActivation ?? [])).toEqual([]);
+      } finally {
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it("preserves a stored repository citation when a Knowledge scope is later added", async () => {
+    const user = userEvent.setup();
+    const scope = {
+      kind: "directory" as const,
+      root: "/synthetic/repository",
+      relativePaths: ["src"],
+      connectedAtMs: 1,
+    };
+    const groundedAnswer: GroundedAnswer = {
+      groundingKind: "connected-context",
+      userMessageId: "u",
+      assistantMessageId: "a",
+      content: "Read [src/demo.ts].",
+      citations: [
+        {
+          scopePath: "src/demo.ts",
+          stableId: "repo-citation",
+          score: 1,
+          lineRange: undefined,
+          sourceScopeFingerprint: connectedScopeFingerprint(scope),
+        },
+      ],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 1,
+      contextPack: repositoryTestContextSummary(),
+    };
+    const session = makeSession({
+      activeChat: makeChat({ connectedScopes: [scope] }),
+      messages: [
+        makeMessage({ role: "assistant", content: groundedAnswer.content, groundedAnswer }),
+      ],
+    });
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "repository-editor" }));
+    const view = render(
+      <ChatSessionProvider value={session}>
+        <ChatWindow openEditorFile={openEditorFile} />
+      </ChatSessionProvider>,
+    );
+    expect(
+      screen.getByRole("button", { name: "Open src/demo.ts in editor · Cited evidence" }),
+    ).toBeVisible();
+    view.rerender(
+      <ChatSessionProvider
+        value={{
+          ...session,
+          activeChat: makeChat({
+            connectedScopes: [scope],
+            localKnowledgeScope: {
+              kind: "capsule",
+              capsuleId: makeCapsuleId("cap-synthetic-quartz"),
+              connectedAtMs: 2,
+            },
+          }),
+        }}
+      >
+        <ChatWindow openEditorFile={openEditorFile} />
+      </ChatSessionProvider>,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Open src/demo.ts in editor · Cited evidence" }),
+    );
+    expect(openEditorFile).toHaveBeenCalledExactlyOnceWith({
+      root: scope.root,
+      path: "src/demo.ts",
+    });
+  });
+
   it("renders the live streaming assistant preview as safe markdown", (): void => {
     renderWindow(
       makeSession({
