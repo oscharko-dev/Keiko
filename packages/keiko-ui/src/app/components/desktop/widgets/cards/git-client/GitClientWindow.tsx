@@ -459,14 +459,14 @@ function blockedOutcome(message: string): SyncOutcomeView {
   return { message, failed: false };
 }
 
-function recordSyncOutcomePresentation(): void {
+function recordGitPresentation(stageName: "git sync outcome" | "git conflict controls blocked"): void {
   const correlationId = newClientCorrelationId();
-  const stage = { stage: "git sync outcome", ordinal: 1 } as const;
-  reportClientDiagnostic("Git sync outcome presentation started.", {
+  const stage = { stage: stageName, ordinal: 1 } as const;
+  reportClientDiagnostic("Git presentation started.", {
     correlationId,
     stageReport: { ...stage, phase: "started" },
   });
-  reportClientDiagnostic("Git sync outcome presentation settled.", {
+  reportClientDiagnostic("Git presentation settled.", {
     correlationId,
     stageReport: { ...stage, phase: "settled", durationMs: 0 },
   });
@@ -483,7 +483,7 @@ function completeSync(
   if (context.sequenceRef.current !== context.sequence) return;
   context.setBusy(false);
   context.setOutcome(outcome);
-  recordSyncOutcomePresentation();
+  recordGitPresentation("git sync outcome");
 }
 
 function failSync(context: SyncExecutionContext, error: unknown): void {

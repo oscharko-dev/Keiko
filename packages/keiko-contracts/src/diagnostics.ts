@@ -1141,6 +1141,7 @@ export const CLIENT_STAGE_IDS = [
   "editor project selection",
   "editor watch recovery",
   "git sync outcome",
+  "git conflict controls blocked",
   "gateway catalog adoption",
   "gateway profile refresh",
   "model selection availability",
