@@ -24877,6 +24877,38 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "gateway.readiness.deactivation",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "gateway-readiness.logDeactivationOutcome",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["deactivated", "not-activated", "check-running", "unknown-model", "bad-request"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-readiness"],
+    proofIds: ["gateway.readiness.deactivation.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "gateway.readiness.scope",
     category: "gateway",
     owner: "keiko-server",

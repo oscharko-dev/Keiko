@@ -18,6 +18,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   applyGatewayVerifiedCapabilities,
+  deactivateChatModel,
   fetchConfig,
   fetchModels,
   resetModelRequestCache,
@@ -1017,17 +1018,71 @@ function modelStatusClass(
   return embeddingReady || voiceReady ? "connected" : "ineligible";
 }
 
+// The actions of a chat model's row. An activated model can be deactivated again: it then leaves the
+// Chat picker and is refused until it is activated anew (ADR-0171 D2, amended 2026-11-16).
+function ModelRowActions({
+  model,
+  readiness,
+  onRunReadiness,
+  onDeactivate,
+}: {
+  readonly model: ModelCapability;
+  readonly readiness: ReadinessRunState | undefined;
+  readonly onRunReadiness: (modelId: string, deep: boolean) => void;
+  readonly onDeactivate: (modelId: string) => void;
+}): ReactNode {
+  const t = useTranslate();
+  const running = readiness?.status === "running";
+  const activated = !running && chatReadinessPassed(readiness, model.conversationReady);
+  return (
+    <div className="ml-actions">
+      <button
+        type="button"
+        className="ml-check"
+        disabled={running}
+        onClick={() => onRunReadiness(model.id, false)}
+      >
+        <ActivityIcon size={13} />
+        {primaryReadinessLabel(readiness, model.conversationReady, t)}
+      </button>
+      <button
+        type="button"
+        className="ml-check secondary"
+        disabled={running}
+        onClick={() => onRunReadiness(model.id, true)}
+      >
+        {t("settings.models.deepProbes")}
+      </button>
+      {activated ? (
+        <button
+          type="button"
+          className="ml-check secondary"
+          data-testid={"model-deactivate-" + model.id}
+          onClick={() => onDeactivate(model.id)}
+        >
+          {t("settings.models.deactivate")}
+        </button>
+      ) : null}
+      {readiness?.status === "done" ? (
+        <ReadinessReportCopyButton report={readiness.report} />
+      ) : null}
+    </div>
+  );
+}
+
 function ModelCapabilityRow({
   model,
   readiness,
   observedGeneration,
   onRunReadiness,
+  onDeactivate,
   onCapabilityApplied,
 }: {
   readonly model: ModelCapability;
   readonly readiness: ReadinessRunState | undefined;
   readonly observedGeneration: number;
   readonly onRunReadiness: (modelId: string, deep: boolean) => void;
+  readonly onDeactivate: (modelId: string) => void;
   readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
 }): ReactNode {
   const t = useTranslate();
@@ -1083,28 +1138,12 @@ function ModelCapabilityRow({
         ) : null}
       </div>
       {conversationEligible ? (
-        <div className="ml-actions">
-          <button
-            type="button"
-            className="ml-check"
-            disabled={readiness?.status === "running"}
-            onClick={() => onRunReadiness(model.id, false)}
-          >
-            <ActivityIcon size={13} />
-            {primaryReadinessLabel(readiness, model.conversationReady, t)}
-          </button>
-          <button
-            type="button"
-            className="ml-check secondary"
-            disabled={readiness?.status === "running"}
-            onClick={() => onRunReadiness(model.id, true)}
-          >
-            {t("settings.models.deepProbes")}
-          </button>
-          {readiness?.status === "done" ? (
-            <ReadinessReportCopyButton report={readiness.report} />
-          ) : null}
-        </div>
+        <ModelRowActions
+          model={model}
+          readiness={readiness}
+          onRunReadiness={onRunReadiness}
+          onDeactivate={onDeactivate}
+        />
       ) : null}
       <span
         className={"ml-status " + statusClass}
@@ -1757,7 +1796,19 @@ interface ModelsTabContentProps {
   readonly onRetry: () => void;
   readonly onRunReadiness: (modelId: string, deep: boolean) => void;
   readonly onActivateAll: (modelIds: readonly string[]) => void;
+  readonly onDeactivate: (modelId: string) => void;
   readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
+}
+
+function emptyModelsListText(
+  loadingModels: boolean,
+  gatewayConfigured: boolean,
+  t: I18nTranslate,
+): string {
+  if (loadingModels) return t("settings.models.loading");
+  return gatewayConfigured
+    ? t("settings.models.emptyConfigured")
+    : t("settings.models.emptyUnconfigured");
 }
 
 // #2723 (S3358): the models-list body was a nested ternary (loadingModels ? … :
@@ -1769,6 +1820,7 @@ function renderModelsListBody({
   readiness,
   configGeneration,
   onRunReadiness,
+  onDeactivate,
   onCapabilityApplied,
   t,
 }: {
@@ -1778,22 +1830,14 @@ function renderModelsListBody({
   readonly readiness: Record<string, ReadinessRunState>;
   readonly configGeneration: number;
   readonly onRunReadiness: (modelId: string, deep: boolean) => void;
+  readonly onDeactivate: (modelId: string) => void;
   readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
   readonly t: I18nTranslate;
 }): ReactNode {
-  if (loadingModels && models.length === 0) {
-    return (
-      <output className="set-placeholder" style={NATIVE_BLOCK_STYLE}>
-        {t("settings.models.loading")}
-      </output>
-    );
-  }
   if (models.length === 0) {
     return (
       <output className="set-placeholder" style={NATIVE_BLOCK_STYLE}>
-        {gatewayConfigured
-          ? t("settings.models.emptyConfigured")
-          : t("settings.models.emptyUnconfigured")}
+        {emptyModelsListText(loadingModels, gatewayConfigured, t)}
       </output>
     );
   }
@@ -1806,6 +1850,7 @@ function renderModelsListBody({
           readiness={readiness[model.id]}
           observedGeneration={configGeneration}
           onRunReadiness={onRunReadiness}
+          onDeactivate={onDeactivate}
           onCapabilityApplied={onCapabilityApplied}
         />
       ))}
@@ -1829,6 +1874,7 @@ function ModelsTabContent({
   onRetry,
   onRunReadiness,
   onActivateAll,
+  onDeactivate,
   onCapabilityApplied,
 }: ModelsTabContentProps): ReactNode {
   const t = useTranslate();
@@ -1916,6 +1962,7 @@ function ModelsTabContent({
         readiness,
         configGeneration,
         onRunReadiness,
+        onDeactivate,
         onCapabilityApplied,
         t,
       })}
@@ -2090,6 +2137,25 @@ export function SettingsPanel({
     }
   }
 
+  // Deactivation sends nothing to the provider. The remembered activation of this generation is
+  // dropped with it, so the row reads "not activated" again and the Chat picker refreshes.
+  async function handleDeactivate(modelId: string): Promise<void> {
+    const generation = configGenerationRef.current;
+    try {
+      await deactivateChatModel(modelId);
+    } catch (error) {
+      setReadinessLedger((ledger) =>
+        recordReadinessRun(ledger, generation, modelId, {
+          status: "error",
+          message: readinessErrorMessage(error, t),
+        }),
+      );
+      return;
+    }
+    setReadinessLedger((ledger) => clearReadinessRun(ledger, generation, modelId));
+    notifyGatewayModelReadinessUpdated();
+  }
+
   return (
     <div className="set">
       <div className="set-tabs">
@@ -2143,6 +2209,9 @@ export function SettingsPanel({
             }}
             onActivateAll={(modelIds) => {
               void handleActivateAll(modelIds);
+            }}
+            onDeactivate={(modelId) => {
+              void handleDeactivate(modelId);
             }}
             onCapabilityApplied={(updatedModel, observedGeneration) => {
               if (configGenerationRef.current !== observedGeneration) return;

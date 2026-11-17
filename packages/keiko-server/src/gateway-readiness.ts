@@ -695,6 +695,56 @@ function logSelectionOutcome(
   );
 }
 
+// Manual model activation (ADR-0171 D2, amended 2026-11-16): what a person's deactivation of a
+// chat model did, under the request's own correlation id.
+const DEACTIVATION_OUTCOMES = [
+  "deactivated",
+  "not-activated",
+  "check-running",
+  "unknown-model",
+  "bad-request",
+] as const;
+type DeactivationOutcome = (typeof DEACTIVATION_OUTCOMES)[number];
+
+const GATEWAY_READINESS_DEACTIVATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.deactivation",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-readiness.logDeactivationOutcome",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: DEACTIVATION_OUTCOMES,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-readiness"],
+  proofIds: ["gateway.readiness.deactivation.line"],
+  releaseImpact: "patch",
+});
+
+function logDeactivationOutcome(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  outcome: DeactivationOutcome,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GATEWAY_READINESS_DEACTIVATION_OPERATION,
+      { correlationId },
+      { outcome, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
 function logReadinessScope(
   deps: UiHandlerDeps,
   correlationId: string,
@@ -2764,7 +2814,7 @@ function workbenchContextProbes(capability: ModelCapability): readonly GatewayRe
 }
 
 // The chat model the product uses now: the election the Chat default makes, with the same
-// observations. At startup, after the walk concluded, it is the model that proved ready.
+// observations, preferring a model a person activated in Settings > Models (ADR-0171 D2).
 function inUseConversationModelId(deps: UiHandlerDeps, config: GatewayConfig): string | undefined {
   return electConversationDefault(
     preferActivatedModels(deps, configuredChatModels(config)),
@@ -2774,7 +2824,7 @@ function inUseConversationModelId(deps: UiHandlerDeps, config: GatewayConfig): s
 
 interface WorkbenchProbeTarget extends WorkbenchProbeNeed {
   readonly modelId: string;
-  /** Startup proof of the model in use, or a person's pick; absent means the trigger decides. */
+  /** Proof of the activated model in use, or a person's pick; absent means the trigger decides. */
   readonly scopeReason?: ConversationCheckReason;
 }
 
@@ -4157,6 +4207,49 @@ export async function handleGatewaySelectionCheck(
   return { status: 200, body: { modelId, state: selectionCheckState(deps, modelId), outcome } };
 }
 
+/**
+ * A person takes an activated chat model out of use again (ADR-0171 D2, amended 2026-11-16).
+ * Deactivation forgets the process-local observation of the current configuration generation, so
+ * Chat no longer offers or elects the model and a send or coding start is refused until the model
+ * is activated again. It sends nothing to the provider. A check of the model that is still running
+ * is not interrupted: the request is refused, so its later result cannot reactivate the model.
+ */
+export async function handleGatewayDeactivation(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const correlationId = ctx.correlationId ?? newCorrelationId();
+  const body = await readJsonBody(ctx.req, correlationId);
+  if ("status" in body) {
+    logDeactivationOutcome(deps, correlationId, "bad-request");
+    return body;
+  }
+  const modelId = body.parsed.modelId;
+  if (modelId === undefined) {
+    logDeactivationOutcome(deps, correlationId, "bad-request");
+    return error("BAD_REQUEST", "A model id is required.");
+  }
+  const outcome = deactivateConversationModel(deps, modelId);
+  logDeactivationOutcome(deps, correlationId, outcome);
+  if (outcome === "unknown-model")
+    return error("NOT_FOUND", "The model is not a configured chat model.", 404);
+  if (outcome === "check-running")
+    return error("CONFLICT", "The model's readiness check is still running.", 409);
+  return { status: 200, body: { modelId, outcome } };
+}
+
+function deactivateConversationModel(deps: UiHandlerDeps, modelId: string): DeactivationOutcome {
+  const holder = deps.gatewayConfig;
+  const config = currentGatewayConfig(deps);
+  if (holder === undefined || config === undefined) return "unknown-model";
+  if (!configuredChatModels(config).some((model) => model.id === modelId)) return "unknown-model";
+  if (isConversationReadinessCheckRunning(deps, modelId) || isExplicitCheckRunning(deps, modelId))
+    return "check-running";
+  if (!currentConversationReady(deps, modelId)) return "not-activated";
+  holder.clearVerifiedCapability(modelId, holder.generation());
+  return "deactivated";
+}
+
 function selectionCheckState(
   deps: UiHandlerDeps,
   modelId: string,
@@ -4191,12 +4284,60 @@ export async function handleGatewayReadiness(
   }
 }
 
+// The checks a person started in Settings > Models, per configuration generation and model. They
+// run outside the initialization queue; a deactivation must still see them, or a check that ends
+// after the deactivation would activate the model again without anybody asking for it.
+const explicitChecksByConfig = new WeakMap<
+  NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  Map<string, number>
+>();
+
+function explicitChecksFor(
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+): Map<string, number> {
+  let checks = explicitChecksByConfig.get(holder);
+  if (checks === undefined) {
+    checks = new Map();
+    explicitChecksByConfig.set(holder, checks);
+  }
+  return checks;
+}
+
+async function trackExplicitCheck<T>(
+  deps: UiHandlerDeps,
+  modelId: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const holder = deps.gatewayConfig;
+  if (holder === undefined || modelId === undefined) return run();
+  const checks = explicitChecksFor(holder);
+  const key = `${String(holder.generation())}:${modelId}`;
+  checks.set(key, (checks.get(key) ?? 0) + 1);
+  try {
+    return await run();
+  } finally {
+    const left = (checks.get(key) ?? 1) - 1;
+    if (left > 0) checks.set(key, left);
+    else checks.delete(key);
+  }
+}
+
+function isExplicitCheckRunning(deps: UiHandlerDeps, modelId: string): boolean {
+  const holder = deps.gatewayConfig;
+  return (
+    holder !== undefined &&
+    explicitChecksFor(holder).has(`${String(holder.generation())}:${modelId}`)
+  );
+}
+
 async function settleExplicitReadiness(
   parsed: GatewayReadinessRequest,
   deps: UiHandlerDeps,
   correlationId: string | undefined,
 ): Promise<RouteResult> {
-  const report = await runGatewayReadiness(parsed, deps, correlationId, "settings");
+  const report = await trackExplicitCheck(deps, parsed.modelId, () =>
+    runGatewayReadiness(parsed, deps, correlationId, "settings"),
+  );
   if ("status" in report) return report;
   // An explicit verification that answered definitively ends the walk's pause on that model.
   recordConversationCheckVerdict(deps, report.modelId, {

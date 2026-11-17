@@ -897,6 +897,19 @@ export async function runGatewayReadiness(
   });
 }
 
+export interface ChatModelDeactivation {
+  readonly modelId: string;
+  readonly outcome: "deactivated" | "not-activated";
+}
+
+/** Takes an activated chat model out of use again; it sends nothing to the provider. */
+export async function deactivateChatModel(modelId: string): Promise<ChatModelDeactivation> {
+  return fetchJson<ChatModelDeactivation>("/api/gateway/readiness/deactivation", {
+    method: "POST",
+    body: JSON.stringify({ modelId }),
+  });
+}
+
 export type VerifiedGatewayCapabilityFields = Partial<
   Pick<
     ModelCapability,

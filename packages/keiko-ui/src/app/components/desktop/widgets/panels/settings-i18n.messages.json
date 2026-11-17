@@ -331,6 +331,10 @@
     "en": "Activate all",
     "de": "Alle aktivieren"
   },
+  "settings.models.deactivate": {
+    "en": "Deactivate",
+    "de": "Deaktivieren"
+  },
   "settings.models.activationHint": {
     "en": "Models are inactive after every start. Activate a model to run its readiness check; once it passes, the model can be used in Chat and the Coding Workbench.",
     "de": "Modelle sind nach jedem Start inaktiv. Aktiviere ein Modell, um seine Bereitschaftsprüfung auszuführen; danach ist es im Chat und in der Coding Workbench nutzbar."

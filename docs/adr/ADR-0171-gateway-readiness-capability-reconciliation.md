@@ -466,7 +466,11 @@ connection/process lifetime; `stale` does not create a new age limit for that ob
 - A context-window lower bound cannot silently shrink a correctly configured model capacity.
 - No chat model is checked at initialization (amended 2026-11-16). After a restart or a connection
   replacement every affected model is inactive until the person activates it in Settings > Models;
-  successful credential-setup checks still count as activation. Requests and passive reads consume
+  successful credential-setup checks still count as activation. The person can deactivate an
+  activated model there again: deactivation forgets the observation of the current generation without
+  a provider request, so Chat no longer offers or elects the model and a send or coding start is
+  refused until it is activated anew. A deactivation while that model's check still runs is refused,
+  so the check's later result cannot reactivate it unasked. Requests and passive reads consume
   that result without age-based renewal or automatic recovery traffic; actual provider requests
   report runtime failures normally.
 - Passive Workbench profile reads return the current projection immediately, even when a provider

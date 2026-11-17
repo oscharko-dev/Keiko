@@ -18,6 +18,7 @@ import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from
 import {
   awaitInitializedConversationReadiness,
   checkSelectedConversationModel,
+  handleGatewayDeactivation,
   handleGatewayReadiness,
   handleGatewaySelectionCheck,
   initializeConfiguredConversationReadiness,
@@ -325,7 +326,7 @@ it("clears transient Chat presentation after a later definitive credential refus
   gateway.chatStatus.set(CHAT_A, 503);
   const deps = composition();
   deps.gatewayConfig?.set(selectedChatConfig(), true, "cold-transient-then-refused");
-    initializeConfiguredConversationReadiness(deps, "cold-transient-then-refused");
+  initializeConfiguredConversationReadiness(deps, "cold-transient-then-refused");
   await vi.waitFor(() => {
     expect(deps.gatewayConfig?.verifiedCapability(CHAT_A)?.fields.conversationReady).toBe(false);
   });
@@ -687,6 +688,110 @@ it("records every selection outcome under the pick's own correlation id, with cl
   const line = linesOf(sink, "gateway.readiness.selection")[0];
   if (line === undefined) throw new TypeError("No selection line was recorded");
   expectActivityLogProof("gateway.readiness.selection.line", formatActivityLogProofLine(line));
+});
+
+function deactivationRequest(body: unknown, correlationId: string): RouteContext {
+  return {
+    ...selectionRequest(body),
+    correlationId,
+    url: new URL("http://127.0.0.1/api/gateway/readiness/deactivation"),
+  };
+}
+
+// Holds the chat completion of one model until the test releases it, so its check stays running.
+function holdChatCompletion(modelId: string): {
+  readonly release: () => void;
+  readonly held: () => boolean;
+} {
+  const forward = globalThis.fetch;
+  let heldCalls = 0;
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.stubGlobal("fetch", (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const body = typeof init?.body === "string" ? init.body : "{}";
+    const model = (JSON.parse(body) as { readonly model?: string }).model;
+    const embedding = (url instanceof Request ? url.url : url.toString()).endsWith("/embeddings");
+    if (model !== modelId || embedding) return forward(url, init);
+    heldCalls += 1;
+    return held.then(() => forward(url, init));
+  });
+  return {
+    release: (): void => {
+      release();
+    },
+    held: (): boolean => heldCalls > 0,
+  };
+}
+
+it("deactivates an activated chat model without a provider request and records each outcome (ADR-0171 D2)", async () => {
+  const sink = loggedSink();
+  const gateway = gatewayDouble();
+  const deps = composition();
+  await started(deps, gateway);
+  await activate(deps, CHAT_B);
+  expect(currentConversationReady(deps, CHAT_B)).toBe(true);
+  const before = gateway.requests.length;
+
+  const deactivated = await handleGatewayDeactivation(
+    deactivationRequest({ modelId: CHAT_B }, "corr-deactivate"),
+    deps,
+  );
+  expect(deactivated).toEqual({ status: 200, body: { modelId: CHAT_B, outcome: "deactivated" } });
+  expect(currentConversationReady(deps, CHAT_B)).toBe(false);
+  const listed = handleModels({ url: new URL("http://127.0.0.1/api/models") } as RouteContext, deps)
+    .body as { readonly models: readonly ModelCapability[] };
+  expect(listed.models.find((model) => model.id === CHAT_B)?.conversationReady).toBeUndefined();
+  expect(captureConversationReadinessAdmission(deps, CHAT_B)).toMatchObject({ status: 400 });
+
+  expect(
+    await handleGatewayDeactivation(deactivationRequest({ modelId: CHAT_B }, "corr-again"), deps),
+  ).toEqual({ status: 200, body: { modelId: CHAT_B, outcome: "not-activated" } });
+  expect(
+    await handleGatewayDeactivation(
+      deactivationRequest({ modelId: EMBEDDING_A }, "corr-embed"),
+      deps,
+    ),
+  ).toMatchObject({ status: 404, body: { error: { code: "NOT_FOUND" } } });
+  expect(
+    await handleGatewayDeactivation(deactivationRequest({}, "corr-no-model"), deps),
+  ).toMatchObject({ status: 400, body: { error: { code: "BAD_REQUEST" } } });
+  // Deactivation itself never reaches the provider.
+  expect(gateway.requests).toHaveLength(before);
+
+  // A check that is still running is not interrupted, and its result is not overruled.
+  const completion = holdChatCompletion(CHAT_C);
+  const checking = handleGatewayReadiness(
+    selectionRequest({ modelId: CHAT_C, options: { probes: ["chat"] } }),
+    deps,
+  );
+  await vi.waitFor(() => {
+    expect(completion.held()).toBe(true);
+  });
+  expect(
+    await handleGatewayDeactivation(deactivationRequest({ modelId: CHAT_C }, "corr-running"), deps),
+  ).toMatchObject({ status: 409, body: { error: { code: "CONFLICT" } } });
+  completion.release();
+  expect(await checking).toMatchObject({ status: 200 });
+  expect(currentConversationReady(deps, CHAT_C)).toBe(true);
+
+  const outcomes = new Map(
+    linesOf(sink, "gateway.readiness.deactivation").map((line) => [
+      line.correlationId,
+      line.extra?.outcome,
+    ]),
+  );
+  expect(Object.fromEntries(outcomes)).toEqual({
+    "corr-deactivate": "deactivated",
+    "corr-again": "not-activated",
+    "corr-embed": "unknown-model",
+    "corr-no-model": "bad-request",
+    "corr-running": "check-running",
+  });
+  const line = linesOf(sink, "gateway.readiness.deactivation")[0];
+  if (line === undefined) throw new TypeError("No deactivation line was recorded");
+  expectActivityLogProof("gateway.readiness.deactivation.line", formatActivityLogProofLine(line));
 });
 
 it("reports a failed selection check instead of leaving an unhandled rejection", async () => {

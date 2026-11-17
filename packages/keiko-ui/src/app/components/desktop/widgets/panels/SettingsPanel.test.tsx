@@ -75,6 +75,7 @@ const READINESS_ACTION = /^(Activate|Run readiness check|Checking readiness…)$
 const fetchConfigMock = vi.fn();
 const fetchModelsMock = vi.fn();
 const runGatewayReadinessMock = vi.fn();
+const deactivateChatModelMock = vi.fn();
 const resetModelRequestCacheMock = vi.fn();
 const applyGatewayVerifiedCapabilitiesMock = vi.fn();
 const fetchManagedLspSettingsMock = vi.fn();
@@ -86,6 +87,8 @@ vi.mock("@/lib/api", () => ({
   resetModelRequestCache: (): void => resetModelRequestCacheMock(),
   runGatewayReadiness: (...args: readonly unknown[]): Promise<unknown> =>
     runGatewayReadinessMock(...args),
+  deactivateChatModel: (...args: readonly unknown[]): Promise<unknown> =>
+    deactivateChatModelMock(...args),
   applyGatewayVerifiedCapabilities: (...args: readonly unknown[]): Promise<unknown> =>
     applyGatewayVerifiedCapabilitiesMock(...args),
   fetchManagedLspSettings: (...args: readonly unknown[]): Promise<unknown> =>
@@ -1659,5 +1662,40 @@ describe("SettingsPanel manual model activation", () => {
       expect(screen.queryByRole("button", { name: "Activate all" })).toBeNull();
     });
     expect(runGatewayReadinessMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("deactivates an activated model and offers Activate again", async () => {
+    primeFetches([{ ...chatCapability("test-chat-1"), conversationReady: true }]);
+    deactivateChatModelMock.mockResolvedValue({ modelId: "test-chat-1", outcome: "deactivated" });
+    render(<SettingsPanel />);
+    const deactivate = await screen.findByRole("button", { name: "Deactivate" });
+    expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/^Activated$/);
+    primeFetches([chatCapability("test-chat-1")]);
+    fireEvent.click(deactivate);
+    expect(deactivateChatModelMock).toHaveBeenCalledWith("test-chat-1");
+    expect(await screen.findByRole("button", { name: "Activate" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Deactivate" })).toBeNull();
+    expect(screen.getByTestId("conv-elig-ok")).toHaveTextContent(/chat model — not activated/i);
+    expect(runGatewayReadinessMock).not.toHaveBeenCalled();
+  });
+
+  it("offers no Deactivate while a model is inactive or its activation is still running", async () => {
+    primeFetches([chatCapability("test-chat-1")]);
+    runGatewayReadinessMock.mockImplementation(() => new Promise(() => undefined));
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Activate" }));
+    expect(await screen.findByRole("button", { name: /Checking readiness/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Deactivate" })).toBeNull();
+  });
+
+  it("keeps the model activated and shows the failure when deactivation fails", async () => {
+    primeFetches([{ ...chatCapability("test-chat-1"), conversationReady: true }]);
+    deactivateChatModelMock.mockRejectedValue(new Error("network down"));
+    render(<SettingsPanel />);
+    fireEvent.click(await screen.findByRole("button", { name: "Deactivate" }));
+    await waitFor(() => {
+      expect(deactivateChatModelMock).toHaveBeenCalledTimes(1);
+    });
+    expect(resetModelRequestCacheMock).not.toHaveBeenCalled();
   });
 });
