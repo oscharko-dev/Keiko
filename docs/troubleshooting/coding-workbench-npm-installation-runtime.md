@@ -73,7 +73,10 @@ a developer and qualification override, not the remedy for a customer installati
 The npm lane is digest-verified, not platform-signed: the readiness answer reports
 `runtimeEvidenceClass: "functional-not-platform-qualified"`, and on macOS the engine runs without
 the Endpoint Security containment a signed desktop package adds. Windows and Linux installations
-use the desktop packages.
+use the desktop packages. A Windows installation without any runtime answers
+`runtimeUnavailableReason: "windows-runtime-unpublished"` and the Workbench says that this Keiko
+build cannot start coding runs on Windows: no published Windows package carries a runtime that may
+start runs yet, so reinstalling does not help (#4404, #4410; qualification is tracked in #4068).
 
 **Prevention**
 

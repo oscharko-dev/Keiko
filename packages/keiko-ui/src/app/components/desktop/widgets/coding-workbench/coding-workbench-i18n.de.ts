@@ -526,6 +526,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.locationBinding": "Gewählten Checkout vorbereiten…",
   "codingWorkbench.repository.locationError":
     "Der gewählte Checkout konnte nicht geöffnet werden. Wähle den Branch in Git und versuche es erneut.",
+  "codingWorkbench.repository.locationUnregistered":
+    "Keiko findet diesen Ordner nicht mehr unter den hinzugefügten Ordnern. Füge ihn erneut hinzu und versuche es dann noch einmal.",
+  "codingWorkbench.repository.locationGitUnreadable":
+    "Git konnte diesen Checkout nicht öffnen. Prüfe, ob Git installiert ist und ob du den obersten Ordner des Repositorys gewählt hast, und versuche es dann erneut.",
   "codingWorkbench.repository.search": "Repositories suchen",
   "codingWorkbench.repository.searchBranch": "Branches suchen",
   "codingWorkbench.repository.noMatches": "Keine passenden Repositories.",

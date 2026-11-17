@@ -740,6 +740,8 @@ export function gatewayServiceMessageKey(
 const RUNTIME_ACTIVATION_MESSAGE_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map([
   ["runtime-disabled", "codingWorkbench.runtime.disabled"],
   ["platform-unqualified", "codingWorkbench.runtime.platformUnqualified"],
+  // #4404, #4410: Windows installations without a runtime get the Windows answer, never "reinstall".
+  ["windows-runtime-unpublished", "codingWorkbench.gatewayService.unqualified"],
   ["dev-lane-refused", "codingWorkbench.runtime.developmentRefused"],
   ["payload-missing", "codingWorkbench.runtime.payloadMissing"],
   ["payload-unapproved", "codingWorkbench.runtime.payloadUnapproved"],

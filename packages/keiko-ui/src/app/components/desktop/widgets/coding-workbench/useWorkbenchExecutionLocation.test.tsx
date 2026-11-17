@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import { ApiError } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 import {
@@ -116,6 +117,35 @@ describe("workbench execution location restoration", () => {
     mocks.selectLocalCheckout.mockResolvedValue({});
     rerender({ ...initial, branchLoading: false, branchError: false });
     await waitFor(() => expect(mocks.selectLocalCheckout).toHaveBeenCalledOnce());
+  });
+
+  // #4404: a Windows checkout failed with "choose a branch in Git" while Git itself could not run.
+  // A closed server code with one plain cause reaches the notice; any other failure does not.
+  it.each([
+    [new ApiError("REPOSITORY_UNREACHABLE", "unreachable", 503), "git-unreadable"],
+    [new ApiError("MISSING_REPOSITORY", "missing", 404), "unregistered"],
+    [new ApiError("UNSAFE_PATH", "unsafe", 400), undefined],
+    [new Error("WORKSPACE_REFRESH_UNAVAILABLE"), undefined],
+  ])("names the server's cause of a failed checkout (%s)", async (failure, reason) => {
+    mocks.selectLocalCheckout.mockRejectedValue(failure);
+    const { result } = renderHook(useWorkbenchExecutionLocation, {
+      initialProps: {
+        root: "/repo",
+        branch: "main",
+        location: "local" as const,
+        activeInstance: null,
+        workspaceLoading: false,
+        workspaceError: false,
+        branchLoading: false,
+        branchError: false,
+        branchDenied: false,
+        runIsActive: false,
+        folderMode: false,
+        refresh,
+      },
+    });
+    await waitFor(() => expect(result.current.error).toBe(true));
+    expect(result.current.reason).toBe(reason);
   });
 
   // #4068: before readiness answers, the runtime's confinable locations are unknown, so the default

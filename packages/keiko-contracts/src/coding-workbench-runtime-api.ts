@@ -556,6 +556,9 @@ export interface CodingWorkbenchRuntimeReadinessRequest {
 export type CodingWorkbenchRuntimeUnavailableReason =
   | "runtime-disabled"
   | "platform-unqualified"
+  // A Windows installation without any coding runtime: no Keiko package for Windows carries one
+  // that may start runs yet (#4404, #4410), so reinstalling cannot help.
+  | "windows-runtime-unpublished"
   | "dev-lane-refused"
   | "payload-missing"
   | "payload-unapproved"
@@ -578,6 +581,7 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
   Object.freeze([
     "runtime-disabled",
     "platform-unqualified",
+    "windows-runtime-unpublished",
     "dev-lane-refused",
     "payload-missing",
     "payload-unapproved",

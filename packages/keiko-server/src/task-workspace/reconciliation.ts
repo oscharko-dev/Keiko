@@ -19,11 +19,7 @@
 
 import { assertManagedWorkspaceInstance } from "./managed-root.js";
 import { existsSync, realpathSync } from "node:fs";
-import {
-  detectWorkspaceAt,
-  PathEscapeError,
-  resolveWithinWorkspace,
-} from "@oscharko-dev/keiko-workspace";
+import { detectWorkspaceAt, resolveWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertContainedRealPathWithinOwnedRoot } from "@oscharko-dev/keiko-workspace/internal/owned-root";
 import type {
@@ -88,11 +84,17 @@ function isoFrom(nowMs: number): string {
   return new Date(nowMs).toISOString();
 }
 
-// Realpath-aware containment check delegated to keiko-workspace (same engine provisioning uses). True
-// when the persisted managed path still resolves inside the managed root after symlink resolution; any
-// escape OR an unverifiable parent chain is treated conservatively as not-contained, so reconciliation
-// never trusts a persisted path it cannot prove (SC).
-function isContained(managedRoot: string, worktreePath: string): boolean {
+// Realpath-aware containment check delegated to keiko-workspace (same engine provisioning uses).
+// Contained when the persisted managed path still resolves inside the managed root after symlink
+// resolution; any escape OR an unverifiable parent chain is treated conservatively as not-contained,
+// so reconciliation never trusts a persisted path it cannot prove (SC). The refusal keeps the error
+// that disproved containment: the reconcile line carries its class and Keiko frames, so a support
+// report tells a lexical escape, a relocated managed root and an unreadable parent chain apart
+// (#4410: a Windows report held 20 `path-escape` lines and nothing that said why).
+type ContainmentProof =
+  { readonly contained: true } | { readonly contained: false; readonly failure: unknown };
+
+function isContained(managedRoot: string, worktreePath: string): ContainmentProof {
   try {
     resolveWithinWorkspace(managedRoot, worktreePath);
     assertContainedRealPathWithinOwnedRoot(
@@ -101,10 +103,16 @@ function isContained(managedRoot: string, worktreePath: string): boolean {
       worktreePath,
       "managed worktree path",
     );
-    return true;
+    return { contained: true };
   } catch (error) {
-    if (error instanceof PathEscapeError) return false;
-    return false;
+    // The refusal is carried as the cause, so the line's cause chain names the engine's own class
+    // (PathEscapeError, PathDeniedError, or a filesystem error) without its message or path.
+    return {
+      contained: false,
+      failure: new TaskWorkspaceError("UNSAFE_PATH", "managed worktree path is not contained", [], {
+        cause: error,
+      }),
+    };
   }
 }
 
@@ -132,6 +140,9 @@ export interface FactsAndHead {
   // The repository's worktree count as the adapter listed it — a real measurement for the
   // evidence line — or 0 when the list was not consulted because the managed worktree is gone.
   readonly worktreeCount: number;
+  // The error that disproved containment, when the persisted path was not proven contained. Only
+  // its class and Keiko frames reach the log; never its message or the path.
+  readonly containmentFailure?: unknown;
 }
 
 // Either an already-resolved repository worktree-list snapshot (every caller that fetches it
@@ -243,7 +254,8 @@ async function gatherFacts(
   nowMs: number,
   actor: string | undefined,
 ): Promise<FactsAndHead> {
-  const pathContained = isContained(ctx.deps.managedRoot, instance.managedWorktreePath);
+  const containment = isContained(ctx.deps.managedRoot, instance.managedWorktreePath);
+  const pathContained = containment.contained;
   const worktreeDirExists = pathContained && existsSync(instance.managedWorktreePath);
   const identity = identityFacts(instance, worktreeDirExists);
   const taskBranchPresent = worktreeDirExists
@@ -258,6 +270,7 @@ async function gatherFacts(
   return {
     observedHead,
     worktreeCount,
+    ...(containment.contained ? {} : { containmentFailure: containment.failure }),
     facts: {
       lifecycleState: instance.lifecycleState,
       pathContained,
@@ -304,6 +317,8 @@ interface ReconcileEvidenceInput {
   // the sanctioned UNKNOWN_CORRELATION_ID fallback rather than a persisted workspace identity.
   readonly correlationId: string | undefined;
   readonly measurement: ReconcileMeasurement;
+  // The error that disproved containment; its class and frames ride on the line (#4410).
+  readonly containmentFailure?: unknown;
 }
 
 function emitReconcileEvidence(ctx: ReconcileCtx, input: ReconcileEvidenceInput): void {
@@ -341,6 +356,7 @@ function emitReconcileEvidence(ctx: ReconcileCtx, input: ReconcileEvidenceInput)
     redactString: ctx.deps.redactString,
     parentCorrelationId: ctx.parentCorrelationId,
     errorCode: outcome.status === "healthy" ? undefined : outcome.status,
+    ...(input.containmentFailure === undefined ? {} : { error: input.containmentFailure }),
   });
 }
 
@@ -409,6 +425,9 @@ function reconcileWithContext(
       durationMs: Math.max(0, nowMs - startedAtMs),
       worktreeCount: gathered.worktreeCount,
     },
+    ...(gathered.containmentFailure === undefined
+      ? {}
+      : { containmentFailure: gathered.containmentFailure }),
   });
   return { instance: persisted, outcome };
 }

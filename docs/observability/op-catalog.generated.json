@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "82c88629e0103de08bfceb8ea0988d1900a5f16ea283be1c4d77cb1e333d1cea",
+    "catalogDigest": "3e663f01f493b6fdce8d61e506e7d2e2af828002d8e6e0da3eeb4b70c8785fc0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -11282,7 +11282,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:90",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:551"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:574"
         ]
       },
       {
@@ -11335,7 +11335,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:137",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:570"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:593"
         ]
       },
       {
@@ -122063,6 +122063,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.activation.unavailable",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:557",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.agent-models.bound",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:2508",
@@ -125187,7 +125194,7 @@
     {
       "op": "server.diagnostic.failure",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:1133",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:1136",
       "package": "keiko-server"
     },
     {
@@ -126003,6 +126010,7 @@
     "coding-repository-handler.settled",
     "coding-repository-handler.started",
     "coding-runtime.accepted-initialization",
+    "coding-runtime.activation.unavailable",
     "coding-runtime.agent-models.bound",
     "coding-runtime.agent.selected",
     "coding-runtime.approval",

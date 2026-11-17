@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { ServerLogEvent } from "../observability/index.js";
 import { makeOwnerPrivateDirectory } from "../test-support/owner-private-fixture.js";
 import {
@@ -125,6 +126,43 @@ describe("production OpenCode activation", () => {
     expect(result.ports).toBeUndefined();
     expect(result.unavailableReason).toBe("platform-unqualified");
     expect(result.runtimeVersion).toBeUndefined();
+  });
+
+  it("names the Windows answer, not a reinstall, when a Windows installation has no runtime", () => {
+    // #4404, #4410: a Windows npm installation found no runtime package and the Workbench told the
+    // person to install the Keiko package with its runtime, which no published Windows package has.
+    const records: ServerDiagnosticRecord[] = [];
+    const result = resolveProductionOpenCodeActivation({
+      ...activationInput(
+        { KEIKO_UI_PORT: "1983", KEIKO_CLI_BIN_PATH: "C:\\nonexistent\\entry.js" },
+        { withSecureRead: true, platform: "win32", arch: "x64" },
+      ),
+      diagnostics: {
+        record: (record: ServerDiagnosticRecord): void => {
+          records.push(record);
+        },
+      },
+    });
+    expect(result.ports).toBeUndefined();
+    expect(result.unavailableReason).toBe("windows-runtime-unpublished");
+    expect(result.runtimeVersion).toBeUndefined();
+    // The support report shows why: one routine, body-free observation, not a failure.
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      operation: "coding-runtime.activation.unavailable",
+      diagnosticOutcome: "routine",
+      code: "reason=windows-runtime-unpublished",
+    });
+  });
+
+  it("keeps the install-the-runtime answer for a macOS installation without a runtime package", () => {
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { KEIKO_UI_PORT: "1983", KEIKO_CLI_BIN_PATH: "/nonexistent/entry.js" },
+        { withSecureRead: true, platform: "darwin", arch: "x64" },
+      ),
+    );
+    expect(result.unavailableReason).toBe("platform-unqualified");
   });
 
   it("fails closed with runtime-disabled when the kill switch is set, before discovery", () => {

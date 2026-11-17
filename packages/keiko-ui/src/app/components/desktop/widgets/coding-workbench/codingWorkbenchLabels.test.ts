@@ -1249,6 +1249,14 @@ describe("runtimeUnavailableMessageKey", () => {
     expect(runtimeUnavailableMessageKey("runtime-outdated")).toBe(
       "codingWorkbench.runtime.outdated",
     );
+    // #4404, #4410: a Windows installation without a runtime gets the Windows answer, never the
+    // install-the-runtime advice that no published Windows package can satisfy.
+    expect(runtimeUnavailableMessageKey("windows-runtime-unpublished")).toBe(
+      "codingWorkbench.gatewayService.unqualified",
+    );
+    expect(runtimeUnavailableMessageKey("windows-runtime-unpublished")).not.toBe(
+      "codingWorkbench.runtime.platformUnqualified",
+    );
     expect(runtimeUnavailableMessageKey("runtime-unqualified")).toBeUndefined();
     expect(runtimeUnavailableMessageKey("constructor")).toBeUndefined();
     expect(runtimeUnavailableMessageKey(undefined)).toBeUndefined();

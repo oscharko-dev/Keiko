@@ -21,7 +21,7 @@ import {
 import { codingSidecarDisabledByPolicy } from "../coding-sidecar-gateway.js";
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { loadMcpServerRegistry } from "../mcp/mcpServerRegistry.js";
 import { loadOperatorPluginRegistry } from "./opencodeOperatorPlugins.js";
@@ -537,7 +537,30 @@ function resolveRuntime(
     recordDevLaneDiscovery(activityLog, npmLane, "npm-runtime-package");
     return devLaneRuntime(npmLane);
   }
+  // No lane found a runtime. On macOS that is a missing runtime package the person can install.
+  // On Windows no published package carries a runtime that may start runs yet (#4404, #4410):
+  // telling the person to reinstall would send them in circles, so Windows names that instead.
+  if (input.platform === "win32") {
+    recordWindowsRuntimeUnpublished(input.diagnostics);
+    return { unavailableReason: "windows-runtime-unpublished" };
+  }
   return devLaneRuntime(discovery);
+}
+
+// The decision is an expected state of a Windows installation, not a failure: recorded once per
+// composition at info, body-free, so a support report shows why the Workbench gave the Windows
+// answer instead of the install-the-runtime advice.
+function recordWindowsRuntimeUnpublished(diagnostics: ServerDiagnosticSink | undefined): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.activation.unavailable",
+    source: "coding-runtime.activation",
+    errorClass: "WindowsRuntimeUnpublished",
+    message: "windows-runtime-unpublished",
+    diagnosticOutcome: "routine",
+    code: "reason=windows-runtime-unpublished",
+  });
 }
 
 function recordDevLaneDiscovery(

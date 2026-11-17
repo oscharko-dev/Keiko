@@ -130,6 +130,12 @@ The active pointer and workspace instance identify that same root for the runtim
 editor, file tools, and Git delivery. A local checkout is re-proved on each active
 read; managed worktree reconciliation remains scoped to managed instances. Opening
 the Coding Workbench with a registered repository requires no separate Code setup.
+The selected root is the native real path the route resolved; it matches a registration by its
+exact spelling or by the same device and file id, because Windows keeps the spelling a person typed
+or a dialog returned (drive-letter case, 8.3 names, mapped drives, junctions). Only that resolved
+path may match by identity, and it must still be canonical (#4404). A failed checkout whose closed
+code has one plain cause (`MISSING_REPOSITORY`, `REPOSITORY_UNREACHABLE`) names that cause beside
+the selector instead of the generic sentence.
 **Folder mode (owner decision, 2026-10-30):** a registered folder whose branch read answers
 `available: false` (an ordinary folder; a rejected or refused read is not one) needs no branch. The
 Workbench binds it in place as a folder workspace (ADR-0088 D1) with **Work in** fixed to Local, the
