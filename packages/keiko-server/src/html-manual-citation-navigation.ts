@@ -4,16 +4,56 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import type { HtmlManualCitationOpenUnavailableReason } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  HtmlManualCitationCheckResult,
+  HtmlManualCitationOpenUnavailableReason,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   resolveHtmlManualCitationTarget,
   type HtmlManualCitationTargetFailureReason,
 } from "@oscharko-dev/keiko-local-knowledge";
 
 import type { UiHandlerDeps } from "./deps.js";
+import { readJsonRequestBodyOutcome } from "./bounded-request-body.js";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
+import { classifyManualCitationTarget } from "./manual/documentation-target.js";
+import { getServerLogger } from "./observability/index.js";
+import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 
 export const HTML_MANUAL_CITATION_TARGET_PREFIX = "keiko-html-manual-citation:" as const;
+const MAX_CITATION_TARGET_LENGTH = 4_096;
+const MAX_CITATION_BODY_BYTES = 8_000;
+
+const MANUAL_CITATION_CHECK = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "knowledge.citation.manual-check",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "html-manual-citation-navigation.handleCheckHtmlManualCitation",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["verified", "unavailable"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  diagnosticWhen: [{ field: "outcome", values: ["unavailable"] }],
+  analyzerProjection: "timeline",
+  failureClasses: ["knowledge-citation-manual-check"],
+  proofIds: ["knowledge.citation.manual-check.line"],
+  releaseImpact: "patch",
+});
 
 export interface HtmlManualCitationTargetPayload {
   readonly capsuleId: KnowledgeCapsuleId;
@@ -23,8 +63,7 @@ export interface HtmlManualCitationTargetPayload {
   readonly anchorId?: string;
 }
 
-export type HtmlManualCitationNavigationResolution =
-  | { readonly kind: "not-citation-target" }
+type HtmlManualCitationNavigationResolution =
   | { readonly kind: "resolved"; readonly target: string }
   | { readonly kind: "failed"; readonly reason: HtmlManualCitationOpenUnavailableReason };
 
@@ -36,15 +75,13 @@ export function buildHtmlManualCitationNavigationTarget(
   )}`;
 }
 
-export function resolveHtmlManualCitationNavigationTarget(
+function resolveHtmlManualCitationNavigationTarget(
   deps: UiHandlerDeps,
   target: string,
 ): HtmlManualCitationNavigationResolution {
   const payload = parseHtmlManualCitationNavigationTarget(target);
   if (payload === undefined) {
-    return target.startsWith(HTML_MANUAL_CITATION_TARGET_PREFIX)
-      ? { kind: "failed", reason: "target-unsupported" }
-      : { kind: "not-citation-target" };
+    return { kind: "failed", reason: "target-unsupported" };
   }
   let env: ReturnType<typeof openKnowledgeStoreForDeps> | undefined;
   try {
@@ -61,6 +98,54 @@ export function resolveHtmlManualCitationNavigationTarget(
   } finally {
     env?.close();
   }
+}
+
+export function checkHtmlManualCitation(
+  deps: UiHandlerDeps,
+  target: string,
+): HtmlManualCitationCheckResult {
+  const resolution = resolveHtmlManualCitationNavigationTarget(deps, target);
+  if (resolution.kind === "failed") return { state: "unavailable", reason: resolution.reason };
+  const classification = classifyManualCitationTarget(resolution.target);
+  return classification.ok
+    ? { state: "verified" }
+    : { state: "unavailable", reason: classification.reason };
+}
+
+export async function handleCheckHtmlManualCitation(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const read = await readJsonRequestBodyOutcome(
+    ctx.req,
+    MAX_CITATION_BODY_BYTES,
+    ctx.correlationId,
+  );
+  if (read.kind === "rejected") return read.response;
+  const target = read.value["target"];
+  if (
+    typeof target !== "string" ||
+    target.length === 0 ||
+    target.length > MAX_CITATION_TARGET_LENGTH
+  ) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "Invalid citation reference.", ctx.correlationId),
+    };
+  }
+  const body = checkHtmlManualCitation(deps, target);
+  getServerLogger().info(
+    activityLogEvent(
+      MANUAL_CITATION_CHECK,
+      { correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
+      {
+        outcome: body.state,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return { status: 200, body };
 }
 
 interface ChunkLineageRow {

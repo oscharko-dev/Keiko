@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a86c4ed9938d07652b4e27e1680ad20be27aaef0b13ec90a824743090408ef88"
+    "catalogDigest": "82c88629e0103de08bfceb8ea0988d1900a5f16ea283be1c4d77cb1e333d1cea"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 708,
-    "proofCount": 731,
-    "resolvedProofCount": 731,
-    "failureClassCount": 405,
+    "operationCount": 710,
+    "proofCount": 733,
+    "resolvedProofCount": 733,
+    "failureClassCount": 406,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -312,6 +312,7 @@
         "gateway.readiness.compatibility-retry.failed",
         "gateway.readiness.compatibility-retry.skipped",
         "gateway.readiness.completed",
+        "gateway.readiness.deactivation",
         "gateway.readiness.scope",
         "gateway.readiness.selection",
         "gateway.readiness.started",
@@ -612,6 +613,7 @@
         "indexing.start.accepted",
         "indexing.start.refused",
         "knowledge.citation.editor-target",
+        "knowledge.citation.manual-check",
         "knowledge.documents.operation",
         "knowledge.log.sink-failed",
         "knowledge.requirement-trace.applied",
@@ -903,6 +905,7 @@
   ],
   "failureClassScenarios": {
     "knowledge-citation-editor-target": ["memory-knowledge.dependency-failure"],
+    "knowledge-citation-manual-check": ["memory-knowledge.dependency-failure"],
     "mcp-authorization": ["tools-workflows.dependency-failure"],
     "chat-tool-transcript": ["bff.dependency-failure"],
     "chat-tool-authority": ["editor-delivery.dependency-failure"],
@@ -2408,6 +2411,9 @@
       "packages/keiko-server/src/gateway-readiness.native-cancellation.test.ts",
       "packages/keiko-server/src/gateway-readiness.test.ts"
     ],
+    "gateway.readiness.deactivation.line": [
+      "packages/keiko-server/src/gateway-models-in-use.test.ts"
+    ],
     "gateway.readiness.scope.line": ["packages/keiko-server/src/gateway-models-in-use.test.ts"],
     "gateway.readiness.selection.line": ["packages/keiko-server/src/gateway-models-in-use.test.ts"],
     "gateway.readiness.started.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],
@@ -2830,6 +2836,9 @@
     ],
     "knowledge.citation.editor-target.line": [
       "packages/keiko-server/src/knowledge-citation-editor-activity.test.ts"
+    ],
+    "knowledge.citation.manual-check.line": [
+      "packages/keiko-server/src/html-manual-citation-route.test.ts"
     ],
     "knowledge.documents.operation.line": [
       "packages/keiko-server/src/chat-tool-turn-coverage.test.ts",

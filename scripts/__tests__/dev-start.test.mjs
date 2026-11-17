@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -687,7 +687,7 @@ describe("dev-start gateway config credentials seed (KEIKO-0542)", () => {
 // is an atomic O_EXCL|O_CREAT create at `$stateDir/dev-start.lock`. Regression: prove serialization
 // by holding the lock in one call while a second call queues behind it.
 describe("dev-start concurrency lock (KEIKO-0719)", () => {
-  it("serialises two concurrent withDevStartLock calls in FIFO order", async () => {
+  it("serialises two concurrent withDevStartLock calls", async () => {
     const order = [];
     const first = withDevStartLock(async () => {
       order.push("A-start");
@@ -720,6 +720,37 @@ describe("dev-start concurrency lock (KEIKO-0719)", () => {
     });
     expect(marker.ran).toBe(true);
   });
+
+  it("releases the lock after reusing a healthy runner and preserves its PID record", async () => {
+    const pidFile = join(stateDirectory, "dev-ui.pid.json");
+    const runnerPid = 12_345;
+    const state = JSON.stringify({ runnerPid, publicPort: 1983 });
+    writeFileSync(pidFile, state, { flag: "wx" });
+    const kill = vi.spyOn(process, "kill").mockImplementation((_pid, signal) => {
+      if (signal !== 0) throw new Error("Unexpected signal to the existing runner");
+      return true;
+    });
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("Launcher exited while holding the lock");
+    });
+    const fetch = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      headers: { get: () => "text/html, image/svg+xml" },
+      text: async () => "Keiko <svg>",
+      json: async () => ({ status: "ok", state: "opened", runtimeAvailable: true }),
+    });
+    try {
+      await expect(withDevStartLock(prepareRunnerCriticalSection)).resolves.toBe(true);
+      expect(kill).toHaveBeenCalledExactlyOnceWith(runnerPid, 0);
+      expect(readFileSync(pidFile, "utf8")).toBe(state);
+      expect(existsSync(DEV_START_LOCK_FILE)).toBe(false);
+    } finally {
+      fetch.mockRestore();
+      exit.mockRestore();
+      kill.mockRestore();
+      rmSync(pidFile, { force: true });
+    }
+  });
 });
 
 // KEIKO-0719 (extended): the two-step "stop any prior runner, then clear pidFile" sequence used
@@ -730,7 +761,10 @@ describe("prepareRunnerCriticalSection (KEIKO-0719 race close)", () => {
   it("runs restartExistingRunnerIfNeeded before removing the pid file", async () => {
     const order = [];
     await prepareRunnerCriticalSection({
-      restartExistingRunnerIfNeeded: async () => order.push("restart"),
+      restartExistingRunnerIfNeeded: async () => {
+        order.push("restart");
+        return false;
+      },
       removePidFile: () => order.push("remove"),
     });
     expect(order).toEqual(["restart", "remove"]);
@@ -752,8 +786,8 @@ describe("prepareRunnerCriticalSection (KEIKO-0719 race close)", () => {
   it("falls through to the default seams when none are provided", async () => {
     expect(DEV_START_LOCK_FILE).toBe(join(stateDirectory, "dev-start.lock"));
     expect(existsSync(join(stateDirectory, "dev-ui.pid.json"))).toBe(false);
-    await expect(prepareRunnerCriticalSection({})).resolves.toBeUndefined();
-    await expect(prepareRunnerCriticalSection()).resolves.toBeUndefined();
+    await expect(prepareRunnerCriticalSection({})).resolves.toBe(false);
+    await expect(prepareRunnerCriticalSection()).resolves.toBe(false);
   });
 });
 

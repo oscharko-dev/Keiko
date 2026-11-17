@@ -530,6 +530,7 @@ export const DE_LOCAL_KNOWLEDGE_MESSAGES: LocalKnowledgeMessageCatalog = {
   "localKnowledge.detail.index.indexedDocuments": "Indexierte Dokumente",
   "localKnowledge.detail.index.failedSkipped": "{failed} fehlgeschlagen, {skipped} übersprungen",
   "localKnowledge.detail.index.vectors": "Vektoren",
+  "localKnowledge.detail.index.noIndexedChunks": "Noch keine Chunks indexiert",
   "localKnowledge.detail.index.chunksMissingVectors": "{count} Chunks ohne Vektoren",
   "localKnowledge.detail.index.allChunksEmbedded": "Alle Chunks haben Embeddings",
   "localKnowledge.detail.index.latestJob": "Letzter Job",

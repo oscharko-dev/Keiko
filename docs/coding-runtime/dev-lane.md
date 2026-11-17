@@ -197,6 +197,10 @@ authority and terminate the managed OpenCode process group before the runner exi
 all tracked development children and reports a failure rather than claiming success while one
 remains. `npm run dev:stop -- --force` is the explicit hard-stop fallback.
 
+If a previous launcher left `dev-start.lock`, stop the Dev UI and confirm that all launch and
+build processes have exited. Move the lock file out of the development state directory
+(`KEIKO_STATE_DIR`, or `.keiko/dev` in the checkout), then retry `npm run dev:start`.
+
 ## Minimal gateway provider profile for Code tasks
 
 The managed runtime routes every model call through the coding-sidecar Model Gateway. The gateway

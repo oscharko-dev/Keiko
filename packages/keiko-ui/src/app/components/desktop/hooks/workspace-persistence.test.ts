@@ -58,6 +58,30 @@ function hostileWindow(type: string, extra: Record<string, unknown> = {}): unkno
 }
 
 describe("workspace-persistence", () => {
+  it("keeps existing Agent run reports and their links when retired windows are dropped", () => {
+    const run = win({
+      id: "agents-result",
+      type: "agents",
+      cfg: { runId: "run-existing", workflow: "verify", inputJson: "old preset input" },
+    });
+    const files = win({ id: "files-1", type: "files" });
+    const kept = { id: "agents-result~files-1", a: run.id, b: files.id };
+    const restored = sanitizePersistedWorkspace(
+      [
+        run,
+        files,
+        win({ id: "agents-preset", type: "agents", cfg: { workflow: "unit-test-generation" } }),
+        hostileWindow("docbrowser", { cfg: { target: "file:///retired.html" } }),
+      ],
+      [kept, { id: "agents-preset~files-1", a: "agents-preset", b: files.id }],
+    );
+    expect(restored.wins).toEqual([
+      { ...run, cfg: { runId: "run-existing", workflow: "verify" } },
+      files,
+    ]);
+    expect(restored.conns).toEqual([kept]);
+  });
+
   it("preserves a Jira Pod node selection through save and reload", () => {
     const selected = win({
       id: "connector-jira",

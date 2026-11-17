@@ -519,6 +519,7 @@ export const EN_LOCAL_KNOWLEDGE_MESSAGES = {
   "localKnowledge.detail.index.indexedDocuments": "Indexed documents",
   "localKnowledge.detail.index.failedSkipped": "{failed} failed, {skipped} skipped",
   "localKnowledge.detail.index.vectors": "Vectors",
+  "localKnowledge.detail.index.noIndexedChunks": "No indexed chunks yet",
   "localKnowledge.detail.index.chunksMissingVectors": "{count} chunks missing vectors",
   "localKnowledge.detail.index.allChunksEmbedded": "All chunks embedded",
   "localKnowledge.detail.index.latestJob": "Latest job",

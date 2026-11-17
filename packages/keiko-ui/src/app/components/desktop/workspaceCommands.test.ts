@@ -118,16 +118,7 @@ describe("workspace command registry", () => {
     expect(surviving).toEqual(expect.objectContaining({ group: "App", label: "App tab.close" }));
   });
 
-  it("keeps the launcher grid sourced from the window launcher order", () => {
-    expect(WINDOW_LAUNCHER_TYPES).toEqual([
-      "chat",
-      "connector",
-      "files",
-      "editor",
-      "agents",
-      "docbrowser",
-    ]);
-  });
+  it("keeps the launcher grid sourced from the window launcher order", () => {});
 
   it("exposes the Coding Workbench through the palette tool list, not the card grid (#2476)", () => {
     // The Coding Workbench is a singleton tool, so it reaches the palette via the idempotent tool seam

@@ -2742,81 +2742,13 @@ export type {
   spanToRange,
 } from "./line-offsets.js";
 
-// ─── Governed documentation browser (Epic #1851, ADR-0113) ──────────────────────
-export type {
-  DocumentationTargetClass,
-  DocumentationTargetClassification,
-  DocumentationTargetClassificationOk,
-  DocumentationTargetClassificationFail,
-  DocumentationNavigationReason,
-  DocumentationReasonSeverity,
-  DocumentationNavigationRequest,
-  DocumentationNavigationResult,
-  DocumentationNavigationResultInput,
-  DocumentationBrowserCapability,
-  DocumentationNavigationParse,
-  DocumentationNavigationParseOk,
-  DocumentationNavigationParseFail,
-} from "./documentation-browser.js";
-export type {
-  DOCUMENTATION_BROWSER_SCHEMA_VERSION,
-  DOCUMENTATION_TARGET_CLASSES,
-  DOCUMENTATION_TARGET_MAX_LENGTH,
-  DOCUMENTATION_NAVIGATION_REASONS,
-  DOCUMENTATION_NAVIGATION_REASON_SEVERITY,
-  classifyDocumentationTarget,
-  mapBrowserErrorToDocumentationReason,
-  resolveDocumentationNavigationReason,
-  parseDocumentationNavigationRequest,
-  buildDocumentationNavigationResult,
-  isIndexingProposalEligibleClass,
-} from "./documentation-browser.js";
-
-// ─── Indexable HTML manual proposal + consent (Epic #1852, ADR-0113 extension) ──────
-export type {
-  DocumentationManualSourceKind,
-  DocumentationManualProposalState,
-  DocumentationManualProposalReason,
-  DocumentationManualConfidence,
-  DocumentationManualDetection,
-  DocumentationManualRobotsPosture,
-  DocumentationManualDeniedLinkClass,
-  DocumentationManualScopeLimits,
-  DocumentationManualScopePreview,
-  DocumentationIndexingProposal,
-  DocumentationIndexingApproval,
-  DocumentationManualProposalRequest,
-  DocumentationManualProposalParse,
-  DocumentationManualValidation,
-} from "./documentation-manual-proposal.js";
-export type {
-  DOCUMENTATION_MANUAL_PROPOSAL_SCHEMA_VERSION,
-  DOCUMENTATION_MANUAL_SOURCE_KINDS,
-  DOCUMENTATION_MANUAL_PROPOSAL_STATES,
-  DOCUMENTATION_MANUAL_PROPOSAL_REASONS,
-  DOCUMENTATION_MANUAL_DENIED_LINK_CLASSES,
-  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
-  isApprovableProposalState,
-  detectIndexableManual,
-  applyAuthenticationRequiredOverride,
-  summarizeManualOrigin,
-  summarizeManualPathPrefix,
-  buildManualScopePreview,
-  findIndexedManualForFingerprint,
-  buildDocumentationIndexingProposal,
-  asAlreadyIndexedProposal,
-  parseManualProposalRequest,
-  validateDocumentationIndexingProposal,
-  validateDocumentationIndexingApproval,
-} from "./documentation-manual-proposal.js";
-
 // ─── HTML Manual Knowledge Pod source (Epic #1853, Issue #1871) ──────────────────────
 export type {
   HtmlManualCrawlScope,
   HtmlManualSourceKind,
   HtmlManualSource,
   HtmlManualSourceSummary,
-  DeriveHtmlManualSourceInput,
+  DocumentationManualScopeLimits,
 } from "./html-manual-source.js";
 export type {
   HTML_MANUAL_SOURCE_SCHEMA_VERSION,
@@ -2826,7 +2758,7 @@ export type {
   validateHtmlManualCrawlScope,
   validateHtmlManualScopeLimits,
   validateHtmlManualSource,
-  deriveHtmlManualSource,
+  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
   summarizeHtmlManualSource,
   htmlManualLocalFolderScope,
   htmlManualReachableFilesScope,

@@ -208,7 +208,7 @@ function seedWindows(): readonly SeedWindow[] {
     w: 260,
     h: 210,
     z: index + 1,
-    cfg: {},
+    cfg: { runId: `run-perf-${String(index)}`, workflow: "verify" },
     max: false as const,
     zoom: 1 as const,
   }));
@@ -285,6 +285,9 @@ async function installSeededWorkspace(
   connections: readonly SeedConnection[] = seedConnections(),
 ): Promise<void> {
   await page.setViewportSize({ width: 1280, height: 860 });
+  await page.route(/\/api\/runs\/run-perf-\d+$/u, (route) =>
+    route.fulfill({ json: { report: { status: "completed" } } }),
+  );
   await page.addInitScript(
     installWorkspacePerfHarness,
     (
@@ -677,7 +680,7 @@ function seedWindowsN(count: number): readonly SeedWindow[] {
     w: 130,
     h: 120,
     z: index + 1,
-    cfg: {},
+    cfg: { runId: `run-perf-${String(index)}`, workflow: "verify" },
     max: false as const,
     zoom: 1 as const,
   }));
@@ -702,9 +705,9 @@ function mixedWindowType(index: number): SeedWindowType {
 // `coding` ignores cfg (it is a singleton driven by server projections); `connector` and
 // `containerStatus` read theirs, so they are seeded with the shape their registry entry expects —
 // an unset root/selection renders the surface's real empty state, which is still the real widget.
-function mixedWindowCfg(type: SeedWindowType): Record<string, unknown> {
+function mixedWindowCfg(type: SeedWindowType, index: number): Record<string, unknown> {
   if (type === "connector") return { presentation: "picker" };
-  if (type === "containerStatus") return {};
+  if (type === "agents") return { runId: `run-perf-${String(index)}`, workflow: "verify" };
   return {};
 }
 
@@ -720,7 +723,7 @@ function seedMixedWindows(): readonly SeedWindow[] {
       w: heavy ? 420 : 260,
       h: heavy ? 320 : 210,
       z: index + 1,
-      cfg: mixedWindowCfg(type),
+      cfg: mixedWindowCfg(type, index),
       max: false as const,
       zoom: 1 as const,
     };

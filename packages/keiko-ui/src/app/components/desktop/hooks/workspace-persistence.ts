@@ -119,6 +119,7 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
     "projectPathPrivacy",
     CHAT_TITLE_IS_DEFAULT_CFG_KEY,
   ],
+  agents: ["runId", "workflow"],
   editor: ["openFiles", "layoutJson", "rootSessionsJson", "rootBinding"],
   files: ["activeFilePath", "activeDirectoryPath", "resolvedRoot", "rootBinding"],
   // The Coding Workbench can explicitly open the user-selected repository rather than an active
@@ -882,6 +883,9 @@ function sanitizeWindow(win: unknown): AppWindow | null {
   ) {
     return null;
   }
+  const cfg = sanitizeCfgForPersistence(type, win["cfg"]);
+  // Old preset-only window records have no run to restore.
+  if (type === "agents" && cfg["runId"] === undefined) return null;
   const next: AppWindow = {
     id: win["id"],
     type,
@@ -890,7 +894,7 @@ function sanitizeWindow(win: unknown): AppWindow | null {
     w: clampWindowSize(win["w"]),
     h: clampWindowSize(win["h"]),
     z: clampWindowZ(win["z"]),
-    cfg: sanitizeCfgForPersistence(type, win["cfg"]),
+    cfg,
     max: win["max"],
   };
   const prev = sanitizePrev(win["prev"]);

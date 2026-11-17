@@ -2,7 +2,22 @@
 
 ## Status
 
-Accepted (Epic #1851, Issues #1859–#1864, 2026-07-06).
+Accepted (Epic #1851, Issues #1859–#1864, 2026-07-06). The standalone browser was retired in
+PR #4448 (2026-11-17).
+
+## Current behavior
+
+- The desktop has no standalone Documentation Browser. Its navigation, indexing proposal and
+  indexing approval routes and wire contracts were retired with the window.
+- HTML citations in Chat retain their page and section labels. The source check posts the
+  existing opaque citation reference to `/api/local-knowledge/manual-citation/check`. The
+  server checks the current capsule, source, document, chunk and approved scope, then returns a
+  closed disposition. The check performs no target egress or document rendering.
+- The Knowledge Pod crawler, scope bounds, stored source metadata and refresh for existing
+  manual Pods retain their own contracts. The ordinary Browser and its loopback policy are
+  independent of this change.
+
+The original first-release design follows as historical context.
 
 ## Context
 
