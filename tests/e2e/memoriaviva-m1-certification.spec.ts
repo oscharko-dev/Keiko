@@ -1,4 +1,5 @@
 import { workspaceStorageArgs } from "./support/workspace-storage.js";
+import { activateChatModel } from "./support/chat-model-activation.js";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -569,6 +570,9 @@ function verifyCommittedBaseline(metrics: MetricCounters): void {
   expect(generated).not.toMatch(/\bDE89\b|Kundennummer/u);
 }
 
+test.beforeEach(async ({ request }): Promise<void> => {
+  await activateChatModel(request);
+});
 test.afterEach(() => {
   for (const root of temporaryProjects.splice(0)) rmSync(root, { recursive: true, force: true });
 });

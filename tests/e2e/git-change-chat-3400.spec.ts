@@ -1,10 +1,12 @@
 import { expect, test, type Locator } from "@playwright/test";
+import { activateChatModel } from "./support/chat-model-activation.js";
 import {
   advanceGitChangeChatFixtureHead,
   authorizeGitHubForFixture,
   buildGitChangeChatFixture,
   createChatForFixture,
   fetchGitChangeScopes,
+  GIT_CHANGE_CHAT_MODEL_ID,
   interceptGovernedPrDescriptionLifecycle,
   interceptProjectList,
   readGitChangeChatProviderState,
@@ -103,6 +105,9 @@ async function sendConnectedRefinement(
 
 const fixtures: GitChangeChatFixture[] = [];
 
+test.beforeEach(async ({ request }): Promise<void> => {
+  await activateChatModel(request, GIT_CHANGE_CHAT_MODEL_ID);
+});
 test.afterEach(() => {
   for (const fixture of fixtures.splice(0)) {
     removeGitChangeChatFixture(fixture.root);
