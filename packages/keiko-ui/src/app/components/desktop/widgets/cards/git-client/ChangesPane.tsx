@@ -311,13 +311,17 @@ function ChangesList({
   if (status === null) return null;
 
   const hasChanges = !status.clean && status.changes.length > 0;
-  const bulkActionsBlocked = stagingBusy || status.truncated;
-  const hasStaged = status.stagedCount > 0 && !status.truncated;
+  const hasConflicts =
+    status.conflictedCount > 0 || status.changes.some((change) => change.conflicted);
+  const stagedCount = status.changes.filter((change) => change.staged && !change.conflicted).length;
+  const stagingBlocked = stagingBusy || hasConflicts;
+  const bulkActionsBlocked = stagingBlocked || status.truncated;
+  const hasStaged = stagedCount > 0 && !status.truncated;
   const hasUnstaged = (status.unstagedCount > 0 || status.untrackedCount > 0) && !status.truncated;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
-      {status.conflictedCount > 0 ? (
+      {hasConflicts ? (
         <div
           role="alert"
           style={{
@@ -341,9 +345,7 @@ function ChangesList({
           <span style={CHANGES_COUNT_STYLE}>
             {status.changes.length} {status.changes.length === 1 ? "change" : "changes"}
           </span>
-          {status.stagedCount > 0 ? (
-            <span style={STAGING_COUNT_STYLE}>{status.stagedCount} staged</span>
-          ) : null}
+          {stagedCount > 0 ? <span style={STAGING_COUNT_STYLE}>{stagedCount} staged</span> : null}
           <span style={SUMMARY_ACTIONS_STYLE}>
             <button
               type="button"
@@ -369,7 +371,7 @@ function ChangesList({
         <p style={STAGING_SCOPE_HINT_STYLE}>{t("gitClientWindow.changes.stagingScopeHint")}</p>
       ) : null}
 
-      {stagingError !== null || stagingOutcome !== null ? (
+      {!hasConflicts && (stagingError !== null || stagingOutcome !== null) ? (
         <div style={{ padding: "0 14px 8px" }}>
           <MutationOutcome
             outcome={stagingOutcome}
@@ -405,7 +407,7 @@ function ChangesList({
                   key={change.path}
                   change={change}
                   selected={change.path === selectedChangePath}
-                  stagingBusy={stagingBusy}
+                  stagingBlocked={stagingBlocked}
                   onSelect={() => onSelectChange(change.path)}
                   onToggleStage={() =>
                     change.staged ? onUnstageFile(change) : onStageFile(change)
@@ -507,25 +509,26 @@ const STAGE_INPUT_STYLE: CSSProperties = {
 function ChangeRow({
   change,
   selected,
-  stagingBusy,
+  stagingBlocked,
   onSelect,
   onToggleStage,
 }: {
   readonly change: GitChangedFile;
   readonly selected: boolean;
-  readonly stagingBusy: boolean;
+  readonly stagingBlocked: boolean;
   readonly onSelect: () => void;
   readonly onToggleStage: () => void;
 }): ReactNode {
   const statusLabel = gitChangeStatusLabel(change);
   const statusLetter = gitChangeLabel(change);
-  const toggleLabel = `${change.staged ? "Unstage" : "Stage"} ${change.path}`;
+  const staged = change.staged && !change.conflicted;
+  const toggleLabel = `${staged ? "Unstage" : "Stage"} ${change.path}`;
   const { dir, name } = splitPath(change.path);
   // The native checkbox is a transparent overlay over an aria-hidden visual box, so the
   // browser's focus ring lands on the invisible input. Mirror the input focus onto the box with
   // an inline ring so keyboard users can see which stage toggle is focused (#GEN-UI-FOCUS-007).
   const [stageFocused, setStageFocused] = useState(false);
-  const boxStyle = stageBoxStyle(change.staged);
+  const boxStyle = stageBoxStyle(staged);
   // On focus, layer a 2px focus ring on top of the box's own outline/border (keeping the unchecked
   // box's inset border) so the visible ring reads clearly without dropping the existing indicator.
   const focusedBoxStyle: CSSProperties = stageFocused
@@ -545,8 +548,8 @@ function ChangeRow({
         >
           <input
             type="checkbox"
-            checked={change.staged}
-            disabled={stagingBusy}
+            checked={staged}
+            disabled={stagingBlocked}
             onChange={onToggleStage}
             onFocus={() => setStageFocused(true)}
             onBlur={() => setStageFocused(false)}
@@ -559,7 +562,7 @@ function ChangeRow({
             data-focus-visible={stageFocused ? "true" : undefined}
             style={focusedBoxStyle}
           >
-            {change.staged ? <CheckIcon size={11} /> : null}
+            {staged ? <CheckIcon size={11} /> : null}
           </span>
         </label>
         <button

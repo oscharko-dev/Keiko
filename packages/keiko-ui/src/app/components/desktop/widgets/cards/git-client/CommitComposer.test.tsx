@@ -3,9 +3,11 @@
 // the composed message (summary + body), and keyboard reachability. The composer is a presentational
 // component driven entirely by props, so no seam mock is needed.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadOptionalWidgetMessages } from "@/lib/optional-widget-i18n";
+import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import { ApiError, type GitDeliveryCommitPreviewResponse } from "@/lib/api";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import { CommitComposer, composeCommitMessage } from "./CommitComposer";
@@ -750,4 +752,56 @@ describe("CommitComposer — keyboard", () => {
     await user.tab();
     expect(screen.getByRole("button", { name: "Copy commit draft" })).toHaveFocus();
   });
+});
+
+describe("CommitComposer — unresolved conflicts (#4445)", () => {
+  it.each([
+    ["en", /Resolve conflicted files or abort the operation in Git/u],
+    ["de", /Löse die Konflikte oder brich den Vorgang in Git ab/u],
+  ] as const)(
+    "announces recovery in %s without preview or generation",
+    async (locale, guidance) => {
+      await loadLocaleMessages(locale);
+      await loadOptionalWidgetMessages(locale);
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      vi.useFakeTimers();
+      const onPreview = vi.fn();
+      const onGenerateDraft = vi.fn(async () => "fix: generated");
+      const onCommit = vi.fn();
+      render(
+        <I18nProvider>
+          <CommitComposer
+            projectId="/repos/alpha"
+            stagedFileCount={1}
+            hasConflicts={true}
+            busy={false}
+            outcome={null}
+            error={null}
+            preview={makePreview()}
+            previewDraft="fix: retained"
+            previewError="GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE"
+            previewRevision={1}
+            summaryValue="fix: retained"
+            bodyValue="Retained detail."
+            onPreview={onPreview}
+            onGenerateDraft={onGenerateDraft}
+            onCommit={onCommit}
+          />
+        </I18nProvider>,
+      );
+      await act(async () => vi.advanceTimersByTimeAsync(1000));
+      const summary = screen.getByDisplayValue("fix: retained");
+      expect(summary).toHaveAccessibleDescription(guidance);
+      expect(screen.getByDisplayValue("Retained detail.")).toBeEnabled();
+      expect(
+        screen.getByRole("button", {
+          name: locale === "en" ? "Generate with Keiko" : "Mit Keiko erzeugen",
+        }),
+      ).toBeDisabled();
+      expect(onPreview).not.toHaveBeenCalled();
+      expect(onGenerateDraft).not.toHaveBeenCalled();
+      expect(onCommit).not.toHaveBeenCalled();
+      expect(screen.queryByText("GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE")).toBeNull();
+    },
+  );
 });

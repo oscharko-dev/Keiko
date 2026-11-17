@@ -6088,7 +6088,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "governedPullRequestCard.description.refreshHint.targetChanged":
     "The repository or Pull Request number changed since the last preview. Preview again before approving or applying.",
   "gitClientWindow.ui.changesAndHistory": "Changes and history",
-  "gitClientWindow.ui.resolveConflicts": "Resolve conflicted files before committing or syncing.",
+  "gitClientWindow.ui.resolveConflicts":
+    "Resolve conflicted files or abort the operation in Git. Staging, unstaging, commit previews, draft generation, commits and sync are unavailable until the conflicts are cleared.",
   "gitClientWindow.ui.stageAll": "Stage all",
   "gitClientWindow.ui.unstageAll": "Unstage all",
   "gitClientWindow.ui.noChanges": "No changes",

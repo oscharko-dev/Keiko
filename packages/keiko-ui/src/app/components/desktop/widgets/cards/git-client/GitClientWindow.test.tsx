@@ -168,19 +168,21 @@ function change(path: string, flags: Partial<GitChangedFile> = {}): GitChangedFi
   };
 }
 
-// A repository whose working tree exercises every changed-file state #1575 must represent.
-function makeStatusRich(): GitRepositoryStatusResponse {
+// Staging/commit journeys start without conflicts; indicator/sync journeys opt into the conflict.
+function makeStatusRich(includeConflict = false): GitRepositoryStatusResponse {
   return makeStatus({
     clean: false,
     stagedCount: 2,
     unstagedCount: 2,
     untrackedCount: 1,
-    conflictedCount: 1,
+    conflictedCount: includeConflict ? 1 : 0,
     changes: [
       change("src/index.ts", { indexStatus: "M", staged: true }),
       change("README.md", { worktreeStatus: "M", unstaged: true }),
       change("notes.txt", { indexStatus: "?", worktreeStatus: "?", untracked: true }),
-      change("merge.ts", { indexStatus: "U", worktreeStatus: "U", conflicted: true }),
+      ...(includeConflict
+        ? [change("merge.ts", { indexStatus: "U", worktreeStatus: "U", conflicted: true })]
+        : []),
       change("partial.ts", { indexStatus: "M", worktreeStatus: "M", staged: true, unstaged: true }),
     ],
   });
@@ -2700,7 +2702,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     expect(await screen.findByRole("button", { name: "Run sync: Detached HEAD" })).toBeDisabled();
 
     const conflictedClient = makeClient({
-      getStatus: vi.fn(async () => makeStatusRich()),
+      getStatus: vi.fn(async () => makeStatusRich(true)),
       getSummary: vi.fn(async () => makeSummary({ conflictedCount: 1, clean: false })),
     });
     rerender(<GitClientWindow projectId={REPO_A.path} client={conflictedClient} />);
@@ -3519,9 +3521,125 @@ describe("GitClientWindow — required visible / absent words", () => {
   });
 });
 
+function makeUnmergedStatus(mixed = false): GitRepositoryStatusResponse {
+  const ordinaryChanges = mixed
+    ? [
+        change("ready.txt", { indexStatus: "M", staged: true }),
+        change("unstaged.txt", { worktreeStatus: "M", unstaged: true }),
+      ]
+    : [];
+  return makeStatus({
+    clean: false,
+    stagedCount: mixed ? 2 : 1,
+    unstagedCount: mixed ? 2 : 1,
+    conflictedCount: 1,
+    changes: [
+      change("conflicted.txt", {
+        indexStatus: "U",
+        worktreeStatus: "U",
+        staged: true,
+        unstaged: true,
+        conflicted: true,
+      }),
+      ...ordinaryChanges,
+    ],
+  });
+}
+
+describe("GitClientWindow — unresolved conflict controls (#4445)", () => {
+  it.each([false, true])(
+    "blocks all staging while preserving inspection (mixed: %s)",
+    async (mixed) => {
+      const client = makeClient({ getStatus: vi.fn(async () => makeUnmergedStatus(mixed)) });
+      const user = userEvent.setup();
+      render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+      const conflict = await screen.findByRole("button", { name: "conflicted.txt, conflicted" });
+      const conflictToggle = screen.getByRole("checkbox", { name: /conflicted.txt/u });
+      expect(conflictToggle).not.toBeChecked();
+      expect(conflictToggle).toBeDisabled();
+      for (const toggle of screen.getAllByRole("checkbox")) expect(toggle).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Stage all" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Unstage all" })).toBeDisabled();
+      expect(screen.queryByText("2 staged")).toBeNull();
+      if (mixed) {
+        expect(screen.getByText("1 staged")).toBeVisible();
+        expect(screen.getByRole("checkbox", { name: "Unstage ready.txt" })).toBeChecked();
+      } else expect(screen.queryByText("1 staged")).toBeNull();
+      await user.click(conflictToggle);
+      await user.click(screen.getByRole("button", { name: "Stage all" }));
+      await user.click(screen.getByRole("button", { name: "Unstage all" }));
+      await user.click(conflict);
+      expect(client.stage).not.toHaveBeenCalled();
+      expect(client.unstage).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(client.getStructuredDiff).toHaveBeenCalledWith({
+          root: REPO_A.path,
+          path: "conflicted.txt",
+          scope: "unstaged",
+        }),
+      );
+    },
+  );
+
+  it("keeps the controlled draft and resumes preview and staging only after resolution", async () => {
+    let status = makeUnmergedStatus(true);
+    const client = makeClient({ getStatus: vi.fn(async () => status) });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await screen.findByRole("button", { name: "conflicted.txt, conflicted" });
+    await user.type(screen.getByLabelText("Summary"), "fix: keep conflict recovery draft");
+    await user.type(screen.getByLabelText("Description"), "Keep this explanation.");
+    expect(screen.getByRole("button", { name: "Generate with Keiko" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Commit to/u })).toBeDisabled();
+    expect(client.commitPreview).not.toHaveBeenCalled();
+    expect(client.commitDraft).not.toHaveBeenCalled();
+    expect(client.commitPropose).not.toHaveBeenCalled();
+    status = makeStatus({
+      clean: false,
+      stagedCount: 1,
+      unstagedCount: 1,
+      changes: [
+        change("ready.txt", { indexStatus: "M", staged: true }),
+        change("unstaged.txt", { worktreeStatus: "M", unstaged: true }),
+      ],
+    });
+    act(() => notifyWorkspaceFileMutated(REPO_A.path));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "conflicted.txt, conflicted" })).toBeNull(),
+    );
+    expect(screen.getByLabelText("Summary")).toHaveValue("fix: keep conflict recovery draft");
+    expect(screen.getByLabelText("Description")).toHaveValue("Keep this explanation.");
+    expect(screen.getByRole("button", { name: "Generate with Keiko" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Commit to/u })).toBeEnabled());
+    expect(client.commitPreview).toHaveBeenCalledWith({
+      projectId: REPO_A.path,
+      messageDraft: "fix: keep conflict recovery draft\n\nKeep this explanation.",
+    });
+    await user.click(screen.getByRole("checkbox", { name: "Stage unstaged.txt" }));
+    await waitFor(() =>
+      expect(client.stage).toHaveBeenCalledWith({
+        projectId: REPO_A.path,
+        pathspecs: ["unstaged.txt"],
+        includeUntracked: false,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "Unstage ready.txt" })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole("checkbox", { name: "Unstage ready.txt" }));
+    await waitFor(() =>
+      expect(client.unstage).toHaveBeenCalledWith({
+        projectId: REPO_A.path,
+        pathspecs: ["ready.txt"],
+      }),
+    );
+    expect(client.commitPropose).not.toHaveBeenCalled();
+  });
+});
+
 describe("GitClientWindow — staging controls (Issue #1575)", () => {
   it("renders staged / unstaged / untracked / conflicted indicators with checkboxes", async () => {
-    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich(true)) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
     expect(await screen.findByText("index.ts")).toBeInTheDocument();

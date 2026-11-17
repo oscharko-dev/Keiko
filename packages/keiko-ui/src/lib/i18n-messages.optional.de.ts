@@ -6374,7 +6374,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Das Repository oder die Pull-Request-Nummer hat sich seit der letzten Vorschau geändert. Vorschau erneut abrufen, bevor Sie genehmigen oder übernehmen.",
   "gitClientWindow.ui.changesAndHistory": "Änderungen und Verlauf",
   "gitClientWindow.ui.resolveConflicts":
-    "Lösen Sie Konfliktdateien, bevor Sie committen oder synchronisieren.",
+    "Löse die Konflikte oder brich den Vorgang in Git ab. Vormerken, Zurücknehmen, Commit-Vorschau, Entwurfserstellung, Commit und Sync sind bis dahin nicht verfügbar.",
   "gitClientWindow.ui.stageAll": "Alle vormerken",
   "gitClientWindow.ui.unstageAll": "Alle zurücknehmen",
   "gitClientWindow.ui.noChanges": "Keine Änderungen",
