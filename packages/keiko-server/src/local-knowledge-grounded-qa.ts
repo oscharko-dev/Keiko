@@ -91,7 +91,7 @@ import {
   composeOwnAssessment,
   OWN_ASSESSMENT_PROMPT_RULE,
 } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
-import { classifyDocumentationTarget } from "@oscharko-dev/keiko-contracts/runtime/documentation-browser";
+import { classifyManualCitationTarget } from "./manual/documentation-target.js";
 import {
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION,
@@ -573,14 +573,6 @@ function manualOpenUnavailable(
   return { state: "unavailable", reason };
 }
 
-function manualOpenReasonForClassification(
-  reason: "invalid-target" | "unsupported-scheme" | "credentials-in-target",
-): HtmlManualCitationOpenUnavailableReason {
-  if (reason === "credentials-in-target") return "target-credentialed";
-  if (reason === "unsupported-scheme") return "target-unsupported";
-  return "target-unavailable";
-}
-
 // Epic #1854 (#1879) — anchorId is a parser-derived HTML id (from html-parser.ts's anchorFromTag,
 // which only bounds length/rejects "://"/NUL) and, unlike pageTitle/safePageId/sectionPath, was
 // spread onto the wire and into the navigation target's URL fragment without the same
@@ -596,15 +588,8 @@ function classifiedManualOpen(
   reference: RetrievalReference,
   rawTarget: string,
 ): Pick<HtmlManualCitationMetadata, "targetSummary" | "open"> {
-  const classification = classifyDocumentationTarget(rawTarget);
-  if (!classification.ok) {
-    return {
-      open: manualOpenUnavailable(manualOpenReasonForClassification(classification.reason)),
-    };
-  }
-  if (classification.targetClass === "external-http") {
-    return { open: manualOpenUnavailable("target-outside-approved-scope") };
-  }
+  const classification = classifyManualCitationTarget(rawTarget);
+  if (!classification.ok) return { open: manualOpenUnavailable(classification.reason) };
   const anchorId = safeAnchorId(reference.citation.anchorId);
   const target = buildHtmlManualCitationNavigationTarget({
     capsuleId: reference.capsuleId,

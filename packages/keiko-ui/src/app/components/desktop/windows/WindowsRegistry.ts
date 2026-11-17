@@ -23,7 +23,6 @@ export type WindowType =
   | "files"
   | "editor"
   | "browser"
-  | "docbrowser"
   | "terminal"
   | "commands"
   | "runtime"
@@ -438,23 +437,6 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
       },
     ],
   },
-  docbrowser: {
-    titleKey: "window.type.docbrowser.title",
-    icon: "file",
-    descKey: "window.type.docbrowser.desc",
-    w: 480,
-    h: 360,
-    config: [
-      {
-        key: "target",
-        labelKey: "window.field.documentationAddress",
-        type: "text",
-        def: "",
-        optional: true,
-        placeholderKey: "window.placeholder.documentationAddress",
-      },
-    ],
-  },
   terminal: {
     titleKey: "window.type.terminal.title",
     icon: "terminal",
@@ -581,8 +563,6 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 520,
     h: 560,
     tiny: { w: 250, h: 140 },
-    ctaKey: "window.type.agents.cta",
-    config: [],
   },
   integ: {
     titleKey: "window.type.integ.title",

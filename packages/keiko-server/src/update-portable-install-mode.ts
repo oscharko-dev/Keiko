@@ -723,6 +723,17 @@ function portableSupportedMode(
   };
 }
 
+function itManagedMode(
+  packageName: string,
+  summary: UpdatePortableInstallSummary,
+): UpdateInstallMode {
+  return portableUnsupportedMode(packageName, "portable-it-managed", {
+    ...summary,
+    status: "it-managed",
+    updateEligible: false,
+  });
+}
+
 function modeForPortableSummary(
   summary: UpdatePortableInstallSummary,
   facts: PortableUpdateRuntimeFacts,
@@ -736,13 +747,7 @@ function modeForPortableSummary(
     return portableUnsupportedMode(packageName, "portable-bootstrap", summary);
   }
   if (!summary.stable) return portableUnsupportedMode(packageName, "portable-non-stable", summary);
-  if (isOrganizationManaged(facts) || hasMachineManagedRoot(facts, summary.target, fs)) {
-    return portableUnsupportedMode(packageName, "portable-it-managed", {
-      ...summary,
-      status: "it-managed",
-      updateEligible: false,
-    });
-  }
+  if (hasMachineManagedRoot(facts, summary.target, fs)) return itManagedMode(packageName, summary);
   if (!summary.updateEligible) {
     return portableUnsupportedMode(packageName, "portable-update-unavailable", summary);
   }
@@ -752,6 +757,26 @@ function modeForPortableSummary(
 export function portableStateDirFromEnv(env: NodeJS.ProcessEnv): string | undefined {
   const stateDir = env.KEIKO_STATE_DIR;
   return stateDir === undefined || stateDir.length === 0 ? undefined : stateDir;
+}
+
+export const PORTABLE_MANAGEMENT_ENV = "KEIKO_PORTABLE_MANAGEMENT";
+
+function isPortableManagementMode(value: string): value is PortableManagementMode {
+  return value === "user-local" || value === "organization-managed" || value === "machine-managed";
+}
+
+/**
+ * Who manages this portable payload, as its launcher declares it. A folder package that runs in
+ * place (no managed setup, updates arrive as a replaced folder) declares `organization-managed`.
+ * A declaration Keiko cannot read fails closed: it never sets up or updates an install whose owner
+ * it cannot name.
+ */
+export function portableManagementFromEnv(
+  env: NodeJS.ProcessEnv,
+): PortableManagementMode | undefined {
+  const declared = env[PORTABLE_MANAGEMENT_ENV];
+  if (declared === undefined || declared.length === 0) return undefined;
+  return isPortableManagementMode(declared) ? declared : "organization-managed";
 }
 
 /**
@@ -795,6 +820,11 @@ export function detectPortableUpdateInstallMode(
   const manifestSummary = bootstrapSummaryFromManifest(facts.packageRoot, fs, packageName);
   const registration = readPortableRegistration(facts.stateDir, fs);
   if (manifestSummary === undefined) return undefined;
+  // A declared organization management decides before the registration is judged: such an install
+  // is never set up, repaired or updated from inside the app, so "run the portable setup" or
+  // "setup failed" would send its user to the very installation the organization chose not to
+  // perform. What is reported is the payload that runs, never a registration.
+  if (isOrganizationManaged(facts)) return itManagedMode(packageName, manifestSummary.summary);
   if (manifestSummary.summary.target === "windows-x64") {
     try {
       // Keep the original install-root spelling: canonicalization can hide mapped-share and

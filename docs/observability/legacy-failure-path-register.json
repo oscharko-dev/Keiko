@@ -620,30 +620,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-contracts/src/documentation-browser.ts",
-      "owner": "classifyDocumentationTarget",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-contracts/src/documentation-manual-proposal.ts",
-      "owner": "safePathname",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-contracts/src/documentation-manual-proposal.ts",
-      "owner": "summarizeManualOrigin",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-contracts/src/documentation-manual-proposal.ts",
-      "owner": "summarizeManualPathPrefix",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-contracts/src/editor-agent.ts",
       "owner": "isEditorAgentActionData",
       "kind": "unregistered-catch",
@@ -3164,30 +3140,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-server/src/docs-browser-proposal.ts",
-      "owner": "normalizedManualRoot",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/docs-browser-proposal.ts",
-      "owner": "safeListKnowledgePods",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/docs-browser.ts",
-      "owner": "readDocsBrowserJsonBody",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/docs-browser.ts",
-      "owner": "resolveReason",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-server/src/editor/agentActionAudit.ts",
       "owner": "recordEditorAgentActionAudit",
       "kind": "unregistered-catch",
@@ -5002,6 +4954,12 @@
     {
       "path": "packages/keiko-server/src/local-knowledge-store-open.ts",
       "owner": "recoverAbandonedIndexingJobs",
+      "kind": "unregistered-catch",
+      "count": 1
+    },
+    {
+      "path": "packages/keiko-server/src/manual/documentation-target.ts",
+      "owner": "classifyDocumentationTarget",
       "kind": "unregistered-catch",
       "count": 1
     },

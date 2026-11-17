@@ -25,14 +25,13 @@ import {
   codingWorkbenchProbesSettledForTests,
   ensureCodingWorkbenchContextWindows,
   isCodingWorkbenchProbePending,
-  initializeLiteLlmCodingReadiness,
   probeInconclusive,
   probeProvider,
   probeTimeoutEvidence,
   resetCodingWorkbenchContextWindowProbesForTests,
   withholdRunningWorkbenchProbesForLiveRun,
 } from "./gateway-readiness.js";
-import type { UiHandlerDeps } from "./deps.js";
+import type { UiHandlerDeps, VerifiedModelCapabilityObservation } from "./deps.js";
 
 function provider(timeoutMs: number): ModelProviderConfig {
   return {
@@ -246,20 +245,28 @@ function workbenchDeps(
     knownLimitations: [],
   };
   const config = { providers: [providerConfig], capabilities: [capability] };
+  const gatewayConfig = {
+    storagePath: "/dev/null",
+    current: (): typeof config => config,
+    present: (): boolean => true,
+    set: (): undefined => undefined,
+    generation: (): number => generation,
+    verification: (): string => "verified",
+    recordVerification: (): undefined => undefined,
+    // Every model of this fixture was activated in Settings > Models: only an activated model is
+    // verified automatically for the Workbench (ADR-0171 D2, amended 2026-11-16).
+    verifiedCapability: (modelId: string): VerifiedModelCapabilityObservation => ({
+      modelId,
+      generation: gatewayConfig.generation(),
+      checkedAt: new Date().toISOString(),
+      fields: { conversationReady: true },
+    }),
+    recordVerifiedCapability: (): undefined => undefined,
+    clearVerifiedCapability: (): boolean => false,
+  };
   const deps = {
     env: {},
-    gatewayConfig: {
-      storagePath: "/dev/null",
-      current: () => config,
-      present: () => true,
-      set: () => undefined,
-      generation: () => generation,
-      verification: () => "verified",
-      recordVerification: () => undefined,
-      verifiedCapability: () => undefined,
-      recordVerifiedCapability: () => undefined,
-      clearVerifiedCapability: () => false,
-    },
+    gatewayConfig,
     redactor: (value: unknown): unknown => value,
     gatewayReadinessFetch: (): Promise<Response> => {
       calls += 1;
@@ -337,26 +344,28 @@ describe("automatic Workbench probes — a live run keeps the gateway", () => {
     expect(events.some((event) => event.op === "gateway.readiness.automatic.withheld")).toBe(false);
   });
 
-  it("renews the startup proof of the model in use only, never every listed model", async () => {
-    const { deps, calls, events } = twoModelDeps();
-    await initializeLiteLlmCodingReadiness(deps, "corr-startup-in-use");
+  // Startup no longer renews any proof (ADR-0171 D2, amended 2026-11-16). A re-proof that a changed
+  // configuration queues is the background work that remains: a live run keeps the gateway for it.
+  it("withholds the re-proof a configuration change queued while a run is live", async () => {
+    const { deps, calls, events, setLive } = twoModelDeps();
+    const holder = deps.gatewayConfig;
+    if (holder === undefined) throw new TypeError("Missing gateway holder");
+    let generation = holder.generation();
+    holder.generation = (): number => generation;
+    const originalFetch = deps.gatewayReadinessFetch;
+    if (originalFetch === undefined) throw new TypeError("Missing readiness fetch");
+    Object.assign(deps, {
+      gatewayReadinessFetch: (...args: Parameters<typeof fetch>): Promise<Response> => {
+        if (calls() === 0) {
+          generation += 1;
+          setLive(true);
+        }
+        return originalFetch(...args);
+      },
+    });
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat", "corr-stale-live-run");
     await codingWorkbenchProbesSettledForTests();
     expect(calls()).toBe(CALLS_PER_MODEL);
-    const scope = events.find((event) => event.op === "gateway.readiness.scope");
-    expect(scope?.extra).toMatchObject({
-      reason: "startup",
-      modelKind: "tool-calling",
-      listedModelCount: 2,
-      checkedModelCount: 1,
-    });
-  });
-
-  it("withholds the startup proof of the model in use while a run is live", async () => {
-    const { deps, calls, events, setLive } = twoModelDeps();
-    setLive(true);
-    await initializeLiteLlmCodingReadiness(deps, "corr-startup-live-run");
-    await codingWorkbenchProbesSettledForTests();
-    expect(calls()).toBe(0);
     const withheld = events.filter((event) => event.op === "gateway.readiness.automatic.withheld");
     expect(withheld).toHaveLength(1);
     const [event] = withheld;
@@ -368,18 +377,6 @@ describe("automatic Workbench probes — a live run keeps the gateway", () => {
       ),
     ).toMatchObject({ reason: "live-run" });
     expect(event.extra).not.toHaveProperty("modelId");
-  });
-
-  it("proves the withheld model on the next read after the run, and no other model", async () => {
-    const { deps, calls, setLive } = twoModelDeps();
-    setLive(true);
-    await initializeLiteLlmCodingReadiness(deps, "corr-startup-live-run");
-    await codingWorkbenchProbesSettledForTests();
-    expect(calls()).toBe(0);
-    setLive(false);
-    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
-    await codingWorkbenchProbesSettledForTests();
-    expect(calls()).toBe(CALLS_PER_MODEL);
   });
 
   // A single-slot model that a background proof of an unchosen model is loading must give the slot
@@ -427,15 +424,37 @@ describe("automatic Workbench probes — a live run keeps the gateway", () => {
       return { deps, events, started, aborted: () => aborted, recorded: () => recorded };
     }
 
-    it("ends the in-flight startup proof of the model in use, records no verdict and logs why", async () => {
-      const { deps, events, started, aborted, recorded } = hangingModel("hosted-chat");
-      void initializeLiteLlmCodingReadiness(deps, "corr-startup-in-flight");
+    it("ends an in-flight re-proof a configuration change queued, records no verdict and logs why", async () => {
+      const { deps, calls, events } = twoModelDeps();
+      const holder = deps.gatewayConfig;
+      if (holder === undefined) throw new TypeError("Missing gateway holder");
+      let generation = holder.generation();
+      holder.generation = (): number => generation;
+      let aborted = false;
+      let markStarted: () => void = (): void => undefined;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      const originalFetch = deps.gatewayReadinessFetch;
+      if (originalFetch === undefined) throw new TypeError("Missing readiness fetch");
+      Object.assign(deps, {
+        gatewayReadinessFetch: (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+          if (calls() === 0) generation += 1;
+          if (calls() < CALLS_PER_MODEL) return originalFetch(url, init);
+          markStarted();
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => {
+              aborted = true;
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          });
+        },
+      });
+      await ensureCodingWorkbenchContextWindows(deps, "hosted-chat", "corr-stale-in-flight");
       await started;
-      const recordedBefore = recorded();
       expect(withholdRunningWorkbenchProbesForLiveRun(deps)).toBe(1);
       await codingWorkbenchProbesSettledForTests();
-      expect(aborted()).toBe(true);
-      expect(recorded()).toBe(recordedBefore);
+      expect(aborted).toBe(true);
       const withheld = events.filter(
         (event) => event.op === "gateway.readiness.automatic.withheld",
       );
@@ -719,73 +738,6 @@ describe("automatic Workbench probes — an unanswered run is retried when someo
   });
 });
 
-// The one place a queue of Workbench proofs still holds mixed work (#4351): the startup proof of the
-// model in use is queued behind a running proof, and a person's pick arrives after it. The pick is
-// promoted ahead of the earlier-queued startup proof; no listed model beyond those two is proven.
-it("promotes a person's pick ahead of an already queued startup proof, without duplicates", async () => {
-  let release: ((response: Response) => void) | undefined;
-  const pending = new Promise<Response>((resolve) => {
-    release = resolve;
-  });
-  const { deps } = workbenchDeps(() => Promise.resolve(new Response()));
-  const holder = deps.gatewayConfig;
-  const original = holder?.current();
-  const model = original?.capabilities?.[0];
-  if (holder === undefined || original === undefined || model === undefined)
-    throw new TypeError("Expected original Workbench fixture.");
-  // The first listed model is the one in use: startup queues its proof.
-  const ids = ["middle-chat", "first-chat", "elected-chat", "unpicked-chat"];
-  const config = {
-    ...original,
-    providers: ids.map((modelId) => ({
-      ...provider(30_000),
-      modelId,
-      tokenCounter: "litellm" as const,
-    })),
-    capabilities: ids.map((id) => ({ ...model, id })),
-  };
-  holder.current = (): GatewayConfig => config;
-  const observed: string[] = [];
-  Object.assign(deps, {
-    gatewayReadinessFetch: (
-      _input: Parameters<typeof fetch>[0],
-      init?: RequestInit,
-    ): Promise<Response> => {
-      const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
-        model?: string;
-      };
-      observed.push(body.model ?? "absent");
-      return observed.length === 1
-        ? pending
-        : Promise.resolve(
-            Response.json({
-              choices: [{ message: { content: "OK KEIKO_LONG_CONTEXT_SENTINEL" } }],
-            }),
-          );
-    },
-  });
-  const active = ensureCodingWorkbenchContextWindows(deps, "first-chat");
-  await vi.waitFor(() => {
-    expect(observed).toEqual(["first-chat"]);
-  });
-  const startup = initializeLiteLlmCodingReadiness(deps, "corr-queued-startup");
-  const picked = ensureCodingWorkbenchContextWindows(deps, "elected-chat");
-  release?.(
-    Response.json({ choices: [{ message: { content: "OK KEIKO_LONG_CONTEXT_SENTINEL" } }] }),
-  );
-  await Promise.all([active, startup, picked]);
-  await codingWorkbenchProbesSettledForTests();
-  expect(observed).toEqual([
-    "first-chat",
-    "first-chat",
-    "elected-chat",
-    "elected-chat",
-    "middle-chat",
-    "middle-chat",
-  ]);
-  resetCodingWorkbenchContextWindowProbesForTests();
-});
-
 it("does not mask a real tool refusal behind an inconclusive long-context result", async () => {
   let calls = 0;
   const { deps } = workbenchDeps(() => {
@@ -811,8 +763,34 @@ it("does not mask a real tool refusal behind an inconclusive long-context result
     ],
   };
   holder.current = (): GatewayConfig => config;
-  await initializeLiteLlmCodingReadiness(deps, "corr-tool-refuted-long-inconclusive");
+  await ensureCodingWorkbenchContextWindows(
+    deps,
+    undefined,
+    "corr-tool-refuted-long-inconclusive",
+    true,
+  );
   expect(calls).toBe(4);
+  expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(false);
+  resetCodingWorkbenchContextWindowProbesForTests();
+});
+
+// 2026-11-16: only a model the person activated in Settings > Models is verified automatically. A
+// Workbench check of a model nobody activated in this process sends nothing to the gateway.
+it("never probes a model that was not activated, even on an explicit Workbench check", async () => {
+  const { deps, calls } = workbenchDeps(() =>
+    Promise.resolve(
+      Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+    ),
+  );
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) throw new TypeError("Expected Workbench fixture.");
+  holder.verifiedCapability = (): undefined => undefined;
+  await ensureCodingWorkbenchContextWindows(deps, "hosted-chat", "corr-inactive-model", true);
+  await ensureCodingWorkbenchContextWindows(deps, undefined, "corr-inactive-default", true);
+  await codingWorkbenchProbesSettledForTests();
+  expect(calls()).toBe(0);
+  const config = holder.current();
+  if (config === undefined) throw new TypeError("Expected Workbench configuration.");
   expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(false);
   resetCodingWorkbenchContextWindowProbesForTests();
 });

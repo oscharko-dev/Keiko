@@ -9,6 +9,7 @@ import {
   writeInstallLayoutOverrideEvidenceWithFactory,
 } from "./install-layout.js";
 import { runLifecycleCli } from "./lifecycle.js";
+import { PORTABLE_MANAGEMENT_ENV } from "./portable-management.js";
 import {
   activateMacosPortableRuntime,
   type MacosRuntimeActivationFn,
@@ -109,6 +110,9 @@ interface PortableCliOptions {
   readonly stateDir: string;
   readonly dryRun: boolean;
   readonly noRelaunch: boolean;
+  /** Launch the payload where it is: no managed setup, no registration (ADR-0121 D9). */
+  readonly inPlace: boolean;
+  readonly provisionedConfig?: string | undefined;
   readonly home: string;
   readonly securityLogSink?: SecurityLogSink | undefined;
   /** Collects the closed reason a start ends non-zero with (#4358). */
@@ -165,15 +169,20 @@ interface PortableRawOptions {
   readonly stateDir: string;
   readonly dryRun: boolean;
   readonly noRelaunch: boolean;
+  readonly inPlace: boolean;
+  readonly provisionedConfig: string | undefined;
 }
 
 const USAGE = `Usage:
   keiko portable setup  [--target TARGET] [--portable-root PATH] [--managed-root PATH] [--state-dir PATH] [--dry-run]
   keiko portable launch [--target TARGET] [--portable-root PATH] [--managed-root PATH] [--state-dir PATH]
+                        [--in-place [--provisioned-config PATH]]
   keiko portable status [--target TARGET] [--portable-root PATH] [--managed-root PATH] [--state-dir PATH]
   keiko portable resolve-root [--target TARGET] [--managed-root PATH] [--state-dir PATH]
 
 Manages archive-first portable setup into Keiko's target-specific install root.
+launch --in-place starts the payload where it is: nothing is copied or registered, and Keiko
+reports itself as managed outside the app.
 `;
 
 function parsePortableCommandToken(
@@ -192,19 +201,20 @@ function resolveInputPath(cwd: string, value: string): string {
   return isAbsolute(value) ? resolve(value) : resolve(cwd, value);
 }
 
+const PORTABLE_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "--target",
+  "--portable-root",
+  "--managed-root",
+  "--state-dir",
+  "--provisioned-config",
+]);
+
 function parsePortableFlag(args: readonly string[], index: number): PortableFlag | undefined {
   const name = args[index];
-  if (name === "--dry-run" || name === "--no-relaunch") {
+  if (name === "--dry-run" || name === "--no-relaunch" || name === "--in-place") {
     return { name, value: undefined, nextIndex: index };
   }
-  if (
-    name !== "--target" &&
-    name !== "--portable-root" &&
-    name !== "--managed-root" &&
-    name !== "--state-dir"
-  ) {
-    return undefined;
-  }
+  if (name === undefined || !PORTABLE_VALUE_FLAGS.has(name)) return undefined;
   const value = readFlag(args, index);
   if (value === undefined) return undefined;
   if (name === "--target" && !isPortableTarget(value)) return undefined;
@@ -218,11 +228,20 @@ function applyPortableFlag(
 ): PortableRawOptions {
   if (flag.name === "--dry-run") return { ...options, dryRun: true };
   if (flag.name === "--no-relaunch") return { ...options, noRelaunch: true };
+  if (flag.name === "--in-place") return { ...options, inPlace: true };
   if (flag.name === "--target") return { ...options, target: flag.value as PortableTarget };
   if (flag.value === undefined) return options;
-  const value = resolveInputPath(cwd, flag.value);
-  if (flag.name === "--portable-root") return { ...options, portableRoot: value };
-  if (flag.name === "--managed-root") return { ...options, managedRoot: value };
+  return applyPortablePathFlag(flag.name, resolveInputPath(cwd, flag.value), options);
+}
+
+function applyPortablePathFlag(
+  name: string,
+  value: string,
+  options: PortableRawOptions,
+): PortableRawOptions {
+  if (name === "--portable-root") return { ...options, portableRoot: value };
+  if (name === "--managed-root") return { ...options, managedRoot: value };
+  if (name === "--provisioned-config") return { ...options, provisionedConfig: value };
   return { ...options, stateDir: value };
 }
 
@@ -234,6 +253,8 @@ function initialRawOptions(env: EnvSource, deps: PortableArgDeps): PortableRawOp
     stateDir: env.KEIKO_STATE_DIR ?? join(deps.homedir(), ".keiko"),
     dryRun: false,
     noRelaunch: false,
+    inPlace: false,
+    provisionedConfig: undefined,
   };
 }
 
@@ -264,6 +285,10 @@ function finalizePortableOptions(
 ): PortableCliOptions | undefined {
   const target = raw.target;
   if (target === undefined) return undefined;
+  // In place is a way to launch, and a provisioned configuration belongs to it: the managed
+  // launcher has no administrator's file beside it.
+  if (raw.inPlace && command !== "launch") return undefined;
+  if (raw.provisionedConfig !== undefined && !raw.inPlace) return undefined;
   return {
     command,
     target,
@@ -275,6 +300,8 @@ function finalizePortableOptions(
     stateDir: resolveInputPath(deps.cwd, raw.stateDir),
     dryRun: raw.dryRun,
     noRelaunch: raw.noRelaunch,
+    inPlace: raw.inPlace,
+    ...(raw.provisionedConfig === undefined ? {} : { provisionedConfig: raw.provisionedConfig }),
     home: deps.homedir(),
   };
 }
@@ -287,6 +314,13 @@ interface LaunchManagedOptions {
   readonly stateDir: string;
   readonly securityLogSink?: SecurityLogSink | undefined;
   readonly launchFailure?: LaunchFailureRecorder | undefined;
+  readonly provisionedConfig?: string | undefined;
+  /**
+   * In place, the start window is read by a person, not an operator: the waiver sentence would
+   * only alarm them, and the Coding Workbench states the runtime's evaluation status where it
+   * matters.
+   */
+  readonly quietActivationWaiver?: boolean | undefined;
   readonly recovered?: {
     readonly descriptor: PortableRecoveredLaunchDescriptor;
     readonly encoded: string;
@@ -312,35 +346,53 @@ function managedLaunchOptions(
   };
 }
 
+// macOS asks the runtime activation before every launch. `false` means the launch is refused and
+// its reason is already written and recorded.
+async function macosRuntimeAdmitsLaunch(
+  options: LaunchManagedOptions,
+  activate: MacosRuntimeActivationFn,
+): Promise<boolean> {
+  const { target, layout, io } = options;
+  if (target !== "macos-arm64" && target !== "macos-x64") return true;
+  const activation = await activate(layout, target);
+  if (activation === "unavailable") {
+    io.err("keiko portable launch: macOS runtime activation is incomplete\n");
+    recordLaunchFailure(options.launchFailure, "macos-activation");
+    return false;
+  }
+  if (activation === "waived-unsigned" && options.quietActivationWaiver !== true) {
+    io.out(
+      "Keiko platform runtime containment is waived: this install carries no release signature.\n",
+    );
+  }
+  return true;
+}
+
+function managedStartArguments(options: LaunchManagedOptions): string[] {
+  const args = ["--open", "--state-dir", options.stateDir];
+  if (options.provisionedConfig !== undefined) {
+    args.push("--provisioned-config", options.provisionedConfig);
+  }
+  if (options.recovered !== undefined) {
+    const { host, port } = options.recovered.descriptor;
+    args.push("--host", host, "--port", String(port));
+  }
+  return args;
+}
+
 async function launchManaged(
   options: LaunchManagedOptions,
   deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
 ): Promise<number> {
-  const { target, layout, io, env, stateDir, securityLogSink, recovered, launchFailure } = options;
-  if (target === "macos-arm64" || target === "macos-x64") {
-    const activation = await deps.activateMacosRuntimeFn(layout, target);
-    if (activation === "unavailable") {
-      io.err("keiko portable launch: macOS runtime activation is incomplete\n");
-      recordLaunchFailure(launchFailure, "macos-activation");
-      return 1;
-    }
-    if (activation === "waived-unsigned") {
-      io.out(
-        "Keiko platform runtime containment is waived: this install carries no release signature.\n",
-      );
-    }
-  }
-  const args = ["--open", "--state-dir", stateDir];
-  if (recovered !== undefined) {
-    args.push("--host", recovered.descriptor.host, "--port", String(recovered.descriptor.port));
-  }
+  const { target, layout, io, env, securityLogSink, recovered, launchFailure } = options;
+  if (!(await macosRuntimeAdmitsLaunch(options, deps.activateMacosRuntimeFn))) return 1;
   const launchEnv =
     recovered === undefined ? env : { ...env, KEIKO_PORTABLE_RECOVERED_LAUNCH: recovered.encoded };
   const nativeUiRuntime =
     target === "linux-x64"
       ? (await import("./native-ui-runtime.js")).nativeUiRuntimeForLayout(layout, securityLogSink)
       : undefined;
-  return deps.lifecycleFn("start", args, io, launchEnv, {
+  return deps.lifecycleFn("start", managedStartArguments(options), io, launchEnv, {
     cwd: layout.appRoot,
     securityLogSink,
     recordFailure: failureRecorderFor(launchFailure),
@@ -511,50 +563,93 @@ function setupDownloadedPortable(
   return 0;
 }
 
-async function launchPortable(
+// A folder package runs where it was unpacked. The payload is validated like every portable root,
+// but nothing is copied, registered or attested, and the UI process is told that this install is
+// managed outside the app, so it offers neither the managed setup nor an in-app update. Update
+// recovery belongs to a managed install and is not consulted.
+async function launchInPlace(
   options: PortableCliOptions,
   io: CliIo,
   env: EnvSource,
-  deps: Pick<
-    PortableRuntimeDeps,
-    | "activateMacosRuntimeFn"
-    | "now"
-    | "spawnFn"
-    | "lifecycleFn"
-    | "recoverNormalStartupFn"
-    | "encodeRecoveredLaunchFn"
-    | "platform"
-  >,
+  deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
 ): Promise<number> {
-  try {
-    const recovered = await recoverBeforePortableLaunch(options, io, env, deps);
-    if (recovered !== undefined) return recovered;
-    const source = validatePortableRoot(
-      options.target,
-      options.portableRoot,
-      options.securityLogSink,
-    );
-    if (sameRealPath(source.layout.installRoot, options.managedRoot)) {
-      return await setupAndLaunchManaged(options, io, env, deps);
-    }
-    const attestedKnownManaged = attestedKnownManagedInstall(options, env);
-    if (attestedKnownManaged !== undefined) {
-      return await upgradeManagedFromClickedPackage(
-        options,
-        source,
-        attestedKnownManaged,
-        io,
-        env,
-        deps,
-      );
-    }
-    const recoveryRoot = failedPortableRecoveryRoot(options, env);
-    return setupDownloadedPortable(
-      recoveryRoot === undefined ? options : { ...options, managedRoot: recoveryRoot },
+  const source = validatePortableRoot(
+    options.target,
+    options.portableRoot,
+    options.securityLogSink,
+  );
+  return launchManaged(
+    {
+      ...managedLaunchOptions(options, source.layout, io, {
+        ...env,
+        [PORTABLE_MANAGEMENT_ENV]: "organization-managed",
+      }),
+      quietActivationWaiver: true,
+      ...(options.provisionedConfig === undefined
+        ? {}
+        : { provisionedConfig: options.provisionedConfig }),
+    },
+    deps,
+  );
+}
+
+type PortableLaunchDeps = Pick<
+  PortableRuntimeDeps,
+  | "activateMacosRuntimeFn"
+  | "now"
+  | "spawnFn"
+  | "lifecycleFn"
+  | "recoverNormalStartupFn"
+  | "encodeRecoveredLaunchFn"
+  | "platform"
+>;
+
+async function launchThroughManagedInstall(
+  options: PortableCliOptions,
+  io: CliIo,
+  env: EnvSource,
+  deps: PortableLaunchDeps,
+): Promise<number> {
+  const recovered = await recoverBeforePortableLaunch(options, io, env, deps);
+  if (recovered !== undefined) return recovered;
+  const source = validatePortableRoot(
+    options.target,
+    options.portableRoot,
+    options.securityLogSink,
+  );
+  if (sameRealPath(source.layout.installRoot, options.managedRoot)) {
+    return await setupAndLaunchManaged(options, io, env, deps);
+  }
+  const attestedKnownManaged = attestedKnownManagedInstall(options, env);
+  if (attestedKnownManaged !== undefined) {
+    return await upgradeManagedFromClickedPackage(
+      options,
+      source,
+      attestedKnownManaged,
       io,
       env,
       deps,
     );
+  }
+  const recoveryRoot = failedPortableRecoveryRoot(options, env);
+  return setupDownloadedPortable(
+    recoveryRoot === undefined ? options : { ...options, managedRoot: recoveryRoot },
+    io,
+    env,
+    deps,
+  );
+}
+
+async function launchPortable(
+  options: PortableCliOptions,
+  io: CliIo,
+  env: EnvSource,
+  deps: PortableLaunchDeps,
+): Promise<number> {
+  try {
+    return options.inPlace
+      ? await launchInPlace(options, io, env, deps)
+      : await launchThroughManagedInstall(options, io, env, deps);
   } catch (error) {
     io.err(`keiko portable launch: ${error instanceof Error ? error.message : "unavailable"}\n`);
     options.launchFailure?.record(failureReasonOf(error, "launch-error"));

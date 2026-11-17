@@ -11,7 +11,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 import { sealedLocalPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { validateManualRefreshChangeSummary } from "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";

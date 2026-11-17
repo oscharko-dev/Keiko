@@ -458,6 +458,35 @@ describe("external change surfaced as explicit recoverable state (AC2)", () => {
       rmSync(escaped, { recursive: true, force: true });
     }
   });
+
+  it("names the refusal that disproved containment on the path-escape line, never the path", async () => {
+    // #4410: a Windows report held 20 reconcile lines with `driftMarker=path-escape` and no cause, so
+    // a lexical escape, a relocated managed root and an unreadable parent chain looked identical.
+    const instance = await provisionTask("t1");
+    const escaped = realpathSync(mkdtempSync(join(tmpdir(), "keiko-escape-")));
+    try {
+      store.upsert({ ...instance, managedWorktreePath: escaped });
+      const activityLog = createBufferedServerLogSink();
+      await reconciliation(activityLog).reconcile(undefined, "path-escape-0001");
+      const line = activityLog.events.find((event) => event.extra?.driftMarker === "path-escape");
+      if (line === undefined) throw new Error("no path-escape line recorded");
+      expect(line.level).toBe("warn");
+      expect(line.correlationId).toBe("path-escape-0001");
+      expect(line.extra?.causeChain).toEqual(["PathEscapeError"]);
+      expect(JSON.stringify(line)).not.toContain(escaped);
+    } finally {
+      rmSync(escaped, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a contained, healthy reconcile line free of a containment cause", async () => {
+    await provisionTask("t1");
+    const activityLog = createBufferedServerLogSink();
+    await reconciliation(activityLog).reconcile(undefined, "contained-0001");
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.extra?.driftMarker).toBeUndefined();
+    expect(line.extra?.causeChain).toBeUndefined();
+  });
 });
 
 describe("pointer drift (negative: corrupted / moved gitdir)", () => {

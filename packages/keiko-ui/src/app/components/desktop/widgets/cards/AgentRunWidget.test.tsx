@@ -106,7 +106,6 @@ describe("AgentRunWidget", () => {
           model: "example-chat-model",
           runId: "run-123456",
           workspaceRoot: "/repo",
-          inputJson: '{"workspaceRoot":"/repo"}',
         }}
         linkedRoot="/repo"
         linkedFilePath={undefined}
@@ -128,7 +127,7 @@ describe("AgentRunWidget", () => {
     expect((await screen.findAllByText("Applied")).length).toBeGreaterThan(0);
   });
 
-  it("exposes the dry-run, diff, and run-input blocks as keyboard-focusable named regions", async () => {
+  it("exposes the dry-run and diff blocks as keyboard-focusable named regions", async () => {
     // GEN-UI-KEYBOARD-005 (test-plan #31) — every overflow:auto output block must be a
     // focusable region with an accessible name so keyboard-only users can scroll it.
     vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
@@ -149,7 +148,6 @@ describe("AgentRunWidget", () => {
           model: "example-chat-model",
           runId: "run-regions",
           workspaceRoot: "/repo",
-          inputJson: '{"workspaceRoot":"/repo"}',
         }}
         linkedRoot="/repo"
         linkedFilePath={undefined}
@@ -163,10 +161,6 @@ describe("AgentRunWidget", () => {
     const dryRun = screen.getByRole("region", { name: /dry-run preview/i });
     expect(dryRun.tagName).toBe("SECTION");
     expect(dryRun).toHaveAttribute("tabindex", "0");
-
-    const runInput = screen.getByRole("region", { name: /run input/i });
-    expect(runInput.tagName).toBe("SECTION");
-    expect(runInput).toHaveAttribute("tabindex", "0");
   });
 
   // uiux-fix F018 C026/C109: SSE disconnects must be visible and the log must be a live region

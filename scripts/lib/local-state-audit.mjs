@@ -24,6 +24,9 @@ import { URL } from "node:url";
 
 // ── On-disk layout (source of truth: packages/keiko-cli/src/state-paths.ts) ────────────────
 const GATEWAY_CONFIG = "keiko.config.json";
+// The digest of the administrator-provisioned config adopted last (provisioned-config.ts). The
+// provisioned file holds the team's key, so its digest is a check for a guessed key: private.
+const PROVISIONED_CONFIG_MARKER = "provisioned-config.sha256";
 const UI_SUBDIR = "ui";
 const CREDENTIALS_SUBDIR = "credentials";
 const PROVIDER_VAULT = "provider-credentials.vault";
@@ -164,7 +167,13 @@ const SECRET_VALUE_PATTERNS = [
 // A regular file is "sensitive" (must be owner-only) when it is a Keiko-owned runtime artifact.
 // Anything else under the tree (e.g. an unrelated customer file a maintainer dropped in) is only
 // reported as informational, never a failure — the auditor must not punish files it does not own.
-const SENSITIVE_FILE_NAMES = new Set([GATEWAY_CONFIG, "ui.pid", "ui.log", "launcher-state.json"]);
+const SENSITIVE_FILE_NAMES = new Set([
+  GATEWAY_CONFIG,
+  PROVISIONED_CONFIG_MARKER,
+  "ui.pid",
+  "ui.log",
+  "launcher-state.json",
+]);
 const SENSITIVE_TOP_DIRS = new Set([
   CREDENTIALS_SUBDIR,
   MEMORY_SUBDIR,

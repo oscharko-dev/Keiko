@@ -141,9 +141,7 @@ describe("translate", () => {
 
     expect(translateOptionalWidget("de", "commandPalette.title")).toBe("Befehle");
     expect(translateOptionalWidget("de", "browserWidget.action.open")).toBe("Sitzung öffnen");
-    expect(translateOptionalWidget("de", "documentationBrowser.action.prepareIndexing")).toBe(
-      "Indizierung vorbereiten",
-    );
+    expect(translateOptionalWidget("de", "grounded.manual.checkSource")).toBe("Quelle prüfen");
     expect(translateOptionalWidget("de", "gitDelivery.state.ready-to-execute")).toBe(
       "Bereit zur Ausführung",
     );

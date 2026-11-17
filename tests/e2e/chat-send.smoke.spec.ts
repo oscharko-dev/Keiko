@@ -8,6 +8,7 @@ import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import { editorModifier, selectAllInEditor } from "./support/editor-chord.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 import { runAxe, formatViolations } from "./support/axe.js";
+import { activateChatModel, E2E_CHAT_MODEL_ID } from "./support/chat-model-activation.js";
 
 // GEN-TEST-RELEASE-GATE-002 / GEN-TEST-E2E-006 — the ONLY CI browser gate never sent a chat message:
 // the central product flow (composer -> POST /api/desktop/chat/stream -> BFF -> gateway -> provider
@@ -17,14 +18,15 @@ import { runAxe, formatViolations } from "./support/axe.js";
 // and repoints the runtime config's baseUrl at it, so a REAL send reaches a real gateway + a real
 // (deterministic) provider and we can assert both the streamed render AND server-side persistence.
 
-const CHAT_MODEL_ID = "e2e-chat-model";
+const CHAT_MODEL_ID = E2E_CHAT_MODEL_ID;
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 // Must match tests/e2e/support/model-mock-server.mjs REPLY_MARKER exactly.
 const REPLY_MARKER = "KEIKO_E2E_STREAM_OK";
 const tempProjects: string[] = [];
 const updateLoopErrors = new WeakMap<Page, string[]>();
 
-test.beforeEach(({ page }): void => {
+test.beforeEach(async ({ page, request }): Promise<void> => {
+  await activateChatModel(request);
   const errors: string[] = [];
   updateLoopErrors.set(page, errors);
   page.on("console", (message): void => {
@@ -235,11 +237,10 @@ test("sends a chat message and streams a persisted assistant reply @smoke", asyn
   await composer.click();
   await composer.fill("Ping the deterministic provider");
   const sendButton = chatWindow.getByRole("button", { name: "Send message" });
-  // Relocated pin (0.3.12, tri-state readiness — the customer restart incident): a model this
-  // process never probed is UNKNOWN, not blocked, so the very first send needs NO manual
-  // Settings readiness check and no reload. The send button is usable immediately; the send
-  // below succeeds because configuration initialization verifies the model before admission — this journey
-  // now proves the whole self-service path in a real browser.
+  // Relocated pin (0.3.12, tri-state readiness — the customer restart incident): once a person
+  // has activated the model in Settings > Models (ADR-0171 D2, amended 2026-11-16; the beforeEach
+  // sends that same explicit check), the very first send needs no reload and no second check. The
+  // send button is usable immediately, and this journey proves the whole path in a real browser.
   await expect(sendButton).toBeEnabled();
 
   await sendButton.click();

@@ -17,7 +17,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 import {
   createDefaultParserRegistry,
   createHtmlManualPod,
@@ -32,7 +32,7 @@ import { scriptedAdapter } from "@oscharko-dev/keiko-local-knowledge/testing";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import {
   buildHtmlManualCitationNavigationTarget,
-  resolveHtmlManualCitationNavigationTarget,
+  checkHtmlManualCitation,
 } from "./html-manual-citation-navigation.js";
 import { createRunRegistry } from "./runs.js";
 
@@ -96,7 +96,7 @@ function findDocumentByPath(store: KnowledgeStore, documentPath: string): Docume
   return row;
 }
 
-describe("resolveHtmlManualCitationNavigationTarget — refresh seam (#1854 x #1856)", () => {
+describe("checkHtmlManualCitation — refresh seam (#1854 x #1856)", () => {
   let staticRoot: string;
   let deps: UiHandlerDeps;
   let store: KnowledgeStore;
@@ -161,8 +161,8 @@ describe("resolveHtmlManualCitationNavigationTarget — refresh seam (#1854 x #1
     });
 
     // Sanity: the handle resolves before the refresh removes its page.
-    const beforeRefresh = resolveHtmlManualCitationNavigationTarget(deps, target);
-    expect(beforeRefresh.kind).toBe("resolved");
+    const beforeRefresh = checkHtmlManualCitation(deps, target);
+    expect(beforeRefresh).toEqual({ state: "verified" });
 
     await refreshHtmlManualPod({
       store,
@@ -176,10 +176,7 @@ describe("resolveHtmlManualCitationNavigationTarget — refresh seam (#1854 x #1
     // The pruned page's document (and dependent chunk row) must be gone.
     expect(() => findDocumentByPath(store, "reference.html")).toThrow();
 
-    const afterRefresh = resolveHtmlManualCitationNavigationTarget(deps, target);
-    expect(afterRefresh.kind).toBe("failed");
-    if (afterRefresh.kind === "failed") {
-      expect(afterRefresh.reason).toBe("citation-lineage-mismatch");
-    }
+    const afterRefresh = checkHtmlManualCitation(deps, target);
+    expect(afterRefresh).toEqual({ state: "unavailable", reason: "citation-lineage-mismatch" });
   });
 });

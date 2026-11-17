@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
-import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import {
   ApiError,
   applyRun,
@@ -45,22 +44,7 @@ interface AgentRunCfg {
   workflow?: string;
   model?: string;
   runId?: string;
-  fingerprint?: string;
   workspaceRoot?: string;
-  inputJson?: string;
-  keikoMode?: boolean;
-  access?: "ask" | "full";
-  requestedMode?: CodingWorkbenchMode;
-  effectiveMode?: CodingWorkbenchMode;
-  deploymentCeiling?: CodingWorkbenchMode;
-  connectorExecution?: "unavailable";
-  deliveryExecution?: "unavailable";
-}
-
-function autonomyModeLabel(mode: CodingWorkbenchMode, t: OptionalWidgetTranslate): string {
-  if (mode === "governed-assist") return t("agentLauncher.mode.governedAssist.label");
-  if (mode === "supervised-coding") return t("agentLauncher.mode.supervisedCoding.label");
-  return t("agentLauncher.mode.autonomousDelivery.label");
 }
 
 interface AgentRunWidgetProps {
@@ -134,10 +118,6 @@ function normalizeWorkflow(value: string | undefined): AgentWorkflowId | null {
     return value;
   }
   return null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readUsage(event: HarnessEvent): UsageTotals | null {
@@ -316,16 +296,6 @@ function shortSummary(
   }
   const outcome = evidence?.run.outcome ?? t("agentRunWidget.summary.unknownOutcome");
   return t("agentRunWidget.summary.evidenceOutcome", { label, outcome });
-}
-
-function parseInput(inputJson: string | undefined): Record<string, unknown> | null {
-  if (inputJson === undefined || inputJson.length === 0) return null;
-  try {
-    const parsed: unknown = JSON.parse(inputJson);
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
 }
 
 function canApply(workflow: AgentWorkflowId | null, report: RunReport | null): boolean {
@@ -858,16 +828,14 @@ function AgentRunHeader({
   workflow,
   modelId,
   costClass,
-  cfg,
   report,
   status,
   statusLabel,
   t,
 }: {
-  readonly workflow: AgentWorkflowId;
+  readonly workflow: AgentWorkflowId | null;
   readonly modelId: string;
   readonly costClass: CostClass | null;
-  readonly cfg: AgentRunCfg;
   readonly report: RunReport | null;
   readonly status: string;
   readonly statusLabel: string;
@@ -875,28 +843,15 @@ function AgentRunHeader({
 }): ReactNode {
   return (
     <div className="arun-head">
-      <span className="arun-role">{workflowLabel(workflow, t)}</span>
+      <span className="arun-role">
+        {workflow === null ? t("agentRunWidget.workflow.fallback") : workflowLabel(workflow, t)}
+      </span>
       {modelId.length > 0 ? <span className="ag-model mono">{modelId}</span> : null}
       {costClass === null ? null : (
         <span className="arun-gov" title={t("agentRunWidget.costClassTitle")}>
           {costClassLabel(costClass)}
         </span>
       )}
-      {cfg.effectiveMode === undefined ? null : (
-        <span
-          className="arun-gov"
-          title={t("agentRunWidget.autonomyMode", {
-            mode: autonomyModeLabel(cfg.effectiveMode, t),
-          })}
-        >
-          {autonomyModeLabel(cfg.effectiveMode, t)}
-        </span>
-      )}
-      {cfg.connectorExecution === "unavailable" && cfg.deliveryExecution === "unavailable" ? (
-        <span className="arun-gov" title={t("agentRunWidget.executionUnavailable")}>
-          {t("agentRunWidget.executionUnavailable")}
-        </span>
-      ) : null}
       <span className="spacer" />
       <span className="arun-status">
         <span className="dot" data-live={report?.status === "running"} data-status={status} />
@@ -970,23 +925,6 @@ function AgentRunPermissions({
   );
 }
 
-function AgentRunInput({
-  input,
-  t,
-}: {
-  readonly input: Record<string, unknown> | null;
-  readonly t: OptionalWidgetTranslate;
-}): ReactNode {
-  if (input === null) return null;
-  const label = t("agentRunWidget.runInput.summary");
-  return (
-    <details className="arun-input">
-      <summary>{label}</summary>
-      <PreformattedScrollRegion title={label} value={JSON.stringify(input, null, 2)} />
-    </details>
-  );
-}
-
 function AgentRunErrors({
   error,
   applyError,
@@ -1017,9 +955,6 @@ export function AgentRunWidget({
 }: AgentRunWidgetProps): ReactNode {
   const t = useOptionalWidgetTranslate();
   const runId = cfg.runId ?? null;
-  const workflow = normalizeWorkflow(cfg.workflow);
-  const modelId = cfg.model ?? "";
-  const input = parseInput(cfg.inputJson);
   const sse = useSSE(runId);
   const { report, evidence, error, loadReport, replaceReport, setError } = useAgentRunData(
     runId,
@@ -1027,6 +962,8 @@ export function AgentRunWidget({
   );
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
+  const workflow = normalizeWorkflow(cfg.workflow ?? evidence?.run.taskType);
+  const modelId = cfg.model ?? report?.modelId ?? evidence?.model.modelId ?? "";
   const costClass = useModelCostClass(modelId);
   const evidenceLinkRef = useRef<HTMLAnchorElement | null>(null);
 
@@ -1095,11 +1032,10 @@ export function AgentRunWidget({
   // the second click actually applies.
   const { confirmApply, onApplyClick } = useApplyConfirmation(applying, () => void doApply());
 
-  if (runId === null || workflow === null) {
+  if (runId === null) {
     return (
       <div className="arun arun-empty">
         <div className="arun-result-title">{t("agentRunWidget.empty.title")}</div>
-        <p>{t("agentRunWidget.empty.body")}</p>
       </div>
     );
   }
@@ -1110,7 +1046,6 @@ export function AgentRunWidget({
         workflow={workflow}
         modelId={modelId}
         costClass={costClass}
-        cfg={cfg}
         report={report}
         status={status}
         statusLabel={statusLabel}
@@ -1136,8 +1071,6 @@ export function AgentRunWidget({
         linkedFilePath={linkedFilePath}
         t={t}
       />
-
-      <AgentRunInput input={input} t={t} />
 
       {/* uiux-fix F018 C109: role=log announces appended entries (TerminalWidget
           pattern). The C026 disconnect row below lives inside this live region, so

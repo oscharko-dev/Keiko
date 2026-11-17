@@ -1,5 +1,7 @@
 # Static HTML Manual Knowledge Pod — closure evidence (Epic #1853)
 
+> Historical evidence. PR #4448 retired the standalone Documentation Browser and its indexing proposal and approval routes. Chat now checks existing HTML citations in place. The Knowledge Pod source and refresh contracts are documented in ADR-0113.
+
 End-to-end closure evidence for the static HTML manual crawler epic. All evidence is body-free:
 counts, statuses, and reason codes only — no raw page body, URL, local path, query token, or
 credential appears here or in any test fixture. The corpus is synthetic (`manual.test` /

@@ -556,6 +556,12 @@ export interface CodingWorkbenchRuntimeReadinessRequest {
 export type CodingWorkbenchRuntimeUnavailableReason =
   | "runtime-disabled"
   | "platform-unqualified"
+  // An npm installation without the coding-runtime package for this computer: the person installs
+  // the desktop package for this computer instead (#4068).
+  | "npm-runtime-package-missing"
+  // A desktop (portable) installation whose bundled runtime did not verify: the person updates or
+  // reinstalls Keiko from its release page.
+  | "portable-runtime-unverified"
   | "dev-lane-refused"
   | "payload-missing"
   | "payload-unapproved"
@@ -570,6 +576,10 @@ export type CodingWorkbenchRuntimeUnavailableReason =
   | "gateway-service-stale"
   | "gateway-service-unknown"
   | "gateway-service-unqualified"
+  // The installation is managed outside the app (a standalone folder package or an IT-managed
+  // deployment): Keiko sets up no system service there, so it neither installs nor offers to
+  // repair the Windows runtime gateway (ADR-0121 D9).
+  | "gateway-service-managed-outside"
   // The Windows installation folder is not on a local disk, or Windows could not check it now.
   | "install-volume-not-local"
   | "install-volume-unverified";
@@ -578,6 +588,8 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
   Object.freeze([
     "runtime-disabled",
     "platform-unqualified",
+    "npm-runtime-package-missing",
+    "portable-runtime-unverified",
     "dev-lane-refused",
     "payload-missing",
     "payload-unapproved",
@@ -591,9 +603,24 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
     "gateway-service-stale",
     "gateway-service-unknown",
     "gateway-service-unqualified",
+    "gateway-service-managed-outside",
     "install-volume-not-local",
     "install-volume-unverified",
   ] as const);
+
+/**
+ * The Workbench's Repair of the Windows runtime gateway (`POST
+ * /api/coding-workbench/runtime/gateway-service/repair`). It runs the same idempotent native install
+ * `keiko gateway-service repair` runs, behind Windows' own UAC approval. `ready` means the broker
+ * now runs this Keiko version's helper; `declined` that the person refused the approval;
+ * `unavailable` that this installation has no repairable gateway; `busy` that a repair already runs.
+ */
+export type CodingWorkbenchGatewayServiceRepairOutcome =
+  "ready" | "declined" | "failed" | "unavailable" | "busy";
+
+export interface CodingWorkbenchGatewayServiceRepairResponse {
+  readonly outcome: CodingWorkbenchGatewayServiceRepairOutcome;
+}
 
 /**
  * How much evidence backs an AVAILABLE runtime. `platform-qualified` is the release-signed,

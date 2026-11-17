@@ -177,6 +177,12 @@ The Knowledge text citation repair (#4443) changed `api.ts` and both optional ca
 arm64 container with Node 26.13.1. The three JSON records now bind the updated source hashes.
 The 14 committed screenshots, updater assertions and harness inputs retain their existing values.
 
+The New chat repair for a remembered project whose folder is gone (#4455, PR #4460) changed
+`api.ts`: chat creation now clears the project-list cache. On 2026-11-17 (UTC) the original nine
+Chromium cases passed in 1.5 minutes in the Linux gates container with an init process and Node
+26.13.1, and `npm run check:update-ui-evidence` passes. Only the three records were kept; the 14
+committed screenshots, updater assertions and harness inputs retain their existing values.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
@@ -781,3 +787,12 @@ The review of #4444 and #4445 aligned the German conflict and signing instructio
 formal address used by Git Sync. All nine original updater cases passed again in the same Linux
 environment. The three records incorporate the new German catalog digest and the generation time
 where recorded.
+
+## Release 1.5.2: Windows Workbench causes and model activation — 2026-11-17 (#4404, #4410, #4450)
+
+The named Windows checkout causes, the manual model activation in Settings > Models and the
+retired surfaces of #4448 change the core and optional English and German catalogs, `api.ts` and
+`globals.css`. All nine original updater cases passed again in the Linux arm64 gates container with
+`--init`, Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`, and `npm run check:update-ui-evidence`
+passed. The three producer-generated records bind the updated source digests and generation time.
+The fourteen committed captures retain the typography of their original renderer.

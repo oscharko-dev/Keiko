@@ -39,6 +39,7 @@ import {
   handleCodingRuntimeDescriptionDraft,
   handleCodingRuntimeEvents,
   handleCodingRuntimeFollowUp,
+  handleCodingRuntimeGatewayServiceRepair,
   handleCodingRuntimeInbox,
   handleCodingRuntimeInboxAction,
   handleCodingRuntimePause,
@@ -320,6 +321,7 @@ describe("coding runtime routes", () => {
   it("declares the productive singleton lifecycle routes and leaves deprecated authority routes unmounted", () => {
     expect(CODING_RUNTIME_ROUTE_GROUP.map(({ method, pattern }) => `${method} ${pattern}`)).toEqual(
       [
+        "POST /api/coding-workbench/runtime/gateway-service/repair",
         "GET /api/coding-workbench/runtime/schedules",
         "POST /api/coding-workbench/runtime/schedules/:scheduleId/:action",
         "POST /api/coding-workbench/runtime/runs",
@@ -2420,6 +2422,13 @@ function spyingRuntime(channel: UiHandlerDeps["codingAppSessionChannel"]): Spyin
           return Promise.resolve({ ok: true as const, status: "paused" as const });
         },
       },
+      codingRuntimeGatewayService: {
+        unavailableReason: () => "gateway-service-absent",
+        repair: () => {
+          invoked.push("gatewayServiceRepair");
+          return Promise.resolve("ready" as const);
+        },
+      },
     } as unknown as UiHandlerDeps,
     get invoked(): readonly string[] {
       return invoked;
@@ -2952,5 +2961,62 @@ describe("scheduled continuation routes (#4271, ADR-0137 D10)", () => {
         cookie,
       ),
     ).resolves.toMatchObject({ status: 503 });
+  });
+});
+
+describe("Windows gateway Repair route", () => {
+  const ROUTE = "/api/coding-workbench/runtime/gateway-service/repair";
+
+  function repairDeps(
+    channel: UiHandlerDeps["codingAppSessionChannel"],
+    repair?: (correlationId: string) => Promise<"ready" | "declined" | "failed" | "busy">,
+  ): UiHandlerDeps {
+    return {
+      codingAppSessionChannel: channel,
+      codingRuntimeGatewayService: {
+        unavailableReason: () => "gateway-service-absent",
+        ...(repair === undefined ? {} : { repair }),
+      },
+    } as unknown as UiHandlerDeps;
+  }
+
+  it("is mounted as a POST in the coding runtime group", () => {
+    expect(
+      CODING_RUNTIME_ROUTE_GROUP.some(
+        (route) => route.method === "POST" && route.pattern === ROUTE,
+      ),
+    ).toBe(true);
+  });
+
+  it("refuses a request without a paired app session before any helper runs", async () => {
+    const repair = vi.fn(() => Promise.resolve("ready" as const));
+    const { channel } = pairedAppSession();
+    const result = await handleCodingRuntimeGatewayServiceRepair(
+      context("{}", {}, ROUTE),
+      repairDeps(channel, repair),
+    );
+    expect(result).toMatchObject({ status: 403 });
+    expect(repair).not.toHaveBeenCalled();
+  });
+
+  it("runs the repair under the request correlation and returns its closed outcome", async () => {
+    const repair = vi.fn(() => Promise.resolve("declined" as const));
+    const { channel, cookie } = pairedAppSession();
+    const result = await handleCodingRuntimeGatewayServiceRepair(
+      context("{}", {}, ROUTE, cookie, "00000000-0000-4000-8000-0000000000aa"),
+      repairDeps(channel, repair),
+    );
+    expect(result).toEqual({ status: 200, body: { outcome: "declined" } });
+    expect(repair).toHaveBeenCalledWith("00000000-0000-4000-8000-0000000000aa");
+  });
+
+  it("answers unavailable where the runtime has no repairable gateway", async () => {
+    const { channel, cookie } = pairedAppSession();
+    await expect(
+      handleCodingRuntimeGatewayServiceRepair(
+        context("{}", {}, ROUTE, cookie),
+        repairDeps(channel),
+      ),
+    ).resolves.toEqual({ status: 200, body: { outcome: "unavailable" } });
   });
 });

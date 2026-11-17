@@ -54,6 +54,7 @@ export {
 export {
   discoverReleasedWindowsGatewayHelper,
   portableInstallCarriesReleaseSignature,
+  runVerifiedWindowsGatewayHelper,
 } from "./coding-runtime/productionPortableCodingRuntime.js";
 export {
   discoverDevCheckoutWindowsGatewayHelper,

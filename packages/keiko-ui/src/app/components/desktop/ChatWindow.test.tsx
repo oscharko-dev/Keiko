@@ -84,7 +84,11 @@ import {
   updateChat,
   updateChatConnectedScopes,
 } from "@/lib/api";
-import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
+import {
+  checkHtmlManualCitation,
+  fetchCapsules,
+  fetchCapsuleSets,
+} from "@/lib/local-knowledge-api";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
@@ -111,6 +115,7 @@ vi.mock("@/lib/local-knowledge-api", async (importOriginal) => {
     ...actual,
     fetchCapsules: vi.fn(async () => ({ capsules: [] })),
     fetchCapsuleSets: vi.fn(async () => ({ capsuleSets: [] })),
+    checkHtmlManualCitation: vi.fn(),
   };
 });
 
@@ -1115,13 +1120,13 @@ describe("ChatWindow cancel button", () => {
     expect(screen.getByText("Scope: 1 file in files (s-plural)")).toBeInTheDocument();
   });
 
-  it("clicking an HTML manual citation opens a docbrowser window with the citation's navigation target", async () => {
-    // AUDIT-E1854-001 audit gap: GroundedAnswer.test.tsx only exercises the citation-chip-to-
-    // callback wiring with a vi.fn() standing in for openDocumentationTarget. This exercises the
-    // real ChatWindow.tsx glue (its useCallback) end to end, so a future rename of the window kind
-    // or config key breaks a test instead of silently breaking every HTML-manual citation "Open".
+  it("checks an HTML manual citation directly in Chat and shows a stale source disposition", async () => {
     const user = userEvent.setup();
-    const addWindow = vi.fn().mockReturnValue("docbrowser-1");
+    const addWindow = vi.fn();
+    vi.mocked(checkHtmlManualCitation).mockResolvedValueOnce({
+      state: "unavailable",
+      reason: "citation-lineage-mismatch",
+    });
     const previewWindows: PdfCitationPreviewWindowApi = {
       add: addWindow,
       focus: vi.fn(),
@@ -1210,13 +1215,15 @@ describe("ChatWindow cancel button", () => {
 
     await user.click(
       screen.getByRole("button", {
-        name: "[1] Device Handbook · HTML manual · device-handbook.html · Troubleshooting · Timeouts · Open manual",
+        name: "[1] Device Handbook · HTML manual · device-handbook.html · Troubleshooting · Timeouts · Check source",
       }),
     );
 
-    expect(addWindow).toHaveBeenCalledWith("docbrowser", {
-      target: "keiko-html-manual-citation:opaque-target",
-    });
+    expect(checkHtmlManualCitation).toHaveBeenCalledWith(
+      "keiko-html-manual-citation:opaque-target",
+    );
+    expect(await screen.findByText("Citation mismatch")).toBeInTheDocument();
+    expect(addWindow).not.toHaveBeenCalled();
   });
 
   it("calls cancelGrounded when the cancel button is clicked", async () => {

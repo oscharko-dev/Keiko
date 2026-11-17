@@ -12,6 +12,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -152,6 +153,28 @@ describe("local checkout selection", () => {
     ).toThrow("The local checkout is unavailable.");
     expect(service.getActive()).toBeUndefined();
     expect(git("branch", "--show-current")).toBe("main");
+  });
+
+  it("binds a checkout registered under another spelling of the same directory (#4404)", () => {
+    // The route always passes the native real path; Windows keeps the spelling a person typed or a
+    // dialog returned (drive-letter case, 8.3 short names, a mapped drive, a junction). A symbolic
+    // link is the portable stand-in: the registration and the real path name one directory.
+    const alias = `${root}-alias`;
+    symlinkSync(root, alias, "junction");
+    const other = realpathSync(mkdtempSync(join(tmpdir(), "keiko other checkout-")));
+    try {
+      const service = fixture(undefined, alias);
+      const selected = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+      expect(selected.binding.activeRoot).toBe(root);
+      expect(service.getActive()?.instance.workspaceId).toBe(selected.instance.workspaceId);
+
+      expect(() =>
+        fixture(undefined, other).selectLocal({ root, branch: "main", requestedBy: "test" }),
+      ).toThrow("Select a registered repository.");
+    } finally {
+      rmSync(alias, { force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
   });
 
   it("still requires the registered root itself to be canonical", () => {

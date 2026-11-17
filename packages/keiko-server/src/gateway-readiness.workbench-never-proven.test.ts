@@ -23,6 +23,7 @@ import {
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   ensureCodingWorkbenchContextWindows,
   resetCodingWorkbenchContextWindowProbesForTests,
+  runGatewayReadiness,
 } from "./gateway-readiness.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
 import { createServerLogger, setServerLogger, type ServerLogEvent } from "./observability/index.js";
@@ -117,11 +118,17 @@ async function observedDeps(config: ReturnType<typeof parseGatewayConfig>): Prom
   });
   compositions.push(deps);
   deps.gatewayConfig?.set(config, true);
-  // The startup chat check of a plain gateway runs and settles before the Workbench is opened.
-  if (config.providers.some((candidate) => candidate.modelId === CHAT)) {
-    await vi.waitFor(() => {
-      expect(deps.gatewayConfig?.verifiedCapability(CHAT)?.fields.conversationReady).toBe(true);
-    });
+  // Startup checks no model: the person activates the chat model in Settings > Models before the
+  // Workbench is opened (ADR-0171 D2, amended 2026-11-16).
+  const holder = deps.gatewayConfig;
+  if (holder !== undefined && config.providers.some((candidate) => candidate.modelId === CHAT)) {
+    await runGatewayReadiness(
+      { modelId: CHAT, options: { probes: ["chat"] } },
+      deps,
+      "corr-settings-activation",
+      "settings",
+    );
+    expect(holder.verifiedCapability(CHAT)?.fields.conversationReady).toBe(true);
   }
   return { deps, events };
 }
