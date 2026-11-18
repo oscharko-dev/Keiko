@@ -183,7 +183,8 @@ and no-chained-type-assertions became active for evaluations (#3933). On 2026-11
 require-safety-comment-for-type-assertion became active for evaluations and harness (#3933). On
 2026-11-15 no-accumulating-spread became active for local-knowledge, server and workspace,
 no-unknown-type-aliases for editor, and no-widen-then-assert for local-knowledge and memory-vault
-(#3933). The engine refuses an active
+(#3933). Later that day no-object-parameters became active for cli and no-unknown-returns for
+evaluations (#3933). The engine refuses an active
 scope without files on the real repository. A hermetic test fixture writes its policy with only the
 scopes its own files certainly fall in.
 

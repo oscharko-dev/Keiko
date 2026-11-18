@@ -101,7 +101,11 @@ describe("BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR required inputs", () => {
 // ─── CLI flag presence in --help output ───────────────────────────────────────
 
 function captureHelp(
-  run: (args: readonly string[], io: CliIo, env: Record<string, string | undefined>) => unknown,
+  run: (
+    args: readonly string[],
+    io: CliIo,
+    env: Record<string, string | undefined>,
+  ) => Promise<number>,
 ): string {
   const chunks: string[] = [];
   const io: CliIo = {
@@ -193,7 +197,7 @@ function fakeCli(help: string): SurfaceParityCliRunner {
     if (args.includes("--help")) {
       io.out(help);
     }
-    return undefined;
+    return Promise.resolve(0);
   };
 }
 
