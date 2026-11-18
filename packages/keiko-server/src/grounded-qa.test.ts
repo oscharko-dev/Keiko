@@ -1001,8 +1001,12 @@ function seedScopedRepo(projectPath: string): void {
   );
 }
 
-function insertGroundedTestMemory(vault: MemoryVaultStore, id: string, body: string): void {
-  const now = NOW;
+function insertGroundedTestMemory(
+  vault: MemoryVaultStore,
+  id: string,
+  body: string,
+  now = NOW,
+): void {
   vault.insertMemory({
     id: id as MemoryId,
     schemaVersion: "1",
@@ -2527,6 +2531,7 @@ describe("handleGroundedAsk", () => {
         memoryVault,
         rememberedId,
         "The current release requires an explicit readiness check.",
+        Date.now(),
       );
       memoryVault.upsertEmbedding(rememberedId, {
         provider: memoryEmbeddingProviderIdentity(embeddingProvider),
