@@ -853,10 +853,7 @@ describe("a pronoun for the person's own thing", () => {
 
   it.each([
     ["My packing slips always start with a number.", "I've got a rule for my packing lists."],
-    [
-      "My elderly parents always start with a number.",
-      "I've got a rule for my elderly parents.",
-    ],
+    ["My elderly parents always start with a number.", "I've got a rule for my elderly parents."],
   ])(
     "refuses a mismatched compound or an owned third-party reference",
     (body, previousUserText) => {
