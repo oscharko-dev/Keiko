@@ -97,6 +97,11 @@ function storedDocument(
   };
 }
 
+/**
+ * A binding the server wrote is a new revision of the open file. It replaces only the saved baseline
+ * of the exact revision it was written over; the document key stays, so the editor keeps its state,
+ * and text typed since stays the person's newer work instead of being replaced by the bound copy.
+ */
 function adoptBinding(
   current: SkillWorkspaceView,
   previousRevision: number,

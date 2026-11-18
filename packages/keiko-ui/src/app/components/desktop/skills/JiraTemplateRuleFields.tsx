@@ -5,6 +5,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   JIRA_ISSUE_TEMPLATE_LIMITS,
+  resolveJiraTemplateFieldIds,
+  type JiraIssueTemplate,
   type JiraTemplateForm,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
@@ -23,6 +25,8 @@ interface ListFieldProps {
   readonly options: readonly RuleChoice[];
   readonly max: number;
   readonly display: (value: string) => string;
+  /** Whether Jira offers what a written value names; a value it does not offer is marked. */
+  readonly offered?: ((value: string) => boolean) | undefined;
   readonly onChange: (values: readonly string[]) => void;
 }
 
@@ -33,6 +37,7 @@ function ListField({
   options,
   max,
   display,
+  offered,
   onChange,
 }: ListFieldProps): ReactNode {
   const t = useTranslate();
@@ -61,7 +66,7 @@ function ListField({
       <span className={styles.cmpHelp} id={`${id}-help`}>
         {help}
       </span>
-      <RuleValues values={values} display={display} onChange={onChange} />
+      <RuleValues values={values} display={display} offered={offered} onChange={onChange} />
     </div>
   );
 }
@@ -69,15 +74,23 @@ function ListField({
 function RuleValues({
   values,
   display,
+  offered,
   onChange,
-}: Pick<ListFieldProps, "values" | "display" | "onChange">): ReactNode {
+}: Pick<ListFieldProps, "values" | "display" | "offered" | "onChange">): ReactNode {
   const t = useTranslate();
   if (values.length === 0) return null;
   return (
     <ul className={styles.cmpRuleValues}>
       {values.map((value, index) => (
-        <li key={`${value}:${String(index)}`}>
-          <span>{display(value)}</span>
+        <li
+          key={`${value}:${String(index)}`}
+          data-offered={offered === undefined ? undefined : String(offered(value))}
+        >
+          <span>
+            {offered === undefined || offered(value)
+              ? display(value)
+              : t("chat.skills.jira.form.notOffered", { subject: display(value) })}
+          </span>
           <button
             type="button"
             aria-label={t("chat.skills.jira.form.remove", { subject: display(value) })}
@@ -97,8 +110,27 @@ function appliesToWrites(value: string): boolean {
 
 type Translate = ReturnType<typeof useTranslate>;
 
-function fieldName(fields: readonly JiraTemplateFieldOption[], value: string): string {
-  return fields.find((field) => field.id === value)?.name ?? value;
+/** Jira's name for the one field a written reference names, by the gate's rule; else the reference. */
+function fieldName(
+  fields: readonly JiraTemplateFieldOption[],
+  value: string,
+  template: JiraIssueTemplate | undefined,
+): string {
+  const ids = resolveJiraTemplateFieldIds(value, fields, template);
+  const only = ids.length === 1 ? fields.find((field) => field.id === ids[0]) : undefined;
+  return only?.name ?? value;
+}
+
+/** The fields no written reference already names, so one field is never offered twice. */
+function unwrittenFields(
+  fields: readonly JiraTemplateFieldOption[],
+  written: readonly string[],
+  template: JiraIssueTemplate | undefined,
+): readonly JiraTemplateFieldOption[] {
+  const named = new Set(
+    written.flatMap((value) => resolveJiraTemplateFieldIds(value, fields, template)),
+  );
+  return fields.filter((field) => !named.has(field.id));
 }
 
 function fieldChoices(
@@ -130,6 +162,8 @@ function statusChoices(
 
 interface RuleFieldsProps {
   readonly form: JiraTemplateForm;
+  /** The whole template as it governs this Jira, once it reads; its binding names fields by id. */
+  readonly template: JiraIssueTemplate | undefined;
   readonly details: JiraOptionsRead;
   readonly onChange: (patch: Partial<JiraTemplateForm>) => void;
 }
@@ -174,7 +208,7 @@ function ActivationField({ form, details, onChange }: RuleFieldsProps): ReactNod
   );
 }
 
-function FieldRequirement({ form, details, onChange }: RuleFieldsProps): ReactNode {
+function FieldRequirement({ form, template, details, onChange }: RuleFieldsProps): ReactNode {
   const t = useTranslate();
   const fields =
     details.state === "ready" && details.options.kind === "details"
@@ -189,9 +223,15 @@ function FieldRequirement({ form, details, onChange }: RuleFieldsProps): ReactNo
       label={t("chat.skills.jira.form.addField")}
       help={t(hint)}
       values={form.requiredFields}
-      options={fieldChoices(fields ?? [], t)}
+      options={fieldChoices(unwrittenFields(fields ?? [], form.requiredFields, template), t)}
       max={JIRA_ISSUE_TEMPLATE_LIMITS.listItems}
-      display={(value) => fieldName(fields ?? [], value)}
+      display={(value) => fieldName(fields ?? [], value, template)}
+      offered={
+        fields === undefined
+          ? undefined
+          : (value: string): boolean =>
+              resolveJiraTemplateFieldIds(value, fields, template).length > 0
+      }
       onChange={(requiredFields) => onChange({ requiredFields })}
     />
   );

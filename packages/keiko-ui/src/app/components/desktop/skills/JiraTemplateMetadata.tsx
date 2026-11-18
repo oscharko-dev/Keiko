@@ -8,6 +8,7 @@ import {
   jiraTemplateIssueTypeMatches,
   JIRA_ISSUE_TEMPLATE_LIMITS,
   parseJiraIssueTemplate,
+  type JiraIssueTemplate,
   type JiraTemplateForm,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
@@ -21,19 +22,29 @@ interface MetadataProps {
   readonly markdown: string;
   readonly onChange: (value: string) => void;
   readonly podId: string | undefined;
+  /** The text below does not read as rules right now: this is the last form that did, held still. */
+  readonly stale: boolean;
 }
 
 type Translate = ReturnType<typeof useTranslate>;
 
+/** The template as it governs this Jira, once the whole document reads; a draft has none yet. */
+function governingTemplate(
+  markdown: string,
+  instanceId: string | undefined,
+): JiraIssueTemplate | undefined {
+  const parsed = parseJiraIssueTemplate(markdown);
+  return parsed.ok ? jiraTemplateForInstance(parsed.template, instanceId) : undefined;
+}
+
 function matchingType(
   options: readonly JiraTemplateNamedOption[],
   issueType: string,
-  markdown: string,
-  instanceId: string | undefined,
+  template: JiraIssueTemplate | undefined,
 ): JiraTemplateNamedOption | undefined {
-  const parsed = parseJiraIssueTemplate(markdown);
-  const template = parsed.ok ? jiraTemplateForInstance(parsed.template, instanceId) : { issueType };
-  const matches = options.filter((option) => jiraTemplateIssueTypeMatches(template, option));
+  const matches = options.filter((option) =>
+    jiraTemplateIssueTypeMatches(template ?? { issueType }, option),
+  );
   return matches.length === 1 ? matches[0] : undefined;
 }
 
@@ -185,10 +196,22 @@ function IssueTypeChoice({
   );
 }
 
-export function JiraTemplateMetadata(props: MetadataProps): ReactNode {
-  const t = useTranslate();
-  const id = useId();
-  const { podId, form } = props;
+interface MetadataReads {
+  readonly project: string;
+  readonly projects: JiraOptionsRead;
+  readonly typesRead: JiraOptionsRead;
+  readonly choices: readonly JiraTemplateNamedOption[];
+  readonly template: JiraIssueTemplate | undefined;
+  readonly selected: JiraTemplateNamedOption | undefined;
+  readonly details: JiraOptionsRead;
+}
+
+/** The three Jira reads the form needs, each one asked only once the choice before it is made. */
+function useMetadataReads(
+  podId: string | undefined,
+  form: JiraTemplateForm,
+  markdown: string,
+): MetadataReads {
   const project = form.project.trim().toUpperCase();
   const projects = useJiraTemplateOptions(podId);
   const typesRead = useJiraTemplateOptions(project === "" ? undefined : podId, project);
@@ -197,11 +220,36 @@ export function JiraTemplateMetadata(props: MetadataProps): ReactNode {
       ? typesRead.options
       : undefined;
   const choices = types?.issueTypes ?? [];
-  const selected = matchingType(choices, form.issueType, props.markdown, types?.instanceId);
+  const template = governingTemplate(markdown, types?.instanceId);
+  const selected = matchingType(choices, form.issueType, template);
   const details = useJiraTemplateOptions(
     selected === undefined ? undefined : podId,
     project,
     selected?.id,
+  );
+  return { project, projects, typesRead, choices, template, selected, details };
+}
+
+function MetadataNotices({ podId, stale }: Pick<MetadataProps, "podId" | "stale">): ReactNode {
+  const t = useTranslate();
+  return (
+    <>
+      {podId === undefined ? <output>{t("chat.skills.jira.form.connect")}</output> : null}
+      {stale ? (
+        <output className={styles.cmpHelp}>{t("chat.skills.jira.form.invalid")}</output>
+      ) : null}
+    </>
+  );
+}
+
+export function JiraTemplateMetadata(props: MetadataProps): ReactNode {
+  const t = useTranslate();
+  const id = useId();
+  const { podId, form } = props;
+  const { project, projects, typesRead, choices, template, selected, details } = useMetadataReads(
+    podId,
+    form,
+    props.markdown,
   );
   const edit = (patch: Partial<JiraTemplateForm>): void =>
     props.onChange(editJiraTemplateForm(props.value, patch));
@@ -213,22 +261,29 @@ export function JiraTemplateMetadata(props: MetadataProps): ReactNode {
   return (
     <section className={styles.cmpForm} aria-labelledby={id}>
       <h4 id={id}>{t("chat.skills.jira.form.title")}</h4>
-      {podId === undefined ? <output>{t("chat.skills.jira.form.connect")}</output> : null}
-      <div className={styles.cmpChoices}>
-        <ProjectChoice
-          project={project}
-          read={projects}
-          onProject={(key) => edit({ project: key, issueType: "" })}
+      <MetadataNotices podId={podId} stale={props.stale} />
+      <fieldset className={styles.cmpFieldset} disabled={props.stale}>
+        <div className={styles.cmpChoices}>
+          <ProjectChoice
+            project={project}
+            read={projects}
+            onProject={(key) => edit({ project: key, issueType: "" })}
+          />
+          <IssueTypeChoice
+            read={typesRead}
+            types={choices}
+            selected={selected}
+            issueType={form.issueType}
+            onType={(issueType) => edit({ issueType })}
+          />
+        </div>
+        <JiraTemplateRuleFields
+          form={form}
+          template={template}
+          details={details}
+          onChange={editRules}
         />
-        <IssueTypeChoice
-          read={typesRead}
-          types={choices}
-          selected={selected}
-          issueType={form.issueType}
-          onType={(issueType) => edit({ issueType })}
-        />
-      </div>
-      <JiraTemplateRuleFields form={form} details={details} onChange={editRules} />
+      </fieldset>
     </section>
   );
 }

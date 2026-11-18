@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   joinMarkdownDocument,
   parseMarkdownDocument,
+  replaceMarkdownFrontMatter,
   serializeMarkdownDocument,
   splitMarkdownDocument,
   supportsFormattedEditing,
@@ -12,6 +13,24 @@ vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: diagnostics
 
 afterEach(() => {
   diagnostics.report.mockClear();
+});
+
+describe("replaceMarkdownFrontMatter", () => {
+  it("replaces only the front matter and keeps the fences, line endings and body as written", () => {
+    expect(replaceMarkdownFrontMatter("---\na: 1\n---\n# Body\n", "a: 2\nb: 3")).toBe(
+      "---\na: 2\nb: 3\n---\n# Body\n",
+    );
+    expect(replaceMarkdownFrontMatter("---\r\na: 1\r\n---\r\n# Body\r\n", "a: 2")).toBe(
+      "---\r\na: 2\r\n---\r\n# Body\r\n",
+    );
+    expect(replaceMarkdownFrontMatter("---\na: 1\n---", "")).toBe("---\n\n---");
+  });
+
+  it("leaves a document without front matter unchanged", () => {
+    expect(replaceMarkdownFrontMatter("# Body\n---\na: 1\n---\n", "b: 2")).toBe(
+      "# Body\n---\na: 1\n---\n",
+    );
+  });
 });
 
 describe("splitMarkdownDocument / joinMarkdownDocument", () => {

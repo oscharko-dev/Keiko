@@ -302,6 +302,28 @@ describe("guided Jira template options", () => {
     expect(http).toHaveBeenCalledOnce();
     expect(http.mock.calls[0]?.[0].url).toMatch(/\/project\/SYN$/u);
   });
+
+  it.each([
+    ["a path in the project key", { projectKey: "../SYN" }],
+    ["a slash in the project key", { projectKey: "SYN/1" }],
+    ["an empty project key", { projectKey: "" }],
+    ["a key starting with a digit", { projectKey: "1SYN" }],
+    ["an over-long project key", { projectKey: `S${"Y".repeat(128)}` }],
+    ["a project key that is no string", { projectKey: 7 }],
+    ["an issue type without a project", { issueTypeId: "10001" }],
+    ["an issue type id of zero", { projectKey: "SYN", issueTypeId: "0" }],
+    ["an issue type id with letters", { projectKey: "SYN", issueTypeId: "1a" }],
+    ["an over-long issue type id", { projectKey: "SYN", issueTypeId: "1".repeat(20) }],
+    ["an issue type id that is no string", { projectKey: "SYN", issueTypeId: 10001 }],
+  ])("refuses %s before Jira is asked", async (_case, selection) => {
+    const { deps, cookie, http } = fixture();
+    const result = await handleJiraTemplateOptions(
+      context(cookie, { podId: POD, ...selection }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(http).not.toHaveBeenCalled();
+  });
 });
 
 describe("template documents in the skill library", () => {

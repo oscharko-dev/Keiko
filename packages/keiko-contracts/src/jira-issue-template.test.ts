@@ -56,6 +56,33 @@ describe("guided Jira template metadata", () => {
     });
   });
 
+  it("drops every binding line with a project or issue type edit, and keeps it for a rule edit", () => {
+    const bound = [
+      ...VALID,
+      "requiredFields: [Team]",
+      'issueTypeId: "10002"',
+      'parentIssueTypeIds: ["10000"]',
+      'requiredFieldIds: ["customfield_1"]',
+      'parentFieldId: "customfield_2"',
+      "transitionStatusIds:",
+      '  - "3"',
+      `jiraBinding: "${"a".repeat(32)}"`,
+      "# Keep this comment.",
+    ].join("\n");
+    const bindingLine =
+      /issueTypeId|parentIssueTypeIds|requiredFieldIds|parentFieldId|transitionStatusIds|jiraBinding/u;
+    for (const patch of [{ project: "OTHER" }, { issueType: "Bug" }]) {
+      const edited = editJiraTemplateForm(bound, patch);
+      expect(edited).not.toMatch(bindingLine);
+      expect(edited).not.toContain('  - "3"');
+      expect(edited).toContain("requiredFields: [Team]");
+      expect(edited).toContain("# Keep this comment.");
+    }
+    const rules = editJiraTemplateForm(bound, { requiredFields: ["Team", "Owner"] });
+    expect(rules).toContain('issueTypeId: "10002"');
+    expect(rules).toContain(`jiraBinding: "${"a".repeat(32)}"`);
+  });
+
   it("leaves malformed or unrelated metadata to the source editor", () => {
     expect(readJiraTemplateForm("name: Example")).toBeUndefined();
     expect(readJiraTemplateForm([...VALID, 'project: ""'].join("\n"))).toBeUndefined();

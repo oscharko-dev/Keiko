@@ -9,6 +9,7 @@ import {
   jiraTemplateParentEntryMatches,
   jiraTemplateParentTypeMatches,
   parseJiraIssueTemplate,
+  resolveJiraTemplateFieldIds,
   type JiraIssueTemplate,
   type JiraTemplateBinding,
   type JiraTemplateBindingIds,
@@ -248,6 +249,23 @@ describe("the one matchers", () => {
     const partly = template(bindJiraIssueTemplateText(PLAIN, half) ?? "");
     expect(jiraTemplateBoundFieldId(partly, "Fälligkeitsdatum")).toBeUndefined();
     expect(jiraTemplateBoundFieldId(partly, "Priorität")).toBe("priority");
+  });
+
+  it("resolve a field reference by its bound id, else an exact id, else every same-named field", () => {
+    const catalog = [
+      { id: "duedate", name: "Termin" },
+      { id: "priority", name: "Priorität" },
+      { id: "customfield_1", name: "Team" },
+      { id: "customfield_2", name: "team" },
+    ];
+    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog, bound)).toEqual(["duedate"]);
+    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog.slice(1), bound)).toEqual([]);
+    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog)).toEqual([]);
+    expect(resolveJiraTemplateFieldIds("customfield_1", catalog)).toEqual(["customfield_1"]);
+    expect(resolveJiraTemplateFieldIds(" TEAM ", catalog)).toEqual([
+      "customfield_1",
+      "customfield_2",
+    ]);
   });
 
   it("name the status id a bound template carries for a transition target, and nothing for a typed id", () => {

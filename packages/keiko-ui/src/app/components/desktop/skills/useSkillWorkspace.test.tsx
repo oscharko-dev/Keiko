@@ -384,16 +384,72 @@ describe("Jira starter templates", () => {
     source.open = true;
     yaml.focus();
     const original = yaml.value;
+    await waitFor(() => expect(jiraTemplates.fetchJiraTemplateOptions).toHaveBeenCalledOnce());
+    const guided = (): HTMLElement | null =>
+      dialog.getByRole("combobox", { name: "Jira project" }).closest("fieldset");
 
+    // A half-typed list holds the last form that read, disabled, instead of removing it.
     fireEvent.change(yaml, { target: { value: original + '\nrequiredFields: ["' } });
     expect(yaml).toHaveFocus();
     expect(source.open).toBe(true);
-    expect(dialog.queryByRole("combobox", { name: "Jira project" })).toBeNull();
+    expect(guided()).toBeDisabled();
+    expect(dialog.getByText(/^Correct the rules in the text below/u)).toBeVisible();
 
     fireEvent.change(yaml, { target: { value: original + '\nrequiredFields: ["description"]' } });
-    await dialog.findByRole("combobox", { name: "Jira project" });
+    await waitFor(() => expect(guided()).toBeEnabled());
+    expect(dialog.queryByText(/^Correct the rules in the text below/u)).toBeNull();
     expect(yaml).toHaveFocus();
     expect(source.open).toBe(true);
+    // The held form kept its reads: nothing asked Jira again for the same project list.
+    expect(jiraTemplates.fetchJiraTemplateOptions).toHaveBeenCalledOnce();
+  });
+
+  it("marks a required field the selected issue type does not offer and never offers a written field twice", async () => {
+    seedStore([]);
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+    vi.mocked(jiraTemplates.fetchJiraTemplateOptions).mockImplementation((selection) => {
+      if (selection.issueTypeId !== undefined)
+        return Promise.resolve({
+          kind: "details",
+          fields: [
+            { id: "customfield_10016", name: "Fachlicher Ansprechpartner", required: false },
+            { id: "duedate", name: "Fälligkeitsdatum", required: true },
+          ],
+          statuses: [],
+        });
+      if (selection.projectKey !== undefined)
+        return Promise.resolve({
+          kind: "types",
+          instanceId: "synthetic-instance",
+          issueTypes: [{ id: "1", name: "Aufgabe" }],
+        });
+      return Promise.resolve({ kind: "projects", projects: [{ key: "LAB", name: "Lab project" }] });
+    });
+    const dialog = within(await openDialog());
+    fireEvent.click(dialog.getByRole("button", { name: "Jira Issue" }));
+    const yaml = dialog.getByLabelText<HTMLTextAreaElement>("Metadata (YAML)");
+    fireEvent.change(yaml, {
+      target: {
+        value: yaml.value
+          .replace('project: ""', "project: LAB")
+          .replace("issueType: Task", "issueType: Aufgabe")
+          .concat('\nrequiredFields: ["Gone field", "fachlicher ansprechpartner"]'),
+      },
+    });
+    fireEvent.click(dialog.getByText("Template rules"));
+
+    const gone = await dialog.findByText(
+      "Gone field (not offered for this issue type)",
+      {},
+      { timeout: 3000 },
+    );
+    expect(gone.closest("li")).toHaveAttribute("data-offered", "false");
+    // A reference written by name shows Jira's own name and counts as that field.
+    const known = dialog.getByText("Fachlicher Ansprechpartner");
+    expect(known.closest("li")).toHaveAttribute("data-offered", "true");
+    const add = within(dialog.getByRole("combobox", { name: "Add required field" }));
+    expect(add.queryByRole("option", { name: "Fachlicher Ansprechpartner" })).toBeNull();
+    expect(add.getByRole("option", { name: "Fälligkeitsdatum (required by Jira)" })).toBeVisible();
   });
 
   it("keeps the user's draft if the Pod is removed while confirming a switch", async () => {
@@ -1003,5 +1059,27 @@ describe("a saved text the server normalized", () => {
     act(() => result.current.adoptBinding(1, { ...bound, body: "Late reply" }));
     expect(result.current.view).toMatchObject({ document: { saved: bound.body } });
     expect(result.current.canSave).toBe(true);
+  });
+
+  it("adopts a binding into a clean file under the same key and ignores one for another skill", () => {
+    const { result, rerender } = renderHook(
+      ({ preview }: { preview: MarkdownSkillDocument | undefined }) =>
+        useSkillWorkspace(fakeLibrary(preview)),
+      { initialProps: { preview: undefined as MarkdownSkillDocument | undefined } },
+    );
+    act(() => result.current.open(REVIEW));
+    rerender({ preview: REVIEW });
+    const opened = result.current.view;
+    if (opened.kind !== "document") throw new TypeError("expected a document");
+    act(() => result.current.adoptBinding(1, { ...PLAN, revision: 2, body: "Foreign" }));
+    expect(result.current.view).toMatchObject({ document: { text: REVIEW.body } });
+
+    const bound = { ...REVIEW, revision: 2, body: "Stored binding" };
+    act(() => result.current.adoptBinding(1, bound));
+    expect(result.current.view).toMatchObject({
+      kind: "document",
+      document: { key: opened.document.key, stored: bound, text: bound.body, saved: bound.body },
+    });
+    expect(result.current.dirty).toBe(false);
   });
 });

@@ -440,12 +440,23 @@ export function readJiraTemplateForm(frontMatter: string): JiraTemplateForm | un
   };
 }
 
+/** The lines a binding writes. A form edit of the project or issue type removes all of them. */
+const BINDING_KEYS: readonly TemplateKey[] = [
+  "issueTypeId",
+  "parentIssueTypeIds",
+  "requiredFieldIds",
+  "parentFieldId",
+  "transitionStatusIds",
+  "jiraBinding",
+];
+
 function formUpdateLines(patch: Partial<JiraTemplateForm>): Map<string, string | undefined> {
   const updates = new Map<string, string | undefined>(
     Object.entries(patch).map(([key, value]) => [key, `${key}: ${JSON.stringify(value)}`]),
   );
+  // Ids resolved for another project or type are no one's binding; the next check binds afresh.
   if (patch.project !== undefined || patch.issueType !== undefined)
-    updates.set("jiraBinding", undefined);
+    for (const key of BINDING_KEYS) updates.set(key, undefined);
   return updates;
 }
 
@@ -1020,6 +1031,23 @@ export function jiraTemplateBoundFieldId(
   const index = template.requiredFields.findIndex((field) => sameName(field, reference));
   const id = index >= 0 ? binding.requiredFieldIds?.[index] : parentFieldIdOf(template, reference);
   return id === undefined || id === JIRA_BINDING_UNRESOLVED ? undefined : id;
+}
+
+/**
+ * Ids a template reference names. A field the template is bound to by id resolves to exactly that id
+ * (and to nothing when the catalog has no such field); otherwise an exact field id first, otherwise
+ * every same-named field. THE one rule: the write gate, the report and the guided editor ask here.
+ */
+export function resolveJiraTemplateFieldIds(
+  reference: string,
+  catalog: readonly { readonly id: string; readonly name: string }[],
+  template?: Pick<JiraIssueTemplate, "binding" | "requiredFields" | "parent">,
+): readonly string[] {
+  const bound = template === undefined ? undefined : jiraTemplateBoundFieldId(template, reference);
+  if (bound !== undefined) return catalog.some((entry) => entry.id === bound) ? [bound] : [];
+  const exact = catalog.filter((entry) => entry.id === reference);
+  if (exact.length > 0) return exact.map((entry) => entry.id);
+  return catalog.filter((entry) => sameName(entry.name, reference)).map((entry) => entry.id);
 }
 
 /** The bound parent-link field id, when the reference names the template's parent field. */

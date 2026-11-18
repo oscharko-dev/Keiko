@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   MARKDOWN_SKILL_LIMITS,
   type MarkdownSkillMetadata,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  isJiraIssueTemplateDocument,
   readJiraTemplateForm,
   type JiraTemplateForm,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -119,17 +120,57 @@ function formComplete(form: JiraTemplateForm | undefined): boolean {
   );
 }
 
+interface GuidedForm {
+  readonly form: JiraTemplateForm;
+  /** The front matter does not read right now; `form` is the last one of this document that did. */
+  readonly stale: boolean;
+}
+
+interface ReadForm {
+  readonly key: string;
+  readonly frontMatter: string;
+  readonly form: JiraTemplateForm;
+}
+
+/**
+ * The guided form of the open template. While its text is half typed (an open list, a stray quote)
+ * the last form that read stays in view, disabled, so the choices neither vanish nor ask Jira again.
+ */
+function useGuidedForm(
+  document: SkillDocument,
+  frontMatter: string | undefined,
+): { readonly current: JiraTemplateForm | undefined; readonly guided: GuidedForm | undefined } {
+  const current = useMemo(
+    () => (frontMatter === undefined ? undefined : readJiraTemplateForm(frontMatter)),
+    [frontMatter],
+  );
+  const [last, setLast] = useState<ReadForm>();
+  if (
+    current !== undefined &&
+    frontMatter !== undefined &&
+    (last?.key !== document.key || last.frontMatter !== frontMatter)
+  )
+    setLast({ key: document.key, frontMatter, form: current });
+  if (current !== undefined) return { current, guided: { form: current, stale: false } };
+  const held =
+    last?.key === document.key && isJiraIssueTemplateDocument(document.text)
+      ? { form: last.form, stale: true }
+      : undefined;
+  return { current, guided: held };
+}
+
 function metadataEditor(
-  form: JiraTemplateForm | undefined,
+  guided: GuidedForm | undefined,
   markdown: string,
   jira: JiraTemplates,
 ): Pick<MarkdownEditorProps, "renderFrontMatter"> {
-  if (form === undefined) return {};
+  if (guided === undefined) return {};
   return {
     renderFrontMatter: (field) => (
       <JiraTemplateMetadata
         {...field}
-        form={form}
+        form={guided.form}
+        stale={guided.stale}
         markdown={markdown}
         podId={jira.podReady ? jira.podId : undefined}
       />
@@ -142,8 +183,8 @@ function DocumentEditor(props: PaneProps & { readonly document: SkillDocument })
   const { document, workspace } = props;
   const template = isTemplate(document, props.jira);
   const frontMatter = splitMarkdownDocument(document.text).frontMatter;
-  const form = frontMatter === undefined ? undefined : readJiraTemplateForm(frontMatter);
-  const canSave = workspace.canSave && formComplete(form);
+  const { current, guided } = useGuidedForm(document, frontMatter);
+  const canSave = workspace.canSave && formComplete(current);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
@@ -166,7 +207,7 @@ function DocumentEditor(props: PaneProps & { readonly document: SkillDocument })
           placeholder={t("chat.skills.editorPlaceholder")}
           maxLength={MARKDOWN_SKILL_LIMITS.importBytes}
           selectTitleOnOpen={document.stored === undefined}
-          {...metadataEditor(form, document.text, props.jira)}
+          {...metadataEditor(guided, document.text, props.jira)}
         />
       </div>
       {skillTextFits(document.text) ? null : (

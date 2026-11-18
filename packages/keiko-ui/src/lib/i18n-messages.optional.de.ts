@@ -2878,6 +2878,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.form.requiredByJira": "{subject} (Jira-Pflichtfeld)",
   "chat.skills.jira.form.choose": "Option auswählen",
   "chat.skills.jira.form.remove": "{subject} entfernen",
+  "chat.skills.jira.form.notOffered": "{subject} (für diesen Vorgangstyp nicht angeboten)",
+  "chat.skills.jira.form.invalid":
+    "Korrigiere die Regeln im Text darunter; die Auswahl folgt wieder, sobald sie stimmen.",
   "chat.skills.jira.starter.epic":
     "## Ziel\n\nBeschreibe das Ziel des Epics.\n\n## Umfang\n\nListe die enthaltenen Arbeiten auf.\n\n## Akzeptanzkriterien\n\nBeschreibe, wie sich überprüfen lässt, ob das Ziel erreicht wurde.",
   "chat.skills.jira.starter.issue":

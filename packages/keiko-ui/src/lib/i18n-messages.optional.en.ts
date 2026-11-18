@@ -2718,6 +2718,9 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.form.requiredByJira": "{subject} (required by Jira)",
   "chat.skills.jira.form.choose": "Select an option",
   "chat.skills.jira.form.remove": "Remove {subject}",
+  "chat.skills.jira.form.notOffered": "{subject} (not offered for this issue type)",
+  "chat.skills.jira.form.invalid":
+    "Correct the rules in the text below; the choices follow again once they read correctly.",
   "chat.skills.jira.starter.epic":
     "## Objective\n\nDescribe the goal of the epic.\n\n## Scope\n\nList the work included.\n\n## Acceptance criteria\n\nDescribe how to verify the goal is met.",
   "chat.skills.jira.starter.issue":

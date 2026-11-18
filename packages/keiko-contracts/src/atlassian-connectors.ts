@@ -2130,6 +2130,7 @@ export {
   jiraTemplateBindingDigest,
   jiraTemplateBoundFieldId,
   jiraTemplateBoundStatusId,
+  resolveJiraTemplateFieldIds,
   jiraTemplateTransitionTargets,
   jiraTemplateForInstance,
   jiraTemplateGovernsWrites,

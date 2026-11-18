@@ -2,7 +2,6 @@ import {
   JIRA_TEMPLATE_VIOLATIONS_MAX,
   compileJiraTemplatePattern,
   jiraIssueTemplateLabel,
-  jiraTemplateBoundFieldId,
   jiraTemplateBoundStatusId,
   jiraTemplateIssueTypeMatches,
   jiraTemplateParentEntryMatches,
@@ -10,10 +9,13 @@ import {
   normalizeJiraSectionHeading,
   readJiraDescriptionSections,
   projectJiraDescriptionInput,
+  resolveJiraTemplateFieldIds,
   type JiraIssueTemplate,
   type JiraTemplateActivation,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+
+export { resolveJiraTemplateFieldIds };
 
 /**
  * The single pure template checker (#4177). Write admission (create, edit, transition), the
@@ -155,23 +157,6 @@ export function jiraTemplatesNeedingTransitionNames(
           !activationMatches(activation, subject, template),
       ),
   );
-}
-
-/**
- * Ids a template reference names. A field the template is bound to by id resolves to exactly that id
- * (and to nothing when the instance has no such field); otherwise an exact field id first, otherwise
- * every same-named field.
- */
-export function resolveJiraTemplateFieldIds(
-  reference: string,
-  catalog: readonly JiraFieldCatalogEntry[],
-  template?: Pick<JiraIssueTemplate, "binding" | "requiredFields" | "parent">,
-): readonly string[] {
-  const bound = template === undefined ? undefined : jiraTemplateBoundFieldId(template, reference);
-  if (bound !== undefined) return catalog.some((entry) => entry.id === bound) ? [bound] : [];
-  const exact = catalog.filter((entry) => entry.id === reference);
-  if (exact.length > 0) return exact.map((entry) => entry.id);
-  return catalog.filter((entry) => same(entry.name, reference)).map((entry) => entry.id);
 }
 
 /**

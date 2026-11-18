@@ -183,6 +183,13 @@ Chromium cases passed in 1.5 minutes in the Linux gates container with an init p
 26.13.1, and `npm run check:update-ui-evidence` passes. Only the three records were kept; the 14
 committed screenshots, updater assertions and harness inputs retain their existing values.
 
+The guided Jira template metadata (PR #4466, integrated in PR #4464) added two strings to both
+optional catalogs: the notice for a held form while its rules do not read, and the mark for a
+required field the selected issue type does not offer. On 2026-11-18 (UTC) the original nine
+Chromium cases passed in 1.5 minutes in the Linux gates image with an init process and Node
+26.13.1, and `npm run check:update-ui-evidence` passes. Only the three records were kept; the 14
+committed screenshots, updater assertions and harness inputs retain their existing values.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
