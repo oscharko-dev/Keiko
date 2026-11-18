@@ -36,9 +36,13 @@ const staticPort =
   () =>
     Promise.resolve(response);
 
-const okResponse = (
-  document: unknown = { id: "12:34", name: "Release", type: "FRAME" },
-): FigmaHttpResponse => ({ status: 200, json: nodesResponse("12:34", document), headers: {} });
+const okDocument = (): unknown => ({ id: "12:34", name: "Release", type: "FRAME" });
+
+const okResponse = (document: unknown = okDocument()): FigmaHttpResponse => ({
+  status: 200,
+  json: nodesResponse("12:34", document),
+  headers: {},
+});
 
 describe("createFigmaConnector — scoped fetch", () => {
   it("calls GET /v1/files/:key/nodes with ids + depth, NEVER the whole-file endpoint", async () => {
@@ -72,6 +76,36 @@ describe("createFigmaConnector — scoped fetch", () => {
     expect(firstRequest(recorder).url).toContain("version=ver-999");
     expect(result.provenance.version).toBe("ver-999");
     expect(result.readiness).toEqual({ source: "version", ready: true, version: "ver-999" });
+  });
+
+  it("refuses a pinned fetch whose response reports another revision", async () => {
+    const response: FigmaHttpResponse = {
+      status: 200,
+      json: { ...(nodesResponse("12:34", okDocument()) as object), version: "ver-1000" },
+      headers: {},
+    };
+    const connector = createFigmaConnector({
+      http: staticPort(response),
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+
+    await expect(connector.fetchScopedNodes(URL_OK, { version: "ver-999" })).rejects.toMatchObject({
+      code: "FIGMA_SOURCE_CHANGED",
+    });
+  });
+
+  it("accepts a pinned fetch whose response repeats the pin or omits its revision", async () => {
+    for (const reported of ["ver-999", undefined]) {
+      const json = { ...(nodesResponse("12:34", okDocument()) as object), version: reported };
+      const connector = createFigmaConnector({
+        http: staticPort({ status: 200, json, headers: {} }),
+        env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      });
+
+      const result = await connector.fetchScopedNodes(URL_OK, { version: "ver-999" });
+
+      expect(result.provenance.version).toBe("ver-999");
+    }
   });
 
   it("returns the raw scoped node subtree plus provenance (no token)", async () => {

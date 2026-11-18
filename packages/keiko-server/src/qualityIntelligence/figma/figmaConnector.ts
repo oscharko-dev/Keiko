@@ -278,7 +278,19 @@ const fetchDocumentAt = async (
   if (response.status < 200 || response.status >= 300) {
     throw statusToError(response.status, response.json);
   }
-  return extractDocument(response.json, nodeId);
+  const scoped = extractDocument(response.json, nodeId);
+  assertPinnedRevision(version, scoped);
+  return scoped;
+};
+
+// A pinned fetch whose response names another revision is not the requested snapshot: the
+// provenance would label foreign content with the pin. A response without revision metadata stays
+// accepted, as before; only an explicit disagreement is refused.
+const assertPinnedRevision = (requested: string | undefined, scoped: ScopedDocument): void => {
+  if (requested === undefined || requested.length === 0) return;
+  if (scoped.version !== undefined && scoped.version !== requested) {
+    throw new FigmaConnectorError("FIGMA_SOURCE_CHANGED");
+  }
 };
 
 const provenanceFor = (target: FigmaTarget, options: FigmaFetchOptions): FigmaProvenance => ({

@@ -1700,7 +1700,9 @@ describe("update preflight service", () => {
         currentVersion: "1.5.3",
         bundledCatalog: baseCatalog(),
       });
-      expect(fetchImpl).toHaveBeenCalled();
+      expect(fetchImpl.mock.calls.map((call) => requestUrl(call[0]))).toContain(
+        "https://registry.npmjs.org/-/package/%40oscharko-dev%2Fkeiko/dist-tags",
+      );
       expect(report.blockers).not.toContainEqual(
         expect.objectContaining({ code: "portable-install-managed-externally" }),
       );
