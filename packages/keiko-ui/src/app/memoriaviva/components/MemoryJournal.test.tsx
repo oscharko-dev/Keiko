@@ -9,7 +9,7 @@ import {
   type MemoryRecentCapturesResponse,
 } from "@/lib/memory-api";
 import { MemoryJournal, orderJournalCaptures } from "./MemoryJournal";
-import { deferred } from "./test-support";
+import { deferred } from "./__tests__/test-support";
 
 function memoryId(value: string): MemoryId {
   return value as MemoryId;

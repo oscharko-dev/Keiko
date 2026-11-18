@@ -5,7 +5,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryDetail } from "./MemoryDetail";
-import { deferred } from "./test-support";
+import { deferred } from "./__tests__/test-support";
 import { PROFILE_EXCLUDED_MEMORY_TAG } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import {
   acceptMemoryProposal,

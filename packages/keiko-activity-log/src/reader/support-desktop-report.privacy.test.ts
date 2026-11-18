@@ -273,6 +273,38 @@ function expectPrivateEvidenceRemoved(
 }
 
 describe("desktop report privacy through real producers and compressed evidence", () => {
+  it("exports the Vault runtime frame and drops Vault test support frames", () => {
+    const runtimeFrame = "packages/keiko-ui/src/lib/memory-vault-view-changes.ts:12:3";
+    const testFrames = [
+      "packages/keiko-ui/src/app/memoriaviva/components/test-support.ts:12:3",
+      "packages/keiko-ui/src/app/memoriaviva/components/__tests__/test-support.ts:12:3",
+    ];
+    const error = new TypeError(FILE_BODY);
+    const frames = [runtimeFrame, ...testFrames];
+    error.stack = [
+      error.message,
+      ...frames.map((frame) => `    at notify (${REPOSITORY_PATH}/${frame})`),
+    ].join("\n");
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    defaultServerDiagnosticSink.record(
+      serverDiagnosticFromError({
+        operation: "files.read",
+        source: "files",
+        correlationId: ROOT_ID,
+        error,
+        redact: (message: string): string => message,
+      }),
+    );
+    sink.close?.();
+    const persisted = readPersistedActivityLog(stateDir);
+    for (const frame of frames) expect(persisted).toContain(frame);
+
+    const { reportJson } = createDesktopSupportReport(stateDir, ROOT_ID);
+    const extracted = inflateEvidence(parseSupportReport(reportJson));
+    expect(extracted).toContain(runtimeFrame);
+    for (const frame of testFrames) expect(extracted).not.toContain(frame);
+  });
+
   it("removes customer labels and content after decompression while preserving useful causality", async () => {
     const frames = await emitPrivateFailure();
     expectPersistedPrivateRedaction();

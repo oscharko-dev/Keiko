@@ -13,7 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryListContent } from "./MemoryList";
-import { deferred } from "./test-support";
+import { deferred } from "./__tests__/test-support";
 import type { MemoryFilterState } from "./MemoryFilters";
 import { forgetMemory, type MemoryListResponse } from "@/lib/memory-api";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";

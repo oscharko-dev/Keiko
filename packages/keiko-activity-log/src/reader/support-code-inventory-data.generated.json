@@ -3295,7 +3295,6 @@
     "keiko-ui/app/memoriaviva/components/MemoryList",
     "keiko-ui/app/memoriaviva/components/ReviewQueue",
     "keiko-ui/app/memoriaviva/components/format-error",
-    "keiko-ui/app/memoriaviva/components/test-support",
     "keiko-ui/app/page",
     "keiko-ui/app/relationships/RelationshipsView",
     "keiko-ui/app/relationships/api",
