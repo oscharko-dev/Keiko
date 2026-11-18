@@ -46,6 +46,17 @@ The first start runs `npm ci --ignore-scripts` with the folder as its `--prefix`
 `--workspaces=false`, so npm installs into this folder even when it lies inside another npm project
 or workspace, and never changes that project. npm installs exactly the versions in
 `package-lock.json` and checks every package against its sha512 integrity; no install script runs.
+The command line also fixes what an inherited `npm_config_*` variable or npm configuration could
+change: no dry run, no lockfile-only run, no global installation, the hoisted layout, and every
+production, optional and peer package (an inherited `omit=optional` would leave out the Coding
+runtime). After npm ends successfully, the start checks that every package the lockfile names for
+this computer is installed in its version; if one is missing, it records nothing as installed,
+names the package and keeps Keiko closed, so the next start installs again.
+
+Before npm runs, the start refuses an `npm-shrinkwrap.json` in the folder, which npm would install
+instead of `package-lock.json`, and a `node_modules` that is a link, a junction, a file or another
+account's folder, because `npm ci` first empties `node_modules` and would empty the folder a link
+points to.
 
 The lockfile is resolved against the public registry. The folder's `.npmrc` may name one other
 registry with a single `registry=` line; npm then loads the same packages from there (npm replaces
@@ -75,9 +86,13 @@ meanwhile is recorded in that lock: the start then does not open Keiko, or stops
 after it opened, also when Keiko reported a failure as it opened. A `Stop Keiko` after that stops
 the open Keiko as usual. A lock whose start was closed or crashed is taken over by the next start:
 its process no longer runs, or the lock was written before the computer started or more than an
-hour ago, since the system gives an ended start's process number to new processes. Each start and
-stop says how it ended. A later start installs again only when the lockfile changed or an earlier
-installation did not finish. Keiko then runs `keiko start`.
+hour ago, since the system gives an ended start's process number to new processes. npm's own
+process holds the lock as well while it installs, so a start window closed during an installation
+leaves the lock to that npm until it ends, and no second npm installs beside it. Each start and
+stop says how it ended. A later start installs again when the lockfile changed, an earlier
+installation did not finish, the installation record `node_modules/.keiko-npm-installed` is
+missing or Keiko's command line is not installed, for example after `node_modules` was deleted.
+Keiko then runs `keiko start`.
 
 The start declares Keiko managed outside the app, as the folder package does, whatever the
 computer's environment declares, so on Windows it sets up no gateway service and asks for no
@@ -153,10 +168,16 @@ An administrator can prepare the folder once, so that nobody in the team enters 
 3. **Access for everyone.** Double-click `system/Zugang speichern.command` (macOS) or
    `system\Zugang speichern.cmd` (Windows) and paste the token; it is not shown. The step reads the
    configuration Gateway Setup saved and replaces the keys sealed on this computer for the gateway
-   connection Gateway Setup verified (the models it set up, its voice models and a reranker on the
-   same address and header) with the token. A model or reranker with its own address, header or
-   key is not that connection: the step refuses before it asks for the token and names it, so one
-   token never goes to another service; write that connection's own key into the file instead. The
+   connection Gateway Setup verified (the models it set up, its voice models and the reranker it
+   wired on that connection, marked `"credentialOrigin": "gateway-connection"`) with the token. A
+   model or reranker whose key is sealed and that has its own address, header or key is not that
+   connection: the step refuses before it asks for the token and names it, so one token never goes
+   to another service. A key written into the file as `apiKey` stays as it is, so write that
+   connection's own key into the file instead. It
+   also refuses a model without an id or an address, and a key Keiko takes from an environment
+   variable of the administrator's computer (`KEIKO_MODEL_<ID>_API_KEY`, `KEIKO_RERANKER_API_KEY`,
+   `KEIKO_DEFAULT_API_KEY`), which Gateway Setup keeps out of the file: unset the variable, enter
+   the key in Gateway Setup and run the step again. The
    step writes `keiko.config.json` next to `Start Keiko` as one complete file, replacing an older one
    only when the new one is written; on macOS it is readable by its owner only, on Windows it takes
    the permissions of the folder. It refuses to run while `KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR`

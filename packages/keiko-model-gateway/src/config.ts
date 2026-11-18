@@ -2081,9 +2081,19 @@ function parseRerankerConfig(
     apiKey,
     apiKeyHeaderName: rerankerHeaderName(block, env),
     timeoutMs: rerankerTimeoutMs(block, env),
+    ...rerankerCredentialOrigin(block.credentialOrigin),
     ...(egress !== undefined ? { egress } : {}),
   };
   return config;
+}
+
+function rerankerCredentialOrigin(value: unknown): Pick<RerankerConfig, "credentialOrigin"> {
+  if (value === undefined) return {};
+  return {
+    credentialOrigin: requireEnum<"gateway-connection">(value, "reranker.credentialOrigin", [
+      "gateway-connection",
+    ]),
+  };
 }
 
 function parseFigmaConnectorConfig(raw: unknown): FigmaConnectorConfig | undefined {

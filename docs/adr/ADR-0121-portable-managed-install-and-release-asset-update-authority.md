@@ -1230,7 +1230,17 @@ by its integrity). It also carries the archive's native USearch addon and its li
 it as in the portable payload, so Knowledge Pods search with their ANN index. The first start runs
 `npm ci --ignore-scripts --prefix <folder> --workspaces=false`, so npm installs exactly those
 packages into the folder even inside another npm project or workspace, checks every integrity and
-runs no install script. The folder's `.npmrc` may name one global `registry`; it then wins over an
+runs no install script. The command line also pins `--dry-run=false`, `--package-lock-only=false`,
+`--global=false`, `--install-strategy=hoisted` and `--include` of production, optional and peer
+packages, so no inherited `npm_config_*` variable or npm configuration turns the run into one that
+installs nothing, installs elsewhere or omits this platform's Coding runtime. A successful npm exit
+is accepted only when every lockfile package meant for this computer (not a development or linked
+entry; `os` and `cpu` with npm's `!name` exclusions; a `libc` restriction is left to npm) is
+installed in its locked version; otherwise nothing is recorded as installed and the start names
+the missing package. Before npm runs, the start refuses an `npm-shrinkwrap.json`, which npm would
+install instead of the checked lockfile, and a `node_modules` that is not a real folder of the
+person's account inside the folder, since `npm ci` empties it first and would empty the target of a
+link or junction. The folder's `.npmrc` may name one global `registry`; it then wins over an
 inherited `npm_config_registry`, npm replaces the registry host while keeping every checksum, and a
 scoped `@scope:registry` line or a repeated `registry` is refused before npm runs. The file is read
 as npm reads it: keys keep their case, quotes and comments follow npm's ini rules, and `${NAME}` is
@@ -1251,14 +1261,19 @@ starts that find it so one takes it. A process number alone does not prove that 
 because the system reuses the numbers of ended processes (Windows soon after), so an owner written
 before the computer started (ten minutes of clock correction aside) or more than an hour ago no
 longer holds the lock; a start whose lock was taken over leaves the new lock alone when it ends.
-Renames of the lock folder are retried while Windows holds a passing handle in it. Every start holds
+Renames of the lock folder are retried while Windows holds a passing handle in it. npm's own process
+adds an owner entry of its own when it loads (`--import` of the launcher module with the lock
+folder as a query, which only adds that entry and removes it at exit), so a start that ends while
+npm still installs leaves the lock held until that npm ends. Every start holds
 the lock until Keiko is open, also one that installs nothing. `Stop Keiko` meanwhile adds its entry
 to the lock; the start releases the lock in one rename, reads the entry there and stops Keiko, also
 one that reported a failure as it opened, or does not open it when the Stop came first. A Stop that
 finds no lock stops the open Keiko itself. The start says how it ended (Keiko open, opened by
 another start of the folder, or stopped while it was being loaded), and the start and stop files
 add only a failure line. A marker holding the lockfile's SHA-256 skips the
-installation at later starts until the lockfile changes. The start then runs `keiko start` with the
+installation at later starts; the start installs again when the lockfile changes, the marker or
+Keiko's command line is missing (after `node_modules` was deleted) or an earlier installation did
+not finish. The start then runs `keiko start` with the
 same state directory and provisioned configuration as the folder package and pins the management
 declaration to `organization-managed` whatever the environment declared, so both the CLI and the
 server read the installation as managed outside the app. Install-mode detection reads that
@@ -1268,10 +1283,18 @@ then makes no registry or release request. An administrator's access step
 typed without echo, only the keys sealed for the gateway connection Gateway Setup verified: the
 primary provider, the providers it built on the same endpoint style, API version, base URL and key
 header (its discovered models and gateway-managed voice, whose capability is read as the gateway's
-loader merges it: the top-level `capabilities` entry, else the provider's own `capability`) and a
-reranker on that address and header.
-A provider or reranker with its own connection is refused before the token is read, so one token
-never reaches another service. The step refuses while `KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR`
+loader merges it: the top-level `capabilities` entry, else the provider's own `capability`) and the
+reranker on that address and header that Gateway Setup proved to share the gateway's credential.
+Address and header do not show whose key a sealed reference names, so Gateway Setup marks that
+reranker `credentialOrigin: "gateway-connection"` when it wires a discovered one or finds an owned
+one sharing the stored connection's endpoint, header and credential, and removes the mark
+otherwise; the gateway's loader accepts only that closed value.
+A provider or reranker with its own connection and a sealed key is refused before the token is
+read, so one token never reaches another service; a key written into the file as `apiKey` is
+neither replaced nor refused. So is a model without an id or an address, and a provider or
+reranker whose key Keiko takes from an environment variable of the administrator's computer
+(`KEIKO_MODEL_<ID>_API_KEY`, `KEIKO_RERANKER_API_KEY` or `KEIKO_DEFAULT_API_KEY`): Gateway Setup
+keeps such a key out of the file, so the team file would carry none. The step refuses while `KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR`
 names another configuration, and it writes `keiko.config.json` owner-readable through a temporary
 file that replaces the old one only when every byte is written and synced (a short write is
 continued, one that writes nothing fails); it is a step the administrator runs, never part

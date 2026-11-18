@@ -214,7 +214,12 @@ describe("an administrator's package", () => {
     const root = tempRoot();
     const sealed = JSON.stringify({
       providers: [{ modelId: "chat", baseUrl: "https://g.example.test", apiKey: "sk-kept" }],
-      reranker: { modelId: "rerank", baseUrl: "https://g.example.test", apiKeySecretRef: "cred:r" },
+      reranker: {
+        modelId: "rerank",
+        baseUrl: "https://g.example.test",
+        apiKeySecretRef: "cred:r",
+        credentialOrigin: "gateway-connection",
+      },
     });
     const options = { config: configFile(root, sealed) };
 
@@ -224,7 +229,12 @@ describe("an administrator's package", () => {
     });
     expect(
       JSON.parse(entriesByName(result.outputPath).get("Keiko/keiko.config.json")).reranker,
-    ).toEqual({ modelId: "rerank", baseUrl: "https://g.example.test", apiKey: "sk-team" });
+    ).toEqual({
+      modelId: "rerank",
+      baseUrl: "https://g.example.test",
+      credentialOrigin: "gateway-connection",
+      apiKey: "sk-team",
+    });
   });
 
   it.each([
@@ -239,6 +249,18 @@ describe("an administrator's package", () => {
         },
       },
       "rerank",
+    ],
+    [
+      "a reranker with its own sealed key on the gateway's endpoint",
+      {
+        providers: [{ modelId: "chat", baseUrl: "https://g.example.test", apiKeySecretRef: "c:1" }],
+        reranker: {
+          modelId: "own-rerank",
+          baseUrl: "https://g.example.test",
+          apiKeySecretRef: "r",
+        },
+      },
+      "own-rerank",
     ],
     [
       "a same-endpoint embedding with its own credential",

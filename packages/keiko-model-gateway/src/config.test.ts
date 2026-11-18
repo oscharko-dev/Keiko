@@ -476,6 +476,25 @@ describe("parseGatewayConfig", () => {
     });
   });
 
+  it("keeps a reranker's gateway-connection mark and refuses any other value", () => {
+    const reranker = {
+      modelId: "qwen3-reranker",
+      baseUrl: "https://litellm.local/v1",
+      apiKey: "rerank-secret",
+    };
+    const marked = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      reranker: { ...reranker, credentialOrigin: "gateway-connection" },
+    });
+    expect(marked.reranker?.credentialOrigin).toBe("gateway-connection");
+    expect(() =>
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        reranker: { ...reranker, credentialOrigin: "own" },
+      }),
+    ).toThrow(/reranker\.credentialOrigin/u);
+  });
+
   it("lets explicit reranker env vars override the config block", () => {
     const config = parseGatewayConfig(
       {

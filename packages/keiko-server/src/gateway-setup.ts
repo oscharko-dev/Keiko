@@ -7427,16 +7427,20 @@ function ownedReranker(input: SetupVerificationInput): RerankerConfig | undefine
 // discovered one does) follows a credential rotation or endpoint move like every other provider
 // that shared it: left behind, it would keep sending a dead token and silently degrade retrieval.
 // One with its own endpoint or credential keeps both — the freshly verified connection details
-// never travel to a connection they were not tested against.
+// never travel to a connection they were not tested against. Only the one proved to ride the
+// connection carries `credentialOrigin`, so a team export never hands the gateway token to a
+// reranker with its own key on the gateway's address (review finding on #4464).
 function rebasedReranker(input: SetupVerificationInput, reranker: RerankerConfig): RerankerConfig {
   if (!sharesStoredGatewayConnection(reranker, storedPrimaryGatewayProvider(input.stored))) {
-    return reranker;
+    const { credentialOrigin: _unproved, ...own } = reranker;
+    return own;
   }
   return {
     ...reranker,
     baseUrl: input.baseUrl,
     apiKey: input.apiKey,
     apiKeyHeaderName: input.apiKeyHeaderName,
+    credentialOrigin: "gateway-connection",
   };
 }
 
@@ -7451,6 +7455,7 @@ function discoveredRerankerBlockFor(
     apiKey: input.apiKey,
     apiKeyHeaderName: input.apiKeyHeaderName,
     timeoutMs: input.timeoutMs ?? DEFAULT_RERANKER_TIMEOUT_MS,
+    credentialOrigin: "gateway-connection",
   };
 }
 

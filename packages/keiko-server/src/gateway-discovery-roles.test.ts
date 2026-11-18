@@ -463,6 +463,8 @@ describe("reranker wiring from discovery", () => {
     expect(block).toMatchObject({ modelId: "house-reranker" });
     expect(block).toHaveProperty("apiKeySecretRef");
     expect(block).not.toHaveProperty("apiKey");
+    // The proof that it rides the verified connection survives the save, for a team export.
+    expect(block).toMatchObject({ credentialOrigin: "gateway-connection" });
   });
 
   it("does not wire a reranker that answers but ranks the wrong document first", async () => {
@@ -553,9 +555,68 @@ describe("reranker wiring from discovery", () => {
     expect(currentGatewayConfig(deps)?.reranker).toMatchObject({
       modelId: "house-reranker",
       apiKey: "rotated-token",
+      credentialOrigin: "gateway-connection",
     });
     // Already wired: the second run neither probes nor replaces it.
     expect(port.requests).toHaveLength(1);
+  });
+
+  it("marks a reranker that shares the gateway credential, also one saved before the mark", async () => {
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "qwen-chat", baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        reranker: {
+          modelId: "house-reranker",
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "token",
+        },
+      }),
+      true,
+    );
+    await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" }),
+      deps,
+    );
+    expect(currentGatewayConfig(deps)?.reranker).toMatchObject({
+      modelId: "house-reranker",
+      credentialOrigin: "gateway-connection",
+    });
+  });
+
+  it("never marks a reranker with its own key on the gateway's address and header", async () => {
+    // Review finding on PR #4464: a team export handed the gateway token to every reranker on the
+    // gateway's address and header, also one the operator gave its own key.
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "qwen-chat", baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        reranker: {
+          modelId: "operator-reranker",
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "operator-rerank-token",
+          // A mark written by hand proves nothing: setup compares the credential itself.
+          credentialOrigin: "gateway-connection",
+        },
+      }),
+      true,
+    );
+    await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" }),
+      deps,
+    );
+    const reranker = currentGatewayConfig(deps)?.reranker;
+    expect(reranker).toMatchObject({
+      modelId: "operator-reranker",
+      apiKey: "operator-rerank-token",
+    });
+    expect(reranker).not.toHaveProperty("credentialOrigin");
   });
 
   it("never moves a reranker with its own connection onto the gateway's new credential", async () => {

@@ -114,11 +114,15 @@ sees a setup dialog.
      --out-dir out
    ```
 
-   The builder replaces the sealed references of the gateway connection Gateway Setup verified
-   (its models, voice models and a reranker on the same address and header) with the key from the
-   named environment variable and writes `out/keiko-windows-x64.standalone-team.zip`. A provider
-   or reranker with its own address, header or key is refused, so the team key never reaches
-   another service; write that connection's own key into the file instead. Every provider in the file must name
+   The builder replaces the sealed references (`apiKeySecretRef`) of the gateway connection
+   Gateway Setup verified with the key from the named environment variable and writes
+   `out/keiko-windows-x64.standalone-team.zip`: its models, its voice models and the reranker
+   Gateway Setup wired on that connection, which it marks with
+   `"credentialOrigin": "gateway-connection"` (a reranker saved before that mark gets it when
+   Gateway Setup runs again). A sealed reference of any other provider or reranker, one with its own
+   address, header or key, is refused, so the team key never reaches another service. A key written
+   into the file as `apiKey` is not replaced and not refused: it stays that connection's own key,
+   so write a separate connection's key into the file that way. Every provider in the file must name
    its `modelId` and `baseUrl`: a package cannot rely on another computer's environment. A configuration that still refers to a
    key sealed on your computer is refused: on another computer that reference names nothing.
 

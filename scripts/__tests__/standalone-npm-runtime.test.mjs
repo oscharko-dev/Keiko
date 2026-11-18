@@ -32,7 +32,10 @@ import {
   acquireInstallLock,
   credentialScope,
   ensureInstalled,
+  environmentKeys,
   folderRegistry,
+  holdArgs,
+  holdInstallLock,
   homeOf,
   installArgs,
   installLockPath,
@@ -43,6 +46,7 @@ import {
   keikoEnv,
   lockfileDigest,
   main,
+  missingFromInstallation,
   needsToken,
   npmCliCandidates,
   npmEnv,
@@ -50,6 +54,7 @@ import {
   ownerExpired,
   publishPrivateFile,
   readHidden,
+  refuseForeignInstallTarget,
   releaseInstallLock,
   requestStop,
   runCommand,
@@ -135,6 +140,12 @@ function staleLock(root, pid, extra = [], writtenAt = "") {
 
 function endedPid() {
   return spawnSync(process.execPath, ["-e", ""]).pid;
+}
+
+// What a run call asked for: npm's `ci` behind the arguments that let npm hold the lock, or Keiko's
+// own command.
+function commandOf(call) {
+  return call[1].includes("ci") ? "ci" : call[1][1];
 }
 
 describe("the npm package start", () => {
@@ -303,6 +314,77 @@ describe("the npm package start", () => {
     expect(args).toContain("--replace-registry-host=npmjs");
     expect(args[args.indexOf("--cache") + 1]).toBe("/s/npm-cache-1");
     expect(args[args.indexOf("--logs-dir") + 1]).toBe(join("/s", "npm-logs"));
+    // Review finding on PR #4464 (P2): an inherited dry-run, package-lock-only or omit made
+    // `npm ci` succeed without installing, or leave out this platform's Coding runtime.
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "--dry-run=false",
+        "--package-lock-only=false",
+        "--global=false",
+        "--install-strategy=hoisted",
+        "--include=prod",
+        "--include=optional",
+        "--include=peer",
+      ]),
+    );
+  });
+
+  describe("the installation check against the lockfile", () => {
+    const lock = {
+      lockfileVersion: 3,
+      packages: {
+        "": { dependencies: { "@oscharko-dev/keiko": "1.5.3" } },
+        "node_modules/@oscharko-dev/keiko": { version: "1.5.3" },
+        "node_modules/@oscharko-dev/keiko-coding-runtime-darwin-arm64": {
+          version: "1.5.3",
+          optional: true,
+          os: ["darwin"],
+          cpu: ["arm64"],
+        },
+        "node_modules/not-on-windows": { version: "2.0.0", os: ["!win32"] },
+        "node_modules/devtool": { version: "1.0.0", dev: true },
+        "node_modules/musl-only": { version: "1.0.0", os: ["linux"], libc: ["musl"] },
+        "node_modules/@oscharko-dev/keiko/node_modules/nested": { version: "3.0.0" },
+      },
+    };
+
+    function lockedRoot() {
+      const root = packageRoot();
+      writeFileSync(join(root, "package-lock.json"), JSON.stringify(lock));
+      return root;
+    }
+
+    function installPackage(root, lockPath, version) {
+      const folder = join(root, ...lockPath.split("/"));
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(join(folder, "package.json"), JSON.stringify({ version }));
+    }
+
+    it("names every package the lockfile promises this computer that is not installed", () => {
+      const root = lockedRoot();
+      installPackage(root, "node_modules/@oscharko-dev/keiko", "1.5.3");
+      installPackage(root, "node_modules/@oscharko-dev/keiko/node_modules/nested", "3.0.0");
+      installPackage(root, "node_modules/not-on-windows", "1.0.0");
+
+      expect(missingFromInstallation(root, "darwin", "arm64")).toEqual([
+        "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
+        "not-on-windows",
+      ]);
+      // Another computer's optional runtime is not expected; a package excluded there neither.
+      expect(missingFromInstallation(root, "win32", "x64")).toEqual([]);
+      installPackage(root, "node_modules/@oscharko-dev/keiko-coding-runtime-darwin-arm64", "1.5.3");
+      installPackage(root, "node_modules/not-on-windows", "2.0.0");
+      expect(missingFromInstallation(root, "darwin", "arm64")).toEqual([]);
+    });
+
+    it("refuses a manifest that cannot be read as not installed", () => {
+      const root = lockedRoot();
+      installPackage(root, "node_modules/@oscharko-dev/keiko", "1.5.3");
+      installPackage(root, "node_modules/@oscharko-dev/keiko/node_modules/nested", "3.0.0");
+      writeFileSync(join(root, "node_modules", "@oscharko-dev", "keiko", "package.json"), "{");
+
+      expect(missingFromInstallation(root, "win32", "x64")).toEqual(["@oscharko-dev/keiko"]);
+    });
   });
 
   describe("the installation", () => {
@@ -468,7 +550,7 @@ describe("the npm package start", () => {
       const { root, nodeDir, env } = installFixture();
       const npm = fakeNpm(root, true);
       const run = vi.fn((node, args, options) =>
-        args[1] === "ci" ? npm.run(node, args, options) : { status: 0 },
+        args.includes("ci") ? npm.run(node, args, options) : { status: 0 },
       );
 
       expect(start(root, nodeDir, env, run)).toBe(0);
@@ -622,7 +704,7 @@ describe("the npm package start", () => {
       expect(start(root, nodeDir, env, run)).toBe(0);
       expect(stopped).toEqual([0]);
       expect(stopRun).not.toHaveBeenCalled();
-      expect(run.mock.calls.map((call) => call[1][1])).toEqual(["start", "stop"]);
+      expect(run.mock.calls.map(commandOf)).toEqual(["start", "stop"]);
       expect(log).toHaveBeenCalledWith(
         "Keiko is still being loaded. It does not stay open: the start that loads it stops it.",
       );
@@ -638,7 +720,7 @@ describe("the npm package start", () => {
       const stopped = [];
       const npm = fakeNpm(root, true, () => stopped.push(stop(root, env, stopRun)));
       const run = vi.fn((node, args, options) =>
-        args[1] === "ci" ? npm.run(node, args, options) : { status: 0 },
+        args.includes("ci") ? npm.run(node, args, options) : { status: 0 },
       );
 
       expect(start(root, nodeDir, env, run)).toBe(0);
@@ -646,7 +728,7 @@ describe("the npm package start", () => {
       expect(stopRun).not.toHaveBeenCalled();
       // npm ran and Keiko was not opened; the start carried the Stop out, so a Keiko an earlier
       // start of the folder opened stops as well.
-      expect(run.mock.calls.map((call) => call[1][1])).toEqual(["ci", "stop"]);
+      expect(run.mock.calls.map(commandOf)).toEqual(["ci", "stop"]);
       expect(log).toHaveBeenCalledWith(
         "Keiko was stopped while it was being loaded and does not start. You can close this window.",
       );
@@ -664,7 +746,7 @@ describe("the npm package start", () => {
       const stopRun = vi.fn();
       const stopped = [];
       const run = vi.fn((node, args, options) => {
-        if (args[1] === "ci") return npm.run(node, args, options);
+        if (args.includes("ci")) return npm.run(node, args, options);
         // Keiko opens while the start still holds the lock; this Stop lands in it.
         if (args[1] === "start") stopped.push(stop(root, env, stopRun));
         return { status: 0 };
@@ -673,7 +755,7 @@ describe("the npm package start", () => {
       expect(start(root, nodeDir, env, run)).toBe(0);
       expect(stopped).toEqual([0]);
       expect(stopRun).not.toHaveBeenCalled();
-      expect(run.mock.calls.map((call) => call[1][1])).toEqual(["ci", "start", "stop"]);
+      expect(run.mock.calls.map(commandOf)).toEqual(["ci", "start", "stop"]);
       expect(log).toHaveBeenCalledWith(
         expect.stringMatching(/^Keiko was stopped again right after it opened/u),
       );
@@ -685,7 +767,7 @@ describe("the npm package start", () => {
       const { root, nodeDir, env } = installFixture();
       const npm = fakeNpm(root, true);
       const run = vi.fn((node, args, options) =>
-        args[1] === "ci" ? npm.run(node, args, options) : { status: 0 },
+        args.includes("ci") ? npm.run(node, args, options) : { status: 0 },
       );
       expect(start(root, nodeDir, env, run)).toBe(0);
 
@@ -693,7 +775,7 @@ describe("the npm package start", () => {
       expect(requestStop(root)).toBe(false);
       const stopRun = vi.fn(() => ({ status: 0 }));
       expect(stop(root, env, stopRun)).toBe(0);
-      expect(stopRun.mock.calls.map((call) => call[1][1])).toEqual(["stop"]);
+      expect(stopRun.mock.calls.map(commandOf)).toEqual(["stop"]);
     });
 
     it("reports Keiko's own exit code when it fails to open after the installation", () => {
@@ -701,7 +783,7 @@ describe("the npm package start", () => {
       const { root, nodeDir, env } = installFixture();
       const npm = fakeNpm(root, true);
       const run = vi.fn((node, args, options) =>
-        args[1] === "ci" ? npm.run(node, args, options) : { status: 4 },
+        args.includes("ci") ? npm.run(node, args, options) : { status: 4 },
       );
 
       expect(start(root, nodeDir, env, run)).toBe(4);
@@ -714,11 +796,11 @@ describe("the npm package start", () => {
       const { root, nodeDir, env } = installFixture();
       const npm = fakeNpm(root, true, () => requestStop(root));
       const run = vi.fn((node, args, options) =>
-        args[1] === "ci" ? npm.run(node, args, options) : { status: 5 },
+        args.includes("ci") ? npm.run(node, args, options) : { status: 5 },
       );
 
       expect(start(root, nodeDir, env, run)).toBe(5);
-      expect(run.mock.calls.map((call) => call[1][1])).toEqual(["ci", "stop"]);
+      expect(run.mock.calls.map(commandOf)).toEqual(["ci", "stop"]);
       expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/was stopped/u));
     });
 
@@ -727,7 +809,7 @@ describe("the npm package start", () => {
       const { root, nodeDir, env } = installFixture();
       const npm = fakeNpm(root, true);
       const run = vi.fn((node, args, options) => {
-        if (args[1] === "ci") return npm.run(node, args, options);
+        if (args.includes("ci")) return npm.run(node, args, options);
         if (args[1] !== "start") return { status: 0 };
         requestStop(root);
         return { status: 6 };
@@ -735,7 +817,7 @@ describe("the npm package start", () => {
 
       // Whatever part of Keiko came up stops, and the start reports why Keiko did not open.
       expect(start(root, nodeDir, env, run)).toBe(6);
-      expect(run.mock.calls.map((call) => call[1][1])).toEqual(["ci", "start", "stop"]);
+      expect(run.mock.calls.map(commandOf)).toEqual(["ci", "start", "stop"]);
     });
 
     it("refuses a lock it cannot take instead of waiting for it", () => {
@@ -754,6 +836,125 @@ describe("the npm package start", () => {
       expect(() => acquireInstallLock(root, pause)).toThrow(LauncherRefusal);
       expect(() => acquireInstallLock(root, pause)).toThrow(/cannot be taken/u);
       expect(lockLeftovers(root)).toEqual([]);
+    });
+
+    it("marks nothing installed when npm succeeds without installing this platform's runtime", () => {
+      // Review finding on PR #4464 (P2): an inherited `omit=optional` left the Coding runtime out,
+      // npm still exited 0, and the marker kept every later start from repairing it.
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { root, nodeDir, env } = installFixture();
+      const runtime = `node_modules/@oscharko-dev/keiko-coding-runtime-${process.platform}-${process.arch}`;
+      writeFileSync(
+        join(root, "package-lock.json"),
+        JSON.stringify({
+          lockfileVersion: 3,
+          packages: {
+            "node_modules/@oscharko-dev/keiko": { version: "1.5.3" },
+            [runtime]: { version: "1.5.3", optional: true, os: [process.platform] },
+          },
+        }),
+      );
+      const keikoOnly = fakeNpm(root, true, () => {
+        writeFileSync(
+          join(root, "node_modules", "@oscharko-dev", "keiko", "package.json"),
+          '{"version":"1.5.3"}',
+        );
+      });
+      // fakeNpm installs Keiko's command line after `during`; make the folder first.
+      mkdirSync(join(root, "node_modules", "@oscharko-dev", "keiko"), { recursive: true });
+
+      expect(ensureInstalled(root, nodeDir, env, keikoOnly.run)).toBe(false);
+      expect(installationCurrent(root, lockfileDigest(root))).toBe(false);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining(runtime.slice("node_modules/".length)),
+      );
+
+      const complete = fakeNpm(root, true, () => {
+        writeFileSync(
+          join(root, "node_modules", "@oscharko-dev", "keiko", "package.json"),
+          '{"version":"1.5.3"}',
+        );
+        mkdirSync(join(root, ...runtime.split("/")), { recursive: true });
+        writeFileSync(join(root, ...runtime.split("/"), "package.json"), '{"version":"1.5.3"}');
+      });
+      expect(ensureInstalled(root, nodeDir, env, complete.run)).toBe(true);
+      expect(installationCurrent(root, lockfileDigest(root))).toBe(true);
+    });
+
+    it("refuses a competing npm-shrinkwrap.json before npm runs", () => {
+      // Review finding on PR #4464 (P2): npm installs npm-shrinkwrap.json before package-lock.json,
+      // while the marker records the shipped lockfile.
+      const { root, nodeDir, env } = installFixture();
+      writeFileSync(join(root, "npm-shrinkwrap.json"), '{"lockfileVersion":3}');
+      const run = vi.fn();
+
+      expect(() => start(root, nodeDir, env, run)).toThrow(/npm-shrinkwrap\.json/u);
+      expect(run).not.toHaveBeenCalled();
+      expect(existsSync(installLockPath(root))).toBe(false);
+    });
+
+    it.each(["dir", "junction"])(
+      "refuses a node_modules that is a %s link before npm empties it",
+      (type) => {
+        // Review finding on PR #4464 (P2): npm ci deletes the entries of node_modules, and through
+        // a link or junction those of a shared folder.
+        const { root, nodeDir, env } = installFixture();
+        const shared = join(tempDir(), "shared-modules");
+        mkdirSync(join(shared, "kept"), { recursive: true });
+        writeFileSync(join(shared, ".keiko-npm-installed"), "other\n");
+        symlinkSync(shared, join(root, "node_modules"), type);
+        const run = vi.fn();
+
+        expect(() => start(root, nodeDir, env, run)).toThrow(/node_modules/u);
+        expect(run).not.toHaveBeenCalled();
+        expect(readdirSync(shared).sort()).toEqual([".keiko-npm-installed", "kept"]);
+        expect(() => refuseForeignInstallTarget(root)).toThrow(LauncherRefusal);
+      },
+    );
+
+    it("lets npm's own process hold the lock, so a start that ends early leaves it held", () => {
+      // Review finding on PR #4464 (P2): the lock named only the start, and a start killed while
+      // `npm ci` still ran let the next start install beside that npm.
+      quiet();
+      const { root, nodeDir, env } = installFixture();
+      const npm = fakeNpm(root, true);
+
+      expect(ensureInstalled(root, nodeDir, env, npm.run)).toBe(true);
+      expect(npm.calls[0].args.slice(0, 2)).toEqual(holdArgs(installLockPath(root)));
+
+      // The start that ran npm ended; npm's own entry still holds the lock.
+      staleLock(root, endedPid());
+      const held = holdInstallLock(installLockPath(root), () => undefined);
+      expect(acquireInstallLock(root)).toBeUndefined();
+      expect(requestStop(root)).toBe(true);
+      rmSync(held);
+      expect(acquireInstallLock(root)).toBeDefined();
+    });
+
+    it("adds npm's entry to the lock while npm runs and removes it when npm exits", () => {
+      const { root } = installFixture();
+      const dir = installLockPath(root);
+      mkdirSync(dir, { recursive: true });
+      const child = spawnSync(
+        process.execPath,
+        [
+          ...holdArgs(dir),
+          "-e",
+          "process.stdout.write(JSON.stringify(require('node:fs').readdirSync(process.argv[1])))",
+          dir,
+        ],
+        { encoding: "utf8" },
+      );
+
+      expect(child.status).toBe(0);
+      expect(JSON.parse(child.stdout)).toEqual([
+        expect.stringMatching(new RegExp(`^owner-${String(child.pid)}-[0-9a-f]+$`, "u")),
+      ]);
+      expect(readdirSync(dir)).toEqual([]);
+      // Without a lock there is nothing to hold and nothing is created.
+      rmSync(dir, { recursive: true });
+      expect(holdInstallLock(dir, () => undefined)).toBeUndefined();
+      expect(existsSync(dir)).toBe(false);
     });
 
     it("records no Stop in the lock of a start that no longer runs", () => {
@@ -828,7 +1029,7 @@ describe("the npm package start", () => {
 
     await expect(main("start", context)).resolves.toBe(0);
     await expect(main("stop", context)).resolves.toBe(0);
-    expect(run.mock.calls.map((call) => call[1][1])).toEqual(["start", "stop"]);
+    expect(run.mock.calls.map(commandOf)).toEqual(["start", "stop"]);
     await expect(main("save-config", context)).resolves.toBe(1);
     await expect(main("other", context)).resolves.toBe(2);
     const outside = { ...context, env: { ...env, KEIKO_STATE_DIR: tempDir() } };
@@ -865,18 +1066,36 @@ describe("the administrator's access step", () => {
     expect(needsToken(result)).toBe(false);
   });
 
-  it("replaces the key of a reranker on the gateway's own endpoint and header", () => {
+  it("replaces the key of a reranker Gateway Setup wired on the gateway's connection", () => {
     const config = {
       providers: [{ modelId: "chat", baseUrl: "https://gw/", apiKey: "own" }],
-      reranker: { modelId: "rerank", baseUrl: "https://gw", apiKeySecretRef: "vault:2" },
+      reranker: {
+        modelId: "rerank",
+        baseUrl: "https://gw",
+        apiKeySecretRef: "vault:2",
+        credentialOrigin: "gateway-connection",
+      },
     };
 
     expect(needsToken(config)).toBe(true);
     expect(teamConfig(config, "token").reranker).toEqual({
       modelId: "rerank",
       baseUrl: "https://gw",
+      credentialOrigin: "gateway-connection",
       apiKey: "token",
     });
+  });
+
+  it("refuses a reranker with its own sealed key on the gateway's endpoint and header", () => {
+    // Review finding on PR #4464: address and header alone passed, so the team token replaced the
+    // reranker's own key. Only Gateway Setup's mark shows that it shares the gateway's credential.
+    const config = {
+      providers: [sealed],
+      reranker: { modelId: "own-rerank", baseUrl: "https://gw", apiKeySecretRef: "vault:2" },
+    };
+
+    expect(credentialScope(config).foreign).toEqual(["own-rerank"]);
+    expect(() => teamConfig(config, "token")).toThrow(/own-rerank has its own connection/u);
   });
 
   it("replaces the key of a voice deployment Gateway Setup found on the gateway", () => {
@@ -1261,6 +1480,59 @@ describe("the administrator's access step", () => {
       await expect(saveConfig(root, env, { readToken })).resolves.toBe(0);
       expect(readToken).not.toHaveBeenCalled();
       expect(JSON.parse(readFileSync(target, "utf8")).providers).toEqual([open]);
+    });
+
+    it.each([
+      ["an empty address", { modelId: "chat", baseUrl: "", apiKeySecretRef: "cred:chat" }],
+      ["a blank address", { modelId: "chat", baseUrl: "  ", apiKeySecretRef: "cred:chat" }],
+      ["an empty model id", { modelId: "", baseUrl: "https://gw", apiKeySecretRef: "cred:" }],
+    ])("refuses a model with %s before it asks for the token", async (_case, provider) => {
+      // Review finding on PR #4464 (P3): an empty baseUrl passed, and the team got a file that
+      // named no gateway.
+      const { root, env, target } = savedConfig({ providers: [provider] });
+      const readToken = vi.fn();
+
+      await expect(saveConfig(root, env, { readToken })).rejects.toThrow(/modelId or baseUrl/u);
+      expect(readToken).not.toHaveBeenCalled();
+      expect(existsSync(target)).toBe(false);
+    });
+
+    it.each([
+      ["KEIKO_DEFAULT_API_KEY", { providers: [{ modelId: "chat", baseUrl: "https://gw" }] }],
+      ["KEIKO_MODEL_CHAT_1_API_KEY", { providers: [{ modelId: "chat-1", baseUrl: "https://gw" }] }],
+      [
+        "KEIKO_RERANKER_API_KEY",
+        {
+          providers: [{ modelId: "chat", baseUrl: "https://gw", apiKeySecretRef: "cred:chat" }],
+          reranker: { modelId: "rerank", baseUrl: "https://gw" },
+        },
+      ],
+    ])("refuses to export a key only %s of this computer holds", async (variable, config) => {
+      // Review finding on PR #4464 (P2): Gateway Setup keeps a key from the environment out of
+      // the file, and the export wrote a team file without any key.
+      const { root, env, target } = savedConfig(config, { [variable]: "admin-only-key" });
+      const readToken = vi.fn();
+
+      await expect(saveConfig(root, env, { readToken })).rejects.toThrow(new RegExp(variable, "u"));
+      expect(readToken).not.toHaveBeenCalled();
+      expect(existsSync(target)).toBe(false);
+    });
+
+    it("keeps exporting keys the file holds while an environment variable is set", () => {
+      const env = { KEIKO_DEFAULT_API_KEY: "x", KEIKO_MODEL_CHAT_API_KEY: "y" };
+      const config = {
+        providers: [
+          { modelId: "chat", baseUrl: "https://gw", apiKeySecretRef: "cred:chat" },
+          { modelId: "plain", baseUrl: "https://gw", apiKey: "file-key" },
+          { modelId: "alias", baseUrl: "https://gw", apiKeySourceModelId: "chat" },
+        ],
+      };
+
+      // A sealed key is replaced by the token, a key in the file stays, an alias follows its source.
+      expect(environmentKeys(config, env)).toEqual([]);
+      expect(
+        environmentKeys({ providers: [{ modelId: "open", baseUrl: "https://gw" }] }, {}),
+      ).toEqual([]);
     });
 
     it("refuses to save without the token a sealed key needs", async () => {

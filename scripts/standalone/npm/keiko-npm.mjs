@@ -50,6 +50,8 @@ const LOCK_ATTEMPTS = 8;
 const LOCK_CONTENDED = new Set(["EEXIST", "ENOTEMPTY", "EPERM", "EACCES", "EBUSY"]);
 const RENAME_ATTEMPTS = 40;
 const RENAME_RETRY_MS = 25;
+// The query parameter with which npm imports this file to hold the lock it installs under.
+const HOLD_PARAMETER = "hold-install-lock";
 // The system gives the number of an ended process to a new one, Windows soon after, so a running
 // process with the owner's number does not prove that its start still runs. An owner written
 // before the computer started, or longer ago than any installation takes, no longer holds the lock.
@@ -132,6 +134,19 @@ export function npmLogsDir(state) {
   return join(state, "npm-logs");
 }
 
+// Whether `path` is a real folder of this account inside `container`: no link or junction (lstat
+// reports both), no file, no folder of another account, nothing that resolves elsewhere.
+function ownFolderInside(path, container) {
+  const entry = lstatSync(path);
+  const owned = typeof process.getuid !== "function" || entry.uid === process.getuid();
+  return (
+    !entry.isSymbolicLink() &&
+    entry.isDirectory() &&
+    owned &&
+    insideOrEqual(realpathSync(path), realpathSync(container))
+  );
+}
+
 /**
  * The log folder npm writes and rotates its files in, created when missing. It must be Keiko's own:
  * a real folder of this account inside the data folder, never a link that leads elsewhere or a
@@ -142,10 +157,7 @@ export function ownedLogsDir(state) {
   if (lstatSync(logsDir, { throwIfNoEntry: false }) === undefined) {
     mkdirSync(logsDir, { mode: 0o700 });
   }
-  const entry = lstatSync(logsDir);
-  const owned = typeof process.getuid !== "function" || entry.uid === process.getuid();
-  const inside = insideOrEqual(realpathSync(logsDir), realpathSync(state));
-  if (entry.isSymbolicLink() || !entry.isDirectory() || !owned || !inside) {
+  if (!ownFolderInside(logsDir, state)) {
     throw new LauncherRefusal(
       `The folder npm-logs in Keiko's data folder ${state} is a link, a file or a folder of another account. Remove it, then start Keiko again.`,
       `Der Ordner npm-logs in Keikos Datenordner ${state} ist eine Verknuepfung, eine Datei oder ein Ordner eines anderen Kontos. Entferne ihn und starte Keiko dann erneut.`,
@@ -154,11 +166,40 @@ export function ownedLogsDir(state) {
   return logsDir;
 }
 
+/**
+ * What `npm ci` empties and fills must be this folder's own: npm deletes every entry of
+ * node_modules first, so a link or junction to a shared folder would lose that folder's contents.
+ * npm itself installs only from the lockfile this start checks, so a competing npm-shrinkwrap.json,
+ * which npm reads first, is refused as well. Both refusals come before anything is changed.
+ */
+export function refuseForeignInstallTarget(root) {
+  if (existsSync(join(root, "npm-shrinkwrap.json"))) {
+    throw new LauncherRefusal(
+      "This folder holds a file npm-shrinkwrap.json, which npm would install instead of package-lock.json. Remove it, then start Keiko again.",
+      "Dieser Ordner enthaelt eine Datei npm-shrinkwrap.json, die npm statt package-lock.json installieren wuerde. Entferne sie und starte Keiko dann erneut.",
+    );
+  }
+  const modules = join(root, "node_modules");
+  if (
+    lstatSync(modules, { throwIfNoEntry: false }) !== undefined &&
+    !ownFolderInside(modules, root)
+  ) {
+    throw new LauncherRefusal(
+      `The folder node_modules in ${root} is a link, a file or a folder of another account, and npm would empty it. Remove it, then start Keiko again.`,
+      `Der Ordner node_modules in ${root} ist eine Verknuepfung, eine Datei oder ein Ordner eines anderen Kontos, und npm wuerde ihn leeren. Entferne ihn und starte Keiko dann erneut.`,
+    );
+  }
+}
+
 // --prefix: npm installs into exactly this folder, and reads this folder's .npmrc as its project
 // configuration, even when a folder above it is an npm project or workspace root.
 // --workspaces=false: npm installs no workspace of any project.
 // --ignore-scripts: Keiko needs no install script, and none of its dependencies may run one here.
 // --replace-registry-host=npmjs: the public addresses in the lockfile go to the configured registry.
+// --dry-run=false, --package-lock-only=false, --global=false, --install-strategy=hoisted: npm
+// installs for real, into this folder, in the layout the start reads.
+// --include=prod|optional|peer: an inherited `omit` cannot leave out the packages Keiko runs with,
+// among them the optional Coding runtime of this platform.
 // Everything is set on the command line, which no npm_config_* variable and no .npmrc overrides:
 // npm writes nothing outside the folder and Keiko's data folder.
 export function installArgs(npmCli, root, cacheDir, logsDir) {
@@ -168,6 +209,13 @@ export function installArgs(npmCli, root, cacheDir, logsDir) {
     "--prefix",
     root,
     "--workspaces=false",
+    "--dry-run=false",
+    "--package-lock-only=false",
+    "--global=false",
+    "--install-strategy=hoisted",
+    "--include=prod",
+    "--include=optional",
+    "--include=peer",
     "--ignore-scripts",
     "--no-audit",
     "--no-fund",
@@ -564,6 +612,101 @@ export function requestStop(root) {
   return false;
 }
 
+// Whether npm installs a lockfile package on this computer: a `!name` in its `os` or `cpu` list
+// excludes this computer, any other name there restricts the package to the computers named.
+function forThisComputer(list, current) {
+  if (!Array.isArray(list) || list.length === 0) return true;
+  if (list.includes(`!${current}`)) return false;
+  const named = list.filter((name) => typeof name === "string" && !name.startsWith("!"));
+  return named.length === 0 || named.includes(current);
+}
+
+// A package `npm ci` installs here: not a development package, and meant for this computer. One
+// restricted by its C library is left to npm, which can tell glibc from musl.
+function expectedHere(entry, platform, arch) {
+  return (
+    entry.dev !== true &&
+    entry.link !== true &&
+    entry.libc === undefined &&
+    typeof entry.version === "string" &&
+    forThisComputer(entry.os, platform) &&
+    forThisComputer(entry.cpu, arch)
+  );
+}
+
+function installedVersion(root, lockPath) {
+  try {
+    const manifest = JSON.parse(
+      readFileSync(join(root, ...lockPath.split("/"), "package.json"), "utf8"),
+    );
+    return isRecord(manifest) ? manifest.version : undefined;
+  } catch (error) {
+    if (error?.code === "ENOENT" || error instanceof SyntaxError) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * The packages package-lock.json names for this computer that are not installed in its version.
+ * npm's exit code alone does not prove an installation: an inherited setting can make `npm ci`
+ * succeed while it installs nothing, or leaves out this platform's optional Coding runtime.
+ */
+export function missingFromInstallation(root, platform = process.platform, arch = process.arch) {
+  const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+  const packages = isRecord(lock?.packages) ? lock.packages : {};
+  return Object.entries(packages)
+    .filter(([lockPath, entry]) => lockPath.startsWith("node_modules/") && isRecord(entry))
+    .filter(([, entry]) => expectedHere(entry, platform, arch))
+    .filter(([lockPath, entry]) => installedVersion(root, lockPath) !== entry.version)
+    .map(([lockPath]) =>
+      lockPath.slice(lockPath.lastIndexOf("node_modules/") + "node_modules/".length),
+    );
+}
+
+function installedCompletely(root, logsDir) {
+  const missing = missingFromInstallation(root);
+  if (missing.length === 0) return true;
+  say(
+    `npm ended without installing ${String(missing.length)} package(s) package-lock.json names for this computer, among them ${missing[0]}. An npm setting of this computer may leave packages out; tell your administrator. npm's log: ${logsDir}`,
+    `npm hat ${String(missing.length)} Paket(e), die package-lock.json fuer diesen Computer nennt, nicht installiert, darunter ${missing[0]}. Eine npm-Einstellung dieses Computers laesst womoeglich Pakete aus; sag deinem Administrator Bescheid. Das Protokoll von npm: ${logsDir}`,
+  );
+  return false;
+}
+
+/**
+ * The arguments that let npm's own process hold the installation lock while it runs: npm imports
+ * this file, which adds an owner entry for npm's process to the lock and removes it when npm exits.
+ * A start that ends while npm still runs, killed alone, then leaves a lock that still holds.
+ */
+export function holdArgs(lockDir) {
+  const url = new URL(import.meta.url);
+  url.search = "";
+  url.searchParams.set(HOLD_PARAMETER, lockDir);
+  return ["--import", url.href];
+}
+
+/**
+ * Adds an owner entry for this process to the installation lock `dir` and removes it when the
+ * process exits. Without a lock there is nothing to keep: the start that runs npm holds none.
+ */
+export function holdInstallLock(dir, onExit = (listener) => process.once("exit", listener)) {
+  const entry = join(dir, `owner-${lockToken()}`);
+  let fd;
+  try {
+    fd = openSync(entry, "wx", 0o600);
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  }
+  try {
+    writeAll(fd, `${String(Date.now())}\n`);
+  } finally {
+    closeSync(fd);
+  }
+  onExit(() => rmSync(entry, { force: true }));
+  return entry;
+}
+
 function runNpm(root, nodeDir, env, run) {
   const npmCli = npmCliCandidates(nodeDir).find((candidate) => existsSync(candidate));
   if (npmCli === undefined) {
@@ -575,6 +718,7 @@ function runNpm(root, nodeDir, env, run) {
   }
   const registryNamed = folderRegistry(root, env);
   const state = stateDir(env);
+  refuseForeignInstallTarget(root);
   say(
     "Keiko is loaded from the npm registry. The first start can take a few minutes.",
     "Keiko wird aus der npm-Registry geladen. Der erste Start kann einige Minuten dauern.",
@@ -587,12 +731,17 @@ function runNpm(root, nodeDir, env, run) {
   // downloads are not needed again once the packages are in node_modules.
   const cacheDir = mkdtempSync(join(state, "npm-cache-"));
   try {
-    const result = run(process.execPath, installArgs(npmCli, root, cacheDir, logsDir), {
+    const args = [
+      ...holdArgs(installLockPath(root)),
+      ...installArgs(npmCli, root, cacheDir, logsDir),
+    ];
+    const result = run(process.execPath, args, {
       cwd: root,
       stdio: "inherit",
       env: npmEnv(env, nodeDir, registryNamed),
     });
-    if (result.status === 0 && existsSync(keikoCliPath(root))) return true;
+    if (result.status === 0 && existsSync(keikoCliPath(root)))
+      return installedCompletely(root, logsDir);
   } finally {
     rmSync(cacheDir, { recursive: true, force: true });
   }
@@ -834,6 +983,65 @@ function builtFromConnection(config, provider, primary) {
   );
 }
 
+function filledText(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+// The gateway's own name for a model's key variable: every character other than a letter or a digit
+// becomes `_`, then upper case.
+function modelKeyVariable(modelId) {
+  return `KEIKO_MODEL_${modelId.replaceAll(/[^A-Za-z0-9]/gu, "_").toUpperCase()}_API_KEY`;
+}
+
+// A block whose key Gateway Setup kept out of the file: no sealed key, no key in the file, and no
+// other model's key it follows.
+function keyOutsideFile(block) {
+  return (
+    block.apiKeySecretRef === undefined &&
+    !filledText(block.apiKey) &&
+    !filledText(block.apiKeySourceModelId)
+  );
+}
+
+// The environment variable a block draws its key from on this computer, as the gateway's loader
+// resolves it; undefined when its key is in the file or it needs none.
+function environmentKey(block, env, specific) {
+  if (!keyOutsideFile(block)) return undefined;
+  if (filledText(env[specific])) return specific;
+  return filledText(env.KEIKO_DEFAULT_API_KEY) ? "KEIKO_DEFAULT_API_KEY" : undefined;
+}
+
+/**
+ * The models (and reranker) whose key this computer takes from an environment variable, which
+ * Gateway Setup keeps out of the saved file: an exported file would leave the team without a key.
+ */
+export function environmentKeys(config, env) {
+  const providers = Array.isArray(config.providers) ? config.providers.filter(isRecord) : [];
+  const found = providers
+    .map((provider) => ({
+      name: blockName(provider, "a model"),
+      variable: filledText(provider.modelId)
+        ? environmentKey(provider, env, modelKeyVariable(provider.modelId))
+        : undefined,
+    }))
+    .filter(({ variable }) => variable !== undefined);
+  if (isRecord(config.reranker)) {
+    const variable = environmentKey(config.reranker, env, "KEIKO_RERANKER_API_KEY");
+    if (variable !== undefined) found.push({ name: "the reranker", variable });
+  }
+  return found;
+}
+
+function refuseEnvironmentKeys(config, env) {
+  const found = environmentKeys(config, env);
+  if (found.length === 0) return;
+  const named = found.map(({ name, variable }) => `${name} (${variable})`).join(", ");
+  throw new LauncherRefusal(
+    `Keiko takes the key of ${named} from an environment variable of this computer, which the team's computers do not have. Unset the variable, enter the key in Gateway Setup, stop Keiko, then run this again.`,
+    `Keiko nimmt den Schluessel von ${named} aus einer Umgebungsvariable dieses Computers, die die Computer des Teams nicht haben. Entferne die Variable, gib den Schluessel in der Gateway-Einrichtung ein, beende Keiko und fuehre dies dann erneut aus.`,
+  );
+}
+
 function blockName(block, fallback) {
   return typeof block?.modelId === "string" ? block.modelId : fallback;
 }
@@ -851,7 +1059,10 @@ function sealedBlocks(config, primary) {
     blocks.push({
       block: reranker,
       fallback: "the reranker",
-      verified: () => sameConnection(reranker, primary),
+      // Address and header alone do not show whose key it is: Gateway Setup marks the reranker it
+      // proved to share the gateway's credential (`credentialOrigin`), never one with its own key.
+      verified: () =>
+        sameConnection(reranker, primary) && reranker.credentialOrigin === "gateway-connection",
     });
   }
   return blocks.filter(({ block }) => block.apiKeySecretRef !== undefined);
@@ -896,7 +1107,7 @@ export function teamConfig(config, token) {
     throw new Error("the configuration names no models");
   }
   for (const provider of config.providers) {
-    if (typeof provider?.modelId !== "string" || typeof provider.baseUrl !== "string") {
+    if (!filledText(provider?.modelId) || !filledText(provider.baseUrl)) {
       throw new TypeError("a model in the configuration names no modelId or baseUrl");
     }
   }
@@ -1078,8 +1289,10 @@ export async function saveConfig(root, env, io = {}) {
     return 1;
   }
   const config = JSON.parse(readFileSync(saved, "utf8"));
-  // Refuses another connection's key before the token is asked for.
+  // Refuses another connection's key, and a key only this computer's environment holds, before the
+  // token is asked for.
   teamConfig(config, "");
+  refuseEnvironmentKeys(config, env);
   const token = needsToken(config)
     ? await readToken("API token (not shown) / API-Token (wird nicht angezeigt): ")
     : "";
@@ -1126,6 +1339,10 @@ export async function runCommand(command, context = {}) {
     return 1;
   }
 }
+
+// npm's process imports this file with the lock to hold (`holdArgs`); nothing else runs then.
+const heldLock = new URL(import.meta.url).searchParams.get(HOLD_PARAMETER);
+if (heldLock !== null) holdInstallLock(heldLock);
 
 if (isEntryPoint(process.argv[1], import.meta.url)) {
   process.exitCode = await runCommand(process.argv[2]);
