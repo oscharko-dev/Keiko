@@ -6,6 +6,7 @@ import {
   type FactAdmission,
   type FactDropReason,
 } from "./fact-admission.js";
+import { isBareRuleAnnouncement } from "./fact-admission-guards.js";
 
 function admit(text: string, evidence: string, body = evidence, about = "self"): FactAdmission {
   return admitProposedFact({ body, evidence, about }, text);
@@ -842,6 +843,74 @@ describe("a pronoun for the person's own thing", () => {
         { previousUserText: "Ich mag meine Kollegin." },
       ),
     ).toEqual({ admitted: false, reason: "third-party" });
+  });
+});
+
+describe("a rule announcement without the rule's content", () => {
+  it("keeps the German and English announcement patterns separate", () => {
+    expect(isBareRuleAnnouncement("I have a rule zu my notes.")).toBe(false);
+    expect(isBareRuleAnnouncement("Ich habe eine Regel about meine Berichte.")).toBe(false);
+  });
+
+  it.each([
+    "Ich habe eine neue Regel fuer meine Berichte.",
+    "Ich habe eine Regel für meine Notizen.",
+    "Ich habe eine neue Regel.",
+    "I have a new rule for my reports.",
+    "I have a rule about my notes.",
+    "I have a rule.",
+  ])("drops only the bare announcement: %s", (text) => {
+    expect(admit(text, text)).toEqual({ admitted: false, reason: "not-entailed" });
+  });
+
+  it.each([
+    "Ich habe eine neue Regel für meine Berichte: Meine Berichte beginnen mit einer Zusammenfassung.",
+    "I have a new rule for my reports: my reports begin with a summary.",
+    "Ich habe eine Regel, meine Berichte mit einer Zusammenfassung zu beginnen.",
+    "I have a rule to begin my reports with a summary.",
+    "Ich habe keine Regel für meine Berichte.",
+    "I have no rule for my reports.",
+    "Ich habe eine neue Regel für meine Berichte, außer für Entwürfe.",
+    "I have a new rule for my reports, except for drafts.",
+    "Meine Berichte beginnen mit einer Zusammenfassung, dafür habe ich eine neue Regel.",
+    "My reports begin with a summary, and I have a new rule for my reports.",
+    "Meine Regel ist, meine Berichte nicht ohne Zusammenfassung abzugeben.",
+    "My rule is to never submit my reports without a summary.",
+    "Ich habe ein neues Fahrrad für meine Fahrten.",
+    "I have a new bicycle for my commute.",
+  ])("keeps stated content, restrictions and ordinary possessions: %s", (text) => {
+    expect(admit(text, text)).toMatchObject({ admitted: true, claim: text });
+  });
+
+  it.each([
+    [
+      "Ich habe eine neue Regel für meine Berichte. Meine Berichte beginnen mit einer Zusammenfassung.",
+      "Meine Berichte beginnen mit einer Zusammenfassung.",
+    ],
+    [
+      "I have a new rule for my reports. My reports begin with a summary.",
+      "My reports begin with a summary.",
+    ],
+  ])("keeps concrete content in the next sentence: %s", (text, evidence) => {
+    expect(admit(text, evidence)).toMatchObject({ admitted: true, claim: evidence });
+    const announcement = text.slice(0, text.indexOf(".") + 1);
+    expect(admit(text, announcement)).toEqual({ admitted: false, reason: "not-entailed" });
+  });
+
+  it.each([
+    [
+      "Ich habe eine neue Regel für meine Berichte: Meine Berichte beginnen mit einer Zusammenfassung.",
+      "Ich habe eine neue Regel für meine Berichte",
+      "Meine Berichte beginnen mit einer Zusammenfassung.",
+    ],
+    [
+      "I have a new rule for my reports: my reports begin with a summary.",
+      "I have a new rule for my reports",
+      "my reports begin with a summary.",
+    ],
+  ])("does not borrow unquoted rule content after an announcement: %s", (text, prefix, rule) => {
+    expect(admit(text, prefix)).toEqual({ admitted: false, reason: "not-entailed" });
+    expect(admit(text, rule)).toMatchObject({ admitted: true });
   });
 });
 

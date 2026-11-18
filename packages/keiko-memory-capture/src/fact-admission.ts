@@ -14,6 +14,7 @@ import {
   lastWord,
 } from "./fact-text.js";
 import {
+  isBareRuleAnnouncement,
   isFirstPersonTaskRequest,
   isInsideCode,
   isOtherPersonsProposition,
@@ -1286,11 +1287,12 @@ function claimNamesOtherPronoun(evidence: string): boolean {
   );
 }
 
-// A question or a request asks for something; it states no fact.
+// Questions, requests and a bare rule announcement state no usable fact content.
 function speechActDropReason(evidence: string, sentence: string): FactDropReason | null {
   if (sentence.trimEnd().endsWith("?") || evidence.includes("?")) return "question";
   if (POLITE_REQUEST_RE.test(evidence) || IMPERATIVE_TO_ME_RE.test(evidence)) return "request";
   if (isFirstPersonTaskRequest(evidence)) return "request";
+  if (isBareRuleAnnouncement(evidence)) return "not-entailed";
   return null;
 }
 

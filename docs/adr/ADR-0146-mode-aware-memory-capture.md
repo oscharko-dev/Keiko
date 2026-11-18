@@ -267,6 +267,12 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   A named calendar day such as “until March 14, 2027” or “bis zum 14. März 2027” ends on that local
   day. A day given without a year uses its next calendar occurrence, including February 29.
 - **Admission.** The span appears verbatim in the person's message and ends at a clause boundary.
+  A bare announcement such as "Ich habe eine neue Regel für meine Berichte" or "I have a new rule
+  for my reports" states no rule content and is dropped as `not-entailed`. A concrete rule,
+  restriction or exception in the admitted span is kept under the existing checks. Dropping the
+  announcement does not remove the person's turn: it still supplies pronoun context when the next
+  turn states the actual rule. An announcement-only quote borrows no unquoted content from later
+  in the message; the concrete rule must itself be evidenced.
   A span that leaves out the first words of its clause ("decided as a team to release …" out of "We
   decided as a team to release …") opens at the start of that clause, at most as far back as a span
   may be long, and every check reads that whole clause, never the fragment; the end is not moved, so

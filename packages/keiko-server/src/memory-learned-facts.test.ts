@@ -755,6 +755,72 @@ describe("what a pronoun and a team's decision become", () => {
     });
   }
 
+  it.each([
+    [
+      "German",
+      "Ich habe eine neue Regel fuer meine Berichte.",
+      "Sie beginnen immer mit einer Zusammenfassung in drei Saetzen.",
+      "Meine Berichte beginnen immer mit einer Zusammenfassung in drei Saetzen.",
+    ],
+    [
+      "English",
+      "I have a new rule for my reports.",
+      "They always begin with a summary in three sentences.",
+      "My reports always begin with a summary in three sentences.",
+    ],
+  ])(
+    "drops a bare %s rule announcement while keeping it as pronoun context",
+    async (_language, announcement, evidence, body) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const vault = makeVault();
+      const base = context();
+      let items: readonly ScriptedItem[] = [
+        { body: announcement, evidence: announcement, type: "procedural" },
+      ];
+      const deps = {
+        ...makeDeps(vault, []),
+        modelPortFactory: (): ModelPort => scriptedModel(items),
+      };
+      deps.store.createProject(base.projectId, "Fixture");
+      const chatId = deps.store.createChat(base.projectId, "Fixture", "gpt-test").id;
+      const ctx = { ...base, conversationId: chatId as ConversationId };
+      const previous = userMessage(deps, chatId, announcement, 1);
+      expect(deps.store.memoryLearning?.markMessage(previous.id, { surface: "desktop" })).toBe(
+        true,
+      );
+      await captureSalientFromTurn(
+        deps,
+        { content: announcement, sourceMessageId: previous.id, memory: { enabled: true } },
+        ctx,
+        "gpt-test",
+        "ok",
+      );
+
+      expect(liveBodies(vault, ctx)).toEqual([]);
+      const dropped = sink.events.find((event) => event.op === "memory.learn.dropped");
+      if (dropped === undefined) throw new Error("expected announcement drop evidence");
+      expect(
+        expectActivityLogProof(
+          "memory.learn.dropped.line",
+          formatActivityLogProofLine(dropped as unknown as Record<string, unknown>),
+        ),
+      ).toMatchObject({ reason: "not-entailed", count: 1 });
+      expect(JSON.stringify(sink.events)).not.toContain(announcement);
+
+      items = [{ body, evidence, type: "procedural" }];
+      const current = userMessage(deps, chatId, evidence, 2);
+      await captureSalientFromTurn(
+        deps,
+        { content: evidence, sourceMessageId: current.id, memory: { enabled: true } },
+        ctx,
+        "gpt-test",
+        "ok",
+      );
+      expect(liveBodies(vault, ctx)).toEqual([body]);
+    },
+  );
+
   it("resolves a pronoun from the person's previous message in the same chat", async () => {
     const vault = makeVault();
     const base = context();

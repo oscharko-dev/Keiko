@@ -104,6 +104,63 @@ export function isFirstPersonTaskRequest(evidence: string): boolean {
   return REQUEST_RES.some((pattern) => pattern.test(evidence));
 }
 
+interface RuleAnnouncementForm {
+  readonly opening: readonly string[];
+  readonly qualifier: string;
+  readonly noun: string;
+  readonly prepositions: ReadonlySet<string>;
+  readonly possessives: ReadonlySet<string>;
+}
+
+const RULE_ANNOUNCEMENT_FORMS: readonly RuleAnnouncementForm[] = [
+  {
+    opening: ["ich", "habe", "eine"],
+    qualifier: "neue",
+    noun: "regel",
+    prepositions: new Set(["für", "fuer", "zu"]),
+    possessives: new Set(["mein", "meine", "meinem", "meinen", "meiner", "meines"]),
+  },
+  {
+    opening: ["i", "have", "a"],
+    qualifier: "new",
+    noun: "rule",
+    prepositions: new Set(["for", "about"]),
+    possessives: new Set(["my"]),
+  },
+];
+const ANNOUNCEMENT_TOPIC_WORD_RE = /^\p{L}+(?:-\p{L}+)*$/u;
+const ANNOUNCEMENT_END_MARKS = new Set([".", "!", "…"]);
+
+function isOwnedAnnouncementTopic(words: readonly string[], form: RuleAnnouncementForm): boolean {
+  return (
+    words.length === 3 &&
+    form.prepositions.has(words[0] ?? "") &&
+    form.possessives.has(words[1] ?? "") &&
+    ANNOUNCEMENT_TOPIC_WORD_RE.test(words[2] ?? "")
+  );
+}
+
+function matchesRuleAnnouncement(words: readonly string[], form: RuleAnnouncementForm): boolean {
+  if (!form.opening.every((word, index) => words[index] === word)) return false;
+  const rest = words.slice(form.opening.length);
+  const content = rest[0] === form.qualifier ? rest.slice(1) : rest;
+  return (
+    content[0] === form.noun &&
+    (content.length === 1 || isOwnedAnnouncementTopic(content.slice(1), form))
+  );
+}
+
+// Possessing a rule without stating it gives no rule to apply. Match only the whole bare clause,
+// with an optional owned topic; content after a colon, a restriction or an exception stays intact.
+// The original turn remains available as pronoun context for the next statement.
+export function isBareRuleAnnouncement(evidence: string): boolean {
+  const text = evidence.trim();
+  let end = text.length;
+  while (end > 0 && ANNOUNCEMENT_END_MARKS.has(text.charAt(end - 1))) end -= 1;
+  const words = text.slice(0, end).trimEnd().toLowerCase().split(/\s+/u);
+  return RULE_ANNOUNCEMENT_FORMS.some((form) => matchesRuleAnnouncement(words, form));
+}
+
 const OWN_SUBJECT = String.raw`(?:ich|i|wir|we|mein\p{L}*|my|unser\p{L}*|our)`;
 const MENTAL_VERBS = String.raw`weiß|weiss|glaube|denke|meine|vermute|habe\s+gehört|know|think|believe|heard|guess|suppose`;
 const WRAPPER = String.raw`(?:(?:ich|i)\s+(?:${MENTAL_VERBS})|i['’]m\s+(?:sure|aware)|i\s+am\s+(?:sure|aware)|ich\s+bin\s+(?:mir\s+)?sicher)`;
