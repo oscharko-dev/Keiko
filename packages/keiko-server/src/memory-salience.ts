@@ -476,14 +476,17 @@ function noveltyOptions(
   vault: MemoryVaultStore,
   relation: LearnedFactRelation,
   trace: LearningTrace,
-  onSuperseded: (decision: LearnedRelationDecision) => void,
+  onDecision: (decision: LearnedRelationDecision) => void,
 ): NoveltyInsertOptions {
   const { seen } = trace;
   // The person may forget the turn while its embedding is computed.
   const refusedSinceStart = (record: MemoryRecord): MemoryCaptureSuppressionReason | null =>
     personRefused(vault, record, trace.statement);
   const confirmDuplicate = (id: MemoryId): void => {
-    recordLearningConfirmation(vault, id, trace);
+    const counted =
+      !restsOn(vault.getMemory(id), trace.sourceMessageId) &&
+      recordLearningConfirmation(vault, id, trace);
+    onDecision(counted ? "confirmed" : "merged");
   };
   const common = { signal: trace.signal, refusedSinceStart, confirmDuplicate };
   // A paraphrased repeat with another end date replaces the fact it repeats, if the learner may.
@@ -494,8 +497,8 @@ function noveltyOptions(
     const seenFact = seen.get(duplicateOf);
     if (seenFact === undefined || !isReplaceable(vault.getMemory(duplicateOf))) return undefined;
     const applied = applyLearnedSupersession(vault, record, duplicateOf, seenFact);
-    if (applied.pendingApproval) onSuperseded("supersession-proposed");
-    else if (applied.superseded !== undefined) onSuperseded("superseded");
+    if (applied.pendingApproval) onDecision("supersession-proposed");
+    else if (applied.superseded !== undefined) onDecision("superseded");
     return applied.record;
   };
   if (relation.kind === "same-unconfirmed") {
@@ -512,8 +515,8 @@ function noveltyOptions(
         relation.memoryId,
         seen.get(relation.memoryId),
       );
-      if (applied.pendingApproval) onSuperseded("supersession-proposed");
-      else if (applied.superseded !== undefined) onSuperseded("superseded");
+      if (applied.pendingApproval) onDecision("supersession-proposed");
+      else if (applied.superseded !== undefined) onDecision("superseded");
       return applied.record;
     },
   };
@@ -681,14 +684,11 @@ async function persistCandidate(
     recordRelation(outcome, "unconfirmed-dropped", trace);
     return { action: null, disposition: "none" };
   }
+  recordRelation(outcome, decision, trace);
   if (outcomeOfInsert.kind === "merged") {
-    // Near-duplicate of an existing in-scope memory: the canonical was reinforced, nothing new to
-    // surface. Over-capture is bounded at the encode boundary rather than deferred to a decay pass.
-    recordRelation(outcome, "merged", trace);
     return { action: null, disposition: "merged" };
   }
   const inserted = outcomeOfInsert.record;
-  recordRelation(outcome, decision, trace);
   recordPersistedCandidateDecision(deps, trace, inserted);
   return {
     action: candidateWireAction(outcome, inserted),

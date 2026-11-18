@@ -359,7 +359,8 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   another turn changed it while the capture ran, only that replacement is refused; the turn's other
   facts still settle. A clear statement whose learned predecessor changed while its embedding was
   computed is stored beside it and replaces nothing.
-- **Reinforcement.** Only the person strengthens a memory: saying it again records a confirmation.
+- **Reinforcement.** Only the person strengthens a memory: saying it again in a separate message
+  records a confirmation. Paraphrases learned from the same message merge without reinforcement.
   An answer that repeats a memory records a use for "Vergiss das" and never a reinforcement, so a
   false memory cannot entrench itself by being repeated back.
 - **Forgotten while learning.** A capture still running when the person forgot that turn's

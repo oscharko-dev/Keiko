@@ -804,6 +804,55 @@ describe("memory learning passes", () => {
     expect(vaultOf(deps).getAccessStats([record.id]).get(record.id)).toEqual(before);
   });
 
+  it("counts a semantic confirmation only when it comes from a separate message", async () => {
+    const modelId = "text-embedding-3-large";
+    const embedding = { ok: true, value: { vector: Float32Array.from([1, 0]), modelId } } as const;
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const deps = makeDeps({
+      config: {
+        providers: [
+          {
+            modelId,
+            baseUrl: "https://gateway.example.test/v1",
+            apiKey: "fixture",
+            timeoutMs: 1000,
+            maxRetries: 0,
+            retryBaseDelayMs: 100,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+      },
+      localKnowledgeEmbeddingRequest: () => Promise.resolve(embedding),
+    });
+    const chat = makeChat(deps);
+    const runtime = memoryLearningRuntime(deps);
+    const original = writeTurn(
+      deps,
+      chat,
+      "I write Atlas in Rust. I program the Atlas application using the Rust language.",
+    );
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+    const [record] = learned(deps, chat);
+    if (record === undefined) throw new Error("expected the learned fact");
+    expect(record.provenance.sourceMessageIds).toEqual([original.userId]);
+    const vault = vaultOf(deps);
+    const confirmations = (): number =>
+      vault.getAccessStats([record.id]).get(record.id)?.accessCount ?? 0;
+    const afterOriginal = confirmations();
+
+    const repeat = writeTurn(deps, chat, "I develop Atlas using Rust.");
+    expect(repeat.userId).not.toBe(original.userId);
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+
+    expect(learned(deps, chat).map((fact) => fact.id)).toEqual([record.id]);
+    const novelty = sink.events.filter((event) => event.op === "memory.capture.novelty-gate");
+    expect(novelty.map((event) => event.extra?.outcome)).toEqual(["inserted", "merged", "merged"]);
+    expect([afterOriginal, confirmations()]).toEqual([0, 1]);
+    const relations = sink.events.filter((event) => event.op === "memory.learn.relation");
+    expect(relations.map((event) => event.extra?.decision)).toEqual(["new", "merged", "confirmed"]);
+  });
+
   it("does not count a confirmation again after a cursor failure and restart", async () => {
     const storePath = join(tempDir("keiko-learning-store-"), "ui.db");
     const vaultDir = tempDir("keiko-learning-vault-");

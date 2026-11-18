@@ -790,8 +790,8 @@ function gatherScopeEmbeddings(
 // statement that was simply false, and one that also skipped the refusal's audit event.
 export type NoveltyInsertOutcome =
   | { readonly kind: "inserted"; readonly record: MemoryRecord }
-  // The candidate is a semantic near-duplicate of a live in-scope memory: that canonical was
-  // reinforced via recordAccess and nothing new was stored.
+  // The candidate is a semantic near-duplicate of a live in-scope memory. The learning callback
+  // determines whether the source can reinforce that memory.
   | { readonly kind: "merged"; readonly mergedInto: MemoryId }
   // The local human already refused this fact (forgot or rejected it) and the candidate is a
   // PARAPHRASE of it: nothing was stored and nothing was reinforced.
@@ -967,7 +967,7 @@ type DuplicateSettlement =
   | { readonly kind: "merged"; readonly mergedInto: MemoryId }
   | { readonly kind: "replaced"; readonly record: MemoryRecord };
 
-// A semantic duplicate is confirmed, or replaced when the person now gives it another end date.
+// A semantic duplicate merges, or replaces the existing memory when the end date changes.
 function settleDuplicate(
   vault: MemoryVaultStore,
   record: MemoryRecord,
