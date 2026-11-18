@@ -685,6 +685,44 @@ describe("captureSalientFromTurn", () => {
     expect(format.schema.type).toBe("object");
   });
 
+  it.each([
+    ["identity", "Ich bin Backend-Entwicklerin."],
+    ["constraint", "Ich darf keine Kundendaten in Tickets schreiben."],
+  ])("admits %s in the structured schema and stores it as standing", async (type, content) => {
+    const vault = makeVault();
+    const seen: GatewayRequest[] = [];
+    const item = {
+      type,
+      about: "self",
+      body: content,
+      evidence: content,
+      relation: "new",
+      related: null,
+    };
+    const deps = makeDeps({
+      memoryVault: vault,
+      config: salienceConfig("gpt-json", true),
+      configPresent: true,
+      modelPortFactory: () =>
+        capturingModel(seen, (request) =>
+          wrapUnderSchemaRequiredKey(request.responseFormat, JSON.stringify([item])),
+        ),
+    });
+    const ctx = context();
+    await captureSalientFromTurn(
+      deps,
+      { content, memory: { enabled: true } },
+      ctx,
+      "gpt-json",
+      "ok",
+    );
+    expect(seen[0]?.responseFormat).toHaveProperty(
+      "schema.properties.items.items.properties.type.enum",
+      expect.arrayContaining([type]),
+    );
+    expect(readMemories(vault, ctx)).toMatchObject([{ retentionHint: { policyKey: "standing" } }]);
+  });
+
   it("persists candidates from the schema-mandated wrapped payload (structured-output round trip)", async () => {
     // The reply is wrapped under whatever key the PRODUCTION schema requires, so this fails if
     // the schema and the extractor's unwrapping ever drift apart.
