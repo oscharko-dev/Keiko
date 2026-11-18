@@ -172,18 +172,24 @@ class ShardFamily {
   }
 
   public async finalize(): Promise<void> {
-    for (const pending of this.shards.values()) {
-      if (!this.host.usable()) return;
-      const shard = await pending;
-      if (!this.host.active()) return;
-      // Unseen advisory records may release capacity even when every new record was refused.
-      // Eviction never asserts file deletion or changes fresh traversal's coverage authority.
-      if (!shard.dirty && shard.seen.size === shard.records.size) continue;
-      const records = [...shard.records.values()].filter((record) =>
-        shard.seen.has(record.scopePath),
-      );
-      await this.host.save(shard.key, records);
-    }
+    const shards = await Promise.all(this.shards.values());
+    // Unseen advisory records may release capacity even when every new record was refused.
+    // Eviction never asserts file deletion or changes fresh traversal's coverage authority.
+    const changed = shards.filter((shard) => shard.dirty || shard.seen.size !== shard.records.size);
+    // Shards are saved one after another so only one serialized snapshot is held at a time; the
+    // first failure ends the chain, and a stopped or unusable request publishes nothing further.
+    await changed.reduce<Promise<void>>(
+      (previous, shard) => previous.then(() => this.saveShard(shard)),
+      Promise.resolve(),
+    );
+  }
+
+  private async saveShard(shard: IndexShard): Promise<void> {
+    if (!this.host.usable()) return;
+    const records = [...shard.records.values()].filter((record) =>
+      shard.seen.has(record.scopePath),
+    );
+    await this.host.save(shard.key, records);
   }
 }
 
