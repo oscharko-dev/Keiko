@@ -63,38 +63,42 @@ function* shrinkDocument(document: Document): Iterable<Document> {
 
 describe("physical line contract properties (#4439)", () => {
   const name = "mixed line endings project exactly like their LF equivalent";
-  it(name, async () => {
-    let crlfCases = 0;
-    await checkProperty({
-      name,
-      generate: documentOf,
-      shrink: shrinkDocument,
-      property: (document) => {
-        const mixed = joined(document, false);
-        const lf = joined(document, true);
-        if (mixed.includes("\r\n")) crlfCases += 1;
-        expect(splitPhysicalLines(mixed)).toEqual(lf.split("\n"));
-        expect(normalizePhysicalLineBreaks(mixed)).toBe(lf);
-        const spans = physicalLineSpans(mixed);
-        expect(spans.map((span) => mixed.slice(span.start, span.end))).toEqual(lf.split("\n"));
-        const lineCount = spans.length;
-        // The whole file, a middle window and the last line, with an end past the file.
-        const middle = Math.ceil(lineCount / 2);
-        for (const [start, end] of [
-          [1, lineCount],
-          [middle, middle + 1],
-          [lineCount, lineCount + 1],
-        ] as const) {
-          expect(codingRepositoryExcerpt("a.ts", mixed, start, end, 4096)).toEqual(
-            codingRepositoryExcerpt("a.ts", lf, start, end, 4096),
+  it(
+    name,
+    async () => {
+      let crlfCases = 0;
+      await checkProperty({
+        name,
+        generate: documentOf,
+        shrink: shrinkDocument,
+        property: (document) => {
+          const mixed = joined(document, false);
+          const lf = joined(document, true);
+          if (mixed.includes("\r\n")) crlfCases += 1;
+          expect(splitPhysicalLines(mixed)).toEqual(lf.split("\n"));
+          expect(normalizePhysicalLineBreaks(mixed)).toBe(lf);
+          const spans = physicalLineSpans(mixed);
+          expect(spans.map((span) => mixed.slice(span.start, span.end))).toEqual(lf.split("\n"));
+          const lineCount = spans.length;
+          // The whole file, a middle window and the last line, with an end past the file.
+          const middle = Math.ceil(lineCount / 2);
+          for (const [start, end] of [
+            [1, lineCount],
+            [middle, middle + 1],
+            [lineCount, lineCount + 1],
+          ] as const) {
+            expect(codingRepositoryExcerpt("a.ts", mixed, start, end, 4096)).toEqual(
+              codingRepositoryExcerpt("a.ts", lf, start, end, 4096),
+            );
+          }
+          expect(buildWorkspaceIndexLexicalRecord(mixed, "a.ts")).toEqual(
+            buildWorkspaceIndexLexicalRecord(lf, "a.ts"),
           );
-        }
-        expect(buildWorkspaceIndexLexicalRecord(mixed, "a.ts")).toEqual(
-          buildWorkspaceIndexLexicalRecord(lf, "a.ts"),
-        );
-      },
-    });
-    // Vacuity guard: most generated documents must actually carry a CRLF terminator.
-    expect(crlfCases).toBeGreaterThan(propertySettings({ name }).runs / 2);
-  }, 30_000);
+        },
+      });
+      // Vacuity guard: most generated documents must actually carry a CRLF terminator.
+      expect(crlfCases).toBeGreaterThan(propertySettings({ name }).runs / 2);
+    },
+    30_000,
+  );
 });
