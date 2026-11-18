@@ -85,16 +85,20 @@ SELECT page.position_rowid, m.id, m.role, m.content, page.timestamp, m.memory_le
   m.memory_learning_mode
 FROM page JOIN chat_messages m ON m.rowid = page.position_rowid
 ORDER BY page.timestamp, page.position_rowid`;
-// Select the preceding message before consulting its mark so an unmarked turn is a barrier.
+// Find the immediately preceding user by rowid within this timestamp, then by earlier timestamp.
+// Inspect the mark on that row only: an unmarked user turn is a consent barrier.
 const SQL_READ_PREVIOUS_USER_TEXT = `
 SELECT CASE WHEN previous.memory_learning IS NOT NULL THEN previous.content END AS content
 FROM chat_messages current
-JOIN chat_messages previous ON previous.chat_id = current.chat_id
-WHERE current.chat_id = ? AND current.id = ? AND current.role = 'user'
-  AND previous.role = 'user'
-  AND (previous.timestamp, previous.rowid) < (current.timestamp, current.rowid)
-ORDER BY previous.timestamp DESC, previous.rowid DESC
-LIMIT 1`;
+JOIN chat_messages previous ON previous.rowid = COALESCE(
+  (SELECT p.rowid FROM chat_messages p
+   WHERE p.chat_id = current.chat_id AND p.role = 'user'
+     AND p.timestamp = current.timestamp AND p.rowid < current.rowid
+   ORDER BY p.rowid DESC LIMIT 1),
+  (SELECT p.rowid FROM chat_messages p
+   WHERE p.chat_id = current.chat_id AND p.role = 'user' AND p.timestamp < current.timestamp
+   ORDER BY p.timestamp DESC, p.rowid DESC LIMIT 1))
+WHERE current.chat_id = ? AND current.id = ? AND current.role = 'user'`;
 // The position never moves back: a pass that finishes after a later one leaves the later position.
 const SQL_ADVANCE = `
 INSERT INTO chat_memory_learning (chat_id, learned_timestamp, learned_rowid)
@@ -167,6 +171,7 @@ function listPendingChats(
 
 export function createChatMemoryLearningStore(db: DatabaseSync): ChatMemoryLearningStore {
   let pendingPage: StatementSync | undefined;
+  let previousUser: StatementSync | undefined;
   return {
     markMessage: (messageId, mark): boolean =>
       Number(db.prepare(SQL_MARK).run(mark.surface, mark.mode ?? null, messageId).changes) > 0,
@@ -177,7 +182,8 @@ export function createChatMemoryLearningStore(db: DatabaseSync): ChatMemoryLearn
       return (pendingPage.all(chatId, limit) as unknown as PendingRow[]).map(pendingMessage);
     },
     readPreviousUserText: (chatId, messageId): string | undefined => {
-      const row = db.prepare(SQL_READ_PREVIOUS_USER_TEXT).get(chatId, messageId) as
+      previousUser ??= db.prepare(SQL_READ_PREVIOUS_USER_TEXT);
+      const row = previousUser.get(chatId, messageId) as
         { readonly content: string | null } | undefined;
       return row?.content ?? undefined;
     },
