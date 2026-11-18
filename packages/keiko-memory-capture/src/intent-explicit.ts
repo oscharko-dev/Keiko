@@ -361,8 +361,14 @@ function withdrawnObject(clause: string): string | undefined {
   const german = GERMAN_RETRACTION.exec(clause);
   if (german === null) return undefined;
   const object = clause.slice(german[0].length);
-  const negation = /\s+(?:bitte\s+)?nicht$/iu.exec(object);
-  return negation === null ? undefined : object.slice(0, negation.index).trim();
+  const negation = /\snicht$/iu.exec(object);
+  return negation === null
+    ? undefined
+    : object
+        .slice(0, negation.index)
+        .trimEnd()
+        .replace(/\sbitte$/iu, "")
+        .trim();
 }
 
 function withdrawsNamedForget(body: string, sentence: string): boolean {
