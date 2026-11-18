@@ -6,7 +6,7 @@ import {
   flushPlaintextResidueWithRetry,
   runMigrations,
 } from "./schema.js";
-import { makeRecord, TEST_CIPHER } from "./_support.js";
+import { makeRecord, memId, TEST_CIPHER } from "./_support.js";
 import {
   getAccessStatsRows,
   getConversationTouchRows,
@@ -174,7 +174,7 @@ describe("runMigrations", () => {
         db.exec(migration.sql);
       }
       db.exec("PRAGMA user_version = 13");
-      const record = makeRecord();
+      const record = makeRecord({ id: memId("migration-confirmation") });
       insertMemoryRow(db, record, TEST_CIPHER);
       recordAccessRows(db, [record.id], 1_000, "chat-a");
       recordUseRows(db, [record.id], 1_100, "chat-a");
