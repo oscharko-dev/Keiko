@@ -30,6 +30,11 @@ export interface PendingLearningMessage {
   readonly mark?: MemoryLearningMark | undefined;
 }
 
+export interface PendingLearningChat {
+  readonly chatId: string;
+  readonly firstPendingTimestamp: number;
+}
+
 export interface ChatMemoryLearningStore {
   /** Records that memory was on for this message. Returns false for no such message. */
   readonly markMessage: (messageId: string, mark: MemoryLearningMark) => boolean;
@@ -41,6 +46,10 @@ export interface ChatMemoryLearningStore {
   readonly advance: (chatId: string, position: MemoryLearningPosition) => void;
   /** Chats holding a message written with memory on after their position, oldest work first. */
   readonly listChatsWithPending: (limit: number) => readonly string[];
+  readonly listPendingChats: (
+    limit: number,
+    after?: PendingLearningChat,
+  ) => readonly PendingLearningChat[];
 }
 
 interface PendingRow {
@@ -92,8 +101,9 @@ WHERE m.memory_learning IS NOT NULL AND m.role = 'user'
   AND (l.chat_id IS NULL OR m.timestamp > l.learned_timestamp
     OR (m.timestamp = l.learned_timestamp AND m.rowid > l.learned_rowid))
 GROUP BY m.chat_id
+HAVING ?1 IS NULL OR (MIN(m.timestamp), m.chat_id) > (?1, ?2)
 ORDER BY first_pending ASC, m.chat_id ASC
-LIMIT ?`;
+LIMIT ?3`;
 
 function assertLimit(limit: number): void {
   if (!Number.isSafeInteger(limit) || limit <= 0) {
@@ -129,6 +139,21 @@ function readPosition(db: DatabaseSync, chatId: string): MemoryLearningPosition 
     : { timestamp: row.learned_timestamp, rowid: row.learned_rowid };
 }
 
+function listPendingChats(
+  db: DatabaseSync,
+  limit: number,
+  after?: PendingLearningChat,
+): readonly PendingLearningChat[] {
+  assertLimit(limit);
+  const rows = db
+    .prepare(SQL_LIST_CHATS)
+    .all(after?.firstPendingTimestamp ?? null, after?.chatId ?? null, limit) as {
+    readonly chat_id: string;
+    readonly first_pending: number;
+  }[];
+  return rows.map((row) => ({ chatId: row.chat_id, firstPendingTimestamp: row.first_pending }));
+}
+
 export function createChatMemoryLearningStore(db: DatabaseSync): ChatMemoryLearningStore {
   return {
     markMessage: (messageId, mark): boolean =>
@@ -148,11 +173,8 @@ export function createChatMemoryLearningStore(db: DatabaseSync): ChatMemoryLearn
     advance: (chatId, position): void => {
       db.prepare(SQL_ADVANCE).run(position.timestamp, position.rowid, chatId);
     },
-    listChatsWithPending: (limit): readonly string[] => {
-      assertLimit(limit);
-      return (db.prepare(SQL_LIST_CHATS).all(limit) as { readonly chat_id: string }[]).map(
-        (row) => row.chat_id,
-      );
-    },
+    listChatsWithPending: (limit): readonly string[] =>
+      listPendingChats(db, limit).map(({ chatId }) => chatId),
+    listPendingChats: (limit, after) => listPendingChats(db, limit, after),
   };
 }

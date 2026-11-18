@@ -125171,7 +125171,7 @@
     {
       "op": "memory.learn.pass",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-learning.ts:528",
+      "site": "packages/keiko-server/src/memory-learning.ts:562",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

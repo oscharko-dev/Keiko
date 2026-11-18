@@ -43,6 +43,9 @@ The vocabulary is deliberately narrow: only these explicit first-person preferen
 `KEIKO_MEMORY_LEARNING_IDLE_MS` (0 to 3,600,000) replaces the default pause; `0` learns as soon as a
 turn settles, which the end-to-end lanes use.
 
+A continuation visits pending Chats after the previous pass's last Chat before retrying older
+unavailable Chats. The usual backoff begins after the remaining Chats have had their turn.
+
 ## Foreground work wins
 
 Any serialized Chat turn (send, stream, grounded answer, delete) is foreground work. A pass does not

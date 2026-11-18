@@ -15,6 +15,7 @@ import type { UiStore } from "./store/index.js";
 import type {
   ChatMemoryLearningStore,
   MemoryLearningPosition,
+  PendingLearningChat,
   PendingLearningMessage,
 } from "./store/chatMemoryLearning.js";
 import { chatForegroundActive, onChatForegroundChange } from "./chat-turn-serializer.js";
@@ -174,6 +175,8 @@ export class MemoryLearningRuntime {
   private missedTrigger = false;
   private running: RunningPass | undefined;
   private retryMs = FIRST_RETRY_MS;
+  // Continue from the last visited Chat before retrying an unavailable one at the front.
+  private pendingPage: { after: PendingLearningChat; hadUnavailable: boolean } | undefined;
   private disposed = false;
   private openedChatId: string | undefined;
   // The last turn noted since a pass claimed the runtime; that pass learns it, so it clears it.
@@ -318,9 +321,15 @@ export class MemoryLearningRuntime {
     const startedAt = performance.now();
     const tally = emptyLearningPassTally();
     let settled: { outcome: MemoryLearningPassOutcome; pendingChatCount: number };
+    let nextPage: PendingLearningChat | undefined;
     try {
-      const chats = store.listChatsWithPending(MAX_CHATS_PER_PASS);
-      if (chats.length === 0) return undefined;
+      const waiting = store.listPendingChats(MAX_CHATS_PER_PASS + 1, this.pendingPage?.after);
+      const chats = waiting.slice(0, MAX_CHATS_PER_PASS).map(({ chatId }) => chatId);
+      if (chats.length === 0) {
+        this.finishEmptyChatPage(store, ids.passId);
+        return undefined;
+      }
+      if (waiting.length > MAX_CHATS_PER_PASS) nextPage = waiting.at(MAX_CHATS_PER_PASS - 1);
       logLearningPassStarted(ids, { trigger, chatCount: chats.length });
       const outcome = await this.learnChats(
         store,
@@ -348,8 +357,15 @@ export class MemoryLearningRuntime {
         ? {}
         : { cancelLatencyMs: performance.now() - running.cancelledAt }),
     });
-    this.afterPass(settled.outcome, settled.pendingChatCount, ids.passId);
+    this.afterPass(settled.outcome, settled.pendingChatCount, ids.passId, nextPage);
     return settled.outcome;
+  }
+
+  private finishEmptyChatPage(store: ChatMemoryLearningStore, passId: string): void {
+    // Other work may have cleared the remaining Chats since the prior page.
+    if (this.pendingPage !== undefined) {
+      this.afterPass("completed", store.listChatsWithPending(MAX_CHATS_PER_PASS).length, passId);
+    }
   }
 
   private passOutcome(outcome: ChatPassOutcome, running: RunningPass): MemoryLearningPassOutcome {
@@ -361,13 +377,18 @@ export class MemoryLearningRuntime {
     outcome: MemoryLearningPassOutcome,
     pendingChatCount: number,
     passId: string,
+    nextPage?: PendingLearningChat,
   ): void {
     if (this.disposed) return;
     const missed = this.missedTrigger;
     this.missedTrigger = false;
-    if (outcome === "unavailable" || outcome === "failed") {
+    if (this.finishChatPage(outcome, nextPage)) {
       this.schedule(this.retryMs, "retry", passId);
       this.retryMs = Math.min(this.retryMs * 2, MAX_RETRY_MS);
+      return;
+    }
+    if (outcome !== "cancelled" && this.pendingPage !== undefined) {
+      this.schedule(CONTINUATION_DELAY_MS, "continuation", passId);
       return;
     }
     this.retryMs = FIRST_RETRY_MS;
@@ -377,6 +398,19 @@ export class MemoryLearningRuntime {
       // A cancelled pass, or a trigger that came while this one ran, resumes after the next pause.
       this.arm("inactivity", passId);
     }
+  }
+
+  private finishChatPage(
+    outcome: MemoryLearningPassOutcome,
+    nextPage: PendingLearningChat | undefined,
+  ): boolean {
+    if (outcome === "cancelled") return false;
+    const hadUnavailable = this.pendingPage?.hadUnavailable === true || outcome === "unavailable";
+    this.pendingPage =
+      nextPage === undefined || outcome === "failed"
+        ? undefined
+        : { after: nextPage, hadUnavailable };
+    return outcome === "failed" || (hadUnavailable && nextPage === undefined);
   }
 
   // One Chat after the other: a single-slot local model serves one learning call at a time.

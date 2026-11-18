@@ -887,6 +887,38 @@ describe("memory learning passes", () => {
     expect(bodies(deps, chat)).toEqual(["I write Atlas in Rust."]);
   });
 
+  it("continues to a healthy Chat after eight unavailable Chats, then retries them", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const learner = fakeLearner();
+    let recovered = false;
+    const deps = makeDeps({
+      env: { KEIKO_MEMORY_LEARNING_IDLE_MS: "3600000" },
+      modelPortFactory: (id) => (id === "healthy-model" || recovered ? learner.port : undefined),
+    });
+    const projectPath = tempDir("keiko-learning-backlog-");
+    deps.store.createProject(projectPath);
+    for (let index = 0; index < 8; index += 1) {
+      const chat = deps.store.createChat(projectPath, "Unavailable", "unavailable-model");
+      writeTurn(deps, { chatId: chat.id, projectPath }, "I use a workshop computer.");
+    }
+    const { id: chatId } = deps.store.createChat(projectPath, "Healthy", "healthy-model");
+    const healthy = { chatId, projectPath };
+    writeTurn(deps, healthy, "I use Vim.");
+    const runtime = memoryLearningRuntime(deps);
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("unavailable");
+    expect(learner.calls()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(learner.calls()).toBe(1);
+    expect(bodies(deps, healthy)).toContain("I use Vim.");
+    expect(deps.store.memoryLearning?.listChatsWithPending(9)).toHaveLength(8);
+
+    recovered = true;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(learner.calls()).toBe(9);
+    expect(deps.store.memoryLearning?.listChatsWithPending(9)).toEqual([]);
+  });
+
   it("applies a forget to what was still waiting to be learned", async () => {
     const deps = makeDeps();
     const chat = makeChat(deps);
