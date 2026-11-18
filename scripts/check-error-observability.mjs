@@ -1059,8 +1059,8 @@ function makeMemoryReviewQueueProbe() {
     { handlerName: "handleMemoryReviewQueue", label: "memory.review-queue" },
     "memory-handlers.handleMemoryReviewQueue",
     (vaultMod) => ({
-      listMemoryScopes() {
-        throw new vaultMod.MemoryStorageError("internal", "gate-vault-scopes-failure");
+      listMemoryReviewQueue() {
+        throw new vaultMod.MemoryStorageError("internal", "gate-vault-queue-failure");
       },
     }),
   );
