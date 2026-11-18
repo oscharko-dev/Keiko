@@ -47,6 +47,7 @@ import {
   listMemoriesAcrossScopeRows,
   listMemoryScopeRows,
   listMemoryMetadataByScopeRows,
+  prepareStandingProfileReader,
   listMemoriesByScopeRows,
   updateMemoryRow,
 } from "./memories.js";
@@ -640,6 +641,7 @@ type MemoryMutators = Pick<
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
+  | "listStandingProfileCandidates"
   | "listMemoryIdsByStatus"
   | "listAcceptedMemoryIdsMissingEmbedding"
   | "countMemoriesByStatus"
@@ -910,6 +912,7 @@ type MemoryReadOps = Pick<
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
+  | "listStandingProfileCandidates"
   | "listMemoryIdsByStatus"
   | "listAcceptedMemoryIdsMissingEmbedding"
   | "countMemoriesByStatus"
@@ -997,7 +1000,15 @@ function readMemoryReviewQueue(db: DatabaseSync, opts: ResolvedOptions): readonl
 }
 
 function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryReadOps {
+  const readStandingProfile = prepareStandingProfileReader(db);
   return {
+    listStandingProfileCandidates: (
+      userId,
+      options,
+    ): ReturnType<MemoryVaultStore["listStandingProfileCandidates"]> => {
+      gateMemoryScope({ kind: "user", userId });
+      return readStandingProfile(userId, options);
+    },
     getMemory: (id: MemoryId): MemoryRecord | undefined => getMemoryRow(db, id, opts.cipher),
     listMemoryScopes: (): readonly MemoryScope[] => listMemoryScopeRows(db),
     listMemoryReviewQueue: (): readonly MemoryRecord[] => readMemoryReviewQueue(db, opts),

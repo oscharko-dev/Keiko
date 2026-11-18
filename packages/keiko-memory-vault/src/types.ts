@@ -15,6 +15,7 @@ import type {
   MemoryType,
   MemoryUpdatePreImage,
   MemoryValidityInterval,
+  UserId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
 import type {
@@ -228,6 +229,16 @@ export interface MemoryVaultStore {
     scope: MemoryScope,
     options?: ListMemoriesOptions,
   ) => readonly MemoryMetadata[];
+  /** Eligible personal profile rows in pin, confirmation, recency and UTF-16 ID order. */
+  readonly listStandingProfileCandidates: (
+    userId: UserId,
+    options: {
+      readonly types: readonly MemoryType[];
+      readonly minConfidenceExclusive: number;
+      readonly nowMs: number;
+      readonly limit: number;
+    },
+  ) => readonly { readonly id: MemoryId; readonly confirmations: number }[];
   readonly insertEdge: (edge: MemoryEdge) => MemoryEdge;
   readonly listOutgoingEdges: (memoryId: MemoryId) => readonly MemoryEdge[];
   readonly listIncomingEdges: (memoryId: MemoryId) => readonly MemoryEdge[];

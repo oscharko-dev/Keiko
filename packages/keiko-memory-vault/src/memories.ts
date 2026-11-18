@@ -15,9 +15,10 @@ import type {
   WorkflowDefinitionId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
+import { STANDING_FACT_RETENTION_POLICY_KEY } from "@oscharko-dev/keiko-contracts/memory";
 import { memoryRecordToRow, rowToMemoryRecord, type MemoryRow } from "./serialize.js";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
-import type { ListMemoriesOptions, MemoryMetadata } from "./types.js";
+import type { ListMemoriesOptions, MemoryMetadata, MemoryVaultStore } from "./types.js";
 import type { MemoryContentCipher } from "./cipher.js";
 import { MemoryStorageError } from "./errors.js";
 import { cachedPrepare } from "./statements.js";
@@ -472,4 +473,39 @@ export function listMemoryMetadataByScopeRows(
     ...params,
   ) as unknown as readonly MemoryMetadataRow[];
   return rows.map(metadataRowToMemoryMetadata);
+}
+
+// Only profile IDs and counters leave this query. The body and its sealed exclusion tags are
+// inspected later under the same read bound as the selector. SQLite's UTF-8 BINARY collation
+// disagrees with the selector's JavaScript ordering for supplementary vs. high BMP characters.
+export function prepareStandingProfileReader(
+  db: DatabaseSync,
+): MemoryVaultStore["listStandingProfileCandidates"] {
+  db.function("keiko_profile_id_key", { deterministic: true, directOnly: true }, (id) => {
+    if (typeof id !== "string") throw new TypeError("Expected a stored profile ID.");
+    return Buffer.from(id, "utf16le").swap16();
+  });
+  const sql = `
+    SELECT m.id, coalesce(a.access_count, 0) AS confirmations
+    FROM memories m LEFT JOIN memory_access a ON a.memory_id = m.id
+    WHERE m.scope_kind = 'user' AND m.scope_coordinate = ?
+      AND m.status = 'accepted' AND m.sensitivity = 'public'
+      AND m.valid_from <= ? AND (m.valid_until IS NULL OR m.valid_until > ?)
+      AND m.confidence > ?
+      AND (m.pinned = 1 OR m.retention_policy_key = ? OR m.type IN (SELECT value FROM json_each(?)))
+    ORDER BY m.pinned DESC, confirmations DESC, m.created_at DESC, keiko_profile_id_key(m.id) ASC
+    LIMIT ?`;
+  return (userId, { types, minConfidenceExclusive, nowMs, limit }) => {
+    // A negative SQLite LIMIT means "unbounded".
+    if (!Number.isSafeInteger(limit) || limit <= 0) return [];
+    return cachedPrepare(db, sql).all(
+      userId,
+      nowMs,
+      nowMs,
+      minConfidenceExclusive,
+      STANDING_FACT_RETENTION_POLICY_KEY,
+      JSON.stringify(types),
+      limit,
+    ) as unknown as ReturnType<MemoryVaultStore["listStandingProfileCandidates"]>;
+  };
 }

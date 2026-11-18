@@ -180,6 +180,57 @@ describe("standingProfileForUser (#4228)", () => {
     expect(profileIds(store)).toEqual(["lead"]);
   });
 
+  it("joins overlapping profile sources and confirmations before taking the bounded window", () => {
+    const store = vault();
+    for (let index = 0; index < 96; index += 1) {
+      seed(store, {
+        id: `overlap-${String(index).padStart(3, "0")}`,
+        body: "Use tables.",
+        pinned: true,
+        standing: true,
+      });
+    }
+    // UTF-8 orders the private-use character ahead of the supplementary character; JavaScript
+    // code-unit order puts the supplementary character first. Both fall on the eight-entry cutoff.
+    for (const id of ["a-😀", "a-\uE000"])
+      seed(store, { id, body: "Use tables.", pinned: true, standing: true });
+    const confirmed = [
+      "overlap-091",
+      "overlap-092",
+      "overlap-093",
+      "overlap-094",
+      "overlap-095",
+      "overlap-083",
+      "overlap-084",
+    ].sort();
+    store.recordAccess(confirmed as MemoryId[], NOW);
+    const ranked = vi.spyOn(store, "listStandingProfileCandidates");
+    const metadata = vi.spyOn(store, "listMemoryMetadataByScope");
+    const counters = vi.spyOn(store, "getAccessStats");
+    const records = vi.spyOn(store, "getMemory");
+    expect(profileIds(store)).toEqual([...confirmed, "a-😀"]);
+    expect(records.mock.calls.length).toBeLessThanOrEqual(16);
+    expect(ranked).toHaveBeenCalledTimes(1);
+    expect(ranked.mock.results[0]?.value).toHaveLength(64);
+    expect(metadata).not.toHaveBeenCalled();
+    expect(counters).not.toHaveBeenCalled();
+  });
+
+  it("keeps invalid SQL window sizes from reading an unbounded profile", () => {
+    const store = vault();
+    seed(store, { id: "pref", body: "Use tables." });
+    for (const limit of [-1, 0, Number.NaN, 0.5]) {
+      expect(
+        store.listStandingProfileCandidates(USER, {
+          types: ["preference"],
+          minConfidenceExclusive: 0,
+          nowMs: NOW,
+          limit,
+        }),
+      ).toEqual([]);
+    }
+  });
+
   it("reads only as many bodies as the profile needs", () => {
     const store = vault();
     for (let index = 0; index < 200; index += 1) {
