@@ -438,6 +438,8 @@ interface RuleSectionProps {
 interface RuleFieldsProps extends RuleSectionProps {
   /** The rules are bound to a Jira this editor cannot read now: guided edits would unbind them. */
   readonly locked?: boolean;
+  /** The whole document does not read as a template: guided rule edits wait until it does. */
+  readonly invalid?: boolean;
 }
 
 function ActivationField({ form, template, details, onChange }: RuleSectionProps): ReactNode {
@@ -552,14 +554,27 @@ function DetailsStatus({
   );
 }
 
-export function JiraTemplateRuleFields({ locked, ...section }: RuleFieldsProps): ReactNode {
+export function JiraTemplateRuleFields({
+  locked: lockedByBinding,
+  invalid,
+  ...section
+}: RuleFieldsProps): ReactNode {
+  const locked = lockedByBinding === true || invalid === true;
   const t = useTranslate();
   return (
     <details className={styles.cmpRules}>
       <summary>{t("chat.skills.jira.form.rules")}</summary>
       <DetailsStatus details={section.details} template={section.template} />
-      {locked === true ? <output>{t("chat.skills.jira.form.rulesLocked")}</output> : null}
-      <fieldset className={styles.cmpFieldset} disabled={locked === true}>
+      {locked ? (
+        <output>
+          {t(
+            invalid === true
+              ? "chat.skills.jira.form.rulesInvalid"
+              : "chat.skills.jira.form.rulesLocked",
+          )}
+        </output>
+      ) : null}
+      <fieldset className={styles.cmpFieldset} disabled={locked}>
         <div className={styles.cmpChoices}>
           <ActivationField {...section} />
           <FieldRequirement {...section} />

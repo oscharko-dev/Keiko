@@ -2729,6 +2729,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "{subject} (no unique name for this type; write it in the metadata to use it)",
   "chat.skills.jira.form.instanceLocalName":
     "{subject} (an instance-local id, not a portable name; write it in the metadata to use it)",
+  "chat.skills.jira.form.rulesInvalid":
+    "The metadata text does not read as a template right now, so the rules cannot be changed here; fix the metadata text first.",
   "chat.skills.jira.form.rulesLocked":
     "The rules are bound to a Jira that is not readable right now; change them in the metadata text or reconnect.",
   "chat.skills.jira.form.fieldCatalogUnknown":

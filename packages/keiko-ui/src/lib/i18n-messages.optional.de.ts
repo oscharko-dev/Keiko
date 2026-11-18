@@ -2889,6 +2889,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "{subject} (für diesen Typ gibt es keinen eindeutigen Namen; schreibe ihn in die Metadaten, um ihn zu verwenden)",
   "chat.skills.jira.form.instanceLocalName":
     "{subject} (eine instanzlokale ID, kein übertragbarer Name; schreibe sie in die Metadaten, um sie zu verwenden)",
+  "chat.skills.jira.form.rulesInvalid":
+    "Der Metadatentext lässt sich gerade nicht als Vorlage lesen, deshalb lassen sich die Regeln hier nicht ändern; korrigiere zuerst den Metadatentext.",
   "chat.skills.jira.form.rulesLocked":
     "Die Regeln sind an ein Jira gebunden, das gerade nicht lesbar ist; ändere sie im Metadatentext oder verbinde dich erneut.",
   "chat.skills.jira.form.fieldCatalogUnknown":

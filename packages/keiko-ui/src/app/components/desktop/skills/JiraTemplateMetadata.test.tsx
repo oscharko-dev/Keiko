@@ -6,6 +6,7 @@ import type { JiraTemplateOptions } from "@oscharko-dev/keiko-contracts/bff-wire
 import {
   bindJiraIssueTemplateText,
   jiraTemplateBindingDigest,
+  jiraTemplateForInstance,
   parseJiraIssueTemplate,
   readJiraTemplateForm,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -155,5 +156,31 @@ describe("guided rule edits against the loaded Jira (PRRT_kwDOSqilAM65BJIV)", ()
         screen.getByRole("combobox", { name: /required field/i }).closest("fieldset"),
       ).toHaveProperty("disabled", false);
     });
+  });
+  it("refuses guided rule edits while the strict parser rejects the document, keeping the binding digest true", async () => {
+    answers(types(INSTANCE_A));
+    // The form reader still succeeds, the strict parser does not: `summaryMinLength` has no number.
+    const invalid = boundTo(INSTANCE_A).replace(
+      "requiredFields:",
+      "summaryMinLength:\nrequiredFields:",
+    );
+    expect(parseJiraIssueTemplate(invalid).ok).toBe(false);
+    expect(readJiraTemplateForm(splitMarkdownDocument(invalid).frontMatter ?? "")).toBeDefined();
+    render(<Harness initial={invalid} />);
+    await openRules();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("combobox", { name: /required field/i }).closest("fieldset"),
+      ).toHaveProperty("disabled", true);
+    });
+    const remove = await screen.findAllByRole("button", { name: /remove/i });
+    await userEvent.click(remove[0] as HTMLElement);
+    expect(latest).toBe(invalid);
+    // Restoring the number leaves a document whose binding still confirms for the Jira.
+    const restored = invalid.replace("summaryMinLength:", "summaryMinLength: 5");
+    const parsed = parseJiraIssueTemplate(restored);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok)
+      expect(jiraTemplateForInstance(parsed.template, INSTANCE_A).binding).toBeDefined();
   });
 });

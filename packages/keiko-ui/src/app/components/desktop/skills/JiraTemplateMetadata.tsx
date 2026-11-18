@@ -46,10 +46,17 @@ function governingTemplate(
  */
 function rulesLocked(markdown: string, instanceId: string | undefined): boolean {
   const parsed = parseJiraIssueTemplate(markdown);
-  if (!parsed.ok || parsed.template.binding === undefined) return false;
+  // A document the strict parser rejects has no binding to confirm: a guided rule edit would write
+  // changed rules beside the old digest, and the binding would stop matching once the text reads again.
+  if (!parsed.ok) return true;
+  if (parsed.template.binding === undefined) return false;
   // The binding must be confirmed for the Jira that supplied the choices: another Jira's binding
   // would be rewritten with a digest that holds for neither instance.
   return jiraTemplateForInstance(parsed.template, instanceId).binding === undefined;
+}
+
+function documentInvalid(markdown: string): boolean {
+  return !parseJiraIssueTemplate(markdown).ok;
 }
 
 function matchingType(
@@ -347,6 +354,7 @@ export function JiraTemplateMetadata(props: MetadataProps): ReactNode {
           template={template}
           details={details}
           locked={rulesLocked(props.markdown, reads.instanceId)}
+          invalid={documentInvalid(props.markdown)}
           onChange={editRules}
         />
       </fieldset>
