@@ -151,6 +151,9 @@ routes use the same invalidation. The UI refetches current server metadata after
 window focus. An unconfirmed lifecycle response requires **Refresh status**; it is not permission
 to repeat a possibly committed operation.
 
+Keiko stores the replacement token in its local credential vault. If the browser opens a separate
+password prompt after the Pod verifies, dismiss the offer. Edge labels that action **Not now**.
+
 Current integration evidence and outstanding acceptance work are recorded in the
 [Epic #4081 matrix](../qa/jira-chat-pods-4081.md).
 

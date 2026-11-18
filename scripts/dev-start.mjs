@@ -502,7 +502,7 @@ async function waitForHealth(port, child) {
     if (lastError.startsWith("runtime: unavailable")) {
       throw new Error(`coding runtime failed readiness: ${lastError}; see ${logFile}`);
     }
-    await sleep(500);
+    await sleep(500); // NOSONAR javascript:S9382 -- A health retry is due only after the current probe fails.
   }
   throw new Error(`development server did not become healthy: ${lastError}; see ${logFile}`);
 }
@@ -534,7 +534,7 @@ export async function reopenDevBrowser(port, fetchFn = globalThis.fetch) {
 
 async function restartExistingRunnerIfNeeded() {
   const state = readState();
-  if (state === undefined || !isAlive(state.runnerPid)) return;
+  if (state === undefined || !isAlive(state.runnerPid)) return false;
 
   const runningPort = state.publicPort ?? publicPort;
   const health = await devServerHealth(runningPort);
@@ -552,13 +552,14 @@ async function restartExistingRunnerIfNeeded() {
           : "[dev:start] browser connection unavailable; restart Keiko to open a connected browser.",
       );
     }
-    process.exit(0);
+    return true;
   }
 
   console.log(
     `[dev:start] existing runner ${String(state.runnerPid)} is unhealthy (${health}); restarting.`,
   );
   await stopUnhealthyRunner(state.runnerPid);
+  return false;
 }
 
 async function resolveDevPorts() {
@@ -707,12 +708,13 @@ export async function withDevStartLock(work) {
       if (openError?.code !== "EEXIST") throw openError;
       if (Date.now() - started > DEV_START_LOCK_WAIT_MS) {
         throw new Error(
-          `[dev:start] another dev-start is holding ${DEV_START_LOCK_FILE} — either wait for it ` +
-            "or `npm run dev:stop` first (use a distinct KEIKO_STATE_DIR to run in parallel)",
+          `[dev:start] ${DEV_START_LOCK_FILE} is still present. Wait for the Dev launcher to finish. ` +
+            "If the file remains after `npm run dev:stop`, confirm that all Dev launcher and build " +
+            "processes have exited, then move the file out of the development state directory and retry.",
           { cause: openError },
         );
       }
-      await sleep(200);
+      await sleep(200); // NOSONAR javascript:S9382 -- The lock can be acquired only after its owner releases it.
     }
   }
   try {
@@ -731,13 +733,14 @@ export async function withDevStartLock(work) {
 export async function prepareRunnerCriticalSection(seams = {}) {
   const restart = seams.restartExistingRunnerIfNeeded ?? restartExistingRunnerIfNeeded;
   const remove = seams.removePidFile ?? (() => rmSync(pidFile, { force: true }));
-  await restart();
-  remove();
+  const reusedExistingRunner = await restart();
+  if (!reusedExistingRunner) remove();
+  return reusedExistingRunner;
 }
 
 async function launchDevelopmentRunner() {
   return withDevStartLock(async () => {
-    await prepareRunnerCriticalSection();
+    if (await prepareRunnerCriticalSection()) return;
     ensureDependencies();
     ensureDevGatewayConfig();
     run(npmCommand(), ["run", "build"], repoRoot);

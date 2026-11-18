@@ -320,7 +320,7 @@ function partialIndexMessage(
   data: CapsuleDetailData,
   job: IndexingJobRecord | undefined,
   t: I18nTranslate,
-): string {
+): string | undefined {
   const missingVectors = data.health.chunkCount - data.health.vectorCount;
   const messages: string[] = [];
   if (data.health.failedDocuments > 0) {
@@ -355,7 +355,8 @@ function partialIndexMessage(
       }),
     );
   }
-  return messages.length > 0 ? messages.join(" ") : t("localKnowledge.detail.index.aligned");
+  if (messages.length > 0) return messages.join(" ");
+  return data.health.chunkCount > 0 ? t("localKnowledge.detail.index.aligned") : undefined;
 }
 
 function discoveryProgressRatio(total: number, completed: number): number {
@@ -455,10 +456,12 @@ function IndexingStatusSection({ data }: { readonly data: CapsuleDetailData }): 
   const completed = completedDocuments(job);
   const indexedDocumentCount = indexedDocuments(data);
   const documentProgress = discoveryProgressRatio(total, completed);
-  const indexedProgress = retrievalCoverageRatio(data);
-  const missingVectors = Math.max(0, data.health.chunkCount - data.health.vectorCount);
+  const { chunkCount, vectorCount } = data.health;
+  const hasChunks = chunkCount > 0;
+  const missingVectors = Math.max(0, chunkCount - vectorCount);
+  const vectorTone = missingVectorsTone(missingVectors);
   const remainingLabel = indexRemainingLabel(job, total, completed, t);
-  const issueTone = indexIssueTone(missingVectors, data, job);
+  const indexMessage = partialIndexMessage(data, job, t);
 
   return (
     <section aria-labelledby="lkd-index-status-heading" className="lkd-status-section">
@@ -484,9 +487,13 @@ function IndexingStatusSection({ data }: { readonly data: CapsuleDetailData }): 
         <MetricCard
           label={t("localKnowledge.detail.index.vectors")}
           help={t("localKnowledge.detail.help.vectors")}
-          value={`${data.health.vectorCount.toString()} / ${data.health.chunkCount.toString()}`}
-          meta={missingVectorsMetaLabel(missingVectors, t)}
-          tone={missingVectorsTone(missingVectors)}
+          value={`${vectorCount.toString()} / ${chunkCount.toString()}`}
+          meta={
+            hasChunks
+              ? missingVectorsMetaLabel(missingVectors, t)
+              : t("localKnowledge.detail.index.noIndexedChunks")
+          }
+          tone={hasChunks ? vectorTone : "neutral"}
         />
         <MetricCard
           label={t("localKnowledge.detail.index.latestJob")}
@@ -502,18 +509,26 @@ function IndexingStatusSection({ data }: { readonly data: CapsuleDetailData }): 
           value={documentProgress}
           help={t("localKnowledge.detail.help.discoveryProgress")}
         />
-        <ProgressRow
-          label={t("localKnowledge.detail.index.retrievalCoverage")}
-          value={indexedProgress}
-          help={t("localKnowledge.detail.help.retrievalCoverage")}
-          tone={missingVectorsTone(missingVectors)}
-        />
+        {hasChunks ? (
+          <ProgressRow
+            label={t("localKnowledge.detail.index.retrievalCoverage")}
+            value={retrievalCoverageRatio(data)}
+            help={t("localKnowledge.detail.help.retrievalCoverage")}
+            tone={vectorTone}
+          />
+        ) : null}
       </div>
-      <Explainable as="div" block={true} description={t("localKnowledge.detail.help.indexMessage")}>
-        <p className="lkd-status-callout" data-tone={issueTone}>
-          {partialIndexMessage(data, job, t)}
-        </p>
-      </Explainable>
+      {indexMessage !== undefined ? (
+        <Explainable
+          as="div"
+          block={true}
+          description={t("localKnowledge.detail.help.indexMessage")}
+        >
+          <p className="lkd-status-callout" data-tone={indexIssueTone(missingVectors, data, job)}>
+            {indexMessage}
+          </p>
+        </Explainable>
+      ) : null}
     </section>
   );
 }

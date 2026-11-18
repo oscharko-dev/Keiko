@@ -25,8 +25,8 @@ import type {
   KnowledgeSourceId,
   ManualRefreshChangeSummary,
 } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
 import {
+  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
   HTML_MANUAL_SOURCE_SCHEMA_VERSION,
   htmlManualReachableFilesScope,
   validateHtmlManualSource,

@@ -65,11 +65,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "0dcf958034d415908e26dcfda888ad8e0479f566bd7432f7de90bcf27f87e5fb"
+      "sha256": "d22ea66b8eee5b8bbd9f25363a5db99f0f2298a6bcd6bf9942765c3cf2e10678"
     },
     {
       "path": "package.json",
-      "sha256": "899eae12b9ad97e45aed7a4c74a4974bce23a8a41529f52fd71253146d18cd46"
+      "sha256": "210d94f20ce322d07f0a5fdfe7bbbe50c2ba3e3ad4d603c5b530601a60f29f90"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -81,7 +81,7 @@
     },
     {
       "path": "packages/keiko-ui/package.json",
-      "sha256": "62feb3bc88f4b966f2713bb0961ba43a5a27d6386c807bc65b391ca91dca2be6"
+      "sha256": "27cd76bd4dbc83ae036b78273f99d9e3f1df0aa9f4249e81261e8211f6fc6bf9"
     },
     {
       "path": "packages/keiko-ui/read-stylesheet.mjs",
@@ -97,7 +97,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/globals.css",
-      "sha256": "299b807fe42bc6069a49ac28c4a5195c016739335b5c375be5c73f216ca9471c"
+      "sha256": "8c87b542e9bec5595c12185faf87cca939a98c416d727591d078c7a7388b2b2d"
     },
     {
       "path": "scripts/lib/css-rendered-evidence.mjs",
@@ -120,10 +120,10 @@
       "sha256": "def885e0621a21a7d998dbedce5c5994c5391a3c8a0c1d1fb4070502d1ff0d7f"
     }
   ],
-  "postCssSha256": "a75653326a80e3d3ca9212fe75c233744952b1129d216cbb11741b094da870c2",
+  "postCssSha256": "2d5a5e54e208fcf54bfdb3e3612f38403b4207f5baf526c6a918829991b9616b",
   "run": {
-    "generatedAt": "2026-11-15T18:06:35.710Z",
-    "repoHeadSha": "860edf47877a205feab6aa18e0db4154d60b885a"
+    "generatedAt": "2026-11-17T15:36:35.192Z",
+    "repoHeadSha": "2a1171e4efa17f14c760ab5856a6a741abf2bcf8"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
   "coverage": "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",

@@ -344,7 +344,7 @@ describe("local-knowledge citation rescue (#189)", () => {
     expect(citations[0]?.source).toBeUndefined();
   });
 
-  it("projects HTML manual citation metadata as safe labels plus an opaque docs-browser target", async () => {
+  it("projects HTML manual citation metadata as safe labels plus an opaque citation reference", async () => {
     const knowledgeStore = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
     });

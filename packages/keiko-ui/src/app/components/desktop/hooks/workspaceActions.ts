@@ -275,10 +275,7 @@ function makeMinimize(setWins: MutateArgs["setWins"]): WorkspaceApi["minimize"] 
     });
 }
 
-function makeRestore(
-  setWins: MutateArgs["setWins"],
-  zc: MutateArgs["zc"],
-): WorkspaceApi["restore"] {
+function makeRestore({ setWins, zc, worldVP }: MutateArgs): WorkspaceApi["restore"] {
   return (id) =>
     setWins((ws) => {
       if (ws === null) return ws;
@@ -287,7 +284,9 @@ function makeRestore(
       const maxZ = ws.reduce((best, w) => Math.max(best, w.z), Number.NEGATIVE_INFINITY);
       if (target.minimized !== true && target.z >= maxZ) return ws;
       zc.current = Math.max(zc.current + 1, maxZ + 1);
-      return ws.map((w) => (w.id === id ? { ...w, minimized: false, z: zc.current } : w));
+      const viewport = target.max ? worldVP() : null;
+      const restored = { ...target, ...viewport, minimized: false, z: zc.current };
+      return ws.map((w) => (w.id === id ? restored : w));
     });
 }
 
@@ -709,7 +708,7 @@ export function makeMutations(args: MutateArgs): Mutations {
     focus: makeFocus(args.setWins, args.zc),
     close: makeClose(args.setWins),
     minimize: makeMinimize(args.setWins),
-    restore: makeRestore(args.setWins, args.zc),
+    restore: makeRestore(args),
     maximize: makeMaximize(args),
     add: makeAdd(args),
     openEditorFile: makeOpenEditorFile(args),
@@ -1634,7 +1633,6 @@ type ConnectApi = Omit<
     | "linkedFigmaSnapshotSources"
     | "linkedImageSources"
     | "linkedGitChangeComparisons"
-    | "currentFilesContext"
   >,
   "linkedFigmaSnapshotSources" | "linkedImageSources" | "linkedGitChangeComparisons"
 > & {
@@ -2174,23 +2172,6 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     return roots;
   };
 
-  const currentFilesContext: WorkspaceApi["currentFilesContext"] = () => {
-    let onlyContext: FilesWindowContext | null = null;
-    let contextCount = 0;
-    let topFilesWindow: AppWindow | null = null;
-    for (const w of winsRef.current) {
-      if (w.type !== "files") continue;
-      const ctx = filesContextFor(w);
-      if (ctx !== null) {
-        contextCount += 1;
-        onlyContext = ctx;
-      }
-      if (topFilesWindow === null || w.z > topFilesWindow.z) topFilesWindow = w;
-    }
-    if (contextCount === 1) return onlyContext;
-    return topFilesWindow === null ? null : filesContextFor(topFilesWindow);
-  };
-
   // Epic #710 #718 — read the selected id of the given kind ("capsule" or "capsule-set") from
   // every connected Connector window, deduped and capped at MAX_SCOPES. Both QI capsule and
   // capsule-set sources flow through this one reader so the hub can bind either (Issue #716/#718).
@@ -2291,7 +2272,6 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     linkedFigmaSnapshotSources,
     linkedImageSources,
     linkedGitChangeComparisons,
-    currentFilesContext,
   };
 }
 

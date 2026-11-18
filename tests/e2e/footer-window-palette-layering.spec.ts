@@ -62,7 +62,25 @@ async function expectControlOwnsHitPoint(page: Page, name: string): Promise<void
         .some((candidate) => candidate.closest(".window") !== null),
     };
   });
-  expect(hit, name).toEqual({ owned: true, windowIntercepts: false, windowUnderControl: false });
+  // The control sits inside its bordered workspace frame, not on or across the frame's edge.
+  const insideWorkspaceFrame = await control.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const frame = element.closest("fieldset")?.parentElement;
+    if (frame == null || getComputedStyle(frame).borderTopWidth === "0px") return false;
+    const bounds = frame.getBoundingClientRect();
+    return (
+      box.left > bounds.left &&
+      box.right < bounds.right &&
+      box.top > bounds.top &&
+      box.bottom < bounds.bottom
+    );
+  });
+  expect({ ...hit, insideWorkspaceFrame }, name).toEqual({
+    owned: true,
+    insideWorkspaceFrame: true,
+    windowIntercepts: false,
+    windowUnderControl: false,
+  });
 }
 
 for (const viewport of [
@@ -130,12 +148,24 @@ for (const viewport of [
     const canvas = page.getByRole("main", { name: "Workspace surface" });
     const normalCanvasHeight = await canvas.evaluate((element) => element.clientHeight);
     await frame.locator("[data-window-header]").dblclick({ position: { x: 100, y: 20 } });
-    await expect(page.getByRole("button", { name: "New window", exact: true })).toBeHidden();
-    await expect(page.getByRole("button", { name: "Zoom out", exact: true })).toBeHidden();
-    await expect
-      .poll(async () => canvas.evaluate((element) => element.clientHeight))
-      .toBeGreaterThan(normalCanvasHeight);
-    await frame.getByRole("button", { name: "Restore Files window", exact: true }).click();
+    await expect(frame).toHaveAttribute("data-max", "true");
+    expect(await canvas.evaluate((element) => element.clientHeight)).toBe(normalCanvasHeight);
+    for (const name of ["New window", "Zoom out", "Zoom in"]) {
+      await expectControlOwnsHitPoint(page, name);
+    }
+    await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+    const reset = page.getByRole("button", { name: "120% - reset", exact: true });
+    await expect(reset).toBeVisible();
+    const restore = frame.getByRole("button", { name: "Restore Files window", exact: true });
+    // A maximized window remains usable while the workspace camera moves.
+    await restore.click({ trial: true });
+    await reset.click();
+    await expect(page.getByRole("button", { name: "100% - reset", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "New window", exact: true }).click();
+    await expect(palette.getByRole("button", { name: /^Chat/u })).toBeVisible();
+    await palette.press("Escape");
+    await expect(frame).toHaveAttribute("data-max", "true");
+    await restore.click();
     await expectControlOwnsHitPoint(page, "New window");
     await expect
       .poll(async () => canvas.evaluate((element) => element.clientHeight))

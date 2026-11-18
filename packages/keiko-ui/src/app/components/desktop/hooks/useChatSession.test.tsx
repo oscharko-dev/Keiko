@@ -1304,6 +1304,41 @@ describe("useChatSession bootstrap", () => {
     });
   });
 
+  it("lets the server pick a folder when the remembered project's folder is gone (#4455)", async (): Promise<void> => {
+    // Full Chromium smoke on #4460: once every registered folder had been deleted, Chat History's
+    // New sent the remembered (unavailable) project path, the server answered PATH_NOT_FOUND and no
+    // composer ever opened. The automatic first chat already let the server choose; New does too.
+    const gone = project("/gone", { available: false });
+    const created = chat({ id: "chat-new", projectPath: "/home", title: "New chat" });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [gone] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    vi.mocked(createDesktopChat).mockResolvedValue({
+      chat: created,
+      project: project("/home"),
+      projects: [project("/home"), gone],
+      chats: [created],
+      messages: [],
+    });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeProject?.path).toBe("/gone");
+
+    await act(async () => {
+      await result.current.openNewChat(undefined, "New chat");
+    });
+    expect(createDesktopChat).toHaveBeenLastCalledWith({ title: "New chat" });
+    expect(result.current.activeChat?.id).toBe("chat-new");
+    expect(result.current.activeProject?.path).toBe("/home");
+
+    // A folder the person names stays their choice, even when it is gone: the server refuses it.
+    await act(async () => {
+      await result.current.openNewChat(gone, "Named");
+    });
+    expect(createDesktopChat).toHaveBeenLastCalledWith({ title: "Named", projectPath: "/gone" });
+  });
+
   it("keeps an elected selection automatic across a chat upsert of the same model", async () => {
     // Review finding on #3221 (round 2): the server persists the ELECTED model on an
     // auto-created chat, so the next upsert of that chat (title rename, message PATCH echo)

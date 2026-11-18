@@ -152,7 +152,7 @@ describe("production runtime workspace authority", () => {
         runId: "run-replaced",
         requestId: "request-replaced",
       }),
-    ).toThrow(expect.objectContaining({ reason: "model-verification-pending" }) as Error);
+    ).toThrow(expect.objectContaining({ reason: "conversation-not-ready" }) as Error);
     expect(productionRuntimeAuthorityFacts(input, context)).toEqual(admittedFacts);
     expect(resolveModel).toHaveBeenCalledTimes(4);
   });

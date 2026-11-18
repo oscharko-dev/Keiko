@@ -12,6 +12,7 @@ import {
   checkSelectedConversationModel,
   initializeConfiguredConversationReadiness,
   NOT_READY_REPROBE_COOLDOWN_MS,
+  withReadinessParentCorrelation,
 } from "./gateway-readiness.js";
 import { handleModels } from "./read-handlers.js";
 import type { RouteContext } from "./routes.js";
@@ -141,6 +142,12 @@ function configure(deps: UiHandlerDeps, correlationId: string, timeoutMs = 1000)
       ],
     }),
     true,
+    correlationId,
+  );
+  // Startup checks no model (ADR-0171 D2, amended 2026-11-16); these tests exercise the shared
+  // readiness queue the way an explicit activation of the configured chat model does.
+  initializeConfiguredConversationReadiness(
+    withReadinessParentCorrelation(deps, correlationId),
     correlationId,
   );
 }
@@ -469,6 +476,7 @@ it("keeps the existing two-slot ceiling while background and selected requests s
     })),
   });
   deps.gatewayConfig?.set(config, true, "corr-two-slot-source");
+  initializeConfiguredConversationReadiness(deps, "corr-two-slot-source");
   // Startup checks only the model in use (#4351); the other three listed models are untouched.
   await vi.waitFor(() => {
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -555,6 +563,8 @@ it("retains the rotated connection result when an older chat failure finally arr
     },
     true,
   );
+  // A rotated connection loses its activation; the person activates the model again.
+  initializeConfiguredConversationReadiness(deps, "corr-rotated-activation");
   await vi.waitFor(() => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
@@ -626,6 +636,8 @@ it("keeps an unchanged model's startup check when discovery replaces the generat
     "corr-discovery",
   );
   expect(replaced).toBe(true);
+  // The batch check is requested again for the new generation; it joins the running one.
+  initializeConfiguredConversationReadiness(deps, "corr-discovery");
   const generation = holder.generation();
   try {
     // The replaced generation joins the running check instead of seeing none: a first turn waits.
@@ -711,3 +723,52 @@ function withDiscoveredModel(current: GatewayConfig): GatewayConfig {
     capabilities: [...(current.capabilities ?? []), ...(added.capabilities ?? [])],
   };
 }
+
+// 2026-11-16: models are activated manually in Settings > Models. Configuring a gateway (startup,
+// a replacement or a credential rotation) starts no chat readiness probe, page loads and Chat
+// requests start none either, and the model stays inactive until the person activates it.
+it("starts no chat readiness probe when a gateway is configured, reloaded or rotated", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  const fetch = startingGateway({ status: 200 });
+  vi.stubGlobal("fetch", fetch);
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) throw new TypeError("Expected gateway owner.");
+  holder.set(
+    parseGatewayConfig({
+      providers: [
+        {
+          modelId: "chat-model",
+          baseUrl: "https://provider.example.invalid/v1",
+          apiKey: "throwaway-key",
+          timeoutMs: 1000,
+          maxRetries: 0,
+          retryBaseDelayMs: 1,
+        },
+      ],
+    }),
+    true,
+    "corr-manual-activation",
+  );
+  await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS);
+  const config = holder.current();
+  if (config === undefined) throw new TypeError("Expected configured gateway.");
+  holder.set(
+    {
+      ...config,
+      providers: config.providers.map((provider) => ({ ...provider, apiKey: "rotated-key" })),
+    },
+    true,
+    "corr-manual-rotation",
+  );
+  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-chat-send");
+  const models = handleModels(
+    { url: new URL("http://127.0.0.1/api/models?refresh=1") } as RouteContext,
+    deps,
+  );
+  await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS);
+  expect(fetch).not.toHaveBeenCalled();
+  expect(currentConversationReady(deps, "chat-model")).toBe(false);
+  expect(models).toMatchObject({ status: 200, body: { models: [{ id: "chat-model" }] } });
+  expect(JSON.stringify(models.body)).not.toContain("conversationReady");
+});

@@ -1,7 +1,6 @@
 import type { GatewayConfig, ModelProviderConfig } from "@oscharko-dev/keiko-model-gateway";
-import { codingSidecarDisabledByPolicy } from "./coding-sidecar-gateway.js";
 import { newCorrelationId } from "./correlation.js";
-import { currentConversationReadinessObservation, type UiHandlerDeps } from "./deps.js";
+import type { UiHandlerDeps } from "./deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import {
   catalogConnectionMatches,
@@ -10,11 +9,7 @@ import {
 } from "./gateway-setup.js";
 import {
   cancellableConversationProbeDeps,
-  initializeConfiguredConversationReadiness,
   initializeConfiguredEmbeddingReadiness,
-  conversationModelForStartupProof,
-  initializeLiteLlmCodingReadiness,
-  settleStartupConversationReadiness,
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   withReadinessParentCorrelation,
 } from "./gateway-readiness.js";
@@ -60,14 +55,6 @@ class GatewayStartupChecks {
 
   public constructor(private readonly deps: UiHandlerDeps) {}
 
-  private initializeConversationReadiness(
-    deps: UiHandlerDeps,
-    correlationId: string,
-    parentCorrelationId: string | undefined,
-  ): void {
-    initializeConfiguredConversationReadiness(deps, parentCorrelationId ?? correlationId);
-  }
-
   public start(parentCorrelationId?: string): void {
     const correlationId = newCorrelationId();
     const observedDeps = withReadinessParentCorrelation(this.deps, parentCorrelationId);
@@ -77,7 +64,9 @@ class GatewayStartupChecks {
     const generation = holder.generation();
     this.initializeGeneration(generation);
     this.startedGeneration = generation;
-    this.initializeConversationReadiness(observedDeps, correlationId, parentCorrelationId);
+    // Chat models are activated manually in Settings > Models: startup starts no basic-chat or
+    // Coding tool-calling check (ADR-0171 D2, amended 2026-11-16). The embedding model in use and
+    // catalog discovery stay automatic.
     this.track(
       initializeConfiguredEmbeddingReadiness(
         cancellableConversationProbeDeps(observedDeps, this.controller.signal),
@@ -169,13 +158,7 @@ class GatewayStartupChecks {
       () => undefined,
     );
     const retryCatalog = await catalog;
-    await this.finishInitialization(
-      deps,
-      correlationId,
-      parentCorrelationId,
-      retryCatalog,
-      generation,
-    );
+    this.finishInitialization(deps, correlationId, parentCorrelationId, retryCatalog, generation);
   }
 
   private catalog(deps: UiHandlerDeps, correlationId: string): Promise<boolean> {
@@ -189,20 +172,16 @@ class GatewayStartupChecks {
     );
   }
 
-  private async finishInitialization(
+  private finishInitialization(
     deps: UiHandlerDeps,
     correlationId: string,
     parentCorrelationId: string | undefined,
     retryCatalog: boolean,
     generation: number,
-  ): Promise<void> {
+  ): void {
     if (!this.currentGeneration(generation)) return;
-    this.initializeConversationReadiness(deps, correlationId, parentCorrelationId);
-    const coding = codingStartupEnabled(deps);
-    if (coding) await this.initializeCodingReadiness(deps, correlationId, generation);
-    if (!this.currentGeneration(generation)) return;
-    // Only catalog discovery is retried on a timer. Basic-chat readiness retains its startup
-    // result until explicit Settings verification or connection replacement.
+    // Only catalog discovery is retried on a timer. Model readiness is established only by the
+    // person's explicit activation in Settings > Models.
     if (retryCatalog) {
       this.scheduleRetry(deps, correlationId, parentCorrelationId, generation);
     } else {
@@ -210,25 +189,6 @@ class GatewayStartupChecks {
       clearTimeout(this.retry);
       this.retry = undefined;
     }
-  }
-
-  // The tool-calling proof follows the chat model in use (#4351). It starts for the model elected
-  // now. When the startup walk then moved to another model because the default was refused
-  // definitively, that model gets its proof too, but only because it answered the walk's own check:
-  // a model nobody picked, and that no check proved ready, never receives a tool-calling request.
-  private async initializeCodingReadiness(
-    deps: UiHandlerDeps,
-    correlationId: string,
-    generation: number,
-  ): Promise<void> {
-    const probeDeps = cancellableConversationProbeDeps(deps, this.controller.signal);
-    const first = conversationModelForStartupProof(deps);
-    await initializeLiteLlmCodingReadiness(probeDeps, correlationId);
-    await settleStartupConversationReadiness(deps);
-    const next = conversationModelForStartupProof(deps);
-    if (!this.currentGeneration(generation) || next === first || next === undefined) return;
-    if (currentConversationReadinessObservation(deps, next) !== true) return;
-    await initializeLiteLlmCodingReadiness(probeDeps, correlationId);
   }
 
   private scheduleRetry(
@@ -440,14 +400,6 @@ function logCatalogCacheDecision(
 function configuredStartupGateway(deps: UiHandlerDeps): GatewayConfig | undefined {
   const holder = deps.gatewayConfig;
   return holder?.configured?.() ?? holder?.current();
-}
-
-function codingStartupEnabled(deps: UiHandlerDeps): boolean {
-  const source =
-    deps.codingSidecarGatewayModelSourceResolver?.() ??
-    deps.codingSidecarGatewayModelSource ??
-    "keiko-model-gateway";
-  return source === "keiko-model-gateway" && !codingSidecarDisabledByPolicy(deps.env);
 }
 
 function catalogCacheDisposition(

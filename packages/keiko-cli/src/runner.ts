@@ -377,8 +377,12 @@ function runPortableCommand(
   const noShortcutOperation =
     command === undefined || command === "--help" || command === "-h" || command === "status";
   const layoutEvidence = installLayoutOverrideEvidence(env);
-  const needsLayoutEvidence = layoutEvidence !== undefined;
-  if ((!needsLayoutEvidence && process.platform !== "win32") || noShortcutOperation) {
+  // `launch` reaches `keiko start`, whose lifecycle evidence is recorded on every platform (#3532):
+  // without the sink a macOS or Linux launch left no health, browser-handoff, failure or
+  // provisioned-config line. The other operations emit only on Windows or after a layout override.
+  const needsDeferredLog =
+    layoutEvidence !== undefined || process.platform === "win32" || command === "launch";
+  if (!needsDeferredLog || noShortcutOperation) {
     return runPortableCli(rest, io, env);
   }
   return runWithDeferredSecurityLog(

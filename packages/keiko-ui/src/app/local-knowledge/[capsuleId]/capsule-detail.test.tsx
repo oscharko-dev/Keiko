@@ -425,6 +425,24 @@ describe("CapsuleDetail — overview section", () => {
 // ---------------------------------------------------------------------------
 
 describe("CapsuleDetail — index status section", () => {
+  it("shows an empty index without claiming that its chunks have embeddings", async () => {
+    const detail: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      health: { ...BASE_HEALTH, documentCount: 0, chunkCount: 0, vectorCount: 0 },
+      indexingJobs: [],
+    };
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    const status = within(await screen.findByRole("region", { name: "Index status" }));
+    expect(status.getByText("Not indexed")).toBeInTheDocument();
+    expect(status.getByText("No indexed chunks yet")).toBeInTheDocument();
+    expect(status.queryByText("All chunks embedded")).not.toBeInTheDocument();
+    expect(status.queryByRole("img", { name: /Indexed chunks with embeddings/u })).toBeNull();
+    expect(
+      status.queryByText("Index and vectors are aligned for indexed documents."),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders indexed documents as successful documents over discovered documents", async () => {
     const baseJob = FULL_DETAIL.indexingJobs[0];
     if (baseJob === undefined) throw new Error("test fixture must include an indexing job");

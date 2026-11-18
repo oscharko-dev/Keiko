@@ -1,4 +1,4 @@
-# Public API surface — 1.5.1
+# Public API surface — 1.5.2
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -110,6 +110,12 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 `KEIKO_PRODUCT_VERSION`.
 
 ## Stability notes
+
+- 1.5.2: root exports remain stable. `keiko start` accepts `--provisioned-config PATH`, which adopts an
+  administrator's gateway configuration for the standalone folder package; `keiko portable launch`
+  accepts `--in-place` for the same package. Chat models are activated in Settings > Models; the
+  readiness API adds `POST /api/gateway/readiness/deactivation`. Existing stores carry forward
+  unchanged.
 
 - 1.5.1: root exports and CLI entrypoints remain stable. Verification history can include the optional denied count. UI schema 79 adds bounded Jira report downloads to the existing store, with existing Chats and history carried forward.
 

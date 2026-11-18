@@ -2232,6 +2232,10 @@ export type HtmlManualCitationOpenUnavailableReason =
   | "target-credentialed"
   | "target-unavailable";
 
+export type HtmlManualCitationCheckResult =
+  | { readonly state: "verified" }
+  | { readonly state: "unavailable"; readonly reason: HtmlManualCitationOpenUnavailableReason };
+
 export type HtmlManualCitationOpenEligibility =
   | { readonly state: "available"; readonly target: string }
   | {

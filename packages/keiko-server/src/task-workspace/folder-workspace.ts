@@ -31,7 +31,7 @@ import {
   type WorkspaceSelectionOutcome,
 } from "./activity-log.js";
 import { buildBinding } from "./binding.js";
-import { isCanonicalLocalRoot } from "./canonical-root.js";
+import { isCanonicalLocalRoot, isRegisteredLocalRoot } from "./canonical-root.js";
 import { TaskWorkspaceError } from "./errors.js";
 import { deriveRepositoryId } from "./naming.js";
 import type { WorkspaceInstanceStore } from "./store.js";
@@ -132,7 +132,7 @@ export function folderView(
   const persisted = instances.getById(pointer.workspaceId);
   if (persisted?.workspaceKind !== "folder") return undefined;
   const root = persisted.repositoryRoot;
-  if (!store.listProjects().some((project) => project.path === root)) return undefined;
+  if (!isRegisteredLocalRoot(store, root)) return undefined;
   if (!isCanonicalLocalRoot(root)) return undefined;
   if (folderWorkspaceId(folderIdentity(root)) !== pointer.workspaceId) return undefined;
   const instance: WorkspaceInstance = { ...persisted, lastVerifiedAt: new Date().toISOString() };
@@ -150,7 +150,7 @@ function isCanonicalFolder(root: string): boolean {
 }
 
 function requireFolderRoot(store: UiStore, root: string): string {
-  if (!store.listProjects().some((project) => project.path === root)) {
+  if (!isRegisteredLocalRoot(store, root)) {
     throw new TaskWorkspaceError("MISSING_REPOSITORY", "Select a registered folder.");
   }
   if (!isCanonicalFolder(root)) {

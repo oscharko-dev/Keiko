@@ -6,7 +6,17 @@ import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
-import type { WorkbenchExecutionLocationState } from "./useWorkbenchExecutionLocation";
+import type {
+  LocationFailureReason,
+  WorkbenchExecutionLocationState,
+} from "./useWorkbenchExecutionLocation";
+
+// A server code with one plain cause gets that cause and its way out; the generic sentence stays
+// for every other failure (#4404: a Windows checkout said "choose a branch" when Git was the cause).
+const LOCATION_FAILURE_KEYS = {
+  unregistered: "codingWorkbench.repository.locationUnregistered",
+  "git-unreadable": "codingWorkbench.repository.locationGitUnreadable",
+} as const satisfies Record<LocationFailureReason, Parameters<CodingWorkbenchTranslate>[0]>;
 
 // The checkout notice beside the repository selector. A failed binding shows its error and Retry
 // alone, as the start blocker does: a reload that runs meanwhile adds no second "Preparing" line,
@@ -17,12 +27,13 @@ import type { WorkbenchExecutionLocationState } from "./useWorkbenchExecutionLoc
  * sentence, and no failure carries a second sentence that guesses another cause (#4371).
  */
 export function locationBlockerKey(
-  state: Pick<WorkbenchExecutionLocationState, "error" | "denied">,
+  state: Pick<WorkbenchExecutionLocationState, "error" | "denied" | "reason">,
 ): Parameters<CodingWorkbenchTranslate>[0] {
   if (state.denied) return "codingWorkbench.repository.deniedBlocker";
-  return state.error
+  if (!state.error) return "codingWorkbench.repository.locationBinding";
+  return state.reason === undefined
     ? "codingWorkbench.repository.locationError"
-    : "codingWorkbench.repository.locationBinding";
+    : LOCATION_FAILURE_KEYS[state.reason];
 }
 
 export function LocationBindingNotices({
@@ -36,7 +47,7 @@ export function LocationBindingNotices({
   if (locationState.error) {
     return (
       <RetryMessage
-        text={t("codingWorkbench.repository.locationError")}
+        text={t(locationBlockerKey(locationState))}
         className={styles.cmpRepositorySelectorNotice}
         role="alert"
         retry={{

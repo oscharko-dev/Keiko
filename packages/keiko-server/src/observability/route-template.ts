@@ -70,14 +70,14 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set(
     "codex-subscription coding-sidecar coding-workbench commands commit compact completion " +
     "completions config conflicts connect connection consolidation containers content " +
     "context control copy correct correction-predecessors create credentials deactivate " +
-    "debug delete dependencies description-draft desktop diagnostics diff directories " +
-    "docs-browser document download draft drafts dryrun-figma dryrun-jira edit editor editor-target " +
+    "deactivation debug delete dependencies description-draft desktop diagnostics diff directories " +
+    "document download draft drafts dryrun-figma dryrun-jira edit editor editor-target " +
     "evaluate events evidence exception-breakpoints execute executions explain export fetch " +
-    "figma files focus folder follow-up forget gateway git git-change github-authorization " +
+    "figma files focus folder follow-up forget gateway gateway-service git git-change github-authorization " +
     "git-delivery grounded handoff health health-scan history hot-exit human-inputs image " +
     "impact import inbox index initialize inline-completion instrumentation issue " +
     "jira-drafts jira-reports jira-templates jobs journey json language local local-branch " +
-    "local-history local-knowledge local-session lsp maintenance manual-pods mark-ready mcp " +
+    "local-history local-knowledge local-session lsp maintenance manual-citation manual-pods mark-ready mcp " +
     "servers chat-write-approval memory merge messages model-policy models " +
     "native-file-dialog navigate open open-browser operations order orphans packs pair " +
     "patch-apply pause pin policy pr pr-description preflight preview producer profile " +

@@ -3,6 +3,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
+  CodingWorkbenchGatewayServiceRepairResponse,
   CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchMode,
   CodingWorkbenchModelRefusalReason,
@@ -1311,7 +1312,40 @@ export function handleCodingRuntimeScheduleControl(
   }, ctx.correlationId);
 }
 
+/**
+ * The Workbench's Repair of the Windows runtime gateway: the same idempotent native install `keiko
+ * gateway-service repair` runs, behind Windows' own UAC approval (ADR-0043 D19). The app session is
+ * the person's; the approval itself is Windows'. No request body: there is nothing to choose.
+ */
+export async function handleCodingRuntimeGatewayServiceRepair(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return {
+      status: 403,
+      body: errorBody(
+        "CODING_GATEWAY_SERVICE_REPAIR_FORBIDDEN",
+        "Gateway repair needs a paired Keiko session.",
+        ctx.correlationId,
+      ),
+    };
+  }
+  const repair = deps.codingRuntimeGatewayService?.repair;
+  const outcome =
+    repair === undefined
+      ? "unavailable"
+      : await repair(ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
+  const body: CodingWorkbenchGatewayServiceRepairResponse = { outcome };
+  return { status: 200, body };
+}
+
 export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/runtime/gateway-service/repair",
+    handler: handleCodingRuntimeGatewayServiceRepair,
+  },
   {
     method: "GET",
     pattern: "/api/coding-workbench/runtime/schedules",

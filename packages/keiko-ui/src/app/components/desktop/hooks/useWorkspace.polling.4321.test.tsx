@@ -10,7 +10,10 @@ function Harness(): ReactElement {
   return (
     <main ref={ref}>
       <output data-testid="windows">{workspace.wins?.map(({ id }) => id).join(",")}</output>
-      <button type="button" onClick={() => workspace.api.add("agents")}>
+      <button
+        type="button"
+        onClick={() => workspace.api.add("agents", { runId: "run-existing", workflow: "verify" })}
+      >
         add
       </button>
     </main>

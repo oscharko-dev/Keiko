@@ -504,4 +504,27 @@ describe("POSIX lifecycle security-log wiring (#3532)", () => {
     // The deferred sink loads the server graph only when an event is actually written.
     expect(commandMocks.loadActivityLog).not.toHaveBeenCalled();
   });
+
+  // `portable launch` ends in `keiko start`. Without the sink a macOS launch recorded nothing of
+  // it: no health, no browser handoff, no failure line and no provisioned-config adoption.
+  it.each(["darwin", "linux"] as const)(
+    "supplies the deferred sink to portable launch on %s and keeps the other operations on their fast path",
+    async (hostPlatform) => {
+      Object.defineProperty(process, "platform", { ...platform, value: hostPlatform });
+      const commandIo = io();
+
+      await expect(Promise.resolve(runCli(["portable", "launch"], commandIo, {}))).resolves.toBe(
+        43,
+      );
+      await expect(Promise.resolve(runCli(["portable", "setup"], commandIo, {}))).resolves.toBe(43);
+      await expect(Promise.resolve(runCli(["portable", "status"], commandIo, {}))).resolves.toBe(
+        43,
+      );
+
+      expect(typeof commandSecurityFactory(commandMocks.portable.mock.calls[0])).toBe("function");
+      expect(commandMocks.portable.mock.calls[1]).toEqual([["setup"], commandIo, {}]);
+      expect(commandMocks.portable.mock.calls[2]).toEqual([["status"], commandIo, {}]);
+      expect(commandMocks.loadActivityLog).not.toHaveBeenCalled();
+    },
+  );
 });

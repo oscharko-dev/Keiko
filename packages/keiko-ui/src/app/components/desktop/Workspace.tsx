@@ -771,12 +771,11 @@ function isWorkspaceEmpty(wins: readonly AppWindow[] | null): boolean {
 }
 
 function hasAnyMaximizedWindow(wins: readonly AppWindow[] | null): boolean {
-  return wins?.some((win) => win.max) ?? false;
+  return wins?.some((win) => win.max && win.minimized !== true) ?? false;
 }
 
 interface WorkspaceMainDataAttributes {
   readonly windowMaxed: "true" | undefined;
-  readonly canvasOverlaysHidden: "true" | "false";
   readonly connecting: "true" | undefined;
   readonly panning: "true" | undefined;
   readonly handTool: "true" | undefined;
@@ -792,7 +791,6 @@ function workspaceMainDataAttributes(state: {
 }): WorkspaceMainDataAttributes {
   return {
     windowMaxed: state.hasMaximizedWindow ? "true" : undefined,
-    canvasOverlaysHidden: state.hasMaximizedWindow ? "true" : "false",
     connecting: state.connecting !== null ? "true" : undefined,
     panning: state.panning ? "true" : undefined,
     handTool: state.handTool ? "true" : undefined,
@@ -940,11 +938,6 @@ function WorkspaceScene({
         : null}
     </div>
   );
-}
-
-function resolvePaletteOverlay(hasMaximizedWindow: boolean, palette: ReactNode): ReactNode {
-  if (hasMaximizedWindow) return null;
-  return palette ?? null;
 }
 
 export function Workspace({
@@ -1506,10 +1499,9 @@ export function Workspace({
 
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
-    <div
-      className={controlStyles.cmpWorkspaceLayout}
-      data-canvas-overlays-hidden={mainDataAttrs.canvasOverlaysHidden}
-    >
+    <div className={controlStyles.cmpWorkspaceLayout}>
+      <WorkspaceShader viewportRef={wsRef} />
+      <div className="ws-grid" style={bgStyle} aria-hidden="true" />
       <main
         className={`workspace ${selectionStyles.cmpWorkspaceSurface} ${controlStyles.cmpWorkspaceViewport}`}
         data-layout-locked={layoutLocked ? "true" : undefined}
@@ -1517,7 +1509,6 @@ export function Workspace({
         aria-label={t("workspace.surface")}
         tabIndex={0}
         data-window-maxed={mainDataAttrs.windowMaxed}
-        data-canvas-overlays-hidden={mainDataAttrs.canvasOverlaysHidden}
         data-connecting={mainDataAttrs.connecting}
         data-panning={mainDataAttrs.panning}
         data-hand-tool={mainDataAttrs.handTool}
@@ -1528,8 +1519,6 @@ export function Workspace({
         onDragOver={onDragOver}
         onDrop={onDrop}
       >
-        <WorkspaceShader />
-        <div className="ws-grid" style={bgStyle} aria-hidden="true" />
         <WorkspaceMarqueeOverlay marquee={marquee} />
         <ConnectAnnouncer
           wins={visibleWins}
@@ -1566,7 +1555,7 @@ export function Workspace({
           selectedWindowIds={selectedWindowIds}
         />
 
-        {resolvePaletteOverlay(hasMaximizedWindow, palette)}
+        {palette}
         {children}
       </main>
 

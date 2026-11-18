@@ -465,10 +465,9 @@ Keiko for Quality review instance. It changes no Coding Workbench mode and adds 
   review worktree of ADR-0184 D3 at its head commit, the action classes are `workspace-read` alone,
   the command policy is `deny`, the network policy `deny-all` with no connector scope, the
   deployment ceiling and therefore the effective mode `governed-assist` (the envelope schema requires
-  a mode), and the budgets are the review run's own (1,500,000 prompt tokens and 20 minutes by
-  default, operator-configurable through `KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS` and
-  `KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES`, never above the coding envelope; out of range fails
-  closed). The envelope's validation is unchanged and admits these grants.
+  a mode), and the budgets are the review run's own (20 minutes by default, operator-configurable
+  through `KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES`, never above the coding envelope; out of range
+  fails closed). Like every run since #4346, a review run has no prompt-token allowance. The envelope's validation is unchanged and admits these grants.
 - **Planning needs a writable authority.** The tool authority port's two relaxed paths -- a
   delivery `propose`/`reconcile` and an approved stage or a Git sync decided elsewhere -- now require
   `workspace-write` beside `workspace-read`. Planning, staging or syncing is meaningful only for an
@@ -482,3 +481,16 @@ Keiko for Quality review instance. It changes no Coding Workbench mode and adds 
   body-free `review.run.action-refused` line. The purpose they enforce comes from the review
   composition's own tool profile, not from the minted authority, so the refusal holds even if the
   review authority were missing.
+
+## Amendment — the Windows runtime gateway is installed with Keiko (2026-11-17)
+
+On Windows every runtime launch needs the `KeikoRuntimeGateway` broker (ADR-0043 D19). Setting it
+up is a host installation step, not a coding action: it sits outside the three modes, grants no run
+authority and changes no Authority Envelope, deployment ceiling or mode default. A healthy
+`keiko start` (first launch, the relaunch after an update, an npm start) brings the broker to the
+current helper, and the Workbench offers one Repair action for an absent, stopped, stale or
+unreadable broker. In both cases Windows asks the local human through UAC, so the decision stays
+the human's; a declined approval changes nothing and is not repeated until the helper changes. A
+runtime that no lane offers names the installation kind the server found
+(`npm-runtime-package-missing`, `portable-runtime-unverified`), so the Workbench states the one
+step for it; no install kind relaxes a hard denial or the fail-closed launch.

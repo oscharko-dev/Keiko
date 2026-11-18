@@ -6,7 +6,7 @@ export const TOOL_CALLING_REQUIRED_MESSAGE =
 export const TOOL_CALLING_VERIFICATION_REQUIRED_MESSAGE =
   "The selected model needs a current tool-calling readiness check. Open Settings > Models and run the readiness check.";
 export const CONVERSATION_REQUIRED_MESSAGE =
-  "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.";
+  "The selected model is not activated or failed its readiness check. Open Settings > Models and activate the model.";
 
 export class ConversationModelNotReadyError extends Error {
   public constructor(

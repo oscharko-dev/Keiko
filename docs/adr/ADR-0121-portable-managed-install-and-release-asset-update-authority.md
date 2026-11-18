@@ -8,7 +8,8 @@ Accepted (Issue #1946, 2026-07-05); amended for the Windows setup companion (Iss
 2026-09-10); amended with the production-qualified Linux x64 archive (Issue #3451, 2026-09-10);
 D8 amended by the `dev` release rehearsal of ADR-0177 (2026-09-14). The `linux-x64` archive is a
 community-tier asset without a parity commitment for new operating-system features
-([ADR-0183](ADR-0183-linux-desktop-community-tier.md), 2026-11-12).
+([ADR-0183](ADR-0183-linux-desktop-community-tier.md), 2026-11-12). D9 adds the standalone folder
+package, an in-place delivery form of the same payload (2026-11-17).
 
 ## Context
 
@@ -294,6 +295,17 @@ version matches the target stable release, and release-impact remediation is com
 safe to defer. A failed download, verification, staging, activation, relaunch, or remediation step
 must fail closed and preserve the current working install when safe. This is failure recovery, not a
 user-facing rollback feature.
+
+**Platform services follow the update (one-step Windows setup, 2026-11-17).** An update is not
+complete for coding work while the Windows `KeikoRuntimeGateway` service still runs the previous
+release's helper. The relaunch that ends a governed update, the first launch after setup and the
+manual re-download fallback all end in the same managed `keiko start`, which, once the UI answered
+healthy, brings the service to the new helper through the existing idempotent native install
+(ADR-0043 D19): one UAC prompt when the helper pin changed, none otherwise, and never before the
+restart proof. The CLI keeps refusing portable `keiko update apply`, because only the in-app attempt
+holds the running UI's launch identity and shutdown trigger that the native handoff needs; its
+refusal names Review updates and says that the gateway follows. A package-manager `keiko update
+apply` ends with `keiko restart`, which runs the same step.
 
 The manual re-download fallback is part of the same portable-managed authority rather than a second
 update channel. If a user opens a newer portable release asset while an older attested managed
@@ -1128,6 +1140,86 @@ for archive and SBOM consumers; they supplement rather than replace the Keiko ma
 The final publisher additionally requires the Windows setup companion's build-provenance attestation
 before release upload so locally replaced setup bytes cannot cross the publish boundary.
 
+### D9 — A standalone folder package runs the same payload in place
+
+Some endpoints cannot take an installation at all: a regulated workplace where the person has no
+administrator rights and any install involves corporate IT. D3's managed install does not fit
+there. On macOS it copies Keiko to `/Applications`, which a standard user cannot write; on Windows
+it adds a per-user program folder and a Start Menu entry. D9 adds a delivery form for those
+endpoints. It does not replace D1 to D8, and the npm path stays the primary developer path.
+
+**Form.** A standalone folder package is one folder, shipped as `keiko-<target>-standalone.zip` for
+`macos-arm64`, `macos-x64` and `windows-x64` (ADR-0183 scopes new delivery forms to macOS and
+Windows):
+
+```text
+Keiko/
+  Start Keiko.command | Start Keiko.cmd
+  Stop Keiko.command  | Stop Keiko.cmd
+  README.txt  LIESMICH.txt
+  keiko.config.json            only in an administrator's package
+  system/standalone.json       target, version, source archive name and SHA-256
+  system/Keiko/...             the portable payload of D1, every file's content unchanged
+```
+
+`scripts/build-standalone-package.mjs` builds it from a portable release archive whose SHA-256 the
+caller must supply; an unverified archive is refused. No file of the payload is added, removed or
+changed (permissions are normalized to owner-only), so every check the product performs on a
+portable payload keeps passing, and the package needs no build of its own: it is a repack of the
+reviewed archive.
+
+**Launch.** The start files run the bundled Node.js against the bundled CLI:
+`keiko portable launch --in-place`. In place, the launch validates the payload like every portable
+root (D2) and then starts Keiko from where it is. It performs no managed setup, writes no
+registration and consults no update recovery, which belongs to a managed install. Keiko does not
+write into the package folder (qualified from a read-only folder on macOS and by comparing the
+folder after a session on Windows). State lives in `~/.keiko-standalone`, deliberately not in the
+`~/.keiko` of a managed install: the two forms then never share a pid file, a registration, an
+update-recovery record or a database schema of a different version, and replacing the folder with
+a newer package keeps the person's data. The start files are scripts on purpose. The only programs
+that run at a double-click are the system shell and the Node.js binary, which its publisher signs;
+the payload's own unsigned native launcher is not used. On macOS the launch still asks the runtime
+activation of D2: a payload without a platform signature is waived as in every unsigned install,
+and a platform-signed payload is refused in place, because its runtime monitor must sit in the
+root-owned application location. The folder form is the unsigned lane's.
+
+**No self-management.** An in-place launch declares `KEIKO_PORTABLE_MANAGEMENT=organization-managed`
+to the UI process. Install-mode detection reads that declaration (closed values `user-local`,
+`organization-managed`, `machine-managed`; an unreadable value fails closed to
+`organization-managed`) and reports a declared payload through the existing `portable-it-managed`
+disposition before it judges any registration. The app therefore states that the install is
+managed outside the app and makes no registry or release request (`update-preflight.test.ts` pins
+that for this disposition); it never offers the portable setup, whose
+instruction would lead the person to the installation this form exists to avoid. The same
+declaration keeps the one-step Windows setup of ADR-0043 D19 away: the start sets up no
+`KeikoRuntimeGateway` service and asks for no approval, and the Coding Workbench offers no Repair.
+It says instead that Coding runs on Windows need that system service, which this Keiko does not set
+up (`gateway-service-managed-outside`). Windows Coding therefore still never runs without the broker;
+an administrator who installs it separately enables it. A new version arrives as a new folder.
+
+**Provisioned configuration.** An administrator may place one `keiko.config.json` beside the start
+files. `keiko start --provisioned-config PATH` adopts it as the gateway configuration whenever its
+bytes differ from the file last adopted (a SHA-256 marker in `ui/provisioned-config.sha256`), after
+the "already running" check and before the UI process is spawned. A candidate must load through
+the gateway's own config loader before it replaces anything, so a mistyped file, or one that still
+refers to a key sealed on the administrator's computer, leaves the working configuration in place.
+The file is authoritative and replaces the configuration as a whole, so a rotated key or a changed
+gateway reaches every person with the next package. A running Keiko is never written under; the adoption waits for the next
+start and says so. An explicit `KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR` wins and the file is not
+adopted. Every decision leaves one `cli.lifecycle.provisioned-config` line with the closed outcome
+and an error class, never a path or content. The file may carry a plaintext `apiKey`; ADR-0046
+states its custody.
+
+**What this form does not do.** It does not bypass the operating system's download checks. A
+package that still carries the download mark (the macOS quarantine attribute, the Windows Mark of
+the Web) is blocked exactly as before; an administrator removes the mark before distributing the
+package over an internal share, and the builder's own output carries none. It does not weaken D7:
+a package that is neither signed by a platform vendor nor allowed by the organization's application
+control stays blocked, and that is the organization's decision. The Windows Coding Workbench keeps
+its requirement of the installed gateway service, which needs an administrator; a folder package
+on Windows therefore offers Chat, Knowledge, Jira and the Editor, and reports Coding as
+unavailable through its existing disposition.
+
 ## Security and threat model
 
 Security review for implementation under this ADR must cover:
@@ -1291,6 +1383,7 @@ Security review for implementation under this ADR must cover:
 | 1.1     | 2026-09-10 | Added `linux-x64` as the fourth release-blocking archive for Issue #3451 so the production packaging model matches the qualified runtime target set. |
 | 1.2     | 2026-09-14 | Amended D8 for the ADR-0177 `dev` release rehearsal: rehearsal attestations name `refs/heads/dev`, and every documented verifier binds the signer workflow and the stable tag. |
 | 1.3     | 2026-10-24 | The macOS application job declares the `Interactive` process type instead of `Background`, which throttled the app's runtime below its startup grant on a busy machine. |
+| 1.4     | 2026-11-17 | Added D9: the standalone folder package runs the portable payload in place, declares itself managed outside the app and can adopt an administrator-provisioned gateway configuration. |
 
 ## Amendment history
 
@@ -1346,3 +1439,16 @@ Security review for implementation under this ADR must cover:
   installation. The launcher also shows the failure box of a start that ended non-zero, from a
   closed reason note, every such end leaves one `portable.launch.failed` line, and the first-start
   bound is stated.
+- **2026-11-17 — D9:** Added the standalone folder package for endpoints that cannot take an
+  installation. It repacks the reviewed portable archive unchanged, starts it with
+  `keiko portable launch --in-place` (no managed setup, no registration, state in
+  `~/.keiko-standalone`), reports itself through the existing `portable-it-managed` disposition
+  and adopts an administrator's `keiko.config.json` with `keiko start --provisioned-config`. Its
+  management declaration also keeps the one-step Windows gateway setup away: no service, no UAC
+  prompt, no Repair (`gateway-service-managed-outside`). D1 to D8 are unchanged; the operating
+  system's download checks and D7 are not relaxed.
+- **2026-11-17 — One-step Windows setup:** Amended D5. The relaunch that completes an update, the
+  first launch and the manual re-download fallback bring the Windows `KeikoRuntimeGateway` service
+  to the new helper after the healthy start (ADR-0043 D19), at most one UAC prompt per helper pin.
+  Portable `keiko update apply` stays refused and now says that the gateway follows the in-app
+  update; a package-manager apply ends with `keiko restart`, which runs the same step.

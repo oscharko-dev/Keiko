@@ -1498,17 +1498,6 @@ input.number-control-input {
      maximize math reads getBoundingClientRect without scroll compensation). A clip
      box is not a scroll container per spec, so focus can never scroll it. */
   overflow: clip;
-  border-radius: var(--radius-surface);
-  border: 1px solid
-    color-mix(in oklch, var(--accent) var(--frame-border-strength, 34%), var(--border-default));
-  background: color-mix(
-    in oklab,
-    var(--background-primary),
-    white var(--workspace-bg-brightness, 0%)
-  );
-  box-shadow:
-    inset 0 1px 0 oklch(1 0 0 / 0.025),
-    inset 0 0 0 1px color-mix(in oklch, var(--border-subtle) 52%, transparent);
 }
 /* The credential dialog is portalled above the workspace. When it is open the
    background stage must be fully inert, otherwise injected browser overlays or
@@ -1534,10 +1523,7 @@ html[data-keiko-modal-open="true"] .workspace {
 html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   cursor: default;
 }
-.workspace[data-canvas-overlays-hidden="true"] .ws-zoom,
-.workspace[data-canvas-overlays-hidden="true"] .ws-fab,
-.workspace[data-canvas-overlays-hidden="true"] .palette,
-.workspace[data-canvas-overlays-hidden="true"] .ws-connect-hint {
+.workspace[data-window-maxed="true"] .ws-connect-hint {
   display: none;
 }
 
@@ -1733,10 +1719,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 
   .rail-div {
     margin: 4px 0 5px;
-  }
-
-  .workspace {
-    border-radius: 12px;
   }
 
   .ws-zoom {
@@ -5250,8 +5232,7 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
-.arun-result-card pre,
-.arun-input pre {
+.arun-result-card pre {
   margin: 0;
   overflow: auto;
   max-height: 220px;
@@ -5260,19 +5241,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   font-size: 11.5px;
   line-height: 1.55;
   white-space: pre;
-}
-.arun-input {
-  flex: none;
-  border: 1px solid var(--border-subtle);
-  border-radius: 9px;
-  padding: 7px 9px;
-  background: var(--ai-tool-surface);
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-.arun-input summary {
-  cursor: pointer;
-  color: var(--text-faint);
 }
 .arun-kv,
 .arun-check-row {
@@ -6195,97 +6163,10 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
   color: var(--text-faint);
   line-height: 1.45;
 }
-.dlg-agent-warning {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  border: 1px solid color-mix(in oklch, var(--feedback-warning) 55%, transparent);
-  background: color-mix(in oklch, var(--feedback-warning) 12%, transparent);
-  color: var(--feedback-warning);
-  border-radius: 10px;
-  padding: 8px 10px;
-  font-size: 12px;
-}
-.dlg-agent-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 12px;
-}
-.dlg-current-file {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  border: 1px solid var(--accent-line);
-  background: var(--accent-dim);
-  color: var(--text-accent);
-  border-radius: 9px;
-  padding: 8px 10px;
-  font-size: 12px;
-  text-align: left;
-}
-.dlg-current-file .mono {
-  color: var(--text-accent);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.dlg-agent-task {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-subtle);
-}
-.dlg-agent-task-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-.dlg-agent-task-title {
-  min-width: 0;
-  color: var(--text-primary);
-  font-size: 13.5px;
-  font-weight: 650;
-}
-.dlg-agent-task-scope {
-  flex: none;
-  padding: 2px 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 650;
-}
-.dlg-agent-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 10px;
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
-  margin: 0 -18px -6px;
-  padding: 12px 18px 14px;
-  border-top: 1px solid var(--border-subtle);
-  background: var(--surface-overlay);
-  box-shadow: 0 -10px 18px color-mix(in oklch, var(--surface-overlay) 70%, transparent);
-}
-.dlg-agent-actions .dlg-note {
-  margin-right: auto;
-}
 .dlg-note {
   font-size: 11px;
   color: var(--text-faint);
 }
-@media (max-width: 560px) {
-  .dlg-agent-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
 /* twin window */
 .twin {
   display: flex;
@@ -7223,9 +7104,6 @@ html[data-keiko-modal-open="true"] .workspace[data-panning="true"] {
 }
 .dlg-overlay.in .dlg {
   transform: none;
-}
-.dlg-agents {
-  width: 480px;
 }
 /* WCAG 2.3.3 — dialog entry transitions only run when the user has not requested reduced motion */
 @media (prefers-reduced-motion: no-preference) {
