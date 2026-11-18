@@ -570,6 +570,8 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     const canonical = makeRecord("the user prefers postgres", "id-canonical");
     await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
     const before = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
+    const readBodies = vi.spyOn(vault, "listMemoriesByScope");
+    const readMetadata = vi.spyOn(vault, "listMemoryMetadataByScope");
 
     const dup = makeRecord("postgres is the database the user works with", "id-dup");
     const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
@@ -577,6 +579,13 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expect(vault.getMemory(dup.id)).toBeUndefined();
     const after = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
     expect(after).toBe(before + 1);
+    expect(readBodies.mock.calls.map(([, options]) => options?.status)).toEqual([["rejected"]]);
+    expect(readMetadata.mock.calls).toHaveLength(1);
+    expect(readMetadata.mock.calls[0]).toMatchObject([
+      canonical.scope,
+      { status: ["accepted", "proposed"] },
+    ]);
+    expect(readMetadata.mock.calls[0]?.[1]?.limit).toBeGreaterThan(0);
   });
 
   it("keeps a changed value in the same slot apart from a semantic near-duplicate (#4212)", async () => {
@@ -756,13 +765,27 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expectInserted(result, bob.id);
   });
 
-  it("inserts plainly when no embedding model is configured (graceful)", async () => {
+  it("inserts without reading the neighborhood when no embedding model is configured", async () => {
     const deps = makeDeps({ modelId: CHAT_MODEL });
     const vault = makeVault();
+    const neighbor = makeRecord("accepted fixture", "neighbor-with-vector");
+    vault.insertMemory(neighbor);
+    vault.upsertEmbedding(neighbor.id, {
+      provider: "test-provider",
+      modelId: EMBEDDING_MODEL,
+      metric: "cosine",
+      vector: fakeVector(8),
+    });
+    const readBodies = vi.spyOn(vault, "listMemoriesByScope");
+    const readVectors = vi.spyOn(vault, "getEmbeddings");
     const rec = makeRecord("anything at all");
     const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, rec);
     expectInserted(outcome, rec.id);
     expect(vault.getEmbedding(rec.id)).toBeUndefined();
+    expect({
+      bodies: readBodies.mock.calls.length,
+      vectors: readVectors.mock.calls.length,
+    }).toEqual({ bodies: 0, vectors: 0 });
   });
 });
 

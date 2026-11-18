@@ -771,11 +771,15 @@ const DEDUP_CORPUS_STATUSES = ["accepted", "proposed"] as const;
 function gatherScopeEmbeddings(
   vault: MemoryVaultStore,
   scope: MemoryScope,
+  candidate: MemoryEmbeddingInput | null,
 ): ReadonlyMap<MemoryId, MemoryEmbeddingRow> {
+  if (candidate === null) return new Map();
   const ids = vault
-    .listMemoriesByScope(scope, { status: [...DEDUP_CORPUS_STATUSES] })
-    .slice(0, MAX_DEDUP_NEIGHBORS)
-    .map((record) => record.id);
+    .listMemoryMetadataByScope(scope, {
+      status: DEDUP_CORPUS_STATUSES,
+      limit: MAX_DEDUP_NEIGHBORS,
+    })
+    .map(({ id }) => id);
   return ids.length === 0 ? new Map() : vault.getEmbeddings(ids);
 }
 
@@ -1016,7 +1020,7 @@ export async function insertSalienceMemoryWithNoveltyGate(
     });
     return { kind: "suppressed", reason: suppression };
   }
-  const neighbors = gatherScopeEmbeddings(vault, record.scope);
+  const neighbors = gatherScopeEmbeddings(vault, record.scope, embedding);
   const neighborCount = neighbors.size;
   const duplicateOf = confirmedDuplicate(
     vault,
