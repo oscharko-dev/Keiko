@@ -63,7 +63,8 @@ import {
 // v11 = stable keyset traversal for the sealed tombstone vector ledger. The partial composite index
 // keeps each exact semantic-suppression page and each authorized audit page bounded without dropping
 // older refusals or exposing a plaintext vector sidecar.
-export const MEMORY_VAULT_SCHEMA_VERSION = 14;
+// v15 = optional structural space digest for a sealed forget-tombstone vector.
+export const MEMORY_VAULT_SCHEMA_VERSION = 15;
 
 const ENCRYPTION_VERSION = 2;
 
@@ -284,6 +285,10 @@ ALTER TABLE memory_conversation_touches ADD COLUMN learned_confirmation_timestam
 ALTER TABLE memory_conversation_touches ADD COLUMN learned_confirmation_rowid INTEGER;
 `;
 
+// A forgotten vector stays sealed. Only the digest of its structural embedding-space identity
+// is retained alongside it. A NULL digest identifies historical vectors of unknown provenance.
+const V15_SQL = "ALTER TABLE memory_tombstones ADD COLUMN body_embedding_space TEXT;";
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through the package's public entry point, so no packaged surface change.
 export const MIGRATIONS: readonly Migration[] = [
@@ -300,6 +305,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 12, sql: V12_SQL },
   { version: 13, sql: V13_SQL },
   { version: 14, sql: V14_SQL },
+  { version: 15, sql: V15_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

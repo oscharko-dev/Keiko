@@ -266,16 +266,18 @@ describe("embedMemoryText (#204)", () => {
           ? `/openai/deployments/${EMBEDDING_MODEL}/embeddings?api-version=2024-02-01`
           : "/embeddings";
       const paths: string[] = [];
-      const fetchImpl: typeof fetch = async (input) => {
+      const fetchImpl: typeof fetch = (input) => {
         const url = new URL(input instanceof Request ? input.url : input);
         const path = url.pathname + url.search;
         paths.push(path);
-        return path === expected
-          ? Response.json({
-              data: [{ index: 0, embedding: [...fakeVector(3072)] }],
-              model: EMBEDDING_MODEL,
-            })
-          : new Response(null, { status: 404 });
+        return Promise.resolve(
+          path === expected
+            ? Response.json({
+                data: [{ index: 0, embedding: [...fakeVector(3072)] }],
+                model: EMBEDDING_MODEL,
+              })
+            : new Response(null, { status: 404 }),
+        );
       };
       const deps = makeDeps({
         config: { ...config, providers: [provider] },
@@ -619,13 +621,15 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expect(vault.getMemory(dup.id)).toBeUndefined();
     const after = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
     expect(after).toBe(before + 1);
-    expect(readBodies.mock.calls.map(([, options]) => options?.status)).toEqual([["rejected"]]);
-    expect(readMetadata.mock.calls).toHaveLength(1);
-    expect(readMetadata.mock.calls[0]).toMatchObject([
-      canonical.scope,
-      { status: ["accepted", "proposed"] },
+    expect(readBodies).not.toHaveBeenCalled();
+    expect(readMetadata.mock.calls.map(([, options]) => options?.status)).toEqual([
+      ["rejected"],
+      ["accepted", "proposed"],
     ]);
-    expect(readMetadata.mock.calls[0]?.[1]?.limit).toBeGreaterThan(0);
+    for (const [scope, options] of readMetadata.mock.calls) {
+      expect(scope).toEqual(canonical.scope);
+      expect(options?.limit).toBeGreaterThan(0);
+    }
   });
 
   it("keeps a changed value in the same slot apart from a semantic near-duplicate (#4212)", async () => {
@@ -691,6 +695,42 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expect(outcome).toEqual({ kind: "unconfirmed" });
     expect(vault.getMemory(claim.id)).toBeUndefined();
   });
+
+  it.each(["forget", "reject"] as const)(
+    "keeps a different model space independent of a prior %s",
+    async (refusal) => {
+      const originalDeps = makeDeps();
+      const otherModel = "text-embedding-3-small";
+      const newDeps = makeDeps({
+        modelId: otherModel,
+        embeddingRequest: () =>
+          Promise.resolve({ ok: true, value: { vector: fakeVector(3072), modelId: otherModel } }),
+      });
+      const vault = makeVault();
+      const first = makeRecord("My preference is coffee", "space-before");
+      await insertSalienceMemoryWithNoveltyGate(originalDeps, vault, first);
+      if (refusal === "forget") {
+        vault.deleteMemory(first.id, {
+          tombstone: true,
+          forgetterSurface: "test",
+          nowMs: Date.now(),
+        });
+        expect(vault.hasForgetTombstoneForBody(first.scope, first.body)).toBe(true);
+      } else {
+        vault.updateMemory(first.id, { status: "rejected" }, Date.now());
+      }
+      const different = makeRecord("I cycle on weekends", "space-after");
+      expect((await insertSalienceMemoryWithNoveltyGate(newDeps, vault, different)).kind).toBe(
+        "inserted",
+      );
+      expect(vault.getMemory(different.id)?.body).toBe(different.body);
+      const paraphrase = makeRecord("I like coffee", "space-paraphrase");
+      expect(await insertSalienceMemoryWithNoveltyGate(originalDeps, vault, paraphrase)).toEqual({
+        kind: "suppressed",
+        reason: refusal === "forget" ? "suppressed-by-forget" : "suppressed-by-rejection",
+      });
+    },
+  );
 
   it("RB-4 (GEN-AI-MEMORY-003): suppresses a PARAPHRASED re-capture of a forgotten memory (semantic, not exact-hash)", async () => {
     // Keyed embedding: any "dark" text → V_DARK; anything else → an orthogonal V_OTHER. The original

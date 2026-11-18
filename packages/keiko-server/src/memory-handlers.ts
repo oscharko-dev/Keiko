@@ -1644,7 +1644,7 @@ export async function forgetStatementNotLearned(
         reviewerId: reviewerIdForMemoryMutation(deps),
         reason: MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
         nowMs,
-        ...(embedding === null ? {} : { bodyEmbedding: embedding.vector }),
+        ...(embedding === null ? {} : { bodyEmbedding: embedding }),
       })),
     );
     return "forgotten";

@@ -15,6 +15,8 @@ import {
   recordUseRows,
 } from "./access.js";
 import { insertMemoryRow } from "./memories.js";
+import { encodeVectorLE } from "./embeddings.js";
+import { hasSemanticallySimilarForgetTombstoneRow } from "./tombstones.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
 import {
   expectActivityLogProof,
@@ -135,11 +137,10 @@ describe("runMigrations", () => {
   // A vault created at v12 kept one shared latest touch; v13 carries it into the touching chat's row.
   it("carries a v12 vault's latest touches into each chat's own row (#4212)", () => {
     const db = openMemDb();
-    runMigrations(db, TEST_CIPHER);
+    for (const migration of MIGRATIONS.filter(({ version }) => version <= 12)) {
+      db.exec(migration.sql);
+    }
     db.exec("PRAGMA foreign_keys = OFF");
-    db.exec("DROP TABLE memory_conversation_touches");
-    db.exec("ALTER TABLE memory_access ADD COLUMN last_used_conversation_id TEXT");
-    db.exec("ALTER TABLE memory_access ADD COLUMN last_accessed_conversation_id TEXT");
     db.exec(`INSERT INTO memory_access
       (memory_id, last_accessed_at, access_count, last_used_at, last_used_conversation_id,
        last_accessed_conversation_id)
@@ -165,6 +166,47 @@ describe("runMigrations", () => {
     expect(accessColumns).not.toContain("last_used_conversation_id");
     expect(accessColumns).not.toContain("last_accessed_conversation_id");
     db.close();
+  });
+
+  it("retains a v14 forgotten vector and its conservative comparison across a store upgrade", () => {
+    const db = openMemDb();
+    try {
+      for (const migration of MIGRATIONS.filter(({ version }) => version <= 14))
+        db.exec(migration.sql);
+      db.exec("PRAGMA user_version = 14");
+      const vector = Float32Array.from([1, 0]);
+      const scope = { kind: "global" } as const;
+      db.prepare(
+        "INSERT INTO memory_tombstones (id,memory_id,scope_kind,scope_coordinate,type,forgotten_at,forgetter_surface,body_embedding) VALUES (?,?,?,?,?,?,?,?)",
+      ).run(
+        "legacy-row",
+        "original-v14",
+        scope.kind,
+        "",
+        "preference",
+        100,
+        "test",
+        TEST_CIPHER.sealBytes(encodeVectorLE(vector)),
+      );
+      runMigrations(db, TEST_CIPHER);
+      expect(userVersion(db)).toBe(MEMORY_VAULT_SCHEMA_VERSION);
+      expect(
+        db
+          .prepare("SELECT body_embedding_space AS space FROM memory_tombstones WHERE id = ?")
+          .get("legacy-row")?.space,
+      ).toBeNull();
+      expect(
+        hasSemanticallySimilarForgetTombstoneRow(
+          db,
+          scope,
+          TEST_CIPHER,
+          { provider: "local", modelId: "current", metric: "cosine", vector },
+          0.95,
+        ),
+      ).toBe(true);
+    } finally {
+      db.close();
+    }
   });
 
   it("preserves v13 touches and counts new learning positions once", () => {

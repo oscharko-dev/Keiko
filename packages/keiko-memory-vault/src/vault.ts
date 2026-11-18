@@ -652,7 +652,7 @@ type MemoryMutators = Pick<
 // that public contract is unchanged (GEN-AI-MEMORY-003, RB-4).
 interface PreparedDelete {
   readonly result: MemoryDeleteResult;
-  readonly bodyEmbedding: Float32Array | undefined;
+  readonly bodyEmbedding: MemoryEmbeddingRow | undefined;
 }
 
 function prepareDelete(
@@ -669,8 +669,7 @@ function prepareDelete(
   if (tombstone !== undefined) {
     assertTombstoneMatchesRecord(existing, tombstone);
   }
-  const bodyEmbedding =
-    tombstone === undefined ? undefined : getEmbeddingRow(db, id, opts.cipher)?.vector;
+  const bodyEmbedding = tombstone === undefined ? undefined : getEmbeddingRow(db, id, opts.cipher);
   return { result: { memoryId: id, scope: existing.scope, tombstone }, bodyEmbedding };
 }
 

@@ -202,7 +202,7 @@ export interface MemoryForgottenStatement {
   readonly reviewerId?: MemoryReviewerId;
   readonly reason?: string;
   readonly nowMs: number;
-  readonly bodyEmbedding?: Float32Array;
+  readonly bodyEmbedding?: MemoryEmbeddingInput | Float32Array;
 }
 
 export interface MemoryVaultStore {
@@ -314,7 +314,7 @@ export interface MemoryVaultStore {
   // body_hash — without ever exposing the forgotten body text itself.
   readonly hasSemanticallySimilarForgetTombstone: (
     scope: MemoryScope,
-    candidate: Float32Array,
+    candidate: MemoryEmbeddingInput | Float32Array,
     threshold: number,
   ) => boolean;
   readonly purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number) => number;

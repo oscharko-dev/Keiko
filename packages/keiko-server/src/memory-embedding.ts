@@ -858,33 +858,35 @@ function confirmedDuplicate(
 // Both are governed refusals, so both must survive a paraphrase — an exact body_hash match is
 // already handled upstream by `exactCaptureSuppressionReason` (memory-suppression.ts); this catches
 // the cosine-similar re-derivation whose normalized body differs.
-function rejectedScopeVectors(
+function rejectedScopeEmbeddings(
   vault: MemoryVaultStore,
   scope: MemoryRecord["scope"],
-): readonly Float32Array[] {
+): readonly MemoryEmbeddingRow[] {
   const ids = vault
-    .listMemoriesByScope(scope, {
+    .listMemoryMetadataByScope(scope, {
       status: ["rejected"],
       limit: MAX_DEDUP_NEIGHBORS,
       includeExpired: true,
     })
     .map((record) => record.id);
   if (ids.length === 0) return [];
-  return [...vault.getEmbeddings(ids).values()].map((row) => row.vector);
+  return [...vault.getEmbeddings(ids).values()];
 }
 
 function refusalMatchesCandidate(
   vault: MemoryVaultStore,
   scope: MemoryRecord["scope"],
-  candidate: Float32Array,
+  candidate: MemoryEmbeddingInput,
   threshold: number,
   reason: MemoryCaptureSuppressionReason,
 ): boolean {
   if (reason === FORGOTTEN_MEMORY_SUPPRESSION_REASON) {
     return vault.hasSemanticallySimilarForgetTombstone(scope, candidate, threshold);
   }
-  return rejectedScopeVectors(vault, scope).some(
-    (vector) => cosineSimilarity(candidate, vector) >= threshold,
+  return rejectedScopeEmbeddings(vault, scope).some(
+    (row) =>
+      embeddingIdentitiesCompatible(candidate, row) &&
+      cosineSimilarity(candidate.vector, row.vector) >= threshold,
   );
 }
 
@@ -899,7 +901,7 @@ function semanticSuppressionReason(
 ): MemoryCaptureSuppressionReason | null {
   if (candidate === null) return null;
   for (const reason of SEMANTIC_SUPPRESSION_REASONS) {
-    if (refusalMatchesCandidate(vault, scope, candidate.vector, threshold, reason)) {
+    if (refusalMatchesCandidate(vault, scope, candidate, threshold, reason)) {
       return reason;
     }
   }
