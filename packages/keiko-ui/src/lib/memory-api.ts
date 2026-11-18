@@ -4,6 +4,7 @@
 // CSRF header added automatically for all mutating methods.
 
 import { bffFetchJson } from "./http";
+import { notifyMemoryVaultViewChange } from "./memory-vault-view-changes";
 import type {
   CodingWorkbenchMode,
   MemoryId,
@@ -343,10 +344,14 @@ export async function editMemory(
   input: EditMemoryInput,
   fetchImpl = fetchJson<MemoryActionResponse>,
 ): Promise<MemoryActionResponse> {
-  return fetchImpl(`/api/memory/${encodeURIComponent(id)}`, {
+  const result = await fetchImpl(`/api/memory/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify(input),
   });
+  if (result?.memory !== undefined) {
+    notifyMemoryVaultViewChange({ kind: "updated", ids: [id] });
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -403,12 +408,16 @@ export async function deleteMemory(
   id: MemoryId,
   fetchImpl = fetchJson<MemoryDeleteResponse>,
 ): Promise<MemoryDeleteResponse> {
-  return fetchImpl(`/api/memory/${encodeURIComponent(id)}`, {
+  const result = await fetchImpl(`/api/memory/${encodeURIComponent(id)}`, {
     method: "DELETE",
     body: JSON.stringify({
       acknowledged: true,
     }),
   });
+  if (result === undefined || result?.deleted === true) {
+    notifyMemoryVaultViewChange({ kind: "removed", ids: result?.memoryIds ?? [id] });
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------

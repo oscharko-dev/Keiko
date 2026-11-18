@@ -8,6 +8,7 @@
 // Browser-safe: imports only from @oscharko-dev/keiko-contracts (ADR-0019 rule 8).
 
 import { bffFetchJson } from "./http";
+import { notifyMemoryVaultViewChange } from "./memory-vault-view-changes";
 import type {
   AcceptMemoryProposalOptions,
   CodingWorkbenchMode,
@@ -56,12 +57,16 @@ export async function forgetMemory(
   id: MemoryId,
   fetchImpl = fetchJson<MemoryForgetResponse>,
 ): Promise<MemoryForgetResponse> {
-  return fetchImpl(`/api/memory/${encodeURIComponent(id)}/forget`, {
+  const result = await fetchImpl(`/api/memory/${encodeURIComponent(id)}/forget`, {
     method: "POST",
     body: JSON.stringify({
       acknowledged: true,
     }),
   });
+  if (result?.forgotten === true) {
+    notifyMemoryVaultViewChange({ kind: "removed", ids: result.memoryIds ?? [id] });
+  }
+  return result;
 }
 
 // `id` is the proposal/record identifier the route encodes into the path. It is typed as a
@@ -76,10 +81,15 @@ export async function acceptMemoryProposal(
 ): Promise<MemoryActionResponse> {
   const options = typeof optionsOrFetch === "function" ? {} : optionsOrFetch;
   const fetchImpl = typeof optionsOrFetch === "function" ? optionsOrFetch : fetchOverride;
-  return await fetchImpl(`/api/memory/proposals/${encodeURIComponent(id)}/accept`, {
+  const result = await fetchImpl(`/api/memory/proposals/${encodeURIComponent(id)}/accept`, {
     method: "POST",
     body: JSON.stringify(options),
   });
+  if (result?.memory !== undefined) {
+    const ids = options.predecessorId === undefined ? [id] : [id, options.predecessorId];
+    notifyMemoryVaultViewChange({ kind: "updated", ids });
+  }
+  return result;
 }
 
 export async function rejectMemoryProposal(

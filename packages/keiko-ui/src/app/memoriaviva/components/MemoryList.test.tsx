@@ -8,13 +8,14 @@
 // empty/error states, header entry points, or a11y was lost in the migration. The "passes q from
 // URL params" test was dropped outright — there is no URL parsing left in this file to test.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryListContent } from "./MemoryList";
+import { deferred } from "./test-support";
 import type { MemoryFilterState } from "./MemoryFilters";
-import type { MemoryListResponse } from "@/lib/memory-api";
+import { forgetMemory, type MemoryListResponse } from "@/lib/memory-api";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
 
 vi.mock("next/link", () => ({
@@ -155,6 +156,30 @@ describe("MemoryListContent — shown again", () => {
 });
 
 describe("MemoryListContent — loading state", () => {
+  it("reloads the open list after forgetting in another surface and discards its older response", async () => {
+    const forgotten = makeRecord({ body: "Forgotten from a different surface" });
+    const retained = makeRecord({ id: makeMemoryId(2), body: "Still in the vault" });
+    const original = deferred<MemoryListResponse>();
+    const load = vi
+      .fn()
+      .mockReturnValueOnce(original.promise)
+      .mockResolvedValueOnce(makeListResponse([retained]));
+    renderDefaultList(load);
+
+    await act(async () => {
+      await forgetMemory(forgotten.id, async () => ({
+        forgotten: true,
+        memoryIds: [forgotten.id],
+        count: 1,
+      }));
+      original.resolve(makeListResponse([forgotten, retained]));
+    });
+
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(retained.body)).toBeInTheDocument();
+    expect(screen.queryByText(forgotten.body)).not.toBeInTheDocument();
+  });
+
   it("shows loading indicator initially", () => {
     renderDefaultList(fetchWith([]));
     // Two status regions exist now (loading indicator + result summary live

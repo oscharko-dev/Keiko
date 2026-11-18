@@ -18,6 +18,7 @@ import Link from "next/link";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
 import { personMemoryTags } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { fetchMemory, type MemoryDetailResponse } from "@/lib/memory-api";
+import { subscribeMemoryVaultViewChanges } from "@/lib/memory-vault-view-changes";
 
 import { formatError } from "./format-error";
 import { MemoryActions } from "./MemoryActions";
@@ -317,6 +318,8 @@ export function MemoryDetail({
   const [record, setRecord] = useState<MemoryRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const requestSeqRef = useRef(0);
+  const removedIdRef = useRef<string | undefined>(undefined);
   // True after a destructive action (forget/delete) cleared the record — the
   // empty state then confirms the removal and offers a way back instead of a
   // dead-end "Memory not found" (uiux-fix F005).
@@ -326,10 +329,22 @@ export function MemoryDetail({
     removedBackControlRef.current = node;
   }, []);
 
-  const handleRecordChange = useCallback((updated: MemoryRecord | null): void => {
-    if (updated === null) setRemoved(true);
-    setRecord(updated);
-  }, []);
+  const showRemovedRecord = useCallback((): void => {
+    requestSeqRef.current += 1;
+    removedIdRef.current = id;
+    setRemoved(true);
+    setRecord(null);
+    setError(null);
+    setLoading(false);
+  }, [id]);
+
+  const handleRecordChange = useCallback(
+    (updated: MemoryRecord | null): void => {
+      if (updated === null) showRemovedRecord();
+      else if (removedIdRef.current !== id) setRecord(updated);
+    },
+    [id, showRemovedRecord],
+  );
 
   // The forget/delete dialog tries to restore focus to its (now unmounted)
   // trigger button; move focus to the back link so keyboard users keep an
@@ -339,21 +354,40 @@ export function MemoryDetail({
   }, [removed, record]);
 
   const load = useCallback(async (): Promise<void> => {
+    if (removedIdRef.current === id) {
+      showRemovedRecord();
+      return;
+    }
+    const seq = (requestSeqRef.current += 1);
     setLoading(true);
     setError(null);
+    setRemoved(false);
     try {
       const res: MemoryDetailResponse = await fetchMemoryImpl(id as MemoryId);
-      setRecord(res.memory);
+      if (seq === requestSeqRef.current) setRecord(res.memory);
     } catch (err) {
-      setError(formatError(err));
+      if (seq === requestSeqRef.current) setError(formatError(err));
     } finally {
-      setLoading(false);
+      if (seq === requestSeqRef.current) setLoading(false);
     }
-  }, [id, fetchMemoryImpl]);
+  }, [id, fetchMemoryImpl, showRemovedRecord]);
 
   useEffect(() => {
     void load();
+    return (): void => {
+      requestSeqRef.current += 1;
+    };
   }, [load]);
+
+  useEffect(
+    () =>
+      subscribeMemoryVaultViewChanges((change) => {
+        if (!change.ids.includes(id)) return;
+        if (change.kind === "removed") showRemovedRecord();
+        else void load();
+      }),
+    [id, load, showRemovedRecord],
+  );
 
   if (loading) {
     return (

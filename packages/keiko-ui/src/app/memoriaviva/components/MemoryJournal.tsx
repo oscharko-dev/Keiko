@@ -19,6 +19,7 @@ import {
 import { MemoryListState, MemoryRowScaffold, StatusBadge } from "./MemoryList";
 import { formatError } from "./format-error";
 import { sourceKindLabel } from "@/lib/memory-source-label";
+import { subscribeMemoryVaultViewChanges } from "@/lib/memory-vault-view-changes";
 import styles from "./MemoryJournal.module.css";
 
 // A refusal and a forget name no record: nothing was kept, or it is gone.
@@ -397,6 +398,26 @@ function JournalRows({
   );
 }
 
+function useJournalVaultChanges(
+  load: () => void,
+  setState: Dispatch<SetStateAction<JournalLoadState>>,
+): void {
+  useEffect(
+    () =>
+      subscribeMemoryVaultViewChanges((change) => {
+        setState((current) => ({
+          ...current,
+          rows: current.rows.filter(
+            ({ capture }) =>
+              capture.memoryId === undefined || !change.ids.includes(capture.memoryId),
+          ),
+        }));
+        load();
+      }),
+    [load, setState],
+  );
+}
+
 function useJournalRows(
   fetchImpl: typeof fetchRecentCaptures,
   forgottenIds: RefObject<Set<string>>,
@@ -428,6 +449,7 @@ function useJournalRows(
       });
   }, [fetchImpl, forgottenIds, keptIds, setAnnouncement, t]);
   useEffect(load, [load]);
+  useJournalVaultChanges(load, setState);
   const setRows = useCallback((next: SetStateAction<readonly JournalRowState[]>): void => {
     setState((current) => ({
       ...current,

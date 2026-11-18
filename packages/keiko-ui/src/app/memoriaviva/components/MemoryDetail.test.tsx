@@ -1,12 +1,18 @@
 // Issue #211 — tests for MemoryDetail: loading, error/retry, not-found, success states,
 // formatScope branches, ValiditySection copy, staleReason, optional provenance fields.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryDetail } from "./MemoryDetail";
+import { deferred } from "./test-support";
 import { PROFILE_EXCLUDED_MEMORY_TAG } from "@oscharko-dev/keiko-contracts/runtime/memory";
-import type { MemoryDetailResponse } from "@/lib/memory-api";
+import {
+  acceptMemoryProposal,
+  deleteMemory,
+  editMemory,
+  type MemoryDetailResponse,
+} from "@/lib/memory-api";
 import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import type {
   MemoryRecord,
@@ -132,6 +138,120 @@ describe("MemoryDetail — loading state", () => {
 
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByTestId("memory-actions")).not.toBeInTheDocument();
+  });
+});
+
+describe("MemoryDetail — live vault state", () => {
+  it("keeps the selected record when a slower read returns for a prior selection", async () => {
+    const first = makeRecord({ body: "Previous selection" });
+    const second = makeRecord({ id: makeMemoryId("mem-002"), body: "Current selection" });
+    const pending = deferred<MemoryDetailResponse>();
+    const load = vi
+      .fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce({ memory: second });
+    const { rerender } = render(<MemoryDetail id={first.id} fetchMemoryImpl={load} />);
+    rerender(<MemoryDetail id={second.id} fetchMemoryImpl={load} />);
+    expect(await screen.findByText(second.body)).toBeInTheDocument();
+
+    await act(async () => {
+      pending.resolve({ memory: first });
+    });
+
+    expect(screen.getByText(second.body)).toBeInTheDocument();
+    expect(screen.queryByText(first.body)).not.toBeInTheDocument();
+  });
+
+  it("shows a confirmed edit instead of a prior in-flight detail read", async () => {
+    const original = makeRecord({ body: "Use the original value" });
+    const edited = {
+      ...original,
+      body: "Use the updated value",
+      updatedAt: original.updatedAt + 1,
+    };
+    const pending = deferred<MemoryDetailResponse>();
+    const load = vi
+      .fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce({ memory: edited });
+    render(<MemoryDetail id={original.id} fetchMemoryImpl={load} />);
+
+    await act(async () => {
+      await editMemory(original.id, { body: edited.body }, async () => ({ memory: edited }));
+      pending.resolve({ memory: original });
+    });
+
+    expect(screen.getByText(edited.body)).toBeInTheDocument();
+    expect(screen.queryByText(original.body)).not.toBeInTheDocument();
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not restore a confirmed deletion when a prior detail read settles", async () => {
+    const original = makeRecord({ body: "Deleted live record" });
+    const pending = deferred<MemoryDetailResponse>();
+    render(<MemoryDetail id={original.id} fetchMemoryImpl={() => pending.promise} />);
+
+    await act(async () => {
+      await deleteMemory(original.id, async () => ({
+        deleted: true,
+        memoryId: original.id,
+        memoryIds: [original.id],
+        count: 1,
+      }));
+      pending.resolve({ memory: original });
+    });
+
+    expect(screen.getByText("Memory removed")).toBeInTheDocument();
+    expect(screen.queryByText(original.body)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("memory-actions")).not.toBeInTheDocument();
+  });
+
+  it("does not reopen a deleted detail when an earlier edit confirmation arrives later", async () => {
+    const original = makeRecord({ body: "Before the edit" });
+    const edited = { ...original, body: "Earlier edit result" };
+    const pending = deferred<MemoryDetailResponse>();
+    const load = resolvesWith(original);
+    render(<MemoryDetail id={original.id} fetchMemoryImpl={load} />);
+    expect(await screen.findByText(original.body)).toBeInTheDocument();
+    const editing = editMemory(original.id, { body: edited.body }, () => pending.promise);
+
+    await act(async () => {
+      await deleteMemory(original.id, async () => ({
+        deleted: true,
+        memoryId: original.id,
+        memoryIds: [original.id],
+        count: 1,
+      }));
+      pending.resolve({ memory: edited });
+      await editing;
+    });
+
+    expect(screen.getByText("Memory removed")).toBeInTheDocument();
+    expect(screen.queryByText(original.body)).not.toBeInTheDocument();
+    expect(screen.queryByText(edited.body)).not.toBeInTheDocument();
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes the predecessor's live status after its correction is accepted", async () => {
+    const original = makeRecord();
+    const correction = makeRecord({ id: makeMemoryId("correction"), body: "Corrected fact" });
+    const superseded = { ...original, status: "superseded" as const };
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ memory: original })
+      .mockResolvedValueOnce({ memory: superseded });
+    render(<MemoryDetail id={original.id} fetchMemoryImpl={load} />);
+    expect(await screen.findByText("Accepted")).toBeInTheDocument();
+
+    await act(async () => {
+      await acceptMemoryProposal(correction.id, { predecessorId: original.id }, async () => ({
+        memory: correction,
+      }));
+    });
+
+    expect(screen.getByText("Superseded")).toBeInTheDocument();
+    expect(screen.queryByText("Accepted")).not.toBeInTheDocument();
+    expect(screen.getByText(original.body)).toBeInTheDocument();
   });
 });
 

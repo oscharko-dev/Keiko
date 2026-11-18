@@ -1,10 +1,15 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts";
-import type { MemoryRecentCapture, MemoryRecentCapturesResponse } from "@/lib/memory-api";
+import {
+  forgetMemory,
+  type MemoryRecentCapture,
+  type MemoryRecentCapturesResponse,
+} from "@/lib/memory-api";
 import { MemoryJournal, orderJournalCaptures } from "./MemoryJournal";
+import { deferred } from "./test-support";
 
 function memoryId(value: string): MemoryId {
   return value as MemoryId;
@@ -50,6 +55,46 @@ function renderJournal(
 }
 
 describe("MemoryJournal loading and ordering", () => {
+  it("removes a forgotten excerpt while loading the body-free decision from the vault", async () => {
+    const capture = makeCapture("removed-from-detail", 100);
+    const retained = makeCapture("retained", 200);
+    const reload = deferred<MemoryRecentCapturesResponse>();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(response([capture, retained]))
+      .mockReturnValueOnce(reload.promise);
+    renderJournal([], { fetchRecentCapturesImpl: load });
+    expect(await screen.findByText(capture.bodyExcerpt ?? "")).toBeInTheDocument();
+
+    await act(async () => {
+      await forgetMemory(memoryId("removed-from-detail"), async () => ({
+        forgotten: true,
+        memoryIds: ["removed-from-detail"],
+        count: 1,
+      }));
+    });
+
+    expect(screen.queryByText(capture.bodyExcerpt ?? "")).not.toBeInTheDocument();
+    expect(screen.getByText(retained.bodyExcerpt ?? "")).toBeInTheDocument();
+    await act(async () => {
+      reload.resolve(
+        response([
+          retained,
+          {
+            eventId: "forgotten-decision",
+            outcome: "forgotten",
+            scope: capture.scope,
+            provenance: capture.provenance,
+            occurredAt: 300,
+            reason: "forgotten-by-user",
+          },
+        ]),
+      );
+    });
+    expect(screen.getByText("Forgotten")).toBeInTheDocument();
+    expect(screen.queryByText(capture.bodyExcerpt ?? "")).not.toBeInTheDocument();
+  });
+
   it("renders the empty and error states with a single Journal status region", async () => {
     const { rerender } = renderJournal([]);
     expect(await screen.findByTestId("memory-journal-empty")).toBeInTheDocument();
