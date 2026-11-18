@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createMemoryVault } from "@oscharko-dev/keiko-memory-vault";
 
-import type { MemoryId, MemoryScope } from "@oscharko-dev/keiko-contracts";
+import type { MemoryId, MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts";
 import type {
   UsearchAnnSearchRequest,
   UsearchAnnSearchResult,
@@ -357,5 +361,64 @@ describe("buildConversationRetrievalSignals", () => {
     );
     expect(disabled?.source).toBe("memory-retrieval-signals");
     expect(disabled?.source).not.toMatch(/local-knowledge/iu);
+  });
+});
+
+describe("semantic candidate validity before the bounded sweep", () => {
+  it.each([
+    { name: "future-only", futureCount: 1, current: false },
+    { name: "future records ahead of a current record", futureCount: 160, current: true },
+    { name: "inclusive valid-from boundary", futureCount: 0, current: true },
+  ])("$name uses only facts valid at the pinned instant", async ({ futureCount, current }) => {
+    const memoryDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-valid-query-"));
+    const vault = createMemoryVault({
+      memoryDir,
+      vaultKey: Buffer.alloc(32, 3),
+      now: () => NOW_MS,
+    });
+    const put = (id: string, validFrom: number, updatedAt: number): void => {
+      const record: MemoryRecord = {
+        id: memoryId(id),
+        schemaVersion: "1",
+        scope: SCOPE,
+        type: "procedural",
+        status: "accepted",
+        body: "Use the published release checklist.",
+        provenance: {
+          sourceKind: "explicit-user-instruction",
+          sensitivity: "public",
+          confidence: 1,
+          capturedAt: 1,
+        },
+        validity: { validFrom },
+        createdAt: 1,
+        updatedAt,
+        pinned: false,
+        tags: [],
+      };
+      vault.insertMemory(record);
+      vault.upsertEmbedding(record.id, {
+        provider: IDENTITY.provider,
+        modelId: IDENTITY.modelId,
+        metric: "cosine",
+        vector: new Float32Array([1, 0]),
+      });
+    };
+    try {
+      if (current) put("current", NOW_MS, 1);
+      for (let index = 0; index < futureCount; index += 1)
+        put(`future-${String(index)}`, NOW_MS + 1, NOW_MS);
+      const getAccessStats = vi.spyOn(vault, "getAccessStats");
+      const signals = await collectSignals(vault);
+      expect([...(signals.semanticById?.keys() ?? [])]).toEqual(
+        current ? [memoryId("current")] : [],
+      );
+      expect(embedMock).toHaveBeenCalledTimes(current ? 1 : 0);
+      expect(getAccessStats).toHaveBeenCalledExactlyOnceWith(current ? [memoryId("current")] : []);
+      expect(observations.flatMap((entry) => entry.ids)).toEqual(current ? ["current"] : []);
+    } finally {
+      vault.close();
+      rmSync(memoryDir, { recursive: true, force: true });
+    }
   });
 });

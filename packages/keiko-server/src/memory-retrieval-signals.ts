@@ -189,6 +189,7 @@ export function semanticRetrievalGateForText(
 
 function isSemanticRetrievalMetadataCandidate(record: MemoryMetadata, nowMs: number): boolean {
   if (record.status !== "accepted") return false;
+  if (record.validity.validFrom > nowMs) return false;
   if (record.validity.validUntil !== undefined && record.validity.validUntil <= nowMs) return false;
   return record.confidence > DEFAULT_STALE_CONFIDENCE_THRESHOLD;
 }
