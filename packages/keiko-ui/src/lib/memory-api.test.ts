@@ -158,13 +158,16 @@ describe("memory governance API helpers", () => {
     vi.unstubAllGlobals();
   });
 
-  it("keeps a confirmed forget successful when one view listener throws", async () => {
+  it("keeps a confirmed forget successful and reports repeated listener failures once", async () => {
     const result = { forgotten: true as const, memoryIds: ["m-1"], count: 1 };
     const listener = vi.fn();
     const diagnostic = vi.fn();
     setClientDiagnosticWriter(diagnostic);
     diagnostic.mockClear();
     const unsubscribeBroken = subscribeMemoryVaultViewChanges(() => {
+      throw new Error("Synthetic private detail");
+    });
+    const unsubscribeAlsoBroken = subscribeMemoryVaultViewChanges(() => {
       throw new Error("Synthetic private detail");
     });
     const unsubscribeHealthy = subscribeMemoryVaultViewChanges(listener);
@@ -181,10 +184,16 @@ describe("memory governance API helpers", () => {
         "Memory vault view notification failed.",
         expect.objectContaining({ failureStage: "memory vault view change", kind: "other" }),
       );
+      expect(
+        diagnostic.mock.calls.filter(
+          ([message]) => message === "Memory vault view notification failed.",
+        ),
+      ).toHaveLength(1);
       expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Synthetic private detail");
     } finally {
       now.mockRestore();
       unsubscribeBroken();
+      unsubscribeAlsoBroken();
       unsubscribeHealthy();
       resetClientDiagnosticWriter();
     }

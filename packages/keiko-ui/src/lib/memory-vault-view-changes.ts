@@ -26,12 +26,19 @@ export function notifyMemoryVaultViewChange(change: MemoryVaultViewChange): void
     stageReport: { stage, phase: "started", ordinal: 1 },
   });
   const startedAt = performance.now();
-  let notificationFailed = false;
+  let failureReported = false;
   for (const listener of listeners) {
     try {
       listener(change);
     } catch {
-      notificationFailed = true;
+      if (!failureReported) {
+        reportClientDiagnostic("Memory vault view notification failed.", {
+          correlationId,
+          kind: "other",
+          failureStage: stage,
+        });
+        failureReported = true;
+      }
     }
   }
   const durationMs = Math.min(
@@ -42,11 +49,4 @@ export function notifyMemoryVaultViewChange(change: MemoryVaultViewChange): void
     correlationId,
     stageReport: { stage, phase: "settled", ordinal: 1, durationMs },
   });
-  if (notificationFailed) {
-    reportClientDiagnostic("Memory vault view notification failed.", {
-      correlationId,
-      kind: "other",
-      failureStage: stage,
-    });
-  }
 }
