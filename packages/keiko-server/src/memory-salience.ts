@@ -154,7 +154,12 @@ function gatherKnownFacts(
   const known: KnownFact[] = [];
   const seen = new Map<MemoryId, SeenFact>();
   for (const scope of conversationMemoryScopes(context)) {
-    for (const record of vault.listMemoriesByScope(scope, { status: ["accepted", "proposed"] })) {
+    const records = vault.listMemoriesByScope(scope, {
+      status: ["accepted", "proposed"],
+      sensitivity: ["public"],
+      limit: MAX_KNOWN_FACTS - known.length,
+    });
+    for (const record of records) {
       if (record.provenance.sensitivity !== "public") continue;
       seen.set(record.id, { status: record.status, updatedAt: record.updatedAt });
       known.push({

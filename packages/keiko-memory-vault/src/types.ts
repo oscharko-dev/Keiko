@@ -158,6 +158,7 @@ export interface MemoryDeleteResult {
 }
 
 export interface ListMemoriesOptions {
+  readonly sensitivity?: readonly MemorySensitivity[];
   readonly type?: readonly MemoryType[];
   readonly status?: readonly MemoryStatus[];
   readonly pinned?: boolean;

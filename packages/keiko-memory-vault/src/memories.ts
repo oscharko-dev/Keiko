@@ -243,6 +243,7 @@ function appendListFilters(
   for (const built of [
     buildEnumClause("type", options.type),
     buildEnumClause("status", options.status),
+    buildEnumClause("sensitivity", options.sensitivity),
     buildPinnedClause(options.pinned),
     buildRetentionPolicyClause(options.retentionPolicyKey),
     buildExpiryClause(options.includeExpired, nowMs),

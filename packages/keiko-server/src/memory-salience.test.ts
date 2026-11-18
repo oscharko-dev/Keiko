@@ -1000,6 +1000,60 @@ describe("captureSalientFromTurn", () => {
     expect(entry?.code).not.toMatch(/ /);
   });
 
+  it("reads only the 200 eligible known facts across scopes before choosing the prompt", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    for (let index = 0; index < 275; index++) {
+      const sensitive = index >= 250;
+      vault.insertMemory({
+        id: `bounded-fact-${String(index)}` as MemoryRecord["id"],
+        schemaVersion: "1",
+        scope:
+          index < 30
+            ? { kind: "workspace", workspaceId: ctx.workspaceId }
+            : { kind: "user", userId: ctx.userId },
+        type: "semantic-fact",
+        body: sensitive ? "private fixture marker" : `reference document ${String(index)}`,
+        tags: [],
+        provenance: {
+          sourceKind: "system-default",
+          capturedAt: index,
+          confidence: 1,
+          sensitivity: sensitive ? "confidential" : "public",
+        },
+        validity: { validFrom: index },
+        status: "accepted",
+        pinned: false,
+        createdAt: index,
+        updatedAt: index,
+      });
+    }
+    const records: MemoryRecord[] = [];
+    const read: MemoryVaultStore["listMemoriesByScope"] = (scope, options) => {
+      const page = vault.listMemoriesByScope(scope, options);
+      records.push(...page);
+      return page;
+    };
+    const seen: GatewayRequest[] = [];
+    const deps = makeDeps({
+      memoryVault: { ...vault, listMemoriesByScope: read },
+      modelPortFactory: () => capturingModel(seen, () => "[]"),
+    });
+    await captureSalientFromTurn(
+      deps,
+      { content: "I use reference document 249.", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "",
+    );
+    expect(seen).toHaveLength(1);
+    expect(JSON.stringify(seen[0]?.messages)).toContain(". reference document 249");
+    expect(JSON.stringify(seen[0]?.messages)).not.toContain("private fixture marker");
+    expect(records).toHaveLength(200);
+    expect(records.filter((record) => record.provenance.sensitivity !== "public")).toHaveLength(0);
+    expect(records.at(-1)?.body).toBe("reference document 80");
+  });
+
   it("dedups a salient candidate against an already-stored body", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
