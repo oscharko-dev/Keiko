@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 406,
-  "completeClassCount": 406,
+  "supportedClassCount": 407,
+  "completeClassCount": 407,
   "completeness": "complete",
   "classes": [
     {
@@ -22185,6 +22185,24 @@
               "required": false
             },
             {
+              "name": "discoveryMembershipRetryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoveryUnavailableEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoveryVanishedEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "queryIdentitySha256",
               "type": "string",
               "dataClass": "digest",
@@ -27659,6 +27677,80 @@
             "causeChain": false
           },
           "proofIds": ["evidence.retention.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "files-search-availability",
+      "requirementContract": "files-search-availability",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["end"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": ["files.search.completed"],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "files.search.completed",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["files.search.completed"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "files.search.completed",
+          "owner": "keiko-server",
+          "category": "search",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "resultCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "scannedFileCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "truncated",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "unavailableEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "vanishedEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["files.search.completed.line"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -47473,6 +47565,12 @@
               "required": true
             },
             {
+              "name": "directoryRetryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "discoveredCount",
               "type": "integer",
               "dataClass": "count",
@@ -47495,6 +47593,12 @@
               "type": "string",
               "dataClass": "digest",
               "required": true
+            },
+            {
+              "name": "vanishedEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "walkCompleted",

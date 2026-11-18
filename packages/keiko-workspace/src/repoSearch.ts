@@ -357,6 +357,9 @@ interface CoverageInputs {
 
 interface CoverageStats {
   readonly unrepresentablePathsByDiscovery: number;
+  readonly unavailableEntriesByDiscovery: number;
+  readonly vanishedEntriesByDiscovery: number;
+  readonly membershipRetriesByDiscovery: number;
   readonly filesDiscovered: number;
   readonly filesAfterPolicy: number;
   readonly ignoredByDiscovery: number;
@@ -369,6 +372,9 @@ interface CoverageStats {
 
 const EMPTY_COVERAGE_STATS: CoverageStats = {
   unrepresentablePathsByDiscovery: 0,
+  unavailableEntriesByDiscovery: 0,
+  vanishedEntriesByDiscovery: 0,
+  membershipRetriesByDiscovery: 0,
   filesDiscovered: 0,
   filesAfterPolicy: 0,
   ignoredByDiscovery: 0,
@@ -389,6 +395,9 @@ function coverageStats(diagnostics: SearchDiagnostics | undefined): CoverageStat
     ignoredByDiscovery: diagnostics.ignoredByDiscovery,
     deniedByDiscovery: diagnostics.deniedByDiscovery,
     unrepresentablePathsByDiscovery: diagnostics.unrepresentablePathsByDiscovery ?? 0,
+    unavailableEntriesByDiscovery: diagnostics.unavailableEntriesByDiscovery ?? 0,
+    vanishedEntriesByDiscovery: diagnostics.vanishedEntriesByDiscovery ?? 0,
+    membershipRetriesByDiscovery: diagnostics.membershipRetriesByDiscovery ?? 0,
     depthPrunedByDiscovery: diagnostics.depthPrunedByDiscovery,
     maxFilesPrunedByDiscovery: diagnostics.maxFilesPrunedByDiscovery,
     lowValueRescueFilesDiscovered: diagnostics.lowValueRescueFilesDiscovered ?? 0,
@@ -437,8 +446,28 @@ function skippedFileCount(inputs: CoverageInputs, stats: CoverageStats): number 
     unvisitedCandidateCount(inputs, stats, omittedCount) +
     stats.ignoredByDiscovery +
     stats.deniedByDiscovery +
-    stats.depthPrunedByDiscovery
+    stats.depthPrunedByDiscovery +
+    stats.unavailableEntriesByDiscovery
   );
+}
+
+function discoveryChurnCoverage(
+  stats: CoverageStats,
+): Pick<
+  ContextCoverageDiagnostics,
+  "unavailableEntriesByDiscovery" | "vanishedEntriesByDiscovery" | "membershipRetriesByDiscovery"
+> {
+  return {
+    ...(stats.unavailableEntriesByDiscovery > 0
+      ? { unavailableEntriesByDiscovery: stats.unavailableEntriesByDiscovery }
+      : {}),
+    ...(stats.vanishedEntriesByDiscovery > 0
+      ? { vanishedEntriesByDiscovery: stats.vanishedEntriesByDiscovery }
+      : {}),
+    ...(stats.membershipRetriesByDiscovery > 0
+      ? { membershipRetriesByDiscovery: stats.membershipRetriesByDiscovery }
+      : {}),
+  };
 }
 
 function buildCoverageDiagnostics(inputs: CoverageInputs): ContextCoverageDiagnostics {
@@ -460,6 +489,7 @@ function buildCoverageDiagnostics(inputs: CoverageInputs): ContextCoverageDiagno
     ...(stats.unrepresentablePathsByDiscovery > 0
       ? { unrepresentablePathsByDiscovery: stats.unrepresentablePathsByDiscovery }
       : {}),
+    ...discoveryChurnCoverage(stats),
     depthPrunedByDiscovery: stats.depthPrunedByDiscovery,
     maxFilesPrunedByDiscovery: stats.maxFilesPrunedByDiscovery,
     matchesReturned: inputs.matchesReturned,
@@ -2642,7 +2672,11 @@ function streamedCoverage(
     filesDiscovered: collected.filesDiscovered,
     filesAfterPolicy: collected.filesAfterPolicy,
     filesScanned: collected.state.filesScanned,
-    filesSkipped: collected.filesSkipped + collected.ignored + collected.denied,
+    filesSkipped:
+      collected.filesSkipped +
+      collected.ignored +
+      collected.denied +
+      (collected.diagnostics.unavailableEntriesByDiscovery ?? 0),
     oversizedFilesScanned: 0,
     lowValueRescueFilesDiscovered: collected.diagnostics.lowValueRescueFilesDiscovered ?? 0,
     lowValueRescueFilesScanned: collected.diagnostics.lowValueRescueFilesScanned ?? 0,
@@ -2652,6 +2686,7 @@ function streamedCoverage(
     ...(collected.diagnostics.unrepresentablePathsByDiscovery === undefined
       ? {}
       : { unrepresentablePathsByDiscovery: collected.diagnostics.unrepresentablePathsByDiscovery }),
+    ...discoveryChurnCoverage(coverageStats(collected.diagnostics)),
     depthPrunedByDiscovery: 0,
     maxFilesPrunedByDiscovery: 0,
     matchesReturned: matchesReturned,

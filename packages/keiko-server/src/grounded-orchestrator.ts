@@ -789,6 +789,10 @@ const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOpe
     },
     codeRedactionRevision: { type: "integer", dataClass: "count", required: false },
     sourceDescriptorPathCount: { type: "integer", dataClass: "count", required: false },
+    // Discovery churn of the actual walk (#4434, #4435); absent when no coverage was reported.
+    discoveryUnavailableEntryCount: { type: "integer", dataClass: "count", required: false },
+    discoveryVanishedEntryCount: { type: "integer", dataClass: "count", required: false },
+    discoveryMembershipRetryCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1802,6 +1806,13 @@ function discoveryCoverageMarker(
   };
 }
 
+// A locked or protected entry was skipped, never read; the answer names it as an explicit gap
+// (#4434). The count is added only when present so ordinary coverage markers stay unchanged.
+function lockedOrProtectedCoverageDetail(coverage: ContextCoverageDiagnostics): readonly string[] {
+  const count = coverage.unavailableEntriesByDiscovery ?? 0;
+  return count > 0 ? [`locked or protected entries ${String(count)}`] : [];
+}
+
 function coverageUncertainty(
   result: Awaited<ReturnType<typeof searchText>>,
   nowMs: number,
@@ -1825,6 +1836,7 @@ function coverageUncertainty(
           `ignored ${String(coverage.ignoredByDiscovery)}`,
           `denied ${String(coverage.deniedByDiscovery)}`,
           `unrepresentable entries ${String(coverage.unrepresentablePathsByDiscovery ?? 0)}`,
+          ...lockedOrProtectedCoverageDetail(coverage),
           `depth-pruned ${String(coverage.depthPrunedByDiscovery)}`,
           `max-files-pruned ${String(coverage.maxFilesPrunedByDiscovery)}`,
         ].join(", ");
@@ -11110,13 +11122,26 @@ function excerptSchedulingActivityExtra(
   };
 }
 
+function discoveryChurnActivityExtra(coverage: ContextCoverageDiagnostics | undefined): {
+  readonly discoveryUnavailableEntryCount?: number;
+  readonly discoveryVanishedEntryCount?: number;
+  readonly discoveryMembershipRetryCount?: number;
+} {
+  if (coverage === undefined) return {};
+  return {
+    discoveryUnavailableEntryCount: coverage.unavailableEntriesByDiscovery ?? 0,
+    discoveryVanishedEntryCount: coverage.vanishedEntriesByDiscovery ?? 0,
+    discoveryMembershipRetryCount: coverage.membershipRetriesByDiscovery ?? 0,
+  };
+}
+
 function logSourceEvidenceDetails(
   logger: ServerLogger,
   identity: ConnectedContextActivityIdentity,
-  status: ConnectedContextCompletionStatus,
+  execution: ConnectedContextExecution,
   correlationId: string,
 ): void {
-  const observed = status.sourceDecision;
+  const observed = execution.status.sourceDecision;
   const observation =
     observed === undefined
       ? { activityDetailStatus: "unavailable" as const }
@@ -11133,6 +11158,7 @@ function logSourceEvidenceDetails(
         scopeIdentitySha256: identity.scopeIdentitySha256,
         queryIdentitySha256: identity.queryIdentitySha256,
         ...observation,
+        ...discoveryChurnActivityExtra(execution.output.pack.diagnostics?.coverage),
         completeness: "complete",
         loss: "none",
       },
@@ -11172,7 +11198,7 @@ function logConnectedContextCompletion(
       selectionDetailsActivityExtra(identity, execution.status),
     ),
   );
-  logSourceEvidenceDetails(logger, identity, execution.status, correlationId);
+  logSourceEvidenceDetails(logger, identity, execution, correlationId);
   logger.info(() =>
     activityLogEvent(
       SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION,

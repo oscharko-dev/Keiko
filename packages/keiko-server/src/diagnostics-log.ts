@@ -885,6 +885,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "atlassian-credential-rejection-activity-log-failed",
   "atlassian-credential-created-activity-log-failed",
   "atlassian-credential-list-activity-log-failed",
+  "files-search-activity-log-failed",
   "atlassian-credential-updated-activity-log-failed",
   "atlassian-connection-check-activity-log-failed",
   "atlassian-target-admission-activity-log-failed",

@@ -198,6 +198,15 @@ run's git status excludes a deny-listed path (`.idea/**`, `.env`, `.keiko/**`) f
 and reports it as a count, because Keiko never reads, edits or stages such a path and the staged
 tree digest still binds the exact index it may sit in; treating it as an incomplete snapshot made
 every repository that tracks its IDE metadata undeliverable (2026-09-10).
+Recursive walks classify per-entry filesystem failures through one shared rule
+(`workspaceEntryAvailabilityFailure`, #4434/#4435): an entry that vanished between listing and
+inspection, and a locked or protected entry, are skipped, counted and disclosed, and every other
+cause keeps its fail-closed handling. Directory identity (canonical path, device and inode,
+creation time, directory type) is distinguished from membership metadata (mtime/ctime), so a
+replaced, moved or re-pointed root still fails while Office lock files and sync clients do not; a
+directory whose membership moved is re-read once. ADR-0022 "Filesystem consistency and redaction"
+states the coverage and Activity Log consequences. The per-file guarded read and its TOCTOU
+snapshot checks are unchanged.
 Connected-context detection uses marker-only language metadata because its request-local candidate
 inventory already performs the bounded repository walk; structural diagnostics derive additional
 observed languages from that shared inventory instead of scanning the repository twice.

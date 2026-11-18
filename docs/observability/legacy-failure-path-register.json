@@ -4155,12 +4155,6 @@
     },
     {
       "path": "packages/keiko-server/src/files.ts",
-      "owner": "collectFileSearchDirectory",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/files.ts",
       "owner": "decodeUtf8",
       "kind": "unregistered-catch",
       "count": 1

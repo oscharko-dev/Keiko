@@ -95,6 +95,12 @@ export interface RankedCandidateDiagnostic {
 export interface SearchDiagnostics {
   readonly citationDirectiveClauseCount?: number | undefined;
   readonly unrepresentablePathsByDiscovery?: number | undefined;
+  // Locked or protected entries the walk skipped and disclosed (#4434).
+  readonly unavailableEntriesByDiscovery?: number | undefined;
+  // Listed entries that no longer existed when inspected; the folder's current state (#4435).
+  readonly vanishedEntriesByDiscovery?: number | undefined;
+  // Directories re-read once after benign membership churn (#4435).
+  readonly membershipRetriesByDiscovery?: number | undefined;
   readonly policyMode: SearchPolicyMode;
   readonly intent: SearchIntent;
   readonly filesDiscovered: number;

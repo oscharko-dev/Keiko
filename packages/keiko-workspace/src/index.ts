@@ -60,6 +60,10 @@ export {
 } from "./errors.js";
 
 export { type WorkspaceDirEntry, type WorkspaceFs, type WorkspaceStat } from "./fs.js";
+export {
+  type WorkspaceEntryAvailability,
+  workspaceEntryAvailabilityFailure,
+} from "./entryAvailability.js";
 
 export { isWithinWorkspace, resolveWithinWorkspace } from "./paths.js";
 

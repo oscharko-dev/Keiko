@@ -23179,6 +23179,63 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "files.search.completed",
+    category: "search",
+    owner: "keiko-server",
+    emitter: "files-search-activity.recordFilesSearchCompleted",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      resultCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      scannedFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      truncated: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      unavailableEntryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      vanishedEntryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["files-search-availability"],
+    proofIds: ["files.search.completed.line"],
+    releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "unavailableEntryCount",
+        positive: true,
+      },
+    ],
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "gateway.catalog.automatic.completed",
     category: "gateway",
     owner: "keiko-server",
@@ -33407,6 +33464,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
       },
+      vanishedEntryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      directoryRetryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -41567,6 +41634,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       sourceDescriptorPathCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      discoveryUnavailableEntryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      discoveryVanishedEntryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      discoveryMembershipRetryCount: {
         type: "integer",
         dataClass: "count",
         required: false,

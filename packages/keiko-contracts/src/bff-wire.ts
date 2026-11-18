@@ -2761,6 +2761,10 @@ export interface FilesSearchResponse {
   readonly results: readonly FilesSearchResult[];
   readonly truncated: boolean;
   readonly scannedFileCount: number;
+  // Locked or protected entries the filename search skipped (#4434); absent when none.
+  readonly unavailableEntryCount?: number;
+  // Listed entries that no longer existed when inspected (#4435); absent when none.
+  readonly vanishedEntryCount?: number;
 }
 
 export interface FilesPreviewBase {
