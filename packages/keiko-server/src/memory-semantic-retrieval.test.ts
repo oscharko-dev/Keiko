@@ -344,6 +344,33 @@ async function sendChat(
   return (await res.json()) as SendResult;
 }
 
+async function retrieveFromSurface(
+  surface: "chat" | "memory-context",
+  chatId: string,
+  query: string,
+): Promise<{ readonly ids: readonly string[]; readonly serialized: string }> {
+  if (surface === "chat") {
+    const result = await sendChat(chatId, query);
+    return {
+      ids: result.memory?.context.memories.map((entry) => entry.memoryId) ?? [],
+      serialized: JSON.stringify(result.memory),
+    };
+  }
+  const response = await fetch(`${base()}/api/memory/context`, {
+    method: "POST",
+    headers: POST_JSON_HEADERS,
+    body: JSON.stringify({ chatId, projectPath: projectDir, queryText: query, budgetTokens: 1200 }),
+  });
+  expect(response.status).toBe(200);
+  const result = (await response.json()) as {
+    readonly included: readonly { readonly memoryId: string }[];
+  };
+  return {
+    ids: result.included.map((entry) => entry.memoryId),
+    serialized: JSON.stringify(result),
+  };
+}
+
 async function createChat(): Promise<string> {
   const res = await fetch(`${base()}/api/desktop/chats`, {
     method: "POST",
@@ -378,6 +405,89 @@ afterEach(async () => {
 });
 
 describe("semantic memory retrieval (#204)", () => {
+  it.each([
+    { surface: "chat", expires: true },
+    { surface: "chat", expires: false },
+    { surface: "memory-context", expires: true },
+    { surface: "memory-context", expires: false },
+  ] as const)(
+    "checks current eligibility after an embedding wait ($surface, expires=$expires)",
+    async ({ surface, expires }) => {
+      const now = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+      const memoryDir = join(tmp, "vault-expiring-recall");
+      mkdirSync(memoryDir);
+      const vault = createMemoryVault({ memoryDir, redactString: (value) => value });
+      const content = "Use concise tables for weekly summaries.";
+      const record = insertAccepted(vault, "expiring-profile-hit", content, "preference");
+      vault.updateMemory(
+        record.id,
+        { validity: { ...record.validity, validUntil: now + 1000 } },
+        now,
+      );
+      storeEmbedding(vault, record.id, content, IN_TENANT_EMBEDDING_BASE_URL);
+      let finish!: (outcome: OpenAIEmbeddingOutcome) => void;
+      let enter!: () => void;
+      const embedding = new Promise<OpenAIEmbeddingOutcome>((resolve) => {
+        finish = resolve;
+      });
+      const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+      const completed: OpenAIEmbeddingOutcome = {
+        ok: true,
+        value: { vector: vectorFor(content), modelId: EMBEDDING_MODEL },
+      };
+      const prompts: string[] = [];
+      const answer = fakeModel("Synthetic answer.");
+      const model: ModelPort = {
+        call: (request, signal) => {
+          prompts.push(request.messages.map((message) => message.content).join("\n"));
+          return answer.call(request, signal);
+        },
+      };
+      let outcome: ReturnType<typeof retrieveFromSurface> | undefined;
+      try {
+        await restart(
+          deps(
+            {
+              memoryVault: vault,
+              env: { KEIKO_MEMORY_AUTO_MAINTAIN: "0" },
+              modelPortFactory: () => model,
+              localKnowledgeEmbeddingRequest: () => {
+                enter();
+                return embedding;
+              },
+            },
+            true,
+            IN_TENANT_EMBEDDING_BASE_URL,
+          ),
+        );
+        outcome = retrieveFromSurface(
+          surface,
+          await createChat(),
+          "Which format is used for weekly summaries?",
+        );
+        await expect(Promise.race([entered, outcome])).resolves.toBeUndefined();
+        if (expires) clock.mockReturnValue(now + 2000);
+        finish(completed);
+        const selected = await outcome;
+        expect(selected.ids).toEqual(expires ? [] : [record.id]);
+        if (expires) {
+          expect(selected.serialized).not.toContain(content);
+          expect(prompts.join("\n")).not.toContain(content);
+        } else {
+          expect(selected.serialized).toContain(content);
+        }
+      } finally {
+        finish(completed);
+        await outcome?.catch(() => undefined);
+        clock.mockRestore();
+        vault.close();
+      }
+    },
+  );
+
   it.each(["forget", "edit", "archive", "private", "unchanged"] as const)(
     "revalidates the new answer's standing profile after a concurrent %s during recall",
     async (mutation) => {

@@ -287,7 +287,7 @@ async function retrieveConversationMemory(
     semanticGate,
   );
   const result = retrieveMemoryContext(
-    buildRetrievalRequest(scopes, input, nowMs, signals, conversationFusionMode(deps)),
+    buildRetrievalRequest(scopes, input, Date.now(), signals, conversationFusionMode(deps)),
     port,
   );
   return result;

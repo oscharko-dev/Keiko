@@ -1498,7 +1498,8 @@ async function retrieveChatMemory(
       ...(profile.entries.length > 0
         ? { standingProfileIds: new Set(profile.entries.map((entry) => entry.id)) }
         : {}),
-      nowMs,
+      // Eligibility is evaluated when text is selected, after the asynchronous query finished.
+      nowMs: Date.now(),
     },
     port,
   );
