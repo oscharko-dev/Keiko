@@ -3708,11 +3708,12 @@ function runGroundedPostCommitMemorySideEffects(
   deps: UiHandlerDeps,
   answer: GroundedAnswer,
 ): void {
-  if (answer.memory === undefined || prepared.memory === undefined) return;
+  // The admitted request owns the consent mark even when optional enrichment could not run.
+  if (prepared.memoryContext === undefined) return;
   runPostCommitCanonicalTurnMemorySideEffects(
     deps,
     groundedCanonicalMemoryRequest(prepared, answer.content),
-    prepared.memory.context,
+    prepared.memoryContext,
     answer.memory,
     answer.content,
     answer.assistantMessageId,

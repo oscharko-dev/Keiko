@@ -125,6 +125,7 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
+import { disposeMemoryLearningRuntime } from "./memory-learning.js";
 import type { MemoryUserId } from "@oscharko-dev/keiko-contracts";
 import {
   defaultServerDiagnosticSink,
@@ -927,6 +928,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  disposeMemoryLearningRuntime({ store });
   store.close();
   rmSync(tmp, { recursive: true, force: true });
 });

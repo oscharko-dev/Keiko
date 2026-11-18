@@ -4576,13 +4576,15 @@ export function runPostCommitCanonicalTurnMemorySideEffects(
   deps: UiHandlerDeps,
   request: CanonicalTurnMemoryRequest,
   context: ConversationMemoryRuntimeContext | undefined,
-  memory: ConversationMemoryResultWire,
+  memory: ConversationMemoryResultWire | undefined,
   assistantText: string,
   correlationId: string,
 ): void {
-  runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.answer-use", () => {
-    recordConversationMemoryUse(deps, memory, assistantText, context);
-  });
+  if (memory !== undefined) {
+    runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.answer-use", () => {
+      recordConversationMemoryUse(deps, memory, assistantText, context);
+    });
+  }
   runPostCommitMemoryEffect(deps, correlationId, "grounded.memory.salience", () => {
     markCanonicalTurnForLearning(deps, request, context, correlationId);
   });
