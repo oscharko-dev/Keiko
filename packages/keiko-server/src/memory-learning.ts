@@ -177,6 +177,10 @@ export class MemoryLearningRuntime {
   private retryMs = FIRST_RETRY_MS;
   // Continue from the last visited Chat before retrying an unavailable one at the front.
   private pendingPage: { after: PendingLearningChat; hadUnavailable: boolean } | undefined;
+  // A bounded Chat pass made progress but left rows behind. Drain these healthy continuations
+  // fairly after the current Chat page tour, before applying unavailable Chats' retry backoff.
+  private readonly readyChats = new Set<string>();
+  private retryAfterContinuations = false;
   private disposed = false;
   private openedChatId: string | undefined;
   // The last turn noted since a pass claimed the runtime; that pass learns it, so it clears it.
@@ -323,13 +327,13 @@ export class MemoryLearningRuntime {
     let settled: { outcome: MemoryLearningPassOutcome; pendingChatCount: number };
     let nextPage: PendingLearningChat | undefined;
     try {
-      const waiting = store.listPendingChats(MAX_CHATS_PER_PASS + 1, this.pendingPage?.after);
-      const chats = waiting.slice(0, MAX_CHATS_PER_PASS).map(({ chatId }) => chatId);
+      const page = this.readPassChats(store);
+      const { chats } = page;
       if (chats.length === 0) {
         this.finishEmptyChatPage(store, ids.passId);
         return undefined;
       }
-      if (waiting.length > MAX_CHATS_PER_PASS) nextPage = waiting.at(MAX_CHATS_PER_PASS - 1);
+      nextPage = page.nextPage;
       logLearningPassStarted(ids, { trigger, chatCount: chats.length });
       const outcome = await this.learnChats(
         store,
@@ -342,7 +346,9 @@ export class MemoryLearningRuntime {
         outcome: this.passOutcome(outcome, running),
         // Chats left without progress wait for new work instead of a continuation loop.
         pendingChatCount:
-          tally.turnCount === 0 ? 0 : store.listChatsWithPending(MAX_CHATS_PER_PASS).length,
+          tally.turnCount === 0 && this.readyChats.size === 0
+            ? 0
+            : store.listChatsWithPending(MAX_CHATS_PER_PASS).length,
       };
     } catch (error: unknown) {
       reportLearningPassFailure(this.deps, ids.passId, error);
@@ -359,6 +365,26 @@ export class MemoryLearningRuntime {
     });
     this.afterPass(settled.outcome, settled.pendingChatCount, ids.passId, nextPage);
     return settled.outcome;
+  }
+
+  private readPassChats(store: ChatMemoryLearningStore): {
+    readonly chats: readonly string[];
+    readonly nextPage?: PendingLearningChat | undefined;
+  } {
+    if (this.pendingPage === undefined && this.readyChats.size > 0) {
+      const chats: string[] = [];
+      for (const chatId of this.readyChats) {
+        chats.push(chatId);
+        if (chats.length === MAX_CHATS_PER_PASS) break;
+      }
+      return { chats };
+    }
+    const waiting = store.listPendingChats(MAX_CHATS_PER_PASS + 1, this.pendingPage?.after);
+    return {
+      chats: waiting.slice(0, MAX_CHATS_PER_PASS).map(({ chatId }) => chatId),
+      nextPage:
+        waiting.length > MAX_CHATS_PER_PASS ? waiting.at(MAX_CHATS_PER_PASS - 1) : undefined,
+    };
   }
 
   private finishEmptyChatPage(store: ChatMemoryLearningStore, passId: string): void {
@@ -387,7 +413,7 @@ export class MemoryLearningRuntime {
       this.retryMs = Math.min(this.retryMs * 2, MAX_RETRY_MS);
       return;
     }
-    if (outcome !== "cancelled" && this.pendingPage !== undefined) {
+    if (outcome !== "cancelled" && (this.pendingPage !== undefined || this.readyChats.size > 0)) {
       this.schedule(CONTINUATION_DELAY_MS, "continuation", passId);
       return;
     }
@@ -405,12 +431,19 @@ export class MemoryLearningRuntime {
     nextPage: PendingLearningChat | undefined,
   ): boolean {
     if (outcome === "cancelled") return false;
-    const hadUnavailable = this.pendingPage?.hadUnavailable === true || outcome === "unavailable";
-    this.pendingPage =
-      nextPage === undefined || outcome === "failed"
-        ? undefined
-        : { after: nextPage, hadUnavailable };
-    return outcome === "failed" || (hadUnavailable && nextPage === undefined);
+    if (outcome === "failed") {
+      this.pendingPage = undefined;
+      this.retryAfterContinuations = false;
+      return true;
+    }
+    const hadUnavailable =
+      this.retryAfterContinuations ||
+      this.pendingPage?.hadUnavailable === true ||
+      outcome === "unavailable";
+    this.pendingPage = nextPage === undefined ? undefined : { after: nextPage, hadUnavailable };
+    const hasReadyChats = this.readyChats.size > 0;
+    this.retryAfterContinuations = hadUnavailable && hasReadyChats;
+    return hadUnavailable && nextPage === undefined && !hasReadyChats;
   }
 
   // One Chat after the other: a single-slot local model serves one learning call at a time.
@@ -438,6 +471,7 @@ export class MemoryLearningRuntime {
     tally: LearningPassTally,
     passId: string,
   ): Promise<ChatPassOutcome> {
+    this.readyChats.delete(chatId);
     const chat = this.deps.store.findChatById(chatId);
     // A deleted Chat took its messages and its position with it; nothing of it is learned.
     if (chat === undefined) return "done";
@@ -445,12 +479,23 @@ export class MemoryLearningRuntime {
     const plan = planLearningTurns(rows, rows.length === PENDING_PAGE);
     if (plan.leadingEnd !== undefined) store.advance(chatId, plan.leadingEnd);
     const context = memoryContextOfChat(chat);
-    return this.learnTurns(store, chat, plan.turns.slice(0, MAX_TURNS_PER_CHAT_PASS), {
-      context,
-      signal,
-      tally,
-      passId,
-    });
+    const outcome = await this.learnTurns(
+      store,
+      chat,
+      plan.turns.slice(0, MAX_TURNS_PER_CHAT_PASS),
+      {
+        context,
+        signal,
+        tally,
+        passId,
+      },
+    );
+    const bounded = rows.length === PENDING_PAGE || plan.turns.length > MAX_TURNS_PER_CHAT_PASS;
+    const advanced = plan.leadingEnd !== undefined || plan.turns.length > 0;
+    if (outcome === "done" && bounded && advanced && store.listPending(chatId, 1).length > 0) {
+      this.readyChats.add(chatId);
+    }
+    return outcome;
   }
 
   // Turns are learned in Chat order, and the position moves past each one only once it is learned.

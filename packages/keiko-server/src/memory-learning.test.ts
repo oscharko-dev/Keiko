@@ -1031,6 +1031,89 @@ describe("memory learning passes", () => {
     expect(deps.store.memoryLearning?.listChatsWithPending(9)).toEqual([]);
   });
 
+  it("drains healthy quota continuations before retrying unavailable Chats", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const learner = fakeLearner();
+    let unavailableAttempts = 0;
+    const deps = makeDeps({
+      env: { KEIKO_MEMORY_LEARNING_IDLE_MS: "3600000" },
+      modelPortFactory: (id) => {
+        if (id === "healthy-model") return learner.port;
+        unavailableAttempts += 1;
+        return undefined;
+      },
+    });
+    const projectPath = tempDir("keiko-learning-healthy-quota-");
+    deps.store.createProject(projectPath);
+    for (let index = 0; index < 8; index += 1) {
+      const chat = deps.store.createChat(projectPath, "Unavailable", "unavailable-model");
+      writeTurn(deps, { chatId: chat.id, projectPath }, "I use a workshop computer.");
+    }
+    const { id: chatId } = deps.store.createChat(projectPath, "Healthy", "healthy-model");
+    const healthy = { chatId, projectPath };
+    for (let index = 0; index < 33; index += 1) {
+      writeTurn(deps, healthy, "I use Vim.");
+    }
+    const runtime = memoryLearningRuntime(deps);
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("unavailable");
+    expect(unavailableAttempts).toBe(8);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(learner.calls()).toBe(16);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(learner.calls()).toBe(32);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(learner.calls()).toBe(33);
+    const [record] = learned(deps, healthy);
+    if (record === undefined) throw new Error("expected the learned fact");
+    expect(bodies(deps, healthy)).toEqual(["I use Vim."]);
+    expect(vaultOf(deps).getAccessStats([record.id]).get(record.id)?.accessCount).toBe(32);
+    expect(unavailableAttempts).toBe(8);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(unavailableAttempts).toBe(8);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(unavailableAttempts).toBe(16);
+  });
+
+  it.each([63, 64, 128])(
+    "continues past %i leading system messages to marked user work",
+    async (systemCount) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const learner = fakeLearner();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const deps = makeDeps({
+        env: { KEIKO_MEMORY_LEARNING_IDLE_MS: "3600000" },
+        modelPortFactory: () => learner.port,
+      });
+      const chat = makeChat(deps);
+      for (let index = 0; index < systemCount; index += 1) {
+        clock += 1_000;
+        deps.store.createMessage({
+          ...NO_RUN,
+          chatId: chat.chatId,
+          role: "system",
+          content: "A synthetic context marker.",
+          timestamp: clock,
+        });
+      }
+      writeTurn(deps, chat, "I use Vim.");
+      await expect(memoryLearningRuntime(deps).runPass("inactivity", undefined)).resolves.toBe(
+        "completed",
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(learner.calls()).toBe(1);
+      expect(bodies(deps, chat)).toEqual(["I use Vim."]);
+      expect(deps.store.memoryLearning?.listChatsWithPending(1)).toEqual([]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(learner.calls()).toBe(1);
+      if (systemCount >= 64) {
+        expect(
+          sink.events.find((event) => event.op === "memory.learn.pass.settled")?.extra,
+        ).toMatchObject({ turnCount: 0, pendingChatCount: 1 });
+      }
+    },
+  );
+
   it("applies a forget to what was still waiting to be learned", async () => {
     const deps = makeDeps();
     const chat = makeChat(deps);

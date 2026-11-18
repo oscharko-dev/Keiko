@@ -44,7 +44,10 @@ The vocabulary is deliberately narrow: only these explicit first-person preferen
 turn settles, which the end-to-end lanes use.
 
 A continuation visits pending Chats after the previous pass's last Chat before retrying older
-unavailable Chats. The usual backoff begins after the remaining Chats have had their turn.
+unavailable Chats. Healthy Chats that reach a turn or message-page bound keep their own one-second
+continuations; they take turns again after that Chat page tour. Advancing past a full page of system
+messages is progress too. The usual backoff begins after these continuations have drained, and does
+not retry unavailable Chats early. A pass that makes no cursor progress keeps the existing backoff.
 
 ## Foreground work wins
 
