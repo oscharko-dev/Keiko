@@ -12,13 +12,13 @@ export const PORTABLE_DOWNLOAD_STALL_BYTES_PER_SECOND = 10 * 1024;
 export const PORTABLE_DOWNLOAD_TIMEOUT_GRACE_MS = 30_000;
 
 // curl's documented exit statuses for a transfer deadline and for --max-filesize.
-export const CURL_EXIT_OPERATION_TIMEDOUT = 28;
-export const CURL_EXIT_FILESIZE_EXCEEDED = 63;
+const CURL_EXIT_OPERATION_TIMEDOUT = 28;
+const CURL_EXIT_FILESIZE_EXCEEDED = 63;
 
 // Mirrors MAX_PORTABLE_MANIFEST_BYTES in packages/keiko-server/src/update-portable-staging-shared.ts
 // (scripts cannot import TS sources; portable-download-bounds.test.mjs pins the two equal).
 export const PORTABLE_MANIFEST_MAX_BYTES = 1_048_576;
-export const PORTABLE_MANIFEST_DOWNLOAD_MAX_TIME_SECONDS = 120;
+const PORTABLE_MANIFEST_DOWNLOAD_MAX_TIME_SECONDS = 120;
 
 /** The subprocess timeout for the small manifest download through gh. */
 export function portableManifestDownloadTimeoutMs() {
