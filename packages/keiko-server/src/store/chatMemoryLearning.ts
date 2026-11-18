@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import { isCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { ConversationMemoryCaptureSurfaceWire } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -64,16 +64,27 @@ interface PendingRow {
 
 const SQL_MARK = `UPDATE chat_messages SET memory_learning = ?, memory_learning_mode = ? WHERE id = ?`;
 const SQL_READ_POSITION = `SELECT learned_timestamp, learned_rowid FROM chat_memory_learning WHERE chat_id = ?`;
+// Seek directly to each pending range in the Chat's (timestamp, rowid) order. Keeping equal
+// timestamps separate also bounds work when an import gave every message the same timestamp.
 const SQL_LIST_PENDING = `
-SELECT m.rowid AS position_rowid, m.id, m.role, m.content, m.timestamp, m.memory_learning,
+WITH cursor AS (
+  SELECT learned_timestamp, learned_rowid FROM chat_memory_learning WHERE chat_id = ?1
+), page AS (
+  SELECT rowid AS position_rowid, timestamp FROM chat_messages
+  WHERE chat_id = (SELECT ?1 WHERE NOT EXISTS (SELECT 1 FROM cursor))
+  UNION ALL
+  SELECT rowid, timestamp FROM chat_messages
+  WHERE chat_id = ?1 AND timestamp = (SELECT learned_timestamp FROM cursor)
+    AND rowid > (SELECT learned_rowid FROM cursor)
+  UNION ALL
+  SELECT rowid, timestamp FROM chat_messages
+  WHERE chat_id = ?1 AND timestamp > (SELECT learned_timestamp FROM cursor)
+  ORDER BY timestamp, position_rowid LIMIT ?2
+)
+SELECT page.position_rowid, m.id, m.role, m.content, page.timestamp, m.memory_learning,
   m.memory_learning_mode
-FROM chat_messages m
-LEFT JOIN chat_memory_learning l ON l.chat_id = m.chat_id
-WHERE m.chat_id = ?
-  AND (l.chat_id IS NULL OR m.timestamp > l.learned_timestamp
-    OR (m.timestamp = l.learned_timestamp AND m.rowid > l.learned_rowid))
-ORDER BY m.timestamp ASC, m.rowid ASC
-LIMIT ?`;
+FROM page JOIN chat_messages m ON m.rowid = page.position_rowid
+ORDER BY page.timestamp, page.position_rowid`;
 // Select the preceding message before consulting its mark so an unmarked turn is a barrier.
 const SQL_READ_PREVIOUS_USER_TEXT = `
 SELECT CASE WHEN previous.memory_learning IS NOT NULL THEN previous.content END AS content
@@ -155,15 +166,15 @@ function listPendingChats(
 }
 
 export function createChatMemoryLearningStore(db: DatabaseSync): ChatMemoryLearningStore {
+  let pendingPage: StatementSync | undefined;
   return {
     markMessage: (messageId, mark): boolean =>
       Number(db.prepare(SQL_MARK).run(mark.surface, mark.mode ?? null, messageId).changes) > 0,
     readPosition: (chatId) => readPosition(db, chatId),
     listPending: (chatId, limit): readonly PendingLearningMessage[] => {
       assertLimit(limit);
-      return (db.prepare(SQL_LIST_PENDING).all(chatId, limit) as unknown as PendingRow[]).map(
-        pendingMessage,
-      );
+      pendingPage ??= db.prepare(SQL_LIST_PENDING);
+      return (pendingPage.all(chatId, limit) as unknown as PendingRow[]).map(pendingMessage);
     },
     readPreviousUserText: (chatId, messageId): string | undefined => {
       const row = db.prepare(SQL_READ_PREVIOUS_USER_TEXT).get(chatId, messageId) as
