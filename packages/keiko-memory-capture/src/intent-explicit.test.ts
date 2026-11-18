@@ -197,6 +197,26 @@ describe("tryExtractForget", () => {
     expect(tryExtractForget("remember about X", ctx(), { resolver: () => [] })).toBeNull();
   });
 
+  it.each([
+    "Vergiss den Bericht. Oder besser nicht.",
+    "Bitte vergiss den Bericht nicht mehr.",
+    "Please forget the report. Actually, don't.",
+    "Bitte vergiss den Bericht. Doch lieber nicht.",
+  ])("honours an explicit withdrawal before resolving a memory in %s", (text) => {
+    const resolver = vi.fn(() => ["memory-report" as MemoryId]);
+    expect(tryExtractForget(text, ctx(), { resolver })).toBeNull();
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it.each(["Vergiss den Bericht. Danke.", "Vergiss, dass ich den Bericht nicht mehr nutze."])(
+    "still resolves a clear forget in %s",
+    (text) => {
+      expect(
+        tryExtractForget(text, ctx(), { resolver: () => ["memory-report" as MemoryId] })?.kind,
+      ).toBe("forget");
+    },
+  );
+
   it("extracts German forget intents", () => {
     const outcome = tryExtractForget("Vergiss bitte die Dark-Mode-Präferenz", ctx(), {
       resolver: (target) => (target.includes("Dark-Mode") ? ["m-9" as MemoryId] : []),

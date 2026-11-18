@@ -420,22 +420,27 @@ describe("extractSalientMemories", () => {
     expect(JSON.stringify(diagnostics)).not.toContain("internal");
   });
 
-  it("reports an unknown type with a closed reason", async () => {
-    const { deps, diagnostics } = harness(
-      reply(fact("Bevorzugt Tabellen", "Ich bevorzuge Tabellen", { type: "vibe" })),
-    );
-    expect(await extractSalientMemories(input("Ich arbeite gern mit Tabellen."), deps)).toEqual([]);
-    expect(diagnostics).toContainEqual({
-      kind: "dropped-model-items",
-      reason: "unknown-type",
-      count: 1,
-    });
-    expect(diagnostics).toContainEqual({
-      kind: "zero-candidates-after-filter",
-      rawItemCount: 1,
-      acceptedCount: 0,
-    });
-  });
+  it.each(["vibe", "__proto__", "constructor"])(
+    "reports unknown type %s with a closed reason",
+    async (type) => {
+      const { deps, diagnostics } = harness(
+        reply(fact("Bevorzugt Tabellen", "Ich bevorzuge Tabellen", { type })),
+      );
+      expect(await extractSalientMemories(input("Ich arbeite gern mit Tabellen."), deps)).toEqual(
+        [],
+      );
+      expect(diagnostics).toContainEqual({
+        kind: "dropped-model-items",
+        reason: "unknown-type",
+        count: 1,
+      });
+      expect(diagnostics).toContainEqual({
+        kind: "zero-candidates-after-filter",
+        rawItemCount: 1,
+        acceptedCount: 0,
+      });
+    },
+  );
 
   it("summarizes every extraction in counts", async () => {
     const { deps, diagnostics } = harness(

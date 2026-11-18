@@ -125,7 +125,12 @@ const GERMAN_NEGATION = String.raw`nicht|nie|niemals|auf\s+(?:gar\s+)?keinen\s+f
 const NEGATED_START_RE = new RegExp(String.raw`^(?:${GERMAN_NEGATION})\b`, "iu");
 const VERGISS_RE = /^\s*vergiss\b/iu;
 const VERGISS_DASS_RE = /^\s*vergiss(?:\s+bitte)?,?\s+dass\b/iu;
-const NEGATED_END_RE = new RegExp(String.raw`(?:^|\s)(?:${GERMAN_NEGATION})$`, "iu");
+const NEGATED_END_RE = new RegExp(String.raw`(?:^|\s)(?:${GERMAN_NEGATION}|nicht\s+mehr)$`, "iu");
+// A separate sentence can take back the whole instruction before any target is resolved.
+const FORGET_WITHDRAWALS = [
+  /[.!?…]\s+(?:oder|doch|nein,?)\s+(?:(?:besser|lieber|doch)\s+)?nicht(?=[.!?…]|$)/iu,
+  /[.!?…]\s+(?:actually|on second thought|no),?\s+don['’]t(?=[.!?…]|$)/iu,
+];
 // "Vergiss es" and "Forget it" mean "never mind", so they name nothing to forget.
 const NEVER_MIND_TARGETS: ReadonlySet<string> = new Set(["es", "it"]);
 
@@ -339,7 +344,7 @@ function statedForgetTarget(text: string): string | null {
   const prefixMatch = forgetPrefixMatch(text);
   if (prefixMatch === null) return null;
   const body = bodyAfterPrefix(prefixMatch, text);
-  if (body === null) return null;
+  if (body === null || FORGET_WITHDRAWALS.some((pattern) => pattern.test(body))) return null;
   const sentence = firstSentence(body);
   if (sentence.endsWith("?") || negatesForgetTarget(text, sentence)) return null;
   const target = trimForgetTarget(sentence);

@@ -295,7 +295,9 @@ export function parseSalienceItems(raw: string): readonly RawSalienceItem[] {
 }
 
 // ─── Loose-label → contract mapping ──────────────────────────────────────────
-const TYPE_MAP: Readonly<Record<string, MemoryType>> = {
+const TYPE_MAP: Readonly<
+  Record<string, MemoryType> & Record<(typeof SALIENCE_FACT_TYPES)[number], MemoryType>
+> = {
   identity: "semantic-fact",
   fact: "semantic-fact",
   constraint: "semantic-fact",
@@ -310,7 +312,8 @@ const TYPE_MAP: Readonly<Record<string, MemoryType>> = {
 };
 
 function mapType(loose: string): MemoryType | null {
-  return TYPE_MAP[loose.trim().toLowerCase()] ?? null;
+  const name = loose.trim().toLowerCase();
+  return Object.hasOwn(TYPE_MAP, name) ? (TYPE_MAP[name] ?? null) : null;
 }
 
 // Labels of a standing fact about the person: who they are and what always holds for them. Such a
