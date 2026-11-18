@@ -282,10 +282,12 @@ export function buildRankBySignal(
   signals: readonly (keyof IncludedSubscores)[],
 ): ReadonlyMap<keyof IncludedSubscores, ReadonlyMap<MemoryId, number>> {
   const rankBySignal = new Map<keyof IncludedSubscores, ReadonlyMap<MemoryId, number>>();
+  if (signals.length === 0) return rankBySignal;
+  const scored = memories.map(({ id }) => ({ id, subscores: requireEntry(subscoresById, id) }));
   for (const sig of signals) {
-    const ordered = [...memories].sort((a, b) => {
-      const av = requireEntry(subscoresById, a.id)[sig];
-      const bv = requireEntry(subscoresById, b.id)[sig];
+    const ordered = [...scored].sort((a, b) => {
+      const av = a.subscores[sig];
+      const bv = b.subscores[sig];
       if (av !== bv) return bv - av;
       if (a.id < b.id) return -1;
       if (a.id > b.id) return 1;
