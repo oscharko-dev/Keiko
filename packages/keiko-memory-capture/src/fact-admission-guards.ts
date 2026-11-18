@@ -115,19 +115,20 @@ interface RuleAnnouncementForm {
   readonly modifier: RegExp;
 }
 
+const GERMAN_TOPIC_PREPOSITIONS = new Set(["für", "fuer", "zu"]);
 const RULE_ANNOUNCEMENT_FORMS: readonly RuleAnnouncementForm[] = [
   {
     opening: ["ich", "habe", "eine"],
     qualifier: "neue",
     modifier: /(?:e|en|er|em|es)$/u,
     noun: "regel",
-    prepositions: new Set(["für", "fuer", "zu"]),
+    prepositions: GERMAN_TOPIC_PREPOSITIONS,
     possessives: new Set(["mein", "meine", "meinem", "meinen", "meiner", "meines"]),
   },
   {
     opening: ["i", "have", "a"],
     qualifier: "new",
-    modifier: /(?:ly|al|ic|ive|ous|ible|able|ary|ful|less|ular)$/u,
+    modifier: /(?:ly|al|ic|ive|ous|ible|able|ary|ful|less|ular|ing)$/u,
     noun: "rule",
     prepositions: new Set(["for", "about"]),
     possessives: new Set(["my"]),
@@ -157,15 +158,33 @@ function matchesRuleAnnouncement(words: readonly string[], form: RuleAnnouncemen
   );
 }
 
+// Both word orders express possession. Keep every topic word and restriction for the same
+// whole-clause check, including material following the rule.
+function announcementWords(text: string): readonly string[] {
+  const words = text.replace(/^i(?:['’]ve|\s+have)\s+got\s+(?=a\s)/iu, "i have ").split(/\s+/u);
+  if (!GERMAN_TOPIC_PREPOSITIONS.has(words[0]?.toLowerCase() ?? "")) return words;
+  const verb = words.findIndex((word) => word.toLowerCase() === "habe");
+  if (verb < 1 || words[verb + 1]?.toLowerCase() !== "ich") return words;
+  return ["ich", "habe", ...words.slice(verb + 2), ...words.slice(0, verb)];
+}
+
 // Possessing a rule without stating it gives no rule to apply. Match only the whole bare clause,
 // with an optional owned topic; content after a colon, a restriction or an exception stays intact.
 // The original turn remains available as pronoun context for the next statement.
-export function isBareRuleAnnouncement(evidence: string): boolean {
+export function ruleAnnouncementTopic(evidence: string): readonly string[] | undefined {
   const text = evidence.trim();
   let end = text.length;
   while (end > 0 && isClausePunctuation(text.charAt(end - 1))) end -= 1;
-  const words = text.slice(0, end).trimEnd().toLowerCase().split(/\s+/u);
-  return RULE_ANNOUNCEMENT_FORMS.some((form) => matchesRuleAnnouncement(words, form));
+  const words = announcementWords(text.slice(0, end).trimEnd());
+  const lower = words.map((word) => word.toLowerCase());
+  const form = RULE_ANNOUNCEMENT_FORMS.find((item) => matchesRuleAnnouncement(lower, item));
+  if (form === undefined) return undefined;
+  const possessive = lower.findIndex((word) => form.possessives.has(word));
+  return possessive < 0 ? [] : words.slice(possessive);
+}
+
+export function isBareRuleAnnouncement(evidence: string): boolean {
+  return ruleAnnouncementTopic(evidence) !== undefined;
 }
 
 const OWN_SUBJECT = String.raw`(?:ich|i|wir|we|mein\p{L}*|my|unser\p{L}*|our)`;

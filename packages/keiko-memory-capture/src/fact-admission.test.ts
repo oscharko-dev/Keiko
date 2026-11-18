@@ -851,6 +851,23 @@ describe("a pronoun for the person's own thing", () => {
     ).toEqual({ admitted: false, reason: "third-party" });
   });
 
+  it.each([
+    ["My packing slips always start with a number.", "I've got a rule for my packing lists."],
+    [
+      "My elderly parents always start with a number.",
+      "I've got a rule for my elderly parents.",
+    ],
+  ])(
+    "refuses a mismatched compound or an owned third-party reference",
+    (body, previousUserText) => {
+      const evidence = "They always start with a number.";
+      expect(
+        admitProposedFact({ body, evidence, about: "self" }, evidence, { previousUserText })
+          .admitted,
+      ).toBe(false);
+    },
+  );
+
   it("still drops a pronoun for a person the person named", () => {
     const said = "Sie arbeitet in Berlin.";
     expect(
@@ -881,6 +898,10 @@ describe("a rule announcement without the rule's content", () => {
     "I have a rule.",
     "I have a rule for my packing-lists;",
     "Ich habe eine Regel für meine Berichte –",
+    "Für meine Schichtberichte habe ich eine neue Regel.",
+    "Zu meinen wöchentlichen Übergaben habe ich eine Regel.",
+    "I've got a new rule for my packing lists.",
+    "I have got a rule about my weekly meetings.",
   ])("drops only the bare announcement: %s", (text) => {
     expect(admit(text, text)).toEqual({ admitted: false, reason: "not-entailed" });
   });
@@ -903,6 +924,8 @@ describe("a rule announcement without the rule's content", () => {
     "My rule is to never submit my reports without a summary.",
     "Ich habe ein neues Fahrrad für meine Fahrten.",
     "I have a new bicycle for my commute.",
+    "I have got a new rule for my packing lists: always label the first crate.",
+    "Für meine Übergaben habe ich eine Regel nur im Winter.",
   ])("keeps stated content, restrictions and ordinary possessions: %s", (text) => {
     expect(admit(text, text)).toMatchObject({ admitted: true, claim: text });
   });

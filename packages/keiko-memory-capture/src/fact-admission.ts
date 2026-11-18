@@ -19,6 +19,7 @@ import {
   isFirstPersonTaskRequest,
   isInsideCode,
   isOtherPersonsProposition,
+  ruleAnnouncementTopic,
   singleQuoteRole,
 } from "./fact-admission-guards.js";
 import { looksLikePersonalIdentifier } from "./secret-patterns.js";
@@ -1597,9 +1598,28 @@ function ownThings(earlier: string): ReadonlyMap<string, OwnThing> {
   return things;
 }
 
+// A rule announcement names exactly one owned topic. Only a model that names its whole
+// multiword subject can resolve the later pronoun. All supplied words come from the two turns.
+function compoundRuleSubject(body: string, topic: readonly string[]): string | null {
+  const [owner, ...words] = topic;
+  const possessive = SUBJECT_POSSESSIVE[owner?.toLowerCase() ?? ""];
+  if (possessive === undefined || namesOtherPerson(`${possessive} ${words.at(-1) ?? ""}`))
+    return null;
+  const named = body
+    .normalize("NFC")
+    .trim()
+    .replace(/^(?:mein(?:e|em|en|er|es)?|my|die|der|das|the)\s+/iu, "")
+    .split(/\s+/u);
+  return words.every((word, index) => word.toLowerCase() === named[index]?.toLowerCase())
+    ? `${possessive} ${words.join(" ")}`
+    : null;
+}
+
 // The model must name which of the person's things the pronoun stands for: a pronoun alone may
 // mean anyone, so a kept pronoun never resolves. The noun is taken from the person's own words.
 function referent(body: string, earlier: string): string | null {
+  const topic = ruleAnnouncementTopic(earlier);
+  if (topic !== undefined && topic.length > 2) return compoundRuleSubject(body, topic);
   const named = LEADING_WORDS_RE.exec(body.normalize("NFC").trim())?.[1];
   const thing = named === undefined ? undefined : ownThings(earlier).get(named.toLowerCase());
   return thing === undefined ? null : `${thing.possessive} ${thing.noun}`;

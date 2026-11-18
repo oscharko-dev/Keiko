@@ -975,6 +975,18 @@ describe("what a pronoun and a team's decision become", () => {
       "They always begin with a summary in three sentences.",
       "My reports always begin with a summary in three sentences.",
     ],
+    [
+      "German topic first",
+      "Für meine Übergaben habe ich eine neue Regel.",
+      "Sie enden immer mit einer Inventarliste.",
+      "Meine Übergaben enden immer mit einer Inventarliste.",
+    ],
+    [
+      "English contracted possession",
+      "I’ve got a new rule for my packing lists.",
+      "They always start with the crate number.",
+      "My packing lists always start with the crate number.",
+    ],
   ])(
     "drops a bare %s rule announcement while keeping it as pronoun context",
     async (_language, announcement, evidence, body) => {
