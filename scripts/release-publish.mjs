@@ -81,6 +81,13 @@ import {
   uploadIntoDraft,
 } from "./lib/portable-release-publication.mjs";
 import {
+  boundedCurlCommand,
+  portableDownloadCurlArgs,
+  portableDownloadFailure,
+  portableDownloadMaxTimeSeconds,
+  portableDownloadTimeoutMs,
+} from "./lib/portable-download-bounds.mjs";
+import {
   makePublishedPortableSeams,
   runVerifyPublishedPortableAssets,
 } from "./lib/portable-release-publish-helpers.mjs";
@@ -1702,85 +1709,24 @@ function runPortableDownloadSmoke(remoteAssets, expectedAssets) {
   }
 }
 
-// A valid asset is a few hundred megabytes: the whole transfer may take half an hour, but a
-// connection that moves less than 10 KiB/s for a minute is stalled, and the subprocess timeout
-// sits just above curl's own deadline so a hung process is still ended and named.
-const PORTABLE_DOWNLOAD_MAX_TIME_SECONDS = 1800;
-const PORTABLE_DOWNLOAD_STALL_SECONDS = 60;
-const PORTABLE_DOWNLOAD_STALL_BYTES_PER_SECOND = 10 * 1024;
-const PORTABLE_DOWNLOAD_TIMEOUT_GRACE_MS = 30_000;
-
-function portableDownloadMaxTimeSeconds() {
-  const override = Number(process.env.KEIKO_PORTABLE_DOWNLOAD_MAX_TIME_SECONDS);
-  return process.env.NODE_ENV === "test" && Number.isInteger(override) && override > 0
-    ? override
-    : PORTABLE_DOWNLOAD_MAX_TIME_SECONDS;
-}
-
-// curl's --max-filesize only applies when the server states a length. The file-size resource limit
-// of the child process bounds the bytes written either way: a transfer past the expected size ends
-// with SIGXFSZ instead of filling the runner's temporary storage.
-function boundedCurlCommand(args, expectedSize) {
-  if (process.platform === "win32") return { cmd: "curl", args };
-  const blocks = Math.ceil(expectedSize / 512) + 1;
-  return {
-    cmd: "sh",
-    args: ["-c", 'ulimit -f "$1" && shift && exec "$@"', "sh", String(blocks), "curl", ...args],
-  };
-}
-
-function downloadedSize(destination) {
-  return existsSync(destination) ? statSync(destination).size : 0;
-}
-
-function portableDownloadFailure(result, expected, destination) {
-  const assetName = expected.assetName;
-  if (result.error?.code === "ETIMEDOUT") {
-    return `portable asset download timed out for ${assetName}.`;
-  }
-  // Node and curl may meet the file-size limit as a failed write instead of the signal; either
-  // way the file can only be longer than the expected size when the response was too large.
-  if (result.signal === "SIGXFSZ" || downloadedSize(destination) > expected.expectedSize) {
-    return `portable asset download exceeded the expected size for ${assetName}.`;
-  }
-  return `unauthenticated portable asset download failed for ${assetName}.`;
-}
-
 function smokePortableDownloadUrl(expected, url) {
   const root = mkdtempSync(join(tmpdir(), "keiko-portable-download-"));
   const destination = join(root, expected.assetName);
   try {
-    const maxTime = portableDownloadMaxTimeSeconds();
-    // -q first: no .curlrc applies. HTTPS only, also through every redirect --location follows.
+    const maxTimeSeconds = portableDownloadMaxTimeSeconds();
     const command = boundedCurlCommand(
-      [
-        "-q",
-        "--proto",
-        "=https",
-        "--proto-redir",
-        "=https",
-        "--fail",
-        "--silent",
-        "--show-error",
-        "--location",
-        "--max-time",
-        String(maxTime),
-        "--speed-limit",
-        String(PORTABLE_DOWNLOAD_STALL_BYTES_PER_SECOND),
-        "--speed-time",
-        String(PORTABLE_DOWNLOAD_STALL_SECONDS),
-        "--max-filesize",
-        String(expected.expectedSize),
-        "--output",
+      portableDownloadCurlArgs({
+        expectedSize: expected.expectedSize,
         destination,
         url,
-      ],
+        maxTimeSeconds,
+      }),
       expected.expectedSize,
     );
     const result = commandResult(command.cmd, command.args, {
       env: networkEnvironment(),
       killSignal: "SIGKILL",
-      timeout: maxTime * 1000 + PORTABLE_DOWNLOAD_TIMEOUT_GRACE_MS,
+      timeout: portableDownloadTimeoutMs(maxTimeSeconds),
     });
     if (result.error !== undefined || result.status !== 0) {
       fail(portableDownloadFailure(result, expected, destination));
