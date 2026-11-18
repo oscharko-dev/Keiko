@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 // The driver against a fake product: the oracle arm's seeding by the id the capture route returns,
 // its precondition, and the rule that anchor text keeps no body. The fake keeps its memories in a
 // list, newest first, like the real list route, and records every call it receives.
@@ -137,10 +138,41 @@ function context(overrides = {}) {
 }
 
 describe("forget confirmation", () => {
+  it.each(["de", "en"])(
+    "requires a live target before the polite forget in %s",
+    async (language) => {
+      const url = new URL(
+        `../testing/memory-lab/scenarios-explicit/polite-forget-yes-${language}.json`,
+        import.meta.url,
+      );
+      const fixture = validateScenario(JSON.parse(readFileSync(url, "utf8")));
+      const empty = fakeProduct({});
+      await expect(
+        runScenario(
+          fixture,
+          empty.instance,
+          context({
+            arm: "product",
+            learning: { quietMs: 0, maxMs: 2000 },
+          }),
+        ),
+      ).rejects.toThrow("required memory missing before turn 2");
+      expect(empty.calls.filter((call) => call === "POST /api/desktop/chat")).toHaveLength(1);
+    },
+  );
+
   it.each([
     {
       name: "skips a forget the subject already applied",
       action: { memoryId: FORGET_ID, requiresConfirmation: false, forgotten: true },
+      posts: [],
+      confirmed: [],
+      unresolved: 0,
+      live: 0,
+    },
+    {
+      name: "skips a completed forget even when a historical confirmation flag is also set",
+      action: { memoryId: FORGET_ID, requiresConfirmation: true, forgotten: true },
       posts: [],
       confirmed: [],
       unresolved: 0,

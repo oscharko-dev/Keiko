@@ -18,6 +18,7 @@
     },
     {
       "user": "Bitte vergiss das.",
+      "requireStoredBefore": [["Tabelle*"]],
       "learner": []
     }
   ],

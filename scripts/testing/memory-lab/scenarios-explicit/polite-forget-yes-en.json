@@ -18,6 +18,7 @@
     },
     {
       "user": "Please forget that.",
+      "requireStoredBefore": [["table*"]],
       "learner": []
     }
   ],

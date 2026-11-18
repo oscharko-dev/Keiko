@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { mapSequential } from "./corpus/sequence.mjs";
 import { awaitLearning, captureTotal, listMemories, readCaptures } from "./instance.mjs";
 import { retainBodiesFor } from "./isolation.mjs";
-import { scoreProbe, scoreStore } from "./score.mjs";
+import { matchesTermGroups, scoreProbe, scoreStore } from "./score.mjs";
 
 export const ARMS = Object.freeze(["off", "product", "oracle"]);
 // The explicit path recognizes "Merke dir <fact>"; a colon after "dir" is not an intent today.
@@ -124,10 +124,21 @@ async function confirmForgets(instance, actions, context) {
   return { confirmed, unresolved };
 }
 
+async function verifyStoredBefore(instance, terms, index, arm) {
+  if (arm !== "product" || terms === undefined) return;
+  const records = await listMemories(instance);
+  if (
+    !records.some((record) => record.status === "accepted" && matchesTermGroups(record.body, terms))
+  ) {
+    throw new Error(`required memory missing before turn ${String(index + 1)}`);
+  }
+}
+
 async function runTurns(scenario, instance, context) {
   const chatId = await createChat(instance, `lab ${scenario.id}`);
   const rows = [];
   for (const [index, turn] of scenario.turns.entries()) {
+    await verifyStoredBefore(instance, turn.requireStoredBefore, index, context.arm);
     const enabled = context.arm === "product" && turn.memory !== false;
     if (enabled && context.fixture !== undefined)
       context.fixture.queueLearner(
