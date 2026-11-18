@@ -1035,6 +1035,31 @@ describe("POST /api/figma/snapshots — capture stops and retained captures", ()
     }
   });
 
+  it("clears the retention timer when the retry receives the capture", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await recordConsent(evidenceDir);
+    const build = await gatedRealBuild();
+    const sharedMap = makeInFlightMap();
+
+    try {
+      await captureAfterClosedRequest(sharedMap, build);
+      await vi.waitFor(() => {
+        expect(sharedMap.size).toBe(1);
+      });
+      const timersWhileRetained = vi.getTimerCount();
+      const retry = await handleFigmaTriggerSnapshot(
+        makeCtx(triggerBody()),
+        makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+        sharedMap,
+      );
+      expect(retry.status).toBe(201);
+      expect(vi.getTimerCount()).toBe(timersWhileRetained - 1);
+    } finally {
+      build.restore();
+      vi.useRealTimers();
+    }
+  });
+
   it("lets a retained capture expire after the retention period", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     await recordConsent(evidenceDir);

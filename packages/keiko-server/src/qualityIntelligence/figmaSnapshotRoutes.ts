@@ -1069,6 +1069,8 @@ interface CoalescedBuildEntry {
   readonly promise: Promise<RouteResult>;
   /** Set once a first capture completed and stored this run; the entry is then retained. */
   readonly storedRunId?: string;
+  /** The retention timer of a retained entry; cleared when a request receives the capture. */
+  readonly expiry?: ReturnType<typeof setTimeout>;
 }
 
 // A first capture that completed after its request had timed out or closed stays answerable for
@@ -1124,10 +1126,11 @@ function settleCoalescedBuild(
     inFlight.delete(scopeKey);
     return;
   }
-  inFlight.set(scopeKey, { promise, storedRunId });
-  setTimeout(() => {
+  const expiry = setTimeout(() => {
     if (inFlight.get(scopeKey)?.promise === promise) inFlight.delete(scopeKey);
-  }, COMPLETED_CAPTURE_RETENTION_MS).unref();
+  }, COMPLETED_CAPTURE_RETENTION_MS);
+  expiry.unref();
+  inFlight.set(scopeKey, { promise, storedRunId, expiry });
 }
 
 function governedBuildOptions(
@@ -1293,7 +1296,9 @@ function releaseDeliveredCapture(
   promise: Promise<RouteResult>,
 ): void {
   const entry = inFlight.get(scopeKey);
-  if (entry?.promise === promise && entry.storedRunId !== undefined) inFlight.delete(scopeKey);
+  if (entry?.promise !== promise || entry.storedRunId === undefined) return;
+  clearTimeout(entry.expiry);
+  inFlight.delete(scopeKey);
 }
 
 interface CaptureWaiter {
