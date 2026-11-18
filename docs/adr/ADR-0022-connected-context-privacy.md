@@ -828,9 +828,15 @@ failure reason and cause metadata. Unexpected programming failures retain their 
 and reach the terminal retrieval diagnostic. Secret redaction uses
 linear private-key boundary scans and scheme-start guards, including conservative redaction of an
 unterminated private-key body, so eligible large text does not trigger repeated suffix scans.
-Workspace search and excerpt projection preserve each masked secret span's original LF/CRLF
+Workspace search and excerpt projection preserve each masked secret span's physical line
 delimiters without retaining its body or columns. Facts between separate secret blocks therefore
 keep their physical source lines in lexical matches, numbered model context, and source navigation.
+LF and CRLF both terminate a source line and a lone CR is line content: the shared
+`splitSourceLines` rule (`keiko-workspace/src/sourceLines.ts`) numbers lines for search,
+classification, the workspace index and excerpts, and excerpt reads fold CRLF into LF before
+redaction, so a file with Windows or mixed line endings yields the same excerpts, ranges and
+citations as its LF copy (#4439). File-size caps still count the original bytes; files on disk are
+never rewritten.
 Source redaction now uses the shared security projection for TypeScript/JavaScript, Java, JSON/JSONC,
 YAML and the existing ordinary two-sided unified-diff subset. Credential assignments mask literal values while preserving syntax metadata and physical
 line delimiters. Java ownership follows its CST after JLS Unicode translation; parsed YAML aliases

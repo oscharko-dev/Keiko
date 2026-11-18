@@ -8,6 +8,7 @@ import {
   type RepositorySourceLine,
 } from "./repoSearchSourceClassification.js";
 import { RetainedAtomHeap } from "./repoSearchRetention.js";
+import { splitSourceLines } from "./sourceLines.js";
 
 const LINE_TIMEOUT_CHECK_INTERVAL = 256;
 const MAX_ENCLOSING_RANGE_LINES = 80;
@@ -794,7 +795,7 @@ function lineSelectionStopped(
 }
 
 export function repositoryPhysicalLines(text: string): string[] {
-  const lines = text.split(/\r?\n/u);
+  const lines = splitSourceLines(text);
   if (text.endsWith("\n")) {
     lines.pop();
   }
