@@ -78,6 +78,8 @@ import {
   type GroundedRunner,
 } from "./grounded-qa.js";
 import { buildMultiSourceGatewayMessages } from "./grounded-qa-multi-source.js";
+import { configuredEmbeddingProviders } from "./local-knowledge-handlers.js";
+import { memoryEmbeddingProviderIdentity } from "./memory-embedding.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { sentPromptContext } from "./grounded-prompt-context.js";
@@ -2509,6 +2511,11 @@ describe("handleGroundedAsk", () => {
   it.each(["single-folder", "multi-folder", "hybrid", "local-knowledge"] as const)(
     "rejects a %s ask when its admitted gateway generation changes during async memory work",
     async (kind) => {
+      const config = customModelConfig();
+      const embeddingProvider = configuredEmbeddingProviders(config)[0];
+      if (embeddingProvider === undefined) {
+        throw new TypeError("Fixture embedding provider missing");
+      }
       const { chatId, projectPath } = await setupChatWithoutScope();
       seedScopedRepo(projectPath);
       connectGroundedTopology(chatId, kind);
@@ -2522,14 +2529,13 @@ describe("handleGroundedAsk", () => {
         "The current release requires an explicit readiness check.",
       );
       memoryVault.upsertEmbedding(rememberedId, {
-        provider: "test-provider",
-        modelId: "text-embedding-3-small",
+        provider: memoryEmbeddingProviderIdentity(embeddingProvider),
+        modelId: embeddingProvider.modelId,
         metric: "cosine",
         vector: Float32Array.from([1, 0]),
       });
       const embeddingStarted = deferred<undefined>();
       const embedding = deferred<OpenAIEmbeddingOutcome>();
-      const config = customModelConfig();
       const runtime = runtimeGatewayConfig(config, true);
       let providerCalls = 0;
       const model = fakeModel("must not run", []);
@@ -2561,11 +2567,11 @@ describe("handleGroundedAsk", () => {
           },
         ),
       );
-      await embeddingStarted.promise;
+      await expect(Promise.race([embeddingStarted.promise, outcome])).resolves.toBeUndefined();
       runtime.set(customModelConfig(), true);
       embedding.resolve({
         ok: true,
-        value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+        value: { vector: Float32Array.from([1, 0]), modelId: embeddingProvider.modelId },
       });
 
       await expect(outcome).resolves.toEqual({
