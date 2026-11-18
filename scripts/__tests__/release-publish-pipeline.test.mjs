@@ -63,6 +63,7 @@ import {
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "../portable-runtime.mjs";
 import { readZipArchiveUncompressedSize, writeZipArchiveEntries } from "../lib/zip-archive.mjs";
+import { boundedCommand } from "../lib/portable-download-bounds.mjs";
 import {
   FOLDER_PACKAGES_DIRECTORY,
   FOLDER_PACKAGES_MANIFEST,
@@ -574,8 +575,11 @@ function stubPrologue(logFile, stateFile) {
     `const STATE = ${JSON.stringify(stateFile)};`,
     `const VERSION = ${JSON.stringify(RELEASE_VERSION)};`,
     "const argv = process.argv.slice(2);",
-    "function log(bin) { appendFileSync(LOG, bin + ' ' + JSON.stringify(argv) + '\\n'); }",
-    "function logCwd(bin) { appendFileSync(LOG, bin + '-cwd ' + JSON.stringify(process.cwd()) + '\\n'); }",
+    // The `sh` stub already recorded a bounded call (see makeShStub); under its file-size limit a
+    // Linux append to the shared log fails with EFBIG, so the limited stub writes no log line.
+    `const LOGGED_BY_SH = process.env[${JSON.stringify(LOGGED_BY_SH_ENV)}] === "1";`,
+    "function log(bin) { if (!LOGGED_BY_SH) appendFileSync(LOG, bin + ' ' + JSON.stringify(argv) + '\\n'); }",
+    "function logCwd(bin) { if (!LOGGED_BY_SH) appendFileSync(LOG, bin + '-cwd ' + JSON.stringify(process.cwd()) + '\\n'); }",
     "function state() { return JSON.parse(readFileSync(STATE, 'utf8')); }",
     "function setState(patch) { writeFileSync(STATE, JSON.stringify({ ...state(), ...patch })); }",
     "",
@@ -796,6 +800,50 @@ function gitStubBody() {
   ].join("\n");
 }
 
+// A bounded download runs as `sh -c '<ulimit wrapper>' sh <blocks> <program> ...` (boundedCommand).
+// On Linux the file-size limit also refuses appends to the shared call log beyond the limit, which
+// macOS permits, so every download stub failed with EFBIG in CI only. This `sh` stub records the
+// bounded call in the stub log format before the limit applies, marks it, and then execs the real
+// shell, so the process tree, its exit status and its signals stay those of the real wrapper. The
+// wrapper text comes from the production helper, never a copy.
+const LOGGED_BY_SH_ENV = "KEIKO_TEST_LOGGED_BY_SH";
+const BOUNDED_WRAPPER_SCRIPT = boundedCommand("curl", [], 1, "linux").args[1];
+
+function shellQuote(value) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function makeShStub(binDir, logFile) {
+  const recorder = join(binDir, "record-bounded-call.mjs");
+  writeFileSync(
+    recorder,
+    [
+      'import { appendFileSync } from "node:fs";',
+      // argv after the recorder: -c, the wrapper, its $0, the block count, the program, its args.
+      "const [, , , , bin, ...args] = process.argv.slice(2);",
+      `appendFileSync(${JSON.stringify(logFile)}, bin + " " + JSON.stringify(args) + "\\n");`,
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const path = join(binDir, "sh");
+  writeFileSync(
+    path,
+    [
+      "#!/bin/sh",
+      `if [ "$1" = "-c" ] && [ "$2" = ${shellQuote(BOUNDED_WRAPPER_SCRIPT)} ]; then`,
+      `  ${shellQuote(process.execPath)} ${shellQuote(recorder)} "$@" || exit 70`,
+      `  ${LOGGED_BY_SH_ENV}=1`,
+      `  export ${LOGGED_BY_SH_ENV}`,
+      "fi",
+      'exec /bin/sh "$@"',
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  chmodSync(path, 0o755);
+}
+
 function makeStub(binDir, name, body, logFile, stateFile) {
   const path = join(binDir, name);
   writeFileSync(path, `#!/usr/bin/env node\n${stubPrologue(logFile, stateFile)}${body}\n`, "utf8");
@@ -903,7 +951,7 @@ function prepublishedEvaluationState() {
 function curlStubBody() {
   return [
     "const url = argv.at(-1);",
-    "appendFileSync(LOG, 'curl ' + JSON.stringify(argv) + '\\n');",
+    'log("curl");',
     `const versionEndpointSuffix = "/" + VERSION;`,
     "if (url.endsWith(versionEndpointSuffix)) {",
     "  const s = state();",
@@ -1197,6 +1245,7 @@ function runPublish({
   makeStub(binDir, "gh", ghStubBody(), logFile, stateFile);
   makeStub(binDir, "git", gitStubBody(), logFile, stateFile);
   makeStub(binDir, "curl", curlStubBody(), logFile, stateFile);
+  makeShStub(binDir, logFile);
 
   const env = {
     ...process.env,
