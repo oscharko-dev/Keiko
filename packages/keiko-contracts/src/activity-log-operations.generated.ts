@@ -38199,6 +38199,42 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "memory.maintenance.candidates.selected",
+    category: "memory",
+    owner: "keiko-server",
+    emitter: "memory-maintenance-handlers.logMaintenanceCandidateSelection",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      promotionCandidateCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      consolidationCandidateCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["memory-maintenance-selection"],
+    proofIds: ["memory.maintenance.candidates.selected.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "native-file-dialog.selection.projected",
     category: "diagnostic",
     owner: "keiko-server",

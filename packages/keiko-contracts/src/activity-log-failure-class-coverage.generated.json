@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 406,
-  "completeClassCount": 406,
+  "supportedClassCount": 407,
+  "completeClassCount": 407,
   "completeness": "complete",
   "classes": [
     {
@@ -42111,6 +42111,62 @@
             "causeChain": false
           },
           "proofIds": ["memory.learn.pass.started.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "memory-maintenance-selection",
+      "requirementContract": "memory-maintenance-selection",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["memory.maintenance.candidates.selected"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "memory.maintenance.candidates.selected",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["memory.maintenance.candidates.selected"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "memory.maintenance.candidates.selected",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "consolidationCandidateCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "promotionCandidateCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.maintenance.candidates.selected.line"],
           "replayReferences": [],
           "missingObligations": []
         }

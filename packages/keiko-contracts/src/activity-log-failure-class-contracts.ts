@@ -8315,6 +8315,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "memory-maintenance-selection",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["memory.maintenance.candidates.selected"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["memory.maintenance.candidates.selected"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["memory.maintenance.candidates.selected"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["memory.maintenance.candidates.selected"],
+    requiredEvidenceClasses: ["completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "memory-audit-state-cache",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
