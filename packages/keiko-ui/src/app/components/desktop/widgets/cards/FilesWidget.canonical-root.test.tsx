@@ -667,6 +667,8 @@ it("clears a preview and its directory when an unchanged root resolves elsewhere
     await waitFor(() => expect(active).toHaveBeenLastCalledWith(null, resolved, null));
     expect(screen.queryByRole("button", { name: "Back to files" })).toBeNull();
     expect(await screen.findByRole("treeitem", { name: /two\.ts/u })).toBeInTheDocument();
+    // Once the replacement tree is shown, nothing may report the old root or preview again.
+    expect(active).toHaveBeenLastCalledWith(null, resolved, null);
   } finally {
     cleanup();
     await native.close();
