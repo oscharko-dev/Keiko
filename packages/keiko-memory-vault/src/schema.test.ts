@@ -85,31 +85,8 @@ describe("runMigrations", () => {
 
   it("upgrades a v2 DB forward to the current schema head by applying only later DDL", () => {
     const db = openMemDb();
-    runMigrations(db, TEST_CIPHER);
-    // Simulate a genuine pre-v3 (encryption-era) database: the access table did not exist and the
-    // version sat at the encryption head. Dropping the table + regressing the version reproduces
-    // the on-disk shape a v2 DB actually has before this migration runs.
-    db.exec("ALTER TABLE memories DROP COLUMN evidence_span");
-    db.exec("ALTER TABLE memories DROP COLUMN source_message_ids_json");
-    db.exec("DROP TABLE memory_conversation_touches");
-    db.exec("DROP TABLE memory_access");
-    db.exec("DROP INDEX idx_tombstones_scope");
-    db.exec("DROP INDEX idx_tombstones_memory_id");
-    db.exec("DROP TABLE memory_tombstones");
-    db.exec(`
-      CREATE TABLE memory_tombstones (
-        id TEXT NOT NULL PRIMARY KEY,
-        memory_id TEXT NOT NULL,
-        scope_kind TEXT NOT NULL,
-        scope_coordinate TEXT NOT NULL,
-        type TEXT NOT NULL,
-        forgotten_at INTEGER NOT NULL,
-        forgetter_surface TEXT NOT NULL,
-        reason TEXT
-      ) STRICT;
-      CREATE INDEX idx_tombstones_scope ON memory_tombstones(scope_kind, scope_coordinate);
-      CREATE INDEX idx_tombstones_memory_id ON memory_tombstones(memory_id);
-    `);
+    for (const migration of MIGRATIONS.filter(({ version }) => version <= 2))
+      db.exec(migration.sql);
     db.exec("PRAGMA user_version = 2");
     runMigrations(db, TEST_CIPHER);
     expect(userVersion(db)).toBe(MEMORY_VAULT_SCHEMA_VERSION);
@@ -267,6 +244,7 @@ describe("runMigrations", () => {
       "memory_conversation_touches",
       "memory_edges",
       "memory_embeddings",
+      "memory_message_sources",
       "memory_tombstones",
       "memory_vault_secrets",
     ]);
@@ -295,6 +273,7 @@ describe("runMigrations", () => {
       "idx_memories_updated_at",
       "idx_memories_valid_until",
       "idx_memory_access_last",
+      "idx_memory_message_source_lookup",
       "idx_tombstones_memory_id",
       "idx_tombstones_scope",
       "idx_tombstones_scope_body_hash",

@@ -255,10 +255,11 @@ function buildSourceMessageClause(
   if (sourceMessageId === undefined) return undefined;
   return {
     clauses: [
-      `EXISTS (SELECT 1 FROM json_each(source_message_ids_json) source_message
-        WHERE source_message.type = 'text' AND source_message.value = ?)`,
+      `((membership.unreadable = 0 AND membership.source_message_id = ?) OR (membership.unreadable = 1 AND
+        EXISTS (SELECT 1 FROM json_each(source_message_ids_json) source_message
+          WHERE source_message.type = 'text' AND source_message.value = ?)))`,
     ],
-    params: [sourceMessageId],
+    params: [sourceMessageId, sourceMessageId],
   };
 }
 
@@ -308,7 +309,14 @@ function buildListSql(
   select = "*",
 ): string {
   const { column, dir } = resolveOrderBy(options);
-  let sql = `SELECT ${select} FROM memories`;
+  // Seek the source first, then the memory PK, even when a scope index could satisfy ORDER BY.
+  const from =
+    options.sourceMessageId === undefined
+      ? "memories"
+      : "memory_message_sources membership CROSS JOIN memories ON memories.id = membership.memory_id";
+  const projection =
+    options.sourceMessageId !== undefined && select === "*" ? "memories.*" : select;
+  let sql = `SELECT ${projection} FROM ${from}`;
   if (where.length > 0) {
     sql += ` WHERE ${where.join(" AND ")}`;
   }

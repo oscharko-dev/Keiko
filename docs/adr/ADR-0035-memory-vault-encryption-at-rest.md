@@ -43,6 +43,12 @@ a vector the Vault checks the provider, canonical model, dimensions and metric t
 An older tombstone with a vector and no recorded identity retains its conservative similarity check.
 Exact-text suppression continues to use the scoped body hash.
 
+Vault schema v16 indexes existing source message IDs alongside their owning memory IDs for exact
+replay lookup. The index contains no message text or memory body. Backfill reads the existing
+provenance array; updates and physical erasure maintain the index in the same transaction. An
+unreadable historical source array keeps the existing scoped read failure and never blocks an
+unrelated vault scope from opening.
+
 Crypto is confined to two wrapper functions in `serialize.ts` (and the per-table seal/open in `edges.ts`, `embeddings.ts`, `tombstones.ts`); the pure row↔record builders operate on plaintext exactly as before. The cipher is threaded as an explicit parameter through the row layer (keeping those modules pure and unit-testable) and resolved once, internally, in `createMemoryVault`.
 
 ### Key resolution tiers (`keiko-memory-vault/cipher.ts`)

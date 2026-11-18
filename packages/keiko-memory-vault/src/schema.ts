@@ -64,7 +64,8 @@ import {
 // keeps each exact semantic-suppression page and each authorized audit page bounded without dropping
 // older refusals or exposing a plaintext vector sidecar.
 // v15 = optional structural space digest for a sealed forget-tombstone vector.
-export const MEMORY_VAULT_SCHEMA_VERSION = 15;
+// v16 = transactionally indexed source-message membership for exact capture replay.
+export const MEMORY_VAULT_SCHEMA_VERSION = 16;
 
 const ENCRYPTION_VERSION = 2;
 
@@ -289,6 +290,40 @@ ALTER TABLE memory_conversation_touches ADD COLUMN learned_confirmation_rowid IN
 // is retained alongside it. A NULL digest identifies historical vectors of unknown provenance.
 const V15_SQL = "ALTER TABLE memory_tombstones ADD COLUMN body_embedding_space TEXT;";
 
+// At migration read every stored provenance array. On insert or update SQLite already owns
+// that row as NEW, so index it directly without a second lookup of its parent.
+function insertMessageSources(row: "m" | "NEW"): string {
+  const from = row === "m" ? "memories m, " : "";
+  const source = `${row}.source_message_ids_json`;
+  return `INSERT OR IGNORE INTO memory_message_sources (memory_id, source_message_id, unreadable)
+    SELECT ${row}.id, coalesce(s.value, ''), s.type = 'null'
+    FROM ${from}json_each(CASE WHEN ${source} IS NULL OR json_valid(${source})
+      THEN ${source} ELSE '[null]' END) s
+    WHERE s.type = 'text' OR (s.type = 'null' AND NOT json_valid(${source}));`;
+}
+
+// Mark unreadable legacy provenance explicitly. Opening its vault must remain
+// possible; a source-filtered read of the affected scope still evaluates its original check.
+const V16_SQL = `
+CREATE TABLE IF NOT EXISTS memory_message_sources (
+  memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+  source_message_id TEXT NOT NULL,
+  unreadable INTEGER NOT NULL CHECK(unreadable IN (0, 1)),
+  PRIMARY KEY(memory_id, source_message_id, unreadable)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_memory_message_source_lookup
+  ON memory_message_sources(unreadable, source_message_id);
+${insertMessageSources("m")}
+CREATE TRIGGER IF NOT EXISTS memory_sources_insert AFTER INSERT ON memories
+WHEN NEW.source_message_ids_json IS NOT NULL BEGIN
+  ${insertMessageSources("NEW")}
+END;
+CREATE TRIGGER IF NOT EXISTS memory_sources_update AFTER UPDATE OF source_message_ids_json ON memories
+WHEN OLD.source_message_ids_json IS NOT NEW.source_message_ids_json BEGIN
+  DELETE FROM memory_message_sources WHERE memory_id = OLD.id;
+  ${insertMessageSources("NEW")}
+END;`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through the package's public entry point, so no packaged surface change.
 export const MIGRATIONS: readonly Migration[] = [
@@ -306,6 +341,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 13, sql: V13_SQL },
   { version: 14, sql: V14_SQL },
   { version: 15, sql: V15_SQL },
+  { version: 16, sql: V16_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {
