@@ -18,6 +18,7 @@ import type { IncomingMessage } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import {
   createMemoryVault,
+  MEMORY_CENTER_PAGE_LIMIT,
   MemoryStorageError,
   MemoryStoragePreconditionError,
   MemoryStorageValidationError,
@@ -105,7 +106,7 @@ import { resolveMemoryTargetRecords } from "./memory-target-resolver.js";
 
 const MAX_MEMORY_BODY_BYTES = 64_000;
 const DEFAULT_REVIEWER_ID = "local-operator" as MemoryReviewerId;
-const MAX_LIST_LIMIT = 200;
+const MAX_LIST_LIMIT = MEMORY_CENTER_PAGE_LIMIT;
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_QUERY_CHARS = 200;
 const MAX_RECENT_SINCE_CHARS = 13;
@@ -733,6 +734,22 @@ function handleLegacyMemories(
   params: LegacyListParams,
 ): RouteResult {
   const { scopeKinds, types, statuses, sensitivities, query, limit, offset } = params;
+  if (query === undefined) {
+    const page = vault.listMemoryCenterPage({
+      scopeKinds: scopeKinds as readonly MemoryScopeKind[],
+      type: types as readonly MemoryType[],
+      status: statuses as readonly MemoryStatus[],
+      sensitivity: sensitivities as readonly MemorySensitivity[],
+      limit,
+      offset,
+    });
+    const memories = redactMemories(deps, page.memories);
+    logVaultRecordSelection(ctx, "list", page.total, page.memories.length);
+    return {
+      status: 200,
+      body: { memories, total: page.total, limit, offset },
+    };
+  }
   const candidates = listMemoryCandidates(vault, {
     ...(scopeKinds.length > 0 ? { scopeKinds: scopeKinds as readonly MemoryScopeKind[] } : {}),
     ...(types.length > 0 ? { types: types as readonly MemoryType[] } : {}),

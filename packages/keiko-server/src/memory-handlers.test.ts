@@ -2736,17 +2736,20 @@ describe("emitServerDiagnostic on memory-handler storage failures (w4b)", () => 
     );
   }
 
-  it("reports a list failure", () => {
+  it.each(["", "?q=Synthetic"])("reports a list failure %s", (query) => {
     const vault = makeVault();
     const { records, diagnostics } = recordingSink();
     const broken: MemoryVaultStore = {
       ...vault,
+      listMemoryCenterPage: () => {
+        throw new MemoryStorageError("internal", "simulated list failure");
+      },
       listMemoryScopes: () => {
         throw new MemoryStorageError("internal", "simulated list failure");
       },
     };
     const result = handleListMemories(
-      withCorrelation(makeCtx("/api/memory", {}), "corr-list-1"),
+      withCorrelation(makeCtx(`/api/memory${query}`, {}), "corr-list-1"),
       makeDeps({ memoryVault: broken, diagnostics }),
     );
     expect(result.status).toBe(500);

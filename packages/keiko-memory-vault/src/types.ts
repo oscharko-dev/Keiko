@@ -187,6 +187,20 @@ export interface ListMemoriesOptions {
   readonly nowMs?: number;
 }
 
+export interface MemoryCenterPageOptions extends Pick<
+  ListMemoriesOptions,
+  "type" | "status" | "sensitivity"
+> {
+  readonly scopeKinds?: readonly MemoryScopeKind[];
+  readonly limit: number;
+  readonly offset: number;
+}
+
+export interface MemoryCenterPage {
+  readonly memories: readonly MemoryRecord[];
+  readonly total: number;
+}
+
 export interface DeleteMemoryOptions {
   readonly tombstone: boolean;
   readonly forgetterSurface: string;
@@ -219,6 +233,8 @@ export interface MemoryVaultStore {
   readonly listMemoryScopes: () => readonly MemoryScope[];
   // The local operator's review queue, with scope discovery and record selection sharing one snapshot.
   readonly listMemoryReviewQueue: () => readonly MemoryRecord[];
+  // Local operator list without a content query. Sorting and page bodies share one snapshot.
+  readonly listMemoryCenterPage: (options: MemoryCenterPageOptions) => MemoryCenterPage;
   readonly listMemoriesAcrossScopes: (
     scopes: readonly MemoryScope[],
     options?: ListMemoriesOptions,

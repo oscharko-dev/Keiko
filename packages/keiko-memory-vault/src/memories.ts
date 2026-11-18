@@ -163,6 +163,19 @@ export function getMemoryRow(
   return row === undefined ? undefined : decodeMemoryRow(row, cipher);
 }
 
+export function getMemoryRowsByIds(
+  db: DatabaseSync,
+  ids: readonly MemoryId[],
+  cipher: MemoryContentCipher,
+): readonly MemoryRecord[] {
+  if (ids.length === 0) return [];
+  const rows = cachedPrepare(
+    db,
+    "SELECT * FROM memories WHERE id IN (SELECT value FROM json_each(?))",
+  ).all(JSON.stringify(ids)) as unknown as readonly MemoryRow[];
+  return rows.map((row) => decodeMemoryRow(row, cipher));
+}
+
 export function updateMemoryRow(
   db: DatabaseSync,
   record: MemoryRecord,
@@ -530,4 +543,21 @@ export function prepareStandingProfileReader(
       limit,
     ) as unknown as ReturnType<MemoryVaultStore["listStandingProfileCandidates"]>;
   };
+}
+
+export function listMemoryMetadataAcrossScopeRows(
+  db: DatabaseSync,
+  scopes: readonly MemoryScope[],
+  options: ListMemoriesOptions,
+  nowMs: number,
+): readonly MemoryMetadata[] {
+  const scopeClause = buildScopesClause(scopes);
+  if (scopeClause === undefined) return [];
+  const params: (string | number)[] = [...scopeClause.params];
+  const where: string[] = [...scopeClause.clauses];
+  appendListFilters(where, params, options, nowMs);
+  const rows = cachedPrepare(db, buildListSql(where, options, METADATA_COLUMNS)).all(
+    ...params,
+  ) as unknown as readonly MemoryMetadataRow[];
+  return rows.map(metadataRowToMemoryMetadata);
 }

@@ -24,6 +24,12 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  MEMORY_SCOPE_KINDS,
+  MEMORY_SENSITIVITIES,
+  MEMORY_STATUSES,
+  MEMORY_TYPES,
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { unwiredSecurityLogSink, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { chmodIfPresent, openMemoryDatabase } from "./db.js";
 import { resolveMemoryDir, resolveMemoryDbPath } from "./paths.js";
@@ -43,11 +49,13 @@ import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import {
   deleteMemoryRow,
   getMemoryRow,
+  getMemoryRowsByIds,
   insertMemoryRow,
   listMemoriesAcrossScopeRows,
   listMemoryScopeRows,
   listMemoryMetadataByScopeRows,
   prepareStandingProfileReader,
+  listMemoryMetadataAcrossScopeRows,
   listMemoriesByScopeRows,
   updateMemoryRow,
 } from "./memories.js";
@@ -104,6 +112,8 @@ import {
 } from "./body-fingerprint.js";
 import { sanitizeMemoryTombstoneReason } from "./tombstone-reason.js";
 import type {
+  MemoryCenterPageOptions,
+  MemoryCenterPage,
   MemoryBatchDelete,
   DeleteMemoryOptions,
   MemoryBatchUpdate,
@@ -124,6 +134,8 @@ import type {
   MemoryVaultFactoryOptions,
   MemoryVaultStore,
 } from "./types.js";
+
+export const MEMORY_CENTER_PAGE_LIMIT = 200;
 
 const MEMORY_VAULT_STORE_OPENED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -638,6 +650,7 @@ type MemoryMutators = Pick<
   | "getMemory"
   | "listMemoryScopes"
   | "listMemoryReviewQueue"
+  | "listMemoryCenterPage"
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
@@ -909,6 +922,7 @@ type MemoryReadOps = Pick<
   | "getMemory"
   | "listMemoryScopes"
   | "listMemoryReviewQueue"
+  | "listMemoryCenterPage"
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
@@ -999,19 +1013,99 @@ function readMemoryReviewQueue(db: DatabaseSync, opts: ResolvedOptions): readonl
   }
 }
 
+function isMemoryCenterFilter(value: unknown, allowed: readonly string[]): boolean {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.every((item: unknown) => typeof item === "string" && allowed.includes(item)))
+  );
+}
+
+function validateMemoryCenterPage(options: MemoryCenterPageOptions): void {
+  const filters = [
+    [options.scopeKinds, MEMORY_SCOPE_KINDS],
+    [options.sensitivity, MEMORY_SENSITIVITIES],
+    [options.status, MEMORY_STATUSES],
+    [options.type, MEMORY_TYPES],
+  ] as const;
+  if (
+    !filters.every(([values, allowed]) => isMemoryCenterFilter(values, allowed)) ||
+    !Number.isSafeInteger(options.limit) ||
+    options.limit < 1 ||
+    options.limit > MEMORY_CENTER_PAGE_LIMIT ||
+    !Number.isSafeInteger(options.offset) ||
+    options.offset < 0
+  ) {
+    throw new MemoryStorageValidationError("Invalid Memory Center page.", [
+      {
+        path: ["page"],
+        message: "Page size, offset or filters are outside their supported bounds.",
+      },
+    ]);
+  }
+}
+
+function readMemoryCenterPage(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  options: MemoryCenterPageOptions,
+): MemoryCenterPage {
+  validateMemoryCenterPage(options);
+  db.exec("BEGIN");
+  try {
+    const scopes = listMemoryScopeRows(db).filter(
+      (scope) => !options.scopeKinds?.length || options.scopeKinds.includes(scope.kind),
+    );
+    for (const scope of scopes) gateMemoryScope(scope);
+    const metadata = [
+      ...listMemoryMetadataAcrossScopeRows(
+        db,
+        scopes,
+        {
+          ...(options.type === undefined ? {} : { type: options.type }),
+          ...(options.status === undefined ? {} : { status: options.status }),
+          ...(options.sensitivity === undefined ? {} : { sensitivity: options.sensitivity }),
+          includeExpired: true,
+        },
+        opts.now(),
+      ),
+    ].sort((a, b) => {
+      if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt;
+      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+      return a.id.localeCompare(b.id);
+    });
+    const page = metadata.slice(options.offset, options.offset + options.limit);
+    const rows = getMemoryRowsByIds(
+      db,
+      page.map(({ id }) => id),
+      opts.cipher,
+    );
+    const byId = new Map(rows.map((record) => [record.id, record]));
+    const memories = page.map(({ id }) => {
+      const record = byId.get(id);
+      if (record === undefined)
+        throw new MemoryStorageError("internal", "Memory page is inconsistent.");
+      return record;
+    });
+    db.exec("COMMIT");
+    return { memories, total: metadata.length };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryReadOps {
   const readStandingProfile = prepareStandingProfileReader(db);
   return {
-    listStandingProfileCandidates: (
-      userId,
-      options,
-    ): ReturnType<MemoryVaultStore["listStandingProfileCandidates"]> => {
+    listStandingProfileCandidates: (userId, options): ReturnType<typeof readStandingProfile> => {
       gateMemoryScope({ kind: "user", userId });
       return readStandingProfile(userId, options);
     },
     getMemory: (id: MemoryId): MemoryRecord | undefined => getMemoryRow(db, id, opts.cipher),
     listMemoryScopes: (): readonly MemoryScope[] => listMemoryScopeRows(db),
     listMemoryReviewQueue: (): readonly MemoryRecord[] => readMemoryReviewQueue(db, opts),
+    listMemoryCenterPage: (options): MemoryCenterPage => readMemoryCenterPage(db, opts, options),
     listMemoriesAcrossScopes: (
       scopes: readonly MemoryScope[],
       options?: ListMemoriesOptions,
