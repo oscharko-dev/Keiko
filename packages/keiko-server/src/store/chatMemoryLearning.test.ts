@@ -2,6 +2,7 @@ import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createChatMemoryLearningStore } from "./chatMemoryLearning.js";
 import { runMigrations } from "./schema.js";
+import { rewindSchemaFixture } from "./legacySchemaTestFixture.js";
 
 // Node 26 exposes the counter before its TypeScript declarations do.
 function executedSteps(statement: StatementSync): number {
@@ -74,4 +75,54 @@ describe("pending learning pages", () => {
     expect(store.readPreviousUserText("c", "later-user")).toBe("entry");
     expect(store.readPreviousUserText("other", "tie-2")).toBeUndefined();
   });
+});
+
+describe("user predecessor seeks across non-user message gaps", () => {
+  it("upgrades an existing database without dropping an unmarked consent barrier", () => {
+    using db = new DatabaseSync(":memory:");
+    seedTiedChat(db);
+    rewindSchemaFixture(db, 79);
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE name = 'idx_messages_user_chat_ts'").get(),
+    ).toBeUndefined();
+    runMigrations(db);
+    runMigrations(db);
+    const store = createChatMemoryLearningStore(db);
+    expect(store.readPreviousUserText("c", "tie-4096")).toBeUndefined();
+    expect(store.listPending("c", 2).map((message) => message.id)).toEqual([
+      "tie-4095",
+      "tie-4096",
+    ]);
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE name = 'idx_messages_user_chat_ts'").get(),
+    ).toMatchObject({ name: "idx_messages_user_chat_ts" });
+  });
+
+  it.each([0, 1])(
+    "bounds work with the current timestamp %i after the predecessor group",
+    (currentTimestamp) => {
+      using db = new DatabaseSync(":memory:");
+      runMigrations(db);
+      db.exec(`
+        INSERT INTO projects (path, name, created_at, last_opened_at) VALUES ('p', 'p', 0, 0);
+        INSERT INTO chats (id, project_path, title, selected_model, created_at, updated_at)
+          VALUES ('c', 'p', 'c', 'local', 0, 0);
+        INSERT INTO chat_messages (id, chat_id, role, content, timestamp, memory_learning)
+          VALUES ('first-user', 'c', 'user', 'The marked statement.', 0, 'desktop');
+        WITH RECURSIVE series(i) AS (VALUES(1) UNION ALL SELECT i + 1 FROM series WHERE i < 4096)
+        INSERT INTO chat_messages (id, chat_id, role, content, timestamp)
+          SELECT 'answer-' || i, 'c', 'assistant', 'A synthetic answer.', 0 FROM series;
+      `);
+      db.prepare(
+        `INSERT INTO chat_messages (id, chat_id, role, content, timestamp)
+          VALUES ('current-user', 'c', 'user', 'The current statement.', ?)`,
+      ).run(currentTimestamp);
+      const readSteps = observeSteps(db);
+      const store = createChatMemoryLearningStore(db);
+      expect(store.readPreviousUserText("c", "current-user")).toBe("The marked statement.");
+      const steps = readSteps();
+      expect(steps).toBeGreaterThan(0);
+      expect(steps).toBeLessThan(256);
+    },
+  );
 });
