@@ -49,6 +49,16 @@ function fakeProduct({
   const calls = [];
   let counter = 0;
   const find = (id) => memories.find((memory) => memory.id === id);
+  function forgetResponse(method, path, body) {
+    if (method !== "POST") return undefined;
+    const forget = /^\/api\/memory\/([^/]+)\/forget$/u.exec(path);
+    if (forget === null) return undefined;
+    const index = memories.findIndex((memory) => memory.id === forget[1]);
+    if (index === -1) return { status: 404, json: {} };
+    if (body.acknowledged !== true) return { status: 400, json: {} };
+    memories.splice(index, 1);
+    return { status: 200, json: {} };
+  }
   const routes = {
     "POST /api/projects": () => ({}),
     "POST /api/chats": () => ({ chat: { id: `chat-${String(counter++)}` } }),
@@ -98,14 +108,8 @@ function fakeProduct({
       find(accept[1]).status = "accepted";
       return { status: 200, json: { memory: find(accept[1]) } };
     }
-    const forget = /^\/api\/memory\/([^/]+)\/forget$/u.exec(url.pathname);
-    if (method === "POST" && forget !== null) {
-      const index = memories.findIndex((memory) => memory.id === forget[1]);
-      if (index === -1) return { status: 404, json: {} };
-      if (body.acknowledged !== true) return { status: 400, json: {} };
-      memories.splice(index, 1);
-      return { status: 200, json: {} };
-    }
+    const forget = forgetResponse(method, url.pathname, body);
+    if (forget !== undefined) return forget;
     const single = /^\/api\/memory\/([^/]+)$/u.exec(url.pathname);
     if (single !== null && method === "GET")
       return { status: 200, json: { memory: find(single[1]) } };
