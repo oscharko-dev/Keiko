@@ -393,10 +393,19 @@ export function MemoryListContent({
   useEffect(
     () =>
       subscribeMemoryVaultViewChanges((change) => {
-        setMemories((current) => current.filter((record) => !change.ids.includes(record.id)));
+        if (change.kind === "removed") {
+          setMemories((current) => current.filter((record) => !change.ids.includes(record.id)));
+        } else if (change.kind === "edited") {
+          const contentUnavailable = t("memoria.journal.contentUnavailable");
+          setMemories((current) =>
+            current.map((record) =>
+              change.ids.includes(record.id) ? { ...record, body: contentUnavailable } : record,
+            ),
+          );
+        }
         void load(filters);
       }),
-    [filters, load],
+    [filters, load, t],
   );
 
   const listRef = useRef<HTMLElement | null>(null);

@@ -349,7 +349,8 @@ export async function editMemory(
     body: JSON.stringify(input),
   });
   if (result?.memory !== undefined) {
-    notifyMemoryVaultViewChange({ kind: "updated", ids: [id] });
+    const kind = input.body !== undefined || input.sensitivity !== undefined ? "edited" : "updated";
+    notifyMemoryVaultViewChange({ kind, ids: [id] });
   }
   return result;
 }

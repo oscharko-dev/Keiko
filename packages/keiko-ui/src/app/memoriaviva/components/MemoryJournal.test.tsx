@@ -4,6 +4,8 @@ import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
+  acceptMemoryProposal,
+  editMemory,
   forgetMemory,
   type MemoryRecentCapture,
   type MemoryRecentCapturesResponse,
@@ -55,16 +57,62 @@ function renderJournal(
 }
 
 describe("MemoryJournal loading and ordering", () => {
+  it("hides an edited excerpt without losing focus while the canonical result loads", async () => {
+    const user = userEvent.setup();
+    const id = memoryId("edited");
+    const capture = makeCapture(id, 100, { bodyExcerpt: "Obsolete journal excerpt" });
+    const reload = deferred<MemoryRecentCapturesResponse>();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(response([capture]))
+      .mockReturnValueOnce(reload.promise);
+    renderJournal([], { fetchRecentCapturesImpl: load });
+    const keep = await screen.findByRole("button", { name: "Keep" });
+    await user.tab();
+    await user.tab();
+    expect(keep).toHaveFocus();
+
+    await act(async () => {
+      await editMemory(
+        id,
+        { body: "Updated journal excerpt" },
+        vi.fn().mockResolvedValue({ memory: { id, body: "Updated journal excerpt" } }),
+      );
+    });
+    expect(screen.queryByText("Obsolete journal excerpt")).not.toBeInTheDocument();
+    expect(screen.getByText("Memory content is unavailable")).toBeInTheDocument();
+    expect(keep).toHaveFocus();
+    await act(async () =>
+      reload.resolve(response([{ ...capture, bodyExcerpt: "Updated journal excerpt" }])),
+    );
+    expect(screen.getByText("Updated journal excerpt")).toBeInTheDocument();
+    expect(document.activeElement).toBe(keep);
+  });
+
   it("removes a forgotten excerpt while loading the body-free decision from the vault", async () => {
+    const user = userEvent.setup();
     const capture = makeCapture("removed-from-detail", 100);
-    const retained = makeCapture("retained", 200);
+    const retained = makeCapture("retained", 200, { outcome: "proposed" });
+    const stale = deferred<MemoryRecentCapturesResponse>();
     const reload = deferred<MemoryRecentCapturesResponse>();
     const load = vi
       .fn()
       .mockResolvedValueOnce(response([capture, retained]))
+      .mockReturnValueOnce(stale.promise)
       .mockReturnValueOnce(reload.promise);
     renderJournal([], { fetchRecentCapturesImpl: load });
     expect(await screen.findByText(capture.bodyExcerpt ?? "")).toBeInTheDocument();
+
+    await user.tab();
+    const back = screen.getByRole("button", { name: "Back" });
+    expect(back).toHaveFocus();
+    await act(async () => {
+      await acceptMemoryProposal(
+        "retained",
+        vi.fn().mockResolvedValue({ memory: { id: "retained", status: "accepted" } }),
+      );
+    });
+    expect(back).toHaveFocus();
 
     await act(async () => {
       await forgetMemory(memoryId("removed-from-detail"), async () => ({
@@ -76,6 +124,8 @@ describe("MemoryJournal loading and ordering", () => {
 
     expect(screen.queryByText(capture.bodyExcerpt ?? "")).not.toBeInTheDocument();
     expect(screen.getByText(retained.bodyExcerpt ?? "")).toBeInTheDocument();
+    await act(async () => stale.resolve(response([capture, retained])));
+    expect(screen.queryByText(capture.bodyExcerpt ?? "")).not.toBeInTheDocument();
     await act(async () => {
       reload.resolve(
         response([
@@ -206,6 +256,53 @@ describe("MemoryJournal loading and ordering", () => {
 });
 
 describe("MemoryJournal Keep and Forget", () => {
+  it.each([
+    { label: "keeps the actual Keep button focused", moveFocus: false },
+    { label: "respects a manual focus change", moveFocus: true },
+  ])("$label during and after a production acceptance reload", async ({ moveFocus }) => {
+    const user = userEvent.setup();
+    const capture = makeCapture("keyboard", 100, { outcome: "proposed" });
+    const reload = deferred<MemoryRecentCapturesResponse>();
+    const mutation = deferred<{ memory: { id: string; status: "accepted" } }>();
+    const fetchAcceptance = vi.fn().mockReturnValue(mutation.promise);
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(response([capture]))
+      .mockReturnValueOnce(reload.promise);
+    renderJournal([], {
+      fetchRecentCapturesImpl: load,
+      acceptMemoryProposalImpl: (id) => acceptMemoryProposal(id, fetchAcceptance),
+    });
+    const keep = await screen.findByRole("button", { name: "Keep" });
+    const back = screen.getByRole("button", { name: "Back" });
+    await user.tab();
+    await user.tab();
+    expect(keep).toHaveFocus();
+
+    await user.keyboard("{Enter}");
+    expect(fetchAcceptance).toHaveBeenCalledWith(
+      "/api/memory/proposals/keyboard/accept",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(keep).toHaveFocus();
+    if (moveFocus) await user.tab({ shift: true });
+    const focused = moveFocus ? back : keep;
+    await act(async () => mutation.resolve({ memory: { id: "keyboard", status: "accepted" } }));
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("button", { name: "Keep" })).toBe(keep);
+    expect(focused).toHaveFocus();
+
+    await act(async () => {
+      reload.resolve(
+        response([{ ...capture, currentStatus: "accepted", bodyExcerpt: "Canonical memory" }]),
+      );
+    });
+    expect(screen.getByText("Canonical memory")).toBeInTheDocument();
+    expect(screen.getByText("Accepted")).toBeInTheDocument();
+    expect(keep).toHaveAttribute("aria-pressed", "true");
+    expect(document.activeElement).toBe(focused);
+  });
+
   it("promotes proposed captures and acknowledges accepted captures locally", async () => {
     const user = userEvent.setup();
     const acceptImpl = vi.fn().mockResolvedValue({ memory: {} });

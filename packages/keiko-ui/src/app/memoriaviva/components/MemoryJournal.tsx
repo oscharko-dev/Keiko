@@ -401,20 +401,32 @@ function JournalRows({
 function useJournalVaultChanges(
   load: () => void,
   setState: Dispatch<SetStateAction<JournalLoadState>>,
+  contentUnavailable: string,
 ): void {
   useEffect(
     () =>
       subscribeMemoryVaultViewChanges((change) => {
-        setState((current) => ({
-          ...current,
-          rows: current.rows.filter(
-            ({ capture }) =>
-              capture.memoryId === undefined || !change.ids.includes(capture.memoryId),
-          ),
-        }));
+        if (change.kind === "removed") {
+          setState((current) => ({
+            ...current,
+            rows: current.rows.filter(
+              ({ capture }) =>
+                capture.memoryId === undefined || !change.ids.includes(capture.memoryId),
+            ),
+          }));
+        } else if (change.kind === "edited") {
+          setState((current) => ({
+            ...current,
+            rows: current.rows.map((row) =>
+              row.capture.memoryId !== undefined && change.ids.includes(row.capture.memoryId)
+                ? { ...row, capture: { ...row.capture, bodyExcerpt: contentUnavailable } }
+                : row,
+            ),
+          }));
+        }
         load();
       }),
-    [load, setState],
+    [contentUnavailable, load, setState],
   );
 }
 
@@ -449,7 +461,7 @@ function useJournalRows(
       });
   }, [fetchImpl, forgottenIds, keptIds, setAnnouncement, t]);
   useEffect(load, [load]);
-  useJournalVaultChanges(load, setState);
+  useJournalVaultChanges(load, setState, t("memoria.journal.contentUnavailable"));
   const setRows = useCallback((next: SetStateAction<readonly JournalRowState[]>): void => {
     setState((current) => ({
       ...current,

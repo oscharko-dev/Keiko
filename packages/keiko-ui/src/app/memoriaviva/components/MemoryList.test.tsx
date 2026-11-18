@@ -15,7 +15,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryListContent } from "./MemoryList";
 import { deferred } from "./__tests__/test-support";
 import type { MemoryFilterState } from "./MemoryFilters";
-import { forgetMemory, type MemoryListResponse } from "@/lib/memory-api";
+import {
+  acceptMemoryProposal,
+  editMemory,
+  forgetMemory,
+  type MemoryListResponse,
+} from "@/lib/memory-api";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
 
 vi.mock("next/link", () => ({
@@ -156,15 +161,71 @@ describe("MemoryListContent — shown again", () => {
 });
 
 describe("MemoryListContent — loading state", () => {
+  it("keeps focus on a retained record through acceptance and the canonical response", async () => {
+    const record = makeRecord({ status: "proposed" });
+    const accepted = { ...record, status: "accepted" as const };
+    const reload = deferred<MemoryListResponse>();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(makeListResponse([record]))
+      .mockReturnValueOnce(reload.promise);
+    renderDefaultList(load);
+    const row = await screen.findByRole("link", { name: new RegExp(record.body) });
+    row.focus();
+    await act(async () => {
+      await acceptMemoryProposal(record.id, async () => ({ memory: accepted }));
+    });
+
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(row).toHaveFocus();
+    expect(row).toHaveTextContent(record.body);
+    await act(async () => reload.resolve(makeListResponse([accepted])));
+    expect(row).toHaveTextContent("Accepted");
+    expect(document.activeElement).toBe(row);
+  });
+
+  it("hides obsolete edited text without detaching a focused record", async () => {
+    const record = makeRecord({ body: "Obsolete private preference" });
+    const edited = { ...record, body: "Corrected preference" };
+    const reload = deferred<MemoryListResponse>();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(makeListResponse([record]))
+      .mockReturnValueOnce(reload.promise);
+    renderDefaultList(load);
+    const row = await screen.findByRole("link", { name: /Obsolete private preference/u });
+    row.focus();
+    await act(async () => {
+      await editMemory(record.id, { body: edited.body }, async () => ({ memory: edited }));
+    });
+
+    expect(screen.queryByText(record.body)).not.toBeInTheDocument();
+    expect(row).toHaveFocus();
+    await act(async () => reload.resolve(makeListResponse([edited])));
+    expect(row).toHaveTextContent(edited.body);
+    expect(document.activeElement).toBe(row);
+  });
+
   it("reloads the open list after forgetting in another surface and discards its older response", async () => {
     const forgotten = makeRecord({ body: "Forgotten from a different surface" });
     const retained = makeRecord({ id: makeMemoryId(2), body: "Still in the vault" });
     const original = deferred<MemoryListResponse>();
+    const reload = deferred<MemoryListResponse>();
     const load = vi
       .fn()
+      .mockResolvedValueOnce(makeListResponse([forgotten, retained]))
       .mockReturnValueOnce(original.promise)
-      .mockResolvedValueOnce(makeListResponse([retained]));
-    renderDefaultList(load);
+      .mockReturnValueOnce(reload.promise);
+    const { rerender } = renderDefaultList(load);
+    expect(await screen.findByText(forgotten.body)).toBeInTheDocument();
+    rerender(
+      <MemoryListContent
+        filters={{ ...emptyFilters, query: "vault" }}
+        onFilterChange={vi.fn()}
+        fetchMemoriesImpl={load}
+        showWorkspaceBackLink
+      />,
+    );
 
     await act(async () => {
       await forgetMemory(forgotten.id, async () => ({
@@ -172,12 +233,15 @@ describe("MemoryListContent — loading state", () => {
         memoryIds: [forgotten.id],
         count: 1,
       }));
-      original.resolve(makeListResponse([forgotten, retained]));
     });
 
-    expect(load).toHaveBeenCalledTimes(2);
+    expect(load).toHaveBeenCalledTimes(3);
     expect(screen.getByText(retained.body)).toBeInTheDocument();
     expect(screen.queryByText(forgotten.body)).not.toBeInTheDocument();
+    await act(async () => original.resolve(makeListResponse([forgotten, retained])));
+    expect(screen.queryByText(forgotten.body)).not.toBeInTheDocument();
+    await act(async () => reload.resolve(makeListResponse([retained])));
+    expect(screen.getByText(retained.body)).toBeInTheDocument();
   });
 
   it("shows loading indicator initially", () => {

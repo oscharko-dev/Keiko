@@ -3,7 +3,7 @@ import { newClientCorrelationId } from "./bff-correlation";
 import { reportClientDiagnostic } from "./client-diagnostics";
 
 interface MemoryVaultViewChange {
-  readonly kind: "updated" | "removed";
+  readonly kind: "updated" | "edited" | "removed";
   readonly ids: readonly string[];
 }
 
