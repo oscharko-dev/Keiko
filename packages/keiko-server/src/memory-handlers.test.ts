@@ -1096,6 +1096,218 @@ describe("memory handlers", () => {
     );
   });
 
+  it.each([
+    [{ body: "Updated synthetic preference" }, "confidential", false],
+    [{ tags: ["updated"] }, "confidential", true],
+    [{ body: "Updated synthetic preference", sensitivity: "public" }, "public", false],
+    [{ sensitivity: "restricted" }, "restricted", true],
+  ] as const)(
+    "preserves concurrent edit metadata for %j",
+    async (input, sensitivity, evidenceSpanPresent) => {
+      const dir = makeVaultDirectory();
+      const reader = makeVault(dir);
+      const writer = makeVault(dir);
+      const learned = makeMemory("concurrent-edit", "Original synthetic preference");
+      reader.insertMemory({
+        ...learned,
+        provenance: { ...learned.provenance, evidenceSpan: learned.body },
+      });
+      const originalRead = reader.getMemory;
+      vi.spyOn(reader, "getMemory").mockImplementationOnce((id) => {
+        const snapshot = originalRead(id);
+        writer.updateMemory(
+          learned.id,
+          {
+            status: "conflicted",
+            provenance: {
+              ...learned.provenance,
+              sensitivity: "confidential",
+              confidence: 0.75,
+              sourceMessageIds: ["concurrent-source"],
+              evidenceSpan: learned.body,
+            },
+          },
+          learned.updatedAt + 1,
+        );
+        return snapshot;
+      });
+      const deps = makeDeps({ memoryVault: reader });
+      const ctx = makeCtx("/api/memory/concurrent-edit", input, { id: learned.id });
+      const result = await handleEditMemory(ctx, deps);
+      expect(result.status).toBe(200);
+      const reread = handleGetMemory(makeCtx(ctx.url.pathname, {}, ctx.params), deps);
+      expect(reread.status).toBe(200);
+      for (const response of [result, reread]) {
+        expect(asJson(response).memory).toMatchObject({
+          id: learned.id,
+          body: "body" in input ? input.body : learned.body,
+          status: "conflicted",
+          provenance: { sensitivity, confidence: 0.75, sourceMessageIds: ["concurrent-source"] },
+        });
+      }
+      const stored = writer.getMemory(learned.id);
+      expect(stored?.provenance.evidenceSpan !== undefined).toBe(evidenceSpanPresent);
+      expect(stored?.tags).toEqual("tags" in input ? input.tags : []);
+    },
+  );
+
+  it("preserves a concurrent profile exclusion while editing tags", async () => {
+    const dir = makeVaultDirectory();
+    const reader = makeVault(dir);
+    const writer = makeVault(dir);
+    const record = makeMemory("concurrent-profile-tag", "Synthetic preference");
+    reader.insertMemory(record);
+    const originalRead = reader.getMemory;
+    vi.spyOn(reader, "getMemory").mockImplementationOnce((id) => {
+      const snapshot = originalRead(id);
+      writer.updateMemory(record.id, { tags: [PROFILE_EXCLUDED_MEMORY_TAG] }, record.updatedAt + 1);
+      return snapshot;
+    });
+    const result = await handleEditMemory(
+      makeCtx("/api/memory/concurrent-profile-tag", { tags: ["updated"] }, { id: record.id }),
+      makeDeps({ memoryVault: reader }),
+    );
+    expect(result.status).toBe(200);
+    expect(writer.getMemory(record.id)?.tags).toEqual(["updated", PROFILE_EXCLUDED_MEMORY_TAG]);
+  });
+
+  it.each([0, 1])("records one body-free edit settlement after %i conflicts", async (conflicts) => {
+    const dir = makeVaultDirectory();
+    const reader = makeVault(dir);
+    const writer = makeVault(dir);
+    const record = makeMemory("logged-edit", "Original synthetic preference");
+    reader.insertMemory(record);
+    const conditionalUpdate = reader.updateMemories;
+    let interleaved = 0;
+    vi.spyOn(reader, "updateMemories").mockImplementation((updates) => {
+      if (interleaved < conflicts) {
+        writer.updateMemory(record.id, { status: "conflicted" }, Date.now());
+        interleaved += 1;
+      }
+      return conditionalUpdate(updates);
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const result = await handleEditMemory(
+        makeCtx(
+          "/api/memory/logged-edit",
+          { body: "Updated synthetic preference" },
+          { id: record.id },
+        ),
+        makeDeps({ memoryVault: reader }),
+      );
+      expect(result.status).toBe(200);
+    } finally {
+      resetServerLogger();
+    }
+    const settlements = sink.events.filter((event) => event.op === "memory.edit.settled");
+    expect(settlements).toHaveLength(1);
+    const [settled] = settlements;
+    if (settled === undefined) throw new TypeError("Missing edit settlement");
+    const line = formatActivityLogProofLine(settled);
+    expectActivityLogProof("memory.edit.settled.line", line);
+    expect(line).not.toContain(record.body);
+    expect(line).not.toContain(record.id);
+    expect(settled.extra).toMatchObject({ outcome: "updated", attemptCount: conflicts + 1 });
+  });
+
+  it("returns a bounded edit conflict without embedding or overwriting a competing update", async () => {
+    const dir = makeVaultDirectory();
+    const reader = makeVault(dir);
+    const writer = makeVault(dir);
+    const record = makeMemory("repeated-edit-conflict", "Original synthetic preference");
+    reader.insertMemory(record);
+    const conditionalUpdate = reader.updateMemories;
+    const attempts = vi.spyOn(reader, "updateMemories").mockImplementation((updates) => {
+      writer.updateMemory(record.id, { tags: ["concurrent-update"] }, Date.now());
+      return conditionalUpdate(updates);
+    });
+    const embeddingRequest = vi.fn();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    let result: RouteResult;
+    try {
+      result = await handleEditMemory(
+        makeCtx(
+          "/api/memory/repeated-edit-conflict",
+          { body: "Updated synthetic preference" },
+          {
+            id: record.id,
+          },
+        ),
+        makeDeps({
+          memoryVault: reader,
+          config: embeddingConfig(),
+          localKnowledgeEmbeddingRequest: embeddingRequest,
+        }),
+      );
+    } finally {
+      resetServerLogger();
+    }
+    expect(result.status).toBe(409);
+    expect(asJson(result).error).toMatchObject({ code: "MEMORY_ERROR" });
+    expect(attempts).toHaveBeenCalledTimes(3);
+    expect(embeddingRequest).not.toHaveBeenCalled();
+    expect(writer.getMemory(record.id)).toMatchObject({
+      body: record.body,
+      status: record.status,
+      tags: ["concurrent-update"],
+    });
+    const settlements = sink.events.filter((event) => event.op === "memory.edit.settled");
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]?.extra).toMatchObject({
+      outcome: "conflict",
+      attemptCount: 3,
+    });
+  });
+
+  it.each(["before-read", "before-write"] as const)(
+    "settles an edit exactly once when concurrently deleted %s",
+    async (timing) => {
+      const dir = makeVaultDirectory();
+      const reader = makeVault(dir);
+      const writer = makeVault(dir);
+      const record = makeMemory("deleted-during-edit", "Synthetic preference");
+      reader.insertMemory(record);
+      const originalRead = reader.getMemory;
+      vi.spyOn(reader, "getMemory").mockImplementationOnce((id) => {
+        const snapshot = timing === "before-read" ? undefined : originalRead(id);
+        writer.deleteMemory(record.id, {
+          tombstone: true,
+          forgetterSurface: "memoria",
+          nowMs: record.updatedAt + 1,
+        });
+        return timing === "before-read" ? originalRead(id) : snapshot;
+      });
+      const deps = makeDeps({ memoryVault: reader });
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      let result: RouteResult;
+      try {
+        result = await handleEditMemory(
+          makeCtx("/api/memory/deleted-during-edit", { tags: ["updated"] }, { id: record.id }),
+          deps,
+        );
+      } finally {
+        resetServerLogger();
+      }
+      expect(result.status).toBe(404);
+      expect(asJson(result).error).toMatchObject({
+        code: timing === "before-read" ? "NOT_FOUND" : "MEMORY_ERROR",
+      });
+      const reread = handleGetMemory(
+        makeCtx("/api/memory/deleted-during-edit", {}, { id: record.id }),
+        deps,
+      );
+      expect(reread.status).toBe(404);
+      expect(writer.getMemory(record.id)).toBeUndefined();
+      const settlements = sink.events.filter((event) => event.op === "memory.edit.settled");
+      expect(settlements).toHaveLength(1);
+      expect(settlements[0]?.extra).toMatchObject({ outcome: "not-found", attemptCount: 1 });
+    },
+  );
+
   it("invalidates a stale embedding when body edit re-embedding fails", async () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("memory-edit-2", "Old body"));
@@ -2178,7 +2390,7 @@ describe("emitServerDiagnostic on memory-handler storage failures (w4b)", () => 
     const { records, diagnostics } = recordingSink();
     const broken: MemoryVaultStore = {
       ...vault,
-      updateMemory: () => {
+      updateMemories: () => {
         throw new MemoryStorageError("internal", "simulated edit failure");
       },
     };

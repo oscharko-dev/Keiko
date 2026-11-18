@@ -529,6 +529,7 @@
   "memory.audit.state-cache.seeded": "lifecycle-crash",
   "memory.capture.decision": "memory-knowledge",
   "memory.capture.novelty-gate": "memory-knowledge",
+  "memory.edit.settled": "memory-knowledge",
   "memory.embedding.invalidated": "memory-knowledge",
   "memory.embedding.invalidation-failed": "memory-knowledge",
   "memory.embedding.store-rejected": "memory-knowledge",

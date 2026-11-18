@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 408,
-  "completeClassCount": 408,
+  "supportedClassCount": 409,
+  "completeClassCount": 409,
   "completeness": "complete",
   "classes": [
     {
@@ -41402,6 +41402,62 @@
             "causeChain": false
           },
           "proofIds": ["memory.capture.novelty-gate.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "memory-edit-conflict",
+      "requirementContract": "memory-edit-conflict",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["memory.edit.settled"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "memory.edit.settled",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["memory.edit.settled"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "memory.edit.settled",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "attemptCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.edit.settled.line"],
           "replayReferences": [],
           "missingObligations": []
         }

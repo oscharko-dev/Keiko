@@ -112,6 +112,11 @@ const MAX_RECENT_SINCE_CHARS = 13;
 const MAX_MEMORY_EXCERPT_CHARS = 240;
 const MAX_TOMBSTONE_CURSOR_CHARS = 1_024;
 const MAX_TOMBSTONE_ID_CHARS = 200;
+const MAX_MEMORY_EDIT_ATTEMPTS = 3;
+const MEMORY_EDIT_FAILURE_STATUS: Partial<Record<MemoryStorageError["code"], number>> = {
+  "not-found": 404,
+  "precondition-failed": 409,
+};
 const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted", "expired"];
 
 const MEMORY_VAULT_RECORDS_SELECTED = defineActivityLogOperation({
@@ -150,6 +155,44 @@ function logVaultRecordSelection(
       MEMORY_VAULT_RECORDS_SELECTED,
       { correlationId: handlerCorrelationId(ctx) },
       { selection, decodedCount, selectedCount },
+    ),
+  );
+}
+
+const MEMORY_EDIT_SETTLED = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory.edit.settled",
+  category: "memory",
+  owner: "keiko-server",
+  emitter: "memory-handlers.logMemoryEditSettlement",
+  fields: {
+    attemptCount: { type: "integer", dataClass: "count", required: true },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["updated", "not-found", "conflict"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["memory-edit-conflict"],
+  proofIds: ["memory.edit.settled.line"],
+  releaseImpact: "patch",
+});
+
+function logMemoryEditSettlement(
+  ctx: RouteContext,
+  attemptCount: number,
+  outcome: "updated" | "not-found" | "conflict",
+): void {
+  getServerLogger().info(() =>
+    activityLogEvent(
+      MEMORY_EDIT_SETTLED,
+      { correlationId: handlerCorrelationId(ctx) },
+      { attemptCount, outcome },
     ),
   );
 }
@@ -991,17 +1034,54 @@ async function readEditRouteInput(ctx: RouteContext): Promise<EditInput | RouteR
   return parseEditInput(body);
 }
 
+function editCurrentMemoryVersion(
+  ctx: RouteContext,
+  vault: MemoryVaultStore,
+  id: MemoryId,
+  input: EditInput,
+): MemoryRecord | undefined {
+  for (let attempt = 1; attempt <= MAX_MEMORY_EDIT_ATTEMPTS; attempt += 1) {
+    const existing = vault.getMemory(id);
+    if (existing === undefined) {
+      logMemoryEditSettlement(ctx, attempt, "not-found");
+      return undefined;
+    }
+    try {
+      const [updated] = vault.updateMemories([
+        {
+          id,
+          patch: buildEditPatch(input, existing),
+          nowMs: Date.now(),
+          expectedUpdatedAt: existing.updatedAt,
+        },
+      ]);
+      if (updated === undefined) throw new TypeError("Memory edit produced no record.");
+      logMemoryEditSettlement(ctx, attempt, "updated");
+      return updated;
+    } catch (error) {
+      if (error instanceof MemoryStorageError && error.code === "not-found") {
+        logMemoryEditSettlement(ctx, attempt, "not-found");
+      }
+      if (!(error instanceof MemoryStoragePreconditionError) || error.field !== "updatedAt") {
+        throw error;
+      }
+    }
+  }
+  logMemoryEditSettlement(ctx, MAX_MEMORY_EDIT_ATTEMPTS, "conflict");
+  throw new MemoryStoragePreconditionError("updatedAt", id);
+}
+
 async function applyMemoryEdit(
+  ctx: RouteContext,
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   id: MemoryId,
   input: EditInput,
 ): Promise<RouteResult> {
-  const existing = vault.getMemory(id);
-  if (existing === undefined) {
+  const updated = editCurrentMemoryVersion(ctx, vault, id, input);
+  if (updated === undefined) {
     return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
   }
-  const updated = vault.updateMemory(id, buildEditPatch(input, existing), Date.now());
   if (typeof input.newBody === "string" && input.newBody.trim().length > 0) {
     await refreshMemoryEmbeddingAfterBodyEdit(deps, vault, updated.id, updated.body);
   }
@@ -1021,7 +1101,7 @@ export async function handleEditMemory(
   if (isRouteResult(input)) return input;
 
   try {
-    return await applyMemoryEdit(deps, vault, id, input);
+    return await applyMemoryEdit(ctx, deps, vault, id, input);
   } catch (err) {
     if (err instanceof MemoryStorageError) {
       reportMemoryHandlerFailure(
@@ -1032,7 +1112,7 @@ export async function handleEditMemory(
         err,
       );
       return {
-        status: err.code === "not-found" ? 404 : 500,
+        status: MEMORY_EDIT_FAILURE_STATUS[err.code] ?? 500,
         body: errorBody("MEMORY_ERROR", "Failed to update memory."),
       };
     }

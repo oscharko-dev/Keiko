@@ -37730,6 +37730,43 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "memory.edit.settled",
+    category: "memory",
+    owner: "keiko-server",
+    emitter: "memory-handlers.logMemoryEditSettlement",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      attemptCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["updated", "not-found", "conflict"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["memory-edit-conflict"],
+    proofIds: ["memory.edit.settled.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "memory.embedding.invalidated",
     category: "memory",
     owner: "keiko-server",
