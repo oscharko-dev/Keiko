@@ -246,6 +246,19 @@ describe("resolving the field and status ids of a template", () => {
     ).toMatchObject({ state: "bound" });
   });
 
+  it("keeps a bound template bound when the author's view resolves none of its slots (PR #4464)", () => {
+    // A binding that carries only the issue type: an empty catalog and workflow learn nothing, so
+    // writing `none` placeholders must not offer a new binding with a new digest.
+    const onlyType = bound(typed, "10002");
+    expect(resolveJiraTemplateBinding(onlyType, view([], []), INSTANCE)).toMatchObject({
+      state: "bound",
+    });
+    // A slot the view does resolve is still learned.
+    expect(
+      resolveJiraTemplateBinding(onlyType, view([], [{ id: "5", name: "Fertig" }]), INSTANCE),
+    ).toMatchObject({ state: "bindable", binding: { transitionStatusIds: ["5", "none"] } });
+  });
+
   it("binds again when a bound field id is gone from the author's view (stale ids)", () => {
     const stale = template("Aufgabe", "requiredFields: [Story Punkte]");
     const resolvedBefore = resolveJiraTemplateBinding(

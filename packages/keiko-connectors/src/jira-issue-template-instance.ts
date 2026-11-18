@@ -746,6 +746,10 @@ function completedStatusIds(
   });
 }
 
+function learned(next: string | undefined, before: string | undefined): boolean {
+  return next !== undefined && next !== JIRA_BINDING_UNRESOLVED && next !== before;
+}
+
 function keptOrResolved(existing: string | undefined, resolve: () => string): string {
   return existing !== undefined && existing !== JIRA_BINDING_UNRESOLVED ? existing : resolve();
 }
@@ -790,10 +794,13 @@ function completedBinding(
     ...completedFieldIds(template, instance.fields, bound),
     ...(statusIds === undefined ? {} : { transitionStatusIds: statusIds }),
   };
+  // Only a slot that now holds an id it did not hold before is learned; writing `none` placeholders
+  // into a binding that carried no slots changes its digest without binding anything (PR #4464).
   const changed =
-    ids.parentFieldId !== bound.parentFieldId ||
-    ids.requiredFieldIds?.some((id, index) => id !== bound.requiredFieldIds?.[index]) === true ||
-    statusIds?.some((id, index) => id !== bound.transitionStatusIds?.[index]) === true;
+    learned(ids.parentFieldId, bound.parentFieldId) ||
+    ids.requiredFieldIds?.some((id, index) => learned(id, bound.requiredFieldIds?.[index])) ===
+      true ||
+    statusIds?.some((id, index) => learned(id, bound.transitionStatusIds?.[index])) === true;
   return changed
     ? { ...ids, digest: jiraTemplateBindingDigest(instanceId, template, ids) }
     : undefined;
