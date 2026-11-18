@@ -211,20 +211,28 @@ describe("Workspace card connections", () => {
     ).toBeNull();
   });
 
-  it("marks canvas overlays hidden when a visible window is maximized", () => {
+  it("keeps the workspace controls and window launcher available when a window is maximized", () => {
     const wins = [appWindow({ id: "agents-1", type: "agents", max: true })];
-    const { container } = render(
+    const zoomTo = vi.fn();
+    const openPalette = vi.fn();
+    render(
       <Workspace
-        ws={workspace({ wins })}
+        ws={workspace({ wins, api: api({ zoomTo }) })}
         wsRef={createRef<HTMLDivElement>()}
-        openPalette={() => undefined}
+        openPalette={openPalette}
+        palette={<div role="dialog" aria-label="New window" />}
       />,
     );
 
-    expect(container.querySelector(".workspace")).toHaveAttribute(
-      "data-canvas-overlays-hidden",
+    expect(screen.getByRole("main", { name: "Workspace surface" })).toHaveAttribute(
+      "data-window-maxed",
       "true",
     );
+    expect(screen.getByRole("dialog", { name: "New window" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    fireEvent.click(screen.getByRole("button", { name: "New window" }));
+    expect(zoomTo).toHaveBeenCalledWith(1.2);
+    expect(openPalette).toHaveBeenCalledOnce();
   });
 
   it("confirms a valid target even when a target child stops pointer bubbling", async () => {
@@ -1618,28 +1626,34 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     }
   });
 
-  it("clears workspace selection with Escape from the focused surface", () => {
-    const clearSelection = vi.fn();
-    const wins = [appWindow({ id: "agents-1", type: "agents" })];
-    render(
-      <Workspace
-        ws={workspace({
-          wins,
-          selection: { focusedWindowId: "agents-1", selectedWindowIds: ["agents-1"] },
-          api: api({ clearSelection }),
-        })}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={() => undefined}
-      />,
-    );
-    const surface = screen.getByRole("main", { name: "Workspace surface" });
-    const escape = createEvent.keyDown(surface, { key: "Escape" });
+  it.each(["surface", "control"] as const)(
+    "clears workspace selection with Escape from the focused %s",
+    (target) => {
+      const clearSelection = vi.fn();
+      const wins = [appWindow({ id: "agents-1", type: "agents" })];
+      render(
+        <Workspace
+          ws={workspace({
+            wins,
+            selection: { focusedWindowId: "agents-1", selectedWindowIds: ["agents-1"] },
+            api: api({ clearSelection }),
+          })}
+          wsRef={createRef<HTMLDivElement>()}
+          openPalette={() => undefined}
+        />,
+      );
+      const surface =
+        target === "surface"
+          ? screen.getByRole("main", { name: "Workspace surface" })
+          : screen.getByRole("button", { name: "New window" });
+      const escape = createEvent.keyDown(surface, { key: "Escape" });
 
-    fireEvent(surface, escape);
+      fireEvent(surface, escape);
 
-    expect(clearSelection).toHaveBeenCalledTimes(1);
-    expect(escape.defaultPrevented).toBe(true);
-  });
+      expect(clearSelection).toHaveBeenCalledTimes(1);
+      expect(escape.defaultPrevented).toBe(true);
+    },
+  );
 
   it("stops an acted-on Escape but preserves an unhandled Escape", () => {
     const clearSelection = vi.fn();

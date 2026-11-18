@@ -171,6 +171,7 @@ const REMOTE_TO_PUBLISH_REASON: Readonly<
   timeout: undefined,
   cancelled: undefined,
   "output-truncated": undefined,
+  "credential-discovery-unavailable": undefined,
   "unsafe-repository": undefined,
   "untrusted-host-key": "auth-failed",
   "auth-failed": "auth-failed",

@@ -1,4 +1,4 @@
-import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type { JiraReportActivity } from "@oscharko-dev/keiko-connectors";
 import {
   JIRA_REPORT_ESTIMATE_SOURCES,
@@ -16,6 +16,7 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { processServerLogSink } from "../process-log-sink.js";
+import { ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS } from "../activity-line-fields.js";
 
 type JiraReportRefusalKind =
   | "invalid-input"
@@ -41,7 +42,7 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["read", "section", "refused", "export"],
+      values: ["read", "section", "refused", "export", "retain"],
     },
     status: {
       type: "string",
@@ -137,6 +138,13 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
     hierarchyRejectedFieldCount: OPTIONAL_COUNT,
     hierarchyInferredFieldCount: OPTIONAL_COUNT,
     byteCount: OPTIONAL_COUNT,
+    retainedReportCount: OPTIONAL_COUNT,
+    exportSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["memory", "retained"],
+    },
     invalidArgumentCount: OPTIONAL_COUNT,
     sectionItemCount: OPTIONAL_COUNT,
     sectionItemTotal: OPTIONAL_COUNT,
@@ -149,6 +157,7 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
       maxItems: 64,
     },
     durationMs: { type: "integer", dataClass: "duration", required: false },
+    ...ACTIVITY_FAILURE_DIAGNOSTIC_FIELDS,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -162,11 +171,15 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
 
 /** One report export; the file text never enters the line. */
 export interface JiraReportExportActivity {
-  readonly phase: "export";
+  readonly phase: "export" | "retain";
   readonly format?: JiraReportExportFormat;
   readonly refusal?: JiraReportRefusalKind;
   readonly byteCount?: number;
+  readonly retainedReportCount?: number;
+  readonly exportSource?: "memory" | "retained";
   readonly durationMs: number;
+  /** Reduced to Keiko frames and cause classes before entering the Activity Log. */
+  readonly error?: unknown;
 }
 export type JiraReportLogInput = JiraReportActivity | JiraReportExportActivity;
 
@@ -194,7 +207,7 @@ function errorKindOf(input: JiraReportLogInput): ActivityLogErrorKind | undefine
   return reason === undefined ? undefined : INCOMPLETE_KIND[reason];
 }
 interface JiraReportLine {
-  readonly phase: "read" | "section" | "refused" | "export";
+  readonly phase: "read" | "section" | "refused" | "export" | "retain";
   readonly scopeKind: "project" | "jql" | "project-jql" | "epic" | "report";
   readonly continued: boolean;
   readonly durationMs: number;
@@ -217,6 +230,8 @@ interface JiraReportLine {
   readonly hierarchyRejectedFieldCount?: number;
   readonly hierarchyInferredFieldCount?: number;
   readonly byteCount?: number;
+  readonly retainedReportCount?: number;
+  readonly exportSource?: "memory" | "retained";
   readonly invalidArgumentCount?: number;
   readonly sectionItemCount?: number;
   readonly sectionItemTotal?: number;
@@ -280,16 +295,7 @@ function sectionPageOf(
 }
 
 function lineOf(input: JiraReportLogInput): JiraReportLine {
-  if (input.phase === "export")
-    return {
-      phase: "export",
-      scopeKind: "report",
-      continued: false,
-      durationMs: input.durationMs,
-      ...(input.format === undefined ? {} : { format: input.format }),
-      ...(input.refusal === undefined ? {} : { refusal: input.refusal }),
-      ...(input.byteCount === undefined ? {} : { byteCount: input.byteCount }),
-    };
+  if (!("scopeKind" in input)) return exportLine(input);
   return {
     phase: input.phase,
     scopeKind: input.scopeKind,
@@ -313,7 +319,23 @@ function lineOf(input: JiraReportLogInput): JiraReportLine {
   };
 }
 
-/** Counts, closed words and rule ids only: no scope text, issue key, summary or report content. */
+function exportLine(input: JiraReportExportActivity): JiraReportLine {
+  return {
+    phase: input.phase,
+    scopeKind: "report",
+    continued: false,
+    durationMs: input.durationMs,
+    ...(input.format === undefined ? {} : { format: input.format }),
+    ...(input.refusal === undefined ? {} : { refusal: input.refusal }),
+    ...(input.byteCount === undefined ? {} : { byteCount: input.byteCount }),
+    ...(input.retainedReportCount === undefined
+      ? {}
+      : { retainedReportCount: input.retainedReportCount }),
+    ...(input.exportSource === undefined ? {} : { exportSource: input.exportSource }),
+  };
+}
+
+/** Body-free evidence only: no scope text, issue key, summary or report content. */
 export function recordJiraReportActivity(
   log: ServerLogSink | undefined,
   correlationId: string,
@@ -329,7 +351,14 @@ export function recordJiraReportActivity(
         level: degraded ? "warn" : "info",
         ...(errorKind === undefined ? {} : { errorKind }),
       },
-      { ...lineOf(input), completeness: degraded ? "partial" : "complete", loss: "none" },
+      {
+        ...lineOf(input),
+        ...("error" in input && input.error !== undefined
+          ? { frames: keikoStackFrames(input.error), causeChain: causeChain(input.error) }
+          : {}),
+        completeness: degraded ? "partial" : "complete",
+        loss: "none",
+      },
     ),
   );
 }

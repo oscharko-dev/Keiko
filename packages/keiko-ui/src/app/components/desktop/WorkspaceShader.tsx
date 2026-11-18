@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import {
   WALLPAPER_ENABLED_EVENT,
   WALLPAPER_ENABLED_KEY,
@@ -128,7 +128,11 @@ function compileShader(gl: WebGLRenderingContext, type: number, src: string): We
   return s;
 }
 
-function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void) | undefined {
+function setupShader(
+  host: HTMLElement,
+  canvas: HTMLCanvasElement,
+  viewport: HTMLElement,
+): (() => void) | undefined {
   canvas.style.opacity = String(readWallpaperOpacity() / 100);
 
   const onOpacity = (e: Event): void => {
@@ -228,7 +232,7 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
     ripHead = (ripHead + 1) % RN;
   };
 
-  host.addEventListener("pointerdown", onDown);
+  viewport.addEventListener("pointerdown", onDown);
 
   const t0 = performance.now();
   let raf = 0;
@@ -268,9 +272,9 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
     // data-view-active while the gesture is in flight, so include it in the skip gate
     // to also suppress the full-screen fbm draw during the most common navigation.
     if (
-      host.dataset.panning === "true" ||
-      host.dataset.viewActive === "true" ||
-      host.dataset.windowMaxed === "true"
+      viewport.dataset.panning === "true" ||
+      viewport.dataset.viewActive === "true" ||
+      viewport.dataset.windowMaxed === "true"
     )
       return;
 
@@ -310,7 +314,7 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
     cancelAnimationFrame(raf);
     document.removeEventListener("visibilitychange", onVis);
     window.removeEventListener(WALLPAPER_OPACITY_EVENT, onOpacity);
-    host.removeEventListener("pointerdown", onDown);
+    viewport.removeEventListener("pointerdown", onDown);
     if (ro !== null) ro.disconnect();
     else window.removeEventListener("resize", resize);
     if (gl !== null) {
@@ -329,7 +333,11 @@ function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void)
   };
 }
 
-export function WorkspaceShader(): ReactNode {
+export function WorkspaceShader({
+  viewportRef,
+}: {
+  readonly viewportRef?: RefObject<HTMLElement | null>;
+}): ReactNode {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [enabled, setEnabled] = useState(readWallpaperEnabled);
 
@@ -394,6 +402,7 @@ export function WorkspaceShader(): ReactNode {
     if (canvas === null) return;
     const host = canvas.parentElement;
     if (host === null) return;
+    const viewport = viewportRef?.current ?? host;
     // WCAG 2.3.3 — skip continuous animation for users who prefer reduced motion.
     // The canvas remains transparent; the solid --bg colour shows through (same
     // graceful fallback as the no-WebGL path documented in setupShader).
@@ -407,7 +416,7 @@ export function WorkspaceShader(): ReactNode {
         dispose?.();
         dispose = undefined;
       } else {
-        dispose ??= setupShader(host, canvas);
+        dispose ??= setupShader(host, canvas, viewport);
       }
     };
     apply();
@@ -416,7 +425,7 @@ export function WorkspaceShader(): ReactNode {
       mq.removeEventListener("change", apply);
       dispose?.();
     };
-  }, [enabled]);
+  }, [enabled, viewportRef]);
 
   return enabled ? (
     <canvas ref={canvasRef} className="ws-shader" aria-hidden="true" tabIndex={-1} />

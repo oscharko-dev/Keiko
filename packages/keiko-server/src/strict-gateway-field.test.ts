@@ -12,10 +12,11 @@ import type { RouteContext } from "./routes.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
 import {
-  awaitAnyInitializedConversationReadyChatModel,
+  settleStartupConversationReadiness,
   codingWorkbenchProbesSettledForTests,
   checkSelectedConversationModel,
   initializeConfiguredConversationReadiness,
+  handleGatewayReadiness,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
@@ -370,6 +371,22 @@ function fieldTmpDir(): string {
   return tmp;
 }
 
+// What the person does in Settings > Models after each start (ADR-0171 D2, amended 2026-11-16):
+// activate the model. `probes` limits the readiness check to the chat answer where a test proves a
+// later step on its own.
+async function activateFieldModel(
+  deps: UiHandlerDeps,
+  modelId: string,
+  probes?: readonly string[],
+): Promise<void> {
+  const activated = await handleGatewayReadiness(
+    ctx("POST", { modelId, ...(probes === undefined ? {} : { options: { probes } }) }),
+    deps,
+  );
+  expect(activated.status).toBe(200);
+  expect(deps.gatewayConfig?.verifiedCapability(modelId)?.fields.conversationReady).toBe(true);
+}
+
 function expectVerifiedFieldToolModel(deps: UiHandlerDeps): void {
   expect(
     deps.gatewayConfig?.current()?.capabilities?.find((model) => model.id === "qwen-chat"),
@@ -507,7 +524,7 @@ describe("strict LiteLLM field twin", () => {
       behavior.emptyChatModels.add("qwen-chat");
       deps.gatewayConfig?.set(deps.gatewayConfig.current(), true);
       initializeConfiguredConversationReadiness(deps, "corr-field-reload");
-      await awaitAnyInitializedConversationReadyChatModel(deps, "qwen-chat", "corr-field-join");
+      await settleStartupConversationReadiness(deps);
       expect(deps.gatewayConfig?.verifiedCapability("qwen-chat")?.fields.conversationReady).toBe(
         false,
       );
@@ -526,7 +543,7 @@ describe("strict LiteLLM field twin", () => {
     }
   });
 
-  it("rejects an explicitly requested unready model without starting a probe or walking siblings", async () => {
+  it("opens a Chat for its explicit unready model without probing it or its siblings", async () => {
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     const behavior: StrictLiteLlmBehavior = { emptyChatModels: new Set() };
     const gateway = startStrictLiteLlm(log, { unsuitableFirstChatModel: true }, behavior);
@@ -538,11 +555,7 @@ describe("strict LiteLLM field twin", () => {
       behavior.emptyChatModels.add("dotsocr");
       deps.gatewayConfig?.set(deps.gatewayConfig.current(), true);
       initializeConfiguredConversationReadiness(deps, "corr-field-explicit-reload");
-      await awaitAnyInitializedConversationReadyChatModel(
-        deps,
-        "qwen-chat",
-        "corr-field-explicit-join",
-      );
+      await settleStartupConversationReadiness(deps);
       // Startup checked only the model in use; the person's pick is what finds dotsocr unready.
       await checkSelectedConversationModel(deps, "dotsocr", "corr-field-pick-unready");
       expect(deps.gatewayConfig?.verifiedCapability("dotsocr")?.fields.conversationReady).toBe(
@@ -558,7 +571,10 @@ describe("strict LiteLLM field twin", () => {
         }),
         deps,
       );
-      expect(chat.status).toBe(400);
+      expect(chat).toMatchObject({
+        status: 201,
+        body: { chat: { selectedModel: "dotsocr" }, messages: [] },
+      });
       expect(probesSince(log, mark, "dotsocr")).toBe(0);
       expect(probesSince(log, mark, "qwen-chat")).toBe(0);
     } finally {
@@ -800,7 +816,18 @@ describe("strict LiteLLM field twin", () => {
         ["qwen-chat", 32_000],
         ["gemma-chat", 4_096],
       ]);
-      // Picking it proves it, and only it.
+      // Picking it before the person activated it proves nothing (ADR-0171 D2, amended
+      // 2026-11-16); after its activation in Settings > Models, picking it proves it, and only it.
+      await handleCodingSidecarGatewayProfile(
+        ctx("GET", {}, {}, "/api?modelId=gemma-chat&check=1"),
+        deps,
+      );
+      await codingWorkbenchProbesSettledForTests();
+      expect(windows()).toEqual([
+        ["qwen-chat", 32_000],
+        ["gemma-chat", 4_096],
+      ]);
+      await activateFieldModel(deps, "gemma-chat", ["chat"]);
       await handleCodingSidecarGatewayProfile(
         ctx("GET", {}, {}, "/api?modelId=gemma-chat&check=1"),
         deps,
@@ -865,6 +892,7 @@ describe("strict LiteLLM field twin", () => {
         },
         true,
       );
+      await activateFieldModel(deps, "qwen-chat", ["chat"]);
 
       const profile = await handleCodingSidecarGatewayProfile(
         ctx("GET", {}, {}, "/api?check=1"),
@@ -920,6 +948,7 @@ describe("strict LiteLLM field twin", () => {
           ?.capabilities?.find((capability) => capability.id === "qwen-chat");
       // The loader still refuses tools on the aged proof; only a renewed proof may admit them.
       expect(chatModel()?.toolCalling).toBe(false);
+      await activateFieldModel(deps, "qwen-chat", ["chat"]);
       const mark = log.chatModels.length;
       const events: ServerLogEvent[] = [];
       const observed: UiHandlerDeps = {
@@ -1026,12 +1055,12 @@ describe("strict LiteLLM field twin", () => {
     }
   });
 
-  it("answers the first pod question after a process restart without any manual probe", async () => {
-    // 0.3.12 adversarial-review finding: readiness observations are process-local by design, so
-    // after EVERY restart the grounded ask — the customer's primary journey — answered 400
-    // "not ready" until an ungrounded send or a manual settings probe happened to record an
-    // observation, and the models wire told the UI that no model was usable at all. This twin
-    // restarts the server half-way: same stored config, same UI DB, fresh process state.
+  it("answers the first pod question after a restart once the person activated the model", async () => {
+    // 2026-11-16 product decision: readiness observations stay process-local, and after every
+    // restart the person activates the model in Settings > Models. Until then the grounded ask —
+    // the customer's primary journey — answers "not ready" without any provider probe; after the
+    // activation it answers. This twin restarts the server half-way: same stored config, same UI
+    // DB, fresh process state.
     const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
     // The installed Knowledge MCP catalog requires an actually verified tool-capable model.
     // This HTTP twin answers the real forced-call proof; no capability flag is injected.
@@ -1105,8 +1134,8 @@ describe("strict LiteLLM field twin", () => {
       expect(deps.gatewayConfig?.present()).toBe(true);
       expectVerifiedFieldToolModel(deps);
 
-      // Tri-state models wire: never-probed is UNKNOWN (field absent), not `false` — a hard
-      // false emptied the UI's model picker after every restart until a manual probe + reload.
+      // Tri-state models wire: a model nobody activated in this process is reported without
+      // `conversationReady`; the browser treats it as not activated.
       const models = handleModels(ctx("GET", {}), deps);
       const listed = (models.body as { models: { id: string; conversationReady?: boolean }[] })
         .models;
@@ -1115,7 +1144,17 @@ describe("strict LiteLLM field twin", () => {
         expect("conversationReady" in model).toBe(false);
       }
 
-      // First grounded ask of the day, no manual probe, no prior send: must answer.
+      // First grounded ask before activation: refused as not ready, without a provider probe.
+      const beforeActivation = log.chatModels.length;
+      const refused = await handleGroundedAsk(
+        ctx("POST", { chatId, content: "Was steht im Handbuch zu KFZ?" }),
+        deps,
+      );
+      expect(refused.status).toBe(400);
+      expect(JSON.stringify(refused.body)).toContain("CONVERSATION_MODEL_NOT_READY");
+      expect(log.chatModels).toHaveLength(beforeActivation);
+
+      await activateFieldModel(deps, "qwen-chat");
       const asked = await handleGroundedAsk(
         ctx("POST", { chatId, content: "Was steht im Handbuch zu KFZ?" }),
         deps,
@@ -1228,6 +1267,9 @@ describe("strict LiteLLM field twin", () => {
         // dotsocr sits FIRST and answers warm; the first declared chat model still wins for the
         // chat picker AND for the background callers (commit drafts, PR descriptions, profiles).
         expect(selectConfiguredModel(config ?? { providers: [] }, { kind: "chat" })).toBe("gpt-4o");
+        // The person activates the declared chat model; Gateway Setup already activated the model it
+        // tested. Among activated models the election still keeps the declared chat model first.
+        await activateFieldModel(deps, "gpt-4o", ["chat"]);
         const chat = await handleCreateDesktopChat(
           ctx("POST", { projectPath: projectDir, title: "Erster Chat" }),
           deps,

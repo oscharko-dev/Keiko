@@ -42,6 +42,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { KEIKO_CODING_EXTERNAL_READ_ROOTS_ENV } from "./opencodeNativeExternalRoots.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { portableManagementFromEnv } from "../update-portable-install-mode.js";
 import type { CodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import {
   configuredCodingRuntimeRepositoryInstructionsEnabled,
@@ -54,6 +55,7 @@ import {
 import {
   discoverDevLaneOpenCode,
   discoverNpmLaneOpenCode,
+  npmLaneRuntimePackageExpected,
   type DevLaneName,
   type DevLaneOpenCodeDiscovery,
   type DevLaneOpenCodeRefusalReason,
@@ -74,6 +76,8 @@ import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorks
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
 import {
   discoverPortableOpenCode,
+  installWindowsGatewayService,
+  portableInstallLayoutPresent,
   readWindowsGatewayServiceStatus,
 } from "./productionPortableCodingRuntime.js";
 import {
@@ -173,6 +177,49 @@ const CODING_RUNTIME_DEV_LANE_REFUSED_OPERATION = defineActivityLogOperation({
   proofIds: ["coding-runtime.dev-lane.refused.emitted-line"],
   releaseImpact: "patch",
 });
+
+// #4068: no lane offered a runtime. The line names the installation kind Keiko found, so a support
+// report shows why the Workbench told an npm install to use the desktop package.
+const CODING_RUNTIME_UNQUALIFIED_INSTALL_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.install.unqualified",
+  // An availability fact about this installation, like the gateway state; not a process lifecycle.
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionOpenCodeActivation.recordUnqualifiedInstall",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "platform-unqualified",
+        "npm-runtime-package-missing",
+        "portable-runtime-unverified",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-dev-lane"],
+  proofIds: ["coding-runtime.install.unqualified.emitted-line"],
+  releaseImpact: "minor",
+});
+
+function recordUnqualifiedInstall(
+  activityLog: ServerLogSink,
+  reason: "platform-unqualified" | "npm-runtime-package-missing" | "portable-runtime-unverified",
+): void {
+  activityLog.write(
+    activityLogEvent(
+      CODING_RUNTIME_UNQUALIFIED_INSTALL_OPERATION,
+      { level: "warn", correlationId: UNKNOWN_CORRELATION_ID, errorKind: "unavailable" },
+      { reason },
+    ),
+  );
+}
 
 export interface ProductionOpenCodeActivationInput {
   readonly historyCapture?: ProductionOpenCodeBackendInput["historyCapture"];
@@ -453,13 +500,26 @@ const UNQUALIFIED_WINDOWS_RUNTIME: {
   windowsGatewayService: { unavailableReason: () => "gateway-service-unqualified" },
 };
 
+/**
+ * Whether the launcher declared an installation managed outside the app (ADR-0121 D9): the
+ * standalone folder package and IT-managed deployments. An unreadable declaration counts as managed
+ * outside, the same fail-closed reading the update detection applies.
+ */
+function managedOutsideApp(env: NodeJS.ProcessEnv | undefined): boolean {
+  const management = env === undefined ? undefined : portableManagementFromEnv(env);
+  // The same shape as the CLI's rule (keiko-cli portable-management.ts): only an absent or
+  // `user-local` declaration leaves Keiko in charge, so a mode added later is managed outside.
+  return management !== undefined && management !== "user-local";
+}
+
 export function windowsGatewayServiceFacts(
-  input: Pick<ProductionOpenCodeActivationInput, "activityLog">,
+  input: Pick<ProductionOpenCodeActivationInput, "activityLog"> &
+    Partial<Pick<ProductionOpenCodeActivationInput, "env">>,
   portable: ResolvedPortableOpenCodeRuntime,
 ): { readonly windowsGatewayService?: WindowsGatewayServiceProbe } {
   if (portable.target !== "windows-x64") return {};
-  // A release-qualified package, a Windows dev checkout and the Windows npm runtime package carry a
-  // broker pin (ADR-0043 D19); all
+  // A release-qualified or independently pinned evaluation package, a Windows dev checkout and the
+  // Windows npm runtime package carry a broker pin (ADR-0043 D19); all
   // then report the installed broker's state, so a checkout without one is told to install it.
   const helperSha256 = windowsGatewayHelperPin(portable);
   const helperPath = portable.nativeHelperPath;
@@ -469,8 +529,15 @@ export function windowsGatewayServiceFacts(
         windowsGatewayService: createWindowsGatewayServiceProbe({
           helperPath,
           helperSha256,
+          evidenceClass: runtimeEvidenceClass(portable),
+          origin: runtimeVersionFacts(portable).origin,
           activityLog: input.activityLog ?? processServerLogSink(),
           runStatus: readWindowsGatewayServiceStatus,
+          // The Workbench's Repair is the person's explicit choice for every origin, the dev lane
+          // included; Windows still asks through UAC. An installation managed outside the app (the
+          // standalone folder package, ADR-0121 D9) sets up no system service and offers no Repair.
+          runInstall: installWindowsGatewayService,
+          managedOutsideApp: managedOutsideApp(input.env),
         }),
       };
 }
@@ -545,7 +612,22 @@ function resolveRuntime(
     recordDevLaneDiscovery(activityLog, npmLane, "npm-runtime-package");
     return devLaneRuntime(npmLane);
   }
-  return devLaneRuntime(discovery);
+  const unavailableReason = unqualifiedInstallReason(host);
+  recordUnqualifiedInstall(activityLog, unavailableReason);
+  return { unavailableReason };
+}
+
+/**
+ * No lane offered a runtime. The Workbench names the one step for the installation kind it found
+ * (#4068): a desktop package whose bundled runtime did not verify, an npm installation without the
+ * runtime package for this computer, or neither (a checkout or an unsupported platform).
+ */
+function unqualifiedInstallReason(
+  host: Pick<ProductionOpenCodeActivationInput, "env" | "platform" | "arch">,
+): "platform-unqualified" | "npm-runtime-package-missing" | "portable-runtime-unverified" {
+  if (portableInstallLayoutPresent(host)) return "portable-runtime-unverified";
+  if (npmLaneRuntimePackageExpected(host)) return "npm-runtime-package-missing";
+  return "platform-unqualified";
 }
 
 function recordDevLaneDiscovery(

@@ -307,7 +307,7 @@ function useCommitPreviewFlow(client: GitClientSeam, projectId: string): CommitP
           if (previewSeqRef.current !== seq) return;
           setPreview(null);
           setPreviewDraft(null);
-          setPreviewRequestRevision(null);
+          setPreviewRequestRevision(requestRevision ?? null);
           setPreviewError(formatGitError(err));
         },
       );

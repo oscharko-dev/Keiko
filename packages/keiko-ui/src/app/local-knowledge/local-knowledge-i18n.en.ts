@@ -380,9 +380,9 @@ export const EN_LOCAL_KNOWLEDGE_MESSAGES = {
   "localKnowledge.detail.help.discoveryProgress":
     "Discovery means Keiko is finding and checking documents in the source. It is the step before content becomes searchable.",
   "localKnowledge.detail.help.retrievalCoverage":
-    "Retrieval coverage shows how much indexed content is ready for semantic search. Low coverage can lead to incomplete results.",
+    "Shows the share of indexed chunks with vectors. Check the document counts for failed and skipped files.",
   "localKnowledge.detail.help.indexMessage":
-    "This message summarizes whether the index and search data match the current source set.",
+    "This message summarizes which documents or vectors still need attention.",
   "localKnowledge.detail.help.advanced":
     "Opens technical details about sources, embeddings, retrieval, and job history. Use it when answers miss expected content.",
   "localKnowledge.detail.help.embeddingSection":
@@ -519,20 +519,24 @@ export const EN_LOCAL_KNOWLEDGE_MESSAGES = {
   "localKnowledge.detail.index.indexedDocuments": "Indexed documents",
   "localKnowledge.detail.index.failedSkipped": "{failed} failed, {skipped} skipped",
   "localKnowledge.detail.index.vectors": "Vectors",
+  "localKnowledge.detail.index.noIndexedChunks": "No indexed chunks yet",
   "localKnowledge.detail.index.chunksMissingVectors": "{count} chunks missing vectors",
   "localKnowledge.detail.index.allChunksEmbedded": "All chunks embedded",
   "localKnowledge.detail.index.latestJob": "Latest job",
   "localKnowledge.detail.index.notIndexed": "Not indexed",
   "localKnowledge.detail.index.discoveryProgress": "Discovery progress",
-  "localKnowledge.detail.index.retrievalCoverage": "Retrieval coverage",
+  "localKnowledge.detail.index.retrievalCoverage": "Indexed chunks with embeddings",
+  "localKnowledge.detail.index.failedDocuments.one":
+    "1 document could not be indexed. Successfully indexed documents remain available. Use Repair failed files under Maintenance and deletion to retry.",
+  "localKnowledge.detail.index.failedDocuments.many":
+    "{count} documents could not be indexed. Successfully indexed documents remain available. Use Repair failed files under Maintenance and deletion to retry.",
   "localKnowledge.detail.index.embeddingStopped":
     "Embedding stopped early: {message}. {count} chunks still need vectors.",
   "localKnowledge.detail.index.missingVectors":
-    "{count} chunks still need vectors before retrieval can cover the full source.",
+    "{count} chunks still need vectors for semantic search.",
   "localKnowledge.detail.index.unsupportedDocuments":
     "{count} documents need a different extraction path before they can be indexed.",
-  "localKnowledge.detail.index.aligned":
-    "Index and vectors are aligned for the current source set.",
+  "localKnowledge.detail.index.aligned": "Index and vectors are aligned for indexed documents.",
   "localKnowledge.detail.compatibility.title": "Embedding compatibility",
   "localKnowledge.detail.compatibility.compatible": "Compatible",
   "localKnowledge.detail.compatibility.unknown": "Unknown",
@@ -636,6 +640,7 @@ export const EN_LOCAL_KNOWLEDGE_MESSAGES = {
   "localKnowledge.detail.jobs.status.queued": "Queued",
   "localKnowledge.detail.jobs.status.running": "Running",
   "localKnowledge.detail.jobs.status.succeeded": "Succeeded",
+  "localKnowledge.detail.jobs.status.completedWithErrors": "Completed with file errors",
   "localKnowledge.detail.jobs.status.failed": "Failed",
   "localKnowledge.detail.jobs.status.cancelled": "Cancelled",
   "localKnowledge.detail.large.title": "Large documents",

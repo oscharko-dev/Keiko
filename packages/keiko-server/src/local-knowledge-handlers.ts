@@ -109,7 +109,7 @@ import {
   validateKnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
 import {
-  currentConversationReadinessObservation,
+  currentConversationReadinessPresentation,
   currentGateway,
   currentGatewayConfig,
   currentGatewayEgressConfig,
@@ -1964,7 +1964,7 @@ function fallbackContextModelId(deps: UiHandlerDeps, config: GatewayConfig): str
     .filter((capability) => capability.kind === "chat")
     .sort((a, b) => MODEL_COST_RANK[a.costClass] - MODEL_COST_RANK[b.costClass]);
   return electConversationDefault(byCost, (capability) =>
-    currentConversationReadinessObservation(deps, capability.id),
+    currentConversationReadinessPresentation(deps, capability.id),
   )?.id;
 }
 

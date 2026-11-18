@@ -196,6 +196,7 @@ export type UpdateUnsupportedReason =
   | "package-manager-unsupported"
   | "manifest-unavailable"
   | "portable-bootstrap"
+  | "portable-update-unavailable"
   | "portable-setup-failed"
   | "portable-it-managed"
   | "portable-registration-invalid"
@@ -214,6 +215,7 @@ export const UPDATE_UNSUPPORTED_REASONS: readonly UpdateUnsupportedReason[] = Ob
   "package-manager-unsupported",
   "manifest-unavailable",
   "portable-bootstrap",
+  "portable-update-unavailable",
   "portable-setup-failed",
   "portable-it-managed",
   "portable-registration-invalid",

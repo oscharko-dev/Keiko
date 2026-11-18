@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "44e6a695b1b0ccd7e9bb5370e090b76e5b48498f679c1fd012fcd27280457c5d"
+    "catalogDigest": "bd006a160e5248c11c12f2dab401b27dea36558be6e9c0f647e0aaace8a94c7c"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 733,
-    "proofCount": 756,
-    "resolvedProofCount": 756,
-    "failureClassCount": 415,
+    "operationCount": 741,
+    "proofCount": 764,
+    "resolvedProofCount": 764,
+    "failureClassCount": 418,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -129,6 +129,7 @@
         "chat.continuity.degraded",
         "chat.continuity.rehydration",
         "chat.creation.intent",
+        "chat.creation.opened",
         "chat.creation.rejected",
         "chat.draft.operation",
         "chat.grounded-tool-round.completed",
@@ -311,6 +312,7 @@
         "gateway.readiness.compatibility-retry.failed",
         "gateway.readiness.compatibility-retry.skipped",
         "gateway.readiness.completed",
+        "gateway.readiness.deactivation",
         "gateway.readiness.scope",
         "gateway.readiness.selection",
         "gateway.readiness.started",
@@ -425,6 +427,7 @@
         "coding-runtime.inbox.dispatch-failed",
         "coding-runtime.initial-turn.dispatch-failed",
         "coding-runtime.initial-turn.stop-failed",
+        "coding-runtime.install.unqualified",
         "coding-runtime.jira-pod",
         "coding-runtime.linked-files.resolved",
         "coding-runtime.location.activation-wait",
@@ -496,6 +499,7 @@
         "coding-runtime.verification-summarized",
         "coding-runtime.websearch.performed",
         "coding-runtime.windows-gateway-service",
+        "coding-runtime.windows-gateway-service.repair",
         "coding-runtime.workspace-discovery",
         "coding-runtime.workspace-read",
         "coding-sidecar.gateway.outcome",
@@ -610,6 +614,8 @@
         "indexing.source.started",
         "indexing.start.accepted",
         "indexing.start.refused",
+        "knowledge.citation.editor-target",
+        "knowledge.citation.manual-check",
         "knowledge.documents.operation",
         "knowledge.log.sink-failed",
         "knowledge.requirement-trace.applied",
@@ -853,8 +859,10 @@
         "cli.audit.started",
         "cli.gateway-service.completed",
         "cli.gateway-service.failed",
+        "cli.gateway-service.setup",
         "cli.gateway-service.started",
         "cli.install-layout.normalized",
+        "cli.lifecycle.provisioned-config",
         "cli.support.export.failed",
         "cli.uninstall.completed",
         "cli.uninstall.failed",
@@ -927,6 +935,8 @@
     }
   ],
   "failureClassScenarios": {
+    "knowledge-citation-editor-target": ["memory-knowledge.dependency-failure"],
+    "knowledge-citation-manual-check": ["memory-knowledge.dependency-failure"],
     "mcp-authorization": ["tools-workflows.dependency-failure"],
     "chat-tool-transcript": ["bff.dependency-failure"],
     "chat-tool-authority": ["editor-delivery.dependency-failure"],
@@ -961,6 +971,7 @@
     "chat-turn": ["bff.dependency-failure"],
     "cli-audit": ["runtime-packages.dependency-failure"],
     "cli-gateway-service": ["runtime-packages.dependency-failure"],
+    "provisioned-config-adoption": ["runtime-packages.dependency-failure"],
     "windows-gateway-service": ["tools-workflows.dependency-failure"],
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
@@ -1471,6 +1482,7 @@
     "chat.creation.intent.decision": [
       "packages/keiko-server/src/store/chatCreationIntents.test.ts"
     ],
+    "chat.creation.opened.line": ["packages/keiko-server/src/chat-handlers.test.ts"],
     "chat.creation.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.draft.operation.lifecycle": ["packages/keiko-server/src/chat-draft-routes.test.ts"],
     "chat.grounded-tool-round.completed.schedule": [
@@ -1566,6 +1578,9 @@
       "packages/keiko-cli/src/gateway-service.test.ts"
     ],
     "cli.gateway-service.failed.real-sink-line": ["packages/keiko-cli/src/gateway-service.test.ts"],
+    "cli.gateway-service.setup.real-sink-line": [
+      "packages/keiko-cli/src/gateway-service-setup.test.ts"
+    ],
     "cli.gateway-service.started.real-sink-line": [
       "packages/keiko-cli/src/gateway-service.test.ts"
     ],
@@ -1584,6 +1599,9 @@
     "cli.lifecycle.native-owner.outcome": [
       "packages/keiko-cli/src/lifecycle-diagnostics.test.ts",
       "packages/keiko-cli/src/lifecycle-native-activity.test.ts"
+    ],
+    "cli.lifecycle.provisioned-config.outcome": [
+      "packages/keiko-cli/src/provisioned-config.test.ts"
     ],
     "cli.lifecycle.stop-escalated.disposition": [
       "packages/keiko-cli/src/ui-process-stop.activity-log-proof.test.ts"
@@ -1889,6 +1907,9 @@
     "coding-runtime.initial-turn.stop-failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.test.ts"
     ],
+    "coding-runtime.install.unqualified.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.test.ts"
+    ],
     "coding-runtime.jira-pod.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.test.ts",
       "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
@@ -2113,6 +2134,9 @@
       "packages/keiko-server/src/coding-runtime/nativeWebSearch.test.ts"
     ],
     "coding-runtime.windows-gateway-service.real-sink-line": [
+      "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.test.ts"
+    ],
+    "coding-runtime.windows-gateway-service.repair.real-sink-line": [
       "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.test.ts"
     ],
     "coding-runtime.workspace-discovery.emitted-line": [
@@ -2439,6 +2463,9 @@
     "gateway.readiness.completed.line": [
       "packages/keiko-server/src/gateway-readiness.native-cancellation.test.ts",
       "packages/keiko-server/src/gateway-readiness.test.ts"
+    ],
+    "gateway.readiness.deactivation.line": [
+      "packages/keiko-server/src/gateway-models-in-use.test.ts"
     ],
     "gateway.readiness.scope.line": ["packages/keiko-server/src/gateway-models-in-use.test.ts"],
     "gateway.readiness.selection.line": ["packages/keiko-server/src/gateway-models-in-use.test.ts"],
@@ -2859,6 +2886,12 @@
     ],
     "jira.template.metadata.line": [
       "packages/keiko-server/src/atlassian/jiraCreateTemplateMetadata.test.ts"
+    ],
+    "knowledge.citation.editor-target.line": [
+      "packages/keiko-server/src/knowledge-citation-editor-activity.test.ts"
+    ],
+    "knowledge.citation.manual-check.line": [
+      "packages/keiko-server/src/html-manual-citation-route.test.ts"
     ],
     "knowledge.documents.operation.line": [
       "packages/keiko-server/src/chat-tool-turn-coverage.test.ts",

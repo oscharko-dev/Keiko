@@ -63,6 +63,19 @@ function abortingRunner(): GitProcessRunner {
 }
 
 describe("runSyncExecute — cancelled remote failure (SYNC_OUTCOME_FOR_REMOTE_FAILURE.cancelled)", () => {
+  it.each(["fetch", "pull"] as const)(
+    "does not classify a byte-capped %s with exit zero as succeeded",
+    async (operation) => {
+      const runner: GitProcessRunner = (args): Promise<GitProcessResult> => {
+        if (subcommand(args) === "status") return Promise.resolve(ok(readyPorcelain()));
+        if (subcommand(args) === "remote") return Promise.resolve(ok("origin\n"));
+        return Promise.resolve({ ...ok(""), truncated: true });
+      };
+      const result = await runSyncExecute(operation, "/repo", undefined, { runner });
+      expect(result.outcome).toBe("output-truncated");
+    },
+  );
+
   it("resolves an aborted fetch to git-error — never timeout, never a success", async () => {
     const result = await runSyncExecute("fetch", "/repo", undefined, { runner: abortingRunner() });
     // Deliberately "git-error": see the module-level comment above and on

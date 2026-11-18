@@ -27,6 +27,19 @@ export const KNOWLEDGE_REVIEW_VALIDATION_REASONS = [
   "clarification-question",
 ] as const;
 export type KnowledgeReviewValidationReason = (typeof KNOWLEDGE_REVIEW_VALIDATION_REASONS)[number];
+/** Source/cursor refusals whose recovery restarts the current document inventory. */
+export const KNOWLEDGE_STALE_SOURCE_REASONS = [
+  "cursor-stale",
+  "document-or-cursor-stale",
+  "document-stale-or-out-of-scope",
+  "source-changed",
+] as const;
+export type KnowledgeStaleSourceReason = (typeof KNOWLEDGE_STALE_SOURCE_REASONS)[number];
+
+/** Only the producer's closed reasons may become presentation or Activity Log evidence. */
+export function knowledgeStaleSourceReason(value: unknown): KnowledgeStaleSourceReason | undefined {
+  return KNOWLEDGE_STALE_SOURCE_REASONS.find((reason) => value === reason);
+}
 /**
  * The single declaration of every managed Knowledge tool identity. The server's tool descriptors,
  * its coverage receipts and the UI presentation all derive from these; none restates them.

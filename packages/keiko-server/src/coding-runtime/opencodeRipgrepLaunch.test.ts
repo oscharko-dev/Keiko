@@ -15,7 +15,7 @@ import { activityLogOperationSchema } from "@oscharko-dev/keiko-contracts/runtim
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { nativeToolchainReadRoots } from "@oscharko-dev/keiko-sandbox";
 import { buildSandboxEnv } from "@oscharko-dev/keiko-tools";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   expectActivityLogProof,
@@ -407,6 +407,29 @@ describe("the child environment", () => {
   };
   const directory = join(tmpdir(), "verified-rg");
   const NATIVE_ALLOWLIST = ["PATH", "LANG"];
+
+  it("filters copied Windows PATH aliases before native launch (#4408)", () => {
+    const foreign = mkdtempSync(join(tmpdir(), "keiko-rg-alias-"));
+    try {
+      writeFileSync(join(foreign, "rg.exe"), "unverified-fixture");
+      // The executable vocabulary is fixed when this module loads on the host.
+      writeFileSync(join(foreign, "rg"), "unverified-fixture");
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const parent = { Path: foreign, TOKEN: "synthetic-scrub-secret" };
+      const filtered = ripgrepLaunchEnvironment(parent, unverified, true);
+      expect(filtered).toEqual({ PATH: "", TOKEN: parent.TOKEN });
+      expect(parent.Path).toBe(foreign);
+      const pinned = ripgrepLaunchEnvironment(
+        { PATH: undefined, Path: foreign },
+        verified(directory),
+        true,
+      );
+      expect(pinned).toEqual({ PATH: directory });
+    } finally {
+      vi.restoreAllMocks();
+      rmSync(foreign, { recursive: true, force: true });
+    }
+  });
 
   it("starts the native PATH with the verified directory, ahead of the inherited entries", () => {
     const processEnv = { PATH: `/usr/bin${delimiter}/opt/tools`, LANG: "en_US.UTF-8", TOKEN: "s" };

@@ -216,6 +216,54 @@ describe("UpdateStartupNotice", () => {
     ).toBeInTheDocument();
   });
 
+  it("explains unavailable Windows updates without asking to repeat completed setup (#4400)", async () => {
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    const unavailableReport = report({
+      updateAvailable: false,
+      status: "degraded",
+      availabilityState: "degraded",
+      manualUpdateRequired: true,
+      oneClickEligible: false,
+      portableAsset: {
+        source: "github-release-asset",
+        target: "windows-x64",
+        requiredAssetName: "keiko-windows-x64.zip",
+        status: "install-mode-ineligible",
+      },
+      blockers: [
+        {
+          code: "portable-update-unavailable",
+          severity: "normal",
+          message: "In-app updates unavailable.",
+          userActionRequired: true,
+        },
+      ],
+    });
+    Reflect.deleteProperty(unavailableReport, "targetVersion");
+    render(
+      <UpdateStartupNotice
+        ready
+        openUpdates={vi.fn()}
+        fetchReport={vi.fn(async () => unavailableReport)}
+      />,
+    );
+    expect(await screen.findByText("In-app updates unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This Windows package cannot update itself. You can keep using Keiko; repeating setup will not enable in-app updates.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Portable setup required")).toBeNull();
+    expect(screen.getByRole("button", { name: "Review details" })).toBeInTheDocument();
+    expect(writer).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        updateNotice: expect.objectContaining({ noticeKind: "portable-update-unavailable" }),
+      }),
+    );
+  });
+
   it("uses setup-required wording for unmanaged portable bootstrap installs", async () => {
     render(
       <UpdateStartupNotice

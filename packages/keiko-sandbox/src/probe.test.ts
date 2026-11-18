@@ -87,6 +87,29 @@ describe("isExecutableOnPath", () => {
     rmSync(winDir, { recursive: true, force: true });
   });
 
+  it("uses copied Windows aliases without a fallback past undefined (#4408)", () => {
+    const bin = mkdtempSync(join(tmpdir(), "keiko-sandbox-win-alias-"));
+    try {
+      const file = join(bin, "alias-tool.CUSTOM");
+      writeFileSync(file, "fixture", { mode: 0o755 });
+      expect(isExecutableOnPath("alias-tool", { Path: bin, Pathext: ".CUSTOM" }, "win32")).toBe(
+        true,
+      );
+      expect(
+        isExecutableOnPath(
+          "alias-tool",
+          { PATH: undefined, Path: bin, Pathext: ".CUSTOM" },
+          "win32",
+        ),
+      ).toBe(false);
+      expect(isExecutableOnPath("alias-tool", { Path: bin, Pathext: ".CUSTOM" }, "darwin")).toBe(
+        false,
+      );
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+  });
+
   it("returns false for a binary absent from PATH", () => {
     expect(
       isExecutableOnPath(

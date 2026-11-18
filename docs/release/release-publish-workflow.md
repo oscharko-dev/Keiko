@@ -309,9 +309,28 @@ node scripts/build-coding-runtime-npm-package.mjs --verify macos-x64 1.1.4 /tmp/
 The Windows package (#4068, owner decision 2026-11-09) is built on a Windows host with MSVC. Both
 native executables are linked with `/Brepro`, so identical sources reproduce the bytes pinned in
 `npmLaneRuntimeApprovals.ts`; the supervisor is pinned to the source tree of
-`native/runtime-supervisor/windows` as the helper is to its own. A Windows npm installation then
-runs `keiko gateway-service install` once (one UAC prompt): without a release helper, the command
-installs the broker for this package's supervisor.
+`native/runtime-supervisor/windows` as the helper is to its own. A Windows npm installation needs no
+separate step: its first healthy `keiko start` installs the broker for this package's supervisor
+(one UAC prompt), and every later start after an update repairs it when the pin changed (ADR-0043
+D19, one-step Windows setup). Until the package is published, a Windows npm installation reports
+`npm-runtime-package-missing`, and the Workbench points to `keiko-windows-x64-setup.exe`.
+
+**One set of Windows native bytes (owner decision 2026-11-17, "Ja, umstellen").** The npm package
+carries exactly the Windows helper and supervisor of the portable release: secure-read helper
+`65cc98c3…` (129,024 bytes) and supervisor `888130331e…` (237,056 bytes), both built by the
+release workflow with MSVC 14.51 (`windows-latest`) and `/Brepro` at `1906b6a5f28a…` from the
+unchanged source trees. `npmLaneRuntimeApprovals.ts` pins the npm lane to those bytes, and
+`npmLaneRuntimeApprovals.test.ts` fails when the npm and portable Windows pins diverge.
+
+Why: a from-source build with Visual Studio 2022 BuildTools 17.14 (MSVC 14.44) reproduces neither
+release binary (it gives helper `1318171b…`, the former npm pin, and supervisor `3277f6da…`,
+235,008 bytes), and the former pins mixed a 14.44 helper with a 14.51 supervisor, so no single
+compiler could produce a candidate. A build host therefore needs MSVC 14.51 to reproduce both from
+source. Without it, build the package directory as usual and replace
+`runtime/native/keiko-secure-workspace-read.exe` and `runtime/native/keiko-runtime-supervisor.exe`
+with the bytes of a release archive whose checksum matches its `windows-x64-SHA256SUMS.txt`; `--pack`
+and `--verify` then check them against the pins. Such a 1.1.5 candidate passed `--pack` and
+`--verify` on 2026-11-17 (10 files; tarball SHA-256 `3f74a03a…`).
 
 ```sh
 node scripts/build-coding-runtime-npm-package.mjs windows-x64 1.2.0 C:\keiko-runtime-1.2.0\windows-x64
@@ -324,6 +343,22 @@ because the root lockfile must resolve it. `scripts/release-workspace-policy.mjs
 `windows-x64` with `firstPublication: "pending"`, and the publish-manifest gate omits it until the
 first publication. That publication removes the flag and adds the exact optional dependency and its
 lockfile entry in one change (step 3 below).
+
+The first Windows publication is an owner-only step, in this order:
+
+1. Build, `--pack` and `--verify` the `windows-x64` candidate on a Windows host at the version
+   recorded for its OpenCode (1.1.5 for OpenCode 2.2.5), with MSVC 14.51 or the verified release
+   binaries described above, and attach the tarball and its receipt to the runtime prerelease.
+2. Add the `windows-x64` entry to `docs/release/coding-runtime-npm-packages.json` under that
+   version, and run `npm trust github @oscharko-dev/keiko-coding-runtime-win32-x64 …` as for the
+   macOS packages.
+3. Publish the package through the trusted-publishing workflow (never from a workstation).
+4. In one change: remove `firstPublication: "pending"`, add
+   `"@oscharko-dev/keiko-coding-runtime-win32-x64": "<version>"` to the root
+   `optionalDependencies` beside the two darwin packages, regenerate `package-lock.json` against
+   the registry, and run `npm run check:version-consistency` and `npm run check:release-impact`.
+5. On Windows: `npm install -g @oscharko-dev/keiko`, then `keiko start` once; the Workbench must
+   report the runtime as available after the one UAC prompt.
 
 The receipt records SHA-256 file hashes, exact helper and upstream OpenCode source commits,
 helper source-tree identity, native byte capability, and the actual tarball's SHA-256 and SHA-512

@@ -14,7 +14,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 81;
+export const SCHEMA_VERSION = 82;
 
 interface Migration {
   readonly version: number;
@@ -3561,6 +3561,21 @@ export const MIGRATIONS: readonly Migration[] = [
   },
   {
     version: 79,
+    // #4390: completed local report exports survive restart without persisting remote authority.
+    sql: `CREATE TABLE jira_report_exports (
+      report_id TEXT PRIMARY KEY CHECK (length(report_id) = 36),
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      last_used_at INTEGER NOT NULL CHECK (last_used_at >= 0),
+      report_digest TEXT NOT NULL CHECK (length(report_digest) = 64),
+      markdown TEXT NOT NULL,
+      csv TEXT NOT NULL,
+      content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
+      byte_count INTEGER NOT NULL CHECK (byte_count >= 256)
+    ) STRICT;
+    CREATE INDEX jira_report_exports_owner ON jira_report_exports(chat_id, last_used_at);`,
+  },
+  {
+    version: 80,
     // ADR-0184 D6 (#4136): Keiko for Quality review runs, their coverage and their candidate
     // findings. Paths and finding text are local product data for the UI; they never enter logs.
     // One unsettled run per repository is enforced here, not only by the service.
@@ -3625,14 +3640,14 @@ export const MIGRATIONS: readonly Migration[] = [
     ) STRICT;`,
   },
   {
-    version: 80,
+    version: 81,
     // ADR-0184 D6 (#4136): whether the Reviewer runtime's end was proven, a warning beside the
     // settlement. NULL when no Reviewer run started and for every run recorded before this column.
     sql: `ALTER TABLE review_runs ADD COLUMN runtime_cleanup TEXT
       CHECK (runtime_cleanup IS NULL OR runtime_cleanup IN ('proven','unproven'));`,
   },
   {
-    version: 81,
+    version: 82,
     // ADR-0184 D6 (R4130-015): the base path of a renamed file, so the reviewed diff reads the base
     // side under the name it had there. NULL for every other entry and every entry recorded earlier.
     sql: `ALTER TABLE review_coverage ADD COLUMN previous_path TEXT;`,

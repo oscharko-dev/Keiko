@@ -70,6 +70,7 @@ import {
   currentContextProfileForModel,
   currentConversationReady,
   currentConversationReadinessObservation,
+  currentConversationReadinessPresentation,
   createLiveCodingChildModelPortFactory,
   createOperatorProvisioningQualification,
   currentGatewayEgressConfig,
@@ -3885,6 +3886,90 @@ describe("runtime gateway accepted source and active inventory", () => {
       })),
     });
   }
+
+  it("binds transient Chat failure metadata to the current connection without readiness", async () => {
+    const deps = inventoryDeps();
+    const holder = deps.gatewayConfig;
+    if (holder?.replaceCatalog === undefined) throw new TypeError("Expected catalog owner.");
+    const configured = inventoryConfig();
+    holder.set(configured, true);
+    const at = new Date().toISOString();
+    const original = holder.generation();
+    holder.recordVerifiedCapability(
+      "retained-chat",
+      { conversationReady: false },
+      at,
+      original,
+      undefined,
+      undefined,
+      "transient",
+    );
+    expect(holder.verifiedCapability("retained-chat")).toMatchObject({
+      generation: original,
+      conversationReadinessFailure: "transient",
+      fields: { conversationReady: false },
+    });
+    expect(currentConversationReady(deps, "retained-chat")).toBe(false);
+    expect(currentConversationReadinessPresentation(deps, "retained-chat")).toBeUndefined();
+    holder.replaceCatalog({ ...configured, providers: configured.providers.slice(0, 1) }, original);
+    expect(holder.verifiedCapability("retained-chat")).toMatchObject({
+      generation: holder.generation(),
+      conversationReadinessFailure: "transient",
+    });
+    expect(currentConversationReadinessPresentation(deps, "retained-chat")).toBeUndefined();
+    holder.recordVerifiedCapability("retained-chat", { conversationReady: true }, at, original);
+    expect(currentConversationReady(deps, "retained-chat")).toBe(false);
+    const oldConnection = holder.generation();
+    holder.set(
+      {
+        ...configured,
+        providers: configured.providers.map((provider) => ({
+          ...provider,
+          apiKey: "rotated-synthetic-credential",
+        })),
+      },
+      true,
+    );
+    holder.recordVerifiedCapability(
+      "retained-chat",
+      { conversationReady: false },
+      at,
+      oldConnection,
+      undefined,
+      undefined,
+      "transient",
+    );
+    expect(holder.verifiedCapability("retained-chat")).toBeUndefined();
+    holder.recordVerifiedCapability("retained-chat", { conversationReady: false }, at);
+    expect(holder.verifiedCapability("retained-chat")).not.toHaveProperty(
+      "conversationReadinessFailure",
+    );
+    expect(currentConversationReadinessPresentation(deps, "retained-chat")).toBe(false);
+    holder.recordVerifiedCapability(
+      "retained-chat",
+      { conversationReady: false },
+      "invalid-time",
+      holder.generation(),
+      undefined,
+      undefined,
+      "transient",
+    );
+    expect(currentConversationReadinessPresentation(deps, "retained-chat")).toBe(false);
+    holder.recordVerifiedCapability(
+      "retained-chat",
+      { conversationReady: true },
+      at,
+      holder.generation(),
+      undefined,
+      undefined,
+      "transient",
+    );
+    expect(holder.verifiedCapability("retained-chat")).not.toHaveProperty(
+      "conversationReadinessFailure",
+    );
+    expect(currentConversationReadinessPresentation(deps, "retained-chat")).toBe(true);
+    await deps.dispose?.();
+  });
 
   it("keeps accepted credentials and original checkedAt only for unchanged active providers", async () => {
     const deps = inventoryDeps();

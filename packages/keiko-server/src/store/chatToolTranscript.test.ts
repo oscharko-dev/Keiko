@@ -308,6 +308,27 @@ describe("ordinary Chat structured tool transcript", () => {
     expect(line).toContain("claim-notice");
   });
 
+  it.each(["no-jira-approval", "jira-report-not-generated"] as const)(
+    "persists the closed %s notice independently of the answer body",
+    (notice) => {
+      const { store, id, logs } = fixture();
+      store.updateChatToolTranscript(id, { kind: "claim-notice", notice }, "jira-download");
+      expect(store.findMessageById(id)?.toolTranscript?.claimNotice).toBe(notice);
+      const event = logs.events
+        .filter((entry) => entry.op === "chat.tool-transcript.updated")
+        .at(-1);
+      const line = formatActivityLogProofLine(event ?? {});
+      expectActivityLogProof("chat.tool-transcript.updated.line", line);
+      expect(line).toContain(notice);
+      store.updateChatToolTranscript(
+        id,
+        { kind: "claim-notice", notice: undefined },
+        "jira-download",
+      );
+      expect(store.findMessageById(id)?.toolTranscript?.claimNotice).toBeUndefined();
+    },
+  );
+
   it("clears the marker when the final answer no longer claims, and never hands it to another message (#4355)", () => {
     const { store, id, chatId, logs } = fixture();
     store.updateChatToolTranscript(id, { kind: "claim-notice", notice: "no-jira-create" }, "n");

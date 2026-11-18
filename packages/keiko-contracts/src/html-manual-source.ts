@@ -1,30 +1,17 @@
 // HTML Manual Knowledge Pod source contract (Epic #1853, Issue #1871).
 //
-// This module bridges the redacted consent handoff produced by Epic #1852
-// (`DocumentationIndexingApproval`) into an internal Local Knowledge crawl source that the
-// crawler (#1872–#1875) consumes and that maps onto the EXISTING `KnowledgeSourceScope`,
-// capsule, indexing, and Knowledge Pod summary machinery — no second store, no parallel
-// retrieval path.
-//
 // Two representations live side by side, following the same split the rest of the Local
 // Knowledge surface uses:
 //   • `HtmlManualCrawlScope` / `HtmlManualSource` are INTERNAL, unredacted runtime state (they
 //     carry the raw local root or the raw intranet origin). Like `KnowledgeSourceScope`, they
 //     stay inside the local-knowledge runtime and are never sent to a browser surface.
-//   • `HtmlManualSourceSummary` is the redacted, browser-safe projection — counts/labels/hashes
-//     only, mirroring the redaction posture of `DocumentationIndexingApproval`.
+//   • `HtmlManualSourceSummary` is the redacted, browser-safe projection of that state.
 //
 // Leaf-package rule (ADR-0019 direction 1): no `@oscharko-dev/keiko-*` imports; pure types and
 // pure validators only (no IO, no clock, no hashing, no randomness). The opaque
 // `sourceFingerprint` is computed downstream in `keiko-server` (the leaf contracts layer cannot
 // hash) and is only VERIFIED here.
 
-import {
-  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
-  type DocumentationIndexingApproval,
-  type DocumentationManualScopeLimits,
-  type DocumentationManualSourceKind,
-} from "./documentation-manual-proposal.js";
 import type { KnowledgeSourceScope } from "./local-knowledge.js";
 import { isSafeScopePath, isSafeStorageReference } from "./local-knowledge-paths.js";
 import type { LocalKnowledgeValidation } from "./local-knowledge-validation.js";
@@ -46,9 +33,6 @@ export const HTML_MANUAL_INCLUDE_GLOBS: readonly string[] = Object.freeze(
 );
 
 // ─── Internal (unredacted) crawl scope ──────────────────────────────────────────
-// `kind` is intentionally the same literal set as `DocumentationManualSourceKind` so the
-// approval's `sourceKind` and the scope discriminant cannot drift.
-//
 // The `html-manual-local` variant is intentionally NOT exposed by any live server route
 // for this release (#2906 KEIKO-0554). The domain-layer fetcher exists in keiko-local-knowledge
 // (`createWorkspaceFsManualFetcher`) with TOCTOU-hardening comments and unit tests, but
@@ -77,12 +61,32 @@ export type HtmlManualCrawlScope =
 
 export type HtmlManualSourceKind = HtmlManualCrawlScope["kind"];
 
+export interface DocumentationManualScopeLimits {
+  readonly maxPages: number;
+  readonly maxDepth: number;
+  readonly maxBytes: number;
+  readonly maxLinkSample: number;
+  readonly timeoutMs: number;
+  readonly followRedirects: false;
+}
+
+// The default governed limits. Small and conservative; the crawler epic may narrow but not widen them.
+export const DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS: DocumentationManualScopeLimits =
+  Object.freeze({
+    maxPages: 200,
+    maxDepth: 4,
+    maxBytes: 25_000_000,
+    maxLinkSample: 64,
+    timeoutMs: 15_000,
+    followRedirects: false,
+  });
+
 export interface HtmlManualSourceTagMetadata {
   readonly sourceKind?: HtmlManualSourceKind;
   readonly sourceFingerprint?: string;
 }
 
-// A fully specified, bounded crawl input derived from an approved manual proposal. Internal
+// A fully specified, bounded crawl input for a previously approved source. Internal
 // runtime state: it carries the raw root/origin and therefore never crosses a browser wire.
 export interface HtmlManualSource {
   readonly schemaVersion: typeof HTML_MANUAL_SOURCE_SCHEMA_VERSION;
@@ -90,14 +94,14 @@ export interface HtmlManualSource {
   readonly limits: DocumentationManualScopeLimits;
   // Opaque, content-free hash of the normalized root (computed downstream, verified here).
   readonly sourceFingerprint: string;
-  // Redacted, already-safe display label carried through from the approval.
+  // Redacted, already-safe display label.
   readonly proposedPodName: string;
 }
 
 // Redacted, browser-safe projection of an `HtmlManualSource`. No raw path, origin path,
-// credential, query, or fragment — only the same redaction-safe summaries the approval carries.
+// credential, query, or fragment.
 export interface HtmlManualSourceSummary {
-  readonly sourceKind: DocumentationManualSourceKind;
+  readonly sourceKind: HtmlManualSourceKind;
   readonly originSummary: string;
   readonly pathPrefixSummary: string | null;
   readonly sourceFingerprint: string;
@@ -146,7 +150,7 @@ export function isSafeManualPathPrefix(prefix: string | null): boolean {
   return !prefix.split("/").includes("..");
 }
 
-// ─── Redaction-safe display text (mirrors documentation-manual-proposal backstop) ──
+// ─── Redaction-safe display text ──
 function isManualRedactionSafe(value: string): boolean {
   if (stripUnsafeFormatChars(value) !== value) return false;
   if (containsAbsolutePath(value)) return false;
@@ -256,43 +260,6 @@ export function validateHtmlManualSource(
   validateSourceIdentity(record, errors);
   if (errors.length > 0) return { ok: false, errors };
   return { ok: true, value: record as unknown as HtmlManualSource };
-}
-
-// ─── Approval → source bridge (fail-closed) ─────────────────────────────────────
-export interface DeriveHtmlManualSourceInput {
-  // The redacted consent handoff produced by Epic #1852. Its `sourceFingerprint`, `sourceKind`,
-  // and `limits` are the governance tokens.
-  readonly approval: DocumentationIndexingApproval;
-  // The raw (internal) crawl scope the server resolved from the approved target.
-  readonly scope: HtmlManualCrawlScope;
-  // The fingerprint the server recomputed from the raw scope. Must equal the approval's, proving
-  // the raw scope is the one the user actually approved.
-  readonly computedFingerprint: string;
-}
-
-// Represent an approved manual as an internal crawl source. Fails closed when the recomputed
-// fingerprint or the source kind do not match the approval — a crawler must never operate on a
-// scope the user did not approve. Because contracts cannot hash, the caller supplies the
-// recomputed fingerprint; this function only checks equality.
-export function deriveHtmlManualSource(
-  input: DeriveHtmlManualSourceInput,
-): LocalKnowledgeValidation<HtmlManualSource> {
-  const { approval, scope, computedFingerprint } = input;
-  const errors: string[] = [];
-  if (scope.kind !== approval.sourceKind) {
-    errors.push("scope.kind must match the approved sourceKind");
-  }
-  if (computedFingerprint.length === 0 || computedFingerprint !== approval.sourceFingerprint) {
-    errors.push("computedFingerprint must match the approved sourceFingerprint");
-  }
-  if (errors.length > 0) return { ok: false, errors };
-  return validateHtmlManualSource({
-    schemaVersion: HTML_MANUAL_SOURCE_SCHEMA_VERSION,
-    scope,
-    limits: approval.limits,
-    sourceFingerprint: approval.sourceFingerprint,
-    proposedPodName: approval.proposedPodName,
-  });
 }
 
 // ─── Redacted browser projection ────────────────────────────────────────────────

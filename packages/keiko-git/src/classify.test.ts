@@ -66,6 +66,22 @@ describe("classifyGitFailure", () => {
 });
 
 describe("classifyGitRemoteFailure", () => {
+  it("distinguishes unavailable credential discovery from remote auth and output failures", () => {
+    const refusal: GitProcessResult = result({
+      exitCode: 128,
+      truncated: true,
+      refusal: "credential-discovery-unavailable",
+      stderr: "Authentication failed synthetic-private-config",
+    });
+    expect(classifyGitRemoteFailure(refusal)).toBe("credential-discovery-unavailable");
+    expect(classifyGitRemoteFailure({ ...refusal, exitCode: 0 })).toBe(
+      "credential-discovery-unavailable",
+    );
+    expect(classifyGitRemoteFailure({ ...refusal, aborted: true })).toBe("cancelled");
+    expect(classifyGitRemoteFailure({ ...refusal, timedOut: true })).toBe("timeout");
+    expect(classifyGitRemoteFailure({ ...refusal, exitCode: 127 })).toBe("git-missing");
+  });
+
   it("keeps the wall-clock timeout and the byte cap as DISTINCT reasons", () => {
     // The runner sets `truncated` for BOTH stops; only `timedOut` means the wall clock fired. A
     // classifier that reads `truncated` alone reports every over-cap run as a timeout (#2F sync/clone).

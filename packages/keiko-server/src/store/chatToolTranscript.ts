@@ -207,7 +207,12 @@ const UPDATE = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["no-jira-create", "tool-call-not-executed"],
+      values: [
+        "no-jira-create",
+        "tool-call-not-executed",
+        "no-jira-approval",
+        "jira-report-not-generated",
+      ],
     },
     turnEndReason: {
       type: "string",

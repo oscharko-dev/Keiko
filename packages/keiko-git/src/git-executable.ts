@@ -1,5 +1,6 @@
 import { constants, accessSync, realpathSync, statSync } from "node:fs";
 import { delimiter, dirname, extname, isAbsolute, join, relative } from "node:path";
+import { environmentVariableValue } from "@oscharko-dev/keiko-contracts/runtime/process-environment";
 
 const GROUP_WRITE_BIT = 0o020;
 const WORLD_WRITE_BIT = 0o002;
@@ -57,7 +58,7 @@ function windowsExtensionCandidates(
   env: NodeJS.ProcessEnv,
   extensions: ReadonlySet<string>,
 ): readonly string[] {
-  return (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+  return (environmentVariableValue(env, "PATHEXT", "win32") ?? ".COM;.EXE;.BAT;.CMD")
     .split(";")
     .map((extension) => extension.trim().toLowerCase())
     .filter((extension) => extensions.has(extension))
@@ -204,7 +205,7 @@ function hasUntrustedWindowsScript(
 ): boolean {
   const scriptNames = windowsScriptNames(env, platform);
   if (scriptNames.length === 0) return false;
-  for (const entry of (env.PATH ?? "").split(delimiter)) {
+  for (const entry of (environmentVariableValue(env, "PATH", platform) ?? "").split(delimiter)) {
     if (!isAbsolute(entry)) continue;
     for (const name of scriptNames) {
       const resolved = trustedCandidate(join(entry, name), cwd, platform, groupIds);
@@ -228,7 +229,7 @@ function scanForTrustedImage(
   groupIds: ReadonlySet<number> | undefined,
 ): ImageScanResult {
   let sawUntrusted = false;
-  for (const entry of (env.PATH ?? "").split(delimiter)) {
+  for (const entry of (environmentVariableValue(env, "PATH", platform) ?? "").split(delimiter)) {
     if (!isAbsolute(entry)) continue;
     for (const name of names) {
       const resolved = trustedCandidate(join(entry, name), cwd, platform, groupIds);

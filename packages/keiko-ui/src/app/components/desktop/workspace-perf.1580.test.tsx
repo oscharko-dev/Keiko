@@ -60,7 +60,6 @@ function makeApi(view: View): WorkspaceApi {
     linkedConnectorCapsuleIds: vi.fn(() => []),
     linkedConnectorCapsuleSetIds: vi.fn(() => []),
     linkedFigmaSnapshotRunIds: vi.fn(() => []),
-    currentFilesContext: vi.fn(() => null),
     zoomTo: vi.fn(),
     fitView: vi.fn(),
     resetView: vi.fn(),

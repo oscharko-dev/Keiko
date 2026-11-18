@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-contracts",
-  "version": "1.5.0",
+  "version": "1.5.2",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: shared Keiko contracts. Not published independently.",
@@ -223,6 +223,10 @@
       "types": "./dist/knowledge-turn-coverage.d.ts",
       "import": "./dist/knowledge-turn-coverage.js"
     },
+    "./runtime/process-environment": {
+      "types": "./dist/process-environment.d.ts",
+      "import": "./dist/process-environment.js"
+    },
     "./runtime/comparators": {
       "types": "./dist/comparators.d.ts",
       "import": "./dist/comparators.js"
@@ -286,14 +290,6 @@
     "./runtime/discussion-intelligence": {
       "types": "./dist/discussion-intelligence.d.ts",
       "import": "./dist/discussion-intelligence.js"
-    },
-    "./runtime/documentation-browser": {
-      "types": "./dist/documentation-browser.d.ts",
-      "import": "./dist/documentation-browser.js"
-    },
-    "./runtime/documentation-manual-proposal": {
-      "types": "./dist/documentation-manual-proposal.d.ts",
-      "import": "./dist/documentation-manual-proposal.js"
     },
     "./runtime/editor-agent": {
       "types": "./dist/editor-agent.d.ts",

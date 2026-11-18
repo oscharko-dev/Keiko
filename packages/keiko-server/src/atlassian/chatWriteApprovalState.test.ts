@@ -24,8 +24,54 @@ import {
   ATLASSIAN_ACTION_APPROVAL_TTL_MS,
 } from "./actionApprovals.js";
 import { projectChatWriteApproval, type ChatWriteApprovalEntry } from "./chatWriteApprovalState.js";
+import { hasJiraApprovalClaimContext, hasPendingJiraApproval } from "../chat-tool-approvals.js";
+import type { ChatMessage, ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 const NOW = 1700000000000;
+
+describe("ordinary Jira approval follow-up context", () => {
+  const previous: ChatMessage = {
+    id: "previous-user",
+    chatId: "jira-chat",
+    role: "user",
+    content: "Lege in Jira drei Aufgaben für das Projekt an.",
+    timestamp: NOW,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  };
+
+  it.each([
+    "Ich sehe nur den gespeicherten Entwurf. Bitte erstelle jetzt die echte Freigabekarte.",
+    "Ich sehe nur den gespeicherten Entwurf, keine Freigabekarte. Wo ist sie?",
+    "I only see the saved draft. Please give me the real approval card.",
+    "Zeig mir die Freigabekarte.",
+    "Wo ist die Freigabekarte?",
+    "Bitte fordere die Freigabe an.",
+    "Please request approval.",
+    "Wo sind die Freigabekarten?",
+    "Where are the approvals?",
+    "Zeig mir die Freigabekarte für den Entwurf.",
+    "Show me the approval card for the draft.",
+  ])("recognizes the card request after Jira work: %s", (request) => {
+    expect(hasJiraApprovalClaimContext(request, previous)).toBe(true);
+    expect(hasJiraApprovalClaimContext(request, undefined)).toBe(false);
+    expect(
+      hasJiraApprovalClaimContext(request, { ...previous, content: "Summarize the notes." }),
+    ).toBe(false);
+  });
+
+  it.each([
+    "Explain how the GitHub approval card looks once it is ready.",
+    "Zeig mir die Freigabekarte für den GitHub-Entwurf.",
+    "Summarize the meeting notes.",
+  ])("keeps an unrelated topic outside the Jira follow-up: %s", (request) => {
+    expect(hasJiraApprovalClaimContext(request, previous)).toBe(false);
+  });
+});
+
 type JiraWriteFixture = ChatWriteApprovalEntry & {
   readonly subject: JiraChatToolAuthoritySubject;
   readonly approval: JiraChatToolWriteApprovalView;
@@ -90,6 +136,81 @@ function claim(
     correlation,
   );
 }
+
+describe("earlier Jira approval card claim evidence", () => {
+  function receipt(approval: JiraChatToolWriteApprovalView): ChatToolExchange {
+    return { call: { id: approval.invocationId, name: "jira_comment", arguments: {} }, approval };
+  }
+  function boundChat(entry: JiraWriteFixture): {
+    id: string;
+    jiraPodBinding: {
+      podId: string;
+      bindingGeneration: number;
+      authenticationGeneration: number;
+      connectedAtMs: number;
+    };
+  } {
+    return {
+      id: entry.subject.chatId,
+      jiraPodBinding: {
+        podId: entry.subject.podId,
+        bindingGeneration: entry.subject.bindingGeneration,
+        authenticationGeneration: entry.subject.authenticationGeneration,
+        connectedAtMs: NOW,
+      },
+    };
+  }
+
+  it("accepts a visible earlier pending card only while its registry entry is live", () => {
+    let now = NOW;
+    const registry = new AtlassianActionApprovalRegistry(() => now);
+    const entry = pending();
+    const chat = boundChat(entry);
+    const exchanges = [receipt(entry.approval)];
+    expect(hasPendingJiraApproval(chat, exchanges, registry, "claim-proof")).toBe(false);
+    expect(registry.createChatWriteApproval(entry).ok).toBe(true);
+    expect(hasPendingJiraApproval(chat, exchanges, registry, "claim-proof")).toBe(true);
+    now += ATLASSIAN_ACTION_APPROVAL_TTL_MS;
+    expect(hasPendingJiraApproval(chat, exchanges, registry, "claim-proof")).toBe(false);
+  });
+
+  it("refuses another Chat, binding, invocation, action or already decided card", () => {
+    const registry = new AtlassianActionApprovalRegistry(() => NOW);
+    const entry = pending();
+    expect(registry.createChatWriteApproval(entry).ok).toBe(true);
+    const chat = boundChat(entry);
+    const exchanges = [receipt(entry.approval)];
+    expect(
+      hasPendingJiraApproval({ ...chat, id: "another-chat" }, exchanges, registry, "claim-proof"),
+    ).toBe(false);
+    expect(
+      hasPendingJiraApproval(
+        { ...chat, jiraPodBinding: { ...chat.jiraPodBinding, authenticationGeneration: 2 } },
+        exchanges,
+        registry,
+        "claim-proof",
+      ),
+    ).toBe(false);
+    expect(
+      hasPendingJiraApproval(
+        chat,
+        [receipt({ ...entry.approval, invocationId: "other-call" })],
+        registry,
+        "claim-proof",
+      ),
+    ).toBe(false);
+    expect(
+      hasPendingJiraApproval(
+        chat,
+        [receipt({ ...entry.approval, actionDigest: "a".repeat(64) })],
+        registry,
+        "claim-proof",
+      ),
+    ).toBe(false);
+    accept(registry, entry);
+    expect(hasPendingJiraApproval(chat, exchanges, registry, "claim-proof")).toBe(false);
+  });
+});
 
 describe("retained concrete Chat write approvals", () => {
   it("cannot claim before approval, claims exactly once, and validates repeat effect checks", () => {

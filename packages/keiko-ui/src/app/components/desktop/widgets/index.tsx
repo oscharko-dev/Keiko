@@ -107,10 +107,6 @@ const BrowserWidget = dynamic(
   () => import("./cards/BrowserWidget").then((mod) => mod.BrowserWidget),
   { ssr: false, loading: windowChunkFallback },
 );
-const DocumentationBrowserWidget = dynamic(
-  () => import("./cards/DocumentationBrowserWidget").then((mod) => mod.DocumentationBrowserWidget),
-  { ssr: false, loading: windowChunkFallback },
-);
 const TerminalWidget = dynamic(
   () => import("./cards/TerminalWidget").then((mod) => mod.TerminalWidget),
   { ssr: false, loading: windowChunkFallback },
@@ -427,11 +423,6 @@ function stringArrayJson(cfg: Record<string, unknown>, key: string): readonly st
   }
 }
 
-function agentAccess(cfg: Record<string, unknown>): "ask" | "full" | undefined {
-  const v = cfg["access"];
-  return v === "ask" || v === "full" ? v : undefined;
-}
-
 function toAgentCfg(cfg: Record<string, unknown>): AgentRunCfg {
   const out: AgentRunCfg = {};
   const workflow = str(cfg, "workflow");
@@ -440,16 +431,8 @@ function toAgentCfg(cfg: Record<string, unknown>): AgentRunCfg {
   if (model !== undefined) out.model = model;
   const runId = str(cfg, "runId");
   if (runId !== undefined) out.runId = runId;
-  const fingerprint = str(cfg, "fingerprint");
-  if (fingerprint !== undefined) out.fingerprint = fingerprint;
   const workspaceRoot = str(cfg, "workspaceRoot");
   if (workspaceRoot !== undefined) out.workspaceRoot = workspaceRoot;
-  const inputJson = str(cfg, "inputJson");
-  if (inputJson !== undefined) out.inputJson = inputJson;
-  const keikoMode = bool(cfg, "keikoMode");
-  if (keikoMode !== undefined) out.keikoMode = keikoMode;
-  const access = agentAccess(cfg);
-  if (access !== undefined) out.access = access;
   return out;
 }
 
@@ -616,19 +599,6 @@ registerWindowRender("editor", (cfg, ctx) => {
 registerWindowRender("browser", (cfg) => {
   const url = str(cfg, "url");
   return url !== undefined && url !== "" ? <BrowserWidget url={url} /> : <BrowserWidget />;
-});
-registerWindowRender("docbrowser", (cfg, ctx) => {
-  const target = str(cfg, "target");
-  // Epic #1852 — an already-indexed manual points the user at the Local Knowledge (Knowledge Pods)
-  // surface so they can open the existing pod instead of creating a duplicate.
-  const onOpenKnowledgePods = (): void => {
-    ctx.openWindow("localKnowledge");
-  };
-  return target !== undefined && target !== "" ? (
-    <DocumentationBrowserWidget target={target} onOpenKnowledgePods={onOpenKnowledgePods} />
-  ) : (
-    <DocumentationBrowserWidget onOpenKnowledgePods={onOpenKnowledgePods} />
-  );
 });
 registerWindowRender("terminal", (cfg, ctx) => {
   const configuredRoot = str(cfg, "projectPath");

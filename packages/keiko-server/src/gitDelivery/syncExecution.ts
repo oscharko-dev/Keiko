@@ -250,6 +250,7 @@ const SYNC_OUTCOME_FOR_REMOTE_FAILURE: Readonly<
   none: undefined,
   "git-error": undefined,
   "output-truncated": undefined,
+  "credential-discovery-unavailable": "git-error",
   // A caller-aborted run is neither a byte-cap event nor a timeout — flow through to the
   // unresolved-remote fallback so it lands as "git-error" on the wire outcome without ever
   // being misreported as an output-cap or wall-clock stop. The typed reason survives in the
@@ -307,7 +308,7 @@ function classifyOutcome(operation: GitSyncOperation, result: GitProcessResult):
     const pullReason = classifyPullStderr(result.stderr);
     if (pullReason !== undefined) return pullReason;
   }
-  if (result.exitCode === 0) {
+  if (remote === "none") {
     if (operation === "pull" && isAlreadyUpToDate(result.stdout)) return "up-to-date";
     return "succeeded";
   }

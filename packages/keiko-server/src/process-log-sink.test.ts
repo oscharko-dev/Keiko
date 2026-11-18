@@ -6,6 +6,8 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 // logger rather than from a value frozen at import.
 
 import { afterEach, describe, expect, it } from "vitest";
+import { CommandDeniedError } from "@oscharko-dev/keiko-tools";
+import { GitWorktreeSpawnError } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import {
   activityLogEvent,
   activityLogEventRegistration,
@@ -207,4 +209,13 @@ it("supplies the canonical body-free failure reducers through process sinks", ()
     });
     expect(JSON.stringify(evidence)).not.toMatch(/private-/u);
   }
+});
+
+it("retains a closed worktree command failure cause without environment or message contents (#4408)", () => {
+  const cause = new CommandDeniedError("private-path-and-token-canary", "git");
+  const error = new GitWorktreeSpawnError("worktree command could not start", { cause });
+  const evidence = processServerLogSink().errorEvidence(error);
+  expect(evidence.causeChain).toEqual([expect.stringMatching(/^CommandDeniedError/u)]);
+  expect(JSON.stringify(evidence)).not.toContain("private-path-and-token-canary");
+  expect(JSON.stringify(evidence)).not.toContain("worktree command could not start");
 });

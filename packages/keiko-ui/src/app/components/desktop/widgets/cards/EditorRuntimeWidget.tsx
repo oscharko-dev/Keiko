@@ -275,6 +275,7 @@ import { useEditorSettings } from "./useEditorSettings";
 import { useEditorVerificationRun } from "./useEditorVerificationRun";
 import { useWorkspaceSnippets } from "./useWorkspaceSnippets";
 import { useWorkspaceWatch } from "./useWorkspaceWatch";
+import { beginWorkspaceWatchRecovery } from "./workspaceWatchRecovery";
 import { notifyWorkspaceFileMutated } from "./workspace-file-events";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -2059,6 +2060,7 @@ function EditorRuntimeWidget({
   // Bounded LRU (Issue 2.8): evict the least-recently-used snapshot on overflow, but never the active
   // file, a mid-save, or a dirty buffer — those are the background-tab save-correctness invariants.
   const activeSessionKeyRef = useRef<string | null>(null);
+  const loadInvocationRef = useRef(0);
   const sessionCacheRef = useRef(
     new LruSessionCache<EditorFileSessionSnapshot>(
       SESSION_CACHE_CAPACITY,
@@ -2301,6 +2303,8 @@ function EditorRuntimeWidget({
     [reconcileWorkspaceWatchEvent],
   );
   const workspaceWatch = useWorkspaceWatch(root, handleWorkspaceWatchEvent);
+  const workspaceWatchRef = useRef(workspaceWatch);
+  workspaceWatchRef.current = workspaceWatch;
   const gitReconciliationSequenceRef = useRef(0);
   useEffect(() => {
     if (!hasTarget || root === undefined || file === undefined || !fileModelMatchesTarget) return;
@@ -2552,11 +2556,18 @@ function EditorRuntimeWidget({
       signal: { cancelled: boolean },
       options: { bypassCache?: boolean; preserveDirty?: boolean } = {},
     ): Promise<void> => {
+      const invocation = ++loadInvocationRef.current;
       if (!hasTarget) {
         clearLoadedTarget();
         return;
       }
       const sessionKey = documentSessionKey(root, file);
+      // Refreshes and Git reconciliation can overlap for the same file. Only the latest load
+      // owns its content, recovery snapshot, comparison baseline and failure state (#4403).
+      const isCurrent = (): boolean =>
+        !signal.cancelled &&
+        loadInvocationRef.current === invocation &&
+        workspaceWatchGenerationRef.current.sessionKey === sessionKey;
       const cached =
         options.bypassCache === true ? undefined : sessionCacheRef.current.get(sessionKey);
       if (cached !== undefined) {
@@ -2567,20 +2578,27 @@ function EditorRuntimeWidget({
         beginLoad();
       }
       const requestCorrelationId = newClientCorrelationId();
+      const recoverSnapshot = beginWorkspaceWatchRecovery(workspaceWatchRef, requestCorrelationId);
+      let recoveryOutcome: "applied" | "failed" | "cancelled" = "cancelled";
       try {
         const response = await fetchFilesContent(root, file, requestCorrelationId);
-        if (signal.cancelled) return;
+        if (!isCurrent()) return;
         const snapshot = await readEditorHotExitSnapshot(root, file);
-        if (signal.cancelled) return;
+        if (!isCurrent()) return;
         if (options.preserveDirty === true && dirtyRef.current) {
           reconcilePreservedDirtyBuffer(response, file);
+          recoveryOutcome = "applied";
           return;
         }
         finishLoad(root, file, response, snapshot);
+        recoveryOutcome = "applied";
       } catch (err: unknown) {
-        if (signal.cancelled) return;
+        if (!isCurrent()) return;
+        recoveryOutcome = "failed";
         failLoad(err, requestCorrelationId, sessionKey);
         throw err;
+      } finally {
+        recoverSnapshot(recoveryOutcome);
       }
     },
     [
@@ -2601,6 +2619,7 @@ function EditorRuntimeWidget({
     void load(signal).catch(() => undefined);
     return () => {
       signal.cancelled = true;
+      loadInvocationRef.current += 1;
     };
   }, [load]);
 
@@ -5052,7 +5071,7 @@ function EditorRuntimeWidget({
             type="button"
             className="ed-reload"
             onClick={() => {
-              workspaceWatch.refresh();
+              if (workspaceWatch.health !== "healthy") workspaceWatch.refresh();
               requestReload();
             }}
           >

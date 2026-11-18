@@ -652,33 +652,40 @@ describe("CodingRuntimeEventHub", () => {
 });
 
 describe("CodingRuntimeEventHub safe verifier facts", () => {
-  it("retains measured verifier checks in bounded replay and rejects content-bearing metadata", () => {
-    const hub = new CodingRuntimeEventHub();
-    const verificationSummary = {
-      verifierId: "targeted-test" as const,
-      status: "failed" as const,
-      passedCount: 0,
-      failedCount: 1,
-      skippedCount: 0,
-      durationMs: 1240.5,
-    };
-    const input: CodingRuntimeEventHubInput = {
-      ...status("run-verifier", 1),
-      kind: "runtime-event",
-      eventKind: "verification-summarized",
-      verificationSummary,
-    };
-    expect(hub.publish(input)).toMatchObject({ ok: true, event: { verificationSummary } });
-    expect(hub.replay("run-verifier")).toMatchObject({
-      ok: true,
-      events: [{ verificationSummary }],
-    });
-    const contentBearing = {
-      ...input,
-      verificationSummary: { ...verificationSummary, stdout: "private verifier output" },
-    };
-    expect(hub.publish(contentBearing)).toMatchObject({ ok: false });
-  });
+  it.each([undefined, 1])(
+    "retains verifier checks including denied subset %s in bounded replay",
+    (deniedCount) => {
+      const hub = new CodingRuntimeEventHub();
+      const verificationSummary = {
+        verifierId: "targeted-test" as const,
+        status: "failed" as const,
+        passedCount: 0,
+        failedCount: 1,
+        skippedCount: 0,
+        durationMs: 1240.5,
+        ...(deniedCount === undefined ? {} : { deniedCount }),
+      };
+      const input: CodingRuntimeEventHubInput = {
+        ...status("run-verifier", 1),
+        kind: "runtime-event",
+        eventKind: "verification-summarized",
+        verificationSummary,
+      };
+      expect(hub.publish(input)).toMatchObject({ ok: true, event: { verificationSummary } });
+      expect(hub.replay("run-verifier")).toMatchObject({
+        ok: true,
+        events: [{ verificationSummary }],
+      });
+      const contentBearing = {
+        ...input,
+        verificationSummary: { ...verificationSummary, stdout: "private verifier output" },
+      };
+      expect(hub.publish(contentBearing)).toMatchObject({ ok: false });
+      expect(
+        hub.publish({ ...input, verificationSummary: { ...verificationSummary, deniedCount: 2 } }),
+      ).toMatchObject({ ok: false });
+    },
+  );
 });
 
 describe("CodingRuntimeEventHub verifier metadata ownership", () => {
@@ -689,6 +696,7 @@ describe("CodingRuntimeEventHub verifier metadata ownership", () => {
       status: "failed" as const,
       passedCount: 0,
       failedCount: 1,
+      deniedCount: 1,
       skippedCount: 0,
       durationMs: 1240.5,
     };
@@ -704,6 +712,7 @@ describe("CodingRuntimeEventHub verifier metadata ownership", () => {
     const encoded = JSON.stringify(published.event);
     const encodedBytes = Buffer.byteLength(encoded, "utf8");
     verificationSummary.failedCount = 99;
+    verificationSummary.deniedCount = 99;
     verificationSummary.durationMs = Number.NaN;
     Object.assign(verificationSummary, { stdout: "UNVALIDATED_PRIVATE_CANARY" });
     expect(published.event.verificationSummary).toEqual({
@@ -711,6 +720,7 @@ describe("CodingRuntimeEventHub verifier metadata ownership", () => {
       status: "failed",
       passedCount: 0,
       failedCount: 1,
+      deniedCount: 1,
       skippedCount: 0,
       durationMs: 1240.5,
     });

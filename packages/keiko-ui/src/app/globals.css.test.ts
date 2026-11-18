@@ -517,18 +517,6 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
   });
 });
 
-describe("Issue #1429 — Agents launcher action row and picker scrollbars", () => {
-  it("keeps the Agents dialog actions sticky and unified inside the dialog flow", () => {
-    const block = cssBlock(".dlg-agent-actions {");
-    expect(block).toContain("justify-content: flex-end");
-    expect(block).toContain("position: sticky");
-    expect(block).toContain("bottom: 0");
-    expect(block).toContain("border-top: 1px solid var(--border-subtle)");
-    expect(block).toContain("background: var(--surface-overlay)");
-    expect(cssBlock(".dlg-agent-actions .dlg-note {")).toContain("margin-right: auto");
-  });
-});
-
 // ─── Fix 1: WCAG 2.4.7 — focus-visible ───────────────────────────────────────
 
 describe("Fix 1 — focus-visible (WCAG 2.4.7)", () => {
@@ -1364,7 +1352,10 @@ describe("uiux-fix A11Y — focus rings for keyboard focus targets (WCAG 2.4.7)"
     expect(stageBlock).toContain("gap: 0");
     expect(stageBlock).toContain("padding: var(--space-4)");
 
-    const workspaceBlock = cssBlock(".workspace {");
+    const controlsStyle = readStylesheet(
+      resolve(here, "components/desktop/WorkspaceControls.module.css"),
+    );
+    const workspaceBlock = cssBlockFrom(controlsStyle, ".cmpWorkspaceLayout {");
     expect(workspaceBlock).toContain("border-radius: var(--radius-surface)");
     // AC2: the canvas surface routes through the warm-neutral --background-primary token.
     expect(workspaceBlock).toContain("var(--background-primary)");
@@ -3058,7 +3049,11 @@ describe("Issue #1293 — global shell + workspace chrome token migration", () =
     expect(cssBlock(".rail {")).toContain("background: var(--nav-surface)");
     expect(cssBlock(".rail {")).not.toContain("background: var(--surface)");
 
-    const ws = cssBlock(".workspace {");
+    // The workspace frame moved into the component-scoped workspace layout (#4448).
+    const ws = cssBlockFrom(
+      readStylesheet(resolve(here, "components/desktop/WorkspaceControls.module.css")),
+      ".cmpWorkspaceLayout {",
+    );
     expect(ws).toContain("border-radius: var(--radius-surface)");
     expect(ws).toContain("var(--background-primary)");
     expect(ws).toContain("var(--border-subtle)");
@@ -3413,7 +3408,6 @@ describe("Issue #1294 — reusable controls + component primitives token migrati
           "fpv-banner",
           "qi-degraded-notice",
           "scope-connect-error",
-          "dlg-agent-warning",
           "wf-dialog-error",
           "mc-dialog-error",
           "dlg-error",
@@ -3902,12 +3896,7 @@ describe("Issue #1296 — AI/agent component set (Design System 0.4.0)", () => {
   });
 
   it("routes the agent-run tool/result/input/summary cards through --ai-tool-surface", () => {
-    for (const sel of [
-      "\n.arun-meter {",
-      "\n.arun-summary {",
-      "\n.arun-result-card {",
-      "\n.arun-input {",
-    ]) {
+    for (const sel of ["\n.arun-meter {", "\n.arun-summary {", "\n.arun-result-card {"]) {
       const block = cssBlock(sel);
       expect(block, `${sel} must consume --ai-tool-surface`).toContain("var(--ai-tool-surface)");
       expect(block, `${sel} must not keep the raw --inset primitive`).not.toContain("var(--inset)");

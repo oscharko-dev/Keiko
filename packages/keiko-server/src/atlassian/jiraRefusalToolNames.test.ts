@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
@@ -93,6 +93,14 @@ const NOT_TOOL_TOKENS: ReadonlySet<string> = new Set([
   "jira.user.timezone",
   "jira_state_json",
 ]);
+// Schema 79 uses these identifiers in store SQL. Keep the exceptions local to their owners so
+// a model-facing description elsewhere still fails if it names either identifier as a tool.
+const JIRA_REPORT_SQL_REFERENCES: ReadonlySet<string> = new Set([
+  "keiko-server/src/store/jiraReportExports.ts: jira_report_exports",
+  "keiko-server/src/store/legacySchemaTestFixture.ts: jira_report_exports",
+  "keiko-server/src/store/schema.ts: jira_report_exports",
+  "keiko-server/src/store/schema.ts: jira_report_exports_owner",
+]);
 let registeredNamesMemo: ReadonlySet<string> | undefined;
 function registeredNames(): ReadonlySet<string> {
   registeredNamesMemo ??= computeRegisteredNames();
@@ -131,7 +139,10 @@ function scan(): {
     parsed: parsed.length,
     spelledLiterally: sources.filter(({ source }) => /jira[._]/iu.test(source)).length,
     tokens: parsed.flatMap(({ path, source }) =>
-      candidatesInLiterals(source).map((token) => ({ path: path.slice(PACKAGES.length), token })),
+      candidatesInLiterals(source).map((token) => ({
+        path: relative(PACKAGES, path).split(sep).join("/"),
+        token,
+      })),
     ),
   };
 }
@@ -208,7 +219,10 @@ describe("every Jira tool named in a text is a registered operation (#4357 AC3)"
     expect(parsed).toBeLessThan(scanned);
     expect(tokens.length).toBeGreaterThan(jiraOperationContracts().length);
     expect(
-      tokens.filter(({ token }) => !known.has(token)).map(({ path, token }) => `${path}: ${token}`),
+      tokens
+        .filter(({ token }) => !known.has(token))
+        .map(({ path, token }) => `${path}: ${token}`)
+        .filter((reference) => !JIRA_REPORT_SQL_REFERENCES.has(reference)),
     ).toEqual([]);
   });
 });

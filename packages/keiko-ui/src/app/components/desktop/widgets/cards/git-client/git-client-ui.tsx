@@ -1,6 +1,7 @@
 "use client";
 
 import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import type { GitRepositoryStatusResponse } from "@/lib/types";
 
 // Shared presentational primitives for the Git client staging + commit surface (Issue #1575,
 // Epic #1571). Carried forward in behaviour from the removed GovernedGitFlowCard (contract §2
@@ -21,6 +22,13 @@ const InfoIcon = Icons.info;
 const CheckIcon = Icons.check;
 
 export type PillTone = "neutral" | "accent" | "success" | "warning" | "danger" | "info";
+
+export function hasRepositoryConflicts(status: GitRepositoryStatusResponse | null): boolean {
+  return (
+    status !== null &&
+    (status.conflictedCount > 0 || status.changes.some((change) => change.conflicted))
+  );
+}
 
 function toneColor(tone: PillTone): string {
   switch (tone) {
@@ -166,11 +174,18 @@ export function MutationOutcome({
   }
   if (outcome === null) return null;
   const tone = outcomeTone(outcome.status);
+  // #4444: the existing closed failure code identifies the recovery; never infer it from stderr.
+  const signingFailure =
+    outcome.actionKind === "commit" &&
+    outcome.executionErrorCode === "signature-failed" &&
+    (outcome.status === "recovery-required" || outcome.status === "failed");
   const codes: readonly string[] = [
     ...(outcome.blockReason !== undefined ? [`reason: ${outcome.blockReason}`] : []),
     ...(outcome.preflightFindingCodes ?? []).map((c) => `preflight: ${c}`),
     ...(outcome.requiredApprovers ?? []).map((a) => `approver: ${a}`),
-    ...(outcome.executionErrorCode !== undefined ? [`error: ${outcome.executionErrorCode}`] : []),
+    ...(outcome.executionErrorCode !== undefined && !signingFailure
+      ? [`error: ${outcome.executionErrorCode}`]
+      : []),
     ...(outcome.messageViolations ?? []).map((v) => violationLabel(v)),
   ];
   const ringColor = outcomeRingColor(tone);
@@ -194,6 +209,7 @@ export function MutationOutcome({
         style={{ margin: 0, font: "600 13px var(--font-ui)", color: "var(--fg)" }}
       >
         {outcome.actionKind}: {STATUS_LABEL[outcome.status]}
+        {signingFailure ? ` ${tUi("gitClientWindow.ui.commitSigningRecovery")}` : null}
       </output>
       {codes.length > 0 ? (
         <ul style={{ margin: 0, paddingLeft: 18, font: "400 11px var(--font-ui)" }}>

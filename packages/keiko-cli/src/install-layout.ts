@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { environmentVariableValue } from "@oscharko-dev/keiko-contracts/runtime/process-environment";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -252,7 +253,10 @@ export function resolveKeikoBinary(
     }
   }
 
-  const pathHit = resolveKeikoBinaryFromPath(process.platform, env.PATH);
+  const pathHit = resolveKeikoBinaryFromPath(
+    process.platform,
+    environmentVariableValue(env, "PATH"),
+  );
   if (pathHit !== undefined) {
     return { source: "path", binPath: pathHit };
   }

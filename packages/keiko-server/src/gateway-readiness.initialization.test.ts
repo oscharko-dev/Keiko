@@ -7,12 +7,12 @@ import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contract
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { buildUiHandlerDeps, currentConversationReady, type UiHandlerDeps } from "./deps.js";
 import {
-  CHAT_MODEL_WALK_BUDGET_MS,
-  awaitAnyInitializedConversationReadyChatModel,
+  CONVERSATION_ADMISSION_WAIT_MS,
   awaitInitializedConversationReadiness,
   checkSelectedConversationModel,
   initializeConfiguredConversationReadiness,
   NOT_READY_REPROBE_COOLDOWN_MS,
+  withReadinessParentCorrelation,
 } from "./gateway-readiness.js";
 import { handleModels } from "./read-handlers.js";
 import type { RouteContext } from "./routes.js";
@@ -22,53 +22,9 @@ import { resetServerLogger } from "../../../tests/support/activity-log-test-supp
 const compositions: UiHandlerDeps[] = [];
 const directories: string[] = [];
 
-it.each([
-  ["selected", awaitInitializedConversationReadiness],
-  ["default", awaitAnyInitializedConversationReadyChatModel],
-] as const)(
-  "keeps %s Chat admission pending through a three-minute shared probe",
-  async (_name, join) => {
-    const sink = createBufferedServerLogSink();
-    setServerLogger(createServerLogger({ sink, level: "info" }));
-    const deps = composition();
-    vi.useFakeTimers();
-    let release: ((response: Response) => void) | undefined;
-    const fetch = vi.fn(
-      () =>
-        new Promise<Response>((resolve) => {
-          release = resolve;
-        }),
-    );
-    vi.stubGlobal("fetch", fetch);
-    configure(deps, "corr-slow-initialization");
-    await vi.waitFor(() => {
-      expect(fetch).toHaveBeenCalledOnce();
-    });
-    let settled = false;
-    const admission = join(deps, "chat-model", "corr-slow-admission").then(() => {
-      settled = true;
-    });
-    await vi.advanceTimersByTimeAsync(180_000);
-    const settledBeforeAnswer = settled;
-    release?.(chatProbeAnswer());
-    await admission;
-    await vi.advanceTimersByTimeAsync(0);
-    expect(settledBeforeAnswer).toBe(false);
-    expect(fetch).toHaveBeenCalledOnce();
-    expect(currentConversationReady(deps, "chat-model")).toBe(true);
-    expect(sink.events).toContainEqual(
-      expect.objectContaining({
-        op: "gateway.readiness.automatic.joined",
-        correlationId: "corr-slow-admission",
-      }),
-    );
-  },
-);
-
-it.each([
-  ["selected", awaitInitializedConversationReadiness],
-  ["default", awaitAnyInitializedConversationReadyChatModel],
-] as const)("keeps a shared probe alive after one %s waiter expires", async (_name, join) => {
+it("keeps Chat execution admission pending through a three-minute shared probe", async () => {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
   const deps = composition();
   vi.useFakeTimers();
   let release: ((response: Response) => void) | undefined;
@@ -79,20 +35,63 @@ it.each([
       }),
   );
   vi.stubGlobal("fetch", fetch);
-  configure(deps, "corr-long-probe", CHAT_MODEL_WALK_BUDGET_MS * 2);
+  configure(deps, "corr-slow-initialization");
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  let settled = false;
+  const admission = awaitInitializedConversationReadiness(
+    deps,
+    "chat-model",
+    "corr-slow-admission",
+  ).then(() => {
+    settled = true;
+  });
+  await vi.advanceTimersByTimeAsync(180_000);
+  const settledBeforeAnswer = settled;
+  release?.(chatProbeAnswer());
+  await admission;
+  await vi.advanceTimersByTimeAsync(0);
+  expect(settledBeforeAnswer).toBe(false);
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(currentConversationReady(deps, "chat-model")).toBe(true);
+  expect(sink.events).toContainEqual(
+    expect.objectContaining({
+      op: "gateway.readiness.automatic.joined",
+      correlationId: "corr-slow-admission",
+    }),
+  );
+});
+
+it("keeps a shared probe alive after one execution waiter expires", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  let release: ((response: Response) => void) | undefined;
+  const fetch = vi.fn(
+    () =>
+      new Promise<Response>((resolve) => {
+        release = resolve;
+      }),
+  );
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-long-probe", CONVERSATION_ADMISSION_WAIT_MS * 2);
   await vi.waitFor(() => {
     expect(fetch).toHaveBeenCalledOnce();
   });
   let firstSettled = false;
-  const first = join(deps, "chat-model", "corr-first-waiter").then(() => {
-    firstSettled = true;
-  });
+  const first = awaitInitializedConversationReadiness(deps, "chat-model", "corr-first-waiter").then(
+    () => {
+      firstSettled = true;
+    },
+  );
   await vi.advanceTimersByTimeAsync(60_000);
   let laterSettled = false;
-  const later = join(deps, "chat-model", "corr-later-waiter").then(() => {
-    laterSettled = true;
-  });
-  await vi.advanceTimersByTimeAsync(CHAT_MODEL_WALK_BUDGET_MS - 60_001);
+  const later = awaitInitializedConversationReadiness(deps, "chat-model", "corr-later-waiter").then(
+    () => {
+      laterSettled = true;
+    },
+  );
+  await vi.advanceTimersByTimeAsync(CONVERSATION_ADMISSION_WAIT_MS - 60_001);
   expect(firstSettled).toBe(false);
   await vi.advanceTimersByTimeAsync(1);
   await first;
@@ -143,6 +142,12 @@ function configure(deps: UiHandlerDeps, correlationId: string, timeoutMs = 1000)
       ],
     }),
     true,
+    correlationId,
+  );
+  // Startup checks no model (ADR-0171 D2, amended 2026-11-16); these tests exercise the shared
+  // readiness queue the way an explicit activation of the configured chat model does.
+  initializeConfiguredConversationReadiness(
+    withReadinessParentCorrelation(deps, correlationId),
     correlationId,
   );
 }
@@ -471,6 +476,7 @@ it("keeps the existing two-slot ceiling while background and selected requests s
     })),
   });
   deps.gatewayConfig?.set(config, true, "corr-two-slot-source");
+  initializeConfiguredConversationReadiness(deps, "corr-two-slot-source");
   // Startup checks only the model in use (#4351); the other three listed models are untouched.
   await vi.waitFor(() => {
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -557,6 +563,8 @@ it("retains the rotated connection result when an older chat failure finally arr
     },
     true,
   );
+  // A rotated connection loses its activation; the person activates the model again.
+  initializeConfiguredConversationReadiness(deps, "corr-rotated-activation");
   await vi.waitFor(() => {
     expect(fetch).toHaveBeenCalledTimes(2);
   });
@@ -628,6 +636,8 @@ it("keeps an unchanged model's startup check when discovery replaces the generat
     "corr-discovery",
   );
   expect(replaced).toBe(true);
+  // The batch check is requested again for the new generation; it joins the running one.
+  initializeConfiguredConversationReadiness(deps, "corr-discovery");
   const generation = holder.generation();
   try {
     // The replaced generation joins the running check instead of seeing none: a first turn waits.
@@ -713,3 +723,52 @@ function withDiscoveredModel(current: GatewayConfig): GatewayConfig {
     capabilities: [...(current.capabilities ?? []), ...(added.capabilities ?? [])],
   };
 }
+
+// 2026-11-16: models are activated manually in Settings > Models. Configuring a gateway (startup,
+// a replacement or a credential rotation) starts no chat readiness probe, page loads and Chat
+// requests start none either, and the model stays inactive until the person activates it.
+it("starts no chat readiness probe when a gateway is configured, reloaded or rotated", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  const fetch = startingGateway({ status: 200 });
+  vi.stubGlobal("fetch", fetch);
+  const holder = deps.gatewayConfig;
+  if (holder === undefined) throw new TypeError("Expected gateway owner.");
+  holder.set(
+    parseGatewayConfig({
+      providers: [
+        {
+          modelId: "chat-model",
+          baseUrl: "https://provider.example.invalid/v1",
+          apiKey: "throwaway-key",
+          timeoutMs: 1000,
+          maxRetries: 0,
+          retryBaseDelayMs: 1,
+        },
+      ],
+    }),
+    true,
+    "corr-manual-activation",
+  );
+  await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS);
+  const config = holder.current();
+  if (config === undefined) throw new TypeError("Expected configured gateway.");
+  holder.set(
+    {
+      ...config,
+      providers: config.providers.map((provider) => ({ ...provider, apiKey: "rotated-key" })),
+    },
+    true,
+    "corr-manual-rotation",
+  );
+  await awaitInitializedConversationReadiness(deps, "chat-model", "corr-chat-send");
+  const models = handleModels(
+    { url: new URL("http://127.0.0.1/api/models?refresh=1") } as RouteContext,
+    deps,
+  );
+  await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS);
+  expect(fetch).not.toHaveBeenCalled();
+  expect(currentConversationReady(deps, "chat-model")).toBe(false);
+  expect(models).toMatchObject({ status: 200, body: { models: [{ id: "chat-model" }] } });
+  expect(JSON.stringify(models.body)).not.toContain("conversationReady");
+});

@@ -727,6 +727,7 @@ const GATEWAY_SERVICE_MESSAGE_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKe
   ["gateway-service-stale", "codingWorkbench.gatewayService.stale"],
   ["gateway-service-unknown", "codingWorkbench.gatewayService.unknown"],
   ["gateway-service-unqualified", "codingWorkbench.gatewayService.unqualified"],
+  ["gateway-service-managed-outside", "codingWorkbench.gatewayService.managedOutside"],
 ]);
 
 /** The sentence naming what the human can do about the Windows broker, when that is the cause. */
@@ -736,8 +737,34 @@ export function gatewayServiceMessageKey(
   return reason === undefined ? undefined : GATEWAY_SERVICE_MESSAGE_KEYS.get(reason);
 }
 
-// #4358: the Windows installation folder stops the bundled runtime: say which of the two it is.
-const INSTALL_VOLUME_MESSAGE_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map([
+// The broker states the Workbench's Repair resolves: the service is missing, stopped, stale or
+// unreadable. An unqualified build has no helper to install, so no Repair is offered for it.
+const REPAIRABLE_GATEWAY_SERVICE_REASONS: ReadonlySet<string> = new Set([
+  "gateway-service-absent",
+  "gateway-service-stopped",
+  "gateway-service-stale",
+  "gateway-service-unknown",
+]);
+
+/** Whether the Workbench offers Repair for this unavailable reason. */
+export function gatewayServiceRepairable(reason: string | undefined): boolean {
+  return reason !== undefined && REPAIRABLE_GATEWAY_SERVICE_REASONS.has(reason);
+}
+
+// Present the server's first failed prerequisite, without guessing an OS or package lane (#4412).
+// The server names the installation kind when it knows it (npm or desktop package), so the
+// sentence names the one step for that kind.
+const RUNTIME_ACTIVATION_MESSAGE_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map([
+  ["runtime-disabled", "codingWorkbench.runtime.disabled"],
+  ["platform-unqualified", "codingWorkbench.runtime.platformUnqualified"],
+  ["npm-runtime-package-missing", "codingWorkbench.runtime.npmRuntimePackageMissing"],
+  ["portable-runtime-unverified", "codingWorkbench.runtime.portableRuntimeUnverified"],
+  ["dev-lane-refused", "codingWorkbench.runtime.developmentRefused"],
+  ["payload-missing", "codingWorkbench.runtime.payloadMissing"],
+  ["payload-unapproved", "codingWorkbench.runtime.payloadUnapproved"],
+  ["payload-tampered", "codingWorkbench.runtime.payloadUnverified"],
+  ["secure-read-unavailable", "codingWorkbench.runtime.secureReadUnavailable"],
+  ["loopback-unavailable", "codingWorkbench.runtime.loopbackUnavailable"],
   ["install-volume-not-local", "codingWorkbench.installVolume.notLocal"],
   ["install-volume-unverified", "codingWorkbench.installVolume.unverified"],
   // #4359: the installed runtime is an earlier OpenCode that Keiko no longer approves.
@@ -749,7 +776,7 @@ export function runtimeUnavailableMessageKey(
   reason: string | undefined,
 ): CodingWorkbenchMessageKey | undefined {
   if (reason === undefined) return undefined;
-  return gatewayServiceMessageKey(reason) ?? INSTALL_VOLUME_MESSAGE_KEYS.get(reason);
+  return gatewayServiceMessageKey(reason) ?? RUNTIME_ACTIVATION_MESSAGE_KEYS.get(reason);
 }
 
 // #4068: a start the Windows broker cannot confine names what to change: the work location, or the

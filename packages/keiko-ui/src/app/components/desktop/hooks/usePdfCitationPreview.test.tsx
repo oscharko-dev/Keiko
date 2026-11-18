@@ -1,7 +1,22 @@
+import { StrictMode } from "react";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PdfCitationPreviewOpenResponse } from "@oscharko-dev/keiko-contracts";
-import { fetchPdfCitationPreviewStatus, openPdfCitationPreviewSession } from "@/lib/api";
+import type {
+  PdfCitationPreviewOpenResponse,
+  PdfCitationPreviewCitationStatus,
+  KnowledgeCitationEditorTargetResponse,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  fetchPdfCitationPreviewStatus,
+  openPdfCitationPreviewSession,
+  openKnowledgeCitationEditorTarget,
+} from "@/lib/api";
+import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
+import {
+  setClientDiagnosticWriter,
+  resetClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import type { GroundedAnswer, LocalKnowledgeEvidenceCitation } from "@/lib/types";
 import {
   showPdfCitationPreviewFailure,
@@ -15,6 +30,7 @@ import {
 vi.mock("@/lib/api", () => ({
   fetchPdfCitationPreviewStatus: vi.fn(),
   openPdfCitationPreviewSession: vi.fn(),
+  openKnowledgeCitationEditorTarget: vi.fn(),
 }));
 
 vi.mock("../widgets/cards/pdf-citation-preview-session", () => ({
@@ -684,4 +700,242 @@ describe("usePdfCitationPreviewController", () => {
       }),
     );
   });
+});
+
+function deferredEditorTarget(): {
+  readonly promise: Promise<KnowledgeCitationEditorTargetResponse>;
+  readonly resolve: (value: KnowledgeCitationEditorTargetResponse) => void;
+} {
+  let resolve: (value: KnowledgeCitationEditorTargetResponse) => void = () => undefined;
+  const promise = new Promise<KnowledgeCitationEditorTargetResponse>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
+function editorCitationStatus(
+  overrides: Partial<PdfCitationPreviewCitationStatus> = {},
+): PdfCitationPreviewCitationStatus {
+  return {
+    stableId: "text-stable",
+    marker: "[1]",
+    markerIndex: 1,
+    state: "not-applicable",
+    reason: "document-not-pdf",
+    editorOpenAvailable: true,
+    ...overrides,
+  };
+}
+function editorFixture(
+  statuses: readonly PdfCitationPreviewCitationStatus[] = [editorCitationStatus()],
+): {
+  readonly selected: LocalKnowledgeEvidenceCitation;
+  readonly grounded: GroundedAnswer;
+} {
+  const selected = citation("[1]", "text-stable", "Companion - Übersicht.txt");
+  vi.mocked(fetchPdfCitationPreviewStatus).mockResolvedValue({ citations: statuses });
+  return { selected, grounded: answer([selected]) };
+}
+
+describe("canonical Knowledge citation editor", () => {
+  afterEach(() => {
+    vi.resetAllMocks();
+    clearPdfCitationPreviewStatusCacheForTests();
+    resetClientDiagnosticWriter();
+  });
+
+  it("deduplicates explicit text clicks and logs only the authorized canonical open", async () => {
+    const { selected, grounded } = editorFixture();
+    const pending = deferredEditorTarget();
+    vi.mocked(openKnowledgeCitationEditorTarget).mockReturnValue(pending.promise);
+    const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "source-editor" }));
+    const reports: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
+    const view = renderHook(
+      () =>
+        usePdfCitationPreviewController({
+          answer: grounded,
+          chatId: "chat-source",
+          windows: undefined,
+          openEditorFile,
+        }),
+      { wrapper: StrictMode },
+    );
+    await waitFor(() => expect(view.result.current?.editor?.stateFor(selected)).toBe("idle"));
+    expect(openKnowledgeCitationEditorTarget).not.toHaveBeenCalled();
+    let first: Promise<void> | undefined;
+    let second: Promise<void> | undefined;
+    act(() => {
+      first = view.result.current?.editor?.openCitation(selected);
+      second = view.result.current?.editor?.openCitation(selected);
+    });
+    expect(openKnowledgeCitationEditorTarget).toHaveBeenCalledTimes(1);
+    expect(openEditorFile).not.toHaveBeenCalled();
+    expect(reports).toEqual([]);
+    await act(async () => {
+      pending.resolve({
+        outcome: "authorized",
+        target: { root: "/synthetic/source", path: "Companion - Übersicht.txt" },
+      });
+      await Promise.all([first, second]);
+    });
+    expect(openEditorFile).toHaveBeenCalledExactlyOnceWith({
+      root: "/synthetic/source",
+      path: "Companion - Übersicht.txt",
+    });
+    expect(view.result.current?.editor?.stateFor(selected)).toBe("opened");
+    expect(reports.flatMap(({ meta }) => meta?.citationActivation ?? [])).toEqual([
+      { reason: "matched", outcome: "opened", rootCount: 1, matchCount: 1 },
+    ]);
+    expect(JSON.stringify(reports)).not.toMatch(/synthetic|Companion|Übersicht/u);
+    await expectDiagnosticWireAccepted(reports);
+  });
+
+  it.each(["wrong-id", "wrong-marker", "no-flag", "duplicate"] as const)(
+    "does not grant a text action from %s status metadata",
+    async (variant) => {
+      let status = editorCitationStatus();
+      if (variant === "wrong-id") status = editorCitationStatus({ stableId: "another-document" });
+      if (variant === "wrong-marker") status = editorCitationStatus({ marker: "[2]" });
+      if (variant === "no-flag") {
+        const { editorOpenAvailable: _, ...rest } = status;
+        status = rest;
+      }
+      const { selected, grounded } = editorFixture(
+        variant === "duplicate" ? [status, status] : [status],
+      );
+      const view = renderHook(() =>
+        usePdfCitationPreviewController({
+          answer: grounded,
+          chatId: "chat-source",
+          windows: undefined,
+          openEditorFile: vi.fn(),
+        }),
+      );
+      await waitFor(() => expect(fetchPdfCitationPreviewStatus).toHaveBeenCalledTimes(1));
+      await act(async () => {
+        await view.result.current?.editor?.openCitation(selected);
+      });
+      expect(view.result.current?.editor?.stateFor(selected)).toBeUndefined();
+      expect(openKnowledgeCitationEditorTarget).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["authorized", "rejected"] as const)(
+    "ignores a late %s text result after a newer chat selection",
+    async (outcome) => {
+      const { selected, grounded } = editorFixture();
+      const pending = deferredEditorTarget();
+      vi.mocked(openKnowledgeCitationEditorTarget).mockReturnValue(pending.promise);
+      const openEditorFile = vi.fn(() => ({ ok: true as const, windowId: "editor" }));
+      const reports: ClientDiagnosticMeta[] = [];
+      setClientDiagnosticWriter((_message, meta) => {
+        if (meta !== undefined) reports.push(meta);
+      });
+      const view = renderHook(
+        ({ chatId }) =>
+          usePdfCitationPreviewController({
+            answer: grounded,
+            chatId,
+            windows: undefined,
+            openEditorFile,
+          }),
+        { initialProps: { chatId: "old-chat" } },
+      );
+      await waitFor(() => expect(view.result.current?.editor?.stateFor(selected)).toBe("idle"));
+      let request: Promise<void> | undefined;
+      act(() => {
+        request = view.result.current?.editor?.openCitation(selected);
+      });
+      view.rerender({ chatId: "new-chat" });
+      await waitFor(() => expect(view.result.current?.editor?.stateFor(selected)).toBe("idle"));
+      await act(async () => {
+        pending.resolve(
+          outcome === "authorized"
+            ? { outcome, target: { root: "/synthetic/source", path: "source.txt" } }
+            : { outcome, reason: "source-modified" },
+        );
+        await request;
+      });
+      expect(openEditorFile).not.toHaveBeenCalled();
+      expect(view.result.current?.editor?.stateFor(selected)).toBe("idle");
+      expect(reports.flatMap((report) => report.citationActivation ?? [])).toEqual([]);
+    },
+  );
+
+  it("does not open a text document after its chat window unmounts", async () => {
+    const { selected, grounded } = editorFixture();
+    const pending = deferredEditorTarget();
+    vi.mocked(openKnowledgeCitationEditorTarget).mockReturnValue(pending.promise);
+    const openEditorFile = vi.fn();
+    const view = renderHook(() =>
+      usePdfCitationPreviewController({
+        answer: grounded,
+        chatId: "chat-source",
+        windows: undefined,
+        openEditorFile,
+      }),
+    );
+    await waitFor(() => expect(view.result.current?.editor?.stateFor(selected)).toBe("idle"));
+    let request: Promise<void> | undefined;
+    act(() => {
+      request = view.result.current?.editor?.openCitation(selected);
+    });
+    view.unmount();
+    await act(async () => {
+      pending.resolve({
+        outcome: "authorized",
+        target: { root: "/synthetic/source", path: "source.txt" },
+      });
+      await request;
+    });
+    expect(openEditorFile).not.toHaveBeenCalled();
+  });
+
+  it.each(["server", "transport", "editor"] as const)(
+    "reports a closed %s refusal without a false successful open",
+    async (origin) => {
+      const { selected, grounded } = editorFixture();
+      if (origin === "transport")
+        vi.mocked(openKnowledgeCitationEditorTarget).mockRejectedValue(
+          new Error("synthetic private source body"),
+        );
+      else
+        vi.mocked(openKnowledgeCitationEditorTarget).mockResolvedValue(
+          origin === "server"
+            ? { outcome: "rejected", reason: "editor-read-refused" }
+            : { outcome: "authorized", target: { root: "/synthetic/source", path: "source.txt" } },
+        );
+      const openEditorFile = vi.fn(() => ({
+        ok: false as const,
+        message: "synthetic private failure",
+      }));
+      const reports: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+      setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
+      const view = renderHook(() =>
+        usePdfCitationPreviewController({
+          answer: grounded,
+          chatId: "chat-source",
+          windows: undefined,
+          openEditorFile,
+        }),
+      );
+      await waitFor(() => expect(view.result.current?.editor?.stateFor(selected)).toBe("idle"));
+      await act(async () => {
+        await view.result.current?.editor?.openCitation(selected);
+      });
+      expect(view.result.current?.editor?.stateFor(selected)).toBe("failed");
+      const authorized = origin === "editor";
+      expect(reports.flatMap(({ meta }) => meta?.citationActivation ?? [])).toEqual([
+        {
+          reason: authorized ? "matched" : "unmatched",
+          outcome: authorized ? "open-refused" : "refused",
+          rootCount: authorized ? 1 : 0,
+          matchCount: authorized ? 1 : 0,
+        },
+      ]);
+      expect(JSON.stringify(reports)).not.toMatch(/synthetic|source.txt|private/u);
+      await expectDiagnosticWireAccepted(reports);
+    },
+  );
 });

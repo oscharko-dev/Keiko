@@ -8,12 +8,13 @@
 // it reads through `WorkspaceFs`; for an intranet manual `keiko-server` provides a
 // `gatewayFetch`-backed implementation (ADR-0038 egress, DNS-rebinding-safe).
 
-import type { DocumentationManualDeniedLinkClass } from "@oscharko-dev/keiko-contracts";
-
-// Body-free reason a candidate link or a fetched page was refused. Reuses the #1852 denied-link
-// classes and adds the crawl-runtime bounds. Never carries a raw URL/path.
+// Body-free reason a candidate link or a fetched page was refused.
 export type ManualCrawlDenyReason =
-  | DocumentationManualDeniedLinkClass // cross-origin | outside-path-prefix | unsupported-scheme | credentialed-url | path-traversal
+  | "cross-origin"
+  | "outside-path-prefix"
+  | "unsupported-scheme"
+  | "credentialed-url"
+  | "path-traversal"
   | "action-link"
   | "non-html"
   | "page-limit"

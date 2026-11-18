@@ -78,6 +78,7 @@ interface CommitComposerProps {
   readonly projectId: string | null;
   readonly branchName?: string | undefined;
   readonly stagedFileCount: number;
+  readonly hasConflicts?: boolean;
   readonly busy: boolean;
   readonly outcome: GitMutationOutcome | null;
   readonly error: string | null;
@@ -604,6 +605,7 @@ interface CommitComposerStateInput {
   readonly projectId: string | null;
   readonly branchName: string | undefined;
   readonly stagedFileCount: number;
+  readonly hasConflicts?: boolean;
   readonly busy: boolean;
   readonly preview: GitDeliveryCommitPreviewResponse | null;
   readonly previewDraft: string | null;
@@ -724,7 +726,7 @@ function commitComposerState(input: CommitComposerStateInput): CommitComposerSta
   const message = composeCommitMessage(input.summary, input.body);
   const subjectEmpty = input.summary.trim() === "";
   const selectedRepository = hasRepository(input.projectId);
-  const hasStaged = input.stagedFileCount > 0;
+  const hasStaged = input.stagedFileCount > 0 && !input.hasConflicts;
   const previewState = commitComposerPreviewState(input, subjectEmpty, hasStaged, message);
   return {
     hasRepository: selectedRepository,
@@ -746,15 +748,17 @@ function commitComposerState(input: CommitComposerStateInput): CommitComposerSta
       policyBlocked: previewState.policyBlocked,
     }),
     branchActionAvailable: selectedRepository && input.onCreateBranch !== undefined,
-    hint: commitHint(
-      selectedRepository,
-      hasStaged,
-      subjectEmpty,
-      previewState.missingFreshPreview,
-      previewState.protectedBranchBlocked,
-      previewState.policyBlocked,
-      input.t,
-    ),
+    hint: input.hasConflicts
+      ? input.t("gitClientWindow.ui.resolveConflicts")
+      : commitHint(
+          selectedRepository,
+          hasStaged,
+          subjectEmpty,
+          previewState.missingFreshPreview,
+          previewState.protectedBranchBlocked,
+          previewState.policyBlocked,
+          input.t,
+        ),
     commitLabel: commitLabelFor(input.branchName, input.t),
   };
 }
@@ -1032,6 +1036,7 @@ interface DraftGenerationController {
 
 interface CommitComposerController {
   readonly state: CommitComposerState;
+  readonly previewFresh: boolean;
   readonly summary: string;
   readonly body: string;
   readonly hintId: string;
@@ -1218,7 +1223,7 @@ function useCommitDraftGeneration(
       (err: unknown) => {
         if (seqRef.current !== seq) return;
         setBusy(false);
-        setError(draftGenerationErrorText(err, t));
+        if (tokenMatches(readToken(), startToken)) setError(draftGenerationErrorText(err, t));
       },
     );
   }, [applyDraft, onGenerateDraft, readToken, t]);
@@ -1283,6 +1288,7 @@ function useCommitComposerController(
     projectId: props.projectId,
     branchName: props.branchName,
     stagedFileCount: props.stagedFileCount,
+    hasConflicts: props.hasConflicts ?? false,
     busy: props.busy,
     preview: props.preview,
     previewDraft: props.previewDraft,
@@ -1295,6 +1301,7 @@ function useCommitComposerController(
   useCommitPreviewRefresh(props, state);
   return {
     state,
+    previewFresh,
     summary: fields.summary,
     body: fields.body,
     hintId,
@@ -1343,7 +1350,7 @@ function CommitComposerContents({
       />
       <CommitFeedback
         state={controller.state}
-        previewError={props.previewError}
+        previewError={controller.previewFresh ? props.previewError : null}
         previewId={controller.previewId}
         branchName={props.branchName}
         outcome={props.outcome}

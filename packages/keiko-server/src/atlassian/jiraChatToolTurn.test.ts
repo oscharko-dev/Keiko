@@ -2032,8 +2032,204 @@ describe.each([false, true])(
 // writes a tool call as text, gets ONE further round; the model writes the final answer, and the
 // log line carries only the closed kind and a count.
 describe.each([false, true])(
+  "a requested report download answered as text (stream=%s)",
+  (stream) => {
+    it.each([
+      ["repeated", "Report:\n```csv\nkey\nSYN-1\n```", "jira-report-not-generated"],
+      ["corrected", "The Jira report cannot be read with the current connection.", undefined],
+    ] as const)(
+      "offers one governed repair and records only a remaining mismatch (%s)",
+      async (scenario, after, notice) => {
+        const answer = "Report:\n```csv\nkey\nSYN-1\n```";
+        scriptedFinalAnswer.next = answer;
+        scriptedFinalAnswer.after = after;
+        vi.mocked(recordChatToolTurnCorrected).mockClear();
+        try {
+          const f = fixture();
+          const ctx = context({
+            ...sendBody(f, `report-download-${String(stream)}-${scenario}`),
+            content:
+              "Create a Jira report for exactly SYN-1 with Markdown and CSV downloads. Do not change Jira.",
+          });
+          const pending = stream
+            ? handleSendDesktopChatStream(ctx, f.deps)
+            : handleSendDesktopChat(ctx, f.deps);
+          void pending.catch(() => undefined);
+          await awaitReadGrantedForWrite(f);
+          await pending;
+          expect(f.calls).toHaveLength(4);
+          const correction = JSON.stringify(
+            f.calls[2]?.messages.filter((message) => message.role === "system").at(-1),
+          );
+          expect(correction).toContain("exact requested issue scope (JQL)");
+          expect(correction).toContain("Do not change Jira");
+          expect(f.calls[2]?.toolCatalog?.kind).toBe("bound");
+          expect(f.writes()).toBe(0);
+          const [user, assistant] = f.deps.store.listMessages(f.chatId);
+          expect(user?.turnState).toBe("completed");
+          expect(user?.toolTranscript?.claimNotice).toBe(notice);
+          expect(assistant?.content).toBe(after);
+          expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
+          expect(vi.mocked(recordChatToolTurnCorrected).mock.calls[0]?.[1]).toMatchObject({
+            correctionKind: "report-download-missing",
+            announcementCount: 1,
+          });
+          expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toContain(
+            "SYN-1",
+          );
+        } finally {
+          scriptedFinalAnswer.next = undefined;
+          scriptedFinalAnswer.after = undefined;
+        }
+      },
+    );
+  },
+);
+
+describe.each([false, true])(
   "an answer that claims an action no tool performed (stream=%s)",
   (stream) => {
+    it("leaves an unrelated no-tool approval explanation alone in a Jira-bound Chat", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      const f = fixture(false, undefined, true, 0);
+      const claim = "The approval card is ready.";
+      scriptedFinalAnswer.next = claim;
+      try {
+        const ctx = context({
+          ...sendBody(f, `unrelated-approval-${String(stream)}`),
+          content: "Explain how the GitHub approval card looks once it is ready.",
+        });
+        await (stream
+          ? handleSendDesktopChatStream(ctx, f.deps)
+          : handleSendDesktopChat(ctx, f.deps));
+        expect(f.calls).toHaveLength(1);
+        expect(vi.mocked(recordChatToolTurnCorrected)).not.toHaveBeenCalled();
+        expect(f.deps.store.listMessages(f.chatId).at(-1)?.content).toBe(claim);
+        expect(f.requests()).toBe(0);
+      } finally {
+        scriptedFinalAnswer.next = undefined;
+        scriptedFinalAnswer.after = undefined;
+      }
+    });
+
+    it("bounds the stored card evidence read to the existing visible Chat history", async () => {
+      const f = fixture(false, undefined, true, 0);
+      const listed = vi.spyOn(f.deps.store, "listMessages");
+      scriptedFinalAnswer.next = "The approval card is ready.";
+      scriptedFinalAnswer.beforeAnswer = (): void => {
+        listed.mockClear();
+      };
+      try {
+        const ctx = context({
+          ...sendBody(f, `bounded-approval-${String(stream)}`),
+          content: "Show the Jira approval card.",
+        });
+        await (stream
+          ? handleSendDesktopChatStream(ctx, f.deps)
+          : handleSendDesktopChat(ctx, f.deps));
+        expect(f.calls).toHaveLength(2);
+        expect(listed).toHaveBeenCalledWith(f.chatId, 48);
+        expect(listed.mock.calls.every(([, limit]) => limit !== undefined && limit <= 48)).toBe(
+          true,
+        );
+      } finally {
+        scriptedFinalAnswer.next = undefined;
+        scriptedFinalAnswer.after = undefined;
+        scriptedFinalAnswer.beforeAnswer = undefined;
+        listed.mockRestore();
+      }
+    });
+
+    it.each([
+      "Ich sehe nur den Entwurf, zeig die Freigabekarte.",
+      "Ich sehe nur den gespeicherten Entwurf. Bitte erstelle jetzt die echte Freigabekarte.",
+      "Wo ist die Freigabekarte?",
+      "I only see the saved draft. Please give me the real approval card.",
+    ])(
+      "recognizes an approval-card follow-up from the preceding Jira tool turn: %s",
+      async (content) => {
+        const f = fixture();
+        await handleSendDesktopChat(sendContext(f, `prior-jira-${String(stream)}`), f.deps);
+        Object.assign(f.model, syntheticModel(f.calls, false, 0, false));
+        const callsBefore = f.calls.length;
+        const requestsBefore = f.requests();
+        scriptedFinalAnswer.next = "Die Freigabekarte ist bereit.";
+        try {
+          const ctx = context({
+            ...sendBody(f, `implicit-approval-${String(stream)}`),
+            content,
+          });
+          await (stream
+            ? handleSendDesktopChatStream(ctx, f.deps)
+            : handleSendDesktopChat(ctx, f.deps));
+          expect(f.calls).toHaveLength(callsBefore + 2);
+          expect(f.calls.at(-1)?.toolCatalog).toBeUndefined();
+          expect(f.requests()).toBe(requestsBefore);
+          expect(f.writes()).toBe(0);
+        } finally {
+          scriptedFinalAnswer.next = undefined;
+          scriptedFinalAnswer.after = undefined;
+        }
+      },
+    );
+
+    it("corrects an explicit Jira approval follow-up with no tool call in this turn", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      const f = fixture(false, undefined, true, 0);
+      scriptedFinalAnswer.next = "Die Freigabekarte steht bereit, bestätige sie, wenn alles passt.";
+      try {
+        const ctx = context({
+          ...sendBody(f, `approval-follow-up-${String(stream)}`),
+          content: "Bitte zeige jetzt die Jira-Freigabekarte für die vorbereiteten Aufgaben.",
+        });
+        await (stream
+          ? handleSendDesktopChatStream(ctx, f.deps)
+          : handleSendDesktopChat(ctx, f.deps));
+        expect(f.calls).toHaveLength(2);
+        expect(f.calls[1]?.toolCatalog).toBeUndefined();
+        expect(JSON.stringify(f.calls[1]?.messages)).toContain("no pending Jira approval");
+        expect(f.requests()).toBe(0);
+        expect(f.writes()).toBe(0);
+        expect(f.deps.store.listMessages(f.chatId).at(-1)?.content).toBe(
+          "No Jira projects are visible.",
+        );
+        expect(vi.mocked(recordChatToolTurnCorrected).mock.calls.at(-1)?.[1]).toMatchObject({
+          correctionKind: "approval-not-requested",
+          announcementCount: 1,
+          settledExchangeCount: 0,
+        });
+      } finally {
+        scriptedFinalAnswer.next = undefined;
+        scriptedFinalAnswer.after = undefined;
+      }
+    });
+
+    it("marks a repeated no-tool Jira approval claim after one tool-less repair", async () => {
+      const f = fixture(false, undefined, true, 0);
+      const claim = "The approval card is ready and will create three tasks.";
+      scriptedFinalAnswer.next = claim;
+      scriptedFinalAnswer.after = claim;
+      try {
+        const ctx = context({
+          ...sendBody(f, `approval-follow-up-repeat-${String(stream)}`),
+          content: "Show the Jira approval card for the prepared tasks.",
+        });
+        await (stream
+          ? handleSendDesktopChatStream(ctx, f.deps)
+          : handleSendDesktopChat(ctx, f.deps));
+        const [user, assistant] = f.deps.store.listMessages(f.chatId);
+        expect(f.calls).toHaveLength(2);
+        expect(f.calls[1]?.toolCatalog).toBeUndefined();
+        expect(user?.toolTranscript?.claimNotice).toBe("no-jira-approval");
+        expect(assistant?.content).toBe(claim);
+        expect(f.requests()).toBe(0);
+        expect(f.writes()).toBe(0);
+      } finally {
+        scriptedFinalAnswer.next = undefined;
+        scriptedFinalAnswer.after = undefined;
+      }
+    });
+
     it.each([
       [
         "announced-create",
@@ -2041,6 +2237,16 @@ describe.each([false, true])(
         "no Jira issue was created in this turn",
       ],
       ["tool-call-as-text", 'jira_create({"projectId":"10000"})', "written as text"],
+      [
+        "approval-not-requested",
+        "Die Freigabekarte ist bereit. Bitte bestätige die Karte.",
+        "no pending Jira approval",
+      ],
+      [
+        "approval-not-requested",
+        "Die Freigabe ist erneut vorbereitet.",
+        "no pending Jira approval",
+      ],
     ] as const)(
       "gets one round for %s, then the model's new answer stands",
       async (kind, claim, said) => {
@@ -2111,6 +2317,12 @@ describe.each([false, true])(
         'jira_create({"projectId":"10000"})',
         { after: 'jira_create({"projectId":"10000"}) again' },
         "tool-call-not-executed",
+      ],
+      [
+        "repeats a claim about a nonexistent approval card",
+        "Die Freigabekarte ist bereit.",
+        { after: "Die Freigabekarte ist bereit. Bitte bestätigen." },
+        "no-jira-approval",
       ],
     ] as const)(
       "stores the closed marker and leaves the answer unchanged when the model %s",

@@ -164,6 +164,7 @@ async function portablePreflightReport(
 // The blocker code is what the update window reads without a session: a volume refusal must not
 // read as "set this install up first".
 function portableBlockerCode(reason: UpdateInstallMode["reason"]): UpdatePreflightBlockerCode {
+  if (reason === "portable-update-unavailable") return "portable-update-unavailable";
   if (reason === "portable-it-managed") return "portable-install-managed-externally";
   if (reason === "portable-volume-not-local") return "portable-install-volume-not-local";
   if (reason === "portable-volume-unverified") return "portable-install-volume-unverified";

@@ -23,6 +23,22 @@ function legacyConversation(version = 54): DatabaseSync {
   return db;
 }
 
+it("adds report exports to v78 without changing conversations and reapplies idempotently (#4390)", () => {
+  const db = legacyConversation(78);
+  try {
+    runMigrations(db);
+    runMigrations(db);
+    expect(db.prepare("SELECT content FROM chat_messages ORDER BY timestamp").all()).toEqual([
+      { content: "Preserve the original request." },
+      { content: "Acknowledged." },
+    ]);
+    expect(db.prepare("SELECT count(*) AS count FROM jira_report_exports").get()?.count).toBe(0);
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
+
 it("backfills both v56 indexes from v55 originals and preserves index integrity", () => {
   const db = legacyConversation(55);
   try {
@@ -105,6 +121,30 @@ describe("v55 migration — private chat continuity", () => {
     } finally {
       db.close();
     }
+  });
+
+  // R4130-078: the review tables' rollbacks kept the numbers 59 to 61 after the 1.5.0 sync moved
+  // the tables to 79 to 81, and no suite noticed, because every other rewind targets 54 or lower.
+  // Each target from 78 on rewinds and migrates forward again; a rollback with a stale number
+  // leaves a table or column behind and the second run fails. It starts at 78 because the
+  // fixture's older rollbacks, which come from dev, fail the same round trip from 57 and from 62
+  // to 77.
+  it("rewinds to every version from 78 on and migrates forward again", () => {
+    const failures: string[] = [];
+    for (let target = 78; target < SCHEMA_VERSION; target += 1) {
+      const db = new DatabaseSync(":memory:");
+      db.exec("PRAGMA foreign_keys = ON");
+      try {
+        runMigrations(db);
+        rewindSchemaFixture(db, target);
+        runMigrations(db);
+      } catch (error) {
+        failures.push(`${String(target)}: ${error instanceof Error ? error.message : "unknown"}`);
+      } finally {
+        db.close();
+      }
+    }
+    expect(failures).toEqual([]);
   });
 });
 

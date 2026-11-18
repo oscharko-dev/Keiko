@@ -51,6 +51,28 @@ describe("LocationBindingNotices", () => {
   });
 });
 
+// #4404: a closed server code with one plain cause replaces the generic sentence and its guess.
+describe("a checkout failure the server named", () => {
+  it.each([
+    [
+      "git-unreadable",
+      "Git could not open this checkout. Check that Git is installed and that you chose the repository's top folder, then try again.",
+    ],
+    [
+      "unregistered",
+      "Keiko no longer finds this folder among the added folders. Add it again, then try again.",
+    ],
+  ] as const)("says the %s cause with Retry and without the branch guess", (reason, text) => {
+    render(<LocationBindingNotices locationState={state({ error: true, reason })} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(text);
+    expect(screen.queryByText(/Choose a branch in Git/u)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(locationBlockerKey({ error: true, denied: false, reason })).not.toBe(
+      "codingWorkbench.repository.locationError",
+    );
+  });
+});
+
 // #4371: a refused folder is explained once (by the selector's own help, with its way out); the
 // notice neither repeats it nor adds the generic sentence that guesses a different cause.
 describe("a checkout refused by the server", () => {

@@ -189,7 +189,15 @@ describe("API route contract", () => {
     const localKnowledgeRoutes = API_ROUTES.filter((r) =>
       r.pattern.startsWith("/api/local-knowledge"),
     );
-    expect(localKnowledgeRoutes).toHaveLength(21);
+    expect(localKnowledgeRoutes).toHaveLength(23);
+    // #4443: an explicit saved text citation resolves an ordinary Editor target.
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "POST" &&
+          r.pattern === "/api/local-knowledge/citation-preview/editor-target",
+      ),
+    ).toBeDefined();
     // HTML manual creation is retired; existing-pod refresh and polling remain mounted.
     expect(
       localKnowledgeRoutes.find(
@@ -295,6 +303,13 @@ describe("API route contract", () => {
       localKnowledgeRoutes.find(
         (r) =>
           r.method === "POST" && r.pattern === "/api/local-knowledge/citation-preview/authorize",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "POST" &&
+          r.pattern === "/api/local-knowledge/citation-preview/editor-target",
       ),
     ).toBeDefined();
     expect(

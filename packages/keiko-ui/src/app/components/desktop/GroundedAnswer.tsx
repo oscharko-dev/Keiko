@@ -7,7 +7,7 @@
 // UI's lib/types re-export. Citations are static evidence references until a future change wires
 // them to the Files-window preview at the cited line range.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import {
   citationFindingTotal,
@@ -49,6 +49,12 @@ import type {
   LocalKnowledgeGroundedAnswerContextSummary,
 } from "@/lib/types";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
+import type {
+  KnowledgeCitationEditorController,
+  KnowledgeCitationEditorState,
+} from "./hooks/useKnowledgeCitationEditor";
+import type { HtmlManualCitationCheckResult } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { checkHtmlManualCitation } from "@/lib/local-knowledge-api";
 import activityBadgeStyles from "./GroundedAnswer.module.css";
 import {
   ConnectedEvidenceInspection,
@@ -79,7 +85,6 @@ function useTranslate(): I18nTranslate {
 // Opens the citation's target in the existing governed documentation browser widget (ADR-0113) so
 // that widget's own navigateDocumentation call renders the authoritative reason/severity outcome —
 // the chip never re-implements that classification. Returns whether a window was actually opened.
-type OpenDocumentationTarget = (target: string) => boolean;
 
 interface GroundedAnswerProps {
   readonly answer: GroundedAnswer | undefined;
@@ -90,7 +95,6 @@ interface GroundedAnswerProps {
   readonly repositoryRoots?: readonly RepositoryReferenceRoot[] | undefined;
   readonly openRepositoryReference?: OpenRepositoryReference | undefined;
   readonly citationPreview?: CitationPreviewController | undefined;
-  readonly openDocumentationTarget?: OpenDocumentationTarget | undefined;
 }
 
 type ConnectedGroundedAnswer = Extract<
@@ -98,10 +102,6 @@ type ConnectedGroundedAnswer = Extract<
   { readonly groundingKind: "connected-context" }
 >;
 type HybridGroundedAnswer = Extract<GroundedAnswer, { readonly groundingKind: "hybrid" }>;
-type KnowledgeGroundedAnswer = Extract<
-  GroundedAnswer,
-  { readonly groundingKind: "local-knowledge" }
->;
 
 // Display "—" for Infinity / non-finite caps (the default budget uses Number.POSITIVE_INFINITY
 // for unbounded dimensions like rerankCallsMax when the orchestrator is disabled).
@@ -727,14 +727,18 @@ function connectedEvidenceSummary(answer: ConnectedGroundedAnswer, t: I18nTransl
   return connectedPromptEvidenceSummary(answer.contextPack, citationCount, t);
 }
 
-function knowledgeEvidenceSummary(answer: KnowledgeGroundedAnswer, t: I18nTranslate): string {
+function knowledgeEvidenceSummary(
+  citations: readonly LocalKnowledgeEvidenceCitation[],
+  contextPack: LocalKnowledgeGroundedAnswerContextSummary,
+  t: I18nTranslate,
+): string {
   return citationCountLabel(
     t,
-    uniqueCitationCount(answer.citations),
+    uniqueCitationCount(citations),
     { one: "grounded.summary.knowledge.one", other: "grounded.summary.knowledge.other" },
     {
-      used: formatCount(answer.contextPack.referencesUsed, t.locale),
-      budget: formatCount(answer.contextPack.referenceBudget, t.locale),
+      used: formatCount(contextPack.referencesUsed, t.locale),
+      budget: formatCount(contextPack.referenceBudget, t.locale),
     },
   );
 }
@@ -996,12 +1000,10 @@ function knowledgeCitationLabel(
 function LocalKnowledgeCitationList({
   citations,
   citationPreview,
-  openDocumentationTarget,
   unverifiedSupport = false,
 }: {
   readonly citations: readonly LocalKnowledgeEvidenceCitation[];
   readonly citationPreview: CitationPreviewController | undefined;
-  readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
   readonly unverifiedSupport?: boolean;
 }): ReactNode {
   const t = useTranslate();
@@ -1026,7 +1028,6 @@ function LocalKnowledgeCitationList({
               citation={citation}
               citationPreview={citationPreview}
               label={knowledgeCitationLabel(citation, t)}
-              openDocumentationTarget={openDocumentationTarget}
               unverified={unverifiedSupport && citation.lexicalSupport === "weak"}
             />
           </li>
@@ -1073,8 +1074,7 @@ function manualCitationLabel(citation: LocalKnowledgeEvidenceCitation, t: I18nTr
   );
 }
 
-// Curated, short copy for every governed reason a manual citation cannot be reopened — mirrors the
-// tone of DocumentationBrowserWidget's REASON_COPY without exposing the raw wire enum token.
+// Show a localized limitation for each closed server reason.
 const MANUAL_UNAVAILABLE_REASON_COPY: Readonly<
   Record<HtmlManualCitationOpenUnavailableReason, MessageKey>
 > = {
@@ -1086,61 +1086,63 @@ const MANUAL_UNAVAILABLE_REASON_COPY: Readonly<
   "target-unavailable": "grounded.manual.reason.target-unavailable",
 };
 
-function manualCitationActionLabel(manual: HtmlManualCitationMetadata, t: I18nTranslate): string {
-  if (manual.open.state === "available") return t("grounded.manual.openManual");
-  if (manual.open.state === "page-level-only") return t("grounded.manual.openPage");
-  return t(MANUAL_UNAVAILABLE_REASON_COPY[manual.open.reason]);
-}
+type ManualCitationCheckState = "idle" | "checking" | "failed" | HtmlManualCitationCheckResult;
 
-function manualCitationChipActionLabel(
-  state: "idle" | "opened" | "failed",
+function manualCitationActionLabel(
   manual: HtmlManualCitationMetadata,
+  state: ManualCitationCheckState,
   t: I18nTranslate,
 ): string {
-  let label: string;
-  if (state === "opened") {
-    label = t("grounded.manual.opened");
-  } else if (state === "failed") {
-    label = t("grounded.manual.failed");
-  } else {
-    label = manualCitationActionLabel(manual, t);
+  if (manual.open.state === "unavailable")
+    return t(MANUAL_UNAVAILABLE_REASON_COPY[manual.open.reason]);
+  if (state === "checking") return t("grounded.manual.checking");
+  if (state === "failed") return t("grounded.manual.failed");
+  if (state === "idle") {
+    return t(
+      manual.open.state === "page-level-only"
+        ? "grounded.manual.checkPage"
+        : "grounded.manual.checkSource",
+    );
   }
-  return label;
+  return state.state === "verified"
+    ? t("grounded.manual.verified")
+    : t(MANUAL_UNAVAILABLE_REASON_COPY[state.reason]);
 }
 
 function ManualCitationChip({
   citation,
+  manual,
   label,
-  openDocumentationTarget,
   unverified = false,
 }: {
   readonly citation: LocalKnowledgeEvidenceCitation;
+  readonly manual: HtmlManualCitationMetadata;
   readonly label: string;
-  readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
   readonly unverified?: boolean;
 }): ReactNode {
   const t = useTranslate();
-  const manual = citation.htmlManual;
-  const [state, setState] = useState<"idle" | "opened" | "failed">("idle");
+  const [state, setState] = useState<ManualCitationCheckState>("idle");
   const accessibleLabel = useSupportAwareLabel(label, unverified);
-  if (manual === undefined) return null;
   const unavailable = manual.open.state === "unavailable";
-  const actionLabel = manualCitationChipActionLabel(state, manual, t);
+  const checking = state === "checking";
+  const actionLabel = manualCitationActionLabel(manual, state, t);
   const target = manual.open.state === "unavailable" ? undefined : manual.open.target;
-  const modifier = unavailable || state === "failed" ? " grounded-citation-action--blocked" : "";
+  const blocked =
+    unavailable ||
+    state === "failed" ||
+    (typeof state === "object" && state.state === "unavailable");
+  const modifier = blocked ? " grounded-citation-action--blocked" : "";
   return (
     <button
       type="button"
       className={`grounded-citation grounded-citation-action ${activityBadgeStyles.manualCitationAction}${modifier}`}
-      aria-disabled={unavailable ? "true" : undefined}
+      aria-disabled={unavailable || checking ? "true" : undefined}
       aria-label={`${accessibleLabel} · ${actionLabel}`}
       title={`${knowledgeCitationTitle(citation, t)} · ${actionLabel}`}
       onClick={() => {
-        if (target === undefined || unavailable || openDocumentationTarget === undefined) return;
-        // Opens the existing governed documentation browser widget (ADR-0113) with this target; the
-        // widget itself calls navigateDocumentation and renders the authoritative reason/severity —
-        // this chip never re-implements or discards that classification.
-        setState(openDocumentationTarget(target) ? "opened" : "failed");
+        if (target === undefined || checking) return;
+        setState("checking");
+        void checkHtmlManualCitation(target).then(setState, () => setState("failed"));
       }}
     >
       <span className={`grounded-citation-range ${activityBadgeStyles.manualCitationRange}`}>
@@ -1172,17 +1174,94 @@ function pdfPreviewActionText(
   return { actionLabel: t("grounded.pdf.open"), actionTitle: t("grounded.pdf.openTitle") };
 }
 
-function KnowledgeCitationChip({
+function KnowledgeEditorCitationChip({
+  citation,
+  label,
+  unverified,
+  controller,
+  state,
+}: {
+  readonly citation: LocalKnowledgeEvidenceCitation;
+  readonly label: string;
+  readonly unverified: boolean;
+  readonly controller: KnowledgeCitationEditorController;
+  readonly state: KnowledgeCitationEditorState;
+}): ReactNode {
+  const t = useTranslate();
+  const statusId = useId();
+  const accessibleLabel = useSupportAwareLabel(label, unverified);
+  const displayPath = stripUnsafeFormatChars(citation.label);
+  const opening = state === "opening";
+  const actionLabel = t("filePreview.openInEditor");
+  let status = "";
+  if (opening) status = t("chat.repository.opening", { path: displayPath });
+  if (state === "opened") status = t("chat.repository.opened", { path: displayPath });
+  if (state === "failed") status = t("grounded.knowledge.editorUnavailable");
+  return (
+    <span>
+      <button
+        type="button"
+        className="grounded-citation grounded-citation-action"
+        disabled={opening}
+        aria-busy={opening || undefined}
+        aria-describedby={statusId}
+        aria-label={`${accessibleLabel} · ${actionLabel}`}
+        title={`${knowledgeCitationTitle(citation, t)} · ${actionLabel}`}
+        onClick={() => {
+          void controller.openCitation(citation);
+        }}
+      >
+        <span className="grounded-citation-range">{label}</span>
+        {unverified ? <UnverifiedSupportBadge /> : null}
+        <span className="grounded-citation-action-label">{actionLabel}</span>
+      </button>
+      <output id={statusId}>{status}</output>
+    </span>
+  );
+}
+
+function KnowledgeCitationWithoutPdf({
   citation,
   citationPreview,
   label,
-  openDocumentationTarget,
   unverified,
 }: {
   readonly citation: LocalKnowledgeEvidenceCitation;
   readonly citationPreview: CitationPreviewController | undefined;
   readonly label: string;
-  readonly openDocumentationTarget: OpenDocumentationTarget | undefined;
+  readonly unverified: boolean;
+}): ReactNode {
+  const t = useTranslate();
+  const editor = citationPreview?.editor;
+  const editorState = editor?.stateFor(citation);
+  if (editor !== undefined && editorState !== undefined) {
+    return (
+      <KnowledgeEditorCitationChip
+        citation={citation}
+        label={label}
+        unverified={unverified}
+        controller={editor}
+        state={editorState}
+      />
+    );
+  }
+  return (
+    <span className="grounded-citation" title={knowledgeCitationTitle(citation, t)}>
+      <span className="grounded-citation-range">{label}</span>
+      {unverified ? <UnverifiedSupportBadge /> : null}
+    </span>
+  );
+}
+
+function KnowledgeCitationChip({
+  citation,
+  citationPreview,
+  label,
+  unverified,
+}: {
+  readonly citation: LocalKnowledgeEvidenceCitation;
+  readonly citationPreview: CitationPreviewController | undefined;
+  readonly label: string;
   readonly unverified: boolean;
 }): ReactNode {
   const t = useTranslate();
@@ -1190,9 +1269,14 @@ function KnowledgeCitationChip({
   if (citation.htmlManual !== undefined) {
     return (
       <ManualCitationChip
+        key={
+          citation.htmlManual.open.state === "unavailable"
+            ? undefined
+            : citation.htmlManual.open.target
+        }
         citation={citation}
+        manual={citation.htmlManual}
         label={label}
-        openDocumentationTarget={openDocumentationTarget}
         unverified={unverified}
       />
     );
@@ -1200,10 +1284,12 @@ function KnowledgeCitationChip({
   const affordance = citationPreview?.forCitation(citation);
   if (affordance === undefined) {
     return (
-      <span className="grounded-citation" title={knowledgeCitationTitle(citation, t)}>
-        <span className="grounded-citation-range">{label}</span>
-        {unverified ? <UnverifiedSupportBadge /> : null}
-      </span>
+      <KnowledgeCitationWithoutPdf
+        citation={citation}
+        citationPreview={citationPreview}
+        label={label}
+        unverified={unverified}
+      />
     );
   }
 
@@ -1894,13 +1980,16 @@ function FolderAuditDetails(props: FolderAuditDetailsProps): ReactNode {
   );
 }
 
+function isSingleFileScope(pack: GroundedAnswerContextPackSummary): boolean {
+  return pack.scopeKind === "files" && pack.fileCount === 1;
+}
+
 export function GroundedAnswer({
   answer,
   busy,
   repositoryRoots = [],
   openRepositoryReference,
   citationPreview,
-  openDocumentationTarget,
   onReadPaths,
 }: GroundedAnswerProps): ReactNode {
   const t = useTranslate();
@@ -1913,23 +2002,31 @@ export function GroundedAnswer({
       </div>
     ) : null;
   }
-  if (answer.groundingKind === "local-knowledge") {
+  // Multiple Pod connections use hybrid retrieval even when there is no Files source.
+  if (
+    answer.groundingKind === "local-knowledge" ||
+    (answer.groundingKind === "hybrid" && answer.contextPack.folderSourceCount === 0)
+  ) {
+    const citations =
+      answer.groundingKind === "hybrid" ? answer.knowledgeCitations : answer.citations;
+    const contextPack =
+      answer.groundingKind === "hybrid" ? answer.contextPack.knowledge : answer.contextPack;
     return (
       <div className="grounded-answer">
         <GroundedAnswerWarnings answer={answer} />
         <GroundedEvidenceDisclosure
           title={t("grounded.title.knowledge")}
-          summary={knowledgeEvidenceSummary(answer, t)}
+          summary={knowledgeEvidenceSummary(citations, contextPack, t)}
+          reportInspection={answer.groundingKind === "hybrid"}
         >
           <LocalKnowledgeCitationList
-            citations={answer.citations}
+            citations={citations}
             citationPreview={citationPreview}
-            openDocumentationTarget={openDocumentationTarget}
             unverifiedSupport={supportUnverified(answer.uncertainty)}
           />
           <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
           <UncertaintyLine markers={answer.uncertainty} />
-          <LocalKnowledgeContextPackSummary contextPack={answer.contextPack} />
+          <LocalKnowledgeContextPackSummary contextPack={contextPack} />
         </GroundedEvidenceDisclosure>
       </div>
     );
@@ -1949,10 +2046,7 @@ export function GroundedAnswer({
         >
           <CoverageNotice
             omittedCounts={answer.contextPack.folder.omittedCounts}
-            singleFile={
-              answer.contextPack.folder.scopeKind === "files" &&
-              answer.contextPack.folder.fileCount === 1
-            }
+            singleFile={isSingleFileScope(answer.contextPack.folder)}
           />
           {/* Folder evidence (source-tagged) */}
           <CitationList
@@ -1964,7 +2058,6 @@ export function GroundedAnswer({
           <LocalKnowledgeCitationList
             citations={answer.knowledgeCitations}
             citationPreview={citationPreview}
-            openDocumentationTarget={openDocumentationTarget}
             unverifiedSupport={supportUnverified(answer.uncertainty)}
           />
           <KnowledgePodRetrievalActivityPanel activity={answer.retrievalActivity} />
@@ -1995,9 +2088,7 @@ export function GroundedAnswer({
       >
         <CoverageNotice
           omittedCounts={answer.contextPack.omittedCounts}
-          singleFile={
-            answer.contextPack.scopeKind === "files" && answer.contextPack.fileCount === 1
-          }
+          singleFile={isSingleFileScope(answer.contextPack)}
         />
         <CitationList
           citations={answer.citations}

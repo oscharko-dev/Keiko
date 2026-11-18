@@ -30,10 +30,15 @@ import { verifyPortableAttestedSidecars } from "../update-portable-sidecar-verif
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
 import {
   discoverQualifiedPortableOpenCode,
+  discoverReleasedWindowsGatewayHelper,
   portableInstallCarriesReleaseSignature,
   releasedWindowsGatewayHelperPin,
 } from "./productionPortableCodingRuntime.js";
 import { OPENCODE_RUNTIME_VERSION_PINS } from "./opencodeRuntimeVersions.js";
+import {
+  NPM_LANE_RUNTIME_APPROVALS,
+  type NpmLaneRuntimeApproval,
+} from "./npmLaneRuntimeApprovals.js";
 
 const TARGET = "windows-x64";
 const COMMIT = "c".repeat(40);
@@ -65,7 +70,151 @@ describe("released Windows gateway helper pin", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("admits the independently approved evaluation artifact without claiming platform qualification", () => {
+    const root = portableInstall("evaluation");
+    const input = {
+      env: {},
+      installRoot: root,
+      platform: "win32" as const,
+      arch: "x64",
+      windowsPortableApproval: evaluationArtifactApproval(),
+    };
+    const runtime = discoverQualifiedPortableOpenCode(input);
+    expect(runtime).toBeDefined();
+    if (runtime === undefined) throw new Error("evaluation runtime missing");
+    expect(releasedWindowsGatewayHelperPin(runtime)).toBe(sha256(SUPERVISOR));
+    expect(runtime.platformAssurance).toBe("evaluation-unqualified");
+    expect(runtime.sidecar.availability).toMatchObject({
+      signatureVerified: false,
+      qualificationVerified: false,
+    });
+    expect(discoverReleasedWindowsGatewayHelper(input)).toMatchObject({
+      helperPath: runtime.nativeHelperPath,
+      helperSha256: sha256(SUPERVISOR),
+      lane: "portable-evaluation",
+    });
+  });
+
+  it("never promotes a self-consistent manifest without independent artifact approval", () => {
+    const runtime = discoverEvaluation(portableInstall("evaluation"));
+    expect(runtime).toBeDefined();
+    if (runtime === undefined) throw new Error("evaluation runtime missing");
+    expect(releasedWindowsGatewayHelperPin(runtime)).toBeUndefined();
+  });
+
+  it.each([
+    "helperSha256",
+    "upstreamVersion",
+    "adapterName",
+    "adapterVersion",
+    "executableTreeSha256",
+    "licenseSha256",
+    "sbomSha256",
+    "protocolSchemaSha256",
+  ] as const)("refuses an evaluation artifact outside the independent %s pin", (field) => {
+    expectNoEvaluationGateway({ ...evaluationArtifactApproval(), [field]: "f".repeat(64) });
+  });
+
+  it("requires both pinned helper sizes and the supervisor digest", () => {
+    const approval = { ...evaluationArtifactApproval() };
+    const supervisor = approval.runtimeSupervisor;
+    if (supervisor === undefined) throw new Error("fixture supervisor missing");
+    expectNoEvaluationGateway({ ...approval, helperSizeBytes: approval.helperSizeBytes + 1 });
+    expectNoEvaluationGateway({
+      ...approval,
+      runtimeSupervisor: { ...supervisor, sizeBytes: supervisor.sizeBytes + 1 },
+    });
+    expectNoEvaluationGateway({
+      ...approval,
+      runtimeSupervisor: { ...supervisor, sha256: "f".repeat(64) },
+    });
+    delete approval.runtimeSupervisor;
+    expectNoEvaluationGateway(approval);
+  });
+
+  it.each(["keiko-runtime-supervisor", "keiko-secure-workspace-read"])(
+    "rejects a self-consistent replacement of %s",
+    (name) => {
+      const root = portableInstall("evaluation");
+      const activationPath = join(root, ".portable", "runtime-activation.json");
+      const activation = JSON.parse(readFileSync(activationPath, "utf8")) as {
+        nativeHelpers: Record<string, unknown>[];
+      };
+      const helper = activation.nativeHelpers.find((entry) => entry.name === name);
+      if (helper === undefined) throw new Error("fixture helper missing");
+      const replacement = "unapproved replacement";
+      writeFileSync(join(root, "runtime", "native", `${name}.exe`), replacement);
+      helper.shippedSha256 = sha256(replacement);
+      helper.sizeBytes = Buffer.byteLength(replacement);
+      writeFileSync(activationPath, JSON.stringify(activation));
+      expectNoEvaluationGateway(evaluationArtifactApproval(), root);
+    },
+  );
+
+  it("rechecks actual license evidence even when the payload manifest was rebound", () => {
+    const root = portableInstall("evaluation");
+    const replacement = "unapproved license evidence";
+    writeFileSync(join(root, SIDECAR_ROOT, "LICENSE.txt"), replacement);
+    const activationPath = join(root, ".portable", "runtime-activation.json");
+    const activation = JSON.parse(readFileSync(activationPath, "utf8")) as {
+      sidecarRuntimes: Record<string, unknown>[];
+    };
+    const sidecar = activation.sidecarRuntimes[0];
+    if (sidecar === undefined) throw new Error("fixture sidecar missing");
+    sidecar.payloadSha256 = treeSha256({
+      ...sidecarFixture("evaluation").files,
+      "LICENSE.txt": replacement,
+    });
+    writeFileSync(activationPath, JSON.stringify(activation));
+    expect(discoverEvaluationWithApproval(root, evaluationArtifactApproval())).toBeUndefined();
+  });
 });
+
+function discoverEvaluationWithApproval(
+  root: string,
+  approval: NpmLaneRuntimeApproval,
+): ReturnType<typeof discoverQualifiedPortableOpenCode> {
+  return discoverQualifiedPortableOpenCode({
+    env: {},
+    installRoot: root,
+    platform: "win32",
+    arch: "x64",
+    windowsPortableApproval: approval,
+  });
+}
+
+function expectNoEvaluationGateway(
+  approval: NpmLaneRuntimeApproval,
+  root = portableInstall("evaluation"),
+): void {
+  const runtime = discoverEvaluationWithApproval(root, approval);
+  expect(runtime).toBeDefined();
+  if (runtime === undefined) throw new Error("evaluation runtime missing");
+  expect(releasedWindowsGatewayHelperPin(runtime)).toBeUndefined();
+}
+
+function evaluationArtifactApproval(): NpmLaneRuntimeApproval {
+  const sidecar = verifyPortableAttestedSidecars(
+    runtimeActivation(sidecarFixture("evaluation").runtime, "evaluation"),
+    TARGET,
+    "evaluation-unqualified",
+  ).sidecars[0];
+  if (sidecar === undefined) throw new Error("fixture sidecar missing");
+  return {
+    ...NPM_LANE_RUNTIME_APPROVALS["windows-x64"],
+    helperSha256: sha256(SECURE_READ),
+    helperSizeBytes: Buffer.byteLength(SECURE_READ),
+    executableTreeSha256: sidecar.executableTreeSha256,
+    licenseSha256: sidecar.licenseEvidenceSha256,
+    sbomSha256: sidecar.sbomEvidenceSha256,
+    runtimeSupervisor: {
+      sha256: sha256(SUPERVISOR),
+      sizeBytes: Buffer.byteLength(SUPERVISOR),
+      sourceTreeSha256: "a".repeat(64),
+    },
+  };
+}
 
 describe("production portable OpenCode discovery", () => {
   it("discovers only a disk-verified sidecar with a signed exact-byte attestation", () => {

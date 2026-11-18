@@ -2409,6 +2409,16 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.documents.tool": "Dokumente",
   "chat.review.tool": "Dokumentenbewertung",
   "chat.knowledge.partial": "Teilergebnis. Nicht alle Dokumentinformationen sind enthalten.",
+  "chat.knowledge.failure.cursorStale":
+    "Keiko kann das Lesen an der bisherigen Stelle nicht fortsetzen.",
+  "chat.knowledge.failure.documentOrCursorStale":
+    "Keiko kann das ausgewählte Dokument nicht weiter lesen oder prüfen.",
+  "chat.knowledge.failure.documentStaleOrOutOfScope":
+    "Das ausgewählte Dokument wurde geändert oder liegt außerhalb der aktuell verbundenen Knowledge Pods.",
+  "chat.knowledge.failure.sourceChanged":
+    "Die verbundenen Quellen wurden während dieser Anfrage geändert.",
+  "chat.knowledge.failure.restartSource":
+    "Bitte Keiko, die Dokumente aus den aktuell verbundenen Knowledge Pods erneut zu lesen.",
   "chat.knowledge.outcome.results": "Wissensergebnisse",
   "chat.knowledge.outcome.detected": "Erkannte Anforderungen",
   "chat.knowledge.outcome.matched": "Passende Anforderungen",
@@ -2759,6 +2769,16 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Die gespeicherte Verbindung wurde aus diesem Browserprofil entfernt. Die aktuelle Sitzung und die Freigabe auf dem Server bleiben bestehen.",
   "updates.notice.aria": "Keiko-Update-Hinweis",
   "updates.status.portableSetupRequired": "Portable Setup erforderlich",
+  "updates.status.portableUpdateUnavailable": "Updates in der App nicht verfügbar",
+  "updates.versionPortableUpdateUnavailable":
+    "Aktuell {current}; diese Installation unterstützt keine Updates in der App.",
+  "updates.portableUpdateUnavailable.body":
+    "Dieses Windows-Paket kann sich nicht selbst aktualisieren. Du kannst Keiko weiter nutzen; eine erneute Einrichtung aktiviert keine Updates in der App.",
+  "updates.portableUpdateUnavailable.guidance":
+    "Nutze diese Version weiter. Lies vor einem Update die Windows-Anleitung der neueren Veröffentlichung.",
+  "updates.portableUpdateUnavailable.releases": "Offizielle Veröffentlichungen ansehen",
+  "updates.check.portableUpdateUnavailable":
+    "Gerade geprüft. Dieses Windows-Paket kann sich weiterhin nicht selbst aktualisieren; eine erneute Einrichtung aktiviert keine Updates in der App.",
   "updates.status.portableExternallyManaged": "Updates werden durch deine Organisation verwaltet",
   "updates.notice.title": "Update verfügbar",
   "updates.notice.criticalTitle": "Kritisches Update verfügbar",
@@ -2819,7 +2839,18 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.pod": "Jira Pod",
   "chat.skills.jira.podRequired":
     "Verbinde einen bereiten Jira Pod, um eine Vorlage zu prüfen oder vorzuschlagen.",
-  "chat.skills.jira.empty": "Noch keine Vorlagen. Erstelle eine aus einem Jira-Projekt.",
+  "chat.skills.jira.empty": "Noch keine Jira-Vorlagen gespeichert.",
+  "chat.skills.jira.starter.title": "Jira-Startvorlagen",
+  "chat.skills.jira.starter.connect":
+    "Aktiviere einen Jira Pod, um die Startvorlagen zu verwenden.",
+  "chat.skills.jira.starter.edit":
+    "Öffne eine Startvorlage und ergänze unter Metadaten (YAML) den Projektschlüssel und den Vorgangstyp.",
+  "chat.skills.jira.starter.epic":
+    "## Ziel\n\nBeschreibe das Ziel des Epics.\n\n## Umfang\n\nListe die enthaltenen Arbeiten auf.\n\n## Akzeptanzkriterien\n\nBeschreibe, wie sich überprüfen lässt, ob das Ziel erreicht wurde.",
+  "chat.skills.jira.starter.issue":
+    "## Beschreibung\n\nBeschreibe, was zu tun ist und warum.\n\n## Akzeptanzkriterien\n\nListe die Bedingungen für den Abschluss auf.",
+  "chat.skills.jira.starter.bug":
+    "## Schritte zur Reproduktion\n\nNenne die Schritte und die betroffene Version oder Umgebung.\n\n## Erwartetes Verhalten\n\nBeschreibe, was passieren sollte.\n\n## Tatsächliches Verhalten\n\nBeschreibe, was passiert.",
   "chat.skills.jira.invalid": "Muss korrigiert werden",
   "chat.skills.jira.checking": "Wird mit Jira abgeglichen …",
   "chat.skills.jira.checkFailed": "Konnte gerade nicht mit Jira abgeglichen werden.",
@@ -2880,6 +2911,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.unavailable": "Ausgewählter Skill nicht verfügbar",
   "chat.skills.requestError":
     "Skills konnten nicht aktualisiert werden. Auswahl neu laden und erneut versuchen.",
+  "chat.skills.connectionRequired":
+    "Wähle „Browser verbinden“, um Skills neu zu laden und fortzufahren. Deine Auswahl bleibt erhalten.",
   "chat.skills.upload": "Markdown hochladen (.md, bis 128 KiB)",
   "chat.skills.retry": "Neu laden",
   "chat.skills.refusal.template-marker-misplaced":
@@ -2956,45 +2989,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.bindDead":
     "Diese Vorlage ist mit einem Vorgangstyp verbunden, den es in diesem Projekt nicht mehr gibt („{subject}“), deshalb gilt sie für nichts und blockiert nichts. Ändere den Vorgangstyp oder lösche die Vorlage.",
   "chat.skills.jira.openProposal": "Im Editor öffnen",
-  "agentLauncher.agent": "Agent",
-  "agentLauncher.agentCount": "{count} Agenten",
-  "agentLauncher.model": "Modell",
-  "agentLauncher.repository": "Repository",
-  "agentLauncher.repositoryPlaceholder": "/absoluter/repository/pfad",
-  "agentLauncher.workflow.unitTest": "Unit Test Agent",
-  "agentLauncher.workflow.bugfix": "Bugfix Agent",
-  "agentLauncher.scope.sourceFile": "Quelldatei",
-  "agentLauncher.scope.bugReport": "Fehlerbericht",
-  "agentLauncher.sourceFilePlaceholder": "src/datei.ts",
-  "agentLauncher.browseSourceFile": "Quelldatei durchsuchen",
-  "agentLauncher.selectRepositoryFirst":
-    "Wähle ein Repository aus, bevor du Quelldateien durchsuchst.",
-  "agentLauncher.skill": "Skill",
-  "agentLauncher.skillNone": "Kein Skill",
-  "agentLauncher.skillNote":
-    "Optional. Ein privater Markdown-Skill leitet jeden Modellaufruf dieses Laufs an. Er gewährt keine zusätzlichen Berechtigungen.",
-  "agentLauncher.skillUnavailable":
-    "Private Skills konnten nicht geladen werden. Der Lauf startet ohne Skill.",
-  "agentLauncher.observedBehavior": "Beobachtetes Verhalten",
-  "agentLauncher.observedBehaviorPlaceholder": "Beschreibe den beobachteten Fehler.",
-  "agentLauncher.failingOutput": "Fehlerhafte Ausgabe",
-  "agentLauncher.stackTrace": "Stacktrace",
-  "agentLauncher.relatedFiles": "Zugehörige Dateien",
-  "agentLauncher.relatedFilesPlaceholder": "src/datei.ts, src/andere.ts",
-  "agentLauncher.notRegistered": "Das Repository ist nicht registriert.",
-  "agentLauncher.registering": "Wird registriert…",
-  "agentLauncher.register": "Repository registrieren",
-  "agentLauncher.useCurrentFile": "Aktuelle Datei verwenden",
-  "agentLauncher.loading": "Modelle und Projekte werden geladen…",
-  "agentLauncher.start": "{label} starten",
-  "agentLauncher.starting": "Wird gestartet…",
-  "agentLauncher.validation.repositoryRequired": "Ein Repository ist erforderlich.",
-  "agentLauncher.validation.noModel": "Kein kompatibles Modell verfügbar.",
-  "agentLauncher.validation.explainFile": "Der Erklärplan benötigt einen Dateipfad.",
-  "agentLauncher.validation.unitSource": "Der Unit Test Agent benötigt eine Quelldatei.",
-  "agentLauncher.validation.bugDescription":
-    "Der Bugfix Agent benötigt ein beobachtetes Verhalten.",
-  "agentLauncher.fileOutsideRepository": "Wähle eine Datei innerhalb des ausgewählten Repositorys.",
   "editor.empty.title": "Projekt öffnen",
   "editor.empty.description":
     "Wählen Sie einen Projektordner aus, um mit der Bearbeitung zu beginnen. Der Editor arbeitet innerhalb des ausgewählten Workspace-Stammverzeichnisses.",
@@ -3085,22 +3079,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "editor.fileHistory.deleteFailed": "Der Wiederherstellungspunkt konnte nicht gelöscht werden.",
   "editor.fileHistory.sizeDelta": "Größenänderung: {delta}",
   "editor.fileHistory.entryLabel": "Wiederherstellungspunkt {sequence}, {origin}, {timestamp}",
-  "agentLauncher.autonomy": "Autonomiemodus",
-  "agentLauncher.mode.governedAssist.label": "Um Genehmigung bitten",
-  "agentLauncher.mode.governedAssist.description":
-    "Lesen und Planen sind möglich. Der geprüfte Patch benötigt weiterhin deine ausdrückliche Apply-Bestätigung.",
-  "agentLauncher.mode.supervisedCoding.label": "Überwachter Workspace",
-  "agentLauncher.mode.supervisedCoding.description":
-    "Routinemäßige Workspace-Arbeit wird von der Policy zugelassen; die Dry-Run-Prüfung bleibt für diese Agentenoberfläche verpflichtend.",
-  "agentLauncher.mode.autonomousDelivery.label": "Vollzugriff",
-  "agentLauncher.mode.autonomousDelivery.description":
-    "Begrenzte Workspace-Arbeit darf ohne einzelne Rückfragen fortfahren. Connector- und Delivery-Ausführung bleiben hier nicht verfügbar.",
-  "agentLauncher.executionUnavailable":
-    "Connector- und Delivery-Ausführung sind für Unit-Test- und Bugfix-Agenten nicht verfügbar.",
-  "agentLauncher.governanceUnavailable":
-    "Der Server hat keinen Authority Envelope bestätigt. Der Agentenlauf wurde nicht geöffnet.",
-  "agentRunWidget.autonomyMode": "Effektive Autonomie: {mode}",
-  "agentRunWidget.executionUnavailable": "Connector- und Delivery-Ausführung nicht verfügbar",
+
   "attachment.rejection.deliveryRefused":
     "Das Bild konnte nicht sicher gespeichert oder für die Übertragung autorisiert werden. Füge es erneut hinzu und versuche es noch einmal.",
   "attachment.imagesDelivered": "Bilder an das ausgewählte Modell übertragen",
@@ -3177,9 +3156,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "agentRunWidget.error.loadReport": "Lauf-Bericht konnte nicht geladen werden.",
   "agentRunWidget.error.cancelRun": "Lauf konnte nicht abgebrochen werden.",
   "agentRunWidget.error.applyRun": "Lauf konnte nicht übernommen werden.",
-  "agentRunWidget.empty.title": "Der Agentenlauf ist nicht konfiguriert.",
-  "agentRunWidget.empty.body":
-    "Öffnen Sie ein neues Agent-Fenster über den Launcher, um einen Workflow zu starten.",
+  "agentRunWidget.empty.title": "Details zum Agentenlauf sind nicht verfügbar.",
   "agentRunWidget.costClassTitle": "Modell-Kostenklasse",
   "agentRunWidget.runIdLabel": "Lauf {id}",
   "agentRunWidget.meter.elapsed": "Laufzeit",
@@ -3188,7 +3165,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "agentRunWidget.meter.tokens": "{tokens} Token",
   "agentRunWidget.meter.latency": "Latenz",
   "agentRunWidget.perm.noWorkspace": "kein Arbeitsbereich",
-  "agentRunWidget.runInput.summary": "Lauf-Eingabe",
   "agentRunWidget.log.ariaLabel": "Lauf-Ereignisse",
   "agentRunWidget.log.connecting": "Verbindung zu Lauf-Ereignissen wird hergestellt…",
   "agentRunWidget.log.waiting": "Warten auf Lauf-Ereignisse…",
@@ -3257,6 +3233,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.turn.cancelled": "Beitrag abgebrochen",
   "chat.claimNotice.label": "Hinweis von Keiko",
   "chat.claimNotice.noJiraCreate": "In diesem Durchgang wurde kein Jira-Vorgang angelegt.",
+  "chat.claimNotice.noJiraApproval":
+    "In diesem Durchgang wartet keine Jira-Freigabe. Das Lesen von Feldern oder Speichern eines Entwurfs erzeugt keine Freigabekarte.",
+  "chat.claimNotice.jiraReportNotGenerated":
+    "In diesem Durchgang wurde kein Jira-Bericht zum Herunterladen erzeugt. Codeblöcke lassen sich kopieren, sind aber keine Berichtsexporte.",
   "chat.claimNotice.toolCallNotExecuted":
     "Ein als Text geschriebener Tool-Aufruf in dieser Antwort wurde nicht ausgeführt.",
   "chat.turnEnd.lead": "Diese Anfrage wurde nicht abgeschlossen.",
@@ -3651,139 +3631,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "promptEnhancer.empty.ariaLabel": "Leerer Zustand der Prompt-Verbesserung",
   "promptEnhancer.empty.message": "Noch kein verbesserter Prompt.",
 
-  "documentationBrowser.reason.preview-available.title": "Lokale Dokumentation erreichbar",
-  "documentationBrowser.reason.preview-available.detail":
-    "Dieser Loopback-Dokumentationsserver hat geantwortet. Als Nächstes kann eine Live-Vorschau geöffnet werden.",
-  "documentationBrowser.reason.rendering-deferred.title": "Zur Prüfung geöffnet",
-  "documentationBrowser.reason.rendering-deferred.detail":
-    "Keiko kann zu diesem Handbuch navigieren. Inline-Rendering folgt in einer späteren Version; es wurde nichts gecrawlt, indiziert oder an den Chat angehängt.",
-  "documentationBrowser.reason.frame-embedding-refused.title": "Seite verweigert Einbettung",
-  "documentationBrowser.reason.frame-embedding-refused.detail":
-    "Diese Seite verweigert die Einbettung über X-Frame-Options oder frame-ancestors. Keiko umgeht die Einbettungsrichtlinie der Website nicht.",
-  "documentationBrowser.reason.authentication-required.title": "Anmeldung erforderlich",
-  "documentationBrowser.reason.authentication-required.detail":
-    "Diese Dokumentation erfordert eine Authentifizierung. Keiko erfasst oder wiederholt Ihre Zugangsdaten nicht.",
-  "documentationBrowser.reason.authentication-required.action":
-    "Öffnen Sie das Handbuch in Ihrer eigenen Browsersitzung und versuchen Sie es anschließend mit einer zugänglichen Seite erneut.",
-  "documentationBrowser.reason.proxy-or-firewall-blocked.title":
-    "Durch Netzwerkrichtlinie blockiert",
-  "documentationBrowser.reason.proxy-or-firewall-blocked.detail":
-    "Ein Proxy oder eine Firewall hat diese Anfrage blockiert. Keiko respektiert die Netzwerkrichtlinie Ihrer Organisation und umgeht sie nicht.",
-  "documentationBrowser.reason.proxy-or-firewall-blocked.action":
-    "Bestätigen Sie, dass die Adresse durch Ihre Netzwerkrichtlinie erlaubt ist, und versuchen Sie es erneut.",
-  "documentationBrowser.reason.host-unreachable.title": "Host nicht gefunden",
-  "documentationBrowser.reason.host-unreachable.detail":
-    "Die Adresse konnte nicht aufgelöst werden. Prüfen Sie den Hostnamen und Ihre Verbindung.",
-  "documentationBrowser.reason.host-unreachable.action":
-    "Prüfen Sie die Adresse und versuchen Sie es erneut.",
-  "documentationBrowser.reason.request-timed-out.title": "Zeitüberschreitung der Anfrage",
-  "documentationBrowser.reason.request-timed-out.detail":
-    "Die Dokumentation hat nicht innerhalb des gesteuerten Zeitlimits geantwortet.",
-  "documentationBrowser.reason.request-timed-out.action":
-    "Versuchen Sie es erneut oder prüfen Sie, ob der Server läuft.",
-  "documentationBrowser.reason.content-too-large.title": "Dokument zu groß",
-  "documentationBrowser.reason.content-too-large.detail":
-    "Dieses Dokument überschreitet die gesteuerte Größenbegrenzung für die Prüfung.",
-  "documentationBrowser.reason.unsupported-scheme.title": "Nicht unterstützte Adresse",
-  "documentationBrowser.reason.unsupported-scheme.detail":
-    "Der Dokumentationsbrowser öffnet HTTP-, HTTPS- und lokale Dateiadressen. Diese Adresse verwendet ein nicht unterstütztes Schema.",
-  "documentationBrowser.reason.unsupported-external-target.title":
-    "Öffentliche Adresse nicht geöffnet",
-  "documentationBrowser.reason.unsupported-external-target.detail":
-    "Dies ist eine öffentliche Internetadresse. Der Dokumentationsbrowser ist für lokale und Intranet-Handbücher vorgesehen und öffnet in dieser Version keine öffentlichen Websites.",
-  "documentationBrowser.reason.local-file-scope-unavailable.title":
-    "Außerhalb des genehmigten Umfangs",
-  "documentationBrowser.reason.local-file-scope-unavailable.detail":
-    "Diese lokale Datei liegt außerhalb des genehmigten Dokumentationsumfangs.",
-  "documentationBrowser.reason.browser-backend-unavailable.title":
-    "Vorschau-Backend nicht verfügbar",
-  "documentationBrowser.reason.browser-backend-unavailable.detail":
-    "Es ist kein lokales Browser-Backend konfiguriert, daher ist keine Live-Vorschau verfügbar. Ziele können weiterhin klassifiziert werden.",
-  "documentationBrowser.reason.invalid-target.title": "Ungültige Adresse",
-  "documentationBrowser.reason.invalid-target.detail":
-    "Dies sieht nicht wie eine gültige Dokumentationsadresse aus.",
-  "documentationBrowser.reason.navigation-failed.title":
-    "Dokumentation konnte nicht geöffnet werden",
-  "documentationBrowser.reason.navigation-failed.detail":
-    "Die Dokumentation konnte nicht geöffnet werden.",
-  "documentationBrowser.reason.navigation-failed.action": "Bitte versuchen Sie es erneut.",
-  "documentationBrowser.proposal.not-evaluated.title": "Nicht geprüft",
-  "documentationBrowser.proposal.not-evaluated.detail": "Keiko hat dieses Ziel noch nicht geprüft.",
-  "documentationBrowser.proposal.likely-manual.title": "Sieht wie ein indizierbares Handbuch aus",
-  "documentationBrowser.proposal.likely-manual.detail":
-    "Keiko hat dies als statisches HTML-Handbuch erkannt. Prüfen Sie vor der Genehmigung den nachfolgenden Umfang.",
-  "documentationBrowser.proposal.probable-manual.title":
-    "Dies könnte ein indizierbares Handbuch sein",
-  "documentationBrowser.proposal.probable-manual.detail":
-    "Prüfen Sie den vorgeschlagenen Umfang sorgfältig vor der Genehmigung — Keiko ist sich nicht vollständig sicher.",
-  "documentationBrowser.proposal.requires-local-file-approval.title":
-    "Lokales Handbuch — Dateizugriff erforderlich",
-  "documentationBrowser.proposal.requires-local-file-approval.detail":
-    "Dies sieht wie ein lokales HTML-Handbuch aus. Durch die Genehmigung erhält Keiko Zugriff, es aus Ihrem genehmigten lokalen Dateiumfang zu indizieren.",
-  "documentationBrowser.proposal.unsupported.title": "Nicht zur Indizierung angeboten",
-  "documentationBrowser.proposal.unsupported.detail":
-    "Keiko indiziert diese Zielklasse nicht. Öffentliche Websites und nicht unterstützte Schemas sind ausgeschlossen.",
-  "documentationBrowser.proposal.denied.title": "Dieses Ziel kann nicht indiziert werden",
-  "documentationBrowser.proposal.denied.detail":
-    "Die Adresse wurde abgelehnt. Keiko indiziert keine Ziele mit Zugangsdaten.",
-  "documentationBrowser.proposal.authentication-required.title": "Anmeldung erforderlich",
-  "documentationBrowser.proposal.authentication-required.detail":
-    "Dieses Handbuch erfordert eine Authentifizierung, die Keiko nicht erfasst. Öffnen Sie stattdessen eine zugängliche Seite.",
-  "documentationBrowser.proposal.already-indexed.title": "Bereits in einem Knowledge Pod",
-  "documentationBrowser.proposal.already-indexed.detail":
-    "Ein Knowledge Pod deckt dieses Handbuch bereits ab. Öffnen Sie den vorhandenen Pod, statt ein Duplikat zu erstellen.",
-  "documentationBrowser.proposal.degraded.title": "Kein statisches Handbuch",
-  "documentationBrowser.proposal.degraded.detail":
-    "Dies sieht wie eine dynamische oder interaktive Seite aus. Versuchen Sie die Startseite des Handbuchs, beispielsweise index.html.",
-  "documentationBrowser.confidence.high": "Hohe Zuverlässigkeit",
-  "documentationBrowser.confidence.medium": "Mittlere Zuverlässigkeit",
-  "documentationBrowser.confidence.low": "Niedrige Zuverlässigkeit — sorgfältig prüfen",
-  "documentationBrowser.deniedLinkClass.cross-origin": "andere Websites",
-  "documentationBrowser.deniedLinkClass.outside-path-prefix": "Seiten außerhalb dieses Abschnitts",
-  "documentationBrowser.deniedLinkClass.unsupported-scheme": "Nicht-Web-Links",
-  "documentationBrowser.deniedLinkClass.credentialed-url": "Links mit Zugangsdaten",
-  "documentationBrowser.deniedLinkClass.path-traversal": "Path-Traversal-Links",
-  "documentationBrowser.error.unexpected": "Unerwarteter Fehler.",
-  "documentationBrowser.error.empty": "Geben Sie eine zu öffnende Dokumentationsadresse ein.",
-  "documentationBrowser.scope.podName": "Name des Knowledge Pods",
-  "documentationBrowser.scope.scope": "Umfang",
-  "documentationBrowser.scope.limits": "Grenzen",
-  "documentationBrowser.scope.limitsValue":
-    "bis zu {maxPages} Seiten, Tiefe {maxDepth}, keine Weiterleitungen",
-  "documentationBrowser.scope.pages": "Seiten",
-  "documentationBrowser.scope.pagesValue":
-    "Noch nicht erfasst — wird während der Indizierung gezählt.",
-  "documentationBrowser.scope.excluded": "Ausgeschlossen",
-  "documentationBrowser.scope.robots": "Robots",
-  "documentationBrowser.scope.robotsValue": "Keiko beachtet die robots.txt der Website.",
-  "documentationBrowser.proposal.existingPodReference": "Referenz des vorhandenen Pods:",
-  "documentationBrowser.consent.ariaLabel": "Einwilligung zur Indizierung",
-  "documentationBrowser.consent.createPod": "Knowledge Pod aus diesem Handbuch erstellen",
-  "documentationBrowser.consent.viewPods": "Ihre Knowledge Pods anzeigen",
-  "documentationBrowser.action.cancel": "Abbrechen",
-  "documentationBrowser.action.dismiss": "Schließen",
-  "documentationBrowser.action.open": "Öffnen",
-  "documentationBrowser.action.reload": "Neu laden",
-  "documentationBrowser.action.prepareIndexing": "Indizierung vorbereiten",
-  "documentationBrowser.approved.title": "Zur Indizierung genehmigt",
-  "documentationBrowser.approved.prefix": "Keiko indiziert",
-  "documentationBrowser.approved.suffix":
-    "über die gesteuerte lokale Indizierungspipeline. Es wurde noch nichts gecrawlt; die Indizierung läuft als separater gesteuerter Schritt und bleibt auf diesem Gerät.",
-  "documentationBrowser.status.opening": "Dokumentation wird geöffnet…",
-  "documentationBrowser.empty.instructions":
-    "Geben Sie eine lokale oder Intranet-Dokumentationsadresse ein und wählen Sie Öffnen",
-  "documentationBrowser.indexing.checking": "Handbuch wird geprüft…",
-  "documentationBrowser.indexing.recordingConsent": "Ihre Einwilligung wird aufgezeichnet…",
-  "documentationBrowser.indexing.proposalAriaLabel": "Indizierungsvorschlag",
-  "documentationBrowser.field.address": "Dokumentationsadresse",
-  "documentationBrowser.field.addressPlaceholder": "https://intranet/handbuch oder file:///…",
-  "documentationBrowser.navigation.ariaLabel": "Dokumentationsnavigation",
-  "documentationBrowser.currentTarget": "Aktuelles Ziel:",
-  "documentationBrowser.indexing.eligibleNote":
-    "Prüfen Sie, ob dies wie ein indizierbares Handbuch aussieht — Sie genehmigen, bevor etwas indiziert wird.",
-  "documentationBrowser.indexing.ineligibleNote":
-    "Öffnen Sie ein lokales oder Intranet-Handbuch, um seine Indizierbarkeit zu prüfen.",
-
   "gitDelivery.state.ready-to-execute": "Bereit zur Ausführung",
   "gitDelivery.state.waiting-for-approval": "Warten auf Genehmigung",
   "gitDelivery.state.blocked": "Blockiert",
@@ -4018,7 +3865,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gatewaySetup.ui.testing": "Zugangsdaten werden geprüft…",
   "gatewaySetup.ui.testAndSave": "Prüfen & speichern",
   "gatewaySetup.ui.secretsNote":
-    "Gespeicherte Geheimnisse bleiben lokal und werden nie an den Browser zurückgegeben. Unterstützte API-Key-Header: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
+    "Gespeicherte Geheimnisse bleiben lokal und werden nie an den Browser zurückgegeben. Wenn dein Browser diese Zugangsdaten als Passwort speichern möchte, lehne diese separate Browserabfrage ab. Unterstützte API-Key-Header: Authorization, X-Litellm-Key, X-Api-Key, api-key.",
   "gatewaySetup.ui.copy.titleUpdate": "Keiko-Zugangsdaten aktualisieren",
   "gatewaySetup.ui.copy.titleSetup": "Keiko mit Ihren internen LLMs verbinden",
   "gatewaySetup.ui.copy.descriptionUpdate":
@@ -4519,12 +4366,15 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "grounded.knowledge.references": "{used} / {budget} Referenzen",
   "grounded.knowledge.hybridAria": "Zusammenfassung kombinierter Quellen",
   "grounded.knowledge.hybridTitle": "Kombiniert: {folders} + {pods}",
+  "grounded.knowledge.editorUnavailable":
+    "Die zitierte Quelle konnte nicht geöffnet werden. Prüfe die Quelle in ihrem Knowledge Pod und versuche es erneut.",
   "grounded.manual.name": "HTML-Handbuch",
   "grounded.manual.evidence": "HTML-Handbuchbeleg",
-  "grounded.manual.openManual": "Handbuch öffnen",
-  "grounded.manual.openPage": "Seite öffnen",
-  "grounded.manual.opened": "Geöffnet",
-  "grounded.manual.failed": "Öffnen fehlgeschlagen",
+  "grounded.manual.checkSource": "Quelle prüfen",
+  "grounded.manual.checkPage": "Seite prüfen",
+  "grounded.manual.checking": "Quelle wird geprüft…",
+  "grounded.manual.verified": "Quelle geprüft",
+  "grounded.manual.failed": "Quellenprüfung fehlgeschlagen",
   "grounded.manual.reason.source-metadata-unavailable": "Quelle nicht verfügbar",
   "grounded.manual.reason.citation-lineage-mismatch": "Quellenangabe stimmt nicht überein",
   "grounded.manual.reason.target-outside-approved-scope": "Außerhalb des freigegebenen Umfangs",
@@ -6335,7 +6185,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Das Repository oder die Pull-Request-Nummer hat sich seit der letzten Vorschau geändert. Vorschau erneut abrufen, bevor Sie genehmigen oder übernehmen.",
   "gitClientWindow.ui.changesAndHistory": "Änderungen und Verlauf",
   "gitClientWindow.ui.resolveConflicts":
-    "Lösen Sie Konfliktdateien, bevor Sie committen oder synchronisieren.",
+    "Lösen Sie die Konflikte oder brechen Sie den Vorgang in Git ab. Vormerken, Zurücknehmen, Commit-Vorschau, Entwurfserstellung, Commit und Sync sind bis dahin nicht verfügbar.",
   "gitClientWindow.ui.stageAll": "Alle vormerken",
   "gitClientWindow.ui.unstageAll": "Alle zurücknehmen",
   "gitClientWindow.ui.noChanges": "Keine Änderungen",
@@ -6592,6 +6442,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitClientWindow.ui.new": "Neu",
   "gitClientWindow.ui.recent": "Zuletzt verwendet",
   "gitClientWindow.ui.error": "Fehler",
+  "gitClientWindow.ui.commitSigningRecovery":
+    "Git konnte diesen Commit nicht signieren. Prüfen Sie den Signaturschlüssel (user.signingKey) und das Signaturformat (gpg.format) des Repositorys. Stellen Sie sicher, dass Keiko das Signaturprogramm ausführen kann (gpg für OpenPGP oder ssh-keygen für SSH). Klicken Sie danach erneut auf Commit.",
   "figmaJson.ui.qiSource": "QI-Quelle",
   "figmaJson.ui.retry": "Erneut versuchen",
   "chatHistoryPanel.ui.conversations": "Konversationen",

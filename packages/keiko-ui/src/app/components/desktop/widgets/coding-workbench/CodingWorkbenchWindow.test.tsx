@@ -1812,12 +1812,58 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Starting a coding run stays unavailable until this installation's coding runtime is confirmed active.",
     );
-    // Field defect 1.1.1 (#3577): the sentence alone told an npm customer nothing they could act on.
+    // An unknown prerequisite does not establish the platform, package or repair command.
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "npm install -g @oscharko-dev/keiko-coding-runtime-darwin-arm64",
+      "Check startup diagnostics in the Activity Log",
     );
+    expect(screen.getByRole("alert")).not.toHaveTextContent(/npm install|darwin|Windows|Mac/u);
     expect(screen.queryByText(/You can bind a workspace now/u)).not.toBeInTheDocument();
   });
+
+  it.each([
+    ["payload-missing", "Files required by the coding runtime are missing"],
+    ["payload-tampered", "could not verify the integrity of its coding runtime files"],
+    ["runtime-disabled", "disabled in this installation's configuration"],
+    ["gateway-service-absent", "Select Repair; Windows asks for approval once"],
+    ["gateway-service-unqualified", "only a release-qualified Keiko package can use"],
+    ["gateway-service-managed-outside", "a system service that this Keiko does not set up"],
+    ["npm-runtime-package-missing", "This Keiko was installed with npm"],
+    ["portable-runtime-unverified", "could not verify its bundled coding runtime"],
+  ] as const)(
+    "keeps Start refused and shows the actual runtime prerequisite: %s",
+    (reason, explanation) => {
+      const state = liveState();
+      const controls = renderWorkbench(
+        liveState({
+          canStart: false,
+          runtime: {
+            ...state.runtime,
+            status: "ready",
+            value: {
+              schemaVersion: "1",
+              requestedMode: "governed-assist",
+              deploymentCeiling: "supervised-coding",
+              effectiveMode: "governed-assist",
+              runtimeAvailable: false,
+              runtimeUnavailableReason: reason,
+              selectableAgents: ["build"],
+            },
+          },
+        }),
+      );
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent(explanation);
+      expect(alert).not.toHaveTextContent(/npm install|darwin|Mac/u);
+      const start = screen.getByRole("button", { name: "Start coding run" });
+      expect(start).toHaveAttribute("aria-disabled", "true");
+      fireEvent.click(start);
+      expect(controls.start).not.toHaveBeenCalled();
+      // Only a broker state the Workbench can repair offers Repair (one-step Windows setup).
+      expect(screen.queryByRole("button", { name: "Repair" }) !== null).toBe(
+        reason === "gateway-service-absent",
+      );
+    },
+  );
 
   it("states the unqualified runtime once while the bootstrap setup section owns that message", (): void => {
     const initial = createInitialCodingWorkbenchRuntimeState();

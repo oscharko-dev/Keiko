@@ -49,6 +49,7 @@ export function startupUpdateNoticeKind(report: UpdatePreflightReport): ClientUp
   if (report.updateAvailable)
     return report.severity === "critical" ? "critical-update-available" : "update-available";
   if (isPortableExternallyManaged(report)) return "externally-managed";
+  if (isPortableUpdateUnavailable(report)) return "portable-update-unavailable";
   if (isPortableBootstrapSetupRequired(report)) return "portable-setup-required";
   if (isPortableReleaseMetadataUnavailable(report) || isUpdateCheckUnavailable(report))
     return "check-unavailable";
@@ -86,7 +87,8 @@ export function isPortableBootstrapSetupRequired(
   report: UpdatePreflightReport,
   session?: UpdateSessionStatus | undefined,
 ): boolean {
-  if (isPortableExternallyManaged(report, session)) return false;
+  if (isPortableExternallyManaged(report, session) || isPortableUpdateUnavailable(report, session))
+    return false;
   return (
     report.blockers.some((blocker) => blocker.code === "portable-install-mode-ineligible") &&
     (session === undefined
@@ -107,6 +109,16 @@ export function isPortableExternallyManaged(
     session?.installMode.reason === "portable-it-managed" ||
     session?.installMode.installKind === "portable-it-managed" ||
     session?.installMode.portable?.status === "it-managed"
+  );
+}
+
+export function isPortableUpdateUnavailable(
+  report: UpdatePreflightReport,
+  session?: UpdateSessionStatus | undefined,
+): boolean {
+  return (
+    report.blockers.some((blocker) => blocker.code === "portable-update-unavailable") ||
+    session?.installMode.reason === "portable-update-unavailable"
   );
 }
 

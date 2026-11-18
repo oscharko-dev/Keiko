@@ -4393,6 +4393,123 @@
         "Node 26 LTS is the sole supported runtime. npm installations need Node.js >=26.13.1 <27 and npm >=11.20.0 <12; desktop packages include their own runtime. This transition requires manual update review. (#4390)",
         "Back up local state and retain its private keys before updating. UI, Memory Vault and Knowledge databases migrate automatically; downgrading requires the matching pre-update backup."
       ]
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-11-16-keiko-1.5.1-chat-windows-jira-reliability",
+      "packageVersion": "1.5.1",
+      "releaseTag": "v1.5.1",
+      "supportedFrom": ["0.2.0", "1.5.0"],
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Chat starts more reliably with existing gateway models, and Windows Git, Editor, workspace and Jira workflows recover more reliably.",
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "UI schema 79 adds bounded Jira report downloads to the existing local database. Recent reports can be exported after a restart, and existing Chats and history carry forward. A downgrade uses its matching pre-update backup.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Chat can open while saved gateway models settle at startup. Late reads preserve the newest Chat and model selection. #4415 #4418",
+        "The Chat composer explains when the browser connection must be renewed and keeps the draft through normal reconnection. #4407 #4419",
+        "Windows Git finds Git in the user environment, shows repository history and reports the observed ahead and behind counts after Fetch and Pull. #4408 #4411 #4414",
+        "Editor refresh clears stale file-list warnings, Windows saves create readable history restore points, and source links open full file names containing spaces. #4403 #4406 #4417",
+        "Knowledge Pod tool receipts explain refused reads and how to continue. Short and narrow Chat windows keep Send reachable. #4405 #4416",
+        "Jira shows actual approval cards and report downloads. Recent reports can still be downloaded as Markdown and CSV after restarting Keiko. #4401 #4402 #4390",
+        "Skills offers editable Jira Epic, Jira Issue and Jira Bug examples while a verified Jira Pod is ready. Removing the last Pod disables the examples and keeps saved templates available. #4420 #4421",
+        "Coding Workbench explains unavailable platform runtimes and identifies verification that could not start. The Windows desktop package still carries an evaluation runtime. Starting Coding runs from that package requires the separate Windows runtime qualification. #4412 #4413 #4404 #4068",
+        "Windows installations with older setup receipts receive clear guidance when in-app updating is unavailable. #4400"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-11-16",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4409#6923967941",
+        "rationale": "The repository owner authorized stable Keiko 1.5.1 for the verified fixes and release preparation in PR #4409. The protected dev checks, resolved reviews, and exact-commit release workflow govern publication. Windows Coding package qualification remains tracked in #4068."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-11-17-keiko-1.5.2-standalone-folder-and-model-activation",
+      "packageVersion": "1.5.2",
+      "releaseTag": "v1.5.2",
+      "supportedFrom": ["0.2.0", "1.5.0", "1.5.1"],
+      "releaseNoteCategory": "new-additions",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Administrators can build a Keiko folder that starts without installation, chat models are activated in Settings > Models, and Windows Coding Workbench messages name the real cause.",
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Chat models are activated in Settings > Models, one at a time or with Activate all, and can be deactivated there again. Keiko no longer sends a check to every model at startup, so a shared gateway does not load models nobody uses. After each start, activate the model you want to use before sending. #4450",
+        "Administrators can build Keiko as one folder from the portable release archive. It starts without installation or download and keeps its data in .keiko-standalone in the user's home folder. A team gateway configuration placed beside the start files is adopted at start. The folder package is not published with this release. #4455",
+        "On Windows, a healthy start of an installed Keiko sets up the Windows runtime gateway service with one Windows approval, the Coding Workbench offers Repair when the service is missing or stopped, and a full uninstall removes it. A Windows npm installation without the coding runtime package points to the Windows desktop package instead of a reinstall. A checkout registered under another spelling of the same folder opens, and a failed checkout names a missing registration or a Git problem. #4454 #4404 #4410 #4068",
+        "Knowledge Pods without indexed chunks say so instead of reporting complete embedding. Chats connected only to Knowledge Pods show Knowledge evidence with their own citation and reference counts. Citations of verified Knowledge text sources open in the Editor. #4448 #4443",
+        "The standalone Documentation Browser and the Agent preset launcher are retired. HTML citations keep their page and section labels and their source check. Canvas controls stay available in fullscreen. #4448"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-11-17",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4455#6954262338",
+        "rationale": "The repository owner authorized stable Keiko 1.5.2 for the standalone folder package, the bundled #4448 Windows QA follow-up, the contributor's one-step Windows gateway setup from #4454 (included at the owner's request) and the fixable Windows user findings in one pull request. The protected dev checks, resolved reviews, and exact-commit release workflow govern publication. Windows Coding package qualification remains tracked in #4068; standalone archives are built locally and are not published with this release."
+      }
     }
   ]
 }

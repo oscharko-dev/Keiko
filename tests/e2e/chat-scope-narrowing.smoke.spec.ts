@@ -6,10 +6,14 @@ import { join } from "node:path";
 import type { ChatConnectedScope } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { connectedScopeFingerprint } from "../../packages/keiko-ui/src/app/components/desktop/hooks/workspaceScopeIdentity.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
+import { activateChatModel } from "./support/chat-model-activation.js";
 
 const HEADERS = { "X-Keiko-CSRF": "1" };
 const fixtureRoots: string[] = [];
 test.use({ viewport: { width: 1800, height: 1000 } });
+test.beforeEach(async ({ request }): Promise<void> => {
+  await activateChatModel(request);
+});
 test.afterEach(() => {
   for (const root of fixtureRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -263,13 +267,29 @@ test("Files navigation follows each visible selection and discards restored fold
   await page.screenshot({ path: testInfo.outputPath("scope-visible-selection.png") });
 });
 
+const SKILLS_CONNECTION_NOTICE =
+  /^(?:Choose Connect browser to refresh Skills and continue\. Your selection is kept\.|Wähle „Browser verbinden“, um Skills neu zu laden und fortzufahren\. Deine Auswahl bleibt erhalten\.)$/u;
+
+async function retryUnpairedDraft(chat: ReturnType<Page["getByRole"]>): Promise<void> {
+  const response = chat
+    .page()
+    .waitForResponse(
+      (response) =>
+        response.request().method() === "GET" &&
+        /^\/api\/chats\/[^/]+\/draft$/u.test(new URL(response.url()).pathname),
+    );
+  await chat.getByRole("button", { name: /Retry draft save|Erneut speichern/u }).click();
+  expect((await response).status()).toBe(404);
+}
+
 async function expectDraftRecoveryUsable(chat: ReturnType<Page["getByRole"]>): Promise<void> {
   const composer = chat.getByRole("textbox");
   await expect(composer).toBeVisible();
   await expect(composer).toBeEditable();
   await expect(composer).toHaveText("");
-  await expect(chat.getByRole("alert")).toHaveCount(0);
-  // An unpaired browser needs recovery only after a real local edit.
+  // The unpaired browser already explains its private Skills refusal; no draft is dirty yet.
+  await expect(chat.getByRole("alert")).toHaveText([SKILLS_CONNECTION_NOTICE]);
+  // Only a real local edit adds the separate draft recovery warning.
   const draft = "Review this selected scope.";
   await composer.fill(draft);
   const retry = chat.getByRole("button", {
@@ -300,6 +320,11 @@ async function expectDraftRecoveryUsable(chat: ReturnType<Page["getByRole"]>): P
   expect(geometry.actionHeight).toBeGreaterThanOrEqual(24);
   expect(geometry.actionVisible).toBe(true);
   expect(geometry.noticeVisible).toBe(true);
+  await retryUnpairedDraft(chat);
+  await expect(warning).toBeVisible();
+  await expect(composer).toHaveText(draft);
+  await expect(chat.getByRole("alert").filter({ hasText: SKILLS_CONNECTION_NOTICE })).toBeVisible();
+  await expect(chat.getByRole("alert")).toHaveCount(2);
 }
 
 async function chatGeometry(chat: ReturnType<Page["getByRole"]>): Promise<{

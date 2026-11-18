@@ -9,6 +9,7 @@ import type {
   PdfCitationPreviewStatusResponse,
   StoredPdfCitationPreviewCitation,
   KnowledgeSourceId,
+  KnowledgeCitationEditorTargetRequest,
 } from "@oscharko-dev/keiko-contracts";
 import { pdfCitationPreviewFailureState } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-preview";
 import type {
@@ -28,7 +29,11 @@ import {
   normalizePreviewMarkerIndex,
   previewDisplay,
 } from "./local-knowledge-preview-authority.js";
-import { probePdfPreviewSourceAvailability } from "./local-knowledge-preview-delivery.js";
+import {
+  probePdfPreviewSourceAvailability,
+  probeKnowledgeCitationEditorSource,
+  type KnowledgeCitationEditorSource,
+} from "./local-knowledge-preview-delivery.js";
 
 type PreviewOutcome =
   | {
@@ -185,6 +190,8 @@ function citationSelectionKey(citation: StoredPdfCitationPreviewCitation): strin
     sourceId: citation.lineage.sourceId,
     documentId: citation.lineage.documentId,
     chunkId: citation.lineage.chunkId,
+    documentContentHash: citation.documentContentHash,
+    documentMediaType: citation.documentMediaType,
   });
 }
 
@@ -398,6 +405,35 @@ function loadMessageContext(
   };
 }
 
+/** Shares the saved message/marker/identity owner; no model text becomes a file target. */
+export function selectKnowledgeCitationForEditor(
+  deps: UiHandlerDeps,
+  input: KnowledgeCitationEditorTargetRequest,
+):
+  | { readonly kind: "selected"; readonly citation: StoredPdfCitationPreviewCitation }
+  | RejectedPreviewOutcome {
+  const loaded = loadMessageContext(deps, input.chatId, input.assistantMessageId);
+  if ("kind" in loaded) return loaded;
+  if (loaded.citations === undefined) return reject("preview-metadata-missing");
+  const selected = selectedCitations(loaded.citations, input.marker, input.stableId);
+  if (selected.kind !== "selected") return selected;
+  const citation = selected.citations[0];
+  return selected.citations.length === 1 && citation !== undefined
+    ? { kind: "selected", citation }
+    : reject("citation-not-found");
+}
+
+export function resolveKnowledgeCitationEditorSource(
+  store: ReturnType<typeof openStoreForDeps>["store"],
+  citation: StoredPdfCitationPreviewCitation,
+): KnowledgeCitationEditorSource {
+  const lookup = lookupCitationPreviewSnapshotForStoredCitation(store, citation);
+  if (lookup.kind !== "ok") return { kind: "rejected", reason: "lineage-missing" };
+  const failure = currentSnapshotPrecheck(citation, lookup.snapshot, citationDisplay(citation));
+  if (failure !== undefined) return failure;
+  return probeKnowledgeCitationEditorSource(store, { citation, current: lookup.snapshot });
+}
+
 function localKnowledgeEvidenceCitations(
   grounded: GroundedAnswer,
 ): readonly LocalKnowledgeEvidenceCitation[] {
@@ -503,9 +539,24 @@ export function getPdfCitationPreviewStatus(
   const session = openStoreForDeps(deps);
   try {
     return {
-      citations: selected.citations.map((citation) =>
-        passiveCitationStatus(citation, evaluateStoredCitation(session.store, citation)),
-      ),
+      citations: selected.citations.map((citation) => {
+        const status = passiveCitationStatus(
+          citation,
+          evaluateStoredCitation(session.store, citation),
+        );
+        if (status.state !== "not-applicable") return status;
+        const sameSelection = selectedCitations(
+          selected.citations,
+          citation.markerIndex,
+          citation.stableId,
+        );
+        const unambiguous =
+          sameSelection.kind === "selected" && sameSelection.citations.length === 1;
+        return unambiguous &&
+          resolveKnowledgeCitationEditorSource(session.store, citation).kind === "ok"
+          ? { ...status, editorOpenAvailable: true as const }
+          : status;
+      }),
     };
   } finally {
     session.close();

@@ -12,6 +12,7 @@ import {
   applyWorkspaceReplace,
   applyGatewayVerifiedCapabilities,
   cloneRepository,
+  createDesktopChat,
   createProject,
   resetConfigRequestCache,
   resetModelRequestCache,
@@ -52,6 +53,7 @@ import {
   fetchUpdateSessionStatus,
   fetchVoiceCapability,
   openPdfCitationPreviewSession,
+  openKnowledgeCitationEditorTarget,
   postEditorAgentActionResult,
   postEditorAgentSessionSnapshot,
   postEditorBufferSafetyRequest,
@@ -2639,6 +2641,27 @@ describe("fetchProjects", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("refreshes the cached list once a chat was created, since the server may register its folder (#4455)", async (): Promise<void> => {
+    // The window that opens a new chat reads the project list right away; a cached list without
+    // the folder the server picked made that window miss its chat and close.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ projects: [{ path: "/repo/gone" }] }))
+      .mockResolvedValueOnce(jsonResponse({ chat: { id: "chat-new", projectPath: "/home" } }))
+      .mockResolvedValueOnce(
+        jsonResponse({ projects: [{ path: "/home" }, { path: "/repo/gone" }] }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchProjects()).resolves.toEqual({ projects: [{ path: "/repo/gone" }] });
+    await createDesktopChat({ title: "New chat" });
+
+    await expect(fetchProjects()).resolves.toEqual({
+      projects: [{ path: "/home" }, { path: "/repo/gone" }],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("cloneRepository", () => {
@@ -3604,6 +3627,34 @@ describe("synthesizeAssistantSpeech (Issue #1558)", () => {
 describe("pdf citation preview api helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("resolves a Knowledge editor citation through the same-origin guarded BFF route", async () => {
+    const response = {
+      outcome: "authorized",
+      target: { root: "/synthetic/source", path: "Companion - Übersicht.txt" },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+    vi.stubGlobal("fetch", fetchMock);
+    const selection = {
+      chatId: "chat-1",
+      assistantMessageId: "message-1",
+      marker: "[1]",
+      stableId: "citation-1",
+    };
+    const correlationId = "ui-knowledge-editor-target";
+    expect(await openKnowledgeCitationEditorTarget(selection, correlationId)).toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/local-knowledge/citation-preview/editor-target",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify(selection),
+        headers: expect.objectContaining({
+          "X-Keiko-CSRF": "1",
+          "X-Keiko-Correlation-Id": correlationId,
+        }),
+      }),
+    );
   });
 
   it("opens a preview session through the local-knowledge BFF route", async () => {

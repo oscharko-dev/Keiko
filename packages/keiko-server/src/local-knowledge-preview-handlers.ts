@@ -31,6 +31,9 @@ import {
   type PdfCitationPreviewSource,
 } from "./local-knowledge-preview-delivery.js";
 import { previewSessionManagerFor } from "./local-knowledge-preview-session-manager.js";
+import { resolveKnowledgeCitationEditorTarget } from "./local-knowledge-editor-target.js";
+import { logKnowledgeCitationEditorTarget } from "./knowledge-citation-editor-activity.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 
 const MAX_BODY_BYTES = 16_000;
 const PDF_PREVIEW_DRAIN_TIMEOUT_MS = 15_000;
@@ -125,6 +128,32 @@ function parseOrigin(body: Record<string, unknown>): PdfCitationPreviewOrigin | 
 
 function invalidRequestResult(message: string): RouteResult {
   return { status: 400, body: errorBody("BAD_REQUEST", message) };
+}
+
+export async function handleKnowledgeCitationEditorTarget(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  try {
+    const body = await readJsonObject(ctx.req);
+    const allowedFields = new Set(["chatId", "assistantMessageId", "marker", "stableId"]);
+    if (Object.keys(body).some((key) => !allowedFields.has(key))) {
+      throw new InvalidRequest("Only a stored citation selection is accepted.");
+    }
+    const selection = selectionInput(body);
+    if (selection.stableId === undefined || selection.stableId.trim().length === 0) {
+      throw new InvalidRequest('Field "stableId" must be a non-empty string.');
+    }
+    const result = await resolveKnowledgeCitationEditorTarget(ctx, deps, {
+      ...selection,
+      stableId: selection.stableId,
+    });
+    logKnowledgeCitationEditorTarget(ctx.correlationId ?? UNKNOWN_CORRELATION_ID, result);
+    return { status: 200, body: result };
+  } catch (error) {
+    if (!(error instanceof InvalidRequest)) throw error;
+    return invalidRequestResult(error.message);
+  }
 }
 
 interface PreviewSourceErrorSpec {

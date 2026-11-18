@@ -45,7 +45,14 @@ import {
   verifyPortableAttestedSidecars,
   type PortableSidecarRuntimeVerification,
 } from "../update-portable-sidecar-verification.js";
-import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
+import {
+  inspectStagedSidecarPayload,
+  verifyStagedSidecarPayloads,
+} from "../update-portable-sidecar-staging-verification.js";
+import {
+  WINDOWS_PORTABLE_RUNTIME_APPROVAL,
+  type CodingRuntimeArtifactApproval,
+} from "./npmLaneRuntimeApprovals.js";
 import {
   macosDeveloperIdRequirement,
   macosReleaseTeamIdentifier,
@@ -96,6 +103,8 @@ export interface QualifiedPortableOpenCodeRuntime {
   readonly qualification: LongLivedRuntimeQualification;
   readonly nativeHelperPath: string;
   readonly nativeHelperSha256?: string;
+  /** Set only after this complete evaluation artifact matches the server's independent pins. */
+  readonly windowsGatewayHelperSha256?: string;
   /**
    * The lane this artifact DECLARES in its own activation document (ADR-0163 D9). The field is
    * deliberately not called `evidenceClass` or `lane`: both names are structural discriminators
@@ -144,6 +153,8 @@ export interface PortableOpenCodeDiscoveryInput {
   readonly activityLog?: ServerLogSink | undefined;
   /** Test seam for the lane-downgrade probe; production spawns the real platform verifier. */
   readonly commandRunner?: PortableRuntimeCommandRunner | undefined;
+  /** Hermetic artifact fixture seam; production never supplies its own approval. */
+  readonly windowsPortableApproval?: CodingRuntimeArtifactApproval | undefined;
 }
 
 interface PortableRuntimeCandidate {
@@ -190,9 +201,12 @@ export function releasedWindowsGatewayHelperPin(runtime: {
   readonly target: UpdatePortableTarget;
   readonly platformAssurance: PortableRuntimeLane;
   readonly nativeHelperSha256?: string;
+  readonly windowsGatewayHelperSha256?: string;
 }): string | undefined {
-  return runtime.target === "windows-x64" && runtime.platformAssurance === "release-qualified"
-    ? runtime.nativeHelperSha256
+  if (runtime.target !== "windows-x64") return undefined;
+  if (runtime.platformAssurance === "release-qualified") return runtime.nativeHelperSha256;
+  return runtime.windowsGatewayHelperSha256 === runtime.nativeHelperSha256
+    ? runtime.windowsGatewayHelperSha256
     : undefined;
 }
 
@@ -232,6 +246,48 @@ export function readWindowsGatewayServiceStatus(
   helperPath: string,
   helperSha256: string,
 ): Promise<number | null> {
+  return runVerifiedWindowsGatewayHelper(
+    helperPath,
+    helperSha256,
+    ["--gateway-service-status", helperSha256],
+    2_000,
+  );
+}
+
+// A UAC approval waits on the human; past this bound the request ends as failed, never as ready.
+const GATEWAY_INSTALL_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * The Workbench's Repair: the same idempotent `--gateway-service-install` command `keiko
+ * gateway-service repair` runs. The helper raises the one UAC prompt itself and re-verifies its own
+ * bytes against the pin before anything is copied; Node never runs elevated. Resolves to the exit
+ * code, or null when it did not run to an exit.
+ */
+export function installWindowsGatewayService(
+  helperPath: string,
+  helperSha256: string,
+): Promise<number | null> {
+  return runVerifiedWindowsGatewayHelper(
+    helperPath,
+    helperSha256,
+    ["--gateway-service-install", helperSha256],
+    GATEWAY_INSTALL_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Runs one `--gateway-service-*` command of the attested helper: the digest is checked and a
+ * private copy of the verified bytes runs, never the path that could be swapped after discovery.
+ * Resolves to the exit code, or null when it did not run to an exit (a refused digest, a spawn
+ * failure or the timeout). It never rejects, and the private copy is removed on every path. The
+ * Workbench, `keiko gateway-service` and the automatic setup after `keiko start` share it.
+ */
+export function runVerifiedWindowsGatewayHelper(
+  helperPath: string,
+  helperSha256: string,
+  args: readonly string[],
+  timeoutMs: number,
+): Promise<number | null> {
   return new Promise((resolve) => {
     // The same digest check a launch applies: bytes that do not match the pin never execute, and the
     // helper that runs is a private copy of the verified bytes, not the path that could be swapped.
@@ -252,11 +308,11 @@ export function readWindowsGatewayServiceStatus(
       }
     };
     try {
-      const child = spawn(copy.path, ["--gateway-service-status", helperSha256], {
+      const child = spawn(copy.path, [...args], {
         stdio: "ignore",
         windowsHide: true,
         shell: false,
-        timeout: 2_000,
+        timeout: timeoutMs,
       });
       child.once("error", (error) => {
         recordGatewayStatusFailure("coding.runtime.windows-gateway-service.spawn", error);
@@ -271,14 +327,38 @@ export function readWindowsGatewayServiceStatus(
 }
 
 /** The helper `keiko gateway-service` may install: only the bytes a launch would accept (#4068). */
-export function discoverReleasedWindowsGatewayHelper(
-  input: PortableOpenCodeDiscoveryInput,
-): { readonly helperPath: string; readonly helperSha256: string } | undefined {
+export function discoverReleasedWindowsGatewayHelper(input: PortableOpenCodeDiscoveryInput):
+  | {
+      readonly helperPath: string;
+      readonly helperSha256: string;
+      readonly lane: "release-qualified" | "portable-evaluation";
+    }
+  | undefined {
   const runtime = discoverQualifiedPortableOpenCode(input);
   const helperSha256 = runtime === undefined ? undefined : releasedWindowsGatewayHelperPin(runtime);
   return runtime === undefined || helperSha256 === undefined
     ? undefined
-    : { helperPath: runtime.nativeHelperPath, helperSha256 };
+    : {
+        helperPath: runtime.nativeHelperPath,
+        helperSha256,
+        lane:
+          runtime.platformAssurance === "release-qualified"
+            ? "release-qualified"
+            : "portable-evaluation",
+      };
+}
+
+/**
+ * Whether this Keiko runs from a desktop (portable) package layout at all, whatever its runtime
+ * verified to: a runtime that failed verification is then the desktop package's, not a missing
+ * npm package (the Workbench names the right step). Structural only: no file is read or trusted.
+ */
+export function portableInstallLayoutPresent(input: PortableOpenCodeDiscoveryInput): boolean {
+  const target = runtimeTarget(input.platform ?? process.platform, input.arch ?? process.arch);
+  if (target === undefined) return false;
+  // An injected resource root is a portable fixture by construction.
+  if (input.installRoot !== undefined) return true;
+  return portablePackageLayout(target, productionUpdateFacts(input.env).packageRoot) !== undefined;
 }
 
 /** Why a Windows portable install cannot offer its bundled runtime although it is one (#4358). */
@@ -308,7 +388,11 @@ export function discoverPortableOpenCode(
     const candidate = portableRuntimeCandidate(input);
     if (candidate === undefined) return undefined;
     if ("volumeRefusal" in candidate) return { unavailableReason: candidate.volumeRefusal };
-    const runtime = qualifiedRuntime(candidate, input.attestation);
+    const runtime = qualifiedRuntime(
+      candidate,
+      input.attestation,
+      input.windowsPortableApproval ?? WINDOWS_PORTABLE_RUNTIME_APPROVAL,
+    );
     if (runtime !== undefined) recordNativeLinuxHelper(input, candidate, runtime);
     return runtime === undefined ? undefined : { runtime };
   } catch (error) {
@@ -581,6 +665,7 @@ function boundActivation(root: string, target: UpdatePortableTarget): BoundActiv
 function qualifiedRuntime(
   candidate: PortableRuntimeCandidate,
   port: PortableRuntimeAttestationPort | undefined,
+  windowsApproval: CodingRuntimeArtifactApproval,
 ): QualifiedPortableOpenCodeRuntime | undefined {
   const binding = receiptBinding(candidate);
   const qualification =
@@ -588,6 +673,7 @@ function qualifiedRuntime(
       ? evaluationQualification(candidate, binding)
       : platformQualification(candidate, binding, port);
   if (qualification === undefined) return undefined;
+  const gatewayPin = approvedWindowsEvaluationHelper(candidate, windowsApproval);
   return {
     // This legacy field is consumed as the immutable resource root by the backend and secure-read
     // pipeline. Keep that contract while using candidate.installRoot for root-level authorities.
@@ -597,6 +683,7 @@ function qualifiedRuntime(
     sidecar: candidate.sidecar,
     qualification,
     nativeHelperSha256: candidate.supervisorSha256,
+    ...(gatewayPin === undefined ? {} : { windowsGatewayHelperSha256: gatewayPin }),
     nativeHelperPath: helperPath(
       candidate.resourceRoot,
       candidate.target,
@@ -605,6 +692,71 @@ function qualifiedRuntime(
     ),
     platformAssurance: candidate.platformAssurance,
   };
+}
+
+/** A coherent, independently pinned artifact may use the existing broker, never a manifest's claim. */
+function approvedWindowsEvaluationHelper(
+  candidate: PortableRuntimeCandidate,
+  approval: CodingRuntimeArtifactApproval,
+): string | undefined {
+  if (
+    candidate.target !== "windows-x64" ||
+    candidate.platformAssurance !== "evaluation-unqualified"
+  )
+    return undefined;
+  const supervisor = approval.runtimeSupervisor;
+  if (
+    supervisor === undefined ||
+    !approvedHelper(
+      candidate,
+      "keiko-runtime-supervisor",
+      supervisor.sha256,
+      supervisor.sizeBytes,
+    ) ||
+    !approvedHelper(
+      candidate,
+      "keiko-secure-workspace-read",
+      approval.helperSha256,
+      approval.helperSizeBytes,
+    ) ||
+    !approvedSidecar(candidate.sidecar, approval)
+  )
+    return undefined;
+  // Discovery already rehashes the executable/tree. This also binds the actual license and SBOM
+  // files to their approved digests, so matching metadata cannot vouch for different evidence.
+  verifyStagedSidecarPayloads({
+    resourceRoot: candidate.resourceRoot,
+    sidecars: [candidate.sidecar],
+  });
+  return candidate.supervisorSha256;
+}
+
+function approvedHelper(
+  candidate: PortableRuntimeCandidate,
+  name: string,
+  sha256: string,
+  sizeBytes: number,
+): boolean {
+  // boundHelperDigests has already required exactly one of each helper and checked its actual file.
+  const helpers = candidate.activation.nativeHelpers;
+  if (!Array.isArray(helpers)) return false;
+  const helper = helpers.map(record).find((entry) => entry?.name === name);
+  return helper?.shippedSha256 === sha256 && helper.sizeBytes === sizeBytes;
+}
+
+function approvedSidecar(
+  sidecar: PortableSidecarRuntimeVerification,
+  approval: CodingRuntimeArtifactApproval,
+): boolean {
+  return (
+    sidecar.summary.upstreamVersion === approval.upstreamVersion &&
+    sidecar.summary.adapterName === approval.adapterName &&
+    sidecar.summary.adapterVersion === approval.adapterVersion &&
+    sidecar.executableTreeSha256 === approval.executableTreeSha256 &&
+    sidecar.licenseEvidenceSha256 === approval.licenseSha256 &&
+    sidecar.sbomEvidenceSha256 === approval.sbomSha256 &&
+    sidecar.protocolSchemaRawSha256 === approval.protocolSchemaSha256
+  );
 }
 
 function receiptBinding(candidate: PortableRuntimeCandidate): RuntimeQualificationReceiptBinding {

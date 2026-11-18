@@ -8,6 +8,7 @@ import { hashHelperSourceTree } from "./devLanePortableCodingRuntime.js";
 import {
   NPM_LANE_RETIRED_EXECUTABLE_TREES,
   NPM_LANE_RUNTIME_APPROVALS,
+  WINDOWS_PORTABLE_RUNTIME_APPROVAL,
 } from "./npmLaneRuntimeApprovals.js";
 import {
   OPENCODE_PINNED_VERSION,
@@ -44,6 +45,42 @@ function approvedRuntime(): CatalogRuntime {
 }
 
 describe("npm-lane runtime approvals", () => {
+  // Owner decision 2026-11-17 ("Ja, umstellen"): the npm lane carries the portable release's Windows
+  // helper instead of a separate local build, so both install kinds share one set of native bytes.
+  it("pins one set of Windows native bytes for the npm and the desktop package", () => {
+    expect(WINDOWS_PORTABLE_RUNTIME_APPROVAL).toMatchObject({
+      helperSha256: "65cc98c377f0e82494c54a1dd68a5be85fcd7b80272679638579aff23f4ab9e6",
+      helperSizeBytes: 129_024,
+      helperSourceCommit: "1906b6a5f28a4ec51fa93a18a3affade7194a126",
+      helperSourceTreeSha256: "88fb376091f406c3fa63c05d0f963d7ba038f650c0824f893ac77089bb30b28b",
+      upstreamVersion: "2.2.5",
+      adapterName: "keiko-coding-sidecar",
+      adapterVersion: "2",
+      executableTreeSha256: "90c59877d8fd7b0d25279bb926194f6cc1a356421d380d54eeb29646ef32046e",
+      licenseSha256: "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b",
+      protocolSchemaSha256: approvedRuntime().protocolSchema.sha256,
+      sbomSha256: "320b03dca2e27a8d9afc6a6bf2d1b4b903f6c5340f25202f20aa7dd104573493",
+      runtimeSupervisor: {
+        sha256: "888130331e49b71d3c29f81cdb0dbae97f4c062d9eea4914a576ee06a8bada52",
+        sizeBytes: 237_056,
+        sourceTreeSha256: "ab0ad9d08504dc28eb81acdf6e4869bd69200eeebc83771df60085330ca27748",
+      },
+    });
+    const npm = NPM_LANE_RUNTIME_APPROVALS["windows-x64"];
+    for (const field of [
+      "helperSha256",
+      "helperSizeBytes",
+      "helperSourceCommit",
+      "helperSourceTreeSha256",
+    ] as const) {
+      expect(npm[field], field).toBe(WINDOWS_PORTABLE_RUNTIME_APPROVAL[field]);
+    }
+    expect(WINDOWS_PORTABLE_RUNTIME_APPROVAL.runtimeSupervisor).toBe(npm.runtimeSupervisor);
+    // The retired local MSVC 14.44 build approves nothing any more.
+    expect(npm.helperSha256).not.toBe(
+      "1318171b0544702ef5f0f9f201084767b3182279c99012278812a5dfe27ede4d",
+    );
+  });
   it.each(Object.entries(NPM_LANE_RUNTIME_APPROVALS))(
     "%s restates the review-approved catalog entry exactly",
     (target, approval) => {

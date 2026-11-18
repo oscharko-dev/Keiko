@@ -179,7 +179,11 @@ import {
 } from "./memory-autonomy-policy-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleBuildVoiceRecap } from "./voice-recap.js";
-import { handleGatewayReadiness, handleGatewaySelectionCheck } from "./gateway-readiness.js";
+import {
+  handleGatewayDeactivation,
+  handleGatewayReadiness,
+  handleGatewaySelectionCheck,
+} from "./gateway-readiness.js";
 import { handleApplyGatewayVerifiedCapabilities, handleGatewaySetup } from "./gateway-setup.js";
 import {
   handleCodingSidecarGatewayChatCompletions,
@@ -366,8 +370,7 @@ import {
   handleCreateBrowserSession,
   handleDeleteBrowserSession,
 } from "./browser.js";
-import { handleDocsBrowserNavigate } from "./docs-browser.js";
-import { handleDocsBrowserApprove, handleDocsBrowserPropose } from "./docs-browser-proposal.js";
+import { handleCheckHtmlManualCitation } from "./html-manual-citation-navigation.js";
 import {
   handleCancelLocalKnowledgeCapsuleIndexing,
   handleConnectLocalKnowledgeCapsule,
@@ -393,6 +396,7 @@ import {
   handleClosePdfCitationPreviewSession,
   handleGetPdfCitationPreviewDocument,
   handleGetPdfCitationPreviewStatus,
+  handleKnowledgeCitationEditorTarget,
   handleOpenPdfCitationPreviewSession,
 } from "./local-knowledge-preview-handlers.js";
 import {
@@ -1408,6 +1412,11 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
   },
   {
     method: "POST",
+    pattern: "/api/local-knowledge/manual-citation/check",
+    handler: handleCheckHtmlManualCitation,
+  },
+  {
+    method: "POST",
     pattern: "/api/local-knowledge/citation-preview/status",
     handler: handleGetPdfCitationPreviewStatus,
   },
@@ -1557,10 +1566,6 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/browser/sessions/:sessionId/events",
     handler: handleBrowserEvents,
   },
-  // Epic #1851 (ADR-0113) — governed documentation browser navigation (product-level adapter).
-  { method: "POST", pattern: "/api/docs-browser/navigate", handler: handleDocsBrowserNavigate },
-  { method: "POST", pattern: "/api/docs-browser/propose", handler: handleDocsBrowserPropose },
-  { method: "POST", pattern: "/api/docs-browser/approve", handler: handleDocsBrowserApprove },
   {
     method: "GET",
     pattern: "/api/atlassian-connectors/human-inputs/:requestId",
@@ -1864,6 +1869,18 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/gateway/readiness/selection",
     handler: handleGatewaySelectionCheck,
+  },
+  // ADR-0171 D2 (amended 2026-11-16): a person takes an activated chat model out of use again.
+  {
+    method: "POST",
+    pattern: "/api/gateway/readiness/deactivation",
+    handler: handleGatewayDeactivation,
+  },
+  // #4443: an explicit saved text citation can resolve an ordinary Editor target.
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/citation-preview/editor-target",
+    handler: handleKnowledgeCitationEditorTarget,
   },
 ];
 

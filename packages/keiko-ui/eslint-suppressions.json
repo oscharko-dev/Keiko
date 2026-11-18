@@ -510,7 +510,7 @@
   },
   "src/app/components/desktop/modals/GatewaySetupDialog.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 2
+      "count": 1
     },
     "complexity": {
       "count": 4
@@ -526,13 +526,13 @@
   },
   "src/app/components/desktop/modals/NewWindowDialog.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 5
+      "count": 4
     },
     "complexity": {
-      "count": 3
+      "count": 1
     },
     "max-lines-per-function": {
-      "count": 5
+      "count": 2
     }
   },
   "src/app/components/desktop/modals/Palette.tsx": {
@@ -642,7 +642,7 @@
       "count": 5
     },
     "max-lines-per-function": {
-      "count": 4
+      "count": 3
     }
   },
   "src/app/components/desktop/widgets/cards/BrowserWidget.tsx": {
@@ -678,14 +678,6 @@
     },
     "max-lines-per-function": {
       "count": 1
-    }
-  },
-  "src/app/components/desktop/widgets/cards/DocumentationBrowserWidget.tsx": {
-    "complexity": {
-      "count": 2
-    },
-    "max-lines-per-function": {
-      "count": 2
     }
   },
   "src/app/components/desktop/widgets/cards/EditorDebugSessionHost.test.ts": {
@@ -1036,7 +1028,7 @@
       "count": 3
     },
     "max-lines-per-function": {
-      "count": 4
+      "count": 3
     }
   },
   "src/app/components/desktop/widgets/cards/git-client/HistoryPane.tsx": {

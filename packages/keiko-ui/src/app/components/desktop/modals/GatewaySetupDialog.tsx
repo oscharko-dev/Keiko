@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useEffectEvent,
   useId,
   useCallback,
   useRef,
@@ -80,7 +81,19 @@ const CubeIcon = Icons.cube;
 const MoonIcon = Icons.moon;
 const SunIcon = Icons.sun;
 
-type FormSubmitEvent = { preventDefault: () => void };
+const SUBMIT_INPUT_TYPES = new Set(["text", "url", "email", "number", "password", "search", "tel"]);
+
+function isSubmitInputEnter(event: globalThis.KeyboardEvent): boolean {
+  return (
+    event.key === "Enter" &&
+    !event.defaultPrevented &&
+    !event.isComposing &&
+    event.target instanceof HTMLInputElement &&
+    // Select popups portal into the dialog; their inputs retain their own Enter behavior.
+    event.target.closest(".gw-form")?.parentElement === event.currentTarget &&
+    SUBMIT_INPUT_TYPES.has(event.target.type)
+  );
+}
 
 // Human-readable message first; the machine code (useful for support) is kept
 // separate and rendered as a secondary mono line, never as a raw
@@ -1243,12 +1256,17 @@ function GatewayBaseUrlField({
   );
 }
 
+interface GatewayApiKeyFieldProps extends GatewayPreservableFieldProps {
+  readonly secretsNoteId: string;
+}
+
 function GatewayApiKeyField({
   preserveExisting,
   value,
   disabled,
   onChange,
-}: GatewayPreservableFieldProps): ReactNode {
+  secretsNoteId,
+}: GatewayApiKeyFieldProps): ReactNode {
   const t = useGatewaySetupTranslate();
   return (
     <GatewayFieldShell
@@ -1266,6 +1284,7 @@ function GatewayApiKeyField({
         className="gw-input mono"
         type="password"
         value={value}
+        aria-describedby={secretsNoteId}
         placeholder={
           preserveExisting
             ? t("gatewaySetup.ui.apiTokenReplacePlaceholder")
@@ -1490,6 +1509,7 @@ function GatewayEndpointProtocolFields({
 
 interface GatewayFieldsSectionProps {
   readonly t: GatewaySetupTranslate;
+  readonly secretsNoteId: string;
   readonly preserveExisting: boolean;
   readonly busy: boolean;
   readonly success: string | undefined;
@@ -1532,6 +1552,7 @@ function GatewayFieldsSection(props: GatewayFieldsSectionProps): ReactNode {
         value={props.apiKey}
         disabled={disabled}
         onChange={props.setApiKey}
+        secretsNoteId={props.secretsNoteId}
       />
       <GatewayApiKeyHeaderField
         preserveExisting={props.preserveExisting}
@@ -2683,6 +2704,7 @@ function GatewaySetupStatus({
 
 interface GatewaySetupActionsProps {
   readonly onCancel: (() => void) | undefined;
+  readonly onSubmit: () => void;
   readonly busy: boolean;
   readonly success: string | undefined;
   readonly canSubmit: boolean;
@@ -2690,6 +2712,7 @@ interface GatewaySetupActionsProps {
 
 function GatewaySetupActions({
   onCancel,
+  onSubmit,
   busy,
   success,
   canSubmit,
@@ -2709,7 +2732,8 @@ function GatewaySetupActions({
       ) : null}
       <button
         className="gw-submit"
-        type="submit"
+        type="button"
+        onClick={onSubmit}
         disabled={!canSubmit}
         aria-busy={busy}
         aria-describedby="gw-submit-requirements"
@@ -2738,6 +2762,7 @@ export function GatewaySetupDialog({
   const voiceEndpointStyleLabelId = useId();
   const endpointStyleLabelId = useId();
   const voiceRealtimeAuthModeLabelId = useId();
+  const secretsNoteId = useId();
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const figmaAccessTokenRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -3081,10 +3106,28 @@ export function GatewaySetupDialog({
     };
   }, [preserveExisting]);
 
+  const submitFromInput = useEffectEvent((event: globalThis.KeyboardEvent): void => {
+    if (!isSubmitInputEnter(event)) return;
+    event.preventDefault();
+    void submit();
+  });
+
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog === null) return undefined;
+    let compositionTarget: EventTarget | null = null;
+    let compositionResetFrame: number | undefined;
+    const onCompositionEnd = (event: CompositionEvent): void => {
+      // WebKit can dispatch compositionend before the same keystroke's Enter (bug 324380).
+      compositionTarget = event.target;
+      if (compositionResetFrame !== undefined) window.cancelAnimationFrame(compositionResetFrame);
+      compositionResetFrame = window.requestAnimationFrame(() => {
+        compositionTarget = null;
+        compositionResetFrame = undefined;
+      });
+    };
     const onDialogKeyDown = (event: globalThis.KeyboardEvent): void => {
+      if (event.target !== compositionTarget) submitFromInput(event);
       if (event.key === "Escape") {
         if (busy || success !== undefined || onCancel === undefined) return;
         event.preventDefault();
@@ -3104,8 +3147,13 @@ export function GatewaySetupDialog({
         first.focus();
       }
     };
+    dialog.addEventListener("compositionend", onCompositionEnd);
     dialog.addEventListener("keydown", onDialogKeyDown);
-    return () => dialog.removeEventListener("keydown", onDialogKeyDown);
+    return (): void => {
+      dialog.removeEventListener("compositionend", onCompositionEnd);
+      dialog.removeEventListener("keydown", onDialogKeyDown);
+      if (compositionResetFrame !== undefined) window.cancelAnimationFrame(compositionResetFrame);
+    };
   }, [busy, onCancel, success]);
 
   // After a failed test the controls are re-enabled but nothing was focused
@@ -3285,9 +3333,8 @@ export function GatewaySetupDialog({
     setImportedVoiceEndpointBaseUrl(fields.voiceBaseUrl.trim());
   }
 
-  async function submit(event: FormSubmitEvent): Promise<void> {
-    event.preventDefault();
-    if (busy) return;
+  async function submit(): Promise<void> {
+    if (!canSubmit) return;
     setBusy(true);
     setError(undefined);
     setErrorCode(undefined);
@@ -3349,6 +3396,7 @@ export function GatewaySetupDialog({
         return;
       }
       setBusy(false);
+      setApiKey("");
       setSuccess(outcome.message);
       // The stored configuration is now a different one. Announce it before the reload window opens:
       // for the ~1s the success message is on screen the Settings panel is still mounted, and every
@@ -3423,6 +3471,7 @@ export function GatewaySetupDialog({
   const gatewayFields = (
     <GatewayFieldsSection
       t={t}
+      secretsNoteId={secretsNoteId}
       preserveExisting={preserveExisting}
       busy={busy}
       success={success}
@@ -3516,7 +3565,8 @@ export function GatewaySetupDialog({
         // area is clicked or all controls are disabled (audit C007/C186).
         tabIndex={-1}
       >
-        <form className="gw-form" onSubmit={(event) => void submit(event)}>
+        {/* Gateway credentials are saved by the explicit action, without a browser login form. */}
+        <div className="gw-form">
           <div className="gw-head">
             <div className={styles["cmp-head-controls"]}>
               <div className="gw-setup-badge">
@@ -3568,7 +3618,9 @@ export function GatewaySetupDialog({
             figmaAccessTokenRef={figmaAccessTokenRef}
           />
 
-          <div className="gw-note">{t("gatewaySetup.ui.secretsNote")}</div>
+          <div className="gw-note" id={secretsNoteId}>
+            {t("gatewaySetup.ui.secretsNote")}
+          </div>
           {/* role=alert/status: the test result arrives after a long async wait
               while all controls are disabled — without a live region screen
               readers never hear it (audit C084). */}
@@ -3580,11 +3632,12 @@ export function GatewaySetupDialog({
           </span>
           <GatewaySetupActions
             onCancel={onCancel}
+            onSubmit={() => void submit()}
             busy={busy}
             success={success}
             canSubmit={canSubmit}
           />
-        </form>
+        </div>
       </dialog>
     </div>
   );

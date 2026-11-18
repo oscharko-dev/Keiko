@@ -168,19 +168,21 @@ function change(path: string, flags: Partial<GitChangedFile> = {}): GitChangedFi
   };
 }
 
-// A repository whose working tree exercises every changed-file state #1575 must represent.
-function makeStatusRich(): GitRepositoryStatusResponse {
+// Staging/commit journeys start without conflicts; indicator/sync journeys opt into the conflict.
+function makeStatusRich(includeConflict = false): GitRepositoryStatusResponse {
   return makeStatus({
     clean: false,
     stagedCount: 2,
     unstagedCount: 2,
     untrackedCount: 1,
-    conflictedCount: 1,
+    conflictedCount: includeConflict ? 1 : 0,
     changes: [
       change("src/index.ts", { indexStatus: "M", staged: true }),
       change("README.md", { worktreeStatus: "M", unstaged: true }),
       change("notes.txt", { indexStatus: "?", worktreeStatus: "?", untracked: true }),
-      change("merge.ts", { indexStatus: "U", worktreeStatus: "U", conflicted: true }),
+      ...(includeConflict
+        ? [change("merge.ts", { indexStatus: "U", worktreeStatus: "U", conflicted: true })]
+        : []),
       change("partial.ts", { indexStatus: "M", worktreeStatus: "M", staged: true, unstaged: true }),
     ],
   });
@@ -2407,9 +2409,8 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     expect(alert).not.toHaveTextContent("raw path");
   });
 
-  // GEN-PERF-WIDGET-006 — the sync outcome must carry a duration and an ahead/behind
-  // repository-state delta, not just a bare status string.
-  it("surfaces sync duration and ahead/behind delta in the outcome", async () => {
+  // GEN-PERF-WIDGET-006: duration and state must describe the settled operation (#4414).
+  it("surfaces sync duration and post-pull counts in the outcome", async () => {
     const user = userEvent.setup();
     const client = makeClient({
       getSummary: vi.fn(async () => makeSummary({ behind: 2 })),
@@ -2429,7 +2430,87 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     const label = pill.textContent ?? "";
     // Duration segment "in <n>s" and the ahead/behind delta must both be present.
     expect(label).toMatch(/in \d+(\.\d+)?s/);
-    expect(label).toMatch(/behind 2/);
+    expect(label).toMatch(/behind 0/);
+    expect(label).not.toMatch(/behind 2/);
+  });
+
+  it.each([
+    [{ ahead: 0, behind: 1 }, ["ahead 0", "behind 1"], []],
+    [{ ahead: 2, behind: 3 }, ["ahead 2", "behind 3"], []],
+    [{ ahead: 0 }, ["ahead 0"], ["behind"]],
+    [{ behind: 0 }, ["behind 0"], ["ahead"]],
+    [{}, [], ["ahead", "behind"]],
+    [{ ahead: -1, behind: Number.NaN }, [], ["ahead", "behind"]],
+    [{ ahead: 1.5, behind: Number.POSITIVE_INFINITY }, [], ["ahead", "behind"]],
+  ])("presents only returned post-fetch counts: %j", async (counts, present, absent) => {
+    const user = userEvent.setup();
+    const diagnostics: ClientDiagnosticMeta[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta !== undefined) diagnostics.push(meta);
+    });
+    const client = makeClient({
+      syncExecute: vi.fn<GitClientSeam["syncExecute"]>(async (input) => ({
+        schemaVersion: "1",
+        operation: input.operation,
+        status: "succeeded",
+        available: true,
+        truncated: false,
+        ...counts,
+      })),
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Run sync: Fetch" }));
+    const pill = await screen.findByRole("status", { name: /Fetch: succeeded/ });
+    expect(pill).toHaveTextContent(/in \d+(\.\d+)?s/);
+    for (const text of present) expect(pill).toHaveTextContent(text);
+    for (const text of absent) expect(pill).not.toHaveTextContent(text);
+    expect(client.syncExecute).toHaveBeenCalledTimes(1);
+    const stages = diagnostics.filter((meta) => meta.stageReport?.stage === "git sync outcome");
+    expect(stages.map((meta) => meta.stageReport?.phase)).toEqual(["started", "settled"]);
+    expect(stages[0]?.correlationId).toBe(stages[1]?.correlationId);
+    expect(JSON.stringify(stages)).not.toContain(REPO_A.path);
+  });
+
+  it("does not present pre-push counts as post-push state", async () => {
+    const user = userEvent.setup();
+    const client = makeClient({ getSummary: vi.fn(async () => makeSummary({ ahead: 2 })) });
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Run sync: Push" }));
+    const pill = await screen.findByRole("status", { name: /Push: succeeded/ });
+    expect(pill).toHaveTextContent(/in \d+(\.\d+)?s/);
+    expect(pill).not.toHaveTextContent(/ahead|behind/);
+  });
+
+  it("does not present an old sync result after switching repositories", async () => {
+    let resolveSync!: (value: Awaited<ReturnType<GitClientSeam["syncExecute"]>>) => void;
+    const pending = new Promise<Awaited<ReturnType<GitClientSeam["syncExecute"]>>>((resolve) => {
+      resolveSync = resolve;
+    });
+    const diagnostics: ClientDiagnosticMeta[] = [];
+    setClientDiagnosticWriter((_message, meta) => {
+      if (meta !== undefined) diagnostics.push(meta);
+    });
+    const client = makeClient({ syncExecute: vi.fn(() => pending) });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await user.click(await screen.findByRole("button", { name: "Run sync: Fetch" }));
+    await waitFor(() => expect(client.syncExecute).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(await screen.findByRole("option", { name: /beta/ }));
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(REPO_B.path));
+    await act(async () => {
+      resolveSync({
+        schemaVersion: "1",
+        operation: "fetch",
+        status: "succeeded",
+        available: true,
+        truncated: false,
+        ahead: 0,
+        behind: 7,
+      });
+    });
+    expect(screen.queryByRole("status", { name: /Fetch: succeeded/ })).not.toBeInTheDocument();
+    expect(diagnostics.some((meta) => meta.stageReport?.stage === "git sync outcome")).toBe(false);
   });
 
   it("does not execute network sync when preview blocks", async () => {
@@ -2621,7 +2702,7 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
     expect(await screen.findByRole("button", { name: "Run sync: Detached HEAD" })).toBeDisabled();
 
     const conflictedClient = makeClient({
-      getStatus: vi.fn(async () => makeStatusRich()),
+      getStatus: vi.fn(async () => makeStatusRich(true)),
       getSummary: vi.fn(async () => makeSummary({ conflictedCount: 1, clean: false })),
     });
     rerender(<GitClientWindow projectId={REPO_A.path} client={conflictedClient} />);
@@ -3440,9 +3521,210 @@ describe("GitClientWindow — required visible / absent words", () => {
   });
 });
 
+function makeUnmergedStatus(mixed = false): GitRepositoryStatusResponse {
+  const ordinaryChanges = mixed
+    ? [
+        change("ready.txt", { indexStatus: "M", staged: true }),
+        change("unstaged.txt", { worktreeStatus: "M", unstaged: true }),
+      ]
+    : [];
+  return makeStatus({
+    clean: false,
+    stagedCount: mixed ? 2 : 1,
+    unstagedCount: mixed ? 2 : 1,
+    conflictedCount: 1,
+    changes: [
+      change("conflicted.txt", {
+        indexStatus: "U",
+        worktreeStatus: "U",
+        staged: true,
+        unstaged: true,
+        conflicted: true,
+      }),
+      ...ordinaryChanges,
+    ],
+  });
+}
+
+describe("GitClientWindow — unresolved conflict controls (#4445)", () => {
+  it("blocks sync when the current status conflicts with an older clean summary", async () => {
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeUnmergedStatus(true)),
+      getSummary: vi.fn(async () => makeSummary({ behind: 2 })),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await screen.findByRole("button", { name: "conflicted.txt, conflicted" });
+    const sync = await screen.findByRole("button", { name: "Run sync: Resolve conflicts" });
+    expect(sync).toBeDisabled();
+    await user.click(sync);
+    expect(client.syncPreview).not.toHaveBeenCalled();
+    expect(client.syncExecute).not.toHaveBeenCalled();
+  });
+
+  it("keeps the human draft when generation settles after a conflicted re-pair", async () => {
+    let status = makeStatusRich();
+    let resolveDraft!: (response: GitDeliveryCommitDraftResponse) => void;
+    const pending = new Promise<GitDeliveryCommitDraftResponse>((resolve) => {
+      resolveDraft = resolve;
+    });
+    const client = makeClient({
+      getStatus: vi.fn(async () => status),
+      commitDraft: vi.fn(() => pending),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await screen.findByText("index.ts");
+    await user.type(screen.getByLabelText("Summary"), "fix: keep the human draft");
+    await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
+    expect(client.commitDraft).toHaveBeenCalledTimes(1);
+
+    status = makeUnmergedStatus(true);
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+    await screen.findByRole("button", { name: "conflicted.txt, conflicted" });
+    await act(async () => resolveDraft(makeCommitDraft("fix: obsolete generated draft")));
+    expect(screen.getByLabelText("Summary")).toHaveValue("fix: keep the human draft");
+  });
+
+  it("requires a fresh preview after the conflict clears across two re-pairs", async () => {
+    const summary = "fix: retain the prepared draft";
+    let status = makeStatusRich();
+    let resolvePreview!: (response: GitDeliveryCommitPreviewResponse) => void;
+    const pending = new Promise<GitDeliveryCommitPreviewResponse>((resolve) => {
+      resolvePreview = resolve;
+    });
+    const client = makeClient({
+      getStatus: vi.fn(async () => status),
+      commitPreview: vi.fn(async ({ messageDraft }) =>
+        messageDraft === summary ? pending : makeCommitPreview(),
+      ),
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await screen.findByText("index.ts");
+    await user.type(screen.getByLabelText("Summary"), summary);
+    await waitFor(() =>
+      expect(client.commitPreview).toHaveBeenCalledWith({
+        projectId: REPO_A.path,
+        messageDraft: summary,
+      }),
+    );
+    status = makeUnmergedStatus(true);
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+    await screen.findByRole("button", { name: "conflicted.txt, conflicted" });
+
+    vi.useFakeTimers();
+    try {
+      status = makeStatusRich();
+      await act(async () => {
+        await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+      });
+      expect(screen.queryByRole("button", { name: "conflicted.txt, conflicted" })).toBeNull();
+      await act(async () => resolvePreview(makeCommitPreview()));
+      expect(screen.getByLabelText("Summary")).toHaveValue(summary);
+      expect(screen.getByRole("button", { name: /^Commit to/u })).toBeDisabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([false, true])(
+    "blocks all staging while preserving inspection (mixed: %s)",
+    async (mixed) => {
+      const client = makeClient({ getStatus: vi.fn(async () => makeUnmergedStatus(mixed)) });
+      const user = userEvent.setup();
+      render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+      const conflict = await screen.findByRole("button", { name: "conflicted.txt, conflicted" });
+      const conflictToggle = screen.getByRole("checkbox", { name: /conflicted.txt/u });
+      expect(conflictToggle).not.toBeChecked();
+      expect(conflictToggle).toBeDisabled();
+      for (const toggle of screen.getAllByRole("checkbox")) expect(toggle).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Stage all" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Unstage all" })).toBeDisabled();
+      expect(screen.queryByText("2 staged")).toBeNull();
+      if (mixed) {
+        expect(screen.getByText("1 staged")).toBeVisible();
+        expect(screen.getByRole("checkbox", { name: "Unstage ready.txt" })).toBeChecked();
+      } else expect(screen.queryByText("1 staged")).toBeNull();
+      await user.click(conflictToggle);
+      await user.click(screen.getByRole("button", { name: "Stage all" }));
+      await user.click(screen.getByRole("button", { name: "Unstage all" }));
+      await user.click(conflict);
+      expect(client.stage).not.toHaveBeenCalled();
+      expect(client.unstage).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(client.getStructuredDiff).toHaveBeenCalledWith({
+          root: REPO_A.path,
+          path: "conflicted.txt",
+          scope: "unstaged",
+        }),
+      );
+    },
+  );
+
+  it("keeps the controlled draft and resumes preview and staging only after resolution", async () => {
+    let status = makeUnmergedStatus(true);
+    const client = makeClient({ getStatus: vi.fn(async () => status) });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    await screen.findByRole("button", { name: "conflicted.txt, conflicted" });
+    await user.type(screen.getByLabelText("Summary"), "fix: keep conflict recovery draft");
+    await user.type(screen.getByLabelText("Description"), "Keep this explanation.");
+    expect(screen.getByRole("button", { name: "Generate with Keiko" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^Commit to/u })).toBeDisabled();
+    expect(client.commitPreview).not.toHaveBeenCalled();
+    expect(client.commitDraft).not.toHaveBeenCalled();
+    expect(client.commitPropose).not.toHaveBeenCalled();
+    status = makeStatus({
+      clean: false,
+      stagedCount: 1,
+      unstagedCount: 1,
+      changes: [
+        change("ready.txt", { indexStatus: "M", staged: true }),
+        change("unstaged.txt", { worktreeStatus: "M", unstaged: true }),
+      ],
+    });
+    act(() => notifyWorkspaceFileMutated(REPO_A.path));
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "conflicted.txt, conflicted" })).toBeNull(),
+    );
+    expect(screen.getByLabelText("Summary")).toHaveValue("fix: keep conflict recovery draft");
+    expect(screen.getByLabelText("Description")).toHaveValue("Keep this explanation.");
+    expect(screen.getByRole("button", { name: "Generate with Keiko" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Commit to/u })).toBeEnabled());
+    expect(client.commitPreview).toHaveBeenCalledWith({
+      projectId: REPO_A.path,
+      messageDraft: "fix: keep conflict recovery draft\n\nKeep this explanation.",
+    });
+    await user.click(screen.getByRole("checkbox", { name: "Stage unstaged.txt" }));
+    await waitFor(() =>
+      expect(client.stage).toHaveBeenCalledWith({
+        projectId: REPO_A.path,
+        pathspecs: ["unstaged.txt"],
+        includeUntracked: false,
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "Unstage ready.txt" })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole("checkbox", { name: "Unstage ready.txt" }));
+    await waitFor(() =>
+      expect(client.unstage).toHaveBeenCalledWith({
+        projectId: REPO_A.path,
+        pathspecs: ["ready.txt"],
+      }),
+    );
+    expect(client.commitPropose).not.toHaveBeenCalled();
+  });
+});
+
 describe("GitClientWindow — staging controls (Issue #1575)", () => {
   it("renders staged / unstaged / untracked / conflicted indicators with checkboxes", async () => {
-    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich()) });
+    const client = makeClient({ getStatus: vi.fn(async () => makeStatusRich(true)) });
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
     expect(await screen.findByText("index.ts")).toBeInTheDocument();

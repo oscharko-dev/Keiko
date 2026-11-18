@@ -26,7 +26,7 @@ function seedWindow(): AppWindow {
     w: 360,
     h: 320,
     z: 1,
-    cfg: {},
+    cfg: { runId: "run-existing", workflow: "verify" },
     max: false,
     zoom: 1,
   };
@@ -47,7 +47,11 @@ function Harness(): ReactElement {
       <button type="button" data-testid="restore" onClick={() => ws.api.restore("agents-1")}>
         restore
       </button>
-      <button type="button" data-testid="add" onClick={() => ws.api.add("agents")}>
+      <button
+        type="button"
+        data-testid="add"
+        onClick={() => ws.api.add("agents", { runId: "run-added", workflow: "verify" })}
+      >
         add
       </button>
       <button

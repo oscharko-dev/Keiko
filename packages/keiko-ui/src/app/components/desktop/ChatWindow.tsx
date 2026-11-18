@@ -819,17 +819,6 @@ function canCollapseAssistantAnswer(
   return !streaming && !isUser && !isRunSummary && isCollapsibleAssistantAnswer(content);
 }
 
-// Extracted from ChatBubbleImpl (SonarCloud S3776) — the branchy body of
-// openDocumentationTarget's useCallback, kept as a plain function so the callback itself is a
-// one-line delegation.
-function resolveDocumentationTarget(
-  previewWindows: PdfCitationPreviewWindowApi | undefined,
-  target: string,
-): boolean {
-  if (previewWindows === undefined) return false;
-  return previewWindows.add("docbrowser", { target }) !== null;
-}
-
 // Extracted from ChatBubbleImpl (SonarCloud S3776) — registers the bubble element as the PDF
 // citation preview's scroll target for its assistant message. Same effect body/deps as before,
 // now isolated as a named hook so the orchestrating component reads as a flat list of steps.
@@ -879,19 +868,49 @@ type ChatBubbleMarkdownProps = {
   readonly citationPreview: CitationPreviewController | undefined;
 };
 
+function proseRepositoryNavigationPolicy(
+  groundingKind: GroundedAnswerWire["groundingKind"] | undefined,
+  chat: Chat | undefined,
+  streaming: boolean,
+): "disabled" | "matched" | "ordinary" {
+  if (groundingKind === "local-knowledge") return "disabled";
+  if (groundingKind === "hybrid") return "matched";
+  // Saved repository provenance stays authoritative when the Chat's current scopes change.
+  if (groundingKind !== undefined) return "ordinary";
+  if (chat !== undefined && groundingConnectorCount(chat) > 0) {
+    return groundingFolderCount(chat) > 0 ? "matched" : "disabled";
+  }
+  return streaming ? "matched" : "ordinary";
+}
+
 // Streaming assistant turns use the same safe renderer as persisted answers; parser failures fall
 // back to plain-text raw source for this bubble. SM-1: wrapped in a per-message boundary so a
 // parser/render defect degrades this one bubble to plain text instead of crashing the view.
 function ChatBubbleMarkdown(props: ChatBubbleMarkdownProps): ReactNode {
   const { message, isUser, streaming } = props;
+  const { activeChat } = useChatSessionCatalog();
+  const policy = proseRepositoryNavigationPolicy(
+    message.groundedAnswer?.groundingKind,
+    activeChat,
+    streaming,
+  );
+  const repositoryEvidence = useMemo(
+    () =>
+      policy === "matched"
+        ? { citations: [], readPaths: [], ...props.repositoryEvidence, requireSourceMatch: true }
+        : props.repositoryEvidence,
+    [policy, props.repositoryEvidence],
+  );
+  // Knowledge document lineage does not identify a repository path (#4443).
+  const openRepositoryReference = policy === "disabled" ? undefined : props.openRepositoryReference;
   if (carriesOwnAssessment(message)) {
     return (
       <AssessedAnswerBody
         content={message.content}
         messageId={message.id}
         repositoryRoots={props.repositoryRoots}
-        repositoryEvidence={props.repositoryEvidence}
-        openRepositoryReference={props.openRepositoryReference}
+        repositoryEvidence={repositoryEvidence}
+        openRepositoryReference={openRepositoryReference}
         citationPreview={props.citationPreview}
       />
     );
@@ -902,8 +921,8 @@ function ChatBubbleMarkdown(props: ChatBubbleMarkdownProps): ReactNode {
       literalUserInput={isUser}
       diagnosticCorrelationId={message.id}
       repositoryRoots={props.repositoryRoots}
-      repositoryEvidence={props.repositoryEvidence}
-      openRepositoryReference={props.openRepositoryReference}
+      repositoryEvidence={repositoryEvidence}
+      openRepositoryReference={openRepositoryReference}
       citationPreview={props.citationPreview}
       streaming={streaming}
       trailing={streaming ? <span className="ai-stream-cursor" aria-hidden="true" /> : undefined}
@@ -1085,7 +1104,6 @@ function ChatBubbleGroundedSection({
   repositoryRoots,
   openRepositoryReference,
   citationPreview,
-  openDocumentationTarget,
   onReadPaths,
 }: {
   readonly onReadPaths: (runId: string, paths: readonly string[]) => void;
@@ -1094,7 +1112,6 @@ function ChatBubbleGroundedSection({
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly citationPreview: CitationPreviewController | undefined;
-  readonly openDocumentationTarget: (target: string) => boolean;
 }): ReactNode {
   if (isUser || message.groundedAnswer === undefined) return null;
   return (
@@ -1106,7 +1123,6 @@ function ChatBubbleGroundedSection({
         repositoryRoots={repositoryRoots}
         openRepositoryReference={openRepositoryReference}
         citationPreview={citationPreview}
-        openDocumentationTarget={openDocumentationTarget}
       />
       <ContextStatusPanel contextSummary={contextSummaryOf(message.groundedAnswer)} />
     </div>
@@ -1187,14 +1203,8 @@ function ChatBubbleImpl({
     chatId: activeChat?.id,
     windowId,
     windows: previewWindows,
+    openEditorFile: openRepositoryReference,
   });
-  // Epic #1854 (#1881) — opens the target in the existing governed documentation browser widget
-  // (ADR-0113) rather than calling navigateDocumentation directly, so the widget's own reason/
-  // severity rendering stays the single source of truth for the navigation outcome.
-  const openDocumentationTarget = useCallback(
-    (target: string): boolean => resolveDocumentationTarget(previewWindows, target),
-    [previewWindows],
-  );
   const canCollapse = canCollapseAssistantAnswer(
     streaming,
     isUser,
@@ -1300,7 +1310,6 @@ function ChatBubbleImpl({
           repositoryRoots={repositoryRoots}
           openRepositoryReference={openRepositoryReference}
           citationPreview={citationPreview}
-          openDocumentationTarget={openDocumentationTarget}
         />
       </div>
     </article>
@@ -2668,6 +2677,7 @@ function ComposerSendButton({
 }
 
 function skillSendHint(skill: ChatMarkdownSkill | undefined, t: I18nTranslate): string {
+  if (skill?.connectionRequired === true) return t("chat.skills.connectionRequired");
   return t(skill?.busy === true ? "chat.skills.loading" : "chat.skills.sendBlocked");
 }
 
@@ -5946,11 +5956,7 @@ function ComposerSkillNotice(): ReactNode {
   const { markdownSkill } = useChatSessionComposer();
   const t = useTranslate();
   if (!chatSkillBlocksSend(markdownSkill)) return null;
-  return (
-    <output className={styles.sessionNotice}>
-      {t(markdownSkill?.busy === true ? "chat.skills.loading" : "chat.skills.sendBlocked")}
-    </output>
-  );
+  return <output className={styles.sessionNotice}>{skillSendHint(markdownSkill, t)}</output>;
 }
 
 function ComposerSendNotice({

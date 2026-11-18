@@ -242,7 +242,7 @@ export async function firstJiraDraftTemplateRefusal(
  * jira.draft, which applies the Chat's access mode itself.
  */
 export const JIRA_DRAFT_READY_GUIDANCE =
-  "The draft is complete. If the user asked to create these issues, call jira.draft now with only " +
+  "The draft is saved; no approval card exists yet. If the user asked to create these issues, call jira.draft now with only " +
   "draftId and draftDigest. Keiko asks for any approval this Chat's access mode requires; do not ask " +
   "the user to confirm again. Never show draftId or draftDigest to the user; say in plain words how many issues are prepared.";
 

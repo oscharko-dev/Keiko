@@ -32,6 +32,10 @@ Portable launch/setup issues are covered in the dedicated
 Windows SmartScreen, macOS Gatekeeper, managed install root, proxy, firewall, local port, and
 organization-managed rollout blockers.
 
+A standalone folder package that does not start, starts without the team's configuration or asks
+for portable setup is covered in
+[Resolve a standalone folder package that does not start or asks for setup](standalone-folder-package.md).
+
 Editor personalization and resilience issues are covered in the dedicated
 [Editor Personalization And Resilience Troubleshooting](editor-m7-personalization.md) entry. Use
 that page for M7 settings availability, watcher rescan/degraded states, safe snippet/keyboard

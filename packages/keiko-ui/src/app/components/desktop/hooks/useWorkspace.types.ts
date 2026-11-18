@@ -147,7 +147,6 @@ export interface WorkspaceApi {
   /** Git-change comparison projected from a Git↔Chat workspace connector edge. */
   readonly linkedGitChangeComparisons?:
     ((id: string) => readonly WorkspaceLinkedGitChangeComparison[]) | undefined;
-  readonly currentFilesContext: () => FilesWindowContext | null;
   /**
    * Live snapshot of the pan/zoom view, read through a ref so window children can
    * compute drag/resize geometry at gesture-start WITHOUT taking `view` as a prop

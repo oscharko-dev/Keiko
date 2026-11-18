@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createActivityLogSink } from "@oscharko-dev/keiko-server";
 import {
   expectActivityLogProof,
@@ -41,7 +41,7 @@ function deps(exitCode: number | undefined, calls: string[][] = []): GatewayServ
     platform: "win32",
     resolveHelper: (): Promise<WindowsGatewayHelper> =>
       Promise.resolve({ helperPath: HELPER, helperSha256: PIN }),
-    runHelper: (_path, args): Promise<number> => {
+    runHelper: (_helper, args): Promise<number> => {
       calls.push([...args]);
       return exitCode === undefined
         ? Promise.reject(new Error(`spawn failed for ${HELPER}`))
@@ -60,6 +60,22 @@ describe("keiko gateway-service", () => {
     const { io } = makeIo();
     expect(await runGatewayServiceCli([action], io, {}, deps(0, calls))).toBe(0);
     expect(calls).toEqual([args]);
+  });
+
+  // ADR-0121 D9 keeps the automatic setup and the Workbench Repair away from an installation
+  // managed outside the app; an administrator's explicit command still installs the broker there.
+  it("runs an explicit install in an installation managed outside the app", async () => {
+    const calls: string[][] = [];
+    const { io } = makeIo();
+    expect(
+      await runGatewayServiceCli(
+        ["install"],
+        io,
+        { KEIKO_PORTABLE_MANAGEMENT: "organization-managed" },
+        deps(0, calls),
+      ),
+    ).toBe(0);
+    expect(calls).toEqual([["--gateway-service-install", PIN]]);
   });
 
   it("removes the service without a pin and treats an absent service as success", async () => {
@@ -225,28 +241,51 @@ describe("keiko gateway-service", () => {
       expect(resolveWindowsGatewayHelper(server(undefined), {}, "dev-checkout")).toBeUndefined();
     });
 
-    it("names the npm runtime lane in the completion it reports", async () => {
-      const root = mkdtempSync(join(tmpdir(), "keiko-gateway-npm-"));
-      try {
-        const env = { KEIKO_STATE_DIR: root };
-        const securityLogSinkFactory = (
-          stateDir: string,
-        ): ReturnType<typeof createActivityLogSink> => createActivityLogSink(stateDir);
-        await runGatewayServiceCli(["status"], makeIo().io, env, {
-          ...deps(0),
-          resolveHelper: () =>
-            Promise.resolve({ helperPath: HELPER, helperSha256: PIN, lane: "npm-runtime-package" }),
-          securityLogSinkFactory,
-        });
-        const raw = readPersistedActivityLog(root);
-        const [completed] = persistedActivityLogLines(raw, "cli.gateway-service.completed");
-        expect(
-          expectActivityLogProof("cli.gateway-service.completed.real-sink-line", completed ?? ""),
-        ).toMatchObject({ action: "status", lane: "npm-runtime-package", state: "ready" });
-      } finally {
-        rmSync(root, { recursive: true, force: true });
-      }
+    it("preserves the compiled portable artifact's honest evaluation lane", () => {
+      const portable: WindowsGatewayHelper = {
+        helperPath: HELPER,
+        helperSha256: PIN,
+        lane: "portable-evaluation",
+      };
+      const npm = vi.fn(() => undefined);
+      expect(
+        resolveWindowsGatewayHelper(
+          {
+            discoverReleasedWindowsGatewayHelper: () => portable,
+            discoverNpmRuntimeWindowsGatewayHelper: npm,
+            discoverDevCheckoutWindowsGatewayHelper: () => undefined,
+          },
+          {},
+          "release-qualified",
+        ),
+      ).toEqual(portable);
+      expect(npm).not.toHaveBeenCalled();
     });
+
+    it.each(["npm-runtime-package", "portable-evaluation"] as const)(
+      "names the %s lane in the completion it reports",
+      async (lane) => {
+        const root = mkdtempSync(join(tmpdir(), "keiko-gateway-npm-"));
+        try {
+          const env = { KEIKO_STATE_DIR: root };
+          const securityLogSinkFactory = (
+            stateDir: string,
+          ): ReturnType<typeof createActivityLogSink> => createActivityLogSink(stateDir);
+          await runGatewayServiceCli(["status"], makeIo().io, env, {
+            ...deps(0),
+            resolveHelper: () => Promise.resolve({ helperPath: HELPER, helperSha256: PIN, lane }),
+            securityLogSinkFactory,
+          });
+          const raw = readPersistedActivityLog(root);
+          const [completed] = persistedActivityLogLines(raw, "cli.gateway-service.completed");
+          expect(
+            expectActivityLogProof("cli.gateway-service.completed.real-sink-line", completed ?? ""),
+          ).toMatchObject({ action: "status", lane, state: "ready" });
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
 
     it("refuses an unverified checkout before any helper or elevation runs", async () => {
       const calls: string[][] = [];

@@ -11,6 +11,7 @@ import {
   isLegalCodingWorkbenchRuntimeTransition,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   createInitialCodingWorkbenchRuntimeState,
   type CodingWorkbenchResourceState,
@@ -1228,6 +1229,9 @@ describe("gatewayServiceMessageKey", () => {
     expect(gatewayServiceMessageKey("gateway-service-unqualified")).toBe(
       "codingWorkbench.gatewayService.unqualified",
     );
+    expect(gatewayServiceMessageKey("gateway-service-managed-outside")).toBe(
+      "codingWorkbench.gatewayService.managedOutside",
+    );
     expect(gatewayServiceMessageKey("runtime-unqualified")).toBeUndefined();
     expect(gatewayServiceMessageKey("constructor")).toBeUndefined();
     expect(gatewayServiceMessageKey(undefined)).toBeUndefined();
@@ -1235,7 +1239,7 @@ describe("gatewayServiceMessageKey", () => {
 });
 
 describe("runtimeUnavailableMessageKey", () => {
-  it("names the broker sentences and the two installation-folder sentences, and nothing else", () => {
+  it("keeps broker and installation causes distinct from an unknown prerequisite", () => {
     expect(runtimeUnavailableMessageKey("gateway-service-stopped")).toBe(
       "codingWorkbench.gatewayService.stopped",
     );
@@ -1248,8 +1252,25 @@ describe("runtimeUnavailableMessageKey", () => {
     expect(runtimeUnavailableMessageKey("runtime-outdated")).toBe(
       "codingWorkbench.runtime.outdated",
     );
+    // #4404, #4410: an npm installation without this computer's runtime package is named as such,
+    // never with the generic install-the-runtime advice that sent a Windows person in circles.
+    expect(runtimeUnavailableMessageKey("npm-runtime-package-missing")).toBe(
+      "codingWorkbench.runtime.npmRuntimePackageMissing",
+    );
+    expect(runtimeUnavailableMessageKey("npm-runtime-package-missing")).not.toBe(
+      "codingWorkbench.runtime.platformUnqualified",
+    );
     expect(runtimeUnavailableMessageKey("runtime-unqualified")).toBeUndefined();
     expect(runtimeUnavailableMessageKey("constructor")).toBeUndefined();
     expect(runtimeUnavailableMessageKey(undefined)).toBeUndefined();
   });
+
+  it.each(
+    CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS.filter(
+      (reason) => reason !== "runtime-unqualified",
+    ),
+  )(
+    "preserves the server's concrete prerequisite instead of guessing a package repair: %s",
+    (reason) => expect(runtimeUnavailableMessageKey(reason)).toBeDefined(),
+  );
 });

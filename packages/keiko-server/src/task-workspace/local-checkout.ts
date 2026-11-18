@@ -27,7 +27,7 @@ import {
 } from "./activity-log.js";
 
 import { TaskWorkspaceError } from "./errors.js";
-import { isCanonicalLocalRoot } from "./canonical-root.js";
+import { isCanonicalLocalRoot, isRegisteredLocalRoot } from "./canonical-root.js";
 import {
   FOLDER_PREFIX,
   folderView,
@@ -237,7 +237,7 @@ function localView(
   const persisted = instances.getById(pointer.workspaceId);
   if (persisted?.executionLocation !== "local") return undefined;
   const root = persisted.repositoryRoot;
-  if (!store.listProjects().some((project) => project.path === root)) return undefined;
+  if (!isRegisteredLocalRoot(store, root)) return undefined;
   if (!isCanonicalLocalRoot(root)) return undefined;
   const state = readProductionWorkspaceGitState(root, root);
   if (state?.branch !== persisted.taskBranch) return undefined;
@@ -273,7 +273,7 @@ interface LocalSelectionRequest {
 }
 
 function validatedLocalIdentity(store: UiStore, root: string): string {
-  if (!store.listProjects().some((project) => project.path === root))
+  if (!isRegisteredLocalRoot(store, root))
     throw new TaskWorkspaceError("MISSING_REPOSITORY", "Select a registered repository.");
   let identity: string | undefined;
   try {

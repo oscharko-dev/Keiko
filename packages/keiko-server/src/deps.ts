@@ -737,6 +737,7 @@ export interface RuntimeGatewayConfig {
     observedGeneration?: number,
     conversationCheckedAt?: string,
     citationObservation?: CitationCapabilityObservation,
+    conversationReadinessFailure?: "transient",
   ): void;
   readonly clearVerifiedCapability: (modelId: string, observedGeneration?: number) => boolean;
 }
@@ -773,6 +774,8 @@ export interface VerifiedModelCapabilityObservation {
   readonly checkedAt: string;
   /** Actual chat observation time, separate from retained feature evidence. */
   readonly conversationCheckedAt?: string | undefined;
+  /** A timed-out or overloaded basic-chat check; selection/election only, never admission. */
+  readonly conversationReadinessFailure?: "transient";
   readonly fields: VerifiedModelCapabilityFields;
   /** Body-free, request outcomes owned by this same generation; never readiness or durable config. */
   readonly citationBehaviourWindow?: readonly NonNullable<ModelCapability["citationBehaviour"]>[];
@@ -1997,6 +2000,7 @@ function gatewayCapabilityRecorder(
     observedGeneration,
     conversationCheckedAt,
     citationObservation,
+    conversationReadinessFailure,
   ): void => {
     const currentGeneration = generation();
     if (!admitted(modelId)) return;
@@ -2009,6 +2013,9 @@ function gatewayCapabilityRecorder(
         ? {}
         : { conversationCheckedAt: conversationCheckedAt ?? checkedAt }),
       fields: { ...fields },
+      ...(fields.conversationReady === false && conversationReadinessFailure === "transient"
+        ? { conversationReadinessFailure }
+        : {}),
       ...boundedCitationObservation(
         citationObservation ?? observations.get(modelId),
         currentGeneration,
@@ -2125,6 +2132,20 @@ export function currentConversationReady(
 }
 
 /**
+ * The models an automatic election may choose from: the activated ones when any is (ADR-0171 D2,
+ * amended 2026-11-16). A model nobody activated in Settings > Models is not usable, so it must not
+ * outrank an activated one merely by its rank tier. Without any activated model the full list is
+ * returned, so the caller keeps its precise "not ready" refusal.
+ */
+export function preferActivatedModels<T extends { readonly id: string }>(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  models: readonly T[],
+): readonly T[] {
+  const activated = models.filter((model) => currentConversationReady(deps, model.id));
+  return activated.length > 0 ? activated : models;
+}
+
+/**
  * Process-local result of the startup or explicit Settings check. A configuration replacement
  * invalidates it. Age alone never schedules provider work or turns a known success into unknown;
  * malformed and future timestamps remain unavailable. Actual calls still surface provider errors.
@@ -2141,6 +2162,18 @@ export function currentConversationReadinessObservation(
   if (observation.fields.conversationReady !== true) return observation.fields.conversationReady;
   const ageMs = conversationReadinessAgeMs(observation);
   return Number.isFinite(ageMs) && ageMs >= 0 ? true : undefined;
+}
+
+/** A transient check leaves selection and default election unknown; admission stays strict. */
+export function currentConversationReadinessPresentation(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  modelId: string,
+): boolean | undefined {
+  const ready = currentConversationReadinessObservation(deps, modelId);
+  const observation = deps.gatewayConfig?.verifiedCapability(modelId);
+  if (ready !== false || observation?.conversationReadinessFailure !== "transient") return ready;
+  const ageMs = conversationReadinessAgeMs(observation);
+  return Number.isFinite(ageMs) && ageMs >= 0 ? undefined : false;
 }
 
 function configuredChatContextProfile(

@@ -218,6 +218,22 @@ export function discoverNpmLaneOpenCode(
 }
 
 /**
+ * Whether this is an npm installation of Keiko on a computer that has an approved runtime package,
+ * whose package is simply not installed (#4068): Keiko's own package root sits inside a
+ * `node_modules` directory. A checkout or an unsupported platform answers false, and the Workbench
+ * keeps its generic sentence. Structural only: nothing is read or trusted.
+ */
+export function npmLaneRuntimePackageExpected(
+  input: Pick<DevLaneOpenCodeDiscoveryInput, "env" | "platform" | "arch" | "npmLaneApprovals">,
+): boolean {
+  const target = targetFromDiscoveryInput(input);
+  if (target === undefined) return false;
+  if ((input.npmLaneApprovals ?? NPM_LANE_RUNTIME_APPROVALS)[target] === undefined) return false;
+  const keikoRoot = productionUpdateFacts(input.env).packageRoot;
+  return keikoRoot?.split(/[\\/]+/u).includes("node_modules") === true;
+}
+
+/**
  * Node's own lookup order for a package requested from Keiko's package root, walked by hand: "not
  * installed" is the ordinary state of an npm installation and is an empty result here, not an
  * exception to swallow.

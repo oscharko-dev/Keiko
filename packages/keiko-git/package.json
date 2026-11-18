@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-git",
-  "version": "1.5.0",
+  "version": "1.5.2",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: shared Git core primitives — hardened process runner and environments, repository resolution and path containment, porcelain/ref/remote/history parsers, and failure classification. Currently consumed by keiko-server; keiko-tools imports only the remote-failure classification (ADR-0115 Non-goals sanctions its own governed spawn surface) and keiko-workspace stays spawn-free by design. Not published independently.",
@@ -20,6 +20,9 @@
   "files": [
     "dist"
   ],
+  "dependencies": {
+    "@oscharko-dev/keiko-contracts": "1.5.2"
+  },
   "sideEffects": false,
   "engines": {
     "node": ">=26.13.1 <27"

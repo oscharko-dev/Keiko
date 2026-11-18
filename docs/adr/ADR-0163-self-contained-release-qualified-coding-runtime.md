@@ -243,6 +243,12 @@ verified leaf signer identities to match before the carrier may emit a receipt. 
 comparison preserves Azure's short-lived certificate rotation model: it does not pin a leaf
 thumbprint, public key, or subject in repository content.
 
+The same supervisor image is the `KeikoRuntimeGateway` broker every Windows launch requires
+(ADR-0043 D19). The self-contained release unit therefore includes setting it up: a healthy
+`keiko start` installs or repairs the broker to the shipped supervisor's pin (one UAC prompt when
+the pin changed, never before the restart proof), and the Workbench offers Repair. A person never
+runs a separate `keiko gateway-service` step after installing or updating (2026-11-17).
+
 ### D4 — macOS uses an entitled Endpoint Security System Extension
 
 Each macOS app contains one target-architecture system extension under the canonical app-bundle
@@ -540,6 +546,18 @@ supervisor binary still changes the runtime identity. It is deliberately NOT rou
 platform receipt parser, which would force a macOS receipt to assert `macos-endpoint-security`: a
 forged containment claim.
 
+For Windows broker admission, internal consistency is insufficient (#4404, owner-authorized repair
+2026-11-16). The published 1.5.0 runtime's exact native-helper digests and sizes are additionally
+compiled into the existing runtime-approvals owner, alongside its current OpenCode tree, adapter,
+protocol, license and SBOM pins. The source artifact was authenticated using the existing portable
+release key and matched against the actual installed bytes; no mutable manifest approves itself.
+Only a complete match yields the D19 broker pin. This adds an independent artifact identity to the
+evaluation path; it does not turn `signatureVerified` or `qualificationVerified` true, supply an
+Authenticode chain, relax the signed-install downgrade guard or change the runtime evidence class.
+The CLI reports `portable-evaluation`, and the existing broker-state Activity Log records its origin,
+helper digest and functional evidence class. The previously published 1.5.0 code is not changed by
+this source fix, and native platform qualification remains separate from functional acceptance.
+
 **`SecureWorkspaceTextReadArtifact.signed` is a structural artifact-shape literal, not a signature
 claim.** It means "this record is the verified artifact identity". The artifact validator requires
 it truthy before the point-of-use verifier runs at all, so setting it `false` on this lane would
@@ -659,3 +677,4 @@ done exactly that; an evaluation runtime is not such a fact and stays in the det
 | 1.9     | 2026-10-29 | D4: recorded that orphaned runtime trees are reaped by the Linux, Windows and macOS supervisors/monitor themselves and deleted the unused server-side native recovery port (#4106). |
 | 1.10    | 2026-11-05 | Pinned OpenCode 2.2.5 (#4271). Every version fact reads from `opencode-runtime-pins.json`. The new built-in plugins are removed at the source, so the shipped payload offers no capability the previous one did not. |
 | 1.11    | 2026-11-12 | D1: `linux-x64` stays in the matrix with all its gates as a community-tier target; new operating-system features are qualified on Windows and macOS only (ADR-0183). |
+| 1.12    | 2026-11-17 | D3/D8: a Windows install or update reaches a usable Workbench without a separate service step: a healthy `keiko start` installs or repairs the gateway broker (ADR-0043 D19), and the Workbench offers Repair. A runtime that no lane offers now names the installation kind the server found (`npm-runtime-package-missing`, `portable-runtime-unverified`, otherwise `platform-unqualified`), logged as `coding-runtime.install.unqualified`. By owner decision the npm lane's Windows helper is re-pinned to the portable release build (`65cc98c3…`), so the npm and desktop packages carry one set of Windows native bytes (MSVC 14.51); the Windows npm runtime package is still unpublished until the owner publishes it (see the release publish workflow). |

@@ -1,13 +1,23 @@
 // #4068: the gateway-service status query runs the helper only when its bytes match the pin.
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 
-import { readWindowsGatewayServiceStatus } from "./productionPortableCodingRuntime.js";
+import {
+  readWindowsGatewayServiceStatus,
+  runVerifiedWindowsGatewayHelper,
+} from "./productionPortableCodingRuntime.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -48,5 +58,32 @@ describe.skipIf(process.platform === "win32")("readWindowsGatewayServiceStatus",
     expect(recorded.mock.calls[0]?.[0]).toMatchObject({
       operation: "coding.runtime.windows-gateway-service.verify",
     });
+  });
+
+  // #4454: `keiko gateway-service` and the setup after `keiko start` spawned the discovered path
+  // directly. They now share this runner, so the bytes that run are the verified private copy and
+  // the arguments arrive exactly as given.
+  it("passes the command's arguments to the verified copy", async () => {
+    const script = '#!/bin/sh\nprintf "%s|" "$@" > MARKER\nexit 0\n';
+    const { path, marker } = helper(script);
+    const pin = digest(script.replace("MARKER", marker));
+    expect(
+      await runVerifiedWindowsGatewayHelper(path, pin, ["--gateway-service-uninstall"], 5_000),
+    ).toBe(0);
+    expect(readFileSync(marker, "utf8")).toBe("--gateway-service-uninstall|");
+  });
+
+  it("never runs a swapped helper for an install or uninstall command", async () => {
+    const { path, marker } = helper("#!/bin/sh\ntouch MARKER\nexit 0\n");
+    vi.spyOn(defaultServerDiagnosticSink, "record").mockImplementation(() => undefined);
+    expect(
+      await runVerifiedWindowsGatewayHelper(
+        path,
+        digest("#!/bin/sh\nexit 0\n"),
+        ["--gateway-service-install", "a".repeat(64)],
+        5_000,
+      ),
+    ).toBeNull();
+    expect(existsSync(marker)).toBe(false);
   });
 });

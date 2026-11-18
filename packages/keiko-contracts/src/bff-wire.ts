@@ -604,7 +604,12 @@ export function isChatToolBatchProgress(value: unknown): value is ChatToolBatchP
  * own turn does not bear out and the correction could not remove the claim. The server states the
  * closed marker; the Chat words it from its message catalog, so no language is guessed here.
  */
-export const CHAT_CLAIM_NOTICES = ["no-jira-create", "tool-call-not-executed"] as const;
+export const CHAT_CLAIM_NOTICES = [
+  "no-jira-create",
+  "tool-call-not-executed",
+  "no-jira-approval",
+  "jira-report-not-generated",
+] as const;
 export type ChatClaimNotice = (typeof CHAT_CLAIM_NOTICES)[number];
 export function isChatClaimNotice(value: unknown): value is ChatClaimNotice {
   return (CHAT_CLAIM_NOTICES as readonly unknown[]).includes(value);
@@ -2226,6 +2231,10 @@ export type HtmlManualCitationOpenUnavailableReason =
   | "target-unsupported"
   | "target-credentialed"
   | "target-unavailable";
+
+export type HtmlManualCitationCheckResult =
+  | { readonly state: "verified" }
+  | { readonly state: "unavailable"; readonly reason: HtmlManualCitationOpenUnavailableReason };
 
 export type HtmlManualCitationOpenEligibility =
   | { readonly state: "available"; readonly target: string }

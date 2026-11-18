@@ -50,6 +50,11 @@ The first release does not add a second app area or a second registry.
   sources, and existing indexed manual pods retain their refresh and citation paths.
 - **Inspect** — the detail page shows pod readiness, connected sources, document
   counts, indexing state, diagnostics, and actions through the current BFF routes.
+  Failed documents remain explicit even when every indexed chunk has an embedding;
+  that percentage describes indexed chunks, not coverage of all source files. The existing
+  **Repair failed files** action retries failures while keeping successfully indexed documents.
+  A completed job with file errors is labelled accordingly using that job's own counts;
+  older errors do not relabel a later successful repair. The underlying lifecycle is unchanged.
 - **Attach** — Conversation Center, the existing source picker, Quality Intelligence, and voice
   grounding surfaces refer to selected local knowledge as Knowledge Pods while keeping
   existing `capsule` and `capsule-set` wire discriminants.
@@ -235,6 +240,13 @@ document inventory. Overlapping Pod and Pod Set connections enumerate each docum
 read rechecks the attached scope, lifecycle and model-use policy, and revision-bound cursors refuse
 changed sources. The inventory is bounded to 10,000 document descriptors and the existing complete
 text reader to 4,000,000 characters per document; exclusions remain explicit.
+
+When a document or review call refuses a stale continuation, changed source or no-longer-selected
+document, Chat renders the canonical refusal in the selected UI language and explains how to restart
+from the current Pod inventory. It never treats the refusal as a successful read, replays a call,
+or displays arbitrary provider recovery instructions. The saved receipt retains this explanation
+after reload. `knowledge.documents.operation` records the closed `sourceRefusal` reason without
+document text, scope references or cursor values (#4405).
 
 Before synthesis, each accepted Chat tool turn with selected Pods records one metadata inventory
 page through that same managed tool, authority and cancellation path. The first model request

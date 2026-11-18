@@ -321,6 +321,7 @@ const UPDATE_INSTALL_MODE_DETECTED_OPERATION = defineActivityLogOperation({
         "package-manager-unsupported",
         "manifest-unavailable",
         "portable-bootstrap",
+        "portable-update-unavailable",
         "portable-setup-failed",
         "portable-it-managed",
         "portable-registration-invalid",

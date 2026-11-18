@@ -1,6 +1,7 @@
 import { accessSync, constants, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
+import { environmentVariableValue } from "@oscharko-dev/keiko-contracts/runtime/process-environment";
 import {
   buildSandboxEnv,
   buildWindowsShellInvocation,
@@ -70,17 +71,6 @@ function candidateExtensions(
     : extensions;
 }
 
-// Windows environment names are case-insensitive, and a copied environment keeps the spelling the
-// parent used (`Path` for a process started from Explorer). Elsewhere only `PATH` names it.
-function searchPathValue(
-  processEnv: NodeJS.ProcessEnv,
-  platform: NodeJS.Platform,
-): string | undefined {
-  if (platform !== "win32" || processEnv.PATH !== undefined) return processEnv.PATH;
-  const key = Object.keys(processEnv).find((name) => name.toUpperCase() === "PATH");
-  return key === undefined ? undefined : processEnv[key];
-}
-
 function probeCandidate(
   directory: string,
   name: string,
@@ -124,8 +114,10 @@ export function resolveExecutableCandidateOutsideWorkspace(
   assertBareExecutableName(name);
   const lexicalRoot = workspace.root;
   const realRoot = workspaceRoot(lexicalRoot);
-  for (const directory of splitProcessPath(searchPathValue(processEnv, platform))) {
-    for (const extension of candidateExtensions(name, processEnv.PATHEXT, platform)) {
+  const path = environmentVariableValue(processEnv, "PATH", platform);
+  const extensions = environmentVariableValue(processEnv, "PATHEXT", platform);
+  for (const directory of splitProcessPath(path)) {
+    for (const extension of candidateExtensions(name, extensions, platform)) {
       const candidate = probeCandidate(directory, name, extension);
       if (candidate === undefined) continue;
       if (isWorkspaceCandidate(candidate, lexicalRoot, realRoot)) {

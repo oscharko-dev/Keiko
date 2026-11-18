@@ -180,7 +180,37 @@ export interface PdfCitationPreviewCitationStatus {
   readonly state: PdfCitationPreviewStatusState;
   readonly reason?: PdfCitationPreviewReasonCode;
   readonly display?: PdfCitationPreviewDisplay;
+  /** A text-source candidate; an explicit open must revalidate provenance and live bytes. */
+  readonly editorOpenAvailable?: true;
 }
+
+export interface KnowledgeCitationEditorTargetRequest {
+  readonly chatId: string;
+  readonly assistantMessageId: string;
+  readonly marker: string | number;
+  readonly stableId: string;
+}
+
+export type KnowledgeCitationEditorTargetReason =
+  | PdfCitationPreviewReasonCode
+  | "editor-source-unsupported"
+  | "editor-scope-unsupported"
+  | "editor-read-refused";
+
+export const KNOWLEDGE_CITATION_EDITOR_TARGET_REASONS = [
+  ...PDF_CITATION_PREVIEW_REASON_CODES,
+  "editor-source-unsupported",
+  "editor-scope-unsupported",
+  "editor-read-refused",
+] as const satisfies readonly KnowledgeCitationEditorTargetReason[];
+
+export type KnowledgeCitationEditorTargetResponse =
+  | {
+      readonly outcome: "authorized";
+      /** Server-derived from the stored citation; ordinary Editor guards still apply. */
+      readonly target: { readonly root: string; readonly path: string };
+    }
+  | { readonly outcome: "rejected"; readonly reason: KnowledgeCitationEditorTargetReason };
 
 export interface PdfCitationPreviewStatusResponse {
   readonly citations: readonly PdfCitationPreviewCitationStatus[];

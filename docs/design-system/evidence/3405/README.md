@@ -172,6 +172,17 @@ passes. Only the three records were kept; its fallback-font captures were discar
 committed captures are unchanged. No updater behavior, fixture, assertion or numerical ceiling
 changed. This remains updater fixture evidence.
 
+The Knowledge text citation repair (#4443) changed `api.ts` and both optional catalogs. On
+2026-11-17 (UTC) the original nine Chromium cases passed in 1.8 minutes in an isolated Linux
+arm64 container with Node 26.13.1. The three JSON records now bind the updated source hashes.
+The 14 committed screenshots, updater assertions and harness inputs retain their existing values.
+
+The New chat repair for a remembered project whose folder is gone (#4455, PR #4460) changed
+`api.ts`: chat creation now clears the project-list cache. On 2026-11-17 (UTC) the original nine
+Chromium cases passed in 1.5 minutes in the Linux gates container with an init process and Node
+26.13.1, and `npm run check:update-ui-evidence` passes. Only the three records were kept; the 14
+committed screenshots, updater assertions and harness inputs retain their existing values.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
@@ -734,3 +745,54 @@ Linux arm64 gates container (Node 24.18.0, `KEIKO_WRITE_TRACKED_EVIDENCE=1`): al
 the source digests and `generatedAt` in the three records were taken from this run; its
 fallback-font captures were discarded and the 14 committed captures are unchanged. No updater
 behavior, fixture, assertion or numerical ceiling changed. This remains updater fixture evidence.
+
+## Windows legacy setup and Chat copy follow-up — 2026-11-16 (#4400, #4405, #4407)
+
+The complete original nine-case producer ran with the locked dependencies in the Linux arm64
+gates container with `--init` and Node 26.13.1.
+`KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:update-ui-1696` passed all nine cases, and
+`npm run check:update-ui-evidence` passed. The three provenance records use the new source digests
+and generation time. The runner substituted fallback fonts, so the fourteen captures keep their
+original renderer's typography.
+
+## Jira starter templates in Skills — 2026-11-16
+
+The localized starter drafts change the optional English and German catalogs. All nine original
+updater cases passed again in the Linux arm64 gates container with the locked dependencies,
+Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The freshness gate passed. The three
+producer-generated records bind the updated source digests and generation time. The fourteen
+captures retain the typography of their original renderer.
+
+### Gateway credential guidance (#4441)
+
+The English and German gateway credential guidance changes the optional catalogs. The original
+nine updater cases passed in the Linux arm64 gates container with Node 26.13.1 and
+`KEIKO_WRITE_TRACKED_EVIDENCE=1`. The three records use that run's source digests and generation
+time where recorded. The captures retain their original typography.
+
+### Git signing recovery (#4444)
+
+All nine original updater cases passed again in the Linux arm64 gates container with Node 26.13.1
+and `KEIKO_WRITE_TRACKED_EVIDENCE=1` after the final English and German signing-tool guidance.
+The three records bind those catalog digests. The committed captures retain the typography of their
+original renderer.
+
+### Git conflict recovery (#4445)
+
+The nine original updater cases passed again in the Linux arm64 gates container with Node 26.13.1
+and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The three records bind the conflict recovery strings in
+both optional catalogs. The committed captures retain their original renderer's typography.
+
+The review of #4444 and #4445 aligned the German conflict and signing instructions with the
+formal address used by Git Sync. All nine original updater cases passed again in the same Linux
+environment. The three records incorporate the new German catalog digest and the generation time
+where recorded.
+
+## Release 1.5.2: Windows Workbench causes and model activation — 2026-11-17 (#4404, #4410, #4450)
+
+The named Windows checkout causes, the manual model activation in Settings > Models and the
+retired surfaces of #4448 change the core and optional English and German catalogs, `api.ts` and
+`globals.css`. All nine original updater cases passed again in the Linux arm64 gates container with
+`--init`, Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`, and `npm run check:update-ui-evidence`
+passed. The three producer-generated records bind the updated source digests and generation time.
+The fourteen committed captures retain the typography of their original renderer.

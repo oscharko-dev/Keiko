@@ -14,6 +14,7 @@ import type {
 import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import {
   detectPortableUpdateInstallMode,
+  portableManagementFromEnv,
   portableStateDirFromEnv,
   type PortableManagementMode,
   type PortableVolumeCheck,
@@ -402,5 +403,6 @@ export function productionUpdateFacts(
     packageName: PACKAGE_NAME,
     packageManagerHint: packageManagerHintFromRoot(packageRoot),
     portableStateDir: portableStateDirFromEnv(env),
+    portableManagement: portableManagementFromEnv(env),
   };
 }

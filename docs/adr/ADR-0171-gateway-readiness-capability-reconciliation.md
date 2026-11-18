@@ -15,6 +15,11 @@ Amended 2026-11-13 (owner decision, #4351): D2 checks only models a person uses.
 models stays free; every check sends an inference request and makes the gateway load the model, so
 startup checks the elected default (walking the election order only after a definitive refusal),
 and a person's first explicit pick of a model without a current observation starts one check of it.
+Amended 2026-11-16 (product decision, manual activation): startup checks no chat model and starts no
+tool-calling proof. Every chat model is inactive in each server process until the person activates
+it in Settings > Models, and that activation is its readiness check; a pick or a Send in Chat and a
+pick or Start in the Coding Workbench no longer start a basic-chat check. Only activated models are
+offered and elected as an automatic default, and the Workbench proves tool calling only for them.
 
 ## Context
 
@@ -67,33 +72,46 @@ verification state and clears the field observations of every provider that was 
 an unchanged provider keeps its observations under the new generation, including when the list was
 only reordered (D3). Observations intentionally survive separate HTTP requests in the current
 process, but not a process restart; because a replacement resets the coarse verification state,
-basic-chat verification starts during configuration initialization after a restart or a replacement. Successful
-credential-setup chat checks populate the same generation-bound ledger and are reused. A Chat
-create, send, streaming send, regeneration, or grounded question may join an already running
-initialization. A successful result remains usable for that configured connection and current
+no chat model is checked after a restart or a replacement until the person activates it in
+Settings > Models (amended 2026-11-16). Successful
+credential-setup chat checks populate the same generation-bound ledger and are reused. Chat send,
+streaming send, regeneration and grounded questions may join an already running initialization.
+Opening an empty local Chat requires a configured conversation model and remains available while
+its readiness is unknown or a check failed. This makes the composer and model picker reachable
+before the first activation. Creation records `chat.creation.opened` with a closed readiness
+observation and a model digest. A successful result remains usable for that configured connection and current
 process; elapsed age alone never invalidates it. Malformed or future successful timestamps remain
-unknown. Configuration initialization checks the chat model in use once per connection (#4351):
-the elected default, through the same generation/model in-flight map and two slots. Only a
-definitive refusal of that model walks the election order one model at a time and stops at the first
-ready model; a check that ended without a verdict (timeout, busy or unreachable gateway) moves
-nothing on, because it says nothing against the model. A person's first explicit pick of a chat
-model with no current observation, in the Chat or Coding Workbench picker, starts exactly one check
-of that model through the same single-model owner, and in the Workbench its tool-calling proof; a
-model already answered for, ready or refused, starts nothing, so a refused model stays refused until
-explicit verification. Startup probes only the embedding model in use, and Gateway Setup verifies only
+unknown. Configuration initialization checks no chat model (amended 2026-11-16); the person
+activates each model in Settings > Models. The batch owner keeps its rules for an explicit batch
+check: the elected default, through the same generation/model in-flight map and two slots, and only
+a definitive refusal of that model walks the election order one model at a time and stops at the
+first ready model; a check that ended without a verdict (timeout, busy or unreachable gateway) moves
+nothing on, because it says nothing against the model. A pick of a chat model in the Chat or Coding
+Workbench picker starts no basic-chat check: the Chat picker offers only activated models, an
+automatic default prefers activated models over a better-ranked inactive one, and the Workbench
+proves tool calling only for an activated model. The server's selection route keeps its single-model
+rules but is no longer called by the Chat picker. Startup probes only the embedding model in use, and Gateway Setup verifies only
 the model that becomes the default and the embedding model in use; the other listed models are
-configured as listed and unverified. The typed `gateway.readiness.scope` operation records, with
+configured as listed and inactive. The typed `gateway.readiness.scope` operation records, with
 closed values and counts, how many models were listed and checked and why (`startup`, `fallback`,
 `selection`), only for a check that sent a request; `gateway.readiness.automatic.started` carries
 the same `checkReason`, and `gateway.readiness.selection` records each pick's outcome under its own
-correlation id. The startup walk uses Chat's own election (`electConversationDefault`), stops at a
-refused credential and at a check without a verdict, and the tool-calling proof at startup follows
-the model in use, never a model nobody picked. A restored selection is not checked on page load,
-restore or opening a Chat; the first Send or Start on a model without a current observation is the
-first use that checks it and goes ahead when it answers, and a window opening reads the Workbench
-profile with `check=use` (it dispatches nothing) while a pick or Start reads with `check=1`. A check
-without a verdict may be repeated by a pick or the next Send after the not-ready cooldown has passed; an
-explicit Settings verification that answers definitively ends the walk's pause. Gateway Setup keeps
+correlation id. The batch walk uses Chat's own election (`electConversationDefault`) and stops at a
+refused credential and at a check without a verdict; startup starts no tool-calling proof. A restored
+selection, a pick, a Send or a Start never checks a model; a window opening reads the Workbench
+profile with `check=use` (it dispatches nothing) while a pick or Start reads with `check=1`, which
+proves tool calling only for an activated model. A check without a verdict may be repeated by
+activation after the not-ready cooldown has passed; an explicit Settings verification that answers
+definitively ends the walk's pause. Chat keeps the model selectable after a basic-chat timeout or
+transient overload: the existing generation-bound observation retains `conversationReady: false`
+plus a closed transient failure marker, while `/api/models` and the Chat and Knowledge default
+elections treat that transient observation as unknown (#4415). A timeout does not demote the
+selected default or move the server's election away from the picker. Inference admission still
+reads the strict observation. Activation may check it once more after the same cooldown; passive
+reads start no work. Definitive
+refusals, including HTTP 401/403/404, remain observed not-ready. The marker follows unchanged
+connections and disappears with a changed connection or a later definitive observation; it is never
+persisted as provider configuration or accepted by inference admission. Gateway Setup keeps
 the full round for explicitly named deployments; for a discovered listing a candidate the walk
 rejects is dropped, a wildcard route pattern is dropped by its shape (a listing of nothing else fails
 with its own reason), a default without a verdict from a gateway that answers (a timeout of its
@@ -103,9 +121,9 @@ takes the existing base-URL fallback and deferred admission without saving anyth
 no request reached are configured and reported unverified. A model kept without a verdict is saved
 only because the answer names it as not verified (with what to do), its tool-calling record is
 `unverified` and no successful observation is recorded for it. A request for a model with no current
-positive observation that did not come through the UI's first-use check (a Voice canonical target, a
-direct API call) is refused and starts no check: Chat create, send and regeneration answer 400
-`CONVERSATION_MODEL_NOT_READY`, a coding run start is refused as model-unavailable, and the Voice
+positive observation is refused and starts no check: Chat send and regeneration answer 400
+`CONVERSATION_MODEL_NOT_READY`, a coding run start is refused as model-unavailable
+(`conversation-not-ready`), and the Voice
 queue retries a bounded number of times and then suspends with the transcript kept. A window's
 opening or restored selection reads with `check=use`, which may join a check that runs and report
 the state but never dispatches one; only a person's pick or Start sends `check=1`, and a Start
@@ -113,13 +131,14 @@ belongs to the model it was pressed for. A connection is the provider entry
 with its credential; a proof another model's check persists advances the generation without
 changing the connection, so it repeats no check. Startup and explicit readiness probes share the
 interactive gateway's five-minute silence floor (#4038), preserving larger configured timeouts.
-Interactive admission may join a running startup check with the existing aggregate five-minute
-wait across all candidate models, including the selected model. Its deadline only stops that
+Interactive inference admission may join a running startup check for the selected model for up to
+five minutes. Its deadline only stops that
 caller's wait and never authorizes an unverified model or cancels the configuration-owned probe.
 
-Chat create, send, regeneration, grounded questions, model lists, page loads and passive Workbench
-profile reads consume the stored result without scheduling provider readiness work; the explicit
-selection above is a deliberate human action, not a passive read. This includes
+Chat creation uses the stored result as a default-model preference. Send, regeneration, grounded
+questions, model lists, page loads and passive Workbench profile reads consume the stored result
+without scheduling provider readiness work; only activation in Settings > Models starts a check.
+This includes
 old failed results and unavailable observations. A passive profile read does not await background
 verification. Failed startup remains visible until explicit Settings verification, connection
 replacement or a process restart performs another check; the person can therefore retry a
@@ -147,7 +166,9 @@ records the inconclusive-probe count without request or response bodies.
 The Coding Workbench's tool-calling and long-context probes follow the same rule (customer 1.3.4).
 A probe the gateway never answered is no verdict: it gets no six-hour cooldown, does not count as
 pending once it settled, and the profile reports `tool-calling-unverified`, never
-`no-tool-calling`. Configuration startup initializes these separate capability checks. A Workbench
+`no-tool-calling`. Configuration startup no longer initializes these capability checks; they run only
+for activated models (amended 2026-11-16), and a tracked model nobody activated is reported
+`conversation-not-ready` instead of a pending check. A Workbench
 profile that explicitly asks (`check=1`, sent when the Workbench opens or a model is chosen) may
 request or join tool-calling and long-context verification after the existing one-minute quiet.
 Passive profile reads, ordinary page loads and timers never retry them. A proof completed against
@@ -257,7 +278,8 @@ Capability application clears carried observations before restoring only retaine
 original feature and conversation measurement times, so an unrelated tool-only proof cannot grant
 conversation readiness. Missing refinement support fails as retryable rather than reporting an
 applied catalog update. Existing connections and policy are retained. A bounded serial queue verifies missing or expired
-tool-call proofs without opening Settings or the Workbench. Behind a gateway that is not a
+tool-call proofs of activated models when the Workbench asks; startup no longer enqueues it
+(amended 2026-11-16). Behind a gateway that is not a
 recognised LiteLLM connection the same targets, including a chat model nobody has proven (#3578),
 are verified through that queue when the Workbench reads its profile (ADR-0124 D5; ADR-0173). A
 refuted proof and a model that is no chat model are never targets. Unknown context windows use the
@@ -442,10 +464,15 @@ connection/process lifetime; `stale` does not create a new age limit for that ob
 - A failed persistence attempt leaves the generation-bound observation available for an identical
   retry; it can never cross a configuration replacement.
 - A context-window lower bound cannot silently shrink a correctly configured model capacity.
-- Basic-chat readiness runs once per configured connection at initialization after restart or
-  connection replacement and reuses successful credential checks. Requests and passive reads
-  consume that result without age-based renewal or automatic recovery traffic. Explicit Settings
-  verification remains available; actual provider requests report runtime failures normally.
+- No chat model is checked at initialization (amended 2026-11-16). After a restart or a connection
+  replacement every affected model is inactive until the person activates it in Settings > Models;
+  successful credential-setup checks still count as activation. The person can deactivate an
+  activated model there again: deactivation forgets the observation of the current generation without
+  a provider request, so Chat no longer offers or elects the model and a send or coding start is
+  refused until it is activated anew. A deactivation while that model's check still runs is refused,
+  so the check's later result cannot reactivate it unasked. Requests and passive reads consume
+  that result without age-based renewal or automatic recovery traffic; actual provider requests
+  report runtime failures normally.
 - Passive Workbench profile reads return the current projection immediately, even when a provider
   verification is still running. Capability proof, configuration and authority denials remain intact.
 - A coding run admitted with a fresh tool-calling proof is not stranded when the proof ages out

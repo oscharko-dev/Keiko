@@ -7,6 +7,7 @@ import { activityLogOperationSchema } from "@oscharko-dev/keiko-contracts/runtim
 import {
   KNOWLEDGE_REVIEW_FAILURE_STAGES,
   KNOWLEDGE_REVIEW_VALIDATION_REASONS,
+  KNOWLEDGE_STALE_SOURCE_REASONS,
 } from "@oscharko-dev/keiko-contracts/runtime/knowledge-turn-coverage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -912,9 +913,26 @@ describe("managed scoped document access", () => {
     expect(stale).toMatchObject({ outcome: "failed", reason: "cursor-stale" });
     expect(stale.nextStep).toContain("inventory");
     expect(stale.nextCursor).toBeUndefined();
+    const refused = sink.events
+      .filter((event) => event.op === "knowledge.documents.operation")
+      .at(-1);
+    if (refused === undefined) throw new TypeError("Expected the refused read's activity.");
+    const line = formatActivityLogProofLine(refused);
+    expect(expectActivityLogProof("knowledge.documents.operation.line", line)).toMatchObject({
+      operation: "read",
+      disposition: "refused",
+      sourceRefusal: "cursor-stale",
+    });
+    if (typeof first.nextCursor !== "string") throw new TypeError("Expected a continuation.");
+    expect(line).not.toContain(first.nextCursor);
     const denied = await call(f, "knowledge.review", args, { beforeEffect: () => false });
     expect(denied).toMatchObject({ outcome: "failed", reason: "denied" });
     expect(denied.nextCursor).toBeUndefined();
+    const otherEvents = sink.events.filter(
+      (event) => event.op === "knowledge.documents.operation" && event !== refused,
+    );
+    expect(otherEvents.every((event) => event.extra?.sourceRefusal === undefined)).toBe(true);
+    expect(analyzeLogText(line).timelines).toHaveLength(1);
   });
 
   it("records a real registered body-free read, refusal and analyzer timeline", async () => {
@@ -925,6 +943,7 @@ describe("managed scoped document access", () => {
     expect(registration?.fields.reviewValidationReason?.values).toEqual(
       KNOWLEDGE_REVIEW_VALIDATION_REASONS,
     );
+    expect(registration?.fields.sourceRefusal?.values).toEqual(KNOWLEDGE_STALE_SOURCE_REASONS);
     const f = await fixture("Private source wording.");
     await call(f, "knowledge.documents", { view: "inventory" });
     await call(f, "knowledge.documents", {

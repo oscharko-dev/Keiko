@@ -30,6 +30,7 @@ import type {
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
 import { matchesOverallStatus } from "@oscharko-dev/keiko-contracts/runtime/verification";
+import { runVerification } from "@oscharko-dev/keiko-verification";
 import type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { GitWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
 import { GitRawWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-mutation";
@@ -1994,6 +1995,119 @@ describe("production managed worktree tools", () => {
             verifierId: "test",
           }),
         }),
+      ).resolves.toMatchObject({ status: "failed", reasonCode });
+    },
+  );
+
+  it("reports real no-backend verification as denied without claiming a check failed (#4413)", async () => {
+    const spawn = vi.fn(() => {
+      throw new TypeError("verification must not spawn without isolation");
+    });
+    const root = "/managed/worktree";
+    const report = await runVerification(
+      {
+        workspaceRoot: root,
+        steps: [
+          {
+            kind: "test",
+            scriptName: "test",
+            command: "npm",
+            args: ["test"],
+            limits: DEFAULT_VERIFICATION_LIMITS,
+          },
+        ],
+      },
+      {
+        workspace: {
+          root,
+          selectedRoot: root,
+          name: "fixture",
+          version: undefined,
+          testFramework: "node-test",
+          sourceDirs: [],
+          testDirs: [],
+          languages: ["javascript"],
+          ignoreLines: [],
+        },
+        spawn,
+        monitor: {
+          canEnforceProcessTreeMemory: () => true,
+          watch: vi.fn((): (() => void) => (): void => undefined),
+        },
+        networkEnforcement: "enforce-or-fail-closed",
+        enforcedNetworkAvailable: false,
+        now: () => 1000,
+      },
+    );
+    expect(report).toMatchObject({
+      overallStatus: "failed",
+      counts: { passed: 0, failed: 0, denied: 1 },
+      results: [{ status: "denied", durationMs: 0 }],
+    });
+    expect(spawn).not.toHaveBeenCalled();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const log: ServerLogEvent[] = [];
+    const completeVerification = vi.fn<VerifiedCommitService["completeVerification"]>();
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(report),
+      records: [],
+      events,
+      log,
+      verifiedCommitService: { ...verificationService(), completeVerification },
+    });
+    const result = await executeVerification(facade, "verification-no-backend");
+    expect(result).toMatchObject({
+      status: "failed",
+      reasonCode: "VERIFICATION_NOT_RUN",
+      detail: "These verification steps did not run: test (denied by policy).",
+    });
+    expect(result).not.toHaveProperty("verificationFailure");
+    expect(codingToolVerificationPresentation(result)).toEqual({ verificationOutcome: "not-run" });
+    expect(events.find((entry) => entry.kind === "verification-summarized")).toMatchObject({
+      kind: "verification-summarized",
+      verificationStatus: "failed",
+      failedCount: 1,
+      verificationSummary: {
+        status: "failed",
+        passedCount: 0,
+        failedCount: 1,
+        deniedCount: 1,
+      },
+    });
+    expect(completeVerification).not.toHaveBeenCalled();
+    const observed = log.find((entry) => entry.op === "coding-runtime.verification");
+    const persisted = expectActivityLogProof(
+      "coding-runtime.verification.emitted-line",
+      formatActivityLogProofLine(observed ?? {}),
+    );
+    expect(persisted).toMatchObject({ state: "not-run", stepCount: 1, steps: ["test:denied"] });
+  });
+
+  it.each([
+    ["failed", "VERIFICATION_FAILED"],
+    ["timed-out", "VERIFICATION_TIMED_OUT"],
+    ["resource-exceeded", "VERIFICATION_RESOURCE_EXCEEDED"],
+  ] as const)(
+    "keeps an executed %s alongside an aggregate denied step visible",
+    async (status, reasonCode) => {
+      const mixed = cancelledAfterRed(status);
+      const report: VerificationReport = {
+        ...mixed,
+        overallStatus: "failed",
+        results: mixed.results.map((step) =>
+          step.status === "cancelled" ? { ...step, status: "denied" } : step,
+        ),
+        counts: { ...mixed.counts, cancelled: 0, denied: 1 },
+      };
+      expect(matchesOverallStatus(report.overallStatus, report.results, report.dependencies)).toBe(
+        true,
+      );
+      const facade = verificationFacade({
+        runToReport: () => Promise.resolve(report),
+        records: [],
+      });
+      await expect(
+        executeVerification(facade, `verification-mixed-denied-${status}`),
       ).resolves.toMatchObject({ status: "failed", reasonCode });
     },
   );

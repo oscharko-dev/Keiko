@@ -52,6 +52,12 @@ D18 also gains the sweep of stale tree entries a crashed supervisor left (2026-1
 per-user lock that serializes concurrent runs' grant edits (2026-11-09). D19 also pins the
 Windows npm runtime package's own supervisor (proposed 2026-11-09, pending repository-owner approval).
 
+1.10 — One-step Windows setup amends D19 (2026-11-17): a healthy `keiko start` installs or repairs
+the broker itself, at most one UAC prompt per helper pin, so installing and updating Keiko brings
+the service along; the Workbench offers Repair instead of a terminal command, and a full
+`keiko uninstall` removes the service in the same command. An installation managed outside the app
+(ADR-0121 D9) sets up no service and offers no Repair.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -455,10 +461,11 @@ Windows refusal leaves the same evidence a support report can reconstruct. Produ
 and release-qualified native lanes. Process-tree qualification alone cannot authorize an unconfined
 network launch. Until a native backend can enforce the policy, starting that run refuses before
 spawning a Windows helper and records `runtime.confinement.failed`; omitting the policy to keep a
-launch working is a fail-open defect. Under D19 only a release-qualified package, a Windows dev
-checkout or the Windows npm runtime package yields a pin for the broker that enforces it. A Windows
-evaluation package yields none, so it refuses every start, and readiness reports
-`gateway-service-unqualified` instead of offering one. The macOS app-sandbox, npm-runtime and explicit dev lanes
+launch working is a fail-open defect. Under D19 a release-qualified package, an independently
+approved Windows evaluation artifact, a Windows dev checkout or the Windows npm runtime package
+yields a pin for the broker that enforces it. Other Windows evaluation artifacts yield none, so they
+refuse every start, and readiness reports `gateway-service-unqualified` instead of offering one.
+The macOS app-sandbox, npm-runtime and explicit dev lanes
 enforce the same policy through Seatbelt. A generic supervisor-prepared loopback wrapper never bypasses the exact gateway policy:
 both prepared and direct backend launches derive the final wrapper from the same server-owned
 policy. The sealed helper receives that exact wrapper in its existing launch packet.
@@ -982,7 +989,19 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
   approved digests, so a package cannot vouch for itself (proposed 2026-11-09, pending repository-owner approval). Without
   `--dev-lane`, the command uses a release-qualified helper and, only where none exists, that
   package's supervisor; the outcome line names the `npm-runtime-package` lane. Its evidence stays
-  `functional-not-platform-qualified`. A Windows evaluation package yields no pin.
+  `functional-not-platform-qualified`.
+  The owner-authorized Windows repair of 2026-11-16 (#4404) additionally admits the independently
+  pinned public 1.5.0 Windows artifact set through this same broker. Discovery must match both
+  native-helper digests and sizes, the current OpenCode executable tree, adapter, protocol schema,
+  license and SBOM against `WINDOWS_PORTABLE_RUNTIME_APPROVAL` in the existing approvals owner.
+  The published manifest was authenticated with Keiko's compiled portable-release key; its helper
+  bytes were independently measured in the installed public package. A coherent manifest alone
+  cannot confer this approval. The portable secure-read image differs from the npm image, so its
+  admission is additive and does not replace the npm or dev pins. The CLI outcome records
+  `portable-evaluation`; `platformAssurance` remains `evaluation-unqualified` and readiness remains
+  `functional-not-platform-qualified`. Unapproved artifacts, signed-install downgrade attempts,
+  changed bytes and unsupported install volumes retain their refusals. No platform qualification,
+  unattended elevation, unsigned service update or second broker path is introduced.
 - **Placement.** The image goes to `%ProgramFiles%\KeikoRuntimeGateway`, which is owned by
   Administrators and closed to inherited or user write access. The copy is verified again there,
   before the running service is stopped, so a failed copy leaves the old broker serving.
@@ -994,8 +1013,26 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
   time while the single instance serves another tree; the SCM check of the server PID follows, so a
   squatted pipe learns the caller's identity and can never act as the caller.
 - **Updates.** A helper that changes between releases leaves the installed digest stale, and the
-  launch refuses until `repair` runs, at one UAC prompt per change. There is no self-update: that
-  would need a verified signature chain the Windows releases do not have yet.
+  launch refuses until the service is repaired, at one UAC prompt per change. The repair is part of
+  installing and updating Keiko (one-step Windows setup, 2026-11-17): every healthy `keiko start`
+  on Windows — the first launch of a desktop install, the relaunch that completes an in-app update,
+  a manual-ZIP upgrade, and `keiko start`/`keiko restart` of an npm install — reads the broker state
+  and, when it is not ready, runs the same idempotent `--gateway-service-install <pin>` with the
+  release or npm helper (`gateway-service-setup.ts`). It runs only after the UI answered healthy,
+  so a pending approval never delays the start or an update's restart proof, and it never changes
+  the start's exit code. Keiko asks at most once per helper pin: the pin of the last automatic
+  attempt is recorded in `<stateDir>/gateway-service-setup.json`, so a declined approval is not
+  repeated at every launch, and a new Keiko version asks once again. The dev lane keeps its
+  explicit `--dev-lane` command; an operator who installs the service through MDM sets
+  `KEIKO_GATEWAY_SERVICE_SETUP=manual`. An installation managed outside the app (a launcher that
+  declares `KEIKO_PORTABLE_MANAGEMENT` other than `user-local`, which the standalone folder package
+  of ADR-0121 D9 does) never sets up the service: the step records `managed-outside` and asks
+  nothing, and its `keiko uninstall` leaves an installed broker in place, because that broker
+  belongs to the administrator who installed it. An administrator's explicit
+  `keiko gateway-service install` still installs it there. This is not unattended elevation: Windows asks the human
+  through UAC, and only the digest-checked native helper runs elevated. There is still no silent
+  self-update of the service: that would need a verified signature chain the Windows releases do
+  not have yet.
 - **Removal.** Uninstall refuses while a durable deny guard remains, because such a guard may still
   protect a live tree and removing it could widen that tree's access. Clearing a guard whose tree
   is known to be gone remains the open recovery work D18 names, so uninstall stays refused until
@@ -1004,9 +1041,19 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
 - **Visibility.** A Windows runtime with a pin reports the broker state on each readiness read,
   because the broker starts delayed after boot and can be installed while Keiko runs. A broker that
   is not ready makes the runtime unavailable with a closed `gateway-service-*` reason, and the
-  Workbench names the command to run. The launch stays fail-closed regardless of the last reading.
-  `keiko uninstall` names the service when its folder exists; it does not remove it, because removal
-  needs an administrator.
+  Workbench offers one Repair action for an absent, stopped, stale or unreadable broker instead of a
+  terminal command. Repair (`POST /api/coding-workbench/runtime/gateway-service/repair`, behind
+  the paired app session) runs the same native install through a verified private copy of the
+  helper, answers a closed outcome (`ready`, `declined`, `failed`, `unavailable`, `busy`; one prompt
+  at a time) and re-reads the state. An installation managed outside the app offers no Repair and
+  answers `gateway-service-managed-outside` for any broker state that is not ready, because Keiko
+  installs no system service there; a broker an administrator installed is still used. The launch
+  stays fail-closed regardless of the last reading.
+  A full `keiko uninstall` removes the service too, through the same `keiko gateway-service
+  uninstall` (one UAC prompt), before the installation's own helper is deleted. A declined approval
+  or a guard that still protects a live tree keeps the service, names the command that removes it
+  later, and lets the rest of the uninstall continue; `--scripts`/`--launchers` alone and
+  `--dry-run` never touch it.
 - **Standard users.** Status and launch read the running broker's image path from the service
   configuration. The default service DACL lets an interactive user read it, while the LocalSystem
   process itself denies that user `PROCESS_QUERY_LIMITED_INFORMATION`. On 2026-11-06 (#4068) a
@@ -1021,8 +1068,13 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
   checks that again before it confirms the tree.
 
 Every action records body-free lifecycle evidence as `cli.gateway-service.*`, with its closed `lane`
-(`release-qualified` or `dev-checkout`), and a change of broker state records
-`coding-runtime.windows-gateway-service`. The lifecycle is
+(`release-qualified`, `portable-evaluation`, `dev-checkout` or `npm-runtime-package`), and a change
+of broker state records `coding-runtime.windows-gateway-service`, including the helper digest,
+runtime origin and honest evidence class when composed by the runtime owner. The automatic setup
+after a start records `cli.gateway-service.setup` with its closed `outcome` (`ready`, `installed`,
+`declined`, `failed`, `deferred`, `no-helper`, `disabled`, `record-unavailable`), the prior state and
+the lane; the Workbench's Repair records `coding-runtime.windows-gateway-service.repair` under the
+request correlation with its outcome, exit class and helper digest. The lifecycle is
 qualified on the disposable runner by `test-windows-gateway-scm.ps1`, which installs through the
 product path instead of `New-Service`.
 
@@ -1041,7 +1093,14 @@ unconfined on the host.
   execution. The native proof in `windows-verification-loop.real.test.ts` qualifies the Windows shell
   path below the boundary and does not certify governed verification.
 - **Refusal stays truthful.** A Windows host without a container runtime cannot run governed
-  verification. Such a run is denied and reports no pass.
+  verification. Such a run is denied and reports no pass. The orchestrator's aggregate `failed`
+  remains a failed gate, while the model and tool card use the existing not-run/denied outcome
+  when no check reached an executed failure. Real step failures, timeouts, resource ceilings and
+  failed dependency bootstrap remain distinct failures. The Workbench summary may carry an
+  optional `deniedCount` subset of its canonical non-passing `failedCount`, so blocked checks do
+  not appear as checks that ran unsuccessfully. Historical summaries without that subset retain
+  their original facts. The existing `coding-runtime.verification` not-run Activity Log evidence
+  records the closed denial reason; neither presentation nor counts grant verification authority.
 - **Scope.** This decides repository verification only. It does not decide the Windows tool profile
   or the runtime confinement of D11 and D18, and D13 still holds.
 - **Open.** The container-backed loop from a Windows checkout, with dependencies installed for the

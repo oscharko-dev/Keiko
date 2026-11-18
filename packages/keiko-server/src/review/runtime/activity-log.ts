@@ -44,6 +44,8 @@ export type ReviewRuntimeStopTrigger = (typeof REVIEW_RUNTIME_STOP_TRIGGERS)[num
 const REVIEW_RUNTIME_START_FAILURES = [
   "runtime-disabled",
   "platform-unqualified",
+  "npm-runtime-package-missing",
+  "portable-runtime-unverified",
   "dev-lane-refused",
   "payload-missing",
   "payload-unapproved",
@@ -57,6 +59,7 @@ const REVIEW_RUNTIME_START_FAILURES = [
   "gateway-service-stale",
   "gateway-service-unknown",
   "gateway-service-unqualified",
+  "gateway-service-managed-outside",
   "install-volume-not-local",
   "install-volume-unverified",
   "host-unavailable",

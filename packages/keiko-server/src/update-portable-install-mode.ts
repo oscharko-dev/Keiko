@@ -397,7 +397,7 @@ function legacyWindowsSummary(
     return undefined;
   }
   return {
-    status: "bootstrap",
+    status: "managed",
     target: "windows-x64",
     updateEligible: false,
     packageVersion,
@@ -579,8 +579,7 @@ function registrationMatchesManifest(
   if (manifest.binding === undefined) {
     return (
       registration.raw.windowsGeneration === undefined &&
-      (manifest.summary.target === "windows-x64" ||
-        registrationDiskMatches(registration.raw, manifest, fs))
+      registrationDiskMatches(registration.raw, manifest, fs)
     );
   }
 
@@ -612,7 +611,7 @@ function registrationDiskMatches(
   manifest: PortableManifestSummary,
   fs: PortableDetectorFs,
 ): boolean {
-  if (manifest.summary.target !== "windows-x64") {
+  if (manifest.binding === undefined) {
     if (
       hasSymlinkAncestor(manifest.layout.appRoot, fs) ||
       !fs.existsSync(manifest.layout.rootLauncherPath)
@@ -650,6 +649,9 @@ function manualInstructions(reason: UpdateInstallMode["reason"]): string {
   if (reason === "portable-it-managed") {
     return "This Keiko install is managed outside the app and is not eligible for self-update.";
   }
+  if (reason === "portable-update-unavailable") {
+    return "This Windows package cannot update itself. Keep using this version and review the Windows release instructions before updating; repeating setup will not enable in-app updates.";
+  }
   if (reason === "portable-non-stable") {
     return "Only stable portable Keiko releases are eligible for in-app updates.";
   }
@@ -675,7 +677,10 @@ export function resolvePortableUnsupportedInstallKind(
   if (reason === "portable-it-managed") {
     return "portable-it-managed";
   }
-  if (reason === "portable-non-stable" && portable.status === "managed") {
+  if (
+    (reason === "portable-non-stable" || reason === "portable-update-unavailable") &&
+    portable.status === "managed"
+  ) {
     return "portable-managed";
   }
   // A volume refusal says nothing about the setup: a managed install stays a managed install.
@@ -718,6 +723,17 @@ function portableSupportedMode(
   };
 }
 
+function itManagedMode(
+  packageName: string,
+  summary: UpdatePortableInstallSummary,
+): UpdateInstallMode {
+  return portableUnsupportedMode(packageName, "portable-it-managed", {
+    ...summary,
+    status: "it-managed",
+    updateEligible: false,
+  });
+}
+
 function modeForPortableSummary(
   summary: UpdatePortableInstallSummary,
   facts: PortableUpdateRuntimeFacts,
@@ -731,12 +747,9 @@ function modeForPortableSummary(
     return portableUnsupportedMode(packageName, "portable-bootstrap", summary);
   }
   if (!summary.stable) return portableUnsupportedMode(packageName, "portable-non-stable", summary);
-  if (isOrganizationManaged(facts) || hasMachineManagedRoot(facts, summary.target, fs)) {
-    return portableUnsupportedMode(packageName, "portable-it-managed", {
-      ...summary,
-      status: "it-managed",
-      updateEligible: false,
-    });
+  if (hasMachineManagedRoot(facts, summary.target, fs)) return itManagedMode(packageName, summary);
+  if (!summary.updateEligible) {
+    return portableUnsupportedMode(packageName, "portable-update-unavailable", summary);
   }
   return portableSupportedMode(packageName, summary);
 }
@@ -744,6 +757,26 @@ function modeForPortableSummary(
 export function portableStateDirFromEnv(env: NodeJS.ProcessEnv): string | undefined {
   const stateDir = env.KEIKO_STATE_DIR;
   return stateDir === undefined || stateDir.length === 0 ? undefined : stateDir;
+}
+
+export const PORTABLE_MANAGEMENT_ENV = "KEIKO_PORTABLE_MANAGEMENT";
+
+function isPortableManagementMode(value: string): value is PortableManagementMode {
+  return value === "user-local" || value === "organization-managed" || value === "machine-managed";
+}
+
+/**
+ * Who manages this portable payload, as its launcher declares it. A folder package that runs in
+ * place (no managed setup, updates arrive as a replaced folder) declares `organization-managed`.
+ * A declaration Keiko cannot read fails closed: it never sets up or updates an install whose owner
+ * it cannot name.
+ */
+export function portableManagementFromEnv(
+  env: NodeJS.ProcessEnv,
+): PortableManagementMode | undefined {
+  const declared = env[PORTABLE_MANAGEMENT_ENV];
+  if (declared === undefined || declared.length === 0) return undefined;
+  return isPortableManagementMode(declared) ? declared : "organization-managed";
 }
 
 /**
@@ -787,6 +820,11 @@ export function detectPortableUpdateInstallMode(
   const manifestSummary = bootstrapSummaryFromManifest(facts.packageRoot, fs, packageName);
   const registration = readPortableRegistration(facts.stateDir, fs);
   if (manifestSummary === undefined) return undefined;
+  // A declared organization management decides before the registration is judged: such an install
+  // is never set up, repaired or updated from inside the app, so "run the portable setup" or
+  // "setup failed" would send its user to the very installation the organization chose not to
+  // perform. What is reported is the payload that runs, never a registration.
+  if (isOrganizationManaged(facts)) return itManagedMode(packageName, manifestSummary.summary);
   if (manifestSummary.summary.target === "windows-x64") {
     try {
       // Keep the original install-root spelling: canonicalization can hide mapped-share and

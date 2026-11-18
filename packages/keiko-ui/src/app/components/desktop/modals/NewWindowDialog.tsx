@@ -3,26 +3,10 @@
 import { startingProjectPaths } from "../windows/startingProjectRoot";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import {
-  ApiError,
-  createProject,
-  fetchModels,
-  fetchProjects,
-  projectResponseWarningMessage,
-  startRun,
-} from "../../../../lib/api";
-import type {
-  AgentWorkflowId,
-  ModelCapability,
-  ProjectWithAvailability,
-} from "../../../../lib/types";
-import {
-  pickWithNativeDialog,
-  type NativeDialogPickOutcome,
-} from "../../../../lib/native-file-dialog";
+import { fetchProjects } from "@/lib/api";
+import { pickWithNativeDialog } from "@/lib/native-file-dialog";
 import { Icons } from "../Icons";
 import { useNativeFileDialogCapability } from "../hooks/useNativeFileDialogCapability";
-import type { FilesWindowContext } from "../hooks/useWorkspace.types";
 import {
   localizedWindowConfigFields,
   localizedWindowCta,
@@ -34,30 +18,17 @@ import {
 } from "../windows/WindowsRegistry";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import KeikoSelect from "../KeikoSelect";
-import { AgentSkillPicker } from "./AgentSkillPicker";
 import { PermControl, type Cfg, type CfgValue } from "./PermControl";
 import { restoreModalFocusAfterUnlock } from "./modalFocusRestore";
-import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { startFilesNavigationEvidence } from "@/lib/files-navigation-evidence";
 import { useEditorProjectConnection } from "../widgets/cards/useEditorProjectConnection";
-import {
-  useOptionalWidgetTranslate,
-  type OptionalWidgetTranslate,
-} from "@/lib/optional-widget-i18n";
-import type { OptionalWidgetMessageKey } from "@/lib/i18n-messages.optional.en";
-import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
-import type { MarkdownSkillReference } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { CODING_WORKBENCH_MODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
-const FilesIcon = Icons.files;
 const CloseIcon = Icons.close;
 
 interface NewWindowDialogProps {
   readonly type: WindowType;
   readonly types: typeof WinTypes;
-  readonly filesContext?: FilesWindowContext | null;
   readonly opener?: HTMLElement | null;
   readonly onConfirm: (cfg: Cfg) => void;
   readonly onClose: () => void;
@@ -151,248 +122,6 @@ async function browseNativeDirectory(
   if (outcome.kind === "error") onError(outcome.message);
 }
 
-type ProductionAgentWorkflowId = Extract<
-  AgentWorkflowId,
-  "unit-test-generation" | "bug-investigation"
->;
-
-// Message keys, not display copy: the agent picker and the task-header chip both render from this
-// table, so a literal here reached the user untranslated in every locale.
-const AGENT_WORKFLOWS: readonly {
-  readonly id: ProductionAgentWorkflowId;
-  readonly labelKey: OptionalWidgetMessageKey;
-  readonly scopeKey: OptionalWidgetMessageKey;
-}[] = [
-  {
-    id: "unit-test-generation",
-    labelKey: "agentLauncher.workflow.unitTest",
-    scopeKey: "agentLauncher.scope.sourceFile",
-  },
-  {
-    id: "bug-investigation",
-    labelKey: "agentLauncher.workflow.bugfix",
-    scopeKey: "agentLauncher.scope.bugReport",
-  },
-];
-
-function availableProjectPaths(projects: readonly ProjectWithAvailability[]): readonly string[] {
-  return projects.filter((project) => project.available).map((project) => project.path);
-}
-
-function splitPaths(value: string): string[] {
-  return value
-    .split(/[\n,]/u)
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
-}
-
-// AC #4: no longer prefers a placeholder id — use the first available model.
-// When models is empty, returns "" (handled by the caller via `current || ...`).
-export function chooseDefaultModel(models: readonly ModelCapability[]): string {
-  return models[0]?.id ?? "";
-}
-
-// Issue #153 — single source of truth lives in @/lib/workflow-eligibility. The thin alias below
-// preserves the historical `isAgentWorkflowModel` export name so NewWindowDialog.test imports keep
-// resolving.
-export const isAgentWorkflowModel = isWorkflowEligibleModel;
-
-function toPosix(value: string): string {
-  return value.replaceAll("\\", "/");
-}
-
-function stripTrailingSlashRun(value: string): string {
-  let end = value.length;
-  while (end > 0 && value.charAt(end - 1) === "/") end -= 1;
-  return value.slice(0, end);
-}
-
-function normalizeAgentPathForWorkspace(workspaceRoot: string, value: string): string {
-  const candidate = toPosix(value.trim());
-  if (candidate.length === 0) return "";
-  const workspace = stripTrailingSlashRun(toPosix(workspaceRoot.trim()));
-  if (workspace.length === 0) return candidate;
-  if (candidate === workspace) return ".";
-  const prefix = `${workspace}/`;
-  return candidate.startsWith(prefix) ? candidate.slice(prefix.length) : candidate;
-}
-
-function normalizePathList(workspaceRoot: string, value: string): string {
-  return splitPaths(value)
-    .map((entry) => normalizeAgentPathForWorkspace(workspaceRoot, entry))
-    .join(", ");
-}
-
-function buildInitialAgentFields(
-  workspaceRoot: string,
-  currentFile: string | null,
-): AgentLauncherFields {
-  const file =
-    currentFile === null ? "" : normalizeAgentPathForWorkspace(workspaceRoot, currentFile);
-  return {
-    verifyTargetFiles: file,
-    explainFilePath: file,
-    explainQuestion: "",
-    unitFilePath: file,
-    bugDescription: "",
-    bugFailingOutput: "",
-    bugStackTrace: "",
-    bugTargetFiles: file,
-  };
-}
-
-function workflowRunBody(
-  workflow: ProductionAgentWorkflowId,
-  workspaceRoot: string,
-  modelId: string,
-  fields: AgentLauncherFields,
-  requestedMode: CodingWorkbenchMode,
-  skill?: MarkdownSkillReference,
-): {
-  workflowId?: string;
-  taskType?: string;
-  input: Record<string, unknown>;
-  modelId: string;
-  requestedMode: CodingWorkbenchMode;
-  skill?: MarkdownSkillReference;
-} {
-  // Only the selected skill's identity travels; the server binds that exact revision (#4025 AC1).
-  const selected = skill === undefined ? {} : { skill };
-  if (workflow === "unit-test-generation") {
-    return {
-      workflowId: "unit-test-generation",
-      modelId,
-      requestedMode,
-      ...selected,
-      input: {
-        workspaceRoot,
-        target: {
-          kind: "file",
-          filePath: normalizeAgentPathForWorkspace(workspaceRoot, fields.unitFilePath),
-        },
-      },
-    };
-  }
-  return {
-    workflowId: "bug-investigation",
-    modelId,
-    requestedMode,
-    ...selected,
-    input: {
-      workspaceRoot,
-      report: {
-        ...(fields.bugDescription.trim().length > 0
-          ? { description: fields.bugDescription.trim() }
-          : {}),
-        ...(fields.bugFailingOutput.trim().length > 0
-          ? { failingOutput: fields.bugFailingOutput.trim() }
-          : {}),
-        ...(fields.bugStackTrace.trim().length > 0
-          ? { stackTrace: fields.bugStackTrace.trim() }
-          : {}),
-        ...(splitPaths(fields.bugTargetFiles).length > 0
-          ? {
-              targetFiles: splitPaths(fields.bugTargetFiles).map((entry) =>
-                normalizeAgentPathForWorkspace(workspaceRoot, entry),
-              ),
-            }
-          : {}),
-      },
-    },
-  };
-}
-
-const AGENT_MODE_KEYS = {
-  "governed-assist": {
-    label: "agentLauncher.mode.governedAssist.label",
-    description: "agentLauncher.mode.governedAssist.description",
-  },
-  "supervised-coding": {
-    label: "agentLauncher.mode.supervisedCoding.label",
-    description: "agentLauncher.mode.supervisedCoding.description",
-  },
-  "autonomous-delivery": {
-    label: "agentLauncher.mode.autonomousDelivery.label",
-    description: "agentLauncher.mode.autonomousDelivery.description",
-  },
-} as const satisfies Readonly<
-  Record<
-    CodingWorkbenchMode,
-    { readonly label: OptionalWidgetMessageKey; readonly description: OptionalWidgetMessageKey }
-  >
->;
-
-function AgentAutonomyModePicker({
-  value,
-  onChange,
-  optionalT,
-}: {
-  readonly value: CodingWorkbenchMode;
-  readonly onChange: (mode: CodingWorkbenchMode) => void;
-  readonly optionalT: OptionalWidgetTranslate;
-}): ReactNode {
-  return (
-    <fieldset className="dlg-agent-task">
-      <legend className="dlg-agent-task-title">{optionalT("agentLauncher.autonomy")}</legend>
-      {CODING_WORKBENCH_MODES.map((mode) => {
-        const copy = AGENT_MODE_KEYS[mode];
-        return (
-          <label className="dlg-field" key={mode}>
-            <span>
-              <input
-                type="radio"
-                name="agent-autonomy-mode"
-                value={mode}
-                checked={value === mode}
-                onChange={() => onChange(mode)}
-              />{" "}
-              <strong>{optionalT(copy.label)}</strong>
-            </span>
-            <span className="dlg-note">{optionalT(copy.description)}</span>
-          </label>
-        );
-      })}
-      <span className="dlg-note">{optionalT("agentLauncher.executionUnavailable")}</span>
-    </fieldset>
-  );
-}
-
-interface AgentLauncherFields {
-  readonly verifyTargetFiles: string;
-  readonly explainFilePath: string;
-  readonly explainQuestion: string;
-  readonly unitFilePath: string;
-  readonly bugDescription: string;
-  readonly bugFailingOutput: string;
-  readonly bugStackTrace: string;
-  readonly bugTargetFiles: string;
-}
-
-function validationMessage(
-  workflow: ProductionAgentWorkflowId,
-  workspaceRoot: string,
-  modelId: string,
-  fields: AgentLauncherFields,
-  optionalT: OptionalWidgetTranslate,
-): string | null {
-  if (workspaceRoot.length === 0) return optionalT("agentLauncher.validation.repositoryRequired");
-  if (modelId.length === 0) return optionalT("agentLauncher.validation.noModel");
-  if (workflow === "unit-test-generation") {
-    if (fields.unitFilePath.trim().length === 0) {
-      return optionalT("agentLauncher.validation.unitSource");
-    }
-  }
-  if (workflow === "bug-investigation") {
-    if (fields.bugDescription.trim().length === 0) {
-      return optionalT("agentLauncher.validation.bugDescription");
-    }
-  }
-  return null;
-}
-
-// Epic #1941 — how a directory field reaches the native OS folder dialog. `supported` reflects
-// the BFF host platform; when false the Browse button is disabled and the text input stays the
-// (manual) fallback.
 interface DirectoryBrowseControl {
   readonly supported: boolean;
   readonly open: (key: string, value: string) => void;
@@ -502,624 +231,6 @@ function renderField(
   );
 }
 
-interface AgentLauncherProps {
-  readonly filesContext: FilesWindowContext | null;
-  readonly setDialogError: (message: string | null) => void;
-  readonly onConfirm: (cfg: Cfg) => void;
-  readonly onClose: () => void;
-}
-
-// Absolute-path shape shared by both native platforms (POSIX, drive-letter, UNC). Used to detect
-// a picked source file that lies OUTSIDE the workspace and therefore cannot become repo-relative.
-function isAbsolutePathLike(value: string): boolean {
-  return value.startsWith("/") || /^[A-Za-z]:[\\/]/u.test(value) || value.startsWith("\\\\");
-}
-
-// Resolves the FilesWindowContext's active file to a launcher default ONLY when its root still
-// matches the currently entered workspace — a stale context (workspace edited since) must not
-// leak its file path into a different repository's fields.
-function resolveCurrentFile(
-  filesContext: FilesWindowContext | null,
-  workspace: string,
-): string | null {
-  if (filesContext === null) return null;
-  if (filesContext.root !== workspace) return null;
-  if (filesContext.activeFilePath === undefined) return null;
-  return filesContext.activeFilePath;
-}
-
-function findAgentWorkflow(workflow: ProductionAgentWorkflowId): (typeof AGENT_WORKFLOWS)[number] {
-  return AGENT_WORKFLOWS.find((item) => item.id === workflow) ?? AGENT_WORKFLOWS[0]!;
-}
-
-function agentStartLabel(
-  workflow: ProductionAgentWorkflowId,
-  optionalT: OptionalWidgetTranslate,
-): string {
-  return optionalT("agentLauncher.start", {
-    label: optionalT(findAgentWorkflow(workflow).labelKey),
-  });
-}
-
-// The native repository dialog opens at the OS default location when no seed is known; the seed
-// below only positions it when one is — the entered workspace first, then the connected Files
-// window's root, then the first registered project.
-function resolveRepositoryBrowseSeed(
-  workspace: string,
-  filesContext: FilesWindowContext | null,
-  firstAvailableProjectRoot: string,
-): string {
-  if (workspace.length > 0) return workspace;
-  return filesContext?.root ?? firstAvailableProjectRoot;
-}
-
-// Fills any still-empty agent-field slots with the workspace-relative current file. Only touches
-// fields the user has not already populated, so a manual edit is never overwritten.
-function fillEmptyAgentFields(
-  current: AgentLauncherFields,
-  normalizedCurrentFile: string,
-): AgentLauncherFields {
-  const patch: Record<string, string> = {};
-  if (current.verifyTargetFiles.trim().length === 0) {
-    patch.verifyTargetFiles = normalizedCurrentFile;
-  }
-  if (current.explainFilePath.trim().length === 0) {
-    patch.explainFilePath = normalizedCurrentFile;
-  }
-  if (current.unitFilePath.trim().length === 0) {
-    patch.unitFilePath = normalizedCurrentFile;
-  }
-  if (current.bugTargetFiles.trim().length === 0) {
-    patch.bugTargetFiles = normalizedCurrentFile;
-  }
-  return Object.keys(patch).length === 0 ? current : { ...current, ...patch };
-}
-
-// Picked source files come back ABSOLUTE from the native dialog; the agent workflows expect
-// repo-relative paths. This folds the raw dialog outcome into a closed set the click handler can
-// react to without re-deriving the same branches.
-type SourceFilePickResolution =
-  | { readonly kind: "picked"; readonly relative: string }
-  | { readonly kind: "outside-workspace" }
-  | { readonly kind: "message"; readonly message: string }
-  | { readonly kind: "noop" };
-
-function resolveSourceFilePick(
-  outcome: NativeDialogPickOutcome,
-  workspace: string,
-  t: I18nTranslate,
-): SourceFilePickResolution {
-  if (outcome.kind === "picked" && outcome.paths[0] !== undefined) {
-    const relative = normalizeAgentPathForWorkspace(workspace, outcome.paths[0]);
-    return isAbsolutePathLike(relative)
-      ? { kind: "outside-workspace" }
-      : { kind: "picked", relative };
-  }
-  if (outcome.kind === "busy") return { kind: "message", message: t("nativeDialog.busy") };
-  if (outcome.kind === "unsupported") {
-    return { kind: "message", message: t("nativeDialog.unsupported") };
-  }
-  if (outcome.kind === "error") return { kind: "message", message: outcome.message };
-  return { kind: "noop" };
-}
-
-function isWorkspaceNotRegisteredError(error: unknown): boolean {
-  return error instanceof ApiError && error.code === "WORKSPACE_NOT_REGISTERED";
-}
-
-interface AgentTaskFieldsProps {
-  readonly workflow: ProductionAgentWorkflowId;
-  readonly fields: AgentLauncherFields;
-  readonly workspace: string;
-  readonly canBrowseSourceFile: boolean;
-  readonly nativeDialogSupported: boolean;
-  readonly sourceBrowseHelperId: string;
-  readonly t: I18nTranslate;
-  readonly optionalT: OptionalWidgetTranslate;
-  readonly updateField: (patch: Partial<AgentLauncherFields>) => void;
-  readonly onBrowseSourceFile: () => void;
-}
-
-function renderAgentSourceFileField(props: AgentTaskFieldsProps): ReactNode {
-  const {
-    fields,
-    workspace,
-    canBrowseSourceFile,
-    nativeDialogSupported,
-    sourceBrowseHelperId,
-    t,
-    optionalT,
-    updateField,
-    onBrowseSourceFile,
-  } = props;
-  return (
-    <label className="dlg-field">
-      <span className="dlg-label">{optionalT("agentLauncher.scope.sourceFile")}</span>
-      <span className="dlg-dirwrap">
-        <input
-          className="dlg-input mono"
-          placeholder={optionalT("agentLauncher.sourceFilePlaceholder")}
-          value={fields.unitFilePath}
-          onChange={(event) => updateField({ unitFilePath: event.target.value })}
-          onBlur={(event) =>
-            updateField({
-              unitFilePath: normalizeAgentPathForWorkspace(workspace, event.target.value),
-            })
-          }
-        />
-        <button
-          type="button"
-          className="dlg-btn dlg-dirbtn"
-          aria-label={optionalT("agentLauncher.browseSourceFile")}
-          disabled={!canBrowseSourceFile}
-          aria-describedby={!canBrowseSourceFile ? sourceBrowseHelperId : undefined}
-          onClick={onBrowseSourceFile}
-        >
-          {t("common.browse")}
-        </button>
-      </span>
-      {!canBrowseSourceFile ? (
-        <span id={sourceBrowseHelperId} className="dlg-note">
-          {nativeDialogSupported
-            ? optionalT("agentLauncher.selectRepositoryFirst")
-            : t("nativeDialog.unsupported")}
-        </span>
-      ) : null}
-    </label>
-  );
-}
-
-function renderAgentBugFields(props: AgentTaskFieldsProps): ReactNode {
-  const { fields, workspace, t, optionalT, updateField } = props;
-  return (
-    <>
-      <label className="dlg-field">
-        <span className="dlg-label">{optionalT("agentLauncher.observedBehavior")}</span>
-        <textarea
-          className="dlg-input dlg-textarea"
-          rows={2}
-          placeholder={optionalT("agentLauncher.observedBehaviorPlaceholder")}
-          value={fields.bugDescription}
-          onChange={(event) => updateField({ bugDescription: event.target.value })}
-        />
-      </label>
-      <label className="dlg-field">
-        <span className="dlg-label">
-          {optionalT("agentLauncher.failingOutput")}{" "}
-          <span className="dlg-opt">{t("common.optional")}</span>
-        </span>
-        <textarea
-          className="dlg-input dlg-textarea mono"
-          rows={2}
-          value={fields.bugFailingOutput}
-          onChange={(event) => updateField({ bugFailingOutput: event.target.value })}
-        />
-      </label>
-      <label className="dlg-field">
-        <span className="dlg-label">
-          {optionalT("agentLauncher.stackTrace")}{" "}
-          <span className="dlg-opt">{t("common.optional")}</span>
-        </span>
-        <textarea
-          className="dlg-input dlg-textarea mono"
-          rows={2}
-          value={fields.bugStackTrace}
-          onChange={(event) => updateField({ bugStackTrace: event.target.value })}
-        />
-      </label>
-      <label className="dlg-field">
-        <span className="dlg-label">
-          {optionalT("agentLauncher.relatedFiles")}{" "}
-          <span className="dlg-opt">{t("common.optional")}</span>
-        </span>
-        <textarea
-          className="dlg-input dlg-textarea mono"
-          rows={2}
-          placeholder={optionalT("agentLauncher.relatedFilesPlaceholder")}
-          value={fields.bugTargetFiles}
-          onChange={(event) => updateField({ bugTargetFiles: event.target.value })}
-          onBlur={(event) =>
-            updateField({ bugTargetFiles: normalizePathList(workspace, event.target.value) })
-          }
-        />
-      </label>
-    </>
-  );
-}
-
-function renderAgentTaskFields(props: AgentTaskFieldsProps): ReactNode {
-  return props.workflow === "unit-test-generation"
-    ? renderAgentSourceFileField(props)
-    : renderAgentBugFields(props);
-}
-
-function renderAgentRegistrationWarning(
-  workspace: string,
-  registered: boolean,
-  registering: boolean,
-  onRegister: () => void,
-  optionalT: OptionalWidgetTranslate,
-): ReactNode {
-  if (workspace.length === 0 || registered) return null;
-  return (
-    <div className="dlg-agent-warning">
-      <span>{optionalT("agentLauncher.notRegistered")}</span>
-      <button type="button" className="dlg-btn" disabled={registering} onClick={onRegister}>
-        {registering ? optionalT("agentLauncher.registering") : optionalT("agentLauncher.register")}
-      </button>
-    </div>
-  );
-}
-
-function renderCurrentFileButton(
-  currentFile: string | null,
-  onUseCurrentFile: () => void,
-  optionalT: OptionalWidgetTranslate,
-): ReactNode {
-  if (currentFile === null) return null;
-  return (
-    <button
-      type="button"
-      className="dlg-current-file"
-      onClick={onUseCurrentFile}
-      title={currentFile}
-    >
-      <FilesIcon size={13} /> {optionalT("agentLauncher.useCurrentFile")}{" "}
-      <span className="mono">{currentFile}</span>
-    </button>
-  );
-}
-
-// Both agent-start notices render into `#agent-start-validation`, the target of the
-// Start button's aria-describedby. <output> is the native status live region
-// (S6819); it is inline like the <span> it replaces, so `.dlg-note` keeps
-// rendering the same box.
-function renderAgentLoadingStatus(loading: boolean, optionalT: OptionalWidgetTranslate): ReactNode {
-  if (!loading) return null;
-  return (
-    <output id="agent-start-validation" className="dlg-note">
-      {optionalT("agentLauncher.loading")}
-    </output>
-  );
-}
-
-// uiux-fix F017 C189 — the disabled Start button never reached the click guard, so its
-// validation copy was dead code; surface the reason inline instead.
-function renderAgentValidationStatus(loading: boolean, validation: string | null): ReactNode {
-  if (loading || validation === null) return null;
-  return (
-    <output id="agent-start-validation" className="dlg-note">
-      {validation}
-    </output>
-  );
-}
-
-function renderRepositoryBrowseNote(
-  canBrowseRepository: boolean,
-  helperId: string,
-  t: I18nTranslate,
-): ReactNode {
-  if (canBrowseRepository) return null;
-  return (
-    <span id={helperId} className="dlg-note">
-      {t("nativeDialog.unsupported")}
-    </span>
-  );
-}
-
-function AgentLauncher({
-  filesContext,
-  setDialogError,
-  onConfirm,
-  onClose,
-}: AgentLauncherProps): ReactNode {
-  const t = useTranslate();
-  const optionalT = useOptionalWidgetTranslate();
-  const [workflow, setWorkflow] = useState<ProductionAgentWorkflowId>("unit-test-generation");
-  const [workspaceRoot, setWorkspaceRoot] = useState(filesContext?.root ?? "");
-  const [modelId, setModelId] = useState("");
-  const [requestedMode, setRequestedMode] = useState<CodingWorkbenchMode>("governed-assist");
-  const [skill, setSkill] = useState<MarkdownSkillReference | undefined>();
-  const [models, setModels] = useState<readonly ModelCapability[]>([]);
-  const [projects, setProjects] = useState<readonly string[]>([]);
-  const [fields, setFields] = useState<AgentLauncherFields>(() =>
-    buildInitialAgentFields(filesContext?.root ?? "", filesContext?.activeFilePath ?? null),
-  );
-  const [loading, setLoading] = useState(true);
-  const [registering, setRegistering] = useState(false);
-  const [starting, setStarting] = useState(false);
-
-  const workspace = workspaceRoot.trim();
-  const currentFile = resolveCurrentFile(filesContext, workspace);
-  const registered = workspace.length > 0 && projects.includes(workspace);
-  const validation = validationMessage(workflow, workspace, modelId, fields, optionalT);
-  const canStart = validation === null && registered && !starting && !loading;
-  const selectedAgent = findAgentWorkflow(workflow);
-  const startLabel = agentStartLabel(workflow, optionalT);
-  const nativeDialogSupported = useNativeFileDialogCapability();
-  const firstAvailableProjectRoot = projects[0] ?? "";
-  const repositoryBrowseSeed = resolveRepositoryBrowseSeed(
-    workspace,
-    filesContext,
-    firstAvailableProjectRoot,
-  );
-  // Native dialogs need no seed root (they open at the OS default location), only platform
-  // support; the seed merely positions the dialog when one is known.
-  const canBrowseRepository = nativeDialogSupported;
-  const repositoryBrowseHelperId = "agent-repository-browse-help";
-  const canBrowseSourceFile = nativeDialogSupported && workspace.length > 0;
-  const sourceBrowseHelperId = "agent-source-file-browse-help";
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setDialogError(null);
-    void Promise.all([fetchModels(), fetchProjects()])
-      .then(([modelPayload, projectPayload]) => {
-        if (cancelled) return;
-        const workflowModels = modelPayload.models.filter(isAgentWorkflowModel);
-        setModels(workflowModels);
-        setModelId((current) => current || chooseDefaultModel(workflowModels));
-        setProjects(availableProjectPaths(projectPayload.projects));
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setDialogError(errorMessage(error, t));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [setDialogError, t]);
-
-  const updateField = (patch: Partial<AgentLauncherFields>): void => {
-    setFields((current) => ({ ...current, ...patch }));
-  };
-
-  useEffect(() => {
-    if (currentFile === null) return;
-    const normalizedCurrentFile = normalizeAgentPathForWorkspace(workspace, currentFile);
-    setFields((current) => fillEmptyAgentFields(current, normalizedCurrentFile));
-  }, [currentFile, workspace]);
-
-  const useCurrentFile = (): void => {
-    if (currentFile === null) return;
-    const normalizedCurrentFile = normalizeAgentPathForWorkspace(workspace, currentFile);
-    if (workflow === "unit-test-generation") {
-      updateField({ unitFilePath: normalizedCurrentFile });
-    } else {
-      updateField({ bugTargetFiles: normalizedCurrentFile });
-    }
-  };
-
-  const refreshProjects = async (): Promise<void> => {
-    const projectPayload = await fetchProjects();
-    setProjects(availableProjectPaths(projectPayload.projects));
-  };
-
-  const registerWorkspace = async (): Promise<void> => {
-    if (workspace.length === 0) return;
-    setRegistering(true);
-    setDialogError(null);
-    try {
-      const response = await createProject({
-        path: workspace,
-        selectionIntent: "explicit-folder-selection",
-      });
-      await refreshProjects();
-      setDialogError(projectResponseWarningMessage(response) ?? null);
-    } catch (error: unknown) {
-      setDialogError(errorMessage(error, t));
-    } finally {
-      setRegistering(false);
-    }
-  };
-
-  const startAgent = async (): Promise<void> => {
-    if (!canStart) {
-      setDialogError(validation ?? optionalT("agentLauncher.notRegistered"));
-      return;
-    }
-    setStarting(true);
-    setDialogError(null);
-    const body = workflowRunBody(workflow, workspace, modelId, fields, requestedMode, skill);
-    try {
-      const started = await startRun(body);
-      if (started.governance === undefined) {
-        throw new Error(optionalT("agentLauncher.governanceUnavailable"));
-      }
-      const governance = started.governance;
-      onConfirm({
-        workflow,
-        model: modelId,
-        runId: started.runId,
-        fingerprint: started.fingerprint,
-        workspaceRoot: workspace,
-        inputJson: JSON.stringify(body.input),
-        requestedMode: governance.requestedMode,
-        effectiveMode: governance.effectiveMode,
-        deploymentCeiling: governance.deploymentCeiling,
-        connectorExecution: governance.connectorExecution,
-        deliveryExecution: governance.deliveryExecution,
-        ...(filesContext !== null && filesContext.root === workspace
-          ? { __connectFilesId: filesContext.id }
-          : {}),
-      });
-    } catch (error: unknown) {
-      if (isWorkspaceNotRegisteredError(error)) {
-        await refreshProjects().catch(() => undefined);
-        setDialogError(optionalT("agentLauncher.notRegistered"));
-      } else {
-        setDialogError(errorMessage(error, t));
-      }
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  const openRepositoryPicker = (): void => {
-    if (!canBrowseRepository) return;
-    void browseNativeDirectory(
-      repositoryBrowseSeed,
-      t("nativeDialog.selectRepository"),
-      setWorkspaceRoot,
-      setDialogError,
-      t,
-    );
-  };
-
-  // Picked source files come back ABSOLUTE from the native dialog; the agent workflows expect
-  // repo-relative paths, so normalize against the workspace and refuse out-of-workspace picks
-  // instead of silently writing an absolute path into the field.
-  const openSourceFilePicker = (): void => {
-    if (!canBrowseSourceFile) return;
-    void pickWithNativeDialog({
-      mode: "open-file",
-      title: t("nativeDialog.selectSourceFile"),
-      defaultPath: workspace,
-    }).then((outcome) => {
-      const resolved = resolveSourceFilePick(outcome, workspace, t);
-      if (resolved.kind === "picked") {
-        updateField({ unitFilePath: resolved.relative });
-        return;
-      }
-      if (resolved.kind === "outside-workspace") {
-        setDialogError(optionalT("agentLauncher.fileOutsideRepository"));
-        return;
-      }
-      if (resolved.kind === "message") setDialogError(resolved.message);
-    });
-  };
-
-  return (
-    <>
-      <div className="dlg-agent-grid">
-        <div className="dlg-field">
-          <span className="dlg-label">{optionalT("agentLauncher.agent")}</span>
-          <span className="dlg-selwrap">
-            <KeikoSelect
-              triggerClassName="dlg-input"
-              value={workflow}
-              ariaLabel={optionalT("agentLauncher.agent")}
-              /* eslint-disable-next-line jsx-a11y/no-autofocus -- launcher dialog starts on workflow selection for keyboard users. */
-              autoFocus
-              menuTitle={optionalT("agentLauncher.agent")}
-              menuCountLabel={optionalT("agentLauncher.agentCount", {
-                count: AGENT_WORKFLOWS.length,
-              })}
-              sections={[
-                {
-                  options: AGENT_WORKFLOWS.map((item) => ({
-                    value: item.id,
-                    label: optionalT(item.labelKey),
-                  })),
-                },
-              ]}
-              onValueChange={(next) => {
-                const item = AGENT_WORKFLOWS.find((candidate) => candidate.id === next);
-                if (item !== undefined) setWorkflow(item.id);
-              }}
-            />
-          </span>
-        </div>
-        <div className="dlg-field">
-          <span className="dlg-label">{optionalT("agentLauncher.model")}</span>
-          <span className="dlg-selwrap">
-            <KeikoSelect
-              triggerClassName="dlg-input mono"
-              value={modelId}
-              ariaLabel={optionalT("agentLauncher.model")}
-              disabled={models.length === 0}
-              menuTitle={optionalT("agentLauncher.model")}
-              mono
-              sections={[
-                {
-                  options: models.map((model) => ({
-                    value: model.id,
-                    label: model.id,
-                  })),
-                },
-              ]}
-              onValueChange={setModelId}
-            />
-          </span>
-        </div>
-      </div>
-      <label className="dlg-field">
-        <span className="dlg-label">{optionalT("agentLauncher.repository")}</span>
-        <span className="dlg-dirwrap">
-          <input
-            className="dlg-input mono"
-            value={workspaceRoot}
-            placeholder={optionalT("agentLauncher.repositoryPlaceholder")}
-            onChange={(event) => setWorkspaceRoot(event.target.value)}
-          />
-          <button
-            type="button"
-            className="dlg-btn dlg-dirbtn"
-            disabled={!canBrowseRepository}
-            aria-describedby={!canBrowseRepository ? repositoryBrowseHelperId : undefined}
-            onClick={openRepositoryPicker}
-          >
-            {t("common.browse")}
-          </button>
-        </span>
-        {renderRepositoryBrowseNote(canBrowseRepository, repositoryBrowseHelperId, t)}
-      </label>
-      {renderAgentRegistrationWarning(
-        workspace,
-        registered,
-        registering,
-        () => void registerWorkspace(),
-        optionalT,
-      )}
-      <AgentAutonomyModePicker
-        value={requestedMode}
-        onChange={setRequestedMode}
-        optionalT={optionalT}
-      />
-      <AgentSkillPicker value={skill} onChange={setSkill} optionalT={optionalT} />
-      {renderCurrentFileButton(currentFile, useCurrentFile, optionalT)}
-      <div className="dlg-agent-task">
-        <div className="dlg-agent-task-head">
-          <span className="dlg-agent-task-title">{optionalT(selectedAgent.labelKey)}</span>
-          <span className="dlg-agent-task-scope">{optionalT(selectedAgent.scopeKey)}</span>
-        </div>
-        {renderAgentTaskFields({
-          workflow,
-          fields,
-          workspace,
-          canBrowseSourceFile,
-          nativeDialogSupported,
-          sourceBrowseHelperId,
-          t,
-          optionalT,
-          updateField,
-          onBrowseSourceFile: openSourceFilePicker,
-        })}
-      </div>
-      <div className="dlg-agent-actions">
-        {renderAgentLoadingStatus(loading, optionalT)}
-        {renderAgentValidationStatus(loading, validation)}
-        <button type="button" className="dlg-btn" onClick={onClose}>
-          {t("common.cancel")}
-        </button>
-        <button
-          type="button"
-          className="dlg-btn dlg-primary"
-          disabled={!canStart}
-          aria-busy={starting}
-          aria-describedby={!canStart && !starting ? "agent-start-validation" : undefined}
-          onClick={() => void startAgent()}
-        >
-          {starting ? optionalT("agentLauncher.starting") : startLabel}
-        </button>
-      </div>
-    </>
-  );
-}
-
 function trapDialogTab(e: KeyboardEvent<HTMLDialogElement>): void {
   if (e.key !== "Tab") return;
   const f = focusableInside(e.currentTarget);
@@ -1138,7 +249,6 @@ function trapDialogTab(e: KeyboardEvent<HTMLDialogElement>): void {
 export function NewWindowDialog({
   type,
   types,
-  filesContext = null,
   opener,
   onConfirm,
   onClose,
@@ -1238,7 +348,6 @@ export function NewWindowDialog({
     },
   };
   const submit = (): void => {
-    if (type === "agents") return;
     const selectedCfg =
       (type === "files" || type === "editor") &&
       typeof cfg.root === "string" &&
@@ -1308,7 +417,7 @@ export function NewWindowDialog({
       <dialog
         open
         ref={dlgRef}
-        className={type === "agents" ? "dlg dlg-agents" : "dlg"}
+        className="dlg"
         aria-modal="true"
         aria-labelledby="new-window-title"
         aria-describedby="new-window-desc"
@@ -1341,64 +450,50 @@ export function NewWindowDialog({
           </button>
         </div>
         <div className="dlg-body">
-          {type === "agents" ? (
-            <AgentLauncher
-              filesContext={filesContext}
-              setDialogError={setDialogError}
-              onConfirm={onConfirm}
-              onClose={onClose}
-            />
-          ) : (
-            fields.length === 0 && (
-              <div className="dlg-empty">
-                {translate("newWindow.empty", { label: windowLabel })}
-              </div>
-            )
+          {fields.length === 0 && (
+            <div className="dlg-empty">{translate("newWindow.empty", { label: windowLabel })}</div>
           )}
-          {type !== "agents" &&
-            fields.map((f, i) => (
-              <label className="dlg-field" key={f.key}>
-                <span className="dlg-label">
-                  {f.label}
-                  {f.optional === true && (
-                    <span className="dlg-opt">{translate("common.optional")}</span>
-                  )}
-                </span>
-                {renderField(
-                  f,
-                  cfg,
-                  set,
-                  i === 0
-                    ? (node) => {
-                        firstFieldRef.current = node;
-                      }
-                    : null,
-                  browse,
-                  translate,
+          {fields.map((f, i) => (
+            <label className="dlg-field" key={f.key}>
+              <span className="dlg-label">
+                {f.label}
+                {f.optional === true && (
+                  <span className="dlg-opt">{translate("common.optional")}</span>
                 )}
-              </label>
-            ))}
+              </span>
+              {renderField(
+                f,
+                cfg,
+                set,
+                i === 0
+                  ? (node) => {
+                      firstFieldRef.current = node;
+                    }
+                  : null,
+                browse,
+                translate,
+              )}
+            </label>
+          ))}
           {dialogError !== null ? (
             <div className="dlg-error" role="alert">
               {dialogError}
             </div>
           ) : null}
         </div>
-        {type !== "agents" ? (
-          <div className="dlg-foot">
-            <button type="button" className="dlg-btn" onClick={onClose}>
-              {translate("common.cancel")}
-            </button>
-            <button
-              type="button"
-              className="dlg-btn dlg-primary"
-              disabled={connectingEditor}
-              onClick={submit}
-            >
-              {connectingEditor ? translate("editor.empty.opening") : cta}
-            </button>
-          </div>
-        ) : null}
+        <div className="dlg-foot">
+          <button type="button" className="dlg-btn" onClick={onClose}>
+            {translate("common.cancel")}
+          </button>
+          <button
+            type="button"
+            className="dlg-btn dlg-primary"
+            disabled={connectingEditor}
+            onClick={submit}
+          >
+            {connectingEditor ? translate("editor.empty.opening") : cta}
+          </button>
+        </div>
       </dialog>
     </div>
   );

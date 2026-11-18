@@ -35,14 +35,15 @@ interface VersionRollback {
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
-  { version: 61, sql: "ALTER TABLE review_coverage DROP COLUMN previous_path;" },
-  { version: 60, sql: "ALTER TABLE review_runs DROP COLUMN runtime_cleanup;" },
+  { version: 82, sql: "ALTER TABLE review_coverage DROP COLUMN previous_path;" },
+  { version: 81, sql: "ALTER TABLE review_runs DROP COLUMN runtime_cleanup;" },
   {
-    version: 59,
+    version: 80,
     sql: `DROP TABLE review_findings;
     DROP TABLE review_coverage;
     DROP TABLE review_runs;`,
   },
+  { version: 79, sql: "DROP TABLE jira_report_exports;" },
   {
     version: 62,
     sql: `DROP TABLE chat_memory_learning; DROP INDEX idx_messages_memory_learning;

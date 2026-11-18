@@ -415,33 +415,63 @@ describe("detectUpdateInstallMode", () => {
     },
   );
 
-  it("keeps historical flat Windows schema 1 registrations manual-only", () => {
-    const installRoot = "/Users/alice/Applications/Keiko";
-    const packageRoot = `${installRoot}/app`;
-    const detectorFs = fakeFiles({
-      [`${installRoot}/.portable/setup-manifest.json`]: portableManifest("windows-x64"),
-      [`${PORTABLE_STATE_DIR}/portable-install-state.json`]: managedRegistration({
-        platformTarget: "windows-x64",
-        updateEligible: true,
-      }),
-    });
-    const mode = detectUpdateInstallMode(
-      facts({
-        packageRoot,
-        packageManagerHint: undefined,
-        installScope: "local",
-        portableStateDir: PORTABLE_STATE_DIR,
-      }),
-      {},
-      detectorFs,
-    );
+  it.each([
+    { updateEligible: false, digestMismatch: undefined },
+    { updateEligible: true, digestMismatch: undefined },
+    { updateEligible: true, digestMismatch: "setupManifestSha256" },
+    { updateEligible: true, digestMismatch: "installRootIdentitySha256" },
+    { updateEligible: true, digestMismatch: "launcherIdentitySha256" },
+  ])(
+    "recognizes only a disk-bound managed Windows schema 1 receipt (#4400): $updateEligible $digestMismatch",
+    ({ updateEligible, digestMismatch }) => {
+      const installRoot = "/Users/alice/Applications/Keiko";
+      const packageRoot = `${installRoot}/app`;
+      const layout = portablePackageLayout("windows-x64", packageRoot);
+      if (layout === undefined) throw new TypeError("Expected Windows fixture layout");
+      const manifest = portableManifest("windows-x64");
+      const launcher = "synthetic Windows managed launcher";
+      const detectorFs = fakeFiles({
+        [`${installRoot}/.portable/setup-manifest.json`]: manifest,
+        [layout.rootLauncherPath]: launcher,
+        [`${PORTABLE_STATE_DIR}/portable-install-state.json`]: managedRegistration({
+          platformTarget: "windows-x64",
+          updateEligible,
+          setupManifestSha256: sha256(manifest),
+          installRootIdentitySha256: sha256(installRoot),
+          launcherIdentitySha256: sha256(launcher),
+          ...(digestMismatch === undefined ? {} : { [digestMismatch]: "a".repeat(64) }),
+        }),
+      });
+      const mode = detectUpdateInstallMode(
+        facts({
+          packageRoot,
+          packageManagerHint: undefined,
+          installScope: "local",
+          portableStateDir: PORTABLE_STATE_DIR,
+        }),
+        {},
+        detectorFs,
+      );
 
-    expect(mode).toMatchObject({
-      status: "unsupported",
-      reason: "portable-bootstrap",
-      portable: { target: "windows-x64", updateEligible: false },
-    });
-  });
+      if (digestMismatch !== undefined) {
+        expect(mode).toMatchObject({
+          status: "unsupported",
+          reason: "portable-registration-invalid",
+          portable: { status: "bootstrap", target: "windows-x64", updateEligible: false },
+        });
+        return;
+      }
+      expect(mode).toMatchObject({
+        status: "unsupported",
+        installKind: "portable-managed",
+        reason: "portable-update-unavailable",
+        recommendedAction: "manual-download",
+        portable: { status: "managed", target: "windows-x64", updateEligible: false },
+      });
+      expect(mode.manualInstructions).not.toMatch(/run.*setup/iu);
+      expect(mode.manualInstructions).toContain("release instructions");
+    },
+  );
 
   it.each([
     [
@@ -554,6 +584,131 @@ describe("detectUpdateInstallMode", () => {
     expect(mode.status).toBe("unsupported");
     expect(mode.reason).toBe("portable-registration-invalid");
     expect(mode.recommendedAction).toBe("manual-download");
+  });
+
+  // A standalone folder package runs in place and declares who manages it (ADR-0121 D9). Without
+  // that declaration the same payload is an unmanaged ZIP root (the bootstrap test above) and the
+  // app sends its user to the managed setup the organization chose not to perform.
+  describe("a payload that declares organization management", () => {
+    function declaredMode(
+      registration: string | false,
+      management: "organization-managed" | "machine-managed" = "organization-managed",
+    ): ReturnType<typeof detectUpdateInstallMode> {
+      return detectUpdateInstallMode(
+        facts({
+          packageRoot: PORTABLE_ROOT,
+          packageManagerHint: undefined,
+          installScope: "local",
+          portableStateDir: PORTABLE_STATE_DIR,
+          portableManagement: management,
+        }),
+        {},
+        portableFiles(PORTABLE_ROOT, registration),
+      );
+    }
+
+    it.each(["organization-managed", "machine-managed"] as const)(
+      "is %s without a registration, never asked to run the portable setup",
+      (management) => {
+        const mode = declaredMode(false, management);
+
+        expect(mode).toMatchObject({
+          status: "unsupported",
+          reason: "portable-it-managed",
+          installKind: "portable-it-managed",
+          recommendedAction: "manual-download",
+          portable: {
+            status: "it-managed",
+            updateEligible: false,
+            target: "macos-arm64",
+            packageVersion: "0.2.14",
+          },
+        });
+        expect(mode.manualInstructions).not.toContain("setup");
+      },
+    );
+
+    it("is not judged by a registration another install left in the state directory", () => {
+      // The managed install of an earlier version wrote this record: without the declaration it is
+      // `portable-registration-invalid` ("download the latest Keiko package").
+      const mode = declaredMode(managedRegistration({ packageVersion: "0.2.13" }));
+
+      expect(mode.reason).toBe("portable-it-managed");
+      expect(mode.portable).toMatchObject({ status: "it-managed", packageVersion: "0.2.14" });
+    });
+
+    it("is not sent back to a setup that failed for another install", () => {
+      const mode = declaredMode(managedRegistration({ status: "setup-failed" }));
+
+      expect(mode.reason).toBe("portable-it-managed");
+    });
+
+    it("stays ineligible when its registration matches: a declaration never grants an update", () => {
+      const mode = declaredMode(managedRegistration());
+
+      expect(mode.status).toBe("unsupported");
+      expect(mode.portable?.updateEligible).toBe(false);
+    });
+
+    it("leaves a user-local declaration on the ordinary path", () => {
+      const mode = detectUpdateInstallMode(
+        facts({
+          packageRoot: PORTABLE_ROOT,
+          packageManagerHint: undefined,
+          installScope: "local",
+          portableStateDir: PORTABLE_STATE_DIR,
+          portableManagement: "user-local",
+        }),
+        {},
+        portableFiles(PORTABLE_ROOT, false),
+      );
+
+      expect(mode.reason).toBe("portable-bootstrap");
+    });
+  });
+
+  describe("the management declaration of the environment", () => {
+    function declared(value: string | undefined): UpdateRuntimeFacts["portableManagement"] {
+      return productionUpdateFacts(
+        {
+          KEIKO_CLI_BIN_PATH: `${PORTABLE_ROOT}/dist/cli/index.js`,
+          ...(value === undefined ? {} : { KEIKO_PORTABLE_MANAGEMENT: value }),
+        },
+        portableFiles(),
+      ).portableManagement;
+    }
+
+    it("is absent when nothing is declared", () => {
+      expect(declared(undefined)).toBeUndefined();
+      expect(declared("")).toBeUndefined();
+    });
+
+    it.each(["user-local", "organization-managed", "machine-managed"] as const)(
+      "reads %s",
+      (value) => {
+        expect(declared(value)).toBe(value);
+      },
+    );
+
+    it.each(["Organization-Managed", "it", "1", " organization-managed"])(
+      "fails closed to organization-managed for the unreadable value %j",
+      (value) => {
+        expect(declared(value)).toBe("organization-managed");
+      },
+    );
+
+    it("turns an in-place payload into an install managed outside the app", () => {
+      const env = {
+        KEIKO_CLI_BIN_PATH: `${PORTABLE_ROOT}/dist/cli/index.js`,
+        KEIKO_STATE_DIR: PORTABLE_STATE_DIR,
+        KEIKO_PORTABLE_MANAGEMENT: "organization-managed",
+      };
+      const files = portableFiles(PORTABLE_ROOT, false);
+
+      expect(
+        detectUpdateInstallMode(productionUpdateFacts(env, files), env, files).installKind,
+      ).toBe("portable-it-managed");
+    });
   });
 
   it("includes portable state directory facts in production detection", () => {
