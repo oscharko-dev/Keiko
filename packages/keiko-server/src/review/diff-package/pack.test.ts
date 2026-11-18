@@ -187,6 +187,50 @@ describe("ReviewDiffPartPacker", () => {
     }
   });
 
+  // #4130, development iteration 9: a section that starts a fresh part leaves a gap in the part
+  // before it. Later small sections went only to the last part, so the gaps stayed empty and the
+  // last files of a large pull request found no part (pull request 3037: 2 of 36 files unprocessed
+  // with 11 of 12 parts open; 14 of 198 files of pull request 2981).
+  it("puts a section that fits whole into the first earlier part with room for it", () => {
+    const small = section("small", 1);
+    const large = section("large", 3);
+    const later = section("later", 1);
+    // One part holds `small` and one more hunk, or `large` alone: `large` starts a fresh part.
+    const budget = header("large") + 3 * hunk + 2;
+    const result = packParts(budget, 3, [small, large, later], length);
+    expect(result.placed).toEqual([1, 3, 1]);
+    // `later` fills the gap `large` left in the first part instead of opening a third part.
+    expect(result.parts).toHaveLength(2);
+    expect(result.parts[0]?.text).toContain("## File: 'later'");
+    expect(result.parts[1]?.text).not.toContain("## File: 'later'");
+    expect(result.covered).toEqual(
+      new Map([
+        [0, 1],
+        [1, 3],
+        [2, 1],
+      ]),
+    );
+    for (const part of result.parts) expect(part.text.length).toBeLessThanOrEqual(budget);
+  });
+
+  it("reports the room left in the last open part", () => {
+    const budget = header("a") + 3 * hunk;
+    const packer = new ReviewDiffPartPacker(budget, 2, length);
+    expect(packer.lastPartRoom()).toBe(budget);
+    expect(packer.place(0, section("a", 1))).toBe(1);
+    expect(packer.lastPartRoom()).toBe(budget - header("a") - hunk);
+  });
+
+  it("answers whether a header might still find room in any part", () => {
+    const budget = header("a") + 3 * hunk;
+    const packer = new ReviewDiffPartPacker(budget, 2, length);
+    expect(packer.place(0, section("a", 1))).toBe(1);
+    // Fills the second part whole; the first part still has room for a header.
+    expect(packer.place(1, section("b", 3, Math.floor(hunk * 1.2)))).toBeDefined();
+    expect(packer.unopenedParts()).toBe(0);
+    expect(packer.mightFit("## File: 'c'\n")).toBe(true);
+  });
+
   it("answers whether a header might still find room in this or a later part", () => {
     const packer = new ReviewDiffPartPacker(header("a") + hunk, 2, length);
     expect(packer.place(0, section("a", 1))).toBe(1);

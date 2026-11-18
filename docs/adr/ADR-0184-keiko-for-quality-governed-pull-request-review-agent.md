@@ -601,8 +601,9 @@ JavaScript, Python, Java, Go, C# and Kotlin, since in-tree attributes are neutra
 base commit's dominant languages first and larger changes first, and `clip`, which in Keiko keeps
 whole hunks only. The included content never exceeds the reviewer budget as the gateway's estimator
 counts it. Since Issue #4130 the package has up to 12 parts, and the budget (`budgetTokens` of the
-coverage summary) is that of one part: files fill the current part in priority order; a file that
-does not fit what is left of it starts the next part when it would fit a part whole; a file larger
+coverage summary) is that of one part: files are placed in priority order; a file that fits whole
+goes into the first part that still has room for it; a file that does not fit what is left of the
+last part starts the next part when it would fit a part whole; a file larger
 than one part continues in the next parts with its header repeated, so its hunks stay in order; once
 every part is open, the single-part rules apply to the last one. Each part is verified as a whole,
 and a file keeps only the hunks that follow each other without a gap from its first hunk, so a hunk
@@ -620,12 +621,20 @@ to 19,500 tokens each as a plain Git diff), which alone makes a review incomplet
 more than 12 parts, which this does not change. Two rules bound what a split may cost (R4130-063,
 R4130-064). A file with such a hunk is placed after every file that fits, in the same order
 (language rank, larger change first, path bytes), so it takes no part from a file that fits. And it
-is shown in windows only when its whole diff fits the windows the parts not yet opened can hold,
-two per part; a larger file is left out whole (`unprocessed`, `budget`) as before the split
+is shown in windows only when its whole diff fits the windows the parts can still hold: two per
+part not yet opened, and one per half part of what is left of the last open part once the file's
+header is placed there, where its first windows go (R4130-075: counting whole windows without the
+header let a file through whose last window then found no part); a larger file is left out whole (`unprocessed`, `budget`) as before the split
 existed, and nothing of it is split. A package of one part therefore never splits a hunk, and the
 rule of #4134 holds there unchanged. A file that the unopened parts can no longer show beside the
 files already held back is not held: it counts as a budget miss when it is read, so the stop of the
-reads after 32 misses in a row bounds oversized files too (R4130-065). Without these rules one file larger than all 12 parts took
+reads after 32 misses in a row bounds oversized files too (R4130-065). The first-fit placement and
+the room of the last open part came from development iteration 9 (Issue #4130): parts were filled
+only at the end, so a file that started a fresh part left a gap behind it that later small files
+could not use, and the window capacity ignored the last open part. Pull request 3037 left 2 of its
+36 files unprocessed with one of 12 parts unopened, and pull request 2981 14 of its 198. Packed
+offline with the same budget, the 30 pull requests of the development set then had 16 files
+unprocessed in 109 parts, and afterwards none in 105. Without these rules one file larger than all 12 parts took
 every part, showed about a tenth of itself and left small files unreviewed, and splitting four
 files of 3.8 MB each held the server's one thread for 37 seconds. The search for a window's end
 grows from the window's start, so its cost follows the window and not the hunk. `hunkCount` and
