@@ -635,11 +635,15 @@ export function extractZipArchiveEntries(archivePath, targetRoot, options = {}) 
         });
       } else {
         assertRegularZipEntry(entry, options.requireRegularEntries);
-        const path = join(targetRoot, normalizedEntryName(entry.rawName));
-        const mode = (entry.unixMode & 0o111) === 0 ? 0o600 : 0o700;
-        mkdirSync(dirname(path), { recursive: true });
-        writeFileSync(path, extractEntryData(fd, entry, size), { mode });
-        chmodSync(path, mode);
+        const name = normalizedEntryName(entry.rawName);
+        // An entry the caller does not ship is validated above but never inflated or written.
+        if (options.include === undefined || options.include(name)) {
+          const path = join(targetRoot, name);
+          const mode = (entry.unixMode & 0o111) === 0 ? 0o600 : 0o700;
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(path, extractEntryData(fd, entry, size), { mode });
+          chmodSync(path, mode);
+        }
       }
       offset = entry.next;
     }

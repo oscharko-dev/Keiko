@@ -277,6 +277,19 @@ function assertWindowsPathBudget(packageRoot, os) {
   }
 }
 
+// The only source entries the npm form reads: the payload's Node.js runtime and retrieval addon
+// (adopted below) and the two files that prove which payload it is. The application tree is what
+// npm installs from the registry instead, so it is neither inflated nor written.
+function isShippedSourceEntry(name, layout) {
+  const resources = `${layout.resources.join("/")}/`;
+  const exact = [
+    ...RETRIEVAL_RUNTIME.map(([from]) => `${resources}${from.join("/")}`),
+    `${resources}.portable/setup-manifest.json`,
+    `${resources}app/dist/cli/index.js`,
+  ];
+  return name.startsWith(`${resources}runtime/node/`) || exact.includes(name);
+}
+
 function assemblePackage(input) {
   const { archivePath, target, workRoot, archiveSha256, configBytes, createLockfile } = input;
   const layout = STANDALONE_TARGETS[target];
@@ -284,7 +297,10 @@ function assemblePackage(input) {
   const packageRoot = join(workRoot, PACKAGE_ROOT_NAME);
   mkdirSync(payloadRoot, { recursive: true });
   mkdirSync(join(packageRoot, "system"), { recursive: true });
-  extractZipArchiveEntries(archivePath, payloadRoot, { requireRegularEntries: true });
+  extractZipArchiveEntries(archivePath, payloadRoot, {
+    requireRegularEntries: true,
+    include: (name) => isShippedSourceEntry(name, layout),
+  });
   const { packageVersion } = inspectPayload(payloadRoot, target);
   const npmCli = adoptNodeRuntime(payloadRoot, packageRoot, layout);
   adoptRetrievalRuntime(payloadRoot, packageRoot, layout);
@@ -322,8 +338,11 @@ function assemblePackage(input) {
 /** Builds the npm package and returns what was written. */
 export function buildNpmPackage(options) {
   const createLockfile = options.createLockfile ?? resolveLockfile;
-  return buildFolderPackage(options, "npm", (input) =>
-    assemblePackage({ ...input, createLockfile }),
+  return buildFolderPackage(
+    options,
+    "npm",
+    (input) => assemblePackage({ ...input, createLockfile }),
+    { sizeSourceEntries: false },
   );
 }
 

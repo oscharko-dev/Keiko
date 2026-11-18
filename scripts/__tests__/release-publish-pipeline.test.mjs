@@ -1154,6 +1154,18 @@ function releaseImpactCatalogForPublishTest() {
   };
 }
 
+// A stub state that cannot be parsed keeps the subprocess diagnostics, which say why.
+function readStubState(stateFile, result) {
+  try {
+    return JSON.parse(readFileSync(stateFile, "utf8"));
+  } catch (cause) {
+    throw new Error(
+      `stub state.json could not be read (exit ${String(result.status)}).\nstdout: ${result.stdout}\nstderr: ${result.stderr}`,
+      { cause },
+    );
+  }
+}
+
 // Run the real scripts/release-publish.mjs with stub npm/gh/git prepended to PATH.
 // `npmBody` is the stub-`npm` behaviour under test; `initState` seeds the publish state.
 // Returns the exit status, stdout/stderr, and the ordered list of intercepted calls.
@@ -1232,30 +1244,33 @@ function runPublish({
     );
   }
 
-  const result = spawnSync(
-    process.execPath,
-    ["scripts/release-publish.mjs", "--tag", "latest", ...extraArgs],
-    {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      env,
-    },
-  );
+  try {
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/release-publish.mjs", "--tag", "latest", ...extraArgs],
+      {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+        env,
+      },
+    );
 
-  const calls = readFileSync(logFile, "utf8")
-    .split("\n")
-    .filter((line) => line.length > 0);
-  const finalState = JSON.parse(readFileSync(stateFile, "utf8"));
-  rmSync(binDir, { recursive: true, force: true });
-  rmSync(portableDir, { recursive: true, force: true });
+    const calls = readFileSync(logFile, "utf8")
+      .split("\n")
+      .filter((line) => line.length > 0);
+    const finalState = readStubState(stateFile, result);
 
-  return {
-    status: result.status,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    calls,
-    state: finalState,
-  };
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      calls,
+      state: finalState,
+    };
+  } finally {
+    rmSync(binDir, { recursive: true, force: true });
+    rmSync(portableDir, { recursive: true, force: true });
+  }
 }
 
 // A stub `npm` that shares the config/gate scaffolding and lets each scenario plug in the
@@ -2210,9 +2225,58 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       const downloads = recovered.calls.filter(
         (l) => l.startsWith("curl [") && l.includes("/releases/download/"),
       );
-      expect(downloads).toHaveLength(first.state.uploadedAssets.length);
+      // No user configuration (.curlrc) may apply to the unauthenticated smoke download, and no
+      // redirect may leave HTTPS.
+      for (const line of downloads) {
+        expect(JSON.parse(line.slice("curl ".length)).slice(0, 5)).toEqual([
+          "-q",
+          "--proto",
+          "=https",
+          "--proto-redir",
+          "=https",
+        ]);
+      }
+      const downloadedNames = downloads
+        .map((line) =>
+          String(JSON.parse(line.slice("curl ".length)).at(-1))
+            .split("/")
+            .at(-1),
+        )
+        .sort();
+      const expectedNames = first.state.uploadedAssets.map((asset) => asset.name).sort();
+      expect(downloadedNames).toEqual(expectedNames);
       expect(recovered.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
       expect(recovered.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(true);
+    });
+
+    it("refuses to download a published manifest whose recorded URL has credentials or is not HTTPS (PR #4464)", () => {
+      // Review finding on PR #4464: on a rerun the manifest records' browser_download_url reached
+      // curl without the HTTPS/no-userinfo rule every other asset is held to.
+      const signingKeyPair = generateKeyPairSync("ed25519");
+      const first = runPublish({
+        npmBody: npmStub(registryVersionBody()),
+        initState: { immutableReleases: true, published: false },
+        signingKeyPair,
+      });
+      expect(first.status, first.stderr).toBe(0);
+      const url = `https://user:secret@github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/`;
+      const uploadedAssets = first.state.uploadedAssets.map((asset) =>
+        asset.name.endsWith("-portable-manifest.json")
+          ? { ...asset, browser_download_url: `${url}${asset.name}` }
+          : asset,
+      );
+      const rerun = runPublish({
+        npmBody: npmStub(registryVersionBody(), { failOnPublish: true }),
+        initState: { ...first.state, uploadedAssets },
+        signingKeyPair,
+      });
+      expect(rerun.status).toBe(1);
+      expect(rerun.stderr).toContain(
+        "-portable-manifest.json must expose an HTTPS browser_download_url without credentials before it is downloaded.",
+      );
+      expect(rerun.stderr).not.toContain("secret");
+      expect(rerun.calls.some((l) => l.startsWith("curl [") && l.includes("secret"))).toBe(false);
+      expect(rerun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
     it("refuses to publish a resumed draft that carries a package this run did not validate (PR #4464)", () => {
@@ -2251,10 +2315,19 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       ).toBe(false);
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
 
-      // The same resumed draft without the stale package is published.
-      lastRun = runPublish({ npmBody: npmStub(registryVersionBody()), initState: resumed });
+      // The failed run's own state, with only the stale package removed, is published.
+      expect(lastRun.state.releasePublished).not.toBe(true);
+      const refusedState = lastRun.state;
+      lastRun = runPublish({
+        npmBody: npmStub(registryVersionBody()),
+        initState: {
+          ...refusedState,
+          uploadedAssets: refusedState.uploadedAssets.filter((asset) => asset.name !== extra.name),
+        },
+      });
       expect(lastRun.status, lastRun.stderr).toBe(0);
       expect(lastRun.stdout).toContain("resuming draft GitHub release");
+      expect(lastRun.state.releasePublished).toBe(true);
     });
 
     it("fails before npm publish when portable upload verification fails", () => {

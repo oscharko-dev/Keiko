@@ -1683,6 +1683,11 @@ function runPortableDownloadSmoke(remoteAssets, expectedAssets) {
   for (const expected of expectedAssets) {
     const url = remoteByName.get(expected.assetName)?.browser_download_url;
     if (typeof url !== "string") fail(`${expected.assetName} has no browser_download_url.`);
+    if (!validBrowserDownloadUrl(url)) {
+      fail(
+        `${expected.assetName} must expose an HTTPS browser_download_url without credentials before it is downloaded.`,
+      );
+    }
     smokePortableDownloadUrl(expected, url);
   }
 }
@@ -1691,9 +1696,23 @@ function smokePortableDownloadUrl(expected, url) {
   const root = mkdtempSync(join(tmpdir(), "keiko-portable-download-"));
   const destination = join(root, expected.assetName);
   try {
+    // -q first: no .curlrc applies. HTTPS only, also through every redirect --location follows.
     const result = commandResult(
       "curl",
-      ["--fail", "--silent", "--show-error", "--location", "--output", destination, url],
+      [
+        "-q",
+        "--proto",
+        "=https",
+        "--proto-redir",
+        "=https",
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--location",
+        "--output",
+        destination,
+        url,
+      ],
       { env: networkEnvironment() },
     );
     if (result.error !== undefined || result.status !== 0) {

@@ -190,12 +190,12 @@ function verifyArchive(archivePath, expected) {
   return actual;
 }
 
-function assertPayloadEntryNames(archivePath, target) {
+function assertPayloadEntryNames(archivePath, target, sizeSourceEntries) {
   const names = readZipArchiveEntryNames(archivePath, { requireRegularEntries: true });
   if (names.length === 0) refuse("the archive is empty");
   const foreign = names.find((name) => !name.startsWith(PAYLOAD_ROOT_PREFIX));
   if (foreign !== undefined) refuse(`the archive is not a portable payload: ${foreign}`);
-  assertWindowsPathBudget(names, target);
+  if (sizeSourceEntries) assertWindowsPathBudget(names, target);
 }
 
 // Checked on the source names, before anything is written: every payload entry lands below
@@ -425,14 +425,17 @@ function publishFolder(packageRoot, keptFolder) {
  * The build every folder form shares. It checks the archive, lets the form's `assemble` build the
  * package in a private work directory, writes the ZIP and its checksum file, and keeps the folder
  * when asked. `assemble` receives the checked input and returns `{ packageRoot, packageVersion }`.
+ * Every source entry name is checked for the payload shape and containment; its Windows path
+ * length is sized here only for a form that ships the whole payload (`sizeSourceEntries`). A form
+ * that ships a part of it sizes what it wrote, so an entry it discards cannot refuse the package.
  */
-export function buildFolderPackage(options, form, assemble) {
+export function buildFolderPackage(options, form, assemble, { sizeSourceEntries = true } = {}) {
   const { target, archivePath, outDir, expected, configBytes, keptFolder } = resolveBuildInput(
     options,
     form,
   );
   const archiveSha256 = verifyArchive(archivePath, expected);
-  assertPayloadEntryNames(archivePath, target);
+  assertPayloadEntryNames(archivePath, target, sizeSourceEntries);
   mkdirSync(outDir, { recursive: true });
   const workRoot = mkdtempSync(join(outDir, `.${form}-work-`));
   try {

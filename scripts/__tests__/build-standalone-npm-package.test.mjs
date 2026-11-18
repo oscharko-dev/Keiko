@@ -209,6 +209,29 @@ describe("an npm package", () => {
     expect(built.get("Keiko/system/keiko-npm.mjs")).not.toContain("\r");
   });
 
+  it("builds from an archive whose discarded application entry is too long for Windows (PR #4464)", () => {
+    // Review finding on PR #4464: the npm form inherited the standalone path-length check on every
+    // source entry, so a valid package was refused because of an application entry it never ships.
+    const deep = `Keiko/app/${"segment/".repeat(24)}file.js`;
+    const { result } = build("windows-x64", {
+      records: [...payloadRecords("windows-x64"), { name: deep, data: "x" }],
+    });
+    const built = entriesByName(result.outputPath);
+
+    expect(built.has("Keiko/system/node/node.exe")).toBe(true);
+    expect([...built.keys()].some((name) => name.includes("segment/"))).toBe(false);
+  });
+
+  it("still refuses a Windows npm package whose shipped entry is too long (PR #4464)", () => {
+    const deep = `Keiko/runtime/node/node_modules/${"segment/".repeat(24)}file.js`;
+
+    expect(() =>
+      build("windows-x64", {
+        records: [...payloadRecords("windows-x64"), { name: deep, data: "x" }],
+      }),
+    ).toThrow("Windows needs 180 or fewer");
+  });
+
   it("names a package with credentials as a team package and keeps its config private", () => {
     const root = tempRoot();
     const config = join(root, "keiko.config.json");

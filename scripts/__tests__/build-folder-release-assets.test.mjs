@@ -6,22 +6,25 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   FolderReleaseBuildError,
   buildFolderReleaseAssets,
   parseFolderReleaseArgs,
+  runFolderReleaseCli,
 } from "../build-folder-release-assets.mjs";
 import { StandaloneBuildError } from "../build-standalone-package.mjs";
 import { sha256File } from "../lib/digest.mjs";
 import {
   FOLDER_PACKAGES_DIRECTORY,
+  FOLDER_PACKAGES_MANIFEST,
   FOLDER_RELEASE_TARGETS,
   folderPackageUploads,
 } from "../lib/folder-package-release.mjs";
@@ -73,6 +76,17 @@ function portableBundle({ evidenceSha256 } = {}) {
 }
 
 describe("the folder packages of a release", () => {
+  it.skipIf(process.platform === "win32")(
+    "publishes the set in an ordinary directory, not the private staging mode (PR #4464)",
+    () => {
+      const { root } = portableBundle();
+
+      buildFolderReleaseAssets({ bundleRoot: root, version: "1.2.3" });
+
+      expect(statSync(join(root, FOLDER_PACKAGES_DIRECTORY)).mode & 0o777).toBe(0o755);
+    },
+  );
+
   it("are built from the bundle's archives and pass the publisher's check", () => {
     const { root, artifacts } = portableBundle();
 
@@ -216,5 +230,65 @@ describe("the folder packages of a release", () => {
     expect(() => parseFolderReleaseArgs(["--bundle-root", "b"])).toThrow(/--version is required/u);
     expect(() => parseFolderReleaseArgs(["--other", "x"])).toThrow(/unknown argument --other/u);
     expect(() => parseFolderReleaseArgs(["--version"])).toThrow(/--version needs a value/u);
+  });
+});
+
+describe("the folder package command line", () => {
+  function captured() {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    return {
+      out: () => log.mock.calls.map((call) => call.join(" ")),
+      err: () => error.mock.calls.map((call) => call.join(" ")),
+    };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("prints its usage on --help and builds nothing", () => {
+    const output = captured();
+
+    expect(runFolderReleaseCli(["--help"])).toBe(0);
+    expect(output.out().join("\n")).toContain("--bundle-root");
+    expect(output.err()).toEqual([]);
+  });
+
+  it("names every package it built with its digest", () => {
+    const { root } = portableBundle();
+    const output = captured();
+
+    expect(runFolderReleaseCli(["--bundle-root", root, "--version", "1.2.3"])).toBe(0);
+    const manifest = JSON.parse(
+      readFileSync(join(root, FOLDER_PACKAGES_DIRECTORY, FOLDER_PACKAGES_MANIFEST), "utf8"),
+    );
+    expect(output.out()).toEqual(
+      manifest.packages.map(
+        (entry) => `PASS folder package ${entry.assetName} sha256 ${entry.sha256}`,
+      ),
+    );
+  });
+
+  it.each([
+    ["an argument it does not know", () => ["--other", "x"], /unknown argument --other/u],
+    [
+      "an archive that is not the one the bundle names",
+      () => {
+        const { root } = portableBundle();
+        writeFileSync(join(root, "artifacts", "macos-x64", "keiko-macos-x64.zip"), "not it");
+        return ["--bundle-root", root, "--version", "1.2.3"];
+      },
+      /^FAIL build-folder-release-assets: /u,
+    ],
+  ])("refuses %s on one FAIL line and exits 1", (_, argv, message) => {
+    const args = argv();
+    const output = captured();
+
+    expect(runFolderReleaseCli(args)).toBe(1);
+    expect(output.err()).toHaveLength(1);
+    expect(output.err()[0]).toMatch(/^FAIL build-folder-release-assets: /u);
+    expect(output.err()[0]).toMatch(message);
+    expect(output.out()).toEqual([]);
   });
 });

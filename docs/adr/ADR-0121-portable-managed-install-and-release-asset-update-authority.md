@@ -1329,9 +1329,12 @@ workflow, source digest and tag as the setup companion) before anything reaches 
 uploads them into the same draft as the archives and verifies GitHub's size and digest of each
 before it publishes the release, so the release is published with them or not at all. A draft
 that carries any asset this run did not validate, such as a package an earlier run left behind, is
-not published. The public release is read once more after publication and must carry exactly that
-set with the same digests again, so assets that changed between the two reads stop the run before
-npm, as a rerun would. After publication it downloads every asset back unauthenticated as a smoke check; a
+not published. The draft is read again right before the publish step and must still carry exactly
+the verified set with the same digests. The public release is read once more after publication and
+must carry exactly that set with the same digests again, so assets that changed between the reads
+stop the run before npm, as a rerun would. After publication it downloads every asset back
+unauthenticated as a smoke check, with `curl -q` so no user configuration applies, only from an
+HTTPS address without credentials and over HTTPS through every redirect; a
 failure there stops the run before npm publication, with the GitHub release already public. A rerun
 over that published release verifies the same metadata, refuses an asset outside the validated set
 and repeats the unauthenticated download of every asset before npm publication. Before it reads

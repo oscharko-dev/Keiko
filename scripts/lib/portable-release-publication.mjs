@@ -290,6 +290,20 @@ function refuseUnvalidatedAssets(publisher, releaseInfo, assets, expected, publi
   );
 }
 
+// The set was verified before the tag check. The draft is read once more right before it is
+// published, so an asset added, removed or replaced since then never becomes an immutable public
+// download: it must still carry exactly the assets this run verified, with the same digests.
+function refuseChangedDraft(publisher, releaseInfo, expected) {
+  const { assets } = publisher.snapshot(releaseInfo);
+  refuseUnvalidatedAssets(publisher, releaseInfo, assets, expected, false);
+  const changed = remoteDigestFailures(assets, expected);
+  if (changed.length > 0) {
+    publisher.fail(
+      `the draft GitHub release ${releaseInfo.tag} changed after this run verified it: ${changed.join(" ")} Run the publish again.`,
+    );
+  }
+}
+
 /**
  * Proves the complete download set on GitHub, then publishes this run's draft as the last GitHub
  * step. The public release is read once more and must carry exactly that set again, so assets that
@@ -314,6 +328,7 @@ export function publishVerifiedPortableRelease(publisher, releaseInfo, remoteAss
   }
   if (releaseInfo.draft !== true) return remoteAssets;
   publisher.assertTagAtHead(releaseInfo.tag);
+  refuseChangedDraft(publisher, releaseInfo, expected);
   publisher.runGh([
     "release",
     "edit",
@@ -326,14 +341,10 @@ export function publishVerifiedPortableRelease(publisher, releaseInfo, remoteAss
   ]);
   publisher.log(`published GitHub release ${releaseInfo.tag}.`);
   const publicSnapshot = publisher.snapshot({ repo: releaseInfo.repo, tag: releaseInfo.tag });
+  const publishedInfo = { ...releaseInfo, published: true };
   refuseUnvalidatedAssets(publisher, releaseInfo, publicSnapshot.assets, expected, true);
+  refuseIncompletePublishedRelease(publisher, publishedInfo, publicSnapshot.assets, expected);
   publisher.verifyAssets(publicSnapshot.assets, expected, releaseInfo);
-  refuseIncompletePublishedRelease(
-    publisher,
-    { ...releaseInfo, published: true },
-    publicSnapshot.assets,
-    expected,
-  );
   return publicSnapshot.assets;
 }
 

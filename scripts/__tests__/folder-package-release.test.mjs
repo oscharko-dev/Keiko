@@ -350,4 +350,43 @@ describe("the folder packages of a bundle", () => {
       "the portable asset bundle carries no readable folder-packages.json.",
     ]);
   });
+
+  it("refuses a manifest that is a folder or a link, without reading it", () => {
+    const root = bundle();
+    const path = join(root, FOLDER_PACKAGES_DIRECTORY, FOLDER_PACKAGES_MANIFEST);
+    const elsewhere = join(root, "elsewhere.json");
+    writeFileSync(elsewhere, readFileSync(path));
+    rmSync(path);
+    mkdirSync(path);
+    const reads = recordedReads();
+
+    expect(uploads(root, "1.2.3", reads).failures).toEqual([
+      "folder-packages.json must be a regular file.",
+    ]);
+    rmSync(path, { recursive: true });
+    symlinkSync(elsewhere, path);
+    expect(uploads(root, "1.2.3", reads).failures).toEqual([
+      "folder-packages.json must be a regular file.",
+    ]);
+    expect(reads.text).not.toHaveBeenCalled();
+  });
+
+  it("refuses a package of a target whose archive the bundle does not carry", () => {
+    const known = archives();
+    known.delete("windows-x64");
+
+    const result = folderPackageUploads({
+      bundleRoot: bundle(),
+      version: "1.2.3",
+      archives: known,
+    });
+
+    // Any failure refuses the whole set; the publisher uploads nothing then.
+    expect(result.failures).toEqual([
+      "the portable asset bundle carries no archive of windows-x64.",
+    ]);
+    expect(result.uploads.map((upload) => upload.assetName)).not.toContain(
+      folderPackageArchiveName("windows-x64", "standalone"),
+    );
+  });
 });

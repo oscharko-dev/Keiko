@@ -1658,6 +1658,58 @@ describe("update preflight service", () => {
     }
   });
 
+  it.each(["machine-managed", "Organization-Managed", "managed"])(
+    "asks no publisher for the npm folder layout declared %s (PR #4464)",
+    async (declared) => {
+      // machine-managed is an outside management like organization-managed; a value Keiko cannot
+      // read fails closed to the organization-managed result instead of querying a publisher.
+      const folder = npmFolderCliPath();
+      const fetchImpl = vi.fn<typeof fetch>();
+      const deps = depsWith(fetchImpl, {
+        env: { KEIKO_CLI_BIN_PATH: folder.cliPath, KEIKO_PORTABLE_MANAGEMENT: declared },
+      });
+
+      try {
+        const report = await runUpdatePreflight(deps, {
+          currentVersion: "1.5.3",
+          bundledCatalog: baseCatalog(),
+        });
+
+        expect(fetchImpl).not.toHaveBeenCalled();
+        expect(report.registryStatus).toBe("not-used");
+        expect(report.blockers).toContainEqual(
+          expect.objectContaining({ code: "portable-install-managed-externally" }),
+        );
+        expect(report.oneClickEligible).toBe(false);
+      } finally {
+        deps.store.close();
+        folder.cleanup();
+      }
+    },
+  );
+
+  it("still asks the registry about the npm folder layout declared user-local (PR #4464)", async () => {
+    const folder = npmFolderCliPath();
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.reject(new Error("offline")));
+    const deps = depsWith(fetchImpl, {
+      env: { KEIKO_CLI_BIN_PATH: folder.cliPath, KEIKO_PORTABLE_MANAGEMENT: "user-local" },
+    });
+
+    try {
+      const report = await runUpdatePreflight(deps, {
+        currentVersion: "1.5.3",
+        bundledCatalog: baseCatalog(),
+      });
+      expect(fetchImpl).toHaveBeenCalled();
+      expect(report.blockers).not.toContainEqual(
+        expect.objectContaining({ code: "portable-install-managed-externally" }),
+      );
+    } finally {
+      deps.store.close();
+      folder.cleanup();
+    }
+  });
+
   it("still asks the registry about the same layout without an outside management", async () => {
     const folder = npmFolderCliPath();
     const fetchImpl = vi.fn<typeof fetch>(() => Promise.reject(new Error("offline")));

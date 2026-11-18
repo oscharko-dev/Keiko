@@ -210,8 +210,10 @@ function fakePublisher({
   view = { status: 1, stdout: "", stderr: "release not found" },
   listing,
   publicAssets = [],
+  snapshots = [],
 } = {}) {
   const calls = [];
+  const queued = [...snapshots];
   const logs = [];
   const publisher = {
     assertTagAtHead: (tag) => calls.push(["assertTagAtHead", tag]),
@@ -232,7 +234,11 @@ function fakePublisher({
     },
     snapshot: (releaseInfo) => {
       calls.push(["snapshot", releaseInfo.tag, releaseInfo.id]);
-      return { assets: publicAssets, createdAt: "2026-09-14T12:00:00Z", id: 7 };
+      return {
+        assets: queued.length > 0 ? queued.shift() : publicAssets,
+        createdAt: "2026-09-14T12:00:00Z",
+        id: 7,
+      };
     },
     verifyAssets: (assets, expected) =>
       calls.push(["verifyAssets", assets.length, expected.length]),
@@ -425,6 +431,7 @@ describe("publishVerifiedPortableRelease", () => {
     expect(calls).toStrictEqual([
       ["verifyAssets", 1, 1],
       ["assertTagAtHead", TAG],
+      ["snapshot", TAG, 42],
       [
         "runGh",
         "release",
@@ -495,13 +502,62 @@ describe("publishVerifiedPortableRelease", () => {
   ])("stops before npm when the public release carries %s (PR #4464)", (_, publicAssets, error) => {
     // Review finding on PR #4464 (P2): the public release was checked asset by asset only, so a
     // folder ZIP that appeared after the draft was verified let the first run go on to npm.
-    const { calls, publisher } = fakePublisher({ publicAssets });
+    // The fresh draft read before the edit is clean; only the public release differs.
+    const { calls, publisher } = fakePublisher({ publicAssets, snapshots: [verified] });
     const releaseInfo = { draft: true, id: 42, latestArgs: ["--latest"], repo: REPO, tag: TAG };
 
     expect(() =>
       publishVerifiedPortableRelease(publisher, releaseInfo, verified, expected),
     ).toThrow(error);
     expect(calls.some((call) => call[0] === "snapshot")).toBe(true);
+  });
+
+  it("refuses an asset that appears between the first read and the publish edit", () => {
+    // Review finding on PR #4464: the draft was read once, before the tag check, so an asset added
+    // in between became an immutable public download. The draft is read again right before the edit.
+    const stray = { digest: `sha256:${SHA}`, name: "notes.txt" };
+    const { calls, publisher } = fakePublisher({ snapshots: [[...verified, stray]] });
+    const releaseInfo = { draft: true, id: 42, latestArgs: ["--latest"], repo: REPO, tag: TAG };
+    expect(() =>
+      publishVerifiedPortableRelease(publisher, releaseInfo, verified, expected),
+    ).toThrow(
+      `the draft GitHub release ${TAG} carries assets this run did not validate: notes.txt; delete them from the draft`,
+    );
+    expect(calls.some((call) => call[2] === "edit")).toBe(false);
+  });
+
+  it.each([
+    [
+      "replaced under the same name",
+      [{ digest: `sha256:${"d".repeat(64)}`, name: "keiko-linux-x64.zip" }],
+    ],
+    ["removed", []],
+  ])(
+    "refuses a verified asset %s between the first read and the publish edit",
+    (_, freshAssets) => {
+      // Audit of PR #4464: the second read compared names only, so a replaced asset went public.
+      const { calls, publisher } = fakePublisher({ snapshots: [freshAssets] });
+      const releaseInfo = { draft: true, id: 42, latestArgs: ["--latest"], repo: REPO, tag: TAG };
+      expect(() =>
+        publishVerifiedPortableRelease(publisher, releaseInfo, verified, expected),
+      ).toThrow(
+        `the draft GitHub release ${TAG} changed after this run verified it: keiko-linux-x64.zip`,
+      );
+      expect(calls.some((call) => call[2] === "edit")).toBe(false);
+    },
+  );
+
+  it("gives the immutable-release guidance before the generic check when the public release lacks a download", () => {
+    // Review finding on PR #4464: after publication nothing can be added, so a missing asset gets
+    // the repair guidance, not the generic verification failure.
+    const { publisher } = fakePublisher({ snapshots: [verified, []] });
+    publisher.verifyAssets = (assets) => {
+      if (assets.length === 0) throw new Error("generic verification failed");
+    };
+    const releaseInfo = { draft: true, id: 42, latestArgs: ["--latest"], repo: REPO, tag: TAG };
+    expect(() =>
+      publishVerifiedPortableRelease(publisher, releaseInfo, verified, expected),
+    ).toThrow(immutableReleaseRepairFailure(TAG, "lacks keiko-linux-x64.zip"));
   });
 
   it("refuses to publish a draft whose digests do not match", () => {

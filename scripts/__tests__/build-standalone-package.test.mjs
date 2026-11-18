@@ -10,13 +10,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   STANDALONE_TARGETS,
   StandaloneBuildError,
   buildStandalonePackage,
   parseStandaloneArgs,
+  runFolderPackageCli,
 } from "../build-standalone-package.mjs";
 import { sha256File } from "../lib/digest.mjs";
 import { extractZipArchiveEntries, readZipArchiveEntries } from "../lib/zip-archive.mjs";
@@ -524,5 +525,87 @@ describe("the command line", () => {
 
   it.each([[["--unknown"]], [["--target"]], [["--target", "--archive"]]])("refuses %j", (argv) => {
     expect(() => parseStandaloneArgs(argv)).toThrow(StandaloneBuildError);
+  });
+});
+
+describe("the command line every folder form shares", () => {
+  const ARGS = [
+    "--target",
+    "macos-arm64",
+    "--archive",
+    "a.zip",
+    "--sha256",
+    "abc",
+    "--out-dir",
+    "o",
+  ];
+
+  function captured() {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    return {
+      out: () => log.mock.calls.map((call) => call.join(" ")),
+      err: () => error.mock.calls.map((call) => call.join(" ")),
+    };
+  }
+
+  function cli(build) {
+    return { form: "npm", command: "build-standalone-npm-package", usage: "usage text", build };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("prints the form's usage on --help and builds nothing", () => {
+    const output = captured();
+    const build = vi.fn();
+
+    expect(runFolderPackageCli(["-h"], cli(build))).toBe(0);
+    expect(output.out()).toEqual(["usage text"]);
+    expect(build).not.toHaveBeenCalled();
+  });
+
+  it("reports what it wrote, and warns about a package that holds credentials", () => {
+    const output = captured();
+    const result = {
+      target: "macos-arm64",
+      packageVersion: "1.2.3",
+      outputPath: "o/keiko-macos-arm64.npm-team.zip",
+      outputSha256: "f".repeat(64),
+      folder: "o/Keiko",
+      provisioned: true,
+    };
+    const build = vi.fn(() => result);
+
+    expect(runFolderPackageCli(ARGS, cli(build))).toBe(0);
+    expect(build).toHaveBeenCalledWith(parseStandaloneArgs(ARGS));
+    expect(output.out()).toEqual([
+      "PASS npm package macos-arm64 (Keiko 1.2.3)",
+      "  archive: o/keiko-macos-arm64.npm-team.zip",
+      `  sha256:  ${"f".repeat(64)}`,
+      "  folder:  o/Keiko",
+      "  This package holds credentials. Distribute it internally only; never publish it.",
+    ]);
+  });
+
+  it("refuses a build on one FAIL line under its command and exits 1", () => {
+    const output = captured();
+    const build = vi.fn(() => {
+      throw new StandaloneBuildError("the archive is empty");
+    });
+
+    expect(runFolderPackageCli(ARGS, cli(build))).toBe(1);
+    expect(output.err()).toEqual(["FAIL build-standalone-npm-package: the archive is empty"]);
+    expect(output.out()).toEqual([]);
+  });
+
+  it("lets an error that is not a refusal through", () => {
+    captured();
+    const build = vi.fn(() => {
+      throw new RangeError("unexpected");
+    });
+
+    expect(() => runFolderPackageCli(ARGS, cli(build))).toThrow(RangeError);
   });
 });

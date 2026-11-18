@@ -13,6 +13,7 @@
  */
 
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdtempSync,
@@ -151,6 +152,9 @@ export function buildFolderReleaseAssets(options) {
 function publishOnce(staging, outDir) {
   if (existsSync(outDir)) refuse(`${outDir} already exists; folder packages are built once`);
   try {
+    // mkdtempSync makes the staging folder private (0700); the published folder keeps the ordinary
+    // directory mode it had when it was created directly.
+    chmodSync(staging, 0o755);
     renameSync(staging, outDir);
   } catch (error) {
     throw new FolderReleaseBuildError(`${outDir} could not be published: ${error.code ?? error}`, {
@@ -159,7 +163,11 @@ function publishOnce(staging, outDir) {
   }
 }
 
-function main(argv) {
+/**
+ * The command line: `--help` prints the usage, a refused build prints one FAIL line and exits 1,
+ * any other error is thrown.
+ */
+export function runFolderReleaseCli(argv) {
   if (argv.includes("--help") || argv.includes("-h")) {
     console.log(USAGE);
     return 0;
@@ -180,5 +188,5 @@ function main(argv) {
 }
 
 if (isMainModule(import.meta.url)) {
-  process.exitCode = main(process.argv.slice(2));
+  process.exitCode = runFolderReleaseCli(process.argv.slice(2));
 }
