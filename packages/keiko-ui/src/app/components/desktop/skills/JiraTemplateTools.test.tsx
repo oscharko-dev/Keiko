@@ -830,6 +830,85 @@ describe("binding a template to this Jira", () => {
     );
   });
 
+  describe("switching to another Jira after a bind (G2)", () => {
+    const foreign: JiraTemplateValidation = { ...bindable, bindingUnconfirmed: true };
+    const bound = {
+      changed: true as const,
+      issueType: "Story",
+      parentTypeCount: 0,
+      skill: BOUND_SKILL,
+    };
+    const validatePerPod = (): void => {
+      vi.mocked(templates.validateJiraTemplate).mockImplementation((podId) =>
+        Promise.resolve(podId === "pod-1" ? bindable : foreign),
+      );
+    };
+    const switchTo = async (podId: string): Promise<void> => {
+      await act(async () => {
+        latest?.selectPod(podId);
+        await Promise.resolve();
+      });
+    };
+
+    it("offers the explicit migration for the second Jira instead of the first one's success", async () => {
+      validatePerPod();
+      vi.mocked(templates.bindJiraTemplate).mockResolvedValue(bound);
+      const user = userEvent.setup();
+      render(<Panel stored={stored} />);
+      const story = await row("Story template");
+      expect(
+        await within(story).findByText(/Bound to the issue type “Story”/u),
+      ).toBeInTheDocument();
+      await switchTo("pod-2");
+      const button = await within(story).findByRole("button", { name: "Bind to this Jira" });
+      expect(within(story).queryByText(/Bound to the issue type/u)).toBeNull();
+      // Only the migration action for this foreign binding sends migrate; the automatic one never did.
+      expect(templates.bindJiraTemplate).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(templates.bindJiraTemplate).mock.calls[0]).toHaveLength(4);
+      await user.click(button);
+      expect(templates.bindJiraTemplate).toHaveBeenLastCalledWith(
+        "pod-2",
+        ENTRY.id,
+        ENTRY.revision,
+        expect.any(String),
+        true,
+      );
+    });
+
+    it("discards a late answer of the first Jira after the selection moved on", async () => {
+      validatePerPod();
+      const late = deferred<typeof bound>();
+      vi.mocked(templates.bindJiraTemplate).mockReturnValue(late.promise);
+      render(<Panel stored={stored} />);
+      const story = await row("Story template");
+      await waitFor(() => expect(templates.bindJiraTemplate).toHaveBeenCalledTimes(1));
+      await switchTo("pod-2");
+      await within(story).findByRole("button", { name: "Bind to this Jira" });
+      await act(async () => {
+        late.resolve(bound);
+        await late.promise;
+      });
+      expect(within(story).queryByText(/Bound to the issue type/u)).toBeNull();
+      expect(within(story).getByRole("button", { name: "Bind to this Jira" })).toBeInTheDocument();
+    });
+
+    it("does not send migrate for a re-check of a binding this Jira does not call foreign", async () => {
+      vi.mocked(templates.validateJiraTemplate).mockResolvedValue(bindable);
+      const sentence = "Write the type as this Jira shows it.";
+      vi.mocked(templates.bindJiraTemplate).mockRejectedValueOnce(
+        new ApiError("INVALID_REQUEST", sentence, 422),
+      );
+      vi.mocked(templates.bindJiraTemplate).mockResolvedValue(bound);
+      const user = userEvent.setup();
+      render(<Panel stored={stored} />);
+      const story = await row("Story template");
+      expect(await within(story).findByRole("alert")).toHaveTextContent(sentence);
+      await user.click(within(story).getByRole("button", { name: "Bind to this Jira" }));
+      expect(templates.bindJiraTemplate).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(templates.bindJiraTemplate).mock.calls[1]).toHaveLength(4);
+    });
+  });
+
   it("still completes a binding this Jira confirms on its own, without a migration (PR #4464)", async () => {
     // A file bound to this Jira whose view now resolves a further slot is bindable as well: that
     // completion stays automatic, because the server does not call the binding unconfirmed.

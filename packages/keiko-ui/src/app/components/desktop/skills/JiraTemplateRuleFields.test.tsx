@@ -223,9 +223,92 @@ describe("a written field reference that Jira renamed (PR #4464)", () => {
       }),
     });
     const select = screen.getByRole("combobox", { name: /required field/i });
-    const labels = Array.from(select.querySelectorAll("option"), (option) => option.textContent);
+    const labels = Array.from(
+      select.querySelectorAll("option"),
+      (option) => option.textContent ?? "",
+    );
     expect(labels.some((label) => /^team$/iu.test(label.trim()))).toBe(false);
     expect(labels.some((label) => label.includes("Sprint"))).toBe(true);
+  });
+});
+
+describe("one name used by the parent clause and a required clause (G1)", () => {
+  const catalog = details({
+    fields: [
+      { id: "parent", name: "Übergeordnet", required: false },
+      { id: "customfield_10200", name: "Parent", required: false },
+    ],
+    statuses: [],
+    ambiguousFieldNames: [],
+  });
+  const front = (requiredFields: readonly string[]): string =>
+    plain(formOf({ requiredFields })).replace(
+      "---\n# Aufgabe",
+      "parentField: Parent\nparentIssueTypes: [Epos]\n---\n# Aufgabe",
+    );
+  const savedWith = (
+    requiredFields: readonly string[],
+    ids: contracts.JiraTemplateBindingIds,
+  ): JiraIssueTemplate => {
+    const text = front(requiredFields);
+    const binding = {
+      digest: contracts.jiraTemplateBindingDigest(INSTANCE, parsed(text), ids),
+      ...ids,
+    };
+    const bound = contracts.bindJiraIssueTemplateText(text, binding) ?? "";
+    return contracts.jiraTemplateForInstance(parsed(bound), INSTANCE);
+  };
+  const parentOnly = {
+    issueTypeId: "10002",
+    parentIssueTypeIds: ["10000"],
+    parentFieldId: "parent",
+  };
+
+  it("shows the custom field a pick names, not the system parent the parent clause is bound to", () => {
+    const template = savedWith([], parentOnly);
+    expect(template.binding).toBeDefined();
+    renderRules({ form: formOf({ requiredFields: ["Parent"] }), template, details: catalog });
+    const chips = screen.queryAllByText(/Übergeordnet/u).filter((el) => el.tagName !== "OPTION");
+    expect(chips).toEqual([]);
+    expect(screen.queryAllByText("Parent").filter((el) => el.tagName !== "OPTION")).not.toEqual([]);
+  });
+
+  it("saves only a combination that reads back by role: the pick, the rebind and the lookup agree", async () => {
+    const template = savedWith([], parentOnly);
+    const onChange = vi.fn();
+    render(
+      <JiraTemplateRuleFields
+        form={formOf()}
+        template={template}
+        details={catalog}
+        onChange={onChange}
+      />,
+    );
+    await userEvent.selectOptions(
+      screen.getByRole("combobox", { name: /required field/i }),
+      "Parent",
+    );
+    const [patch, resolved] = onChange.mock.calls[0] as [
+      Partial<JiraTemplateForm>,
+      contracts.JiraTemplateEditedIds,
+    ];
+    expect(patch.requiredFields).toEqual(["Parent"]);
+    const binding = contracts.rebindJiraTemplateAfterEdit(
+      template,
+      INSTANCE,
+      { requiredFields: ["Parent"], activateOn: ["create"] },
+      resolved,
+    );
+    expect(binding?.requiredFieldIds).toEqual(["customfield_10200"]);
+    expect(binding?.parentFieldId).toBe("parent");
+    const saved = savedWith(["Parent"], {
+      ...parentOnly,
+      requiredFieldIds: ["customfield_10200"],
+    });
+    expect(contracts.jiraTemplateBoundFieldId(saved, "Parent", "parent")).toBe("parent");
+    expect(contracts.jiraTemplateBoundFieldId(saved, "Parent", "required")).toBe(
+      "customfield_10200",
+    );
   });
 });
 

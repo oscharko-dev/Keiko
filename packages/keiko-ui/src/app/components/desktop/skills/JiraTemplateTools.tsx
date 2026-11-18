@@ -29,6 +29,7 @@ import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { SkillChatToggle } from "./SkillChatToggle";
 import {
   useAutomaticTemplateBinding,
+  bindOutcomeKey,
   useJiraTemplateBinding,
   type BindOutcome,
 } from "./useJiraTemplateBinding";
@@ -439,8 +440,13 @@ export function JiraTemplateList({
           onOpen={onOpen}
           chat={chat}
           bind={{
-            outcome: binding.outcomes.get(entry.id),
-            onBind: () => void binding.bind(entry, true),
+            outcome: binding.outcomes.get(bindOutcomeKey(jira.podId, entry)),
+            // Only a binding this Jira does not confirm is migrated, and only by this explicit click.
+            onBind: () =>
+              void binding.bind(
+                entry,
+                ownedElsewhere(tools.checks.get(templateKey(entry))) ? true : undefined,
+              ),
           }}
         />
       ))}

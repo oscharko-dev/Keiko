@@ -187,7 +187,7 @@ function fieldName(
   value: string,
   template: JiraIssueTemplate | undefined,
 ): string {
-  const ids = resolveJiraTemplateFieldIds(value, fields, template);
+  const ids = resolveJiraTemplateFieldIds(value, fields, template, "required");
   const only = ids.length === 1 ? fields.find((field) => field.id === ids[0]) : undefined;
   return only === undefined ? value : fieldLabel(only, fields);
 }
@@ -219,7 +219,7 @@ function unwrittenFields(
   const hit = unwrittenCache.get(fields);
   if (hit?.written === written && hit.key === key) return hit.result;
   const named = new Set(
-    written.flatMap((value) => resolveJiraTemplateFieldIds(value, fields, template)),
+    written.flatMap((value) => resolveJiraTemplateFieldIds(value, fields, template, "required")),
   );
   // A reference Jira renamed keeps the id it was bound to, so a field now carrying that written name
   // is excluded too: selecting it would store the old id twice.
@@ -514,7 +514,7 @@ function FieldRequirement({ form, template, details, onChange }: RuleSectionProp
         fields === undefined
           ? undefined
           : (value: string): boolean =>
-              resolveJiraTemplateFieldIds(value, fields, template).length > 0
+              resolveJiraTemplateFieldIds(value, fields, template, "required").length > 0
       }
       onChange={(requiredFields) =>
         onChange({ requiredFields }, { fieldIds: fieldIdsByReference(fields ?? []) })
