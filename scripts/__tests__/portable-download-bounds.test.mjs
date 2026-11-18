@@ -121,4 +121,23 @@ describe("portable download bounds (PR #4464)", () => {
       );
     }
   });
+
+  it("names curl's own timeout and file-size statuses, even with a short or missing file", () => {
+    const missing = join(tmpdir(), "keiko-download-bounds-missing", "asset.zip");
+    for (const destination of [missing, fileOfSize(10)]) {
+      expect(portableDownloadFailure({ status: 28 }, expected, destination)).toBe(
+        "portable asset download timed out for keiko-linux-x64.zip.",
+      );
+      expect(portableDownloadFailure({ status: 63 }, expected, destination)).toBe(
+        "portable asset download exceeded the expected size for keiko-linux-x64.zip.",
+      );
+    }
+  });
+
+  it("keeps the manifest limit equal to the updater's MAX_PORTABLE_MANIFEST_BYTES", async () => {
+    const { MAX_PORTABLE_MANIFEST_BYTES } =
+      await import("../../packages/keiko-server/src/update-portable-staging-shared.ts");
+    const { PORTABLE_MANIFEST_MAX_BYTES } = await import("../lib/portable-download-bounds.mjs");
+    expect(PORTABLE_MANIFEST_MAX_BYTES).toBe(MAX_PORTABLE_MANIFEST_BYTES);
+  });
 });

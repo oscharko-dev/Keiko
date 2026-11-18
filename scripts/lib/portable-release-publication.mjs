@@ -506,7 +506,8 @@ export function checkPublishedManifestBinding(manifest, expected, seams) {
   if (manifest.provenance?.sourceCommitSha !== expected.commitSha) {
     return "provenance.sourceCommitSha does not match the checked-out HEAD";
   }
-  return undefined;
+  const idFailures = signedIdFailures(manifest, expected);
+  return idFailures.length === 0 ? undefined : idFailures.join("; ");
 }
 
 /**
@@ -536,12 +537,44 @@ export function nonManifestEvidenceExpected(assets, seams) {
  * `release.commitSha` and `provenance.sourceCommitSha` must equal, and which tag its
  * `release.releaseTag` must equal.
  */
-export function manifestBindingsFromAssets(assets, head, releaseTag) {
+export function manifestBindingsFromAssets(assets, head, releaseTag, snapshot) {
+  const idOf = (name) => snapshot?.assets?.find((remote) => remote?.name === name)?.id;
   return assets.map((asset) => ({
     assetName: `${asset.platformTarget}-portable-manifest.json`,
     commitSha: head,
     releaseTag,
+    ...(snapshot === undefined
+      ? {}
+      : {
+          archiveAssetId: idOf(asset.archiveAssetName),
+          expectsSetup: asset.setupAssetName !== undefined,
+          releaseId: snapshot.id,
+          setupAssetId: asset.setupAssetName === undefined ? undefined : idOf(asset.setupAssetName),
+          target: asset.platformTarget,
+        }),
   }));
+}
+
+// A rerun's signed manifests must name the very GitHub objects of the live release; ids that
+// differ mean the manifests describe another release or asset set (PR #4464).
+function signedIdFailures(manifest, expected) {
+  if (!("releaseId" in expected)) return [];
+  const binding = manifest.releaseImpact?.reviewedBinding;
+  const pairs = [
+    ["release", manifest.release?.releaseId, expected.releaseId],
+    ["release (reviewed binding)", binding?.releaseId, expected.releaseId],
+    ["archive asset", manifest.artifact?.assetId, expected.archiveAssetId],
+    ["archive asset (reviewed binding)", binding?.assetId, expected.archiveAssetId],
+    ...(expected.expectsSetup === true
+      ? [["setup asset", binding?.setupAsset?.assetId, expected.setupAssetId]]
+      : []),
+  ];
+  return pairs
+    .filter(([, signed, live]) => signed !== live || live === undefined)
+    .map(
+      ([what, signed, live]) =>
+        `${expected.target}: signed ${what} id ${String(signed)} differs from the live GitHub id ${String(live)}`,
+    );
 }
 
 /**

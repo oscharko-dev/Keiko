@@ -11,6 +11,20 @@ export const PORTABLE_DOWNLOAD_STALL_SECONDS = 60;
 export const PORTABLE_DOWNLOAD_STALL_BYTES_PER_SECOND = 10 * 1024;
 export const PORTABLE_DOWNLOAD_TIMEOUT_GRACE_MS = 30_000;
 
+// curl's documented exit statuses for a transfer deadline and for --max-filesize.
+export const CURL_EXIT_OPERATION_TIMEDOUT = 28;
+export const CURL_EXIT_FILESIZE_EXCEEDED = 63;
+
+// Mirrors MAX_PORTABLE_MANIFEST_BYTES in packages/keiko-server/src/update-portable-staging-shared.ts
+// (scripts cannot import TS sources; portable-download-bounds.test.mjs pins the two equal).
+export const PORTABLE_MANIFEST_MAX_BYTES = 1_048_576;
+export const PORTABLE_MANIFEST_DOWNLOAD_MAX_TIME_SECONDS = 120;
+
+/** The subprocess timeout for the small manifest download through gh. */
+export function portableManifestDownloadTimeoutMs() {
+  return portableDownloadTimeoutMs(PORTABLE_MANIFEST_DOWNLOAD_MAX_TIME_SECONDS);
+}
+
 /** The transfer deadline; tests may shorten it, a release run never can. */
 export function portableDownloadMaxTimeSeconds(env = process.env) {
   const override = Number(env.KEIKO_PORTABLE_DOWNLOAD_MAX_TIME_SECONDS);
@@ -73,12 +87,16 @@ function downloadedSize(destination) {
 /** The plain reason a failed download names, with the asset it concerns. */
 export function portableDownloadFailure(result, expected, destination) {
   const assetName = expected.assetName;
-  if (result.error?.code === "ETIMEDOUT") {
+  if (result.error?.code === "ETIMEDOUT" || result.status === CURL_EXIT_OPERATION_TIMEDOUT) {
     return `portable asset download timed out for ${assetName}.`;
   }
   // Node and curl may meet the file-size limit as a failed write instead of the signal; either
   // way the file can only be longer than the expected size when the response was too large.
-  if (result.signal === "SIGXFSZ" || downloadedSize(destination) > expected.expectedSize) {
+  if (
+    result.signal === "SIGXFSZ" ||
+    result.status === CURL_EXIT_FILESIZE_EXCEEDED ||
+    downloadedSize(destination) > expected.expectedSize
+  ) {
     return `portable asset download exceeded the expected size for ${assetName}.`;
   }
   return `unauthenticated portable asset download failed for ${assetName}.`;

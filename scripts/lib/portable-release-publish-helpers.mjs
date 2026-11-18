@@ -10,6 +10,10 @@ import { join } from "node:path";
 
 import { sha256 } from "./digest.mjs";
 import {
+  PORTABLE_MANIFEST_MAX_BYTES,
+  portableManifestDownloadTimeoutMs,
+} from "./portable-download-bounds.mjs";
+import {
   checkPublishedManifestBinding,
   downloadPortableReleaseAsset,
   immutableReleaseRepairFailure,
@@ -28,9 +32,11 @@ function readFileSha256(path) {
 export function makeDownloadSeams(runGh) {
   return {
     mkdtemp: (prefix) => mkdtempSync(join(tmpdir(), prefix)),
-    runGh,
+    // The manifest is small: a stalled gh is ended at a deadline, and a file past the limit the
+    // updater itself enforces counts as not downloaded, never read into memory or parsed.
+    runGh: (args) => runGh(args, { timeout: portableManifestDownloadTimeoutMs() }),
     pathJoin: join,
-    exists: existsSync,
+    exists: (path) => existsSync(path) && statSync(path).size <= PORTABLE_MANIFEST_MAX_BYTES,
     readFile: readFileSync,
     sha256,
     toUtf8: (bytes) => bytes.toString("utf8"),
@@ -95,7 +101,7 @@ export function runVerifyPublishedPortableAssets({
   });
   verifyAssets(archiveSnapshot.assets, evidenceExpected, releaseInfo);
   const head = headOfCheckout();
-  const bindings = manifestBindingsFromAssets(assets, head, releaseInfo.tag);
+  const bindings = manifestBindingsFromAssets(assets, head, releaseInfo.tag, archiveSnapshot);
   verifyPublishedPortableEvidence(publisher, releaseInfo, archiveSnapshot.assets, bindings);
   const published = [
     ...archiveExpected,

@@ -1343,7 +1343,8 @@ function portablePublisher() {
     snapshot: githubReleaseSnapshot,
     verifyAssets: verifyRemotePortableAssets,
     ...makePublishedPortableSeams({
-      runGh: (args) => commandResult("gh", args, { env: githubEnvironment() }),
+      runGh: (args, options = {}) =>
+        commandResult("gh", args, { env: githubEnvironment(), ...options }),
       verifyReleaseTrust: verifyPortableReleaseTrust,
       trustedKeys: portableReleaseTrustedKeys(),
     }),
