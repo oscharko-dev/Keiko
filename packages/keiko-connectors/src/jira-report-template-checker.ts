@@ -1,13 +1,16 @@
 import {
+  JIRA_TEMPLATE_VIOLATIONS_MAX,
   jiraTemplateGovernsWrites,
   type JiraIssueTemplate,
   type JiraTemplateFieldRole,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
-  checkJiraIssueTemplates,
+  collectJiraTemplateViolations,
+  dedupeJiraTemplateViolations,
   matchingJiraIssueTemplates,
   resolveJiraTemplateFieldIds,
+  type JiraAttributedTemplateViolation,
   type JiraFieldCatalogEntry,
   type JiraTemplateSubject,
 } from "./jira-issue-template-check.js";
@@ -116,16 +119,24 @@ const RULE_FIELD: Readonly<Record<string, string>> = {
   "label-count": "labels",
 };
 
-/** The one field a violation concerns, when that is determinable without reading a value. */
+/**
+ * The one field a violation concerns, when that is determinable without reading a value. A clause's
+ * own template and role decide which native field its written name is bound to: the parent clause
+ * and a required clause can write the same name for different fields.
+ */
 function fieldOf(
-  violation: JiraTemplateViolation,
+  entry: JiraAttributedTemplateViolation,
   catalog: readonly JiraFieldCatalogEntry[],
 ): string | undefined {
+  const { violation, role, template } = entry;
   const fixed = RULE_FIELD[violation.ruleId];
   if (fixed !== undefined) return fixed;
   if (!["field-missing", "field-unavailable", "parent-missing"].includes(violation.ruleId))
     return undefined;
-  const ids = resolveJiraTemplateFieldIds(violation.subject, catalog);
+  const ids =
+    role === undefined
+      ? resolveJiraTemplateFieldIds(violation.subject, catalog)
+      : resolveJiraTemplateFieldIds(violation.subject, catalog, template, role);
   return ids.length === 1 ? ids[0] : undefined;
 }
 
@@ -149,10 +160,11 @@ function deviationSubject(
 }
 
 function deviation(
-  violation: JiraTemplateViolation,
+  entry: JiraAttributedTemplateViolation,
   catalog: readonly JiraFieldCatalogEntry[],
 ): JiraReportDeviation {
-  const fieldId = fieldOf(violation, catalog);
+  const { violation } = entry;
+  const fieldId = fieldOf(entry, catalog);
   return {
     ruleId: violation.ruleId,
     ...(fieldId === undefined ? {} : { fieldId }),
@@ -212,9 +224,12 @@ async function checkSubject(
     needsParent && request !== undefined
       ? await bindJiraTemplateParentTypes(request, subject, matching, catalog)
       : subject;
-  const violations = checkJiraIssueTemplates(matching, bound, catalog);
-  if (violations.some(({ ruleId }) => ruleId === "template-unreadable")) return "unavailable";
-  return violations.map((violation) => deviation(violation, catalog));
+  const entries = dedupeJiraTemplateViolations(
+    collectJiraTemplateViolations(matching, bound, catalog),
+  ).slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX);
+  if (entries.some(({ violation }) => violation.ruleId === "template-unreadable"))
+    return "unavailable";
+  return entries.map((entry) => deviation(entry, catalog));
 }
 
 /** A withheld requested field is unknown; an observed null still proves an absent parent. */

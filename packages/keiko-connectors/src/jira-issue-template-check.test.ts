@@ -9,6 +9,7 @@ import {
   checkJiraIssueTemplates,
   evaluateJiraTemplateChange,
   jiraTemplateValuePresent,
+  jiraTransitionsFullyChecked,
   jiraNoGoverningTemplateGuidance,
   jiraTemplateGuidanceVariants,
   jiraTemplateValueText,
@@ -805,7 +806,10 @@ describe("validateJiraIssueTemplateAgainstInstance", () => {
       validateJiraIssueTemplateAgainstInstance(missing, instance).map(
         (finding) => `${finding.code}:${finding.subject}`,
       ),
-    ).toEqual(["unknown-transition-target:Done"]);
+    ).toEqual([]);
+    // A project-level status list cannot disprove a transition id or action name (see the
+    // attribution tests): the unlisted target is unverified, not unknown.
+    expect(jiraTransitionsFullyChecked(missing, instance)).toBe(false);
   });
 
   it("judges a transition target bound to a status id by that id, not by the typed name", () => {

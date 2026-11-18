@@ -674,11 +674,12 @@ describe("validate against the live instance", () => {
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       valid: true,
-      checked: { project: true, fields: true, linkTypes: true, transitions: true },
+      // "Ready" is no listed destination status, so it may be a transition id or action name:
+      // the project's status list cannot disprove it, and the transition is not reported checked.
+      checked: { project: true, fields: true, linkTypes: true, transitions: false },
       findings: [
         { code: "unknown-field", subject: "Unknown Thing" },
         { code: "unknown-link-type", subject: "relates to" },
-        { code: "unknown-transition-target", subject: "Ready" },
       ],
     });
     expect(http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
