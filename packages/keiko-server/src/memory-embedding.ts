@@ -446,13 +446,13 @@ export function bindMemoryQueryEmbedding(
   deps: UiHandlerDeps,
   provider: ModelProviderConfig,
   queryText: string,
-): () => Promise<MemoryEmbeddingInput | null> {
+): (signal?: AbortSignal) => Promise<MemoryEmbeddingInput | null> {
   const embed = bindMemoryEmbedder(
     provider,
     requestEmbeddingImpl(deps),
     deps.activityLog ?? processServerLogSink(),
   );
-  return () => embed(queryText, "query");
+  return (signal) => embed(queryText, "query", signal);
 }
 
 // Split out of the factory so the request path stays inside the function-length bar once the three

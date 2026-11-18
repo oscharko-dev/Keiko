@@ -86,7 +86,7 @@ type SemanticRetrievalGate =
       readonly reason: "allowed";
       readonly matchesQuery: (query: string | undefined) => boolean;
       readonly providerIdentity: string;
-      readonly embedQuery: () => Promise<MemoryEmbeddingInput | null>;
+      readonly embedQuery: (signal?: AbortSignal) => Promise<MemoryEmbeddingInput | null>;
     }
   | {
       readonly allowed: false;
@@ -420,12 +420,12 @@ async function semanticScoresFrom(
     warnSkippedIncompatible(deps, embeddings.size, candidateIds.length);
     return new Map<MemoryId, number>();
   }
-  const queryEmbedding = await gate.embedQuery();
+  const queryEmbedding = await gate.embedQuery(signal);
+  throwIfAborted(signal);
   if (queryEmbedding === null) {
     warnSemanticRetrievalDisabled(deps, "no-embedder", candidateIds.length);
     return undefined;
   }
-  throwIfAborted(signal);
   const queryIdentity = inputIdentity(queryEmbedding);
   const compatible = compatibleMemoryEntries(
     queryEmbedding,

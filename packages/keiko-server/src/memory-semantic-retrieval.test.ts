@@ -783,12 +783,12 @@ describe("semantic memory retrieval (#204)", () => {
       const content = "The user is building a product named Keiko";
       const record = insertAccepted(vault, "mem-product", content);
       storeEmbedding(vault, "mem-product", content);
-      const requests: string[] = [];
+      const requestEmbedding = vi.fn(embeddingAdapter());
       const diagnostics: ServerDiagnosticRecord[] = [];
       const handlerDeps = deps(
         {
           memoryVault: vault,
-          localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(requests),
+          localKnowledgeEmbeddingRequest: requestEmbedding,
           diagnostics: {
             record(entry) {
               diagnostics.push(entry);
@@ -809,7 +809,7 @@ describe("semantic memory retrieval (#204)", () => {
         staleGate,
       );
       expect(noMatch.semanticById).toBeUndefined();
-      expect(requests).toEqual([]);
+      expect(requestEmbedding).not.toHaveBeenCalled();
       const operation = "memory.retrieval.semantic-disabled";
       const diagnostic = diagnostics.find((entry) => entry.operation === operation);
       expect(diagnostic).toMatchObject({ code: "query-mismatch", semanticCandidateCount: 1 });
@@ -848,10 +848,126 @@ describe("semantic memory retrieval (#204)", () => {
         gate,
       );
       expect(matched.semanticById?.get(record.id)).toBe(1);
-      expect(requests).toEqual([query]);
+      expect(requestEmbedding.mock.calls.map(([request]) => request.input)).toEqual([query]);
+      expect(requestEmbedding.mock.calls[0]?.[0].signal).toBeUndefined();
     } finally {
       vi.unstubAllEnvs();
       sink.close?.();
+      vault.close();
+    }
+  });
+
+  it("cancels the in-flight query adapter with the retrieval signal", async () => {
+    const memoryDir = join(tmp, "vault-query-cancellation");
+    mkdirSync(memoryDir);
+    const vault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const controller = new AbortController();
+    let complete!: (outcome: OpenAIEmbeddingOutcome) => void;
+    const pending = new Promise<OpenAIEmbeddingOutcome>((resolve) => {
+      complete = resolve;
+    });
+    const cancelledAtAdapter = vi.fn(() => {
+      complete({ ok: false, kind: "cancelled" });
+    });
+    const requestEmbedding = vi.fn((request: OpenAIEmbeddingRequest) => {
+      request.signal?.addEventListener("abort", cancelledAtAdapter, { once: true });
+      return pending;
+    });
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const handlerDeps = deps(
+      {
+        localKnowledgeEmbeddingRequest: requestEmbedding,
+        diagnostics: { record: (entry) => diagnostics.push(entry) },
+      },
+      true,
+    );
+    const content = "The user is building a product named Keiko";
+    const record = insertAccepted(vault, "mem-product", content);
+    storeEmbedding(vault, "mem-product", content);
+    const query = "Wie heißt mein Produkt?";
+    const gate = semanticRetrievalGateForText(handlerDeps, query, {});
+    const result = buildConversationRetrievalSignals(
+      handlerDeps,
+      vault,
+      query,
+      [record.scope],
+      Date.now(),
+      gate,
+      controller.signal,
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(requestEmbedding).toHaveBeenCalledTimes(1);
+      });
+      controller.abort();
+      expect(cancelledAtAdapter).toHaveBeenCalledTimes(1);
+      expect(requestEmbedding.mock.calls[0]?.[0].signal).toBe(controller.signal);
+      await expect(result).rejects.toThrow("memory retrieval aborted");
+      expect(diagnostics).toEqual([]);
+      const failure = sink.events.find((entry) => entry.op === "embedding.memory.failed");
+      const line = formatActivityLogProofLine(failure ?? {});
+      expect(JSON.parse(line)).toMatchObject({
+        op: "embedding.memory.failed",
+        errorKind: "cancelled",
+        failureKind: "cancelled",
+      });
+      expect(line).not.toContain(query);
+      expect(line).not.toContain(content);
+      expect(analyzeLogText(line).clusters).toContainEqual(
+        expect.objectContaining({
+          op: "embedding.memory.failed",
+          errorKind: "cancelled",
+          count: 1,
+        }),
+      );
+    } finally {
+      complete({ ok: true, value: { vector: vectorFor(query), modelId: EMBEDDING_MODEL } });
+      await result.catch(() => undefined);
+      resetServerLogger();
+      vault.close();
+    }
+  });
+
+  it("keeps the routine no-embedder fallback when the adapter fails without cancellation", async () => {
+    const memoryDir = join(tmp, "vault-query-adapter-timeout");
+    mkdirSync(memoryDir);
+    const vault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    try {
+      const content = "The user is building a product named Keiko";
+      const record = insertAccepted(vault, "mem-product", content);
+      storeEmbedding(vault, "mem-product", content);
+      const requestEmbedding = vi.fn((): Promise<OpenAIEmbeddingOutcome> =>
+        Promise.resolve({ ok: false, kind: "timeout" }),
+      );
+      const diagnostics: ServerDiagnosticRecord[] = [];
+      const handlerDeps = deps(
+        {
+          localKnowledgeEmbeddingRequest: requestEmbedding,
+          diagnostics: { record: (entry) => diagnostics.push(entry) },
+        },
+        true,
+      );
+      const query = "Wie heißt mein Produkt?";
+      const result = await buildConversationRetrievalSignals(
+        handlerDeps,
+        vault,
+        query,
+        [record.scope],
+        Date.now(),
+        semanticRetrievalGateForText(handlerDeps, query, {}),
+      );
+      expect(requestEmbedding).toHaveBeenCalledTimes(1);
+      expect(result.semanticById).toBeUndefined();
+      expect(diagnostics).toMatchObject([
+        {
+          operation: "memory.retrieval.semantic-disabled",
+          code: "no-embedder",
+          diagnosticOutcome: "routine",
+        },
+      ]);
+    } finally {
       vault.close();
     }
   });
