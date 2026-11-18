@@ -51,7 +51,7 @@ Users who need the archive-first fallback may still download, extract, and open
 lifecycle. Reopening setup validates and launches an existing managed installation without
 replacing it. Governed in-app update remains the upgrade path.
 
-For workplaces that may not install anything, the release also carries the
+For workplaces that may not install anything, every stable `latest` release also carries the
 [standalone folder package](standalone-folder-package.md#download-from-a-release) of each desktop
 target (`keiko-<target>.standalone.zip`). It is a download for people, not an update input.
 

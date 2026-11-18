@@ -1279,12 +1279,23 @@ entry; a Stop adds its entry and then looks for the closing entry, so a Stop is 
 closing start and carried out while it still holds the lock, or is turned away, waits until that start has
 let go, takes the lock, closes it and stops Keiko under it (a lock held for 90 seconds makes the Stop
 say so and not act). While it waits it retries recording: a later start that wins the lock first
-records the Stop in its own lock and carries it out, and the waiting Stop does not act itself. A start writes its token
-to `system/keiko-npm-start-generation` under the lock only when its launch of Keiko succeeded (the command line ended with
-success). A spawn the system refused, a command line that refused before it opened anything and a failed start record nothing.
-A start that no longer owns its lock leaves the record alone, so a returning former owner never replaces a newer token. A Stop reads that record, and the owner tokens of the starts holding the lock,
-as it is pressed, before it asks the lock, and again after it took the lock. The record is read on both sides of the holder
-listing and the pair is read again when it changed in between. It does not act only when the record names a
+records the Stop in its own lock and carries it out, and the waiting Stop does not act itself. A lock a Stop takes is born
+closed: its `closing` entry is in the same rename as its owner entry, so no observer sees a Stop's owner entry as a start
+that is about to open Keiko. A start writes its token
+as `keiko-npm-start-generation-<token>` only when its launch of Keiko succeeded (the command line ended with
+success), twice: in the folder's `system/` and in Keiko's data folder, which every package folder of the account shares.
+A spawn the system refused, a command line that refused before it opened anything and a failed start record nothing.
+Each record is published whole by the owner-private publisher under a name of its own, so it never replaces another record.
+A start lists the existing records, checks that it still owns its lock, publishes its record, checks the lock again and only then
+removes the records it listed; a start that lost its lock at any point withdraws only its own record, so a returning former
+owner never displaces or removes a newer one. The newest record (by write time) is the generation. A Stop reads both records,
+and the owner tokens of the starts holding the lock,
+as it is pressed, before it asks the lock, and again after it took the lock. The records are read on both sides of the holder
+listing and read again when one changed in between. The data folder's record binds a delayed Stop to every package folder that
+uses the same data: a start of another folder that opened Keiko while the Stop waited is a start that came after it. A Stop
+cannot see the lock of another folder, so a start of another folder that held its lock at the press and finishes later is also
+taken for a later start (the Stop leaves Keiko open and asks to be pressed again). The re-read before the stop is dispatched
+is not atomic with the stop command across folders, because each folder's installation lock stays its own. It does not act only when a record names a
 start that was neither the one it saw nor one that held the lock when it was pressed (that start opened Keiko after the
 Stop); a start that held the lock at the press and finishes meanwhile came before the Stop, so the Stop still acts. It also
 does not act when closing the lock it took reports it is no longer its own. A start that lost its lock while closing it carries

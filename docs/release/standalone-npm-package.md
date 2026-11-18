@@ -101,11 +101,11 @@ closes it: a `Stop Keiko` that the lock accepted is carried out first, and one t
 lock closed is not recorded: it waits until that start has let go, takes the lock itself, closes it
 and only then stops the open Keiko, so no start opens Keiko between its decision and its effect and
 it can never stop the Keiko a later start opened (if the lock stays held for 90 seconds it says so
-and does not act). A start that has launched Keiko writes its token into `system/keiko-npm-start-generation`
-under the lock, in one rename, only when its command line ended with success, so Keiko really opened. A start whose command line
+and does not act). A lock a Stop takes is born closed (its closing entry arrives in the same rename), so a start that watches it never takes that Stop for a start that opens Keiko. A start that has launched Keiko writes its token as `keiko-npm-start-generation-<token>`
+only when its command line ended with success, so Keiko really opened, both in the folder's `system/` and in Keiko's data folder (`~/.keiko-standalone` by default), which every package folder of the account shares. Each record is published whole, owner-private, under a name of its own and only while the start owns its lock: it lists the records, checks the lock, publishes, checks the lock again and then removes the records it listed, so a start that lost its lock never displaces or removes a newer record. A Stop reads the data folder's record as well as the folder's, so a delayed Stop never stops the Keiko that a start of another package folder opened meanwhile (it says so and asks to be pressed again). A start whose command line
 the system refused to run, that refused at once (for example while another start is busy), or that failed records nothing, so it
 never makes a waiting Stop think Keiko was restarted. A start that no longer owns its lock, because another start took it over while
-its command line ran, leaves the record alone and never writes its own token over the newer one. The record outlives the lock. A Stop reads it as it is pressed, together with the starts that hold the lock at that moment,
+its command line ran, leaves the record alone and never writes its own token over the newer one. The record outlives the lock. A Stop reads the records as it is pressed, together with the starts that hold the lock at that moment,
 before it asks the lock, and again once it holds the lock. The Stop reads the record on both sides of the lock listing and reads
 them again when the record changed in between, so a start that finishes while the Stop looks is never taken for a later one: if it names a start that neither the Stop saw nor held the lock at the press,
 that start opened Keiko after the Stop, and the Stop says so and leaves Keiko open (press Stop again to end it). A start that held

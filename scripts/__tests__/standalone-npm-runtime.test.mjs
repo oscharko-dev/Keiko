@@ -73,6 +73,7 @@ import {
   startArgs,
   startGeneration,
   stateDir,
+  stateGeneration,
   stop,
   teamConfig,
   tokenInput,
@@ -2297,6 +2298,151 @@ describe("the npm package start", () => {
         expect(start(root, nodeDir, env, run)).toBe(0);
         expect(run).toHaveBeenCalledOnce();
         expect(startGeneration(root)).toBe(`${replacement.token}\n`);
+      });
+
+      // The start records a folder or the shared data folder holds.
+      function recordsIn(dir) {
+        return readdirSync(dir).filter((name) => name.startsWith("keiko-npm-start-generation-"));
+      }
+
+      it("does not stop the Keiko that a start of another folder opened while its Stop waited", () => {
+        // Owner finding on PR #4464 (keiko-npm.mjs:1626): two extracted folders share one data
+        // folder. Stop A waited for A's closing lock, start B then opened Keiko and recorded its
+        // launch under B only, and the resumed Stop A read A's record alone and stopped B's Keiko.
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const a = stopFixture();
+        const b = installFixture();
+        installKeiko(b.root, `${lockfileDigest(b.root)}\n`);
+        const closing = acquireInstallLock(a.root);
+        closeInstallLock(closing);
+        const base = lockClock.sleep.getMockImplementation();
+        let started;
+        vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+          if (started === undefined && clock.now >= 30_000) {
+            removeInstallLock(closing);
+            // Folder B shares A's data folder: both are given the same environment.
+            started = start(b.root, b.nodeDir, a.env, a.run);
+          }
+          base(milliseconds, dir);
+        });
+
+        expect(stop(a.root, a.env, a.run)).toBe(0);
+        expect(started).toBe(0);
+        expect(a.commands).toEqual(["start"]);
+        // Folder A recorded nothing itself: only the shared record names B's start.
+        expect(startGeneration(a.root)).toBe("");
+        expect(stateGeneration(a.state)).toBe(startGeneration(b.root));
+        expect(log).toHaveBeenCalledWith(
+          expect.stringMatching(/^Keiko was started again while Stop/u),
+        );
+      });
+
+      it("stops Keiko when no start of another folder came while its Stop waited", () => {
+        quiet();
+        const a = stopFixture();
+        const closing = acquireInstallLock(a.root);
+        closeInstallLock(closing);
+        const base = lockClock.sleep.getMockImplementation();
+        vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+          if (clock.now >= 30_000) removeInstallLock(closing);
+          base(milliseconds, dir);
+        });
+
+        expect(stop(a.root, a.env, a.run)).toBe(0);
+        expect(a.commands).toEqual(["stop"]);
+      });
+
+      it("keeps one owner-private start record per folder and in the shared data folder", () => {
+        quiet();
+        const { root, nodeDir, env, state, run } = stopFixture();
+
+        expect(start(root, nodeDir, env, run)).toBe(0);
+        expect(start(root, nodeDir, env, run)).toBe(0);
+
+        expect(recordsIn(join(root, "system"))).toHaveLength(1);
+        expect(recordsIn(state)).toHaveLength(1);
+        expect(stateGeneration(state)).toBe(startGeneration(root));
+        expect(startGeneration(root)).toMatch(/^\d+-[0-9a-f]+\n$/u);
+        expect(readdirSync(state).filter((name) => name.endsWith(".stage"))).toEqual([]);
+        if (process.platform !== "win32") {
+          expect(statSync(join(state, recordsIn(state)[0])).mode & 0o777).toBe(0o600);
+        }
+      });
+
+      it("leaves the newer record alone when the lock is lost between its check and its publication", () => {
+        // Audit of PR #4464 (thread M0FQ): the former owner checked that it still held the lock,
+        // lost it, and its rename then replaced the record the replacement had published.
+        quiet();
+        const { root } = stopFixture();
+        const former = acquireInstallLock(root);
+        const restrict = privateFileAccess.restrict;
+        let replacement;
+        vi.spyOn(privateFileAccess, "restrict").mockImplementation((path) => {
+          if (replacement === undefined) {
+            rmSync(installLockPath(root), { recursive: true, force: true });
+            replacement = acquireInstallLock(root);
+            recordStartLaunch(root, replacement);
+            removeInstallLock(replacement);
+          }
+          restrict(path);
+        });
+
+        expect(recordStartLaunch(root, former)).toBe(false);
+        expect(replacement).toBeDefined();
+        expect(startGeneration(root)).toBe(`${replacement.token}\n`);
+        expect(recordsIn(join(root, "system"))).toEqual([
+          `keiko-npm-start-generation-${replacement.token}`,
+        ]);
+      });
+
+      it("withdraws its own record when the lock is lost while the record is published", () => {
+        quiet();
+        const { root } = stopFixture();
+        const former = acquireInstallLock(root);
+        const restrict = privateFileAccess.restrict;
+        let taken = false;
+        vi.spyOn(privateFileAccess, "restrict").mockImplementation((path) => {
+          if (!taken) {
+            taken = true;
+            rmSync(installLockPath(root), { recursive: true, force: true });
+            acquireInstallLock(root);
+          }
+          restrict(path);
+        });
+
+        expect(recordStartLaunch(root, former)).toBe(false);
+        expect(taken).toBe(true);
+        expect(recordsIn(join(root, "system"))).toEqual([]);
+        expect(startGeneration(root)).toBe("");
+      });
+
+      it("never shows a Stop's lock as a start that is about to open Keiko", () => {
+        // Audit of PR #4464 (thread GMvg): a Stop created its owner entry and its closing entry in
+        // two steps, so a start that watched the lock between them took the Stop's renewing entry
+        // for a start that opens Keiko, said so and exited 0 although nobody was going to open it.
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const { root, nodeDir, env, commands, run } = stopFixture();
+        const closing = acquireInstallLock(root);
+        closeInstallLock(closing);
+        const base = lockClock.sleep.getMockImplementation();
+        vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+          if (clock.now >= 30_000) removeInstallLock(closing);
+          base(milliseconds, dir);
+        });
+        let nested;
+        lockRenewal.start.mockImplementation(() => {
+          // The Stop's lock was just published and no later step has closed it yet.
+          nested ??= start(root, nodeDir, env, run);
+          return () => undefined;
+        });
+
+        expect(stop(root, env, run)).toBe(0);
+        expect(nested).toBe(1);
+        expect(commands).toEqual(["stop"]);
+        expect(log).not.toHaveBeenCalledWith(
+          expect.stringMatching(/^Another start of this folder/u),
+        );
+        expect(log).toHaveBeenCalledWith(expect.stringMatching(/^Keiko is still being closed/u));
       });
     });
 

@@ -26,7 +26,7 @@ import {
   renameSync,
   rmdirSync,
   rmSync,
-  writeFileSync,
+  statSync,
   writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -49,11 +49,15 @@ const STATE_DIR_NAME = ".keiko-standalone";
 // process adds `npm-<pid>-<random>` while it installs and renews only that entry. A start that is about to let go of the lock adds
 // `closing-<pid>-<random>` first: from then on no Stop is accepted by that lock.
 const INSTALL_LOCK = ["system", "keiko-npm-install.lock"];
-// The start that opened Keiko last leaves its token here, written under the lock once its launch
-// of Keiko really happened (the CLI was spawned) and replaced in one rename. The lock is gone once
-// the start let go; this record is not, so a Stop that waited for the lock can tell that another
-// start opened Keiko meanwhile. A start whose launch never happened records nothing.
-const START_GENERATION = ["system", "keiko-npm-start-generation"];
+// The start that opened Keiko last leaves its token as `keiko-npm-start-generation-<token>`,
+// written once its launch of Keiko really happened (the CLI was spawned) and only while it still
+// holds its lock. The lock is gone once the start let go; the record is not, so a Stop that waited
+// for the lock can tell that another start opened Keiko meanwhile. A start whose launch never
+// happened records nothing. The record lives in two places: this folder's `system/`, and Keiko's
+// data folder, which every package folder of the account shares, so a Stop of one folder also sees
+// a start of another folder that uses the same data.
+const GENERATION_PREFIX = "keiko-npm-start-generation-";
+const GENERATION_DIR = "system";
 // A Stop that acts while only npm of an ended start holds the lock holds no lock of its own: it
 // leaves `keiko-npm-stop-handoff-<pid>-<random>` in system/ for the time its stop runs, and every
 // start waits for such an entry (whose process runs) before it opens Keiko.
@@ -654,8 +658,10 @@ function renameRetrying(from, to, taken = () => false) {
   throw failure;
 }
 
-// The lock appears in one rename and already holds its owner, so no start finds it empty.
-function publishLock(dir, pause) {
+// The lock appears in one rename and already holds its owner, so no start finds it empty. A lock
+// taken to carry out a Stop appears closed as well: its closing entry is in the same rename, so no
+// observer ever sees that Stop's owner entry as a start that is about to open Keiko.
+function publishLock(dir, pause, closing) {
   const token = lockToken();
   const candidate = `${dir}.${token}.candidate`;
   mkdirSync(candidate, { mode: 0o700 });
@@ -665,6 +671,7 @@ function publishLock(dir, pause) {
   } finally {
     closeSync(fd);
   }
+  if (closing) closeSync(openSync(join(candidate, `closing-${token}`), "wx", 0o600));
   pause("publish");
   try {
     return renameRetrying(candidate, dir, () => existsSync(dir)) ? { dir, token } : undefined;
@@ -677,9 +684,10 @@ function publishLock(dir, pause) {
  * Makes this start the folder's one installer and returns its lock, or undefined while another
  * start installs. A lock whose start no longer runs (it crashed or was closed) is cleared and
  * taken; of two starts that find it so, one takes it. `pause` names each step at which another
- * start may run, so a test can let one run there.
+ * start may run, so a test can let one run there. With `closing` the lock is born closed, as a Stop
+ * takes it.
  */
-export function acquireInstallLock(root, pause = () => undefined) {
+export function acquireInstallLock(root, pause = () => undefined, { closing = false } = {}) {
   const dir = installLockPath(root);
   mkdirSync(dirname(dir), { recursive: true });
   removeLockLeftovers(dirname(dir));
@@ -692,7 +700,7 @@ export function acquireInstallLock(root, pause = () => undefined) {
       pause("clear");
       clearStaleLock(dir, entries);
     }
-    const lock = publishLock(dir, pause);
+    const lock = publishLock(dir, pause, closing);
     if (lock !== undefined) {
       lock.stopRenewing = lockRenewal.start(join(dir, ownerEntryName(lock)));
       return lock;
@@ -1268,35 +1276,81 @@ function reportRunning() {
   );
 }
 
-/**
- * The token of the start that opened Keiko last, or "" when none did. It outlives the lock, so a
- * Stop that waited for the lock can tell that a start opened Keiko meanwhile.
- */
-export function startGeneration(root) {
+// The records of `dir`, in the order they were written (the newest last).
+function generationRecords(dir) {
+  let names;
   try {
-    return readFileSync(join(root, ...START_GENERATION), "utf8");
+    names = readdirSync(dir);
   } catch (error) {
-    if (error?.code === "ENOENT") return "";
+    if (error?.code === "ENOENT") return [];
     throw error;
   }
+  const written = [];
+  for (const name of names.filter((entry) => entry.startsWith(GENERATION_PREFIX))) {
+    try {
+      written.push({ name, at: statSync(join(dir, name)).mtimeMs });
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+  }
+  return written
+    .sort((a, b) => a.at - b.at || a.name.localeCompare(b.name))
+    .map(({ name }) => name);
 }
 
-// Written under the lock once the start's launch of Keiko happened, in one rename: a reader sees
-// the previous token or this one, never a partial file. A start that no longer owns the lock
-// generation it published (a replacement start took it over while its command line ran) leaves
-// the record alone, so a returning former owner never puts its token over a newer one. Returns
-// whether the record was written.
-export function recordStartLaunch(root, lock) {
-  if (heldEntries(lock) === undefined) return false;
-  const target = join(root, ...START_GENERATION);
-  const temporary = `${target}.${lock.token}.tmp`;
-  try {
-    writeFileSync(temporary, `${lock.token}\n`, { mode: 0o600 });
-    renameSync(temporary, target);
-  } finally {
-    rmSync(temporary, { force: true });
+// The token of the newest record of `dir`, or "" when none exists.
+function newestGeneration(dir) {
+  for (const name of generationRecords(dir).reverse()) {
+    try {
+      return readFileSync(join(dir, name), "utf8");
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
   }
+  return "";
+}
+
+/**
+ * The token of the start that opened Keiko last in this folder, or "" when none did. It outlives
+ * the lock, so a Stop that waited for the lock can tell that a start opened Keiko meanwhile.
+ */
+export function startGeneration(root) {
+  return newestGeneration(join(root, GENERATION_DIR));
+}
+
+/** The same for every package folder that uses the data folder `state`. */
+export function stateGeneration(state) {
+  return newestGeneration(state);
+}
+
+// Publishes the record of the start that holds `lock` in `dir` and returns whether it did. The
+// record has a name of its own, so it never replaces another one, and only records that were there
+// before the lock was checked are removed, which makes them older than this start's lock
+// generation. The records are listed first, the lock checked second, the record published third and
+// the lock checked again: a start that lost its lock at any point leaves the newer record of its
+// replacement alone and withdraws only its own.
+function publishLaunchRecord(dir, lock) {
+  const own = `${GENERATION_PREFIX}${lock.token}`;
+  const earlier = generationRecords(dir).filter((name) => name !== own);
+  if (heldEntries(lock) === undefined) return false;
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  publishPrivateFile(join(dir, own), `${lock.token}\n`);
+  if (heldEntries(lock) === undefined) {
+    rmSync(join(dir, own), { force: true });
+    return false;
+  }
+  for (const name of earlier) rmSync(join(dir, name), { force: true });
   return true;
+}
+
+// Written once the start's launch of Keiko happened: in this folder and, when `state` names it, in
+// the data folder the package folders of the account share. Each record is published whole under
+// its own name by the owner-private publisher and only while the start owns the lock generation it
+// published, so a returning former owner never displaces what a replacement start recorded.
+// Returns whether the start's records were written.
+export function recordStartLaunch(root, lock, state = undefined) {
+  if (!publishLaunchRecord(join(root, GENERATION_DIR), lock)) return false;
+  return state === undefined || publishLaunchRecord(state, lock);
 }
 
 // While it holds the lock, this start installs Keiko and opens it, unless a Stop came first.
@@ -1309,7 +1363,7 @@ function installThenOpen(root, nodeDir, env, run, lock, args) {
   // waits. A launch the system refused, or one the command line refused before it opened anything
   // (its lifecycle was busy), started nothing, and a failed one leaves it uncertain: none of them
   // may make an earlier Stop look as if Keiko had been started again.
-  if (launch.spawned && launch.code === 0) recordStartLaunch(root, lock);
+  if (launch.spawned && launch.code === 0) recordStartLaunch(root, lock, stateDir(env));
   return { outcome: "opened", code: launch.code };
 }
 
@@ -1576,11 +1630,11 @@ function reportStopRecorded() {
 // this Stop must not act, or it would end the Keiko that start just reported running.
 function waitForStopLock(root) {
   const deadline = lockClock.now() + STOP_LOCK_WAIT_MS;
-  let lock = acquireInstallLock(root);
+  let lock = acquireInstallLock(root, undefined, { closing: true });
   while (lock === undefined && lockClock.now() < deadline) {
     if (requestStop(root)) return { recorded: true };
     lockClock.sleep(LOCK_OBSERVE_STEP_MS, installLockPath(root));
-    lock = acquireInstallLock(root);
+    lock = acquireInstallLock(root, undefined, { closing: true });
   }
   return { lock, recorded: false };
 }
@@ -1599,14 +1653,22 @@ function reportStartCameAfterStop() {
   );
 }
 
-// What a Stop saw when it was pressed: the start record, and the starts that held the lock then.
+// The two start records a Stop is bound to: this folder's and the data folder's, which every
+// package folder using the same data shares.
+function readRecords(root, state) {
+  return { folder: startGeneration(root), shared: stateGeneration(state) };
+}
+
+// What a Stop saw when it was pressed: the start records, and the starts that held the lock then.
 // A start that held the lock at that moment came before the Stop, whenever it finished, so only a
-// record that names neither the one seen nor a holder seen belongs to a start that came after.
-// The two reads must agree: a start that records its launch and lets go of the lock between them
-// would show the earlier record and no holder, and look like a start that came after the Stop. The
-// reads are repeated until the record is the same on both sides of the holder listing.
-function observeStart(root, pause = () => undefined) {
-  let generation = startGeneration(root);
+// record that names neither the one seen nor a holder seen belongs to a start that came after. The
+// data folder's record binds the Stop to the starts of every folder that uses it: a start of
+// another package folder that opened Keiko while the Stop waited came after it. The reads must
+// agree: a start that records its launch and lets go of the lock between them would show the
+// earlier record and no holder, and look like a start that came after the Stop. The reads are
+// repeated until both records are the same on both sides of the holder listing.
+function observeStart(root, state, pause = () => undefined) {
+  let records = readRecords(root, state);
   for (let attempt = 0; attempt < OBSERVE_ATTEMPTS; attempt += 1) {
     pause("observe");
     const holders = new Set(
@@ -1615,16 +1677,21 @@ function observeStart(root, pause = () => undefined) {
         .filter((match) => match?.[1] === "owner")
         .map((match) => `${match[2]}-${match[3]}`),
     );
-    const after = startGeneration(root);
-    if (after === generation) return { generation, holders };
-    generation = after;
+    const after = readRecords(root, state);
+    if (after.folder === records.folder && after.shared === records.shared) {
+      return { records, holders, state };
+    }
+    records = after;
   }
-  return { generation, holders: new Set([generation.trim()]) };
+  return { records, holders: new Set([records.folder.trim(), records.shared.trim()]), state };
 }
 
 function startCameAfter(root, seen) {
-  const current = startGeneration(root);
-  return current !== seen.generation && !seen.holders.has(current.trim());
+  const later = (current, before) => current !== before && !seen.holders.has(current.trim());
+  return (
+    later(startGeneration(root), seen.records.folder) ||
+    later(stateGeneration(seen.state), seen.records.shared)
+  );
 }
 
 // A Stop the lock turned away (its start is closing) acts under the lock itself: it waits until
@@ -1725,7 +1792,7 @@ export function stop(root, env, run = spawnSync, pause = () => undefined) {
   // The start record and the starts holding the lock as this Stop was pressed, read before it asks
   // the lock: a start that opens Keiko while the lock answers, or later while the Stop waits, and
   // that was not holding the lock now, came after this Stop.
-  const seen = observeStart(root, pause);
+  const seen = observeStart(root, state, pause);
   if (requestStop(root)) {
     reportStopRecorded();
     return 0;

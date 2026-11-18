@@ -111,8 +111,8 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 
 ## Stability notes
 
-- 1.5.3: root exports and CLI entrypoints remain stable. Every stable release carries the standalone
-  folder package of each desktop target as a release asset: `keiko-macos-arm64.standalone.zip`,
+- 1.5.3: root exports and CLI entrypoints remain stable. Every stable `latest` release carries the
+  standalone folder package of each desktop target as a release asset: `keiko-macos-arm64.standalone.zip`,
   `keiko-macos-x64.standalone.zip` and `keiko-windows-x64.standalone.zip`. The npm folder package is
   not a release asset; an administrator builds it from the published release as described in
   [the npm folder package guide](release/standalone-npm-package.md#build-a-package). The Jira
