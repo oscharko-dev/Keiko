@@ -1249,7 +1249,9 @@ replaced from the environment. A spelling npm does not read (`REGISTRY=`), a lis
 too, since npm would ignore each of them and ask the public registry. Each attempt gets its own npm
 cache `npm-cache-<random>` in the state directory, removed when it ends; npm's log lies in
 `npm-logs` there, which must be a real folder of the person's account inside the state directory:
-a link, a file or another account's folder is refused before npm writes. The start sets both on
+a link, a file or another account's folder is refused before npm writes, while one that another
+package folder's start sharing the state directory created a moment before (`EEXIST`) is checked
+and used. The start sets both on
 npm's command line (`--cache`, `--logs-dir`), which no
 inherited `npm_config_*` variable and no `.npmrc` overrides, so npm writes nothing else outside the
 folder. The state directory lies in the home folder, created owner-private as Keiko does; a
@@ -1259,12 +1261,22 @@ the owner entry of its start already inside, naming when it was written, so no s
 empty. A lock whose start no longer runs is cleared entry by entry and only then removed, so of two
 starts that find it so one takes it. A process number alone does not prove that a start still runs,
 because the system reuses the numbers of ended processes (Windows soon after), so an owner written
-before the computer started (ten minutes of clock correction aside) or more than an hour ago no
-longer holds the lock; a start whose lock was taken over leaves the new lock alone when it ends.
-Renames of the lock folder are retried while Windows holds a passing handle in it. npm's own process
-adds an owner entry of its own when it loads (`--import` of the launcher module with the lock
-folder as a query, which only adds that entry and removes it at exit), so a start that ends while
-npm still installs leaves the lock held until that npm ends. Every start holds
+before the computer started (ten minutes of clock correction aside) or last renewed more than an
+hour ago no longer holds the lock; a start whose lock was taken over leaves the new lock alone when
+it ends. Renames of the lock folder are retried while Windows holds a passing handle in it. npm's
+own process adds an owner entry of its own when it loads (`--import` of the launcher module with
+the lock folder and the start's owner entry as a query, which only holds the lock), so a start that
+ends while npm still installs leaves the lock held until that npm ends. While npm runs, its process
+renews its own entry and the start's every five minutes on a timer that never keeps npm running,
+so an installation longer than the hour keeps its lock; at exit it renews the start's entry once
+more and removes its own, so the lock passes back to the start until Keiko is open. A renewal only
+rewrites an entry still in the lock, never recreates one that went with a release or takeover, and
+accepts no name outside the lock; a failed renewal is said once and never ends npm. An entry npm
+cannot create (other than a lock already gone) ends npm with the error code before it installs.
+The lockfile check leaves to npm an optional package whose `engines` npm evaluates, except the
+platform's Coding runtime, since only npm can tell whether this Node.js meets a version range. The
+export names the gateway loader's own key variables: any value that is not empty counts, and a model
+id maps to `KEIKO_MODEL_<ID>_API_KEY` UTF-16 code unit by code unit. Every start holds
 the lock until Keiko is open, also one that installs nothing. `Stop Keiko` meanwhile adds its entry
 to the lock; the start releases the lock in one rename, reads the entry there and stops Keiko, also
 one that reported a failure as it opened, or does not open it when the Stop came first. A Stop that

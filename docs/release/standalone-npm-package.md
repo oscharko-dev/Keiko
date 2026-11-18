@@ -51,7 +51,8 @@ change: no dry run, no lockfile-only run, no global installation, the hoisted la
 production, optional and peer package (an inherited `omit=optional` would leave out the Coding
 runtime). After npm ends successfully, the start checks that every package the lockfile names for
 this computer is installed in its version; if one is missing, it records nothing as installed,
-names the package and keeps Keiko closed, so the next start installs again.
+names the package and keeps Keiko closed, so the next start installs again. An optional package
+with `engines` npm may leave out for this Node.js is not counted, except the Coding runtime.
 
 Before npm runs, the start refuses an `npm-shrinkwrap.json` in the folder, which npm would install
 instead of `package-lock.json`, and a `node_modules` that is a link, a junction, a file or another
@@ -72,7 +73,8 @@ registry.
 Each installation gets its own npm cache, `.keiko-standalone/npm-cache-<random>`, which is removed
 when it ends; an npm cache that already exists there is never touched. npm's log lies in
 `.keiko-standalone/npm-logs`, and a failed installation names its log; an `npm-logs` that is a
-link, a file or another account's folder is refused before npm writes. Both are set on npm's command
+link, a file or another account's folder is refused before npm writes; one that the start of another
+package folder sharing the data folder made a moment before is used. Both are set on npm's command
 line so that no `npm_config_*` variable moves them. Keiko's data folder is `.keiko-standalone` in the
 person's user folder, the same data folder as the folder package, so replacing the folder keeps
 chats, settings and credentials. A `KEIKO_STATE_DIR` outside the user folder is refused before
@@ -85,10 +87,14 @@ whether Keiko opened. Every start keeps the folder's installation lock
 meanwhile is recorded in that lock: the start then does not open Keiko, or stops it again right
 after it opened, also when Keiko reported a failure as it opened. A `Stop Keiko` after that stops
 the open Keiko as usual. A lock whose start was closed or crashed is taken over by the next start:
-its process no longer runs, or the lock was written before the computer started or more than an
-hour ago, since the system gives an ended start's process number to new processes. npm's own
-process holds the lock as well while it installs, so a start window closed during an installation
-leaves the lock to that npm until it ends, and no second npm installs beside it. Each start and
+its process no longer runs, or the lock was written before the computer started or last renewed
+more than an hour ago, since the system gives an ended start's process number to new processes.
+npm's own process holds the lock as well while it installs and renews it every five minutes, its
+own entry and that of the start that runs it, so an installation that takes longer than an hour
+keeps its lock, and a start window closed during an installation leaves the lock to that npm until
+it ends; no second npm installs beside it. When npm ends, the start's entry is renewed once more,
+so the start keeps the lock until Keiko is open. A lock npm cannot hold ends npm with the reason
+before it installs anything. Each start and
 stop says how it ended. A later start installs again when the lockfile changed, an earlier
 installation did not finish, the installation record `node_modules/.keiko-npm-installed` is
 missing or Keiko's command line is not installed, for example after `node_modules` was deleted.

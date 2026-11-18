@@ -116,15 +116,59 @@ function appliesToWrites(value: string): boolean {
 type Translate = ReturnType<typeof useTranslate>;
 
 /**
- * A field's name, with its id when the name alone does not name exactly this field by the gate's
- * rule: Jira can return several fields of one name, and the id tells which one governs writes.
+ * Each field's label: its name, with its id when the name alone does not name exactly this field by
+ * the gate's rule (Jira can return several fields of one name, and the id tells which one governs
+ * writes) or when another field would carry the very same final label (a field whose Jira name is
+ * itself `Team (customfield_10010)`). Every field in a collision gets its id until the labels are
+ * unique; a unique label keeps the plain name.
  */
+function fieldLabels(fields: readonly JiraTemplateFieldOption[]): ReadonlyMap<string, string> {
+  const withId = new Set<string>();
+  for (const field of fields) {
+    const named = resolveJiraTemplateFieldIds(field.name, fields);
+    if (named.length !== 1 || named[0] !== field.id) withId.add(field.id);
+  }
+  const labelOf = (field: JiraTemplateFieldOption): string =>
+    withId.has(field.id) ? `${field.name} (${field.id})` : field.name;
+  // Each round adds the id to the plain-named holders of a shared label; ids are unique, so the
+  // rounds are bounded by the number of fields.
+  for (let round = 0; round <= fields.length; round += 1) {
+    const grown = collidingPlainIds(fields, labelOf, withId);
+    if (grown.length === 0) break;
+    for (const id of grown) withId.add(id);
+  }
+  return new Map(fields.map((field) => [field.id, labelOf(field)]));
+}
+
+/** The ids of fields that share their final label with another field and do not show their id yet. */
+function collidingPlainIds(
+  fields: readonly JiraTemplateFieldOption[],
+  labelOf: (field: JiraTemplateFieldOption) => string,
+  withId: ReadonlySet<string>,
+): readonly string[] {
+  const holders = new Map<string, string[]>();
+  for (const field of fields) {
+    const label = labelOf(field);
+    holders.set(label, [...(holders.get(label) ?? []), field.id]);
+  }
+  return [...holders.values()]
+    .filter((ids) => ids.length > 1)
+    .flat()
+    .filter((id) => !withId.has(id));
+}
+
+const labelCache = new WeakMap<readonly JiraTemplateFieldOption[], ReadonlyMap<string, string>>();
+
 function fieldLabel(
   field: JiraTemplateFieldOption,
   fields: readonly JiraTemplateFieldOption[],
 ): string {
-  const named = resolveJiraTemplateFieldIds(field.name, fields);
-  return named.length === 1 && named[0] === field.id ? field.name : `${field.name} (${field.id})`;
+  let labels = labelCache.get(fields);
+  if (labels === undefined) {
+    labels = fieldLabels(fields);
+    labelCache.set(fields, labels);
+  }
+  return labels.get(field.id) ?? `${field.name} (${field.id})`;
 }
 
 /** Jira's name for the one field a written reference names, by the gate's rule; else the reference. */

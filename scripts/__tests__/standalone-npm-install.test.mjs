@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { clearInterval, setInterval } from "node:timers";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -30,19 +31,31 @@ const LAUNCHER = fileURLToPath(new URL("../standalone/npm/keiko-npm.mjs", import
 const VERSION = "1.2.3";
 const PUBLIC_TARBALL = `https://registry.npmjs.org/@oscharko-dev/keiko/-/keiko-${VERSION}.tgz`;
 // A registry that serves the stand-in tarball for every .tgz request and records every request.
+// Given a release file, it holds each tarball until that file exists.
 const REGISTRY_SOURCE = `
-import { appendFileSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
-const [tarball, log] = process.argv.slice(1);
+const [tarball, log, release] = process.argv.slice(1);
+function sendTarball(response) {
+  response.writeHead(200, { "content-type": "application/octet-stream" });
+  response.end(readFileSync(tarball));
+}
 const server = createServer((request, response) => {
   appendFileSync(log, request.url + "\\n");
-  if (request.url.endsWith(".tgz")) {
-    response.writeHead(200, { "content-type": "application/octet-stream" });
-    response.end(readFileSync(tarball));
+  if (!request.url.endsWith(".tgz")) {
+    response.writeHead(404);
+    response.end();
     return;
   }
-  response.writeHead(404);
-  response.end();
+  if (release === undefined) {
+    sendTarball(response);
+    return;
+  }
+  const wait = setInterval(() => {
+    if (!existsSync(release)) return;
+    clearInterval(wait);
+    sendTarball(response);
+  }, 20);
 });
 server.listen(0, "127.0.0.1", () => console.log(String(server.address().port)));
 `;
@@ -74,12 +87,36 @@ function nodeDirWithNpm(root) {
 }
 
 // What npm needs of the environment, and nothing of the person who runs the tests: no proxy, no
-// registry and no npm configuration of theirs.
+// registry and no npm configuration of theirs. npm also reads the global npmrc of the Node.js that
+// runs it, which here is the host's (an `offline=true` there would fail every install), so that one
+// is an empty file beside the home folder.
 function isolatedEnv(home, extra = {}) {
   const kept = Object.entries(process.env).filter(([name]) =>
     ["path", "systemroot", "temp", "tmp", "tmpdir", "comspec"].includes(name.toLowerCase()),
   );
-  return { ...Object.fromEntries(kept), HOME: home, USERPROFILE: home, ...extra };
+  const globalConfig = join(dirname(home), "empty-global-npmrc");
+  writeFileSync(globalConfig, "");
+  return {
+    ...Object.fromEntries(kept),
+    HOME: home,
+    USERPROFILE: home,
+    npm_config_globalconfig: globalConfig,
+    ...extra,
+  };
+}
+
+// Resolves once `check` holds, polling until `watch.stopped` is set.
+function once(check, watch) {
+  return new Promise((resolveCheck) => {
+    const poll = setInterval(() => {
+      if (watch.stopped) {
+        clearInterval(poll);
+      } else if (check()) {
+        clearInterval(poll);
+        resolveCheck();
+      }
+    }, 50);
+  });
 }
 
 function standInTarball(root, npmCli, cli) {
@@ -122,11 +159,18 @@ function writePackage(root, integrity, registry) {
 }
 
 // A loopback registry in its own process: spawnSync of npm blocks this test's event loop.
-async function startRegistry(tarball, log) {
+async function startRegistry(tarball, log, release) {
   writeFileSync(log, "");
   const child = spawn(
     process.execPath,
-    ["--input-type=module", "-e", REGISTRY_SOURCE, tarball, log],
+    [
+      "--input-type=module",
+      "-e",
+      REGISTRY_SOURCE,
+      tarball,
+      log,
+      ...(release === undefined ? [] : [release]),
+    ],
     {
       stdio: ["ignore", "pipe", "inherit"],
     },
@@ -141,6 +185,19 @@ async function startRegistry(tarball, log) {
 }
 
 describe("the first start with the real npm", () => {
+  it("reads no global npm configuration of the host", () => {
+    // Review finding on PR #4464: npm read the host Node.js installation's global npmrc.
+    const root = tempDir("keiko-npm-globalconfig-");
+    const read = spawnSync(process.execPath, [locateNpmCli(), "config", "get", "globalconfig"], {
+      cwd: root,
+      encoding: "utf8",
+      env: isolatedEnv(join(root, "home")),
+    });
+
+    expect(read.status).toBe(0);
+    expect(read.stdout.trim()).toBe(join(root, "empty-global-npmrc"));
+  });
+
   it("installs into the folder, asks only the folder's registry and leaves other trees alone", async () => {
     // Review findings on PR #4464 (P1): with npm 11, a folder above the package that declared it a
     // workspace became npm's project, and its CI install removed unrelated files; an inherited
@@ -194,7 +251,15 @@ describe("the first start with the real npm", () => {
     const started = join(root, "started.log");
     const cli = `require("node:fs").appendFileSync(${JSON.stringify(started)}, process.argv[2] + "\\n");`;
     const { tarball, integrity } = standInTarball(root, npmCli, cli);
-    const mirror = await startRegistry(tarball, join(root, "mirror.log"));
+    // The registry holds the tarball, so the first start's npm is still installing when the second
+    // start looks (review finding on PR #4464: without the hold the two may never overlap).
+    const release = join(root, "release-tarball");
+    const mirror = await startRegistry(tarball, join(root, "mirror.log"), release);
+    const tarballRequests = () =>
+      mirror
+        .requests()
+        .split("\n")
+        .filter((line) => line.endsWith(".tgz"));
     const folder = join(root, "Keiko");
     writePackage(folder, integrity, mirror.url);
     // Two processes that each run the package's own launcher, with npm where the package keeps it.
@@ -205,27 +270,39 @@ describe("the first start with the real npm", () => {
     const env = isolatedEnv(join(root, "home"));
 
     const launch = () =>
-      new Promise((resolveRun) => {
+      new Promise((resolveRun, rejectRun) => {
         const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
           cwd: folder,
           env,
           stdio: ["ignore", "pipe", "pipe"],
         });
+        cleanups.push(() => child.kill());
         let output = "";
+        child.once("error", rejectRun);
         child.stdout.on("data", (chunk) => (output += String(chunk)));
         child.stderr.on("data", (chunk) => (output += String(chunk)));
         child.on("exit", (code) => resolveRun({ code, output }));
       });
-    const runs = await Promise.all([launch(), launch()]);
+    const runs = [launch(), launch()];
+    const watching = { stopped: false };
+    // One start ends while the other's npm waits for its tarball, or a second npm asks for one.
+    const firstEnded = await Promise.race([
+      Promise.race(runs),
+      once(() => tarballRequests().length > 1, watching).then(() => undefined),
+    ]);
+    watching.stopped = true;
+    const requestsWhileHeld = tarballRequests();
+    // No tarball has been served yet, so the other start had not finished installing.
+    const installedWhileHeld = existsSync(join(folder, "node_modules", ".keiko-npm-installed"));
+    writeFileSync(release, "");
+    const results = await Promise.all(runs);
 
-    expect(runs.map((run) => run.code)).toEqual([0, 0]);
-    const tarballRequests = mirror
-      .requests()
-      .split("\n")
-      .filter((line) => line.endsWith(".tgz"));
-    // npm ran once, or the second start found the first one's complete installation.
-    expect(tarballRequests).toHaveLength(1);
-    expect(readFileSync(started, "utf8").trim().split("\n").length).toBeGreaterThanOrEqual(1);
+    expect(firstEnded?.output).toMatch(/Another start of this folder is opening Keiko\./u);
+    expect(installedWhileHeld).toBe(false);
+    expect(requestsWhileHeld.length).toBeLessThanOrEqual(1);
+    expect(results.map((run) => run.code)).toEqual([0, 0]);
+    expect(tarballRequests()).toHaveLength(1);
+    expect(readFileSync(started, "utf8").trim().split("\n")).toHaveLength(1);
     expect(existsSync(join(folder, "system", "keiko-npm-install.lock"))).toBe(false);
   }, 120_000);
 });

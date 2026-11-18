@@ -574,13 +574,28 @@ export function editJiraTemplateForm(
 ): string {
   const updates = formUpdateLines(frontMatter, patch, binding);
   const state: RewriteState = { kept: [], replacingList: false };
-  for (const entry of textLines(frontMatter)) rewriteLine(entry, updates, state);
+  const { lines, tail } = splitTrailingEmpty(textLines(frontMatter));
+  for (const entry of lines) rewriteLine(entry, updates, state);
   const ending = /\r\n|\n|\r/u.exec(frontMatter)?.[0] ?? "\n";
   for (const line of updates.values()) if (line !== undefined) state.kept.push({ line, ending });
+  if (tail !== undefined) state.kept.push(tail);
   const { kept } = state;
   return kept
     .map((entry, index) => entry.line + (index === kept.length - 1 ? "" : entry.ending || ending))
     .join("");
+}
+
+/**
+ * A front matter that ends with a line ending splits into a final empty entry: new lines go before
+ * it, so they follow the last line directly instead of after a blank one.
+ */
+function splitTrailingEmpty(entries: readonly TextLine[]): {
+  readonly lines: readonly TextLine[];
+  readonly tail?: TextLine;
+} {
+  const last = entries.at(-1);
+  if (entries.length < 2 || last?.line !== "" || last.ending !== "") return { lines: entries };
+  return { lines: entries.slice(0, -1), tail: last };
 }
 
 interface RewriteState {

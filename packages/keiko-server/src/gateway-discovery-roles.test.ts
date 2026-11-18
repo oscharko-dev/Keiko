@@ -561,6 +561,29 @@ describe("reranker wiring from discovery", () => {
     expect(port.requests).toHaveLength(1);
   });
 
+  it("probes a shared reranker whose stored address differs from the submitted base, though both normalize alike", async () => {
+    // Review finding on PR #4464: `.../v1` and `.../v1/chat/completions` compare equal as a base
+    // identity, but the rerank request appends `/rerank` to the stored string, so they reach
+    // different endpoints. Only a byte-identical base may skip the probe.
+    const port = answeringRerankPort();
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, port);
+    const stored = "https://llm-gateway.example.com/v1/chat/completions";
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [{ modelId: "qwen-chat", baseUrl: stored, apiKey: "token" }],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        reranker: { modelId: "house-reranker", baseUrl: stored, apiKey: "token" },
+      }),
+      true,
+    );
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(port.requests.length).toBeGreaterThan(0);
+  });
+
   it("marks a reranker that shares the gateway credential, also one saved before the mark", async () => {
     const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
     deps.gatewayConfig?.set(

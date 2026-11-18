@@ -464,7 +464,7 @@ describe("Jira starter templates", () => {
     // different ids, so an operator could not tell which field would govern writes. Review finding
     // UyB (P1): a pick wrote that instance-local id, which names another field on another Jira. The
     // choices stay tellable apart; the field is written by the author, explicitly, as its id.
-    seedStore([]);
+    const store = seedStore([]);
     vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
     vi.mocked(jiraTemplates.fetchJiraTemplateOptions).mockImplementation((selection) => {
       if (selection.issueTypeId !== undefined)
@@ -526,6 +526,64 @@ describe("Jira starter templates", () => {
     );
     expect(add.queryByRole("option", { name: /customfield_10011/u })).toBeNull();
     expect(add.getByRole("option", { name: /Team \(customfield_10010\)/u })).toBeVisible();
+
+    // Saving stores the field the author chose, never the other same-named one.
+    fireEvent.click(dialog.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.saveMarkdownSkill).toHaveBeenCalledOnce());
+    const [stored] = store.all;
+    expect(stored?.body).toContain("customfield_10011");
+    expect(stored?.body).not.toContain("customfield_10010");
+  });
+
+  it("keeps every final field label unique when a Jira name already looks like a disambiguated one", async () => {
+    // Review finding on PR #4464: a third field named `Team (customfield_10010)` kept the very label
+    // the first two same-named fields were given, so two choices read alike again.
+    seedStore([]);
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+    vi.mocked(jiraTemplates.fetchJiraTemplateOptions).mockImplementation((selection) => {
+      if (selection.issueTypeId !== undefined)
+        return Promise.resolve({
+          kind: "details",
+          fields: [
+            { id: "customfield_10010", name: "Team", required: false },
+            { id: "customfield_10011", name: "Team", required: false },
+            { id: "customfield_10012", name: "Team (customfield_10010)", required: false },
+          ],
+          statuses: [],
+        });
+      if (selection.projectKey !== undefined)
+        return Promise.resolve({
+          kind: "types",
+          instanceId: "synthetic-instance",
+          issueTypes: [{ id: "1", name: "Aufgabe" }],
+        });
+      return Promise.resolve({ kind: "projects", projects: [{ key: "LAB", name: "Lab project" }] });
+    });
+    const dialog = within(await openDialog());
+    fireEvent.click(dialog.getByRole("button", { name: "Jira Issue" }));
+    const yaml = dialog.getByLabelText<HTMLTextAreaElement>("Metadata (YAML)");
+    fireEvent.change(yaml, {
+      target: {
+        value: yaml.value
+          .replace('project: ""', "project: LAB")
+          .replace("issueType: Task", "issueType: Aufgabe"),
+      },
+    });
+    fireEvent.click(dialog.getByText("Template rules"));
+    const picker = await dialog.findByRole(
+      "combobox",
+      { name: "Add required field" },
+      { timeout: 3000 },
+    );
+    await waitFor(() => expect(within(picker).getAllByRole("option").length).toBeGreaterThan(3));
+    const labels = within(picker)
+      .getAllByRole("option")
+      .map((option) => option.textContent)
+      .filter((text) => text?.includes("Team") === true);
+    expect(labels).toHaveLength(3);
+    expect(new Set(labels).size).toBe(3);
+    for (const id of ["customfield_10010", "customfield_10011", "customfield_10012"])
+      expect(labels.some((text) => text?.includes(`(${id})`))).toBe(true);
   });
 
   it("keeps the user's draft if the Pod is removed while confirming a switch", async () => {

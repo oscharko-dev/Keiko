@@ -15,6 +15,7 @@ import {
   closeSync,
   existsSync,
   fsyncSync,
+  ftruncateSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -29,6 +30,7 @@ import {
 } from "node:fs";
 import { homedir, uptime } from "node:os";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
+import { clearInterval, setInterval } from "node:timers";
 import { fileURLToPath, URL } from "node:url";
 
 const PACKAGE_PATH = ["node_modules", "@oscharko-dev", "keiko"];
@@ -50,12 +52,19 @@ const LOCK_ATTEMPTS = 8;
 const LOCK_CONTENDED = new Set(["EEXIST", "ENOTEMPTY", "EPERM", "EACCES", "EBUSY"]);
 const RENAME_ATTEMPTS = 40;
 const RENAME_RETRY_MS = 25;
-// The query parameter with which npm imports this file to hold the lock it installs under.
+// The query parameters with which npm imports this file to hold the lock it installs under, and to
+// keep the entry of the start that runs it.
 const HOLD_PARAMETER = "hold-install-lock";
+const KEEP_PARAMETER = "keep-install-lock-owner";
 // The system gives the number of an ended process to a new one, Windows soon after, so a running
 // process with the owner's number does not prove that its start still runs. An owner written
-// before the computer started, or longer ago than any installation takes, no longer holds the lock.
+// before the computer started, or last renewed more than an hour ago, no longer holds the lock.
 const LOCK_EXPIRES_AFTER_MS = 60 * 60 * 1000;
+// npm's process renews the lock's entries this often while it installs, so an installation that
+// takes longer than the expiry keeps its lock.
+const LOCK_RENEW_MS = 5 * 60 * 1000;
+// The optional Coding runtime of a platform, which `npm ci` must install whatever its `engines` say.
+const CODING_RUNTIME_PACKAGE = /(?:^|\/)node_modules\/@oscharko-dev\/keiko-coding-runtime-[^/]+$/u;
 // Wall-clock corrections after the computer started move its estimated start time.
 const BOOT_TOLERANCE_MS = 10 * 60 * 1000;
 
@@ -152,10 +161,14 @@ function ownFolderInside(path, container) {
  * a real folder of this account inside the data folder, never a link that leads elsewhere or a
  * folder of another account. Anything else is refused before npm runs.
  */
-export function ownedLogsDir(state) {
+export function ownedLogsDir(state, makeDir = mkdirSync) {
   const logsDir = npmLogsDir(state);
-  if (lstatSync(logsDir, { throwIfNoEntry: false }) === undefined) {
-    mkdirSync(logsDir, { mode: 0o700 });
+  try {
+    makeDir(logsDir, { mode: 0o700 });
+  } catch (error) {
+    // Already there, also when the start of another package folder sharing this data folder made
+    // it just now: whatever is there is checked below.
+    if (error?.code !== "EEXIST") throw error;
   }
   if (!ownFolderInside(logsDir, state)) {
     throw new LauncherRefusal(
@@ -409,9 +422,15 @@ function processAlive(pid) {
   }
 }
 
+/**
+ * How the lock tells whether a process with a number runs. Tests replace `alive`: the system may
+ * give the number of a process that just ended to a new one before a test looks.
+ */
+export const lockProcesses = { alive: processAlive };
+
 function pidAlive(text) {
   const pid = Number.parseInt(text, 10);
-  return Number.isInteger(pid) && pid > 0 && processAlive(pid);
+  return Number.isInteger(pid) && pid > 0 && lockProcesses.alive(pid);
 }
 
 function sleepSync(milliseconds) {
@@ -438,7 +457,7 @@ function lockEntries(dir) {
 
 /**
  * Whether an owner entry written at `writtenAt` can no longer belong to a running start: it was
- * written before the computer started, or longer ago than any installation takes.
+ * written before the computer started, or last renewed more than an hour ago.
  */
 export function ownerExpired(writtenAt, now = Date.now(), upMs = uptime() * 1000) {
   return writtenAt < now - upMs - BOOT_TOLERANCE_MS || now - writtenAt > LOCK_EXPIRES_AFTER_MS;
@@ -621,16 +640,26 @@ function forThisComputer(list, current) {
   return named.length === 0 || named.includes(current);
 }
 
+// Whether npm must install an optional package: npm leaves out one whose `engines` this Node.js or
+// npm does not meet, which only npm can evaluate. Such a package is required only when it is the
+// Coding runtime, whose versions match the folder's Node.js.
+function optionalRequired(lockPath, entry) {
+  return (
+    entry.optional !== true || entry.engines === undefined || CODING_RUNTIME_PACKAGE.test(lockPath)
+  );
+}
+
 // A package `npm ci` installs here: not a development package, and meant for this computer. One
 // restricted by its C library is left to npm, which can tell glibc from musl.
-function expectedHere(entry, platform, arch) {
+function expectedHere(lockPath, entry, platform, arch) {
   return (
     entry.dev !== true &&
     entry.link !== true &&
     entry.libc === undefined &&
     typeof entry.version === "string" &&
     forThisComputer(entry.os, platform) &&
-    forThisComputer(entry.cpu, arch)
+    forThisComputer(entry.cpu, arch) &&
+    optionalRequired(lockPath, entry)
   );
 }
 
@@ -656,7 +685,7 @@ export function missingFromInstallation(root, platform = process.platform, arch 
   const packages = isRecord(lock?.packages) ? lock.packages : {};
   return Object.entries(packages)
     .filter(([lockPath, entry]) => lockPath.startsWith("node_modules/") && isRecord(entry))
-    .filter(([, entry]) => expectedHere(entry, platform, arch))
+    .filter(([lockPath, entry]) => expectedHere(lockPath, entry, platform, arch))
     .filter(([lockPath, entry]) => installedVersion(root, lockPath) !== entry.version)
     .map(([lockPath]) =>
       lockPath.slice(lockPath.lastIndexOf("node_modules/") + "node_modules/".length),
@@ -676,20 +705,62 @@ function installedCompletely(root, logsDir) {
 /**
  * The arguments that let npm's own process hold the installation lock while it runs: npm imports
  * this file, which adds an owner entry for npm's process to the lock and removes it when npm exits.
- * A start that ends while npm still runs, killed alone, then leaves a lock that still holds.
+ * A start that ends while npm still runs, killed alone, then leaves a lock that still holds. `keep`
+ * names the owner entry of the start that runs npm, which npm's process renews with its own.
  */
-export function holdArgs(lockDir) {
+export function holdArgs(lockDir, keep) {
   const url = new URL(import.meta.url);
   url.search = "";
   url.searchParams.set(HOLD_PARAMETER, lockDir);
+  if (keep !== undefined) url.searchParams.set(KEEP_PARAMETER, keep);
   return ["--import", url.href];
 }
 
-/**
- * Adds an owner entry for this process to the installation lock `dir` and removes it when the
- * process exits. Without a lock there is nothing to keep: the start that runs npm holds none.
- */
-export function holdInstallLock(dir, onExit = (listener) => process.once("exit", listener)) {
+// Writes the current time into an owner entry that is still in the lock; false once it is gone,
+// so a lock released or taken over meanwhile is never recreated.
+function renewOwnerEntry(path) {
+  let fd;
+  try {
+    fd = openSync(path, "r+");
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+  try {
+    ftruncateSync(fd, 0);
+    writeAll(fd, `${String(Date.now())}\n`);
+  } finally {
+    closeSync(fd);
+  }
+  return true;
+}
+
+// Renews the entries still in the lock. It runs in npm's process, which must not end over it: a
+// failure is said once per hold and the entry left as it was, so its expiry still applies.
+function renewHeld(paths, failure) {
+  for (const path of paths) {
+    try {
+      renewOwnerEntry(path);
+    } catch (error) {
+      if (failure.reported) continue;
+      failure.reported = true;
+      say(
+        `Keiko could not renew its installation lock (${String(error?.code ?? "unknown")}). If the installation takes longer than an hour, another start may begin one beside it.`,
+        `Keiko konnte seine Installationssperre nicht erneuern (${String(error?.code ?? "unbekannt")}). Dauert die Installation laenger als eine Stunde, kann ein anderer Start daneben eine beginnen.`,
+      );
+    }
+  }
+}
+
+function renewalTimer(renew) {
+  const timer = setInterval(renew, LOCK_RENEW_MS);
+  // The renewal never keeps npm's process running.
+  timer.unref();
+  return () => clearInterval(timer);
+}
+
+// An owner entry this process creates in the lock `dir`, or undefined when no lock is there.
+function createOwnerEntry(dir) {
   const entry = join(dir, `owner-${lockToken()}`);
   let fd;
   try {
@@ -703,11 +774,50 @@ export function holdInstallLock(dir, onExit = (listener) => process.once("exit",
   } finally {
     closeSync(fd);
   }
-  onExit(() => rmSync(entry, { force: true }));
   return entry;
 }
 
-function runNpm(root, nodeDir, env, run) {
+/**
+ * Adds an owner entry for this process to the installation lock `dir`, renews it and the start's
+ * entry `keep` every few minutes while the process runs, and when it exits renews `keep` once more
+ * and removes its own: the lock holds as long as npm runs and then for the start that ran it.
+ * Without a lock there is nothing to keep: the start that runs npm holds none.
+ */
+export function holdInstallLock(dir, options = {}) {
+  const {
+    keep,
+    onExit = (listener) => process.once("exit", listener),
+    every = renewalTimer,
+  } = options;
+  const entry = createOwnerEntry(dir);
+  if (entry === undefined) return undefined;
+  // Only an owner entry of this lock, never another path.
+  const kept = LOCK_ENTRY.exec(keep ?? "")?.[1] === "owner" ? [join(dir, keep)] : [];
+  const failure = { reported: false };
+  const stopRenewing = every(() => renewHeld([entry, ...kept], failure));
+  onExit(() => {
+    stopRenewing();
+    renewHeld(kept, failure);
+    rmSync(entry, { force: true });
+  });
+  return entry;
+}
+
+// npm's process imports this file with the lock to hold (`holdArgs`); nothing else runs then. npm
+// must not install without its entry, so a lock it cannot hold ends npm with the reason.
+function holdFromImport(params) {
+  try {
+    holdInstallLock(params.get(HOLD_PARAMETER), { keep: params.get(KEEP_PARAMETER) ?? undefined });
+  } catch (error) {
+    say(
+      `Keiko could not hold its installation lock (${String(error?.code ?? "unknown")}), so npm does not install. Check the access rights of the folder "system", then start Keiko again.`,
+      `Keiko konnte seine Installationssperre nicht halten (${String(error?.code ?? "unbekannt")}), daher installiert npm nicht. Pruefe die Zugriffsrechte des Ordners "system" und starte Keiko dann erneut.`,
+    );
+    process.exit(1);
+  }
+}
+
+function runNpm(root, nodeDir, env, run, lock) {
   const npmCli = npmCliCandidates(nodeDir).find((candidate) => existsSync(candidate));
   if (npmCli === undefined) {
     say(
@@ -731,8 +841,9 @@ function runNpm(root, nodeDir, env, run) {
   // downloads are not needed again once the packages are in node_modules.
   const cacheDir = mkdtempSync(join(state, "npm-cache-"));
   try {
+    const keep = lock === undefined ? undefined : `owner-${lock.token}`;
     const args = [
-      ...holdArgs(installLockPath(root)),
+      ...holdArgs(installLockPath(root), keep),
       ...installArgs(npmCli, root, cacheDir, logsDir),
     ];
     const result = run(process.execPath, args, {
@@ -752,11 +863,14 @@ function runNpm(root, nodeDir, env, run) {
   return false;
 }
 
-/** Installs Keiko unless the last complete installation was of this lockfile; the caller holds the lock. */
-export function ensureInstalled(root, nodeDir, env, run = spawnSync) {
+/**
+ * Installs Keiko unless the last complete installation was of this lockfile; the caller holds
+ * `lock`, whose owner entry npm's process keeps renewed while it installs.
+ */
+export function ensureInstalled(root, nodeDir, env, run = spawnSync, lock = undefined) {
   const digest = lockfileDigest(root);
   if (installationCurrent(root, digest)) return true;
-  if (!runNpm(root, nodeDir, env, run)) return false;
+  if (!runNpm(root, nodeDir, env, run, lock)) return false;
   const fd = openSync(join(root, "node_modules", INSTALLED_MARKER), "w");
   try {
     writeAll(fd, `${digest}\n`);
@@ -815,7 +929,7 @@ function reportRunning() {
 
 // While it holds the lock, this start installs Keiko and opens it, unless a Stop came first.
 function installThenOpen(root, nodeDir, env, run, lock, args) {
-  if (!ensureInstalled(root, nodeDir, env, run)) return { outcome: "install-failed" };
+  if (!ensureInstalled(root, nodeDir, env, run, lock)) return { outcome: "install-failed" };
   if (stopRequested(lock.dir)) return { outcome: "cancelled" };
   return { outcome: "opened", code: runKeiko(root, args, env, run) };
 }
@@ -987,10 +1101,17 @@ function filledText(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-// The gateway's own name for a model's key variable: every character other than a letter or a digit
-// becomes `_`, then upper case.
+// Whether the gateway's loader takes a key from this environment value: any value that is not
+// empty, blanks included.
+function setInEnvironment(value) {
+  return typeof value === "string" && value.length > 0;
+}
+
+// The gateway's own name for a model's key variable: every UTF-16 code unit other than a letter or
+// a digit becomes `_`, then upper case. The expression has no `u` flag, as the loader's has none,
+// so a character outside the Basic Multilingual Plane becomes two `_` there and here alike.
 function modelKeyVariable(modelId) {
-  return `KEIKO_MODEL_${modelId.replaceAll(/[^A-Za-z0-9]/gu, "_").toUpperCase()}_API_KEY`;
+  return `KEIKO_MODEL_${modelId.replaceAll(/[^A-Za-z0-9]/g, "_").toUpperCase()}_API_KEY`;
 }
 
 // A block whose key Gateway Setup kept out of the file: no sealed key, no key in the file, and no
@@ -1007,8 +1128,8 @@ function keyOutsideFile(block) {
 // resolves it; undefined when its key is in the file or it needs none.
 function environmentKey(block, env, specific) {
   if (!keyOutsideFile(block)) return undefined;
-  if (filledText(env[specific])) return specific;
-  return filledText(env.KEIKO_DEFAULT_API_KEY) ? "KEIKO_DEFAULT_API_KEY" : undefined;
+  if (setInEnvironment(env[specific])) return specific;
+  return setInEnvironment(env.KEIKO_DEFAULT_API_KEY) ? "KEIKO_DEFAULT_API_KEY" : undefined;
 }
 
 /**
@@ -1340,9 +1461,8 @@ export async function runCommand(command, context = {}) {
   }
 }
 
-// npm's process imports this file with the lock to hold (`holdArgs`); nothing else runs then.
-const heldLock = new URL(import.meta.url).searchParams.get(HOLD_PARAMETER);
-if (heldLock !== null) holdInstallLock(heldLock);
+const holdParams = new URL(import.meta.url).searchParams;
+if (holdParams.has(HOLD_PARAMETER)) holdFromImport(holdParams);
 
 if (isEntryPoint(process.argv[1], import.meta.url)) {
   process.exitCode = await runCommand(process.argv[2]);

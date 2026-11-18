@@ -118,9 +118,11 @@ sees a setup dialog.
    Gateway Setup verified with the key from the named environment variable and writes
    `out/keiko-windows-x64.standalone-team.zip`: its models, its voice models and the reranker
    Gateway Setup wired on that connection, which it marks with
-   `"credentialOrigin": "gateway-connection"` (a reranker saved before that mark gets it when
-   Gateway Setup runs again). A sealed reference of any other provider or reranker, one with its own
-   address, header or key, is refused, so the team key never reaches another service. A key written
+   `"credentialOrigin": "gateway-connection"` (Gateway Setup adds that mark, also to a reranker
+   saved before it, only when it verifies that the reranker shares the gateway's address, header
+   and credential; a reranker with its own credential never gets it). A sealed reference of any
+   other provider or reranker, one with its own address, header or key, is refused, so the team
+   key never reaches another service. A key written
    into the file as `apiKey` is not replaced and not refused: it stays that connection's own key,
    so write a separate connection's key into the file that way. Every provider in the file must name
    its `modelId` and `baseUrl`: a package cannot rely on another computer's environment. A configuration that still refers to a

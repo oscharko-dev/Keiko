@@ -150,6 +150,17 @@ describe("guided Jira template metadata", () => {
     expect(appended).not.toMatch(/(?<!\r)\n/u);
   });
 
+  it("appends new lines directly after a front matter that ends with a line ending", () => {
+    for (const ending of ["\n", "\r\n"]) {
+      const text = VALID.join(ending) + ending;
+      const edited = editJiraTemplateForm(text, { requiredFields: ["Team"] });
+      expect(edited).not.toContain(`${ending}${ending}`);
+      expect(edited.startsWith(text)).toBe(true);
+      expect(edited.endsWith(ending)).toBe(true);
+      expect(edited).toContain(`requiredFields: ["Team"]`);
+    }
+  });
+
   it("leaves malformed or unrelated metadata to the source editor", () => {
     expect(readJiraTemplateForm("name: Example")).toBeUndefined();
     expect(readJiraTemplateForm([...VALID, 'project: ""'].join("\n"))).toBeUndefined();

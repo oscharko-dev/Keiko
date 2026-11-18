@@ -16,12 +16,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, URL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The two readers of the declaration: the CLI's (Windows gateway service setup) and the server's
 // (update preflight).
 import { managedOutsideApp } from "../../packages/keiko-cli/src/portable-management.ts";
+// The gateway's own loader, whose key variables the export must name alike.
+import { parseGatewayConfig } from "../../packages/keiko-model-gateway/dist/index.js";
 import {
   externallyManagedInstallMode,
   portableManagementFromEnv,
@@ -44,6 +46,7 @@ import {
   isEntryPoint,
   keikoCliPath,
   keikoEnv,
+  lockProcesses,
   lockfileDigest,
   main,
   missingFromInstallation,
@@ -51,6 +54,7 @@ import {
   npmCliCandidates,
   npmEnv,
   npmLogsDir,
+  ownedLogsDir,
   ownerExpired,
   publishPrivateFile,
   readHidden,
@@ -75,6 +79,7 @@ const tempRoots = [];
 
 afterEach(() => {
   vi.restoreAllMocks();
+  endedPids.clear();
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -138,8 +143,37 @@ function staleLock(root, pid, extra = [], writtenAt = "") {
   for (const name of extra) writeFileSync(join(dir, name), "");
 }
 
+const systemAlive = lockProcesses.alive;
+const endedPids = new Set();
+
+// The number of a process that ended. The system may give it to a new process before the lock
+// looks, Windows soon after, so the lock's probe is told it ended (review finding on PR #4464); a
+// number that runs again is a case of its own below.
 function endedPid() {
-  return spawnSync(process.execPath, ["-e", ""]).pid;
+  const pid = spawnSync(process.execPath, ["-e", ""]).pid;
+  endedPids.add(pid);
+  vi.spyOn(lockProcesses, "alive").mockImplementation(
+    (candidate) => !endedPids.has(candidate) && systemAlive(candidate),
+  );
+  return pid;
+}
+
+// A hold whose exit and renewal the test runs itself.
+function heldByTest(dir, keep) {
+  const hold = { renew: undefined, exit: undefined };
+  hold.entry = holdInstallLock(dir, {
+    keep,
+    onExit: (listener) => {
+      hold.exit = listener;
+    },
+    every: (renew) => {
+      hold.renew = renew;
+      return () => {
+        hold.renew = undefined;
+      };
+    },
+  });
+  return hold;
 }
 
 // What a run call asked for: npm's `ci` behind the arguments that let npm hold the lock, or Keiko's
@@ -377,6 +411,41 @@ describe("the npm package start", () => {
       expect(missingFromInstallation(root, "darwin", "arm64")).toEqual([]);
     });
 
+    it("leaves to npm an optional package whose engines it may not meet, but not the Coding runtime", () => {
+      // Audit of PR #4464: npm skips an optional package whose `engines` the folder's Node.js does
+      // not meet and exits 0; the check then refused every later start.
+      const root = packageRoot();
+      const runtime = "node_modules/@oscharko-dev/keiko-coding-runtime-darwin-arm64";
+      writeFileSync(
+        join(root, "package-lock.json"),
+        JSON.stringify({
+          lockfileVersion: 3,
+          packages: {
+            "node_modules/optional-engines": {
+              version: "1.0.0",
+              optional: true,
+              engines: { node: "<1" },
+            },
+            "node_modules/required-engines": { version: "1.0.0", engines: { node: ">=26" } },
+            [runtime]: {
+              version: "1.5.3",
+              optional: true,
+              os: ["darwin"],
+              cpu: ["arm64"],
+              engines: { node: ">=26" },
+            },
+            "node_modules/optional-plain": { version: "1.0.0", optional: true },
+          },
+        }),
+      );
+
+      expect(missingFromInstallation(root, "darwin", "arm64")).toEqual([
+        "required-engines",
+        "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
+        "optional-plain",
+      ]);
+    });
+
     it("refuses a manifest that cannot be read as not installed", () => {
       const root = lockedRoot();
       installPackage(root, "node_modules/@oscharko-dev/keiko", "1.5.3");
@@ -474,6 +543,25 @@ describe("the npm package start", () => {
         expect(ownedCaches(state)).toEqual([]);
       },
     );
+
+    it("uses the npm-logs folder that another package folder's start made a moment before", () => {
+      // Review finding on PR #4464: two package folders share the data folder but not their
+      // locks, and the second start's mkdir failed with EEXIST when the first had just made it.
+      const state = tempDir();
+      const raced = (path, options) => {
+        mkdirSync(path, options);
+        mkdirSync(path, options);
+      };
+
+      expect(ownedLogsDir(state, raced)).toBe(npmLogsDir(state));
+      // What the other start left there is still checked: a file is refused.
+      const other = tempDir();
+      const fileFirst = (path, options) => {
+        writeFileSync(path, "");
+        mkdirSync(path, options);
+      };
+      expect(() => ownedLogsDir(other, fileFirst)).toThrow(LauncherRefusal);
+    });
 
     it("refuses a data folder outside the home folder before npm or any folder is touched", () => {
       const { root, nodeDir } = installFixture();
@@ -924,23 +1012,117 @@ describe("the npm package start", () => {
 
       // The start that ran npm ended; npm's own entry still holds the lock.
       staleLock(root, endedPid());
-      const held = holdInstallLock(installLockPath(root), () => undefined);
+      const held = heldByTest(installLockPath(root)).entry;
       expect(acquireInstallLock(root)).toBeUndefined();
       expect(requestStop(root)).toBe(true);
       rmSync(held);
       expect(acquireInstallLock(root)).toBeDefined();
     });
 
+    it("tells npm which entry of the lock belongs to the start that runs it", () => {
+      // Review finding on PR #4464 (Major): npm's process renews that entry, so it must be the
+      // start's own, the one the lock holds while npm runs.
+      quiet();
+      const { root, nodeDir, env } = installFixture();
+      let owners;
+      const npm = fakeNpm(root, true, () => {
+        owners = lockOwners(root);
+      });
+      // npm installs; Keiko's own command opens it.
+      const run = (node, args, options) =>
+        args.includes("ci") ? npm.run(node, args, options) : { status: 0 };
+
+      expect(start(root, nodeDir, env, run)).toBe(0);
+      const [ci] = npm.calls;
+      const hold = new URL(ci.args[1]).searchParams;
+      expect(owners).toEqual([hold.get("keep-install-lock-owner")]);
+      expect(ci.args.slice(0, 2)).toEqual(
+        holdArgs(installLockPath(root), hold.get("keep-install-lock-owner")),
+      );
+    });
+
+    it("keeps the lock of an installation that runs longer than an hour", () => {
+      // Review finding on PR #4464 (Major): the lock expired an hour after it was written while
+      // npm still ran, and a second start ran `npm ci` beside it.
+      const { root } = installFixture();
+      const dir = installLockPath(root);
+      const lock = acquireInstallLock(root);
+      const startEntry = join(dir, `owner-${lock.token}`);
+      const hold = heldByTest(dir, `owner-${lock.token}`);
+      const longAgo = `${String(Date.now() - 2 * 60 * 60 * 1000)}\n`;
+      writeFileSync(startEntry, longAgo);
+      writeFileSync(hold.entry, longAgo);
+      // Neither entry was written within the hour: without renewal the lock is free.
+      expect(installerActive(root)).toBe(false);
+
+      hold.renew();
+      expect(installerActive(root)).toBe(true);
+      expect(acquireInstallLock(root)).toBeUndefined();
+
+      // npm ends after its hour as well: the start's entry is renewed once more, npm's goes, and
+      // the lock stays with the start until it releases it.
+      writeFileSync(startEntry, longAgo);
+      writeFileSync(hold.entry, longAgo);
+      hold.exit();
+      expect(hold.renew).toBeUndefined();
+      expect(lockOwners(root)).toEqual([`owner-${lock.token}`]);
+      expect(installerActive(root)).toBe(true);
+      expect(acquireInstallLock(root)).toBeUndefined();
+      expect(releaseInstallLock(lock)).toBe(false);
+      expect(acquireInstallLock(root)).toBeDefined();
+    });
+
+    it("renews only entries still in the lock and nothing outside it", () => {
+      quiet();
+      const { root } = installFixture();
+      const dir = installLockPath(root);
+      mkdirSync(dir, { recursive: true });
+      const outside = join(root, "system", "outside.txt");
+      writeFileSync(outside, "kept\n");
+      const gone = `owner-${String(process.pid)}-ab`;
+
+      // A start whose entry was taken over meanwhile does not get it back.
+      const hold = heldByTest(dir, gone);
+      hold.renew();
+      hold.exit();
+      expect(readdirSync(dir)).toEqual([]);
+      // A name that is no owner entry of this lock is never written.
+      const escaping = heldByTest(dir, "../outside.txt");
+      escaping.renew();
+      escaping.exit();
+      expect(readFileSync(outside, "utf8")).toBe("kept\n");
+      expect(readdirSync(dir)).toEqual([]);
+    });
+
+    it("says once that it cannot renew the lock and never ends npm over it", () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { root } = installFixture();
+      const dir = installLockPath(root);
+      // An owner entry that cannot be written: a folder of that name.
+      const unwritable = `owner-${String(process.pid)}-cd`;
+      mkdirSync(join(dir, unwritable), { recursive: true });
+      const hold = heldByTest(dir, unwritable);
+
+      expect(() => hold.renew()).not.toThrow();
+      expect(() => hold.renew()).not.toThrow();
+      expect(() => hold.exit()).not.toThrow();
+      expect(log.mock.calls.filter(([line]) => /could not renew/u.test(line))).toHaveLength(1);
+      expect(readdirSync(dir)).toEqual([unwritable]);
+    });
+
     it("adds npm's entry to the lock while npm runs and removes it when npm exits", () => {
       const { root } = installFixture();
       const dir = installLockPath(root);
       mkdirSync(dir, { recursive: true });
+      // The entry of the start that runs npm, written long ago.
+      const keep = `owner-${String(process.pid)}-ab`;
+      writeFileSync(join(dir, keep), "1\n");
       const child = spawnSync(
         process.execPath,
         [
-          ...holdArgs(dir),
+          ...holdArgs(dir, keep),
           "-e",
-          "process.stdout.write(JSON.stringify(require('node:fs').readdirSync(process.argv[1])))",
+          "process.stdout.write(JSON.stringify(require('node:fs').readdirSync(process.argv[1]).sort()))",
           dir,
         ],
         { encoding: "utf8" },
@@ -948,14 +1130,37 @@ describe("the npm package start", () => {
 
       expect(child.status).toBe(0);
       expect(JSON.parse(child.stdout)).toEqual([
+        keep,
         expect.stringMatching(new RegExp(`^owner-${String(child.pid)}-[0-9a-f]+$`, "u")),
       ]);
-      expect(readdirSync(dir)).toEqual([]);
+      // npm's entry went with npm, and the start's entry was renewed as npm ended.
+      expect(readdirSync(dir)).toEqual([keep]);
+      expect(Number(readFileSync(join(dir, keep), "utf8"))).toBeGreaterThan(Date.now() - 60_000);
       // Without a lock there is nothing to hold and nothing is created.
       rmSync(dir, { recursive: true });
-      expect(holdInstallLock(dir, () => undefined)).toBeUndefined();
+      expect(heldByTest(dir).entry).toBeUndefined();
       expect(existsSync(dir)).toBe(false);
     });
+
+    // Windows answers a path below a file with ENOENT, which means no lock to hold there.
+    it.skipIf(process.platform === "win32")(
+      "ends npm with the reason when it cannot hold the lock",
+      () => {
+        // Audit of PR #4464: a lock npm could not hold read as a network failure.
+        const { root } = installFixture();
+        const notAFolder = installLockPath(root);
+        writeFileSync(notAFolder, "");
+        const child = spawnSync(
+          process.execPath,
+          [...holdArgs(notAFolder), "-e", "process.stdout.write('installed')"],
+          { encoding: "utf8" },
+        );
+
+        expect(child.status).toBe(1);
+        expect(child.stdout).toMatch(/could not hold its installation lock \(ENOTDIR\)/u);
+        expect(child.stdout).not.toMatch(/installed/u);
+      },
+    );
 
     it("records no Stop in the lock of a start that no longer runs", () => {
       quiet();
@@ -1517,6 +1722,44 @@ describe("the administrator's access step", () => {
       expect(readToken).not.toHaveBeenCalled();
       expect(existsSync(target)).toBe(false);
     });
+
+    // The key variable the gateway's own loader reads for a model, recorded as it reads it.
+    function loaderKeyVariable(modelId) {
+      const read = [];
+      const env = new Proxy(
+        {},
+        {
+          get: (_target, name) => {
+            if (typeof name === "string") read.push(name);
+            return undefined;
+          },
+        },
+      );
+      try {
+        parseGatewayConfig({ providers: [{ modelId, baseUrl: "https://gw.example" }] }, env);
+      } catch (error) {
+        // A model without a key is refused after its variables were read.
+        expect(error).toBeInstanceOf(Error);
+      }
+      return read.find((name) => /^KEIKO_MODEL_.*_API_KEY$/u.test(name));
+    }
+
+    it.each(["chat-1", "café", "m😀"])(
+      "names the key variable of %s as the gateway reads it, a blank value included",
+      (modelId) => {
+        // Audit of PR #4464: the loader takes any value that is not empty and turns each UTF-16
+        // code unit into `_`; the export skipped blank values and turned an emoji into one `_`.
+        const variable = loaderKeyVariable(modelId);
+        const config = { providers: [{ modelId, baseUrl: "https://gw" }] };
+
+        expect(variable).toBeDefined();
+        expect(environmentKeys(config, { [variable]: " " })).toEqual([{ name: modelId, variable }]);
+        expect(environmentKeys(config, { KEIKO_DEFAULT_API_KEY: " " })).toEqual([
+          { name: modelId, variable: "KEIKO_DEFAULT_API_KEY" },
+        ]);
+        expect(environmentKeys(config, { [variable]: "", KEIKO_DEFAULT_API_KEY: "" })).toEqual([]);
+      },
+    );
 
     it("keeps exporting keys the file holds while an environment variable is set", () => {
       const env = { KEIKO_DEFAULT_API_KEY: "x", KEIKO_MODEL_CHAT_API_KEY: "y" };

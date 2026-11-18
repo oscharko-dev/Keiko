@@ -7484,7 +7484,10 @@ async function admitRerankerCandidates(
   if (owned === undefined) return admitDiscoveredRerankers(input, validationConfig, candidates, 0);
   const carried = rebasedReranker(input, owned);
   const candidateCount = candidates.length;
-  if (sameBaseUrlIdentity(owned.baseUrl, carried.baseUrl)) {
+  // Exact strings, not the base-URL identity: the rerank request appends `/rerank` to the stored
+  // string, so `.../v1` and `.../v1/chat/completions` compare equal as identities yet reach
+  // different endpoints (review finding on #4464).
+  if (owned.baseUrl === carried.baseUrl) {
     // Its own connection, or the gateway's endpoint unchanged (a credential rotation): nothing new
     // to verify — the model is hosted where it always was.
     return {
