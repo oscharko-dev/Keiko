@@ -25,7 +25,10 @@ import {
   unpinMemory,
 } from "./memory-api";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
-import { subscribeMemoryVaultViewChanges } from "./memory-vault-view-changes";
+import {
+  notifyCompletedChatForgets,
+  subscribeMemoryVaultViewChanges,
+} from "./memory-vault-view-changes";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -156,6 +159,33 @@ describe("memory consolidation API helpers", () => {
 describe("memory governance API helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("issues one removal for duplicate completed actions and leaves pending decisions alone", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeMemoryVaultViewChanges(listener);
+    const context = { enabled: true, text: "", memories: [], budget: { used: 0, tokens: 100 } };
+    const applied = {
+      kind: "forget" as const,
+      memoryId: "done",
+      requiresConfirmation: false,
+      forgotten: true,
+    };
+    try {
+      notifyCompletedChatForgets(undefined);
+      notifyCompletedChatForgets({
+        context,
+        actions: [
+          { ...applied, forgotten: false },
+          { ...applied, requiresConfirmation: true },
+        ],
+      });
+      expect(listener).not.toHaveBeenCalled();
+      notifyCompletedChatForgets({ context, actions: [applied, applied] });
+      expect(listener).toHaveBeenCalledExactlyOnceWith({ kind: "removed", ids: ["done"] });
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("keeps a confirmed forget successful and reports repeated listener failures once", async () => {

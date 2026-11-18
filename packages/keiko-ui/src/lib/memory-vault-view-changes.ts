@@ -1,3 +1,4 @@
+import type { ConversationMemoryResultWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { CLIENT_STAGE_DURATION_MS_MAX } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { newClientCorrelationId } from "./bff-correlation";
 import { reportClientDiagnostic } from "./client-diagnostics";
@@ -15,6 +16,18 @@ export function subscribeMemoryVaultViewChanges(listener: Listener): () => void 
   return () => {
     listeners.delete(listener);
   };
+}
+
+// A live turn may have already committed a Forget on the server. Historical Chat messages
+// carry the same action wire for display but do not publish a new Vault change.
+export function notifyCompletedChatForgets(memory: ConversationMemoryResultWire | undefined): void {
+  const removed = new Set<string>();
+  for (const action of memory?.actions ?? []) {
+    if (action.kind === "forget" && action.forgotten === true && !action.requiresConfirmation) {
+      removed.add(action.memoryId);
+    }
+  }
+  notifyMemoryVaultViewChange({ kind: "removed", ids: [...removed] });
 }
 
 export function notifyMemoryVaultViewChange(change: MemoryVaultViewChange): void {
