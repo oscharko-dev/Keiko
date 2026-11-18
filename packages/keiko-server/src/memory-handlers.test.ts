@@ -12,6 +12,7 @@ import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { DatabaseSync } from "node:sqlite";
 import {
   createAuditRedactor,
   createInMemoryEvidenceStore,
@@ -36,9 +37,11 @@ import type {
   MemoryId,
   MemoryRecord,
   MemoryReviewerId,
+  MemoryScope,
   MemoryUserId,
   MemoryWorkspaceId,
 } from "@oscharko-dev/keiko-contracts";
+import type { ProjectId } from "@oscharko-dev/keiko-contracts/memory";
 import type {
   GatewayConfig,
   OpenAIEmbeddingOutcome,
@@ -148,6 +151,52 @@ function makeVault(dir = makeVaultDirectory()): MemoryVaultStore {
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   activeVaults.push(vault);
   return vault;
+}
+
+function makeReviewVaults(): readonly [MemoryVaultStore, MemoryVaultStore] {
+  const options = {
+    memoryDir: makeVaultDirectory(),
+    vaultKey: Buffer.alloc(32, 67),
+    redactString: (value: string): string => value,
+  };
+  const reader = createMemoryVault(options);
+  const writer = createMemoryVault(options);
+  activeVaults.push(reader, writer);
+  return [reader, writer];
+}
+
+function interleaveAfterScopeRead<T>(read: () => T, write: () => void): T {
+  const prepare = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "prepare")
+    ?.value as DatabaseSync["prepare"];
+  let restoreRead = (): void => undefined;
+  let interleaved = false;
+  const scopePrepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+    this: DatabaseSync,
+    sql: string,
+  ): ReturnType<typeof prepare> {
+    const statement = prepare.call(this, sql);
+    if (sql.includes("SELECT DISTINCT scope_kind, scope_coordinate")) {
+      const all = statement.all.bind(statement);
+      const scopeRead = vi.spyOn(statement, "all").mockImplementationOnce((...params) => {
+        const rows = all(...params);
+        interleaved = true;
+        write();
+        return rows;
+      });
+      restoreRead = (): void => {
+        scopeRead.mockRestore();
+      };
+    }
+    return statement;
+  });
+  try {
+    const result = read();
+    expect(interleaved).toBe(true);
+    return result;
+  } finally {
+    restoreRead();
+    scopePrepare.mockRestore();
+  }
 }
 
 function memoryId(value: string): MemoryId {
@@ -730,7 +779,7 @@ describe("memory handlers", () => {
         );
       }
     }
-    const reads = vi.spyOn(vault, "listMemoriesAcrossScopes");
+    const reads = vi.spyOn(vault, "listMemoryReviewQueue");
     const result = handleMemoryReviewQueue(
       makeCtx("/api/memory/review-queue", {}),
       makeDeps({ memoryVault: vault }),
@@ -767,9 +816,9 @@ describe("memory handlers", () => {
         staleReason: "changed-source",
       });
       reader.insertMemory(record);
-      const read = reader.listMemoriesAcrossScopes;
+      const read = reader.listMemoryReviewQueue;
       const selections = vi
-        .spyOn(reader, "listMemoriesAcrossScopes")
+        .spyOn(reader, "listMemoryReviewQueue")
         .mockImplementationOnce((...args) => {
           const rows = read(...args);
           writer.updateMemory(record.id, { status: after }, record.updatedAt + 1);
@@ -790,6 +839,71 @@ describe("memory handlers", () => {
       expect(statuses()).toEqual([after]);
     },
   );
+
+  it.each([
+    { kind: "global" },
+    { kind: "user", userId: "shared-coordinate" },
+    { kind: "project", projectId: "shared-coordinate" },
+    { kind: "workspace", workspaceId: "shared-coordinate" },
+    { kind: "workflow", workflowDefinitionId: "shared-coordinate" },
+  ] as readonly MemoryScope[])(
+    "keeps a queue snapshot when a new %j scope is inserted",
+    (scope) => {
+      const [reader, writer] = makeReviewVaults();
+      const previous = makeMemory("existing-scope-record", "Synthetic existing preference", {
+        scope: { kind: "project", projectId: "existing-project" as ProjectId },
+        status: "accepted",
+        createdAt: 20,
+        updatedAt: 20,
+      });
+      const stable = makeMemory("stable-user-review", "Synthetic personal preference", {
+        scope: { kind: "user", userId: userId("stable-user") },
+        status: "proposed",
+        createdAt: 30,
+        updatedAt: 30,
+      });
+      reader.insertMemory(previous);
+      reader.insertMemory(stable);
+      const deps = makeDeps({ memoryVault: reader });
+      const read = (): RouteResult =>
+        handleMemoryReviewQueue(makeCtx("/api/memory/review-queue", {}), deps);
+      const result = interleaveAfterScopeRead(read, () => {
+        writer.insertMemory(
+          makeMemory("new-scope-record", "Synthetic new preference", {
+            scope,
+            status: "proposed",
+            createdAt: 10,
+            updatedAt: 10,
+          }),
+        );
+        writer.updateMemory(previous.id, { status: "conflicted" }, 21);
+      });
+      expect(result.status).toBe(200);
+      expect((asJson(result).memories as readonly MemoryRecord[]).map(({ id }) => id)).toEqual([
+        stable.id,
+      ]);
+      expect((asJson(read()).memories as readonly MemoryRecord[]).map(({ id }) => id)).toEqual([
+        stable.id,
+        previous.id,
+        "new-scope-record",
+      ]);
+    },
+  );
+
+  it("reads a consistent empty queue while the first scope is concurrently inserted", () => {
+    const [reader, writer] = makeReviewVaults();
+    const deps = makeDeps({ memoryVault: reader });
+    const read = (): RouteResult =>
+      handleMemoryReviewQueue(makeCtx("/api/memory/review-queue", {}), deps);
+    const result = interleaveAfterScopeRead(read, () => {
+      writer.insertMemory(
+        makeMemory("first-review-record", "Synthetic preference", { status: "proposed" }),
+      );
+    });
+    expect(result.status).toBe(200);
+    expect(asJson(result).total).toBe(0);
+    expect(asJson(read()).total).toBe(1);
+  });
 
   it("includes non-global conflicts in the review queue", () => {
     const vault = makeVault();
@@ -2382,7 +2496,7 @@ describe("emitServerDiagnostic on memory-handler storage failures (w4b)", () => 
     const { records, diagnostics } = recordingSink();
     const broken: MemoryVaultStore = {
       ...vault,
-      listMemoryScopes: () => {
+      listMemoryReviewQueue: () => {
         throw new MemoryStorageError("internal", "simulated review-queue failure");
       },
     };

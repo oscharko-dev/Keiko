@@ -117,7 +117,6 @@ const MEMORY_EDIT_FAILURE_STATUS: Partial<Record<MemoryStorageError["code"], num
   "not-found": 404,
   "precondition-failed": 409,
 };
-const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted", "expired"];
 
 const MEMORY_VAULT_RECORDS_SELECTED = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -489,16 +488,6 @@ function listMemoryCandidates(
     ...(options.sensitivities === undefined ? {} : { sensitivity: options.sensitivities }),
     includeExpired: true,
   });
-}
-
-function listReviewQueueMemories(vault: MemoryVaultStore): readonly MemoryRecord[] {
-  const scopes = vault.listMemoryScopes();
-  const records = vault.listMemoriesAcrossScopes(scopes, {
-    status: REVIEW_QUEUE_STATUSES,
-    includeStaleStatuses: ["accepted", "superseded"],
-    includeExpired: true,
-  });
-  return sortMemories(records);
 }
 
 // ─── Handler: GET /api/memory ─────────────────────────────────────────────────
@@ -873,7 +862,7 @@ export function handleMemoryReviewQueue(ctx: RouteContext, deps: UiHandlerDeps):
   if (isRouteResult(vault)) return vault;
 
   try {
-    const proposed = listReviewQueueMemories(vault);
+    const proposed = sortMemories(vault.listMemoryReviewQueue());
     const memories = redactMemories(deps, proposed);
     logVaultRecordSelection(ctx, "review-queue", proposed.length, proposed.length);
     return {

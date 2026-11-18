@@ -636,6 +636,7 @@ type MemoryMutators = Pick<
   | "deleteMemories"
   | "getMemory"
   | "listMemoryScopes"
+  | "listMemoryReviewQueue"
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
@@ -906,6 +907,7 @@ type MemoryReadOps = Pick<
   MemoryMutators,
   | "getMemory"
   | "listMemoryScopes"
+  | "listMemoryReviewQueue"
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
@@ -976,10 +978,30 @@ function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWri
   };
 }
 
+function readMemoryReviewQueue(db: DatabaseSync, opts: ResolvedOptions): readonly MemoryRecord[] {
+  db.exec("BEGIN");
+  try {
+    const scopes = listMemoryScopeRows(db);
+    for (const scope of scopes) gateMemoryScope(scope);
+    const options = gateListOptions({
+      status: ["proposed", "conflicted", "expired"],
+      includeStaleStatuses: ["accepted", "superseded"],
+      includeExpired: true,
+    });
+    const records = listMemoriesAcrossScopeRows(db, scopes, options, opts.now(), opts.cipher);
+    db.exec("COMMIT");
+    return records;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryReadOps {
   return {
     getMemory: (id: MemoryId): MemoryRecord | undefined => getMemoryRow(db, id, opts.cipher),
     listMemoryScopes: (): readonly MemoryScope[] => listMemoryScopeRows(db),
+    listMemoryReviewQueue: (): readonly MemoryRecord[] => readMemoryReviewQueue(db, opts),
     listMemoriesAcrossScopes: (
       scopes: readonly MemoryScope[],
       options?: ListMemoriesOptions,

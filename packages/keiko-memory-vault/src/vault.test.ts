@@ -931,6 +931,36 @@ describe("namespace isolation regression", () => {
 });
 
 describe("list filters", () => {
+  it("releases a review snapshot after a storage failure", () => {
+    const vault = openVault(freshDir());
+    const record = makeMemory({ id: "snapshot-recovery" as MemoryId, status: "proposed" });
+    const prepare = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "prepare")
+      ?.value as DatabaseSync["prepare"];
+    try {
+      vault.insertMemory(record);
+      const fault = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql: string,
+      ): ReturnType<typeof prepare> {
+        if (sql.startsWith("SELECT * FROM memories WHERE")) {
+          throw new MemoryStorageError("internal", "Synthetic read failure");
+        }
+        return prepare.call(this, sql);
+      });
+      try {
+        expect(() => vault.listMemoryReviewQueue()).toThrow(MemoryStorageError);
+      } finally {
+        fault.mockRestore();
+      }
+      expect(
+        vault.updateMemory(record.id, { tags: ["after-failure"] }, record.updatedAt + 1).tags,
+      ).toEqual(["after-failure"]);
+      expect(vault.listMemoryReviewQueue().map(({ id }) => id)).toEqual([record.id]);
+    } finally {
+      vault.close();
+    }
+  });
+
   it("keeps both review status alternatives within the requested scope and sensitivity", () => {
     const vault = openVault(freshDir());
     try {

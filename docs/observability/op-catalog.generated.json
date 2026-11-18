@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "44f6e1a5f660553fc23a57bc287b122732f45451bcfebedbcbbbc0d9cade3b50",
+    "catalogDigest": "686e9a01c7a3fdb783e69da1dbcaed4b1ceb0af19851481c2661378fc5d0e38c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -39308,8 +39308,8 @@
         "failureClasses": ["memory-edit-conflict"],
         "proofIds": ["memory.edit.settled.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/memory-handlers.ts:162",
-        "emitterSites": ["packages/keiko-server/src/memory-handlers.ts:192"]
+        "registrationSite": "packages/keiko-server/src/memory-handlers.ts:161",
+        "emitterSites": ["packages/keiko-server/src/memory-handlers.ts:191"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39884,8 +39884,8 @@
         "failureClasses": ["memory-vault-selection"],
         "proofIds": ["memory.vault.records.selected.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/memory-handlers.ts:122",
-        "emitterSites": ["packages/keiko-server/src/memory-handlers.ts:154"]
+        "registrationSite": "packages/keiko-server/src/memory-handlers.ts:121",
+        "emitterSites": ["packages/keiko-server/src/memory-handlers.ts:153"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -121751,7 +121751,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-handlers.ts:259",
+      "site": "packages/keiko-server/src/memory-handlers.ts:258",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125498,7 +125498,7 @@
     {
       "op": "memory.edit.settled",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-handlers.ts:165",
+      "site": "packages/keiko-server/src/memory-handlers.ts:164",
       "package": "keiko-server"
     },
     {
@@ -125619,7 +125619,7 @@
     {
       "op": "memory.vault.records.selected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-handlers.ts:125",
+      "site": "packages/keiko-server/src/memory-handlers.ts:124",
       "package": "keiko-server"
     },
     {

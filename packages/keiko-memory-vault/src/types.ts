@@ -214,6 +214,8 @@ export interface MemoryVaultStore {
   readonly deleteMemory: (id: MemoryId, options: DeleteMemoryOptions) => void;
   readonly deleteMemories: (deletes: readonly MemoryBatchDelete[]) => readonly MemoryDeleteResult[];
   readonly listMemoryScopes: () => readonly MemoryScope[];
+  // The local operator's review queue, with scope discovery and record selection sharing one snapshot.
+  readonly listMemoryReviewQueue: () => readonly MemoryRecord[];
   readonly listMemoriesAcrossScopes: (
     scopes: readonly MemoryScope[],
     options?: ListMemoriesOptions,
