@@ -139,7 +139,7 @@ describe("explicitly declared legacy HTML codecs", () => {
       endLine: 302,
       maxBytes: 512,
     });
-    expect(excerpt.content).toBe("<p>CodecServiceProbe Ölwechsel 中文 750 hours</p>\r");
+    expect(excerpt.content).toBe("<p>CodecServiceProbe Ölwechsel 中文 750 hours</p>");
   });
   it.each([
     '<meta/charset="windows-1252">',

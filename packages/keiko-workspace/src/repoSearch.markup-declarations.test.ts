@@ -58,7 +58,7 @@ describe("actual markup declaration search and physical excerpts", () => {
       endLine: 3,
       maxBytes: 512,
     });
-    expect(excerpt.content).toBe(`${line}\r`);
+    expect(excerpt.content).toBe(line);
   });
 
   it("retains truthful unavailable-codec coverage for an actual XHTML XML declaration", async () => {
