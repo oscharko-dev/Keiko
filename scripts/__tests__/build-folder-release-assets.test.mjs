@@ -1,7 +1,9 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   renameSync,
   rmSync,
   symlinkSync,
@@ -105,6 +107,27 @@ describe("the folder packages of a release", () => {
     expect(() => buildFolderReleaseAssets({ bundleRoot: root, version: "1.2.3" })).toThrow(
       FolderReleaseBuildError,
     );
+  });
+
+  it("leaves no part of the set when a target fails, so the repaired bundle builds", () => {
+    // Review finding on PR #4464 (P2): the set's folder was created before the targets were built,
+    // so a failure on the last target left two packages and no manifest, and a retry was refused.
+    const { root } = portableBundle();
+    const archive = join(root, "artifacts", "windows-x64", "keiko-windows-x64.zip");
+    const original = readFileSync(archive);
+    writeFileSync(archive, "not the archive");
+
+    expect(() => buildFolderReleaseAssets({ bundleRoot: root, version: "1.2.3" })).toThrow(
+      StandaloneBuildError,
+    );
+    expect(existsSync(join(root, FOLDER_PACKAGES_DIRECTORY))).toBe(false);
+    // Nothing of the attempt remains beside the bundle's own entries.
+    expect(readdirSync(root).sort()).toEqual(["artifacts", "portable-assets.json"]);
+
+    writeFileSync(archive, original);
+    const manifest = buildFolderReleaseAssets({ bundleRoot: root, version: "1.2.3" });
+    expect(manifest.packages).toHaveLength(3);
+    expect(readdirSync(join(root, FOLDER_PACKAGES_DIRECTORY))).toHaveLength(7);
   });
 
   it("refuses an archive its checksum evidence does not bind", () => {

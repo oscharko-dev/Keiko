@@ -33,6 +33,16 @@ export const FOLDER_PACKAGES_MANIFEST = "folder-packages.json";
 const FORMS = new Set(["standalone", "npm"]);
 /** The manifest names three packages; anything near this size is not one the build wrote. */
 export const FOLDER_PACKAGES_MANIFEST_MAX_BYTES = 64 * 1024;
+/**
+ * GitHub accepts release assets under 2 GiB. A package declared at or above that size is refused
+ * before any of it is read, whatever its manifest says.
+ */
+export const FOLDER_PACKAGE_MAX_BYTES = 2 * 1024 ** 3 - 1;
+/** How the check reads files; tests replace it to prove what is never read. */
+const FILE_READS = Object.freeze({
+  digest: (path, maxBytes) => sha256FileChunked(path, maxBytes),
+  text: (path) => readFileSync(path, "utf8"),
+});
 const SHA256_HEX = /^[a-f0-9]{64}$/u;
 
 /** The file name of a folder package: `keiko-<target>.<form>.zip`, `-team` when it holds access. */
@@ -55,7 +65,7 @@ function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function readManifest(path, failures) {
+function readManifest(path, failures, reads) {
   try {
     const stat = lstatSync(path);
     if (!stat.isFile()) {
@@ -69,7 +79,7 @@ function readManifest(path, failures) {
       );
       return undefined;
     }
-    return JSON.parse(readFileSync(path, "utf8"));
+    return JSON.parse(reads.text(path));
   } catch {
     failures.push(`the portable asset bundle carries no readable ${FOLDER_PACKAGES_MANIFEST}.`);
     return undefined;
@@ -121,6 +131,11 @@ function entryFailures(entry, archive) {
     [!FIRST_CLASS_ARCHIVE_NAME.test(String(entry.assetName)), "must not look like an archive"],
     [SHA256_HEX.test(String(entry.sha256)), "must name its sha256"],
     [Number.isSafeInteger(entry.sizeBytes) && entry.sizeBytes > 0, "must name its size"],
+    [
+      // A size that is no number fails the check above; only a number larger than the limit here.
+      typeof entry.sizeBytes !== "number" || entry.sizeBytes <= FOLDER_PACKAGE_MAX_BYTES,
+      `must be smaller than the ${String(FOLDER_PACKAGE_MAX_BYTES + 1)} bytes GitHub accepts`,
+    ],
     [entry.sourceArchive?.assetName === archive.assetName, "must name its source archive"],
     [entry.sourceArchive?.sha256 === archive.sha256, "must be built from this release's archive"],
   ];
@@ -129,31 +144,36 @@ function entryFailures(entry, archive) {
   );
 }
 
-function fileFailures(entry, zipPath) {
-  // The size is compared first, so a package of another size is never read; a package of the
-  // declared size is hashed in chunks rather than loaded whole.
-  if (lstatSync(zipPath).size === entry.sizeBytes && sha256FileChunked(zipPath) === entry.sha256) {
+function fileFailures(entry, zipPath, reads) {
+  // The size is compared first, so a package of another size, or of a size GitHub refuses, is never
+  // read. A package of the declared size is hashed in chunks, and never beyond that size: one that
+  // grew after the comparison fails the digest without being read to its end.
+  const size = lstatSync(zipPath).size;
+  if (
+    size === entry.sizeBytes &&
+    size <= FOLDER_PACKAGE_MAX_BYTES &&
+    reads.digest(zipPath, entry.sizeBytes) === entry.sha256
+  ) {
     return [];
   }
   return [`${entry.assetName} does not have the digest and size its manifest declares.`];
 }
 
 /** The checksum file holds exactly `text`; one of another size is refused without reading it. */
-function checksumMatches(checksumPath, text) {
+function checksumMatches(checksumPath, text, reads) {
   return (
-    lstatSync(checksumPath).size === Buffer.byteLength(text) &&
-    readFileSync(checksumPath, "utf8") === text
+    lstatSync(checksumPath).size === Buffer.byteLength(text) && reads.text(checksumPath) === text
   );
 }
 
-function packageUpload(directory, entry, failures) {
+function packageUpload(directory, entry, failures, reads) {
   const zipPath = packageFile(directory, entry.assetName, failures);
   const checksumName = `${entry.assetName}.sha256`;
   const checksumPath = packageFile(directory, checksumName, failures);
   if (zipPath === undefined || checksumPath === undefined) return [];
-  failures.push(...fileFailures(entry, zipPath));
+  failures.push(...fileFailures(entry, zipPath, reads));
   const checksumText = folderChecksumText(entry.sha256, entry.assetName);
-  if (!checksumMatches(checksumPath, checksumText)) {
+  if (!checksumMatches(checksumPath, checksumText, reads)) {
     failures.push(`${checksumName} must bind ${entry.assetName}.`);
   }
   // The stable-tag workflow attests each package's build provenance; its `.sha256` file is text
@@ -199,13 +219,13 @@ function targetEntries(packages, failures) {
  * have been built from. Returns `{ failures, uploads }`; an upload names its local path, its
  * asset name and the digest and size GitHub must report for it.
  */
-export function folderPackageUploads({ bundleRoot, version, archives }) {
+export function folderPackageUploads({ bundleRoot, version, archives, reads = FILE_READS }) {
   const failures = [];
   const directory = packageDirectory(bundleRoot);
   if (directory === undefined) {
     return { failures: ["the portable asset bundle carries no folder packages."], uploads: [] };
   }
-  const manifest = readManifest(join(directory, FOLDER_PACKAGES_MANIFEST), failures);
+  const manifest = readManifest(join(directory, FOLDER_PACKAGES_MANIFEST), failures, reads);
   if (manifest === undefined) return { failures, uploads: [] };
   failures.push(...manifestHeaderFailures(manifest, version));
   if (failures.length > 0) return { failures, uploads: [] };
@@ -218,7 +238,9 @@ export function folderPackageUploads({ bundleRoot, version, archives }) {
     }
     const before = failures.length;
     failures.push(...entryFailures(entry, archive));
-    if (failures.length === before) uploads.push(...packageUpload(directory, entry, failures));
+    if (failures.length === before) {
+      uploads.push(...packageUpload(directory, entry, failures, reads));
+    }
   }
   return { failures, uploads };
 }

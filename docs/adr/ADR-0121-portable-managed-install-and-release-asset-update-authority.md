@@ -1322,8 +1322,13 @@ set with the same digests again, so assets that changed between the two reads st
 npm, as a rerun would. After publication it downloads every asset back unauthenticated as a smoke check; a
 failure there stops the run before npm publication, with the GitHub release already public. A rerun
 over that published release verifies the same metadata, refuses an asset outside the validated set
-and repeats the unauthenticated download of every asset before npm publication. It reads the
-bundle's manifest, packages and checksum files only up to their declared sizes. The rule binds every
+and repeats the unauthenticated download of every asset before npm publication. Before it reads
+any of the bundle's files, it compares each file's size: the manifest with its 64 KiB limit, a
+checksum file with the line it must hold, and a package with its declared size and the 2 GiB GitHub
+accepts for an asset, so a file of another size, or a package GitHub would refuse, is never read.
+A package of the declared size is then hashed in chunks by a reader that stops one byte past that
+size, so a package that grew after the size check fails its digest without being read to its end.
+The rule binds every
 publish that supplies the portable asset bundle, which the stable-tag workflow does for every
 stable `latest` release. A stable publish under another dist-tag without a bundle uploads and
 verifies no portable asset at all, so it neither adds nor checks folder packages, on a new release

@@ -172,11 +172,18 @@ export function isolatedNpmEnv(env) {
   );
 }
 
-/** npm resolves only the lockfile, from the public registry, with the given empty configurations. */
-export function lockfileResolutionArgs(npmCli, userConfig, globalConfig) {
+/**
+ * npm resolves only the lockfile, from the public registry, with the given empty configurations.
+ * `--prefix` and `--workspaces=false` keep npm in the package folder: from a folder inside another
+ * npm project or workspace, npm would otherwise write that project's lockfile instead.
+ */
+export function lockfileResolutionArgs(npmCli, packageRoot, userConfig, globalConfig) {
   return [
     npmCli,
     "install",
+    "--prefix",
+    packageRoot,
+    "--workspaces=false",
     "--package-lock-only",
     "--ignore-scripts",
     "--no-audit",
@@ -201,7 +208,7 @@ export function resolveLockfile(packageRoot, npmCli) {
     writeFileSync(emptyGlobalConfig, "");
     const result = spawnSync(
       process.execPath,
-      lockfileResolutionArgs(npmCli, emptyUserConfig, emptyGlobalConfig),
+      lockfileResolutionArgs(npmCli, packageRoot, emptyUserConfig, emptyGlobalConfig),
       { cwd: packageRoot, env: isolatedNpmEnv(process.env), encoding: "utf8" },
     );
     if (result.status !== 0) {

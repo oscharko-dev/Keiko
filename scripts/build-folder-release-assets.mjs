@@ -12,7 +12,16 @@
  * The packages are generic: they carry no `keiko.config.json` and no access of any kind.
  */
 
-import { existsSync, lstatSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, resolve, sep } from "node:path";
 
 import {
@@ -109,23 +118,45 @@ function buildTarget(bundleRoot, bundle, target, options) {
   };
 }
 
-/** Builds every folder package of the bundle and returns the manifest it wrote. */
+/**
+ * Builds every folder package of the bundle and returns the manifest it wrote. The set is built in a
+ * private folder beside its final name and appears there in one rename once every target and the
+ * manifest are written, so a failed target leaves no partial set that a retry would refuse.
+ */
 export function buildFolderReleaseAssets(options) {
   const bundleRoot = resolve(options.bundleRoot);
   const outDir = resolve(bundleRoot, FOLDER_PACKAGES_DIRECTORY);
   if (existsSync(outDir)) refuse(`${outDir} already exists; folder packages are built once`);
   const bundle = readJsonFile(resolve(bundleRoot, "portable-assets.json"));
   if (!Array.isArray(bundle?.artifacts)) refuse("portable-assets.json names no artifacts");
-  mkdirSync(outDir);
-  const packages = FOLDER_RELEASE_TARGETS.map((target) =>
-    buildTarget(bundleRoot, bundle, target, { outDir, version: options.version }),
-  );
-  const manifest = folderPackagesManifest(options.version, packages);
-  writeFileSync(
-    resolve(outDir, FOLDER_PACKAGES_MANIFEST),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-  );
-  return manifest;
+  const staging = mkdtempSync(resolve(bundleRoot, `.${FOLDER_PACKAGES_DIRECTORY}-`));
+  try {
+    const packages = FOLDER_RELEASE_TARGETS.map((target) =>
+      buildTarget(bundleRoot, bundle, target, { outDir: staging, version: options.version }),
+    );
+    const manifest = folderPackagesManifest(options.version, packages);
+    writeFileSync(
+      resolve(staging, FOLDER_PACKAGES_MANIFEST),
+      `${JSON.stringify(manifest, null, 2)}\n`,
+    );
+    publishOnce(staging, outDir);
+    return manifest;
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
+  }
+}
+
+// A set another run published meanwhile is never replaced: a rename onto a folder that holds files
+// fails, and an empty folder in its place is refused before the rename.
+function publishOnce(staging, outDir) {
+  if (existsSync(outDir)) refuse(`${outDir} already exists; folder packages are built once`);
+  try {
+    renameSync(staging, outDir);
+  } catch (error) {
+    throw new FolderReleaseBuildError(`${outDir} could not be published: ${error.code ?? error}`, {
+      cause: error,
+    });
+  }
 }
 
 function main(argv) {

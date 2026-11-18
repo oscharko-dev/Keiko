@@ -1,12 +1,21 @@
 import { Buffer } from "node:buffer";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { basename, dirname, join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { sha256 } from "../lib/digest.mjs";
+import { sha256, sha256FileChunked } from "../lib/digest.mjs";
 import {
   FIRST_CLASS_ARCHIVE_NAME,
+  FOLDER_PACKAGE_MAX_BYTES,
   FOLDER_PACKAGES_DIRECTORY,
   FOLDER_PACKAGES_MANIFEST,
   FOLDER_PACKAGES_MANIFEST_MAX_BYTES,
@@ -114,8 +123,26 @@ describe("the folder packages of a bundle", () => {
     return root;
   }
 
-  function uploads(root, version = "1.2.3") {
-    return folderPackageUploads({ bundleRoot: root, version, archives: archives() });
+  function uploads(root, version = "1.2.3", reads = undefined) {
+    return folderPackageUploads({
+      bundleRoot: root,
+      version,
+      archives: archives(),
+      ...(reads === undefined ? {} : { reads }),
+    });
+  }
+
+  // The real reads, recorded, so a test can show which file the check never reached.
+  function recordedReads() {
+    return {
+      digest: vi.fn((path, maxBytes) => sha256FileChunked(path, maxBytes)),
+      text: vi.fn((path) => readFileSync(path, "utf8")),
+    };
+  }
+
+  // File names, not paths: the check reads the bundle through its canonical path.
+  function readNames(mock) {
+    return mock.mock.calls.map(([path]) => basename(path));
   }
 
   it("uploads every package and its .sha256 file with the digests GitHub must report", () => {
@@ -249,13 +276,55 @@ describe("the folder packages of a bundle", () => {
     // Review finding on PR #4464 (P2): each file was read whole before its size was compared. A
     // sparse 3 GiB file costs no disk, and reading it whole would throw: the refusal proves the
     // size was compared first.
+    let oversized = "";
     const root = bundle((manifest, directory) => {
-      truncateSync(join(directory, fileOf(manifest.packages[0].assetName)), 3 * 1024 ** 3);
+      oversized = fileOf(manifest.packages[0].assetName);
+      truncateSync(join(directory, oversized), 3 * 1024 ** 3);
     });
+    const reads = recordedReads();
 
-    expect(uploads(root).failures.join("\n")).toMatch(
+    expect(uploads(root, "1.2.3", reads).failures.join("\n")).toMatch(
       /keiko-macos-arm64\.standalone\.zip(\.sha256 must bind| does not have the digest)/u,
     );
+    // Review finding on PR #4464: the refusal alone does not show the file was never read.
+    expect([...readNames(reads.digest), ...readNames(reads.text)]).not.toContain(oversized);
+    // The other packages are still checked, so the reads ran.
+    expect(reads.digest).toHaveBeenCalled();
+  });
+
+  it("refuses a package GitHub would not accept before reading any of it (PR #4464)", () => {
+    // Review finding on PR #4464: a 3 GiB package that declares its real size passed the size
+    // comparison and was hashed to its end before anything refused it.
+    let oversized = "";
+    const root = bundle((manifest, directory) => {
+      oversized = manifest.packages[0].assetName;
+      truncateSync(join(directory, oversized), 3 * 1024 ** 3);
+      manifest.packages[0].sizeBytes = 3 * 1024 ** 3;
+    });
+    const reads = recordedReads();
+
+    expect(uploads(root, "1.2.3", reads).failures).toEqual([
+      `macos-arm64 folder package must be smaller than the ${String(FOLDER_PACKAGE_MAX_BYTES + 1)} bytes GitHub accepts.`,
+    ]);
+    expect(readNames(reads.digest)).not.toContain(oversized);
+  });
+
+  it("hashes a package no further than its declared size (PR #4464)", () => {
+    // Review finding on PR #4464: a package that grew after its size was compared was read to its
+    // end. The check now bounds the read by the declared size.
+    const reads = recordedReads();
+    const result = uploads(bundle(), "1.2.3", reads);
+
+    expect(result.failures).toEqual([]);
+    expect(reads.digest.mock.calls.map(([, maxBytes]) => maxBytes)).toEqual(
+      result.uploads.filter((upload) => upload.attested).map((upload) => upload.size),
+    );
+    const grown = join(mkdtempSync(join(tmpdir(), "keiko-folder-grown-")), "package.zip");
+    tempRoots.push(dirname(grown));
+    writeFileSync(grown, "0123456789");
+    expect(sha256FileChunked(grown, 10)).toBe(sha256("0123456789"));
+    expect(sha256FileChunked(grown, 9)).toBeUndefined();
+    expect(sha256FileChunked(grown)).toBe(sha256("0123456789"));
   });
 
   it("refuses an oversized manifest before reading it (PR #4464)", () => {
@@ -264,10 +333,13 @@ describe("the folder packages of a bundle", () => {
     const path = join(root, FOLDER_PACKAGES_DIRECTORY, FOLDER_PACKAGES_MANIFEST);
     const manifest = JSON.stringify(folderPackagesManifest("1.2.3", []));
     writeFileSync(path, manifest.padEnd(FOLDER_PACKAGES_MANIFEST_MAX_BYTES + 1, " "));
+    const reads = recordedReads();
 
-    expect(uploads(root).failures).toEqual([
+    expect(uploads(root, "1.2.3", reads).failures).toEqual([
       `folder-packages.json is larger than ${String(FOLDER_PACKAGES_MANIFEST_MAX_BYTES)} bytes.`,
     ]);
+    // Review finding on PR #4464: the size error alone does not show the read never happened.
+    expect(reads.text).not.toHaveBeenCalled();
   });
 
   it("refuses a manifest that is not one", () => {

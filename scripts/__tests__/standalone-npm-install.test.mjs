@@ -14,17 +14,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { packageJsonText } from "../build-standalone-npm-package.mjs";
-import {
-  ensureInstalled,
-  keikoCliPath,
-  npmCliCandidates,
-  stateDir,
-} from "../standalone/npm/keiko-npm.mjs";
+import { ensureInstalled, keikoCliPath, stateDir } from "../standalone/npm/keiko-npm.mjs";
+import { locateNpmCli } from "./support/host-npm-cli.mjs";
 
 // The first start of an npm package with the real npm (ADR-0121 D9): Keiko is a small stand-in
 // package served by loopback registries, so nothing leaves the machine. These tests prove where
@@ -61,29 +57,6 @@ function tempDir(prefix) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   cleanups.push(() => rmSync(root, { recursive: true, force: true }));
   return root;
-}
-
-// The npm of the Node.js that runs the tests: beside it, the one `npm test` names, or on PATH.
-// The npm CLI script an npm on PATH runs: npm.cmd beside its node_modules, or a link to it.
-function npmCliOnPath(folder) {
-  const windows = join(folder, "node_modules", "npm", "bin", "npm-cli.js");
-  if (existsSync(join(folder, "npm.cmd")) && existsSync(windows)) return windows;
-  const link = join(folder, "npm");
-  return existsSync(link) && realpathSync(link).endsWith("npm-cli.js")
-    ? realpathSync(link)
-    : undefined;
-}
-
-function locateNpmCli() {
-  const named = process.env.npm_execpath;
-  if (named !== undefined && named.endsWith("npm-cli.js") && existsSync(named)) return named;
-  const beside = npmCliCandidates(dirname(process.execPath)).find((path) => existsSync(path));
-  if (beside !== undefined) return beside;
-  for (const folder of (process.env.PATH ?? "").split(delimiter)) {
-    const found = npmCliOnPath(folder);
-    if (found !== undefined) return found;
-  }
-  throw new Error("no npm found for the Node.js that runs these tests");
 }
 
 // A Node.js folder whose npm is the real one, laid out as the macOS package keeps it.

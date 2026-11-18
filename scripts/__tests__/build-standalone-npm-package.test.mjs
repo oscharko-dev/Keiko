@@ -1,5 +1,6 @@
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -18,7 +19,9 @@ import {
   isolatedNpmEnv,
   lockfileResolutionArgs,
   packageJsonText,
+  resolveLockfile,
 } from "../build-standalone-npm-package.mjs";
+import { locateNpmCli } from "./support/host-npm-cli.mjs";
 import { sha256File } from "../lib/digest.mjs";
 import {
   extractZipArchiveEntries,
@@ -340,14 +343,40 @@ describe("the npm of the build", () => {
   });
 
   it("resolves against the public registry with empty configurations and no install script", () => {
-    const args = lockfileResolutionArgs("/n/npm-cli.js", "/i/user", "/i/global");
+    const args = lockfileResolutionArgs("/n/npm-cli.js", "/p/Keiko", "/i/user", "/i/global");
     const value = (flag) => args[args.indexOf(flag) + 1];
 
     expect(args.slice(0, 2)).toEqual(["/n/npm-cli.js", "install"]);
+    expect(value("--prefix")).toBe("/p/Keiko");
+    expect(args).toContain("--workspaces=false");
     expect(args).toContain("--package-lock-only");
     expect(args).toContain("--ignore-scripts");
     expect(value("--registry")).toBe(REGISTRY);
     expect(value("--userconfig")).toBe("/i/user");
     expect(value("--globalconfig")).toBe("/i/global");
+  });
+
+  it("writes the lockfile into the package, not into an npm workspace around it", () => {
+    // Review finding on PR #4464 (P2): from a work folder inside an npm workspace, npm wrote the
+    // workspace's lockfile and left the package without one.
+    const npmCli = locateNpmCli();
+    const workspace = tempRoot();
+    writeFileSync(
+      join(workspace, "package.json"),
+      JSON.stringify({ name: "enclosing", private: true, workspaces: ["work/*"] }),
+    );
+    const packageRoot = join(workspace, "work", "Keiko");
+    mkdirSync(packageRoot, { recursive: true });
+    // No dependency, so npm needs no registry to write the lockfile.
+    writeFileSync(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ name: "keiko-folder", version: "1.0.0", private: true }),
+    );
+
+    resolveLockfile(packageRoot, npmCli);
+
+    expect(existsSync(join(packageRoot, "package-lock.json"))).toBe(true);
+    expect(existsSync(join(workspace, "package-lock.json"))).toBe(false);
+    expect(existsSync(join(workspace, "node_modules"))).toBe(false);
   });
 });
