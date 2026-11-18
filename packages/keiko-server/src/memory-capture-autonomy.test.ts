@@ -1116,6 +1116,29 @@ describe("explicit forget statement in chat", () => {
     expect(readMemories(vault, ctx)).toHaveLength(0);
   });
 
+  it("stops returning an explicitly time-limited preference after the stated local day", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    const now = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 10, 17, 12).getTime());
+    try {
+      await collectMemoryActions(
+        deps,
+        turnRequest("Please remember that I prefer tables until November 18, 2026."),
+        ctx,
+      );
+      const scope = { kind: "user", userId: ctx.userId } as const;
+      expect(
+        vault.listMemoriesByScope(scope, { nowMs: new Date(2026, 10, 18, 23, 59).getTime() }),
+      ).toHaveLength(1);
+      expect(
+        vault.listMemoriesByScope(scope, { nowMs: new Date(2026, 10, 19).getTime() }),
+      ).toHaveLength(0);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("keeps German project instructions within their project and treats a file task as ordinary Chat", async () => {
     const vault = makeVault();
     const ctx = context();

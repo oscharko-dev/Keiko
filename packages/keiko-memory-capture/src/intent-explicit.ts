@@ -18,8 +18,13 @@ import { MEMORY_BODY_MAX_CHARS_DEFAULT } from "./_constants.js";
 import { buildForget, buildProposal, buildUpdate } from "./_envelopes.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
+import { statedValidUntil } from "./stated-validity.js";
 import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
-import { foldWordCase, withoutTrailingNonLetters } from "./fact-text.js";
+import {
+  foldWordCase,
+  startsWithStatedPreference,
+  withoutTrailingNonLetters,
+} from "./fact-text.js";
 import type {
   CaptureContext,
   CaptureMemoryResolver,
@@ -677,6 +682,13 @@ function readRememberInstruction(text: string): {
   };
 }
 
+// After German "dass", the person's present-tense "bevorzuge" can close the clause.
+function explicitPreferenceEnd(body: string, nowMs: number): number | null {
+  const preference =
+    startsWithStatedPreference(body) || (/^ich\s/iu.test(body) && /\bbevorzuge[.!]?$/iu.test(body));
+  return preference ? statedValidUntil(body, nowMs) : null;
+}
+
 // ─── tryExtractRemember ──────────────────────────────────────────────────────
 // "remember about this project: X" → project scope hint. "remember about this workspace: X" →
 // workspace scope hint. "remember that X" / "remember X" → implicit scope from context. Emits a
@@ -710,6 +722,7 @@ export function tryExtractRemember(
       defaultSensitivity: policy.defaultSensitivity,
     }),
   });
+  const validUntil = explicitPreferenceEnd(body, context.nowMs);
   const proposal = buildProposal(
     {
       context,
@@ -718,6 +731,7 @@ export function tryExtractRemember(
       type: "preference",
       sensitivity: decision.sensitivity,
       sourceKind: "explicit-user-instruction",
+      ...(validUntil === null ? {} : { validUntil }),
     },
     1.0,
   );

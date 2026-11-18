@@ -34,6 +34,34 @@ function ctx(overrides: Partial<CaptureContext> = {}): CaptureContext {
 }
 
 describe("tryExtractRemember", () => {
+  it.each([
+    "Please remember that I prefer tables until November 18, 2026.",
+    "Merke dir: Ich bevorzuge Tabellen bis zum 18. November 2026.",
+    "Bitte merke dir, dass ich Tabellen bis zum 18. November 2026 bevorzuge.",
+  ])("carries a current preference's stated local deadline in %s", (statement) => {
+    const nowMs = new Date(2026, 10, 17, 12).getTime();
+    expect(tryExtractRemember(statement, ctx({ nowMs }))).toMatchObject({
+      kind: "candidate",
+      proposal: {
+        validity: {
+          validFrom: nowMs,
+          validUntil: new Date(2026, 10, 18, 23, 59, 59, 999).getTime(),
+        },
+      },
+    });
+  });
+
+  it("keeps an explicitly remembered historical event independently of the date it describes", () => {
+    const nowMs = new Date(2026, 10, 17, 12).getTime();
+    const result = tryExtractRemember(
+      "Remember that I worked on the migration until November 12, 2025.",
+      ctx({ nowMs }),
+    );
+    expect(result?.kind).toBe("candidate");
+    if (result?.kind === "candidate")
+      expect(result.proposal.validity).toEqual({ validFrom: nowMs });
+  });
+
   it('extracts "remember that X" as a preference proposal at user scope', () => {
     const outcome = tryExtractRemember("remember that I prefer dark mode", ctx());
     expect(outcome?.kind).toBe("candidate");

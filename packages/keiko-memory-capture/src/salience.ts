@@ -27,6 +27,7 @@ import {
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
 import { looksLikePersonalIdentifier } from "./secret-patterns.js";
+import { startsWithStatedPreference } from "./fact-text.js";
 import { statedEndPassed, statedReason, statedValidUntil } from "./stated-validity.js";
 import type {
   CaptureContext,
@@ -615,8 +616,6 @@ function emitExtractionDiagnostics(
 // sentence passes the same admission, relation and safety checks as a model item; it is consulted
 // only when the model's items yielded no fact, so it never replaces or duplicates one. The
 // vocabulary is deliberately narrow: only these explicit first-person preference openings.
-const STATED_PREFERENCE_RE =
-  /^(?:ich\s+bevorzuge|i\s+prefer|i\s+would\s+prefer|i['’]d\s+prefer)\s/iu;
 // A sentence ends at a line break or at a stop before a capital letter, as in admission. A stop
 // before a lower-case word ("z.B. bei Zahlen") does not end it, nor does an abbreviation's stop.
 const LINE_BREAK_RE = /\n+/u;
@@ -721,7 +720,7 @@ function statedPreferenceItems(
 ): readonly RawSalienceItem[] {
   const stated = sentencesOf(userText)
     .map((sentence) => withoutClosingStop(sentence))
-    .filter((sentence) => STATED_PREFERENCE_RE.test(sentence));
+    .filter(startsWithStatedPreference);
   // Two stated preferences in one message may contradict each other; only the model can tell.
   if (stated.length !== 1) return [];
   return stated
