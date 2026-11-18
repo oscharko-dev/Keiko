@@ -888,6 +888,61 @@ describe("what a pronoun and a team's decision become", () => {
     },
   );
 
+  const pronounClause = "Sie beginnen immer mit einer Zusammenfassung";
+  it.each([
+    { body: "I use Vim.", evidence: "I use Vim.", content: "I use Vim.", type: "fact", reads: 0 },
+    {
+      body: "Meine Berichte beginnen immer mit einer Zusammenfassung",
+      evidence: pronounClause,
+      content: `Vielen Dank. ${pronounClause}.`,
+      type: "procedural",
+      reads: 1,
+    },
+  ])(
+    "reads the previous turn only for a resolvable clause ($content)",
+    async ({ body, evidence, content, type, reads }) => {
+      const vault = makeVault();
+      const base = context();
+      const model = scriptedModel([{ body, evidence, type }]);
+      const call = vi.spyOn(model, "call");
+      const deps = { ...makeDeps(vault, []), modelPortFactory: (): ModelPort => model };
+      const learning = deps.store.memoryLearning;
+      if (learning === undefined) throw new Error("missing memory-learning fixture");
+      const read = vi.spyOn(learning, "readPreviousUserText");
+      deps.store.createProject(base.projectId, "Fixture");
+      const chatId = deps.store.createChat(base.projectId, "Fixture", "gpt-test").id;
+      const ctx = { ...base, conversationId: chatId as ConversationId };
+      const earlier = userMessage(
+        deps,
+        chatId,
+        `${"A ".repeat(4000)}eine Regel fuer meine Berichte.`,
+        1,
+      );
+      expect(learning.markMessage(earlier.id, { surface: "desktop" })).toBe(true);
+      const current = userMessage(deps, chatId, content, 2);
+      await captureSalientFromTurn(
+        deps,
+        { content, sourceMessageId: current.id, memory: { enabled: true } },
+        ctx,
+        "gpt-test",
+        "ok",
+      );
+      const prompt = call.mock.calls[0]?.[0].messages.find(({ role }) => role === "user")?.content;
+      expect(liveBodies(vault, ctx)).toEqual([body]);
+      expect([
+        read.mock.calls.length,
+        typeof prompt === "string" ? Buffer.byteLength(prompt) : 0,
+      ]).toEqual([
+        reads,
+        Buffer.byteLength(
+          reads === 1
+            ? `The person said before (context for pronouns, not a source):\n${earlier.content}\n\nUser said:\n${content}`
+            : `User said:\n${content}`,
+        ),
+      ]);
+    },
+  );
+
   it("resolves a pronoun from the person's previous message in the same chat", async () => {
     const vault = makeVault();
     const base = context();

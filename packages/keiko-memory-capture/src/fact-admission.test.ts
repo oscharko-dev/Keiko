@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   admitProposedFact,
+  mayResolvePreviousTurn,
   reasonNamesOtherPerson,
   type FactAdmission,
   type FactDropReason,
@@ -21,6 +22,22 @@ function reasonOf(
   const admission = admit(text, evidence, body, about);
   return admission.admitted ? null : admission.reason;
 }
+
+it.each([
+  ["Es beginnt hier.", true],
+  ["Danke\n  Sie beginnen gleich.", true],
+  ["A note. They begin here.", true],
+  ["A note, and It begins here.", true],
+  ["A note: (They begin here.)", true],
+  ["I use Vim.", false],
+  ["I like It here.", false],
+  ["Siegel und Items bleiben hier.", false],
+] as const)(
+  "checks every possible pronoun clause before requesting the previous turn: %s",
+  (text, expected) => {
+    expect(mayResolvePreviousTurn(text)).toBe(expected);
+  },
+);
 
 describe("admitProposedFact", () => {
   it.each([

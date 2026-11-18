@@ -1560,7 +1560,15 @@ function spanDropReason(evidence: string, text: string): FactDropReason | null {
 // "Sie beginnen immer mit einer Zusammenfassung" after "… meine Berichte": the claim's subject is the
 // person's own thing only when the model's statement names it and the person named exactly that
 // thing as theirs just before. "Diese" and "These" open a noun phrase and stand for nothing.
-const LEADING_THING_PRONOUN_RE = /^(?:Sie|Es|They|It)\s+/u;
+const THING_PRONOUN_RE = /\b(?:Sie|Es|They|It)\s+/gu;
+
+// The extraction prompt needs the preceding message only when admission could bind a clause to it.
+export function mayResolvePreviousTurn(text: string): boolean {
+  for (const match of text.matchAll(THING_PRONOUN_RE)) {
+    if (opensClause(text, match.index, 0)) return true;
+  }
+  return false;
+}
 const OWN_THING_GLOBAL_RE = /(?:^|[^\p{L}])(mein(?:e|em|en|er|es)?|my)\s+(\p{L}+)/giu;
 const LEADING_WORDS_RE = /^(?:(?:mein(?:e|em|en|er|es)?|my|die|der|das|the)\s+)?(\p{L}+)/iu;
 // The subject form of the possessive the person used: "für meine Berichte" → "Meine Berichte".
@@ -1598,9 +1606,9 @@ function referent(body: string, earlier: string): string | null {
 }
 
 function resolvedClaim(body: string, evidence: string, context: AdmissionContext): string {
-  const pronoun = LEADING_THING_PRONOUN_RE.exec(evidence);
+  const pronoun = evidence.matchAll(THING_PRONOUN_RE).next().value;
   const earlier = context.previousUserText?.normalize("NFC");
-  if (pronoun === null || earlier === undefined) return evidence;
+  if (pronoun?.index !== 0 || earlier === undefined) return evidence;
   const thing = referent(body, earlier);
   return thing === null ? evidence : `${thing} ${evidence.slice(pronoun[0].length)}`;
 }
@@ -1699,7 +1707,10 @@ function opensWord(text: string, at: number): boolean {
 // Only the few characters a lead can occupy are read.
 function opensClause(text: string, at: number, sentenceFrom: number): boolean {
   let gap = at;
-  while (gap > sentenceFrom && /\s/u.test(text.charAt(gap - 1))) gap -= 1;
+  while (gap > sentenceFrom && /\s/u.test(text.charAt(gap - 1))) {
+    if (text.charAt(gap - 1) === "\n") return true;
+    gap -= 1;
+  }
   if (gap === sentenceFrom) return true;
   const last = text.charAt(gap - 1);
   if (isClausePunctuation(last) || BRACKET_OPENERS.has(last) || isQuote(last)) return true;

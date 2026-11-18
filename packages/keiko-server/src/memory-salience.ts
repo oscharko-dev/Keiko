@@ -24,6 +24,7 @@ import { findConfiguredCapability, type ResponseFormat } from "@oscharko-dev/kei
 import {
   extractSalientMemories,
   isExplicitMemoryStatement,
+  mayResolvePreviousTurn,
   memoryTextSecretEgressRejectionReason,
   SALIENCE_FACT_TYPES,
   type CaptureContext,
@@ -777,7 +778,8 @@ function previousUserText(
   context: ConversationMemoryRuntimeContext,
   policy: ReturnType<typeof memoryCapturePolicyForDeps>,
 ): string | undefined {
-  if (request.sourceMessageId === undefined) return undefined;
+  if (request.sourceMessageId === undefined || !mayResolvePreviousTurn(request.content))
+    return undefined;
   const previous = deps.store.memoryLearning?.readPreviousUserText(
     context.conversationId,
     request.sourceMessageId,
