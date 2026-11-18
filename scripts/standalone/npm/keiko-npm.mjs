@@ -28,10 +28,12 @@ import {
   rmSync,
   writeSync,
 } from "node:fs";
-import { homedir, uptime } from "node:os";
+import { homedir } from "node:os";
 import { basename, delimiter, dirname, join, resolve, sep, win32 } from "node:path";
+import { performance } from "node:perf_hooks";
 import { clearInterval, setInterval } from "node:timers";
 import { fileURLToPath, URL } from "node:url";
+import { Worker } from "node:worker_threads";
 
 const PACKAGE_PATH = ["node_modules", "@oscharko-dev", "keiko"];
 const INSTALLED_MARKER = ".keiko-npm-installed";
@@ -41,11 +43,14 @@ const CONFIG_NAME = "keiko.config.json";
 const STATE_DIR_NAME = ".keiko-standalone";
 // npm removes node_modules during `npm ci`, so the installation's lock lies beside this file. The
 // lock is a folder that appears complete in one rename: it always holds the entry
-// `owner-<pid>-<random>` of the start that installs, which names when it was written, and a Stop
-// made meanwhile adds `stop-<pid>-<random>` to it. A start that is about to let go of the lock adds
+// `owner-<pid>-<random>` of the start that installs, whose content its holder rewrites every few
+// seconds, and a Stop made meanwhile adds `stop-<pid>-<random>` to it. npm's own process adds
+// `npm-<pid>-<random>` while it installs. A start that is about to let go of the lock adds
 // `closing-<pid>-<random>` first: from then on no Stop is accepted by that lock.
 const INSTALL_LOCK = ["system", "keiko-npm-install.lock"];
-const LOCK_ENTRY = /^(owner|stop|closing)-(\d+)-[0-9a-f]+$/u;
+const LOCK_ENTRY = /^(owner|npm|stop|closing)-(\d+)-([0-9a-f]+)$/u;
+const START_KINDS = new Set(["owner"]);
+const HOLDER_KINDS = new Set(["owner", "npm"]);
 // A lock on its way in or out: `<lock>.<pid>-<random>.candidate` or `.released`.
 const LOCK_LEFTOVER = /^keiko-npm-install\.lock\.(\d+)-[0-9a-f]+\.(?:candidate|released)$/u;
 const LOCK_ATTEMPTS = 8;
@@ -57,19 +62,17 @@ const RENAME_RETRY_MS = 25;
 // keep the entry of the start that runs it.
 const HOLD_PARAMETER = "hold-install-lock";
 const KEEP_PARAMETER = "keep-install-lock-owner";
-// The system gives the number of an ended process to a new one, Windows soon after, so a running
-// process with the owner's number does not prove that its start still runs. An owner written
-// before the computer started, or last renewed more than a day ago, no longer holds the lock. A
-// running owner that is merely late renewing (a suspended computer) is never taken over: only this
-// far above any installation does its process number count as reused.
-const LOCK_EXPIRES_AFTER_MS = 24 * 60 * 60 * 1000;
-// npm's process renews the lock's entries this often while it installs, so an installation that
-// takes longer than the expiry keeps its lock.
-const LOCK_RENEW_MS = 5 * 60 * 1000;
+// The system gives the number of an ended process to a new one, Windows soon after, and a clock can
+// jump, so neither a running process number nor a timestamp proves that a holder still runs. A
+// holder proves it by renewing: every holder rewrites its own entry this often, and a start that
+// finds a lock whose entries have a running process number watches them for up to
+// LOCK_OBSERVE_MS on its own monotonic clock. Any entry that changed means the lock is live; none
+// that did means its holder ended or is frozen, and the lock is taken over.
+const LOCK_RENEW_MS = 15 * 1000;
+const LOCK_OBSERVE_MS = 60 * 1000;
+const LOCK_OBSERVE_STEP_MS = 500;
 // The optional Coding runtime of a platform, which `npm ci` must install whatever its `engines` say.
 const CODING_RUNTIME_PACKAGE = /(?:^|\/)node_modules\/@oscharko-dev\/keiko-coding-runtime-[^/]+$/u;
-// Wall-clock corrections after the computer started move its estimated start time.
-const BOOT_TOLERANCE_MS = 10 * 60 * 1000;
 
 /** Prints one message in English and in German, as every start file does. */
 function say(english, german) {
@@ -330,7 +333,9 @@ function registryAddress(value, env) {
 // it keeps the administrator's registry from being replaced by an inherited override unseen.
 function refuseUnreadableSyntax(text) {
   const bareReturn = /\r(?!\n)/u.test(text);
+  // A comment line is no setting: npm's ini parser skips it after leading whitespace.
   const expandedKey = text.split(/\r?\n/u).some((line) => {
+    if (/^\s*[;#]/u.test(line)) return false;
     const split = line.indexOf("=");
     return (split < 0 ? line : line.slice(0, split)).includes("${");
   });
@@ -477,44 +482,107 @@ function lockEntries(dir) {
 }
 
 /**
- * Whether an owner entry written at `writtenAt` can no longer belong to a running start: it was
- * written before the computer started, or last renewed more than a day ago.
+ * The clock the lock observes renewal with: monotonic, so a wall-clock jump (a suspended computer,
+ * a corrected clock) changes nothing. Tests replace both; `sleep` is told the lock folder.
  */
-export function ownerExpired(writtenAt, now = Date.now(), upMs = uptime() * 1000) {
-  return writtenAt < now - upMs - BOOT_TOLERANCE_MS || now - writtenAt > LOCK_EXPIRES_AFTER_MS;
-}
+export const lockClock = {
+  now: () => performance.now(),
+  sleep: (milliseconds) => sleepSync(milliseconds),
+};
 
-// When the owner entry was written; undefined when it names no time this launcher wrote, so only
-// its process number decides.
-function ownerWrittenAt(path) {
-  const value = Number(readFileSync(path, "utf8").trim());
-  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
-function liveOwner(dir, name) {
-  const entry = LOCK_ENTRY.exec(name);
-  if (entry?.[1] !== "owner" || !pidAlive(entry[2])) return false;
-  let writtenAt;
-  try {
-    writtenAt = ownerWrittenAt(join(dir, name));
-  } catch (error) {
-    // The lock went while it was read: no start holds it any more.
-    if (error?.code === "ENOENT") return false;
-    throw error;
+// The content of each entry of one of the kinds whose process number runs.
+function renewalSnapshot(dir, names, kinds) {
+  const seen = new Map();
+  for (const name of names) {
+    const match = LOCK_ENTRY.exec(name);
+    if (match === null || !kinds.has(match[1]) || !pidAlive(match[2])) continue;
+    try {
+      seen.set(name, readFileSync(join(dir, name), "utf8"));
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
   }
-  return writtenAt === undefined || !ownerExpired(writtenAt);
+  return seen;
 }
 
-function hasLiveOwner(dir, entries) {
-  return entries.some((name) => liveOwner(dir, name));
+/**
+ * Whether the lock `dir` has a holder of one of the kinds that is renewing. Without an entry whose
+ * process number runs the lock is stale at once. Otherwise its entries are watched for up to
+ * LOCK_OBSERVE_MS: one that changed (or appeared) is renewal; none means the number was reused or
+ * the holder is frozen. Only the observer's monotonic clock counts, never a timestamp.
+ */
+function renewalObserved(dir, kinds) {
+  const names = lockEntries(dir);
+  if (names === undefined) return false;
+  const first = renewalSnapshot(dir, names, kinds);
+  if (first.size === 0) return false;
+  const deadline = lockClock.now() + LOCK_OBSERVE_MS;
+  while (lockClock.now() < deadline) {
+    lockClock.sleep(LOCK_OBSERVE_STEP_MS, dir);
+    const current = lockEntries(dir);
+    if (current === undefined) return false;
+    const next = renewalSnapshot(dir, current, kinds);
+    if ([...next].some(([name, content]) => first.get(name) !== content)) return true;
+  }
+  return false;
+}
+
+// Whether an entry of a start (not npm) with a running process number is in the lock.
+function hasStartEntry(names) {
+  return names.some((name) => {
+    const match = LOCK_ENTRY.exec(name);
+    return match?.[1] === "owner" && pidAlive(match[2]);
+  });
 }
 
 /** Whether another start of this folder is installing Keiko right now. */
 export function installerActive(root) {
-  const dir = installLockPath(root);
-  const entries = lockEntries(dir);
-  return entries !== undefined && hasLiveOwner(dir, entries);
+  return renewalObserved(installLockPath(root), HOLDER_KINDS);
 }
+
+// The Start process renews its own owner entry for as long as it holds the lock, also while it is
+// blocked in a synchronous npm run: a worker thread does it, which ends with the process. It only
+// rewrites an entry that is still there and stops once it is gone, so it never recreates one.
+const RENEWAL_WORKER = `
+const { workerData } = require("node:worker_threads");
+const fs = require("node:fs");
+const timer = setInterval(() => {
+  let fd;
+  try {
+    fd = fs.openSync(workerData.path, "r+");
+  } catch (error) {
+    if (error.code === "ENOENT") clearInterval(timer);
+    return;
+  }
+  try {
+    const bytes = Buffer.from(String(Date.now()) + "\\n");
+    fs.writeSync(fd, bytes, 0, bytes.length, 0);
+    fs.ftruncateSync(fd, bytes.length);
+  } finally {
+    fs.closeSync(fd);
+  }
+}, workerData.every);
+`;
+
+function startRenewalWorker(path) {
+  const worker = new Worker(RENEWAL_WORKER, {
+    eval: true,
+    workerData: { path, every: lockRenewal.everyMs },
+  });
+  worker.unref();
+  worker.once("error", (error) => {
+    say(
+      `Keiko could not renew its installation lock (${String(error?.code ?? "unknown")}). Another start may begin an installation beside it.`,
+      `Keiko konnte seine Installationssperre nicht erneuern (${String(error?.code ?? "unbekannt")}). Ein anderer Start kann daneben eine Installation beginnen.`,
+    );
+  });
+  return () => {
+    worker.terminate();
+  };
+}
+
+/** How the start renews its own entry; tests replace `start`. */
+export const lockRenewal = { everyMs: LOCK_RENEW_MS, start: startRenewalWorker };
 
 // What a start left when it ended between preparing its lock and removing it after use.
 function removeLockLeftovers(system) {
@@ -590,12 +658,15 @@ export function acquireInstallLock(root, pause = () => undefined) {
     if (attempt > 0) sleepSync(RENAME_RETRY_MS);
     const entries = lockEntries(dir);
     if (entries !== undefined) {
-      if (hasLiveOwner(dir, entries)) return undefined;
+      if (renewalObserved(dir, HOLDER_KINDS)) return undefined;
       pause("clear");
       clearStaleLock(dir, entries);
     }
     const lock = publishLock(dir, pause);
-    if (lock !== undefined) return lock;
+    if (lock !== undefined) {
+      lock.stopRenewing = lockRenewal.start(join(dir, ownerEntryName(lock)));
+      return lock;
+    }
   }
   throw new LauncherRefusal(
     `The installation lock ${dir} cannot be taken. Remove it, then start Keiko again.`,
@@ -607,8 +678,13 @@ function hasStopEntry(names) {
   return names.some((name) => LOCK_ENTRY.exec(name)?.[1] === "stop");
 }
 
+// A closing entry counts only beside the owner entry of the same start: a stray one that a killed
+// start left in a lock another start published closes nothing.
 function hasClosingEntry(names) {
-  return names.some((name) => LOCK_ENTRY.exec(name)?.[1] === "closing");
+  return names.some((name) => {
+    const match = LOCK_ENTRY.exec(name);
+    return match?.[1] === "closing" && names.includes(`owner-${match[2]}-${match[3]}`);
+  });
 }
 
 function ownerEntryName(lock) {
@@ -668,6 +744,7 @@ export function closeInstallLock(lock) {
  * and is never moved, read or removed, so no replacement is ever exposed.
  */
 export function removeInstallLock(lock) {
+  lock.stopRenewing?.();
   const names = heldEntries(lock);
   if (names === undefined) return;
   try {
@@ -689,22 +766,27 @@ export function releaseInstallLock(lock) {
   return stopRequested;
 }
 
+// Whether a start (not npm alone) holds the lock and has not closed it.
+function acceptsStop(names) {
+  return names !== undefined && hasStartEntry(names) && !hasClosingEntry(names);
+}
+
 /**
  * Records a Stop in the lock of the start that installs Keiko. Returns false when no start holds
- * the lock or it is closing, so the caller stops Keiko itself. The entry counts only while the lock
- * still has a live owner and no closing entry after it was added.
+ * the lock or it is closing, so the caller stops Keiko itself. Only the entry of the start counts
+ * (running and renewing), never npm's alone: a start that ended while npm still runs cannot stop
+ * Keiko after the installation. The entry counts only while the start's entry is still there and
+ * no closing entry follows it.
  */
 export function requestStop(root) {
   const dir = installLockPath(root);
+  if (!renewalObserved(dir, START_KINDS)) return false;
   for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
-    const entries = lockEntries(dir);
-    if (entries === undefined || !hasLiveOwner(dir, entries) || hasClosingEntry(entries)) {
-      return false;
-    }
+    if (!acceptsStop(lockEntries(dir))) return false;
     const name = `stop-${lockToken()}`;
     if (!createLockEntry(join(dir, name))) continue;
     const after = lockEntries(dir);
-    if (after?.includes(name) && hasLiveOwner(dir, after) && !hasClosingEntry(after)) return true;
+    if (after?.includes(name) && acceptsStop(after)) return true;
     rmSync(join(dir, name), { force: true });
   }
   return false;
@@ -902,8 +984,8 @@ function renewHeld(paths, failure, write) {
       if (failure.reported) continue;
       failure.reported = true;
       say(
-        `Keiko could not renew its installation lock (${String(error?.code ?? "unknown")}). If the installation takes longer than a day, another start may begin one beside it.`,
-        `Keiko konnte seine Installationssperre nicht erneuern (${String(error?.code ?? "unbekannt")}). Dauert die Installation laenger als einen Tag, kann ein anderer Start daneben eine beginnen.`,
+        `Keiko could not renew its installation lock (${String(error?.code ?? "unknown")}). If its entry goes unrenewed for a minute, another start may begin an installation beside it.`,
+        `Keiko konnte seine Installationssperre nicht erneuern (${String(error?.code ?? "unbekannt")}). Bleibt der Eintrag eine Minute lang unerneuert, kann ein anderer Start daneben eine Installation beginnen.`,
       );
     }
   }
@@ -936,9 +1018,9 @@ function lockNotJoined() {
   );
 }
 
-// An owner entry this process creates in the lock `dir`, or undefined when no lock is there.
+// An npm entry this process creates in the lock `dir`, or undefined when no lock is there.
 function createOwnerEntry(dir) {
-  const entry = join(dir, `owner-${lockToken()}`);
+  const entry = join(dir, `npm-${lockToken()}`);
   let fd;
   try {
     fd = openSync(entry, "wx", 0o600);

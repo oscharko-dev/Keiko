@@ -17,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { pathToFileURL, URL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // The two readers of the declaration: the CLI's (Windows gateway service setup) and the server's
 // (update preflight).
@@ -47,7 +47,9 @@ import {
   isEntryPoint,
   keikoCliPath,
   keikoEnv,
+  lockClock,
   lockProcesses,
+  lockRenewal,
   lockfileDigest,
   main,
   missingFromInstallation,
@@ -56,7 +58,6 @@ import {
   npmEnv,
   npmLogsDir,
   ownedLogsDir,
-  ownerExpired,
   privateFileAccess,
   publishPrivateFile,
   readHidden,
@@ -80,6 +81,34 @@ import {
 // built-ins only, before Keiko is installed.
 
 const tempRoots = [];
+
+// The lock watches its holders renew on a monotonic clock for up to a minute. The tests give it a
+// virtual one: `sleep` advances it, and every fifteen virtual seconds each holder entry of the lock
+// that still has a running process number is rewritten, unless the test froze the holders.
+const clock = { renewing: true, now: 0, last: 0, writes: 0, frozen: new Set() };
+const realRenewalStart = lockRenewal.start;
+
+function renewHolders(dir) {
+  const names = existsSync(dir) ? readdirSync(dir) : [];
+  for (const name of names.filter((entry) => /^(owner|npm)-\d+-/u.test(entry))) {
+    const path = join(dir, name);
+    if (clock.frozen.has(name) || !statSync(path).isFile()) continue;
+    clock.writes += 1;
+    writeFileSync(path, `${String(clock.now)}-${String(clock.writes)}\n`);
+  }
+}
+
+beforeEach(() => {
+  Object.assign(clock, { renewing: true, now: 0, last: 0, writes: 0, frozen: new Set() });
+  vi.spyOn(lockClock, "now").mockImplementation(() => clock.now);
+  vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+    clock.now += milliseconds;
+    if (!clock.renewing || clock.now - clock.last < 15_000) return;
+    clock.last = clock.now;
+    renewHolders(dir);
+  });
+  vi.spyOn(lockRenewal, "start").mockImplementation(() => () => undefined);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -343,6 +372,9 @@ describe("the npm package start", () => {
         /cannot read exactly as npm does/u,
       );
     }
+    // Comment lines are no settings: npm's parser skips them, so they are no reason to refuse.
+    writeFileSync(npmrc, "; see ${HOME}\n  # ${KEY}=x\nregistry=https://a.example/\n;${KEY}=y\r\n");
+    expect(folderRegistry(root)).toBe(true);
     // Plain lines in either line ending keep working.
     writeFileSync(npmrc, "registry=https://a.example/\r\nproxy=http://p.example\r\n");
     expect(folderRegistry(root)).toBe(true);
@@ -851,37 +883,52 @@ describe("the npm package start", () => {
       expect(releaseInstallLock(lock)).toBe(false);
     });
 
-    it("takes over a lock written before the computer started, though its number runs again", () => {
-      // Audit of PR #4464 (P2): the system gives an ended start's process number to a new process,
-      // and that process held the lock for every later start and Stop.
+    it("takes over a lock whose reused process number does not renew, once it was observed", () => {
+      // Audit of PR #4464 (finding 2): a killed start's process number runs again, and the folder
+      // stood for a day with "another start is opening Keiko". A holder proves itself by renewing.
       const { root } = installFixture();
+      clock.renewing = false;
       staleLock(root, process.pid, [], "1\n");
 
-      expect(installerActive(root)).toBe(false);
       expect(requestStop(root)).toBe(false);
       const lock = acquireInstallLock(root);
       expect(lock).toBeDefined();
+      // The observation took the whole window on the monotonic clock, and no more.
+      expect(clock.now).toBeGreaterThanOrEqual(60_000);
+      expect(clock.now).toBeLessThan(130_000);
       expect(lockOwners(root)).toEqual([`owner-${lock.token}`]);
-      // The lock this start wrote names its own time, so it holds against the next start.
+      clock.renewing = true;
       expect(installerActive(root)).toBe(true);
       expect(acquireInstallLock(root)).toBeUndefined();
     });
 
-    it("lets an owner hold the lock only within the computer's run and one day", () => {
-      const now = 10_000_000_000;
-      const up = 5 * 60 * 60 * 1000;
-      const minute = 60 * 1000;
+    it("clears at once a lock none of whose entries has a running process number", () => {
+      const { root } = installFixture();
+      staleLock(root, endedPid());
 
-      expect(ownerExpired(now - minute, now, up)).toBe(false);
-      // A clock set back after the owner was written does not end it.
-      expect(ownerExpired(now + minute, now, up)).toBe(false);
-      // Written before the computer started, beyond what a clock correction explains.
-      expect(ownerExpired(now - up - 11 * minute, now, up)).toBe(true);
-      expect(ownerExpired(now - minute, now, 4 * minute)).toBe(false);
-      // A late renewal is no expiry: only a day without one counts as a reused process number.
-      expect(ownerExpired(now - 61 * minute, now, up)).toBe(false);
-      expect(ownerExpired(now - 25 * 60 * minute, now, 48 * 60 * minute)).toBe(true);
-      expect(ownerExpired(now - 23 * 60 * minute, now, 48 * 60 * minute)).toBe(false);
+      expect(acquireInstallLock(root)).toBeDefined();
+      expect(clock.now).toBe(0);
+    });
+
+    it("keeps the lock of a renewing owner whatever its timestamps and the wall clock say", () => {
+      // Audit of PR #4464 (finding 1): after a long suspend or a forward clock step every entry
+      // looked written before the computer started, and a live npm's lock was cleared.
+      const { root } = installFixture();
+      staleLock(root, process.pid, [], "1\n");
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now + 30 * 24 * 60 * 60 * 1000);
+
+      expect(installerActive(root)).toBe(true);
+      expect(acquireInstallLock(root)).toBeUndefined();
+      expect(requestStop(root)).toBe(true);
+    });
+
+    it("decides by renewal and not by wall-clock timestamps across processes", () => {
+      const { root } = installFixture();
+      const lock = acquireInstallLock(root);
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() - 365 * 24 * 60 * 60 * 1000);
+      expect(acquireInstallLock(root)).toBeUndefined();
+      expect(releaseInstallLock(lock)).toBe(false);
     });
 
     it("leaves a lock another start took over to that start when it ends", () => {
@@ -1292,7 +1339,10 @@ describe("the npm package start", () => {
       staleLock(root, endedPid());
       const held = heldByTest(installLockPath(root)).entry;
       expect(acquireInstallLock(root)).toBeUndefined();
-      expect(requestStop(root)).toBe(true);
+      // npm still runs but its start does not: the start that loads Keiko is gone, so a Stop is
+      // not recorded (it would promise a stop nobody carries out) and stops Keiko itself.
+      expect(requestStop(root)).toBe(false);
+      expect(readdirSync(installLockPath(root)).filter((n) => n.startsWith("stop-"))).toEqual([]);
       rmSync(held);
       expect(acquireInstallLock(root)).toBeDefined();
     });
@@ -1319,35 +1369,91 @@ describe("the npm package start", () => {
       );
     });
 
-    it("keeps the lock of an installation that runs longer than a day", () => {
+    it("keeps the lock of an installation that runs for hours while it renews", () => {
       // Review finding on PR #4464 (Major): the lock expired after a fixed time while npm still
-      // ran, and a second start ran `npm ci` beside it.
+      // ran, and a second start ran `npm ci` beside it. Renewal, not age, keeps it.
       const { root } = installFixture();
       const dir = installLockPath(root);
       const lock = acquireInstallLock(root);
-      const startEntry = join(dir, `owner-${lock.token}`);
       const hold = heldByTest(dir, `owner-${lock.token}`);
-      const longAgo = `${String(Date.now() - 25 * 60 * 60 * 1000)}\n`;
-      writeFileSync(startEntry, longAgo);
+      const longAgo = "1\n";
+      writeFileSync(join(dir, `owner-${lock.token}`), longAgo);
       writeFileSync(hold.entry, longAgo);
-      // Neither entry was written within the day: without renewal the lock is free.
-      expect(installerActive(root)).toBe(false);
-
-      hold.renew();
       expect(installerActive(root)).toBe(true);
       expect(acquireInstallLock(root)).toBeUndefined();
 
-      // npm ends after its day as well: the start's entry is renewed once more, npm's goes, and
-      // the lock stays with the start until it releases it.
-      writeFileSync(startEntry, longAgo);
-      writeFileSync(hold.entry, longAgo);
+      // npm ends: its entry goes and the lock stays with the start until it releases it.
       hold.exit();
       expect(hold.renew).toBeUndefined();
       expect(lockOwners(root)).toEqual([`owner-${lock.token}`]);
-      expect(installerActive(root)).toBe(true);
       expect(acquireInstallLock(root)).toBeUndefined();
       expect(releaseInstallLock(lock)).toBe(false);
       expect(acquireInstallLock(root)).toBeDefined();
+    });
+
+    it("renews the start's own entry from a worker while the start is blocked", () => {
+      // Audit of PR #4464 (finding 2): the start renews itself for the whole time it holds the
+      // lock, also while a synchronous npm run blocks it, and never recreates a removed entry.
+      const { root } = installFixture();
+      const dir = installLockPath(root);
+      const lock = acquireInstallLock(root);
+      const entry = join(dir, `owner-${lock.token}`);
+      const before = readFileSync(entry, "utf8");
+      lockRenewal.everyMs = 30;
+      try {
+        const stopRenewing = realRenewalStart(entry);
+        const deadline = Date.now() + 10_000;
+        // The main thread is blocked here, as it is while it waits for npm.
+        while (readFileSync(entry, "utf8") === before && Date.now() < deadline) {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+        }
+        expect(readFileSync(entry, "utf8")).not.toBe(before);
+        expect(readFileSync(entry, "utf8")).toMatch(/^\d+\n$/u);
+        rmSync(entry);
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+        expect(existsSync(entry)).toBe(false);
+        stopRenewing();
+      } finally {
+        lockRenewal.everyMs = 15_000;
+      }
+    });
+
+    it("records a Stop only in a lock whose start runs and renews", () => {
+      // Audit of PR #4464 (finding 3): a Stop was accepted by the lock of a dead start whose npm
+      // still ran, which promised a stop nobody carried out.
+      const { root } = installFixture();
+      staleLock(root, endedPid());
+      heldByTest(installLockPath(root));
+      expect(requestStop(root)).toBe(false);
+
+      clock.renewing = false;
+      rmSync(installLockPath(root), { recursive: true });
+      staleLock(root, process.pid);
+      expect(requestStop(root)).toBe(false);
+
+      // npm renews but the start's entry does not: the start is frozen or its number was reused.
+      rmSync(installLockPath(root), { recursive: true });
+      staleLock(root, process.pid);
+      clock.renewing = true;
+      clock.frozen.add(`owner-${String(process.pid)}-0a`);
+      heldByTest(installLockPath(root));
+      expect(requestStop(root)).toBe(false);
+
+      clock.frozen.clear();
+      expect(requestStop(root)).toBe(true);
+    });
+
+    it("ignores a closing entry that has no owner entry of its start beside it", () => {
+      // Audit of PR #4464 (finding 4): a start killed after it added its closing entry left it in
+      // a lock another start published, and every later Stop fell through.
+      const { root } = installFixture();
+      const lock = acquireInstallLock(root);
+      writeFileSync(join(installLockPath(root), `closing-${String(endedPid())}-ab`), "");
+
+      expect(requestStop(root)).toBe(true);
+      // The start's own closing entry still closes the lock.
+      expect(closeInstallLock(lock).owned).toBe(true);
+      expect(requestStop(root)).toBe(false);
     });
 
     it("renews only entries still in the lock and nothing outside it", () => {
@@ -1400,17 +1506,6 @@ describe("the npm package start", () => {
       hold.renew();
       expect(Number(readFileSync(entry, "utf8"))).toBeGreaterThanOrEqual(Number(before));
       expect(readFileSync(entry, "utf8")).toMatch(/^\d+\n$/u);
-    });
-
-    it("does not take over an owner that is alive but late renewing", () => {
-      // Review finding on PR #4464: a start took over the lock of a running owner an hour after its
-      // last renewal, so two npm processes installed into the same folder.
-      const { root } = installFixture();
-      staleLock(root, process.pid, [], `${String(Date.now() - 3 * 60 * 60 * 1000)}\n`);
-
-      expect(installerActive(root)).toBe(true);
-      expect(acquireInstallLock(root)).toBeUndefined();
-      expect(requestStop(root)).toBe(true);
     });
 
     it("ends npm before it does anything when the lock is not its start's generation", () => {
@@ -1477,8 +1572,9 @@ describe("the npm package start", () => {
 
       expect(child.status).toBe(0);
       expect(JSON.parse(child.stdout)).toEqual([
+        // npm's own entry carries its own kind, so a Stop never mistakes it for the start's.
+        expect.stringMatching(new RegExp(`^npm-${String(child.pid)}-[0-9a-f]+$`, "u")),
         keep,
-        expect.stringMatching(new RegExp(`^owner-${String(child.pid)}-[0-9a-f]+$`, "u")),
       ]);
       // npm's entry went with npm, and the start's entry was renewed as npm ended.
       expect(readdirSync(dir)).toEqual([keep]);

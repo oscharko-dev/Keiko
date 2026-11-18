@@ -1259,12 +1259,19 @@ folder. The state directory lies in the home folder, created owner-private as Ke
 keeps a second start from installing concurrently. It is a folder that appears in one rename with
 the owner entry of its start already inside, naming when it was written, so no start can find it
 empty. A lock whose start no longer runs is cleared entry by entry and only then removed, so of two
-starts that find it so one takes it. A process number alone does not prove that a start still runs,
-because the system reuses the numbers of ended processes (Windows soon after), so an owner written
-before the computer started (ten minutes of clock correction aside) or last renewed more than 24
-hours ago no longer holds the lock. An owner whose process runs is otherwise never taken over, however
-late its renewal is: that 24-hour hard expiry is the one remaining limit, after which even a running
-process number counts as reused. A start releases only the generation it acquired: it removes its own
+starts that find it so one takes it. Neither a process number nor a timestamp proves that a start
+still runs: the system reuses the numbers of ended processes (Windows soon after) and a clock can
+jump, so liveness is observed renewal. Every holder (the start, whose renewal runs in a worker thread
+so it continues while the start is blocked in npm, and npm's process with its `npm-` entry) rewrites
+its entry every 15 seconds. A start that finds a lock without any entry whose process number runs
+takes it over at once; otherwise it watches the entries for up to 60 seconds on its own monotonic
+clock, and any entry that changes (or appears) means the lock is held, while none means the number
+was reused or the holder is frozen and the lock is taken over. No wall-clock comparison across
+processes, no boot rule and no age limit decides. The remaining limit is stated plainly: a frozen
+holder that resumes after a takeover overlaps for at most one renewal interval, because its first
+renewal finds its entry gone and ends npm. A Stop is recorded only when the start's own entry (not
+npm's alone) runs and renews; a closing entry counts only beside the owner entry of the same start.
+A start releases only the generation it acquired: it removes its own
 owner entry first and then the entries it read beside it, and a lock without its owner entry is
 another start's and is never moved, read or removed. Before it lets go, a start adds a `closing`
 entry; a Stop adds its entry and then looks for the closing entry, so a Stop is either read by the
@@ -1273,8 +1280,8 @@ and can never stop the Keiko a later start opened. Renames of the lock folder ar
 own process adds an owner entry of its own when it loads (`--import` of the launcher module with
 the lock folder and the start's owner entry as a query, which only holds the lock), so a start that
 ends while npm still installs leaves the lock held until that npm ends. While npm runs, its process
-renews its own entry and the start's every five minutes on a timer that never keeps npm running,
-so an installation longer than a day keeps its lock; at exit it renews the start's entry once
+renews its own entry and the start's every 15 seconds on a timer that never keeps npm running,
+so an installation of any length keeps its lock; at exit it renews the start's entry once
 more and removes its own, so the lock passes back to the start until Keiko is open. A renewal
 rewrites the timestamp of an entry still in the lock in place and never empties the file, never
 recreates an entry that went with a release or takeover, and accepts no name outside the lock; a

@@ -94,20 +94,25 @@ folder has no Keiko to stop with: the start window then says so and that a Keiko
 another folder is stopped there. A `Stop Keiko` after that stops the open Keiko as usual. Before the start lets go of the lock it
 closes it: a `Stop Keiko` that the lock accepted is carried out first, and one that comes after the
 lock closed is not recorded but stops the open Keiko itself, so it can never stop the Keiko a later
-start opened. A lock whose start was closed or crashed is taken over by the next start: its process
-no longer runs, or the lock was written before the computer started. A start whose process still
-runs is never taken over because its renewal is late (a computer that slept): npm renews every five
-minutes, and a running owner holds the lock until it ends. The one remaining limit: the system
-gives an ended start's process number to new processes, so an owner entry that was not renewed for
-24 hours counts as such a reused number and is taken over even though a process with that number
-runs. An installation that takes longer than 24 hours keeps its lock as long as npm renews it. npm's
-own process holds the lock as well while it installs, with its own entry and that of the start that
-runs it, and a start window closed during an installation leaves the lock to that npm until it
-ends; no second npm installs beside it. npm runs only as part of the lock generation of the start
+start opened. Whether a lock is still held is told by renewal, never by a clock: every holder (the
+start itself, also while it waits for npm, and npm's own process) rewrites its entry every 15
+seconds. A start that finds a lock none of whose entries has a running process number takes it over
+at once. If an entry's process number runs, the start watches the lock's entries for up to 60
+seconds on its own monotonic clock: any entry that changes means the lock is held (the start then
+says another start is opening Keiko, after up to one renewal interval), and none that changes means
+the holder ended and its process number was reused by another process, or the holder is frozen, and
+the lock is taken over. No timestamp in a file and no wall-clock jump (a computer that slept, a
+corrected clock) decides this. The one remaining limit: a holder that is frozen for longer than that
+minute and then resumes can overlap with the start that took over for at most one renewal interval;
+the first renewal of the resumed npm finds its entry gone and ends it. A `Stop Keiko` is recorded
+only in a lock whose start's own entry runs and renews: if the start ended while its npm still runs,
+the Stop is not recorded and stops Keiko directly. npm's own process holds the lock as well while it
+installs, with its own entry, and a start window closed during an installation leaves the lock to
+that npm until it ends; no second npm installs beside it. npm runs only as part of the lock generation of the start
 that ran it: before it does anything, npm's process ends with the reason when the lock is gone,
 when the start's entry is not in it, or when another start's lock replaced it. A running npm ends at
 once, without writing further, when it finds its own entry or the start's gone at a renewal (only a
-takeover after the 24 hours can cause that). A renewal rewrites the entry's timestamp in place and
+takeover of a frozen holder can cause that). A renewal rewrites the entry's timestamp in place and
 never empties it, so a failed renewal keeps the last valid timestamp. When npm ends, the start's
 entry is renewed once more, so the start keeps the lock until Keiko is open. Each start and
 stop says how it ended. A later start installs again when the lockfile changed, an earlier
