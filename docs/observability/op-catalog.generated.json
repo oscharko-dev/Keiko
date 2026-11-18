@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "78818f70acf077bd71da40bbeeca548c4243418f8a9675e04a216f1592729b61",
+    "catalogDigest": "c9ce62d7db93d5846af034eb92e5d8d746aff6aa12a1f1a349c1678537295bb5",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -44500,8 +44500,8 @@
           "search.native-runtime-resolved.worker"
         ],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:37",
-        "emitterSites": ["packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:418"]
+        "registrationSite": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:38",
+        "emitterSites": ["packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:416"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -120393,7 +120393,7 @@
     {
       "op": "search.native-runtime-resolved",
       "category": "search",
-      "site": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:40",
+      "site": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:41",
       "package": "keiko-local-knowledge"
     },
     {

@@ -303,6 +303,31 @@ describe("guided Jira template options", () => {
     expect(http.mock.calls[0]?.[0].url).toMatch(/\/project\/SYN$/u);
   });
 
+  it("records a project Jira does not know as a rejected read under the request correlation", async () => {
+    // The editor shows such a project as missing without a client failure diagnostic; this line
+    // is the evidence of that read.
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const { deps, cookie } = fixture();
+    const result = await handleJiraTemplateOptions(
+      context(cookie, { podId: POD, projectKey: "GONE" }),
+      deps,
+    );
+    expect(result.status).toBe(404);
+    const closing = sink.events
+      .filter(
+        (event) =>
+          event.op === "skills.library.operation" &&
+          event.extra?.action === "jira-template-options",
+      )
+      .at(-1);
+    expect(closing).toMatchObject({
+      correlationId: "template-routes",
+      extra: { phase: "rejected", httpStatus: 404 },
+    });
+    expect(formatActivityLogProofLine(closing ?? {})).not.toMatch(/\bGONE\b|example\.invalid/u);
+  });
+
   it.each([
     ["a path in the project key", { projectKey: "../SYN" }],
     ["a slash in the project key", { projectKey: "SYN/1" }],

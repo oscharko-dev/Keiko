@@ -425,12 +425,19 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// A loop, not `/\/+$/`: a run of `/` before other text makes that pattern retry at every slash.
+function withoutTrailingSlashes(value) {
+  let end = value.length;
+  while (end > 0 && value.codePointAt(end - 1) === 47 /* '/' */) end -= 1;
+  return value.slice(0, end);
+}
+
 function baseUrlIdentity(value) {
   if (typeof value !== "string") return undefined;
   try {
-    return new URL(value.trim()).href.replace(/\/+$/u, "");
+    return withoutTrailingSlashes(new URL(value.trim()).href);
   } catch {
-    return value.trim().replace(/\/+$/u, "");
+    return withoutTrailingSlashes(value.trim());
   }
 }
 
@@ -478,11 +485,6 @@ function blockName(block, fallback) {
   return typeof block?.modelId === "string" ? block.modelId : fallback;
 }
 
-/**
- * Which keys sealed on this computer the team token replaces (`token`), and which belong to another
- * connection (`foreign`, by model name). A reranker shares the token only on the gateway's own
- * endpoint and header, exactly where Gateway Setup wires a discovered one.
- */
 /** The sealed blocks of a configuration: providers first, then a reranker, with their test. */
 function sealedBlocks(config, primary) {
   const providers = Array.isArray(config.providers) ? config.providers.filter(isRecord) : [];
@@ -502,6 +504,11 @@ function sealedBlocks(config, primary) {
   return blocks.filter(({ block }) => block.apiKeySecretRef !== undefined);
 }
 
+/**
+ * Which keys sealed on this computer the team token replaces (`token`), and which belong to another
+ * connection (`foreign`, by model name). A reranker shares the token only on the gateway's own
+ * endpoint and header, exactly where Gateway Setup wires a discovered one.
+ */
 export function credentialScope(config) {
   const providers = Array.isArray(config.providers) ? config.providers.filter(isRecord) : [];
   const primary = providers.length > 0 ? primaryProvider(config) : undefined;

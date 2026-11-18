@@ -168,7 +168,11 @@ interface RuleFieldsProps {
   readonly onChange: (patch: Partial<JiraTemplateForm>) => void;
 }
 
-function ActivationField({ form, details, onChange }: RuleFieldsProps): ReactNode {
+function ActivationField({
+  form,
+  details,
+  onChange,
+}: Omit<RuleFieldsProps, "template">): ReactNode {
   const t = useTranslate();
   const writes = form.activateOn.filter(appliesToWrites);
   const transitions = form.activateOn.filter((value) => !appliesToWrites(value));
