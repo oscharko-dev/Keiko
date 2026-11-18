@@ -221,7 +221,12 @@ function unwrittenFields(
   const named = new Set(
     written.flatMap((value) => resolveJiraTemplateFieldIds(value, fields, template)),
   );
-  const result = fields.filter((field) => !named.has(field.id));
+  // A reference Jira renamed keeps the id it was bound to, so a field now carrying that written name
+  // is excluded too: selecting it would store the old id twice.
+  const names = new Set(written.map((value) => value.trim().toLowerCase()));
+  const result = fields.filter(
+    (field) => !named.has(field.id) && !names.has(field.name.trim().toLowerCase()),
+  );
   unwrittenCache.set(fields, { written, key, result });
   return result;
 }
@@ -405,7 +410,7 @@ function sameActivation(
   template: JiraIssueTemplate | undefined,
 ): (written: string, choice: string) => boolean {
   const target = (value: string): string | undefined =>
-    value.startsWith("transition:") ? value.slice("transition:".length) : undefined;
+    value.startsWith("transition:") ? value.slice("transition:".length).trim() : undefined;
   // A saved target keeps the id it was bound to even when Jira now names that status differently.
   const savedId = (name: string): string | undefined =>
     template === undefined

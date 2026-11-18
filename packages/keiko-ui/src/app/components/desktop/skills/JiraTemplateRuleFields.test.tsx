@@ -120,6 +120,26 @@ describe("status choices", () => {
     expect(optionValues(select)).not.toContain("transition:Done");
   });
 
+  it("finds the bound id of a saved activation whose quoted target has surrounding blanks (PR #4464)", () => {
+    const form = formOf({ activateOn: ["create", "transition: Erledigt "] });
+    const template = bound(form, { issueTypeId: "10002", transitionStatusIds: ["3"] });
+    expect(template.binding).toBeDefined();
+    renderRules({
+      form,
+      template,
+      details: details({
+        fields: [],
+        statuses: [
+          { id: "3", name: "Done" },
+          { id: "4", name: "Open" },
+        ],
+      }),
+    });
+    const select = screen.getByRole("combobox", { name: /status/i });
+    expect(optionValues(select)).toContain("transition:Open");
+    expect(optionValues(select)).not.toContain("transition:Done");
+  });
+
   it("still offers a differently named status when nothing binds the saved one", () => {
     const form = formOf({ activateOn: ["create", "transition:Erledigt"] });
     renderRules({
@@ -182,6 +202,30 @@ describe("partial details", () => {
       details: details({ fields, statuses: [] }),
     });
     expect(screen.queryByRole("button", { name: /try again|retry/i })).toBeNull();
+  });
+});
+
+describe("a written field reference that Jira renamed (PR #4464)", () => {
+  it("does not offer another field whose name equals the written reference after case folding", () => {
+    const form = formOf({ requiredFields: ["Team"] });
+    const template = bound(form, { issueTypeId: "10002", requiredFieldIds: ["customfield_1"] });
+    expect(template.binding).toBeDefined();
+    renderRules({
+      form,
+      template,
+      details: details({
+        fields: [
+          { id: "customfield_2", name: "team", required: false },
+          { id: "customfield_3", name: "Sprint", required: false },
+        ],
+        statuses: [],
+        ambiguousFieldNames: [],
+      }),
+    });
+    const select = screen.getByRole("combobox", { name: /required field/i });
+    const labels = Array.from(select.querySelectorAll("option"), (option) => option.textContent);
+    expect(labels.some((label) => /^team$/iu.test(label.trim()))).toBe(false);
+    expect(labels.some((label) => label.includes("Sprint"))).toBe(true);
   });
 });
 

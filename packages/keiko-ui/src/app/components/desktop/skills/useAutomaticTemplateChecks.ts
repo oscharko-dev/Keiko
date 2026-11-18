@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { parseJiraIssueTemplate } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   validateJiraTemplate,
   type JiraTemplateEntry,
@@ -14,11 +15,26 @@ export function templateKey(entry: Pick<JiraTemplateEntry, "id" | "revision">): 
   return `${entry.id}:${String(entry.revision)}`;
 }
 
+/** Jira's answer, marked when the file's own binding is not this Jira's. */
+type CheckedTemplate = JiraTemplateValidation & { readonly bindingOwnedElsewhere?: true };
+
+/**
+ * A file that carries a binding this Jira does not confirm (another Jira's, or an edited one) is
+ * offered a binding anyway; replacing that binding is the person's explicit choice, never automatic.
+ */
+function markForeignBinding(result: JiraTemplateValidation, body: string): CheckedTemplate {
+  if (!result.valid || result.binding?.state !== "bindable") return result;
+  const parsed = parseJiraIssueTemplate(body);
+  return parsed.ok && parsed.template.binding !== undefined
+    ? { ...result, bindingOwnedElsewhere: true }
+    : result;
+}
+
 async function checkStoredTemplate(
   podId: string,
   entry: JiraTemplateEntry,
   isCurrent: () => boolean,
-): Promise<JiraTemplateValidation | undefined> {
+): Promise<CheckedTemplate | undefined> {
   const correlationId = newClientCorrelationId();
   reportClientDiagnostic("Jira template validation started.", { correlationId });
   try {
@@ -33,7 +49,7 @@ async function checkStoredTemplate(
     }
     const result = await validateJiraTemplate(podId, skill.body, correlationId);
     reportClientDiagnostic("Jira template validation completed.", { correlationId });
-    return result;
+    return markForeignBinding(result, skill.body);
   } catch (error) {
     reportClientDiagnostic("Jira template request failed.", {
       correlationId,
@@ -45,7 +61,7 @@ async function checkStoredTemplate(
 }
 
 /** The outcome of one automatic check: Jira's answer, or that the check itself could not run. */
-export type AutomaticTemplateCheck = JiraTemplateValidation | "failed";
+export type AutomaticTemplateCheck = CheckedTemplate | "failed";
 
 const EMPTY_CHECKS: ReadonlyMap<string, AutomaticTemplateCheck> = new Map();
 

@@ -778,9 +778,15 @@ describe("binding a template to this Jira", () => {
   const bind = (
     f: ReturnType<typeof fixture>,
     skill: { id: string; revision: number },
+    migrate?: boolean,
   ): ReturnType<typeof handleBindJiraTemplate> =>
     handleBindJiraTemplate(
-      context(f.cookie, { podId: POD, skillId: skill.id, revision: skill.revision }),
+      context(f.cookie, {
+        podId: POD,
+        skillId: skill.id,
+        revision: skill.revision,
+        ...(migrate === true ? { migrate } : {}),
+      }),
       f.deps,
     );
 
@@ -888,13 +894,38 @@ describe("binding a template to this Jira", () => {
     expect(f.deps.store.markdownSkills.get(skill.id)?.revision).toBe(2);
   });
 
-  it("ignores a binding made for another Jira and replaces it with this one's ids", async () => {
+  it("refuses to replace a binding owned by another Jira unless a migration is asked for (PR #4464)", async () => {
     const f = fixture();
     const skill = await stored(
       f,
-      typed("Story", 'issueTypeId: "999"', `jiraBinding: "${FOREIGN}"`),
+      typed(
+        "Story",
+        'issueTypeId: "999"',
+        'parentIssueTypeIds: ["998"]',
+        'parentFieldId: "parent"',
+        `jiraBinding: "${FOREIGN}"`,
+      ),
     );
-    expect((await bind(f, skill)).body).toMatchObject({ changed: true, issueType: "Story" });
+    const before = f.deps.store.markdownSkills.get(skill.id)?.body;
+    const refused = await bind(f, skill);
+    expect(refused.status).toBe(409);
+    expect(f.deps.store.markdownSkills.get(skill.id)?.body).toBe(before);
+    expect(f.deps.store.markdownSkills.get(skill.id)?.revision).toBe(1);
+  });
+
+  it("ignores a binding made for another Jira and replaces it with this one's ids on an explicit migration", async () => {
+    const f = fixture();
+    const skill = await stored(
+      f,
+      typed(
+        "Story",
+        'issueTypeId: "999"',
+        'parentIssueTypeIds: ["998"]',
+        'parentFieldId: "parent"',
+        `jiraBinding: "${FOREIGN}"`,
+      ),
+    );
+    expect((await bind(f, skill, true)).body).toMatchObject({ changed: true, issueType: "Story" });
     const body = f.deps.store.markdownSkills.get(skill.id)?.body ?? "";
     expect(body).toContain('issueTypeId: "10001"');
     expect(body).not.toContain(FOREIGN);
@@ -952,10 +983,12 @@ describe("binding a template to this Jira", () => {
       f.deps,
     );
     expect(checked.body).toMatchObject({ binding: { state: "bindable", issueType: "Bug" } });
-    expect((await bind(f, { id: skill.id, revision: replaced.revision })).body).toMatchObject({
-      changed: true,
-      issueType: "Bug",
-    });
+    expect((await bind(f, { id: skill.id, revision: replaced.revision }, true)).body).toMatchObject(
+      {
+        changed: true,
+        issueType: "Bug",
+      },
+    );
     const after = f.deps.store.markdownSkills.get(skill.id)?.body ?? "";
     expect(after).toContain('issueTypeId: "10005"');
     expect(after.match(/^issueTypeId:/gmu)).toHaveLength(1);

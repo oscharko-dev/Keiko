@@ -31,18 +31,22 @@ export function useJiraTemplateBinding(
   adoptBinding?: SkillWorkspace["adoptBinding"],
 ): {
   readonly outcomes: ReadonlyMap<string, BindOutcome>;
-  readonly bind: (entry: JiraTemplateEntry) => Promise<void>;
+  /** `migrate` is the person's explicit choice to replace a binding another Jira owns. */
+  readonly bind: (entry: JiraTemplateEntry, migrate?: boolean) => Promise<void>;
 } {
   const [outcomes, setOutcomes] = useState<ReadonlyMap<string, BindOutcome>>(new Map());
   const bind = useCallback(
-    async (entry: JiraTemplateEntry): Promise<void> => {
+    async (entry: JiraTemplateEntry, migrate?: boolean): Promise<void> => {
       if (podId === undefined) return;
       const correlationId = newClientCorrelationId();
       const settle = (outcome: BindOutcome): void =>
         setOutcomes((current) => new Map(current).set(entry.id, outcome));
       settle("working");
       try {
-        const bound = await bindJiraTemplate(podId, entry.id, entry.revision, correlationId);
+        const bound =
+          migrate === true
+            ? await bindJiraTemplate(podId, entry.id, entry.revision, correlationId, true)
+            : await bindJiraTemplate(podId, entry.id, entry.revision, correlationId);
         settle({ issueType: bound.issueType, parentTypeCount: bound.parentTypeCount ?? 0 });
         if (bound.skill !== undefined) adoptBinding?.(entry.revision, bound.skill);
         await library.refresh();

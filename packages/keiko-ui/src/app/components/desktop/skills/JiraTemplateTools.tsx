@@ -267,16 +267,24 @@ export function PodSelect({ jira }: { readonly jira: JiraTemplates }): ReactNode
   );
 }
 
+function ownedElsewhere(check: AutomaticTemplateCheck | undefined): boolean {
+  return check !== undefined && check !== "failed" && check.bindingOwnedElsewhere === true;
+}
+
 function bindable(check: AutomaticTemplateCheck | undefined): boolean {
   return (
     check !== undefined && check !== "failed" && check.valid && check.binding?.state === "bindable"
   );
 }
 
-/** The templates whose automatic check offers the binding. */
+/** The templates whose check offers the binding and whose file carries no binding of another Jira. */
 function useBindableEntries(tools: JiraTemplates["tools"]): readonly JiraTemplateEntry[] {
   return useMemo(
-    () => tools.templates.filter((entry) => bindable(tools.checks.get(templateKey(entry)))),
+    () =>
+      tools.templates.filter((entry) => {
+        const check = tools.checks.get(templateKey(entry));
+        return bindable(check) && !ownedElsewhere(check);
+      }),
     [tools.templates, tools.checks],
   );
 }
@@ -428,7 +436,7 @@ export function JiraTemplateList({
           chat={chat}
           bind={{
             outcome: binding.outcomes.get(entry.id),
-            onBind: () => void binding.bind(entry),
+            onBind: () => void binding.bind(entry, true),
           }}
         />
       ))}

@@ -148,6 +148,11 @@ export function bindJiraTemplate(
   skillId: string,
   revision: number,
   correlationId?: string,
+  migrate?: boolean,
 ): Promise<JiraTemplateBound> {
-  return request("/api/skills/jira-templates/bind", { podId, skillId, revision }, correlationId);
+  return request(
+    "/api/skills/jira-templates/bind",
+    { podId, skillId, revision, ...(migrate === true ? { migrate } : {}) },
+    correlationId,
+  );
 }

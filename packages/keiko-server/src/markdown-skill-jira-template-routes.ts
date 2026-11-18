@@ -440,6 +440,27 @@ function saveBinding(
   });
 }
 
+function readAccounting(fields: readonly unknown[] | undefined): MarkdownSkillTemplateAccounting {
+  return {
+    ...(fields === undefined ? {} : { checkedFieldCount: fields.length }),
+    bindingUpdateCount: 0,
+  };
+}
+
+/** A binding this Jira does not confirm is another Jira's (or an edited one): replacing it needs an explicit migration. */
+function assertMigrationAsked(
+  stored: JiraIssueTemplate,
+  template: JiraIssueTemplate,
+  migrate: unknown,
+): void {
+  if (stored.binding === undefined || template.binding !== undefined || migrate === true) return;
+  throw new UiStoreError(
+    "INVALID_REQUEST",
+    `The template "${jiraIssueTemplateLabel(stored)}" is bound to another Jira. Migrate it to this Jira explicitly to replace that binding.`,
+    409,
+  );
+}
+
 /**
  * Binds a stored template to the issue types of the Jira the caller chose (#4354): the typed names are
  * resolved in the caller's own view and the ids are written into the template's front matter as a new
@@ -465,15 +486,11 @@ export function handleBindJiraTemplate(
       assertReadHeld(ctx, deps, pod);
       if (!read.ok) throw jiraReadFailure(read.reason);
       const resolution = resolveJiraTemplateBinding(template, read.instance, instanceId);
-      accounting = {
-        ...(read.instance.fields === undefined
-          ? {}
-          : { checkedFieldCount: read.instance.fields.length }),
-        bindingUpdateCount: 0,
-      };
+      accounting = readAccounting(read.instance.fields);
       if (resolution.state === "bound" || resolution.state === "dead")
         return { status: 200, body: unchangedBinding(resolution) };
       if (resolution.state !== "bindable") throw refusedBinding(template, resolution);
+      assertMigrationAsked(stored, template, body.value.migrate);
       const saved = saveBinding(deps, skill, resolution.binding);
       accounting = { ...accounting, bindingUpdateCount: 1 };
       const answer: JiraTemplateBound = {

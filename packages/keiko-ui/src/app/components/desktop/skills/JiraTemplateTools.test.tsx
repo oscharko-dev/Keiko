@@ -789,6 +789,43 @@ describe("binding a template to this Jira", () => {
     expect(await axe(document.body)).toHaveNoViolations();
   });
 
+  it("never replaces a binding another Jira owns on its own, and migrates it on an explicit click (PR #4464)", async () => {
+    const owned = [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Story",
+      'issueTypeId: "999"',
+      `jiraBinding: "${"f".repeat(32)}"`,
+      "activateOn: [create]",
+      "summaryMinLength: 4",
+      "---",
+      "# Story template",
+    ].join("\n");
+    vi.mocked(skills.readMarkdownSkill).mockResolvedValue({ ...DOCUMENT, body: owned });
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue(bindable);
+    vi.mocked(templates.bindJiraTemplate).mockResolvedValue({
+      changed: true,
+      issueType: "Story",
+      parentTypeCount: 0,
+      skill: BOUND_SKILL,
+    });
+    const user = userEvent.setup();
+    render(<Panel stored={stored} />);
+    const story = await row("Story template");
+    const button = await within(story).findByRole("button", { name: "Bind to this Jira" });
+    expect(templates.bindJiraTemplate).not.toHaveBeenCalled();
+    await user.click(button);
+    expect(templates.bindJiraTemplate).toHaveBeenCalledWith(
+      "pod-1",
+      ENTRY.id,
+      ENTRY.revision,
+      expect.any(String),
+      true,
+    );
+  });
+
   it("says what a bound template is and does not bind it again", async () => {
     vi.mocked(templates.validateJiraTemplate).mockResolvedValue({
       ...MATCH,
