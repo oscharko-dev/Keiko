@@ -34,7 +34,12 @@ export function makeDownloadSeams(runGh) {
     mkdtemp: (prefix) => mkdtempSync(join(tmpdir(), prefix)),
     // The manifest is small: a stalled gh is ended at a deadline, and a file past the limit the
     // updater itself enforces counts as not downloaded, never read into memory or parsed.
-    runGh: (args) => runGh(args, { timeout: portableManifestDownloadTimeoutMs() }),
+    // `maxBytes` asks the caller to bound the bytes gh writes while it transfers.
+    runGh: (args) =>
+      runGh(args, {
+        timeout: portableManifestDownloadTimeoutMs(),
+        maxBytes: PORTABLE_MANIFEST_MAX_BYTES,
+      }),
     pathJoin: join,
     exists: (path) => existsSync(path) && statSync(path).size <= PORTABLE_MANIFEST_MAX_BYTES,
     readFile: readFileSync,

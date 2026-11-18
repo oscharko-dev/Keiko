@@ -81,6 +81,7 @@ import {
   uploadIntoDraft,
 } from "./lib/portable-release-publication.mjs";
 import {
+  boundedCommand,
   boundedCurlCommand,
   portableDownloadCurlArgs,
   portableDownloadFailure,
@@ -1343,8 +1344,11 @@ function portablePublisher() {
     snapshot: githubReleaseSnapshot,
     verifyAssets: verifyRemotePortableAssets,
     ...makePublishedPortableSeams({
-      runGh: (args, options = {}) =>
-        commandResult("gh", args, { env: githubEnvironment(), ...options }),
+      runGh: (args, { maxBytes, ...options } = {}) => {
+        const command =
+          maxBytes === undefined ? { cmd: "gh", args } : boundedCommand("gh", args, maxBytes);
+        return commandResult(command.cmd, command.args, { env: githubEnvironment(), ...options });
+      },
       verifyReleaseTrust: verifyPortableReleaseTrust,
       trustedKeys: portableReleaseTrustedKeys(),
     }),

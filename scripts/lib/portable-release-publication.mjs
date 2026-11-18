@@ -6,6 +6,8 @@
 // evidence verify on GitHub. These decisions live here, not in the spawned publisher, so in-process
 // tests can prove every branch.
 
+import { PORTABLE_MANIFEST_MAX_BYTES } from "./portable-download-bounds.mjs";
+
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/u;
 
@@ -407,6 +409,11 @@ function publishedEvidenceFailuresForBinding(publisher, releaseInfo, remoteByNam
   const remote = remoteByName.get(binding.assetName);
   if (!validRemoteDigest(remote)) {
     return [`${binding.assetName} has no SHA-256 digest on GitHub.`];
+  }
+  if (typeof remote.size === "number" && remote.size > PORTABLE_MANIFEST_MAX_BYTES) {
+    return [
+      `${binding.assetName} is larger than the ${String(PORTABLE_MANIFEST_MAX_BYTES)} byte manifest limit.`,
+    ];
   }
   const download = publisher.downloadReleaseAsset(releaseInfo, binding.assetName);
   if (!validDownloadResult(download)) {

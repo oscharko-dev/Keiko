@@ -1,11 +1,13 @@
 import { Buffer } from "node:buffer";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  boundedCommand,
   boundedCurlCommand,
   PORTABLE_DOWNLOAD_MAX_TIME_SECONDS,
   PORTABLE_DOWNLOAD_STALL_BYTES_PER_SECOND,
@@ -139,5 +141,41 @@ describe("portable download bounds (PR #4464)", () => {
       await import("../../packages/keiko-server/src/update-portable-staging-shared.ts");
     const { PORTABLE_MANIFEST_MAX_BYTES } = await import("../lib/portable-download-bounds.mjs");
     expect(PORTABLE_MANIFEST_MAX_BYTES).toBe(MAX_PORTABLE_MANIFEST_BYTES);
+  });
+});
+
+describe("boundedCommand transfer ceiling (PR #4464)", () => {
+  const posix = process.platform === "win32" ? it.skip : it;
+  const CEILING = 1_048_576;
+
+  function writeThrough(bytes) {
+    const root = mkdtempSync(join(tmpdir(), "keiko-download-bounds-"));
+    roots.push(root);
+    const out = join(root, "manifest.json");
+    const command = boundedCommand(
+      "sh",
+      ["-c", `head -c ${String(bytes)} /dev/zero > "$1"`, "sh", out],
+      CEILING,
+    );
+    const result = spawnSync(command.cmd, command.args, { encoding: "utf8" });
+    return { out, result };
+  }
+
+  posix("cuts a body larger than the ceiling while it is written", () => {
+    const { out, result } = writeThrough(CEILING * 4);
+    expect(result.status === 0 && result.signal === null).toBe(false);
+    // Linux counts the limit in 512-byte blocks, macOS's sh in 1024-byte ones: at most twice the
+    // ceiling reaches the disk there, never the four times the body would write.
+    expect(statSync(out).size).toBeLessThanOrEqual(2 * CEILING + 1024);
+  });
+
+  posix("admits a body of exactly the ceiling", () => {
+    const { out, result } = writeThrough(CEILING);
+    expect(result.status).toBe(0);
+    expect(statSync(out).size).toBe(CEILING);
+  });
+
+  it("leaves the command alone where no POSIX file-size limit exists", () => {
+    expect(boundedCommand("gh", ["a"], CEILING, "win32")).toEqual({ cmd: "gh", args: ["a"] });
   });
 });

@@ -72,11 +72,20 @@ export function portableDownloadCurlArgs({ expectedSize, destination, url, maxTi
  * blocks in POSIX shells, so one block more than the size rounded up always admits the exact size.
  */
 export function boundedCurlCommand(args, expectedSize, platform = process.platform) {
-  if (platform === "win32") return { cmd: "curl", args };
-  const blocks = Math.ceil(expectedSize / 512) + 1;
+  return boundedCommand("curl", args, expectedSize, platform);
+}
+
+/**
+ * Any child process, bounded the same way. On POSIX the limit applies to every file the child
+ * writes, so the child must not append to other large files. On Windows nothing bounds the transfer
+ * itself: the caller's advertised-size check and its after-the-fact size check remain.
+ */
+export function boundedCommand(cmd, args, maxBytes, platform = process.platform) {
+  if (platform === "win32") return { cmd, args };
+  const blocks = Math.ceil(maxBytes / 512) + 1;
   return {
     cmd: "sh",
-    args: ["-c", 'ulimit -f "$1" && shift && exec "$@"', "sh", String(blocks), "curl", ...args],
+    args: ["-c", 'ulimit -f "$1" && shift && exec "$@"', "sh", String(blocks), cmd, ...args],
   };
 }
 

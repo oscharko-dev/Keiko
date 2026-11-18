@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { sha256 } from "../lib/digest.mjs";
+import { verifyPublishedPortableEvidence } from "../lib/portable-release-publication.mjs";
 
 import {
   makeDownloadSeams,
@@ -62,6 +63,67 @@ describe("makeDownloadSeams bounds (PR #4464)", () => {
     seams.runGh(["release", "download"]);
     expect(seen[0]?.timeout).toBeGreaterThan(0);
     expect(seen[0]?.timeout).toBeLessThan(10 * 60_000);
+  });
+
+  function manifestSeams(runGh) {
+    return makePublishedPortableSeams({
+      runGh,
+      verifyReleaseTrust: () => ({ ok: true }),
+      trustedKeys: [],
+    });
+  }
+  const ASSET = "linux-x64-portable-manifest.json";
+  const writeManifest = (args, size) =>
+    writeFileSync(join(args[args.indexOf("--dir") + 1], ASSET), Buffer.alloc(size, 0x20));
+
+  it("asks the caller to bound the bytes gh writes at the updater's limit", () => {
+    const seen = [];
+    const seams = makeDownloadSeams((_args, options) => {
+      seen.push(options);
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    seams.runGh(["release", "download"]);
+    expect(seen[0]?.maxBytes).toBe(1_048_576);
+  });
+
+  it("refuses a transfer cut at the ceiling despite a small advertised size", () => {
+    const seams = manifestSeams((args) => {
+      writeManifest(args, 1_048_576);
+      return { status: null, signal: "SIGXFSZ", stdout: "", stderr: "" };
+    });
+    expect(
+      seams.downloadReleaseAsset({ published: true, repo: REPO, tag: TAG }, ASSET),
+    ).toBeUndefined();
+  });
+
+  it("accepts a manifest of exactly the ceiling", () => {
+    const seams = manifestSeams((args) => {
+      writeManifest(args, 1_048_576);
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    const info = { published: true, repo: REPO, tag: TAG };
+    expect(seams.downloadReleaseAsset(info, ASSET)?.text).toHaveLength(1_048_576);
+  });
+
+  it("refuses an advertised oversize manifest before requesting it", () => {
+    let downloads = 0;
+    const failures = [];
+    verifyPublishedPortableEvidence(
+      {
+        downloadReleaseAsset: () => {
+          downloads += 1;
+          return undefined;
+        },
+        verifyPublishedManifestBinding: () => undefined,
+        fail: (message) => failures.push(message),
+      },
+      { published: true, repo: REPO, tag: TAG },
+      [{ name: ASSET, digest: `sha256:${"a".repeat(64)}`, size: 1_048_577 }],
+      [{ assetName: ASSET, commitSha: HEAD, releaseTag: TAG }],
+    );
+    expect(downloads).toBe(0);
+    expect(failures.join("\n")).toContain(ASSET);
+    expect(failures.join("\n")).toContain("1048576");
   });
 
   it("refuses a manifest file larger than the updater's limit before reading it", () => {
