@@ -14,14 +14,12 @@
 // layer treats any non-2xx as an upstream error.
 
 import { classifyFigmaTransportError, FigmaConnectorError } from "./figmaConnectorErrors.js";
+import { figmaGetFetch } from "./figmaGetFetch.js";
 import {
-  gatewayFetch,
   GatewayResponseBodyValidationError,
   readJsonCapped,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
-import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
-import { processServerLogSink } from "../../process-log-sink.js";
 
 /** Default request timeout in milliseconds for Figma HTTP API calls. */
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -95,19 +93,13 @@ export const createDefaultFigmaHttpPort = (
   const maxResponseBytes = options?.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
 
   return async (request: FigmaHttpRequest): Promise<FigmaHttpResponse> => {
-    const signal = AbortSignal.timeout(timeoutMs);
     try {
-      const response = await gatewayFetch(request.url, {
-        method: "GET",
-        headers: { ...request.headers },
-        redirect: "manual",
-        signal,
-        maxResponseBytes,
-        log: processServerLogSink(),
-        logContext: { correlationId: options?.correlationId ?? UNKNOWN_CORRELATION_ID },
-        ...(egress !== undefined ? { egress } : {}),
-        ...(fetchImpl !== undefined ? { fetchImpl } : {}),
-      });
+      const response = await figmaGetFetch(
+        request,
+        { timeoutMs, maxResponseBytes, correlationId: options?.correlationId },
+        egress,
+        fetchImpl,
+      );
       const headers = collectHeaders(response);
       const json = await readFigmaJson(response, maxResponseBytes);
       return { status: response.status, json, headers };

@@ -126,7 +126,7 @@ export interface FigmaSnapshotMetrics {
 }
 
 /** Body-free completeness telemetry from the scoped acquisition. */
-export interface FigmaSnapshotCoverage {
+interface FigmaSnapshotCoverage {
   readonly screenCount: number;
   readonly screensDeepFetched: number;
   readonly screensTruncated: number;

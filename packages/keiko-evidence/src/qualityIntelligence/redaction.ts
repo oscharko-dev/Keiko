@@ -9,7 +9,7 @@
 // matched text). The summary is what the audit cross-references; redaction is irreversible.
 
 import { redact } from "@oscharko-dev/keiko-security";
-import { EvidenceWriteError } from "../errors.js";
+import { deepRedactJson } from "../redaction-container-guard.js";
 import type { QualityIntelligenceRedactionSummary } from "./manifestSchema.js";
 
 const QI_REDACTED = "[REDACTED]";
@@ -106,64 +106,6 @@ function redactString(
   return qiRedacted;
 }
 
-// Shared depth-ceiling + cycle guard for both container branches (array/object) of deepRedact.
-// Fails closed with a controlled EvidenceWriteError -- rather than an uncaught RangeError -- when
-// the ceiling is exceeded or `node` is already an ancestor in the current recursion path. `seen`
-// tracks only the current path (added before recursing into children, removed on the way back
-// out), so two independent, non-cyclic references to the same object are not mistaken for a cycle.
-function deepRedactContainer(
-  node: object,
-  depth: number,
-  maxDepth: number,
-  seen: WeakSet<object>,
-  build: () => unknown,
-): unknown {
-  if (depth >= maxDepth) {
-    throw new EvidenceWriteError("QI evidence payload exceeds the maximum redaction depth");
-  }
-  if (seen.has(node)) {
-    throw new EvidenceWriteError("QI evidence payload contains a circular reference");
-  }
-  seen.add(node);
-  try {
-    return build();
-  } finally {
-    seen.delete(node);
-  }
-}
-
-function deepRedact(
-  value: unknown,
-  additionalSecrets: readonly string[],
-  counter: QualityIntelligenceCounterState,
-  maxDepth: number,
-  depth = 0,
-  seen = new WeakSet(),
-): unknown {
-  if (typeof value === "string") {
-    return redactString(value, additionalSecrets, counter);
-  }
-  if (Array.isArray(value)) {
-    return deepRedactContainer(value, depth, maxDepth, seen, () =>
-      value.map((item): unknown =>
-        deepRedact(item, additionalSecrets, counter, maxDepth, depth + 1, seen),
-      ),
-    );
-  }
-  if (typeof value === "object" && value !== null) {
-    return deepRedactContainer(value, depth, maxDepth, seen, () => {
-      // KEIKO-0188: null-prototype seed keeps a `__proto__` key from a JSON.parse'd input as a
-      // plain own-property instead of silently mutating the reconstructed object's prototype.
-      const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-      for (const [key, child] of Object.entries(value)) {
-        out[key] = deepRedact(child, additionalSecrets, counter, maxDepth, depth + 1, seen);
-      }
-      return out;
-    });
-  }
-  return value;
-}
-
 export interface QualityIntelligenceRedactionOptions {
   // Caller-supplied literal secrets (apiKey/baseUrl/env values) the workflow holds. Passed to the
   // security-package `redact` as escaped literals so non-standard shapes still scrub. Strings
@@ -202,7 +144,9 @@ function redactEvidence<TValue>(
   maxDepth: number,
 ): QualityIntelligenceRedactionResult<TValue> {
   const counter = createCounter();
-  const redacted = deepRedact(value, additionalSecrets, counter, maxDepth) as TValue;
+  const redacted = deepRedactJson("QI", value, maxDepth, (input) =>
+    redactString(input, additionalSecrets, counter),
+  ) as TValue;
   const summary: QualityIntelligenceRedactionSummary = {
     totalStringsScanned: counter.totalStringsScanned,
     stringsRedacted: counter.stringsRedacted,

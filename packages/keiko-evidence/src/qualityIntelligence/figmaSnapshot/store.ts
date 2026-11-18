@@ -42,8 +42,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
 import {
   fsyncDirectoryContaining,
-  PostRenameFsyncError,
-  replaceViaDurableTempFile,
+  replaceDurablyOrThrowEvidenceError,
   writeDurableUtf8TempFile,
 } from "../../durable-write.js";
 import { EvidenceReadError, EvidenceWriteError } from "../../errors.js";
@@ -561,23 +560,12 @@ function atomicWriteOnce(
 }
 
 function atomicWriteMutable(target: string, json: string, randomSuffix: () => string): void {
-  const temp = `${target}.${randomSuffix()}.tmp`;
-  try {
-    replaceViaDurableTempFile(target, temp, json);
-  } catch (error) {
-    // Post-rename fsync failure = content is durable on the target, only the parent-dir metadata
-    // fsync is unconfirmed. Do not clean the (already gone) temp; do not claim the write failed.
-    // See KEIKO-0388 / KEIKO-1034.
-    if (error instanceof PostRenameFsyncError) {
-      throw new EvidenceWriteError(
-        `Figma snapshot management metadata parent-directory fsync failed after durable rename: ${error.message}`,
-      );
-    }
-    rmSync(temp, { force: true });
-    throw new EvidenceWriteError(
-      `Figma snapshot management metadata write failed: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  replaceDurablyOrThrowEvidenceError(
+    target,
+    json,
+    randomSuffix,
+    "Figma snapshot management metadata",
+  );
 }
 
 function normalizeDisplayName(value: string | null | undefined): string | undefined {

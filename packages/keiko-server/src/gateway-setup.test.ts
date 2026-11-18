@@ -3007,6 +3007,52 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("keeps the verified-connection mark through a capability-only rewrite and drops it when the connection moved", async () => {
+    // Review finding on #4464: a later verified-capability save reserialized every provider through
+    // `rawConfigFromCurrent`, which copied `catalogOrigin` but not `credentialOrigin`, so the team
+    // export classified the unchanged shared voice provider as foreign.
+    const uiDir = await tempDir("keiko-gw-ui-voice-origin-resave-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-origin-resave-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const initial = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        voiceSpeechToTextModelId: "shared-stt",
+      }),
+      deps,
+    );
+    expect(initial.status).toBe(200);
+    const config = requiredGatewayConfig(deps);
+
+    const resaved = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
+    expect(requiredProvider(resaved, "shared-stt").credentialOrigin).toBe("gateway-connection");
+    expect(requiredProvider(resaved, "example-chat-model")).not.toHaveProperty("credentialOrigin");
+
+    const moved = parseGatewayConfig(
+      rawConfigFromCurrent(
+        {
+          ...config,
+          providers: config.providers.map((provider) =>
+            provider.modelId === "shared-stt"
+              ? { ...provider, apiKey: "voice-only-token" }
+              : provider,
+          ),
+        },
+        undefined,
+      ),
+    );
+    expect(requiredProvider(moved, "shared-stt")).not.toHaveProperty("credentialOrigin");
+    deps.store.close();
+  });
+
   it("rejects new voice credentials without an explicit deployment role", async () => {
     const uiDir = await tempDir("keiko-gw-ui-voice-no-role-");
     const deps = buildUiHandlerDeps({

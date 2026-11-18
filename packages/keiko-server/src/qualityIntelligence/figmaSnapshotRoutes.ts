@@ -830,6 +830,7 @@ function logFigmaInternal(
   });
 }
 
+const REQUIRED_COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
 const FIGMA_SNAPSHOT_CAPTURED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -838,12 +839,12 @@ const FIGMA_SNAPSHOT_CAPTURED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "figmaSnapshotRoutes.logSnapshotCaptured",
   fields: {
-    renderedCount: { type: "integer", dataClass: "count", required: true },
-    skippedCount: { type: "integer", dataClass: "count", required: true },
-    invalidRenderCount: { type: "integer", dataClass: "count", required: true },
-    renderBudgetSkipCount: { type: "integer", dataClass: "count", required: true },
-    truncatedCount: { type: "integer", dataClass: "count", required: true },
-    scopedFetchCount: { type: "integer", dataClass: "count", required: true },
+    renderedCount: REQUIRED_COUNT_FIELD,
+    skippedCount: REQUIRED_COUNT_FIELD,
+    invalidRenderCount: REQUIRED_COUNT_FIELD,
+    renderBudgetSkipCount: REQUIRED_COUNT_FIELD,
+    truncatedCount: REQUIRED_COUNT_FIELD,
+    scopedFetchCount: REQUIRED_COUNT_FIELD,
     scopeCapped: { type: "boolean", dataClass: "closed-enum", required: true },
   },
   causal: "correlation",

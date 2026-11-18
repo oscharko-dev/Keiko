@@ -203,6 +203,7 @@ const GATEWAY_TOOL_CALLING_VERIFICATION_OPERATION = defineActivityLogOperation({
   proofIds: ["gateway.tool-calling.verification.line"],
   releaseImpact: "patch",
 });
+const REQUIRED_COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
 const GATEWAY_VOICE_SETUP_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -211,11 +212,11 @@ const GATEWAY_VOICE_SETUP_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "gateway-setup.logVoiceSetupResolution",
   fields: {
-    speechInputModels: { type: "integer", dataClass: "count", required: true },
-    usableSpeechOutputModels: { type: "integer", dataClass: "count", required: true },
-    incompleteSpeechOutputModels: { type: "integer", dataClass: "count", required: true },
-    usableRealtimeModels: { type: "integer", dataClass: "count", required: true },
-    incompleteRealtimeModels: { type: "integer", dataClass: "count", required: true },
+    speechInputModels: REQUIRED_COUNT_FIELD,
+    usableSpeechOutputModels: REQUIRED_COUNT_FIELD,
+    incompleteSpeechOutputModels: REQUIRED_COUNT_FIELD,
+    usableRealtimeModels: REQUIRED_COUNT_FIELD,
+    incompleteRealtimeModels: REQUIRED_COUNT_FIELD,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1363,6 +1364,19 @@ function storedCatalogOrigin(
   return provider.catalogOrigin === undefined ? {} : { catalogOrigin: provider.catalogOrigin };
 }
 
+// The mark says "this provider's connection IS the verified gateway connection". A rewrite from the
+// stored configuration keeps it only while that is still true of the stored data: the provider
+// still shares the primary's address, header and credential. Any provider whose connection moved
+// loses it, and Setup recomputes it from the verified connection (review finding on #4464).
+function storedCredentialOrigin(
+  provider: ModelProviderConfig,
+  primary: ModelProviderConfig | undefined,
+): Pick<ModelProviderConfig, "credentialOrigin"> {
+  return provider.credentialOrigin !== undefined && sharesStoredGatewayConnection(provider, primary)
+    ? { credentialOrigin: provider.credentialOrigin }
+    : {};
+}
+
 function storedDeploymentIdentity(
   provider: ModelProviderConfig,
 ): Pick<ModelProviderConfig, "deploymentIdentitySha256"> {
@@ -1398,6 +1412,7 @@ function rawProviderFromCurrent(
   provider: ModelProviderConfig,
   capability: ModelCapability | undefined,
   timeoutMs: number | undefined,
+  primary: ModelProviderConfig | undefined,
 ): Record<string, unknown> {
   return {
     modelId: provider.modelId,
@@ -1405,6 +1420,7 @@ function rawProviderFromCurrent(
     ...rawProviderCredential(provider),
     apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
     ...storedCatalogOrigin(provider),
+    ...storedCredentialOrigin(provider, primary),
     ...storedDeploymentIdentity(provider),
     ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
     ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
@@ -1460,12 +1476,14 @@ export function rawConfigFromCurrent(
   figmaAccessToken: string | undefined,
   timeoutMs?: number,
 ): Record<string, unknown> {
+  const primary = storedPrimaryGatewayProvider(config);
   return {
     providers: config.providers.map((provider) =>
       rawProviderFromCurrent(
         provider,
         config.capabilities?.find((item) => item.id === provider.modelId),
         timeoutMs,
+        primary,
       ),
     ),
     circuitBreaker: config.circuitBreaker,
