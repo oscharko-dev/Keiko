@@ -1389,6 +1389,98 @@ describe("ChatWindow memory disclosure", () => {
     expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
   });
 
+  it("discloses the profile supplied to the model when no memories were retrieved", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1188, used: 0 },
+            profile: {
+              entries: [{ memoryId: "mem-profile", text: "Prefers concise explanations" }],
+              tokens: 12,
+            },
+          },
+          actions: [],
+        },
+      }),
+    );
+
+    const disclosure = screen.getByRole("button", { name: "Profile facts included (1)" });
+    expect(disclosure).toHaveAttribute("data-empty", "false");
+    expect(disclosure.querySelector(".chat-memory-count")).toBeNull();
+    expect(screen.queryByRole("button", { name: "No memories included" })).toBeNull();
+    expect(screen.queryByText("Prefers concise explanations")).not.toBeInTheDocument();
+
+    disclosure.focus();
+    await user.keyboard("{Enter}");
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    const profile = screen.getByRole("region", { name: "Personal profile" });
+    expect(within(profile).getByRole("listitem")).toHaveTextContent("Prefers concise explanations");
+    expect(within(profile).getByText("Profile tokens used (12)")).toBeInTheDocument();
+    expect(screen.getByText("No memories retrieved for this question.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Question-specific retrieval used 0 of 1188 tokens."),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps retrieved memories, background profile facts and exclusions distinct", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "- Use tables for measurements",
+            memories: [
+              {
+                memoryId: "mem-retrieved",
+                bodyExcerpt: "Use tables for measurements",
+                inclusionReason: "lexical match",
+                sourceKind: "explicit-user-instruction",
+                sensitivity: "public",
+                confidence: 1,
+                status: "accepted",
+                capturedAt: 1_700_000_000_000,
+              },
+            ],
+            budget: { tokens: 1176, used: 12 },
+            profile: {
+              entries: [{ memoryId: "mem-profile", text: "Prefers concise explanations" }],
+              tokens: 12,
+              droppedCount: 2,
+            },
+            profileRetrievedCount: 1,
+            belowFloorCount: 3,
+          },
+          actions: [],
+        },
+      }),
+    );
+
+    const disclosure = screen.getByRole("button", {
+      name: "Question-specific memories (1) · Profile facts included (1)",
+    });
+    expect(disclosure.querySelector(".chat-memory-count")).toHaveTextContent("1");
+    await user.click(disclosure);
+
+    const retrieved = screen.getByRole("region", { name: "Memories retrieved for this question" });
+    const profile = screen.getByRole("region", { name: "Personal profile" });
+    expect(within(retrieved).getByText("Use tables for measurements")).toBeInTheDocument();
+    expect(
+      within(retrieved).getByText("Profile facts among these memories (1)"),
+    ).toBeInTheDocument();
+    expect(within(profile).getByText("Prefers concise explanations")).toBeInTheDocument();
+    expect(within(profile).getByText("Profile facts omitted by the limit (2)")).toBeInTheDocument();
+    expect(within(profile).queryByText("Use tables for measurements")).not.toBeInTheDocument();
+    expect(screen.getByText("Memories below the relevance threshold (3)")).toBeInTheDocument();
+  });
+
   it("keeps an explicitly activated chat enabled before its first response", async () => {
     const user = userEvent.setup();
     renderWindow(makeSession({ activeChat: makeChat(), memoryEnabled: true }));

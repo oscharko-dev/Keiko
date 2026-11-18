@@ -4707,9 +4707,23 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.memory.disableForChat": "MemoriaViva für diesen Chat deaktivieren",
   "chat.memory.included": "{count} Erinnerungen einbezogen",
   "chat.memory.noneIncluded": "Keine Erinnerungen einbezogen",
+  "chat.memory.profileIncluded": "Profilfakten mitgegeben ({count})",
+  "chat.memory.retrievedAndProfile":
+    "Zur Frage abgerufene Erinnerungen ({retrieved}) · Profilfakten mitgegeben ({profile})",
   "chat.memory.disclosurePending": "MemoriaViva-Hinweis erscheint nach der nächsten Antwort.",
   "chat.memory.usedTokens": "{used} von {tokens} MemoriaViva-Token verwendet.",
+  "chat.memory.retrievalTokens":
+    "Für den Abruf zur Frage wurden {used} von {tokens} Token verwendet.",
   "chat.memory.disabledLast": "MemoriaViva war für die letzte Anfrage deaktiviert.",
+  "chat.memory.retrievedHeading": "Für diese Frage abgerufene Erinnerungen",
+  "chat.memory.noneRetrieved": "Für diese Frage wurden keine Erinnerungen abgerufen.",
+  "chat.memory.profileHeading": "Persönliches Profil",
+  "chat.memory.profileDescription":
+    "Das Modell hat diese Fakten als Hintergrund für die Antwort erhalten.",
+  "chat.memory.profileTokens": "Verwendete Profil-Token ({tokens})",
+  "chat.memory.profileDropped": "Wegen der Begrenzung ausgelassene Profilfakten ({count})",
+  "chat.memory.profileRetrieved": "Profilfakten unter den abgerufenen Erinnerungen ({count})",
+  "chat.memory.belowRelevance": "Erinnerungen unter der Relevanzschwelle ({count})",
   "chat.memory.provenance": "Herkunft für {id}",
   "chat.memory.source": "Quelle",
   "chat.memory.sensitivity": "Sensitivität",

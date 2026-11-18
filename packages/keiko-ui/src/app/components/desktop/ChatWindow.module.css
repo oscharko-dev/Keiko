@@ -300,6 +300,29 @@
   background: var(--surface-secondary);
 }
 
+.memoryContextGroup {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.memoryContextGroup > h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.memoryProfileFacts {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding-inline-start: 1.25rem;
+  color: var(--text-primary);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
 .memoryBudgetSetting > label {
   color: var(--text-primary);
   font-size: 0.8125rem;

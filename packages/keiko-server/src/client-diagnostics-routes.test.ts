@@ -4203,6 +4203,8 @@ it.each([
   ["chat connector selection", "settled", "chat-connector-selection"],
   ["chat connector refresh", "started", "chat-connector-refresh"],
   ["chat connector refresh", "settled", "chat-connector-refresh"],
+  ["chat memory profile disclosure", "started", "chat-memory-profile-disclosure"],
+  ["chat memory profile disclosure", "settled", "chat-memory-profile-disclosure"],
 ] as const)(
   "persists %s %s through the existing activity log",
   async (stage, phase, activityStage) => {
