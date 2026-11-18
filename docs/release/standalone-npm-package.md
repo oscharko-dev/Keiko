@@ -93,8 +93,12 @@ lets go of the lock, so no other start opens Keiko in between. When the installa
 folder has no Keiko to stop with: the start window then says so and that a Keiko opened from
 another folder is stopped there. A `Stop Keiko` after that stops the open Keiko as usual. Before the start lets go of the lock it
 closes it: a `Stop Keiko` that the lock accepted is carried out first, and one that comes after the
-lock closed is not recorded but stops the open Keiko itself, so it can never stop the Keiko a later
-start opened. Whether a lock is still held is told by renewal, never by a clock: every holder (the
+lock closed is not recorded: it waits until that start has let go, takes the lock itself, closes it
+and only then stops the open Keiko, so no start opens Keiko between its decision and its effect and
+it can never stop the Keiko a later start opened (if the lock stays held for 90 seconds it says so
+and does not act). If a later start wins the lock first, the Stop is recorded in that start's lock
+instead and that start, which does not leave Keiko open, carries it out; the Stop does not act itself. A start that finds its lock taken over by another start ends with a plain message
+before it writes the installed marker or starts Keiko. Whether a lock is still held is told by renewal, never by a clock: every holder (the
 start itself, also while it waits for npm, and npm's own process) rewrites its entry every 15
 seconds. A start that finds a lock none of whose entries has a running process number takes it over
 at once. If an entry's process number runs, the start watches the lock's entries for up to 60

@@ -375,6 +375,9 @@ describe("the npm package start", () => {
     // Comment lines are no settings: npm's parser skips them, so they are no reason to refuse.
     writeFileSync(npmrc, "; see ${HOME}\n  # ${KEY}=x\nregistry=https://a.example/\n;${KEY}=y\r\n");
     expect(folderRegistry(root)).toBe(true);
+    // Review finding on PR #4464 (P2): a comment naming a variable, with no `=`, is no key either.
+    writeFileSync(npmrc, "# Set ${TEAM_TOKEN} before running npm\nregistry=https://a.example/\n");
+    expect(folderRegistry(root)).toBe(true);
     // Plain lines in either line ending keep working.
     writeFileSync(npmrc, "registry=https://a.example/\r\nproxy=http://p.example\r\n");
     expect(folderRegistry(root)).toBe(true);
@@ -1178,12 +1181,99 @@ describe("the npm package start", () => {
           args.includes("ci") ? npm.run(node, args, options) : { status: 0 },
         );
 
-        expect(start(root, nodeDir, env, run)).toBe(0);
-        expect(run.mock.calls.map(commandOf)).toEqual(["ci", "start"]);
+        // Review finding on PR #4464 (P2): the old start used to dispatch `start` here, reopening
+        // Keiko after the replacement's Stop. It now ends without opening Keiko or marking.
+        expect(() => start(root, nodeDir, env, run)).toThrow(LauncherRefusal);
+        expect(run.mock.calls.map(commandOf)).toEqual(["ci"]);
+        expect(existsSync(join(root, "node_modules", ".keiko-npm-installed"))).toBe(false);
         expect(existsSync(installLockPath(root))).toBe(otherHolds);
         if (otherHolds) expect(lockOwners(root)).toEqual([`owner-${other.token}`]);
       },
     );
+
+    it("ends a start that lost its lock before it opens Keiko when nothing needed installing", () => {
+      quiet();
+      const { root, nodeDir, env } = installFixture();
+      installKeiko(root, `${lockfileDigest(root)}\n`);
+      const run = vi.fn(() => ({ status: 0 }));
+      // Another start replaces the lock right after this one published it.
+      const replacement = `owner-${String(process.pid)}-0b`;
+      lockRenewal.start.mockImplementation(() => {
+        rmSync(installLockPath(root), { recursive: true });
+        mkdirSync(installLockPath(root));
+        writeFileSync(join(installLockPath(root), replacement), "");
+        return () => undefined;
+      });
+
+      expect(() => start(root, nodeDir, env, run)).toThrow(LauncherRefusal);
+      expect(run).not.toHaveBeenCalled();
+      expect(lockOwners(root)).toEqual([replacement]);
+    });
+
+    it("lets a Stop that the closing lock turned away act only after that start let go", () => {
+      // Review finding on PR #4464 (P2): the turned-away Stop ran the CLI with no lock, so a new
+      // start could open Keiko just before the old Stop shut it down.
+      quiet();
+      const { root, env } = installFixture();
+      installKeiko(root);
+      const lock = acquireInstallLock(root);
+      closeInstallLock(lock);
+      const during = [];
+      const run = vi.fn(() => {
+        during.push(lockOwners(root).length === 1);
+        return { status: 0 };
+      });
+      vi.spyOn(lockClock, "sleep").mockImplementation(() => removeInstallLock(lock));
+
+      expect(stop(root, env, run)).toBe(0);
+      expect(run).toHaveBeenCalledOnce();
+      // The Stop held the lock while it acted, so no start could open Keiko in between.
+      expect(during).toEqual([true]);
+      expect(existsSync(installLockPath(root))).toBe(false);
+    });
+
+    it("records a waiting Stop in a later start's lock and does not stop Keiko itself", () => {
+      // Coordinator refinement on PR #4464 (P2): a start that wins the lock after the closing one
+      // let go reports Keiko running; the waiting Stop must not then end it behind that report.
+      quiet();
+      const { root, env } = installFixture();
+      installKeiko(root);
+      const closing = acquireInstallLock(root);
+      closeInstallLock(closing);
+      const base = lockClock.sleep.getMockImplementation();
+      let later;
+      vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+        // Only once the Stop has been turned away and waits: the first observations are its own.
+        if (later === undefined && clock.now >= 30_000) {
+          removeInstallLock(closing);
+          later = acquireInstallLock(root);
+        }
+        base(milliseconds, dir);
+      });
+      const run = vi.fn(() => ({ status: 0 }));
+
+      expect(stop(root, env, run)).toBe(0);
+      expect(run).not.toHaveBeenCalled();
+      expect(readdirSync(installLockPath(root)).some((name) => name.startsWith("stop-"))).toBe(
+        true,
+      );
+      // That start does not leave Keiko open: it carries the recorded Stop out.
+      expect(releaseInstallLock(later)).toBe(true);
+    });
+
+    it("says Stop did not act when the closing start never lets go of the lock", () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { root, env } = installFixture();
+      installKeiko(root);
+      closeInstallLock(acquireInstallLock(root));
+      const run = vi.fn(() => ({ status: 0 }));
+
+      expect(stop(root, env, run)).toBe(1);
+      expect(run).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(
+        expect.stringMatching(/^Another start of this folder is still/u),
+      );
+    });
 
     it("says it cannot stop Keiko when Stop was pressed and the installation failed", () => {
       // Review finding on PR #4464: a Stop recorded during a failed installation was dropped

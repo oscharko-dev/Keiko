@@ -1275,8 +1275,12 @@ A start releases only the generation it acquired: it removes its own
 owner entry first and then the entries it read beside it, and a lock without its owner entry is
 another start's and is never moved, read or removed. Before it lets go, a start adds a `closing`
 entry; a Stop adds its entry and then looks for the closing entry, so a Stop is either read by the
-closing start and carried out while it still holds the lock, or is turned away and stops Keiko itself,
-and can never stop the Keiko a later start opened. Renames of the lock folder are retried while Windows holds a passing handle in it. npm's
+closing start and carried out while it still holds the lock, or is turned away, waits until that start has
+let go, takes the lock, closes it and stops Keiko under it (a lock held for 90 seconds makes the Stop
+say so and not act). While it waits it retries recording: a later start that wins the lock first
+records the Stop in its own lock and carries it out, and the waiting Stop does not act itself. So it can never stop the Keiko a later start opened. A start that finds its lock
+generation replaced ends with a plain message before it writes the installed marker or dispatches
+the CLI. Renames of the lock folder are retried while Windows holds a passing handle in it. npm's
 own process adds an owner entry of its own when it loads (`--import` of the launcher module with
 the lock folder and the start's owner entry as a query, which only holds the lock), so a start that
 ends while npm still installs leaves the lock held until that npm ends. While npm runs, its process

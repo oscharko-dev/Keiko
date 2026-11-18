@@ -698,6 +698,17 @@ function heldEntries(lock) {
   return names?.includes(ownerEntryName(lock)) ? names : undefined;
 }
 
+// A start that no longer owns the lock generation it published ends here: another start took the
+// lock over, so this one must neither write completion state nor open Keiko over a newer Stop or
+// into a tree that start reinstalls.
+function refuseLostLock(lock) {
+  if (lock === undefined || heldEntries(lock) !== undefined) return;
+  throw new LauncherRefusal(
+    "Another start of this folder took over the installation of Keiko, so this start ends without opening Keiko. Start Keiko again.",
+    "Ein anderer Start dieses Ordners hat die Installation von Keiko uebernommen, daher endet dieser Start, ohne Keiko zu oeffnen. Starte Keiko erneut.",
+  );
+}
+
 // Whether a Stop was recorded in the lock this start still holds, from one read of it. A lock
 // another start took over is that start's, and one it released meanwhile is gone.
 function heldStopRecorded(lock) {
@@ -1157,7 +1168,9 @@ function runNpm(root, nodeDir, env, run, lock) {
 export function ensureInstalled(root, nodeDir, env, run = spawnSync, lock = undefined) {
   const digest = lockfileDigest(root);
   if (installationCurrent(root, digest)) return true;
+  refuseLostLock(lock);
   if (!runNpm(root, nodeDir, env, run, lock)) return false;
+  refuseLostLock(lock);
   const fd = openSync(join(root, "node_modules", INSTALLED_MARKER), "w");
   try {
     writeAll(fd, `${digest}\n`);
@@ -1217,6 +1230,7 @@ function reportRunning() {
 // While it holds the lock, this start installs Keiko and opens it, unless a Stop came first.
 function installThenOpen(root, nodeDir, env, run, lock, args) {
   if (!ensureInstalled(root, nodeDir, env, run, lock)) return { outcome: "install-failed" };
+  refuseLostLock(lock);
   if (heldStopRecorded(lock)) return { outcome: "cancelled" };
   return { outcome: "opened", code: runKeiko(root, args, env, run) };
 }
@@ -1318,6 +1332,61 @@ export function start(root, nodeDir, env, run = spawnSync, pause = () => undefin
   return installAndOpen(root, nodeDir, env, run, lock, args);
 }
 
+const STOP_LOCK_WAIT_MS = 90 * 1000;
+
+function reportStopRecorded() {
+  say(
+    "Keiko is still being loaded. It does not stay open: the start that loads it stops it.",
+    "Keiko wird noch geladen. Es bleibt nicht geoeffnet: Der Start, der es laedt, beendet es.",
+  );
+}
+
+// Waits for the lock of a start that is closing. A later start that wins it before this Stop does
+// records the Stop in its own lock instead (`recorded`): that start does not leave Keiko open, so
+// this Stop must not act, or it would end the Keiko that start just reported running.
+function waitForStopLock(root) {
+  const deadline = lockClock.now() + STOP_LOCK_WAIT_MS;
+  let lock = acquireInstallLock(root);
+  while (lock === undefined && lockClock.now() < deadline) {
+    if (requestStop(root)) return { recorded: true };
+    lockClock.sleep(LOCK_OBSERVE_STEP_MS, installLockPath(root));
+    lock = acquireInstallLock(root);
+  }
+  return { lock, recorded: false };
+}
+
+// A Stop the lock turned away (its start is closing) acts under the lock itself: it waits until
+// that start has let go, takes the lock, closes it so no further Stop is recorded in it, and only
+// then stops Keiko. No start opens Keiko between the Stop's decision and its effect, so the Stop
+// can never end the Keiko a newer start opened.
+function stopUnderLock(root, state, env, run) {
+  const { lock, recorded } = waitForStopLock(root);
+  if (recorded) {
+    reportStopRecorded();
+    return 0;
+  }
+  if (lock === undefined) {
+    say(
+      "Another start of this folder is still opening Keiko, so Stop did not act. Double-click Stop Keiko again in a moment.",
+      "Ein anderer Start dieses Ordners oeffnet Keiko noch, daher hat Beenden nicht gewirkt. Doppelklicke gleich erneut auf Stop Keiko.",
+    );
+    return 1;
+  }
+  try {
+    closeInstallLock(lock);
+    const code = stopKeiko(root, state, env, run);
+    if (code === 0) {
+      say(
+        "Keiko is stopped. You can close this window.",
+        "Keiko ist beendet. Du kannst dieses Fenster schliessen.",
+      );
+    }
+    return code;
+  } finally {
+    removeInstallLock(lock);
+  }
+}
+
 /**
  * Stops a running Keiko. While a start of this folder is still loading Keiko, the Stop is recorded
  * in its lock and that start does not leave Keiko open. A folder Keiko was never loaded into has
@@ -1326,24 +1395,14 @@ export function start(root, nodeDir, env, run = spawnSync, pause = () => undefin
 export function stop(root, env, run = spawnSync) {
   const state = stateDir(env);
   if (requestStop(root)) {
-    say(
-      "Keiko is still being loaded. It does not stay open: the start that loads it stops it.",
-      "Keiko wird noch geladen. Es bleibt nicht geoeffnet: Der Start, der es laedt, beendet es.",
-    );
+    reportStopRecorded();
     return 0;
   }
   if (!existsSync(keikoCliPath(root))) {
     say("Keiko is not running.", "Keiko laeuft nicht.");
     return 0;
   }
-  const code = stopKeiko(root, state, env, run);
-  if (code === 0) {
-    say(
-      "Keiko is stopped. You can close this window.",
-      "Keiko ist beendet. Du kannst dieses Fenster schliessen.",
-    );
-  }
-  return code;
+  return stopUnderLock(root, state, env, run);
 }
 
 // The gateway connection Gateway Setup verified, and what it built from it. One token covers only
