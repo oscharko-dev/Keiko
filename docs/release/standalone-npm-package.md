@@ -29,31 +29,49 @@ Keiko/
   .npmrc                                    the organization's registry (added by an administrator)
   keiko.config.json                         the gateway access (added by an administrator)
   system/node/                              Node.js and npm, the signed nodejs.org build
+  system/native/usearch.node                the Knowledge Pod search index, from the release archive
   system/keiko-npm.mjs                      start, stop and the administrator's access step
   system/Zugang speichern.command | .cmd    the administrator's access step
   system/npm-package.json                   target, version, source archive and lockfile digests
 ```
 
-The Node.js runtime is taken from the verified portable release archive of the same Keiko version,
-so it is byte for byte the runtime the folder package ships, which is the signed nodejs.org build.
-The only programs that run at a double-click are the system shell and that Node.js binary, and npm
-writes no download mark on what it installs.
+The Node.js runtime and the native search index of Knowledge Pods are taken from the verified
+portable release archive of the same Keiko version, so they are byte for byte the files the folder
+package ships; the Node.js runtime is the signed nodejs.org build. Keiko finds the search index next
+to that runtime, as it does in the portable payload, so Knowledge Pods search with their index. The
+only programs that run at a double-click are the system shell and that Node.js binary, and npm writes
+no download mark on what it installs.
 
-The first start runs `npm ci --ignore-scripts` in the folder. npm installs exactly the versions in
+The first start runs `npm ci --ignore-scripts` with the folder as its `--prefix` and
+`--workspaces=false`, so npm installs into this folder even when it lies inside another npm project
+or workspace, and never changes that project. npm installs exactly the versions in
 `package-lock.json` and checks every package against its sha512 integrity; no install script runs.
-The lockfile is resolved against the public registry; an `.npmrc` that names another registry
-makes npm load the same packages from there (npm replaces the registry host and keeps every
-checksum). Without one, npm follows the person's own npm configuration, if there is one, and
-otherwise the public registry. npm's cache and its log lie in `.keiko-standalone/npm-cache` during
-the installation, set on npm's command line so that no `npm_config_*` variable moves them; a
-successful installation removes them, a failed one keeps the log. A later start
-installs again only when the lockfile changed or an earlier installation did not finish. Keiko then
-runs `keiko start` with its data in `.keiko-standalone` in the person's user folder, the same data
-folder as the folder package, so replacing the folder keeps chats, settings and credentials.
 
-The start declares Keiko managed outside the app, as the folder package does, so on Windows it sets
-up no gateway service and asks for no approval. Keiko offers no in-app update for a folder that npm
-installed into: a new version arrives as a new folder.
+The lockfile is resolved against the public registry. The folder's `.npmrc` may name one other
+registry with a single `registry=` line; npm then loads the same packages from there (npm replaces
+the registry host and keeps every checksum), and a `registry` inherited from an `npm_config_*`
+variable cannot override it. A scoped `@scope:registry` line, or `registry` named twice, is refused
+before npm runs, because it would send packages of that scope elsewhere. Without an `.npmrc`, npm
+follows the person's own npm configuration, if there is one, and otherwise the public registry.
+
+Each installation gets its own npm cache, `.keiko-standalone/npm-cache-<random>`, which is removed
+when it ends; an npm cache that already exists there is never touched. npm's log lies in
+`.keiko-standalone/npm-logs`, and a failed installation names its log. Both are set on npm's command
+line so that no `npm_config_*` variable moves them. Keiko's data folder is `.keiko-standalone` in the
+person's user folder, the same data folder as the folder package, so replacing the folder keeps
+chats, settings and credentials. A `KEIKO_STATE_DIR` outside the user folder is refused before
+anything is written.
+
+A second start while the first is still installing waits for nothing and starts no second
+installation: it says that Keiko is being loaded. `Stop Keiko` during the installation lets it finish
+and keeps Keiko from starting afterwards. A later start installs again only when the lockfile
+changed or an earlier installation did not finish. Keiko then runs `keiko start`.
+
+The start declares Keiko managed outside the app, as the folder package does, whatever the
+computer's environment declares, so on Windows it sets up no gateway service and asks for no
+approval. Keiko offers no in-app update for a folder that npm installed into and asks no registry or
+GitHub for one: its update check reports the installation as managed outside the app. A new version
+arrives as a new folder.
 
 ## The Download Mark
 
@@ -122,10 +140,15 @@ An administrator can prepare the folder once, so that nobody in the team enters 
    address and token. Keiko verifies the gateway and its models. Stop Keiko.
 3. **Access for everyone.** Double-click `system/Zugang speichern.command` (macOS) or
    `system\Zugang speichern.cmd` (Windows) and paste the token; it is not shown. The step reads the
-   configuration Gateway Setup saved, replaces every key sealed on this computer (the models' and
-   the reranker's; Gateway Setup uses one gateway token for all of them) with the token and writes
-   `keiko.config.json` next to `Start Keiko`. On macOS the file is readable by its owner only; on
-   Windows it takes the permissions of the folder.
+   configuration Gateway Setup saved and replaces the keys sealed on this computer for the gateway
+   connection Gateway Setup verified (the models it set up, its voice models and a reranker on the
+   same address and header) with the token. A model or reranker with its own address, header or
+   key is not that connection: the step refuses before it asks for the token and names it, so one
+   token never goes to another service; write that connection's own key into the file instead. The
+   step writes `keiko.config.json` next to `Start Keiko` as one complete file, replacing an older one
+   only when the new one is written; on macOS it is readable by its owner only, on Windows it takes
+   the permissions of the folder. It refuses to run while `KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR`
+   names another configuration, because the file would not be the one Keiko starts with.
 4. **Pass it on.** Delete the folder's `node_modules`, pack the folder and share it with the team.
 
 On each person's first start, Keiko adopts `keiko.config.json` with the same mechanism as the

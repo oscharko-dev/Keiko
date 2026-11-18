@@ -69,6 +69,53 @@ export function remoteDigestFailures(remoteAssets, expectedAssets) {
   });
 }
 
+/**
+ * What a release carries beyond the assets this run validated, or undefined when it carries no
+ * others. Missing assets are reported by the per-asset checks. A resumed draft can still hold an
+ * asset an earlier run uploaded (a stale package of an unsupported target, a team variant); once
+ * the release is published it would be an immutable download outside the validated bundle
+ * (PR #4464).
+ *
+ * @param expected  [{ assetName }] — every asset this run validated for the release
+ * @returns a clause such as "carries assets this run did not validate: a, b"
+ */
+export function unvalidatedReleaseAssets(remoteAssets, expected) {
+  const allowed = new Set(expected.map((entry) => entry.assetName));
+  const names = (Array.isArray(remoteAssets) ? remoteAssets : []).map((asset) => asset?.name);
+  const seen = new Set();
+  const refused = new Set();
+  for (const name of names) {
+    if (!allowed.has(name) || seen.has(name)) refused.add(String(name));
+    seen.add(name);
+  }
+  return refused.size === 0
+    ? undefined
+    : `carries assets this run did not validate: ${[...refused].join(", ")}`;
+}
+
+/**
+ * The public download records of the manifests on a published release. A rerun cannot rebuild the
+ * signed manifest bytes, so after verifyPublishedPortableEvidence proved GitHub's digest against the
+ * signed download, that digest and size are what an unauthenticated download must return.
+ *
+ * @param manifestBindings  [{ assetName }] — one per portable-manifest asset
+ * @returns [{ assetName, expectedSha256, expectedSize, firstClassArchive: false }]
+ */
+export function publishedManifestDownloads(manifestBindings, remoteAssets) {
+  const remoteByName = new Map(
+    (Array.isArray(remoteAssets) ? remoteAssets : []).map((asset) => [asset?.name, asset]),
+  );
+  return manifestBindings.map(({ assetName }) => {
+    const remote = remoteByName.get(assetName);
+    return {
+      assetName,
+      expectedSha256: String(remote?.digest).slice("sha256:".length),
+      expectedSize: remote?.size,
+      firstClassArchive: false,
+    };
+  });
+}
+
 /** The message for a published release that cannot take the downloads it lacks. */
 export function immutableReleaseRepairFailure(tag, detail) {
   return `GitHub release ${tag} is already published and ${detail}; an immutable release cannot be repaired, so publish the next patch version instead.`;
@@ -239,6 +286,14 @@ export function refuseIncompletePublishedRelease(publisher, releaseInfo, remoteA
  */
 export function publishVerifiedPortableRelease(publisher, releaseInfo, remoteAssets, expected) {
   refuseIncompletePublishedRelease(publisher, releaseInfo, remoteAssets, expected);
+  const unvalidated = unvalidatedReleaseAssets(remoteAssets, expected);
+  if (unvalidated !== undefined) {
+    publisher.fail(
+      releaseInfo.published === true
+        ? immutableReleaseRepairFailure(releaseInfo.tag, unvalidated)
+        : `the draft GitHub release ${releaseInfo.tag} ${unvalidated}; delete them from the draft, then run the publish again.`,
+    );
+  }
   publisher.verifyAssets(remoteAssets, expected, releaseInfo);
   const digestFailures = remoteDigestFailures(remoteAssets, expected);
   if (digestFailures.length > 0) {

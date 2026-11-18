@@ -1,17 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
 import {
-  closeSync,
   copyFileSync,
   chmodSync,
   existsSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
-  openSync,
   readFileSync,
-  readSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -58,7 +53,7 @@ import {
   portableDownloadAssetNames,
   uploadedDownloadSetFailure,
 } from "./lib/portable-release-verification.mjs";
-import { sha256 } from "./lib/digest.mjs";
+import { sha256, sha256FileChunked } from "./lib/digest.mjs";
 import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-command.mjs";
 import { readJsonFile } from "./lib/json.mjs";
 import { resolveGithubRepository } from "./lib/github-repository.mjs";
@@ -549,21 +544,6 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function sha256FileSync(path) {
-  const fd = openSync(path, "r");
-  const hash = createHash("sha256");
-  const buffer = Buffer.alloc(1024 * 1024);
-  try {
-    for (;;) {
-      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
-      if (bytesRead === 0) return hash.digest("hex");
-      hash.update(buffer.subarray(0, bytesRead));
-    }
-  } finally {
-    closeSync(fd);
-  }
-}
-
 function containedPath(root, path) {
   const normalizedRoot = root.endsWith("/") ? root : `${root}/`;
   return path === root || path.startsWith(normalizedRoot);
@@ -930,7 +910,7 @@ function validatePortableArchiveDigest(target, archivePath, archiveStat, manifes
   if (archiveStat !== undefined && manifest.artifact?.sizeBytes !== archiveStat.size) {
     failures.push(`${target.platformTarget}.artifact.sizeBytes must match the archive size.`);
   }
-  if (archiveStat !== undefined && manifest.artifact?.sha256 !== sha256FileSync(archivePath)) {
+  if (archiveStat !== undefined && manifest.artifact?.sha256 !== sha256FileChunked(archivePath)) {
     failures.push(`${target.platformTarget}.artifact.sha256 must match the archive bytes.`);
   }
   if (archiveStat !== undefined) {
@@ -1106,7 +1086,7 @@ function validateOneSidecarEvidence(target, resourceRoot, evidence, requiresCycl
     const sbom = readEvidenceJson(path, "sidecar SBOM evidence", failures);
     if (sbom.bomFormat !== "CycloneDX") failures.push("sidecar SBOM evidence is invalid.");
   }
-  if (sha256FileSync(path) !== evidence.sha256)
+  if (sha256FileChunked(path) !== evidence.sha256)
     failures.push("sidecar evidence digest must match the manifest.");
 }
 
@@ -1388,8 +1368,10 @@ function publishPortableReleaseAssets(options, assets, releaseInfo, folderPackag
         publisher,
         releaseInfo,
         assets,
+        archiveExpected: archiveUpload.expected,
         archiveSnapshot,
         verifyAssets: verifyRemotePortableAssets,
+        smokeDownloads: runPortableDownloadSmoke,
         headOfCheckout: () => commandResult("git", ["rev-parse", "HEAD"]).stdout.trim(),
       });
       return;
@@ -1492,7 +1474,7 @@ function portableEvidenceUploadFiles(assets, root) {
       addUploadPath(destination, evidence.assetName, names, paths);
       expected.push({
         assetName: evidence.assetName,
-        expectedSha256: sha256FileSync(destination),
+        expectedSha256: sha256FileChunked(destination),
         expectedSize: statSync(destination).size,
         firstClassArchive: false,
       });
@@ -1719,7 +1701,7 @@ function smokePortableDownloadUrl(expected, url) {
     }
     if (
       statSync(destination).size !== expected.expectedSize ||
-      sha256FileSync(destination) !== expected.expectedSha256
+      sha256FileChunked(destination) !== expected.expectedSha256
     ) {
       fail(`downloaded portable asset bytes do not match ${expected.assetName}.`);
     }

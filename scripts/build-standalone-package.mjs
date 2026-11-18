@@ -38,6 +38,7 @@ import { fileURLToPath } from "node:url";
 import { sha256File } from "./lib/digest.mjs";
 import { folderChecksumText, folderPackageArchiveName } from "./lib/folder-package-release.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
+import { credentialScope, teamConfig } from "./standalone/npm/keiko-npm.mjs";
 import {
   extractZipArchiveEntries,
   readZipArchiveEntryNames,
@@ -256,20 +257,6 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Gateway Setup seals a key into the vault of the computer it ran on and leaves a reference in the
-// config. On another person's computer that reference names nothing, so a package may not carry
-// one: it becomes the team's key, or the build is refused.
-function withTeamApiKey(provider, apiKey) {
-  if (!isRecord(provider) || provider.apiKeySecretRef === undefined) return provider;
-  if (apiKey === undefined) {
-    refuse(
-      "the provisioned config refers to a key sealed on this computer (apiKeySecretRef); pass --api-key-env NAME with the team's key",
-    );
-  }
-  const kept = Object.entries(provider).filter(([field]) => field !== "apiKeySecretRef");
-  return { ...Object.fromEntries(kept), apiKey };
-}
-
 function teamApiKey(apiKeyEnv, env) {
   if (apiKeyEnv === undefined) return undefined;
   const value = env[apiKeyEnv];
@@ -277,6 +264,27 @@ function teamApiKey(apiKeyEnv, env) {
     refuse(`--api-key-env: the environment variable ${apiKeyEnv} is not set`);
   }
   return value;
+}
+
+// Gateway Setup seals a key into the vault of the computer it ran on and leaves a reference in the
+// config. On another person's computer that reference names nothing, so a package may not carry
+// one: on the gateway connection Gateway Setup verified it becomes the team's key, by the same rule
+// as the npm package's access step (system/keiko-npm.mjs). A key of any other connection refuses:
+// the team's key must never reach a service it was not verified for.
+function withTeamApiKeys(config, apiKey) {
+  const scope = credentialScope(config);
+  if (scope.foreign.length > 0) {
+    refuse(
+      `the provisioned config refers to keys sealed on this computer for another connection (${scope.foreign.join(", ")}); one team key covers only the gateway connection Gateway Setup verified, so write that connection's key into the file instead`,
+    );
+  }
+  if (scope.token.size === 0) return undefined;
+  if (apiKey === undefined) {
+    refuse(
+      "the provisioned config refers to a key sealed on this computer (apiKeySecretRef); pass --api-key-env NAME with the team's key",
+    );
+  }
+  return teamConfig(config, apiKey);
 }
 
 /**
@@ -291,21 +299,15 @@ export function readProvisionedConfig(configPath, apiKeyEnv = undefined, env = p
   if (!Array.isArray(config.providers) || config.providers.length === 0) {
     refuse("the provisioned config names no providers");
   }
-  const apiKey = teamApiKey(apiKeyEnv, env);
-  const providers = config.providers.map((provider) => withTeamApiKey(provider, apiKey));
-  providers.forEach((provider, index) => {
+  config.providers.forEach((provider, index) => {
     assertProviderOutline(provider, index);
   });
-  // Gateway Setup seals the reranker's key like a provider's.
-  const reranker = withTeamApiKey(config.reranker, apiKey);
+  const team = withTeamApiKeys(config, teamApiKey(apiKeyEnv, env));
   // The administrator's own text when nothing was sealed (without a byte order mark).
-  const unchanged =
-    reranker === config.reranker &&
-    providers.every((provider, index) => provider === config.providers[index]);
-  const team =
-    config.reranker === undefined ? { ...config, providers } : { ...config, providers, reranker };
   return Buffer.from(
-    unchanged ? readTextWithoutByteOrderMark(configPath) : `${JSON.stringify(team, null, 2)}\n`,
+    team === undefined
+      ? readTextWithoutByteOrderMark(configPath)
+      : `${JSON.stringify(team, null, 2)}\n`,
     "utf8",
   );
 }

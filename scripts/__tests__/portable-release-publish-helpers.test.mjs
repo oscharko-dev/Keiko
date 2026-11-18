@@ -168,9 +168,11 @@ describe("runVerifyPublishedPortableAssets", () => {
       publisher: fakePublisher(),
       releaseInfo: RELEASE_INFO,
       assets,
+      archiveExpected: [],
       archiveSnapshot,
       verifyAssets: (remoteAssets, expected, info) =>
         verifyCalls.push({ remoteAssets, expected, info }),
+      smokeDownloads: () => undefined,
       headOfCheckout: () => HEAD,
       log: (message) => logs.push(message),
     });
@@ -178,7 +180,85 @@ describe("runVerifyPublishedPortableAssets", () => {
     // Only the non-manifest evidence must reach verifyAssets — the manifest goes through the
     // signature path instead.
     expect(verifyCalls[0].expected).toStrictEqual([]);
-    expect(logs.at(-1)).toContain(`portable assets verified on published ${TAG}`);
+    expect(logs.at(-1)).toContain(`portable assets verified and downloaded on published ${TAG}`);
+  });
+
+  function recoveryRun({ remoteAssets, smokeDownloads = () => undefined }) {
+    const archive = {
+      assetName: "keiko-linux-x64.standalone.zip",
+      expectedSha256: "f".repeat(64),
+      expectedSize: 3,
+      firstClassArchive: false,
+    };
+    runVerifyPublishedPortableAssets({
+      publisher: fakePublisher(),
+      releaseInfo: RELEASE_INFO,
+      assets: makeAssets(["linux-x64"]),
+      archiveExpected: [archive],
+      archiveSnapshot: { assets: remoteAssets },
+      verifyAssets: () => undefined,
+      smokeDownloads,
+      headOfCheckout: () => HEAD,
+      log: () => undefined,
+    });
+    return archive;
+  }
+
+  const manifestAsset = {
+    digest: `sha256:${"e".repeat(64)}`,
+    name: "linux-x64-portable-manifest.json",
+    size: 5,
+  };
+  const packageAsset = { name: "keiko-linux-x64.standalone.zip" };
+
+  it("downloads every published asset again without credentials (PR #4464)", () => {
+    // Review finding on PR #4464 (P2): a run whose public download failed left the release
+    // published, and its rerun returned after the API checks, so npm published over a download
+    // nobody could fetch.
+    const smoked = [];
+    const archive = recoveryRun({
+      remoteAssets: [packageAsset, manifestAsset],
+      smokeDownloads: (remote, expected) => smoked.push({ remote, expected }),
+    });
+
+    expect(smoked).toStrictEqual([
+      {
+        remote: [packageAsset, manifestAsset],
+        expected: [
+          archive,
+          {
+            assetName: "linux-x64-portable-manifest.json",
+            expectedSha256: "e".repeat(64),
+            expectedSize: 5,
+            firstClassArchive: false,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("fails the rerun when a published asset still cannot be downloaded", () => {
+    expect(() =>
+      recoveryRun({
+        remoteAssets: [packageAsset, manifestAsset],
+        smokeDownloads: () => {
+          throw new Error("unauthenticated portable asset download failed");
+        },
+      }),
+    ).toThrow("unauthenticated portable asset download failed");
+  });
+
+  it("refuses a published release carrying an asset this run did not validate", () => {
+    const smoked = [];
+    expect(() =>
+      recoveryRun({
+        remoteAssets: [packageAsset, manifestAsset, { name: "keiko-linux-x64.npm-team.zip" }],
+        smokeDownloads: () => smoked.push(true),
+      }),
+    ).toThrow(
+      `GitHub release ${TAG} is already published and carries assets this run did not validate: keiko-linux-x64.npm-team.zip; an immutable release cannot be repaired`,
+    );
+    expect(smoked).toStrictEqual([]);
   });
 
   it("propagates a manifest binding failure through the publisher.fail seam", () => {
@@ -195,8 +275,10 @@ describe("runVerifyPublishedPortableAssets", () => {
         }),
         releaseInfo: RELEASE_INFO,
         assets,
+        archiveExpected: [],
         archiveSnapshot,
         verifyAssets: () => undefined,
+        smokeDownloads: () => undefined,
         headOfCheckout: () => HEAD,
         log: () => undefined,
       }),
@@ -225,8 +307,10 @@ describe("runVerifyPublishedPortableAssets", () => {
       publisher,
       releaseInfo: RELEASE_INFO,
       assets,
+      archiveExpected: [],
       archiveSnapshot,
       verifyAssets: () => undefined,
+      smokeDownloads: () => undefined,
       headOfCheckout: () => HEAD,
       log: () => undefined,
     });

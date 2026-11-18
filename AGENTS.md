@@ -155,8 +155,9 @@ This shapes the product _and_ how you work on it:
   configuration as the folder package. Never write outside the folder and the state directory,
   never run an install script, never ship a lockfile without those integrities. The
   administrator's access step (`Zugang speichern`) writes `keiko.config.json` from the
-  configuration Gateway Setup saved. Windows has no npm coding-runtime package, so this form offers
-  no Coding Workbench on Windows.
+  configuration Gateway Setup saved and gives the team token only to the gateway connection Gateway
+  Setup verified; a provider or reranker with its own connection is refused, never given that token.
+  Windows has no npm coding-runtime package, so this form offers no Coding Workbench on Windows.
 - Portable updates must not require an Apple Developer subscription (ADR-0121 D7). Verify macOS
   handoff copies against the exact current artifact digests in the validated plan after managed
   registration admission; preserve candidate authenticity, containment and process ownership.

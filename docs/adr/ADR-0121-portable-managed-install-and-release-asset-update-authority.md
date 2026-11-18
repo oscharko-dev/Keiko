@@ -1225,23 +1225,41 @@ archive's Node.js runtime with npm, moved unchanged to `system/node`, a `package
 public registry. The builder runs npm with no configuration of the person who builds and refuses a
 lockfile that does not install exactly that version, names a link, or names a downloaded package
 without a public-registry sha512 integrity (packages bundled inside Keiko's own tarball are covered
-by its integrity). The first start runs `npm ci --ignore-scripts` in the folder, so
-npm installs exactly those packages, checks every integrity and runs no install script; an `.npmrc`
-beside the start files names the organization's registry, and npm replaces the registry host while
-keeping every checksum. npm's cache and log live in the state directory, which the start creates
-owner-private as Keiko does, and a successful installation removes them. The start sets both on
-npm's command line (`--cache`, `--logs-dir`), which no inherited `npm_config_*` variable and no
-`.npmrc` overrides, so npm writes nothing else outside the folder. A marker holding the lockfile's SHA-256 skips the installation at later starts
-until the lockfile changes. The start then runs `keiko start` with the same state directory,
-management declaration and provisioned configuration as the folder package. An administrator's
-access step (`system/Zugang speichern`) reads the configuration Gateway Setup saved, replaces each
-key sealed on that computer (providers and reranker) with a token typed without echo and writes
-`keiko.config.json`, owner-readable on macOS; it is a step the administrator runs, never part of a
-start. The only programs a double-click runs are the system shell and the signed Node.js binary,
-and npm writes no download mark on what it installs; the ZIP itself takes the mark like the folder
-package, and the paragraph below applies to it unchanged. npm publishes no Windows coding-runtime
-package, so this form on Windows reports Coding as unavailable; on macOS npm installs the coding
-runtime package for the computer.
+by its integrity). It also carries the archive's native USearch addon and its license at
+`system/native` and `system/licenses`, where Keiko's default lookup beside the Node.js runtime finds
+it as in the portable payload, so Knowledge Pods search with their ANN index. The first start runs
+`npm ci --ignore-scripts --prefix <folder> --workspaces=false`, so npm installs exactly those
+packages into the folder even inside another npm project or workspace, checks every integrity and
+runs no install script. The folder's `.npmrc` may name one global `registry`; it then wins over an
+inherited `npm_config_registry`, npm replaces the registry host while keeping every checksum, and a
+scoped `@scope:registry` line or a repeated `registry` is refused before npm runs. Each attempt gets
+its own npm cache `npm-cache-<random>` in the state directory, removed when it ends; npm's log lies in
+`npm-logs` there. The start sets both on npm's command line (`--cache`, `--logs-dir`), which no
+inherited `npm_config_*` variable and no `.npmrc` overrides, so npm writes nothing else outside the
+folder. The state directory lies in the home folder, created owner-private as Keiko does; a
+`KEIKO_STATE_DIR` outside it is refused before anything is written. An exclusive install lock in
+`system/` keeps a second start from installing concurrently, and `Stop Keiko` during an installation
+lets it finish and keeps Keiko from starting. A marker holding the lockfile's SHA-256 skips the
+installation at later starts until the lockfile changes. The start then runs `keiko start` with the
+same state directory and provisioned configuration as the folder package and pins the management
+declaration to `organization-managed` whatever the environment declared, so both the CLI and the
+server read the installation as managed outside the app. Install-mode detection reads that
+declaration for an npm installation too and reports `portable-it-managed`; the update preflight
+then makes no registry or release request. An administrator's access step
+(`system/Zugang speichern`) reads the configuration Gateway Setup saved and replaces with one token,
+typed without echo, only the keys sealed for the gateway connection Gateway Setup verified: the
+primary provider, the providers it built on the same endpoint style, API version, base URL and key
+header (its discovered models and gateway-managed voice) and a reranker on that address and header.
+A provider or reranker with its own connection is refused before the token is read, so one token
+never reaches another service. The step refuses while `KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR`
+names another configuration, and it writes `keiko.config.json` owner-readable through a temporary
+file that replaces the old one only when complete; it is a step the administrator runs, never part
+of a start. The folder package's builder applies the same rule to `--api-key-env`. The only
+programs a double-click runs are the system shell and the signed Node.js binary, and npm writes no
+download mark on what it installs; the ZIP itself takes the mark like the folder package, and the
+paragraph below applies to it unchanged. npm publishes no Windows coding-runtime package, so this
+form on Windows reports Coding as unavailable; on macOS npm installs the coding runtime package for
+the computer.
 
 **Release assets.** Every stable release carries the generic standalone folder package of each
 desktop target beside the four archives, as `keiko-<target>.standalone.zip` with its `.sha256`
@@ -1253,9 +1271,13 @@ of another Keiko version, another archive, other bytes or another target set, an
 package's build provenance from the stable-tag workflow (`gh attestation verify`, the same signer
 workflow, source digest and tag as the setup companion) before anything reaches the draft. It
 uploads them into the same draft as the archives and verifies GitHub's size and digest of each
-before it publishes the release, so the release is published with them or not at all. After
-publication it downloads every asset back unauthenticated as a smoke check; a failure there stops
-the run before npm publication, with the GitHub release already public. The rule binds every
+before it publishes the release, so the release is published with them or not at all. A draft
+that carries any asset this run did not validate, such as a package an earlier run left behind, is
+not published. After publication it downloads every asset back unauthenticated as a smoke check; a
+failure there stops the run before npm publication, with the GitHub release already public. A rerun
+over that published release verifies the same metadata, refuses an asset outside the validated set
+and repeats the unauthenticated download of every asset before npm publication. It reads the
+bundle's manifest, packages and checksum files only up to their declared sizes. The rule binds every
 publish that supplies the portable asset bundle, which the stable-tag workflow does for every
 stable `latest` release. A stable publish under another dist-tag without a bundle uploads and
 verifies no portable asset at all, so it neither adds nor checks folder packages, on a new release

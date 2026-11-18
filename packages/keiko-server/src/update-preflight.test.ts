@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createPortableReleaseTrust,
   portableReleaseTrustKeyId,
@@ -1600,6 +1603,73 @@ describe("update preflight service", () => {
     );
     expect(fetchImpl).not.toHaveBeenCalled();
     deps.store.close();
+  });
+
+  // The npm folder package (ADR-0121 D9): npm installed Keiko into the folder's node_modules, and
+  // its launcher declares the installation managed outside the app.
+  function npmFolderCliPath(): { readonly cliPath: string; readonly cleanup: () => void } {
+    const root = mkdtempSync(join(tmpdir(), "keiko-npm-folder-"));
+    const packageRoot = join(root, "Keiko", "node_modules", "@oscharko-dev", "keiko");
+    mkdirSync(join(packageRoot, "dist", "cli"), { recursive: true });
+    writeFileSync(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ name: "@oscharko-dev/keiko", version: "1.5.3" }),
+    );
+    const cliPath = join(packageRoot, "dist", "cli", "index.js");
+    writeFileSync(cliPath, "");
+    return {
+      cliPath,
+      cleanup: (): void => {
+        rmSync(root, { recursive: true, force: true });
+      },
+    };
+  }
+
+  it("asks no publisher for a Keiko the npm folder package installed (PR #4464)", async () => {
+    // Review finding on PR #4464 (P1): without a portable manifest the declaration was never read,
+    // so the folder's local npm install queried the public registry and GitHub.
+    const folder = npmFolderCliPath();
+    const fetchImpl = vi.fn<typeof fetch>();
+    const deps = depsWith(fetchImpl, {
+      env: {
+        KEIKO_CLI_BIN_PATH: folder.cliPath,
+        KEIKO_PORTABLE_MANAGEMENT: "organization-managed",
+      },
+    });
+
+    try {
+      const report = await runUpdatePreflight(deps, {
+        currentVersion: "1.5.3",
+        bundledCatalog: baseCatalog(),
+      });
+
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect(report.status).toBe("degraded");
+      expect(report.registryStatus).toBe("not-used");
+      expect(report.releaseMetadataStatus).toBe("not-needed");
+      expect(report.portableAsset).toBeUndefined();
+      expect(report.blockers).toContainEqual(
+        expect.objectContaining({ code: "portable-install-managed-externally" }),
+      );
+      expect(report.oneClickEligible).toBe(false);
+    } finally {
+      deps.store.close();
+      folder.cleanup();
+    }
+  });
+
+  it("still asks the registry about the same layout without an outside management", async () => {
+    const folder = npmFolderCliPath();
+    const fetchImpl = vi.fn<typeof fetch>(() => Promise.reject(new Error("offline")));
+    const deps = depsWith(fetchImpl, { env: { KEIKO_CLI_BIN_PATH: folder.cliPath } });
+
+    try {
+      await runUpdatePreflight(deps, { currentVersion: "1.5.3", bundledCatalog: baseCatalog() });
+      expect(fetchImpl).toHaveBeenCalled();
+    } finally {
+      deps.store.close();
+      folder.cleanup();
+    }
   });
 
   it("fails quietly with a degraded report when the registry times out", async () => {

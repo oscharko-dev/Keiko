@@ -182,6 +182,7 @@ describe("an administrator's package", () => {
           modelId: "embed",
           baseUrl: "https://gateway.example.test",
           apiKeySecretRef: "cred:embed",
+          catalogOrigin: "discovered",
         },
         { modelId: "own-key", baseUrl: "https://other.example.test", apiKey: "sk-kept" },
       ],
@@ -198,7 +199,12 @@ describe("an administrator's package", () => {
       schemaVersion: 2,
       providers: [
         { modelId: "chat", baseUrl: "https://gateway.example.test", apiKey: "sk-team" },
-        { modelId: "embed", baseUrl: "https://gateway.example.test", apiKey: "sk-team" },
+        {
+          modelId: "embed",
+          baseUrl: "https://gateway.example.test",
+          catalogOrigin: "discovered",
+          apiKey: "sk-team",
+        },
         { modelId: "own-key", baseUrl: "https://other.example.test", apiKey: "sk-kept" },
       ],
     });
@@ -219,6 +225,49 @@ describe("an administrator's package", () => {
     expect(
       JSON.parse(entriesByName(result.outputPath).get("Keiko/keiko.config.json")).reranker,
     ).toEqual({ modelId: "rerank", baseUrl: "https://g.example.test", apiKey: "sk-team" });
+  });
+
+  it.each([
+    [
+      "a reranker on another endpoint",
+      {
+        providers: [{ modelId: "chat", baseUrl: "https://g.example.test", apiKeySecretRef: "c:1" }],
+        reranker: {
+          modelId: "rerank",
+          baseUrl: "https://rerank.example.test",
+          apiKeySecretRef: "r",
+        },
+      },
+      "rerank",
+    ],
+    [
+      "a same-endpoint embedding with its own credential",
+      {
+        providers: [
+          { modelId: "chat", baseUrl: "https://g.example.test", apiKeySecretRef: "c:1" },
+          {
+            modelId: "own-key-embedding",
+            baseUrl: "https://g.example.test",
+            apiKeySecretRef: "c:2",
+          },
+        ],
+        capabilities: [{ id: "own-key-embedding", kind: "embedding" }],
+      },
+      "own-key-embedding",
+    ],
+  ])("never gives the team's key to %s", (_case, config, name) => {
+    // Review finding on PR #4464 (P1): the team key replaced every sealed reference, so an
+    // independent reranker or a model with its own credential received the gateway's key.
+    const root = tempRoot();
+    const options = {
+      config: configFile(root, JSON.stringify(config)),
+      apiKeyEnv: "KEIKO_TEAM_KEY",
+      env: { KEIKO_TEAM_KEY: "sk-team" },
+    };
+
+    expect(() => build("macos-arm64", { options })).toThrow(
+      new RegExp(`for another connection \\(${name}\\)`, "u"),
+    );
   });
 
   it("refuses a config that still refers to a key sealed on the administrator's computer", () => {

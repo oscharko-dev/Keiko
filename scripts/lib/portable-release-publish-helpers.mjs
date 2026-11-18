@@ -12,8 +12,11 @@ import { sha256 } from "./digest.mjs";
 import {
   checkPublishedManifestBinding,
   downloadPortableReleaseAsset,
+  immutableReleaseRepairFailure,
   manifestBindingsFromAssets,
   nonManifestEvidenceExpected,
+  publishedManifestDownloads,
+  unvalidatedReleaseAssets,
   verifyPublishedPortableEvidence,
 } from "./portable-release-publication.mjs";
 
@@ -64,17 +67,25 @@ export function makePublishedPortableSeams({ runGh, verifyReleaseTrust, trustedK
  * The published-release verification path itself: verify every non-manifest evidence file's digest
  * against GitHub (its bytes are byte-reproducible from the assemble stage), then verify each
  * portable manifest by its trusted Ed25519 signature and its commit/tag binding (a rerun cannot
- * reproduce the released manifest bytes once release.created_at has drifted).
+ * reproduce the released manifest bytes once release.created_at has drifted). The release must
+ * carry no asset beyond that set, and every asset of it must still download without credentials:
+ * a run that failed its public download smoke leaves the release published, and its rerun takes
+ * this path (PR #4464).
  *
+ * @param archiveExpected  the archive, setup and folder package records this run validated.
  * @param verifyAssets  the archive/evidence digest checker in release-publish.mjs.
+ * @param smokeDownloads (remoteAssets, expected) → downloads each asset without credentials and
+ *                       fails the run on a failed download or other bytes.
  * @param headOfCheckout () → sha of the checked-out HEAD.
  */
 export function runVerifyPublishedPortableAssets({
   publisher,
   releaseInfo,
   assets,
+  archiveExpected,
   archiveSnapshot,
   verifyAssets,
+  smokeDownloads,
   headOfCheckout,
   log = console.log,
 }) {
@@ -86,5 +97,15 @@ export function runVerifyPublishedPortableAssets({
   const head = headOfCheckout();
   const bindings = manifestBindingsFromAssets(assets, head, releaseInfo.tag);
   verifyPublishedPortableEvidence(publisher, releaseInfo, archiveSnapshot.assets, bindings);
-  log(`release-publish: portable assets verified on published ${releaseInfo.tag}.`);
+  const published = [
+    ...archiveExpected,
+    ...evidenceExpected,
+    ...publishedManifestDownloads(bindings, archiveSnapshot.assets),
+  ];
+  const unvalidated = unvalidatedReleaseAssets(archiveSnapshot.assets, published);
+  if (unvalidated !== undefined) {
+    publisher.fail(immutableReleaseRepairFailure(releaseInfo.tag, unvalidated));
+  }
+  smokeDownloads(archiveSnapshot.assets, published);
+  log(`release-publish: portable assets verified and downloaded on published ${releaseInfo.tag}.`);
 }

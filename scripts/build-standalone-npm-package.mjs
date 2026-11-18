@@ -13,6 +13,7 @@
 //     .npmrc                                     the administrator's registry (not shipped)
 //     keiko.config.json                          only with --config, or saved by the administrator
 //     system/node/...                            Node.js and npm from the release archive, unchanged
+//     system/native/usearch.node                 the retrieval addon from the release archive, unchanged
 //     system/keiko-npm.mjs                       start, stop and the administrator's access step
 //     system/Zugang speichern.command | .cmd     writes keiko.config.json for the whole team
 //     system/npm-package.json                    what this package was built from
@@ -127,6 +128,31 @@ function adoptNodeRuntime(payloadRoot, packageRoot, layout) {
   const npmCli = join(destination, ...NPM_CLI[layout.os]);
   if (!existsSync(npmCli)) refuse("the archive's Node.js runtime carries no npm");
   return npmCli;
+}
+
+// Keiko's approximate nearest-neighbour search runs on the USearch addon the portable payload
+// carries verified (ADR-0164); npm installs no copy of it. The package keeps the payload's addon
+// and its license where Keiko looks for the addon next to this Node.js runtime: two levels above
+// node on macOS (system/node/bin/node), one above node.exe on Windows (system/node/node.exe).
+const RETRIEVAL_RUNTIME = Object.freeze([
+  [
+    ["runtime", "native", "usearch.node"],
+    ["system", "native", "usearch.node"],
+  ],
+  [
+    ["runtime", "licenses", "usearch", "LICENSE"],
+    ["system", "licenses", "usearch", "LICENSE"],
+  ],
+]);
+
+function adoptRetrievalRuntime(payloadRoot, packageRoot, layout) {
+  for (const [from, to] of RETRIEVAL_RUNTIME) {
+    const source = join(payloadRoot, ...layout.resources, ...from);
+    if (!existsSync(source)) refuse(`the archive carries no ${from.join("/")}`);
+    const destination = join(packageRoot, ...to);
+    mkdirSync(dirname(destination), { recursive: true });
+    renameSync(source, destination);
+  }
 }
 
 export function packageJsonText(packageVersion) {
@@ -254,6 +280,7 @@ function assemblePackage(input) {
   extractZipArchiveEntries(archivePath, payloadRoot, { requireRegularEntries: true });
   const { packageVersion } = inspectPayload(payloadRoot, target);
   const npmCli = adoptNodeRuntime(payloadRoot, packageRoot, layout);
+  adoptRetrievalRuntime(payloadRoot, packageRoot, layout);
   rmSync(payloadRoot, { recursive: true, force: true });
   writePackageFile(join(packageRoot, "package.json"), packageJsonText(packageVersion), 0o644);
   createLockfile(packageRoot, npmCli);

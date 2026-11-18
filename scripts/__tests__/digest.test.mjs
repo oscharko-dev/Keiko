@@ -6,7 +6,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { sha256, sha256File } from "../lib/digest.mjs";
+import { sha256, sha256File, sha256FileChunked } from "../lib/digest.mjs";
 
 const roots = [];
 
@@ -41,5 +41,22 @@ describe("digest", () => {
     const crlf = join(root, "crlf.bin");
     writeFileSync(crlf, Buffer.from("line1\r\nline2\n", "utf8"));
     expect(sha256File(crlf)).not.toBe(sha256("line1\nline2\n"));
+  });
+
+  it("hashes a file in chunks to the same digest, across chunk boundaries", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-digest-test-"));
+    roots.push(root);
+    const empty = join(root, "empty.bin");
+    writeFileSync(empty, Buffer.alloc(0));
+    expect(sha256FileChunked(empty)).toBe(SHA256_EMPTY);
+    const abc = join(root, "abc.bin");
+    writeFileSync(abc, Buffer.from("abc", "utf8"));
+    expect(sha256FileChunked(abc)).toBe(SHA256_ABC);
+    // Larger than two 1 MiB chunks and not a multiple of one.
+    const bytes = Buffer.alloc(2 * 1024 * 1024 + 7);
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = index % 251;
+    const large = join(root, "large.bin");
+    writeFileSync(large, bytes);
+    expect(sha256FileChunked(large)).toBe(createHash("sha256").update(bytes).digest("hex"));
   });
 });

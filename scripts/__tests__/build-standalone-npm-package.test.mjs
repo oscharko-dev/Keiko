@@ -25,6 +25,7 @@ import {
   readZipArchiveEntries,
   writeZipArchiveEntries,
 } from "../lib/zip-archive.mjs";
+import { portableUsearchBinaryPath } from "../../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 
 // An npm package carries the release's Node.js runtime, a pinned lockfile and start files; Keiko
 // itself arrives from the npm registry at the first start (ADR-0121 D9). These tests build real
@@ -56,7 +57,15 @@ function setupManifest(target) {
   })}\n`;
 }
 
-function payloadRecords(target, { withNpm = true } = {}) {
+// The verified USearch addon and its license, as the portable payload carries them.
+function retrievalRecords(resources) {
+  return [
+    { name: `${resources}/runtime/native/usearch.node`, data: "usearch", mode: EXECUTABLE },
+    { name: `${resources}/runtime/licenses/usearch/LICENSE`, data: "usearch license" },
+  ];
+}
+
+function payloadRecords(target, { withNpm = true, withRetrieval = true } = {}) {
   if (target === "windows-x64") {
     return [
       { name: "Keiko/Keiko.exe", data: "launcher", mode: REGULAR },
@@ -66,6 +75,7 @@ function payloadRecords(target, { withNpm = true } = {}) {
       ...(withNpm
         ? [{ name: "Keiko/runtime/node/node_modules/npm/bin/npm-cli.js", data: "npm" }]
         : []),
+      ...(withRetrieval ? retrievalRecords("Keiko") : []),
     ];
   }
   const resources = "Keiko/Keiko.app/Contents/Resources";
@@ -77,6 +87,7 @@ function payloadRecords(target, { withNpm = true } = {}) {
     ...(withNpm
       ? [{ name: `${resources}/runtime/node/lib/node_modules/npm/bin/npm-cli.js`, data: "npm" }]
       : []),
+    ...(withRetrieval ? retrievalRecords(resources) : []),
   ];
 }
 
@@ -144,6 +155,8 @@ describe("an npm package", () => {
       "Keiko/package.json",
       "Keiko/system/Zugang speichern.command",
       "Keiko/system/keiko-npm.mjs",
+      "Keiko/system/licenses/usearch/LICENSE",
+      "Keiko/system/native/usearch.node",
       "Keiko/system/node/bin/node",
       "Keiko/system/node/lib/node_modules/npm/bin/npm-cli.js",
       "Keiko/system/npm-package.json",
@@ -207,6 +220,33 @@ describe("an npm package", () => {
     expect(result.outputPath.endsWith("keiko-windows-x64.npm-team.zip")).toBe(true);
     expect(result.provisioned).toBe(true);
     expect(statSync(join(extracted, "Keiko", "keiko.config.json")).mode & 0o777).toBe(0o600);
+  });
+
+  it.each([
+    ["macos-arm64", ["system", "node", "bin", "node"], "darwin"],
+    ["windows-x64", ["system", "node", "node.exe"], "win32"],
+  ])(
+    "keeps the release's retrieval addon on %s where Keiko looks for it beside Node.js",
+    (target, node, platform) => {
+      const { root, result } = build(target);
+      const extracted = join(root, "extracted");
+      extractZipArchiveEntries(result.outputPath, extracted);
+      const folder = join(extracted, "Keiko");
+
+      // The same function Keiko's retrieval resolves the addon with, from the package's Node.js.
+      const addon = portableUsearchBinaryPath(join(folder, ...node), platform);
+      expect(addon).toBe(join(folder, "system", "native", "usearch.node"));
+      expect(readFileSync(addon, "utf8")).toBe("usearch");
+      expect(readFileSync(join(folder, "system", "licenses", "usearch", "LICENSE"), "utf8")).toBe(
+        "usearch license",
+      );
+    },
+  );
+
+  it("refuses an archive that carries no retrieval addon", () => {
+    expect(() =>
+      build("windows-x64", { records: payloadRecords("windows-x64", { withRetrieval: false }) }),
+    ).toThrow(/carries no runtime\/native\/usearch\.node/u);
   });
 
   it("refuses an archive whose Node.js runtime carries no npm", () => {

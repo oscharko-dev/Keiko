@@ -704,6 +704,8 @@ function ghStubBody() {
     "  if (state().existingReleaseIsDraft) { writeFileSync(1, JSON.stringify({ isDraft: true, assets: [] })); process.exit(0); }",
     "  if (state().existingEvaluationRelease) { writeFileSync(1, JSON.stringify({ isDraft: false, assets: [{ name: 'keiko-portable-evaluation-manifest.json' }] })); process.exit(0); }",
     "  if (state().releasePublished) { writeFileSync(1, JSON.stringify({ isDraft: false, assets: state().uploadedAssets || [] })); process.exit(0); }",
+    // A draft an interrupted run of this publisher left behind: resumed under its own title and id.
+    "  if (state().resumableDraft) { writeFileSync(1, JSON.stringify({ isDraft: true, name: 'Keiko ' + VERSION, databaseId: 987654321, assets: state().uploadedAssets || [] })); process.exit(0); }",
     "  if (state().publisherDraft) { writeFileSync(1, JSON.stringify({ isDraft: true, assets: state().uploadedAssets || [] })); process.exit(0); }",
     "  process.exit(1);",
     "}",
@@ -713,6 +715,15 @@ function ghStubBody() {
     "}",
     'if (sub === "release" && argv[1] === "edit") {',
     "  if (argv.includes('--draft=false')) setState({ publisherDraft: false, releasePublished: true });",
+    "  process.exit(0);",
+    "}",
+    // The authenticated download a rerun over a published release reads each signed manifest with.
+    'if (sub === "release" && argv[1] === "download") {',
+    '  const pattern = argv[argv.indexOf("--pattern") + 1];',
+    '  const dir = argv[argv.indexOf("--dir") + 1];',
+    "  const asset = (state().uploadedAssets || []).find((entry) => entry.name === pattern);",
+    "  if (!asset) { process.stderr.write('no assets match the file pattern\\n'); process.exit(1); }",
+    "  writeFileSync(join(dir, asset.name), Buffer.from(asset.content, 'base64'));",
     "  process.exit(0);",
     "}",
     'if (sub === "release" && argv[1] === "upload") {',
@@ -806,6 +817,18 @@ function expectNoPublicationSideEffect(calls) {
   for (const prefix of PUBLICATION_CALL_PREFIXES) {
     expect(calls.filter((line) => line.startsWith(prefix))).toEqual([]);
   }
+}
+
+function registryVersionBody() {
+  return [
+    "  const s = state();",
+    '  if (argv.includes("version")) {',
+    '    if (!s.published) { process.stderr.write("npm error code E404\\n"); process.exit(1); }',
+    '    process.stdout.write(VERSION + "\\n");',
+    "    process.exit(0);",
+    "  }",
+    '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+  ].join("\n");
 }
 
 function passthroughViewBody() {
@@ -904,6 +927,7 @@ function curlStubBody() {
     'const name = url.split("/").at(-1);',
     "const asset = (state().uploadedAssets || []).find((entry) => entry.name === name);",
     "if (!asset || output.length === 0) process.exit(2);",
+    "if ((state().failPublicDownloads || []).includes(name)) { process.stderr.write('curl: (22) The requested URL returned error: 503\\n'); process.exit(22); }",
     'const bytes = Buffer.from(asset.content, "base64");',
     'if (state().tamperRemoteDownloads && name.endsWith(".zip") && bytes.length > 0) bytes[0] ^= 0xff;',
     "writeFileSync(output, bytes);",
@@ -1141,8 +1165,9 @@ function runPublish({
   qualificationEnv = {},
   extraArgs = [],
   codingRuntimeReleases = codingRuntimeReleasesForPublishTest(),
+  signingKeyPair = generateKeyPairSync("ed25519"),
 }) {
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const { privateKey, publicKey } = signingKeyPair;
   const binDir = mkdtempSync(join(tmpdir(), "keiko-release-publish-stub-"));
   const portableDir = mkdtempSync(join(tmpdir(), "keiko-portable-assets-fixture-"));
   const logFile = join(binDir, "calls.log");
@@ -1220,10 +1245,17 @@ function runPublish({
   const calls = readFileSync(logFile, "utf8")
     .split("\n")
     .filter((line) => line.length > 0);
+  const finalState = JSON.parse(readFileSync(stateFile, "utf8"));
   rmSync(binDir, { recursive: true, force: true });
   rmSync(portableDir, { recursive: true, force: true });
 
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr, calls };
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    calls,
+    state: finalState,
+  };
 }
 
 // A stub `npm` that shares the config/gate scaffolding and lets each scenario plug in the
@@ -2134,6 +2166,95 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.stderr).not.toMatch(/lacks[^\n]*keiko-macos-arm64\.zip/u);
       expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("downloads every asset again when it reruns over a published release (PR #4464)", () => {
+      // Review finding on PR #4464 (P2): the first run published the release and then failed its
+      // public download of a folder package. The rerun found the release published, checked the
+      // API metadata and returned before any download, so npm published Keiko beside a package
+      // nobody could fetch.
+      const signingKeyPair = generateKeyPairSync("ed25519");
+      const failing = folderPackageArchiveName("macos-arm64", "standalone");
+      const first = runPublish({
+        npmBody: npmStub(registryVersionBody()),
+        initState: { immutableReleases: true, published: false, failPublicDownloads: [failing] },
+        signingKeyPair,
+      });
+      expect(first.status).toBe(1);
+      expect(first.stderr).toContain(
+        `unauthenticated portable asset download failed for ${failing}.`,
+      );
+      expect(first.state.releasePublished).toBe(true);
+      expect(first.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+
+      const rerun = runPublish({
+        npmBody: npmStub(registryVersionBody()),
+        initState: first.state,
+        signingKeyPair,
+      });
+      expect(rerun.status).toBe(1);
+      expect(rerun.stderr).toContain(
+        `unauthenticated portable asset download failed for ${failing}.`,
+      );
+      expect(rerun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(rerun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+
+      // Once the download works, the same rerun proves every asset publicly and publishes npm.
+      const recovered = runPublish({
+        npmBody: npmStub(registryVersionBody()),
+        initState: { ...first.state, failPublicDownloads: [] },
+        signingKeyPair,
+      });
+      expect(recovered.status, recovered.stderr).toBe(0);
+      expect(recovered.stdout).toContain("portable assets verified and downloaded on published");
+      const downloads = recovered.calls.filter(
+        (l) => l.startsWith("curl [") && l.includes("/releases/download/"),
+      );
+      expect(downloads).toHaveLength(first.state.uploadedAssets.length);
+      expect(recovered.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(recovered.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(true);
+    });
+
+    it("refuses to publish a resumed draft that carries a package this run did not validate (PR #4464)", () => {
+      // Review finding on PR #4464 (P2): a resumed draft with every expected asset and an extra
+      // keiko-linux-x64.standalone.zip reached publication, so the stale package would have become
+      // an immutable public download outside the validated bundle.
+      const stale = Buffer.from("stale linux folder package\n");
+      const extra = {
+        id: 300001,
+        name: "keiko-linux-x64.standalone.zip",
+        size: stale.byteLength,
+        content: stale.toString("base64"),
+        digest: `sha256:${createHash("sha256").update(stale).digest("hex")}`,
+        browser_download_url: `https://github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/keiko-linux-x64.standalone.zip`,
+      };
+      const resumed = {
+        immutableReleases: true,
+        published: false,
+        publisherDraft: true,
+        resumableDraft: true,
+      };
+      lastRun = runPublish({
+        npmBody: npmStub(registryVersionBody()),
+        initState: { ...resumed, uploadedAssets: [extra] },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stdout).toContain("resuming draft GitHub release");
+      expect(lastRun.stderr).toContain(
+        "carries assets this run did not validate: keiko-linux-x64.standalone.zip; delete them from the draft",
+      );
+      expect(
+        lastRun.calls.some(
+          (l) => l.startsWith('gh ["release","edit"') && l.includes("--draft=false"),
+        ),
+      ).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+
+      // The same resumed draft without the stale package is published.
+      lastRun = runPublish({ npmBody: npmStub(registryVersionBody()), initState: resumed });
+      expect(lastRun.status, lastRun.stderr).toBe(0);
+      expect(lastRun.stdout).toContain("resuming draft GitHub release");
     });
 
     it("fails before npm publish when portable upload verification fails", () => {

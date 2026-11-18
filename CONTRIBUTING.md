@@ -94,8 +94,10 @@ registry the folder's `.npmrc` names. `scripts/build-standalone-npm-package.mjs`
 logic and start files live in `scripts/standalone/npm/`. A change here must keep three things true:
 nothing is written outside the folder and the state directory, no install script runs, and every
 package npm downloads carries a public-registry sha512 integrity. Run
-`scripts/__tests__/build-standalone-npm-package.test.mjs` and
-`scripts/__tests__/standalone-npm-runtime.test.mjs`. The operator guide is
+`scripts/__tests__/build-standalone-npm-package.test.mjs`,
+`scripts/__tests__/standalone-npm-runtime.test.mjs` and
+`scripts/__tests__/standalone-npm-install.test.mjs`, which runs the real npm against a loopback
+registry inside an enclosing workspace. The operator guide is
 [`docs/release/standalone-npm-package.md`](docs/release/standalone-npm-package.md).
 
 ### Activity Log runtime changes

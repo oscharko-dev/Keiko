@@ -10,12 +10,14 @@ import {
   manifestBindingsFromAssets,
   nonManifestEvidenceExpected,
   openPortableRelease,
+  publishedManifestDownloads,
   publishVerifiedPortableRelease,
   refuseIncompletePublishedRelease,
   releaseSnapshotPath,
   releaseTagAtHeadFailure,
   remoteDigestFailures,
   resumableDraftFailure,
+  unvalidatedReleaseAssets,
   uploadIntoDraft,
   verifyPublishedPortableEvidence,
 } from "../lib/portable-release-publication.mjs";
@@ -453,6 +455,28 @@ describe("publishVerifiedPortableRelease", () => {
     expect(calls).toStrictEqual([["verifyAssets", 1, 1]]);
   });
 
+  it.each([
+    ["a stale folder package of an unsupported target", "keiko-linux-x64.standalone.zip"],
+    ["a team variant", "keiko-linux-x64.standalone-team.zip"],
+    ["an asset of another lane", "notes.txt"],
+  ])("refuses to publish a resumed draft carrying %s (PR #4464)", (_, name) => {
+    // Review finding on PR #4464 (P2): the checks went through the expected names one by one, so
+    // an asset an earlier run left in the draft became an immutable public download.
+    const { calls, publisher } = fakePublisher();
+    const releaseInfo = { draft: true, id: 42, latestArgs: ["--latest"], repo: REPO, tag: TAG };
+    expect(() =>
+      publishVerifiedPortableRelease(
+        publisher,
+        releaseInfo,
+        [...verified, { digest: `sha256:${SHA}`, name }],
+        expected,
+      ),
+    ).toThrow(
+      `the draft GitHub release ${TAG} carries assets this run did not validate: ${name}; delete them from the draft`,
+    );
+    expect(calls.some((call) => call[2] === "edit")).toBe(false);
+  });
+
   it("refuses to publish a draft whose digests do not match", () => {
     const { calls, publisher } = fakePublisher();
     const releaseInfo = { draft: true, id: 42, latestArgs: ["--latest"], repo: REPO, tag: TAG };
@@ -465,6 +489,46 @@ describe("publishVerifiedPortableRelease", () => {
       ),
     ).toThrow("GitHub Release portable asset digests failed");
     expect(calls.some((call) => call[2] === "edit")).toBe(false);
+  });
+});
+
+describe("unvalidatedReleaseAssets", () => {
+  const expected = [{ assetName: "a.zip" }, { assetName: "a.zip.sha256" }];
+
+  it("accepts exactly the validated set, and a set the per-asset checks report as incomplete", () => {
+    expect(unvalidatedReleaseAssets([{ name: "a.zip" }, { name: "a.zip.sha256" }], expected)).toBe(
+      undefined,
+    );
+    expect(unvalidatedReleaseAssets([{ name: "a.zip" }], expected)).toBe(undefined);
+  });
+
+  it("names every extra and every repeated asset once", () => {
+    expect(
+      unvalidatedReleaseAssets(
+        [{ name: "a.zip" }, { name: "b.zip" }, { name: "a.zip" }, { name: "b.zip" }, {}],
+        expected,
+      ),
+    ).toBe("carries assets this run did not validate: b.zip, a.zip, undefined");
+    expect(unvalidatedReleaseAssets(undefined, expected)).toBe(undefined);
+  });
+});
+
+describe("publishedManifestDownloads", () => {
+  it("expects the digest and size GitHub reports for each signed manifest", () => {
+    const remote = [
+      { digest: `sha256:${SHA}`, name: "linux-x64-portable-manifest.json", size: 12 },
+      { digest: `sha256:${"d".repeat(64)}`, name: "keiko-linux-x64.zip", size: 99 },
+    ];
+    expect(
+      publishedManifestDownloads([{ assetName: "linux-x64-portable-manifest.json" }], remote),
+    ).toStrictEqual([
+      {
+        assetName: "linux-x64-portable-manifest.json",
+        expectedSha256: SHA,
+        expectedSize: 12,
+        firstClassArchive: false,
+      },
+    ]);
   });
 });
 

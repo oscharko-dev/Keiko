@@ -17,7 +17,7 @@ import { Buffer } from "node:buffer";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 
-import { sha256, sha256File } from "./digest.mjs";
+import { sha256, sha256FileChunked } from "./digest.mjs";
 
 /** The release asset names that shipped updaters read as portable archives. */
 export const FIRST_CLASS_ARCHIVE_NAME = /^keiko-[a-z0-9-]+\.zip$/u;
@@ -31,6 +31,8 @@ export const FOLDER_PACKAGES_DIRECTORY = "folder-packages";
 export const FOLDER_PACKAGES_MANIFEST = "folder-packages.json";
 
 const FORMS = new Set(["standalone", "npm"]);
+/** The manifest names three packages; anything near this size is not one the build wrote. */
+export const FOLDER_PACKAGES_MANIFEST_MAX_BYTES = 64 * 1024;
 const SHA256_HEX = /^[a-f0-9]{64}$/u;
 
 /** The file name of a folder package: `keiko-<target>.<form>.zip`, `-team` when it holds access. */
@@ -55,8 +57,16 @@ function isRecord(value) {
 
 function readManifest(path, failures) {
   try {
-    if (!lstatSync(path).isFile()) {
+    const stat = lstatSync(path);
+    if (!stat.isFile()) {
       failures.push(`${FOLDER_PACKAGES_MANIFEST} must be a regular file.`);
+      return undefined;
+    }
+    // Checked before reading, so an oversized file is never loaded.
+    if (stat.size > FOLDER_PACKAGES_MANIFEST_MAX_BYTES) {
+      failures.push(
+        `${FOLDER_PACKAGES_MANIFEST} is larger than ${String(FOLDER_PACKAGES_MANIFEST_MAX_BYTES)} bytes.`,
+      );
       return undefined;
     }
     return JSON.parse(readFileSync(path, "utf8"));
@@ -120,10 +130,20 @@ function entryFailures(entry, archive) {
 }
 
 function fileFailures(entry, zipPath) {
-  if (sha256File(zipPath) === entry.sha256 && lstatSync(zipPath).size === entry.sizeBytes) {
+  // The size is compared first, so a package of another size is never read; a package of the
+  // declared size is hashed in chunks rather than loaded whole.
+  if (lstatSync(zipPath).size === entry.sizeBytes && sha256FileChunked(zipPath) === entry.sha256) {
     return [];
   }
   return [`${entry.assetName} does not have the digest and size its manifest declares.`];
+}
+
+/** The checksum file holds exactly `text`; one of another size is refused without reading it. */
+function checksumMatches(checksumPath, text) {
+  return (
+    lstatSync(checksumPath).size === Buffer.byteLength(text) &&
+    readFileSync(checksumPath, "utf8") === text
+  );
 }
 
 function packageUpload(directory, entry, failures) {
@@ -133,7 +153,7 @@ function packageUpload(directory, entry, failures) {
   if (zipPath === undefined || checksumPath === undefined) return [];
   failures.push(...fileFailures(entry, zipPath));
   const checksumText = folderChecksumText(entry.sha256, entry.assetName);
-  if (readFileSync(checksumPath, "utf8") !== checksumText) {
+  if (!checksumMatches(checksumPath, checksumText)) {
     failures.push(`${checksumName} must bind ${entry.assetName}.`);
   }
   // The stable-tag workflow attests each package's build provenance; its `.sha256` file is text

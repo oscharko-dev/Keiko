@@ -29,6 +29,8 @@ export function payloadRecords(target, manifestOverrides = {}) {
       },
       { name: "Keiko/app/dist/cli/index.js", data: "cli" },
       { name: "Keiko/runtime/node/node.exe", data: "node" },
+      { name: "Keiko/runtime/native/usearch.node", data: "usearch" },
+      { name: "Keiko/runtime/licenses/usearch/LICENSE", data: "usearch license" },
     ];
   }
   const resources = "Keiko/Keiko.app/Contents/Resources";
@@ -40,6 +42,8 @@ export function payloadRecords(target, manifestOverrides = {}) {
     },
     { name: `${resources}/app/dist/cli/index.js`, data: "cli" },
     { name: `${resources}/runtime/node/bin/node`, data: "node", mode: EXECUTABLE },
+    { name: `${resources}/runtime/native/usearch.node`, data: "usearch", mode: EXECUTABLE },
+    { name: `${resources}/runtime/licenses/usearch/LICENSE`, data: "usearch license" },
   ];
 }
 

@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,6 +9,7 @@ import {
   FIRST_CLASS_ARCHIVE_NAME,
   FOLDER_PACKAGES_DIRECTORY,
   FOLDER_PACKAGES_MANIFEST,
+  FOLDER_PACKAGES_MANIFEST_MAX_BYTES,
   FOLDER_RELEASE_TARGETS,
   folderChecksumText,
   folderPackageArchiveName,
@@ -186,6 +187,22 @@ describe("the folder packages of a bundle", () => {
       "keiko-macos-arm64.standalone.zip does not have the digest and size its manifest declares",
     ],
     [
+      "a package of another size",
+      (manifest) => Object.assign(manifest.packages[0], { sizeBytes: 1 }),
+      undefined,
+      "keiko-macos-arm64.standalone.zip does not have the digest and size its manifest declares",
+    ],
+    [
+      "a checksum file with more than the binding line",
+      (manifest, directory) =>
+        writeFileSync(
+          join(directory, `${manifest.packages[0].assetName}.sha256`),
+          `${folderChecksumText(manifest.packages[0].sha256, manifest.packages[0].assetName)}x`,
+        ),
+      undefined,
+      "keiko-macos-arm64.standalone.zip.sha256 must bind keiko-macos-arm64.standalone.zip",
+    ],
+    [
       "a checksum file of another package",
       (manifest, directory) =>
         writeFileSync(
@@ -222,6 +239,34 @@ describe("the folder packages of a bundle", () => {
     symlinkSync(join(root, FOLDER_PACKAGES_DIRECTORY), join(empty, FOLDER_PACKAGES_DIRECTORY));
     expect(uploads(empty).failures).toEqual([
       "the portable asset bundle carries no folder packages.",
+    ]);
+  });
+
+  it.each([
+    ["a package", (name) => name],
+    ["a checksum file", (name) => `${name}.sha256`],
+  ])("never reads %s larger than its manifest declares (PR #4464)", (_, fileOf) => {
+    // Review finding on PR #4464 (P2): each file was read whole before its size was compared. A
+    // sparse 3 GiB file costs no disk, and reading it whole would throw: the refusal proves the
+    // size was compared first.
+    const root = bundle((manifest, directory) => {
+      truncateSync(join(directory, fileOf(manifest.packages[0].assetName)), 3 * 1024 ** 3);
+    });
+
+    expect(uploads(root).failures.join("\n")).toMatch(
+      /keiko-macos-arm64\.standalone\.zip(\.sha256 must bind| does not have the digest)/u,
+    );
+  });
+
+  it("refuses an oversized manifest before reading it (PR #4464)", () => {
+    // Review finding on PR #4464 (P2): the manifest was read to its end whatever its size.
+    const root = bundle();
+    const path = join(root, FOLDER_PACKAGES_DIRECTORY, FOLDER_PACKAGES_MANIFEST);
+    const manifest = JSON.stringify(folderPackagesManifest("1.2.3", []));
+    writeFileSync(path, manifest.padEnd(FOLDER_PACKAGES_MANIFEST_MAX_BYTES + 1, " "));
+
+    expect(uploads(root).failures).toEqual([
+      `folder-packages.json is larger than ${String(FOLDER_PACKAGES_MANIFEST_MAX_BYTES)} bytes.`,
     ]);
   });
 
