@@ -1281,3 +1281,61 @@ describe("a partial proposal says so, and the list without a proposal stays boun
     });
   });
 });
+
+// PR #4464 owner review: a bound status id the partial workflow list cannot verify is not a checked match.
+describe("validation says transitions were not fully checked for an unverifiable bound status", () => {
+  const INSTANCE = jiraInstanceIdentity(BASE_URL);
+  const lines = (...extra: readonly string[]): string =>
+    [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Story",
+      ...extra,
+      "activateOn: [transition:Ready]",
+      "summaryMinLength: 4",
+      "---",
+      "# Story template",
+    ].join("\n");
+  async function checked(statusId: string): Promise<unknown> {
+    const f = fixture();
+    f.http.mockImplementation((request) =>
+      new URL(request.url).pathname.endsWith("/project/SYN/statuses")
+        ? Promise.resolve(
+            response([
+              {
+                id: "10001",
+                name: "Story",
+                statuses: [{ id: "3", name: "Fini" }, { name: "No id" }],
+              },
+            ]),
+          )
+        : jiraGet(request),
+    );
+    const plain = parseJiraIssueTemplate(lines());
+    if (!plain.ok) throw new TypeError("Expected a parseable template");
+    const digest = jiraTemplateBindingDigest(INSTANCE, plain.template, {
+      issueTypeId: "10001",
+      transitionStatusIds: [statusId],
+    });
+    const markdown = lines(
+      'issueTypeId: "10001"',
+      `transitionStatusIds: ["${statusId}"]`,
+      `jiraBinding: "${digest}"`,
+    );
+    const result = await handleValidateJiraTemplate(
+      context(f.cookie, { podId: POD, markdown }),
+      f.deps,
+    );
+    return result.body;
+  }
+
+  it("does not report transitions as checked or the template as a clean match", async () => {
+    expect(await checked("9")).toMatchObject({ findings: [], checked: { transitions: false } });
+  });
+
+  it("still reports transitions as checked when the partial list shows the bound id", async () => {
+    expect(await checked("3")).toMatchObject({ findings: [], checked: { transitions: true } });
+  });
+});

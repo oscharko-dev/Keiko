@@ -12,6 +12,7 @@ import {
   resolveJiraTemplateFieldIds,
   type JiraIssueTemplate,
   type JiraTemplateActivation,
+  type JiraTemplateFieldRole,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
@@ -222,21 +223,25 @@ function checkSections(context: Context): void {
   }
 }
 
-function fieldPresent(context: Context, reference: string): boolean | undefined {
-  const ids = resolveJiraTemplateFieldIds(reference, context.catalog, context.template);
+function fieldPresent(
+  context: Context,
+  reference: string,
+  role: JiraTemplateFieldRole,
+): boolean | undefined {
+  const ids = resolveJiraTemplateFieldIds(reference, context.catalog, context.template, role);
   if (ids.length === 0) return undefined;
   return ids.some((id) => jiraTemplateValuePresent(fieldValue(context, id)));
 }
 
 function checkFields(context: Context): void {
   for (const field of context.template.requiredFields) {
-    const present = fieldPresent(context, field);
+    const present = fieldPresent(context, field, "required");
     if (present === undefined) raise(context, "field-unavailable", field);
     else if (!present) raise(context, "field-missing", field);
   }
   const parent = context.template.parent;
   if (parent.field !== undefined) {
-    const present = fieldPresent(context, parent.field);
+    const present = fieldPresent(context, parent.field, "parent");
     if (present !== true) raise(context, "parent-missing", parent.field);
   }
   if (parent.link !== undefined) {
@@ -255,7 +260,7 @@ function checkParentType(context: Context): void {
     return;
   }
   // Ordinary presence errors remain distinct; a supplied parent requires independent type proof.
-  if (fieldPresent(context, field) !== true) return;
+  if (fieldPresent(context, field, "parent") !== true) return;
   const observed = observedParentType(context, field);
   if (observed === undefined) raise(context, "template-unreadable", field);
   else if (!jiraTemplateParentTypeMatches(context.template, observed))
@@ -270,7 +275,7 @@ function observedParentType(
   context: Context,
   field: string,
 ): { readonly id: string; readonly name: string } | undefined {
-  const ids = resolveJiraTemplateFieldIds(field, context.catalog, context.template);
+  const ids = resolveJiraTemplateFieldIds(field, context.catalog, context.template, "parent");
   const id = ids.length === 1 ? ids[0] : undefined;
   const evidence = context.subject.parentIssueTypes;
   return id !== undefined && evidence !== undefined && Object.hasOwn(evidence, id)
@@ -369,7 +374,7 @@ function parentFieldIds(
     "parent",
     "issuelinks",
     field,
-    ...resolveJiraTemplateFieldIds(field, catalog, template),
+    ...resolveJiraTemplateFieldIds(field, catalog, template, "parent"),
   ]);
 }
 /** The wire field ids a violation is about; an empty result means it is not about one field. */
@@ -384,7 +389,7 @@ function violationFieldIds(
     return parentFieldIds(violation, catalog, template);
   return new Set([
     violation.subject,
-    ...resolveJiraTemplateFieldIds(violation.subject, catalog, template),
+    ...resolveJiraTemplateFieldIds(violation.subject, catalog, template, "required"),
   ]);
 }
 
@@ -479,12 +484,12 @@ function fieldFindings(
   template: JiraIssueTemplate,
   catalog: readonly JiraFieldCatalogEntry[],
 ): readonly JiraTemplateFinding[] {
-  const references = [
-    ...template.requiredFields,
-    ...(template.parent.field === undefined ? [] : [template.parent.field]),
+  const references: readonly (readonly [string, JiraTemplateFieldRole])[] = [
+    ...template.requiredFields.map((field) => [field, "required"] as const),
+    ...(template.parent.field === undefined ? [] : [[template.parent.field, "parent"] as const]),
   ];
-  return references.flatMap((reference): readonly JiraTemplateFinding[] => {
-    const ids = resolveJiraTemplateFieldIds(reference, catalog, template);
+  return references.flatMap(([reference, role]): readonly JiraTemplateFinding[] => {
+    const ids = resolveJiraTemplateFieldIds(reference, catalog, template, role);
     if (ids.length === 0) return [{ code: "unknown-field", subject: reference }];
     const exact = catalog.some((entry) => entry.id === reference);
     return ids.length > 1 && !exact ? [{ code: "ambiguous-field", subject: reference }] : [];
@@ -503,25 +508,52 @@ function linkFindings(
   return known ? [] : [{ code: "unknown-link-type", subject: link }];
 }
 
+/** How the live workflow answers one transition target: it lists it, does not, or cannot tell. */
+function transitionTargetState(
+  template: JiraIssueTemplate,
+  instance: JiraTemplateInstanceMetadata,
+  activation: JiraIssueTemplate["activations"][number],
+  target: string,
+): "known" | "unknown" | "unverifiable" {
+  // A target bound to a confirmed status id is judged by that id, in every language of the instance.
+  const statusId = jiraTemplateBoundStatusId(template, activation);
+  if (statusId === undefined || instance.statusRefs === undefined)
+    return (instance.statuses ?? []).some((status) => same(status, target)) ? "known" : "unknown";
+  if (instance.statusRefs.some((status) => status.id === statusId)) return "known";
+  // An id missing from an incomplete list may be the row without an id: unverifiable, not unknown.
+  return instance.statusRefsComplete === false ? "unverifiable" : "unknown";
+}
+
 function transitionFindings(
   template: JiraIssueTemplate,
   instance: JiraTemplateInstanceMetadata,
 ): readonly JiraTemplateFinding[] {
-  const statuses = instance.statuses;
-  if (statuses === undefined) return [];
+  if (instance.statuses === undefined) return [];
   return template.activations.flatMap((activation): readonly JiraTemplateFinding[] => {
     if (activation.kind !== "transition" || activation.target === undefined) return [];
     const { target } = activation;
-    // A target bound to a confirmed status id is judged by that id, in every language of the instance.
-    const statusId = jiraTemplateBoundStatusId(template, activation);
-    const known =
-      statusId !== undefined && instance.statusRefs !== undefined
-        ? // An id missing from an incomplete list may be the row without an id: unverifiable, not unknown.
-          instance.statusRefsComplete === false ||
-          instance.statusRefs.some((status) => status.id === statusId)
-        : statuses.some((status) => same(status, target));
-    return known ? [] : [{ code: "unknown-transition-target", subject: target }];
+    return transitionTargetState(template, instance, activation, target) === "unknown"
+      ? [{ code: "unknown-transition-target", subject: target }]
+      : [];
   });
+}
+
+/**
+ * Whether every transition target of the template was actually judged against the live workflow: false
+ * when the workflow was not read, or when a bound status id cannot be told apart from the one row an
+ * incomplete list left without an id. An unverified target is never reported as a checked match.
+ */
+export function jiraTransitionsFullyChecked(
+  template: JiraIssueTemplate,
+  instance: JiraTemplateInstanceMetadata,
+): boolean {
+  if (instance.statuses === undefined) return false;
+  return template.activations.every(
+    (activation) =>
+      activation.kind !== "transition" ||
+      activation.target === undefined ||
+      transitionTargetState(template, instance, activation, activation.target) !== "unverifiable",
+  );
 }
 
 function projectFindings(
@@ -582,7 +614,7 @@ function parentRelationFindings(
   const reference = template.parent.field;
   const type = declaredIssueType(template, instance);
   if (reference === undefined || type === undefined || instance.fields === undefined) return [];
-  const ids = resolveJiraTemplateFieldIds(reference, instance.fields, template);
+  const ids = resolveJiraTemplateFieldIds(reference, instance.fields, template, "parent");
   const named = ids.length === 1 ? instance.fields.find((entry) => entry.id === ids[0]) : undefined;
   if (named === undefined) return [];
   const actual = actualParentField(type, instance.fields);

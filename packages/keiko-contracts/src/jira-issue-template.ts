@@ -1266,20 +1266,29 @@ export function rebindJiraTemplateAfterEdit(
   return { digest: jiraTemplateBindingDigest(instance, typed, ids), ...ids };
 }
 
+/** Which typed clause a field reference belongs to: a `requiredFields` entry or the `parentField`. */
+export type JiraTemplateFieldRole = "required" | "parent";
+
 /**
- * The field id a bound template carries for a typed field reference (`requiredFields` entry or
- * `parentField`), or undefined where the template is unbound or that name did not resolve: such a
- * reference is matched by name or by a typed id, as before.
+ * The field id a bound template carries for a typed field reference, or undefined where the template
+ * is unbound or that name did not resolve: such a reference is matched by name or by a typed id, as
+ * before. The `role` is required: a `requiredFields` entry reads only its own required slot and the
+ * `parentField` only the parent slot, so one name used by both clauses never answers with the other's id.
  */
 export function jiraTemplateBoundFieldId(
   template: Pick<JiraIssueTemplate, "binding" | "requiredFields" | "parent">,
   reference: string,
+  role: JiraTemplateFieldRole,
 ): string | undefined {
   const { binding } = template;
   if (binding === undefined) return undefined;
-  const index = template.requiredFields.findIndex((field) => sameName(field, reference));
-  const id = index >= 0 ? binding.requiredFieldIds?.[index] : parentFieldIdOf(template, reference);
-  return id === undefined || id === JIRA_BINDING_UNRESOLVED ? undefined : id;
+  const id =
+    role === "required"
+      ? binding.requiredFieldIds?.[
+          template.requiredFields.findIndex((field) => sameName(field, reference))
+        ]
+      : parentFieldIdOf(template, reference);
+  return id === JIRA_BINDING_UNRESOLVED ? undefined : id;
 }
 
 /**
@@ -1290,9 +1299,23 @@ export function jiraTemplateBoundFieldId(
 export function resolveJiraTemplateFieldIds(
   reference: string,
   catalog: readonly { readonly id: string; readonly name: string }[],
+): readonly string[];
+export function resolveJiraTemplateFieldIds(
+  reference: string,
+  catalog: readonly { readonly id: string; readonly name: string }[],
+  template: Pick<JiraIssueTemplate, "binding" | "requiredFields" | "parent"> | undefined,
+  role: JiraTemplateFieldRole,
+): readonly string[];
+export function resolveJiraTemplateFieldIds(
+  reference: string,
+  catalog: readonly { readonly id: string; readonly name: string }[],
   template?: Pick<JiraIssueTemplate, "binding" | "requiredFields" | "parent">,
+  role?: JiraTemplateFieldRole,
 ): readonly string[] {
-  const bound = template === undefined ? undefined : jiraTemplateBoundFieldId(template, reference);
+  const bound =
+    template === undefined || role === undefined
+      ? undefined
+      : jiraTemplateBoundFieldId(template, reference, role);
   if (bound !== undefined) return catalog.some((entry) => entry.id === bound) ? [bound] : [];
   const exact = catalog.filter((entry) => entry.id === reference);
   if (exact.length > 0) return exact.map((entry) => entry.id);

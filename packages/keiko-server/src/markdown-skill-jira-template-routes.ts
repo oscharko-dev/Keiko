@@ -6,6 +6,7 @@ import {
   readJiraTemplateInstanceMetadata,
   readJiraTemplateOptions,
   resolveJiraTemplateBinding,
+  jiraTransitionsFullyChecked,
   validateJiraIssueTemplateAgainstInstance,
 } from "@oscharko-dev/keiko-connectors";
 import {
@@ -302,7 +303,7 @@ export function handleValidateJiraTemplate(
             project: read.instance.project !== undefined,
             fields: read.instance.fields !== undefined,
             linkTypes: read.instance.linkTypes !== undefined,
-            transitions: read.instance.statuses !== undefined,
+            transitions: jiraTransitionsFullyChecked(template, read.instance),
           },
         },
       };

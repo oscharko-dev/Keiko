@@ -5,6 +5,7 @@ import {
   readJiraDescriptionSections,
   type AtlassianConnectorWriteFailureReason,
   type JiraIssueTemplate,
+  type JiraTemplateFieldRole,
   JIRA_BINDING_UNRESOLVED,
   jiraTemplateBindingDigest,
   jiraTemplateTransitionTargets,
@@ -228,6 +229,15 @@ function readParentTypesIfRequired(
     ? Promise.resolve(undefined)
     : readParentIssueTypes(request);
 }
+/**
+ * The type a binding's typed name finds when its bound id is gone: the one whose workflow the binder
+ * needs before it binds status ids (never a guess among several holders of the name).
+ */
+function renamedType(template: JiraIssueTemplate, project: ProjectFacts): TypeRef | undefined {
+  if (template.binding === undefined) return undefined;
+  const found = namedTypes(project.issueTypes, template.issueType);
+  return found.length === 1 ? found[0] : undefined;
+}
 function readStatusesIfProject(
   request: JiraMutationRequest,
   template: JiraIssueTemplate,
@@ -235,7 +245,7 @@ function readStatusesIfProject(
 ): Promise<ProjectStatuses | undefined> {
   if (project === undefined) return Promise.resolve(undefined);
   const wanted = project.issueTypes.find((type) => jiraTemplateIssueTypeMatches(template, type));
-  return readStatuses(request, project.key, wanted?.id);
+  return readStatuses(request, project.key, (wanted ?? renamedType(template, project))?.id);
 }
 
 type OptionsRead = JiraTemplateInstanceRead<{ readonly options: JiraTemplateOptions }>;
@@ -339,9 +349,29 @@ export async function readJiraTemplateOptions(
   return { ok: true, options: { kind: "types", issueTypes, instanceId } };
 }
 
-/** Resolve names missing from GET field against the selected type's create metadata, just as the
- * write gate does. Data Center exposes the localized parent name only there (#4390). A failed
- * supplemental read cannot prove that a field does not exist. */
+/** The references whose field identity no verified binding id vouches for, as the picker would read them. */
+function unverifiedReferences(
+  template: JiraIssueTemplate,
+  fields: readonly JiraFieldCatalogEntry[],
+): readonly (readonly [string, JiraTemplateFieldRole])[] {
+  const exists = (id: string | undefined): boolean =>
+    id !== undefined && id !== JIRA_BINDING_UNRESOLVED && fields.some((field) => field.id === id);
+  const { binding, parent } = template;
+  return [
+    ...template.requiredFields
+      .filter((_reference, index) => !exists(binding?.requiredFieldIds?.[index]))
+      .map((reference) => [reference, "required"] as const),
+    ...(parent.field === undefined || exists(binding?.parentFieldId)
+      ? []
+      : [[parent.field, "parent"] as const]),
+  ];
+}
+
+/** Resolve names against the selected type's create metadata, just as the guided picker and the write
+ * gate do. One match in the global catalog cannot establish identity: the selected type's screen may call
+ * another field by that name (system `Parent` as `Übergeordnet`, a custom field as `Parent`; #4390). A
+ * failed supplemental read cannot prove that a field does not exist; the global catalog then stands only
+ * for references it names exactly once. */
 async function readTemplateFields(
   request: JiraMutationRequest,
   template: JiraIssueTemplate,
@@ -349,18 +379,8 @@ async function readTemplateFields(
 ): Promise<readonly JiraFieldCatalogEntry[] | undefined> {
   const fields = await readJiraFieldCatalog(request);
   if (fields === undefined || project === undefined) return fields;
-  const references = [
-    ...template.requiredFields,
-    ...(template.parent.field === undefined ? [] : [template.parent.field]),
-  ];
-  // Only a reference that names exactly one field in the global catalog needs no create metadata: a
-  // name two fields carry may be one field on the selected type's screen, as the guided picker reads it.
-  if (
-    references.every(
-      (reference) => resolveJiraTemplateFieldIds(reference, fields, template).length === 1,
-    )
-  )
-    return fields;
+  const references = unverifiedReferences(template, fields);
+  if (references.length === 0) return fields;
   const types = project.issueTypes.filter((type) => jiraTemplateIssueTypeMatches(template, type));
   const [type] = types;
   if (types.length !== 1 || type === undefined) return fields;
@@ -369,7 +389,13 @@ async function readTemplateFields(
     encodeURIComponent(project.id),
     encodeURIComponent(type.id),
   );
-  return metadata.ok ? mergeJiraTemplateFieldCatalogs(fields, metadata.fields) : undefined;
+  if (metadata.ok) return mergeJiraTemplateFieldCatalogs(fields, metadata.fields);
+  return references.every(
+    ([reference, role]) =>
+      resolveJiraTemplateFieldIds(reference, fields, template, role).length === 1,
+  )
+    ? fields
+    : undefined;
 }
 
 /** A workflow Jira did not list is unknown, not empty: no status names, no ids to rebind with. */
@@ -703,23 +729,45 @@ export function resolveJiraTemplateBinding(
       ? { state: "bound", issueType: current }
       : { state: "bindable", issueType: current, binding };
   }
-  // A binding that no longer finds its ids is resolved again from the typed names.
-  const own = exactlyOne(types, template.issueType);
-  if (!("found" in own)) return unresolvedOrDead(template, own);
-  const parents = parentTypeIds(template, instance.parentIssueTypes ?? []);
-  if ("state" in parents) return parents;
+  // A binding that no longer finds its ids keeps every verified same-instance id that still exists;
+  // only what is gone is resolved again from the typed names.
   const kept = sameInstanceBinding(template, instanceId);
-  const ids: JiraTemplateBindingIds = {
-    issueTypeId: own.found.id,
-    ...(template.parent.issueTypes === undefined ? {} : { parentIssueTypeIds: parents }),
-    ...boundFieldIds(template, instance.fields, kept),
-    ...boundStatusIds(template, trustedStatusRefs(instance), kept),
-  };
+  const own = governedType(template, types, kept);
+  if (!("found" in own)) return unresolvedOrDead(template, own);
+  const parents = parentTypeIds(template, instance.parentIssueTypes ?? [], kept);
+  if ("state" in parents) return parents;
+  const ids = reboundIds(template, instance, own.found.id, parents, kept);
   return {
     state: "bindable",
     issueType: own.found.name,
     binding: { digest: jiraTemplateBindingDigest(instanceId, template, ids), ...ids },
   };
+}
+
+/** The ids of a binding made again: every verified id that still exists is kept, the rest is resolved. */
+function reboundIds(
+  template: JiraIssueTemplate,
+  instance: JiraTemplateInstanceMetadata,
+  issueTypeId: string,
+  parents: readonly string[],
+  kept: JiraTemplateBinding | undefined,
+): JiraTemplateBindingIds {
+  return {
+    issueTypeId,
+    ...(template.parent.issueTypes === undefined ? {} : { parentIssueTypeIds: parents }),
+    ...boundFieldIds(template, instance.fields, kept),
+    ...boundStatusIds(template, trustedStatusRefs(instance), kept),
+  };
+}
+
+/** The type the template governs: its verified bound id while the project still has it, else its typed name. */
+function governedType(
+  template: JiraIssueTemplate,
+  types: readonly TypeRef[],
+  kept: JiraTemplateBinding | undefined,
+): Pick1<TypeRef> {
+  const retained = types.find((type) => type.id === kept?.issueTypeId);
+  return retained === undefined ? exactlyOne(types, template.issueType) : { found: retained };
 }
 
 function oneFieldId(
@@ -951,15 +999,21 @@ function currentBinding(
   );
   return parentsKnown && boundIdsExist(bound, instance) ? type?.name : undefined;
 }
-/** The ids of the typed parent types, or the first name that is not exactly one type. */
+/** The ids of the typed parent types, or the first name that is not exactly one type. A verified bound id that still exists is kept. */
 function parentTypeIds(
   template: JiraIssueTemplate,
   parents: readonly TypeRef[],
+  kept?: JiraTemplateBinding,
 ):
   | readonly string[]
   | Extract<JiraTemplateBindingResolution, { state: "unresolved" | "ambiguous" }> {
   const ids: string[] = [];
-  for (const typed of template.parent.issueTypes ?? []) {
+  for (const [index, typed] of (template.parent.issueTypes ?? []).entries()) {
+    const retained = kept?.parentIssueTypeIds?.[index];
+    if (retained !== undefined && parents.some((parent) => parent.id === retained)) {
+      ids.push(retained);
+      continue;
+    }
     const parent = exactlyOne(parents, typed);
     if (!("found" in parent)) return parent;
     ids.push(parent.found.id);

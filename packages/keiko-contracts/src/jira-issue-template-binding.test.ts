@@ -243,15 +243,50 @@ describe("the one matchers", () => {
   });
 
   it("name the field id a bound template carries, and nothing for a name that did not resolve", () => {
-    expect(jiraTemplateBoundFieldId(bound, "Fälligkeitsdatum")).toBe("duedate");
-    expect(jiraTemplateBoundFieldId(bound, "priorität")).toBe("priority");
-    expect(jiraTemplateBoundFieldId(bound, "Epic Link")).toBe("customfield_10109");
-    expect(jiraTemplateBoundFieldId(bound, "Unknown")).toBeUndefined();
-    expect(jiraTemplateBoundFieldId(template(PLAIN), "Fälligkeitsdatum")).toBeUndefined();
+    expect(jiraTemplateBoundFieldId(bound, "Fälligkeitsdatum", "required")).toBe("duedate");
+    expect(jiraTemplateBoundFieldId(bound, "priorität", "required")).toBe("priority");
+    expect(jiraTemplateBoundFieldId(bound, "Epic Link", "parent")).toBe("customfield_10109");
+    expect(jiraTemplateBoundFieldId(bound, "Unknown", "required")).toBeUndefined();
+    expect(
+      jiraTemplateBoundFieldId(template(PLAIN), "Fälligkeitsdatum", "required"),
+    ).toBeUndefined();
     const half = bindingFor(PLAIN, INSTANCE, { ...IDS, requiredFieldIds: ["none", "priority"] });
     const partly = template(bindJiraIssueTemplateText(PLAIN, half) ?? "");
-    expect(jiraTemplateBoundFieldId(partly, "Fälligkeitsdatum")).toBeUndefined();
-    expect(jiraTemplateBoundFieldId(partly, "Priorität")).toBe("priority");
+    expect(jiraTemplateBoundFieldId(partly, "Fälligkeitsdatum", "required")).toBeUndefined();
+    expect(jiraTemplateBoundFieldId(partly, "Priorität", "required")).toBe("priority");
+  });
+
+  it("resolve a parent clause and a required clause of one shared name by their own slots (G1)", () => {
+    const shared = PLAIN.replace(
+      "requiredFields: [Fälligkeitsdatum, Priorität]",
+      "requiredFields: [Parent]",
+    ).replace("parentField: Epic Link", "parentField: Parent");
+    const ids = { ...IDS, requiredFieldIds: ["customfield_10200"], parentFieldId: "parent" };
+    const saved = template(
+      bindJiraIssueTemplateText(shared, bindingFor(shared, INSTANCE, ids)) ?? "",
+    );
+    const roundTripped = jiraTemplateForInstance(
+      template(
+        bindJiraIssueTemplateText(shared, saved.binding ?? bindingFor(shared, INSTANCE, ids)) ?? "",
+      ),
+      INSTANCE,
+    );
+    expect(roundTripped.binding).toBeDefined();
+    expect(jiraTemplateBoundFieldId(roundTripped, "Parent", "parent")).toBe("parent");
+    expect(jiraTemplateBoundFieldId(roundTripped, "Parent", "required")).toBe("customfield_10200");
+    const catalog = [
+      { id: "parent", name: "Übergeordnet" },
+      { id: "customfield_10200", name: "Parent" },
+    ];
+    expect(resolveJiraTemplateFieldIds("Parent", catalog, roundTripped, "parent")).toEqual([
+      "parent",
+    ]);
+    expect(resolveJiraTemplateFieldIds("Parent", catalog, roundTripped, "required")).toEqual([
+      "customfield_10200",
+    ]);
+    // A role names only its own slot: the parent field is never a required clause's id.
+    expect(jiraTemplateBoundFieldId(bound, "Epic Link", "required")).toBeUndefined();
+    expect(jiraTemplateBoundFieldId(bound, "Priorität", "parent")).toBeUndefined();
   });
 
   it("resolve a field reference by its bound id, else an exact id, else every same-named field", () => {
@@ -261,11 +296,15 @@ describe("the one matchers", () => {
       { id: "customfield_1", name: "Team" },
       { id: "customfield_2", name: "team" },
     ];
-    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog, bound)).toEqual(["duedate"]);
-    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog.slice(1), bound)).toEqual([]);
+    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog, bound, "required")).toEqual([
+      "duedate",
+    ]);
+    expect(
+      resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog.slice(1), bound, "required"),
+    ).toEqual([]);
     // A field now carrying the old name never takes over the bound field's place (u5K).
     const renamed = [...catalog.slice(1), { id: "customfield_9", name: "Fälligkeitsdatum" }];
-    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", renamed, bound)).toEqual([]);
+    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", renamed, bound, "required")).toEqual([]);
     expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", renamed)).toEqual(["customfield_9"]);
     expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog)).toEqual([]);
     expect(resolveJiraTemplateFieldIds("customfield_1", catalog)).toEqual(["customfield_1"]);
@@ -375,7 +414,9 @@ describe("a guided edit of a bound template's rules", () => {
       { id: "customfield_5", name: "Fälligkeitsdatum" },
       { id: "priority", name: "Priorität" },
     ];
-    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog, edited)).toEqual(["duedate"]);
+    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog, edited, "required")).toEqual([
+      "duedate",
+    ]);
   });
 
   it("offers no binding where none is in force for this Jira or the edit does not read", () => {

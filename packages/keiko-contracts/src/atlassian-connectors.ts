@@ -2155,6 +2155,7 @@ export {
   type JiraIssueTemplateParseResult,
   type JiraTemplateActivation,
   type JiraTemplateBinding,
+  type JiraTemplateFieldRole,
   type JiraTemplateBindingIds,
   type JiraTemplateGateFact,
   type JiraTemplateParseError,

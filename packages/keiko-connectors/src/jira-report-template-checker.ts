@@ -1,6 +1,7 @@
 import {
   jiraTemplateGovernsWrites,
   type JiraIssueTemplate,
+  type JiraTemplateFieldRole,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
@@ -56,14 +57,18 @@ function catalogOf(
   return [...known.values()];
 }
 
-function references(
-  templates: readonly JiraIssueTemplate[],
-): readonly { readonly template: JiraIssueTemplate; readonly reference: string }[] {
+function references(templates: readonly JiraIssueTemplate[]): readonly {
+  readonly template: JiraIssueTemplate;
+  readonly reference: string;
+  readonly role: JiraTemplateFieldRole;
+}[] {
   return templates.flatMap((template) =>
     [
-      ...template.requiredFields,
-      ...(template.parent.field === undefined ? [] : [template.parent.field]),
-    ].map((reference) => ({ template, reference })),
+      ...template.requiredFields.map((reference) => ({ reference, role: "required" as const })),
+      ...(template.parent.field === undefined
+        ? []
+        : [{ reference: template.parent.field, role: "parent" as const }]),
+    ].map((entry) => ({ template, ...entry })),
   );
 }
 
@@ -72,8 +77,8 @@ function unresolved(
   catalog: readonly JiraFieldCatalogEntry[],
 ): boolean {
   return references(templates).some(
-    ({ reference, template }) =>
-      resolveJiraTemplateFieldIds(reference, catalog, template).length === 0,
+    ({ reference, template, role }) =>
+      resolveJiraTemplateFieldIds(reference, catalog, template, role).length === 0,
   );
 }
 
@@ -82,8 +87,8 @@ function fieldIdsOf(
   catalog: readonly JiraFieldCatalogEntry[],
 ): readonly string[] {
   const ids = new Set<string>(CHECKED_FIELDS);
-  for (const { reference, template } of references(templates))
-    for (const id of resolveJiraTemplateFieldIds(reference, catalog, template)) ids.add(id);
+  for (const { reference, template, role } of references(templates))
+    for (const id of resolveJiraTemplateFieldIds(reference, catalog, template, role)) ids.add(id);
   return [...ids];
 }
 
@@ -221,7 +226,7 @@ function parentFieldsObserved(
   return templates.every((template) => {
     const { parent } = template;
     if (parent.field === undefined) return true;
-    const ids = resolveJiraTemplateFieldIds(parent.field, catalog, template);
+    const ids = resolveJiraTemplateFieldIds(parent.field, catalog, template, "parent");
     return ids.length === 1 && ids.every((id) => Object.hasOwn(subject.fields, id));
   });
 }
