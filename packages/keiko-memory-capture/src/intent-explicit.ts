@@ -93,21 +93,22 @@ const REMEMBER_PATTERNS: readonly RegExp[] = [
 // "Merke dir nicht, ..." asks for the opposite, and "Remember when ..." recalls instead of stating.
 const NOT_A_FACT_START_RE =
   /^(?:nicht|nie|niemals|not|never|when|how|if|why|what|where|who|wann|wie|ob|warum|was|wo|wer)\b/iu;
-// Each branch carries its own copy of the trailing "this project/workspace:" scope hint (rather
-// than factoring it into a second matching stage) so a single execFirst pass still yields the
-// complete prefix length bodyAfterPrefix needs — matching the original REMEMBER_ABOUT_RE shape.
-// The (project|workspace) alternation is now a CAPTURING group (audit KEIKO-0336): tryExtractRemember
-// reads the captured noun and threads it into scopeOrReject as an explicit scopeKind, so
-// "remember about this workspace: X" produces workspace-scoped output even when projectId is set
-// (pickImplicitScopeKind's project-first precedence would otherwise silently override the user's
-// stated intent). When the "about this project|workspace" fragment is absent (i.e. the plain
-// "remember about X" form) the capture is undefined and scope inference falls back to context
-// precedence exactly as before.
+// Parse the imperative before interpreting the scope qualifier. Ordinary mentions of a project in
+// a stated fact keep the caller's default. "For this project:" is a qualifier only with its colon.
 const REMEMBER_ABOUT_PATTERNS: readonly RegExp[] = [
-  /^\s*remember\s+about\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
-  /^\s*merk(?:e)?\s+dir\s+(?:zu|über|ueber)\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
-  /^\s*speicher(?:e)?\s+(?:zu|über|ueber)\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
+  /^\s*(?:please\s+)?remember\s+about\s+/iu,
+  /^\s*(?:bitte\s+)?merke?\s+dir(?:\s+bitte)?\s+(?:zu|über|ueber)\s+/iu,
+  /^\s*(?:bitte\s+)?speichere?\s+(?:zu|über|ueber)\s+/iu,
 ];
+const ABOUT_SCOPE_PATTERNS = [
+  /^this\s+(project|workspace)(?:[:,\s]+|$)/iu,
+  /^dies(?:em|es|en)\s+(projekt|arbeitsbereich|workspace)\s*:\s*/iu,
+];
+const FOR_SCOPE_PATTERNS = [
+  /^for\s+this\s+(project|workspace)\s*:\s*/iu,
+  /^(?:für|fuer)\s+dies(?:em|es|en)\s+(projekt|arbeitsbereich|workspace)\s*:\s*/iu,
+];
+const PROJECT_NOUNS = new Set(["project", "projekt"]);
 const FORGET_PATTERNS: readonly RegExp[] = [
   /^\s*forget(?!\s+not\b)(?:\s+about)?(?:\s+that(?=\s+\S))?\s+/iu,
   /^\s*vergiss(?:\s+bitte)?,?\s+dass\s+(?:alles\s+)?(?:über|ueber|zu|an)\s+/iu,
@@ -512,8 +513,8 @@ function firstSentence(line: string): string {
   return line;
 }
 
-function statedFactAfterPrefix(prefixMatch: RegExpExecArray, text: string): string | null {
-  const firstLine = text.slice(prefixMatch[0].length).trim().split(LINE_TERMINATOR_RE, 1)[0];
+function statedFactAfterPrefix(remainder: string): string | null {
+  const firstLine = remainder.trim().split(LINE_TERMINATOR_RE, 1)[0];
   const body = firstLine === undefined ? "" : firstSentence(firstLine.trim());
   if (body === "" || body.endsWith("?") || NOT_A_FACT_START_RE.test(body)) return null;
   return body;
@@ -648,22 +649,21 @@ function rememberScopePolicy(
   return mergePolicyScopeKind(policy, explicitScopeKind ?? policy.rememberScopeKind);
 }
 
-// Reads the capturing group added to REMEMBER_ABOUT_PATTERNS. Returns undefined when the "about
-// this <noun>:" fragment was absent (plain "remember about X"), so the caller preserves whatever
-// policy.scopeKind (if any) was already provided by the surrounding capture pipeline. Audit
-// KEIKO-0336.
-function explicitScopeKindFromAboutMatch(
-  aboutPrefixMatch: RegExpExecArray | null,
-): ExplicitScopeKind | undefined {
-  const captured = aboutPrefixMatch?.[1];
-  if (captured === undefined) {
-    return undefined;
-  }
-  const normalized = captured.toLowerCase();
-  if (normalized === "project" || normalized === "workspace") {
-    return normalized;
-  }
-  return undefined;
+function readRememberInstruction(text: string): {
+  readonly remainder: string;
+  readonly scopeKind?: ExplicitScopeKind;
+} | null {
+  const about = execFirst(REMEMBER_ABOUT_PATTERNS, text);
+  const command = about ?? execFirst(REMEMBER_PATTERNS, text);
+  if (command === null) return null;
+  const remainder = text.slice(command[0].length);
+  const scope = execFirst(about === null ? FOR_SCOPE_PATTERNS : ABOUT_SCOPE_PATTERNS, remainder);
+  const noun = scope?.[1];
+  if (scope === null || noun === undefined) return { remainder };
+  return {
+    scopeKind: PROJECT_NOUNS.has(noun.toLowerCase()) ? "project" : "workspace",
+    remainder: remainder.slice(scope[0].length),
+  };
 }
 
 // ─── tryExtractRemember ──────────────────────────────────────────────────────
@@ -676,17 +676,9 @@ export function tryExtractRemember(
   context: CaptureContext,
   policy: CapturePolicyOptions = {},
 ): CaptureOutcome | null {
-  // "about" is tried first and, if its prefix matches at all (even with an unusable body), wins
-  // outright — falling back to the plain prefix on a matched-but-empty "about" body would let
-  // the plain pattern reinterpret the word "about" itself as body text (the same class of bug
-  // this file's regex catalogue comment documents).
-  const aboutPrefixMatch = execFirst(REMEMBER_ABOUT_PATTERNS, text);
-  const plainPrefixMatch = aboutPrefixMatch === null ? execFirst(REMEMBER_PATTERNS, text) : null;
-  const prefixMatch = aboutPrefixMatch ?? plainPrefixMatch;
-  if (prefixMatch === null) {
-    return null;
-  }
-  const body = statedFactAfterPrefix(prefixMatch, text);
+  const instruction = readRememberInstruction(text);
+  if (instruction === null) return null;
+  const body = statedFactAfterPrefix(instruction.remainder);
   if (body === null) {
     return null;
   }
@@ -694,14 +686,8 @@ export function tryExtractRemember(
   if (rejection !== null) {
     return rejection;
   }
-  // The REMEMBER_ABOUT_PATTERNS capture the noun ("project" or "workspace") when the user wrote
-  // "about this <noun>:". Thread it through scopeOrReject as an explicit scopeKind only when
-  // the CALLER has not already set one (audit KEIKO-0336). PR-review follow-up: never let
-  // user-controlled text override an authority-constraint scopeKind supplied by the pipeline
-  // — that would let "remember about this workspace" widen a project-scoped policy from an
-  // agent turn. On conflict (policy asks for one scope, text names the other) fail closed by
-  // rejecting the capture, mirroring how scope-missing already rejects.
-  const explicitScopeKind = explicitScopeKindFromAboutMatch(aboutPrefixMatch);
+  // The named scope must still agree with any authority constraint supplied by the caller.
+  const explicitScopeKind = instruction.scopeKind;
   const conflictOutcome = rejectOnScopeConflict(policy, explicitScopeKind, context);
   if (conflictOutcome !== null) return conflictOutcome;
   const scopeResolution = scopeOrReject(context, rememberScopePolicy(policy, explicitScopeKind));
@@ -745,8 +731,7 @@ export function isExplicitMemoryStatement(text: string): boolean {
 
 export function explicitStatementKind(text: string): "forget" | "remember" | null {
   if (forgetTargetOf(text) !== null) return "forget";
-  const remembered = execFirst(REMEMBER_ABOUT_PATTERNS, text) ?? execFirst(REMEMBER_PATTERNS, text);
-  return remembered === null ? null : "remember";
+  return readRememberInstruction(text) === null ? null : "remember";
 }
 
 // A forget whose name matched no memory. "Forget the formatting, just give me the answer" is then an

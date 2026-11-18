@@ -90,6 +90,21 @@ describe("tryExtractRemember", () => {
     expect(outcome).toEqual({ kind: "rejected", reason: "scope-not-resolvable" });
   });
 
+  it.each([
+    "Please remember about this workspace: keep diagrams local",
+    "Merke dir zu diesem Arbeitsbereich: keep diagrams local",
+    "Bitte merke dir für diesen Arbeitsbereich: keep diagrams local",
+  ])("honours the named workspace and the caller's scope constraint in %s", (statement) => {
+    const context = ctx({ projectId: "p-1" as ProjectId, workspaceId: "w-1" as WorkspaceId });
+    expect(tryExtractRemember(statement, context, { rememberScopeKind: "user" })).toMatchObject({
+      kind: "candidate",
+      proposal: { scope: { kind: "workspace", workspaceId: "w-1" }, body: "keep diagrams local" },
+    });
+    const rejected = { kind: "rejected", reason: "scope-not-resolvable" };
+    expect(tryExtractRemember(statement, context, { scopeKind: "project" })).toEqual(rejected);
+    expect(tryExtractRemember(statement, ctx(), { rememberScopeKind: "user" })).toEqual(rejected);
+  });
+
   it("flips requiresApproval=true when body classifies as confidential", () => {
     const outcome = tryExtractRemember("remember that internal: deploy at midnight", ctx());
     expect(outcome?.kind).toBe("candidate");
