@@ -310,6 +310,26 @@ describe("extractSalientMemories", () => {
     expect(learned?.proposal.validity).toEqual({ validFrom: FIXED_NOW, validUntil });
   });
 
+  it.each([
+    ["I use Slack until March 14, 2027.", "I use Slack", new Date(2027, 2, 14, 23, 59, 59, 999)],
+    [
+      "Ich nutze Slack bis zum 14. März 2027.",
+      "Ich nutze Slack",
+      new Date(2027, 2, 14, 23, 59, 59, 999),
+    ],
+    ["Ich nutze Slack bis 29.02.", "Ich nutze Slack", new Date(2028, 1, 29, 23, 59, 59, 999)],
+  ] as const)("retains the exact calendar day in %s", async (text, evidence, end) => {
+    const [learned] = candidates(await learn(text, [fact(evidence, evidence)]));
+    expect(learned?.proposal.validity).toEqual({ validFrom: FIXED_NOW, validUntil: end.getTime() });
+  });
+
+  it.each([
+    ["I use Slack until March 14, 2020.", "I use Slack"],
+    ["Ich nutze Slack bis zum 14. März 2020.", "Ich nutze Slack"],
+  ])("drops a fact with an explicit expired named day in %s", async (text, evidence) => {
+    expect(candidates(await learn(text, [fact(evidence, evidence)]))).toEqual([]);
+  });
+
   it("closes validity at a dotted German date stated after the copied span", async () => {
     const [learned] = candidates(
       await learn("Ich arbeite bei Acme bis 31.12.2027.", [

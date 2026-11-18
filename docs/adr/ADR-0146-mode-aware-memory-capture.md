@@ -264,6 +264,8 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   person's turns it came from (`sourceMessageIds`). A decision keeps its reason in the key-value
   payload, and a stated end in the future closes validity; both are parsed from the words, never
   taken from the model. A stated end that has passed means the fact is over, so nothing is stored.
+  A named calendar day such as “until March 14, 2027” or “bis zum 14. März 2027” ends on that local
+  day. A day given without a year uses its next calendar occurrence, including February 29.
 - **Admission.** The span appears verbatim in the person's message and ends at a clause boundary.
   A span that leaves out the first words of its clause ("decided as a team to release …" out of "We
   decided as a team to release …") opens at the start of that clause, at most as far back as a span

@@ -2,6 +2,7 @@
 // person's own words only. "Im Zweifel zu wenig": a check that cannot confirm a fact drops it, and
 // the reason stays a closed value.
 
+import { statedDateOrdinalDots } from "./stated-validity.js";
 import { REDACTION_PLACEHOLDER } from "@oscharko-dev/keiko-security";
 
 import {
@@ -928,22 +929,23 @@ function asksForTextWork(lead: string): boolean {
 const SPEAKER_REACH = 3;
 
 // A dot between digits ("31.12.2027", "3.5") is part of a number, not the end of a sentence.
-function endsSentenceAt(text: string, at: number): boolean {
+function endsSentenceAt(text: string, at: number, ordinalDots: ReadonlySet<number>): boolean {
   const char = text.charAt(at);
   if (!SENTENCE_END_RE.test(char)) return false;
   return !(
     char === "." &&
     DIGIT_RE.test(text.charAt(at - 1)) &&
-    DIGIT_RE.test(text.charAt(at + 1))
+    (DIGIT_RE.test(text.charAt(at + 1)) || ordinalDots.has(at))
   );
 }
 
 function sentenceAround(text: string, start: number, end: number): { from: number; to: number } {
+  const ordinalDots = statedDateOrdinalDots(text);
   let from = start;
-  while (from > 0 && !endsSentenceAt(text, from - 1)) from -= 1;
-  if (end > start && endsSentenceAt(text, end - 1)) return { from, to: end };
+  while (from > 0 && !endsSentenceAt(text, from - 1, ordinalDots)) from -= 1;
+  if (end > start && endsSentenceAt(text, end - 1, ordinalDots)) return { from, to: end };
   let to = end;
-  while (to < text.length && !endsSentenceAt(text, to)) to += 1;
+  while (to < text.length && !endsSentenceAt(text, to, ordinalDots)) to += 1;
   return { from, to: Math.min(text.length, to + 1) };
 }
 

@@ -24,6 +24,22 @@ describe("statedValidUntil", () => {
   });
 
   it.each([
+    ["until March 21st, 2028", endOfDay(2028, 2, 21)],
+    ["through December 9", endOfDay(2026, 11, 9)],
+    ["bis zum 29. Februar", endOfDay(2028, 1, 29)],
+    ["until February 30, 2028", null],
+    ["bis 31. November 2028", null],
+    ["bis 29.02.2027", null],
+  ])("reads a calendar day without substituting the end of a month in %s", (deadline, expected) => {
+    expect(statedValidUntil(deadline, NOW)).toBe(expected);
+  });
+
+  it("finds the next leap day across a non-leap century", () => {
+    const afterLeapDay = new Date(2096, 2, 1).getTime();
+    expect(statedValidUntil("bis 29.02.", afterLeapDay)).toBe(endOfDay(2104, 1, 29));
+  });
+
+  it.each([
     "Ich nutze Slack.",
     "Ich warte bis morgen.",
     "Ich nutze Slack bis 31.02.2027.",
