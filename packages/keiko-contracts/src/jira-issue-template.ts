@@ -629,6 +629,23 @@ function boundedText(value: string, max: number): boolean {
   return value.length <= max && !/\p{Cc}/u.test(value);
 }
 
+/**
+ * THE rule for text a guided pick writes into a template scalar or list entry: nonblank after
+ * trimming, within the grammar's length and free of control characters, so the strict reader keeps
+ * what the writer wrote.
+ */
+export function isPortableJiraTemplateText(text: string): boolean {
+  return text.trim().length > 0 && boundedText(text, JIRA_ISSUE_TEMPLATE_LIMITS.textChars);
+}
+
+/**
+ * Whether a type name can be written as the portable `issueType`: it must round-trip through the
+ * reader and must not read as a native id, which the matcher takes for an id on any other Jira.
+ */
+export function isPortableJiraIssueTypeName(name: string): boolean {
+  return isPortableJiraTemplateText(name) && !isJiraNativeId(name.trim());
+}
+
 class Reader {
   public readonly errors: JiraTemplateParseError[] = [];
   public constructor(private readonly entries: readonly RawEntry[]) {}

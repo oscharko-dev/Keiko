@@ -169,6 +169,29 @@ describe("Jira template editor options", () => {
     ).toEqual(["Team"]);
   });
 
+  it("lists a name the binder resolves to another field than the one offered (PR #4464)", async () => {
+    const values = [{ ...field("customfield_10010", "string"), name: "environment" }];
+    const request = fixture({
+      "project/LAB": object(PROJECT),
+      [CREATE_FIELDS]: object({
+        values,
+        isLast: true,
+        startAt: 0,
+        maxResults: 100,
+        total: values.length,
+      }),
+      // The system Environment field is absent from the create screen but its id equals the typed name.
+      field: array([
+        { id: "customfield_10010", name: "environment" },
+        { id: "environment", name: "Environment" },
+      ]),
+    });
+    const read = await readJiraTemplateOptions(request, DETAILS, INSTANCE);
+    expect(
+      read.ok && read.options.kind === "details" ? read.options.ambiguousFieldNames : [],
+    ).toEqual(["environment"]);
+  });
+
   it("omits the ambiguous-name list when the full catalog cannot be read (P-N)", async () => {
     const values = [{ ...field("customfield_10010", "string"), name: "Team" }];
     const request = fixture({

@@ -4,6 +4,8 @@ import {
   describeJiraTemplateParseErrors,
   editJiraTemplateForm,
   isJiraIssueTemplateDocument,
+  isPortableJiraIssueTypeName,
+  isPortableJiraTemplateText,
   jiraIssueTemplateLabel,
   jiraTemplatePatternIssue,
   mentionsJiraIssueTemplateMarker,
@@ -456,5 +458,34 @@ describe("the template pattern grammar", () => {
   it("matches the way the lead wrote it", () => {
     expect(compileJiraTemplatePattern("^[A-Z][a-z ]+$").test("Add login")).toBe(true);
     expect(compileJiraTemplatePattern("^[A-Z][a-z ]+$").test("add login")).toBe(false);
+  });
+});
+
+// PRRT_kwDOSqilAM65BHdB / PRRT_kwDOSqilAM65BHeJ: what a pick writes must survive the strict reader and
+// must not be taken for a native id on another Jira.
+describe("portable template text", () => {
+  it("refuses an issue type name another Jira would read as a native id", () => {
+    expect(isPortableJiraIssueTypeName("Bug")).toBe(true);
+    expect(isPortableJiraIssueTypeName("31")).toBe(false);
+    expect(isPortableJiraIssueTypeName(" 31 ")).toBe(false);
+    // Not a native id (leading zero, beyond int64): the matcher keeps it as a name.
+    expect(isPortableJiraIssueTypeName("031")).toBe(true);
+    expect(isPortableJiraIssueTypeName("9223372036854775808")).toBe(true);
+  });
+
+  it("admits only text the writer round-trips through the strict reader", () => {
+    const tabbed = "Bug\tfix";
+    expect(isPortableJiraIssueTypeName(tabbed)).toBe(false);
+    expect(
+      parseJiraIssueTemplate(
+        template([...VALID.slice(0, 3), `issueType: ${tabbed}`, VALID[4] ?? ""]),
+      ),
+    ).toMatchObject({
+      ok: false,
+    });
+    expect(isPortableJiraTemplateText("   ")).toBe(false);
+    expect(isPortableJiraTemplateText("")).toBe(false);
+    expect(isPortableJiraTemplateText("x".repeat(121))).toBe(false);
+    expect(isPortableJiraTemplateText("Done")).toBe(true);
   });
 });

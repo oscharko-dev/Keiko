@@ -267,8 +267,12 @@ function ambiguousNames(
 ): readonly string[] | undefined {
   if (catalog === undefined) return undefined;
   const full = mergeJiraTemplateFieldCatalogs(catalog, create);
-  const names = new Set(offeredFields(create).map(({ name }) => name));
-  return [...names].filter((name) => resolveJiraTemplateFieldIds(name, full).length !== 1);
+  // The binder must resolve the name to the very field the picker offered, not merely to one field.
+  const unbound = offeredFields(create).filter(({ id, name }) => {
+    const ids = resolveJiraTemplateFieldIds(name, full);
+    return ids.length !== 1 || ids[0] !== id;
+  });
+  return [...new Set(unbound.map(({ name }) => name))];
 }
 
 function offeredFields(
@@ -690,7 +694,7 @@ export function resolveJiraTemplateBinding(
   if (types === undefined) return { state: "unresolved", subject: template.project };
   const current = currentBinding(template, types, instance);
   if (current !== undefined) {
-    const binding = completedFieldBinding(template, instance.fields, instanceId);
+    const binding = completedBinding(template, instance, instanceId);
     return binding === undefined
       ? { state: "bound", issueType: current }
       : { state: "bindable", issueType: current, binding };
@@ -721,36 +725,75 @@ function oneFieldId(
   return ids.length === 1 && ids[0] !== undefined ? ids[0] : JIRA_BINDING_UNRESOLVED;
 }
 
-/** Fill previously unresolved field slots without rebinding an existing id by a translated name. */
-function completedFieldBinding(
+/** The status id of a target that is exactly one status name in the view, else unresolved. */
+function oneStatusId(statuses: readonly TypeRef[], target: string): string {
+  const found = exactlyOne(statuses, target);
+  return "found" in found && found.found.name.trim().toLowerCase() === target.trim().toLowerCase()
+    ? found.found.id
+    : JIRA_BINDING_UNRESOLVED;
+}
+
+/** Fill previously unresolved status slots; a confirmed slot is never overwritten. */
+function completedStatusIds(
+  template: JiraIssueTemplate,
+  statuses: readonly TypeRef[] | undefined,
+  bound: JiraTemplateBinding,
+): readonly string[] | undefined {
+  const targets = jiraTemplateTransitionTargets(template);
+  if (statuses === undefined || targets.length === 0) return undefined;
+  return targets.map((target, index) => {
+    return keptOrResolved(bound.transitionStatusIds?.[index], () => oneStatusId(statuses, target));
+  });
+}
+
+function keptOrResolved(existing: string | undefined, resolve: () => string): string {
+  return existing !== undefined && existing !== JIRA_BINDING_UNRESOLVED ? existing : resolve();
+}
+
+/** Fill previously unresolved field slots; a confirmed id is never rebound by a translated name. */
+function completedFieldIds(
   template: JiraIssueTemplate,
   catalog: readonly JiraFieldCatalogEntry[] | undefined,
-  instanceId: string,
-): JiraTemplateBinding | undefined {
-  const bound = template.binding;
-  if (bound === undefined || catalog === undefined) return undefined;
-  const complete = (reference: string, existing: string | undefined): string => {
-    if (existing !== undefined && existing !== JIRA_BINDING_UNRESOLVED) return existing;
-    return oneFieldId(catalog, reference);
-  };
-  const ids: JiraTemplateBindingIds = {
-    ...bound,
+  bound: JiraTemplateBinding,
+): Pick<JiraTemplateBindingIds, "requiredFieldIds" | "parentFieldId"> {
+  const { parent } = template;
+  return {
     ...(template.requiredFields.length === 0
       ? {}
       : {
           requiredFieldIds: template.requiredFields.map((field, index) =>
-            complete(field, bound.requiredFieldIds?.[index]),
+            keptOrResolved(bound.requiredFieldIds?.[index], () => oneFieldId(catalog, field)),
           ),
         }),
-    ...(template.parent.field === undefined
+    ...(parent.field === undefined
       ? {}
       : {
-          parentFieldId: complete(template.parent.field, bound.parentFieldId),
+          parentFieldId: keptOrResolved(bound.parentFieldId, () =>
+            oneFieldId(catalog, parent.field ?? ""),
+          ),
         }),
+  };
+}
+
+/** Fill previously unresolved field and status slots without rebinding an existing id by a translated name. */
+function completedBinding(
+  template: JiraIssueTemplate,
+  instance: JiraTemplateInstanceMetadata,
+  instanceId: string,
+): JiraTemplateBinding | undefined {
+  const bound = template.binding;
+  if (bound === undefined) return undefined;
+  const statusIds = completedStatusIds(template, instance.statusRefs, bound);
+  if (instance.fields === undefined && statusIds === undefined) return undefined;
+  const ids: JiraTemplateBindingIds = {
+    ...bound,
+    ...completedFieldIds(template, instance.fields, bound),
+    ...(statusIds === undefined ? {} : { transitionStatusIds: statusIds }),
   };
   const changed =
     ids.parentFieldId !== bound.parentFieldId ||
-    ids.requiredFieldIds?.some((id, index) => id !== bound.requiredFieldIds?.[index]) === true;
+    ids.requiredFieldIds?.some((id, index) => id !== bound.requiredFieldIds?.[index]) === true ||
+    statusIds?.some((id, index) => id !== bound.transitionStatusIds?.[index]) === true;
   return changed
     ? { ...ids, digest: jiraTemplateBindingDigest(instanceId, template, ids) }
     : undefined;
@@ -783,13 +826,7 @@ function boundStatusIds(
   if (statuses === undefined && kept?.length === targets.length)
     return { transitionStatusIds: kept };
   return {
-    transitionStatusIds: targets.map((target) => {
-      const found = exactlyOne(statuses ?? [], target);
-      return "found" in found &&
-        found.found.name.trim().toLowerCase() === target.trim().toLowerCase()
-        ? found.found.id
-        : JIRA_BINDING_UNRESOLVED;
-    }),
+    transitionStatusIds: targets.map((target) => oneStatusId(statuses ?? [], target)),
   };
 }
 

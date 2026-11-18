@@ -510,9 +510,13 @@ function transitionFindings(
   return template.activations.flatMap((activation): readonly JiraTemplateFinding[] => {
     if (activation.kind !== "transition" || activation.target === undefined) return [];
     const { target } = activation;
-    return statuses.some((status) => same(status, target))
-      ? []
-      : [{ code: "unknown-transition-target", subject: target }];
+    // A target bound to a confirmed status id is judged by that id, in every language of the instance.
+    const statusId = jiraTemplateBoundStatusId(template, activation);
+    const known =
+      statusId !== undefined && instance.statusRefs !== undefined
+        ? instance.statusRefs.some((status) => status.id === statusId)
+        : statuses.some((status) => same(status, target));
+    return known ? [] : [{ code: "unknown-transition-target", subject: target }];
   });
 }
 

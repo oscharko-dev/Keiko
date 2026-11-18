@@ -772,6 +772,29 @@ describe("validateJiraIssueTemplateAgainstInstance", () => {
     ).toEqual(["unknown-transition-target:Done"]);
   });
 
+  it("judges a transition target bound to a status id by that id, not by the typed name", () => {
+    const base = parsed(["summaryMinLength: 3"], "# T");
+    const bound = {
+      ...base,
+      activations: [{ kind: "transition" as const, target: "Erledigt" }],
+      binding: { issueTypeId: "10001", digest: "d", transitionStatusIds: ["3"] },
+    };
+    const french = {
+      ...instance,
+      statuses: ["Terminé"],
+      statusRefs: [{ id: "3", name: "Terminé" }],
+    };
+    expect(validateJiraIssueTemplateAgainstInstance(bound, french)).toEqual([]);
+    const gone = {
+      ...instance,
+      statuses: ["Erledigt"],
+      statusRefs: [{ id: "9", name: "Erledigt" }],
+    };
+    expect(
+      validateJiraIssueTemplateAgainstInstance(bound, gone).map((finding) => finding.code),
+    ).toEqual(["unknown-transition-target"]);
+  });
+
   it("is clean for a template that matches the instance", () => {
     const clean = parsed(["requiredFields: [Story Points]", "parentField: Epic Link"], "# T");
     expect(validateJiraIssueTemplateAgainstInstance(clean, instance)).toEqual([]);

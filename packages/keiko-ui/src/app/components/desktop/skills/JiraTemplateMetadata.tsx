@@ -4,9 +4,9 @@ import { useId, type ReactNode } from "react";
 import type { JiraTemplateNamedOption } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   editJiraTemplateForm,
+  isPortableJiraIssueTypeName,
   jiraTemplateForInstance,
   jiraTemplateIssueTypeMatches,
-  JIRA_ISSUE_TEMPLATE_LIMITS,
   parseJiraIssueTemplate,
   rebindJiraTemplateAfterEdit,
   type JiraIssueTemplate,
@@ -40,13 +40,16 @@ function governingTemplate(
 }
 
 /**
- * A template carrying a binding while no Jira context is available: a rule edit would leave the
- * binding's digest and ids behind, so guided rule edits wait for the context (YAML stays editable).
+ * A template carrying a binding the loaded Jira cannot confirm (no Jira context yet, or another
+ * Jira's binding): a rule edit would leave the binding's digest and ids behind, so guided rule edits
+ * wait until the binding is confirmed (YAML stays editable).
  */
 function rulesLocked(markdown: string, instanceId: string | undefined): boolean {
-  if (instanceId !== undefined) return false;
   const parsed = parseJiraIssueTemplate(markdown);
-  return parsed.ok && parsed.template.binding !== undefined;
+  if (!parsed.ok || parsed.template.binding === undefined) return false;
+  // The binding must be confirmed for the Jira that supplied the choices: another Jira's binding
+  // would be rewritten with a digest that holds for neither instance.
+  return jiraTemplateForInstance(parsed.template, instanceId).binding === undefined;
 }
 
 function matchingType(
@@ -62,7 +65,8 @@ function matchingType(
 
 /**
  * The portable name a pick writes for an issue type, or undefined when the type has none: a name
- * several types answer to, or one too long for the grammar. The native id is instance-local and is
+ * several types answer to, one the template grammar cannot round-trip, or one that reads as a native
+ * id (another Jira would match it to an unrelated type). The native id is instance-local and is
  * never written into the portable `issueType` field by a pick.
  */
 function typeReference(
@@ -72,9 +76,7 @@ function typeReference(
   const matches = types.filter((option) =>
     jiraTemplateIssueTypeMatches({ issueType: type.name }, option),
   );
-  return matches.length === 1 && type.name.length <= JIRA_ISSUE_TEMPLATE_LIMITS.textChars
-    ? type.name
-    : undefined;
+  return matches.length === 1 && isPortableJiraIssueTypeName(type.name) ? type.name : undefined;
 }
 
 function statusMessage(read: JiraOptionsRead, hint: string, empty: boolean, t: Translate): string {

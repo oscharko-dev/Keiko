@@ -2142,6 +2142,8 @@ export {
   editJiraTemplateForm,
   rebindJiraTemplateAfterEdit,
   isJiraNativeId,
+  isPortableJiraIssueTypeName,
+  isPortableJiraTemplateText,
   JIRA_NATIVE_ID_CHARS_MAX,
   type JiraTemplateEditedIds,
   readJiraTemplateForm,

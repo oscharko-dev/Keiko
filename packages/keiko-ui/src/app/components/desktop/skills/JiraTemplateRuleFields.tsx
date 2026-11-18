@@ -4,6 +4,8 @@ import type {
   JiraTemplateNamedOption,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  isPortableJiraTemplateText,
+  jiraTemplateBoundStatusId,
   JIRA_ISSUE_TEMPLATE_LIMITS,
   resolveJiraTemplateFieldIds,
   type JiraIssueTemplate,
@@ -30,7 +32,7 @@ interface ListFieldProps {
   readonly display: (value: string) => string;
   /** Whether Jira offers what a written value names; a value it does not offer is marked. */
   readonly offered?: ((value: string) => boolean) | undefined;
-  /** Whether a written value and an offered choice name the same thing; such a choice is not offered. */
+  /** Whether a written value and an offered choice name the same thing; such a choice is not offered. Absent: only the identical value. */
   readonly equivalent?: ((written: string, choice: string) => boolean) | undefined;
   readonly onChange: (values: readonly string[]) => void;
 }
@@ -48,9 +50,11 @@ function ListField({
 }: ListFieldProps): ReactNode {
   const t = useTranslate();
   const id = useId();
-  const same = equivalent ?? ((written: string, choice: string): boolean => written === choice);
+  const written = new Set(values);
   const choices = options.filter(
-    (choice) => !values.some((written) => written === choice.value || same(written, choice.value)),
+    (choice) =>
+      !written.has(choice.value) &&
+      (equivalent === undefined || !values.some((value) => equivalent(value, choice.value))),
   );
   return (
     <div className={styles.cmpField}>
@@ -188,16 +192,38 @@ function fieldName(
   return only === undefined ? value : fieldLabel(only, fields);
 }
 
-/** The fields no written reference already names, so one field is never offered twice. */
+interface UnwrittenRead {
+  readonly written: readonly string[];
+  readonly key: string;
+  readonly result: readonly JiraTemplateFieldOption[];
+}
+
+const unwrittenCache = new WeakMap<readonly JiraTemplateFieldOption[], UnwrittenRead>();
+
+/** What `resolveJiraTemplateFieldIds` reads of a template: its binding, typed fields and parent field. */
+function resolutionKey(template: JiraIssueTemplate | undefined): string {
+  return JSON.stringify([template?.binding, template?.requiredFields, template?.parent.field]);
+}
+
+/**
+ * The fields no written reference already names, so one field is never offered twice. Each written
+ * reference is resolved against the catalog once and the offered fields are filtered by set
+ * membership; the result is reused while the catalog, the written list and the binding stay the same.
+ */
 function unwrittenFields(
   fields: readonly JiraTemplateFieldOption[],
   written: readonly string[],
   template: JiraIssueTemplate | undefined,
 ): readonly JiraTemplateFieldOption[] {
+  const key = resolutionKey(template);
+  const hit = unwrittenCache.get(fields);
+  if (hit?.written === written && hit.key === key) return hit.result;
   const named = new Set(
     written.flatMap((value) => resolveJiraTemplateFieldIds(value, fields, template)),
   );
-  return fields.filter((field) => !named.has(field.id));
+  const result = fields.filter((field) => !named.has(field.id));
+  unwrittenCache.set(fields, { written, key, result });
+  return result;
 }
 
 /**
@@ -210,8 +236,25 @@ function portableReference(
   field: JiraTemplateFieldOption,
   fields: readonly JiraTemplateFieldOption[],
 ): string | undefined {
+  let references = referenceCache.get(fields);
+  if (references === undefined) {
+    references = new Map(fields.map((entry) => [entry.id, computeReference(entry, fields)]));
+    referenceCache.set(fields, references);
+  }
+  return references.has(field.id) ? references.get(field.id) : computeReference(field, fields);
+}
+
+const referenceCache = new WeakMap<
+  readonly JiraTemplateFieldOption[],
+  ReadonlyMap<string, string | undefined>
+>();
+
+function computeReference(
+  field: JiraTemplateFieldOption,
+  fields: readonly JiraTemplateFieldOption[],
+): string | undefined {
   const named = resolveJiraTemplateFieldIds(field.name, fields);
-  const fits = field.name.trim() === field.name && portableText(field.name);
+  const fits = field.name.trim() === field.name && isPortableJiraTemplateText(field.name);
   return named.length === 1 && named[0] === field.id && fits && !instanceLocalId(field.name)
     ? field.name
     : undefined;
@@ -222,12 +265,6 @@ function instanceLocalId(name: string): boolean {
   return /^customfield_\d+$/iu.test(name.trim());
 }
 
-function portableText(text: string): boolean {
-  return (
-    text.length > 0 && text.length <= JIRA_ISSUE_TEMPLATE_LIMITS.textChars && !/\p{Cc}/u.test(text)
-  );
-}
-
 /**
  * What the instance's full field catalog says about the offered names: the names it cannot resolve
  * to one field, or undefined while it was unreadable. An unbound template is bound later against
@@ -236,6 +273,8 @@ function portableText(text: string): boolean {
 interface CatalogUniqueness {
   readonly ambiguous: ReadonlySet<string> | undefined;
   readonly unbound: boolean;
+  /** The catalog was unreadable and the template needs it: the details are partial. */
+  readonly missing: boolean;
 }
 
 function catalogUniqueness(
@@ -246,9 +285,11 @@ function catalogUniqueness(
     details.state === "ready" && details.options.kind === "details"
       ? details.options.ambiguousFieldNames
       : undefined;
+  const unbound = template?.binding === undefined;
   return {
     ambiguous: names === undefined ? undefined : new Set(names),
-    unbound: template?.binding === undefined,
+    unbound,
+    missing: names === undefined && unbound,
   };
 }
 
@@ -310,7 +351,7 @@ function statusKey(name: string): string {
 
 /** A status name a transition target can carry without being taken for a transition id. */
 function portableStatusName(name: string): boolean {
-  return portableText(name) && !/^\d+$/u.test(name.trim());
+  return isPortableJiraTemplateText(name) && !/^\d+$/u.test(name.trim());
 }
 
 function statusChoices(
@@ -320,7 +361,7 @@ function statusChoices(
   const counts = new Map<string, number>();
   for (const { name } of statuses)
     counts.set(statusKey(name), (counts.get(statusKey(name)) ?? 0) + 1);
-  const names = new Set(statuses.map(({ name }) => name).filter(portableText));
+  const names = new Set(statuses.map(({ name }) => name).filter(isPortableJiraTemplateText));
   const choice = (name: string): RuleChoice => {
     const value = `transition:${name}`;
     if ((counts.get(statusKey(name)) ?? 0) > 1)
@@ -361,15 +402,21 @@ function statusIdsByName(
 /** Two activation values name the same target: the same folded name, or the same native status id. */
 function sameActivation(
   ids: ReadonlyMap<string, string>,
+  template: JiraIssueTemplate | undefined,
 ): (written: string, choice: string) => boolean {
   const target = (value: string): string | undefined =>
     value.startsWith("transition:") ? value.slice("transition:".length) : undefined;
+  // A saved target keeps the id it was bound to even when Jira now names that status differently.
+  const savedId = (name: string): string | undefined =>
+    template === undefined
+      ? undefined
+      : jiraTemplateBoundStatusId(template, { kind: "transition", target: name });
   return (written, choice) => {
     const a = target(written);
     const b = target(choice);
     if (a === undefined || b === undefined) return written === choice;
     if (statusKey(a) === statusKey(b)) return true;
-    const idA = ids.get(statusKey(a));
+    const idA = savedId(a) ?? ids.get(statusKey(a));
     return idA !== undefined && idA === ids.get(statusKey(b));
   };
 }
@@ -388,11 +435,7 @@ interface RuleFieldsProps extends RuleSectionProps {
   readonly locked?: boolean;
 }
 
-function ActivationField({
-  form,
-  details,
-  onChange,
-}: Omit<RuleSectionProps, "template">): ReactNode {
+function ActivationField({ form, template, details, onChange }: RuleSectionProps): ReactNode {
   const t = useTranslate();
   const writes = form.activateOn.filter(appliesToWrites);
   const transitions = form.activateOn.filter((value) => !appliesToWrites(value));
@@ -425,7 +468,7 @@ function ActivationField({
         help={t("chat.skills.jira.form.statusHelp")}
         values={transitions}
         options={statusChoices(metadata?.statuses ?? [], t)}
-        equivalent={sameActivation(statusIds.statusIds)}
+        equivalent={sameActivation(statusIds.statusIds, template)}
         max={JIRA_ISSUE_TEMPLATE_LIMITS.activations - writes.length}
         display={(value) =>
           value === "transition"
@@ -462,7 +505,6 @@ function FieldRequirement({ form, template, details, onChange }: RuleSectionProp
       )}
       max={JIRA_ISSUE_TEMPLATE_LIMITS.listItems}
       display={(value) => fieldName(fields ?? [], value, template)}
-      equivalent={(written, choice) => sameField(fields ?? [], written, choice, template)}
       offered={
         fields === undefined
           ? undefined
@@ -476,20 +518,13 @@ function FieldRequirement({ form, template, details, onChange }: RuleSectionProp
   );
 }
 
-/** Two references name the same field: the same normalised name or the same Jira id. */
-function sameField(
-  fields: readonly JiraTemplateFieldOption[],
-  written: string,
-  choice: string,
-  template: JiraIssueTemplate | undefined,
-): boolean {
-  if (written.trim().toLowerCase() === choice.trim().toLowerCase()) return true;
-  const ids = resolveJiraTemplateFieldIds(written, fields, template);
-  const other = resolveJiraTemplateFieldIds(choice, fields, template);
-  return ids.length === 1 && other.length === 1 && ids[0] === other[0];
-}
-
-function DetailsStatus({ details }: { readonly details: JiraOptionsRead }): ReactNode {
+function DetailsStatus({
+  details,
+  template,
+}: {
+  readonly details: JiraOptionsRead;
+  readonly template: JiraIssueTemplate | undefined;
+}): ReactNode {
   const t = useTranslate();
   if (details.state === "loading") return <output>{t("chat.skills.jira.form.loading")}</output>;
   if (details.state === "idle") return null;
@@ -497,7 +532,9 @@ function DetailsStatus({ details }: { readonly details: JiraOptionsRead }): Reac
     details.state === "ready" &&
     details.options.kind === "details" &&
     details.options.fields !== undefined &&
-    details.options.statuses !== undefined
+    details.options.statuses !== undefined &&
+    // An unbound template is bound against the full field catalog, so a missing catalog is partial too.
+    !catalogUniqueness(details, template).missing
   )
     return null;
   return (
@@ -515,7 +552,7 @@ export function JiraTemplateRuleFields({ locked, ...section }: RuleFieldsProps):
   return (
     <details className={styles.cmpRules}>
       <summary>{t("chat.skills.jira.form.rules")}</summary>
-      <DetailsStatus details={section.details} />
+      <DetailsStatus details={section.details} template={section.template} />
       {locked === true ? <output>{t("chat.skills.jira.form.rulesLocked")}</output> : null}
       <fieldset className={styles.cmpFieldset} disabled={locked === true}>
         <div className={styles.cmpChoices}>

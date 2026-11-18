@@ -215,6 +215,37 @@ describe("resolving the field and status ids of a template", () => {
     });
   });
 
+  it("fills an unresolved status slot once the workflow is known and keeps confirmed slots (PR #4464)", () => {
+    const first = resolveJiraTemplateBinding(typed, view([], []), INSTANCE);
+    if (first.state !== "bindable") throw new TypeError("Expected a bindable template");
+    expect(first.binding.transitionStatusIds).toEqual(["none", "none"]);
+    const boundFirst: JiraIssueTemplate = { ...typed, binding: first.binding };
+    const later = resolveJiraTemplateBinding(
+      boundFirst,
+      view([], [{ id: "5", name: "Fertig" }]),
+      INSTANCE,
+    );
+    if (later.state !== "bindable") throw new TypeError("Expected a completed binding");
+    expect(later.binding.transitionStatusIds).toEqual(["5", "none"]);
+    const { digest, ...ids } = later.binding;
+    expect(digest).toBe(jiraTemplateBindingDigest(INSTANCE, typed, ids));
+    // A confirmed slot is never overwritten by a translated or duplicated name.
+    const settled: JiraIssueTemplate = { ...typed, binding: later.binding };
+    expect(
+      resolveJiraTemplateBinding(
+        settled,
+        view(
+          [],
+          [
+            { id: "5", name: "Terminé" },
+            { id: "7", name: "Fertig" },
+          ],
+        ),
+        INSTANCE,
+      ),
+    ).toMatchObject({ state: "bound" });
+  });
+
   it("binds again when a bound field id is gone from the author's view (stale ids)", () => {
     const stale = template("Aufgabe", "requiredFields: [Story Punkte]");
     const resolvedBefore = resolveJiraTemplateBinding(
