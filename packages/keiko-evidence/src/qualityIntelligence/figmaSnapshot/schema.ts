@@ -38,6 +38,8 @@ export type FigmaSnapshotSkipReason =
   | "render-fetch-failed"
   | `render-fetch-failed:${string}`
   | "render-empty"
+  | "render-invalid-png"
+  | "render-budget-exceeded"
   | "render-oversized";
 
 export interface FigmaSnapshotSkippedScreenRow {
@@ -123,6 +125,16 @@ export interface FigmaSnapshotMetrics {
   readonly a11y?: FigmaSnapshotA11yMetrics;
 }
 
+/** Body-free completeness telemetry from the scoped acquisition. */
+export interface FigmaSnapshotCoverage {
+  readonly screenCount: number;
+  readonly screensDeepFetched: number;
+  readonly screensTruncated: number;
+  readonly nodeCount: number;
+  readonly fetchCount: number;
+  readonly capped: boolean;
+}
+
 export interface FigmaSnapshotRecord {
   readonly figmaSnapshotSchemaVersion: typeof FIGMA_SNAPSHOT_SCHEMA_VERSION;
   readonly runId: string;
@@ -149,8 +161,11 @@ export interface FigmaSnapshotRecord {
   readonly tokens?: unknown;
   /** Durable numeric operational metrics (#760), safe to expose and reload with the snapshot. */
   readonly metrics?: FigmaSnapshotMetrics;
+  readonly coverage?: FigmaSnapshotCoverage;
   /** Separate integrity hashes for optional hash-neutral artifacts (`links`/`tokens`) when present. */
   readonly artifactHashes?: FigmaSnapshotArtifactHashes;
+  /** Complete stored-record hash. Older records have only their drift and artifact hashes. */
+  readonly contentHash?: string;
   readonly integrityHash: string;
   readonly redactionSummary: FigmaSnapshotRedactionSummary;
 }
@@ -165,7 +180,9 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set<string>([
   "links",
   "tokens",
   "metrics",
+  "coverage",
   "artifactHashes",
+  "contentHash",
   "integrityHash",
   "redactionSummary",
 ]);
@@ -198,6 +215,14 @@ const REQUIRED_METRIC_KEYS = [
   "renderCount",
   "designTokenCount",
 ] as const;
+const COVERAGE_COUNT_KEYS = [
+  "screenCount",
+  "screensDeepFetched",
+  "screensTruncated",
+  "nodeCount",
+  "fetchCount",
+] as const;
+const ALLOWED_COVERAGE_KEYS = new Set<string>([...COVERAGE_COUNT_KEYS, "capped"]);
 
 export interface FigmaSnapshotValidationResult {
   readonly ok: boolean;
@@ -209,10 +234,11 @@ function validateArtifactHashes(value: unknown): FigmaSnapshotValidationResult |
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return { ok: false, reason: "artifactHashes must be an object" };
   }
-  for (const key of Object.keys(value)) {
+  for (const [key, hash] of Object.entries(value)) {
     if (!ALLOWED_ARTIFACT_HASH_KEYS.has(key)) {
       return { ok: false, reason: `unknown artifactHashes key: ${key}` };
     }
+    if (!isSha256(hash)) return { ok: false, reason: "invalid artifact hash" };
   }
   return undefined;
 }
@@ -302,16 +328,131 @@ function validateScreenCollections(
   if (record.structuralScreens !== undefined && !Array.isArray(record.structuralScreens)) {
     return { ok: false, reason: "structuralScreens must be an array" };
   }
+  if (!record.screens.every(isRenderedScreen) || !record.skippedScreens.every(isSkippedScreen)) {
+    return { ok: false, reason: "invalid rendered or skipped screen" };
+  }
+  if (
+    Array.isArray(record.structuralScreens) &&
+    !record.structuralScreens.every(isStructuralScreen)
+  ) {
+    return { ok: false, reason: "invalid structural screen" };
+  }
   return undefined;
 }
 
-// Strict-schema gate for a deserialised snapshot record: schema-version literal + closed key set.
-// Structural correctness of the integrity hashes is the builder's responsibility, not this gate's.
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function isSha256(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isOptionalCoverage(value: unknown): boolean {
+  if (value === undefined) return true;
+  return (
+    isObject(value) &&
+    keysAllowed(value, ALLOWED_COVERAGE_KEYS) &&
+    typeof value.capped === "boolean" &&
+    COVERAGE_COUNT_KEYS.every((key) => isNonNegativeInteger(value[key]))
+  );
+}
+
+const SIDE_FILE_NAME_PATTERN = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/u;
+
+export function isFigmaSnapshotImageRef(value: unknown): value is FigmaSnapshotImageRef {
+  return (
+    isObject(value) &&
+    value.mimeType === "image/png" &&
+    typeof value.relativePath === "string" &&
+    SIDE_FILE_NAME_PATTERN.test(value.relativePath) &&
+    isSha256(value.sha256) &&
+    isNonNegativeInteger(value.byteLength)
+  );
+}
+
+function isRenderedScreen(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isNonEmptyString(value.screenId) &&
+    Object.hasOwn(value, "irJson") &&
+    isSha256(value.integrityHash) &&
+    isFigmaSnapshotImageRef(value.image)
+  );
+}
+
+function isSkippedScreen(value: unknown): value is Record<string, unknown> {
+  return isObject(value) && isNonEmptyString(value.screenId) && isNonEmptyString(value.reason);
+}
+
+function isStructuralScreen(value: unknown): boolean {
+  return isSkippedScreen(value) && Object.hasOwn(value, "irJson") && isSha256(value.integrityHash);
+}
+
+function isLink(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isNonEmptyString(value.sourceNodeId) &&
+    isNonEmptyString(value.trigger) &&
+    isNonEmptyString(value.targetNodeId)
+  );
+}
+
+export function isFigmaSnapshotProvenance(value: unknown): value is FigmaSnapshotProvenanceRow {
+  return (
+    isObject(value) &&
+    isNonEmptyString(value.fileKey) &&
+    isNonEmptyString(value.nodeId) &&
+    (value.version === undefined || isNonEmptyString(value.version)) &&
+    isNonEmptyString(value.fetchedAt) &&
+    Number.isFinite(Date.parse(value.fetchedAt))
+  );
+}
+
+function isRedactionSummary(value: unknown): boolean {
+  return (
+    isObject(value) &&
+    isNonNegativeInteger(value.totalStringsScanned) &&
+    isNonNegativeInteger(value.stringsRedacted) &&
+    isObject(value.patternsMatched) &&
+    Object.values(value.patternsMatched).every(isNonNegativeInteger)
+  );
+}
+
+function validateSnapshotMetadata(
+  record: Record<string, unknown>,
+): FigmaSnapshotValidationResult | undefined {
+  if (!isNonEmptyString(record.runId) || !isFigmaSnapshotProvenance(record.provenance)) {
+    return { ok: false, reason: "invalid snapshot identity or provenance" };
+  }
+  if (
+    !isSha256(record.integrityHash) ||
+    (record.contentHash !== undefined && !isSha256(record.contentHash))
+  ) {
+    return { ok: false, reason: "invalid snapshot hash" };
+  }
+  if (!isRedactionSummary(record.redactionSummary))
+    return { ok: false, reason: "invalid redaction summary" };
+  if (record.links !== undefined && (!Array.isArray(record.links) || !record.links.every(isLink))) {
+    return { ok: false, reason: "invalid links" };
+  }
+  return undefined;
+}
+
+// The store verifies the hash values and disk-side identity after checking the record shape.
 export function validateFigmaSnapshotRecord(value: unknown): FigmaSnapshotValidationResult {
-  if (typeof value !== "object" || value === null) {
+  if (!isObject(value)) {
     return { ok: false, reason: "record is not an object" };
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   if (record.figmaSnapshotSchemaVersion !== FIGMA_SNAPSHOT_SCHEMA_VERSION) {
     return {
       ok: false,
@@ -329,5 +470,8 @@ export function validateFigmaSnapshotRecord(value: unknown): FigmaSnapshotValida
   if (artifactHashesValidation !== undefined) return artifactHashesValidation;
   const metricsValidation = validateMetrics(record.metrics);
   if (metricsValidation !== undefined) return metricsValidation;
-  return { ok: true, reason: undefined };
+  if (!isOptionalCoverage(record.coverage)) {
+    return { ok: false, reason: "invalid snapshot coverage" };
+  }
+  return validateSnapshotMetadata(record) ?? { ok: true, reason: undefined };
 }

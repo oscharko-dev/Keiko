@@ -16,6 +16,7 @@
 import { classifyFigmaTransportError, FigmaConnectorError } from "./figmaConnectorErrors.js";
 import {
   gatewayFetch,
+  GatewayResponseBodyValidationError,
   readJsonCapped,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
@@ -53,11 +54,26 @@ export interface FigmaHttpPortOptions {
 // Collects the response headers into a plain lower-cased map. `Headers` already lower-cases
 // names, so this is a faithful, allocation-bounded copy with no token (request-only header).
 const collectHeaders = (response: Response): Readonly<Record<string, string>> => {
-  const out: Record<string, string> = {};
-  response.headers.forEach((value, name) => {
-    out[name] = value;
-  });
-  return out;
+  return Object.fromEntries(response.headers);
+};
+
+const readFigmaJson = async (response: Response, maxBytes: number): Promise<unknown> => {
+  if (!response.ok && response.status !== 403) {
+    // These statuses carry their classification (and Retry-After) without a response body.
+    await response.body?.cancel().catch(() => undefined);
+    return undefined;
+  }
+  try {
+    return await readJsonCapped(response, maxBytes);
+  } catch (error) {
+    if (response.status === 403) return undefined;
+    if (!(error instanceof GatewayResponseBodyValidationError)) throw error;
+    if (error.validation === "size-exceeded") {
+      throw new FigmaConnectorError("FIGMA_RESPONSE_TOO_LARGE");
+    }
+    // The scoped-node and render callers already handle missing JSON according to their endpoint.
+    return undefined;
+  }
 };
 
 /**
@@ -86,18 +102,14 @@ export const createDefaultFigmaHttpPort = (
         headers: { ...request.headers },
         redirect: "manual",
         signal,
+        maxResponseBytes,
         log: processServerLogSink(),
         logContext: { correlationId: options?.correlationId ?? UNKNOWN_CORRELATION_ID },
         ...(egress !== undefined ? { egress } : {}),
         ...(fetchImpl !== undefined ? { fetchImpl } : {}),
       });
       const headers = collectHeaders(response);
-      let json: unknown;
-      try {
-        json = await readJsonCapped(response, maxResponseBytes);
-      } catch {
-        throw new FigmaConnectorError("FIGMA_RESPONSE_TOO_LARGE");
-      }
+      const json = await readFigmaJson(response, maxResponseBytes);
       return { status: response.status, json, headers };
     } catch (err) {
       if (err instanceof FigmaConnectorError) throw err;

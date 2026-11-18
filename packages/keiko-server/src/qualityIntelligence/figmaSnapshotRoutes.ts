@@ -39,22 +39,29 @@
 //   The underlying build is bounded by per-fetch timeouts and pagination budgets.
 //
 // Client disconnect (item 4):
-//   The handler listens for the 'close' event on ctx.req. On disconnect the per-waiter
+//   The handler observes cancellation of the response. On disconnect the per-waiter
 //   race resolves promptly (504 FIGMA_BUILD_TIMEOUT body never sent over the wire).
 //   The coalesced build continues — other waiters (if any) are unaffected and will
 //   receive the result when the build settles.
 
+import { openFigmaSnapshotStore } from "./figmaSnapshotStore.js";
 import { randomUUID } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
-import { join } from "node:path";
-import { MAX_TIMER_DELAY_MS } from "../abort-race.js";
+import { AbortDeadlineRaceError, MAX_TIMER_DELAY_MS, raceAbortDeadline } from "../abort-race.js";
 import { STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { newReferenceId } from "../reference-id.js";
-import type { EnvSource } from "@oscharko-dev/keiko-security";
+import { createRequestCancellation } from "../request-cancellation.js";
+import { readBoundedRequestBody } from "../bounded-request-body.js";
+import { assertValidRunId, type EnvSource } from "@oscharko-dev/keiko-security";
+import { normalizeFigmaNodeId } from "@oscharko-dev/keiko-contracts/runtime/figma-url";
 import { emitServerDiagnostic } from "../diagnostics-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   appendFigmaConnectorAudit,
   parseFigmaTarget,
@@ -75,12 +82,10 @@ import {
   type GovernedSnapshotResult,
 } from "./figmaSnapshotOrchestration.js";
 import {
-  createNodeFigmaSnapshotStore,
   type FigmaSnapshotLinkRow,
   type FigmaSnapshotRecord,
   type FigmaSnapshotUserMetadata,
 } from "@oscharko-dev/keiko-evidence";
-import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 // ─── Error helpers ─────────────────────────────────────────────────────────────
 
@@ -98,6 +103,8 @@ const FIGMA_ROUTE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
     "The Figma board was not found. Check the link and that the PAT can access this file.",
   FIGMA_NOT_READY:
     "The selected Figma scope is not release-ready. Pin a Figma version, select a Release section, or mark the frame Ready for dev before snapshotting.",
+  FIGMA_SOURCE_CHANGED:
+    "The Figma file changed during capture. Retry when editing has paused or use a pinned version.",
   FIGMA_UPSTREAM_UNAVAILABLE: "Figma API is temporarily unavailable. Please try again.",
   FIGMA_PROXY_EGRESS_FAILED:
     "The forward proxy rejected the Figma egress request. Check proxy configuration.",
@@ -121,11 +128,14 @@ const FIGMA_ROUTE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
     "The Figma request timed out. Retry or raise KEIKO_FIGMA_REQUEST_TIMEOUT_MS.",
   FIGMA_EGRESS_FAILED: "The outbound request to Figma failed before a response was received.",
   FIGMA_BUILD_TIMEOUT:
-    "The snapshot build exceeded the configured deadline. No partial snapshot was stored.",
+    "The wait for the snapshot exceeded the configured deadline. The capture may still complete.",
   FIGMA_INTERNAL: "An unexpected error occurred during the snapshot-build.",
   FIGMA_BAD_LINK:
     "The board link is not a valid Figma URL, or it is missing a node-id " +
     "(section/frame anchor required).",
+  FIGMA_BAD_VERSION: "The Figma version pin is invalid or ambiguous.",
+  FIGMA_BAD_SCOPE:
+    "Supply both the Figma file key and a single node ID to filter snapshot history.",
   FIGMA_BAD_METADATA: "The snapshot metadata update is invalid.",
   FIGMA_SNAPSHOT_NOT_FOUND: "No snapshot was found for this run id.",
   FIGMA_SCREEN_NOT_FOUND: "No captured screen image was found for this snapshot.",
@@ -173,6 +183,7 @@ function figmaStatusForCode(code: FigmaConnectorErrorCode): number {
   if (FIGMA_502_CODES.has(code)) return 502;
   if (code === "FIGMA_NOT_FOUND") return 404;
   if (code === "FIGMA_NOT_READY") return 412;
+  if (code === "FIGMA_SOURCE_CHANGED") return 409;
   if (code === "FIGMA_RATE_LIMITED") return 429;
   if (code === "FIGMA_OVERSIZED_SCOPE") return 422;
   // Precondition Required: the operator must acknowledge the read-only scope before the build (#760).
@@ -235,9 +246,7 @@ export interface FigmaSnapshotSummary {
   /** Integrity hash over the snapshot content — deterministic for drift detection (#735). */
   readonly integrityHash: string;
   /**
-   * Deep-fetch coverage telemetry (#837) — present on a freshly-built snapshot (POST response).
-   * Lets the UI honestly report how much of a huge instance-heavy board was deep-fetched vs
-   * truncated by the bounded per-screen budgets. Build-time only; never persisted in the snapshot.
+   * Scoped fetch coverage (#837), available after reloading snapshots that captured it.
    */
   readonly coverage?: FigmaScopeCoverage;
   /**
@@ -345,6 +354,7 @@ export interface FigmaSnapshotListEntry {
   readonly structuralOnlyCount: number;
   readonly reductionHint: string;
   readonly integrityHash: string;
+  readonly coverage?: FigmaScopeCoverage;
 }
 
 export interface FigmaSnapshotListResponse {
@@ -423,20 +433,33 @@ function managementSummaryFromMetadata(
   };
 }
 
+function describeDeepCoverage(coverage: FigmaScopeCoverage | undefined): string {
+  if (coverage === undefined) return "";
+  const truncated =
+    coverage.screensTruncated > 0
+      ? `; ${coverage.screensTruncated.toString()} partially captured (deep content bounded)`
+      : "";
+  return coverage.capped ? `${truncated}; scope coverage limited` : truncated;
+}
+
+function snapshotReductionHint(record: FigmaSnapshotRecord): string {
+  const reduction = buildReductionHint(
+    record.screens.length,
+    record.skippedScreens.length,
+    record.structuralScreens?.length ?? 0,
+  );
+  return `${reduction}${describeDeepCoverage(record.coverage)}`;
+}
+
 function recordToSummary(
   record: FigmaSnapshotRecord,
-  coverage?: FigmaScopeCoverage,
-  metrics?: FigmaConnectorMetrics,
   metadata?: FigmaSnapshotUserMetadata,
 ): FigmaSnapshotSummary {
   const screenCount = record.screens.length;
   const skippedCount = record.skippedScreens.length;
   const structuralOnlyCount = record.structuralScreens?.length ?? 0;
+  const { coverage, metrics } = record;
   const management = managementSummaryFromMetadata(metadata);
-  const truncatedClause =
-    coverage !== undefined && (coverage.screensTruncated > 0 || coverage.capped)
-      ? `; ${coverage.screensTruncated.toString()} partially captured (deep content bounded)`
-      : "";
   return {
     runId: record.runId,
     ...(management.displayName !== undefined ? { displayName: management.displayName } : {}),
@@ -448,7 +471,7 @@ function recordToSummary(
     screenCount,
     skippedCount,
     structuralOnlyCount,
-    reductionHint: `${buildReductionHint(screenCount, skippedCount, structuralOnlyCount)}${truncatedClause}`,
+    reductionHint: snapshotReductionHint(record),
     integrityHash: record.integrityHash,
     ...(coverage !== undefined ? { coverage } : {}),
     ...(metrics !== undefined ? { metrics } : {}),
@@ -596,12 +619,9 @@ function recordToListEntry(
     screenCount: record.screens.length,
     skippedCount: record.skippedScreens.length,
     structuralOnlyCount,
-    reductionHint: buildReductionHint(
-      record.screens.length,
-      record.skippedScreens.length,
-      structuralOnlyCount,
-    ),
+    reductionHint: snapshotReductionHint(record),
     integrityHash: record.integrityHash,
+    ...(record.coverage !== undefined ? { coverage: record.coverage } : {}),
   };
 }
 
@@ -670,10 +690,10 @@ function parseTriggerBoardLink(body: Record<string, unknown>): string | undefine
 }
 
 /** Reads and validates the POST body, returning the board link or an error result. */
-async function parseTriggerBody(req: IncomingMessage): Promise<ParsedTriggerBody | RouteResult> {
+async function parseTriggerBody(ctx: RouteContext): Promise<ParsedTriggerBody | RouteResult> {
   let raw: string;
   try {
-    raw = await readBody(req);
+    raw = await readBoundedRequestBody(ctx.req, MAX_BODY_BYTES, undefined, ctx.correlationId);
   } catch {
     return { status: 400, body: figmaErrorBody("FIGMA_BAD_LINK") };
   }
@@ -685,10 +705,8 @@ async function parseTriggerBody(req: IncomingMessage): Promise<ParsedTriggerBody
   if (boardLink === undefined) {
     return { status: 400, body: figmaErrorBody("FIGMA_BAD_LINK") };
   }
-  const requestedVersion =
-    typeof body.version === "string" ? parseFigmaVersion(body.version) : undefined;
-  const linkVersion = parseFigmaVersionFromLink(boardLink);
-  const version = requestedVersion ?? linkVersion;
+  const version = parseRequestedVersion(body.version, boardLink);
+  if (version === null) return { status: 400, body: figmaErrorBody("FIGMA_BAD_VERSION") };
   return {
     boardLink,
     ...(version !== undefined ? { version } : {}),
@@ -713,14 +731,16 @@ function parseFigmaVersion(raw: string): string | undefined {
   return FIGMA_VERSION_PATTERN.test(value) ? value : undefined;
 }
 
-function parseFigmaVersionFromLink(boardLink: string): string | undefined {
-  try {
-    const url = new URL(boardLink);
-    const raw = url.searchParams.get("version-id") ?? url.searchParams.get("version");
-    return raw === null ? undefined : parseFigmaVersion(raw);
-  } catch {
-    return undefined;
+function parseRequestedVersion(raw: unknown, boardLink: string): string | undefined | null {
+  if (raw !== undefined) {
+    return typeof raw === "string" ? (parseFigmaVersion(raw) ?? null) : null;
   }
+  const params = new URL(boardLink).searchParams;
+  const requested = [...params.getAll("version-id"), ...params.getAll("version")];
+  if (requested.length === 0) return undefined;
+  const pins = new Set(requested.map(parseFigmaVersion));
+  if (pins.size !== 1 || pins.has(undefined)) return null;
+  return parseFigmaVersion(requested[0] ?? "");
 }
 
 // Deployment-overridable deep scoped-pagination budgets (#837). Operators on a tighter Figma plan can
@@ -798,6 +818,52 @@ function logFigmaInternal(stage: string, err: unknown, deps: UiHandlerDeps): voi
   });
 }
 
+const FIGMA_SNAPSHOT_CAPTURED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "figma.snapshot.captured",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "figmaSnapshotRoutes.logSnapshotCaptured",
+  fields: {
+    renderedCount: { type: "integer", dataClass: "count", required: true },
+    skippedCount: { type: "integer", dataClass: "count", required: true },
+    invalidRenderCount: { type: "integer", dataClass: "count", required: true },
+    renderBudgetSkipCount: { type: "integer", dataClass: "count", required: true },
+    truncatedCount: { type: "integer", dataClass: "count", required: true },
+    scopedFetchCount: { type: "integer", dataClass: "count", required: true },
+    scopeCapped: { type: "boolean", dataClass: "closed-enum", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["figma-snapshot"],
+  proofIds: ["figma.snapshot.captured.line"],
+  releaseImpact: "patch",
+});
+
+function logSnapshotCaptured(result: GovernedSnapshotResult, correlationId: string): void {
+  processServerLogSink().write(
+    activityLogEvent(
+      FIGMA_SNAPSHOT_CAPTURED_OPERATION,
+      { correlationId },
+      {
+        renderedCount: result.snapshot.screens.length,
+        skippedCount: result.snapshot.skippedScreens.length,
+        invalidRenderCount: result.snapshot.skippedScreens.filter(
+          ({ reason }) => reason === "render-invalid-png",
+        ).length,
+        renderBudgetSkipCount: result.snapshot.skippedScreens.filter(
+          ({ reason }) => reason === "render-budget-exceeded",
+        ).length,
+        truncatedCount: result.coverage?.screensTruncated ?? 0,
+        scopedFetchCount: result.coverage?.fetchCount ?? 0,
+        scopeCapped: result.coverage?.capped ?? false,
+      },
+    ),
+  );
+}
+
 // Map a thrown error from the governed build to a coded route result: a coded connector error maps to
 // its status (consent-required → 428, auth → 502, rate-limit → 429, …); anything else is a safe 500.
 function figmaErrorResult(err: unknown, deps: UiHandlerDeps): RouteResult {
@@ -820,7 +886,7 @@ function persistSnapshot(
   result: GovernedSnapshotResult,
   deps: UiHandlerDeps,
 ): FigmaSnapshotRecord | RouteResult {
-  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  const store = openFigmaSnapshotStore(evidenceDir, deps, runId);
   try {
     store.record({
       runId,
@@ -849,26 +915,24 @@ function persistSnapshot(
       ...(result.snapshot.links !== undefined ? { links: result.snapshot.links } : {}),
       tokens: result.ir.tokens,
       metrics: result.metrics,
+      ...(result.coverage !== undefined ? { coverage: result.coverage } : {}),
     });
   } catch (e) {
     logFigmaInternal("persist.record", e, deps);
     return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   }
-  let record: FigmaSnapshotRecord | undefined;
   try {
-    record = store.load(runId);
+    return store.load(runId) ?? { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   } catch (e) {
     logFigmaInternal("persist.load", e, deps);
     return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   }
-  if (record === undefined) return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
-  return record;
 }
 
 // ─── In-flight coalescing ──────────────────────────────────────────────────────
 //
-// Keyed by "fileKey:nodeId:operation:consent" (the snapshot scope plus flags that affect auditing or
-// consent). The FIRST POST starts the governed build, mints the runId ONCE, and persists ONCE
+// Keyed by evidence store, Figma scope, explicit version and flags that affect consent or auditing.
+// The FIRST POST starts the governed build, mints the runId ONCE, and persists ONCE
 // (inside the build chain — see header comment for the persist-inside-build design decision).
 // Subsequent POSTs for the same scope and same flags await the SAME promise and receive the same
 // runId and response. The entry is removed on settle (finally) so a retry POSTing after the build
@@ -895,8 +959,8 @@ export function resetInFlightMap(): void {
   defaultInFlightMap = new Map<string, CoalescedBuildEntry>();
 }
 
-/** Derive the coalescing key (fileKey:nodeId:operation:consent) for the in-flight map. */
 function coalescingKeyFor(
+  evidenceDir: string,
   boardLink: string,
   acknowledgeReadOnly: boolean,
   isResnapshot: boolean,
@@ -904,7 +968,14 @@ function coalescingKeyFor(
 ): string | undefined {
   const target = parseFigmaTarget(boardLink);
   if (target === null) return undefined;
-  return `${target.fileKey}:${target.nodeId}:${version ?? "latest"}:${isResnapshot ? "resnapshot" : "snapshot"}:${acknowledgeReadOnly ? "ack" : "noack"}`;
+  return JSON.stringify([
+    evidenceDir,
+    target.fileKey,
+    target.nodeId,
+    version ?? null,
+    isResnapshot,
+    acknowledgeReadOnly,
+  ]);
 }
 
 // Starts the governed build + persist and removes the map entry on settle.
@@ -920,31 +991,23 @@ function startCoalescedBuild(
   correlationId: string,
 ): Promise<RouteResult> {
   const buildAndPersist = async (): Promise<RouteResult> => {
-    let result: GovernedSnapshotResult;
-    try {
-      // The governed build resolves the vault>config>env PAT (#758), gates on recorded read-only
-      // consent before any egress + audits the action + computes metrics (#760), and deep-fetches +
-      // renders within the snapshot boundary (#837/#759). Errors (incl. consent-required) are coded.
-      result = await governedSnapshotBuild(
-        boardLink,
-        {
-          evidenceDir,
-          env: deps.env,
-          now: new Date().toISOString(),
-          correlationId,
-          acknowledgeReadOnly: body.acknowledgeReadOnly,
-          version: body.version,
-          pagination: figmaPaginationFromEnv(deps.env),
-          egress: currentGatewayEgressConfig(deps),
-          configToken: currentGatewayConfig(deps)?.figma?.accessToken,
-          portOptions: { timeoutMs: figmaRequestTimeoutMsFromEnv(deps.env) },
-          deferSuccessAudit: true,
-        },
-        body.isResnapshot,
-      );
-    } catch (err) {
-      return figmaErrorResult(err, deps);
-    }
+    const result = await governedSnapshotBuild(
+      boardLink,
+      {
+        evidenceDir,
+        env: deps.env,
+        now: new Date().toISOString(),
+        correlationId,
+        acknowledgeReadOnly: body.acknowledgeReadOnly,
+        version: body.version,
+        pagination: figmaPaginationFromEnv(deps.env),
+        egress: currentGatewayEgressConfig(deps),
+        configToken: currentGatewayConfig(deps)?.figma?.accessToken,
+        portOptions: { timeoutMs: figmaRequestTimeoutMsFromEnv(deps.env) },
+        deferSuccessAudit: true,
+      },
+      body.isResnapshot,
+    );
 
     // A Figma window persists it as a reference (#3557 review).
     const runId = newReferenceId({ kind: "figma-snapshot-run", prefix: "fs-", correlationId });
@@ -954,37 +1017,17 @@ function startCoalescedBuild(
       return stored;
     }
     appendPersistedSnapshotAudit(evidenceDir, result, stored, body.isResnapshot);
-    return { status: 201, body: recordToSummary(stored, result.coverage, stored.metrics) };
+    logSnapshotCaptured(result, correlationId);
+    return { status: 201, body: recordToSummary(stored) };
   };
 
-  const promise = buildAndPersist().finally(() => {
-    inFlight.delete(scopeKey);
-  });
+  const promise = buildAndPersist()
+    .catch((err: unknown) => figmaErrorResult(err, deps))
+    .finally(() => {
+      inFlight.delete(scopeKey);
+    });
   inFlight.set(scopeKey, { promise });
   return promise;
-}
-
-// Returns a clearable deadline: promise rejects with FIGMA_BUILD_TIMEOUT after `ms` ms.
-// `.unref()` ensures a stray pending timer never blocks event-loop / test teardown.
-// Always call `.clear()` in a finally block after the race settles.
-interface Deadline {
-  readonly promise: Promise<never>;
-  readonly clear: () => void;
-}
-function makeDeadline(ms: number): Deadline {
-  let timerId: ReturnType<typeof setTimeout> | undefined;
-  const promise = new Promise<never>((_resolve, reject) => {
-    timerId = setTimeout(() => {
-      reject(new FigmaConnectorError("FIGMA_BUILD_TIMEOUT"));
-    }, ms);
-    timerId.unref();
-  });
-  return {
-    promise,
-    clear: (): void => {
-      clearTimeout(timerId);
-    },
-  };
 }
 
 function triggerBuildPromise(
@@ -1012,11 +1055,12 @@ export async function handleFigmaTriggerSnapshot(
   if (evidenceDir === undefined || evidenceDir.length === 0) {
     return { status: 503, body: figmaErrorBody("FIGMA_NO_EVIDENCE_DIR") };
   }
-  const bodyResult = await parseTriggerBody(ctx.req);
+  const bodyResult = await parseTriggerBody(ctx);
   if ("status" in bodyResult) return bodyResult;
   const body: ParsedTriggerBody = bodyResult;
 
   const scopeKey = coalescingKeyFor(
+    evidenceDir,
     body.boardLink,
     body.acknowledgeReadOnly,
     body.isResnapshot,
@@ -1037,27 +1081,22 @@ export async function handleFigmaTriggerSnapshot(
     ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
   );
 
-  const deadlineMs = figmaBuildDeadlineMsFromEnv(deps.env);
-  const deadline = makeDeadline(deadlineMs);
-
   // Per-waiter race: deadline + client-disconnect both resolve this waiter promptly while the
   // coalesced build (and its persist) continues uninterrupted for other waiters.
-  // Named handler so removeListener can target it precisely in the finally block.
-  let onClose!: () => void;
-  const disconnectPromise = new Promise<never>((_resolve, reject) => {
-    onClose = (): void => {
-      reject(new FigmaConnectorError("FIGMA_BUILD_TIMEOUT"));
-    };
-    ctx.req.once("close", onClose);
-  });
-
+  const cancellation = createRequestCancellation(ctx, "figma-snapshot-waiter-closed");
   try {
-    return await Promise.race([buildPromise, deadline.promise, disconnectPromise]);
+    return await raceAbortDeadline(() => buildPromise, {
+      signal: cancellation.signal,
+      nowMs: () => performance.now(),
+      deadlineAtMs: performance.now() + figmaBuildDeadlineMsFromEnv(deps.env),
+    });
   } catch (err) {
+    if (err instanceof AbortDeadlineRaceError) {
+      return { status: 504, body: figmaErrorBody("FIGMA_BUILD_TIMEOUT") };
+    }
     return figmaErrorResult(err, deps);
   } finally {
-    deadline.clear();
-    ctx.req.removeListener("close", onClose);
+    cancellation.dispose();
   }
 }
 
@@ -1097,8 +1136,6 @@ export function handleFigmaRevokeToken(_ctx: RouteContext, deps: UiHandlerDeps):
 
 const DEFAULT_FIGMA_SNAPSHOT_LIST_LIMIT = 12;
 const MAX_FIGMA_SNAPSHOT_LIST_LIMIT = 50;
-const FIGMA_SNAPSHOT_RECORD_SUFFIX = ".figma-snapshot.json";
-const FIGMA_EVIDENCE_SUBDIR = "qi";
 
 function parseSnapshotListLimit(url: URL): number {
   const raw = url.searchParams.get("limit");
@@ -1110,72 +1147,41 @@ function parseSnapshotListLimit(url: URL): number {
 
 function parseSnapshotListScope(
   url: URL,
-): { readonly fileKey: string; readonly nodeId: string } | undefined {
-  const fileKey = (url.searchParams.get("fileKey") ?? "").trim();
-  const nodeId = (url.searchParams.get("nodeId") ?? "").trim();
-  return fileKey.length > 0 && nodeId.length > 0 ? { fileKey, nodeId } : undefined;
+): { readonly fileKey: string; readonly nodeId: string } | undefined | null {
+  const [file, ...additionalFiles] = url.searchParams.getAll("fileKey");
+  const [node, ...additionalNodes] = url.searchParams.getAll("nodeId");
+  if (file === undefined && node === undefined) return undefined;
+  if (
+    file === undefined ||
+    node === undefined ||
+    additionalFiles.length + additionalNodes.length > 0
+  )
+    return null;
+  const fileKey = file.trim();
+  const nodeId = normalizeFigmaNodeId(node.trim());
+  return fileKey.length > 0 && nodeId !== undefined ? { fileKey, nodeId } : null;
 }
 
 function loadSnapshotListEntries(
-  store: ReturnType<typeof createNodeFigmaSnapshotStore>,
+  store: ReturnType<typeof openFigmaSnapshotStore>,
   runIds: readonly string[],
+  limit: number,
+  deps: UiHandlerDeps,
 ): readonly FigmaSnapshotListEntry[] {
   const entries: FigmaSnapshotListEntry[] = [];
+  let reportedReadFailure = false;
   for (const runId of runIds) {
-    let record: FigmaSnapshotRecord | undefined;
     try {
-      record = store.loadMetadata(runId);
-    } catch {
-      continue;
+      const record = store.loadMetadata(runId);
+      if (record !== undefined)
+        entries.push(recordToListEntry(record, store.loadUserMetadata(runId)));
+    } catch (error) {
+      if (!reportedReadFailure) logFigmaInternal("list.load", error, deps);
+      reportedReadFailure = true;
     }
-    if (record !== undefined)
-      entries.push(recordToListEntry(record, store.loadUserMetadata(runId)));
+    if (entries.length === limit) break;
   }
   return entries;
-}
-
-function readSnapshotFetchedAt(qiDir: string, fileName: string): string | undefined {
-  try {
-    const parsed = JSON.parse(readFileSync(join(qiDir, fileName), "utf8")) as Record<
-      string,
-      unknown
-    >;
-    const provenance =
-      typeof parsed.provenance === "object" && parsed.provenance !== null
-        ? (parsed.provenance as Record<string, unknown>)
-        : undefined;
-    const fetchedAt = provenance?.fetchedAt;
-    return typeof fetchedAt === "string" && fetchedAt.length > 0 ? fetchedAt : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-// Descending by fetchedAt; ties (e.g. two snapshots built within the same fetchedAt tick) fall
-// back to an ascending, locale-independent runId comparison so the order never depends on
-// readdirSync's OS-dependent directory-enumeration order (#2723 review finding).
-export function compareByFetchedAtDescending(
-  a: { readonly fetchedAt: string; readonly runId?: string },
-  b: { readonly fetchedAt: string; readonly runId?: string },
-): number {
-  if (a.fetchedAt > b.fetchedAt) return -1;
-  if (a.fetchedAt < b.fetchedAt) return 1;
-  return compareStrings(a.runId ?? "", b.runId ?? "");
-}
-
-function listRecentSnapshotRunIds(evidenceDir: string, limit: number): readonly string[] {
-  const qiDir = join(evidenceDir, FIGMA_EVIDENCE_SUBDIR);
-  const stat = lstatSync(qiDir, { throwIfNoEntry: false });
-  if (stat?.isDirectory() !== true) return [];
-  const records: { runId: string; fetchedAt: string }[] = [];
-  for (const entry of readdirSync(qiDir, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(FIGMA_SNAPSHOT_RECORD_SUFFIX)) continue;
-    const runId = entry.name.slice(0, -FIGMA_SNAPSHOT_RECORD_SUFFIX.length);
-    const fetchedAt = readSnapshotFetchedAt(qiDir, entry.name);
-    if (fetchedAt !== undefined) records.push({ runId, fetchedAt });
-  }
-  records.sort(compareByFetchedAtDescending);
-  return records.slice(0, limit).map((record) => record.runId);
 }
 
 export function handleFigmaListSnapshots(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -1186,25 +1192,18 @@ export function handleFigmaListSnapshots(ctx: RouteContext, deps: UiHandlerDeps)
 
   const limit = parseSnapshotListLimit(ctx.url);
   const scope = parseSnapshotListScope(ctx.url);
-  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  if (scope === null) return { status: 400, body: figmaErrorBody("FIGMA_BAD_SCOPE") };
+  const store = openFigmaSnapshotStore(evidenceDir, deps, ctx.correlationId);
 
   try {
-    if (scope !== undefined) {
-      const snapshots = store
-        .listByScope(scope.fileKey, scope.nodeId)
-        .slice(0, limit)
-        .flatMap((entry) => {
-          const record = store.loadMetadata(entry.runId);
-          return record === undefined
-            ? []
-            : [recordToListEntry(record, store.loadUserMetadata(entry.runId))];
-        });
-      return { status: 200, body: { snapshots } satisfies FigmaSnapshotListResponse };
-    }
-
-    const snapshots = loadSnapshotListEntries(store, listRecentSnapshotRunIds(evidenceDir, limit));
+    const runIds =
+      scope === undefined
+        ? store.listRecent(Number.MAX_SAFE_INTEGER)
+        : store.listByScope(scope.fileKey, scope.nodeId).map((entry) => entry.runId);
+    const snapshots = loadSnapshotListEntries(store, runIds, limit, deps);
     return { status: 200, body: { snapshots } satisfies FigmaSnapshotListResponse };
-  } catch {
+  } catch (error) {
+    logFigmaInternal("list.scan", error, deps);
     return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   }
 }
@@ -1222,7 +1221,7 @@ export function handleFigmaLoadSnapshot(ctx: RouteContext, deps: UiHandlerDeps):
     return { status: 400, body: figmaErrorBody("FIGMA_SNAPSHOT_NOT_FOUND") };
   }
 
-  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  const store = openFigmaSnapshotStore(evidenceDir, deps, ctx.correlationId);
   let record: FigmaSnapshotRecord | undefined;
   try {
     record = store.loadMetadata(runId);
@@ -1236,7 +1235,7 @@ export function handleFigmaLoadSnapshot(ctx: RouteContext, deps: UiHandlerDeps):
 
   return {
     status: 200,
-    body: recordToSummary(record, undefined, record.metrics, store.loadUserMetadata(runId)),
+    body: recordToSummary(record, store.loadUserMetadata(runId)),
   };
 }
 
@@ -1314,7 +1313,7 @@ export async function handleFigmaUpdateSnapshotMetadata(
   const patch = await parseSnapshotMetadataPatch(ctx.req);
   if ("status" in patch) return patch;
 
-  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  const store = openFigmaSnapshotStore(evidenceDir, deps, ctx.correlationId);
   let record: FigmaSnapshotRecord | undefined;
   try {
     record = store.loadMetadata(runId);
@@ -1337,7 +1336,7 @@ export async function handleFigmaUpdateSnapshotMetadata(
 
   return {
     status: 200,
-    body: recordToSummary(record, undefined, record.metrics, metadata),
+    body: recordToSummary(record, metadata),
   };
 }
 
@@ -1350,23 +1349,18 @@ export function handleFigmaDeleteSnapshot(ctx: RouteContext, deps: UiHandlerDeps
   }
 
   const runId = ctx.params.runId ?? "";
-  if (runId.length === 0) {
+  try {
+    assertValidRunId(runId);
+  } catch {
     return { status: 400, body: figmaErrorBody("FIGMA_SNAPSHOT_NOT_FOUND") };
   }
 
-  const store = createNodeFigmaSnapshotStore(evidenceDir);
-  let record: FigmaSnapshotRecord | undefined;
-  try {
-    record = store.loadMetadata(runId);
-  } catch {
-    return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
-  }
-  if (record === undefined) {
-    return { status: 404, body: figmaErrorBody("FIGMA_SNAPSHOT_NOT_FOUND") };
-  }
-
+  const store = openFigmaSnapshotStore(evidenceDir, deps, ctx.correlationId);
   try {
     const deleted = store.deleteSnapshot(runId);
+    if (!deleted.recordDeleted) {
+      return { status: 404, body: figmaErrorBody("FIGMA_SNAPSHOT_NOT_FOUND") };
+    }
     return {
       status: 200,
       body: {
@@ -1376,7 +1370,8 @@ export function handleFigmaDeleteSnapshot(ctx: RouteContext, deps: UiHandlerDeps
         metadataDeleted: deleted.metadataDeleted,
       },
     };
-  } catch {
+  } catch (error) {
+    logFigmaInternal("delete", error, deps);
     return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   }
 }
@@ -1398,7 +1393,7 @@ export function handleFigmaInspectSnapshotScreenJson(
     return { status: 404, body: figmaErrorBody("FIGMA_SCREEN_NOT_FOUND") };
   }
 
-  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  const store = openFigmaSnapshotStore(evidenceDir, deps, ctx.correlationId);
   let record: FigmaSnapshotRecord | undefined;
   try {
     record = store.loadMetadata(runId);
@@ -1424,7 +1419,7 @@ function parseScreenIndex(raw: string | undefined): number | undefined {
   return Number.isInteger(parsed) && parsed >= 0 && String(parsed) === raw ? parsed : undefined;
 }
 
-type FigmaSnapshotStore = ReturnType<typeof createNodeFigmaSnapshotStore>;
+type FigmaSnapshotStore = ReturnType<typeof openFigmaSnapshotStore>;
 
 interface LoadedSnapshotRecord {
   readonly store: FigmaSnapshotStore;
@@ -1434,8 +1429,10 @@ interface LoadedSnapshotRecord {
 function loadSnapshotRecordForImage(
   evidenceDir: string,
   runId: string,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
 ): LoadedSnapshotRecord | RouteResult {
-  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  const store = openFigmaSnapshotStore(evidenceDir, deps, correlationId);
   let record: FigmaSnapshotRecord | undefined;
   try {
     record = store.load(runId);
@@ -1462,7 +1459,7 @@ export function handleFigmaLoadSnapshotImage(
     return { status: 404, body: figmaErrorBody("FIGMA_SCREEN_NOT_FOUND") };
   }
 
-  const loaded = loadSnapshotRecordForImage(evidenceDir, runId);
+  const loaded = loadSnapshotRecordForImage(evidenceDir, runId, deps, ctx.correlationId);
   if ("status" in loaded) return loaded;
 
   const screen = loaded.record.screens[screenIndex];

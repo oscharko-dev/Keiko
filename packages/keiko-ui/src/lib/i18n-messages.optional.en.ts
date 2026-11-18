@@ -3879,6 +3879,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "figmaSnapshotWindow.error.generic.unknownDetail": "An unexpected error occurred.",
   "figmaSnapshotWindow.error.openTokenSettings": "Open Figma access token settings",
   "figmaSnapshotWindow.error.runIdClearedSuffix": "The stored run ID has been cleared.",
+  "figmaSnapshotWindow.error.sourceChanged":
+    "The Figma file changed during capture. Retry the snapshot or use a link to a specific version.",
   "figmaSnapshotWindow.error.tokenAttention.remediation":
     "Open the Figma access token settings to add or rotate the read-only token, then retry. No snapshot was stored.",
   "figmaSnapshotWindow.error.tokenAttention.title": "Figma access token needs attention",
@@ -6121,6 +6123,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "figmaJson.ui.figmaJson": "Figma JSON",
   "figmaJson.ui.copyJson": "Copy JSON",
   "figmaJson.ui.loadingJson": "Loading JSON…",
+  "figmaJson.ui.loadFailed": "Failed to load the selected Figma JSON.",
+  "figmaJson.ui.missingReference": "Missing Figma JSON source reference.",
   "figmaImage.ui.imagePreviewIsUnavailable": "Image preview is unavailable.",
   "resourceLimits.ui.resourceLimitDecisions": "Resource-limit decisions",
   "relationshipPanel.ui.referenceId": "Reference id: {id}",

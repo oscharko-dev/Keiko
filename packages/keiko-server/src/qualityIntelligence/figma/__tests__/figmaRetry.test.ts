@@ -124,16 +124,18 @@ describe("fetchWithBackoff", () => {
     expect(delays).toEqual([1000, 2000, 2500]);
   });
 
-  it("caps a Retry-After delay at maxDelayMs (no unbounded wait)", async () => {
+  it("stops when Retry-After is longer than the bounded wait", async () => {
     const op = scriptedOperation([
       { status: 429, headers: { "retry-after": "999999" } },
       { status: 200 },
     ]);
     const { sleep, delays } = recordingSleep();
 
-    await fetchWithBackoff(op.run, POLICY, sleep);
-
-    expect(delays).toEqual([POLICY.maxDelayMs]);
+    await expect(fetchWithBackoff(op.run, POLICY, sleep)).rejects.toMatchObject({
+      code: "FIGMA_RATE_LIMITED",
+    });
+    expect(op.calls()).toBe(1);
+    expect(delays).toEqual([]);
   });
 
   it("does not retry a 5xx — only 429 is rate-limit-retryable here", async () => {

@@ -810,3 +810,10 @@ retired surfaces of #4448 change the core and optional English and German catalo
 `--init`, Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`, and `npm run check:update-ui-evidence`
 passed. The three producer-generated records bind the updated source digests and generation time.
 The fourteen committed captures retain the typography of their original renderer.
+
+## Figma Snapshot status messages — 2026-11-18
+
+All nine updater cases passed in the Linux arm64 gates container with Node 26.13.1, a fresh
+lockfile install and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The three producer records bind the
+English and German optional catalogs after the Figma status changes. The fourteen committed
+captures retain their original renderer's typography. The freshness gate passed.

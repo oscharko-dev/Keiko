@@ -23,18 +23,27 @@
 //       screenName ir.name / "Screen" fallback, reductionHint pluralisation + skipped clause
 
 import { mkdtemp, rm } from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage, Server } from "node:http";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNodeFigmaSnapshotStore } from "@oscharko-dev/keiko-evidence";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { buildCspHeader } from "../csp.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
+import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { createRunRegistry } from "../runs.js";
 import { UI_HOST } from "../server.js";
+import { fixturePng } from "./figma/__tests__/figmaRenderFixture.js";
 import { closeUiTestServer, startUiTestServer } from "../ui-test-server/_support.js";
 import {
   EXPECTED_FIGMA_SCOPES,
@@ -48,7 +57,6 @@ import {
 } from "./figma/index.js";
 import type { RouteContext } from "../routes.js";
 import {
-  compareByFetchedAtDescending,
   handleFigmaInspectSnapshotScreenJson,
   handleFigmaDeleteSnapshot,
   handleFigmaListSnapshots,
@@ -124,6 +132,7 @@ const FIGMA_BOARD = {
       name: "Screen",
       type: "FRAME",
       devStatus: { type: "READY_FOR_DEV" },
+      absoluteBoundingBox: { x: 0, y: 0, width: 100, height: 100 },
       children: [],
     },
   ],
@@ -161,7 +170,11 @@ const fakeHttpPort: FigmaHttpPort = (request) => {
 };
 
 const fakeRenderPort: FigmaRenderPort = () =>
-  Promise.resolve({ status: 200, bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]), headers: {} });
+  Promise.resolve({
+    status: 200,
+    bytes: fixturePng(),
+    headers: {},
+  });
 
 // ─── Helpers for consent recording ───────────────────────────────────────────
 
@@ -189,12 +202,12 @@ function makeCtx(bodyStr: string): RouteContext {
   const reqStream = Readable.from([Buffer.from(bodyStr, "utf8")]);
   const fakeReq = Object.assign(reqStream, {
     headers: { "content-type": "application/json" },
-    once: (_event: string, _listener: () => void): unknown => fakeReq,
+    complete: true,
   }) as unknown as IncomingMessage;
   return {
     correlationId: undefined,
     req: fakeReq,
-    res: {} as RouteContext["res"],
+    res: new EventEmitter() as RouteContext["res"],
     params: {},
     url: new URL("http://127.0.0.1/api/figma/snapshots"),
   };
@@ -212,6 +225,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  resetServerLogger();
   await closeServer();
   await rm(staticRoot, { recursive: true, force: true });
   await rm(evidenceDir, { recursive: true, force: true });
@@ -250,6 +264,19 @@ describe("POST /api/figma/snapshots — Content-Type guard", () => {
 // ─── FIGMA_BAD_LINK validation ────────────────────────────────────────────────
 
 describe("POST /api/figma/snapshots — FIGMA_BAD_LINK validation", () => {
+  it.each([
+    { version: " " },
+    { version: 123 },
+    { boardLink: `${BOARD_LINK}&version-id=v1&version=v2` },
+  ])("rejects an invalid or ambiguous version without using latest", async (overrides) => {
+    const res = await fetch(`${baseUrl()}/api/figma/snapshots`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: triggerBody(overrides),
+    });
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toMatchObject({ error: { code: "FIGMA_BAD_VERSION" } });
+  });
   it("400 on malformed JSON body", async () => {
     const res = await fetch(`${baseUrl()}/api/figma/snapshots`, {
       method: "POST",
@@ -344,6 +371,7 @@ const CODE_STATUS_MATRIX: { code: FigmaConnectorErrorCode; status: number }[] = 
   // Other mapped codes
   { code: "FIGMA_NOT_FOUND", status: 404 },
   { code: "FIGMA_NOT_READY", status: 412 },
+  { code: "FIGMA_SOURCE_CHANGED", status: 409 },
   { code: "FIGMA_RATE_LIMITED", status: 429 },
   { code: "FIGMA_OVERSIZED_SCOPE", status: 422 },
   { code: "FIGMA_CONSENT_REQUIRED", status: 428 },
@@ -584,6 +612,8 @@ describe("env var parsing — KEIKO_FIGMA_* scoped pagination limits", () => {
 describe("POST /api/figma/snapshots — in-flight coalescing", () => {
   it("two concurrent POSTs for the same scope yield ONE build invocation and the same runId", async () => {
     await recordConsent(evidenceDir);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
 
     let buildCallCount = 0;
     const orchModule = await import("./figmaSnapshotOrchestration.js");
@@ -617,6 +647,79 @@ describe("POST /api/figma/snapshots — in-flight coalescing", () => {
     const b1 = r1.body as { runId: string };
     const b2 = r2.body as { runId: string };
     expect(b1.runId).toBe(b2.runId);
+
+    const events = sink.events.filter(({ op }) => op === "figma.snapshot.captured");
+    expect(events).toHaveLength(1);
+    const event = events[0];
+    if (event === undefined) throw new Error("expected a snapshot capture event");
+    expect(
+      expectActivityLogProof("figma.snapshot.captured.line", formatActivityLogProofLine(event)),
+    ).toMatchObject({ renderedCount: 1, skippedCount: 0, scopeCapped: false });
+  });
+
+  it("keeps an unpinned waiter separate from a pinned waiter and from another evidence store", async () => {
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const build = vi.spyOn(orchModule, "governedSnapshotBuild").mockImplementation(async () => {
+      await gate;
+      throw new FigmaConnectorError("FIGMA_RATE_LIMITED");
+    });
+    const sharedMap = makeInFlightMap();
+    const deps = makeDeps(evidenceDir);
+    const waiters = [
+      handleFigmaTriggerSnapshot(makeCtx(triggerBody()), deps, sharedMap),
+      handleFigmaTriggerSnapshot(makeCtx(triggerBody({ version: "latest" })), deps, sharedMap),
+      handleFigmaTriggerSnapshot(
+        makeCtx(triggerBody()),
+        makeDeps(join(evidenceDir, "other-store")),
+        sharedMap,
+      ),
+    ];
+
+    try {
+      await vi.waitFor(() => {
+        expect(build).toHaveBeenCalledTimes(3);
+      });
+      release();
+      expect((await Promise.all(waiters)).map(({ status }) => status)).toEqual([429, 429, 429]);
+    } finally {
+      release();
+      build.mockRestore();
+    }
+  });
+
+  it("detaches a disconnected response while a second waiter receives the shared result", async () => {
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
+    let release = (): void => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const build = vi.spyOn(orchModule, "governedSnapshotBuild").mockImplementation(async () => {
+      await gate;
+      throw new FigmaConnectorError("FIGMA_RATE_LIMITED");
+    });
+    const sharedMap = makeInFlightMap();
+    const deps = makeDeps(evidenceDir);
+    const firstCtx = makeCtx(triggerBody());
+    const first = handleFigmaTriggerSnapshot(firstCtx, deps, sharedMap);
+    const second = handleFigmaTriggerSnapshot(makeCtx(triggerBody()), deps, sharedMap);
+
+    try {
+      await vi.waitFor(() => {
+        expect(firstCtx.res.listenerCount("close")).toBeGreaterThan(0);
+      });
+      firstCtx.res.emit("close");
+      await expect(first).resolves.toMatchObject({ status: 504 });
+      release();
+      await expect(second).resolves.toMatchObject({ status: 429 });
+      expect(build).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      build.mockRestore();
+    }
   });
 
   it("does not coalesce an explicit re-snapshot with an in-flight first snapshot", async () => {
@@ -927,13 +1030,22 @@ describe("GET /api/figma/snapshots/:runId — handleFigmaLoadSnapshot", () => {
 
     const orchModule = await import("./figmaSnapshotOrchestration.js");
     const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
+    const coverage = {
+      screenCount: 1,
+      screensDeepFetched: 1,
+      screensTruncated: 1,
+      nodeCount: 2,
+      fetchCount: 1,
+      capped: true,
+    };
     spy.mockImplementation(async (boardLink, deps) => {
       spy.mockRestore();
-      return orchModule.governedSnapshotBuild(boardLink, {
+      const result = await orchModule.governedSnapshotBuild(boardLink, {
         ...deps,
         httpPort: fakeHttpPort,
         renderPort: fakeRenderPort,
       });
+      return { ...result, coverage };
     });
 
     const handlerDeps = makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN });
@@ -942,6 +1054,9 @@ describe("GET /api/figma/snapshots/:runId — handleFigmaLoadSnapshot", () => {
     const postResult = await handleFigmaTriggerSnapshot(makeCtx(triggerBody()), handlerDeps);
     expect(postResult.status).toBe(201);
     const postBody = postResult.body as FigmaSnapshotSummary;
+    expect(postBody.coverage).toEqual(coverage);
+    expect(postBody.reductionHint).toContain("1 partially captured (deep content bounded)");
+    expect(postBody.reductionHint).toContain("scope coverage limited");
     const persistedRunId = postBody.runId;
     expect(typeof persistedRunId).toBe("string");
     expect(persistedRunId.startsWith("fs-")).toBe(true);
@@ -979,8 +1094,12 @@ describe("GET /api/figma/snapshots/:runId — handleFigmaLoadSnapshot", () => {
     // Exact count depends on render success rate — we only assert the shape is present.
     expect(typeof summary.screenCount).toBe("number");
     expect(typeof summary.skippedCount).toBe("number");
-    expect(summary.reductionHint.length).toBeGreaterThan(0);
+    expect(summary.reductionHint).toBe(postBody.reductionHint);
+    expect(summary.coverage).toEqual(coverage);
     expect(summary.metrics).toEqual(postMetrics);
+    expect(handleFigmaListSnapshots(makeListCtx(), handlerDeps).body).toMatchObject({
+      snapshots: [{ runId: persistedRunId, coverage, reductionHint: postBody.reductionHint }],
+    });
 
     // The projected screens array has the correct element shape (structural smoke check).
     expect(Array.isArray(summary.screens)).toBe(true);
@@ -1107,6 +1226,21 @@ describe("DELETE /api/figma/snapshots/:runId — handleFigmaDeleteSnapshot", () 
     expect((listResult.body as { snapshots: { runId: string }[] }).snapshots).toEqual([]);
   });
 
+  it("allows explicit cleanup of an unreadable snapshot", () => {
+    const runId = "fs-00000000-0000-0000-0000-000000000402";
+    seedSnapshotRecord(evidenceDir, runId, "2026-06-17T10:00:00.000Z", {
+      fileKey: "file-key",
+      nodeId: "0:1",
+    });
+    const store = createNodeFigmaSnapshotStore(evidenceDir);
+    writeFileSync(store.location(runId), "{");
+    expect(handleFigmaDeleteSnapshot(makeGetCtx(runId), makeDeps(evidenceDir, {}))).toMatchObject({
+      status: 200,
+      body: { deleted: true, sideFileDirDeleted: true },
+    });
+    expect(store.loadMetadata(runId)).toBeUndefined();
+  });
+
   it("returns 404 when deleting a missing snapshot", () => {
     const result = handleFigmaDeleteSnapshot(
       makeGetCtx("fs-00000000-0000-0000-0000-000000000499"),
@@ -1202,58 +1336,6 @@ describe("GET /api/figma/snapshots/:runId/screens/:screenId/json", () => {
   });
 });
 
-describe("compareByFetchedAtDescending — snapshot listing ordering comparator", () => {
-  it("returns -1 when the first fetchedAt is newer than the second", () => {
-    expect(
-      compareByFetchedAtDescending(
-        { fetchedAt: "2026-06-03T10:00:00.000Z" },
-        { fetchedAt: "2026-06-01T10:00:00.000Z" },
-      ),
-    ).toBe(-1);
-  });
-
-  it("returns 1 when the first fetchedAt is older than the second", () => {
-    expect(
-      compareByFetchedAtDescending(
-        { fetchedAt: "2026-06-01T10:00:00.000Z" },
-        { fetchedAt: "2026-06-03T10:00:00.000Z" },
-      ),
-    ).toBe(1);
-  });
-
-  it("returns 0 when both fetchedAt values are equal", () => {
-    expect(
-      compareByFetchedAtDescending(
-        { fetchedAt: "2026-06-01T10:00:00.000Z" },
-        { fetchedAt: "2026-06-01T10:00:00.000Z" },
-      ),
-    ).toBe(0);
-  });
-
-  // Regression (#2723 review finding): equal fetchedAt values must fall back to a deterministic
-  // runId comparison instead of preserving readdirSync's OS-dependent enumeration order.
-  it("breaks an equal-fetchedAt tie by ascending runId", () => {
-    expect(
-      compareByFetchedAtDescending(
-        { fetchedAt: "2026-06-01T10:00:00.000Z", runId: "fs-b" },
-        { fetchedAt: "2026-06-01T10:00:00.000Z", runId: "fs-a" },
-      ),
-    ).toBe(1);
-    expect(
-      compareByFetchedAtDescending(
-        { fetchedAt: "2026-06-01T10:00:00.000Z", runId: "fs-a" },
-        { fetchedAt: "2026-06-01T10:00:00.000Z", runId: "fs-b" },
-      ),
-    ).toBe(-1);
-    expect(
-      compareByFetchedAtDescending(
-        { fetchedAt: "2026-06-01T10:00:00.000Z", runId: "fs-a" },
-        { fetchedAt: "2026-06-01T10:00:00.000Z", runId: "fs-a" },
-      ),
-    ).toBe(0);
-  });
-});
-
 describe("GET /api/figma/snapshots — handleFigmaListSnapshots", () => {
   it("503 FIGMA_NO_EVIDENCE_DIR when evidenceDir is undefined", () => {
     const deps: UiHandlerDeps = { ...makeDeps(""), evidenceDir: undefined };
@@ -1330,6 +1412,26 @@ describe("GET /api/figma/snapshots — handleFigmaListSnapshots", () => {
       "fs-00000000-0000-0000-0000-000000000202",
       "fs-00000000-0000-0000-0000-000000000203",
     ]);
+  });
+
+  it.each([
+    "?limit=1",
+    "?fileKey=KEY123&nodeId=0%3A1&limit=1",
+    "?fileKey=KEY123&nodeId=0-1&limit=1",
+  ])("fills the limit with readable results after a damaged record for %s", (query) => {
+    const readableRunId = "fs-00000000-0000-0000-0000-000000000114";
+    const damagedRunId = "fs-00000000-0000-0000-0000-000000000115";
+    const provenance = { fileKey: "KEY123", nodeId: "0:1" };
+    seedSnapshotRecord(evidenceDir, readableRunId, "2026-06-01T10:00:00.000Z", provenance);
+    seedSnapshotRecord(evidenceDir, damagedRunId, "2026-06-02T10:00:00.000Z", provenance);
+    const damagedPath = createNodeFigmaSnapshotStore(evidenceDir).location(damagedRunId);
+    const snapshot = JSON.parse(readFileSync(damagedPath, "utf8")) as Record<string, unknown>;
+    writeFileSync(damagedPath, JSON.stringify({ ...snapshot, screens: [null] }));
+
+    expect(handleFigmaListSnapshots(makeListCtx(query), makeDeps(evidenceDir, {}))).toMatchObject({
+      status: 200,
+      body: { snapshots: [{ runId: readableRunId }] },
+    });
   });
 
   it("filters snapshots to the requested board scope and applies the limit", () => {

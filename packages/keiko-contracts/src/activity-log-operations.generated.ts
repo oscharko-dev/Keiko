@@ -23179,6 +23179,67 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "figma.snapshot.captured",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "figmaSnapshotRoutes.logSnapshotCaptured",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      renderedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      skippedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      invalidRenderCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      renderBudgetSkipCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      truncatedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      scopedFetchCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      scopeCapped: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["figma-snapshot"],
+    proofIds: ["figma.snapshot.captured.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "gateway.catalog.automatic.completed",
     category: "gateway",
     owner: "keiko-server",

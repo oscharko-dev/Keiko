@@ -42,6 +42,7 @@ export type FigmaConnectorErrorCode =
   | "FIGMA_TOKEN_REVOKED"
   | "FIGMA_NOT_FOUND"
   | "FIGMA_NOT_READY"
+  | "FIGMA_SOURCE_CHANGED"
   | "FIGMA_INSUFFICIENT_SCOPE"
   | "FIGMA_RENDER_FAILED"
   | "FIGMA_PROXY_EGRESS_FAILED"
@@ -75,6 +76,8 @@ const SAFE_MESSAGES: Readonly<Record<FigmaConnectorErrorCode, string>> = {
   FIGMA_NOT_FOUND: "The requested Figma node could not be found for the supplied link.",
   FIGMA_NOT_READY:
     "The requested Figma scope is not release-ready. Pin a Figma version, select a Release section, or mark the frame Ready for dev before snapshotting.",
+  FIGMA_SOURCE_CHANGED:
+    "The Figma file changed during capture. Retry when editing has paused or use a pinned version.",
   FIGMA_INSUFFICIENT_SCOPE:
     "The configured Figma access token is not permitted to read the requested node. Re-key the connector with a read-only token that can read this file.",
   FIGMA_RENDER_FAILED:
@@ -103,7 +106,7 @@ const SAFE_MESSAGES: Readonly<Record<FigmaConnectorErrorCode, string>> = {
     "The Figma request timed out before completing. Retry; if it persists, raise KEIKO_FIGMA_REQUEST_TIMEOUT_MS or check upstream latency.",
   FIGMA_EGRESS_FAILED: "The outbound request to Figma failed before a response was received.",
   FIGMA_BUILD_TIMEOUT:
-    "The snapshot build exceeded the configured deadline. No partial snapshot was stored. Retry or raise KEIKO_FIGMA_BUILD_DEADLINE_MS.",
+    "The wait for the snapshot exceeded the configured deadline. The capture may still complete.",
   FIGMA_INTERNAL: "The Figma connector could not service the request.",
 };
 

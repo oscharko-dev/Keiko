@@ -71,7 +71,13 @@ describe("createDefaultFigmaRenderPort", () => {
     const gatewayFetch = vi.fn(() =>
       Promise.resolve(new Response(PNG_BYTES.buffer, { status: 200 })),
     );
-    vi.doMock("@oscharko-dev/keiko-model-gateway/internal/http", () => ({ gatewayFetch }));
+    vi.doMock(
+      import("@oscharko-dev/keiko-model-gateway/internal/http"),
+      async (importOriginal) => ({
+        ...(await importOriginal()),
+        gatewayFetch,
+      }),
+    );
     try {
       const { createDefaultFigmaRenderPort: createPort } = await import("../figmaRenderPort.js");
       const port = createPort(undefined, undefined, { maxResponseBytes: 123 });

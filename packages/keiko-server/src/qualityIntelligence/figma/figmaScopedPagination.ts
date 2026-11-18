@@ -32,9 +32,11 @@ export interface RawFigmaNode {
   [key: string]: unknown;
 }
 
-/** Fetches one node id's subtree at the configured `pageDepth`. Returns undefined on a hard failure
- *  (the caller keeps the shallow content rather than aborting the whole build). */
-export type ScopedNodeFetcher = (nodeId: string) => Promise<RawFigmaNode | undefined>;
+/** Fetches one scoped subtree. A soft failure leaves the already captured shallow content intact. */
+export type ScopedNodeFetcher = (
+  nodeId: string,
+  depth?: number,
+) => Promise<RawFigmaNode | undefined>;
 
 /**
  * Generic, board-agnostic budgets that bound the per-screen pagination. The global ceiling is the
@@ -119,9 +121,9 @@ export interface FigmaScopeCoverage {
   readonly screensTruncated: number;
   /** Total raw nodes in the assembled deep document. */
   readonly nodeCount: number;
-  /** Total per-screen scoped fetches performed (excludes the single discovery fetch). */
+  /** Scoped fetches after the initial discovery request, including nested section discovery. */
   readonly fetchCount: number;
-  /** True when more screens were discovered than `maxScreensDeep`, so some stayed shallow. */
+  /** True when some screens stayed shallow or nested section discovery was incomplete. */
   readonly capped: boolean;
 }
 
@@ -176,19 +178,25 @@ const pruneToNodeBudget = (node: RawFigmaNode, maxNodes: number): RawFigmaNode =
  * Mirrors the pure-domain `detectScreens` rule (#752) at the connector (raw-node) layer. A directly
  * scoped screen root is the sole screen.
  */
-export const discoverScreenNodes = (root: RawFigmaNode): readonly RawFigmaNode[] => {
-  if (SCREEN_TYPES.has(typeOf(root))) return [root];
-  if (!CONTAINER_TYPES.has(typeOf(root))) return [];
-  const screens: RawFigmaNode[] = [];
-  const walk = (node: RawFigmaNode): void => {
-    for (const child of childrenOf(node)) {
-      if (SCREEN_TYPES.has(typeOf(child))) screens.push(child);
-      else if (CONTAINER_TYPES.has(typeOf(child))) walk(child);
+function findScreenNodes(root: RawFigmaNode): readonly {
+  readonly node: RawFigmaNode;
+  readonly depth: number;
+}[] {
+  const screens: { node: RawFigmaNode; depth: number }[] = [];
+  const walk = (node: RawFigmaNode, depth: number): void => {
+    const type = typeOf(node);
+    if (SCREEN_TYPES.has(type)) {
+      screens.push({ node, depth });
+    } else if (CONTAINER_TYPES.has(type)) {
+      for (const child of childrenOf(node)) walk(child, depth + 1);
     }
   };
-  walk(root);
+  walk(root, 0);
   return screens;
-};
+}
+
+export const discoverScreenNodes = (root: RawFigmaNode): readonly RawFigmaNode[] =>
+  findScreenNodes(root).map(({ node }) => node);
 
 // Collect the container frontier nodes of a `pageDepth`-limited subtree: containers at exactly
 // `pageDepth` carrying an empty `children` array (Figma's truncation marker). These are the only
@@ -214,6 +222,7 @@ const collectFrontier = (node: RawFigmaNode, pageDepth: number): RawFigmaNode[] 
 const createFetchGate = (fetchNode: ScopedNodeFetcher, limit: number): ScopedNodeFetcher => {
   const cap = Math.max(1, limit);
   let active = 0;
+  let failure: { readonly error: unknown } | undefined;
   const queue: (() => void)[] = [];
   const acquire = (): Promise<void> => {
     if (active < cap) {
@@ -228,10 +237,14 @@ const createFetchGate = (fetchNode: ScopedNodeFetcher, limit: number): ScopedNod
       next(); // hand the slot straight to the next waiter (active unchanged)
     else active -= 1;
   };
-  return async (nodeId: string): Promise<RawFigmaNode | undefined> => {
+  return async (nodeId, depth): Promise<RawFigmaNode | undefined> => {
     await acquire();
     try {
-      return await fetchNode(nodeId);
+      if (failure !== undefined) throw failure.error;
+      return await fetchNode(nodeId, depth);
+    } catch (error) {
+      failure ??= { error };
+      throw error;
     } finally {
       release();
     }
@@ -287,7 +300,7 @@ const expandLevel = async (
       frontierNode.children = deepChildren;
       nodesAdded += added;
       remainingNodeBudget -= added;
-      for (const f of collectFrontier(deep, pageDepth)) nextFrontier.push(f);
+      nextFrontier.push(...collectFrontier(deep, pageDepth));
     }
   }
   return { nextFrontier, fetchesUsed: level.length, nodesAdded, cut };
@@ -325,24 +338,67 @@ const completeScreen = async (
       truncated = true;
       break;
     }
-    const level = await expandLevel(
-      frontier,
-      gatedFetch,
-      limits.pageDepth,
-      limits.maxFetchesPerScreen - fetches,
-      limits.maxNodesPerScreen - screenNodes,
-    );
+    const level =
+      await /* NOSONAR typescript:S9382 -- each parallel level determines the next frontier and remaining budget. */ expandLevel(
+        frontier,
+        gatedFetch,
+        limits.pageDepth,
+        limits.maxFetchesPerScreen - fetches,
+        limits.maxNodesPerScreen - screenNodes,
+      );
     fetches += level.fetchesUsed;
     screenNodes += level.nodesAdded;
-    if (level.cut) {
-      truncated = true;
-      break;
-    }
+    truncated ||= level.cut;
     frontier = level.nextFrontier;
   }
-  if (frontier.length > 0) truncated = true;
   return { node: base, deepFetched: true, truncated, fetchCount: fetches };
 };
+
+function retainCompleteScreen(shallow: RawFigmaNode, maxNodes: number): ScreenOutcome {
+  const truncated = countNodes(shallow) > maxNodes;
+  return {
+    node: truncated ? pruneToNodeBudget(shallow, maxNodes) : shallow,
+    deepFetched: false,
+    truncated,
+    fetchCount: 0,
+  };
+}
+
+// The discovery response can end inside a chain of nested sections. Follow only the unresolved
+// grouping frontier, never a frame's body or the whole file. Reuse the screen cap as the number
+// of additional single-depth reads, and surface a coverage cap if a branch stays unresolved.
+async function deepenDiscovery(
+  root: RawFigmaNode,
+  initialDepth: number,
+  maxFetches: number,
+  fetchNode: ScopedNodeFetcher,
+): Promise<{ readonly fetchCount: number; readonly capped: boolean }> {
+  const frontier: RawFigmaNode[] = [];
+  const collect = (node: RawFigmaNode, depth: number): void => {
+    if (!CONTAINER_TYPES.has(typeOf(node))) return;
+    if (depth === 0 && childrenOf(node).length === 0) {
+      frontier.push(node);
+      return;
+    }
+    if (depth <= 0) return;
+    for (const child of childrenOf(node)) collect(child, depth - 1);
+  };
+  collect(root, initialDepth);
+  let fetchCount = 0;
+  let capped = false;
+  for (const container of frontier) {
+    if (fetchCount >= maxFetches) return { fetchCount, capped: true };
+    fetchCount += 1;
+    const expanded = await fetchNode(idOf(container), 1); // NOSONAR typescript:S9382 -- discovery appends children to this queue before advancing within the scoped fetch budget.
+    if (expanded === undefined) {
+      capped = true;
+      continue;
+    }
+    container.children = childrenOf(expanded);
+    for (const child of container.children) collect(child, 0);
+  }
+  return { fetchCount, capped };
+}
 
 // Rebuild the scoped document with each screen subtree replaced by its deep-fetched version, keeping
 // the surrounding container structure (CANVAS/SECTION) intact. Screen nodes are matched by id.
@@ -360,6 +416,17 @@ const rebuildWithDeepScreens = (
   return rewrite(root);
 };
 
+function completeDiscoveryScreenIds(root: RawFigmaNode, discoveryDepth?: number): Set<string> {
+  const ids = new Set<string>();
+  if (discoveryDepth === undefined) return ids;
+  for (const { node, depth } of findScreenNodes(root)) {
+    if (depth < discoveryDepth && collectFrontier(node, discoveryDepth - depth).length === 0) {
+      ids.add(idOf(node));
+    }
+  }
+  return ids;
+}
+
 /**
  * Deepen a shallow scoped document into a per-screen-paginated one, bounded by {@link limits}.
  * `fetchNode` performs one bounded `depth=pageDepth` scoped fetch (with the connector's 429 backoff).
@@ -372,8 +439,19 @@ export const paginateScopedDocument = async (
   shallowRoot: RawFigmaNode,
   fetchNode: ScopedNodeFetcher,
   limits: ScopedPaginationLimits = DEFAULT_SCOPED_PAGINATION_LIMITS,
+  discoveryDepth?: number,
 ): Promise<DeepFetchResult> => {
   const resolvedLimits = resolveScopedPaginationLimits(limits);
+  const completeIds = completeDiscoveryScreenIds(shallowRoot, discoveryDepth);
+  const discovery =
+    discoveryDepth === undefined
+      ? undefined
+      : await deepenDiscovery(
+          shallowRoot,
+          discoveryDepth,
+          resolvedLimits.maxScreensDeep,
+          fetchNode,
+        );
   const screens = discoverScreenNodes(shallowRoot);
   const deepable = screens.slice(0, resolvedLimits.maxScreensDeep);
   const gatedFetch = createFetchGate(fetchNode, resolvedLimits.fetchConcurrency);
@@ -381,21 +459,23 @@ export const paginateScopedDocument = async (
   // All deep-fetchable screens run concurrently; the shared gate bounds total in-flight fetches.
   // Each screen's result depends only on its own budgets, so order-of-completion never changes it.
   const outcomes = await Promise.all(
-    deepable.map((screen) => completeScreen(screen, gatedFetch, resolvedLimits)),
+    deepable.map(async (screen) =>
+      completeIds.has(idOf(screen))
+        ? retainCompleteScreen(screen, resolvedLimits.maxNodesPerScreen)
+        : await completeScreen(screen, gatedFetch, resolvedLimits),
+    ),
   );
 
   const deepById = new Map<string, RawFigmaNode>();
   let screensDeepFetched = 0;
   let screensTruncated = 0;
-  let fetchCount = 0;
-  deepable.forEach((screen, index) => {
-    const outcome = outcomes[index];
-    if (outcome === undefined) return;
-    deepById.set(idOf(screen), outcome.node);
+  let fetchCount = discovery?.fetchCount ?? 0;
+  for (const outcome of outcomes) {
+    deepById.set(idOf(outcome.node), outcome.node);
     if (outcome.deepFetched) screensDeepFetched += 1;
     if (outcome.truncated) screensTruncated += 1;
     fetchCount += outcome.fetchCount;
-  });
+  }
 
   // When the root IS the single screen, the rebuild replaces the root itself with its deep version.
   const document = rebuildWithDeepScreens(shallowRoot, deepById);
@@ -407,7 +487,7 @@ export const paginateScopedDocument = async (
       screensTruncated,
       nodeCount: countNodes(document),
       fetchCount,
-      capped: deepable.length < screens.length,
+      capped: discovery?.capped === true || deepable.length < screens.length,
     },
   };
 };

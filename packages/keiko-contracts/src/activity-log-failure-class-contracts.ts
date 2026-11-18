@@ -5543,6 +5543,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "figma-snapshot",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: ["figma.snapshot.captured"],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["figma.snapshot.captured"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["figma.snapshot.captured"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["figma.snapshot.captured"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "gateway-chat-call",
     requiredProductSurfaces: ["keiko-model-gateway"],
     requiredLifecycleOperations: {

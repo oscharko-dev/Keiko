@@ -6,37 +6,33 @@
 // realpath-contained QI dir, the atomic O_EXCL side-file writer, the QI redaction wrapper, and the
 // runId validator — and adds NO new persistence layer.
 //
-// Immutability: unlike the MUTABLE candidate companion, this record is the evidence artifact, so it
-// is write-once. `record` refuses to overwrite an existing snapshot (O_EXCL on the JSON temp +
-// an explicit pre-check) — a re-snapshot is a new run, never a mutation of an old one.
+// Immutability: reserve a per-run image directory, durably write the images, then publish the
+// write-once JSON. The JSON's appearance is the commit point, including for concurrent readers.
 //
-// Redaction: the whole record (including the design-content IR) is passed through
-// `redactQualityIntelligenceEvidence` before write. The token is never present by construction
-// (the server builder never places it on the in-memory snapshot); redaction is defense-in-depth.
+// Redaction: the whole record (including the design-content IR) uses the shared QI redactor with
+// the Figma tree's depth bound. The server builder keeps the PAT out of the snapshot.
 //
 // Integrity: load() recomputes each persisted screen hash from the stored, redacted IR + image
 // sha256, verifies each PNG side-file against the stored sha256/byteLength, and then recomputes the
 // snapshot integrity hash. Tampered or truncated records are rejected at the read boundary. The
-// optional artifacts (`links`, `tokens`, `metrics`) stay out of the drift hash but carry separate
-// artifact hashes when present; old un-hashed optional artifacts are omitted on load instead of being
-// trusted.
+// complete record carries its own hash so metadata and optional styling cannot drift unnoticed.
+// Old records remain readable with their original drift and optional artifact hashes.
 //
 // Retention: `enforceFigmaSnapshotRetention` deletes snapshot records + their side-file dirs in
 // lock-step with the provided policy. Wiring: call it where the other QI retention enforcement
 // runs (the orchestrator that calls `deleteQualityIntelligenceRun` for each expired run).
 //
-// Orphan cleanup: `sweepOrphanedFigmaSnapshotSideDirs` removes side-file dirs (and stray *.tmp
-// files) that have no matching record. It is lazy/once — the store calls it on first use so stale
-// dirs from a previously interrupted record() are cleaned up without a separate boot step.
+// Orphan cleanup is lazy and rate-limited. A later store operation reaps stale directories and
+// temporary files left by interrupted writes.
 
 import { createHash, randomUUID } from "node:crypto";
 import {
   type Dirent,
   linkSync,
   lstatSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
-  renameSync,
   rmSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -44,7 +40,6 @@ import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparator
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { assertValidRunId } from "@oscharko-dev/keiko-security";
-import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import {
   fsyncDirectoryContaining,
   PostRenameFsyncError,
@@ -57,12 +52,16 @@ import {
   ownedChildPath,
   prepareOwnedDirectory,
   removeOwnedRunDirectory,
+  resolveOwnedRunDirectoryForDeletion,
 } from "../../fs-safety.js";
 import { writeSideFile } from "../../side-file.js";
-import { redactQualityIntelligenceEvidence } from "../redaction.js";
+import { redactFigmaSnapshotEvidence } from "../redaction.js";
 import { QI_SUBDIR } from "../store.js";
 import {
   FIGMA_SNAPSHOT_SCHEMA_VERSION,
+  isFigmaSnapshotImageRef,
+  isFigmaSnapshotProvenance,
+  isSha256,
   validateFigmaSnapshotRecord,
   type FigmaSnapshotArtifactHashes,
   type FigmaSnapshotImageRef,
@@ -79,8 +78,6 @@ const SNAPSHOT_SUFFIX = ".figma-snapshot.json";
 const SNAPSHOT_MANAGEMENT_SUFFIX = ".figma-snapshot.management.json";
 const FIGMA_SNAPSHOT_MANAGEMENT_SCHEMA_VERSION = 1 as const;
 const SIDE_FILE_SUBDIR = "figma-snapshots";
-const MAX_SIDE_FILE_NAME_LENGTH = 128;
-const SIDE_FILE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/u;
 const MAX_SNAPSHOT_DISPLAY_NAME_LENGTH = 120;
 
 export interface RecordFigmaSnapshotScreenInput {
@@ -119,6 +116,8 @@ export interface RecordFigmaSnapshotInput {
   readonly tokens?: unknown;
   /** Numeric operational metrics (#760). Optional for older snapshots. */
   readonly metrics?: FigmaSnapshotMetrics;
+  /** Bounded acquisition coverage. Optional for older snapshots. */
+  readonly coverage?: FigmaSnapshotRecord["coverage"];
 }
 
 export interface RecordFigmaSnapshotResult {
@@ -186,16 +185,18 @@ export interface FigmaSnapshotStore {
   readonly location: (runId: string) => string;
   /**
    * List all snapshot records for a specific Figma scope, sorted by `fetchedAt` descending
-   * (most-recent first). Reads only the record headers — cheap scan. Unparseable files are
-   * skipped silently. Used by drift work (#735) to find existing snapshots for re-comparison.
+   * (most-recent first). Checks record headers and skips unparseable files. Used by drift work
+   * (#735) to find existing snapshots for re-comparison.
    */
   readonly listByScope: (fileKey: string, nodeId: string) => readonly FigmaSnapshotScopeEntry[];
   /**
    * List the most recent snapshot run ids across all scopes, sorted by `fetchedAt` descending.
-   * Reads only the record headers and skips unparseable files silently.
+   * Checks record headers and skips unparseable files.
    */
   readonly listRecent: (limit?: number) => readonly string[];
 }
+
+type ReportSnapshotFailure = (stage: "read-header" | "orphan-sweep" | "retention") => void;
 
 export interface FigmaSnapshotStoreOptions {
   readonly fs?: WorkspaceFs;
@@ -210,6 +211,8 @@ export interface FigmaSnapshotStoreOptions {
   readonly retention?: { readonly maxRecords?: number } | undefined;
   /** Injectable clock for the module-level re-sweep interval (GEN-PERF-PERSISTENCE-010). Tests only. */
   readonly now?: () => number;
+  /** Reports recoverable faults without exposing stored content, filesystem paths, or run IDs. */
+  readonly reportFailure?: ReportSnapshotFailure;
 }
 
 // GEN-PERF-PERSISTENCE-010 — the store is constructed per HTTP request, so a per-instance `swept`
@@ -248,8 +251,6 @@ export const DEFAULT_FIGMA_SNAPSHOT_MAX_RECORDS = 500;
 
 const compareAscending = (a: string, b: string): number => compareStrings(a, b);
 
-const compareDescending = (a: string, b: string): number => compareStrings(b, a);
-
 // ─── Integrity hash (mirrors figmaSnapshotHash.ts — inlined so keiko-evidence does not depend
 //     on the private keiko-server package). MUST stay bit-identical with the server builder. ────
 
@@ -265,12 +266,17 @@ function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${(value as unknown[]).map(canonical).join(",")}]`;
   const record = value as Record<string, unknown>;
   const entries = Object.keys(record)
+    .filter((key) => record[key] !== undefined)
     .sort((left, right) => left.localeCompare(right))
     .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`);
   return `{${entries.join(",")}}`;
 }
 
 const hashArtifact = (value: unknown): string => sha256Hex(canonical(value));
+
+function hashRecordContent({ contentHash: _contentHash, ...content }: FigmaSnapshotRecord): string {
+  return sha256Hex(JSON.stringify(content));
+}
 
 // Hash-neutral IR projection (mirrors figmaSnapshotHash.ts in keiko-server). The store accepts
 // `irJson` as opaque JSON, so malformed legacy/tampered shapes fall back to the raw JSON projection;
@@ -451,26 +457,19 @@ function realBaseForRead(baseDir: string, fs: WorkspaceFs): string | undefined {
   return existingOwnedDirectory(baseDir, fs, "Figma snapshot directory");
 }
 
+function snapshotRecordName(runId: string): string {
+  return `${runId}${SNAPSHOT_SUFFIX}`;
+}
+
 function containedRecordPath(runId: string, realBase: string, _fs: WorkspaceFs): string {
   assertValidRunId(runId);
-  const name = `${runId}${SNAPSHOT_SUFFIX}`;
-  return ownedChildPath(realBase, name);
+  return ownedChildPath(realBase, snapshotRecordName(runId));
 }
 
 function containedManagementPath(runId: string, realBase: string, _fs: WorkspaceFs): string {
   assertValidRunId(runId);
   const name = `${runId}${SNAPSHOT_MANAGEMENT_SUFFIX}`;
   return ownedChildPath(realBase, name);
-}
-
-function containedSideFileRunDir(ctx: StoreCtx, runId: string): string {
-  assertValidRunId(runId);
-  const realQiBase = realBaseForRead(ctx.qiDir, ctx.fs) ?? realBaseForWrite(ctx.qiDir, ctx.fs);
-  const sideBase = ownedChildPath(realQiBase, SIDE_FILE_SUBDIR);
-  const realSideBase = existingOwnedDirectory(sideBase, ctx.fs, "Figma snapshot side-file root", {
-    parentReal: realQiBase,
-  });
-  return ownedChildPath(realSideBase ?? sideBase, runId);
 }
 
 function assertSnapshotAbsent(target: string): void {
@@ -526,27 +525,38 @@ function snapshotRecordFiles(baseDir: string): readonly SnapshotRecordFile[] {
 // Write-once: create a temp file, then hard-link it into the final target. `linkSync` is the
 // exclusive commit: it fails with EEXIST if another recorder created the target after the
 // pre-check, unlike `rename`, which would overwrite the winner on POSIX.
-function atomicWriteOnce(target: string, json: string, randomSuffix: () => string): void {
+class PublishedSnapshotSyncError extends EvidenceWriteError {}
+
+function atomicWriteOnce(
+  target: string,
+  json: string,
+  randomSuffix: () => string,
+  beforePublish: () => void,
+): void {
   assertSnapshotAbsent(target);
   const temp = `${target}.${randomSuffix()}.tmp`;
+  let tempWritten = false;
   try {
     writeDurableUtf8TempFile(temp, json);
-    try {
-      linkSync(temp, target);
-      fsyncDirectoryContaining(target);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-        throw new EvidenceWriteError("Figma snapshot already exists for this run (write-once)");
-      }
-      throw error;
-    }
-    rmSync(temp, { force: true });
+    tempWritten = true;
+    beforePublish();
+    linkSync(temp, target);
   } catch (error) {
-    rmSync(temp, { force: true });
+    if (tempWritten || (error as NodeJS.ErrnoException).code !== "EEXIST") {
+      rmSync(temp, { force: true });
+    }
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new EvidenceWriteError("Figma snapshot already exists for this run (write-once)");
+    }
     if (error instanceof EvidenceWriteError) throw error;
-    throw new EvidenceWriteError(
-      `Figma snapshot write failed: ${error instanceof Error ? error.message : "unknown"}`,
-    );
+    throw new EvidenceWriteError("Figma snapshot write failed");
+  }
+  try {
+    rmSync(temp, { force: true });
+    fsyncDirectoryContaining(target);
+  } catch {
+    // The record is already visible. Keep its images even if directory durability is unconfirmed.
+    throw new PublishedSnapshotSyncError("Figma snapshot was published but could not be synced");
   }
 }
 
@@ -694,22 +704,22 @@ function assembleRecord(
     ...(links !== undefined ? { links } : {}),
     ...(input.tokens !== undefined ? { tokens: input.tokens } : {}),
     ...(input.metrics !== undefined ? { metrics: input.metrics } : {}),
+    ...(input.coverage !== undefined ? { coverage: input.coverage } : {}),
     integrityHash: input.integrityHash,
     redactionSummary: { totalStringsScanned: 0, stringsRedacted: 0, patternsMatched: {} },
   };
-  const { redacted, summary } = redactQualityIntelligenceEvidence(draft);
+  const { redacted, summary } = redactFigmaSnapshotEvidence(draft);
   const rehashed = rehashRecord(redacted);
   const artifactHashes = artifactHashesFor(rehashed);
-  return {
+  const record = {
     ...rehashed,
     ...(artifactHashes !== undefined ? { artifactHashes } : {}),
     redactionSummary: summary,
   };
-}
-
-function isAllowedSideFileName(name: string): boolean {
-  if (name.length === 0 || name.length > MAX_SIDE_FILE_NAME_LENGTH) return false;
-  return !name.startsWith(".") && SIDE_FILE_NAME_PATTERN.test(name);
+  if (!validateFigmaSnapshotRecord(record).ok) {
+    throw new EvidenceWriteError("Figma snapshot record has an invalid schema");
+  }
+  return { ...record, contentHash: hashRecordContent(record) };
 }
 
 function verifyScreenIntegrity(screen: FigmaSnapshotScreenRow, runId: string): void {
@@ -739,12 +749,12 @@ function readVerifiedScreenImageSideFile(
   runId: string,
   image: FigmaSnapshotImageRef,
 ): Buffer {
-  const name = image.relativePath;
-  if (!isAllowedSideFileName(name)) {
+  if (!isFigmaSnapshotImageRef(image)) {
     throw new EvidenceReadError(
-      `Figma snapshot integrity check failed for run ${runId}: invalid image side-file path`,
+      `Figma snapshot integrity check failed for run ${runId}: invalid image side-file reference`,
     );
   }
+  const name = image.relativePath;
   const realQiBase = realBaseForRead(ctx.qiDir, ctx.fs);
   if (realQiBase === undefined) {
     throw new EvidenceReadError(
@@ -775,9 +785,14 @@ function readVerifiedScreenImageSideFile(
   }
   const absolute = ownedChildPath(realRunDir, name);
   const stat = lstatSync(absolute, { throwIfNoEntry: false });
-  if (stat === undefined || !stat.isFile() || stat.isSymbolicLink()) {
+  if (stat?.isFile() !== true) {
     throw new EvidenceReadError(
       `Figma snapshot integrity check failed for run ${runId}: image side-file missing`,
+    );
+  }
+  if (stat.size !== image.byteLength) {
+    throw new EvidenceReadError(
+      `Figma snapshot integrity check failed for run ${runId}: image side-file hash mismatch`,
     );
   }
   const bytes = readFileSync(absolute);
@@ -789,112 +804,125 @@ function readVerifiedScreenImageSideFile(
   return bytes;
 }
 
-function verifyScreenImageSideFile(
-  ctx: StoreCtx,
-  runId: string,
-  screen: FigmaSnapshotScreenRow,
-): void {
-  readVerifiedScreenImageSideFile(ctx, runId, screen.image);
-}
-
-function verifyPersistedScreens(ctx: StoreCtx, rec: FigmaSnapshotRecord, runId: string): void {
-  for (const screen of rec.screens) {
-    verifyScreenIntegrity(screen, runId);
-    verifyScreenImageSideFile(ctx, runId, screen);
-  }
-  for (const screen of rec.structuralScreens ?? []) verifyStructuralScreenIntegrity(screen, runId);
-}
-
 function verifyPersistedScreenMetadata(rec: FigmaSnapshotRecord, runId: string): void {
   for (const screen of rec.screens) verifyScreenIntegrity(screen, runId);
   for (const screen of rec.structuralScreens ?? []) verifyStructuralScreenIntegrity(screen, runId);
 }
 
-// Parse one raw JSON string from a snapshot record file into a scope entry, or null when the
-// file does not belong to the requested scope or cannot be parsed.
-function parseScopeEntry(
-  filePath: string,
-  fileKey: string,
-  nodeId: string,
-): FigmaSnapshotScopeEntry | null {
+interface SnapshotHeader extends FigmaSnapshotScopeEntry {
+  readonly fileKey: string;
+  readonly nodeId: string;
+  readonly fetchedAtMs: number;
+}
+
+function readSnapshotHeader(
+  file: SnapshotRecordFile,
+  reportFailure: ReportSnapshotFailure | undefined,
+): SnapshotHeader | undefined {
   try {
-    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
-    const prov = parsed.provenance as Record<string, unknown> | undefined;
-    if (!prov?.fileKey || prov.fileKey !== fileKey || prov.nodeId !== nodeId) return null;
-    const runId = typeof parsed.runId === "string" ? parsed.runId : undefined;
-    if (runId === undefined) return null;
-    const fetchedAt = typeof prov.fetchedAt === "string" ? prov.fetchedAt : "";
-    const integrityHash = typeof parsed.integrityHash === "string" ? parsed.integrityHash : "";
-    return { runId, fetchedAt, integrityHash };
+    const parsed: unknown = JSON.parse(readFileSync(file.path, "utf8"));
+    if (!isJsonObject(parsed) || parsed.runId !== file.runId) return undefined;
+    if (parsed.figmaSnapshotSchemaVersion !== FIGMA_SNAPSHOT_SCHEMA_VERSION) return undefined;
+    const { provenance, integrityHash } = parsed;
+    if (!isFigmaSnapshotProvenance(provenance) || !isSha256(integrityHash)) return undefined;
+    const { fileKey, nodeId, fetchedAt } = provenance;
+    return {
+      runId: file.runId,
+      fileKey,
+      nodeId,
+      fetchedAt,
+      fetchedAtMs: Date.parse(fetchedAt),
+      integrityHash,
+    };
   } catch {
-    return null;
+    reportFailure?.("read-header");
+    return undefined;
   }
+}
+
+function snapshotHeaders(
+  baseDir: string,
+  reportFailure: ReportSnapshotFailure | undefined,
+): SnapshotHeader[] {
+  const headers: SnapshotHeader[] = [];
+  for (const file of snapshotRecordFiles(baseDir)) {
+    const header = readSnapshotHeader(file, reportFailure);
+    if (header !== undefined) headers.push(header);
+  }
+  return headers;
+}
+
+function newestSnapshotFirst(a: SnapshotHeader, b: SnapshotHeader): number {
+  return b.fetchedAtMs - a.fetchedAtMs || compareAscending(a.runId, b.runId);
 }
 
 // ─── Orphan sweep ─────────────────────────────────────────────────────────────────────────────
 
 function snapshotRecordExists(qiDir: string, runId: string): boolean {
-  const recordPath = join(qiDir, `${runId}${SNAPSHOT_SUFFIX}`);
+  const recordPath = join(qiDir, snapshotRecordName(runId));
   return lstatSync(recordPath, { throwIfNoEntry: false })?.isFile() === true;
 }
 
-function sweepSideFileBaseEntry(qiDir: string, sideFileBase: string, name: string): void {
-  if (name.endsWith(".tmp")) {
-    rmSync(join(sideFileBase, name), { force: true });
-    return;
+const LEGACY_ATTEMPT_NAME = /^\.attempt-[0-9a-f-]{36}$/u;
+const SNAPSHOT_TEMP_SUFFIX = /\.[0-9a-f-]{36}\.tmp$/u;
+
+function sweepSideFileBaseEntries(qiDir: string, fs: WorkspaceFs, cutoff: number): void {
+  const sideBase = existingOwnedDirectory(
+    ownedChildPath(qiDir, SIDE_FILE_SUBDIR),
+    fs,
+    "Figma snapshot side-file root",
+    { parentReal: qiDir },
+  );
+  if (sideBase === undefined) return;
+  for (const entry of readdirSync(sideBase, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (
+      runIdFromSnapshotName(snapshotRecordName(entry.name)) === undefined &&
+      !LEGACY_ATTEMPT_NAME.test(entry.name)
+    )
+      continue;
+    const stat = lstatSync(ownedChildPath(sideBase, entry.name), { throwIfNoEntry: false });
+    if (stat === undefined || stat.mtimeMs >= cutoff || snapshotRecordExists(qiDir, entry.name))
+      continue;
+    removeOwnedRunDirectory(sideBase, entry.name, fs, "Figma snapshot side-file", {
+      containmentRoot: qiDir,
+    });
   }
-  if (snapshotRecordExists(qiDir, name)) return;
-  const runDir = join(sideFileBase, name);
-  const stat = lstatSync(runDir, { throwIfNoEntry: false });
-  if (stat?.isDirectory() === true) rmSync(runDir, { recursive: true, force: true });
 }
 
-function sweepSideFileBaseEntries(qiDir: string, sideFileBase: string): void {
-  const sideBaseStat = lstatSync(sideFileBase, { throwIfNoEntry: false });
-  if (!sideBaseStat?.isDirectory()) return;
-  let entries: string[];
-  try {
-    entries = readdirSync(sideFileBase);
-  } catch {
-    return; // non-fatal: best-effort sweep
-  }
-  for (const name of entries) sweepSideFileBaseEntry(qiDir, sideFileBase, name);
-}
-
-function sweepManagementMetadataFiles(qiDir: string): void {
-  let qiEntries: Dirent[];
-  try {
-    qiEntries = readdirSync(qiDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
+function sweepRecordSidecars(qiDir: string, cutoff: number): void {
+  const qiEntries = readdirSync(qiDir, { withFileTypes: true });
   for (const entry of qiEntries) {
-    if (!entry.isFile() || entry.isSymbolicLink()) continue;
+    if (!entry.isFile()) continue;
+    if (SNAPSHOT_TEMP_SUFFIX.test(entry.name)) {
+      sweepSnapshotTempFile(qiDir, entry.name, cutoff);
+      continue;
+    }
     const runId = runIdFromManagementName(entry.name);
     if (runId === undefined) continue;
-    if (!snapshotRecordExists(qiDir, runId)) rmSync(join(qiDir, entry.name), { force: true });
-  }
-}
-
-// Removes side-file dirs, stray *.tmp files, and orphaned mutable management sidecars that have no
-// matching record in qiDir. Called lazily once per store instance to clean up interrupted writes.
-function sweepOrphanedSideDirs(qiDir: string, sideFileBase: string): void {
-  sweepSideFileBaseEntries(qiDir, sideFileBase);
-  sweepManagementMetadataFiles(qiDir);
-}
-
-// Read the fetchedAt timestamp from one snapshot file, or undefined when missing/unparseable.
-function readFetchedAt(filePath: string): string | undefined {
-  try {
-    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
-    const prov = parsed.provenance as Record<string, unknown> | undefined;
-    if (typeof prov?.fetchedAt !== "string" || prov.fetchedAt.trim() === "") {
-      return undefined;
+    if (!snapshotRecordExists(qiDir, runId)) {
+      rmSync(ownedChildPath(qiDir, entry.name), { force: true });
     }
-    return Number.isNaN(Date.parse(prov.fetchedAt)) ? undefined : prov.fetchedAt;
-  } catch {
-    return undefined;
   }
+}
+
+function sweepSnapshotTempFile(qiDir: string, name: string, cutoff: number): void {
+  const targetName = name.replace(SNAPSHOT_TEMP_SUFFIX, "");
+  if (
+    runIdFromSnapshotName(targetName) === undefined &&
+    runIdFromManagementName(targetName) === undefined
+  )
+    return;
+  const target = ownedChildPath(qiDir, name);
+  const stat = lstatSync(target, { throwIfNoEntry: false });
+  if (stat?.isFile() === true && stat.mtimeMs < cutoff) rmSync(target, { force: true });
+}
+
+// A new image directory may belong to another live writer. Leave it in place until the next sweep
+// interval, then remove it if a record still has not been published.
+function sweepOrphanedSideDirs(qiDir: string, fs: WorkspaceFs, cutoff: number): void {
+  sweepSideFileBaseEntries(qiDir, fs, cutoff);
+  sweepRecordSidecars(qiDir, cutoff);
 }
 
 function listRecentOp(ctx: StoreCtx, limit = 12): readonly string[] {
@@ -902,14 +930,10 @@ function listRecentOp(ctx: StoreCtx, limit = 12): readonly string[] {
   const realBase = realBaseForRead(ctx.qiDir, ctx.fs);
   if (realBase === undefined) return [];
   const boundedLimit = Number.isInteger(limit) && limit > 0 ? limit : 12;
-  const records: { runId: string; fetchedAt: string }[] = [];
-  for (const file of snapshotRecordFiles(realBase)) {
-    const fetchedAt = readFetchedAt(file.path);
-    if (fetchedAt === undefined) continue;
-    records.push({ runId: file.runId, fetchedAt });
-  }
-  records.sort((a, b) => compareDescending(a.fetchedAt, b.fetchedAt));
-  return records.slice(0, boundedLimit).map((record) => record.runId);
+  return snapshotHeaders(realBase, ctx.reportFailure)
+    .sort(newestSnapshotFirst)
+    .slice(0, boundedLimit)
+    .map((record) => record.runId);
 }
 
 // ─── Retention ───────────────────────────────────────────────────────────────────────────────
@@ -920,10 +944,8 @@ export interface FigmaSnapshotRetentionProfile {
 }
 
 /**
- * Enforce store-level retention for Figma snapshot records. Deletes the RECORD first, then the
- * side-file dir, so a partially-retained snapshot is never in a state where the record is gone
- * but the side-files remain (the side-files are unreachable without the record). A retained
- * record's side-dir is never touched.
+ * Enforce store-level retention for Figma snapshot records. The side-file directory must pass
+ * containment checks before the store removes the snapshot. Corrupt headers stay untouched.
  *
  * Wiring: call this alongside `deleteQualityIntelligenceRun` in the QI retention orchestrator
  * (#274). The profiles are intentionally separate because snapshot retention may differ from
@@ -932,27 +954,16 @@ export interface FigmaSnapshotRetentionProfile {
 export function enforceFigmaSnapshotRetention(
   evidenceDir: string,
   profile: FigmaSnapshotRetentionProfile,
+  reportFailure?: ReportSnapshotFailure,
 ): void {
   const qiDir = join(evidenceDir, QI_SUBDIR);
   const realQiDir = existingOwnedDirectory(qiDir, nodeWorkspaceFs, "Figma snapshot directory");
   if (realQiDir === undefined) return;
-  const sideFileBase = ownedChildPath(realQiDir, SIDE_FILE_SUBDIR);
-  // Scan for snapshot records and sort by fetchedAt ascending so we remove the oldest first.
-  const records: { runId: string; fetchedAt: string }[] = [];
-  for (const file of snapshotRecordFiles(realQiDir)) {
-    const fetchedAt = readFetchedAt(file.path);
-    // Unparseable records are skipped — do not evict conservatively.
-    if (fetchedAt !== undefined) records.push({ runId: file.runId, fetchedAt });
-  }
-  // Sort oldest first (ascending fetchedAt) so we evict the oldest beyond the cap.
-  records.sort((a, b) => compareAscending(a.fetchedAt, b.fetchedAt));
-  const toEvict = records.slice(0, Math.max(0, records.length - profile.maxRecords));
+  if (!Number.isSafeInteger(profile.maxRecords) || profile.maxRecords <= 0) return;
+  const records = snapshotHeaders(realQiDir, reportFailure).sort(newestSnapshotFirst);
+  const toEvict = records.slice(profile.maxRecords).reverse();
   for (const { runId } of toEvict) {
-    removeOwnedRunDirectory(sideFileBase, runId, nodeWorkspaceFs, "Figma snapshot side-file", {
-      containmentRoot: realQiDir,
-    });
-    rmSync(join(realQiDir, `${runId}${SNAPSHOT_SUFFIX}`), { force: true });
-    rmSync(join(realQiDir, `${runId}${SNAPSHOT_MANAGEMENT_SUFFIX}`), { force: true });
+    deleteOwnedSnapshot(realQiDir, runId, nodeWorkspaceFs);
   }
 }
 
@@ -963,41 +974,34 @@ interface StoreCtx {
   readonly sideFileBase: string;
   readonly fs: WorkspaceFs;
   readonly randomSuffix: () => string;
+  readonly reportFailure: ReportSnapshotFailure | undefined;
   readonly ensureSwept: () => void;
 }
 
-// Moves this attempt's staged side-files to the canonical per-run directory. Only ever called by
-// the attempt that WON the write-once JSON commit, so a directory still sitting at the canonical
-// path is an orphan from an aborted earlier attempt (no record for this runId existed a moment
-// ago, or the commit would have been rejected) and never a committed sibling's evidence.
-//
-// A missing staging directory is legitimate ONLY when there were no screens to stage in the first
-// place (writeScreenSideFiles never creates it for an empty input) — expectedScreenCount
-// distinguishes that from a non-empty attempt whose directory disappeared, e.g. a concurrent
-// store instance's lazy orphan sweep racing this same window (it has no way to tell an in-flight
-// attempt from an abandoned one, since neither has a committed record yet). Silently no-op-ing in
-// THAT case would let the record commit above reference images that were never installed.
-function publishStagedSideFiles(
-  stagedRunDir: string,
-  sideFileDir: string,
-  expectedScreenCount: number,
-): void {
-  if (lstatSync(stagedRunDir, { throwIfNoEntry: false })?.isDirectory() !== true) {
-    if (expectedScreenCount > 0) {
-      throw new EvidenceWriteError(
-        "Figma snapshot side-file staging directory disappeared before publish",
-      );
-    }
-    return;
+function reserveSideFileDirectory(path: string): () => boolean {
+  try {
+    mkdirSync(path, { mode: QI_DIR_MODE });
+  } catch {
+    throw new EvidenceWriteError("Figma snapshot image directory could not be reserved");
   }
-  rmSync(sideFileDir, { recursive: true, force: true });
-  atomicPublishRename(stagedRunDir, sideFileDir, { rename: renameSync });
-  // Matches atomicWriteOnce's own durability discipline (durable-write.ts): a rename's directory
-  // entry is not guaranteed durable until the containing directory is fsynced, so without this a
-  // crash right after renameSync returns can lose the entry while the JSON record — already
-  // fsynced by atomicWriteOnce — survives, reproducing the exact "record references missing
-  // images" gap this function exists to prevent, just via a crash instead of a thrown error.
-  fsyncDirectoryContaining(sideFileDir);
+  const reserved = lstatSync(path);
+  return (): boolean => {
+    const current = lstatSync(path, { throwIfNoEntry: false });
+    return (
+      current?.isDirectory() === true &&
+      current.dev === reserved.dev &&
+      current.ino === reserved.ino
+    );
+  };
+}
+
+function assertSideFilesPresent(dir: string, screens: readonly FigmaSnapshotScreenRow[]): void {
+  for (const { image } of screens) {
+    const stat = lstatSync(ownedChildPath(dir, image.relativePath), { throwIfNoEntry: false });
+    if (stat?.isFile() !== true || stat.size !== image.byteLength) {
+      throw new EvidenceWriteError("Figma snapshot image disappeared before publication");
+    }
+  }
 }
 
 function recordOp(ctx: StoreCtx, input: RecordFigmaSnapshotInput): RecordFigmaSnapshotResult {
@@ -1005,85 +1009,49 @@ function recordOp(ctx: StoreCtx, input: RecordFigmaSnapshotInput): RecordFigmaSn
   ctx.ensureSwept();
   const realBase = realBaseForWrite(ctx.qiDir, ctx.fs);
   const recordPath = containedRecordPath(input.runId, realBase, ctx.fs);
-  // Write-once pre-check BEFORE any side-file is written so a rejected re-record leaves no
-  // partial render bytes behind. `atomicWriteOnce` re-checks via O_EXCL to close the TOCTOU gap.
   assertSnapshotAbsent(recordPath);
-  // Side-files are staged in an attempt-private directory and published only once this attempt has
-  // won that same write-once commit, mirroring its "commit once, atomically" discipline. Sharing
-  // the runId-keyed directory across attempts made a concurrent duplicate request destructive in
-  // both directions: a loser overwrote the winner's PNG bytes at the deterministic screen-N.png
-  // path (leaving the committed record referencing a sha256 that no longer matched disk), and its
-  // failure cleanup then deleted the winner's whole directory.
-  // Validated here rather than joined straight from ctx.sideFileBase: mkdirSync's recursive create
-  // silently follows a symlink planted at the figma-snapshots segment while creating a DEEPER path
-  // under it, and the writeSideFile's own lstat/realpath containment check then only sees that
-  // deeper, genuinely-real final component — never the symlinked ancestor above it. Deriving the
-  // staging base through prepareOwnedDirectory with parentReal here, from the already-validated
-  // realBase, mirrors containedSideFileRunDir's read-side check and closes that gap for writes.
   const realSideFileBase = prepareOwnedDirectory(
     join(realBase, SIDE_FILE_SUBDIR),
     ctx.fs,
     "Figma snapshot side-file root",
     { parentReal: realBase },
   );
-  const stagingBase = join(realSideFileBase, `.attempt-${randomUUID()}`);
-  const sideFileDir = join(realSideFileBase, input.runId);
+  const sideFileDir = ownedChildPath(realSideFileBase, input.runId);
+  const ownsSideFileDir = reserveSideFileDirectory(sideFileDir);
   try {
-    const rows: readonly FigmaSnapshotScreenRow[] = writeScreenSideFiles(
-      stagingBase,
+    const rows = writeScreenSideFiles(
+      realSideFileBase,
       input.runId,
       input.screens,
       ctx.fs,
       ctx.randomSuffix,
     );
-    atomicWriteOnce(recordPath, JSON.stringify(assembleRecord(input, rows)), ctx.randomSuffix);
-    try {
-      publishStagedSideFiles(join(stagingBase, input.runId), sideFileDir, input.screens.length);
-    } catch (error) {
-      // The record committed but installing its side-files then threw: roll back the record so a
-      // reader never observes it permanently referencing missing images, and so a retry passes
-      // assertSnapshotAbsent again. This closes the synchronous-failure half of the gap; a hard
-      // process kill between the two writes (not a thrown error) remains unmitigated here and
-      // would need two-phase-commit machinery to close — the orphaned staging directory is at
-      // least reclaimed by sweepOrphanedSideDirs, but the broken record is not self-healing.
-      rmSync(recordPath, { force: true });
-      throw error;
+    const record = assembleRecord(input, rows);
+    // Persist directory entries before the JSON can expose the already-synced image files.
+    fsyncDirectoryContaining(sideFileDir);
+    fsyncDirectoryContaining(realSideFileBase);
+    atomicWriteOnce(recordPath, JSON.stringify(record), ctx.randomSuffix, () => {
+      if (!ownsSideFileDir()) {
+        throw new EvidenceWriteError(
+          "Figma snapshot image directory disappeared before publication",
+        );
+      }
+      assertSideFilesPresent(sideFileDir, rows);
+    });
+  } catch (error) {
+    if (!(error instanceof PublishedSnapshotSyncError) && ownsSideFileDir()) {
+      rmSync(sideFileDir, { recursive: true, force: true });
     }
-  } finally {
-    // Only ever this attempt's own staging directory — never the canonical one, which by now
-    // belongs to whichever attempt committed the record.
-    rmSync(stagingBase, { recursive: true, force: true });
+    throw error;
   }
   return { recordPath, sideFileDir };
 }
 
 function loadOp(ctx: StoreCtx, runId: string): FigmaSnapshotRecord | undefined {
-  assertValidRunId(runId);
-  ctx.ensureSwept();
-  const realBase = realBaseForRead(ctx.qiDir, ctx.fs);
-  if (realBase === undefined) return undefined;
-  const target = join(realBase, `${runId}${SNAPSHOT_SUFFIX}`);
-  if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(target, "utf8"));
-  } catch (error) {
-    throw new EvidenceReadError(
-      `Figma snapshot is not valid JSON: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
-  if (!validateFigmaSnapshotRecord(parsed).ok) return undefined;
-  const rec = parsed as FigmaSnapshotRecord;
-  // Integrity check: recompute and reject on mismatch. Screen rows are verified before the
-  // snapshot-level hash so stale/tampered IR or image refs cannot hide behind an old screen hash.
-  verifyPersistedScreens(ctx, rec, runId);
-  const expected = recomputeSnapshotIntegrityHash(rec);
-  if (rec.integrityHash !== expected) {
-    throw new EvidenceReadError(
-      `Figma snapshot integrity check failed for run ${runId}: hash mismatch`,
-    );
-  }
-  return verifyOptionalArtifactHashes(rec, runId);
+  const record = loadMetadataOp(ctx, runId);
+  if (record === undefined) return undefined;
+  for (const { image } of record.screens) readVerifiedScreenImageSideFile(ctx, runId, image);
+  return record;
 }
 
 function loadMetadataOp(ctx: StoreCtx, runId: string): FigmaSnapshotRecord | undefined {
@@ -1091,18 +1059,19 @@ function loadMetadataOp(ctx: StoreCtx, runId: string): FigmaSnapshotRecord | und
   ctx.ensureSwept();
   const realBase = realBaseForRead(ctx.qiDir, ctx.fs);
   if (realBase === undefined) return undefined;
-  const target = join(realBase, `${runId}${SNAPSHOT_SUFFIX}`);
+  const target = containedRecordPath(runId, realBase, ctx.fs);
   if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) return undefined;
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(target, "utf8"));
-  } catch (error) {
-    throw new EvidenceReadError(
-      `Figma snapshot is not valid JSON: ${error instanceof Error ? error.message : "unknown"}`,
-    );
+  } catch {
+    throw new EvidenceReadError("Figma snapshot could not be read as valid JSON");
   }
-  if (!validateFigmaSnapshotRecord(parsed).ok) return undefined;
+  if (!validateFigmaSnapshotRecord(parsed).ok) {
+    throw new EvidenceReadError("Figma snapshot record has an invalid schema");
+  }
   const rec = parsed as FigmaSnapshotRecord;
+  if (rec.runId !== runId) throw new EvidenceReadError("Figma snapshot record run ID mismatch");
   verifyPersistedScreenMetadata(rec, runId);
   const expected = recomputeSnapshotIntegrityHash(rec);
   if (rec.integrityHash !== expected) {
@@ -1110,7 +1079,22 @@ function loadMetadataOp(ctx: StoreCtx, runId: string): FigmaSnapshotRecord | und
       `Figma snapshot integrity check failed for run ${runId}: hash mismatch`,
     );
   }
-  return verifyOptionalArtifactHashes(rec, runId);
+  const verified = verifyOptionalArtifactHashes(rec, runId);
+  return verifyRecordContent(rec, verified);
+}
+
+function verifyRecordContent(
+  stored: FigmaSnapshotRecord,
+  verified: FigmaSnapshotRecord,
+): FigmaSnapshotRecord {
+  if (stored.contentHash !== undefined && stored.contentHash !== hashRecordContent(stored)) {
+    throw new EvidenceReadError("Figma snapshot stored content hash mismatch");
+  }
+  if (stored.contentHash === undefined && verified.coverage !== undefined) {
+    const { coverage: _coverage, ...legacy } = verified;
+    return legacy;
+  }
+  return verified;
 }
 
 function loadImageOp(
@@ -1163,11 +1147,6 @@ function updateUserMetadataOp(
     updatedAt: input.updatedAt ?? new Date().toISOString(),
   };
   const realBase = realBaseForWrite(ctx.qiDir, ctx.fs);
-  // KEIKO-0416: derive the management file's path from the AUTHENTICATED request runId, not
-  // from `record.runId` — a tampered on-disk record whose runId was flipped to another valid
-  // uuid would otherwise cause this write to land under a different filename, silently
-  // clobbering another run's management file while the caller's own update becomes unreadable
-  // (loadUserMetadata validates the embedded runId matches the requested key).
   atomicWriteMutable(
     containedManagementPath(runId, realBase, ctx.fs),
     metadataToJson(runId, next),
@@ -1184,19 +1163,36 @@ function deleteSnapshotOp(ctx: StoreCtx, runId: string): DeleteFigmaSnapshotResu
     return { runId, recordDeleted: false, sideFileDirDeleted: false, metadataDeleted: false };
   }
 
-  const recordPath = containedRecordPath(runId, realBase, ctx.fs);
-  const metadataPath = containedManagementPath(runId, realBase, ctx.fs);
-  const sideFileDir = containedSideFileRunDir(ctx, runId);
+  return deleteOwnedSnapshot(realBase, runId, ctx.fs);
+}
+
+function deleteOwnedSnapshot(
+  realBase: string,
+  runId: string,
+  fs: WorkspaceFs,
+): DeleteFigmaSnapshotResult {
+  const recordPath = containedRecordPath(runId, realBase, fs);
+  const metadataPath = containedManagementPath(runId, realBase, fs);
   const recordDeleted = lstatSync(recordPath, { throwIfNoEntry: false })?.isFile() === true;
+  if (!recordDeleted) {
+    return { runId, recordDeleted: false, sideFileDirDeleted: false, metadataDeleted: false };
+  }
   const metadataDeleted = lstatSync(metadataPath, { throwIfNoEntry: false })?.isFile() === true;
-  const sideStat = lstatSync(sideFileDir, { throwIfNoEntry: false });
-  const sideFileDirDeleted = sideStat !== undefined;
+  const sideFileDir = resolveOwnedRunDirectoryForDeletion(
+    ownedChildPath(realBase, SIDE_FILE_SUBDIR),
+    runId,
+    fs,
+    "Figma snapshot side-file",
+    { containmentRoot: realBase },
+  );
 
+  // Validate containment first and durably remove the publish marker before deleting its images.
   rmSync(recordPath, { force: true });
+  fsyncDirectoryContaining(recordPath);
   rmSync(metadataPath, { force: true });
-  if (sideStat !== undefined) rmSync(sideFileDir, { recursive: true, force: true });
+  if (sideFileDir !== undefined) rmSync(sideFileDir, { recursive: true, force: true });
 
-  return { runId, recordDeleted, sideFileDirDeleted, metadataDeleted };
+  return { runId, recordDeleted, sideFileDirDeleted: sideFileDir !== undefined, metadataDeleted };
 }
 
 function listByScopeOp(
@@ -1207,13 +1203,10 @@ function listByScopeOp(
   ctx.ensureSwept();
   const realBase = realBaseForRead(ctx.qiDir, ctx.fs);
   if (realBase === undefined) return [];
-  const results: FigmaSnapshotScopeEntry[] = [];
-  for (const file of snapshotRecordFiles(realBase)) {
-    const entry = parseScopeEntry(file.path, fileKey, nodeId);
-    if (entry !== null) results.push(entry);
-  }
-  results.sort((a, b) => compareDescending(a.fetchedAt, b.fetchedAt));
-  return results;
+  return snapshotHeaders(realBase, ctx.reportFailure)
+    .filter((entry) => entry.fileKey === fileKey && entry.nodeId === nodeId)
+    .sort(newestSnapshotFirst)
+    .map(({ runId, fetchedAt, integrityHash }) => ({ runId, fetchedAt, integrityHash }));
 }
 
 // ─── Store factory ────────────────────────────────────────────────────────────────────────────
@@ -1227,12 +1220,14 @@ export function createNodeFigmaSnapshotStore(
   const sideFileBase = join(qiDir, SIDE_FILE_SUBDIR);
   const maxRecords = options.retention?.maxRecords ?? DEFAULT_FIGMA_SNAPSHOT_MAX_RECORDS;
   const now = options.now ?? Date.now;
+  const reportFailure = options.reportFailure ?? ((): void => undefined);
   let swept = false;
   const ctx: StoreCtx = {
     qiDir,
     sideFileBase,
     fs: options.fs ?? nodeWorkspaceFs,
     randomSuffix: options.randomSuffix ?? randomUUID,
+    reportFailure,
     ensureSwept(): void {
       if (swept) return;
       swept = true;
@@ -1247,7 +1242,13 @@ export function createNodeFigmaSnapshotStore(
       }
       figmaSnapshotLastSweptAt.set(qiDir, nowMs);
       __figmaSnapshotSweepStats.sweeps += 1;
-      sweepOrphanedSideDirs(qiDir, sideFileBase);
+      try {
+        const realQiDir = realBaseForRead(qiDir, ctx.fs);
+        if (realQiDir !== undefined)
+          sweepOrphanedSideDirs(realQiDir, ctx.fs, nowMs - FIGMA_SWEEP_INTERVAL_MS);
+      } catch {
+        reportFailure("orphan-sweep");
+      }
       // Issue #1323 AC4 — make retention operational. Runs once per store instance (the sweep is
       // already guarded against concurrent re-entry by `swept`). A non-positive cap disables it so
       // a deployment can opt out without removing the call site. Best-effort: `ensureSwept` runs at
@@ -1255,9 +1256,9 @@ export function createNodeFigmaSnapshotStore(
       // surface as a read error; it is swallowed and retried on the next store instance.
       if (Number.isFinite(maxRecords) && maxRecords > 0) {
         try {
-          enforceFigmaSnapshotRetention(evidenceDir, { maxRecords });
+          enforceFigmaSnapshotRetention(evidenceDir, { maxRecords }, reportFailure);
         } catch {
-          // ignore; retention is best-effort and re-runs once per fresh store instance
+          reportFailure("retention");
         }
       }
     },
