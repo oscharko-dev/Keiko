@@ -27,6 +27,7 @@ import type {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { MemoryId, MemoryRecord, MemoryUserId } from "@oscharko-dev/keiko-contracts";
 import {
+  bindMemoryQueryEmbedding,
   cosineSimilarity,
   embedAndStoreMemory,
   embedMemoryText,
@@ -247,6 +248,45 @@ describe("embedMemoryText (#204)", () => {
     expect(input?.modelId).toBe(EMBEDDING_MODEL);
     expect(input?.vector.length).toBe(3072);
   });
+
+  it.each(["azure-openai-deployment", "openai-compatible"] as const)(
+    "honors %s routing in the gateway transport for both a captured body and a bound query",
+    async (endpointStyle) => {
+      const config = gatewayConfig(EMBEDDING_MODEL);
+      const first = config.providers.at(0);
+      if (first === undefined) throw new TypeError("Missing test provider");
+      const provider = {
+        ...first,
+        endpointStyle,
+        apiVersion: "2024-02-01",
+        baseUrl: "https://routing.example.test",
+      };
+      const expected =
+        endpointStyle === "azure-openai-deployment"
+          ? `/openai/deployments/${EMBEDDING_MODEL}/embeddings?api-version=2024-02-01`
+          : "/embeddings";
+      const paths: string[] = [];
+      const fetchImpl: typeof fetch = async (input) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        const path = url.pathname + url.search;
+        paths.push(path);
+        return path === expected
+          ? Response.json({
+              data: [{ index: 0, embedding: [...fakeVector(3072)] }],
+              model: EMBEDDING_MODEL,
+            })
+          : new Response(null, { status: 404 });
+      };
+      const deps = makeDeps({
+        config: { ...config, providers: [provider] },
+        embeddingRequest: (request) => requestOpenAIEmbedding({ ...request, fetchImpl }),
+      });
+      const document = await embedMemoryText(deps, "Synthetic document");
+      const query = await bindMemoryQueryEmbedding(deps, provider, "Synthetic question")();
+      expect(paths).toEqual([expected, expected]);
+      expect([document?.modelId, query?.modelId]).toEqual([EMBEDDING_MODEL, EMBEDDING_MODEL]);
+    },
+  );
 
   it("hands the deps activity-log sink to the embedding transport", async () => {
     const adapter = okAdapter();

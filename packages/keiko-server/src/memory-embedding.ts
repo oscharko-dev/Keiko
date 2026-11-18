@@ -236,25 +236,25 @@ function buildAdapter(
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
   log: EmbeddingLogSink,
 ): OpenAIEmbeddingAdapter {
-  return {
+  const connection = {
     endpoint: provider.baseUrl,
     apiKey: provider.apiKey,
     ...(provider.apiKeyHeaderName !== undefined
       ? { apiKeyHeaderName: provider.apiKeyHeaderName }
       : {}),
     ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
+  };
+  return {
+    ...connection,
     request: (request) =>
       // `log` is spread first so a caller-supplied sink wins. Without one the gateway transport
       // resolves the frozen no-op sink and its failure / TLS-trust lines count as `port-unwired`.
       requestImpl({
         log,
         ...request,
-        endpoint: provider.baseUrl,
-        apiKey: provider.apiKey,
-        ...(provider.apiKeyHeaderName !== undefined
-          ? { apiKeyHeaderName: provider.apiKeyHeaderName }
-          : {}),
-        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
+        ...connection,
+        endpointStyle: provider.endpointStyle,
+        apiVersion: provider.apiVersion,
       }),
   };
 }
