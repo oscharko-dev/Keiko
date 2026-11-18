@@ -1261,6 +1261,59 @@ describe("the npm package start", () => {
       expect(releaseInstallLock(later)).toBe(true);
     });
 
+    it("lets a start pressed while a Stop acts wait for that Stop and then open Keiko", () => {
+      // Audit of PR #4464: a Stop holding the lock turned a start pressed meanwhile away as if
+      // another start were opening Keiko, so Keiko stayed stopped although Start came last.
+      quiet();
+      const { root, nodeDir, env } = installFixture();
+      installKeiko(root, `${lockfileDigest(root)}\n`);
+      const commands = [];
+      let started;
+      const run = vi.fn((_node, args) => {
+        commands.push(args[1]);
+        if (args[1] === "stop") {
+          // Start is pressed while the Stop runs the CLI under its renewing lock; the Stop lets
+          // go of the lock only after that start has seen the lock held and waits.
+          const base = lockClock.sleep.getMockImplementation();
+          const pressed = clock.now;
+          lockClock.sleep.mockImplementation((milliseconds, dir) => {
+            if (clock.now - pressed >= 30_000) {
+              rmSync(installLockPath(root), { recursive: true, force: true });
+            }
+            base(milliseconds, dir);
+          });
+          started = start(root, nodeDir, env, run);
+          lockClock.sleep.mockImplementation(base);
+        }
+        return { status: 0 };
+      });
+
+      expect(stop(root, env, run)).toBe(0);
+      expect(started).toBe(0);
+      expect(commands).toEqual(["stop", "start"]);
+    });
+
+    it("stops Keiko at once when only npm of a start that already ended holds the lock", () => {
+      // Audit of PR #4464: such a lock made the Stop wait 90 seconds and then not act.
+      quiet();
+      const { root, env } = installFixture();
+      installKeiko(root);
+      mkdirSync(installLockPath(root), { recursive: true });
+      writeFileSync(join(installLockPath(root), `npm-${String(process.pid)}-0c`), "1\n");
+      const base = lockClock.sleep.getMockImplementation();
+      vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+        // npm keeps renewing its entry.
+        writeFileSync(join(installLockPath(root), `npm-${String(process.pid)}-0c`), "2\n");
+        base(milliseconds, dir);
+      });
+      const before = lockClock.now();
+      const run = vi.fn(() => ({ status: 0 }));
+
+      expect(stop(root, env, run)).toBe(0);
+      expect(run).toHaveBeenCalledOnce();
+      expect(lockClock.now() - before).toBeLessThanOrEqual(60_000);
+    });
+
     it("says Stop did not act when the closing start never lets go of the lock", () => {
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       const { root, env } = installFixture();

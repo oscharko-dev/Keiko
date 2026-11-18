@@ -1319,9 +1319,27 @@ function installAndOpen(root, nodeDir, env, run, lock, args) {
  * itself how the start ended: Keiko open, opened by another start of the folder, or stopped while
  * it was being loaded.
  */
+function lockClosing(root) {
+  const names = lockEntries(installLockPath(root));
+  return names !== undefined && hasClosingEntry(names);
+}
+
+// A closing lock is let go shortly: its start opened Keiko, or a Stop is stopping it under the
+// lock. A start waits for it and then takes the lock itself, instead of leaving it to a holder
+// that is already done.
+function acquireAfterClosing(root, pause) {
+  const deadline = lockClock.now() + STOP_LOCK_WAIT_MS;
+  let lock = acquireInstallLock(root, pause);
+  while (lock === undefined && lockClosing(root) && lockClock.now() < deadline) {
+    lockClock.sleep(LOCK_OBSERVE_STEP_MS, installLockPath(root));
+    lock = acquireInstallLock(root, pause);
+  }
+  return lock;
+}
+
 export function start(root, nodeDir, env, run = spawnSync, pause = () => undefined) {
   const args = startArgs(root, env);
-  const lock = acquireInstallLock(root, pause);
+  const lock = acquireAfterClosing(root, pause);
   if (lock === undefined) {
     say(
       "Another start of this folder is opening Keiko. Its window says whether Keiko opened. You can close this one.",
@@ -1374,17 +1392,32 @@ function stopUnderLock(root, state, env, run) {
   }
   try {
     closeInstallLock(lock);
-    const code = stopKeiko(root, state, env, run);
-    if (code === 0) {
-      say(
-        "Keiko is stopped. You can close this window.",
-        "Keiko ist beendet. Du kannst dieses Fenster schliessen.",
-      );
-    }
-    return code;
+    return stopNow(root, state, env, run);
   } finally {
     removeInstallLock(lock);
   }
+}
+
+function stopNow(root, state, env, run) {
+  const code = stopKeiko(root, state, env, run);
+  if (code === 0) {
+    say(
+      "Keiko is stopped. You can close this window.",
+      "Keiko ist beendet. Du kannst dieses Fenster schliessen.",
+    );
+  }
+  return code;
+}
+
+// Only npm of a start that already ended holds the lock: no start can open Keiko until that npm
+// ends, and a Stop must not wait for it, so it acts at once.
+function onlyNpmHoldsLock(root) {
+  const names = lockEntries(installLockPath(root));
+  return (
+    names !== undefined &&
+    !hasStartEntry(names) &&
+    renewalObserved(installLockPath(root), HOLDER_KINDS)
+  );
 }
 
 /**
@@ -1402,7 +1435,9 @@ export function stop(root, env, run = spawnSync) {
     say("Keiko is not running.", "Keiko laeuft nicht.");
     return 0;
   }
-  return stopUnderLock(root, state, env, run);
+  return onlyNpmHoldsLock(root)
+    ? stopNow(root, state, env, run)
+    : stopUnderLock(root, state, env, run);
 }
 
 // The gateway connection Gateway Setup verified, and what it built from it. One token covers only

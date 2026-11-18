@@ -97,7 +97,9 @@ lock closed is not recorded: it waits until that start has let go, takes the loc
 and only then stops the open Keiko, so no start opens Keiko between its decision and its effect and
 it can never stop the Keiko a later start opened (if the lock stays held for 90 seconds it says so
 and does not act). If a later start wins the lock first, the Stop is recorded in that start's lock
-instead and that start, which does not leave Keiko open, carries it out; the Stop does not act itself. A start that finds its lock taken over by another start ends with a plain message
+instead and that start, which does not leave Keiko open, carries it out; the Stop does not act itself. A
+start pressed while a Stop holds the closed lock waits for that Stop (up to 90 seconds) and then opens
+Keiko, so the button pressed last decides. A start that finds its lock taken over by another start ends with a plain message
 before it writes the installed marker or starts Keiko. Whether a lock is still held is told by renewal, never by a clock: every holder (the
 start itself, also while it waits for npm, and npm's own process) rewrites its entry every 15
 seconds. A start that finds a lock none of whose entries has a running process number takes it over

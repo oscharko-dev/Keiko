@@ -1278,7 +1278,10 @@ entry; a Stop adds its entry and then looks for the closing entry, so a Stop is 
 closing start and carried out while it still holds the lock, or is turned away, waits until that start has
 let go, takes the lock, closes it and stops Keiko under it (a lock held for 90 seconds makes the Stop
 say so and not act). While it waits it retries recording: a later start that wins the lock first
-records the Stop in its own lock and carries it out, and the waiting Stop does not act itself. So it can never stop the Keiko a later start opened. A start that finds its lock
+records the Stop in its own lock and carries it out, and the waiting Stop does not act itself. So it can never stop the Keiko a later start opened. A
+lock that only npm of an already ended start holds accepts no Stop, so that Stop acts at once. A start
+that finds a `closing` entry waits up to the same 90 seconds for that holder to let go before it
+reports another start, so a Start pressed while a Stop acts opens Keiko after it. A start that finds its lock
 generation replaced ends with a plain message before it writes the installed marker or dispatches
 the CLI. Renames of the lock folder are retried while Windows holds a passing handle in it. npm's
 own process adds an owner entry of its own when it loads (`--import` of the launcher module with
