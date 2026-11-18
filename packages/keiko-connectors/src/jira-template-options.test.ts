@@ -141,4 +141,71 @@ describe("Jira template editor options", () => {
       options: { kind: "details" },
     });
   });
+
+  it("retains an explicit empty status list but omits a workflow Jira did not list", async () => {
+    const empty = fixture({
+      "project/LAB": object(PROJECT),
+      [CREATE_FIELDS]: DENIED,
+      "project/LAB/statuses": array([{ id: "10003", statuses: [] }]),
+    });
+    expect(await readJiraTemplateOptions(empty, DETAILS, INSTANCE)).toEqual({
+      ok: true,
+      options: { kind: "details", statuses: [] },
+    });
+    // Jira answered, but for other types only (u44): the selected workflow is unknown, not empty.
+    const otherType = fixture({
+      "project/LAB": object(PROJECT),
+      [CREATE_FIELDS]: DENIED,
+      "project/LAB/statuses": array([{ id: "10004", statuses: [{ id: "7", name: "Other" }] }]),
+    });
+    expect(await readJiraTemplateOptions(otherType, DETAILS, INSTANCE)).toEqual({
+      ok: true,
+      options: { kind: "details" },
+    });
+    const noArray = fixture({
+      "project/LAB": object(PROJECT),
+      [CREATE_FIELDS]: DENIED,
+      "project/LAB/statuses": array([{ id: "10003" }]),
+    });
+    expect(await readJiraTemplateOptions(noArray, DETAILS, INSTANCE)).toEqual({
+      ok: true,
+      options: { kind: "details" },
+    });
+  });
+
+  it("offers neither of two projects whose keys differ only by case (u4r)", async () => {
+    const request = fixture({
+      project: array([
+        { id: "1", key: "LAB", name: "Lab project" },
+        { id: "2", key: "lab", name: "Lower lab" },
+        { id: "3", key: "PROD", name: "Product" },
+      ]),
+    });
+    expect(await readJiraTemplateOptions(request, {}, INSTANCE)).toEqual({
+      ok: true,
+      options: { kind: "projects", projects: [{ key: "PROD", name: "Product" }] },
+    });
+  });
+
+  it("never reads details for an id above the native Jira range, even when the project lists it (u4w)", async () => {
+    const wide = "9223372036854775808";
+    const request = fixture({
+      "project/LAB": object({ ...PROJECT, issueTypes: [{ id: wide, name: "Too wide" }] }),
+    });
+    expect(
+      await readJiraTemplateOptions(request, { projectKey: "LAB", issueTypeId: wide }, INSTANCE),
+    ).toEqual(MISSING);
+    expect(request).toHaveBeenCalledExactlyOnceWith("project/LAB");
+  });
+
+  it("offers an issue type id beyond JavaScript's safe integers (UyI)", async () => {
+    const id = "12345678901234567";
+    const request = fixture({
+      "project/LAB": object({ ...PROJECT, issueTypes: [{ id, name: "Wide" }] }),
+    });
+    expect(await readJiraTemplateOptions(request, { projectKey: "LAB" }, INSTANCE)).toEqual({
+      ok: true,
+      options: { kind: "types", instanceId: INSTANCE, issueTypes: [{ id, name: "Wide" }] },
+    });
+  });
 });

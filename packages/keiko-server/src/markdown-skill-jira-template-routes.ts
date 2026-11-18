@@ -10,11 +10,13 @@ import {
 } from "@oscharko-dev/keiko-connectors";
 import {
   MARKDOWN_SKILL_LIMITS,
+  type JiraTemplateBound,
   type JiraTemplateOptionsRequest,
   type MarkdownSkillDocument,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   bindJiraIssueTemplateText,
+  isJiraNativeId,
   jiraIssueTemplateLabel,
   jiraTemplateForInstance,
   jiraTemplateGovernsWrites,
@@ -24,6 +26,7 @@ import {
   type JiraTemplateActivation,
   type JiraTemplateBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { findOwnedJiraPod, isReadyJiraPod, listOwnedJiraPods } from "./atlassian/jiraPodAccess.js";
@@ -159,6 +162,14 @@ function podRequest(
   );
 }
 
+/**
+ * A session can expire or be revoked while Jira is being read: what the read returned is then
+ * disclosed to no one, and nothing is counted or written.
+ */
+function assertSessionHeld(ctx: RouteContext, deps: TemplateRouteDeps): void {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) throw notFound("Skill");
+}
+
 function jiraReadFailure(reason: string): UiStoreError {
   return new UiStoreError(
     "INTERNAL",
@@ -175,7 +186,7 @@ function optionsSelection(
   if (typeof projectKey !== "string" || !/^[A-Za-z]\w{0,127}$/u.test(projectKey))
     throw invalidRequest("Provide a Jira project key.");
   if (issueTypeId === undefined) return { projectKey };
-  if (typeof issueTypeId !== "string" || !/^[1-9]\d{0,18}$/u.test(issueTypeId))
+  if (!isJiraNativeId(issueTypeId))
     throw invalidRequest("Choose an issue type from the Jira project.");
   return { projectKey, issueTypeId };
 }
@@ -199,6 +210,7 @@ export function handleJiraTemplateOptions(
         selection,
         jiraInstanceIdentity(pod.baseUrl),
       );
+      assertSessionHeld(ctx, deps);
       if (!read.ok) {
         if (read.reason === "not-found") throw notFound("Jira project or issue type");
         throw jiraReadFailure(read.reason);
@@ -245,6 +257,7 @@ export function handleValidateJiraTemplate(
       // A binding made for another Jira means nothing here: the typed names are what this Jira sees.
       const template = jiraTemplateForInstance(parsed.template, instanceId);
       const read = await readJiraTemplateInstanceMetadata(podRequest(deps, ctx, pod), template);
+      assertSessionHeld(ctx, deps);
       if (!read.ok) throw jiraReadFailure(read.reason);
       const findings = validateJiraIssueTemplateAgainstInstance(template, read.instance);
       accounting = {
@@ -311,6 +324,7 @@ export function handleProposeJiraTemplates(
       }
       const pod = readyPod(deps, podId);
       const result = await proposeJiraIssueTemplates(podRequest(deps, ctx, pod), projectKey);
+      assertSessionHeld(ctx, deps);
       if (!result.ok) {
         if (result.reason === "not-found") throw notFound("Jira project");
         throw jiraReadFailure(result.reason);
@@ -379,6 +393,15 @@ function bindTarget(
   return { skill, template: parsed.template };
 }
 
+/** The answers that write nothing: already bound for this Jira, or bound to a type that is gone. */
+function unchangedBinding(
+  resolution: Extract<ReturnType<typeof resolveJiraTemplateBinding>, { state: "bound" | "dead" }>,
+): JiraTemplateBound {
+  return resolution.state === "bound"
+    ? { changed: false, issueType: resolution.issueType }
+    : { changed: false, dead: true, issueType: resolution.subject };
+}
+
 /** The new skill revision that carries the binding, written through the skill store's own replace. */
 function saveBinding(
   deps: TemplateRouteDeps,
@@ -415,6 +438,7 @@ export function handleBindJiraTemplate(
       const instanceId = jiraInstanceIdentity(pod.baseUrl);
       const template = jiraTemplateForInstance(stored, instanceId);
       const read = await readJiraTemplateInstanceMetadata(podRequest(deps, ctx, pod), template);
+      assertSessionHeld(ctx, deps);
       if (!read.ok) throw jiraReadFailure(read.reason);
       const resolution = resolveJiraTemplateBinding(template, read.instance, instanceId);
       accounting = {
@@ -423,22 +447,18 @@ export function handleBindJiraTemplate(
           : { checkedFieldCount: read.instance.fields.length }),
         bindingUpdateCount: 0,
       };
-      if (resolution.state === "bound")
-        return { status: 200, body: { changed: false, issueType: resolution.issueType } };
-      if (resolution.state === "dead")
-        return { status: 200, body: { changed: false, dead: true, issueType: resolution.subject } };
+      if (resolution.state === "bound" || resolution.state === "dead")
+        return { status: 200, body: unchangedBinding(resolution) };
       if (resolution.state !== "bindable") throw refusedBinding(template, resolution);
       const saved = saveBinding(deps, skill, resolution.binding);
       accounting = { ...accounting, bindingUpdateCount: 1 };
-      return {
-        status: 200,
-        body: {
-          changed: true,
-          issueType: resolution.issueType,
-          parentTypeCount: resolution.binding.parentIssueTypeIds?.length ?? 0,
-          skill: saved,
-        },
+      const answer: JiraTemplateBound = {
+        changed: true,
+        issueType: resolution.issueType,
+        parentTypeCount: resolution.binding.parentIssueTypeIds?.length ?? 0,
+        skill: saved,
       };
+      return { status: 200, body: answer };
     },
     () => accounting,
   );

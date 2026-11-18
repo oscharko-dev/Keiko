@@ -287,6 +287,70 @@ describe("guided Jira template options", () => {
     expect(deps.store.markdownSkills.list()).toEqual([]);
   });
 
+  it("refuses an issue type id above the native Jira range before asking Jira anything (UyI)", async () => {
+    const { deps, cookie, http } = fixture();
+    const result = await handleJiraTemplateOptions(
+      context(cookie, { podId: POD, projectKey: "SYN", issueTypeId: "9223372036854775808" }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(http).not.toHaveBeenCalled();
+  });
+
+  describe("when the app session ends while Jira is being read (u5s)", () => {
+    function revokeDuringRead(fx: ReturnType<typeof fixture>): void {
+      const token = fx.cookie.slice(APP_SESSION_COOKIE_NAME.length + 1);
+      const original = fx.http.getMockImplementation();
+      if (original === undefined) throw new TypeError("Expected the Jira mock");
+      fx.http.mockImplementation((request) => {
+        fx.deps.codingAppSessionChannel?.signOut(token);
+        return original(request);
+      });
+    }
+
+    it("discloses no options and counts none", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const fx = fixture();
+      revokeDuringRead(fx);
+      const result = await handleJiraTemplateOptions(context(fx.cookie, { podId: POD }), fx.deps);
+      expect(result.status).toBe(404);
+      expect(JSON.stringify(result.body)).not.toMatch(/Synthetic project/u);
+      const closing = sink.events
+        .filter(
+          (event) =>
+            event.op === "skills.library.operation" &&
+            event.extra?.action === "jira-template-options",
+        )
+        .at(-1);
+      expect(closing).toMatchObject({ extra: { phase: "rejected", httpStatus: 404 } });
+      expect(closing?.extra).not.toHaveProperty("projectCount");
+    });
+
+    it("discloses no proposal and no validation either", async () => {
+      const proposing = fixture();
+      revokeDuringRead(proposing);
+      expect(
+        (
+          await handleProposeJiraTemplates(
+            context(proposing.cookie, { podId: POD, projectKey: "SYN" }),
+            proposing.deps,
+          )
+        ).status,
+      ).toBe(404);
+      const validating = fixture();
+      revokeDuringRead(validating);
+      expect(
+        (
+          await handleValidateJiraTemplate(
+            context(validating.cookie, { podId: POD, markdown: TEMPLATE }),
+            validating.deps,
+          )
+        ).status,
+      ).toBe(404);
+    });
+  });
+
   it("refuses an unknown Pod and never loads fields for a type outside the project", async () => {
     const { deps, cookie, http } = fixture();
     expect((await handleJiraTemplateOptions(context("", { podId: POD }), deps)).status).toBe(404);

@@ -76,6 +76,26 @@ export type JiraTemplateOptions =
     };
 
 /**
+ * What binding a stored template to the Jira the caller chose answered (#4354). A changed binding is
+ * a new revision of the skill, and the response carries it; the other answers write nothing.
+ */
+export type JiraTemplateBound =
+  | {
+      readonly changed: true;
+      readonly issueType: string;
+      readonly parentTypeCount: number;
+      readonly skill: MarkdownSkillDocument;
+    }
+  | {
+      readonly changed: false;
+      readonly issueType: string;
+      /** The bound issue type is gone from the project and its typed name finds none either. */
+      readonly dead?: true;
+      readonly parentTypeCount?: undefined;
+      readonly skill?: undefined;
+    };
+
+/**
  * Why the server refused to store a Markdown skill, as a closed vocabulary the browser turns into
  * one plain sentence each. A Jira template parse failure keeps its own closed code behind the
  * `template-` prefix. The refusal never carries the person's text, a key name or a path.

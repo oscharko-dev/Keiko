@@ -83,6 +83,73 @@ describe("guided Jira template metadata", () => {
     expect(rules).toContain(`jiraBinding: "${"a".repeat(32)}"`);
   });
 
+  it("realigns the bound ids with an edited rule list, so an untouched rule keeps its own id (u5a)", () => {
+    const bound = [
+      ...VALID,
+      "requiredFields: [Team, Owner]",
+      'issueTypeId: "10002"',
+      'requiredFieldIds: ["customfield_1","customfield_2"]',
+      "transitionStatusIds:",
+      '  - "3"',
+      `jiraBinding: "${"a".repeat(32)}"`,
+    ].join("\n");
+    const added = editJiraTemplateForm(bound, { requiredFields: ["Team", "Owner", "Risk"] });
+    expect(added).toContain('requiredFieldIds: ["customfield_1","customfield_2","none"]');
+    const removed = editJiraTemplateForm(bound, { requiredFields: ["Owner"] });
+    expect(removed).toContain('requiredFieldIds: ["customfield_2"]');
+    const reordered = editJiraTemplateForm(bound, { requiredFields: ["Owner", "Team"] });
+    expect(reordered).toContain('requiredFieldIds: ["customfield_2","customfield_1"]');
+    const emptied = editJiraTemplateForm(bound, { requiredFields: [] });
+    expect(emptied).not.toContain("requiredFieldIds");
+    expect(emptied).toContain('issueTypeId: "10002"');
+  });
+
+  it("keeps the binding when a patch sets the project or type to the value it already has", () => {
+    const bound = [...VALID, 'issueTypeId: "10002"', `jiraBinding: "${"a".repeat(32)}"`].join("\n");
+    const same = editJiraTemplateForm(bound, { project: "abc", issueType: "Story" });
+    expect(same).toContain('issueTypeId: "10002"');
+    expect(same).toContain(`jiraBinding: "${"a".repeat(32)}"`);
+  });
+
+  it("removes every repeated binding line when the project changes, not only the first (u5j)", () => {
+    const doubled = [
+      ...VALID,
+      'issueTypeId: "10002"',
+      'issueTypeId: "10003"',
+      "requiredFieldIds:",
+      '  - "a"',
+      "requiredFieldIds:",
+      '  - "b"',
+    ].join("\n");
+    const edited = editJiraTemplateForm(doubled, { project: "OTHER" });
+    expect(edited).not.toContain("issueTypeId");
+    expect(edited).not.toContain("requiredFieldIds");
+    expect(edited).not.toMatch(/- "[ab]"/u);
+    expect(edited.match(/^project:/gmu)).toHaveLength(1);
+  });
+
+  it("splits lines like the strict parser: a bare carriage return ends a line (u5T)", () => {
+    const bare = VALID.join("\r");
+    expect(readJiraTemplateForm(bare)).toMatchObject({ project: "abc", issueType: "Story" });
+    const edited = editJiraTemplateForm(bare, { project: "XYZ" });
+    expect(edited.match(/project:/gu)).toHaveLength(1);
+    expect(readJiraTemplateForm(edited)?.project).toBe("XYZ");
+    expect(edited).not.toContain("\n");
+  });
+
+  it("keeps the CRLF line endings of every metadata line, edited or not (u56)", () => {
+    const crlf = [...VALID, "requiredFields: [Team]", "# Keep me.", "requiredLabels: [a]"].join(
+      "\r\n",
+    );
+    const edited = editJiraTemplateForm(crlf, { requiredFields: ["Team", "Owner"] });
+    expect(edited).not.toMatch(/(?<!\r)\n/u);
+    expect(edited).toContain(
+      'requiredFields: ["Team","Owner"]\r\n# Keep me.\r\nrequiredLabels: [a]',
+    );
+    const appended = editJiraTemplateForm(crlf, { activateOn: ["create", "edit"] });
+    expect(appended).not.toMatch(/(?<!\r)\n/u);
+  });
+
   it("leaves malformed or unrelated metadata to the source editor", () => {
     expect(readJiraTemplateForm("name: Example")).toBeUndefined();
     expect(readJiraTemplateForm([...VALID, 'project: ""'].join("\n"))).toBeUndefined();

@@ -131,6 +131,8 @@ async function readLinkTypes(
 interface ProjectStatuses {
   readonly names: readonly string[];
   readonly refs: readonly { readonly id: string; readonly name: string }[];
+  /** Whether Jira listed the wanted workflow (any workflow when no type is wanted); an empty list is not that. */
+  readonly listed: boolean;
 }
 
 async function readStatuses(
@@ -176,14 +178,16 @@ function statusesOfType(record: Record<string, unknown> | undefined): {
 function statusesOf(types: readonly unknown[], wantedId: string | undefined): ProjectStatuses {
   const refs = new Map<string, { id: string; name: string }>();
   const names = new Set<string>();
+  let listed = wantedId === undefined;
   for (const type of types) {
     const record = asRecord(type);
     if (wantedId !== undefined && record?.id !== wantedId) continue;
+    if (asArray(record?.statuses) !== undefined) listed = true;
     const found = statusesOfType(record);
     for (const name of found.names) names.add(name);
     for (const ref of found.refs) refs.set(ref.id, ref);
   }
-  return { names: [...names], refs: [...refs.values()] };
+  return { names: [...names], refs: [...refs.values()], listed };
 }
 
 async function readParentIssueTypes(request: JiraMutationRequest): Promise<
@@ -232,8 +236,14 @@ async function readTemplateProjects(request: JiraMutationRequest): Promise<Optio
   if (!response.ok) return response;
   const directory = jiraProjectDirectory(response.items);
   if (!directory.ok) return directory;
-  const projects = directory.projects
-    .filter(({ key, name }) => PROJECT_KEY.test(key) && jiraNativeName(name, 255))
+  // The editor asks for a project's types by its upper-cased key: keys that differ only by case would
+  // load one project's types under the other's name, so neither is offered.
+  const keyed = directory.projects.filter(({ key }) => PROJECT_KEY.test(key));
+  const keyCounts = new Map<string, number>();
+  for (const { key } of keyed)
+    keyCounts.set(key.toUpperCase(), (keyCounts.get(key.toUpperCase()) ?? 0) + 1);
+  const projects = keyed
+    .filter(({ key, name }) => keyCounts.get(key.toUpperCase()) === 1 && jiraNativeName(name, 255))
     .map(({ key, name }) => ({ key, name }));
   return { ok: true, options: { kind: "projects", projects } };
 }
@@ -243,7 +253,8 @@ async function readTemplateTypeDetails(
   project: ProjectFacts,
   issueTypeId: string,
 ): Promise<OptionsRead> {
-  if (!project.issueTypes.some((type) => type.id === issueTypeId))
+  // The one native id rule, before any detail read: an id the picker never offers asks Jira nothing.
+  if (!jiraNativeId(issueTypeId) || !project.issueTypes.some((type) => type.id === issueTypeId))
     return { ok: false, reason: "not-found" };
   const [metadata, statuses] = await Promise.all([
     jiraCreateMutationMetadata(request, encodeURIComponent(project.id), issueTypeId),
@@ -265,7 +276,8 @@ async function readTemplateTypeDetails(
     options: {
       kind: "details",
       ...(fields === undefined ? {} : { fields }),
-      ...(statuses === undefined ? {} : { statuses: statuses.refs }),
+      // A workflow Jira did not list is unknown, not empty: omitted, so the editor says so.
+      ...(statuses?.listed === true ? { statuses: statuses.refs } : {}),
     },
   };
 }
