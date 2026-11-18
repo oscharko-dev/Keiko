@@ -771,6 +771,13 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
   releaseImpact: "patch",
 });
 
+// Discovery churn of the actual walk (#4434, #4435); absent when no coverage was reported.
+const DISCOVERY_CHURN_ACTIVITY_FIELDS = {
+  discoveryUnavailableEntryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryVanishedEntryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryMembershipRetryCount: { type: "integer", dataClass: "count", required: false },
+} as const;
+
 const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -779,6 +786,7 @@ const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOpe
   owner: "keiko-server",
   emitter: "grounded-orchestrator.logSourceEvidenceDetails",
   fields: {
+    ...DISCOVERY_CHURN_ACTIVITY_FIELDS,
     scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     activityDetailStatus: {
@@ -789,10 +797,6 @@ const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOpe
     },
     codeRedactionRevision: { type: "integer", dataClass: "count", required: false },
     sourceDescriptorPathCount: { type: "integer", dataClass: "count", required: false },
-    // Discovery churn of the actual walk (#4434, #4435); absent when no coverage was reported.
-    discoveryUnavailableEntryCount: { type: "integer", dataClass: "count", required: false },
-    discoveryVanishedEntryCount: { type: "integer", dataClass: "count", required: false },
-    discoveryMembershipRetryCount: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },

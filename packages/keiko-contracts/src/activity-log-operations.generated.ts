@@ -41610,6 +41610,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      discoveryUnavailableEntryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      discoveryVanishedEntryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      discoveryMembershipRetryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       scopeIdentitySha256: {
         type: "string",
         dataClass: "digest",
@@ -41634,21 +41649,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       sourceDescriptorPathCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
-      discoveryUnavailableEntryCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
-      discoveryVanishedEntryCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
-      discoveryMembershipRetryCount: {
         type: "integer",
         dataClass: "count",
         required: false,

@@ -253,6 +253,33 @@ describe("recursive search under benign directory churn (#4435)", () => {
     });
   });
 
+  it("does not retry a directory above the per-directory name ceiling", async () => {
+    let passes = 0;
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      iterateDirectory: async function* (path) {
+        if (!isDocsDirectory(path)) {
+          yield* iterate()(path);
+          return;
+        }
+        passes += 1;
+        // More names than the retry may retain; they no longer exist when inspected.
+        for (let index = 0; index <= 10_000; index += 1)
+          yield await Promise.resolve({
+            name: `listed-${String(index)}.txt`,
+            isDirectory: false,
+            isFile: true,
+            isSymbolicLink: false,
+          });
+        throw new WorkspaceDescriptorReadError("directory-membership-changed");
+      },
+    };
+    const result = await searchText(scope(), query(), DEFAULT_SEARCH_LIMITS, { fs });
+    expect(passes).toBe(1);
+    expect(result.coverage.membershipRetriesByDiscovery).toBeUndefined();
+    expect(result.coverage).toMatchObject({ incomplete: true, reasons: ["io-error"] });
+  });
+
   it("still fails closed when the enumerated directory changes identity", async () => {
     const fs: WorkspaceFs = {
       ...nodeWorkspaceFs,

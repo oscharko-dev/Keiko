@@ -9,6 +9,7 @@ import type { ServerLogSink } from "./observability/index.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import {
   contentFreeErrorClass,
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
@@ -80,7 +81,7 @@ export function recordFilesSearchCompleted(
       operation: "files.search.completed",
       source: "files.search-activity.record-completed",
       errorClass: contentFreeErrorClass(error),
-      message: "files-search-activity-log-failed",
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
     });
   }
 }
