@@ -73,7 +73,7 @@ Windows ZIP remains the manual and troubleshooting fallback. The setup companion
 reviewed `windows-x64` archive and delegates installation and launch to the same portable lifecycle.
 It does not create another platform target, payload authority, or update channel.
 
-Stable releases also carry the standalone folder packages of D9 (`keiko-<target>.standalone.zip`).
+Stable `latest` releases also carry the standalone folder packages of D9 (`keiko-<target>.standalone.zip`).
 They are downloads for people, not update inputs, and their names stay outside the archive name
 pattern that updaters read.
 

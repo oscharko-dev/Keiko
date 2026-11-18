@@ -329,6 +329,84 @@ describe("buildFigmaSnapshot", () => {
       ]);
     });
 
+    it("charges a rate-limited download only the bodies it read", async () => {
+      const ids = ["1:1", "1:2"];
+      const screens = ids.map((id) => screen(id, id));
+      const imageSize = fixturePngOfSize(1000).length;
+      const port: FigmaRenderPort = (request) =>
+        Promise.resolve(
+          request.url === urlOf("1:1")
+            ? { status: 429, bytes: new Uint8Array(10), headers: {} }
+            : { status: 200, bytes: fixturePngOfSize(1000), headers: {} },
+        );
+
+      const snapshot = await buildFigmaSnapshot({
+        ...baseInput(screens, imagesPort().port, port),
+        downloadConcurrency: 1,
+        retryPolicy: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 },
+        maxSnapshotImageBytes: imageSize + 500,
+      });
+
+      expect(snapshot.screens.map(({ screenId }) => screenId)).toEqual(["1:2"]);
+      expect(snapshot.skippedScreens).toEqual([
+        { screenId: "1:1", reason: "render-fetch-failed:FIGMA_RATE_LIMITED" },
+      ]);
+    });
+
+    const rateLimitedFirst = (
+      retryAfter: string | undefined,
+    ): { readonly port: FigmaRenderPort; readonly urls: string[] } => {
+      const urls: string[] = [];
+      const port: FigmaRenderPort = (request) => {
+        urls.push(request.url);
+        if (request.url !== urlOf("1:1")) {
+          return Promise.resolve({ status: 200, bytes: png(1), headers: {} });
+        }
+        const headers: Record<string, string> =
+          retryAfter === undefined ? {} : { "retry-after": retryAfter };
+        return Promise.resolve({ status: 429, bytes: new Uint8Array(0), headers });
+      };
+      return { port, urls };
+    };
+
+    it("starts no further download once Figma names a Retry-After", async () => {
+      const ids = ["1:1", "1:2", "1:3"];
+      const renders = rateLimitedFirst("60");
+
+      const snapshot = await buildFigmaSnapshot({
+        ...baseInput(
+          ids.map((id) => screen(id, id)),
+          imagesPort().port,
+          renders.port,
+        ),
+        downloadConcurrency: 1,
+        retryPolicy: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 },
+      });
+
+      expect(renders.urls).toEqual([urlOf("1:1")]);
+      expect(snapshot.skippedScreens).toEqual(
+        ids.map((screenId) => ({ screenId, reason: "render-fetch-failed:FIGMA_RATE_LIMITED" })),
+      );
+    });
+
+    it("keeps downloading after a 429 that names no delay (control)", async () => {
+      const ids = ["1:1", "1:2", "1:3"];
+      const renders = rateLimitedFirst(undefined);
+
+      const snapshot = await buildFigmaSnapshot({
+        ...baseInput(
+          ids.map((id) => screen(id, id)),
+          imagesPort().port,
+          renders.port,
+        ),
+        downloadConcurrency: 1,
+        retryPolicy: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 },
+      });
+
+      expect(renders.urls).toEqual(ids.map(urlOf));
+      expect(snapshot.screens.map(({ screenId }) => screenId)).toEqual(["1:2", "1:3"]);
+    });
+
     it("counts the body of a rate-limited attempt against the same reservation", async () => {
       const ids = ["1:1", "1:2"];
       const screens = ids.map((id) => screen(id, id));

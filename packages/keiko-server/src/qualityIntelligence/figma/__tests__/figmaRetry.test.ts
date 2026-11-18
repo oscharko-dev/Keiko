@@ -161,6 +161,34 @@ describe("fetchWithBackoff", () => {
     ).rejects.toMatchObject({ retryAfterMs: 60_000 });
   });
 
+  it("keeps a Retry-After named earlier when a later 429 names none", async () => {
+    const op = scriptedOperation([
+      { status: 429, headers: { "retry-after": "1" } },
+      { status: 429 },
+    ]);
+    const { sleep, delays } = recordingSleep();
+
+    await expect(
+      fetchWithBackoff(op.run, { maxRetries: 1, baseDelayMs: 7, maxDelayMs: 5000 }, sleep),
+    ).rejects.toMatchObject({ code: "FIGMA_RATE_LIMITED", retryAfterMs: 1000 });
+    expect(delays).toEqual([1000]);
+  });
+
+  it.each(["1.5", "-5", "1,5", "12 13"])(
+    "ignores a Retry-After of %s, which is neither whole seconds nor an HTTP date",
+    async (value) => {
+      const op = scriptedOperation([
+        { status: 429, headers: { "retry-after": value } },
+        { status: 200 },
+      ]);
+      const { sleep, delays } = recordingSleep();
+
+      await fetchWithBackoff(op.run, { maxRetries: 1, baseDelayMs: 7, maxDelayMs: 5000 }, sleep);
+
+      expect(delays).toEqual([7]);
+    },
+  );
+
   it("carries no retry delay on a 429 without Retry-After (control)", async () => {
     const op = scriptedOperation([{ status: 429 }]);
     const { sleep } = recordingSleep();

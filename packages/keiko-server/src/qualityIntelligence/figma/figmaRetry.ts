@@ -57,8 +57,11 @@ const computeBackoffMs = (attempt: number, policy: FigmaRetryPolicy): number => 
   return Math.min(exponential, policy.maxDelayMs);
 };
 
-// Retry-After is either whole seconds or an HTTP date; anything else is ignored. A date in the
-// past means "now", so it reads as a zero delay.
+// The HTTP-date form senders must generate (RFC 9110 IMF-fixdate), e.g. "Sun, 06 Nov 1994 08:49:37 GMT".
+const IMF_FIXDATE = /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/u;
+
+// Retry-After is either whole seconds or an HTTP date; anything else ("1.5", "-5") is ignored, so the
+// computed backoff applies. A date in the past means "now", so it reads as a zero delay.
 const retryAfterMs = (
   headers: Readonly<Record<string, string>> | undefined,
   now: () => number,
@@ -66,6 +69,7 @@ const retryAfterMs = (
   const raw = headers?.["retry-after"]?.trim();
   if (raw === undefined) return undefined;
   if (/^\d+$/u.test(raw)) return Number(raw) * 1000;
+  if (!IMF_FIXDATE.test(raw)) return undefined;
   const at = Date.parse(raw);
   return Number.isNaN(at) ? undefined : Math.max(0, at - now());
 };
@@ -86,10 +90,12 @@ export const fetchWithBackoff = async <R extends FigmaBackoffResponse>(
   for (let attempt = 0; attempt <= policy.maxRetries; attempt += 1) {
     const response = await operation(); // NOSONAR typescript:S9382 -- the current status determines whether another attempt is needed.
     if (response.status !== FIGMA_RATE_LIMIT_STATUS) return response;
-    // Read the header before any exit so the error keeps what Figma asked for, even with no retry.
-    explicitDelay = retryAfterMs(response.headers, now);
+    // Read the header before any exit so the error keeps what Figma asked for, even with no retry;
+    // a later answer that names no delay does not erase one Figma named earlier.
+    const named = retryAfterMs(response.headers, now);
+    if (named !== undefined) explicitDelay = named;
     if (attempt === policy.maxRetries) break;
-    const delay = explicitDelay ?? computeBackoffMs(attempt, policy);
+    const delay = named ?? computeBackoffMs(attempt, policy);
     // A shorter wait would send requests while the provider has instructed us to stop.
     if (delay > policy.maxDelayMs) break;
     await sleep(delay); // NOSONAR typescript:S9382 -- wait before another attempt to respect Retry-After.
