@@ -928,7 +928,9 @@ function curlStubBody() {
     "const asset = (state().uploadedAssets || []).find((entry) => entry.name === name);",
     "if (!asset || output.length === 0) process.exit(2);",
     "if ((state().failPublicDownloads || []).includes(name)) { process.stderr.write('curl: (22) The requested URL returned error: 503\\n'); process.exit(22); }",
-    'const bytes = Buffer.from(asset.content, "base64");',
+    "if ((state().hangPublicDownloads || []).includes(name)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60000);",
+    'let bytes = Buffer.from(asset.content, "base64");',
+    "if ((state().oversizeRemoteDownloads || []).includes(name)) bytes = Buffer.concat([bytes, Buffer.alloc(2 * 1024 * 1024, 1)]);",
     'if (state().tamperRemoteDownloads && name.endsWith(".zip") && bytes.length > 0) bytes[0] ^= 0xff;',
     "writeFileSync(output, bytes);",
     "process.exit(0);",
@@ -2249,6 +2251,51 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(recovered.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(true);
     });
 
+    it("bounds every portable download by time, stall and bytes and names the asset (PR #4464)", () => {
+      // Review findings on PR #4464: a download that never finished, or a response larger than the
+      // verified asset, ran until the job was cancelled or the temporary storage was full.
+      const signingKeyPair = generateKeyPairSync("ed25519");
+      const target = folderPackageArchiveName("macos-arm64", "standalone");
+      const ok = runPublish({
+        npmBody: npmStub(registryVersionBody()),
+        initState: { immutableReleases: true, published: false },
+        signingKeyPair,
+      });
+      expect(ok.status, ok.stderr).toBe(0);
+      const download = ok.calls
+        .filter((l) => l.startsWith("curl [") && l.includes("/releases/download/"))
+        .map((l) => JSON.parse(l.slice("curl ".length)))[0];
+      for (const flag of ["--max-time", "--speed-limit", "--speed-time", "--max-filesize"]) {
+        expect(download).toContain(flag);
+      }
+
+      // No Content-Length is involved: the stub writes a file larger than the expected size.
+      const oversized = runPublish({
+        npmBody: npmStub(registryVersionBody()),
+        initState: {
+          immutableReleases: true,
+          published: false,
+          oversizeRemoteDownloads: [target],
+        },
+        signingKeyPair,
+      });
+      expect(oversized.status).toBe(1);
+      expect(oversized.stderr).toContain(
+        `portable asset download exceeded the expected size for ${target}.`,
+      );
+      expect(oversized.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+
+      // A download that never ends is stopped at the deadline and named.
+      const hung = runPublish({
+        npmBody: npmStub(registryVersionBody()),
+        initState: { immutableReleases: true, published: false, hangPublicDownloads: [target] },
+        signingKeyPair,
+        qualificationEnv: { KEIKO_PORTABLE_DOWNLOAD_MAX_TIME_SECONDS: "1" },
+      });
+      expect(hung.status).toBe(1);
+      expect(hung.stderr).toContain(`portable asset download timed out for ${target}.`);
+    }, 120_000);
+
     it("refuses to download a published manifest whose recorded URL has credentials or is not HTTPS (PR #4464)", () => {
       // Review finding on PR #4464: on a rerun the manifest records' browser_download_url reached
       // curl without the HTTPS/no-userinfo rule every other asset is held to.
@@ -2259,25 +2306,33 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         signingKeyPair,
       });
       expect(first.status, first.stderr).toBe(0);
-      const url = `https://user:secret@github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/`;
-      const uploadedAssets = first.state.uploadedAssets.map((asset) =>
-        asset.name.endsWith("-portable-manifest.json")
-          ? { ...asset, browser_download_url: `${url}${asset.name}` }
-          : asset,
-      );
-      const rerun = runPublish({
-        npmBody: npmStub(registryVersionBody(), { failOnPublish: true }),
-        initState: { ...first.state, uploadedAssets },
-        signingKeyPair,
-      });
-      expect(rerun.status).toBe(1);
-      expect(rerun.stderr).toContain(
-        "-portable-manifest.json must expose an HTTPS browser_download_url without credentials before it is downloaded.",
-      );
-      expect(rerun.stderr).not.toContain("secret");
-      expect(rerun.calls.some((l) => l.startsWith("curl [") && l.includes("secret"))).toBe(false);
-      expect(rerun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
-    });
+      const rejectedUrls = [
+        `https://user:secret@github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/`,
+        // Credential-free but not HTTPS: only the scheme rule can reject it.
+        `http://github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/`,
+      ];
+      for (const url of rejectedUrls) {
+        const uploadedAssets = first.state.uploadedAssets.map((asset) =>
+          asset.name.endsWith("-portable-manifest.json")
+            ? { ...asset, browser_download_url: `${url}${asset.name}` }
+            : asset,
+        );
+        const rerun = runPublish({
+          npmBody: npmStub(registryVersionBody(), { failOnPublish: true }),
+          initState: { ...first.state, uploadedAssets },
+          signingKeyPair,
+        });
+        expect(rerun.status).toBe(1);
+        expect(rerun.stderr).toContain(
+          "-portable-manifest.json must expose an HTTPS browser_download_url without credentials before it is downloaded.",
+        );
+        expect(rerun.stderr).not.toContain("secret");
+        expect(
+          rerun.calls.some((l) => l.startsWith("curl [") && l.includes(`${url}`.slice(0, 20))),
+        ).toBe(false);
+        expect(rerun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      }
+    }, 120_000);
 
     it("refuses to publish a resumed draft that carries a package this run did not validate (PR #4464)", () => {
       // Review finding on PR #4464 (P2): a resumed draft with every expected asset and an extra

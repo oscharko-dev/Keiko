@@ -51,14 +51,21 @@ export function resumableDraftFailure(view, tag, evaluationManifestAssetName) {
  * GitHub records a SHA-256 digest for every uploaded asset. Checking it against the bytes this run
  * verified proves the upload before the release becomes immutable, instead of only afterwards.
  *
- * @param expectedAssets  [{ assetName, expectedSha256 }]
+ * An expected asset may also carry `assetId`, the immutable GitHub asset id a signed manifest
+ * recorded; an asset replaced with identical bytes keeps its digest but gets a new id, so a
+ * differing id fails too.
+ *
+ * @param expectedAssets  [{ assetName, expectedSha256, assetId? }]
  * @returns one failure per missing or mismatching digest
  */
 export function remoteDigestFailures(remoteAssets, expectedAssets) {
   const byName = new Map(
     (Array.isArray(remoteAssets) ? remoteAssets : []).map((asset) => [asset?.name, asset]),
   );
-  return expectedAssets.flatMap(({ assetName, expectedSha256 }) => {
+  return expectedAssets.flatMap(({ assetName, expectedSha256, assetId }) => {
+    if (assetId !== undefined && byName.get(assetName)?.id !== assetId) {
+      return [`${assetName} on GitHub is not the asset whose id was signed or verified.`];
+    }
     const digest = byName.get(assetName)?.digest;
     if (typeof digest !== "string" || !SHA256_DIGEST.test(digest)) {
       return [`${assetName} has no SHA-256 digest on GitHub.`];
@@ -320,7 +327,14 @@ export function publishVerifiedPortableRelease(publisher, releaseInfo, remoteAss
     releaseInfo.published === true,
   );
   publisher.verifyAssets(remoteAssets, expected, releaseInfo);
-  const digestFailures = remoteDigestFailures(remoteAssets, expected);
+  // From here on an asset is the exact GitHub asset this run verified: a signed id (archives and
+  // setup assets) or the id of the snapshot just verified (evidence uploaded after signing).
+  const byName = new Map(remoteAssets.map((asset) => [asset?.name, asset]));
+  const pinned = expected.map((entry) => ({
+    ...entry,
+    assetId: entry.assetId ?? byName.get(entry.assetName)?.id,
+  }));
+  const digestFailures = remoteDigestFailures(remoteAssets, pinned);
   if (digestFailures.length > 0) {
     publisher.fail(
       `GitHub Release portable asset digests failed:\n  - ${digestFailures.join("\n  - ")}`,
@@ -328,7 +342,7 @@ export function publishVerifiedPortableRelease(publisher, releaseInfo, remoteAss
   }
   if (releaseInfo.draft !== true) return remoteAssets;
   publisher.assertTagAtHead(releaseInfo.tag);
-  refuseChangedDraft(publisher, releaseInfo, expected);
+  refuseChangedDraft(publisher, releaseInfo, pinned);
   publisher.runGh([
     "release",
     "edit",
@@ -342,8 +356,8 @@ export function publishVerifiedPortableRelease(publisher, releaseInfo, remoteAss
   publisher.log(`published GitHub release ${releaseInfo.tag}.`);
   const publicSnapshot = publisher.snapshot({ repo: releaseInfo.repo, tag: releaseInfo.tag });
   const publishedInfo = { ...releaseInfo, published: true };
-  refuseUnvalidatedAssets(publisher, releaseInfo, publicSnapshot.assets, expected, true);
-  refuseIncompletePublishedRelease(publisher, publishedInfo, publicSnapshot.assets, expected);
+  refuseUnvalidatedAssets(publisher, releaseInfo, publicSnapshot.assets, pinned, true);
+  refuseIncompletePublishedRelease(publisher, publishedInfo, publicSnapshot.assets, pinned);
   publisher.verifyAssets(publicSnapshot.assets, expected, releaseInfo);
   return publicSnapshot.assets;
 }

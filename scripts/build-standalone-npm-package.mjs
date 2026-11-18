@@ -231,11 +231,33 @@ function lockEntryProblem(name, entry) {
   return undefined;
 }
 
+// The Coding runtime package of a macOS target; Windows has none. npm may leave an optional
+// package it cannot resolve out of the lockfile and still succeed, which would ship a package
+// whose installed tree has no Coding runtime.
+const CODING_RUNTIME_BY_TARGET = Object.freeze({
+  "macos-arm64": "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
+  "macos-x64": "@oscharko-dev/keiko-coding-runtime-darwin-x64",
+});
+
+function assertCodingRuntimeLocked(packages, target) {
+  const name = CODING_RUNTIME_BY_TARGET[target];
+  if (name === undefined) return;
+  const expected = packages[`node_modules/${PACKAGE_NAME}`]?.optionalDependencies?.[name];
+  if (typeof expected !== "string" || expected.length === 0) {
+    refuse(`package-lock.json: ${PACKAGE_NAME} declares no ${name} for ${target}`);
+  }
+  if (packages[`node_modules/${name}`]?.version !== expected) {
+    refuse(`package-lock.json does not lock ${name} ${expected} for ${target}`);
+  }
+}
+
 /**
  * The lockfile a package may ship: it installs exactly this Keiko version, and every package it
  * names comes from the public registry with a sha512 integrity that npm checks while installing.
+ * With a `target`, a macOS lockfile must also lock that target's Coding runtime package at the
+ * version Keiko declares.
  */
-export function assertLockfile(lockText, packageVersion) {
+export function assertLockfile(lockText, packageVersion, target) {
   let lock;
   try {
     lock = JSON.parse(lockText);
@@ -253,6 +275,7 @@ export function assertLockfile(lockText, packageVersion) {
     const problem = lockEntryProblem(name, entry);
     if (problem !== undefined) refuse(`package-lock.json: ${problem}`);
   }
+  assertCodingRuntimeLocked(packages, target);
 }
 
 function packageEntryNames(root, prefix = PACKAGE_ROOT_NAME) {
@@ -309,7 +332,7 @@ function assemblePackage(input) {
   createLockfile(packageRoot, npmCli);
   const lockPath = join(packageRoot, "package-lock.json");
   if (!existsSync(lockPath)) refuse("npm wrote no package-lock.json");
-  assertLockfile(readFileSync(lockPath, "utf8"), packageVersion);
+  assertLockfile(readFileSync(lockPath, "utf8"), packageVersion, target);
   writeWrapperLayer(packageRoot, layout.os);
   if (configBytes !== undefined) {
     writePackageFile(join(packageRoot, "keiko.config.json"), configBytes, 0o600);

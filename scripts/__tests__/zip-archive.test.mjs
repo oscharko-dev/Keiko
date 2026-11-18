@@ -678,4 +678,23 @@ describe("extractZipArchiveEntries", () => {
       /does not match its declared size or checksum/u,
     );
   });
+
+  it("refuses an excluded entry whose local header is marked encrypted", () => {
+    // A clear central flag over a set local flag is a metadata lie even when the caller does not
+    // ship the entry; excluding it must not skip the header check (PR #4464).
+    const root = temporaryRoot();
+    const archivePath = join(root, "excluded-encrypted.zip");
+    writeZipArchiveEntries(archivePath, [
+      { name: "skip.bin", data: "skipped bytes" },
+      { name: "keep.txt", data: "kept bytes" },
+    ]);
+    const bytes = readFileSync(archivePath);
+    bytes.writeUInt16LE(bytes.readUInt16LE(6) | 0x1, 6); // first local header, general-purpose flags
+    writeFileSync(archivePath, bytes);
+    const options = { requireRegularEntries: true, include: (name) => name === "keep.txt" };
+
+    expect(() => extractZipArchiveEntries(archivePath, join(root, "out"), options)).toThrow(
+      /skip\.bin is marked encrypted/u,
+    );
+  });
 });

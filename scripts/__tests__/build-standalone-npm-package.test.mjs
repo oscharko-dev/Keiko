@@ -94,6 +94,19 @@ function payloadRecords(target, { withNpm = true, withRetrieval = true } = {}) {
   ];
 }
 
+const RUNTIME_ARM64 = "@oscharko-dev/keiko-coding-runtime-darwin-arm64";
+const RUNTIME_X64 = "@oscharko-dev/keiko-coding-runtime-darwin-x64";
+const RUNTIME_VERSION = "1.1.5";
+
+function runtimeEntry(name, version = RUNTIME_VERSION) {
+  return {
+    version,
+    resolved: `${REGISTRY}${name}/-/${name.split("/").at(-1)}-${version}.tgz`,
+    integrity: "sha512-runtime",
+    optional: true,
+  };
+}
+
 function lockfile(version = "1.2.3", extraPackages = {}) {
   return {
     name: "keiko-npm-package",
@@ -105,7 +118,13 @@ function lockfile(version = "1.2.3", extraPackages = {}) {
         version,
         resolved: `${REGISTRY}@oscharko-dev/keiko/-/keiko-${version}.tgz`,
         integrity: "sha512-keiko",
+        optionalDependencies: {
+          [RUNTIME_ARM64]: RUNTIME_VERSION,
+          [RUNTIME_X64]: RUNTIME_VERSION,
+        },
       },
+      [`node_modules/${RUNTIME_ARM64}`]: runtimeEntry(RUNTIME_ARM64),
+      [`node_modules/${RUNTIME_X64}`]: runtimeEntry(RUNTIME_X64),
       "node_modules/@oscharko-dev/keiko/node_modules/vendored": {
         version: "1.0.0",
         inBundle: true,
@@ -346,6 +365,42 @@ describe("the lockfile an npm package ships", () => {
     expect(() => {
       assertLockfile(text(lockfile("1.2.3", { "node_modules/a": entry })), "1.2.3");
     }).toThrow(message);
+  });
+
+  it.each([
+    ["macos-arm64", RUNTIME_ARM64],
+    ["macos-x64", RUNTIME_X64],
+  ])("refuses a %s lockfile without its Coding runtime package (PR #4464)", (target, name) => {
+    // npm can leave an unresolvable optional package out of the lock and still exit 0.
+    const lock = lockfile();
+    lock.packages = Object.fromEntries(
+      Object.entries(lock.packages).filter(([key]) => key !== `node_modules/${name}`),
+    );
+    expect(() => {
+      assertLockfile(text(lock), "1.2.3", target);
+    }).toThrow(/does not lock .*keiko-coding-runtime/u);
+    // Windows ships no Coding runtime and is unchanged.
+    expect(() => {
+      assertLockfile(text(lock), "1.2.3", "windows-x64");
+    }).not.toThrow();
+    // A complete lockfile is the positive control.
+    expect(() => {
+      assertLockfile(text(lockfile()), "1.2.3", target);
+    }).not.toThrow();
+  });
+
+  it("refuses a Coding runtime locked at another version than Keiko declares (PR #4464)", () => {
+    const lock = lockfile("1.2.3", {
+      [`node_modules/${RUNTIME_ARM64}`]: runtimeEntry(RUNTIME_ARM64, "1.1.4"),
+    });
+    expect(() => {
+      assertLockfile(text(lock), "1.2.3", "macos-arm64");
+    }).toThrow(/does not lock .*1\.1\.5/u);
+    const undeclared = lockfile();
+    delete undeclared.packages["node_modules/@oscharko-dev/keiko"].optionalDependencies;
+    expect(() => {
+      assertLockfile(text(undeclared), "1.2.3", "macos-arm64");
+    }).toThrow(/declares no/u);
   });
 
   it("refuses text that is not a lockfile", () => {

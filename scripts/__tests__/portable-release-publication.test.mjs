@@ -512,6 +512,45 @@ describe("publishVerifiedPortableRelease", () => {
     expect(calls.some((call) => call[0] === "snapshot")).toBe(true);
   });
 
+  describe("asset ids (PR #4464)", () => {
+    const withId = (id) => [{ digest: `sha256:${SHA}`, id, name: "keiko-linux-x64.zip" }];
+    const info = { draft: true, id: 42, latestArgs: ["--latest"], repo: REPO, tag: TAG };
+
+    it("refuses a draft asset replaced with identical bytes after it was verified", () => {
+      // Same name and digest, new GitHub asset id: the signed manifest would name a dead id.
+      const { calls, publisher } = fakePublisher({ snapshots: [withId(8)] });
+      expect(() => publishVerifiedPortableRelease(publisher, info, withId(7), expected)).toThrow(
+        "keiko-linux-x64.zip on GitHub is not the asset whose id was signed or verified.",
+      );
+      expect(calls.some((call) => call[2] === "edit")).toBe(false);
+    });
+
+    it("refuses a verified asset whose id differs from the signed one", () => {
+      const signed = [{ ...expected[0], assetId: 7 }];
+      const { calls, publisher } = fakePublisher({ snapshots: [withId(8)] });
+      expect(() => publishVerifiedPortableRelease(publisher, info, withId(8), signed)).toThrow(
+        "is not the asset whose id was signed or verified.",
+      );
+      expect(calls.some((call) => call[2] === "edit")).toBe(false);
+    });
+
+    it("refuses a public asset whose id changed after publication", () => {
+      const { publisher } = fakePublisher({ publicAssets: withId(9), snapshots: [withId(7)] });
+      expect(() => publishVerifiedPortableRelease(publisher, info, withId(7), expected)).toThrow(
+        "is not the asset whose id was signed or verified.",
+      );
+    });
+
+    it("publishes when every id still matches", () => {
+      const { publisher } = fakePublisher({ publicAssets: withId(7), snapshots: [withId(7)] });
+      expect(
+        publishVerifiedPortableRelease(publisher, info, withId(7), [
+          { ...expected[0], assetId: 7 },
+        ]),
+      ).toStrictEqual(withId(7));
+    });
+  });
+
   it("refuses an asset that appears between the first read and the publish edit", () => {
     // Review finding on PR #4464: the draft was read once, before the tag check, so an asset added
     // in between became an immutable public download. The draft is read again right before the edit.

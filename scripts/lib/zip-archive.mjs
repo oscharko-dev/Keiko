@@ -576,8 +576,8 @@ function readAt(fd, position, length) {
   return buffer;
 }
 
-/** The entry's proven bytes, read through the descriptor — never the whole archive. */
-function extractEntryData(fd, entry, archiveSize) {
+/** The 30-byte local header, proven present, signed and not marked encrypted. */
+function readLocalHeader(fd, entry, archiveSize) {
   if (entry.localOffset + 30 > archiveSize) {
     throw new Error(`ZIP entry ${entry.rawName} has a malformed local header`);
   }
@@ -586,6 +586,12 @@ function extractEntryData(fd, entry, archiveSize) {
     throw new Error(`ZIP entry ${entry.rawName} has a malformed local header`);
   }
   assertLocalHeaderNotEncrypted(header.readUInt16LE(6), entry);
+  return header;
+}
+
+/** The entry's proven bytes, read through the descriptor — never the whole archive. */
+function extractEntryData(fd, entry, archiveSize) {
+  const header = readLocalHeader(fd, entry, archiveSize);
   const nameLength = header.readUInt16LE(26);
   const extraLength = header.readUInt16LE(28);
   const dataStart = entry.localOffset + 30 + nameLength + extraLength;
@@ -636,13 +642,17 @@ export function extractZipArchiveEntries(archivePath, targetRoot, options = {}) 
       } else {
         assertRegularZipEntry(entry, options.requireRegularEntries);
         const name = normalizedEntryName(entry.rawName);
-        // An entry the caller does not ship is validated above but never inflated or written.
+        // An entry the caller does not ship is validated above but never inflated or written; its
+        // local header is still checked, so a clear central flag over an encrypted local flag
+        // cannot pass by being excluded.
         if (options.include === undefined || options.include(name)) {
           const path = join(targetRoot, name);
           const mode = (entry.unixMode & 0o111) === 0 ? 0o600 : 0o700;
           mkdirSync(dirname(path), { recursive: true });
           writeFileSync(path, extractEntryData(fd, entry, size), { mode });
           chmodSync(path, mode);
+        } else {
+          readLocalHeader(fd, entry, size);
         }
       }
       offset = entry.next;
