@@ -12,7 +12,9 @@
 // processes. Such files are reported exactly like any other file that did not fit.
 //
 // A file with a hunk larger than one part is placed after the files that fit (Issue #4130), in the
-// same order, and only when its whole diff fits the windows the unopened parts can hold. Otherwise
+// same order, and only when its whole diff fits the windows the parts can still hold: two per
+// unopened part, and one per half part of what is left of the last open part after the file's
+// header. Otherwise
 // it is unprocessed for the budget, so it never takes a part from a file that fits. Such a file is
 // held back only while the unopened parts could still show it beside the files already held; one
 // that cannot be shown any more counts as a budget miss like any file that did not fit, so the
@@ -208,7 +210,7 @@ class PackingRun {
   /**
    * The files with a hunk larger than one part, after every file that fits is placed (R4130-064),
    * in the same order. Such a file is shown in windows only when its whole diff fits the windows
-   * the unopened parts can hold, two per part; otherwise it is left out as before this change
+   * the parts can still hold (`windowCapacity`); otherwise it is left out as before this change
    * (`unprocessed`, `budget`) and nothing of it is split (R4130-063). So a file larger than the
    * parts that are left takes no part from a file that fits, and the work of splitting is bounded
    * by the parts, not by the size of the change.
@@ -216,16 +218,23 @@ class PackingRun {
   private placeDeferred(): void {
     for (const { index, file, header, hunks, tokens } of this.deferred) {
       throwIfReviewDiffStopped(this.read.abort);
-      const fits = tokens <= this.windowCapacity();
+      const fits = tokens <= this.windowCapacity(header);
       if (!fits || !this.place(index, file, header, this.windowed(header, hunks))) {
         this.options.coverage.addUnprocessed(file, "budget");
       }
     }
   }
 
-  /** What the unopened parts can hold in windows, two per part. */
-  private windowCapacity(): number {
-    return this.packer.unopenedParts() * 2 * this.windowBudget;
+  /**
+   * What the parts can still hold in windows of the file with this header: two per unopened part,
+   * and one per half part of what is left of the last open part once the header is placed there,
+   * where the file's first windows go. A half part per window keeps the margin an unopened part
+   * has (two windows of 45 % each), which the header and the estimator's slack need (R4130-075).
+   */
+  private windowCapacity(header: string): number {
+    const room = this.packer.lastPartRoom() - this.options.count(header);
+    const lastPartWindows = Math.max(0, Math.floor(room / (this.options.budgetTokens / 2)));
+    return (this.packer.unopenedParts() * 2 + lastPartWindows) * this.windowBudget;
   }
 
   /**
@@ -240,7 +249,7 @@ class PackingRun {
     header: string,
     hunks: readonly PatchHunk[],
   ): void {
-    const capacity = this.windowCapacity() - this.deferredTokens;
+    const capacity = this.windowCapacity(header) - this.deferredTokens;
     const tokens =
       capacity > 0 ? this.options.count(header + hunks.map(renderReviewHunk).join("")) : 0;
     if (capacity <= 0 || tokens > capacity) {

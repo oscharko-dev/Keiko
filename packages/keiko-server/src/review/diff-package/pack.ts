@@ -10,9 +10,10 @@
 // content therefore never exceeds the budget as the gateway counts it.
 //
 // `ReviewDiffPartPacker` (Issue #4130) fills up to `maxParts` such packers, one per part: a section
-// that does not fit what is left of a started part starts the next part when it would fit a part
-// whole, and a section larger than one part continues in the next parts, so its hunks stay in order.
-// Once every part is open, the rules above apply to the last one exactly as to a single part.
+// that fits whole goes into the first part with room for it, a section that does not fit what is
+// left of the last part starts the next part when it would fit a part whole, and a section larger
+// than one part continues in the next parts, so its hunks stay in order. Once every part is open,
+// the rules above apply to the last one exactly as to a single part.
 
 export interface ReviewPackSection {
   readonly header: string;
@@ -51,6 +52,11 @@ export class ReviewDiffPacker {
     private readonly budget: number,
     private readonly count: ReviewTokenCounter,
   ) {}
+
+  /** The budget not yet taken by an included section. */
+  public room(): number {
+    return this.budget - this.used;
+  }
 
   /** Whether nothing has been included yet. */
   public isEmpty(): boolean {
@@ -172,9 +178,36 @@ export class ReviewDiffPartPacker {
     return this.maxParts - this.parts.length;
   }
 
-  /** Whether the smallest part of a section could still find room in this or a later part. */
+  /** What is left of the last open part: a windowed file's first windows go there (Issue #4130). */
+  public lastPartRoom(): number {
+    return this.part.packer.room();
+  }
+
+  /** Whether the smallest part of a section could still find room in any part, open or not. */
   public mightFit(header: string): boolean {
-    return this.canOpenPart() || this.part.packer.mightFit(header);
+    return this.canOpenPart() || this.parts.some((part) => part.packer.mightFit(header));
+  }
+
+  /**
+   * An earlier part with room for the whole section (Issue #4130): a section that fits whole goes
+   * into the first part that still has room for it, so the gaps a larger section left by starting a
+   * fresh part are filled and later parts stay free for the files that need them. Parts are reviewed
+   * independently, so the order of files across parts carries no meaning.
+   */
+  private earlierPartWithRoom(section: ReviewPackSection): OpenPart | undefined {
+    return this.parts.find(
+      (part) => part !== this.part && !part.packer.isEmpty() && part.packer.fitsWhole(section),
+    );
+  }
+
+  /** Places the whole section in an earlier part with room; `undefined` when none takes it. */
+  private fillEarlierPart(index: number, section: ReviewPackSection): number | undefined {
+    const earlier = this.earlierPartWithRoom(section);
+    const kept = earlier?.packer.offer(index, section);
+    if (earlier === undefined || kept === undefined) return undefined;
+    earlier.sections.set(index, section);
+    earlier.starts.set(index, 0);
+    return kept;
   }
 
   /** A section that does not fit what is left of a started part, but would fit a fresh part whole. */
@@ -189,6 +222,11 @@ export class ReviewDiffPartPacker {
    * or `undefined` when not even its first hunk found room (a hunkless section is all header).
    */
   public place(index: number, section: ReviewPackSection): number | undefined {
+    return this.fillEarlierPart(index, section) ?? this.placeFromLastPart(index, section);
+  }
+
+  /** Places a section's hunks in order from the last open part on, opening parts as needed. */
+  private placeFromLastPart(index: number, section: ReviewPackSection): number | undefined {
     let start = 0;
     let placedAny = false;
     for (;;) {
