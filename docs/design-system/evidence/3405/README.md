@@ -197,6 +197,13 @@ gates image with an init process and Node 26.13.1, `npm run check:update-ui-evid
 the Linux Editor bundle gates pass unchanged. Only the three records were kept; the 14 committed
 screenshots, updater assertions and harness inputs retain their existing values.
 
+A later review round of the guided Jira template editor (PR #4464) added the notice that guided
+rule edits wait until the template metadata parses to both optional catalogs. On 2026-11-18 (UTC)
+the original nine Chromium cases passed in 1.7 minutes in the Linux gates image with an init process
+and Node 26.13.1, `npm run check:update-ui-evidence` passes and the Linux Editor bundle gates pass
+unchanged. Only the three records were kept; the 14 committed screenshots, updater assertions and
+harness inputs retain their existing values.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
