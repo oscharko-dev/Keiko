@@ -649,7 +649,7 @@ describe("shared retrieval suppression", () => {
     const record = { ...base, status: "accepted" as const, validity: { validFrom: 0 } };
     expect(evaluateMemorySuppression(record, 100, 0)).toEqual({ suppressed: false });
     const unknown = { ...record, status: "unknown" as MemoryStatus };
-    expect(evaluateMemorySuppression(unknown, 100, Number.NaN)).toBe("invalid-threshold");
+    expect(evaluateMemorySuppression(unknown, 100, Number.NaN)).toBeUndefined();
     expect(() => evaluateMemorySuppression(unknown, 100, 0)).toThrow("Unsupported memory status");
   });
 });

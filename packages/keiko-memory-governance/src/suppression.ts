@@ -21,7 +21,7 @@ export function isMemorySuppressedFromRetrieval(
 ): MemorySuppressionResult {
   const staleConfidenceThreshold = options.staleConfidenceThreshold ?? 0.3;
   const result = evaluateMemorySuppression(memory, nowMs, staleConfidenceThreshold);
-  if (result !== "invalid-threshold") return result;
+  if (result !== undefined) return result;
   throw new GovernanceError(
     "invalid-threshold",
     `staleConfidenceThreshold must be a finite number in [0, 1] (got ${String(staleConfidenceThreshold)})`,

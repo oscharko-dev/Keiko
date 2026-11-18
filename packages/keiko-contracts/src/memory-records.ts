@@ -235,13 +235,13 @@ function suppressionByStatus(status: MemoryStatus): MemorySuppressionResult | un
   }
 }
 
-/** Shared by governance and retrieval. Those packages translate an invalid threshold to their own error. */
+/** Returns no decision for an invalid threshold so each caller can report its own domain error. */
 export function evaluateMemorySuppression(
   record: MemoryRecord,
   nowMs: number,
   staleConfidenceThreshold: number,
-): MemorySuppressionResult | "invalid-threshold" {
-  if (!isUnitInterval(staleConfidenceThreshold)) return "invalid-threshold";
+): MemorySuppressionResult | undefined {
+  if (!isUnitInterval(staleConfidenceThreshold)) return undefined;
   const byStatus = suppressionByStatus(record.status);
   if (byStatus !== undefined) return byStatus;
   if (nowMs < record.validity.validFrom) return { suppressed: true, reason: "not-yet-valid" };

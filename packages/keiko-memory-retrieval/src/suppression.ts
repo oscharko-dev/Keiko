@@ -16,7 +16,7 @@ export function isMemorySuppressed(
   staleConfidenceThreshold: number,
 ): MemorySuppressionResult {
   const result = evaluateMemorySuppression(memory, nowMs, staleConfidenceThreshold);
-  if (result !== "invalid-threshold") return result;
+  if (result !== undefined) return result;
   throw new RetrievalError(
     "invalid-threshold",
     `staleConfidenceThreshold must be a finite number in [0, 1] (got ${String(staleConfidenceThreshold)})`,
