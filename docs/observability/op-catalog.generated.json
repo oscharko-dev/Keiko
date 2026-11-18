@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d04aeca369b89a99bb70d0df24bac6f443668ae2c64f5252d21adb6d3a2c762e",
+    "catalogDigest": "2a9a8635770dcb9021ee5bbce1a5721418ce44093d12ba05bb78021f4ab78a5c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -23247,7 +23247,7 @@
         "failureClasses": ["memory-embedding-request"],
         "proofIds": ["embedding.memory.failed.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:95",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:351"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:370"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23298,7 +23298,7 @@
         "failureClasses": ["memory-embedding-request"],
         "proofIds": ["embedding.memory.succeeded.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:139",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:393"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:412"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23337,7 +23337,7 @@
         "failureClasses": ["memory-embedding-unavailable"],
         "proofIds": ["embedding.memory.unavailable.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:75",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:327"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:346"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39270,8 +39270,8 @@
         "analyzerProjection": "timeline",
         "failureClasses": ["memory-capture-novelty"],
         "proofIds": ["memory.capture.novelty-gate.line"],
-        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:180",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:944"]
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:199",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:982"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39344,7 +39344,7 @@
         "failureClasses": ["memory-embedding-invalidation"],
         "proofIds": ["memory.embedding.invalidated.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:161",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:554"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:579"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39378,7 +39378,41 @@
         "failureClasses": ["memory-embedding-invalidation"],
         "proofIds": ["memory.embedding.invalidation-failed.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:125",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:382"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:401"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "owner": "keiko-server",
+        "causal": "none",
+        "releaseImpact": "patch",
+        "op": "memory.embedding.refresh.skipped",
+        "category": "memory",
+        "emitter": "memory-embedding.logEmbeddingRefreshSkipped",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["body-changed-or-missing"]
+          }
+        },
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["memory-embedding-invalidation"],
+        "proofIds": ["memory.embedding.refresh.skipped.line"],
+        "registrationSite": "packages/keiko-server/src/memory-embedding.ts:180",
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:597"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39412,7 +39446,7 @@
         "failureClasses": ["memory-embedding-storage"],
         "proofIds": ["memory.embedding.store-rejected.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:111",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:377"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:396"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -60897,7 +60931,7 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["memory.embedding.invalidated"],
+          "state": ["memory.embedding.invalidated", "memory.embedding.refresh.skipped"],
           "end": [],
           "failure": ["memory.embedding.invalidation-failed"],
           "loss": []
@@ -60906,10 +60940,14 @@
         "requiredLossOperations": [],
         "requiredProofOperations": [
           "memory.embedding.invalidated",
-          "memory.embedding.invalidation-failed"
+          "memory.embedding.invalidation-failed",
+          "memory.embedding.refresh.skipped"
         ],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["memory.embedding.invalidated"],
+        "requiredResourceOperations": [
+          "memory.embedding.invalidated",
+          "memory.embedding.refresh.skipped"
+        ],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
@@ -105846,7 +105884,7 @@
           "lifecycleTransitions": ["failure", "state"],
           "lifecycleOperations": {
             "start": [],
-            "state": ["memory.embedding.invalidated"],
+            "state": ["memory.embedding.invalidated", "memory.embedding.refresh.skipped"],
             "end": [],
             "failure": ["memory.embedding.invalidation-failed"],
             "loss": []
@@ -105859,10 +105897,14 @@
             {
               "op": "memory.embedding.invalidation-failed",
               "mode": "none"
+            },
+            {
+              "op": "memory.embedding.refresh.skipped",
+              "mode": "none"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["memory.embedding.invalidated"],
+          "resourceSignals": ["memory.embedding.invalidated", "memory.embedding.refresh.skipped"],
           "replayReferences": [],
           "operations": [
             {
@@ -105910,6 +105952,30 @@
                 "causeChain": false
               },
               "proofIds": ["memory.embedding.invalidation-failed.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "memory.embedding.refresh.skipped",
+              "owner": "keiko-server",
+              "category": "memory",
+              "lifecycle": "state",
+              "causal": "none",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["memory.embedding.refresh.skipped.line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -125061,6 +125127,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "invalidation-failed",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-embedding.ts:591",
+      "package": "keiko-server"
+    },
+    {
       "op": "jira.approval.names",
       "category": "process",
       "site": "packages/keiko-server/src/atlassian/jiraChatApprovalNames.ts:47",
@@ -125465,7 +125537,7 @@
     {
       "op": "memory.capture.novelty-gate",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:182",
+      "site": "packages/keiko-server/src/memory-embedding.ts:201",
       "package": "keiko-server"
     },
     {
@@ -125512,6 +125584,12 @@
       "op": "memory.embedding.invalidation-failed",
       "category": "memory",
       "site": "packages/keiko-server/src/memory-embedding.ts:127",
+      "package": "keiko-server"
+    },
+    {
+      "op": "memory.embedding.refresh.skipped",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-embedding.ts:182",
       "package": "keiko-server"
     },
     {
@@ -126031,19 +126109,19 @@
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:1064",
+      "site": "packages/keiko-server/src/memory-embedding.ts:1102",
       "package": "keiko-server"
     },
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:524",
+      "site": "packages/keiko-server/src/memory-embedding.ts:543",
       "package": "keiko-server"
     },
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:547",
+      "site": "packages/keiko-server/src/memory-embedding.ts:573",
       "package": "keiko-server"
     },
     {
@@ -127256,6 +127334,7 @@
     "memory.edit.settled",
     "memory.embedding.invalidated",
     "memory.embedding.invalidation-failed",
+    "memory.embedding.refresh.skipped",
     "memory.embedding.store-rejected",
     "memory.explicit.forget",
     "memory.explicit.remember",

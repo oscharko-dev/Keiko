@@ -1107,6 +1107,7 @@ type EdgeAndEmbeddingOps = Pick<
   | "deleteEdge"
   | "upsertEmbedding"
   | "deleteEmbedding"
+  | "replaceEmbeddingForMemoryBody"
   | "replaceAllEmbeddings"
   | "listEmbeddedMemoryIds"
   | "snapshotEmbeddedMemoryIds"
@@ -1123,6 +1124,7 @@ type EmbeddingOps = Pick<
   MemoryVaultStore,
   | "upsertEmbedding"
   | "deleteEmbedding"
+  | "replaceEmbeddingForMemoryBody"
   | "replaceAllEmbeddings"
   | "listEmbeddedMemoryIds"
   | "snapshotEmbeddedMemoryIds"
@@ -1223,6 +1225,10 @@ function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOp
     deleteEmbedding: (memoryId: MemoryId): void => {
       deleteSingleEmbedding(db, opts, memoryId);
     },
+    replaceEmbeddingForMemoryBody: (memoryId, expectedBody, embedding): boolean =>
+      withSidecarHardening(opts, () =>
+        replaceEmbeddingForMemoryBody(db, opts, memoryId, expectedBody, embedding),
+      ),
     replaceAllEmbeddings: (
       pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
       expectedSnapshot?: ReadonlyMap<MemoryId, number>,
@@ -1274,6 +1280,44 @@ function upsertSingleEmbedding(
       modelId: embedding.modelId,
     });
   });
+}
+
+function replaceEmbeddingForMemoryBody(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  memoryId: MemoryId,
+  expectedBody: string,
+  embedding: MemoryEmbeddingInput | null,
+): boolean {
+  if (typeof expectedBody !== "string")
+    throw new TypeError("Expected memory body must be a string.");
+  let event: MemoryEvent | undefined;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const current = getMemoryRow(db, memoryId, opts.cipher);
+    if (current?.body !== expectedBody) {
+      db.exec("COMMIT");
+      return false;
+    }
+    if (embedding === null) {
+      if (deleteEmbeddingRow(db, memoryId)) event = { kind: "embedding:deleted", memoryId };
+    } else {
+      gateEmbeddingInput(embedding);
+      upsertEmbeddingRow(db, memoryId, embedding, opts.now(), opts.cipher);
+      event = {
+        kind: "embedding:upserted",
+        memoryId,
+        provider: embedding.provider,
+        modelId: embedding.modelId,
+      };
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  if (event !== undefined) opts.emit(event);
+  return true;
 }
 
 function deleteSingleEmbedding(db: DatabaseSync, opts: ResolvedOptions, memoryId: MemoryId): void {

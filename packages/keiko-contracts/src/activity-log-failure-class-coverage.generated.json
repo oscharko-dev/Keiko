@@ -41472,7 +41472,7 @@
       "lifecycleTransitions": ["failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["memory.embedding.invalidated"],
+        "state": ["memory.embedding.invalidated", "memory.embedding.refresh.skipped"],
         "end": [],
         "failure": ["memory.embedding.invalidation-failed"],
         "loss": []
@@ -41485,10 +41485,14 @@
         {
           "op": "memory.embedding.invalidation-failed",
           "mode": "none"
+        },
+        {
+          "op": "memory.embedding.refresh.skipped",
+          "mode": "none"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["memory.embedding.invalidated"],
+      "resourceSignals": ["memory.embedding.invalidated", "memory.embedding.refresh.skipped"],
       "replayReferences": [],
       "operations": [
         {
@@ -41536,6 +41540,30 @@
             "causeChain": false
           },
           "proofIds": ["memory.embedding.invalidation-failed.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "memory.embedding.refresh.skipped",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.embedding.refresh.skipped.line"],
           "replayReferences": [],
           "missingObligations": []
         }

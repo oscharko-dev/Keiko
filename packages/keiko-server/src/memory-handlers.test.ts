@@ -67,6 +67,8 @@ import {
   handleUnpinMemory,
 } from "./memory-handlers.js";
 import { standingProfileForUser } from "./memory-profile.js";
+import { handleMemoryCaptureFromConversation } from "./memory-conv-handlers.js";
+import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
@@ -1464,6 +1466,247 @@ describe("memory handlers", () => {
       const settlements = sink.events.filter((event) => event.op === "memory.edit.settled");
       expect(settlements).toHaveLength(1);
       expect(settlements[0]?.extra).toMatchObject({ outcome: "not-found", attemptCount: 1 });
+    },
+  );
+
+  it.each(["unchanged", "unrelated", "metadata"] as const)(
+    "stores the edited version's vector with an %s competing record",
+    async (change) => {
+      const [reader, writer] = makeReviewVaults();
+      const record = reader.insertMemory(makeMemory("embedding-current", "Initial preference"));
+      const unrelated = reader.insertMemory(makeMemory("embedding-unrelated", "Other preference"));
+      const body = "Current synthetic preference";
+      let finish: (result: OpenAIEmbeddingOutcome) => void = () => {
+        throw new TypeError("Embedding request not started");
+      };
+      let reportStarted: () => void = () => undefined;
+      const started = new Promise<void>((resolve) => {
+        reportStarted = resolve;
+      });
+      const deferred = new Promise<OpenAIEmbeddingOutcome>((resolve) => {
+        finish = resolve;
+      });
+      const request = vi.fn(() => {
+        reportStarted();
+        return deferred;
+      });
+      const deps = makeDeps({
+        memoryVault: reader,
+        config: embeddingConfig(),
+        configPresent: true,
+        localKnowledgeEmbeddingRequest: request,
+      });
+      const edit = handleEditMemory(
+        makeCtx(`/api/memory/${record.id}`, { body }, { id: record.id }),
+        deps,
+      );
+      await started;
+      if (change === "unrelated") {
+        writer.updateMemory(unrelated.id, { tags: ["updated"] }, unrelated.updatedAt);
+      } else if (change === "metadata") {
+        writer.updateMemory(record.id, { tags: ["updated"] }, record.updatedAt);
+      }
+      finish({ ok: true, value: { modelId: EMBEDDING_MODEL, vector: vectorForText(body) } });
+      expect((await edit).status).toBe(200);
+      expect(writer.getMemory(record.id)?.body).toBe(body);
+      expect(writer.getMemory(record.id)?.tags).toEqual(change === "metadata" ? ["updated"] : []);
+      expect(Array.from(writer.getEmbedding(record.id)?.vector ?? [])).toEqual(
+        Array.from(vectorForText(body)),
+      );
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["success", "transport", "rejected-vector"] as const)(
+    "keeps the newer edit's vector after an older refresh finishes with %s",
+    async (outcome) => {
+      const [reader, writer] = makeReviewVaults();
+      const record = reader.insertMemory(makeMemory("embedding-edit-race", "Initial preference"));
+      const olderBody = "Earlier synthetic preference";
+      const newerBody = "Latest synthetic preference";
+      let finishOlder: (result: OpenAIEmbeddingOutcome) => void = () => {
+        throw new TypeError("Older embedding request not started");
+      };
+      let reportStarted: () => void = () => undefined;
+      const started = new Promise<void>((resolve) => {
+        reportStarted = resolve;
+      });
+      const delayed = new Promise<OpenAIEmbeddingOutcome>((resolve) => {
+        finishOlder = resolve;
+      });
+      const embeddingRequest = vi.fn(
+        (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+          if (request.input === olderBody) {
+            reportStarted();
+            return delayed;
+          }
+          return Promise.resolve({
+            ok: true,
+            value: { modelId: request.modelId, vector: vectorForText(request.input) },
+          });
+        },
+      );
+      const deps = makeDeps({
+        memoryVault: reader,
+        config: embeddingConfig(),
+        configPresent: true,
+        localKnowledgeEmbeddingRequest: embeddingRequest,
+      });
+      const edit = (body: string): ReturnType<typeof handleEditMemory> =>
+        handleEditMemory(makeCtx(`/api/memory/${record.id}`, { body }, { id: record.id }), deps);
+      const older = edit(olderBody);
+      await started;
+      expect((await edit(newerBody)).status).toBe(200);
+      const current = writer.getMemory(record.id);
+      const currentVector = writer.getEmbedding(record.id);
+      expect(current?.body).toBe(newerBody);
+      expect(Array.from(currentVector?.vector ?? [])).toEqual(Array.from(vectorForText(newerBody)));
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      try {
+        finishOlder(
+          outcome === "transport"
+            ? { ok: false, kind: "transport" }
+            : {
+                ok: true,
+                value: {
+                  modelId: EMBEDDING_MODEL,
+                  vector:
+                    outcome === "rejected-vector" ? new Float32Array() : vectorForText(olderBody),
+                },
+              },
+        );
+        expect((await older).status).toBe(200);
+      } finally {
+        resetServerLogger();
+      }
+      expect(writer.getMemory(record.id)).toEqual(current);
+      expect(writer.getEmbedding(record.id)).toEqual(currentVector);
+      const skipped = sink.events.filter(
+        (event) => event.op === "memory.embedding.refresh.skipped",
+      );
+      expect(skipped).toHaveLength(1);
+      expect(sink.events.some((event) => event.op === "memory.embedding.invalidated")).toBe(false);
+      expect(sink.events.some((event) => event.op === "memory.embedding.store-rejected")).toBe(
+        false,
+      );
+      const line = formatActivityLogProofLine(skipped[0] ?? {});
+      expectActivityLogProof("memory.embedding.refresh.skipped.line", line);
+      expect(line).not.toContain(olderBody);
+      expect(line).not.toContain(newerBody);
+      expect(line).not.toContain(record.id);
+      expect(embeddingRequest).toHaveBeenCalledTimes(2);
+      const reread = handleGetMemory(
+        makeCtx(`/api/memory/${record.id}`, {}, { id: record.id }),
+        deps,
+      );
+      expect(asJson(reread).memory).toMatchObject({
+        body: newerBody,
+        updatedAt: current?.updatedAt,
+      });
+    },
+  );
+
+  it.each(["body-changed", "deleted"] as const)(
+    "skips provider work when a refresh already has a %s body binding",
+    async (change) => {
+      const [reader, writer] = makeReviewVaults();
+      const record = reader.insertMemory(makeMemory("refresh-already-stale", "Old synthetic body"));
+      if (change === "body-changed") {
+        writer.updateMemory(record.id, { body: "Current synthetic body" }, record.updatedAt);
+        writer.upsertEmbedding(record.id, {
+          provider: "synthetic-provider",
+          modelId: EMBEDDING_MODEL,
+          metric: "cosine",
+          vector: vectorForText("Current synthetic body"),
+        });
+      } else {
+        writer.deleteMemory(record.id, {
+          tombstone: true,
+          forgetterSurface: "memory-center",
+          nowMs: record.updatedAt,
+        });
+      }
+      const current = writer.getEmbedding(record.id);
+      const request = vi.fn();
+      await refreshMemoryEmbeddingAfterBodyEdit(
+        makeDeps({
+          config: embeddingConfig(),
+          configPresent: true,
+          localKnowledgeEmbeddingRequest: request,
+        }),
+        reader,
+        record.id,
+        record.body,
+      );
+      expect(request).not.toHaveBeenCalled();
+      expect(writer.getEmbedding(record.id)).toEqual(current);
+    },
+  );
+
+  it.each([false, true])(
+    "binds a delayed capture vector after a manual edit %s",
+    async (edited) => {
+      const [reader, writer] = makeReviewVaults();
+      let finish: (result: OpenAIEmbeddingOutcome) => void = () => {
+        throw new TypeError("Capture embedding not started");
+      };
+      let reportStarted: () => void = () => undefined;
+      const started = new Promise<void>((resolve) => {
+        reportStarted = resolve;
+      });
+      const deferred = new Promise<OpenAIEmbeddingOutcome>((resolve) => {
+        finish = resolve;
+      });
+      let requestCount = 0;
+      const request = vi.fn((input: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+        requestCount += 1;
+        if (requestCount === 1) {
+          reportStarted();
+          return deferred;
+        }
+        return Promise.resolve({
+          ok: true,
+          value: { modelId: input.modelId, vector: vectorForText(input.input) },
+        });
+      });
+      const deps = makeDeps({
+        memoryVault: reader,
+        config: embeddingConfig(),
+        configPresent: true,
+        localKnowledgeEmbeddingRequest: request,
+      });
+      const projectPath = makeVaultDirectory();
+      deps.store.createProject(projectPath, "synthetic-capture");
+      const chat = deps.store.createChat(projectPath, "synthetic-capture", "synthetic-model");
+      const capture = handleMemoryCaptureFromConversation(
+        makeCtx("/api/memory/capture-from-conversation", {
+          text: "remember that we use pnpm not npm for installs",
+          context: { projectPath, chatId: chat.id },
+        }),
+        deps,
+      );
+      await started;
+      const captured = writer.listMemoriesAcrossScopes(writer.listMemoryScopes())[0];
+      if (captured === undefined) throw new TypeError("Missing captured synthetic memory");
+      const expectedBody = edited ? "Latest synthetic capture preference" : captured.body;
+      if (edited) {
+        const result = await handleEditMemory(
+          makeCtx(`/api/memory/${captured.id}`, { body: expectedBody }, { id: captured.id }),
+          deps,
+        );
+        expect(result.status).toBe(200);
+      }
+      finish({
+        ok: true,
+        value: { modelId: EMBEDDING_MODEL, vector: vectorForText(captured.body) },
+      });
+      expect((await capture).status).toBe(200);
+      expect(writer.getMemory(captured.id)?.body).toBe(expectedBody);
+      expect(Array.from(writer.getEmbedding(captured.id)?.vector ?? [])).toEqual(
+        Array.from(vectorForText(expectedBody)),
+      );
+      expect(request).toHaveBeenCalledTimes(edited ? 2 : 1);
     },
   );
 

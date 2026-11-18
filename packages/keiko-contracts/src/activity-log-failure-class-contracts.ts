@@ -8522,7 +8522,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["memory.embedding.invalidated"],
+      state: ["memory.embedding.invalidated", "memory.embedding.refresh.skipped"],
       end: [],
       failure: ["memory.embedding.invalidation-failed"],
       loss: [],
@@ -8532,9 +8532,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: [
       "memory.embedding.invalidated",
       "memory.embedding.invalidation-failed",
+      "memory.embedding.refresh.skipped",
     ],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["memory.embedding.invalidated"],
+    requiredResourceOperations: [
+      "memory.embedding.invalidated",
+      "memory.embedding.refresh.skipped",
+    ],
     requiredEvidenceClasses: ["closed-enum", "completeness-state", "error-kind", "loss-state"],
     requiredFrameOperations: [],
     requiredCauseOperations: [],

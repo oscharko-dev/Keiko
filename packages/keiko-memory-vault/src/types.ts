@@ -250,6 +250,13 @@ export interface MemoryVaultStore {
   readonly deleteEdge: (edgeId: MemoryEdgeId) => void;
   readonly upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput) => void;
   readonly deleteEmbedding: (memoryId: MemoryId) => void;
+  // A delayed body refresh may replace/invalidate only the body it actually embedded. The body
+  // check and embedding mutation share a write transaction; false means no matching live record.
+  readonly replaceEmbeddingForMemoryBody: (
+    memoryId: MemoryId,
+    expectedBody: string,
+    embedding: MemoryEmbeddingInput | null,
+  ) => boolean;
   // KEIKO-0440 (PR-review follow-up): reserved for `keiko memory reembed --force`. Atomic
   // vault-wide replace: delete every existing embedding row and insert the supplied set in
   // ONE transaction. Any failure inside the swap rolls the whole transaction back so the

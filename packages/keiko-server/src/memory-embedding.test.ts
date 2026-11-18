@@ -1169,7 +1169,7 @@ describe("memory embedding activity log", () => {
     const deps = makeDeps();
     const vault = makeVault();
     const rejection = Object.assign(new Error("dimension mismatch"), { code: "EDIMENSION" });
-    vi.spyOn(vault, "upsertEmbedding").mockImplementation(() => {
+    vi.spyOn(vault, "replaceEmbeddingForMemoryBody").mockImplementation(() => {
       throw rejection;
     });
     const sink = capture("info");
@@ -1210,6 +1210,7 @@ describe("memory embedding activity log", () => {
       metric: "cosine",
       vector: Float32Array.from([1, 0, 0, 0]),
     });
+    vault.updateMemory(stored.id, { body: "the user prefers spaces" }, stored.updatedAt);
     const sink = capture("info");
 
     await refreshMemoryEmbeddingAfterBodyEdit(deps, vault, stored.id, "the user prefers spaces");
@@ -1240,19 +1241,17 @@ describe("memory embedding activity log", () => {
       metric: "cosine",
       vector: Float32Array.from([1, 0, 0, 0]),
     });
+    vault.updateMemory(stored.id, { body: "the user prefers spaces" }, stored.updatedAt);
     const deletionFailure = Object.assign(new Error("row locked"), { code: "EBUSY" });
-    vi.spyOn(vault, "deleteEmbedding").mockImplementation(() => {
+    vi.spyOn(vault, "replaceEmbeddingForMemoryBody").mockImplementation(() => {
       throw deletionFailure;
     });
     const sink = capture("info");
 
     await refreshMemoryEmbeddingAfterBodyEdit(deps, vault, stored.id, "the user prefers spaces");
 
-    expect(opsIn(sink)).toEqual([
-      "memory.embedding.invalidated",
-      "memory.embedding.invalidation-failed",
-    ]);
-    const [, failure] = sink.events;
+    expect(opsIn(sink)).toEqual(["memory.embedding.invalidation-failed"]);
+    const [failure] = sink.events;
     expect(failure?.level).toBe("warn");
     expect(failure?.category).toBe("memory");
     expect(failure?.extra).toMatchObject({ failureKind: "EBUSY" });

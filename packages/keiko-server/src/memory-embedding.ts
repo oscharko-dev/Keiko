@@ -177,6 +177,25 @@ const MEMORY_EMBEDDING_INVALIDATED_OPERATION = defineActivityLogOperation({
   proofIds: ["memory.embedding.invalidated.line"],
 });
 
+const MEMORY_EMBEDDING_REFRESH_SKIPPED_OPERATION = defineActivityLogOperation({
+  ...MEMORY_EMBEDDING_OPERATION_BASE,
+  op: "memory.embedding.refresh.skipped",
+  category: "memory",
+  emitter: "memory-embedding.logEmbeddingRefreshSkipped",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["body-changed-or-missing"],
+    },
+  },
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["memory-embedding-invalidation"],
+  proofIds: ["memory.embedding.refresh.skipped.line"],
+});
+
 const MEMORY_CAPTURE_NOVELTY_GATE_OPERATION = defineActivityLogOperation({
   ...MEMORY_EMBEDDING_OPERATION_BASE,
   op: "memory.capture.novelty-gate",
@@ -506,8 +525,8 @@ export async function embedMemoryText(
   return embedder(text, kind, signal);
 }
 
-// Best-effort embed-on-capture. Embeds the memory body and upserts the vector. A null embedding
-// (no model / failure) is a no-op; a vault rejection (e.g. gateEmbeddingInput dimension/contract
+// Best-effort embed-on-capture. Stores the vector only while its captured body is still current.
+// A null embedding (no model / failure) is a no-op; a vault rejection (e.g. dimension/contract
 // guard) is swallowed so a malformed vector can never break the capture that already succeeded.
 export async function embedAndStoreMemory(
   deps: UiHandlerDeps,
@@ -518,35 +537,41 @@ export async function embedAndStoreMemory(
   const input = await embedMemoryText(deps, text, "document");
   if (input === null) return;
   try {
-    vault.upsertEmbedding(memoryId, input);
+    if (!vault.replaceEmbeddingForMemoryBody(memoryId, text, input)) logEmbeddingRefreshSkipped();
   } catch (error) {
     // gateEmbeddingInput / storage rejection — capture already succeeded; drop the embedding.
     logEmbeddingStoreRejected("store-rejected", error);
   }
 }
 
-// Invalidation, not storage, is the invariant here: after a body edit the old vector is WRONG, so
-// every failure path below ends with the row deleted rather than left stale. Each of those paths
-// leaves the memory unsearchable by similarity until the next successful refresh, which is exactly
-// the state an operator needs named when semantic recall quietly stops returning a known memory.
+// Remove the obsolete vector before awaiting the provider, then bind replacement to the body that
+// produced it. Metadata-only edits may keep the result; a changed/deleted body skips it. Failure
+// never performs a late unconditional delete that could remove another edit's valid vector.
 export async function refreshMemoryEmbeddingAfterBodyEdit(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   memoryId: MemoryId,
   text: string,
 ): Promise<void> {
+  try {
+    if (!vault.replaceEmbeddingForMemoryBody(memoryId, text, null)) {
+      logEmbeddingRefreshSkipped();
+      return;
+    }
+  } catch (error) {
+    // A successful replacement can still recover from a failed initial invalidation.
+    logEmbeddingStoreRejected("invalidation-failed", error);
+  }
   const input = await embedMemoryText(deps, text, "document");
   if (input === null) {
-    logEmbeddingInvalidated("no-embedding");
-    deleteEmbeddingBestEffort(vault, memoryId);
+    logUnavailableEditedEmbedding(vault, memoryId, text);
     return;
   }
   try {
-    vault.upsertEmbedding(memoryId, input);
+    if (!vault.replaceEmbeddingForMemoryBody(memoryId, text, input)) logEmbeddingRefreshSkipped();
   } catch (error) {
     logEmbeddingStoreRejected("store-rejected", error);
     logEmbeddingInvalidated("store-rejected");
-    deleteEmbeddingBestEffort(vault, memoryId);
   }
 }
 
@@ -554,14 +579,27 @@ function logEmbeddingInvalidated(reason: "no-embedding" | "store-rejected"): voi
   getServerLogger().warn(activityLogEvent(MEMORY_EMBEDDING_INVALIDATED_OPERATION, {}, { reason }));
 }
 
-// Missing memory / no existing row / storage rejection: the edit already succeeded, and the
-// important invariant is that we never keep using a known stale vector when refresh fails.
-function deleteEmbeddingBestEffort(vault: MemoryVaultStore, memoryId: MemoryId): void {
+function logUnavailableEditedEmbedding(
+  vault: MemoryVaultStore,
+  memoryId: MemoryId,
+  text: string,
+): void {
   try {
-    vault.deleteEmbedding(memoryId);
+    if (vault.getMemory(memoryId)?.body !== text) logEmbeddingRefreshSkipped();
+    else if (vault.getEmbedding(memoryId) === undefined) logEmbeddingInvalidated("no-embedding");
   } catch (error) {
     logEmbeddingStoreRejected("invalidation-failed", error);
   }
+}
+
+function logEmbeddingRefreshSkipped(): void {
+  getServerLogger().info(
+    activityLogEvent(
+      MEMORY_EMBEDDING_REFRESH_SKIPPED_OPERATION,
+      {},
+      { reason: "body-changed-or-missing" },
+    ),
+  );
 }
 
 // Pure cosine similarity in [0,1]. Returns 0 when the vectors differ in length or either has zero

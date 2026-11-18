@@ -37832,6 +37832,38 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "memory.embedding.refresh.skipped",
+    category: "memory",
+    owner: "keiko-server",
+    emitter: "memory-embedding.logEmbeddingRefreshSkipped",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["body-changed-or-missing"],
+      },
+    },
+    causal: "none",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["memory-embedding-invalidation"],
+    proofIds: ["memory.embedding.refresh.skipped.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "memory.embedding.store-rejected",
     category: "memory",
     owner: "keiko-server",
