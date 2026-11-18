@@ -14,8 +14,13 @@ that only moves forward.
 A pass reads the messages after a Chat's position in Chat order, pairs each of the person's messages
 with the answers up to their next message and learns from the person's words through the same
 governed capture a turn used before (salience extraction, deterministic admission, mode-aware
-status, hard denials first). After each turn the position moves past it, so a stopped server neither
-loses nor repeats a turn.
+status, hard denials first). The saved position moves forward after each settled turn. A stop before
+it moves leaves that turn pending.
+
+Learning confirmations also record the user turn's position beside the vault's existing per-chat
+touch. The position and confirmation count commit together, so a retry after the vault write and
+before the Chat cursor advances cannot reinforce the same fact twice. A later turn can still
+confirm it again.
 
 When the model's items for a message yield no fact, a preference the person states about themself in
 a sentence of its own ("Ich bevorzuge …", "I prefer …") is still learned from their words. It passes

@@ -67,6 +67,7 @@ import {
   getAccessStatsRows,
   getConversationTouchRows,
   recordAccessRows,
+  recordLearnedConfirmationRows,
   recordUseRows,
   recordOutcomeRows,
   type MemoryAccessStat,
@@ -1336,6 +1337,10 @@ function buildStore(db: DatabaseSync, opts: ResolvedOptions): MemoryVaultStore {
     ...buildMemoryMutators(db, opts),
     ...buildEdgeAndEmbeddingOps(db, opts),
     ...buildTombstoneAndAccessOps(db, opts),
+    recordLearnedConfirmation: (id, conversationId, position, nowMs): boolean =>
+      withSidecarHardening(opts, () =>
+        recordLearnedConfirmationRows(db, id, conversationId, position, nowMs),
+      ),
     // Idempotent: a composition closes the vault on every dispose, and a process may dispose twice.
     close: (): void => {
       if (db.isOpen) db.close();

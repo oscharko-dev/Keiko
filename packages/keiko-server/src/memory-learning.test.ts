@@ -741,6 +741,45 @@ describe("memory learning passes", () => {
     expect(vaultOf(deps).getAccessStats([record.id]).get(record.id)).toEqual(before);
   });
 
+  it("does not count a confirmation again after a cursor failure and restart", async () => {
+    const storePath = join(tempDir("keiko-learning-store-"), "ui.db");
+    const vaultDir = tempDir("keiko-learning-vault-");
+    const store = createNodeUiStore(storePath);
+    const deps = makeDeps({ store, memoryVault: makeVault(vaultDir) });
+    const chat = makeChat(deps);
+    const runtime = memoryLearningRuntime(deps);
+    const statement = "I write Atlas in Rust.";
+    writeTurn(deps, chat, statement);
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+    const [record] = learned(deps, chat);
+    if (record === undefined) throw new Error("expected the learned fact");
+    writeTurn(deps, chat, statement);
+    const learningStore = store.memoryLearning;
+    if (learningStore === undefined) throw new Error("learning store missing");
+    const failAdvance = vi.spyOn(learningStore, "advance").mockImplementationOnce(() => {
+      throw new Error("synthetic cursor write failure");
+    });
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("failed");
+    failAdvance.mockRestore();
+    expect(vaultOf(deps).getAccessStats([record.id]).get(record.id)?.accessCount).toBe(1);
+    expect(learningStore.listChatsWithPending(8)).toEqual([chat.chatId]);
+    disposeMemoryLearningRuntime(deps);
+    store.close();
+
+    const reopened = createNodeUiStore(storePath);
+    const restartedDeps = makeDeps({ store: reopened, memoryVault: makeVault(vaultDir) });
+    const restarted = memoryLearningRuntime(restartedDeps);
+    await expect(restarted.runPass("retry", undefined)).resolves.toBe("completed");
+    expect(reopened.memoryLearning?.listChatsWithPending(8)).toEqual([]);
+    const vault = vaultOf(restartedDeps);
+    expect(vault.getAccessStats([record.id]).get(record.id)?.accessCount).toBe(1);
+    writeTurn(restartedDeps, chat, statement);
+    await expect(restarted.runPass("inactivity", undefined)).resolves.toBe("completed");
+    expect(vault.getAccessStats([record.id]).get(record.id)?.accessCount).toBe(2);
+    disposeMemoryLearningRuntime(restartedDeps);
+    reopened.close();
+  });
+
   it("does not start while an answer runs", async () => {
     const learner = fakeLearner();
     const deps = makeDeps({ modelPortFactory: () => learner.port });

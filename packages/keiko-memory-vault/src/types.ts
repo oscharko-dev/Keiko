@@ -17,7 +17,11 @@ import type {
   MemoryValidityInterval,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
-import type { MemoryAccessStat, MemoryConversationTouch } from "./access.js";
+import type {
+  MemoryAccessStat,
+  MemoryConfirmationPosition,
+  MemoryConversationTouch,
+} from "./access.js";
 
 export type { MemoryAccessStat, MemoryConversationTouch } from "./access.js";
 export type { MemoryUpdatePreImage } from "@oscharko-dev/keiko-contracts/memory";
@@ -314,6 +318,13 @@ export interface MemoryVaultStore {
   // (a recall reflex from the retrieval surface); `getAccessStats` reads the counters back for the
   // maintenance planner. Both operate on the cleartext `memory_access` table — no content.
   readonly recordAccess: (ids: readonly MemoryId[], nowMs: number, conversationId?: string) => void;
+  /** Reinforces a fact once for an ordered learning turn. Returns true when counted. */
+  readonly recordLearnedConfirmation: (
+    id: MemoryId,
+    conversationId: string,
+    position: MemoryConfirmationPosition,
+    nowMs: number,
+  ) => boolean;
   // An answer drew on these memories. Remembered for "Vergiss das"; it does not strengthen them.
   readonly recordUse: (ids: readonly MemoryId[], nowMs: number, conversationId: string) => void;
   // Outcome tracking (#204, O-V1). `recordOutcome` appends a governed retention judgement (utility

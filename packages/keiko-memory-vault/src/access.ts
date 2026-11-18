@@ -30,6 +30,12 @@ export interface MemoryConversationTouch {
   readonly usedAt?: number;
 }
 
+/** The durable order of the user turn that confirmed a fact. */
+export interface MemoryConfirmationPosition {
+  readonly timestamp: number;
+  readonly rowid: number;
+}
+
 // Insert-or-increment. The ON CONFLICT clause turns a repeat access into a counter bump plus a
 // timestamp advance, so the row reflects the MOST RECENT touch and the TOTAL touch count. A
 // duplicate id inside one batch is applied as two separate statements => counted twice, which is
@@ -52,6 +58,19 @@ const CONFIRM_IN_CONVERSATION_SQL = `
 INSERT INTO memory_conversation_touches (memory_id, conversation_id, confirmed_at)
 SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM memories WHERE id = ?1)
 ON CONFLICT(memory_id, conversation_id) DO UPDATE SET confirmed_at = excluded.confirmed_at
+`;
+
+const CONFIRM_LEARNED_TURN_SQL = `
+INSERT INTO memory_conversation_touches
+  (memory_id, conversation_id, confirmed_at, learned_confirmation_timestamp, learned_confirmation_rowid)
+SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM memories WHERE id = ?1)
+ON CONFLICT(memory_id, conversation_id) DO UPDATE SET
+  confirmed_at = excluded.confirmed_at,
+  learned_confirmation_timestamp = excluded.learned_confirmation_timestamp,
+  learned_confirmation_rowid = excluded.learned_confirmation_rowid
+WHERE learned_confirmation_timestamp IS NULL
+  OR (learned_confirmation_timestamp, learned_confirmation_rowid)
+    < (excluded.learned_confirmation_timestamp, excluded.learned_confirmation_rowid)
 `;
 
 const USE_IN_CONVERSATION_SQL = `
@@ -109,6 +128,32 @@ export function recordAccessRows(
   for (const id of ids) {
     stmt.run(id, nowMs);
     touch?.run(id, conversationId ?? null, nowMs);
+  }
+}
+
+export function recordLearnedConfirmationRows(
+  db: DatabaseSync,
+  memoryId: MemoryId,
+  conversationId: string,
+  position: MemoryConfirmationPosition,
+  nowMs: number,
+): boolean {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = cachedPrepare(db, CONFIRM_LEARNED_TURN_SQL).run(
+      memoryId,
+      conversationId,
+      nowMs,
+      position.timestamp,
+      position.rowid,
+    );
+    const confirmed = Number(result.changes) > 0;
+    if (confirmed) recordAccessRows(db, [memoryId], nowMs);
+    db.exec("COMMIT");
+    return confirmed;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
   }
 }
 

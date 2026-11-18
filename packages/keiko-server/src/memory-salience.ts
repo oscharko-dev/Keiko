@@ -46,6 +46,7 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import type { MemoryLearningPosition } from "./store/chatMemoryLearning.js";
 import {
   insertSalienceMemoryWithNoveltyGate,
   type NoveltyInsertOptions,
@@ -481,6 +482,9 @@ function noveltyOptions(
   // The person may forget the turn while its embedding is computed.
   const refusedSinceStart = (record: MemoryRecord): MemoryCaptureSuppressionReason | null =>
     personRefused(vault, record, trace.statement);
+  const confirmDuplicate = (id: MemoryId): void => {
+    recordLearningConfirmation(vault, id, trace);
+  };
   // A paraphrased repeat with another end date replaces the fact it repeats, if the learner may.
   const replaceDuplicate = (
     record: MemoryRecord,
@@ -494,11 +498,12 @@ function noveltyOptions(
     return applied.record;
   };
   if (relation.kind === "same-unconfirmed") {
-    return { onlyConfirm: true, refusedSinceStart, replaceDuplicate };
+    return { onlyConfirm: true, refusedSinceStart, replaceDuplicate, confirmDuplicate };
   }
-  if (relation.kind === "new") return { refusedSinceStart, replaceDuplicate };
+  if (relation.kind === "new") return { refusedSinceStart, replaceDuplicate, confirmDuplicate };
   return {
     refusedSinceStart,
+    confirmDuplicate,
     replaces: relation.memoryId,
     insert: (record): MemoryRecord => {
       const applied = applyLearnedSupersession(
@@ -522,11 +527,25 @@ interface LearningTrace {
   // The person's message the turn rests on. A pass that learns it again, after a stop between the
   // vault write and the Chat's learned position, adds nothing it already learned from it (#4213).
   readonly sourceMessageId?: string | undefined;
+  readonly sourcePosition?: MemoryLearningPosition | undefined;
   readonly conversationId: string;
   // What the person said in the turn, which they may have forgotten while this capture was running.
   readonly statement: string;
   // How the facts the learner compared with stood before the model call.
   readonly seen: ReadonlyMap<MemoryId, SeenFact>;
+}
+
+function recordLearningConfirmation(
+  vault: MemoryVaultStore,
+  id: MemoryId,
+  trace: LearningTrace,
+): boolean {
+  const nowMs = Date.now();
+  if (trace.sourcePosition !== undefined) {
+    return vault.recordLearnedConfirmation(id, trace.conversationId, trace.sourcePosition, nowMs);
+  }
+  vault.recordAccess([id], nowMs, trace.conversationId);
+  return true;
 }
 
 function recordRelation(
@@ -568,8 +587,8 @@ function confirmKnownFact(
     recordRelation(outcome, "refused", trace);
     return { action: null, disposition: "none" };
   }
-  vault.recordAccess([outcome.memoryId], Date.now(), trace.conversationId);
-  recordRelation(outcome, "confirmed", trace);
+  const counted = recordLearningConfirmation(vault, outcome.memoryId, trace);
+  recordRelation(outcome, counted ? "confirmed" : "merged", trace);
   return { action: null, disposition: "merged" };
 }
 
@@ -933,6 +952,7 @@ function activeSalienceVault(
 
 interface SalienceCaptureInputs extends TurnSalienceInputs {
   readonly surface: SalienceCaptureSurface;
+  readonly sourcePosition?: MemoryLearningPosition | undefined;
 }
 
 // The turn-scoped work `captureSalientFromTurn` runs inside its own try/catch. Split out so that
@@ -976,6 +996,7 @@ async function runSalienceCapture(
     correlationId,
     sourceMessageCount: request.sourceMessageId === undefined ? 0 : 1,
     sourceMessageId: request.sourceMessageId,
+    sourcePosition: inputs.sourcePosition,
     conversationId: context.conversationId,
     statement: request.content,
     seen,
@@ -1032,6 +1053,7 @@ export interface StoredLearningTurn {
   readonly correlationId: string;
   /** The pass that learns the turn. */
   readonly parentCorrelationId: string;
+  readonly sourcePosition?: MemoryLearningPosition | undefined;
 }
 
 /**
@@ -1094,6 +1116,7 @@ export async function learnStoredTurn(
       surface: turn.surface,
       correlationId: turn.correlationId,
       parentCorrelationId: turn.parentCorrelationId,
+      sourcePosition: turn.sourcePosition,
       signal,
     });
     // A turn whose facts are stored is learned, even when the pass was cancelled meanwhile.

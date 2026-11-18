@@ -476,6 +476,7 @@ export class MemoryLearningRuntime {
         surface: mark.surface,
         correlationId: turn.correlationId,
         parentCorrelationId: passId,
+        sourcePosition: turn.user.position,
       },
       signal,
     );

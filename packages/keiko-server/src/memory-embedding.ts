@@ -795,6 +795,8 @@ export interface NoveltyInsertOptions {
   // A refusal by the person that may have arrived while the embedding was computed. Checked after
   // the last wait, immediately before anything is merged or stored.
   readonly refusedSinceStart?: (record: MemoryRecord) => MemoryCaptureSuppressionReason | null;
+  // Learning turns can retry after the vault commits, so their confirmation is replay-safe.
+  readonly confirmDuplicate?: (id: MemoryId) => void;
   // Replaces the semantic duplicate when the person now gives the fact another end date. Returns
   // undefined when that duplicate may not be replaced, and the candidate then only confirms it.
   readonly replaceDuplicate?: (
@@ -960,7 +962,11 @@ function settleDuplicate(
   if (duplicateOf === null) return { kind: "none" };
   const replaced = replacedDuplicate(vault, record, duplicateOf, options);
   if (replaced !== undefined) return { kind: "replaced", record: replaced };
-  vault.recordAccess([duplicateOf], Date.now(), record.provenance.sourceConversationId);
+  if (options.confirmDuplicate === undefined) {
+    vault.recordAccess([duplicateOf], Date.now(), record.provenance.sourceConversationId);
+  } else {
+    options.confirmDuplicate(duplicateOf);
+  }
   return { kind: "merged", mergedInto: duplicateOf };
 }
 

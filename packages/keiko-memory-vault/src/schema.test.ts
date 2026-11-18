@@ -6,7 +6,15 @@ import {
   flushPlaintextResidueWithRetry,
   runMigrations,
 } from "./schema.js";
-import { TEST_CIPHER } from "./_support.js";
+import { makeRecord, TEST_CIPHER } from "./_support.js";
+import {
+  getAccessStatsRows,
+  getConversationTouchRows,
+  recordAccessRows,
+  recordLearnedConfirmationRows,
+  recordUseRows,
+} from "./access.js";
+import { insertMemoryRow } from "./memories.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
 import {
   expectActivityLogProof,
@@ -157,6 +165,43 @@ describe("runMigrations", () => {
     expect(accessColumns).not.toContain("last_used_conversation_id");
     expect(accessColumns).not.toContain("last_accessed_conversation_id");
     db.close();
+  });
+
+  it("preserves v13 touches and counts new learning positions once", () => {
+    const db = openMemDb();
+    try {
+      for (const migration of MIGRATIONS.filter(({ version }) => version <= 13)) {
+        db.exec(migration.sql);
+      }
+      db.exec("PRAGMA user_version = 13");
+      const record = makeRecord();
+      insertMemoryRow(db, record, TEST_CIPHER);
+      recordAccessRows(db, [record.id], 1_000, "chat-a");
+      recordUseRows(db, [record.id], 1_100, "chat-a");
+
+      runMigrations(db, TEST_CIPHER);
+      expect(userVersion(db)).toBe(MEMORY_VAULT_SCHEMA_VERSION);
+      expect(getConversationTouchRows(db, "chat-a").get(record.id)).toEqual({
+        confirmedAt: 1_000,
+        usedAt: 1_100,
+      });
+      const first = { timestamp: 1_500, rowid: 4 };
+      const second = { ...first, rowid: 6 };
+      expect(recordLearnedConfirmationRows(db, record.id, "chat-a", first, 2_000)).toBe(true);
+      expect(recordLearnedConfirmationRows(db, record.id, "chat-a", first, 2_100)).toBe(false);
+      expect(recordLearnedConfirmationRows(db, record.id, "chat-a", second, 2_200)).toBe(true);
+      expect(recordLearnedConfirmationRows(db, record.id, "chat-a", first, 2_300)).toBe(false);
+      expect(getAccessStatsRows(db, [record.id]).get(record.id)).toMatchObject({
+        accessCount: 3,
+        lastAccessedAt: 2_200,
+      });
+      expect(getConversationTouchRows(db, "chat-a").get(record.id)).toEqual({
+        confirmedAt: 2_200,
+        usedAt: 1_100,
+      });
+    } finally {
+      db.close();
+    }
   });
 
   it("refuses to open a schema newer than this binary supports", () => {
