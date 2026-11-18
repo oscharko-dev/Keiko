@@ -40,6 +40,10 @@ import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpa
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 import { workspaceDirectoryFingerprint } from "./workspaceDirectorySnapshot.js";
 import {
+  normalizeWorkspaceIndexContent,
+  type WorkspaceIndexRecordContent,
+} from "./workspaceIndexContent.js";
+import {
   normalizeWorkspaceIndexQueryMatch,
   type WorkspaceIndexQueryMatch,
 } from "./workspaceIndexQueryMatch.js";
@@ -48,7 +52,10 @@ type MaybePromise<T> = T | Promise<T>;
 
 // Matching authority changes with decoding semantics, even when source bytes and stat metadata
 // stay unchanged. Older records cannot certify the current source privacy projection.
-export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 16;
+// Version 17 (#4457) adds the query-independent content shards beside the query-match shards.
+export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 17;
+// Query-match and content shards share one path-hash partition of this size.
+export const WORKSPACE_INDEX_SHARD_COUNT = 16;
 
 export interface WorkspaceIndexCandidatePathPolicy {
   readonly include: readonly string[];
@@ -60,6 +67,9 @@ export type WorkspaceIndexRecordKind = "text" | "binary" | "size-exceeded";
 
 export interface WorkspaceIndexScopeKey {
   readonly queryMatchShard?: number | undefined;
+  // #4457: a content shard keys its storage by the lane-text policy fingerprint as well.
+  readonly contentShard?: number | undefined;
+  readonly contentPolicySha256?: string | undefined;
   readonly workspaceRoot: string;
   readonly relativePaths: readonly string[];
   readonly ignorePolicySha256: string;
@@ -120,10 +130,13 @@ export interface WorkspaceIndexRecord extends WorkspaceIndexDiscoveredFile {
   readonly fingerprint?: string | undefined;
   readonly lexical?: WorkspaceIndexLexicalRecord | undefined;
   readonly queryMatch?: WorkspaceIndexQueryMatch | undefined;
+  /** Present only in content shards: the redacted evidence-lane text of a text record. */
+  readonly content?: WorkspaceIndexRecordContent | undefined;
 }
 
 export interface WorkspaceIndexSnapshot {
   readonly queryMatchShard?: number | undefined;
+  readonly contentShard?: number | undefined;
   readonly version: number;
   readonly relativePaths: readonly string[];
   readonly ignorePolicySha256: string;
@@ -196,6 +209,7 @@ export interface WorkspaceIndexPreparationReport {
   readonly discoveredEntries: number;
   readonly retainedEntries: number;
   readonly indexedRecords: number;
+  /** Files settled without a read: a stored query match or, since #4457, stored lane text. */
   readonly reusedRecords: number;
   readonly staleRecords: number;
   readonly skippedEntries: number;
@@ -514,7 +528,26 @@ function normalizeDirectorySnapshot(
   };
 }
 
-function normalizeRecord(record: WorkspaceIndexRecord): WorkspaceIndexRecord | undefined {
+type WorkspaceIndexRecordLayer = "match" | "content";
+
+function normalizeContentRecord(record: WorkspaceIndexRecord): WorkspaceIndexRecord | undefined {
+  const base = normalizeDiscoveredFile(record);
+  if (base === undefined) return undefined;
+  // A content shard proves only what one redacting read observed: the lane text or binary bytes.
+  if (record.kind === "binary") return { ...base, kind: "binary" };
+  if (record.kind !== "text") return undefined;
+  const content = normalizeWorkspaceIndexContent(record.content);
+  return content === undefined ? undefined : { ...base, kind: "text", content };
+}
+
+function normalizeRecord(
+  record: WorkspaceIndexRecord,
+  layer: WorkspaceIndexRecordLayer = "match",
+): WorkspaceIndexRecord | undefined {
+  return layer === "content" ? normalizeContentRecord(record) : normalizeMatchRecord(record);
+}
+
+function normalizeMatchRecord(record: WorkspaceIndexRecord): WorkspaceIndexRecord | undefined {
   const base = normalizeDiscoveredFile(record);
   if (base === undefined) {
     return undefined;
@@ -636,8 +669,19 @@ interface NormalizedWorkspaceIndexHeader {
   readonly candidatePathPolicySha256: string;
 }
 
-function validQueryMatchShard(value: number | undefined): boolean {
-  return value === undefined || (Number.isSafeInteger(value) && value >= 0 && value < 16);
+function validShardNumber(value: number | undefined): boolean {
+  return (
+    value === undefined ||
+    (Number.isSafeInteger(value) && value >= 0 && value < WORKSPACE_INDEX_SHARD_COUNT)
+  );
+}
+
+function validShardLayer(snapshot: WorkspaceIndexSnapshot): boolean {
+  return (
+    validShardNumber(snapshot.queryMatchShard) &&
+    validShardNumber(snapshot.contentShard) &&
+    (snapshot.queryMatchShard === undefined || snapshot.contentShard === undefined)
+  );
 }
 
 function validWorkspaceIndexVersion(snapshot: WorkspaceIndexSnapshot): boolean {
@@ -645,8 +689,24 @@ function validWorkspaceIndexVersion(snapshot: WorkspaceIndexSnapshot): boolean {
     normalizeWholeNumber(snapshot.version) === WORKSPACE_INDEX_SNAPSHOT_VERSION &&
     typeof snapshot.applyGitignore === "boolean" &&
     typeof snapshot.omitLowValueWorkspaceFiles === "boolean" &&
-    validQueryMatchShard(snapshot.queryMatchShard)
+    validShardLayer(snapshot)
   );
+}
+
+function snapshotShardFields(
+  snapshot: Pick<WorkspaceIndexSnapshot, "queryMatchShard" | "contentShard">,
+): Pick<WorkspaceIndexSnapshot, "queryMatchShard" | "contentShard"> {
+  return {
+    ...(snapshot.queryMatchShard === undefined
+      ? {}
+      : { queryMatchShard: snapshot.queryMatchShard }),
+    ...(snapshot.contentShard === undefined ? {} : { contentShard: snapshot.contentShard }),
+  };
+}
+
+/** Content snapshots stay out of the parsed-snapshot cache so their text is not held process-wide. */
+export function isWorkspaceIndexContentSnapshot(snapshot: WorkspaceIndexSnapshot): boolean {
+  return snapshot.contentShard !== undefined;
 }
 
 function normalizeWorkspaceIndexHeader(
@@ -686,17 +746,16 @@ function normalizeSnapshot(snapshot: WorkspaceIndexSnapshot): WorkspaceIndexSnap
   }
   const relativePaths = normalizeRelativePaths(snapshot.relativePaths);
   const allowedPaths = new Set(discovery.files.map((file) => file.scopePath));
+  const layer = snapshot.contentShard === undefined ? "match" : "content";
   const records = dedupeRecords(
     snapshot.records
-      .map((record) => normalizeRecord(record))
+      .map((record) => normalizeRecord(record, layer))
       .filter((record): record is WorkspaceIndexRecord => record !== undefined),
     allowedPaths,
   );
   return {
     version: WORKSPACE_INDEX_SNAPSHOT_VERSION,
-    ...(snapshot.queryMatchShard === undefined
-      ? {}
-      : { queryMatchShard: snapshot.queryMatchShard }),
+    ...snapshotShardFields(snapshot),
     relativePaths,
     ignorePolicySha256,
     candidatePathPolicySha256,
@@ -726,8 +785,25 @@ function storageKey(scopeKey: WorkspaceIndexScopeKey): string {
         ? {}
         : { queryMatchShard: scopeKey.queryMatchShard }),
       ...(scopeKey.contentRedaction === "preserve" ? { contentRedaction: "preserve" } : {}),
+      ...(scopeKey.contentShard === undefined
+        ? {}
+        : {
+            contentShard: scopeKey.contentShard,
+            contentPolicySha256: scopeKey.contentPolicySha256 ?? "",
+          }),
     }),
   )}`;
+}
+
+function snapshotShardMatchesScopeKey(
+  snapshot: WorkspaceIndexSnapshot,
+  scopeKey: WorkspaceIndexScopeKey,
+): boolean {
+  return (
+    snapshot.queryMatchShard === scopeKey.queryMatchShard &&
+    snapshot.contentShard === scopeKey.contentShard &&
+    (scopeKey.contentShard === undefined || scopeKey.contentPolicySha256 !== undefined)
+  );
 }
 
 function snapshotMatchesScopeKey(
@@ -736,7 +812,7 @@ function snapshotMatchesScopeKey(
 ): boolean {
   const relativePaths = normalizeRelativePaths(scopeKey.relativePaths);
   return (
-    snapshot.queryMatchShard === scopeKey.queryMatchShard &&
+    snapshotShardMatchesScopeKey(snapshot, scopeKey) &&
     snapshot.ignorePolicySha256 === scopeKey.ignorePolicySha256 &&
     snapshot.candidatePathPolicySha256 === scopeKey.candidatePathPolicySha256 &&
     snapshot.policyMode === scopeKey.policyMode &&
@@ -1790,6 +1866,8 @@ function parseAndCacheStoredSnapshot(
   if (!workspaceIndexGenerationIsActive(config)) return undefined;
   const snapshot = parsed.status === "loaded" ? parsed.snapshot : undefined;
   if (parsed.status === "rejected") config.onLoadFailure?.({ reason: parsed.reason });
+  // #4457: decrypted lane text lives only as long as the request that loaded it.
+  if (snapshot !== undefined && isWorkspaceIndexContentSnapshot(snapshot)) return snapshot;
   writeParsedSnapshotCache(path, {
     fingerprint: read.fingerprint,
     encryptionKeyId: config.encryptionKeyId,
@@ -3204,6 +3282,7 @@ export function workspaceIndexCandidateSet(
 
 export interface BuildWorkspaceIndexSnapshotInput {
   readonly queryMatchShard?: number | undefined;
+  readonly contentShard?: number | undefined;
   readonly scope: ScopeKeyShape;
   readonly policy: PolicyShape;
   readonly maxBytesPerFileScanned: number;
@@ -3225,15 +3304,16 @@ export function buildWorkspaceIndexSnapshot(
     truncated: false,
   };
   const allowedPaths = new Set(discovery.files.map((file) => file.scopePath));
+  const layer = input.contentShard === undefined ? "match" : "content";
   const records = dedupeRecords(
     [...input.records]
-      .map((record) => normalizeRecord(record))
+      .map((record) => normalizeRecord(record, layer))
       .filter((record): record is WorkspaceIndexRecord => record !== undefined),
     allowedPaths,
   );
   return {
     version: WORKSPACE_INDEX_SNAPSHOT_VERSION,
-    ...(input.queryMatchShard === undefined ? {} : { queryMatchShard: input.queryMatchShard }),
+    ...snapshotShardFields(input),
     relativePaths: normalizeRelativePaths(input.scope.relativePaths),
     ignorePolicySha256: workspaceIgnorePolicyFingerprint(input.scope.workspace?.ignoreLines ?? []),
     candidatePathPolicySha256: workspaceCandidatePathPolicyFingerprint(

@@ -995,6 +995,65 @@ describe("retrieveConnectedContextPack activity log", () => {
     }
   });
 
+  it("persists stored-text reuse for a differently worded question (#4457)", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-connected-context-content-log-"));
+    const activityLog = createFileServerLogSink(stateDir, { level: "debug" });
+    const workspaceIndex = createWorkspaceIndex();
+    const fs = memFs(FIXTURE_ROOT, {
+      [PRIVATE_SCOPE_FILE]: "export function PrivateCustomerHandler(): string { return 'ok'; }\n",
+    });
+    const reworded: OrchestratorInput = {
+      ...fixtureInput(),
+      query: {
+        ...fixtureQuery(),
+        text: "Where is PrivateCustomerHandler declared and what returns?",
+      },
+    };
+    try {
+      const cold = await retrieveConnectedContextPack(fixtureInput(), {
+        ...fixtureDeps(activityLog, `${CORRELATION_ID}-cold`),
+        fs,
+        workspaceIndexForRoot: () => workspaceIndex,
+      });
+      const warm = await retrieveConnectedContextPack(reworded, {
+        ...fixtureDeps(activityLog, `${CORRELATION_ID}-reworded`),
+        fs,
+        workspaceIndexForRoot: () => workspaceIndex,
+      });
+      activityLog.close?.();
+
+      const raw = readPersistedActivityLog(stateDir);
+      const [coldLine, warmLine] = parsePersistedLogLines(raw).filter(
+        (entry) => entry.op === "search.connected-context.completion-details",
+      );
+      if (coldLine === undefined || warmLine === undefined) {
+        throw new Error("expected both connected-context completion lines");
+      }
+      expect(warmLine.correlationId).toBe(`${CORRELATION_ID}-reworded`);
+      expect(warm.pack.files.map((file) => file.scopePath)).toEqual(
+        cold.pack.files.map((file) => file.scopePath),
+      );
+      expect(nestedExtra(coldLine, "workspaceIndex")).toMatchObject({
+        searchMode: "persistent-cold",
+        reusedRecords: 0,
+      });
+      // The reworded question reuses the stored lane text: no new record, no stale record.
+      expect(nestedExtra(warmLine, "workspaceIndex")).toMatchObject({
+        searchMode: "persistent-warm",
+        indexedRecords: 0,
+        staleRecords: 0,
+      });
+      expect(nestedExtra(warmLine, "workspaceIndex").reusedRecords).toBeGreaterThan(0);
+      expect(nestedExtra(warmLine, "workspaceIo").contentReadCalls).toBeLessThan(
+        nestedExtra(coldLine, "workspaceIo").contentReadCalls as number,
+      );
+      for (const secret of privateFixtureValues()) expect(raw).not.toContain(secret);
+    } finally {
+      activityLog.close?.();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps uncapped source coverage independent of an unavailable index store", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-connected-context-index-failure-log-"));
     const activityLog = createFileServerLogSink(stateDir, { level: "debug" });
