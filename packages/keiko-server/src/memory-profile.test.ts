@@ -1,7 +1,7 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   ConversationId,
@@ -19,6 +19,7 @@ import {
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 import { buildMemoryResult, type SendDesktopChatRequest } from "./chat-handlers.js";
+import { memorySelectionLogFields } from "./chat-activity.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import { applyLearnedSupersession } from "./memory-learned-facts.js";
@@ -196,6 +197,13 @@ describe("standingProfileForUser (#4228)", () => {
 });
 
 describe("Chat memory with the standing profile (#4228)", () => {
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   const ctx: ConversationMemoryRuntimeContext = {
     userId: USER,
     workspaceId: "w1" as WorkspaceId,
@@ -265,6 +273,33 @@ describe("Chat memory with the standing profile (#4228)", () => {
     expect(tables.context.memories.map((memory) => memory.memoryId)).toEqual(["tables"]);
     expect(tables.context.profile).toBeUndefined();
     expect(tables.context.profileRetrievedCount).toBe(1);
+  });
+
+  it("preserves the profile cap count when recall includes every selected profile line", async () => {
+    const store = vault();
+    const topics = ["Tabellen", "Balken", "Diagramme", "Listen", "Anlagen", "Stichpunkte"];
+    const detail = " mit Legenden, Fußnoten, Einheiten und geeigneten Überschriften".repeat(4);
+    for (const [index, topic] of topics.entries()) {
+      seed(store, {
+        id: topic,
+        body: `Bevorzugt ${topic}${detail}.`,
+        createdAt: NOW - 1_000 - index,
+      });
+    }
+    const selected = standingProfileForUser(store, USER, Date.now());
+    const before = standingProfileWire(selected);
+    expect(before.entries.map((entry) => entry.memoryId)).toEqual(topics.slice(0, 5));
+    expect(before.droppedCount).toBe(1);
+
+    const result = await buildMemoryResult(ask(topics.slice(0, 5).join(" ")), deps(store), ctx);
+
+    expect(result.context.profileRetrievedCount).toBe(5);
+    expect(result.context.profile).toEqual({ entries: [], tokens: 0, droppedCount: 1 });
+    expect(memorySelectionLogFields(result)).toMatchObject({
+      profileEntryCount: 0,
+      profileDroppedCount: 1,
+      profileRetrievedCount: 5,
+    });
   });
 
   it("answers a question about a corrected preference with the correction, never the old value", async () => {

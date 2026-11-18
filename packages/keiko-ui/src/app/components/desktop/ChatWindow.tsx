@@ -5574,15 +5574,19 @@ function StandingMemoryProfile({
   return (
     <section className={styles.cmpMemoryContextGroup} aria-label={t("chat.memory.profileHeading")}>
       <h2>{t("chat.memory.profileHeading")}</h2>
-      <p className="chat-memory-summary">{t("chat.memory.profileDescription")}</p>
-      <ul className={styles.cmpMemoryProfileFacts}>
-        {profile.entries.map((entry) => (
-          <li key={entry.memoryId}>{entry.text}</li>
-        ))}
-      </ul>
-      <p className="chat-memory-summary">
-        {t("chat.memory.profileTokens", { tokens: profile.tokens })}
-      </p>
+      {profile.entries.length > 0 ? (
+        <>
+          <p className="chat-memory-summary">{t("chat.memory.profileDescription")}</p>
+          <ul className={styles.cmpMemoryProfileFacts}>
+            {profile.entries.map((entry) => (
+              <li key={entry.memoryId}>{entry.text}</li>
+            ))}
+          </ul>
+          <p className="chat-memory-summary">
+            {t("chat.memory.profileTokens", { tokens: profile.tokens })}
+          </p>
+        </>
+      ) : null}
       {profile.droppedCount !== undefined && profile.droppedCount > 0 ? (
         <p className="chat-memory-summary">
           {t("chat.memory.profileDropped", { count: profile.droppedCount })}
@@ -5666,7 +5670,7 @@ function MemoryContextDetails({
       ) : (
         <p className="chat-memory-summary">{t("chat.memory.noneRetrieved")}</p>
       )}
-      {profile !== undefined && profile.entries.length > 0 ? (
+      {profile !== undefined && (profile.entries.length > 0 || (profile.droppedCount ?? 0) > 0) ? (
         <StandingMemoryProfile profile={profile} t={t} />
       ) : null}
       {belowFloorCount > 0 ? (

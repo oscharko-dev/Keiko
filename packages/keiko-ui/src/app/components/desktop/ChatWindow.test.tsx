@@ -14,7 +14,9 @@ import type {
   CapsuleSetId,
   KnowledgeCapsuleId,
   KnowledgePodSummary,
+  MemoryId,
 } from "@oscharko-dev/keiko-contracts";
+import { deleteMemory } from "@/lib/memory-api";
 import { LOCAL_KNOWLEDGE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import { KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
 import {
@@ -1340,6 +1342,79 @@ describe("ChatWindow cancel button", () => {
 });
 
 describe("ChatWindow memory disclosure", () => {
+  it.each([
+    { name: "legacy response", droppedCount: undefined },
+    { name: "empty profile", droppedCount: 0 },
+    { name: "empty profile with cap omissions", droppedCount: 2 },
+  ])("discloses cap omissions from an otherwise $name", async ({ droppedCount }) => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1200, used: 0 },
+            ...(droppedCount === undefined
+              ? {}
+              : { profile: { entries: [], tokens: 0, droppedCount } }),
+          },
+          actions: [],
+        },
+      }),
+    );
+    const button = screen.getByRole("button", { name: "No memories included" });
+    expect(button.querySelector(".chat-memory-count")).toBeNull();
+    await user.click(button);
+
+    expect(
+      screen.queryByText("Keiko selected these profile facts as background for this answer."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Checked profile facts omitted by the limit/)).toBe(
+      droppedCount === 2
+        ? screen.getByText("Checked profile facts omitted by the limit (2)")
+        : null,
+    );
+  });
+
+  it("preserves what the last answer selected after a live vault deletion", async () => {
+    const memoryId = "historic-context" as MemoryId;
+    const historicalProfile = "Prefers the old example";
+    const historicalAnswer = "Here is the earlier answer using that example.";
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [makeMessage({ role: "assistant", content: historicalAnswer })],
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1188, used: 0 },
+            profile: { entries: [{ memoryId, text: historicalProfile }], tokens: 12 },
+          },
+          actions: [],
+        },
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Profile facts in context (1)" }));
+
+    await act(async () => {
+      await deleteMemory(memoryId, async () => ({
+        deleted: true,
+        memoryId,
+        memoryIds: [memoryId],
+        count: 1,
+      }));
+    });
+
+    expect(screen.getByText(historicalProfile)).toBeInTheDocument();
+    expect(screen.getByText(historicalAnswer)).toBeInTheDocument();
+  });
+
   it("exposes expanded state and disclosure linkage on the memory brain button", async () => {
     const user = userEvent.setup();
     renderWindow(

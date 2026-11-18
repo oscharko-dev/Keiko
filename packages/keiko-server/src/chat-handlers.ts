@@ -1350,9 +1350,12 @@ function toMemoryResult(
   profile: StandingProfile = EMPTY_STANDING_PROFILE,
   profileRetrievedCount = 0,
 ): ConversationMemoryResultWire {
+  const profileWire = standingProfileWire(profile);
   return {
     context: {
-      ...(profile.entries.length > 0 ? { profile: standingProfileWire(profile) } : {}),
+      ...(profileWire.entries.length > 0 || (profileWire.droppedCount ?? 0) > 0
+        ? { profile: profileWire }
+        : {}),
       ...(profileRetrievedCount > 0 ? { profileRetrievedCount } : {}),
       // A fact the profile supplies anyway was not held back from the answer.
       belowFloorCount: retrieval.omitted.filter(
