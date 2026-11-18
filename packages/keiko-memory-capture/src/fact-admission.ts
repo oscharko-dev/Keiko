@@ -12,6 +12,7 @@ import {
   hasWord,
   isNegated,
   lastWord,
+  isClausePunctuation,
 } from "./fact-text.js";
 import {
   isBareRuleAnnouncement,
@@ -81,7 +82,6 @@ export type FactAdmission =
   | { readonly admitted: false; readonly reason: FactDropReason };
 
 const EVIDENCE_MAX_CHARS = 400;
-const CLAUSE_PUNCTUATION = new Set([",", ";", ":", ".", "!", "?", "…", ")", "-", "–", "—"]);
 // A bracket opens an aside: "Ich mag Tee (aber Anna mag Kaffee)".
 const BRACKET_OPENERS = new Set(["(", "["]);
 const QUOTE_OPENERS = new Set(["„", "«", "‚"]);
@@ -952,10 +952,10 @@ function sentenceAround(text: string, start: number, end: number): { from: numbe
 
 function endsAtClause(text: string, end: number): boolean {
   const last = text.charAt(end - 1);
-  if (CLAUSE_PUNCTUATION.has(last)) return true;
+  if (isClausePunctuation(last)) return true;
   const rest = text.slice(end).trimStart();
   const next = rest.at(0);
-  if (next === undefined || CLAUSE_PUNCTUATION.has(next) || isQuote(next)) return true;
+  if (next === undefined || isClausePunctuation(next) || isQuote(next)) return true;
   // A closing single quote or a code mark ends the words it encloses.
   const nextAt = text.length - rest.length;
   if (next === "`" || singleQuoteRole(text, nextAt) === "close") return true;
@@ -1693,7 +1693,7 @@ function opensClause(text: string, at: number, sentenceFrom: number): boolean {
   while (gap > sentenceFrom && /\s/u.test(text.charAt(gap - 1))) gap -= 1;
   if (gap === sentenceFrom) return true;
   const last = text.charAt(gap - 1);
-  if (CLAUSE_PUNCTUATION.has(last) || BRACKET_OPENERS.has(last) || isQuote(last)) return true;
+  if (isClausePunctuation(last) || BRACKET_OPENERS.has(last) || isQuote(last)) return true;
   return CLAUSE_LEAD_RE.test(text.slice(Math.max(sentenceFrom, gap - CLAUSE_LEAD_REACH), at));
 }
 

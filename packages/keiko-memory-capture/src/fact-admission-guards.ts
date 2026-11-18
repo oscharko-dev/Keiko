@@ -2,6 +2,8 @@
 // foreign-source markup (code, single quotes), first-person task requests and a first-person
 // wrapper around another person's proposition. Each errs towards learning too little.
 
+import { isClausePunctuation } from "./fact-text.js";
+
 const FENCE_RE = /^[ \t]{0,3}(?:`{3,}|~{3,})/u;
 const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/u;
 const SINGLE_QUOTES = new Set(["'", "‘", "’"]);
@@ -129,7 +131,6 @@ const RULE_ANNOUNCEMENT_FORMS: readonly RuleAnnouncementForm[] = [
   },
 ];
 const ANNOUNCEMENT_TOPIC_WORD_RE = /^\p{L}+(?:-\p{L}+)*$/u;
-const ANNOUNCEMENT_END_MARKS = new Set([".", "!", "…"]);
 
 function isOwnedAnnouncementTopic(words: readonly string[], form: RuleAnnouncementForm): boolean {
   return (
@@ -156,7 +157,7 @@ function matchesRuleAnnouncement(words: readonly string[], form: RuleAnnouncemen
 export function isBareRuleAnnouncement(evidence: string): boolean {
   const text = evidence.trim();
   let end = text.length;
-  while (end > 0 && ANNOUNCEMENT_END_MARKS.has(text.charAt(end - 1))) end -= 1;
+  while (end > 0 && isClausePunctuation(text.charAt(end - 1))) end -= 1;
   const words = text.slice(0, end).trimEnd().toLowerCase().split(/\s+/u);
   return RULE_ANNOUNCEMENT_FORMS.some((form) => matchesRuleAnnouncement(words, form));
 }

@@ -859,6 +859,8 @@ describe("a rule announcement without the rule's content", () => {
     "I have a new rule for my reports.",
     "I have a rule about my notes.",
     "I have a rule.",
+    "I have a rule for my packing-lists;",
+    "Ich habe eine Regel für meine Berichte –",
   ])("drops only the bare announcement: %s", (text) => {
     expect(admit(text, text)).toEqual({ admitted: false, reason: "not-entailed" });
   });
@@ -910,6 +912,7 @@ describe("a rule announcement without the rule's content", () => {
     ],
   ])("does not borrow unquoted rule content after an announcement: %s", (text, prefix, rule) => {
     expect(admit(text, prefix)).toEqual({ admitted: false, reason: "not-entailed" });
+    expect(admit(text, prefix + ":")).toEqual({ admitted: false, reason: "not-entailed" });
     expect(admit(text, rule)).toMatchObject({ admitted: true });
   });
 });

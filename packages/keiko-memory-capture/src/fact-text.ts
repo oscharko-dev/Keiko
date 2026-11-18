@@ -7,6 +7,12 @@ import {
   tokenizeMemoryText,
 } from "@oscharko-dev/keiko-contracts/memory";
 
+const CLAUSE_PUNCTUATION = new Set([",", ";", ":", ".", "!", "?", "…", ")", "-", "–", "—"]);
+
+export function isClausePunctuation(character: string): boolean {
+  return CLAUSE_PUNCTUATION.has(character);
+}
+
 const STATED_PREFERENCE_RE =
   /^(?:ich\s+bevorzuge|i\s+prefer|i\s+would\s+prefer|i['’]d\s+prefer)\s/iu;
 
