@@ -106,9 +106,11 @@ counts `profileEntryCount`, `profileTokens`, `profileDroppedCount` (entries drop
 `profileRetrievedCount` (profile facts sent with recall instead), `retrievedMemoryCount` and
 `belowFloorMemoryCount`. The wire memory context carries
 `profile {entries, tokens, droppedCount}`, `profileRetrievedCount` and `belowFloorCount`. The Chat
-disclosure shows the profile entries supplied to the model separately from the memories retrieved
-for this question. The retrieval count covers those question-specific memories. No fact text enters the
-Activity Log.
+disclosure shows the profile entries Keiko selected as background for that answer separately from
+the memories retrieved for the question. Selection can take place even when grounded answering
+finishes without calling the model. The cap counter covers the candidates the selector examined.
+The retrieval count for profile members covers full entries moved out of the profile into recall.
+No fact text enters the Activity Log.
 
 ## Open measurement
 

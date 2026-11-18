@@ -1389,7 +1389,7 @@ describe("ChatWindow memory disclosure", () => {
     expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
   });
 
-  it("discloses the profile supplied to the model when no memories were retrieved", async () => {
+  it("discloses the selected profile when no memories were retrieved", async () => {
     const user = userEvent.setup();
     renderWindow(
       makeSession({
@@ -1410,7 +1410,7 @@ describe("ChatWindow memory disclosure", () => {
       }),
     );
 
-    const disclosure = screen.getByRole("button", { name: "Profile facts included (1)" });
+    const disclosure = screen.getByRole("button", { name: "Profile facts in context (1)" });
     expect(disclosure).toHaveAttribute("data-empty", "false");
     expect(disclosure.querySelector(".chat-memory-count")).toBeNull();
     expect(screen.queryByRole("button", { name: "No memories included" })).toBeNull();
@@ -1421,6 +1421,11 @@ describe("ChatWindow memory disclosure", () => {
     expect(disclosure).toHaveAttribute("aria-expanded", "true");
     const profile = screen.getByRole("region", { name: "Personal profile" });
     expect(within(profile).getByRole("listitem")).toHaveTextContent("Prefers concise explanations");
+    expect(
+      within(profile).getByText(
+        "Keiko selected these profile facts as background for this answer.",
+      ),
+    ).toBeInTheDocument();
     expect(within(profile).getByText("Profile tokens used (12)")).toBeInTheDocument();
     expect(screen.getByText("No memories retrieved for this question.")).toBeInTheDocument();
     expect(
@@ -1464,7 +1469,7 @@ describe("ChatWindow memory disclosure", () => {
     );
 
     const disclosure = screen.getByRole("button", {
-      name: "Question-specific memories (1) · Profile facts included (1)",
+      name: "Question-specific memories (1) · Profile facts in context (1)",
     });
     expect(disclosure.querySelector(".chat-memory-count")).toHaveTextContent("1");
     await user.click(disclosure);
@@ -1473,10 +1478,12 @@ describe("ChatWindow memory disclosure", () => {
     const profile = screen.getByRole("region", { name: "Personal profile" });
     expect(within(retrieved).getByText("Use tables for measurements")).toBeInTheDocument();
     expect(
-      within(retrieved).getByText("Profile facts among these memories (1)"),
+      within(retrieved).getByText("Profile facts moved in full to the retrieval context (1)"),
     ).toBeInTheDocument();
     expect(within(profile).getByText("Prefers concise explanations")).toBeInTheDocument();
-    expect(within(profile).getByText("Profile facts omitted by the limit (2)")).toBeInTheDocument();
+    expect(
+      within(profile).getByText("Checked profile facts omitted by the limit (2)"),
+    ).toBeInTheDocument();
     expect(within(profile).queryByText("Use tables for measurements")).not.toBeInTheDocument();
     expect(screen.getByText("Memories below the relevance threshold (3)")).toBeInTheDocument();
   });

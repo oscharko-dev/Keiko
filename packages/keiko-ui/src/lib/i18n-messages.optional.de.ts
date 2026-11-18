@@ -4707,9 +4707,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.memory.disableForChat": "MemoriaViva für diesen Chat deaktivieren",
   "chat.memory.included": "{count} Erinnerungen einbezogen",
   "chat.memory.noneIncluded": "Keine Erinnerungen einbezogen",
-  "chat.memory.profileIncluded": "Profilfakten mitgegeben ({count})",
+  "chat.memory.profileIncluded": "Profilfakten im Kontext ({count})",
   "chat.memory.retrievedAndProfile":
-    "Zur Frage abgerufene Erinnerungen ({retrieved}) · Profilfakten mitgegeben ({profile})",
+    "Zur Frage abgerufene Erinnerungen ({retrieved}) · Profilfakten im Kontext ({profile})",
   "chat.memory.disclosurePending": "MemoriaViva-Hinweis erscheint nach der nächsten Antwort.",
   "chat.memory.usedTokens": "{used} von {tokens} MemoriaViva-Token verwendet.",
   "chat.memory.retrievalTokens":
@@ -4719,10 +4719,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.memory.noneRetrieved": "Für diese Frage wurden keine Erinnerungen abgerufen.",
   "chat.memory.profileHeading": "Persönliches Profil",
   "chat.memory.profileDescription":
-    "Das Modell hat diese Fakten als Hintergrund für die Antwort erhalten.",
+    "Keiko hat diese Profilfakten als Hintergrund für die Antwort ausgewählt.",
   "chat.memory.profileTokens": "Verwendete Profil-Token ({tokens})",
-  "chat.memory.profileDropped": "Wegen der Begrenzung ausgelassene Profilfakten ({count})",
-  "chat.memory.profileRetrieved": "Profilfakten unter den abgerufenen Erinnerungen ({count})",
+  "chat.memory.profileDropped":
+    "Geprüfte Profilfakten, die wegen der Begrenzung entfallen ({count})",
+  "chat.memory.profileRetrieved":
+    "Vollständig in den Abrufkontext übernommene Profilfakten ({count})",
   "chat.memory.belowRelevance": "Erinnerungen unter der Relevanzschwelle ({count})",
   "chat.memory.provenance": "Herkunft für {id}",
   "chat.memory.source": "Quelle",
