@@ -1274,12 +1274,21 @@ rewrites an entry still in the lock, never recreates one that went with a releas
 accepts no name outside the lock; a failed renewal is said once and never ends npm. An entry npm
 cannot create (other than a lock already gone) ends npm with the error code before it installs.
 The lockfile check leaves to npm an optional package whose `engines` npm evaluates, except the
-platform's Coding runtime, since only npm can tell whether this Node.js meets a version range. The
+platform's Coding runtime, since only npm can tell whether this Node.js meets a version range. It
+counts only the packages the folder's package reaches through packages meant for this computer,
+following npm's resolution, so an optional package of another computer takes the packages only it
+needs (nested or hoisted) out of the check, as npm leaves them out; a lock without the root entry
+falls back to every package meant for this computer. The
 export names the gateway loader's own key variables: any value that is not empty counts, and a model
-id maps to `KEIKO_MODEL_<ID>_API_KEY` UTF-16 code unit by code unit. Every start holds
+id maps to `KEIKO_MODEL_<ID>_API_KEY` UTF-16 code unit by code unit. On Windows the access step
+removes the inherited permissions of the new `keiko.config.json` and grants it to the running
+account's SID alone (`whoami` and `icacls` from System32) before the token is written, and writes no
+token when that fails. Every start holds
 the lock until Keiko is open, also one that installs nothing. `Stop Keiko` meanwhile adds its entry
-to the lock; the start releases the lock in one rename, reads the entry there and stops Keiko, also
-one that reported a failure as it opened, or does not open it when the Stop came first. A Stop that
+to the lock; the start reads it and stops Keiko while it still holds the lock, so no other start
+opens Keiko in between, also one that reported a failure as it opened, or does not open it when the
+Stop came first. A Stop that arrives after that check is read when the lock goes in one rename. A
+start whose installation failed has no Keiko to stop with and says so instead. A Stop that
 finds no lock stops the open Keiko itself. The start says how it ended (Keiko open, opened by
 another start of the folder, or stopped while it was being loaded), and the start and stop files
 add only a failure line. A marker holding the lockfile's SHA-256 skips the

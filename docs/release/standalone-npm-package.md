@@ -52,7 +52,10 @@ production, optional and peer package (an inherited `omit=optional` would leave 
 runtime). After npm ends successfully, the start checks that every package the lockfile names for
 this computer is installed in its version; if one is missing, it records nothing as installed,
 names the package and keeps Keiko closed, so the next start installs again. An optional package
-with `engines` npm may leave out for this Node.js is not counted, except the Coding runtime.
+with `engines` npm may leave out for this Node.js is not counted, except the Coding runtime. Only
+the packages npm installs here are counted: those the folder's package reaches through packages
+meant for this computer, so an optional package of another computer and the packages only it
+needs, nested or hoisted, are not.
 
 Before npm runs, the start refuses an `npm-shrinkwrap.json` in the folder, which npm would install
 instead of `package-lock.json`, and a `node_modules` that is a link, a junction, a file or another
@@ -85,8 +88,10 @@ no second installation: it says that another start is opening Keiko and that its
 whether Keiko opened. Every start keeps the folder's installation lock
 (`system/keiko-npm-install.lock`) until Keiko is open, also one that installs nothing. `Stop Keiko`
 meanwhile is recorded in that lock: the start then does not open Keiko, or stops it again right
-after it opened, also when Keiko reported a failure as it opened. A `Stop Keiko` after that stops
-the open Keiko as usual. A lock whose start was closed or crashed is taken over by the next start:
+after it opened, also when Keiko reported a failure as it opened. It carries the Stop out before it
+lets go of the lock, so no other start opens Keiko in between. When the installation fails, the
+folder has no Keiko to stop with: the start window then says so and that a Keiko opened from
+another folder is stopped there. A `Stop Keiko` after that stops the open Keiko as usual. A lock whose start was closed or crashed is taken over by the next start:
 its process no longer runs, or the lock was written before the computer started or last renewed
 more than an hour ago, since the system gives an ended start's process number to new processes.
 npm's own process holds the lock as well while it installs and renews it every five minutes, its
@@ -185,8 +190,10 @@ An administrator can prepare the folder once, so that nobody in the team enters 
    `KEIKO_DEFAULT_API_KEY`), which Gateway Setup keeps out of the file: unset the variable, enter
    the key in Gateway Setup and run the step again. The
    step writes `keiko.config.json` next to `Start Keiko` as one complete file, replacing an older one
-   only when the new one is written; on macOS it is readable by its owner only, on Windows it takes
-   the permissions of the folder. It refuses to run while `KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR`
+   only when the new one is written; it is readable by its owner only. On Windows the step removes
+   the permissions the folder hands down and grants the file to the account that runs it alone
+   (`icacls` from Windows' System32) before the token is written, and writes no token when that
+   fails. It refuses to run while `KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR`
    names another configuration, because the file would not be the one Keiko starts with.
 4. **Pass it on.** Delete the folder's `node_modules`, pack the folder and share it with the team.
 

@@ -29,7 +29,7 @@ import {
   writeSync,
 } from "node:fs";
 import { homedir, uptime } from "node:os";
-import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, join, resolve, sep, win32 } from "node:path";
 import { clearInterval, setInterval } from "node:timers";
 import { fileURLToPath, URL } from "node:url";
 
@@ -582,8 +582,21 @@ export function acquireInstallLock(root, pause = () => undefined) {
   );
 }
 
-function stopRequested(dir) {
-  return readdirSync(dir).some((name) => LOCK_ENTRY.exec(name)?.[1] === "stop");
+function hasStopEntry(names) {
+  return names.some((name) => LOCK_ENTRY.exec(name)?.[1] === "stop");
+}
+
+// Whether a Stop was recorded in the lock this start still holds, from one read of it. A lock
+// another start took over is that start's, and one it released meanwhile is gone.
+function heldStopRequested(lock) {
+  let names;
+  try {
+    names = readdirSync(lock.dir);
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
+  }
+  return names.includes(`owner-${lock.token}`) && hasStopEntry(names);
 }
 
 /**
@@ -598,7 +611,7 @@ export function releaseInstallLock(lock) {
   // A Stop holds its entry open only while it creates it.
   renameRetrying(lock.dir, released);
   try {
-    return stopRequested(released);
+    return hasStopEntry(readdirSync(released));
   } finally {
     rmSync(released, { recursive: true, force: true });
   }
@@ -650,7 +663,8 @@ function optionalRequired(lockPath, entry) {
 }
 
 // A package `npm ci` installs here: not a development package, and meant for this computer. One
-// restricted by its C library is left to npm, which can tell glibc from musl.
+// restricted by its C library is left to npm, which can tell glibc from musl, and so are the
+// packages only it needs; off Linux npm installs none of them.
 function expectedHere(lockPath, entry, platform, arch) {
   return (
     entry.dev !== true &&
@@ -675,6 +689,72 @@ function installedVersion(root, lockPath) {
   }
 }
 
+const DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies"];
+
+// The names a lockfile package depends on. An optional peer is installed only when another
+// package needs it, so it is reached through that package or not at all.
+function dependencyNames(entry) {
+  const peerMeta = isRecord(entry.peerDependenciesMeta) ? entry.peerDependenciesMeta : {};
+  return DEPENDENCY_FIELDS.flatMap((field) =>
+    isRecord(entry[field])
+      ? Object.keys(entry[field]).filter(
+          (name) => field !== "peerDependencies" || peerMeta[name]?.optional !== true,
+        )
+      : [],
+  );
+}
+
+// The lockfile path npm resolves `name` to from the package at `from`: the nearest node_modules
+// folder at or above `from` that holds it.
+function resolvedLockPath(packages, from, name) {
+  let base = from;
+  for (;;) {
+    const candidate = base === "" ? `node_modules/${name}` : `${base}/node_modules/${name}`;
+    if (isRecord(packages[candidate])) return candidate;
+    if (base === "") return undefined;
+    const cut = base.lastIndexOf("/node_modules/");
+    base = cut < 0 ? "" : base.slice(0, cut);
+  }
+}
+
+// A linked package's own dependencies resolve from the folder it links to.
+function linkedFolder(packages, entry) {
+  if (entry.link !== true || typeof entry.resolved !== "string") return undefined;
+  return isRecord(packages[entry.resolved]) ? entry.resolved : undefined;
+}
+
+/**
+ * The lockfile paths npm installs here: every package reached from the folder's own package
+ * through packages meant for this computer. npm leaves an optional package of another computer
+ * out together with the packages only it needs, nested or hoisted, so neither is looked for; a
+ * package another installed package needs is. A lock without the folder's own entry is not one
+ * npm writes; then every package meant for this computer is looked for.
+ */
+function packagesNpmInstalls(packages, platform, arch) {
+  if (!isRecord(packages[""])) return undefined;
+  const reached = new Set([""]);
+  const installed = new Set();
+  const queue = [""];
+  while (queue.length > 0) {
+    const from = queue.shift();
+    for (const name of dependencyNames(packages[from])) {
+      const target = resolvedLockPath(packages, from, name);
+      if (target === undefined || reached.has(target)) continue;
+      reached.add(target);
+      const entry = packages[target];
+      const linked = linkedFolder(packages, entry);
+      if (linked !== undefined && !reached.has(linked)) {
+        reached.add(linked);
+        queue.push(linked);
+      }
+      if (!expectedHere(target, entry, platform, arch)) continue;
+      installed.add(target);
+      queue.push(target);
+    }
+  }
+  return installed;
+}
+
 /**
  * The packages package-lock.json names for this computer that are not installed in its version.
  * npm's exit code alone does not prove an installation: an inherited setting can make `npm ci`
@@ -683,9 +763,14 @@ function installedVersion(root, lockPath) {
 export function missingFromInstallation(root, platform = process.platform, arch = process.arch) {
   const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
   const packages = isRecord(lock?.packages) ? lock.packages : {};
+  const installs = packagesNpmInstalls(packages, platform, arch);
   return Object.entries(packages)
     .filter(([lockPath, entry]) => lockPath.startsWith("node_modules/") && isRecord(entry))
-    .filter(([lockPath, entry]) => expectedHere(lockPath, entry, platform, arch))
+    .filter(([lockPath, entry]) =>
+      installs === undefined
+        ? expectedHere(lockPath, entry, platform, arch)
+        : installs.has(lockPath),
+    )
     .filter(([lockPath, entry]) => installedVersion(root, lockPath) !== entry.version)
     .map(([lockPath]) =>
       lockPath.slice(lockPath.lastIndexOf("node_modules/") + "node_modules/".length),
@@ -930,7 +1015,7 @@ function reportRunning() {
 // While it holds the lock, this start installs Keiko and opens it, unless a Stop came first.
 function installThenOpen(root, nodeDir, env, run, lock, args) {
   if (!ensureInstalled(root, nodeDir, env, run, lock)) return { outcome: "install-failed" };
-  if (stopRequested(lock.dir)) return { outcome: "cancelled" };
+  if (heldStopRequested(lock)) return { outcome: "cancelled" };
   return { outcome: "opened", code: runKeiko(root, args, env, run) };
 }
 
@@ -948,16 +1033,36 @@ function reportStoppedWhileLoading(opened) {
   );
 }
 
+// A Stop recorded while this start held the lock that the start could not carry out: the window
+// says so instead of leaving the promise standing. A folder that could not load Keiko has no
+// command line to stop one with; a start that ended with an error leaves the Stop to be repeated.
+function reportStopNotCarriedOut(installed) {
+  if (!installed) {
+    say(
+      "Stop was pressed while Keiko was being loaded, but this folder could not load Keiko and cannot stop it. If Keiko is open from another folder, stop it there.",
+      "Beenden wurde gedrueckt, waehrend Keiko geladen wurde, aber dieser Ordner konnte Keiko nicht laden und kann es nicht beenden. Ist Keiko aus einem anderen Ordner geoeffnet, beende es dort.",
+    );
+    return;
+  }
+  say(
+    "Stop was pressed while Keiko was being loaded, but this start ended with an error before it stopped Keiko. Double-click Stop Keiko again.",
+    "Beenden wurde gedrueckt, waehrend Keiko geladen wurde, aber dieser Start endete mit einem Fehler, bevor er Keiko beendet hat. Doppelklicke erneut auf Stop Keiko.",
+  );
+}
+
 // A Stop made while this start held the lock stops whatever opened: this start's Keiko, also one
 // that reported a failure, or one an earlier start of the folder opened. Stopping a Keiko that does
-// not run succeeds.
-function settleStart(root, env, run, step, stopped) {
-  if (step.outcome === "install-failed") return 1;
-  if (!stopped && step.outcome === "opened") {
+// not run succeeds. `stop.code` is the result of a Stop already carried out under the lock.
+function settleStart(root, env, run, step, stop) {
+  if (step.outcome === "install-failed") {
+    if (stop.requested) reportStopNotCarriedOut(false);
+    return 1;
+  }
+  if (!stop.requested && step.outcome === "opened") {
     if (step.code === 0) reportRunning();
     return step.code;
   }
-  const code = stopKeiko(root, stateDir(env), env, run);
+  const code = stop.code ?? stopKeiko(root, stateDir(env), env, run);
   // Why Keiko did not open says more than the Stop after it.
   if (step.code !== undefined && step.code !== 0) return step.code;
   if (code !== 0) return code;
@@ -965,17 +1070,30 @@ function settleStart(root, env, run, step, stopped) {
   return 0;
 }
 
-// This start holds the lock until Keiko is open, so a Stop meanwhile is read when the lock goes,
-// and a Stop after that finds Keiko open and stops it.
+// A Stop already recorded is carried out while this start still holds the lock, so no other start
+// can open Keiko in between and see it stopped after it said Keiko is open.
+function stopWhileHeld(root, env, run, lock, step) {
+  if (step.outcome === "install-failed" || !heldStopRequested(lock)) return undefined;
+  return stopKeiko(root, stateDir(env), env, run);
+}
+
+// This start holds the lock until Keiko is open, so a Stop meanwhile is read before the lock goes
+// or when it goes, and a Stop after that finds Keiko open and stops it.
 function installAndOpen(root, nodeDir, env, run, lock, args) {
   let step;
+  let heldStop;
   try {
     step = installThenOpen(root, nodeDir, env, run, lock, args);
+    heldStop = stopWhileHeld(root, env, run, lock, step);
   } catch (error) {
-    releaseInstallLock(lock);
+    if (releaseInstallLock(lock)) reportStopNotCarriedOut(true);
     throw error;
   }
-  return settleStart(root, env, run, step, releaseInstallLock(lock));
+  const requestedAtRelease = releaseInstallLock(lock);
+  return settleStart(root, env, run, step, {
+    requested: heldStop !== undefined || requestedAtRelease,
+    code: heldStop,
+  });
 }
 
 /**
@@ -1349,10 +1467,69 @@ export function writeAll(fd, text, write = writeSync) {
   }
 }
 
+function windowsSystemProgram(env, name) {
+  const root = env.SystemRoot ?? env.windir ?? String.raw`C:\Windows`;
+  if (!/^[A-Za-z]:\\/u.test(root)) {
+    throw new LauncherRefusal(
+      "Windows' system folder cannot be found, so the access file cannot be made private.",
+      "Der Systemordner von Windows ist nicht zu finden, daher kann die Zugangsdatei nicht privat gemacht werden.",
+    );
+  }
+  return win32.join(root, "System32", name);
+}
+
+function refusePrivateAccess() {
+  throw new LauncherRefusal(
+    "The access file cannot be limited to your Windows account, so no token is written. Move this folder into a folder of your own on this computer, then run this step again; a USB stick or a network drive may not support this.",
+    "Die Zugangsdatei kann nicht auf dein Windows-Konto beschraenkt werden, daher wird kein Token geschrieben. Verschiebe diesen Ordner in einen eigenen Ordner auf diesem Computer und fuehre diesen Schritt dann erneut aus; ein USB-Stick oder ein Netzlaufwerk unterstuetzt das moeglicherweise nicht.",
+  );
+}
+
+/**
+ * Windows applies no mode bits: a new file takes the permissions its folder hands down, which can
+ * let other accounts read it. Before a byte of the token is written, the file is cut off from
+ * them and granted to the account that runs this step alone (its SID from whoami, the grant by
+ * icacls, both from Windows' own System32). Other systems keep the 0600 the file was created with.
+ */
+const WINDOWS_SPAWN = { encoding: "utf8", windowsHide: true, shell: false };
+
+function ranCleanly(result) {
+  return result.error === undefined && result.status === 0;
+}
+
+// The SID of the account this process runs as, from its own token.
+function currentAccountSid(env, run) {
+  const who = run(
+    windowsSystemProgram(env, "whoami.exe"),
+    ["/user", "/fo", "csv", "/nh"],
+    WINDOWS_SPAWN,
+  );
+  const sid = ranCleanly(who)
+    ? /,"(S-1-\d+(?:-\d+)+)"\s*$/u.exec(String(who.stdout).trim())?.[1]
+    : undefined;
+  return sid ?? refusePrivateAccess();
+}
+
+export function restrictToCurrentAccount(path, options = {}) {
+  const { platform = process.platform, env = process.env, run = spawnSync } = options;
+  if (platform !== "win32") return;
+  const sid = currentAccountSid(env, run);
+  const grant = run(
+    windowsSystemProgram(env, "icacls.exe"),
+    [path, "/inheritance:r", "/grant:r", `*${sid}:F`],
+    WINDOWS_SPAWN,
+  );
+  if (!ranCleanly(grant)) refusePrivateAccess();
+}
+
+// The seam the tests use to stand in for Windows' access control.
+export const privateFileAccess = { restrict: restrictToCurrentAccount };
+
 /** Writes a new owner-private file completely and durably; it must not exist yet. */
 export function writeNewPrivateFile(path, text, write = writeSync) {
   const fd = openSync(path, "wx", 0o600);
   try {
+    privateFileAccess.restrict(path);
     writeAll(fd, text, write);
     fsyncSync(fd);
   } finally {

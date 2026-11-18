@@ -56,11 +56,13 @@ import {
   npmLogsDir,
   ownedLogsDir,
   ownerExpired,
+  privateFileAccess,
   publishPrivateFile,
   readHidden,
   refuseForeignInstallTarget,
   releaseInstallLock,
   requestStop,
+  restrictToCurrentAccount,
   runCommand,
   saveConfig,
   start,
@@ -367,8 +369,15 @@ describe("the npm package start", () => {
     const lock = {
       lockfileVersion: 3,
       packages: {
-        "": { dependencies: { "@oscharko-dev/keiko": "1.5.3" } },
-        "node_modules/@oscharko-dev/keiko": { version: "1.5.3" },
+        "": {
+          dependencies: { "@oscharko-dev/keiko": "1.5.3" },
+          devDependencies: { devtool: "1.0.0" },
+        },
+        "node_modules/@oscharko-dev/keiko": {
+          version: "1.5.3",
+          dependencies: { nested: "3.0.0", "not-on-windows": "2.0.0", "musl-only": "1.0.0" },
+          optionalDependencies: { "@oscharko-dev/keiko-coding-runtime-darwin-arm64": "1.5.3" },
+        },
         "node_modules/@oscharko-dev/keiko-coding-runtime-darwin-arm64": {
           version: "1.5.3",
           optional: true,
@@ -421,6 +430,14 @@ describe("the npm package start", () => {
         JSON.stringify({
           lockfileVersion: 3,
           packages: {
+            "": {
+              dependencies: { "required-engines": "1.0.0" },
+              optionalDependencies: {
+                "optional-engines": "1.0.0",
+                "@oscharko-dev/keiko-coding-runtime-darwin-arm64": "1.5.3",
+                "optional-plain": "1.0.0",
+              },
+            },
             "node_modules/optional-engines": {
               version: "1.0.0",
               optional: true,
@@ -444,6 +461,83 @@ describe("the npm package start", () => {
         "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
         "optional-plain",
       ]);
+    });
+
+    it("does not look for the packages only an optional package of another computer needs", () => {
+      // Review finding on PR #4464: a package nested under, or hoisted for, an optional package
+      // npm leaves out on this computer was looked for, so every start reported it missing.
+      const root = packageRoot();
+      writeFileSync(
+        join(root, "package-lock.json"),
+        JSON.stringify({
+          lockfileVersion: 3,
+          packages: {
+            "": {
+              dependencies: { app: "1.0.0" },
+              optionalDependencies: { "darwin-only": "1.0.0" },
+            },
+            "node_modules/app": {
+              version: "1.0.0",
+              dependencies: { shared: "1.0.0", linked: "1.0.0" },
+              peerDependencies: { "optional-peer": "1.0.0", peer: "1.0.0" },
+              peerDependenciesMeta: { "optional-peer": { optional: true } },
+            },
+            "node_modules/darwin-only": {
+              version: "1.0.0",
+              optional: true,
+              os: ["darwin"],
+              dependencies: {
+                "nested-for-darwin": "1.0.0",
+                "only-for-darwin": "1.0.0",
+                shared: "1.0.0",
+              },
+            },
+            "node_modules/darwin-only/node_modules/nested-for-darwin": { version: "1.0.0" },
+            "node_modules/only-for-darwin": { version: "1.0.0", optional: true },
+            "node_modules/shared": { version: "1.0.0" },
+            "node_modules/peer": { version: "1.0.0", peer: true },
+            "node_modules/optional-peer": { version: "1.0.0", peer: true, optional: true },
+            // A link is npm's to make; the dependencies of the folder it links to are installed.
+            "node_modules/linked": { link: true, resolved: "packages/linked" },
+            "packages/linked": { version: "1.0.0", dependencies: { "via-link": "1.0.0" } },
+            "node_modules/via-link": { version: "1.0.0" },
+          },
+        }),
+      );
+
+      // On Windows npm leaves darwin-only out with the two packages only it needs; the package it
+      // shares with app, and app's required peer, are still installed.
+      expect(missingFromInstallation(root, "win32", "x64")).toEqual([
+        "app",
+        "shared",
+        "peer",
+        "via-link",
+      ]);
+      expect(missingFromInstallation(root, "darwin", "arm64")).toEqual([
+        "app",
+        "darwin-only",
+        "nested-for-darwin",
+        "only-for-darwin",
+        "shared",
+        "peer",
+        "via-link",
+      ]);
+    });
+
+    it("looks for every package meant for this computer in a lock without the folder's own entry", () => {
+      const root = packageRoot();
+      writeFileSync(
+        join(root, "package-lock.json"),
+        JSON.stringify({
+          lockfileVersion: 3,
+          packages: {
+            "node_modules/unreached": { version: "1.0.0" },
+            "node_modules/elsewhere": { version: "1.0.0", os: ["darwin"] },
+          },
+        }),
+      );
+
+      expect(missingFromInstallation(root, "win32", "x64")).toEqual(["unreached"]);
     });
 
     it("refuses a manifest that cannot be read as not installed", () => {
@@ -890,6 +984,93 @@ describe("the npm package start", () => {
       expect(start(root, nodeDir, env, run)).toBe(5);
       expect(run.mock.calls.map(commandOf)).toEqual(["ci", "stop"]);
       expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/was stopped/u));
+    });
+
+    it("holds the lock while it carries out a recorded Stop, so no other start opens Keiko in between", () => {
+      // Review finding on PR #4464: the start let go of the lock before it ran the recorded Stop,
+      // so a start in that moment opened Keiko, said so, and the Stop then ended it.
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { root, nodeDir, env } = installFixture();
+      const npm = fakeNpm(root, true, () => requestStop(root));
+      const other = vi.fn(() => ({ status: 0 }));
+      const duringStop = [];
+      const run = vi.fn((node, args, options) => {
+        if (args.includes("ci")) return npm.run(node, args, options);
+        if (args[1] === "stop") {
+          duringStop.push(existsSync(installLockPath(root)), start(root, nodeDir, env, other));
+        }
+        return { status: 0 };
+      });
+
+      expect(start(root, nodeDir, env, run)).toBe(0);
+      expect(run.mock.calls.map(commandOf)).toEqual(["ci", "stop"]);
+      expect(duringStop).toEqual([true, 0]);
+      expect(other).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^Another start of this folder/u));
+      expect(log).toHaveBeenCalledWith(
+        "Keiko was stopped while it was being loaded and does not start. You can close this window.",
+      );
+      expect(existsSync(installLockPath(root))).toBe(false);
+    });
+
+    it.each([
+      ["holds it", true],
+      ["released it", false],
+    ])(
+      "neither reads nor carries out a Stop in a lock another start took over and %s",
+      (_label, otherHolds) => {
+        // Audit of PR #4464: the start read the Stop entries of a lock another start had taken
+        // over, and failed with ENOENT when that start had released it meanwhile.
+        quiet();
+        const { root, nodeDir, env } = installFixture();
+        let other;
+        const npm = fakeNpm(root, true, () => {
+          rmSync(installLockPath(root), { recursive: true });
+          other = acquireInstallLock(root);
+          requestStop(root);
+          if (!otherHolds) releaseInstallLock(other);
+        });
+        const run = vi.fn((node, args, options) =>
+          args.includes("ci") ? npm.run(node, args, options) : { status: 0 },
+        );
+
+        expect(start(root, nodeDir, env, run)).toBe(0);
+        expect(run.mock.calls.map(commandOf)).toEqual(["ci", "start"]);
+        expect(existsSync(installLockPath(root))).toBe(otherHolds);
+        if (otherHolds) expect(lockOwners(root)).toEqual([`owner-${other.token}`]);
+      },
+    );
+
+    it("says it cannot stop Keiko when Stop was pressed and the installation failed", () => {
+      // Review finding on PR #4464: a Stop recorded during a failed installation was dropped
+      // silently while the Stop window had said the start would stop Keiko.
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { root, nodeDir, env } = installFixture();
+      const npm = fakeNpm(root, false, () => requestStop(root));
+
+      expect(start(root, nodeDir, env, npm.run)).toBe(1);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringMatching(/this folder could not load Keiko and cannot stop it\./u),
+      );
+      expect(existsSync(installLockPath(root))).toBe(false);
+    });
+
+    it("says the Stop was not carried out when the start ends with an error", () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { root, nodeDir, env } = installFixture();
+      const npm = fakeNpm(root, true, () => requestStop(root));
+      const run = vi.fn((node, args, options) => {
+        if (args.includes("ci")) return npm.run(node, args, options);
+        throw new RangeError("the stop could not run");
+      });
+
+      expect(() => start(root, nodeDir, env, run)).toThrow(RangeError);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /ended with an error before it stopped Keiko\. Double-click Stop Keiko again\./u,
+        ),
+      );
+      expect(existsSync(installLockPath(root))).toBe(false);
     });
 
     it("carries out a Stop also when Keiko reported a failure as it opened", () => {
@@ -1808,6 +1989,93 @@ describe("the administrator's access step", () => {
     publishPrivateFile(target, "two\n");
     expect(readFileSync(target, "utf8")).toBe("two\n");
     expect(readdirSync(root)).toEqual(["file.json"]);
+  });
+
+  it("limits the access file to the account before it writes a byte of the token", () => {
+    // Review finding on PR #4464: on Windows the 0600 mode is not applied, and the file took the
+    // permissions its folder hands down before the token was in it.
+    const root = tempDir();
+    const target = join(root, "file.json");
+    const sizes = [];
+    vi.spyOn(privateFileAccess, "restrict").mockImplementation((path) => {
+      sizes.push(statSync(path).size);
+    });
+
+    publishPrivateFile(target, "token\n");
+    expect(sizes).toEqual([0]);
+    expect(readFileSync(target, "utf8")).toBe("token\n");
+  });
+
+  it("writes no token and leaves nothing behind when the file cannot be limited", () => {
+    const root = tempDir();
+    const target = join(root, "file.json");
+    vi.spyOn(privateFileAccess, "restrict").mockImplementation(() => {
+      throw new LauncherRefusal("cannot be limited", "nicht beschraenkbar");
+    });
+
+    expect(() => publishPrivateFile(target, "token\n")).toThrow(LauncherRefusal);
+    expect(readdirSync(root)).toEqual([]);
+  });
+
+  describe("the access file's permissions on Windows", () => {
+    const env = { SystemRoot: "C:\\Windows" };
+    const sid = "S-1-5-21-1004336348-1177238915-682003330-1001";
+
+    function windows(whoami, icacls = { status: 0 }) {
+      const calls = [];
+      const run = vi.fn((program, args) => {
+        calls.push([program, ...args]);
+        return program.endsWith("whoami.exe") ? whoami : icacls;
+      });
+      return { calls, run };
+    }
+
+    it("cuts the file off from its folder and grants it to the running account alone", () => {
+      const { calls, run } = windows({ status: 0, stdout: `"host\\admin","${sid}"\r\n` });
+
+      restrictToCurrentAccount("C:\\Keiko\\.keiko.config.json.tmp", {
+        platform: "win32",
+        env,
+        run,
+      });
+      expect(calls).toEqual([
+        ["C:\\Windows\\System32\\whoami.exe", "/user", "/fo", "csv", "/nh"],
+        [
+          "C:\\Windows\\System32\\icacls.exe",
+          "C:\\Keiko\\.keiko.config.json.tmp",
+          "/inheritance:r",
+          "/grant:r",
+          `*${sid}:F`,
+        ],
+      ]);
+    });
+
+    it.each([
+      ["whoami fails", { status: 1, stdout: "" }, { status: 0 }],
+      ["whoami names no SID", { status: 0, stdout: '"host\\admin","admin"' }, { status: 0 }],
+      ["icacls fails", { status: 0, stdout: `"host\\admin","${sid}"` }, { status: 5 }],
+      [
+        "icacls cannot run",
+        { status: 0, stdout: `"host\\admin","${sid}"` },
+        { error: new Error("ENOENT") },
+      ],
+    ])("refuses to go on when %s", (_, whoami, icacls) => {
+      const { run } = windows(whoami, icacls);
+
+      expect(() => restrictToCurrentAccount("C:\\f", { platform: "win32", env, run })).toThrow(
+        /cannot be limited to your Windows account/u,
+      );
+    });
+
+    it("refuses a system folder that is not a drive path, and leaves other systems alone", () => {
+      const { run } = windows({ status: 0, stdout: `"h\\a","${sid}"` });
+
+      expect(() =>
+        restrictToCurrentAccount("C:\\f", { platform: "win32", env: { SystemRoot: "evil" }, run }),
+      ).toThrow(LauncherRefusal);
+      restrictToCurrentAccount("/tmp/f", { platform: "darwin", env, run });
+      expect(run).not.toHaveBeenCalled();
+    });
   });
 
   it("refuses a configuration that names no usable model", () => {
