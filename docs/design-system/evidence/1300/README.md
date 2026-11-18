@@ -337,3 +337,21 @@ differences and no missing selectors. All 14 editor references and 108 running-a
 completed without errors. The seven-mode accessibility proof has zero serious/critical violations
 and zero unresolved incomplete findings. No producer assertion, tolerance, budget or source
 stylesheet changed.
+
+## Next.js 16.4.5 input refresh, 2026-11-17
+
+PR #4428 patches `next` and `eslint-config-next` to 16.4.5 on the epic #3914 branch for
+GHSA-mfr8-8qww-v76h. That changes `package-lock.json` and `packages/keiko-ui/package.json`, both
+declared producer inputs. The four original producers were rerun on macOS arm64 with Node 24.18.0
+and npm 11.16.0, and all passed. Component fidelity retains 427 probes with zero gated differences
+and no missing selectors. Editor fidelity retains all 14 reference captures and zero gated
+differences. The seven-mode accessibility proof has zero serious/critical violations and zero
+unresolved incomplete findings. All 108 running-app captures completed without page errors,
+unexpected API requests, missing selectors, crashed windows, visible error notices or unavailable
+workspace trust. The proof records rebind only the lockfile and `keiko-ui` manifest digests. 69
+captures are committed as recaptured. A pixel comparison against the previous captures found four
+forced-colors Git window captures in which the "main" and "New" buttons show a different state:
+three change from GrayText to white and the mobile constrained capture changes the other way. The
+browser harness takes each screenshot after a fixed 900 ms wait and checks selectors afterwards, so
+these buttons can be captured before or after their state settles; the Next.js patch does not cause
+it. No producer assertion, tolerance, fixture or budget changed.

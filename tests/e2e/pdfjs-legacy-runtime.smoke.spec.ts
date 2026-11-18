@@ -3,7 +3,8 @@
 // `check:browser-baseline` raised the chrome/edge floor to 119 for exactly that reason, and this
 // smoke no longer deletes it: demanding that PDF.js restore a polyfill it does not ship would pin a
 // fiction. `Promise.try` and `URL.parse` are still bundled and are still proven here.
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, type Page, type Route } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 

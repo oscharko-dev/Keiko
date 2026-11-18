@@ -2,7 +2,8 @@ import { mkdtempSync, readFileSync, existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { McpSettingsSnapshot } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
+import { test } from "./support/smoke-test.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 
 // Deliberately retained until the owned MCP process is closed by the app. No productive data.
