@@ -374,22 +374,25 @@ function sameActivation(
   };
 }
 
-interface RuleFieldsProps {
+interface RuleSectionProps {
   readonly form: JiraTemplateForm;
   /** The whole template as it governs this Jira, once it reads; its binding names fields by id. */
   readonly template: JiraIssueTemplate | undefined;
   readonly details: JiraOptionsRead;
-  /** The rules are bound to a Jira this editor cannot read now: guided edits would unbind them. */
-  readonly locked?: boolean;
   /** `resolved` carries the ids Jira gave the references a pick adds, so a bound template keeps them. */
   readonly onChange: (patch: Partial<JiraTemplateForm>, resolved?: JiraTemplateEditedIds) => void;
+}
+
+interface RuleFieldsProps extends RuleSectionProps {
+  /** The rules are bound to a Jira this editor cannot read now: guided edits would unbind them. */
+  readonly locked?: boolean;
 }
 
 function ActivationField({
   form,
   details,
   onChange,
-}: Omit<RuleFieldsProps, "template">): ReactNode {
+}: Omit<RuleSectionProps, "template">): ReactNode {
   const t = useTranslate();
   const writes = form.activateOn.filter(appliesToWrites);
   const transitions = form.activateOn.filter((value) => !appliesToWrites(value));
@@ -435,7 +438,7 @@ function ActivationField({
   );
 }
 
-function FieldRequirement({ form, template, details, onChange }: RuleFieldsProps): ReactNode {
+function FieldRequirement({ form, template, details, onChange }: RuleSectionProps): ReactNode {
   const t = useTranslate();
   const fields =
     details.state === "ready" && details.options.kind === "details"
@@ -507,17 +510,17 @@ function DetailsStatus({ details }: { readonly details: JiraOptionsRead }): Reac
   );
 }
 
-export function JiraTemplateRuleFields(props: RuleFieldsProps): ReactNode {
+export function JiraTemplateRuleFields({ locked, ...section }: RuleFieldsProps): ReactNode {
   const t = useTranslate();
   return (
     <details className={styles.cmpRules}>
       <summary>{t("chat.skills.jira.form.rules")}</summary>
-      <DetailsStatus details={props.details} />
-      {props.locked === true ? <output>{t("chat.skills.jira.form.rulesLocked")}</output> : null}
-      <fieldset className={styles.cmpFieldset} disabled={props.locked === true}>
+      <DetailsStatus details={section.details} />
+      {locked === true ? <output>{t("chat.skills.jira.form.rulesLocked")}</output> : null}
+      <fieldset className={styles.cmpFieldset} disabled={locked === true}>
         <div className={styles.cmpChoices}>
-          <ActivationField {...props} />
-          <FieldRequirement {...props} />
+          <ActivationField {...section} />
+          <FieldRequirement {...section} />
         </div>
       </fieldset>
     </details>

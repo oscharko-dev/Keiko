@@ -543,7 +543,7 @@ export function installerActive(root) {
 // The Start process renews its own owner entry for as long as it holds the lock, also while it is
 // blocked in a synchronous npm run: a worker thread does it, which ends with the process. It only
 // rewrites an entry that is still there and stops once it is gone, so it never recreates one.
-const RENEWAL_WORKER = `
+const RENEWAL_WORKER = String.raw`
 const { workerData } = require("node:worker_threads");
 const fs = require("node:fs");
 const timer = setInterval(() => {
@@ -555,7 +555,7 @@ const timer = setInterval(() => {
     return;
   }
   try {
-    const bytes = Buffer.from(String(Date.now()) + "\\n");
+    const bytes = Buffer.from(String(Date.now()) + "\n");
     fs.writeSync(fd, bytes, 0, bytes.length, 0);
     fs.ftruncateSync(fd, bytes.length);
   } finally {
@@ -577,7 +577,7 @@ function startRenewalWorker(path) {
     );
   });
   return () => {
-    worker.terminate();
+    void worker.terminate();
   };
 }
 
