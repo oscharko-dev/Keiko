@@ -1,6 +1,7 @@
 import { redact } from "@oscharko-dev/keiko-security";
 import type { CodingRepositoryHit } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { RepoSearchInvalidRangeError } from "./errors.js";
+import { normalizePhysicalLineBreaks, physicalLineSpans } from "./physicalLines.js";
 import { clampToBytes } from "./repoSearch.js";
 
 interface SourceWindow {
@@ -9,15 +10,16 @@ interface SourceWindow {
   readonly endLine: number;
 }
 
+// RAW-source offsets of the requested physical lines; the last line's terminator, "\n" or "\r\n",
+// stays outside the window (#4439).
 function sourceWindow(raw: string, startLine: number, endLine: number): SourceWindow {
-  const lines = raw.split("\n");
-  if (startLine > lines.length) throw new RepoSearchInvalidRangeError("line range is unavailable");
-  const actualEnd = Math.min(endLine, lines.length);
-  return {
-    start: lines.slice(0, startLine - 1).reduce((size, line) => size + line.length + 1, 0),
-    end: lines.slice(0, actualEnd).reduce((size, line) => size + line.length + 1, -1),
-    endLine: actualEnd,
-  };
+  const spans = physicalLineSpans(raw);
+  const actualEnd = Math.min(endLine, spans.length);
+  const first = spans[startLine - 1];
+  const last = spans[actualEnd - 1];
+  if (first === undefined || last === undefined)
+    throw new RepoSearchInvalidRangeError("line range is unavailable");
+  return { start: first.start, end: last.end, endLine: actualEnd };
 }
 
 function changedSourceInterval(raw: string, safe: string): { start: number; end: number } {
@@ -68,7 +70,11 @@ export function codingRepositoryExcerpt(
   const window = sourceWindow(raw, startLine, endLine);
   const safe = redact(raw);
   const projected = safeSourceWindow(raw, safe, window);
-  const { excerpt: snippet, truncated: snippetTruncated } = clampToBytes(projected, maxBytes);
+  // The snippet carries LF terminators only, so a CRLF file projects exactly like its LF twin.
+  const { excerpt: snippet, truncated: snippetTruncated } = clampToBytes(
+    normalizePhysicalLineBreaks(projected),
+    maxBytes,
+  );
   return {
     path,
     startLine,

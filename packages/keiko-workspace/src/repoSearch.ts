@@ -43,6 +43,7 @@ import {
 } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
+import { splitPhysicalLines } from "./physicalLines.js";
 import {
   containedRealPathInfo,
   isCanonicalAllowedContainedPath,
@@ -3975,7 +3976,8 @@ async function assertExcerptNotBinary(
   }
 }
 
-// Both lanes retain physical source lines. Evidence masks secret spans while preserving their
+// Both lanes retain physical source lines, split by the shared physical-line contract so "\r\n"
+// terminators never reach an excerpt (#4439). Evidence masks secret spans while preserving their
 // newline delimiters; the human-operated editor lane leaves content masking to its read surface.
 function excerptFileLines(
   scope: SearchScope,
@@ -4004,14 +4006,16 @@ function excerptTextLines(
       "binary",
     );
   }
-  if (lane === "editor") return raw.split("\n");
-  return redactWorkspaceSource(
-    raw,
-    scopePath,
-    true,
-    workspaceContentPolicy(workspace),
-    workspaceContentSecrets(workspace),
-  ).split("\n");
+  if (lane === "editor") return splitPhysicalLines(raw);
+  return splitPhysicalLines(
+    redactWorkspaceSource(
+      raw,
+      scopePath,
+      true,
+      workspaceContentPolicy(workspace),
+      workspaceContentSecrets(workspace),
+    ),
+  );
 }
 
 async function readExcerptLines(

@@ -2,6 +2,7 @@ import {
   isLexicalQueryGroupKey,
   type ContextCoverageTruncationReason,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { splitPhysicalLines } from "./physicalLines.js";
 import type { LineMatcher } from "./repoSearchMatchers.js";
 import {
   repositorySourceLines,
@@ -794,7 +795,7 @@ function lineSelectionStopped(
 }
 
 export function repositoryPhysicalLines(text: string): string[] {
-  const lines = text.split(/\r?\n/u);
+  const lines = splitPhysicalLines(text);
   if (text.endsWith("\n")) {
     lines.pop();
   }

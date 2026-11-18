@@ -2,6 +2,8 @@
 // or quoted examples. The raw line remains available for ordinary lexical matching; these masked
 // views are used only for definition and route classification.
 
+import { splitPhysicalLines } from "./physicalLines.js";
+
 const CLASSIFIABLE_EXTENSIONS = new Set([
   "c",
   "cc",
@@ -1112,7 +1114,7 @@ export function repositorySourceLines(
   scopePath?: string,
 ): readonly RepositorySourceLine[] {
   const syntax = syntaxFor(scopePath);
-  const lines = text.split(/\r?\n/u);
+  const lines = splitPhysicalLines(text);
   if (!syntax.classifiable) {
     return lines.map((raw) => ({
       raw,

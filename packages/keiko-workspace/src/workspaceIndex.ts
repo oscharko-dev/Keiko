@@ -29,6 +29,7 @@ import {
   REPOSITORY_ROUTE_DECLARATION_WINDOW_LINES,
   repositoryRouteDeclarationMarkers,
 } from "./repoSearchRoutes.js";
+import { splitPhysicalLines } from "./physicalLines.js";
 import { repositorySourceLines } from "./repoSearchSourceClassification.js";
 import {
   orderCandidatesForSearch,
@@ -2389,7 +2390,7 @@ export function buildWorkspaceIndexLexicalRecord(
   content: string,
   scopePath?: string,
 ): WorkspaceIndexLexicalRecord {
-  const lines = content.split("\n");
+  const lines = splitPhysicalLines(content);
   const sourceLines = repositorySourceLines(content, scopePath);
   const lexicalLines: WorkspaceIndexLexicalLine[] = [];
   const preparedLines: { readonly index: number; readonly value: PreparedLexicalLine }[] = [];
