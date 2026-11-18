@@ -316,6 +316,7 @@
   "embedding.scalar-ladder.item-completed": "model-gateway",
   "embedding.scalar-ladder.item-failed": "model-gateway",
   "evidence.retention": "runtime-packages",
+  "figma.snapshot.captured": "bff",
   "gateway.catalog.automatic.completed": "model-gateway",
   "gateway.catalog.metadata.wait": "model-gateway",
   "gateway.chat.completed": "model-gateway",

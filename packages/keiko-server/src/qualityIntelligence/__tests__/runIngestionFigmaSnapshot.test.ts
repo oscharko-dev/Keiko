@@ -137,6 +137,28 @@ const visualOnlyScreen = (): unknown =>
 // ─── Structural baseline → atoms ─────────────────────────────────────────────────
 
 describe("figma-snapshot ingestion — deterministic structural baseline", () => {
+  it("keeps existing atom ids while fingerprinting a renamed screen in the latest snapshot", async () => {
+    const original = record([screenRow("s1", screenIr("s1", "Login", irNode("r", "container")))]);
+    const current = {
+      ...record([screenRow("s1", screenIr("s1", "Sign in", irNode("r", "container")))]),
+      runId: "snap-2",
+    };
+    const before = ingestInlineSources(
+      input([figmaSource()], { figmaSnapshotLoader: loaderFor(original) }),
+    );
+    const after = await ingestInlineSourcesAsync(
+      input([figmaSource()], {
+        figmaSnapshotLoader: Object.assign(loaderFor(current), { loadPinned: loaderFor(original) }),
+      }),
+    );
+
+    expect(after.ingestedAtoms[0]?.atom.id).toBe(before.ingestedAtoms[0]?.atom.id);
+    expect(after.ingestedAtoms[0]?.atom.canonicalHashSha256Hex).not.toBe(
+      before.ingestedAtoms[0]?.atom.canonicalHashSha256Hex,
+    );
+    expect(after.ingestedAtoms[0]?.canonicalText).toContain("Sign in");
+  });
+
   it("ingests one citation-ready atom per screen with the structural baseline text", () => {
     const result: QiIngestionResult = ingestInlineSources(
       input([figmaSource()], {

@@ -18,6 +18,8 @@
 import { classifyFigmaTransportError, FigmaConnectorError } from "./figmaConnectorErrors.js";
 import {
   gatewayFetch,
+  GatewayResponseBodyValidationError,
+  readBytesCapped,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
@@ -26,8 +28,8 @@ import { processServerLogSink } from "../../process-log-sink.js";
 /** Default request timeout in milliseconds for Figma render downloads. */
 const DEFAULT_TIMEOUT_MS = 60_000;
 
-/** Default maximum render response body size (32 MiB). */
-const DEFAULT_MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+/** Maximum amount of image data accepted per screen. */
+export const MAX_FIGMA_RENDER_BYTES = 25 * 1024 * 1024;
 
 export interface FigmaRenderRequest {
   readonly url: string;
@@ -51,36 +53,18 @@ export interface FigmaRenderPortOptions {
   readonly correlationId?: string;
 }
 
-/**
- * Read a streaming response body up to `maxBytes`, accumulating into a Uint8Array.
- * Throws a {@link FigmaConnectorError} with `FIGMA_RESPONSE_TOO_LARGE` if the cap is exceeded.
- */
-const readBytesCapped = async (response: Response, maxBytes: number): Promise<Uint8Array> => {
-  if (response.body === null) {
-    const buffer = await response.arrayBuffer();
-    return new Uint8Array(buffer);
+async function readRenderResponse(
+  response: Response,
+  maxBytes: number,
+): Promise<FigmaRenderResponse> {
+  const headers = Object.fromEntries(response.headers);
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    return { status: response.status, bytes: new Uint8Array(0), headers };
   }
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel();
-      throw new FigmaConnectorError("FIGMA_RESPONSE_TOO_LARGE");
-    }
-    chunks.push(value);
-  }
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
-};
+  const bytes = await readBytesCapped(response, maxBytes);
+  return { status: response.status, bytes, headers };
+}
 
 /**
  * Thin default adapter over the platform `fetch`. This is the ONLY place in the render path
@@ -99,7 +83,7 @@ export const createDefaultFigmaRenderPort = (
   options?: FigmaRenderPortOptions,
 ): FigmaRenderPort => {
   const timeoutMs = options?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const maxResponseBytes = options?.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+  const maxResponseBytes = options?.maxResponseBytes ?? MAX_FIGMA_RENDER_BYTES;
 
   return async (request: FigmaRenderRequest): Promise<FigmaRenderResponse> => {
     const signal = AbortSignal.timeout(timeoutMs);
@@ -115,14 +99,12 @@ export const createDefaultFigmaRenderPort = (
         ...(egress !== undefined ? { egress } : {}),
         ...(fetchImpl !== undefined ? { fetchImpl } : {}),
       });
-      const headers: Record<string, string> = {};
-      response.headers.forEach((value, name) => {
-        headers[name] = value;
-      });
-      const bytes = await readBytesCapped(response, maxResponseBytes);
-      return { status: response.status, bytes, headers };
+      return await readRenderResponse(response, maxResponseBytes);
     } catch (err) {
       if (err instanceof FigmaConnectorError) throw err;
+      if (err instanceof GatewayResponseBodyValidationError && err.validation === "size-exceeded") {
+        throw new FigmaConnectorError("FIGMA_RESPONSE_TOO_LARGE");
+      }
       throw new FigmaConnectorError(classifyFigmaTransportError(err));
     }
   };

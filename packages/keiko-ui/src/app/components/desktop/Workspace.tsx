@@ -60,6 +60,7 @@ import {
 import {
   FIGMA_IMAGE_DROP_EVENT,
   FIGMA_IMAGE_DRAG_TYPE,
+  isSafeFigmaImageSrc,
   parseFigmaImageDrag,
   type FigmaImageDragPayload,
   type FigmaImageDropDetail,
@@ -185,7 +186,12 @@ function isFigmaJsonDropDetail(detail: unknown): detail is FigmaJsonDropDetail {
 
 function isFigmaImageDropDetail(detail: unknown): detail is FigmaImageDropDetail {
   const payload = workspaceDropPayload(detail);
-  return isFigmaJsonPayload(payload) && typeof payload?.["imageSrc"] === "string";
+  return (
+    isFigmaJsonPayload(payload) &&
+    typeof payload?.["snapshotRunId"] === "string" &&
+    typeof payload["imageSrc"] === "string" &&
+    isSafeFigmaImageSrc(payload["imageSrc"], payload["snapshotRunId"])
+  );
 }
 
 // Step the view zoom by ±0.2, snapping onto 100% when a step would jump across

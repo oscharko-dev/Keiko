@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 406,
-  "completeClassCount": 406,
+  "supportedClassCount": 407,
+  "completeClassCount": 407,
   "completeness": "complete",
   "classes": [
     {
@@ -27659,6 +27659,92 @@
             "causeChain": false
           },
           "proofIds": ["evidence.retention.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "figma-snapshot",
+      "requirementContract": "figma-snapshot",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["end"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": ["figma.snapshot.captured"],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "figma.snapshot.captured",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["figma.snapshot.captured"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "figma.snapshot.captured",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "invalidRenderCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "renderBudgetSkipCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "renderedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "scopeCapped",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "scopedFetchCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "skippedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "truncatedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["figma.snapshot.captured.line"],
           "replayReferences": [],
           "missingObligations": []
         }

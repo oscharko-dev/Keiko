@@ -6,6 +6,7 @@ import type { FigmaRenderPort, FigmaRenderRequest } from "../figmaRenderPort.js"
 import { FigmaConnectorError } from "../figmaConnectorErrors.js";
 import type { FigmaRetrySleep } from "../figmaRetry.js";
 import { buildFigmaSnapshot, type BuildFigmaSnapshotInput } from "../figmaSnapshotBuilder.js";
+import { fixturePng as png } from "./figmaRenderFixture.js";
 
 const TOKEN = "figd_unit-test-secret-pat-value-1234567890";
 
@@ -43,9 +44,6 @@ const provenance: FigmaProvenance = {
   version: "v-pinned-1",
   fetchedAt: "2026-06-09T00:00:00.000Z",
 };
-
-const png = (seed: number): Uint8Array =>
-  new Uint8Array([0x89, 0x50, 0x4e, 0x47, seed, seed + 1, seed + 2]);
 
 interface ImagesPortStub {
   readonly port: FigmaHttpPort;
@@ -197,6 +195,63 @@ describe("buildFigmaSnapshot", () => {
     });
 
     expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-oversized" }]);
+  });
+
+  it.each([
+    new TextEncoder().encode("upstream response"),
+    png(4).subarray(0, -1),
+    Buffer.concat([png(4), Uint8Array.of(0)]),
+  ])("keeps the IR when a render body is not a complete PNG", async (bytes) => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    const renders = renderPort({
+      "https://s3-alpha-sig.figma.com/1:1.png": bytes,
+    });
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images.port, renders.port));
+
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.structuralScreens).toMatchObject([
+      { screenId: "1:1", reason: "render-invalid-png" },
+    ]);
+  });
+
+  it("bounds aggregate render bytes in screen order and stops later downloads", async () => {
+    const screens = [screen("1:1", "Home"), screen("1:2", "Detail"), screen("1:3", "Settings")];
+    const images = imagesPort();
+    const firstImage = png(10);
+    const renders = renderPort({
+      "https://s3-alpha-sig.figma.com/1:1.png": firstImage,
+      "https://s3-alpha-sig.figma.com/1:2.png": png(20),
+    });
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images.port, renders.port),
+      downloadConcurrency: 2,
+      maxSnapshotImageBytes: firstImage.length,
+    });
+
+    expect(snapshot.screens.map(({ screenId }) => screenId)).toEqual(["1:1"]);
+    expect(snapshot.skippedScreens).toEqual([
+      { screenId: "1:2", reason: "render-budget-exceeded" },
+      { screenId: "1:3", reason: "render-budget-exceeded" },
+    ]);
+    expect(renders.requests).toHaveLength(2);
+  });
+
+  it("checks the revision after requesting renders and before downloading any bytes", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    const renders = renderPort({});
+    const verifyRevision = (): Promise<void> => {
+      expect(images.requests).toHaveLength(1);
+      expect(renders.requests).toHaveLength(0);
+      return Promise.reject(new FigmaConnectorError("FIGMA_SOURCE_CHANGED"));
+    };
+    await expect(
+      buildFigmaSnapshot({ ...baseInput(screens, images.port, renders.port), verifyRevision }),
+    ).rejects.toMatchObject({ code: "FIGMA_SOURCE_CHANGED" });
+    expect(renders.requests).toHaveLength(0);
   });
 
   it("produces a valid empty snapshot when there are no screens (no Figma call)", async () => {

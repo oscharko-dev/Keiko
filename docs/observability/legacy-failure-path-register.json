@@ -897,12 +897,6 @@
     },
     {
       "path": "packages/keiko-evidence/src/qualityIntelligence/figmaSnapshot/store.ts",
-      "owner": "createNodeFigmaSnapshotStore",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-evidence/src/qualityIntelligence/figmaSnapshot/store.ts",
       "owner": "loadUserMetadataOp",
       "kind": "unregistered-catch",
       "count": 1
@@ -910,18 +904,6 @@
     {
       "path": "packages/keiko-evidence/src/qualityIntelligence/figmaSnapshot/store.ts",
       "owner": "metadataDisplayName",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-evidence/src/qualityIntelligence/figmaSnapshot/store.ts",
-      "owner": "parseScopeEntry",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-evidence/src/qualityIntelligence/figmaSnapshot/store.ts",
-      "owner": "readFetchedAt",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -940,18 +922,6 @@
     {
       "path": "packages/keiko-evidence/src/qualityIntelligence/figmaSnapshot/store.ts",
       "owner": "snapshotRecordFiles",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-evidence/src/qualityIntelligence/figmaSnapshot/store.ts",
-      "owner": "sweepManagementMetadataFiles",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-evidence/src/qualityIntelligence/figmaSnapshot/store.ts",
-      "owner": "sweepSideFileBaseEntries",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -5222,12 +5192,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-server/src/qualityIntelligence/figma/figmaUrl.ts",
-      "owner": "parseUrl",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-server/src/qualityIntelligence/figmaCodegenRoutes.ts",
       "owner": "handleFigmaGenerateCode",
       "kind": "unregistered-catch",
@@ -5236,12 +5200,6 @@
     {
       "path": "packages/keiko-server/src/qualityIntelligence/figmaCodegenRoutes.ts",
       "owner": "loadSnapshotForCodegen",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotAdapter.ts",
-      "owner": "makeFigmaSnapshotLoader",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -5265,12 +5223,6 @@
     },
     {
       "path": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts",
-      "owner": "buildAndPersist",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts",
       "owner": "decodeRouteParam",
       "kind": "unregistered-catch",
       "count": 1
@@ -5279,17 +5231,11 @@
       "path": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts",
       "owner": "handleFigmaDeleteSnapshot",
       "kind": "unregistered-catch",
-      "count": 2
-    },
-    {
-      "path": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts",
-      "owner": "handleFigmaInspectSnapshotScreenJson",
-      "kind": "unregistered-catch",
       "count": 1
     },
     {
       "path": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts",
-      "owner": "handleFigmaListSnapshots",
+      "owner": "handleFigmaInspectSnapshotScreenJson",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -5325,19 +5271,7 @@
     },
     {
       "path": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts",
-      "owner": "loadSnapshotListEntries",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts",
       "owner": "loadSnapshotRecordForImage",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts",
-      "owner": "parseFigmaVersionFromLink",
       "kind": "unregistered-catch",
       "count": 1
     },
@@ -5362,12 +5296,6 @@
     {
       "path": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts",
       "owner": "parseTriggerJson",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts",
-      "owner": "readSnapshotFetchedAt",
       "kind": "unregistered-catch",
       "count": 1
     },

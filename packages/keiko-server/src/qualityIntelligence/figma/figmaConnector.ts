@@ -37,6 +37,7 @@ import {
 const FIGMA_API_ORIGIN = "https://api.figma.com";
 const DEFAULT_DEPTH = 2;
 const DEFAULT_MAX_NODE_COUNT = 5000;
+const MAX_RESPONSE_TREE_DEPTH = 512;
 const EPOCH = "1970-01-01T00:00:00.000Z";
 const DEEP_FETCH_FAIL_SOFT_RETRY_POLICY: FigmaRetryPolicy = {
   maxRetries: 0,
@@ -96,6 +97,8 @@ export interface FigmaScopedResult {
   readonly nodes: FigmaNode;
   readonly provenance: FigmaProvenance;
   readonly readiness: ReadinessSignal;
+  /** Verify a latest-version capture after the render requests, which have no revision metadata. */
+  readonly verifyRevision?: () => Promise<void>;
   /**
    * Coverage telemetry, present only on the deep (`fetchScopedNodesDeep`) path (#837). Reports how
    * many screens were deep-fetched / truncated and the assembled node + fetch counts, so the build
@@ -151,24 +154,67 @@ const extractFigmaReason = (body: unknown): string | undefined => {
 const statusToError = (status: number, body: unknown): FigmaConnectorError =>
   classifyTokenFailure(status, extractFigmaReason(body));
 
-const extractDocument = (body: unknown, nodeId: string): RawFigmaNode => {
+interface ScopedDocument {
+  readonly document: RawFigmaNode;
+  readonly version: string | undefined;
+  readonly lastModified: string | undefined;
+}
+
+const metadataString = (value: unknown): string | undefined =>
+  typeof value === "string" && value.length > 0 ? value : undefined;
+
+const extractDocument = (body: unknown, nodeId: string): ScopedDocument => {
   if (!isRecord(body) || !isRecord(body.nodes)) throw new FigmaConnectorError("FIGMA_INTERNAL");
-  const entry = body.nodes[nodeId];
-  if (entry === undefined) throw new FigmaConnectorError("FIGMA_NOT_FOUND");
-  if (!isRecord(entry) || !isRecord(entry.document)) {
+  const entry = Object.hasOwn(body.nodes, nodeId) ? body.nodes[nodeId] : undefined;
+  if (entry === undefined || entry === null) throw new FigmaConnectorError("FIGMA_NOT_FOUND");
+  if (!isRecord(entry) || !isRecord(entry.document) || entry.document.id !== nodeId) {
     throw new FigmaConnectorError("FIGMA_INTERNAL");
   }
-  return entry.document;
+  return {
+    document: entry.document,
+    version: metadataString(body.version),
+    lastModified: metadataString(body.lastModified),
+  };
 };
 
-const countNodes = (node: RawFigmaNode): number => {
-  let total = 1;
-  for (const child of Array.isArray(node.children) ? node.children : []) total += countNodes(child);
-  return total;
+function isScopedNode(node: unknown): node is RawFigmaNode & { id: string } {
+  return (
+    isRecord(node) &&
+    typeof node.id === "string" &&
+    /^[\w:;-]{1,512}$/u.test(node.id) &&
+    typeof node.name === "string" &&
+    typeof node.type === "string"
+  );
+}
+
+const validateTree = (document: RawFigmaNode, maxNodeCount: number): void => {
+  const ids = new Set<string>();
+  const visit = (node: unknown, depth: number): void => {
+    if (depth > MAX_RESPONSE_TREE_DEPTH || ids.size >= maxNodeCount) {
+      throw new FigmaConnectorError("FIGMA_OVERSIZED_SCOPE");
+    }
+    if (!isScopedNode(node) || ids.has(node.id)) {
+      throw new FigmaConnectorError("FIGMA_INTERNAL");
+    }
+    ids.add(node.id);
+    if (node.children === undefined) return;
+    if (!Array.isArray(node.children)) throw new FigmaConnectorError("FIGMA_INTERNAL");
+    for (const child of node.children) visit(child, depth + 1);
+  };
+  visit(document, 0);
 };
 
-const guardScopeSize = (node: RawFigmaNode, maxNodeCount: number): void => {
-  if (countNodes(node) > maxNodeCount) throw new FigmaConnectorError("FIGMA_OVERSIZED_SCOPE");
+const assertSameRevision = (initial: ScopedDocument, next: ScopedDocument): void => {
+  if (
+    (initial.version !== undefined &&
+      next.version !== undefined &&
+      initial.version !== next.version) ||
+    (initial.lastModified !== undefined &&
+      next.lastModified !== undefined &&
+      initial.lastModified !== next.lastModified)
+  ) {
+    throw new FigmaConnectorError("FIGMA_SOURCE_CHANGED");
+  }
 };
 
 // A per-node deep fetch that hits one of these codes means the WHOLE build is compromised (auth lost,
@@ -185,6 +231,7 @@ const guardScopeSize = (node: RawFigmaNode, maxNodeCount: number): void => {
 // it truncated. That keeps large boards reviewable instead of failing the whole snapshot after one
 // expensive branch hits Figma's cost-based limit.
 const DEEP_FETCH_ABORT_CODES: ReadonlySet<string> = new Set([
+  "FIGMA_SOURCE_CHANGED",
   "FIGMA_TOKEN_MISSING",
   "FIGMA_TOKEN_INVALID",
   "FIGMA_TOKEN_EXPIRED",
@@ -221,7 +268,7 @@ const fetchDocumentAt = async (
   fetchDepth: number,
   version: string | undefined,
   retryPolicy: FigmaRetryPolicy = rt.retryPolicy,
-): Promise<RawFigmaNode> => {
+): Promise<ScopedDocument> => {
   const requestUrl = buildScopedUrl(fileKey, nodeId, fetchDepth, version);
   const response = await fetchWithBackoff(
     () => rt.deps.http({ url: requestUrl, headers: { "X-Figma-Token": token } }),
@@ -262,7 +309,7 @@ const doFetchScopedNodes = async (
 ): Promise<FigmaScopedResult> => {
   const token = resolveToken(rt.deps);
   const target = resolveTarget(url);
-  const document = await fetchDocumentAt(
+  const { document } = await fetchDocumentAt(
     rt,
     token,
     target.fileKey,
@@ -270,7 +317,7 @@ const doFetchScopedNodes = async (
     rt.depth,
     options.version,
   );
-  guardScopeSize(document, rt.maxNodeCount);
+  validateTree(document, rt.maxNodeCount);
   return {
     nodes: document as unknown as FigmaNode,
     provenance: provenanceFor(target, options),
@@ -285,18 +332,22 @@ const makeDeepFetcher = (
   token: string,
   target: FigmaTarget,
   version: string | undefined,
+  initial: ScopedDocument,
 ): ScopedNodeFetcher => {
-  return async (nodeId) => {
+  return async (nodeId, depth = rt.paginationLimits.pageDepth) => {
     try {
-      return await fetchDocumentAt(
+      const result = await fetchDocumentAt(
         rt,
         token,
         target.fileKey,
         nodeId,
-        rt.paginationLimits.pageDepth,
+        depth,
         version,
         DEEP_FETCH_FAIL_SOFT_RETRY_POLICY,
       );
+      assertSameRevision(initial, result);
+      validateTree(result.document, Number.MAX_SAFE_INTEGER);
+      return result.document;
     } catch (err) {
       if (err instanceof FigmaConnectorError && DEEP_FETCH_ABORT_CODES.has(err.code)) throw err;
       return undefined;
@@ -323,17 +374,35 @@ const doFetchScopedNodesDeep = async (
     rt.depth,
     options.version,
   );
-  const fetchNode = makeDeepFetcher(rt, token, target, options.version);
+  validateTree(discovery.document, Number.MAX_SAFE_INTEGER);
+  const fetchNode = makeDeepFetcher(rt, token, target, options.version, discovery);
   const { document, coverage } = await paginateScopedDocument(
-    discovery,
+    discovery.document,
     fetchNode,
     rt.paginationLimits,
+    rt.depth,
   );
   return {
     nodes: document as unknown as FigmaNode,
     provenance: provenanceFor(target, options),
     readiness: readinessFor(rt, document, options.version),
     coverage,
+    ...(options.version === undefined &&
+    (discovery.version !== undefined || discovery.lastModified !== undefined)
+      ? {
+          async verifyRevision(): Promise<void> {
+            const latest = await fetchDocumentAt(
+              rt,
+              token,
+              target.fileKey,
+              target.nodeId,
+              1,
+              undefined,
+            );
+            assertSameRevision(discovery, latest);
+          },
+        }
+      : {}),
   };
 };
 

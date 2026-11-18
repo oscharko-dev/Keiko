@@ -876,6 +876,8 @@ registerWindowRender("figmaView", (cfg, ctx) => {
   const selectedScreenName = str(cfg, "selectedScreenName");
   return (
     <FigmaSnapshotWindow
+      key={snapshotRunId}
+      viewSource
       sourceWindowId={ctx.windowId}
       snapshotRunId={snapshotRunId}
       selectedScreenIds={selectedScreenIds}
@@ -906,9 +908,16 @@ registerWindowRender("figmaJson", (cfg) => {
 });
 
 registerWindowRender("figmaImage", (cfg) => {
+  const snapshotRunId = str(cfg, "snapshotRunId");
   const imageSrc = str(cfg, "imageSrc");
   const selectedScreenName = str(cfg, "selectedScreenName");
-  return <FigmaImageSourceWindow imageSrc={imageSrc} screenName={selectedScreenName} />;
+  return (
+    <FigmaImageSourceWindow
+      snapshotRunId={snapshotRunId}
+      imageSrc={imageSrc}
+      screenName={selectedScreenName}
+    />
+  );
 });
 
 // Epic #189 Slice 3 M2 — connector picker window. updateCfg persists selectedKind/selectedId into

@@ -10,7 +10,7 @@
 // schedule is driven by the caller's awaited promise chain, so a mocked sleep makes tests instant.
 //
 // The `sleep` seam is injectable so unit tests record the exact delay schedule without waiting.
-// `Retry-After` (whole seconds) is honoured when present and numeric, capped at `maxDelayMs`.
+// A valid `Retry-After` (whole seconds) is honored if it fits the delay budget.
 
 import { FigmaConnectorError } from "./figmaConnectorErrors.js";
 
@@ -57,17 +57,12 @@ const computeBackoffMs = (attempt: number, policy: FigmaRetryPolicy): number => 
   return Math.min(exponential, policy.maxDelayMs);
 };
 
-// Parses a numeric `Retry-After` (whole seconds) into capped milliseconds. Returns undefined for a
-// missing/non-numeric/negative value so the caller falls back to the computed exponential delay.
 const retryAfterMs = (
   headers: Readonly<Record<string, string>> | undefined,
-  policy: FigmaRetryPolicy,
 ): number | undefined => {
-  const raw = headers?.["retry-after"];
-  if (raw === undefined) return undefined;
-  const seconds = Number(raw);
-  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
-  return Math.min(seconds * 1000, policy.maxDelayMs);
+  const raw = headers?.["retry-after"]?.trim();
+  if (raw === undefined || !/^\d+$/u.test(raw)) return undefined;
+  return Number(raw) * 1000;
 };
 
 /**
@@ -81,11 +76,13 @@ export const fetchWithBackoff = async <R extends FigmaBackoffResponse>(
   sleep: FigmaRetrySleep,
 ): Promise<R> => {
   for (let attempt = 0; attempt <= policy.maxRetries; attempt += 1) {
-    const response = await operation();
+    const response = await operation(); // NOSONAR typescript:S9382 -- the current status determines whether another attempt is needed.
     if (response.status !== FIGMA_RATE_LIMIT_STATUS) return response;
     if (attempt === policy.maxRetries) break;
-    const delay = retryAfterMs(response.headers, policy) ?? computeBackoffMs(attempt, policy);
-    await sleep(delay);
+    const delay = retryAfterMs(response.headers) ?? computeBackoffMs(attempt, policy);
+    // A shorter wait would send requests while the provider has instructed us to stop.
+    if (delay > policy.maxDelayMs) break;
+    await sleep(delay); // NOSONAR typescript:S9382 -- wait before another attempt to respect Retry-After.
   }
   throw new FigmaConnectorError("FIGMA_RATE_LIMITED");
 };

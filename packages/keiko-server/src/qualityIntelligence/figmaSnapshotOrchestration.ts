@@ -341,6 +341,7 @@ export const governedSnapshotBuild = async (
         imagesPort: httpPort,
         renderPort,
         maxScreensRendered: renderLimits.maxScreensDeep,
+        ...(scoped.verifyRevision === undefined ? {} : { verifyRevision: scoped.verifyRevision }),
       }),
   });
 

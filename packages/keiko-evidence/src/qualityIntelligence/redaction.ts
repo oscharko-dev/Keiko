@@ -16,10 +16,12 @@ const QI_REDACTED = "[REDACTED]";
 
 // KEIKO-0778 sibling: mirrors the depth ceiling + cycle guard already applied to
 // promptEnhancement/redaction.ts's deepRedact. Without these, a self-referential or excessively
-// deep QI evidence payload (Figma-derived node trees can nest through frame -> children arrays)
+// deep QI evidence payload
 // would crash the process with an uncaught RangeError instead of failing closed. 32 comfortably
 // covers this package's flat manifest shapes while still bounding worst-case recursion.
 const MAX_REDACT_DEPTH = 32;
+// The Figma normalizer admits 512 levels. Each level contributes an object and a children array.
+const MAX_FIGMA_SNAPSHOT_REDACT_DEPTH = 2 * 512 + 16;
 
 // QI-extension deny-list. Linear character classes with one bounded/open quantifier only — no
 // nesting, no backreferences — so the polynomial-ReDoS gate stays green. Each pattern has a stable
@@ -112,10 +114,11 @@ function redactString(
 function deepRedactContainer(
   node: object,
   depth: number,
+  maxDepth: number,
   seen: WeakSet<object>,
   build: () => unknown,
 ): unknown {
-  if (depth >= MAX_REDACT_DEPTH) {
+  if (depth >= maxDepth) {
     throw new EvidenceWriteError("QI evidence payload exceeds the maximum redaction depth");
   }
   if (seen.has(node)) {
@@ -133,6 +136,7 @@ function deepRedact(
   value: unknown,
   additionalSecrets: readonly string[],
   counter: QualityIntelligenceCounterState,
+  maxDepth: number,
   depth = 0,
   seen = new WeakSet(),
 ): unknown {
@@ -140,17 +144,19 @@ function deepRedact(
     return redactString(value, additionalSecrets, counter);
   }
   if (Array.isArray(value)) {
-    return deepRedactContainer(value, depth, seen, () =>
-      value.map((item): unknown => deepRedact(item, additionalSecrets, counter, depth + 1, seen)),
+    return deepRedactContainer(value, depth, maxDepth, seen, () =>
+      value.map((item): unknown =>
+        deepRedact(item, additionalSecrets, counter, maxDepth, depth + 1, seen),
+      ),
     );
   }
   if (typeof value === "object" && value !== null) {
-    return deepRedactContainer(value, depth, seen, () => {
+    return deepRedactContainer(value, depth, maxDepth, seen, () => {
       // KEIKO-0188: null-prototype seed keeps a `__proto__` key from a JSON.parse'd input as a
       // plain own-property instead of silently mutating the reconstructed object's prototype.
       const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
       for (const [key, child] of Object.entries(value)) {
-        out[key] = deepRedact(child, additionalSecrets, counter, depth + 1, seen);
+        out[key] = deepRedact(child, additionalSecrets, counter, maxDepth, depth + 1, seen);
       }
       return out;
     });
@@ -181,9 +187,22 @@ export function redactQualityIntelligenceEvidence<TValue>(
   value: TValue,
   options: QualityIntelligenceRedactionOptions = {},
 ): QualityIntelligenceRedactionResult<TValue> {
-  const additionalSecrets: readonly string[] = options.additionalSecrets ?? [];
+  return redactEvidence(value, options.additionalSecrets ?? [], MAX_REDACT_DEPTH);
+}
+
+export function redactFigmaSnapshotEvidence<TValue>(
+  value: TValue,
+): QualityIntelligenceRedactionResult<TValue> {
+  return redactEvidence(value, [], MAX_FIGMA_SNAPSHOT_REDACT_DEPTH);
+}
+
+function redactEvidence<TValue>(
+  value: TValue,
+  additionalSecrets: readonly string[],
+  maxDepth: number,
+): QualityIntelligenceRedactionResult<TValue> {
   const counter = createCounter();
-  const redacted = deepRedact(value, additionalSecrets, counter) as TValue;
+  const redacted = deepRedact(value, additionalSecrets, counter, maxDepth) as TValue;
   const summary: QualityIntelligenceRedactionSummary = {
     totalStringsScanned: counter.totalStringsScanned,
     stringsRedacted: counter.stringsRedacted,

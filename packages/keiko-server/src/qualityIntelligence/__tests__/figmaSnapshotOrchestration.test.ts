@@ -18,6 +18,7 @@ import {
   type FigmaRenderPort,
 } from "../figma/index.js";
 import { createNodeFigmaSnapshotStore } from "@oscharko-dev/keiko-evidence";
+import { fixturePng } from "../figma/__tests__/figmaRenderFixture.js";
 
 // ─── Synthetic board (NO customer data) ─────────────────────────────────────────
 
@@ -165,7 +166,11 @@ const singleTextBoard = (textFill: {
 });
 
 const renderPort: FigmaRenderPort = () =>
-  Promise.resolve({ status: 200, bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47]), headers: {} });
+  Promise.resolve({
+    status: 200,
+    bytes: fixturePng(),
+    headers: {},
+  });
 
 let dir: string;
 beforeEach(() => {

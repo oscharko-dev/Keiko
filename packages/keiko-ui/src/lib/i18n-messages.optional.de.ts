@@ -4046,6 +4046,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "figmaSnapshotWindow.error.generic.unknownDetail": "Ein unerwarteter Fehler ist aufgetreten.",
   "figmaSnapshotWindow.error.openTokenSettings": "Figma-Zugriffstoken-Einstellungen öffnen",
   "figmaSnapshotWindow.error.runIdClearedSuffix": "Die gespeicherte Run-ID wurde gelöscht.",
+  "figmaSnapshotWindow.error.sourceChanged":
+    "Die Figma-Datei wurde während der Erfassung geändert. Starte den Snapshot erneut oder verwende einen Link zu einer bestimmten Version.",
   "figmaSnapshotWindow.error.tokenAttention.remediation":
     "Öffnen Sie die Figma-Zugriffstoken-Einstellungen, um den schreibgeschützten Token hinzuzufügen oder zu erneuern, und versuchen Sie es dann erneut. Es wurde kein Snapshot gespeichert.",
   "figmaSnapshotWindow.error.tokenAttention.title": "Figma-Zugriffstoken erfordert Aufmerksamkeit",
@@ -6372,6 +6374,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "figmaJson.ui.figmaJson": "Figma-JSON",
   "figmaJson.ui.copyJson": "JSON kopieren",
   "figmaJson.ui.loadingJson": "JSON wird geladen…",
+  "figmaJson.ui.loadFailed": "Das JSON der ausgewählten Figma-Ansicht konnte nicht geladen werden.",
+  "figmaJson.ui.missingReference": "Die Referenz zur Figma-JSON-Quelle fehlt.",
   "figmaImage.ui.imagePreviewIsUnavailable": "Die Bildvorschau ist nicht verfügbar.",
   "resourceLimits.ui.resourceLimitDecisions": "Entscheidungen zu Ressourcenlimits",
   "relationshipPanel.ui.referenceId": "Referenz-ID: {id}",
