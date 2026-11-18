@@ -40,6 +40,7 @@ import type {
   MemoryId,
   MemoryRecord,
   MemoryScope,
+  MemoryType,
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
 import { memoryEmbeddingProviderIdentity } from "./memory-embedding.js";
@@ -175,7 +176,12 @@ function memoryUserId(value: string): MemoryUserId {
   return raw as MemoryUserId;
 }
 
-function insertAccepted(vault: MemoryVaultStore, id: string, body: string): MemoryRecord {
+function insertAccepted(
+  vault: MemoryVaultStore,
+  id: string,
+  body: string,
+  type: MemoryType = "semantic-fact",
+): MemoryRecord {
   const now = Date.now();
   const scope: MemoryScope = { kind: "user", userId: memoryUserId("local-operator") };
   const record: MemoryRecord = {
@@ -184,7 +190,7 @@ function insertAccepted(vault: MemoryVaultStore, id: string, body: string): Memo
     scope,
     // A fact, not a preference: preferences reach every answer through the standing profile
     // (#4228), and this fixture proves retrieval by the question.
-    type: "semantic-fact",
+    type,
     body,
     provenance: {
       sourceKind: "explicit-user-instruction",
@@ -509,6 +515,7 @@ describe("semantic memory retrieval (#204)", () => {
     mkdirSync(memoryDir);
     const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
     insertAccepted(vault, "mem-package-manager", "Use pnpm for installs");
+    storeEmbedding(vault, "mem-package-manager", "Use pnpm for installs");
     const embeddingCalls: string[] = [];
     await restart(
       deps(
@@ -531,6 +538,58 @@ describe("semantic memory retrieval (#204)", () => {
     expect(embeddingCalls).toEqual([]);
     vault.close();
   });
+
+  it.each(["profile-only chat", "memory context API"] as const)(
+    "does not dispatch an embedding query when %s has zero recall budget",
+    async (surface) => {
+      const memoryDir = join(tmp, "vault-zero-recall-budget");
+      mkdirSync(memoryDir);
+      const vault = createMemoryVault({ memoryDir, redactString: (value) => value });
+      try {
+        insertAccepted(vault, "mem-preference", "Use tabs", "preference");
+        storeEmbedding(vault, "mem-preference", "Use tabs");
+        const embeddingCalls: string[] = [];
+        await restart(
+          deps(
+            {
+              memoryVault: vault,
+              localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(embeddingCalls),
+            },
+            true,
+          ),
+        );
+        const chatId = await createChat();
+        const queryText = "Which formatting do I use?";
+        if (surface === "profile-only chat") {
+          const result = await sendChat(chatId, queryText, {
+            enabled: true,
+            budgetTokens: 3,
+            context: {},
+          });
+          expect(result.memory?.context).toMatchObject({
+            memories: [],
+            profile: { entries: [{ text: "Use tabs" }], tokens: 3 },
+            budget: { tokens: 0, used: 0 },
+          });
+        } else {
+          const response = await fetch(`${base()}/api/memory/context`, {
+            method: "POST",
+            headers: POST_JSON_HEADERS,
+            body: JSON.stringify({ chatId, projectPath: projectDir, queryText, budgetTokens: 0 }),
+          });
+          expect(response.status).toBe(200);
+          await expect(response.json()).resolves.toMatchObject({
+            included: [],
+            omitted: [],
+            budget: { tokens: 0, used: 0 },
+          });
+        }
+        expect(embeddingCalls).toEqual([]);
+      } finally {
+        vault.close();
+      }
+    },
+  );
 
   it("does not embed sensitive memory-enabled query text for secondary retrieval ranking", async () => {
     const memoryDir = join(tmp, "vault-sensitive-query");

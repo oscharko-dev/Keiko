@@ -42,6 +42,9 @@ import {
   buildStrengthById,
   DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
   DEFAULT_STALE_CONFIDENCE_THRESHOLD,
+  retrieveMemoryContext,
+  type MemoryQueryPort,
+  type MemoryRetrievalResult,
   type RankingFusionMode,
 } from "@oscharko-dev/keiko-memory-retrieval";
 import type {
@@ -69,6 +72,7 @@ export type SemanticRetrievalGateReason =
   | "allowed"
   | "blocked-by-policy"
   | "no-query"
+  | "no-budget"
   | "no-embeddings"
   | "no-embedder"
   | "query-mismatch"
@@ -588,4 +592,14 @@ export async function buildConversationRetrievalSignals(
     ...(embeddingSignals.mmrLambda !== undefined ? { mmrLambda: embeddingSignals.mmrLambda } : {}),
     ...(semanticById !== undefined ? { semanticById } : {}),
   };
+}
+
+export function retrieveMemoryWithZeroBudget(
+  deps: UiHandlerDeps,
+  port: MemoryQueryPort,
+  scopes: readonly MemoryScope[],
+  nowMs: number,
+): MemoryRetrievalResult {
+  warnSemanticRetrievalDisabled(deps, "no-budget", 0);
+  return retrieveMemoryContext({ scopes, nowMs, budgetTokens: 0 }, port);
 }

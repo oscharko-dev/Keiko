@@ -125,6 +125,7 @@ import {
 import {
   buildConversationRetrievalSignals,
   conversationFusionMode,
+  retrieveMemoryWithZeroBudget,
   semanticRetrievalGateForText,
 } from "./memory-retrieval-signals.js";
 import { memoriesUsedInAnswer } from "./memory-answer-use.js";
@@ -1458,6 +1459,8 @@ async function retrieveChatMemory(
   nowMs: number,
   profile: StandingProfile = EMPTY_STANDING_PROFILE,
 ): Promise<ReturnType<typeof retrieveMemoryContext>> {
+  const port = vaultAsQueryPort(vault);
+  if (budgetTokens === 0) return retrieveMemoryWithZeroBudget(deps, port, scopes, nowMs);
   const semanticGate = semanticRetrievalGateForText(
     deps,
     content,
@@ -1490,7 +1493,7 @@ async function retrieveChatMemory(
         : {}),
       nowMs,
     },
-    vaultAsQueryPort(vault),
+    port,
   );
 }
 
