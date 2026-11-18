@@ -512,9 +512,7 @@ export function MemoryDetail({
     <article ref={articleRef} aria-label={articleLabelFor(record)} className="mc-detail">
       {loadError}
       {contentPending ? (
-        <p role="status" className="lk-loading">
-          {t("memoria.loadingMemory")}
-        </p>
+        <output className="lk-loading">{t("memoria.loadingMemory")}</output>
       ) : (
         <RecordContent record={record} onBack={onBack} t={t} />
       )}
