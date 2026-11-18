@@ -1,10 +1,10 @@
 # Resolve a standalone folder package that does not start or asks for setup
 
-| Field             | Value                                                                                                                                                                                              |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Severity          | Blocker                                                                                                                                                                                            |
-| Surface           | CLI                                                                                                                                                                                                |
-| Stable identifier | `Keiko could not start.` / `Keiko is incomplete: files are missing in the folder "system".` / `keiko portable launch: portable setup manifest is unavailable` / `cli.lifecycle.provisioned-config` |
+| Field             | Value                                                                                                                                                                                                                                                                             |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Severity          | Blocker                                                                                                                                                                                                                                                                           |
+| Surface           | CLI                                                                                                                                                                                                                                                                               |
+| Stable identifier | `Keiko could not start.` / `Keiko is incomplete: files are missing in the folder "system".` / `keiko portable launch: portable setup manifest is unavailable` / `cli.lifecycle.provisioned-config` / `Keiko.zip does not match Keiko.zip.sha256` / `Keiko could not be unpacked.` |
 
 The standalone folder package is described in the
 [Standalone Folder Package](../release/standalone-folder-package.md) guide. This page covers a
@@ -28,6 +28,9 @@ One of these, after a double-click on `Start Keiko`:
 7. After a new package, Keiko still uses the old gateway or key.
 8. On macOS the start window prints `keiko portable launch: macOS runtime activation is
 incomplete`, then `Keiko could not start.`
+9. Nested form: `start.sh` or `start.cmd` prints
+   `Keiko.zip does not match Keiko.zip.sha256: the file is damaged or was changed.`
+10. Nested form: `start.sh` or `start.cmd` prints `Keiko could not be unpacked.`
 
 **Root Cause**
 
@@ -54,6 +57,11 @@ incomplete`, then `Keiko could not start.`
 8. The payload carries an Apple platform signature. A signed payload's runtime monitor must sit in
    the root-owned application location, which a folder in the user's home can never be, so the
    in-place launch is refused (ADR-0121 D9). The folder form is for the unsigned payload.
+9. The nested form checks `Keiko.zip` against `Keiko.zip.sha256` before it unpacks anything. The
+   archive was copied only in part, or one of the two files was changed or replaced alone.
+10. The nested form unpacks into `system.partial/` and then replaces `system/`. The package folder
+    is not writable (a read-only share, a write-protected folder), the disk is full, or a running
+    Keiko still holds files in `system/` while a newer `Keiko.zip` is to be unpacked.
 
 **Diagnostic Steps**
 
@@ -109,3 +117,8 @@ started in place.
 7. Stop Keiko and start it again.
 8. Use the unsigned standalone package, or install the signed build through the
    [portable managed install](../release/portable-launch-setup-guide.md).
+9. Delete the folder and extract the whole package archive again. Never replace `Keiko.zip`
+   without the `Keiko.zip.sha256` of the same package.
+10. Stop Keiko with `stop.sh` or `stop.cmd`, move the folder to a writable place with free space,
+    for example Documents, and start again. A left-over `system.partial/` is removed by the next
+    start.

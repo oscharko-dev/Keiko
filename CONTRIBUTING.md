@@ -74,7 +74,11 @@ The standalone folder package (ADR-0121 D9) is the portable payload, every file 
 start and stop files around it. `scripts/build-standalone-package.mjs` repacks a verified portable archive;
 the start files live in `scripts/standalone/`. A change here must keep three things true: the
 payload is never modified, the folder form never performs or suggests an installation, and nothing
-is downloaded at start. Run `scripts/__tests__/build-standalone-package.test.mjs` and the
+is downloaded at start. The nested form (`--layout nested`) carries the archive itself as
+`Keiko.zip`, which its start file verifies against `Keiko.zip.sha256` and unpacks once. Run
+`scripts/__tests__/build-standalone-package.test.mjs`,
+`scripts/__tests__/build-standalone-package-nested.test.mjs` (on Windows it runs the real
+`start.cmd` and `stop.cmd`) and the
 `portable-in-place` and `provisioned-config` suites of `keiko-cli`. The operator guide is
 [`docs/release/standalone-folder-package.md`](docs/release/standalone-folder-package.md).
 

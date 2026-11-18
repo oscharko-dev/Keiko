@@ -1183,6 +1183,36 @@ activation of D2: a payload without a platform signature is waived as in every u
 and a platform-signed payload is refused in place, because its runtime monitor must sit in the
 root-owned application location. The folder form is the unsigned lane's.
 
+**Nested form.** `--layout nested` builds the same package as `keiko-<target>-standalone-nested.zip`
+for a delivery that shows its runtime and the archive it starts:
+
+```text
+Keiko/
+  node/                        the payload's own Node.js runtime with its licence and source record
+  Keiko.zip                    the verified portable archive of D1, byte for byte
+  Keiko.zip.sha256             its SHA-256
+  package.json                 Keiko and Node.js versions; `engines.node` pins the runtime
+  package-lock.json            pins package.json; the package has no npm dependencies
+  .npmrc                       offline=true, engine-strict=true; never a registry or credential
+  README.md
+  start.sh  stop.sh            macOS
+  start.cmd stop.cmd           Windows
+  keiko.config.json            only in an administrator's package
+```
+
+On the first start the start file checks `Keiko.zip` against `Keiko.zip.sha256` with the bundled
+Node.js, unpacks it with the system's own unpacker (`System32\tar.exe`, `/usr/bin/ditto`) into
+`system.partial/`, puts the checksum into that folder and renames it to `system/`, so `system/` is
+either complete or absent. A later start whose `system/Keiko.zip.sha256` equals the package's uses
+`system/` as it is; a changed archive replaces the folder as a whole, and a damaged one is refused
+before anything is unpacked or started. The launch is then the same `keiko portable launch
+--in-place`, run by `node/`. The nested form writes into the package folder once, by the start file
+and before Keiko runs: its folder must be writable, unlike the folder form's. Keiko itself still
+writes nothing there. The builder writes `Keiko.zip` anew instead of copying it, because a file copy
+carries the source's download mark (the Windows `Zone.Identifier` stream, the macOS quarantine
+attribute) into the package. npm installs nothing at any point: the manifests describe and pin the
+folder, and `.npmrc` keeps an accidental `npm install` offline.
+
 **No self-management.** An in-place launch declares `KEIKO_PORTABLE_MANAGEMENT=organization-managed`
 to the UI process. Install-mode detection reads that declaration (closed values `user-local`,
 `organization-managed`, `machine-managed`; an unreadable value fails closed to
@@ -1384,6 +1414,7 @@ Security review for implementation under this ADR must cover:
 | 1.2     | 2026-09-14 | Amended D8 for the ADR-0177 `dev` release rehearsal: rehearsal attestations name `refs/heads/dev`, and every documented verifier binds the signer workflow and the stable tag. |
 | 1.3     | 2026-10-24 | The macOS application job declares the `Interactive` process type instead of `Background`, which throttled the app's runtime below its startup grant on a busy machine. |
 | 1.4     | 2026-11-17 | Added D9: the standalone folder package runs the portable payload in place, declares itself managed outside the app and can adopt an administrator-provisioned gateway configuration. |
+| 1.5     | 2026-11-18 | Amended D9 with the nested form: `node/`, the verified archive as `Keiko.zip`, pinning npm manifests and start/stop files that unpack the archive once before the same in-place launch. |
 
 ## Amendment history
 
@@ -1447,6 +1478,12 @@ Security review for implementation under this ADR must cover:
   management declaration also keeps the one-step Windows gateway setup away: no service, no UAC
   prompt, no Repair (`gateway-service-managed-outside`). D1 to D8 are unchanged; the operating
   system's download checks and D7 are not relaxed.
+- **2026-11-18 — D9 nested form:** Added `--layout nested`. The package carries the payload's own
+  Node.js as `node/`, the verified portable archive unchanged as `Keiko.zip` with its checksum, a
+  `package.json`/`package-lock.json`/`.npmrc` that pin the versions and keep npm offline, a README
+  and `start`/`stop` files. The start file verifies and unpacks `Keiko.zip` into `system/` once,
+  atomically, then runs the unchanged in-place launch. The payload, the launch, the state location
+  and the download-mark position of D9 are unchanged; only this form's folder must be writable.
 - **2026-11-17 — One-step Windows setup:** Amended D5. The relaunch that completes an update, the
   first launch and the manual re-download fallback bring the Windows `KeikoRuntimeGateway` service
   to the new helper after the healthy start (ADR-0043 D19), at most one UAC prompt per helper pin.

@@ -57,6 +57,62 @@ checksum the caller supplies (`--sha256sums` or `--sha256`); an unverified archi
 the macOS package on macOS or Linux, where file permissions exist; the Windows package can be built
 anywhere.
 
+## The Nested Form
+
+`--layout nested` builds the same package in a second form. Its folder shows the Node.js it runs
+with and holds the release archive itself, which the start file unpacks on the first start:
+
+```text
+Keiko/
+  node/                    the payload's own Node.js (and npm), with licence and source record
+  Keiko.zip                the verified portable archive, byte for byte
+  Keiko.zip.sha256         its SHA-256
+  package.json             Keiko and Node.js versions; engines.node pins the runtime
+  package-lock.json        pins package.json; there are no npm dependencies
+  .npmrc                   offline=true, engine-strict=true; no registry, no credential
+  README.md                English and German
+  start.sh  stop.sh        macOS
+  start.cmd stop.cmd       Windows
+  keiko.config.json        only in an administrator's package
+```
+
+```bash
+node scripts/build-standalone-package.mjs \
+  --target windows-x64 --layout nested \
+  --archive keiko-windows-x64.zip \
+  --sha256sums windows-x64-SHA256SUMS.txt \
+  --out-dir out
+```
+
+The result is `out/keiko-windows-x64-standalone-nested.zip` (with `--config`:
+`-standalone-nested-team.zip`). `--config`, `--api-key-env` and `--keep-folder` work as for the
+folder form.
+
+On the first start, `start.sh` or `start.cmd`:
+
+1. checks `Keiko.zip` against `Keiko.zip.sha256` with the bundled Node.js and refuses a damaged
+   archive before anything is unpacked or started;
+2. unpacks it with the system's own unpacker (`System32\tar.exe` on Windows, `/usr/bin/ditto` on
+   macOS) into `system.partial/`, adds the checksum and renames the folder to `system/`, so `system/`
+   is either complete or absent;
+3. runs `node/` against `system/` with the same `keiko portable launch --in-place` as the folder
+   form.
+
+Later starts use `system/` directly. A package folder whose `Keiko.zip` was replaced by a newer one
+(with its checksum) is unpacked again as a whole; stop Keiko first. `stop.sh` or `stop.cmd` runs
+`keiko stop` with the bundled Node.js and says so when Keiko was never started from the folder.
+
+What differs from the folder form:
+
+- **The folder must be writable.** The first start creates `system/` in it, so a read-only share or
+  a write-protected folder does not work. Keiko itself still writes nothing into the folder.
+- **Node.js is in the package twice:** in `node/` and inside the payload. Both are the same pinned
+  runtime; the server runs with the payload's own copy.
+- **macOS has no double-click start.** Finder opens a `.sh` file in an editor. A person runs
+  `sh start.sh` in Terminal. Use the folder form where a double-click is required.
+- **npm installs nothing.** The manifests describe and pin the folder; `npm start` with the bundled
+  npm runs the start file.
+
 ## Prepare A Package For A Team
 
 An administrator can ship the gateway configuration with the package, so that nobody in the team
@@ -175,7 +231,12 @@ unzip -p keiko-macos-arm64-standalone.zip Keiko/system/standalone.json
 ```
 
 `standalone.json` names the target, the Keiko version and the name and SHA-256 of the portable
-archive the package was built from. That archive carries the GitHub Artifact Attestation described
+archive the package was built from. In the nested form, `package.json` (`keiko.archive`) names the
+same, and `Keiko.zip` is that archive:
+
+````bash
+unzip -p keiko-windows-x64-standalone-nested.zip Keiko/package.json
+``` That archive carries the GitHub Artifact Attestation described
 in the [portable guide](portable-launch-setup-guide.md#verifying-a-downloaded-artifact).
 
 ## Related Documents
@@ -184,3 +245,4 @@ in the [portable guide](portable-launch-setup-guide.md#verifying-a-downloaded-ar
 - [Portable Launch And Setup Guide](portable-launch-setup-guide.md)
 - [Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md)
 - [ADR-0046](../adr/ADR-0046-local-credential-vault.md) for the custody of the provisioned key
+````

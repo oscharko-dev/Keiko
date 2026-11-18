@@ -19,10 +19,16 @@
 // The archive is verified against a SHA-256 the caller must supply; an unverified archive is
 // refused. Files this script writes carry no download mark, so the result starts on a machine that
 // received it over an internal share even when the source archive was a browser download.
+//
+// `--layout nested` builds the second form of the same package: the verified archive itself as
+// `Keiko.zip`, the payload's own Node.js as `node/`, a `package.json`/`package-lock.json`/`.npmrc`
+// that pin and describe it, a README and `start`/`stop` files. The start file checks `Keiko.zip`
+// against `Keiko.zip.sha256`, unpacks it into `system/` once and then starts exactly as above.
 
 import { Buffer } from "node:buffer";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -47,6 +53,8 @@ const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "standalone"
 const PACKAGE_NAME = "@oscharko-dev/keiko";
 const PACKAGE_ROOT_NAME = "Keiko";
 const PAYLOAD_ROOT_PREFIX = "Keiko/";
+const NESTED_ARCHIVE_NAME = "Keiko.zip";
+const NODE_SOURCE_NAME = "NODE_RUNTIME_SOURCE.json";
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 // Windows refuses paths beyond 260 characters when the archive is extracted with Explorer. The
@@ -59,20 +67,37 @@ const MACOS_LAYOUT = Object.freeze({
   os: "macos",
   resources: MACOS_RESOURCES,
   node: [...MACOS_RESOURCES, "runtime", "node", "bin", "node"],
+  nodeRuntime: [...MACOS_RESOURCES, "runtime", "node"],
   startName: "Start Keiko.command",
   stopName: "Stop Keiko.command",
   startTemplate: "macos-start.sh",
   stopTemplate: "macos-stop.sh",
+  nestedStartName: "start.sh",
+  nestedStopName: "stop.sh",
+  nestedStartTemplate: "nested-macos-start.sh",
+  nestedStopTemplate: "nested-macos-stop.sh",
 });
 const WINDOWS_LAYOUT = Object.freeze({
   os: "windows",
   resources: ["Keiko"],
   node: ["Keiko", "runtime", "node", "node.exe"],
+  nodeRuntime: ["Keiko", "runtime", "node"],
   startName: "Start Keiko.cmd",
   stopName: "Stop Keiko.cmd",
   startTemplate: "windows-start.cmd",
   stopTemplate: "windows-stop.cmd",
+  nestedStartName: "start.cmd",
+  nestedStopName: "stop.cmd",
+  nestedStartTemplate: "nested-windows-start.cmd",
+  nestedStopTemplate: "nested-windows-stop.cmd",
 });
+
+/**
+ * The two package layouts. `folder` carries the payload unpacked below `system/`. `nested` carries
+ * the verified release archive itself as `Keiko.zip` beside its own `node/` runtime; its start file
+ * unpacks the archive into `system/` on the first start (ADR-0121 D9).
+ */
+export const STANDALONE_LAYOUTS = Object.freeze(["folder", "nested"]);
 
 /** The targets a standalone package exists for (ADR-0183: macOS and Windows). */
 export const STANDALONE_TARGETS = Object.freeze({
@@ -84,9 +109,12 @@ export const STANDALONE_TARGETS = Object.freeze({
 const USAGE = `Usage:
   node scripts/build-standalone-package.mjs --target TARGET --archive PATH
        (--sha256 HEX | --sha256sums PATH) --out-dir PATH
-       [--config PATH [--api-key-env NAME]] [--keep-folder]
+       [--layout folder|nested] [--config PATH [--api-key-env NAME]] [--keep-folder]
 
   --target       ${Object.keys(STANDALONE_TARGETS).join(" | ")}
+  --layout       folder (default): the payload unpacked below system/
+                 nested: node/, Keiko.zip, package.json, package-lock.json, .npmrc, README.md and
+                 start/stop files; the start file unpacks Keiko.zip on the first start
   --archive      the portable release archive for that target (keiko-<target>.zip)
   --sha256       the archive's expected SHA-256, or
   --sha256sums   a SHA256SUMS file that names the archive
@@ -113,6 +141,7 @@ const VALUE_FLAGS = Object.freeze({
   "--out-dir": "outDir",
   "--config": "config",
   "--api-key-env": "apiKeyEnv",
+  "--layout": "layout",
 });
 
 function readFlagValue(argv, index) {
@@ -357,8 +386,151 @@ function writeStandaloneManifest(packageRoot, record) {
   );
 }
 
-function archiveName(target, provisioned) {
-  return provisioned ? `keiko-${target}-standalone-team.zip` : `keiko-${target}-standalone.zip`;
+function archiveName(target, provisioned, layout = "folder") {
+  const kind = layout === "nested" ? "standalone-nested" : "standalone";
+  return provisioned ? `keiko-${target}-${kind}-team.zip` : `keiko-${target}-${kind}.zip`;
+}
+
+/** The pinned Node.js runtime the payload carries, as its staging recorded it. */
+export function readNodeRuntimeSource(systemRoot, target) {
+  const sourcePath = join(systemRoot, ...STANDALONE_TARGETS[target].nodeRuntime, NODE_SOURCE_NAME);
+  if (!existsSync(sourcePath)) refuse("the payload does not record its Node.js runtime");
+  const source = readJsonObject(sourcePath, "the Node.js runtime record");
+  const version =
+    typeof source.nodeVersion === "string" ? source.nodeVersion.replace(/^v/u, "") : "";
+  if (!VERSION_PATTERN.test(version)) refuse("the Node.js runtime record names no version");
+  if (typeof source.sha256 !== "string" || !SHA256_PATTERN.test(source.sha256)) {
+    refuse("the Node.js runtime record names no SHA-256");
+  }
+  return { version, sha256: source.sha256, fileName: String(source.fileName ?? "") };
+}
+
+// The package's own manifest. It names what the folder holds and pins the Node.js version; it has
+// no dependencies, so npm has nothing to fetch for it, and `.npmrc` keeps npm offline anyway.
+function nestedPackageJson(record, layout) {
+  const command = layout.os === "windows" ? (name) => name : (name) => `sh ${name}`;
+  return {
+    name: `keiko-standalone-${record.platformTarget}`,
+    version: record.packageVersion,
+    private: true,
+    description: `Keiko ${record.packageVersion} with its own Node.js ${record.nodeRuntime.version}. Start with ${layout.nestedStartName}, stop with ${layout.nestedStopName}.`,
+    engines: { node: record.nodeRuntime.version },
+    scripts: {
+      start: command(layout.nestedStartName),
+      stop: command(layout.nestedStopName),
+    },
+    keiko: {
+      packageName: PACKAGE_NAME,
+      packageVersion: record.packageVersion,
+      platformTarget: record.platformTarget,
+      archive: { name: NESTED_ARCHIVE_NAME, ...record.sourceArchive },
+      nodeRuntime: record.nodeRuntime,
+      provisionedConfig: record.provisionedConfig,
+    },
+  };
+}
+
+// What `npm install` writes for a package without dependencies: the lock pins the root alone.
+function nestedPackageLock(packageJson) {
+  return {
+    name: packageJson.name,
+    version: packageJson.version,
+    lockfileVersion: 3,
+    requires: true,
+    packages: {
+      "": { name: packageJson.name, version: packageJson.version, engines: packageJson.engines },
+    },
+  };
+}
+
+const NESTED_NPMRC = `# Keiko brings everything it needs. npm never downloads anything for this folder.
+offline=true
+engine-strict=true
+package-lock=true
+audit=false
+fund=false
+update-notifier=false
+`;
+
+function jsonText(value) {
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+function writeNestedManifests(packageRoot, record, layout) {
+  const packageJson = nestedPackageJson(record, layout);
+  writePackageFile(join(packageRoot, "package.json"), jsonText(packageJson), 0o644);
+  writePackageFile(
+    join(packageRoot, "package-lock.json"),
+    jsonText(nestedPackageLock(packageJson)),
+    0o644,
+  );
+  writePackageFile(join(packageRoot, ".npmrc"), NESTED_NPMRC, 0o644);
+}
+
+function writeNestedWrapperLayer(packageRoot, layout) {
+  const files = [
+    [layout.nestedStartName, layout.nestedStartTemplate, 0o755],
+    [layout.nestedStopName, layout.nestedStopTemplate, 0o755],
+    ["README.md", "nested-readme.md", 0o644],
+  ];
+  for (const [name, template, mode] of files) {
+    writePackageFile(join(packageRoot, name), templateText(template, layout), mode);
+  }
+}
+
+// The archive goes in as it is, with its digest beside it: the start file checks the one against
+// the other before it unpacks anything. Its bytes are written anew rather than copied: a file copy
+// carries the source's download mark along (the Zone.Identifier stream on Windows, the quarantine
+// attribute on macOS), and the unpacked payload would inherit it.
+function writeNestedArchive(packageRoot, archivePath, archiveSha256) {
+  const target = join(packageRoot, NESTED_ARCHIVE_NAME);
+  writePackageFile(target, readFileSync(archivePath), 0o644);
+  if (sha256File(target) !== archiveSha256) refuse("Keiko.zip does not match the verified archive");
+  writePackageFile(
+    join(packageRoot, `${NESTED_ARCHIVE_NAME}.sha256`),
+    `${archiveSha256}  ${NESTED_ARCHIVE_NAME}\n`,
+    0o644,
+  );
+}
+
+// The bundled runtime is the payload's own Node.js, copied with its licence and source record, so
+// the folder runs on the exact version the payload was qualified with.
+function copyNodeRuntime(inspectRoot, packageRoot, layout) {
+  const nodeRoot = join(packageRoot, "node");
+  cpSync(join(inspectRoot, ...layout.nodeRuntime), nodeRoot, { recursive: true });
+  const executable = join(nodeRoot, ...layout.node.slice(layout.nodeRuntime.length));
+  if (!existsSync(executable)) refuse("the copied Node.js runtime has no executable");
+  if (layout.os !== "windows") chmodSync(executable, 0o755);
+}
+
+function assembleNestedPackage(input) {
+  const { archivePath, target, workRoot, archiveSha256, configBytes } = input;
+  const layout = STANDALONE_TARGETS[target];
+  const packageRoot = join(workRoot, PACKAGE_ROOT_NAME);
+  const inspectRoot = join(workRoot, ".inspect");
+  mkdirSync(packageRoot, { recursive: true });
+  extractZipArchiveEntries(archivePath, inspectRoot, { requireRegularEntries: true });
+  const { packageVersion } = inspectPayload(inspectRoot, target);
+  const nodeRuntime = readNodeRuntimeSource(inspectRoot, target);
+  copyNodeRuntime(inspectRoot, packageRoot, layout);
+  rmSync(inspectRoot, { recursive: true, force: true });
+  writeNestedArchive(packageRoot, archivePath, archiveSha256);
+  writeNestedWrapperLayer(packageRoot, layout);
+  if (configBytes !== undefined) {
+    writePackageFile(join(packageRoot, "keiko.config.json"), configBytes, 0o600);
+  }
+  writeNestedManifests(
+    packageRoot,
+    {
+      platformTarget: target,
+      packageVersion,
+      nodeRuntime,
+      sourceArchive: { source: basename(archivePath), sha256: archiveSha256 },
+      provisionedConfig: configBytes !== undefined,
+    },
+    layout,
+  );
+  return { packageRoot, packageVersion };
 }
 
 function assemblePackage(input) {
@@ -399,13 +571,19 @@ function resolveBuildInput(options) {
     options.config === undefined
       ? undefined
       : readProvisionedConfig(resolve(options.config), options.apiKeyEnv, options.env);
+  const layout = options.layout ?? "folder";
+  if (!STANDALONE_LAYOUTS.includes(layout)) {
+    refuse(`unsupported layout ${layout}: use ${STANDALONE_LAYOUTS.join(", ")}`);
+  }
   const keptFolder =
-    options.keepFolder === true ? join(outDir, `keiko-${target}-standalone`) : undefined;
+    options.keepFolder === true
+      ? join(outDir, archiveName(target, false, layout).replace(/\.zip$/u, ""))
+      : undefined;
   // Before any work: a kept folder is never replaced, and its absence is cheap to check now.
   if (keptFolder !== undefined && existsSync(keptFolder)) {
     refuse(`--keep-folder: ${keptFolder} already exists; remove it first`);
   }
-  return { target, archivePath, outDir, expected, configBytes, keptFolder };
+  return { target, archivePath, outDir, expected, configBytes, keptFolder, layout };
 }
 
 function publishFolder(packageRoot, keptFolder) {
@@ -416,21 +594,22 @@ function publishFolder(packageRoot, keptFolder) {
 
 /** Builds the standalone package and returns what was written. */
 export function buildStandalonePackage(options) {
-  const { target, archivePath, outDir, expected, configBytes, keptFolder } =
+  const { target, archivePath, outDir, expected, configBytes, keptFolder, layout } =
     resolveBuildInput(options);
   const archiveSha256 = verifyArchive(archivePath, expected);
   assertPayloadEntryNames(archivePath, target);
   mkdirSync(outDir, { recursive: true });
   const workRoot = mkdtempSync(join(outDir, ".standalone-work-"));
   try {
-    const { packageRoot, packageVersion } = assemblePackage({
+    const assemble = layout === "nested" ? assembleNestedPackage : assemblePackage;
+    const { packageRoot, packageVersion } = assemble({
       archivePath,
       target,
       workRoot,
       archiveSha256,
       configBytes,
     });
-    const outputPath = join(outDir, archiveName(target, configBytes !== undefined));
+    const outputPath = join(outDir, archiveName(target, configBytes !== undefined, layout));
     writeZipArchiveFromDirectory(packageRoot, outputPath, {
       rootName: PACKAGE_ROOT_NAME,
       requireRegularEntries: true,
@@ -440,6 +619,7 @@ export function buildStandalonePackage(options) {
     const folder = keptFolder === undefined ? undefined : publishFolder(packageRoot, keptFolder);
     return {
       target,
+      layout,
       packageVersion,
       outputPath,
       outputSha256,
@@ -452,7 +632,9 @@ export function buildStandalonePackage(options) {
 }
 
 function report(result) {
-  console.log(`PASS standalone package ${result.target} (Keiko ${result.packageVersion})`);
+  console.log(
+    `PASS standalone package ${result.target} (${result.layout}, Keiko ${result.packageVersion})`,
+  );
   console.log(`  archive: ${result.outputPath}`);
   console.log(`  sha256:  ${result.outputSha256}`);
   if (result.folder !== undefined) console.log(`  folder:  ${result.folder}`);

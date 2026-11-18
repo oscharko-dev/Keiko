@@ -140,7 +140,11 @@ This shapes the product _and_ how you work on it:
   folder form perform or suggest an installation, and never weaken the operating system's download
   checks to make a package start: an administrator removes the download mark before internal
   distribution. A team's `keiko.config.json` beside the start files is an administrator-owned
-  input; Keiko adopts it and seals its key, and never writes to it (ADR-0046 D5).
+  input; Keiko adopts it and seals its key, and never writes to it (ADR-0046 D5). The nested form
+  (`--layout nested`, owner decision 2026-11-18) ships `node/`, the verified archive unchanged as
+  `Keiko.zip`, pinning `package.json`/`package-lock.json`/`.npmrc` and `start`/`stop` files that
+  verify and unpack `Keiko.zip` once into `system/` before the same in-place launch; npm never
+  installs anything for it.
 - Portable updates must not require an Apple Developer subscription (ADR-0121 D7). Verify macOS
   handoff copies against the exact current artifact digests in the validated plan after managed
   registration admission; preserve candidate authenticity, containment and process ownership.
