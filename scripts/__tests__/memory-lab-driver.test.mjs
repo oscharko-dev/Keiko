@@ -8,6 +8,8 @@ import { validateScenario } from "../testing/memory-lab/scenario.mjs";
 
 const TABLES = "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.";
 const SPACES = "Ich nutze zwei Leerzeichen zum Einruecken.";
+const FORGET = "Vergiss die Tabellen.";
+const FORGET_ID = "forget-target";
 
 function scenario(overrides = {}) {
   return validateScenario({
@@ -33,8 +35,16 @@ function scenario(overrides = {}) {
  * @param {object} options
  * @param {(text: string) => (object | undefined)} [options.capture] decides what the capture route
  *   does with a seed: undefined stores one candidate; `{outcomes}` is returned as is, nothing stored.
+ * @param {object} [options.forgetAction] the chat's response to the fixture's forget request.
  */
-function fakeProduct({ stored = [], capture, status = "accepted", scope = "project", edit } = {}) {
+function fakeProduct({
+  stored = [],
+  capture,
+  status = "accepted",
+  scope = "project",
+  edit,
+  forgetAction,
+} = {}) {
   const memories = stored.map((memory) => ({ scope: { kind: "user" }, ...memory }));
   const calls = [];
   let counter = 0;
@@ -60,6 +70,11 @@ function fakeProduct({ stored = [], capture, status = "accepted", scope = "proje
       };
     },
     "POST /api/desktop/chat": (body) => {
+      const action = body.content === FORGET ? forgetAction : undefined;
+      if (action?.forgotten === true) {
+        const index = memories.findIndex((memory) => memory.id === action.memoryId);
+        if (index !== -1) memories.splice(index, 1);
+      }
       const supplied = body.memory?.enabled
         ? memories
             .filter((memory) => memory.status === "accepted")
@@ -69,7 +84,7 @@ function fakeProduct({ stored = [], capture, status = "accepted", scope = "proje
         messages: [
           { role: "assistant", content: supplied.map((entry) => entry.bodyExcerpt).join(" ") },
         ],
-        memory: { actions: [], context: { memories: supplied } },
+        memory: { actions: action === undefined ? [] : [action], context: { memories: supplied } },
       };
     },
   };
@@ -82,6 +97,14 @@ function fakeProduct({ stored = [], capture, status = "accepted", scope = "proje
     if (method === "POST" && accept !== null) {
       find(accept[1]).status = "accepted";
       return { status: 200, json: { memory: find(accept[1]) } };
+    }
+    const forget = /^\/api\/memory\/([^/]+)\/forget$/u.exec(url.pathname);
+    if (method === "POST" && forget !== null) {
+      const index = memories.findIndex((memory) => memory.id === forget[1]);
+      if (index === -1) return { status: 404, json: {} };
+      if (body.acknowledged !== true) return { status: 400, json: {} };
+      memories.splice(index, 1);
+      return { status: 200, json: {} };
     }
     const single = /^\/api\/memory\/([^/]+)$/u.exec(url.pathname);
     if (single !== null && method === "GET")
@@ -108,6 +131,58 @@ function context(overrides = {}) {
     ...overrides,
   };
 }
+
+describe("forget confirmation", () => {
+  it.each([
+    {
+      name: "skips a forget the subject already applied",
+      action: { memoryId: FORGET_ID, requiresConfirmation: false, forgotten: true },
+      posts: [],
+      confirmed: [],
+      unresolved: 0,
+      live: 0,
+    },
+    {
+      name: "confirms an older subject's pending forget",
+      action: { memoryId: FORGET_ID, requiresConfirmation: true },
+      posts: [`POST /api/memory/${FORGET_ID}/forget`],
+      confirmed: [{ id: FORGET_ID, status: 200 }],
+      unresolved: 0,
+      live: 0,
+    },
+    {
+      name: "leaves a forget without a confirmation request alone",
+      action: { memoryId: FORGET_ID, requiresConfirmation: false },
+      posts: [],
+      confirmed: [],
+      unresolved: 0,
+      live: 1,
+    },
+    {
+      name: "records a pending forget without a wire memory id as unresolved",
+      action: { targets: [FORGET_ID], requiresConfirmation: true },
+      posts: [],
+      confirmed: [],
+      unresolved: 1,
+      live: 1,
+    },
+  ])("$name", async ({ action, posts, confirmed, unresolved, live }) => {
+    const product = fakeProduct({
+      stored: [{ id: FORGET_ID, body: TABLES, status: "accepted" }],
+      forgetAction: { kind: "forget", ...action },
+    });
+    const result = await runScenario(
+      scenario({ turns: [{ user: FORGET }] }),
+      product.instance,
+      context({ arm: "product", learning: { quietMs: 0, maxMs: 2000 } }),
+    );
+    expect({
+      posts: product.calls.filter((call) => call.endsWith("/forget")),
+      forgets: result.turns[0].forgets,
+      live: result.store.live,
+    }).toEqual({ posts, forgets: { confirmed, unresolved }, live });
+  });
+});
 
 describe("the oracle arm's seeding", () => {
   it("seeds each truth fact by the id the capture route returns and meets its precondition", async () => {

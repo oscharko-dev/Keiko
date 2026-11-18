@@ -99,37 +99,27 @@ function profileEntries(profile) {
   }));
 }
 
-function idOf(entry) {
-  if (typeof entry === "string") return entry;
-  return entry?.memoryId ?? entry?.id;
-}
-
-function memoryIdsOf(action) {
-  const listed = [action.memoryIds, action.targets, action.candidates]
-    .filter((list) => Array.isArray(list))
-    .flat();
-  const ids = [action.memoryId, ...listed].map(idOf);
-  return [...new Set(ids.filter((id) => typeof id === "string" && id.length > 0))];
-}
-
-// A person confirms the forget the product asked to confirm. The lab records that it had to.
+// Current subjects can forget directly in Chat. Older subjects request confirmation explicitly.
 async function confirmForgets(instance, actions, context) {
   const confirmed = [];
   let unresolved = 0;
   for (const action of actions) {
-    if (action?.kind !== "forget") continue;
-    const ids = memoryIdsOf(action);
-    if (ids.length === 0) {
+    if (
+      action?.kind !== "forget" ||
+      action.forgotten === true ||
+      action.requiresConfirmation !== true
+    )
+      continue;
+    const id = action.memoryId;
+    if (typeof id !== "string" || id.length === 0) {
       unresolved += 1;
       continue;
     }
     if (!context.confirmForget) continue;
-    for (const id of ids) {
-      const result = await instance.request("POST", `/api/memory/${id}/forget`, {
-        acknowledged: true,
-      });
-      confirmed.push({ id, status: result.status });
-    }
+    const result = await instance.request("POST", `/api/memory/${encodeURIComponent(id)}/forget`, {
+      acknowledged: true,
+    });
+    confirmed.push({ id, status: result.status });
   }
   return { confirmed, unresolved };
 }
