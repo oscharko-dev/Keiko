@@ -153,6 +153,33 @@ beforeEach(() => {
 });
 
 describe("buildConversationRetrievalSignals", () => {
+  it("loads reinforcement only for eligible memories in the requested scopes", async () => {
+    const alpha = memoryId("alpha");
+    const archived = memoryId("archived");
+    const outside = memoryId("outside");
+    const stat = { lastAccessedAt: NOW_MS, accessCount: 2, outcomeCount: 0, utilitySum: 0 };
+    const getAccessStats = vi.fn((ids?: readonly MemoryId[]) => {
+      const stats = new Map([
+        [alpha, stat],
+        [archived, stat],
+        [outside, stat],
+      ]);
+      return ids === undefined ? stats : new Map([...stats].filter(([id]) => ids.includes(id)));
+    });
+    const vault = {
+      ...vaultFor(
+        () => [metadata(alpha, 100), { ...metadata(archived, 200), status: "archived" }],
+        new Map(),
+      ),
+      getAccessStats,
+    };
+
+    const signals = await collectSignals(vault);
+
+    expect(getAccessStats).toHaveBeenCalledExactlyOnceWith([alpha]);
+    expect([...signals.strengthById.keys()]).toEqual([alpha]);
+  });
+
   it("reuses one canonical memory partition for candidate permutations", async () => {
     const alpha = memoryId("alpha");
     const beta = memoryId("beta");

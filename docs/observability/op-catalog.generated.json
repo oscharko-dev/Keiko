@@ -125215,14 +125215,14 @@
     {
       "op": "memory.retrieval.semantic-disabled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:461",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:468",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "memory.retrieval.semantic-skipped",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:279",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:286",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

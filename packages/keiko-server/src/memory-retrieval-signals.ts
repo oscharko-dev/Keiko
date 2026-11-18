@@ -205,13 +205,12 @@ function cleartextCandidateScore(
   );
 }
 
-function gatherCandidateIds(
+function gatherCandidateMetadata(
   vault: MemoryVaultStore,
   scopes: readonly MemoryScope[],
   nowMs: number,
-  strengthById: ReadonlyMap<MemoryId, number>,
   signal?: AbortSignal,
-): readonly MemoryId[] {
+): MemoryMetadata[] {
   const candidates: MemoryMetadata[] = [];
   const seen = new Set<string>();
   for (const scope of scopes) {
@@ -227,6 +226,14 @@ function gatherCandidateIds(
       candidates.push(record);
     }
   }
+  return candidates;
+}
+
+function semanticCandidateIds(
+  candidates: MemoryMetadata[],
+  nowMs: number,
+  strengthById: ReadonlyMap<MemoryId, number>,
+): readonly MemoryId[] {
   candidates.sort((a, b) => {
     const scoreDelta =
       cleartextCandidateScore(b, nowMs, strengthById) -
@@ -567,9 +574,13 @@ export async function buildConversationRetrievalSignals(
   signal?: AbortSignal,
 ): Promise<ConversationRetrievalSignals> {
   throwIfAborted(signal);
-  const strengthById = buildStrengthById(vault.getAccessStats(), nowMs);
+  const candidates = gatherCandidateMetadata(vault, scopes, nowMs, signal);
   throwIfAborted(signal);
-  const candidateIds = gatherCandidateIds(vault, scopes, nowMs, strengthById, signal);
+  const strengthById = buildStrengthById(
+    vault.getAccessStats(candidates.map((record) => record.id)),
+    nowMs,
+  );
+  const candidateIds = semanticCandidateIds(candidates, nowMs, strengthById);
   throwIfAborted(signal);
   const embeddings =
     candidateIds.length > 0
