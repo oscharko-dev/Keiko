@@ -32,6 +32,7 @@ import {
 import {
   LauncherRefusal,
   acquireInstallLock,
+  closeInstallLock,
   credentialScope,
   ensureInstalled,
   environmentKeys,
@@ -61,6 +62,7 @@ import {
   readHidden,
   refuseForeignInstallTarget,
   releaseInstallLock,
+  removeInstallLock,
   requestStop,
   restrictToCurrentAccount,
   runCommand,
@@ -161,9 +163,10 @@ function endedPid() {
 }
 
 // A hold whose exit and renewal the test runs itself.
-function heldByTest(dir, keep) {
+function heldByTest(dir, keep, extra = {}) {
   const hold = { renew: undefined, exit: undefined };
   hold.entry = holdInstallLock(dir, {
+    ...extra,
     keep,
     onExit: (listener) => {
       hold.exit = listener;
@@ -321,6 +324,28 @@ describe("the npm package start", () => {
       writeFileSync(npmrc, ignored);
       expect(() => folderRegistry(root, env), ignored).toThrow(reason);
     }
+  });
+
+  it("refuses .npmrc syntax it cannot read exactly as npm does, before any request", () => {
+    // Review finding on PR #4464 (P2): npm reads a registry after a bare carriage return and a key
+    // spelled by `${...}`; the reader saw neither, kept the inherited registry override and the
+    // administrator's mirror was never asked.
+    const root = packageRoot();
+    const npmrc = join(root, ".npmrc");
+    for (const unreadable of [
+      "proxy=http://p.example\rregistry=https://mirror.example/\n",
+      "registry=https://mirror.example/\r",
+      "${KEY}=https://mirror.example/\n",
+      "@scope:${KEY}=https://mirror.example/\n",
+    ]) {
+      writeFileSync(npmrc, unreadable);
+      expect(() => folderRegistry(root, { KEY: "registry" }), unreadable).toThrow(
+        /cannot read exactly as npm does/u,
+      );
+    }
+    // Plain lines in either line ending keep working.
+    writeFileSync(npmrc, "registry=https://a.example/\r\nproxy=http://p.example\r\n");
+    expect(folderRegistry(root)).toBe(true);
   });
 
   it("declares Keiko managed outside the app, whatever the environment declares", () => {
@@ -842,7 +867,7 @@ describe("the npm package start", () => {
       expect(acquireInstallLock(root)).toBeUndefined();
     });
 
-    it("lets an owner hold the lock only within the computer's run and one hour", () => {
+    it("lets an owner hold the lock only within the computer's run and one day", () => {
       const now = 10_000_000_000;
       const up = 5 * 60 * 60 * 1000;
       const minute = 60 * 1000;
@@ -853,8 +878,10 @@ describe("the npm package start", () => {
       // Written before the computer started, beyond what a clock correction explains.
       expect(ownerExpired(now - up - 11 * minute, now, up)).toBe(true);
       expect(ownerExpired(now - minute, now, 4 * minute)).toBe(false);
-      expect(ownerExpired(now - 61 * minute, now, up)).toBe(true);
-      expect(ownerExpired(now - 59 * minute, now, up)).toBe(false);
+      // A late renewal is no expiry: only a day without one counts as a reused process number.
+      expect(ownerExpired(now - 61 * minute, now, up)).toBe(false);
+      expect(ownerExpired(now - 25 * 60 * minute, now, 48 * 60 * minute)).toBe(true);
+      expect(ownerExpired(now - 23 * 60 * minute, now, 48 * 60 * minute)).toBe(false);
     });
 
     it("leaves a lock another start took over to that start when it ends", () => {
@@ -883,6 +910,61 @@ describe("the npm package start", () => {
       expect(
         readdirSync(dirname(installLockPath(root))).filter((name) => /released/u.test(name)),
       ).toEqual([]);
+    });
+
+    it("releases only the generation it acquired and never touches a replacement", () => {
+      // Review finding on PR #4464 (P1): release moved the canonical lock first and read its owner
+      // afterwards, so a replacement's live lock was moved, its slot was vacant for a moment and a
+      // third start could take it.
+      const { root } = installFixture();
+      const dir = installLockPath(root);
+      const lock = acquireInstallLock(root);
+      rmSync(dir, { recursive: true });
+      const other = acquireInstallLock(root);
+      const changed = statSync(dir).ctimeMs;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30);
+
+      expect(releaseInstallLock(lock)).toBe(false);
+      expect(statSync(dir).ctimeMs).toBe(changed);
+      expect(lockOwners(root)).toEqual([`owner-${other.token}`]);
+      expect(lockLeftovers(root)).toEqual([]);
+      expect(acquireInstallLock(root)).toBeUndefined();
+    });
+
+    it("keeps the closing generation exclusive and refuses a Stop that comes after it closed", () => {
+      // Review finding on PR #4464 (P2): a Stop accepted after the last read was acted on after the
+      // lock was released, and stopped the Keiko a later start had opened.
+      const { root } = installFixture();
+      const lock = acquireInstallLock(root);
+      expect(requestStop(root)).toBe(true);
+
+      expect(closeInstallLock(lock)).toEqual({ owned: true, stopRequested: true });
+      // Closed, not released: no other start takes the lock, and no further Stop is accepted by it.
+      expect(acquireInstallLock(root)).toBeUndefined();
+      expect(requestStop(root)).toBe(false);
+      expect(readdirSync(installLockPath(root)).filter((n) => n.startsWith("stop-"))).toHaveLength(
+        1,
+      );
+      removeInstallLock(lock);
+      expect(existsSync(installLockPath(root))).toBe(false);
+      expect(acquireInstallLock(root)).toBeDefined();
+    });
+
+    it("carries a Stop that arrives while the start closes out before the lock is released", () => {
+      quiet();
+      const { root, nodeDir, env } = installFixture();
+      const npm = fakeNpm(root, true);
+      let lockHeldDuringStop;
+      const run = vi.fn((node, args, options) => {
+        if (args.includes("ci")) return npm.run(node, args, options);
+        if (args[1] === "start") requestStop(root);
+        if (args[1] === "stop") lockHeldDuringStop = existsSync(installLockPath(root));
+        return { status: 0 };
+      });
+
+      expect(start(root, nodeDir, env, run)).toBe(0);
+      expect(lockHeldDuringStop).toBe(true);
+      expect(existsSync(installLockPath(root))).toBe(false);
     });
 
     it("holds the lock also when Keiko is already loaded, so a Stop meanwhile is carried out", () => {
@@ -1237,25 +1319,25 @@ describe("the npm package start", () => {
       );
     });
 
-    it("keeps the lock of an installation that runs longer than an hour", () => {
-      // Review finding on PR #4464 (Major): the lock expired an hour after it was written while
-      // npm still ran, and a second start ran `npm ci` beside it.
+    it("keeps the lock of an installation that runs longer than a day", () => {
+      // Review finding on PR #4464 (Major): the lock expired after a fixed time while npm still
+      // ran, and a second start ran `npm ci` beside it.
       const { root } = installFixture();
       const dir = installLockPath(root);
       const lock = acquireInstallLock(root);
       const startEntry = join(dir, `owner-${lock.token}`);
       const hold = heldByTest(dir, `owner-${lock.token}`);
-      const longAgo = `${String(Date.now() - 2 * 60 * 60 * 1000)}\n`;
+      const longAgo = `${String(Date.now() - 25 * 60 * 60 * 1000)}\n`;
       writeFileSync(startEntry, longAgo);
       writeFileSync(hold.entry, longAgo);
-      // Neither entry was written within the hour: without renewal the lock is free.
+      // Neither entry was written within the day: without renewal the lock is free.
       expect(installerActive(root)).toBe(false);
 
       hold.renew();
       expect(installerActive(root)).toBe(true);
       expect(acquireInstallLock(root)).toBeUndefined();
 
-      // npm ends after its hour as well: the start's entry is renewed once more, npm's goes, and
+      // npm ends after its day as well: the start's entry is renewed once more, npm's goes, and
       // the lock stays with the start until it releases it.
       writeFileSync(startEntry, longAgo);
       writeFileSync(hold.entry, longAgo);
@@ -1275,19 +1357,88 @@ describe("the npm package start", () => {
       mkdirSync(dir, { recursive: true });
       const outside = join(root, "system", "outside.txt");
       writeFileSync(outside, "kept\n");
-      const gone = `owner-${String(process.pid)}-ab`;
+      const start = `owner-${String(process.pid)}-ab`;
+      writeFileSync(join(dir, start), "1\n");
 
-      // A start whose entry was taken over meanwhile does not get it back.
-      const hold = heldByTest(dir, gone);
+      // A start whose entry was taken over after npm joined does not get it back, and npm ends.
+      const onLost = vi.fn();
+      const hold = heldByTest(dir, start, { onLost });
+      rmSync(join(dir, start));
       hold.renew();
+      expect(onLost).toHaveBeenCalledOnce();
       hold.exit();
       expect(readdirSync(dir)).toEqual([]);
-      // A name that is no owner entry of this lock is never written.
-      const escaping = heldByTest(dir, "../outside.txt");
-      escaping.renew();
-      escaping.exit();
+      // A name that is no owner entry of this lock is never joined or written.
+      expect(() => heldByTest(dir, "../outside.txt")).toThrow(/not the one of the start/u);
       expect(readFileSync(outside, "utf8")).toBe("kept\n");
       expect(readdirSync(dir)).toEqual([]);
+    });
+
+    it("never lets an owner entry stand empty or stale when a renewal fails", () => {
+      // Review finding on PR #4464: renewal emptied the file before it wrote, so a failed write
+      // left an owner without a timestamp, which never expired once its number was reused.
+      quiet();
+      const { root } = installFixture();
+      const dir = installLockPath(root);
+      const lock = acquireInstallLock(root);
+      const entry = join(dir, `owner-${lock.token}`);
+      const before = readFileSync(entry, "utf8");
+      const sizes = [];
+      let failing = true;
+      const hold = heldByTest(dir, `owner-${lock.token}`, {
+        write: (fd, bytes, offset, length, position) => {
+          sizes.push(statSync(entry).size);
+          if (failing) throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+          return writeSync(fd, bytes, offset, length, position);
+        },
+      });
+
+      hold.renew();
+      expect(readFileSync(entry, "utf8")).toBe(before);
+      expect(sizes[0]).toBeGreaterThan(0);
+      failing = false;
+      hold.renew();
+      expect(Number(readFileSync(entry, "utf8"))).toBeGreaterThanOrEqual(Number(before));
+      expect(readFileSync(entry, "utf8")).toMatch(/^\d+\n$/u);
+    });
+
+    it("does not take over an owner that is alive but late renewing", () => {
+      // Review finding on PR #4464: a start took over the lock of a running owner an hour after its
+      // last renewal, so two npm processes installed into the same folder.
+      const { root } = installFixture();
+      staleLock(root, process.pid, [], `${String(Date.now() - 3 * 60 * 60 * 1000)}\n`);
+
+      expect(installerActive(root)).toBe(true);
+      expect(acquireInstallLock(root)).toBeUndefined();
+      expect(requestStop(root)).toBe(true);
+    });
+
+    it("ends npm before it does anything when the lock is not its start's generation", () => {
+      // Review findings on PR #4464: npm's preload returned quietly when the lock was gone and
+      // joined a lock another start had published, so two npm processes could share a folder.
+      quiet();
+      const { root } = installFixture();
+      const dir = installLockPath(root);
+      const probe = "process.stdout.write('installed')";
+      const run = (keep) =>
+        spawnSync(process.execPath, [...holdArgs(dir, keep), "-e", probe], { encoding: "utf8" });
+      const mine = `owner-${String(process.pid)}-ab`;
+
+      // The lock is gone.
+      expect(run(mine).status).toBe(1);
+      expect(run(mine).stdout).not.toMatch(/installed/u);
+      expect(run(mine).stdout).toMatch(/no longer the one of the start that ran npm/u);
+      // Another start's lock: its generation holds no entry of the start that ran npm.
+      const other = acquireInstallLock(root);
+      const foreign = run(mine);
+      expect(foreign.status).toBe(1);
+      expect(foreign.stdout).not.toMatch(/installed/u);
+      expect(lockOwners(root)).toEqual([`owner-${other.token}`]);
+      // The generation that holds the start's entry is joined and npm runs.
+      const joined = run(`owner-${other.token}`);
+      expect(joined.status).toBe(0);
+      expect(joined.stdout).toBe("installed");
+      expect(lockOwners(root)).toEqual([`owner-${other.token}`]);
     });
 
     it("says once that it cannot renew the lock and never ends npm over it", () => {
@@ -1499,14 +1650,34 @@ describe("the administrator's access step", () => {
     expect(() => teamConfig(config, "token")).toThrow(/own-rerank has its own connection/u);
   });
 
-  it("replaces the key of a voice deployment Gateway Setup found on the gateway", () => {
+  it("replaces the key of a voice deployment Gateway Setup marked as sharing the gateway's credential", () => {
     const config = {
-      providers: [sealed, { modelId: "stt", baseUrl: "https://gw", apiKeySecretRef: "vault:3" }],
+      providers: [
+        sealed,
+        {
+          modelId: "stt",
+          baseUrl: "https://gw",
+          apiKeySecretRef: "vault:3",
+          credentialOrigin: "gateway-connection",
+        },
+      ],
       capabilities: [{ id: "stt", kind: "voice", voiceProviderLocality: "gateway-managed" }],
     };
 
     expect(credentialScope(config).foreign).toEqual([]);
     expect(teamConfig(config, "token").providers[1]).toMatchObject({ apiKey: "token" });
+  });
+
+  it("refuses a voice deployment whose key was rotated alone, though its locality is gateway-managed", () => {
+    // Review finding on PR #4464 (P1): the locality survives an independent voice-key rotation, so
+    // it proved nothing and the team token replaced the voice provider's own sealed key.
+    const config = {
+      providers: [sealed, { modelId: "stt", baseUrl: "https://gw", apiKeySecretRef: "vault:3" }],
+      capabilities: [{ id: "stt", kind: "voice", voiceProviderLocality: "gateway-managed" }],
+    };
+
+    expect(credentialScope(config).foreign).toEqual(["stt"]);
+    expect(() => teamConfig(config, "token")).toThrow(/stt has its own connection/u);
   });
 
   it("reads a capability Gateway Setup stored on its provider, and a listed one first", () => {
@@ -1518,13 +1689,20 @@ describe("the administrator's access step", () => {
       supportsSpeechInput: true,
       voiceProviderLocality: "gateway-managed",
     };
-    const voice = { modelId: "stt", baseUrl: "https://gw", apiKeySecretRef: "vault:3", capability };
+    const voice = {
+      modelId: "stt",
+      baseUrl: "https://gw",
+      apiKeySecretRef: "vault:3",
+      credentialOrigin: "gateway-connection",
+      capability,
+    };
     const config = { providers: [sealed, voice] };
 
     expect(credentialScope(config).foreign).toEqual([]);
     expect(teamConfig(config, "token").providers[1]).toEqual({
       modelId: "stt",
       baseUrl: "https://gw",
+      credentialOrigin: "gateway-connection",
       capability,
       apiKey: "token",
     });
@@ -1538,7 +1716,8 @@ describe("the administrator's access step", () => {
     expect(credentialScope({ providers: [sealed, voice, speech] }).foreign).toEqual(["own-tts"]);
     // The stored kind decides the main connection: a voice model listed first is not it.
     expect(credentialScope({ providers: [speech, sealed] }).foreign).toEqual(["own-tts"]);
-    // A listed capability wins over the provider's own, as the gateway's loader merges them.
+    // A listed capability wins over the provider's own, as the gateway's loader merges them, and
+    // a marked voice provider the loader reaches outside the gateway is still its own connection.
     const listed = {
       ...config,
       capabilities: [{ id: "stt", kind: "voice", voiceProviderLocality: "azure-foundry" }],
@@ -2013,12 +2192,30 @@ describe("the administrator's access step", () => {
     const target = join(root, "file.json");
     const sizes = [];
     vi.spyOn(privateFileAccess, "restrict").mockImplementation((path) => {
-      sizes.push(statSync(path).size);
+      if (statSync(path).isFile()) sizes.push(statSync(path).size);
     });
 
     publishPrivateFile(target, "token\n");
     expect(sizes).toEqual([0]);
     expect(readFileSync(target, "utf8")).toBe("token\n");
+  });
+
+  it("limits the folder that will hold the stage file before the file exists", () => {
+    // Review finding on PR #4464: on Windows the file took its folder's permissions between its
+    // creation and its restriction, so another account could open it. The stage file is created
+    // inside a folder that was already cut off from other accounts.
+    const root = tempDir();
+    const target = join(root, "file.json");
+    const seen = [];
+    vi.spyOn(privateFileAccess, "restrict").mockImplementation((path) => {
+      const folder = statSync(path).isDirectory();
+      seen.push({ folder, entries: folder ? readdirSync(path) : undefined });
+    });
+
+    publishPrivateFile(target, "token\n");
+    expect(seen[0]).toEqual({ folder: true, entries: [] });
+    expect(readdirSync(root)).toEqual(["file.json"]);
+    if (process.platform !== "win32") expect(statSync(target).mode & 0o777).toBe(0o600);
   });
 
   it("writes no token and leaves nothing behind when the file cannot be limited", () => {

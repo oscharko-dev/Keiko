@@ -91,15 +91,25 @@ meanwhile is recorded in that lock: the start then does not open Keiko, or stops
 after it opened, also when Keiko reported a failure as it opened. It carries the Stop out before it
 lets go of the lock, so no other start opens Keiko in between. When the installation fails, the
 folder has no Keiko to stop with: the start window then says so and that a Keiko opened from
-another folder is stopped there. A `Stop Keiko` after that stops the open Keiko as usual. A lock whose start was closed or crashed is taken over by the next start:
-its process no longer runs, or the lock was written before the computer started or last renewed
-more than an hour ago, since the system gives an ended start's process number to new processes.
-npm's own process holds the lock as well while it installs and renews it every five minutes, its
-own entry and that of the start that runs it, so an installation that takes longer than an hour
-keeps its lock, and a start window closed during an installation leaves the lock to that npm until
-it ends; no second npm installs beside it. When npm ends, the start's entry is renewed once more,
-so the start keeps the lock until Keiko is open. A lock npm cannot hold ends npm with the reason
-before it installs anything. Each start and
+another folder is stopped there. A `Stop Keiko` after that stops the open Keiko as usual. Before the start lets go of the lock it
+closes it: a `Stop Keiko` that the lock accepted is carried out first, and one that comes after the
+lock closed is not recorded but stops the open Keiko itself, so it can never stop the Keiko a later
+start opened. A lock whose start was closed or crashed is taken over by the next start: its process
+no longer runs, or the lock was written before the computer started. A start whose process still
+runs is never taken over because its renewal is late (a computer that slept): npm renews every five
+minutes, and a running owner holds the lock until it ends. The one remaining limit: the system
+gives an ended start's process number to new processes, so an owner entry that was not renewed for
+24 hours counts as such a reused number and is taken over even though a process with that number
+runs. An installation that takes longer than 24 hours keeps its lock as long as npm renews it. npm's
+own process holds the lock as well while it installs, with its own entry and that of the start that
+runs it, and a start window closed during an installation leaves the lock to that npm until it
+ends; no second npm installs beside it. npm runs only as part of the lock generation of the start
+that ran it: before it does anything, npm's process ends with the reason when the lock is gone,
+when the start's entry is not in it, or when another start's lock replaced it. A running npm ends at
+once, without writing further, when it finds its own entry or the start's gone at a renewal (only a
+takeover after the 24 hours can cause that). A renewal rewrites the entry's timestamp in place and
+never empties it, so a failed renewal keeps the last valid timestamp. When npm ends, the start's
+entry is renewed once more, so the start keeps the lock until Keiko is open. Each start and
 stop says how it ended. A later start installs again when the lockfile changed, an earlier
 installation did not finish, the installation record `node_modules/.keiko-npm-installed` is
 missing or Keiko's command line is not installed, for example after `node_modules` was deleted.
@@ -179,8 +189,10 @@ An administrator can prepare the folder once, so that nobody in the team enters 
 3. **Access for everyone.** Double-click `system/Zugang speichern.command` (macOS) or
    `system\Zugang speichern.cmd` (Windows) and paste the token; it is not shown. The step reads the
    configuration Gateway Setup saved and replaces the keys sealed on this computer for the gateway
-   connection Gateway Setup verified (the models it set up, its voice models and the reranker it
-   wired on that connection, marked `"credentialOrigin": "gateway-connection"`) with the token. A
+   connection Gateway Setup verified (the models it set up, and the voice provider and the reranker it
+   wired on that connection, each marked `"credentialOrigin": "gateway-connection"`) with the
+   token. A voice provider whose key was rotated alone has no mark, however its capability reads,
+   and is refused like a reranker with its own key. A
    model or reranker whose key is sealed and that has its own address, header or key is not that
    connection: the step refuses before it asks for the token and names it, so one token never goes
    to another service. A key written into the file as `apiKey` stays as it is, so write that

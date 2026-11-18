@@ -42,9 +42,10 @@ const STATE_DIR_NAME = ".keiko-standalone";
 // npm removes node_modules during `npm ci`, so the installation's lock lies beside this file. The
 // lock is a folder that appears complete in one rename: it always holds the entry
 // `owner-<pid>-<random>` of the start that installs, which names when it was written, and a Stop
-// made meanwhile adds `stop-<pid>-<random>` to it.
+// made meanwhile adds `stop-<pid>-<random>` to it. A start that is about to let go of the lock adds
+// `closing-<pid>-<random>` first: from then on no Stop is accepted by that lock.
 const INSTALL_LOCK = ["system", "keiko-npm-install.lock"];
-const LOCK_ENTRY = /^(owner|stop)-(\d+)-[0-9a-f]+$/u;
+const LOCK_ENTRY = /^(owner|stop|closing)-(\d+)-[0-9a-f]+$/u;
 // A lock on its way in or out: `<lock>.<pid>-<random>.candidate` or `.released`.
 const LOCK_LEFTOVER = /^keiko-npm-install\.lock\.(\d+)-[0-9a-f]+\.(?:candidate|released)$/u;
 const LOCK_ATTEMPTS = 8;
@@ -58,8 +59,10 @@ const HOLD_PARAMETER = "hold-install-lock";
 const KEEP_PARAMETER = "keep-install-lock-owner";
 // The system gives the number of an ended process to a new one, Windows soon after, so a running
 // process with the owner's number does not prove that its start still runs. An owner written
-// before the computer started, or last renewed more than an hour ago, no longer holds the lock.
-const LOCK_EXPIRES_AFTER_MS = 60 * 60 * 1000;
+// before the computer started, or last renewed more than a day ago, no longer holds the lock. A
+// running owner that is merely late renewing (a suspended computer) is never taken over: only this
+// far above any installation does its process number count as reused.
+const LOCK_EXPIRES_AFTER_MS = 24 * 60 * 60 * 1000;
 // npm's process renews the lock's entries this often while it installs, so an installation that
 // takes longer than the expiry keeps its lock.
 const LOCK_RENEW_MS = 5 * 60 * 1000;
@@ -322,6 +325,22 @@ function registryAddress(value, env) {
   }
 }
 
+// Syntax this reader cannot interpret exactly as npm does: a bare carriage return ends a line for
+// npm but not here, and `${...}` in a key can spell a registry key from the environment. Refusing
+// it keeps the administrator's registry from being replaced by an inherited override unseen.
+function refuseUnreadableSyntax(text) {
+  const bareReturn = /\r(?!\n)/u.test(text);
+  const expandedKey = text.split(/\r?\n/u).some((line) => {
+    const split = line.indexOf("=");
+    return (split < 0 ? line : line.slice(0, split)).includes("${");
+  });
+  if (!bareReturn && !expandedKey) return;
+  throw new LauncherRefusal(
+    "The file .npmrc uses syntax this start cannot read exactly as npm does (a bare carriage return as a line ending, or ${...} in a setting name), so the registry could not be told for certain. Use plain lines with line feeds and write the registry as registry=<address>.",
+    "Die Datei .npmrc nutzt eine Syntax, die dieser Start nicht genau so liest wie npm (ein einzelnes Wagenruecklaufzeichen als Zeilenende oder ${...} in einem Einstellungsnamen); die Registry laesst sich daher nicht sicher bestimmen. Nutze einfache Zeilen mit Zeilenvorschub und schreibe die Registry als registry=<Adresse>.",
+  );
+}
+
 function refuseScopedRegistry(entries) {
   if (entries.some(({ key }) => /^@[^:]+:registry$/iu.test(key))) {
     throw new LauncherRefusal(
@@ -342,7 +361,9 @@ function refuseScopedRegistry(entries) {
 export function folderRegistry(root, env = process.env) {
   const path = join(root, ".npmrc");
   if (!existsSync(path)) return false;
-  const entries = npmrcEntries(readFileSync(path, "utf8"));
+  const text = readFileSync(path, "utf8");
+  refuseUnreadableSyntax(text);
+  const entries = npmrcEntries(text);
   refuseScopedRegistry(entries);
   const named = entries.filter(({ key }) => key.replace(/\[\]$/u, "").toLowerCase() === "registry");
   if (named.some(({ key, section }) => key !== "registry" || section !== undefined)) {
@@ -457,7 +478,7 @@ function lockEntries(dir) {
 
 /**
  * Whether an owner entry written at `writtenAt` can no longer belong to a running start: it was
- * written before the computer started, or last renewed more than an hour ago.
+ * written before the computer started, or last renewed more than a day ago.
  */
 export function ownerExpired(writtenAt, now = Date.now(), upMs = uptime() * 1000) {
   return writtenAt < now - upMs - BOOT_TOLERANCE_MS || now - writtenAt > LOCK_EXPIRES_AFTER_MS;
@@ -586,73 +607,105 @@ function hasStopEntry(names) {
   return names.some((name) => LOCK_ENTRY.exec(name)?.[1] === "stop");
 }
 
+function hasClosingEntry(names) {
+  return names.some((name) => LOCK_ENTRY.exec(name)?.[1] === "closing");
+}
+
+function ownerEntryName(lock) {
+  return `owner-${lock.token}`;
+}
+
+// The entries of the lock this start still holds, or undefined when the lock is gone or another
+// start's: a lock holds this start's owner entry exactly while it is the generation it published.
+function heldEntries(lock) {
+  const names = lockEntries(lock.dir);
+  return names?.includes(ownerEntryName(lock)) ? names : undefined;
+}
+
 // Whether a Stop was recorded in the lock this start still holds, from one read of it. A lock
 // another start took over is that start's, and one it released meanwhile is gone.
-function heldStopRequested(lock) {
-  let names;
-  try {
-    names = readdirSync(lock.dir);
-  } catch (error) {
-    if (error?.code === "ENOENT") return false;
-    throw error;
-  }
-  return names.includes(`owner-${lock.token}`) && hasStopEntry(names);
+function heldStopRecorded(lock) {
+  const names = heldEntries(lock);
+  return names !== undefined && hasStopEntry(names);
 }
 
-/**
- * Ends the installation in one rename and returns whether a Stop was requested while this start
- * held the lock. A Stop either added its entry before the rename, which is read here, or finds no
- * lock afterwards and stops Keiko itself.
- */
-export function releaseInstallLock(lock) {
-  const released = `${lock.dir}.${lock.token}.released`;
-  // A Stop holds its entry open only while it creates it. The lock is moved first and its owner
-  // read afterwards, so no other start can take it over or release it between the two.
-  if (!renameUnlessGone(lock.dir, released)) return false;
-  try {
-    const names = readdirSync(released);
-    if (names.includes(`owner-${lock.token}`)) return hasStopEntry(names);
-    // A lock another start took over, because this one held it too long, is that start's.
-    renameRetrying(released, lock.dir);
-    return false;
-  } finally {
-    rmSync(released, { recursive: true, force: true });
-  }
-}
-
-// false when the lock is gone: another start took it over and has released it.
-function renameUnlessGone(from, to) {
-  try {
-    return renameRetrying(from, to);
-  } catch (error) {
-    if (error?.code === "ENOENT") return false;
-    throw error;
-  }
-}
-
-// false when the lock was released while the entry was created.
+// Whether adding the entry succeeded; false when the lock went away meanwhile. An entry that is
+// already there counts as added.
 function createLockEntry(path) {
   try {
     closeSync(openSync(path, "wx", 0o600));
     return true;
   } catch (error) {
+    if (error?.code === "EEXIST") return true;
     if (error?.code === "ENOENT") return false;
     throw error;
   }
 }
 
 /**
+ * Stops the lock accepting Stops and returns whether one was recorded in it while this start held
+ * it (`owned` is false for a lock that is no longer this start's: another start took it over and
+ * the Stop belongs to that start). A Stop adds its entry and then looks for this closing entry, so
+ * it is either read here or turned away and stops Keiko itself. The lock stays this start's until
+ * `removeInstallLock`, so no other start opens Keiko before the recorded Stop is carried out.
+ */
+export function closeInstallLock(lock) {
+  if (heldEntries(lock) === undefined) return { owned: false, stopRequested: false };
+  const closing = join(lock.dir, `closing-${lock.token}`);
+  if (!createLockEntry(closing)) return { owned: false, stopRequested: false };
+  const names = heldEntries(lock);
+  if (names === undefined) {
+    // The lock was replaced while the entry was added: never leave it in a foreign lock.
+    rmSync(closing, { force: true });
+    return { owned: false, stopRequested: false };
+  }
+  return { owned: true, stopRequested: hasStopEntry(names) };
+}
+
+/**
+ * Lets go of the lock this start acquired and nothing else: its own owner entry goes first, and
+ * only then the entries read beside it. A lock without this start's owner entry is another start's
+ * and is never moved, read or removed, so no replacement is ever exposed.
+ */
+export function removeInstallLock(lock) {
+  const names = heldEntries(lock);
+  if (names === undefined) return;
+  try {
+    rmSync(join(lock.dir, ownerEntryName(lock)));
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  clearStaleLock(
+    lock.dir,
+    names.filter((name) => name !== ownerEntryName(lock)),
+  );
+}
+
+/** Closes and removes the lock; returns whether a Stop was requested while this start held it. */
+export function releaseInstallLock(lock) {
+  const { stopRequested } = closeInstallLock(lock);
+  removeInstallLock(lock);
+  return stopRequested;
+}
+
+/**
  * Records a Stop in the lock of the start that installs Keiko. Returns false when no start holds
- * the lock, so the caller stops Keiko itself. The entry counts only while it is still in the lock:
- * one that went out with a lock released meanwhile is looked for again.
+ * the lock or it is closing, so the caller stops Keiko itself. The entry counts only while the lock
+ * still has a live owner and no closing entry after it was added.
  */
 export function requestStop(root) {
   const dir = installLockPath(root);
   for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
     const entries = lockEntries(dir);
-    if (entries === undefined || !hasLiveOwner(dir, entries)) return false;
-    const entry = join(dir, `stop-${lockToken()}`);
-    if (createLockEntry(entry) && existsSync(entry)) return true;
+    if (entries === undefined || !hasLiveOwner(dir, entries) || hasClosingEntry(entries)) {
+      return false;
+    }
+    const name = `stop-${lockToken()}`;
+    if (!createLockEntry(join(dir, name))) continue;
+    const after = lockEntries(dir);
+    if (after?.includes(name) && hasLiveOwner(dir, after) && !hasClosingEntry(after)) return true;
+    rmSync(join(dir, name), { force: true });
   }
   return false;
 }
@@ -814,9 +867,10 @@ export function holdArgs(lockDir, keep) {
   return ["--import", url.href];
 }
 
-// Writes the current time into an owner entry that is still in the lock; false once it is gone,
-// so a lock released or taken over meanwhile is never recreated.
-function renewOwnerEntry(path) {
+// Writes the current time over the timestamp of an owner entry that is still in the lock; false
+// once it is gone, so a lock released or taken over meanwhile is never recreated. The file is
+// written in place and never emptied: a write that fails leaves the last valid timestamp.
+function renewOwnerEntry(path, write = writeSync) {
   let fd;
   try {
     fd = openSync(path, "r+");
@@ -825,29 +879,35 @@ function renewOwnerEntry(path) {
     throw error;
   }
   try {
-    ftruncateSync(fd, 0);
-    writeAll(fd, `${String(Date.now())}\n`);
+    const bytes = Buffer.from(`${String(Date.now())}\n`, "utf8");
+    if (write(fd, bytes, 0, bytes.length, 0) !== bytes.length) {
+      throw Object.assign(new Error("the owner entry could not be renewed"), { code: "EIO" });
+    }
+    ftruncateSync(fd, bytes.length);
   } finally {
     closeSync(fd);
   }
   return true;
 }
 
-// Renews the entries still in the lock. It runs in npm's process, which must not end over it: a
-// failure is said once per hold and the entry left as it was, so its expiry still applies.
-function renewHeld(paths, failure) {
+// Renews the entries still in the lock and returns whether one of them is gone: the lock was
+// released or taken over, and npm must end. A failed renewal is said once per hold and the entry
+// left as it was, so its expiry still applies; it never ends npm.
+function renewHeld(paths, failure, write) {
+  let lost = false;
   for (const path of paths) {
     try {
-      renewOwnerEntry(path);
+      if (!renewOwnerEntry(path, write)) lost = true;
     } catch (error) {
       if (failure.reported) continue;
       failure.reported = true;
       say(
-        `Keiko could not renew its installation lock (${String(error?.code ?? "unknown")}). If the installation takes longer than an hour, another start may begin one beside it.`,
-        `Keiko konnte seine Installationssperre nicht erneuern (${String(error?.code ?? "unbekannt")}). Dauert die Installation laenger als eine Stunde, kann ein anderer Start daneben eine beginnen.`,
+        `Keiko could not renew its installation lock (${String(error?.code ?? "unknown")}). If the installation takes longer than a day, another start may begin one beside it.`,
+        `Keiko konnte seine Installationssperre nicht erneuern (${String(error?.code ?? "unbekannt")}). Dauert die Installation laenger als einen Tag, kann ein anderer Start daneben eine beginnen.`,
       );
     }
   }
+  return lost;
 }
 
 function renewalTimer(renew) {
@@ -855,6 +915,25 @@ function renewalTimer(renew) {
   // The renewal never keeps npm's process running.
   timer.unref();
   return () => clearInterval(timer);
+}
+
+// npm's process lost its lock: another start took it over, so two npm processes must never install
+// into the same folder, and this one ends at once without writing further.
+function endNpmLockLost() {
+  say(
+    "Keiko's installation lock was taken over by another start, so this npm ends. Start Keiko again.",
+    "Die Installationssperre von Keiko wurde von einem anderen Start uebernommen, daher endet dieses npm. Starte Keiko erneut.",
+  );
+  process.exit(1);
+}
+
+function lockNotJoined() {
+  return Object.assign(
+    new Error("the installation lock is not the one of the start that ran npm"),
+    {
+      code: "ELOCKGEN",
+    },
+  );
 }
 
 // An owner entry this process creates in the lock `dir`, or undefined when no lock is there.
@@ -875,38 +954,66 @@ function createOwnerEntry(dir) {
   return entry;
 }
 
+// The entry of the start that requested the hold, which must be in the lock now and still after
+// npm's own entry was added: only then npm joined the generation that start acquired.
+function joinedEntries(dir, keep) {
+  if (LOCK_ENTRY.exec(keep)?.[1] !== "owner") throw lockNotJoined();
+  if (lockEntries(dir)?.includes(keep) !== true) throw lockNotJoined();
+  const entry = createOwnerEntry(dir);
+  if (entry === undefined || lockEntries(dir)?.includes(keep) !== true) {
+    if (entry !== undefined) rmSync(entry, { force: true });
+    throw lockNotJoined();
+  }
+  return { entry, kept: [join(dir, keep)] };
+}
+
 /**
  * Adds an owner entry for this process to the installation lock `dir`, renews it and the start's
  * entry `keep` every few minutes while the process runs, and when it exits renews `keep` once more
  * and removes its own: the lock holds as long as npm runs and then for the start that ran it.
- * Without a lock there is nothing to keep: the start that runs npm holds none.
+ * When a start requested the hold (`keep`), npm runs only joined to the generation that start
+ * acquired: a missing lock, a missing `keep` entry or a replaced lock throws (code `ELOCKGEN`), and
+ * a lock lost while npm runs ends npm through `onLost`. Without `keep` no hold was requested, and
+ * without a lock there is nothing to join.
  */
 export function holdInstallLock(dir, options = {}) {
   const {
     keep,
     onExit = (listener) => process.once("exit", listener),
     every = renewalTimer,
+    onLost = endNpmLockLost,
+    write = writeSync,
   } = options;
-  const entry = createOwnerEntry(dir);
+  const joined =
+    keep === undefined ? { entry: createOwnerEntry(dir), kept: [] } : joinedEntries(dir, keep);
+  const { entry, kept } = joined;
   if (entry === undefined) return undefined;
-  // Only an owner entry of this lock, never another path.
-  const kept = LOCK_ENTRY.exec(keep ?? "")?.[1] === "owner" ? [join(dir, keep)] : [];
   const failure = { reported: false };
-  const stopRenewing = every(() => renewHeld([entry, ...kept], failure));
+  const stopRenewing = every(() => {
+    if (renewHeld([entry, ...kept], failure, write)) onLost();
+  });
   onExit(() => {
     stopRenewing();
-    renewHeld(kept, failure);
+    renewHeld(kept, failure, write);
     rmSync(entry, { force: true });
   });
   return entry;
 }
 
 // npm's process imports this file with the lock to hold (`holdArgs`); nothing else runs then. npm
-// must not install without its entry, so a lock it cannot hold ends npm with the reason.
+// must not install without its entry, so a lock it cannot hold, or one that is no longer the lock
+// of the start that ran it, ends npm with the reason.
 function holdFromImport(params) {
   try {
     holdInstallLock(params.get(HOLD_PARAMETER), { keep: params.get(KEEP_PARAMETER) ?? undefined });
   } catch (error) {
+    if (error?.code === "ELOCKGEN") {
+      say(
+        "Keiko's installation lock is no longer the one of the start that ran npm, so npm does not install. Start Keiko again.",
+        "Die Installationssperre von Keiko ist nicht mehr die des Starts, der npm gestartet hat, daher installiert npm nicht. Starte Keiko erneut.",
+      );
+      process.exit(1);
+    }
     say(
       `Keiko could not hold its installation lock (${String(error?.code ?? "unknown")}), so npm does not install. Check the access rights of the folder "system", then start Keiko again.`,
       `Keiko konnte seine Installationssperre nicht halten (${String(error?.code ?? "unbekannt")}), daher installiert npm nicht. Pruefe die Zugriffsrechte des Ordners "system" und starte Keiko dann erneut.`,
@@ -1028,7 +1135,7 @@ function reportRunning() {
 // While it holds the lock, this start installs Keiko and opens it, unless a Stop came first.
 function installThenOpen(root, nodeDir, env, run, lock, args) {
   if (!ensureInstalled(root, nodeDir, env, run, lock)) return { outcome: "install-failed" };
-  if (heldStopRequested(lock)) return { outcome: "cancelled" };
+  if (heldStopRecorded(lock)) return { outcome: "cancelled" };
   return { outcome: "opened", code: runKeiko(root, args, env, run) };
 }
 
@@ -1068,10 +1175,10 @@ function reportStopNotCarriedOut(installed) {
 // not run succeeds. `stop.code` is the result of a Stop already carried out under the lock.
 function settleStart(root, env, run, step, stop) {
   if (step.outcome === "install-failed") {
-    if (stop.requested) reportStopNotCarriedOut(false);
+    if (stop.stopRequested) reportStopNotCarriedOut(false);
     return 1;
   }
-  if (!stop.requested && step.outcome === "opened") {
+  if (!stop.stopRequested && step.outcome === "opened") {
     if (step.code === 0) reportRunning();
     return step.code;
   }
@@ -1083,30 +1190,31 @@ function settleStart(root, env, run, step, stop) {
   return 0;
 }
 
-// A Stop already recorded is carried out while this start still holds the lock, so no other start
-// can open Keiko in between and see it stopped after it said Keiko is open.
-function stopWhileHeld(root, env, run, lock, step) {
-  if (step.outcome === "install-failed" || !heldStopRequested(lock)) return undefined;
-  return stopKeiko(root, stateDir(env), env, run);
+// A Stop this start's lock accepted is carried out while the start still holds that lock, and the
+// lock is let go of only afterwards: no other start can open Keiko in between and see it stopped,
+// and a Stop accepted here can never stop the Keiko a later start opened.
+function closeAndStop(root, env, run, lock, step) {
+  const { stopRequested } = closeInstallLock(lock);
+  if (stopRequested && step.outcome !== "install-failed") {
+    return { stopRequested, code: stopKeiko(root, stateDir(env), env, run) };
+  }
+  return { stopRequested, code: undefined };
 }
 
-// This start holds the lock until Keiko is open, so a Stop meanwhile is read before the lock goes
-// or when it goes, and a Stop after that finds Keiko open and stops it.
+// This start holds the lock until Keiko is open, so a Stop meanwhile is carried out before the lock
+// goes, and a Stop after that finds Keiko open and stops it.
 function installAndOpen(root, nodeDir, env, run, lock, args) {
   let step;
-  let heldStop;
+  let stop;
   try {
     step = installThenOpen(root, nodeDir, env, run, lock, args);
-    heldStop = stopWhileHeld(root, env, run, lock, step);
+    stop = closeAndStop(root, env, run, lock, step);
   } catch (error) {
     if (releaseInstallLock(lock)) reportStopNotCarriedOut(true);
     throw error;
   }
-  const requestedAtRelease = releaseInstallLock(lock);
-  return settleStart(root, env, run, step, {
-    requested: heldStop !== undefined || requestedAtRelease,
-    code: heldStop,
-  });
+  removeInstallLock(lock);
+  return settleStart(root, env, run, step, stop);
 }
 
 /**
@@ -1214,17 +1322,22 @@ function sameConnection(block, primary) {
 }
 
 // Gateway Setup marks what it built from the connection it verified: every chat and embedding model
-// carries `catalogOrigin`, every voice deployment it found there a gateway-managed capability.
-// A model entered with its own credential carries neither, even on the same endpoint.
+// carries `catalogOrigin`, and a voice provider it proved to share the gateway's credential carries
+// `credentialOrigin` (as the reranker does). A voice deployment needs both that mark and the
+// gateway-managed locality the gateway's loader reads: a locality alone survives a voice key rotated
+// on its own, and the mark alone says nothing about a deployment Keiko reaches outside the gateway.
+// A model entered with its own credential carries neither mark, even on the same endpoint.
 function builtFromConnection(config, provider, primary) {
   if (provider === primary) return true;
   if (provider.endpointStyle !== primary.endpointStyle) return false;
   if (provider.apiVersion !== primary.apiVersion) return false;
   if (!sameConnection(provider, primary)) return false;
+  if (provider.catalogOrigin !== undefined) return true;
   const capability = capabilityOf(config, provider);
   return (
-    provider.catalogOrigin !== undefined ||
-    (capability?.kind === "voice" && capability.voiceProviderLocality === "gateway-managed")
+    provider.credentialOrigin === "gateway-connection" &&
+    capability?.kind === "voice" &&
+    capability.voiceProviderLocality === "gateway-managed"
   );
 }
 
@@ -1551,21 +1664,26 @@ export function writeNewPrivateFile(path, text, write = writeSync) {
 }
 
 /**
- * Replaces `target` in one step: the text goes into a new owner-private file beside it, which then
- * takes the target's name. An existing file never holds the new token under its old permissions,
+ * Replaces `target` in one step: the text goes into a new owner-private file in an owner-private
+ * folder beside it, which then takes the target's name. An existing file never holds the new token under its old permissions,
  * and a failed write leaves it as it was.
  */
 export function publishPrivateFile(target, text, writeNew = writeNewPrivateFile) {
-  const temporary = join(
+  // The file is created inside a folder that is already private to this account, so no other
+  // account can open it before its own access is limited: Windows hands a new file the permissions
+  // of its folder.
+  const stage = join(
     dirname(target),
-    `.${basename(target)}.${String(process.pid)}.${randomBytes(6).toString("hex")}.tmp`,
+    `.${basename(target)}.${String(process.pid)}.${randomBytes(6).toString("hex")}.stage`,
   );
+  mkdirSync(stage, { mode: 0o700 });
   try {
+    privateFileAccess.restrict(stage);
+    const temporary = join(stage, basename(target));
     writeNew(temporary, text);
     renameSync(temporary, target);
-  } catch (error) {
-    rmSync(temporary, { force: true });
-    throw error;
+  } finally {
+    rmSync(stage, { recursive: true, force: true });
   }
 }
 

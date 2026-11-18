@@ -1261,18 +1261,30 @@ the owner entry of its start already inside, naming when it was written, so no s
 empty. A lock whose start no longer runs is cleared entry by entry and only then removed, so of two
 starts that find it so one takes it. A process number alone does not prove that a start still runs,
 because the system reuses the numbers of ended processes (Windows soon after), so an owner written
-before the computer started (ten minutes of clock correction aside) or last renewed more than an
-hour ago no longer holds the lock; a start whose lock was taken over leaves the new lock alone when
-it ends. Renames of the lock folder are retried while Windows holds a passing handle in it. npm's
+before the computer started (ten minutes of clock correction aside) or last renewed more than 24
+hours ago no longer holds the lock. An owner whose process runs is otherwise never taken over, however
+late its renewal is: that 24-hour hard expiry is the one remaining limit, after which even a running
+process number counts as reused. A start releases only the generation it acquired: it removes its own
+owner entry first and then the entries it read beside it, and a lock without its owner entry is
+another start's and is never moved, read or removed. Before it lets go, a start adds a `closing`
+entry; a Stop adds its entry and then looks for the closing entry, so a Stop is either read by the
+closing start and carried out while it still holds the lock, or is turned away and stops Keiko itself,
+and can never stop the Keiko a later start opened. Renames of the lock folder are retried while Windows holds a passing handle in it. npm's
 own process adds an owner entry of its own when it loads (`--import` of the launcher module with
 the lock folder and the start's owner entry as a query, which only holds the lock), so a start that
 ends while npm still installs leaves the lock held until that npm ends. While npm runs, its process
 renews its own entry and the start's every five minutes on a timer that never keeps npm running,
-so an installation longer than the hour keeps its lock; at exit it renews the start's entry once
-more and removes its own, so the lock passes back to the start until Keiko is open. A renewal only
-rewrites an entry still in the lock, never recreates one that went with a release or takeover, and
-accepts no name outside the lock; a failed renewal is said once and never ends npm. An entry npm
-cannot create (other than a lock already gone) ends npm with the error code before it installs.
+so an installation longer than a day keeps its lock; at exit it renews the start's entry once
+more and removes its own, so the lock passes back to the start until Keiko is open. A renewal
+rewrites the timestamp of an entry still in the lock in place and never empties the file, never
+recreates an entry that went with a release or takeover, and accepts no name outside the lock; a
+failed renewal is said once, keeps the last valid timestamp and never ends npm, but a renewal that
+finds its own entry or the start's gone ends npm at once (the lock was taken over). Two npm
+processes never install into the same folder: when the start requested the hold, the preload ends
+npm with a non-zero exit before npm does anything if the lock is absent, the start's owner entry is
+not in it, or another start's lock replaced it. Only a hold with no start's entry requested (a
+test-only path) joins an existing lock quietly or does nothing without one. An entry npm cannot
+create ends npm with the error code before it installs.
 The lockfile check leaves to npm an optional package whose `engines` npm evaluates, except the
 platform's Coding runtime, since only npm can tell whether this Node.js meets a version range. It
 counts only the packages the folder's package reaches through packages meant for this computer,
@@ -1287,7 +1299,8 @@ token when that fails. Every start holds
 the lock until Keiko is open, also one that installs nothing. `Stop Keiko` meanwhile adds its entry
 to the lock; the start reads it and stops Keiko while it still holds the lock, so no other start
 opens Keiko in between, also one that reported a failure as it opened, or does not open it when the
-Stop came first. A Stop that arrives after that check is read when the lock goes in one rename. A
+Stop came first. The start closes the lock before the final read, and a Stop that arrives after it
+closed is not accepted by that lock. A
 start whose installation failed has no Keiko to stop with and says so instead. A Stop that
 finds no lock stops the open Keiko itself. The start says how it ended (Keiko open, opened by
 another start of the folder, or stopped while it was being loaded), and the start and stop files
@@ -1349,8 +1362,10 @@ over that published release verifies the same metadata, refuses an asset outside
 and repeats the unauthenticated download of every asset before npm publication. Before it reads
 any of the bundle's files, it compares each file's size: the manifest with its 64 KiB limit, a
 checksum file with the line it must hold, and a package with its declared size and the 2 GiB GitHub
-accepts for an asset, so a file of another size, or a package GitHub would refuse, is never read.
-A package of the declared size is then hashed in chunks by a reader that stops one byte past that
+accepts for an asset, so a file that already has another size at inspection time, or a package
+GitHub would refuse, is rejected without being read. The size check is not a read limit: a checksum
+file that grew after it is still read before the text comparison rejects it. A package of the
+declared size is hashed in chunks by a reader with its own byte limit that stops one byte past that
 size, so a package that grew after the size check fails its digest without being read to its end.
 The rule binds every
 publish that supplies the portable asset bundle, which the stable-tag workflow does for every

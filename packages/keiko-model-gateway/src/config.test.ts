@@ -495,6 +495,18 @@ describe("parseGatewayConfig", () => {
     ).toThrow(/reranker\.credentialOrigin/u);
   });
 
+  it("keeps a provider's gateway-connection mark, refuses any other value and loads unmarked configs", () => {
+    const raw = validRaw() as { providers: Record<string, unknown>[] };
+    const first = raw.providers[0] ?? {};
+    const parse = (extra: Record<string, unknown>): ReturnType<typeof parseGatewayConfig> =>
+      parseGatewayConfig({ ...raw, providers: [{ ...first, ...extra }] });
+    expect(parse({ credentialOrigin: "gateway-connection" }).providers[0]?.credentialOrigin).toBe(
+      "gateway-connection",
+    );
+    expect(parse({}).providers[0]).not.toHaveProperty("credentialOrigin");
+    expect(() => parse({ credentialOrigin: "own" })).toThrow(/credentialOrigin/u);
+  });
+
   it("lets explicit reranker env vars override the config block", () => {
     const config = parseGatewayConfig(
       {

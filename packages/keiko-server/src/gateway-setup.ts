@@ -1028,6 +1028,8 @@ interface VoiceProviderRawOptions {
   readonly capabilities: SetupVoiceCapabilities;
   readonly rawCapability?: ModelCapability | undefined;
   readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
+  /** Only ever "gateway-connection", and only when setup proved the connection is shared. */
+  readonly credentialOrigin?: "gateway-connection" | undefined;
   // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): pass a per-provider
   // circuitBreaker override through voice reserialization so applyVoiceProviders /
   // validateVoiceProviderConnection can round-trip it without dropping.
@@ -1066,6 +1068,9 @@ function voiceProviderRaw(
     baseUrl,
     apiKey,
     apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+    ...(options.credentialOrigin === undefined
+      ? {}
+      : { credentialOrigin: options.credentialOrigin }),
     ...voiceProviderEndpointRaw(options),
     capability: configuredOrDefaultVoiceCapability(modelId, options),
     ...(options.voiceProfiles === undefined ? {} : { voiceProfiles: options.voiceProfiles }),
@@ -1553,9 +1558,27 @@ function setupVoiceProvidersFromCurrent(
   );
 }
 
+type VerifiedGatewayConnection = Pick<
+  ModelProviderConfig,
+  "baseUrl" | "apiKey" | "apiKeyHeaderName"
+>;
+
+// Only a voice provider whose address, header and credential are the verified gateway connection's
+// is marked; one with its own key (a voice-only rotation, a separately entered endpoint) never is,
+// so a team export cannot replace its credential with the gateway token (review finding on #4464).
+function voiceCredentialOrigin(
+  provider: SetupVoiceProvider,
+  connection: VerifiedGatewayConnection | undefined,
+): Pick<VoiceProviderRawOptions, "credentialOrigin"> {
+  return connection !== undefined && sharesStoredGatewayConnection(provider, connection)
+    ? { credentialOrigin: "gateway-connection" }
+    : {};
+}
+
 function applyVoiceProviders(
   rawConfig: Record<string, unknown>,
   voiceProviders: readonly SetupVoiceProvider[],
+  connection?: VerifiedGatewayConnection,
 ): Record<string, unknown> {
   if (voiceProviders.length === 0) {
     return rawConfig;
@@ -1582,6 +1605,7 @@ function applyVoiceProviders(
           providerLocality: provider.providerLocality,
           capabilities: provider.capabilities,
           rawCapability: provider.rawCapability,
+          ...voiceCredentialOrigin(provider, connection),
           ...(provider.voiceProfiles === undefined
             ? {}
             : { voiceProfiles: provider.voiceProfiles }),
@@ -6691,7 +6715,7 @@ function finalRawConfigForSetup(
   // baked into the rebuilt persisted config (review finding on #3037).
   const voiceProviders = discoveredVoiceProvidersForSetup(input, admittedModels);
   return applyStoredDedicatedProviders(
-    applyVoiceProviders(rawConfigWithOptionalBlocks, voiceProviders),
+    applyVoiceProviders(rawConfigWithOptionalBlocks, voiceProviders, input),
     input.stored,
     [...input.storedOcrModelIds, ...input.storedDedicatedEmbeddingModelIds],
     {
@@ -6803,7 +6827,7 @@ interface SetupGatewayConnection {
 // rule as the endpoint-change token guard).
 function sharesStoredGatewayConnection(
   provider: Pick<ModelProviderConfig, "baseUrl" | "apiKey" | "apiKeyHeaderName">,
-  storedPrimary: ModelProviderConfig | undefined,
+  storedPrimary: Pick<ModelProviderConfig, "baseUrl" | "apiKey" | "apiKeyHeaderName"> | undefined,
 ): boolean {
   return (
     storedPrimary !== undefined &&
@@ -8622,6 +8646,7 @@ function saveExistingConfigUpdate(
   const rawConfig = applyVoiceProviders(
     rawConfigFromCurrent(updatedCurrent, request.figmaAccessToken, request.timeoutMs),
     request.voiceProviders,
+    storedPrimaryGatewayProvider(updatedCurrent),
   );
   const persistedRawConfig = withPersistedGatewayEgress(rawConfig, gatewayConfig.storagePath, deps);
   const config = parseGatewayConfig(

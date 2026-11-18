@@ -285,12 +285,21 @@ describe("the first start with the real npm", () => {
       });
     const runs = [launch(), launch()];
     const watching = { stopped: false };
+    // The watcher also stops when the test ends first (a timeout), before cleanup removes the log.
+    cleanups.push(() => {
+      watching.stopped = true;
+    });
     // One start ends while the other's npm waits for its tarball, or a second npm asks for one.
-    const firstEnded = await Promise.race([
-      Promise.race(runs),
-      once(() => tarballRequests().length > 1, watching).then(() => undefined),
-    ]);
-    watching.stopped = true;
+    let firstEnded;
+    try {
+      firstEnded = await Promise.race([
+        Promise.race(runs),
+        once(() => tarballRequests().length > 1, watching).then(() => undefined),
+      ]);
+    } finally {
+      // A launcher that failed to spawn rejects the race: the watcher must not outlive it.
+      watching.stopped = true;
+    }
     const requestsWhileHeld = tarballRequests();
     // No tarball has been served yet, so the other start had not finished installing.
     const installedWhileHeld = existsSync(join(folder, "node_modules", ".keiko-npm-installed"));

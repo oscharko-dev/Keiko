@@ -2963,6 +2963,50 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("marks a voice provider on the verified connection and drops the mark on a voice-only key rotation", async () => {
+    // Review finding on #4464: `gateway-managed` locality is no proof the voice provider shares the
+    // gateway credential; only the mark Gateway Setup writes from the verified connection is.
+    const uiDir = await tempDir("keiko-gw-ui-voice-origin-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-voice-origin-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const initial = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://llm.example.com/v1",
+        apiKey: "chat-token",
+        voiceSpeechToTextModelId: "shared-stt",
+      }),
+      deps,
+    );
+    expect(initial.status).toBe(200);
+    expect(requiredProvider(requiredGatewayConfig(deps), "shared-stt").credentialOrigin).toBe(
+      "gateway-connection",
+    );
+    expect(requiredProvider(requiredGatewayConfig(deps), "example-chat-model")).not.toHaveProperty(
+      "credentialOrigin",
+    );
+
+    const rotated = await handleGatewaySetup(
+      ctx({
+        preserveExisting: true,
+        voiceApiKey: "voice-only-token",
+        voiceSpeechToTextModelId: "shared-stt",
+      }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const voice = requiredProvider(requiredGatewayConfig(deps), "shared-stt");
+    expect(voice.apiKey).toBe("voice-only-token");
+    expect(voice).not.toHaveProperty("credentialOrigin");
+    deps.store.close();
+  });
+
   it("rejects new voice credentials without an explicit deployment role", async () => {
     const uiDir = await tempDir("keiko-gw-ui-voice-no-role-");
     const deps = buildUiHandlerDeps({
