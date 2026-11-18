@@ -469,7 +469,12 @@ describe("createNodeFigmaSnapshotStore", () => {
     });
   });
 
-  it("rejects a record stored under a different run ID", () => {
+  // KEIKO-0416: a metadata update must never land under the run ID a record claims for itself
+  // instead of the authenticated request run ID, or it clobbers an unrelated run's metadata. The
+  // pin used to accept such a tampered record and write under the requested run ID; the store now
+  // refuses the record outright, so the update is refused too. That is stricter, not looser: no
+  // management file is written under either run ID, and the tampered record is never listed.
+  it("refuses a record stored under a different run ID and writes no metadata (KEIKO-0416)", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     store.record(baseInput());
     const raw = readSnapshotFile();
@@ -483,6 +488,7 @@ describe("createNodeFigmaSnapshotStore", () => {
       EvidenceReadError,
     );
     expect(lstatSync(snapshotManagementFile(RUN_ID_2), { throwIfNoEntry: false })).toBeUndefined();
+    expect(lstatSync(snapshotManagementFile(RUN_ID), { throwIfNoEntry: false })).toBeUndefined();
   });
 
   it("does not overwrite a record that appears between the write-once precheck and final commit", () => {
@@ -1175,6 +1181,37 @@ describe("createNodeFigmaSnapshotStore — listRecent", () => {
     expect(store.listRecent()).toEqual([RUN_ID_2, RUN_ID_3, RUN_ID]);
     expect(store.listRecent(2)).toEqual([RUN_ID_2, RUN_ID_3]);
     expect(store.listRecent(0)).toEqual([RUN_ID_2, RUN_ID_3, RUN_ID]);
+  });
+
+  it("keeps a record with an empty provenance version readable and listed", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const base = baseInput();
+    store.record({ ...base, provenance: { ...base.provenance, version: "" } });
+
+    expect(loadOrThrow(store, RUN_ID).provenance.version).toBe("");
+    expect(store.listRecent()).toEqual([RUN_ID]);
+    expect(store.listByScope("KEY123", "0:1").map(({ runId }) => runId)).toEqual([RUN_ID]);
+  });
+
+  // Regression (#2723 review finding), relocated from the route with the listing it pins: records
+  // captured at the same instant are ordered by ascending run ID, never by the directory order.
+  it("orders records captured at the same instant by ascending run ID", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const base = baseInput();
+    for (const [runId, fetchedAt] of [
+      [RUN_ID_3, "2026-06-19T10:00:00.000Z"],
+      [RUN_ID, "2026-06-19T11:00:00+01:00"],
+      [RUN_ID_2, "2026-06-19T10:00:00Z"],
+    ] as const) {
+      store.record({ ...base, runId, provenance: { ...base.provenance, fetchedAt } });
+    }
+
+    expect(store.listRecent()).toEqual([RUN_ID, RUN_ID_2, RUN_ID_3]);
+    expect(store.listByScope("KEY123", "0:1").map(({ runId }) => runId)).toEqual([
+      RUN_ID,
+      RUN_ID_2,
+      RUN_ID_3,
+    ]);
   });
 
   it("skips unparseable snapshot files silently", () => {

@@ -291,6 +291,10 @@ describe("makeFigmaSnapshotLoader — resolveLatestByScope", () => {
     }
   });
 
+  // The former pin kept the pinned record on equal hashes to avoid false drift. The legacy hash
+  // omits prototype links and accessibility metadata QI reads (ADR-0037 D6), so equal hashes can
+  // hide a real change. "No false drift" is now pinned where drift is decided: an unchanged
+  // re-snapshot yields identical atom ids and fingerprints (runIngestionFigmaSnapshot.test.ts).
   it("loads the newest same-scope record even when the legacy integrity hashes match", () => {
     const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-same-"));
     try {
@@ -318,6 +322,10 @@ describe("makeFigmaSnapshotLoader — resolveLatestByScope", () => {
     }
   });
 
+  // The former pin fell back to the pinned record here, which reported "fresh" against a record
+  // that failed validation: a false fresh verdict. Re-check must still never crash; it now fails
+  // closed, the loader returns undefined and the caller answers QI_FIGMA_SNAPSHOT_UNAVAILABLE
+  // (ADR-0037 D6).
   it("reports the latest record unavailable when the indexed record fails validation", () => {
     const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-toctou-"));
     try {

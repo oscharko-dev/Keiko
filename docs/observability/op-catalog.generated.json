@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4afca44b570f4883cfdfb89ad3d16bb0fc801a37a871844af18c5a533e2dfe15",
+    "catalogDigest": "5ce266e5e0ed13469f286e8a248d59c9ae86af07a37e46081dd86b0484d8fee6",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -24193,6 +24193,77 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "figma.snapshot.capture-failed",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "figmaSnapshotRoutes.logSnapshotCaptureFailed",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "code": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "FIGMA_MALFORMED_URL",
+              "FIGMA_TOKEN_MISSING",
+              "FIGMA_CONSENT_REQUIRED",
+              "FIGMA_TOKEN_INVALID",
+              "FIGMA_TOKEN_EXPIRED",
+              "FIGMA_TOKEN_REVOKED",
+              "FIGMA_NOT_FOUND",
+              "FIGMA_NOT_READY",
+              "FIGMA_SOURCE_CHANGED",
+              "FIGMA_INSUFFICIENT_SCOPE",
+              "FIGMA_RENDER_FAILED",
+              "FIGMA_PROXY_EGRESS_FAILED",
+              "FIGMA_PROXY_UNREACHABLE",
+              "FIGMA_PROXY_AUTH_REQUIRED",
+              "FIGMA_PROXY_BLOCKED_BY_POLICY",
+              "FIGMA_TLS_CA_FAILURE",
+              "FIGMA_OVERSIZED_SCOPE",
+              "FIGMA_RESPONSE_TOO_LARGE",
+              "FIGMA_RATE_LIMITED",
+              "FIGMA_UPSTREAM_UNAVAILABLE",
+              "FIGMA_NETWORK_UNREACHABLE",
+              "FIGMA_EGRESS_TIMEOUT",
+              "FIGMA_EGRESS_FAILED",
+              "FIGMA_BUILD_TIMEOUT",
+              "FIGMA_INTERNAL"
+            ]
+          },
+          "stage": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["build", "persist", "deadline", "client-closed"]
+          },
+          "resnapshot": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["figma-snapshot"],
+        "proofIds": ["figma.snapshot.capture-failed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:917",
+        "emitterSites": ["packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:960"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "figma.snapshot.captured",
         "category": "diagnostic",
         "owner": "keiko-server",
@@ -24250,8 +24321,8 @@
         "failureClasses": ["figma-snapshot"],
         "proofIds": ["figma.snapshot.captured.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:821",
-        "emitterSites": ["packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:847"]
+        "registrationSite": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:833",
+        "emitterSites": ["packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:970"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -57793,12 +57864,12 @@
           "start": [],
           "state": [],
           "end": ["figma.snapshot.captured"],
-          "failure": [],
+          "failure": ["figma.snapshot.capture-failed"],
           "loss": []
         },
-        "requiredCausalOperations": ["figma.snapshot.captured"],
+        "requiredCausalOperations": ["figma.snapshot.capture-failed", "figma.snapshot.captured"],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["figma.snapshot.captured"],
+        "requiredProofOperations": ["figma.snapshot.capture-failed", "figma.snapshot.captured"],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": ["figma.snapshot.captured"],
         "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -91857,15 +91928,19 @@
           "failureClass": "figma-snapshot",
           "requirementContract": "figma-snapshot",
           "productSurfaces": ["keiko-server"],
-          "lifecycleTransitions": ["end"],
+          "lifecycleTransitions": ["end", "failure"],
           "lifecycleOperations": {
             "start": [],
             "state": [],
             "end": ["figma.snapshot.captured"],
-            "failure": [],
+            "failure": ["figma.snapshot.capture-failed"],
             "loss": []
           },
           "causalEdges": [
+            {
+              "op": "figma.snapshot.capture-failed",
+              "mode": "correlation"
+            },
             {
               "op": "figma.snapshot.captured",
               "mode": "correlation"
@@ -91875,6 +91950,42 @@
           "resourceSignals": ["figma.snapshot.captured"],
           "replayReferences": [],
           "operations": [
+            {
+              "op": "figma.snapshot.capture-failed",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "code",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "resnapshot",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "stage",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["figma.snapshot.capture-failed.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
             {
               "op": "figma.snapshot.captured",
               "owner": "keiko-server",
@@ -124009,15 +124120,21 @@
       "package": "keiko-server"
     },
     {
+      "op": "figma.snapshot.capture-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:920",
+      "package": "keiko-server"
+    },
+    {
       "op": "figma.snapshot.captured",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:824",
+      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:836",
       "package": "keiko-server"
     },
     {
       "op": "figma.snapshotBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:814",
+      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:826",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126825,6 +126942,7 @@
     "embedding.scalar-ladder.item-completed",
     "embedding.scalar-ladder.item-failed",
     "evidence.retention",
+    "figma.snapshot.capture-failed",
     "figma.snapshot.captured",
     "figma.snapshotBuild",
     "figma.snapshotRead",

@@ -27,16 +27,23 @@
 //   caller starts the governed build, mints the runId ONCE, persists ONCE (inside the build
 //   chain so a deadline-expired-but-completed build still persists and is recoverable via an
 //   immediate retry POST). Subsequent callers await the same promise and receive the same
-//   runId/response. The entry is removed on settle (finally). Failures propagate to all
-//   waiters with the same coded error.
+//   runId/response. A failed build or an explicit re-snapshot leaves the map when it settles;
+//   a first capture that stored its run but that no waiting request received stays for
+//   COMPLETED_CAPTURE_RETENTION_MS, so a retry after a timeout receives that capture instead of
+//   importing the scope again, as long as the record is still stored. The first request that
+//   receives it releases it. Failures propagate to all waiters with the same coded error.
 //
 // Build deadline (item 3):
 //   KEIKO_FIGMA_BUILD_DEADLINE_MS (default 600 000 ms). The awaiting handler races the
 //   coalesced build promise against a deadline rejection. On deadline the handler responds
 //   504 FIGMA_BUILD_TIMEOUT WITHOUT a runId. The coalesced build itself continues (other
 //   waiters may exist); persist is INSIDE the build chain, so if/when the build completes
-//   a subsequent POST for the same scope finds the map empty and re-coalesces cheaply.
+//   a subsequent POST for the same scope receives the retained capture.
 //   The underlying build is bounded by per-fetch timeouts and pagination budgets.
+//
+// Activity Log:
+//   A stored capture records `figma.snapshot.captured`; a capture that stopped, and a request
+//   that stopped waiting, record `figma.snapshot.capture-failed` with the closed code and stage.
 //
 // Client disconnect (item 4):
 //   The handler observes cancellation of the response. On disconnect the per-waiter
@@ -45,7 +52,6 @@
 //   receive the result when the build settles.
 
 import { openFigmaSnapshotStore } from "./figmaSnapshotStore.js";
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { AbortDeadlineRaceError, MAX_TIMER_DELAY_MS, raceAbortDeadline } from "../abort-race.js";
 import { STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } from "../routes.js";
@@ -61,6 +67,7 @@ import { processServerLogSink } from "../process-log-sink.js";
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   appendFigmaConnectorAudit,
@@ -798,7 +805,12 @@ export function figmaRequestTimeoutMsFromEnv(env: EnvSource): number {
 // pattern memory-salience.ts's emitSalienceDiagnostic uses — never console.* directly, so the record
 // lands in server.log with a correlationId and is visible to a support bundle. Only fires for
 // FIGMA_INTERNAL — expected coded errors (consent/auth/rate-limit) stay quiet (already audited).
-function logFigmaInternal(stage: string, err: unknown, deps: UiHandlerDeps): void {
+function logFigmaInternal(
+  stage: string,
+  err: unknown,
+  deps: UiHandlerDeps,
+  correlationId: string,
+): void {
   const name = err instanceof Error ? err.constructor.name : typeof err;
   // Issue #3245: `redact()` only strips known SECRET shapes (bearer tokens, API keys) out of a
   // string — it passes every other character through unchanged, so `err.message` survived it as
@@ -809,7 +821,7 @@ function logFigmaInternal(stage: string, err: unknown, deps: UiHandlerDeps): voi
   // arbitrary error message has no safe home on a body-free evidence record. `errorClass` (the
   // constructor name, already content-free) is retained as the diagnosable signal.
   emitServerDiagnostic(deps.diagnostics, {
-    correlationId: randomUUID(),
+    correlationId,
     timestamp: new Date().toISOString(),
     operation: "figma.snapshotBuild",
     source: `figmaSnapshotRoutes.logFigmaInternal.${stage}`,
@@ -842,6 +854,117 @@ const FIGMA_SNAPSHOT_CAPTURED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const FIGMA_CAPTURE_FAILURE_CODES = [
+  "FIGMA_MALFORMED_URL",
+  "FIGMA_TOKEN_MISSING",
+  "FIGMA_CONSENT_REQUIRED",
+  "FIGMA_TOKEN_INVALID",
+  "FIGMA_TOKEN_EXPIRED",
+  "FIGMA_TOKEN_REVOKED",
+  "FIGMA_NOT_FOUND",
+  "FIGMA_NOT_READY",
+  "FIGMA_SOURCE_CHANGED",
+  "FIGMA_INSUFFICIENT_SCOPE",
+  "FIGMA_RENDER_FAILED",
+  "FIGMA_PROXY_EGRESS_FAILED",
+  "FIGMA_PROXY_UNREACHABLE",
+  "FIGMA_PROXY_AUTH_REQUIRED",
+  "FIGMA_PROXY_BLOCKED_BY_POLICY",
+  "FIGMA_TLS_CA_FAILURE",
+  "FIGMA_OVERSIZED_SCOPE",
+  "FIGMA_RESPONSE_TOO_LARGE",
+  "FIGMA_RATE_LIMITED",
+  "FIGMA_UPSTREAM_UNAVAILABLE",
+  "FIGMA_NETWORK_UNREACHABLE",
+  "FIGMA_EGRESS_TIMEOUT",
+  "FIGMA_EGRESS_FAILED",
+  "FIGMA_BUILD_TIMEOUT",
+  "FIGMA_INTERNAL",
+] as const satisfies readonly FigmaConnectorErrorCode[];
+
+/** Where a capture stopped: in the build, while storing it, or for one waiting request only. */
+type FigmaCaptureFailureStage = "build" | "persist" | "deadline" | "client-closed";
+
+// Each coded stop maps to the closed Activity Log error kind; the Record keeps it exhaustive.
+const FIGMA_CAPTURE_ERROR_KINDS: Readonly<Record<FigmaConnectorErrorCode, ActivityLogErrorKind>> = {
+  FIGMA_MALFORMED_URL: "invalid-request",
+  FIGMA_TOKEN_MISSING: "authority-denied",
+  FIGMA_CONSENT_REQUIRED: "authority-denied",
+  FIGMA_TOKEN_INVALID: "permission-denied",
+  FIGMA_TOKEN_EXPIRED: "permission-denied",
+  FIGMA_TOKEN_REVOKED: "permission-denied",
+  FIGMA_NOT_FOUND: "unavailable",
+  FIGMA_NOT_READY: "validation-failed",
+  FIGMA_SOURCE_CHANGED: "conflict",
+  FIGMA_INSUFFICIENT_SCOPE: "permission-denied",
+  FIGMA_RENDER_FAILED: "unavailable",
+  FIGMA_PROXY_EGRESS_FAILED: "unavailable",
+  FIGMA_PROXY_UNREACHABLE: "unavailable",
+  FIGMA_PROXY_AUTH_REQUIRED: "permission-denied",
+  FIGMA_PROXY_BLOCKED_BY_POLICY: "permission-denied",
+  FIGMA_TLS_CA_FAILURE: "unavailable",
+  FIGMA_OVERSIZED_SCOPE: "validation-failed",
+  FIGMA_RESPONSE_TOO_LARGE: "validation-failed",
+  FIGMA_RATE_LIMITED: "rate-limited",
+  FIGMA_UPSTREAM_UNAVAILABLE: "unavailable",
+  FIGMA_NETWORK_UNREACHABLE: "unavailable",
+  FIGMA_EGRESS_TIMEOUT: "timeout",
+  FIGMA_EGRESS_FAILED: "unavailable",
+  FIGMA_BUILD_TIMEOUT: "timeout",
+  FIGMA_INTERNAL: "internal",
+};
+
+const FIGMA_SNAPSHOT_CAPTURE_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "figma.snapshot.capture-failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "figmaSnapshotRoutes.logSnapshotCaptureFailed",
+  fields: {
+    code: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: FIGMA_CAPTURE_FAILURE_CODES,
+    },
+    stage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["build", "persist", "deadline", "client-closed"],
+    },
+    resnapshot: { type: "boolean", dataClass: "closed-enum", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["figma-snapshot"],
+  proofIds: ["figma.snapshot.capture-failed.line"],
+  releaseImpact: "patch",
+});
+
+function captureFailureCode(err: unknown): FigmaConnectorErrorCode {
+  return err instanceof FigmaConnectorError ? err.code : "FIGMA_INTERNAL";
+}
+
+// A capture that stopped leaves one body-free line: its closed code, where it stopped and whether
+// it was a re-snapshot. A deadline or a closed request ends only that request; the build goes on.
+function logSnapshotCaptureFailed(
+  code: FigmaConnectorErrorCode,
+  stage: FigmaCaptureFailureStage,
+  resnapshot: boolean,
+  correlationId: string,
+): void {
+  processServerLogSink().write(
+    activityLogEvent(
+      FIGMA_SNAPSHOT_CAPTURE_FAILED_OPERATION,
+      { level: "warn", correlationId, errorKind: FIGMA_CAPTURE_ERROR_KINDS[code] },
+      { code, stage, resnapshot },
+    ),
+  );
+}
+
 function logSnapshotCaptured(result: GovernedSnapshotResult, correlationId: string): void {
   processServerLogSink().write(
     activityLogEvent(
@@ -866,12 +989,12 @@ function logSnapshotCaptured(result: GovernedSnapshotResult, correlationId: stri
 
 // Map a thrown error from the governed build to a coded route result: a coded connector error maps to
 // its status (consent-required → 428, auth → 502, rate-limit → 429, …); anything else is a safe 500.
-function figmaErrorResult(err: unknown, deps: UiHandlerDeps): RouteResult {
+function figmaErrorResult(err: unknown, deps: UiHandlerDeps, correlationId: string): RouteResult {
   if (err instanceof FigmaConnectorError) {
-    if (err.code === "FIGMA_INTERNAL") logFigmaInternal("build", err, deps);
+    if (err.code === "FIGMA_INTERNAL") logFigmaInternal("build", err, deps, correlationId);
     return { status: figmaStatusForCode(err.code), body: figmaErrorBody(err.code) };
   }
-  logFigmaInternal("build", err, deps);
+  logFigmaInternal("build", err, deps, correlationId);
   return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
 }
 
@@ -885,8 +1008,9 @@ function persistSnapshot(
   runId: string,
   result: GovernedSnapshotResult,
   deps: UiHandlerDeps,
+  correlationId: string,
 ): FigmaSnapshotRecord | RouteResult {
-  const store = openFigmaSnapshotStore(evidenceDir, deps, runId);
+  const store = openFigmaSnapshotStore(evidenceDir, deps, correlationId);
   try {
     store.record({
       runId,
@@ -918,13 +1042,13 @@ function persistSnapshot(
       ...(result.coverage !== undefined ? { coverage: result.coverage } : {}),
     });
   } catch (e) {
-    logFigmaInternal("persist.record", e, deps);
+    logFigmaInternal("persist.record", e, deps, correlationId);
     return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   }
   try {
     return store.load(runId) ?? { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   } catch (e) {
-    logFigmaInternal("persist.load", e, deps);
+    logFigmaInternal("persist.load", e, deps, correlationId);
     return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   }
 }
@@ -935,15 +1059,23 @@ function persistSnapshot(
 // The FIRST POST starts the governed build, mints the runId ONCE, and persists ONCE
 // (inside the build chain — see header comment for the persist-inside-build design decision).
 // Subsequent POSTs for the same scope and same flags await the SAME promise and receive the same
-// runId and response. The entry is removed on settle (finally) so a retry POSTing after the build
-// completes always starts fresh. Re-snapshot requests intentionally do not coalesce with first-
-// snapshot requests because #756/#759 require an explicit re-snapshot to be audited and fetched as a
+// runId and response. A first capture that stored its run but reached no request is retained for a
+// while after it settled (see COMPLETED_CAPTURE_RETENTION_MS); everything else leaves the map.
+// Re-snapshot requests intentionally do not coalesce with first-snapshot requests because #756/#759 require an explicit re-snapshot to be audited and fetched as a
 // fresh full scoped build; consent-acknowledged requests also stay separate from unacknowledged ones
 // so the first caller cannot mask a later operator acknowledgement.
 
 interface CoalescedBuildEntry {
   readonly promise: Promise<RouteResult>;
+  /** Set once a first capture completed and stored this run; the entry is then retained. */
+  readonly storedRunId?: string;
 }
+
+// A first capture that completed after its request had timed out or closed stays answerable for
+// this long, so a retry returns the stored capture instead of importing the same scope again. An
+// explicit re-snapshot and a failed capture are never retained, and a capture a request received
+// is released at once.
+export const COMPLETED_CAPTURE_RETENTION_MS = 10 * 60 * 1000;
 
 // The map is module-level so it is shared across concurrent requests on the same server instance.
 // It is exposed via makeInFlightMap so tests can inject a fresh map (isolation without mocking).
@@ -978,9 +1110,49 @@ function coalescingKeyFor(
   ]);
 }
 
-// Starts the governed build + persist and removes the map entry on settle.
-// Persist is INSIDE this chain: if a caller's deadline fires but the build later completes,
-// the record is stored and an immediate retry POST coalesces or finds it via the GET route.
+// A settled build leaves the map, unless it is a first capture that stored its run: that one stays
+// for COMPLETED_CAPTURE_RETENTION_MS. Only the entry this build set is touched.
+function settleCoalescedBuild(
+  scopeKey: string,
+  inFlight: Map<string, CoalescedBuildEntry>,
+  promise: Promise<RouteResult>,
+  storedRunId: string | undefined,
+  isResnapshot: boolean,
+): void {
+  if (inFlight.get(scopeKey)?.promise !== promise) return;
+  if (isResnapshot || storedRunId === undefined) {
+    inFlight.delete(scopeKey);
+    return;
+  }
+  inFlight.set(scopeKey, { promise, storedRunId });
+  setTimeout(() => {
+    if (inFlight.get(scopeKey)?.promise === promise) inFlight.delete(scopeKey);
+  }, COMPLETED_CAPTURE_RETENTION_MS).unref();
+}
+
+function governedBuildOptions(
+  body: ParsedTriggerBody,
+  evidenceDir: string,
+  deps: UiHandlerDeps,
+  correlationId: string,
+): Parameters<typeof governedSnapshotBuild>[1] {
+  return {
+    evidenceDir,
+    env: deps.env,
+    now: new Date().toISOString(),
+    correlationId,
+    acknowledgeReadOnly: body.acknowledgeReadOnly,
+    version: body.version,
+    pagination: figmaPaginationFromEnv(deps.env),
+    egress: currentGatewayEgressConfig(deps),
+    configToken: currentGatewayConfig(deps)?.figma?.accessToken,
+    portOptions: { timeoutMs: figmaRequestTimeoutMsFromEnv(deps.env) },
+    deferSuccessAudit: true,
+  };
+}
+
+// Starts the governed build + persist. Persist is INSIDE this chain: if a caller's deadline fires
+// but the build later completes, the record is stored and a retry receives it (see above).
 function startCoalescedBuild(
   scopeKey: string,
   inFlight: Map<string, CoalescedBuildEntry>,
@@ -990,44 +1162,57 @@ function startCoalescedBuild(
   deps: UiHandlerDeps,
   correlationId: string,
 ): Promise<RouteResult> {
+  let storedRunId: string | undefined;
   const buildAndPersist = async (): Promise<RouteResult> => {
     const result = await governedSnapshotBuild(
       boardLink,
-      {
-        evidenceDir,
-        env: deps.env,
-        now: new Date().toISOString(),
-        correlationId,
-        acknowledgeReadOnly: body.acknowledgeReadOnly,
-        version: body.version,
-        pagination: figmaPaginationFromEnv(deps.env),
-        egress: currentGatewayEgressConfig(deps),
-        configToken: currentGatewayConfig(deps)?.figma?.accessToken,
-        portOptions: { timeoutMs: figmaRequestTimeoutMsFromEnv(deps.env) },
-        deferSuccessAudit: true,
-      },
+      governedBuildOptions(body, evidenceDir, deps, correlationId),
       body.isResnapshot,
     );
 
     // A Figma window persists it as a reference (#3557 review).
     const runId = newReferenceId({ kind: "figma-snapshot-run", prefix: "fs-", correlationId });
-    const stored = persistSnapshot(evidenceDir, runId, result, deps);
+    const stored = persistSnapshot(evidenceDir, runId, result, deps, correlationId);
     if ("status" in stored) {
       appendSnapshotRouteFailureAudit(evidenceDir, result, body.isResnapshot, "FIGMA_INTERNAL");
+      logSnapshotCaptureFailed("FIGMA_INTERNAL", "persist", body.isResnapshot, correlationId);
       return stored;
     }
     appendPersistedSnapshotAudit(evidenceDir, result, stored, body.isResnapshot);
     logSnapshotCaptured(result, correlationId);
+    storedRunId = stored.runId;
     return { status: 201, body: recordToSummary(stored) };
   };
 
-  const promise = buildAndPersist()
-    .catch((err: unknown) => figmaErrorResult(err, deps))
-    .finally(() => {
-      inFlight.delete(scopeKey);
+  const promise: Promise<RouteResult> = buildAndPersist()
+    .catch((err: unknown) => {
+      logSnapshotCaptureFailed(captureFailureCode(err), "build", body.isResnapshot, correlationId);
+      return figmaErrorResult(err, deps, correlationId);
+    })
+    .then((result) => {
+      settleCoalescedBuild(scopeKey, inFlight, promise, storedRunId, body.isResnapshot);
+      return result;
     });
   inFlight.set(scopeKey, { promise });
   return promise;
+}
+
+// A retained capture answers a retry only while its record is still stored; one deleted meanwhile,
+// or no longer readable, lets the retry capture afresh.
+function retainedCaptureStillStored(
+  entry: CoalescedBuildEntry,
+  evidenceDir: string,
+  deps: UiHandlerDeps,
+  correlationId: string,
+): boolean {
+  if (entry.storedRunId === undefined) return true;
+  try {
+    const store = openFigmaSnapshotStore(evidenceDir, deps, correlationId);
+    return store.loadMetadata(entry.storedRunId) !== undefined;
+  } catch (err) {
+    logFigmaInternal("retained.load", err, deps, correlationId);
+    return false;
+  }
 }
 
 function triggerBuildPromise(
@@ -1038,9 +1223,18 @@ function triggerBuildPromise(
   deps: UiHandlerDeps,
   correlationId: string,
 ): Promise<RouteResult> {
-  return (
-    inFlight.get(scopeKey)?.promise ??
-    startCoalescedBuild(scopeKey, inFlight, body.boardLink, body, evidenceDir, deps, correlationId)
+  const entry = inFlight.get(scopeKey);
+  if (entry !== undefined && retainedCaptureStillStored(entry, evidenceDir, deps, correlationId)) {
+    return entry.promise;
+  }
+  return startCoalescedBuild(
+    scopeKey,
+    inFlight,
+    body.boardLink,
+    body,
+    evidenceDir,
+    deps,
+    correlationId,
   );
 }
 
@@ -1072,29 +1266,67 @@ export async function handleFigmaTriggerSnapshot(
   }
 
   // Coalesce: join an existing build for this scope, or start a new one.
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
   const buildPromise = triggerBuildPromise(
     scopeKey,
     inFlight,
     body,
     evidenceDir,
     deps,
-    ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    correlationId,
   );
+  return awaitCaptureForRequest(ctx, deps, {
+    buildPromise,
+    isResnapshot: body.isResnapshot,
+    correlationId,
+    onDelivered: () => {
+      releaseDeliveredCapture(scopeKey, inFlight, buildPromise);
+    },
+  });
+}
 
-  // Per-waiter race: deadline + client-disconnect both resolve this waiter promptly while the
-  // coalesced build (and its persist) continues uninterrupted for other waiters.
+// A retained capture is kept for a request that never received it; once a request has received
+// it, a later submit of the same link imports the scope again.
+function releaseDeliveredCapture(
+  scopeKey: string,
+  inFlight: Map<string, CoalescedBuildEntry>,
+  promise: Promise<RouteResult>,
+): void {
+  const entry = inFlight.get(scopeKey);
+  if (entry?.promise === promise && entry.storedRunId !== undefined) inFlight.delete(scopeKey);
+}
+
+interface CaptureWaiter {
+  readonly buildPromise: Promise<RouteResult>;
+  readonly isResnapshot: boolean;
+  readonly correlationId: string;
+  readonly onDelivered: () => void;
+}
+
+// Per-waiter race: deadline + client-disconnect both resolve this waiter promptly while the
+// coalesced build (and its persist) continues uninterrupted for other waiters.
+async function awaitCaptureForRequest(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  waiter: CaptureWaiter,
+): Promise<RouteResult> {
+  const { buildPromise, isResnapshot, correlationId } = waiter;
   const cancellation = createRequestCancellation(ctx, "figma-snapshot-waiter-closed");
   try {
-    return await raceAbortDeadline(() => buildPromise, {
+    const result = await raceAbortDeadline(() => buildPromise, {
       signal: cancellation.signal,
       nowMs: () => performance.now(),
       deadlineAtMs: performance.now() + figmaBuildDeadlineMsFromEnv(deps.env),
     });
+    waiter.onDelivered();
+    return result;
   } catch (err) {
     if (err instanceof AbortDeadlineRaceError) {
+      const stage = cancellation.signal.aborted ? "client-closed" : "deadline";
+      logSnapshotCaptureFailed("FIGMA_BUILD_TIMEOUT", stage, isResnapshot, correlationId);
       return { status: 504, body: figmaErrorBody("FIGMA_BUILD_TIMEOUT") };
     }
-    return figmaErrorResult(err, deps);
+    return figmaErrorResult(err, deps, correlationId);
   } finally {
     cancellation.dispose();
   }
@@ -1102,7 +1334,7 @@ export async function handleFigmaTriggerSnapshot(
 
 // ─── DELETE /api/figma/token — revoke the stored PAT (#758 rotation/revocation, #760 audit) ───
 
-export function handleFigmaRevokeToken(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export function handleFigmaRevokeToken(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const evidenceDir = deps.evidenceDir;
   if (evidenceDir === undefined || evidenceDir.length === 0) {
     return { status: 503, body: figmaErrorBody("FIGMA_NO_EVIDENCE_DIR") };
@@ -1121,7 +1353,7 @@ export function handleFigmaRevokeToken(_ctx: RouteContext, deps: UiHandlerDeps):
       },
     });
   } catch (err) {
-    return figmaErrorResult(err, deps);
+    return figmaErrorResult(err, deps, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
   }
   return {
     status: 200,
@@ -1167,6 +1399,7 @@ function loadSnapshotListEntries(
   runIds: readonly string[],
   limit: number,
   deps: UiHandlerDeps,
+  correlationId: string,
 ): readonly FigmaSnapshotListEntry[] {
   const entries: FigmaSnapshotListEntry[] = [];
   let reportedReadFailure = false;
@@ -1176,7 +1409,7 @@ function loadSnapshotListEntries(
       if (record !== undefined)
         entries.push(recordToListEntry(record, store.loadUserMetadata(runId)));
     } catch (error) {
-      if (!reportedReadFailure) logFigmaInternal("list.load", error, deps);
+      if (!reportedReadFailure) logFigmaInternal("list.load", error, deps, correlationId);
       reportedReadFailure = true;
     }
     if (entries.length === limit) break;
@@ -1193,17 +1426,18 @@ export function handleFigmaListSnapshots(ctx: RouteContext, deps: UiHandlerDeps)
   const limit = parseSnapshotListLimit(ctx.url);
   const scope = parseSnapshotListScope(ctx.url);
   if (scope === null) return { status: 400, body: figmaErrorBody("FIGMA_BAD_SCOPE") };
-  const store = openFigmaSnapshotStore(evidenceDir, deps, ctx.correlationId);
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  const store = openFigmaSnapshotStore(evidenceDir, deps, correlationId);
 
   try {
     const runIds =
       scope === undefined
         ? store.listRecent(Number.MAX_SAFE_INTEGER)
         : store.listByScope(scope.fileKey, scope.nodeId).map((entry) => entry.runId);
-    const snapshots = loadSnapshotListEntries(store, runIds, limit, deps);
+    const snapshots = loadSnapshotListEntries(store, runIds, limit, deps, correlationId);
     return { status: 200, body: { snapshots } satisfies FigmaSnapshotListResponse };
   } catch (error) {
-    logFigmaInternal("list.scan", error, deps);
+    logFigmaInternal("list.scan", error, deps, correlationId);
     return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   }
 }
@@ -1355,7 +1589,8 @@ export function handleFigmaDeleteSnapshot(ctx: RouteContext, deps: UiHandlerDeps
     return { status: 400, body: figmaErrorBody("FIGMA_SNAPSHOT_NOT_FOUND") };
   }
 
-  const store = openFigmaSnapshotStore(evidenceDir, deps, ctx.correlationId);
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  const store = openFigmaSnapshotStore(evidenceDir, deps, correlationId);
   try {
     const deleted = store.deleteSnapshot(runId);
     if (!deleted.recordDeleted) {
@@ -1371,7 +1606,7 @@ export function handleFigmaDeleteSnapshot(ctx: RouteContext, deps: UiHandlerDeps
       },
     };
   } catch (error) {
-    logFigmaInternal("delete", error, deps);
+    logFigmaInternal("delete", error, deps, correlationId);
     return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   }
 }

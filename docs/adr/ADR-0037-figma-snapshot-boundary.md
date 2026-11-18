@@ -24,6 +24,12 @@ exceed 17 000 nodes per screen with meaningful text at depth 7–18.
    coalesce server-side into one build. Explicit version pins apply to both node and render requests.
    For latest imports, the connector checks available Figma revision metadata across scoped reads and
    rechecks it after obtaining render URLs. A detected change aborts the build before publication.
+   A first import that completed and was stored after every waiting request had timed out or
+   closed stays answerable for ten minutes: a retry receives that stored capture once instead of
+   importing the board again, while the record still exists. An explicit re-snapshot and a failed
+   build are never retained. A stored capture records `figma.snapshot.captured`; a build that
+   stopped, and a request that stopped waiting, record `figma.snapshot.capture-failed` with the
+   closed connector code and stage (`build`, `persist`, `deadline`, `client-closed`).
 2. **PAT-only credential posture.** The read-only token comes from `FIGMA_ACCESS_TOKEN`
    (allowlisted in the CLI `.env` loader) or the encrypted vault
    (`packages/keiko-server/src/qualityIntelligence/figma/figmaTokenStore.ts`). The token string

@@ -411,7 +411,9 @@ export function isFigmaSnapshotProvenance(value: unknown): value is FigmaSnapsho
     isObject(value) &&
     isNonEmptyString(value.fileKey) &&
     isNonEmptyString(value.nodeId) &&
-    (value.version === undefined || isNonEmptyString(value.version)) &&
+    // Records written before field validation existed carry any string here; it is provenance
+    // metadata only, so an empty one keeps an existing record readable.
+    (value.version === undefined || typeof value.version === "string") &&
     isNonEmptyString(value.fetchedAt) &&
     Number.isFinite(Date.parse(value.fetchedAt))
   );

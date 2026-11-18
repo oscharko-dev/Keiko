@@ -57,6 +57,7 @@ import {
 } from "./figma/index.js";
 import type { RouteContext } from "../routes.js";
 import {
+  COMPLETED_CAPTURE_RETENTION_MS,
   handleFigmaInspectSnapshotScreenJson,
   handleFigmaDeleteSnapshot,
   handleFigmaListSnapshots,
@@ -198,14 +199,14 @@ function triggerBody(overrides: Record<string, unknown> = {}): string {
 }
 
 // Build a fake RouteContext with a Readable body stream.
-function makeCtx(bodyStr: string): RouteContext {
+function makeCtx(bodyStr: string, options: { readonly correlationId?: string } = {}): RouteContext {
   const reqStream = Readable.from([Buffer.from(bodyStr, "utf8")]);
   const fakeReq = Object.assign(reqStream, {
     headers: { "content-type": "application/json" },
     complete: true,
   }) as unknown as IncomingMessage;
   return {
-    correlationId: undefined,
+    correlationId: options.correlationId,
     req: fakeReq,
     res: new EventEmitter() as RouteContext["res"],
     params: {},
@@ -421,7 +422,9 @@ describe("POST /api/figma/snapshots — code→status matrix", () => {
 
     try {
       const result = await handleFigmaTriggerSnapshot(
-        makeCtx(JSON.stringify({ boardLink: BOARD_LINK, acknowledgeReadOnly: false })),
+        makeCtx(JSON.stringify({ boardLink: BOARD_LINK, acknowledgeReadOnly: false }), {
+          correlationId: "corr-figma-internal",
+        }),
         deps,
       );
       expect(result.status).toBe(500);
@@ -430,7 +433,8 @@ describe("POST /api/figma/snapshots — code→status matrix", () => {
       expect(diagnosticCalls.length).toBeGreaterThan(0);
       const record = diagnosticCalls[0];
       expect(record?.errorClass).toBe("TypeError"); // the cause class is surfaced for diagnosis…
-      expect(record?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      // …under the request's own correlation, so the diagnostic joins the request's timeline.
+      expect(record?.correlationId).toBe("corr-figma-internal");
       expect(JSON.stringify(record)).not.toContain(TOKEN); // …but the secret PAT is redacted out
     } finally {
       spy.mockRestore();
@@ -765,6 +769,291 @@ describe("POST /api/figma/snapshots — in-flight coalescing", () => {
       expect(initialBody.runId).not.toBe(resnapshotBody.runId);
     } finally {
       spy.mockRestore();
+    }
+  });
+});
+
+// ─── Capture stops (Activity Log) and captures retained for a retry ───────────
+
+function captureFailedEvents(
+  sink: ReturnType<typeof createBufferedServerLogSink>,
+): ReturnType<typeof createBufferedServerLogSink>["events"] {
+  return sink.events.filter(({ op }) => op === "figma.snapshot.capture-failed");
+}
+
+// A build that waits for the test to release it, then runs the real build on the fake transports.
+async function gatedRealBuild(): Promise<{
+  readonly release: () => void;
+  readonly calls: () => number;
+  readonly restore: () => void;
+}> {
+  const orchModule = await import("./figmaSnapshotOrchestration.js");
+  const actualBuild = orchModule.governedSnapshotBuild;
+  let release = (): void => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let calls = 0;
+  const spy = vi
+    .spyOn(orchModule, "governedSnapshotBuild")
+    .mockImplementation(async (boardLink, deps, isResnapshot = false) => {
+      calls += 1;
+      await gate;
+      return actualBuild(
+        boardLink,
+        { ...deps, httpPort: fakeHttpPort, renderPort: fakeRenderPort },
+        isResnapshot,
+      );
+    });
+  return {
+    release: (): void => {
+      release();
+    },
+    calls: (): number => calls,
+    restore: (): void => {
+      release();
+      spy.mockRestore();
+    },
+  };
+}
+
+// Sends one request, closes it before the build settles and waits for the build to store its run.
+async function captureAfterClosedRequest(
+  sharedMap: ReturnType<typeof makeInFlightMap>,
+  build: Awaited<ReturnType<typeof gatedRealBuild>>,
+  overrides: Record<string, unknown> = {},
+): Promise<string> {
+  const deps = makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN });
+  const ctx = makeCtx(triggerBody(overrides));
+  const pending = handleFigmaTriggerSnapshot(ctx, deps, sharedMap);
+  await vi.waitFor(() => {
+    expect(ctx.res.listenerCount("close")).toBeGreaterThan(0);
+  });
+  ctx.res.emit("close");
+  await expect(pending).resolves.toMatchObject({ status: 504 });
+  build.release();
+  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  await vi.waitFor(() => {
+    expect(store.listRecent(10).length).toBeGreaterThan(0);
+  });
+  const [runId] = store.listRecent(10);
+  if (runId === undefined) throw new Error("expected a stored capture");
+  return runId;
+}
+
+describe("POST /api/figma/snapshots — capture stops and retained captures", () => {
+  it("records a coded build stop under the request correlation", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
+    const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
+    spy.mockRejectedValueOnce(new FigmaConnectorError("FIGMA_RATE_LIMITED"));
+
+    try {
+      const result = await handleFigmaTriggerSnapshot(
+        makeCtx(triggerBody(), { correlationId: "corr-figma-rate" }),
+        makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+      );
+      expect(result.status).toBe(429);
+      const events = captureFailedEvents(sink);
+      expect(events).toHaveLength(1);
+      const event = events[0];
+      if (event === undefined) throw new Error("expected a capture stop event");
+      expect(event).toMatchObject({
+        level: "warn",
+        correlationId: "corr-figma-rate",
+        errorKind: "rate-limited",
+      });
+      expect(
+        expectActivityLogProof(
+          "figma.snapshot.capture-failed.line",
+          formatActivityLogProofLine(event),
+        ),
+      ).toMatchObject({ code: "FIGMA_RATE_LIMITED", stage: "build", resnapshot: false });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("records an unexpected build error as an internal stop of a re-snapshot", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
+    const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
+    spy.mockRejectedValueOnce(new TypeError("render parse failed"));
+
+    try {
+      const result = await handleFigmaTriggerSnapshot(
+        makeCtx(triggerBody({ isResnapshot: true })),
+        makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+      );
+      expect(result.status).toBe(500);
+      const [event] = captureFailedEvents(sink);
+      expect(event).toMatchObject({
+        errorKind: "internal",
+        correlationId: "unknown-correlation-id",
+      });
+      expect(event?.extra).toMatchObject({
+        code: "FIGMA_INTERNAL",
+        stage: "build",
+        resnapshot: true,
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("records a request that reached its deadline as a timeout of that request", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
+    const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
+    spy.mockImplementationOnce((): Promise<never> => new Promise(() => undefined));
+
+    try {
+      const result = await handleFigmaTriggerSnapshot(
+        makeCtx(triggerBody()),
+        makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN, KEIKO_FIGMA_BUILD_DEADLINE_MS: "1" }),
+      );
+      expect(result.status).toBe(504);
+      const events = captureFailedEvents(sink);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ errorKind: "timeout" });
+      expect(events[0]?.extra).toMatchObject({ code: "FIGMA_BUILD_TIMEOUT", stage: "deadline" });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("records a closed request apart from a deadline", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const build = await gatedRealBuild();
+    await recordConsent(evidenceDir);
+
+    try {
+      await captureAfterClosedRequest(makeInFlightMap(), build);
+      const events = captureFailedEvents(sink);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.extra).toMatchObject({
+        code: "FIGMA_BUILD_TIMEOUT",
+        stage: "client-closed",
+      });
+    } finally {
+      build.restore();
+    }
+  });
+
+  it("hands a capture no request received to the retry, once, without importing again", async () => {
+    await recordConsent(evidenceDir);
+    const build = await gatedRealBuild();
+    const sharedMap = makeInFlightMap();
+    const deps = makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN });
+
+    try {
+      const storedRunId = await captureAfterClosedRequest(sharedMap, build);
+      await vi.waitFor(() => {
+        expect(sharedMap.size).toBe(1);
+      });
+      const retry = await handleFigmaTriggerSnapshot(makeCtx(triggerBody()), deps, sharedMap);
+      expect(retry.status).toBe(201);
+      expect((retry.body as { runId: string }).runId).toBe(storedRunId);
+      expect(build.calls()).toBe(1);
+      // The retry received it, so the next submit of the same link imports the scope again.
+      expect(sharedMap.size).toBe(0);
+      const next = await handleFigmaTriggerSnapshot(makeCtx(triggerBody()), deps, sharedMap);
+      expect(next.status).toBe(201);
+      expect((next.body as { runId: string }).runId).not.toBe(storedRunId);
+      expect(build.calls()).toBe(2);
+    } finally {
+      build.restore();
+    }
+  });
+
+  it("does not keep a capture its own request received", async () => {
+    await recordConsent(evidenceDir);
+    const build = await gatedRealBuild();
+    build.release();
+    const sharedMap = makeInFlightMap();
+
+    try {
+      const result = await handleFigmaTriggerSnapshot(
+        makeCtx(triggerBody()),
+        makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+        sharedMap,
+      );
+      expect(result.status).toBe(201);
+      expect(sharedMap.size).toBe(0);
+    } finally {
+      build.restore();
+    }
+  });
+
+  it("captures afresh when the retained capture was deleted meanwhile", async () => {
+    await recordConsent(evidenceDir);
+    const build = await gatedRealBuild();
+    const sharedMap = makeInFlightMap();
+
+    try {
+      const storedRunId = await captureAfterClosedRequest(sharedMap, build);
+      await vi.waitFor(() => {
+        expect(sharedMap.size).toBe(1);
+      });
+      createNodeFigmaSnapshotStore(evidenceDir).deleteSnapshot(storedRunId);
+      const retry = await handleFigmaTriggerSnapshot(
+        makeCtx(triggerBody()),
+        makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+        sharedMap,
+      );
+      expect(retry.status).toBe(201);
+      expect((retry.body as { runId: string }).runId).not.toBe(storedRunId);
+      expect(build.calls()).toBe(2);
+    } finally {
+      build.restore();
+    }
+  });
+
+  it("never keeps an explicit re-snapshot for a retry", async () => {
+    await recordConsent(evidenceDir);
+    const build = await gatedRealBuild();
+    const sharedMap = makeInFlightMap();
+
+    try {
+      await captureAfterClosedRequest(sharedMap, build, { isResnapshot: true });
+      await vi.waitFor(() => {
+        expect(sharedMap.size).toBe(0);
+      });
+      const retry = await handleFigmaTriggerSnapshot(
+        makeCtx(triggerBody({ isResnapshot: true })),
+        makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+        sharedMap,
+      );
+      expect(retry.status).toBe(201);
+      expect(build.calls()).toBe(2);
+    } finally {
+      build.restore();
+    }
+  });
+
+  it("lets a retained capture expire after the retention period", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await recordConsent(evidenceDir);
+    const build = await gatedRealBuild();
+    const sharedMap = makeInFlightMap();
+
+    try {
+      await captureAfterClosedRequest(sharedMap, build);
+      await vi.waitFor(() => {
+        expect(sharedMap.size).toBe(1);
+      });
+      // vi.waitFor advances the fake clock by its poll interval, so the bound keeps a margin.
+      vi.advanceTimersByTime(COMPLETED_CAPTURE_RETENTION_MS - 60_000);
+      expect(sharedMap.size).toBe(1);
+      vi.advanceTimersByTime(60_000);
+      expect(sharedMap.size).toBe(0);
+    } finally {
+      build.restore();
+      vi.useRealTimers();
     }
   });
 });

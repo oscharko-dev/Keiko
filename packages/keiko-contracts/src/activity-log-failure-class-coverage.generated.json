@@ -27670,15 +27670,19 @@
       "failureClass": "figma-snapshot",
       "requirementContract": "figma-snapshot",
       "productSurfaces": ["keiko-server"],
-      "lifecycleTransitions": ["end"],
+      "lifecycleTransitions": ["end", "failure"],
       "lifecycleOperations": {
         "start": [],
         "state": [],
         "end": ["figma.snapshot.captured"],
-        "failure": [],
+        "failure": ["figma.snapshot.capture-failed"],
         "loss": []
       },
       "causalEdges": [
+        {
+          "op": "figma.snapshot.capture-failed",
+          "mode": "correlation"
+        },
         {
           "op": "figma.snapshot.captured",
           "mode": "correlation"
@@ -27688,6 +27692,42 @@
       "resourceSignals": ["figma.snapshot.captured"],
       "replayReferences": [],
       "operations": [
+        {
+          "op": "figma.snapshot.capture-failed",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "code",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "resnapshot",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "stage",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["figma.snapshot.capture-failed.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
         {
           "op": "figma.snapshot.captured",
           "owner": "keiko-server",

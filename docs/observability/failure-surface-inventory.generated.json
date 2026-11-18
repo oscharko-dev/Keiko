@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4afca44b570f4883cfdfb89ad3d16bb0fc801a37a871844af18c5a533e2dfe15"
+    "catalogDigest": "5ce266e5e0ed13469f286e8a248d59c9ae86af07a37e46081dd86b0484d8fee6"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 714,
-    "proofCount": 737,
-    "resolvedProofCount": 737,
+    "operationCount": 715,
+    "proofCount": 738,
+    "resolvedProofCount": 738,
     "failureClassCount": 407,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -148,6 +148,7 @@
         "chat.tool-turn.ended",
         "chat.tool-turn.result-condensed",
         "chat.turn.started",
+        "figma.snapshot.capture-failed",
         "figma.snapshot.captured",
         "git-change.chat.apply",
         "git-change.chat.description-target.denied",
@@ -2321,6 +2322,9 @@
       "packages/keiko-model-gateway/src/openai-embedding-adapter.logging.test.ts"
     ],
     "evidence.retention.line": ["packages/keiko-server/src/evidence-retention-log.test.ts"],
+    "figma.snapshot.capture-failed.line": [
+      "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.test.ts"
+    ],
     "figma.snapshot.captured.line": [
       "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.test.ts"
     ],
