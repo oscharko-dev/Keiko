@@ -2,8 +2,9 @@
 //
 // isMemorySuppressedFromRetrieval is a pure function consumed by the retrieval layer
 // (#210) to filter result sets. It maps the discriminated MemoryStatus enum to a
-// suppression reason and also applies two derived rules:
+// suppression reason and also applies the validity window and the confidence threshold:
 //
+//   - nowMs < validity.validFrom → "not-yet-valid"
 //   - validity.validUntil <= nowMs   →   "expired"   (regardless of status)
 //   - provenance.confidence <= staleConfidenceThreshold  →  "stale-low-confidence"
 //
@@ -25,6 +26,7 @@ export type SuppressionReason =
   | "forgotten"
   | "conflicted"
   | "expired"
+  | "not-yet-valid"
   | "proposed"
   | "rejected"
   | "stale-low-confidence";
@@ -89,6 +91,7 @@ function unsupportedStatus(_status: never): never {
 }
 
 function validitySuppression(memory: MemoryRecord, nowMs: number): SuppressionResult | null {
+  if (nowMs < memory.validity.validFrom) return { suppressed: true, reason: "not-yet-valid" };
   if (memory.validity.validUntil === undefined) return null;
   if (memory.validity.validUntil > nowMs) return null;
   return { suppressed: true, reason: "expired" };

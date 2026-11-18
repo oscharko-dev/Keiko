@@ -8,7 +8,8 @@
 // mirrored there.
 //
 // The semantics map the discriminated MemoryStatus enum to a suppression reason and
-// additionally apply two derived rules:
+// additionally apply the validity window and the confidence threshold:
+//   - nowMs < validity.validFrom → "not-yet-valid"
 //   - validity.validUntil <= nowMs                              => "expired"
 //   - provenance.confidence <= staleConfidenceThreshold         => "stale-low-confidence"
 //
@@ -28,6 +29,7 @@ export type SuppressionReason =
   | "forgotten"
   | "conflicted"
   | "expired"
+  | "not-yet-valid"
   | "proposed"
   | "rejected"
   | "stale-low-confidence";
@@ -81,6 +83,7 @@ function unsupportedStatus(_status: never): never {
 }
 
 function validitySuppression(memory: MemoryRecord, nowMs: number): SuppressionResult | null {
+  if (nowMs < memory.validity.validFrom) return { suppressed: true, reason: "not-yet-valid" };
   if (memory.validity.validUntil === undefined) return null;
   if (memory.validity.validUntil > nowMs) return null;
   return { suppressed: true, reason: "expired" };

@@ -19,6 +19,8 @@ model (`selectStandingProfile` in `keiko-memory-retrieval`).
 Only private (`user` scope), accepted, unsuppressed facts with sensitivity `public` are members; a
 confidential or restricted fact never rides along with every answer, pinned or not. Project memory
 is not in the profile.
+A future-dated record becomes eligible at its recorded validity start; this also applies to a
+pinned entry and to question-specific retrieval. A record whose validity end has arrived is omitted.
 
 A standing mark is the existing retention hint `policyKey: "standing"`
 (`STANDING_FACT_RETENTION_POLICY_KEY`). The column is not sealed, so the vault lists marked facts
