@@ -1352,6 +1352,25 @@ describe("memory handlers", () => {
     expect(vault.getMemory(initial.id)?.body).toBe("My draft");
   });
 
+  it.each([{ value: [17] }, { value: ["valid", 17] }, { value: "wrong" }, { value: null }])(
+    "rejects malformed tag replacements without a revision or content change",
+    async ({ value: tags }) => {
+      const vault = makeVault();
+      const original = { ...makeMemory("invalid-edit-tags", "Existing body"), tags: ["kept"] };
+      vault.insertMemory(original);
+      const deps = makeDeps({ memoryVault: vault });
+      const edit = (replacement: unknown): ReturnType<typeof handleEditMemory> =>
+        handleEditMemory(
+          makeCtx("/api/memory/invalid-edit-tags", { tags: replacement }, { id: original.id }),
+          deps,
+        );
+      expect((await edit(tags)).status).toBe(400);
+      expect(vault.getMemory(original.id)).toEqual(original);
+      expect((await edit([])).status).toBe(200);
+      expect(vault.getMemory(original.id)?.tags).toEqual([]);
+    },
+  );
+
   it("returns a bounded edit conflict without embedding or overwriting a competing update", async () => {
     const dir = makeVaultDirectory();
     const reader = makeVault(dir);

@@ -17,7 +17,7 @@ import {
   MEMORY_SENSITIVITIES,
   personMemoryTags,
 } from "@oscharko-dev/keiko-contracts/runtime/memory";
-import { correctMemory, editMemory } from "@/lib/memory-api";
+import { correctMemory, editMemory, type EditMemoryInput } from "@/lib/memory-api";
 
 import { useDialogTabTrap } from "../../components/desktop/hooks/useDialogTabTrap";
 import { useModalInteractionLock } from "../../components/desktop/hooks/useModalInteractionLock";
@@ -46,6 +46,27 @@ function editableFieldsChanged(
     JSON.stringify(personMemoryTags(original.tags)) !==
       JSON.stringify(personMemoryTags(current.tags))
   );
+}
+
+function changedFields(
+  original: MemoryRecord,
+  body: string,
+  tagsRaw: string,
+  sensitivity: MemorySensitivity,
+): EditMemoryInput {
+  const originalTags = personMemoryTags(original.tags);
+  const tags =
+    tagsRaw === originalTags.join(", ")
+      ? originalTags
+      : tagsRaw
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean);
+  return {
+    ...(body === original.body.trim() ? {} : { body }),
+    ...(JSON.stringify(tags) === JSON.stringify(originalTags) ? {} : { tags }),
+    ...(sensitivity === original.provenance.sensitivity ? {} : { sensitivity }),
+  };
 }
 
 export function EditMemoryDialog({
@@ -107,11 +128,6 @@ export function EditMemoryDialog({
       return;
     }
 
-    const tags = tagsRaw
-      .split(",")
-      .map((t) => t.trim())
-      .filter((t) => t.length > 0);
-
     setSaving(true);
     setError(null);
     try {
@@ -119,13 +135,13 @@ export function EditMemoryDialog({
         const res = await correctMemoryImpl(record.id as MemoryId, trimmedBody);
         onSave(res.correction);
       } else {
-        const res = await editMemoryImpl(record.id as MemoryId, {
-          expectedUpdatedAt: record.updatedAt,
-          body: trimmedBody,
-          tags,
-          sensitivity,
-        });
-        onSave(res.memory);
+        const patch = changedFields(original, trimmedBody, tagsRaw, sensitivity);
+        const saved =
+          Object.keys(patch).length === 0
+            ? record
+            : (await editMemoryImpl(record.id, { ...patch, expectedUpdatedAt: record.updatedAt }))
+                .memory;
+        onSave(saved);
       }
     } catch (err) {
       if (!isCorrectMode && err instanceof ApiError && err.status === 409) setVersionConflict(true);
@@ -138,8 +154,8 @@ export function EditMemoryDialog({
     body,
     tagsRaw,
     sensitivity,
-    record.id,
-    record.updatedAt,
+    original,
+    record,
     isCorrectMode,
     correctMemoryImpl,
     editMemoryImpl,

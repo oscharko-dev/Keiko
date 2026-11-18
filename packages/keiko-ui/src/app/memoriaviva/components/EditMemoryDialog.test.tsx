@@ -253,10 +253,41 @@ describe("EditMemoryDialog — interaction", () => {
     await waitFor(() => {
       expect(onSave).toHaveBeenCalledWith(updatedRecord);
     });
-    expect(editImpl).toHaveBeenCalledWith(
-      "mem-edit-1",
-      expect.objectContaining({ body: "Updated body" }),
+    expect(editImpl).toHaveBeenCalledWith("mem-edit-1", {
+      body: "Updated body",
+      expectedUpdatedAt: updatedRecord.updatedAt,
+    });
+  });
+
+  it("sends only edited tags and leaves a learned body's evidence and sensitivity untouched", async () => {
+    const record = makeRecord();
+    const save = vi.fn().mockResolvedValue({ memory: record });
+    const user = userEvent.setup();
+    render(
+      <EditMemoryDialog record={record} editMemoryImpl={save} onSave={vi.fn()} onClose={vi.fn()} />,
     );
+    await waitFor(() => expect(screen.getByRole("textbox", { name: /^body/i })).toHaveFocus());
+    const input = screen.getByRole("textbox", { name: /tags/i });
+    await user.clear(input);
+    await user.type(input, "new tag");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(save).toHaveBeenCalledExactlyOnceWith(record.id, {
+      tags: ["new tag"],
+      expectedUpdatedAt: record.updatedAt,
+    });
+  });
+
+  it("closes an unchanged form without writing a new revision", async () => {
+    const record = makeRecord({ tags: ["design, research", "release"] });
+    const save = vi.fn().mockResolvedValue({ memory: record });
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <EditMemoryDialog record={record} editMemoryImpl={save} onSave={onSave} onClose={vi.fn()} />,
+    );
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(save).not.toHaveBeenCalled();
+    expect(onSave).toHaveBeenCalledExactlyOnceWith(record);
   });
 
   it("calls correctMemoryImpl and returns the new correction record in correction mode", async () => {
@@ -326,6 +357,7 @@ describe("EditMemoryDialog — interaction", () => {
         editMemoryImpl={editImpl}
       />,
     );
+    await user.type(screen.getByRole("textbox", { name: /^body/i }), " edited");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();

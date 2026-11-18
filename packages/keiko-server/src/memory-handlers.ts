@@ -924,7 +924,7 @@ export function handleGetMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
 interface EditInput {
   readonly newBody: string | undefined;
   readonly expectedUpdatedAt: number | undefined;
-  readonly tags: unknown;
+  readonly tags: readonly string[] | undefined;
   readonly sensitivity: unknown;
 }
 
@@ -935,6 +935,12 @@ function isOptionalEditBody(value: unknown): value is string | undefined {
 function isOptionalEditRevision(value: unknown): value is number | undefined {
   return (
     value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+  );
+}
+
+function isOptionalEditTags(value: unknown): value is readonly string[] | undefined {
+  return (
+    value === undefined || (Array.isArray(value) && value.every((tag) => typeof tag === "string"))
   );
 }
 
@@ -962,6 +968,9 @@ function parseEditInput(raw: Record<string, unknown>): EditInput | RouteResult {
       ),
     };
   }
+  if (!isOptionalEditTags(tags)) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "tags must be an array of strings.") };
+  }
   if (!isOptionalEditRevision(expectedUpdatedAt)) {
     return {
       status: 400,
@@ -988,9 +997,9 @@ function buildEditPatch(input: EditInput, existing: MemoryRecord): Record<string
   const patch: Record<string, unknown> = {};
   const bodyEdited = typeof newBody === "string" && newBody.trim().length > 0;
   if (bodyEdited) patch.body = newBody.trim();
-  if (Array.isArray(tags)) {
+  if (tags !== undefined) {
     // The person edits their own tags; Keiko's profile exclusion stays as it was (#4228).
-    const own = personMemoryTags(tags.filter((t): t is string => typeof t === "string"));
+    const own = personMemoryTags(tags);
     patch.tags = existing.tags.includes(PROFILE_EXCLUDED_MEMORY_TAG)
       ? [...own, PROFILE_EXCLUDED_MEMORY_TAG]
       : own;
