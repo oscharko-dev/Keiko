@@ -4,11 +4,13 @@ import {
   jiraInstanceIdentity,
   proposeJiraIssueTemplates,
   readJiraTemplateInstanceMetadata,
+  readJiraTemplateOptions,
   resolveJiraTemplateBinding,
   validateJiraIssueTemplateAgainstInstance,
 } from "@oscharko-dev/keiko-connectors";
 import {
   MARKDOWN_SKILL_LIMITS,
+  type JiraTemplateOptionsRequest,
   type MarkdownSkillDocument,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
@@ -162,6 +164,63 @@ function jiraReadFailure(reason: string): UiStoreError {
     "INTERNAL",
     `Jira could not be read (${reason}). Check the Pod and try again.`,
     502,
+  );
+}
+
+function optionsSelection(
+  value: Record<string, unknown>,
+): Pick<JiraTemplateOptionsRequest, "projectKey" | "issueTypeId"> {
+  const { projectKey, issueTypeId } = value;
+  if (projectKey === undefined && issueTypeId === undefined) return {};
+  if (typeof projectKey !== "string" || !/^[A-Za-z]\w{0,127}$/u.test(projectKey))
+    throw invalidRequest("Provide a Jira project key.");
+  if (issueTypeId === undefined) return { projectKey };
+  if (typeof issueTypeId !== "string" || !/^[1-9]\d{0,18}$/u.test(issueTypeId))
+    throw invalidRequest("Choose an issue type from the Jira project.");
+  return { projectKey, issueTypeId };
+}
+
+export function handleJiraTemplateOptions(
+  ctx: RouteContext,
+  deps: TemplateRouteDeps,
+): Promise<RouteResult> {
+  let accounting: MarkdownSkillTemplateAccounting | undefined;
+  return withSkillAccess(
+    ctx,
+    deps,
+    "jira-template-options",
+    async () => {
+      const body = await readMutation(ctx, deps, 4096);
+      if (body.kind === "rejected") return body.response;
+      const selection = optionsSelection(body.value);
+      const pod = readyPod(deps, body.value.podId);
+      const read = await readJiraTemplateOptions(
+        podRequest(deps, ctx, pod),
+        selection,
+        jiraInstanceIdentity(pod.baseUrl),
+      );
+      if (!read.ok) {
+        if (read.reason === "not-found") throw notFound("Jira project or issue type");
+        throw jiraReadFailure(read.reason);
+      }
+      const { options } = read;
+      switch (options.kind) {
+        case "projects":
+          accounting = { projectCount: options.projects.length };
+          break;
+        case "types":
+          accounting = { typeCount: options.issueTypes.length };
+          break;
+        case "details":
+          accounting = {
+            ...(options.fields === undefined ? {} : { checkedFieldCount: options.fields.length }),
+            ...(options.statuses === undefined ? {} : { statusCount: options.statuses.length }),
+          };
+          break;
+      }
+      return { status: 200, body: options };
+    },
+    () => accounting,
   );
 }
 
@@ -377,7 +436,7 @@ export function handleBindJiraTemplate(
           changed: true,
           issueType: resolution.issueType,
           parentTypeCount: resolution.binding.parentIssueTypeIds?.length ?? 0,
-          skill: { id: saved.id, revision: saved.revision },
+          skill: saved,
         },
       };
     },

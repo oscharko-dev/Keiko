@@ -6,6 +6,7 @@ import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { bffRequestErrorKind } from "@/lib/http";
 import { bindJiraTemplate, type JiraTemplateEntry } from "@/lib/jira-templates-api";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
+import type { SkillWorkspace } from "./useSkillWorkspace";
 
 /** The outcome of one bind request, shown on the template's row until the library reloads. */
 export type BindOutcome =
@@ -27,6 +28,7 @@ function failedOutcome(error: unknown): BindOutcome {
 export function useJiraTemplateBinding(
   podId: string | undefined,
   library: MarkdownSkillLibrary,
+  adoptBinding?: SkillWorkspace["adoptBinding"],
 ): {
   readonly outcomes: ReadonlyMap<string, BindOutcome>;
   readonly bind: (entry: JiraTemplateEntry) => Promise<void>;
@@ -42,6 +44,7 @@ export function useJiraTemplateBinding(
       try {
         const bound = await bindJiraTemplate(podId, entry.id, entry.revision, correlationId);
         settle({ issueType: bound.issueType, parentTypeCount: bound.parentTypeCount ?? 0 });
+        if (bound.skill !== undefined) adoptBinding?.(entry.revision, bound.skill);
         await library.refresh();
       } catch (error) {
         settle(failedOutcome(error));
@@ -52,7 +55,7 @@ export function useJiraTemplateBinding(
         });
       }
     },
-    [podId, library],
+    [podId, library, adoptBinding],
   );
   return { outcomes, bind };
 }

@@ -5,12 +5,17 @@ import {
   MARKDOWN_SKILL_LIMITS,
   type MarkdownSkillMetadata,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  readJiraTemplateForm,
+  type JiraTemplateForm,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { Icons } from "../Icons";
-import { MarkdownEditor } from "../markdown-editor/MarkdownEditor";
+import { MarkdownEditor, type MarkdownEditorProps } from "../markdown-editor/MarkdownEditor";
 import { splitMarkdownDocument } from "../markdown-editor/markdown-document";
 import { JiraTemplateProposal, TemplateStatus, type JiraTemplates } from "./JiraTemplateTools";
+import { JiraTemplateMetadata } from "./JiraTemplateMetadata";
 import { MarkdownSkillAuthor } from "./MarkdownSkillAuthor";
 import { templateKey } from "./useAutomaticTemplateChecks";
 import { skillTextFits } from "./useMarkdownSkillAuthor";
@@ -107,20 +112,48 @@ function isTemplate(document: SkillDocument, jira: JiraTemplates): boolean {
   return splitMarkdownDocument(document.text).frontMatter !== undefined;
 }
 
+function formComplete(form: JiraTemplateForm | undefined): boolean {
+  return (
+    form === undefined ||
+    (form.project.trim() !== "" && form.issueType.trim() !== "" && form.activateOn.length > 0)
+  );
+}
+
+function metadataEditor(
+  form: JiraTemplateForm | undefined,
+  markdown: string,
+  jira: JiraTemplates,
+): Pick<MarkdownEditorProps, "renderFrontMatter"> {
+  if (form === undefined) return {};
+  return {
+    renderFrontMatter: (field) => (
+      <JiraTemplateMetadata
+        {...field}
+        form={form}
+        markdown={markdown}
+        podId={jira.podReady ? jira.podId : undefined}
+      />
+    ),
+  };
+}
+
 function DocumentEditor(props: PaneProps & { readonly document: SkillDocument }): ReactNode {
   const t = useTranslate();
   const { document, workspace } = props;
   const template = isTemplate(document, props.jira);
+  const frontMatter = splitMarkdownDocument(document.text).frontMatter;
+  const form = frontMatter === undefined ? undefined : readJiraTemplateForm(frontMatter);
+  const canSave = workspace.canSave && formComplete(form);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
-      if (workspace.canSave) workspace.save();
+      if (canSave) workspace.save();
     }
   };
   return (
     // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- ⌘S saves from anywhere in the open file
     <div className={styles.cmpDocument} onKeyDown={onKeyDown}>
-      <DocumentHeader {...props} template={template} />
+      <DocumentHeader {...props} template={template} canSave={canSave} />
       {template && document.stored !== undefined ? (
         <OpenTemplateStatus jira={props.jira} id={document.stored.id} />
       ) : null}
@@ -133,6 +166,7 @@ function DocumentEditor(props: PaneProps & { readonly document: SkillDocument })
           placeholder={t("chat.skills.editorPlaceholder")}
           maxLength={MARKDOWN_SKILL_LIMITS.importBytes}
           selectTitleOnOpen={document.stored === undefined}
+          {...metadataEditor(form, document.text, props.jira)}
         />
       </div>
       {skillTextFits(document.text) ? null : (
@@ -190,7 +224,11 @@ function DocumentMeta({
 }
 
 function DocumentHeader(
-  props: PaneProps & { readonly document: SkillDocument; readonly template: boolean },
+  props: PaneProps & {
+    readonly document: SkillDocument;
+    readonly template: boolean;
+    readonly canSave: boolean;
+  },
 ): ReactNode {
   const t = useTranslate();
   const { document, workspace } = props;
@@ -208,7 +246,7 @@ function DocumentHeader(
         <button
           type="button"
           className={styles.cmpPrimary}
-          disabled={!workspace.canSave}
+          disabled={!props.canSave}
           title="⌘S"
           onClick={workspace.save}
         >

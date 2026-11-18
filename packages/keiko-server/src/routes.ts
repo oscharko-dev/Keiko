@@ -18,6 +18,7 @@ import {
 } from "./markdown-skill-routes.js";
 import {
   handleListJiraTemplates,
+  handleJiraTemplateOptions,
   handleProposeJiraTemplates,
   handleBindJiraTemplate,
   handleValidateJiraTemplate,
@@ -742,6 +743,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/skills/jira-templates",
     handler: handleListJiraTemplates,
+  },
+  {
+    method: "POST",
+    pattern: "/api/skills/jira-templates/options",
+    handler: handleJiraTemplateOptions,
   },
   {
     method: "POST",

@@ -381,6 +381,7 @@ export {
   JIRA_TEMPLATE_WITHOUT_PROPOSAL_LISTED_MAX,
   proposeJiraIssueTemplates,
   readJiraTemplateInstanceMetadata,
+  readJiraTemplateOptions,
   renderProposedJiraIssueTemplate,
   resolveJiraTemplateBinding,
   type JiraTemplateBindingResolution,

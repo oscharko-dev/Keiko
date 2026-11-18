@@ -25,6 +25,13 @@ export function joinMarkdownDocument(parts: MarkdownDocumentParts): string {
   return `---\n${parts.frontMatter}\n---\n${body}`;
 }
 
+export function replaceMarkdownFrontMatter(text: string, frontMatter: string): string {
+  const match = FRONT_MATTER.exec(text);
+  if (match === null) return text;
+  const start = text.indexOf("\n") + 1;
+  return text.slice(0, start) + frontMatter + text.slice(start + (match[1]?.length ?? 0));
+}
+
 /**
  * Documents keep the author's code fences as written and escape literal Markdown characters; the
  * chat composer's serializer instead labels unlabelled code and keeps typed text literal.

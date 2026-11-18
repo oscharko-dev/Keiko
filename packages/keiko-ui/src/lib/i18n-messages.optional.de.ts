@@ -2844,7 +2844,40 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.starter.connect":
     "Aktiviere einen Jira Pod, um die Startvorlagen zu verwenden.",
   "chat.skills.jira.starter.edit":
-    "Öffne eine Startvorlage und ergänze unter Metadaten (YAML) den Projektschlüssel und den Vorgangstyp.",
+    "Öffne eine Startvorlage und wähle im Editor das Projekt und den Vorgangstyp.",
+  "chat.skills.jira.form.title": "Jira-Metadaten",
+  "chat.skills.jira.form.project": "Jira-Projekt",
+  "chat.skills.jira.form.issueType": "Vorgangstyp",
+  "chat.skills.jira.form.chooseProject": "Projekt auswählen",
+  "chat.skills.jira.form.chooseType": "Vorgangstyp auswählen",
+  "chat.skills.jira.form.projectHelp": "Wähle das Projekt, für das die Vorlage gilt.",
+  "chat.skills.jira.form.typeHelp":
+    "Die Liste zeigt die Jira-Namen der Vorgangstypen im gewählten Projekt.",
+  "chat.skills.jira.form.unmatchedType":
+    "Jira konnte „{subject}“ nicht zuordnen. Wähle den passenden Typ aus der Liste.",
+  "chat.skills.jira.form.connect":
+    "Verbinde einen Jira Pod, um Projekte und Vorgangstypen zu laden.",
+  "chat.skills.jira.form.loading": "Wird aus Jira geladen …",
+  "chat.skills.jira.form.empty": "Jira hat keine Auswahlwerte geliefert.",
+  "chat.skills.jira.form.projectMissing":
+    "Der Jira Pod konnte das gewählte Projekt nicht öffnen oder finden.",
+  "chat.skills.jira.form.readFailed": "Die Auswahlwerte konnten nicht aus Jira geladen werden.",
+  "chat.skills.jira.form.detailsUnavailable":
+    "Einige Felder oder Status konnten nicht aus Jira gelesen werden.",
+  "chat.skills.jira.form.retry": "Erneut versuchen",
+  "chat.skills.jira.form.rules": "Vorlagenregeln",
+  "chat.skills.jira.form.onWrite": "Beim Anlegen und Bearbeiten anwenden",
+  "chat.skills.jira.form.activationRequired": "Wähle, wann diese Vorlage angewendet wird.",
+  "chat.skills.jira.form.addStatus": "Beim Wechsel in einen Status anwenden",
+  "chat.skills.jira.form.anyStatus": "Jeder Statuswechsel",
+  "chat.skills.jira.form.statusHelp":
+    "Wähle den Zielstatus, bei dessen Eintritt Keiko die Regeln prüft.",
+  "chat.skills.jira.form.addField": "Pflichtfeld hinzufügen",
+  "chat.skills.jira.form.selectForFields": "Wähle einen Vorgangstyp, um seine Felder zu laden.",
+  "chat.skills.jira.form.fieldsHelp": "Wähle die Felder, die diese Vorlage voraussetzt.",
+  "chat.skills.jira.form.requiredByJira": "{subject} (Jira-Pflichtfeld)",
+  "chat.skills.jira.form.choose": "Option auswählen",
+  "chat.skills.jira.form.remove": "{subject} entfernen",
   "chat.skills.jira.starter.epic":
     "## Ziel\n\nBeschreibe das Ziel des Epics.\n\n## Umfang\n\nListe die enthaltenen Arbeiten auf.\n\n## Akzeptanzkriterien\n\nBeschreibe, wie sich überprüfen lässt, ob das Ziel erreicht wurde.",
   "chat.skills.jira.starter.issue":
@@ -2864,7 +2897,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.finding.unknown-project":
     "Das Projekt {subject} existiert nicht oder ist nicht sichtbar.",
   "chat.skills.jira.finding.unknown-issue-type":
-    "Der Vorgangstyp {subject} existiert im Projekt nicht.",
+    "Jira konnte „{subject}“ keinem Vorgangstyp in diesem Projekt zuordnen. Wähle den Vorgangstyp in den Jira-Metadaten.",
   "chat.skills.jira.finding.unknown-field":
     "Das Feld {subject} existiert nicht. Davon betroffene Schreibvorgänge werden abgelehnt.",
   "chat.skills.jira.finding.ambiguous-field":

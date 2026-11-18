@@ -11,6 +11,10 @@ import {
   type JiraTemplateBinding,
   type JiraTemplateBindingIds,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  JiraTemplateOptions,
+  JiraTemplateOptionsRequest,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import {
   resolveJiraTemplateFieldIds,
@@ -26,6 +30,8 @@ import {
   readJiraFieldCatalog,
 } from "./jira-managed-template-gate.js";
 import { jiraTemplateNativeIssueType } from "./jira-template-parent-types.js";
+import { jiraProjectDirectory } from "./jira-managed-metadata.js";
+import { jiraNativeId, jiraNativeName } from "./jira-native-values.js";
 
 /**
  * Read-only instance facts for the Jira Pod template settings (#4177): what a template is
@@ -129,19 +135,18 @@ interface ProjectStatuses {
 
 async function readStatuses(
   request: JiraMutationRequest,
-  template: JiraIssueTemplate,
-  project: ProjectFacts,
+  projectKey: string,
+  issueTypeId: string | undefined,
 ): Promise<ProjectStatuses | undefined> {
   const response = await request(
-    `project/${encodeURIComponent(project.key)}/statuses`,
+    `project/${encodeURIComponent(projectKey)}/statuses`,
     "GET",
     undefined,
     "json-array",
   );
   const types = response.ok ? response.items : undefined;
   if (types === undefined || types.length > 200) return undefined;
-  const wanted = project.issueTypes.find((type) => jiraTemplateIssueTypeMatches(template, type));
-  return statusesOf(types, wanted?.id);
+  return statusesOf(types, issueTypeId);
 }
 
 /** The id and name of one status entry; an entry without an id is no status a rule can be bound to. */
@@ -215,9 +220,75 @@ function readStatusesIfProject(
   template: JiraIssueTemplate,
   project: ProjectFacts | undefined,
 ): Promise<ProjectStatuses | undefined> {
-  return project === undefined
-    ? Promise.resolve(undefined)
-    : readStatuses(request, template, project);
+  if (project === undefined) return Promise.resolve(undefined);
+  const wanted = project.issueTypes.find((type) => jiraTemplateIssueTypeMatches(template, type));
+  return readStatuses(request, project.key, wanted?.id);
+}
+
+type OptionsRead = JiraTemplateInstanceRead<{ readonly options: JiraTemplateOptions }>;
+
+async function readTemplateProjects(request: JiraMutationRequest): Promise<OptionsRead> {
+  const response = await request("project", "GET", undefined, "json-array");
+  if (!response.ok) return response;
+  const directory = jiraProjectDirectory(response.items);
+  if (!directory.ok) return directory;
+  const projects = directory.projects
+    .filter(({ key, name }) => PROJECT_KEY.test(key) && jiraNativeName(name, 255))
+    .map(({ key, name }) => ({ key, name }));
+  return { ok: true, options: { kind: "projects", projects } };
+}
+
+async function readTemplateTypeDetails(
+  request: JiraMutationRequest,
+  project: ProjectFacts,
+  issueTypeId: string,
+): Promise<OptionsRead> {
+  if (!project.issueTypes.some((type) => type.id === issueTypeId))
+    return { ok: false, reason: "not-found" };
+  const [metadata, statuses] = await Promise.all([
+    jiraCreateMutationMetadata(request, encodeURIComponent(project.id), issueTypeId),
+    readStatuses(request, project.key, issueTypeId),
+  ]);
+  const fields = metadata.ok
+    ? metadata.fields
+        .filter(
+          (field) =>
+            field.id !== "project" &&
+            field.id !== "issuetype" &&
+            field.kind !== "unsupported" &&
+            field.operations.includes("set"),
+        )
+        .map(({ id, name, required }) => ({ id, name, required }))
+    : undefined;
+  return {
+    ok: true,
+    options: {
+      kind: "details",
+      ...(fields === undefined ? {} : { fields }),
+      ...(statuses === undefined ? {} : { statuses: statuses.refs }),
+    },
+  };
+}
+
+/** The same project facts used by validation and binding feed the guided editor. */
+export async function readJiraTemplateOptions(
+  request: JiraMutationRequest,
+  selection: Pick<JiraTemplateOptionsRequest, "projectKey" | "issueTypeId">,
+  instanceId: string,
+): Promise<OptionsRead> {
+  const { projectKey, issueTypeId } = selection;
+  if (projectKey === undefined) return readTemplateProjects(request);
+  const result = await readProject(request, projectKey);
+  if (!result.ok) return result;
+  const { project } = result;
+  if (project === undefined) return { ok: false, reason: "not-found" };
+  if (project.key.toUpperCase() !== projectKey.toUpperCase() || !jiraNativeId(project.id))
+    return MALFORMED;
+  if (issueTypeId !== undefined) return readTemplateTypeDetails(request, project, issueTypeId);
+  const issueTypes = project.issueTypes
+    .filter((type) => jiraNativeId(type.id) && jiraNativeName(type.name, 255))
+    .map(({ id, name }) => ({ id, name }));
+  return { ok: true, options: { kind: "types", issueTypes, instanceId } };
 }
 
 /** Resolve names missing from GET field against the selected type's create metadata, just as the

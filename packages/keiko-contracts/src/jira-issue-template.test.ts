@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   compileJiraTemplatePattern,
   describeJiraTemplateParseErrors,
+  editJiraTemplateForm,
   isJiraIssueTemplateDocument,
   jiraIssueTemplateLabel,
   jiraTemplatePatternIssue,
   mentionsJiraIssueTemplateMarker,
   normalizeJiraSectionHeading,
   parseJiraIssueTemplate,
+  readJiraTemplateForm,
 } from "./jira-issue-template.js";
 
 function template(frontMatter: readonly string[], body = "# Story\n\n## Context\nWhy.\n"): string {
@@ -15,6 +17,51 @@ function template(frontMatter: readonly string[], body = "# Story\n\n## Context\
 }
 const MINIMAL = ["keiko: jira-issue-template", "version: 1", "project: abc", "issueType: Story"];
 const VALID = [...MINIMAL, "activateOn: [create]"];
+
+describe("guided Jira template metadata", () => {
+  it("reads blank draft selections and preserves unrelated block rules and comments during edits", () => {
+    const frontMatter = [
+      ...VALID.slice(0, 2),
+      'project: ""',
+      'issueType: ""',
+      "activateOn: [create]",
+      "requiredFields:",
+      "  - description",
+      "  # Preserve this comment.",
+      "  - summary",
+      "requiredLabels: [approved]",
+      "parentField: parent",
+    ].join("\n");
+    expect(readJiraTemplateForm(frontMatter)).toEqual({
+      project: "",
+      issueType: "",
+      activateOn: ["create"],
+      requiredFields: ["description", "summary"],
+    });
+    const edited = editJiraTemplateForm(frontMatter, {
+      project: "ABC",
+      issueType: 'Aufgabe "Fachlich"',
+      requiredFields: ["customfield_10000"],
+    });
+    expect(edited).toContain("  # Preserve this comment.");
+    expect(parseJiraIssueTemplate(template(edited.split("\n")))).toMatchObject({
+      ok: true,
+      template: {
+        project: "ABC",
+        issueType: 'Aufgabe "Fachlich"',
+        requiredFields: ["customfield_10000"],
+        labels: { required: ["approved"] },
+        parent: { field: "parent" },
+      },
+    });
+  });
+
+  it("leaves malformed or unrelated metadata to the source editor", () => {
+    expect(readJiraTemplateForm("name: Example")).toBeUndefined();
+    expect(readJiraTemplateForm([...VALID, 'project: ""'].join("\n"))).toBeUndefined();
+    expect(readJiraTemplateForm([...VALID, "malformed"].join("\n"))).toBeUndefined();
+  });
+});
 
 function failure(markdown: string): readonly { code: string; key?: string; line?: number }[] {
   const result = parseJiraIssueTemplate(markdown);
