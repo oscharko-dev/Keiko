@@ -102,7 +102,10 @@ interface Observed {
   readonly events: ServerLogEvent[];
 }
 
-async function observedDeps(config: ReturnType<typeof parseGatewayConfig>): Promise<Observed> {
+async function observedDeps(
+  config: ReturnType<typeof parseGatewayConfig>,
+  activate = true,
+): Promise<Observed> {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-never-proven-"));
   directories.push(dir);
   const events: ServerLogEvent[] = [];
@@ -122,7 +125,11 @@ async function observedDeps(config: ReturnType<typeof parseGatewayConfig>): Prom
   // Startup checks no model: the person activates the chat model in Settings > Models before the
   // Workbench is opened (ADR-0171 D2, amended 2026-11-16).
   const holder = deps.gatewayConfig;
-  if (holder !== undefined && config.providers.some((candidate) => candidate.modelId === CHAT)) {
+  if (
+    activate &&
+    holder !== undefined &&
+    config.providers.some((candidate) => candidate.modelId === CHAT)
+  ) {
     await runGatewayReadiness(
       { modelId: CHAT, options: { probes: ["chat"] } },
       deps,
@@ -550,6 +557,21 @@ describe("a review asking for its role model", () => {
 
     expect(gateway.toolCalls()).toBe(toolCalls);
     expect(gateway.calls).toHaveLength(calls);
+  });
+
+  // R4130-079: dev 1.5.2 activates a chat model only through Settings > Models. On a fresh process a
+  // review with an aged proof sent a chat request and a forced tool call to a model nobody activated.
+  it("sends nothing for a model nobody activated in this process", async () => {
+    const gateway = stubGateway("calls");
+    const { deps, events } = await observedDeps(agedPair(), false);
+
+    await ensureReviewModelReady(deps, CHAT, "review-launch-4130");
+
+    expect(gateway.calls).toEqual([]);
+    expect(deps.gatewayConfig?.verifiedCapability(CHAT)?.fields.conversationReady).not.toBe(true);
+    expect(events.filter((event) => event.op === "gateway.readiness.automatic.started")).toEqual(
+      [],
+    );
   });
 
   it("leaves a refuted proof alone: the launch then refuses the model as before", async () => {

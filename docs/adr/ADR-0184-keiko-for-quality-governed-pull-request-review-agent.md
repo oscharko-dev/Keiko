@@ -668,6 +668,17 @@ offers (`ReviewModelPolicy`). One pure rule, `evaluateReviewRoleEligibility`, de
 for both roles from the existing gateway capability data: a model must be configured, have verified
 and current tool calling, a known context window that fits the review budget, and be coding-safe.
 Conversation readiness `false` makes it temporarily unavailable; a busy model stays eligible.
+Since dev 1.5.2 a chat model is inactive in each server process until a person activates it in
+Settings > Models (ADR-0171 D2, amended 2026-11-16), and Keiko sends an inactive model no request.
+A review follows that rule as a Coding Workbench start does (R4130-079). Right after the policy
+admits the pair, a dry run and a run start refuse a role model that is not activated
+(`ReviewModelPort.activated`, the production port's `currentConversationReady`): the dry run
+answers `model-unavailable`, the run settles `skipped/model-unavailable` before it resolves the
+target or prepares a worktree, and the closed `modelCause: not-activated` on `review.run.refused`
+or `review.run.settled` names the step for the person. `ensureReviewModelReady` itself returns
+without a request for a model that is not activated. The offline gate activates both role models
+through the readiness route at its start, as a person's Settings check does.
+
 A run verifies both role models' readiness again at its start (Issue #4138). Each Reviewer launch
 verifies the Reviewer model's again right before its self-check reads the model's authority
 (Issue #4130): that authority is minted only for a readiness observation younger than five minutes,

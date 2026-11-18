@@ -47096,6 +47096,12 @@
               "required": true
             },
             {
+              "name": "modelCause",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "reason",
               "type": "string",
               "dataClass": "closed-enum",
@@ -47160,6 +47166,12 @@
               "type": "integer",
               "dataClass": "duration",
               "required": true
+            },
+            {
+              "name": "modelCause",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
             },
             {
               "name": "partialFiles",

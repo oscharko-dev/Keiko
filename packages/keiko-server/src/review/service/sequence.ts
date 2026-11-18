@@ -54,6 +54,7 @@ import {
   admitReviewRoleModels,
   ensureReviewRoleModelsReady,
   evaluateReviewRoleModels,
+  inactiveReviewRoleModels,
   type ReviewModelPort,
 } from "./models.js";
 import { counterCheckOrder, presentationCandidatesOf, presentationIsFull } from "./presentation.js";
@@ -103,6 +104,8 @@ export interface ReviewRunState {
   reviewer: ReviewerSettlementFact | undefined;
   /** Whether the Reviewer runtime's end was proven; a warning, never a settlement (#4136). */
   runtimeCleanup: ReviewRuntimeCleanup | undefined;
+  /** Why the role models were unavailable, when a person had not activated one (R4130-079). */
+  modelCause: "not-activated" | undefined;
   readonly counterCheckEffects: CounterCheckEffect[];
   uncheckedCandidates: number;
   /** What left them unchecked: the phase's wall-time limit (#4130); absent after a cancellation. */
@@ -151,6 +154,7 @@ export function newReviewRunState(): ReviewRunState {
     coverageSummary: null,
     reviewer: undefined,
     runtimeCleanup: undefined,
+    modelCause: undefined,
     counterCheckEffects: [],
     uncheckedCandidates: 0,
     uncheckedReason: undefined,
@@ -328,6 +332,12 @@ async function checkRoleModels(
 ): Promise<boolean> {
   if (!admitReviewRoleModels(deps.models, ctx, ctx.correlationId)) {
     return stopWith(state, { kind: "skipped", reason: "policy-invalid" });
+  }
+  // R4130-079: a role model nobody activated in Settings > Models receives no request, and the run
+  // stops before it prepares a worktree; its settled line names the cause.
+  if (inactiveReviewRoleModels(deps.models, ctx).length > 0) {
+    state.modelCause = "not-activated";
+    return stopWith(state, { kind: "skipped", reason: "model-unavailable" });
   }
   await ensureReviewRoleModelsReady(deps.models, ctx, ctx.correlationId);
   const models = evaluateReviewRoleModels(deps.models, ctx, deps.now());

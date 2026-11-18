@@ -226,6 +226,8 @@ export interface HarnessOptions {
   readonly admit?: ReviewRunServiceDeps["models"]["admit"];
   /** Issue #4138: the readiness re-check before admission (default: none). */
   readonly ensureReady?: ReviewRunServiceDeps["models"]["ensureReady"];
+  /** R4130-079: whether a person activated a model in Settings > Models (default: not asked). */
+  readonly activated?: ReviewRunServiceDeps["models"]["activated"];
   /** Issue #4141: the exclusion of dismissed fingerprints (default: none configured). */
   readonly excludedFingerprint?: ReviewRunServiceDeps["excludedFingerprint"];
   /** Issue #4130: further files the topic branch adds before its head commit (a larger change). */
@@ -317,6 +319,7 @@ function serviceDeps(
       generation: () => 7,
       ...(options.admit === undefined ? {} : { admit: options.admit }),
       ...(options.ensureReady === undefined ? {} : { ensureReady: options.ensureReady }),
+      ...(options.activated === undefined ? {} : { activated: options.activated }),
     },
     activityLog: harness.log.sink,
     ...(options.excludedFingerprint === undefined

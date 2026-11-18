@@ -69,6 +69,15 @@ export const REVIEW_RUN_LOG_REFUSAL_REASONS = [
   "request-invalid",
 ] as const;
 
+// R4130-079: a `model-unavailable` refusal or skip because a person has not activated a role model
+// in Settings > Models in this server process. Present only then.
+const MODEL_CAUSE = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: ["not-activated"],
+} as const;
+
 const RUN_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -228,6 +237,7 @@ const REVIEW_RUN_SETTLED = defineActivityLogOperation({
     // findings as it may. They carry no verdict and do not make the run incomplete. Present only
     // when there are any.
     surplusCandidateCount: OPTIONAL_COUNT,
+    modelCause: MODEL_CAUSE,
     // #4130: parts whose last Reviewer session was refused a read, and those of them whose completed
     // session reported nothing. A completed one counts as reviewed, a failed one keeps its failure;
     // a run with a silent one settles as a warning. Present once the Reviewer has run.
@@ -270,6 +280,7 @@ const REVIEW_RUN_REFUSED = defineActivityLogOperation({
       values: REVIEW_RUN_LOG_REFUSAL_REASONS,
     },
     dryRun: { type: "boolean", dataClass: "closed-enum", required: true },
+    modelCause: MODEL_CAUSE,
   },
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
@@ -443,6 +454,8 @@ export interface ReviewRunSettledLine {
   readonly durationMs: number;
   readonly stale: boolean;
   readonly runtimeCleanup?: ReviewRuntimeCleanup | undefined;
+  /** Why the role models were unavailable, when a person had not activated one (R4130-079). */
+  readonly modelCause?: "not-activated" | undefined;
 }
 
 /**
@@ -519,6 +532,7 @@ export function logReviewRunSettled(
         durationMs: Math.max(0, Math.round(line.durationMs)),
         stale: line.stale,
         ...(line.runtimeCleanup === undefined ? {} : { runtimeCleanup: line.runtimeCleanup }),
+        ...(line.modelCause === undefined ? {} : { modelCause: line.modelCause }),
       },
     ),
   );
@@ -529,6 +543,7 @@ export function logReviewRunRefused(
   correlationId: string,
   reason: ReviewRunRefusalReason,
   dryRun: boolean,
+  modelCause?: "not-activated",
 ): void {
   log.write(
     activityLogEvent(
@@ -538,7 +553,7 @@ export function logReviewRunRefused(
         level: "warn",
         errorKind: reason === "active-review-exists" ? "conflict" : "invalid-request",
       },
-      { reason, dryRun },
+      { reason, dryRun, ...(modelCause === undefined ? {} : { modelCause }) },
     ),
   );
 }

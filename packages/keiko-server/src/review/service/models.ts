@@ -33,6 +33,24 @@ export interface ReviewModelPort {
    * not be refused for a stale observation. Resolves when the check settled, whatever its result.
    */
   ensureReady?(modelId: string, correlationId: string | undefined): Promise<void>;
+  /**
+   * Whether a person activated the model in Settings > Models in this server process (ADR-0171 D2,
+   * amended 2026-11-16; R4130-079). Keiko sends a chat model no request until then, so a review
+   * refuses a role model that is not activated before it reads, probes or calls anything.
+   */
+  activated?(modelId: string): boolean;
+}
+
+/** The role models a person has not activated, in role order (R4130-079). */
+export function inactiveReviewRoleModels(
+  port: ReviewModelPort,
+  models: ReviewRoleModels,
+): readonly ReviewModelRole[] {
+  if (port.activated === undefined) return [];
+  const roles: ReviewModelRole[] = [];
+  if (!port.activated(models.reviewerModelId)) roles.push("reviewer");
+  if (!port.activated(models.counterCheckerModelId)) roles.push("counter-checker");
+  return roles;
 }
 
 /** Re-verifies each distinct role model before the run is admitted (#4138). */
@@ -54,7 +72,12 @@ export interface ReviewRoleModels {
 
 export type ReviewModelValidation =
   | { readonly ok: true }
-  | { readonly ok: false; readonly reason: "policy-invalid" | "model-unavailable" };
+  | {
+      readonly ok: false;
+      readonly reason: "policy-invalid" | "model-unavailable";
+      /** A role model nobody activated in Settings > Models (R4130-079). */
+      readonly cause?: "not-activated";
+    };
 
 /**
  * The operator and user policy alone (R4130-003): a run checks it before anything reads, probes or
@@ -109,6 +132,9 @@ export async function validateReviewRoleModels(
 ): Promise<ReviewModelValidation> {
   if (!admitReviewRoleModels(port, models, correlationId)) {
     return { ok: false, reason: "policy-invalid" };
+  }
+  if (inactiveReviewRoleModels(port, models).length > 0) {
+    return { ok: false, reason: "model-unavailable", cause: "not-activated" };
   }
   await ensureReviewRoleModelsReady(port, models, correlationId);
   return evaluateReviewRoleModels(port, models, now());

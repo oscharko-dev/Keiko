@@ -378,5 +378,37 @@ describe("review run Activity Log proofs", () => {
       reason: "active-review-exists",
       dryRun: false,
     });
+    expect(JSON.parse(line)).not.toHaveProperty("modelCause");
+  });
+
+  // R4130-079: a role model nobody activated in Settings > Models is named as the cause on the
+  // refusal of a dry run and on the settled line of a run.
+  it("proves the not-activated cause on review.run.refused and review.run.settled", () => {
+    const refused = onlyLine((sink) => {
+      logReviewRunRefused(sink, CORRELATION, "model-unavailable", true, "not-activated");
+    });
+    expect(expectActivityLogProof("review.run.refused.line", refused)).toMatchObject({
+      reason: "model-unavailable",
+      dryRun: true,
+      modelCause: "not-activated",
+    });
+    const settled = onlyLine((sink) => {
+      logReviewRunSettled(sink, CORRELATION, {
+        runId: "review-run-1",
+        settlement: { kind: "skipped", reason: "model-unavailable" },
+        coverage: null,
+        verdicts: { candidates: 0, confirmed: 0, refuted: 0, undecided: 0, presented: 0 },
+        reviewer: TOTALS,
+        counterChecker: TOTALS,
+        durationMs: 10,
+        stale: false,
+        modelCause: "not-activated",
+      });
+    });
+    expect(expectActivityLogProof("review.run.settled.line", settled)).toMatchObject({
+      settlement: "skipped",
+      reason: "model-unavailable",
+      modelCause: "not-activated",
+    });
   });
 });

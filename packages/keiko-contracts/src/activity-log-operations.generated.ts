@@ -41395,6 +41395,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
       },
+      modelCause: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["not-activated"],
+      },
     },
     causal: "correlation",
     lifecycle: "failure",
@@ -41691,6 +41697,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      modelCause: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["not-activated"],
       },
       readLimitedPartCount: {
         type: "integer",

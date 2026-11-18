@@ -811,6 +811,45 @@ describe("review run service: reads, dry run and evaluation switches", () => {
     });
   });
 
+  // R4130-079: dev 1.5.2 activates a chat model only through Settings > Models. A review whose role
+  // model nobody activated must not probe it or prepare anything; the refusal names the cause.
+  it("refuses a dry run whose role model nobody activated, before any readiness check", async () => {
+    const asked: string[] = [];
+    const h = setUp({
+      activated: (modelId) => modelId !== "checker-model",
+      ensureReady: (modelId) => {
+        asked.push(modelId);
+        return Promise.resolve();
+      },
+    });
+    const refused = await start(h, startBody({ dryRun: true }));
+    expect(refused.status).toBe(503);
+    expect(asked).toEqual([]);
+    expect(h.log.events.find((event) => event.op === "review.run.refused")).toMatchObject({
+      extra: { reason: "model-unavailable", dryRun: true, modelCause: "not-activated" },
+    });
+  });
+
+  it("skips a run whose role model nobody activated before it prepares a worktree", async () => {
+    const asked: string[] = [];
+    const h = setUp({
+      activated: (modelId) => modelId !== "reviewer-model",
+      ensureReady: (modelId) => {
+        asked.push(modelId);
+        return Promise.resolve();
+      },
+    });
+    const view = await settled(h, await start(h));
+    expect(view.settlement).toEqual({ kind: "skipped", reason: "model-unavailable" });
+    expect(asked).toEqual([]);
+    expect(h.runtimeRequests).toEqual([]);
+    expect(h.log.events.find((event) => event.op === "review.run.settled")?.extra).toMatchObject({
+      settlement: "skipped",
+      reason: "model-unavailable",
+      modelCause: "not-activated",
+    });
+  });
+
   // R4130-058: a dry run judged the stored tool-call proof while the start it stands for renews a
   // lapsed one first, so the two disagreed on a server older than a day. The dry run now checks
   // readiness between admission and eligibility, like the start.

@@ -253,12 +253,14 @@ class ReviewRunServiceImpl implements ReviewRunService {
     reason: ReviewRunRefusalReason,
     input: ReviewRunStartInput,
     activeRunId?: string,
+    modelCause?: "not-activated",
   ): ReviewRunStartOutcome {
     logReviewRunRefused(
       this.deps.activityLog,
       input.correlationId,
       reason,
       input.request.dryRun === true,
+      modelCause,
     );
     return { kind: "refused", reason, ...(activeRunId === undefined ? {} : { activeRunId }) };
   }
@@ -270,7 +272,7 @@ class ReviewRunServiceImpl implements ReviewRunService {
       this.now,
       input.correlationId,
     );
-    if (!models.ok) return this.refuse(models.reason, input);
+    if (!models.ok) return this.refuse(models.reason, input, undefined, models.cause);
     const estimate = await estimateDryRun(
       this.deps.reviewServices,
       this.deps.store,
