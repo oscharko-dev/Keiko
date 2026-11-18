@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b52fc7dcf6c5b0f66a01e8068fc01277ed9168cd7c7d7041fccfe9990cc7dbb0",
+    "catalogDigest": "d04aeca369b89a99bb70d0df24bac6f443668ae2c64f5252d21adb6d3a2c762e",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -38920,8 +38920,8 @@
         "failureClasses": ["memory-vault-encryption-checkpoint"],
         "proofIds": ["memory-vault.store.encryption-checkpoint-degraded.state"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/schema.ts:70",
-        "emitterSites": ["packages/keiko-memory-vault/src/schema.ts:467"]
+        "registrationSite": "packages/keiko-memory-vault/src/schema.ts:72",
+        "emitterSites": ["packages/keiko-memory-vault/src/schema.ts:509"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39039,8 +39039,8 @@
         "failureClasses": ["memory-vault-open"],
         "proofIds": ["memory-vault.store.opened.key-source"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/vault.ts:127",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault.ts:479"]
+        "registrationSite": "packages/keiko-memory-vault/src/vault.ts:128",
+        "emitterSites": ["packages/keiko-memory-vault/src/vault.ts:480"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39271,7 +39271,7 @@
         "failureClasses": ["memory-capture-novelty"],
         "proofIds": ["memory.capture.novelty-gate.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:180",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:942"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:944"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -120786,7 +120786,7 @@
     {
       "op": "memory-vault.store.encryption-checkpoint-degraded",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/schema.ts:73",
+      "site": "packages/keiko-memory-vault/src/schema.ts:75",
       "package": "keiko-memory-vault"
     },
     {
@@ -120804,7 +120804,7 @@
     {
       "op": "memory-vault.store.opened",
       "category": "memory",
-      "site": "packages/keiko-memory-vault/src/vault.ts:130",
+      "site": "packages/keiko-memory-vault/src/vault.ts:131",
       "package": "keiko-memory-vault"
     },
     {
@@ -121503,7 +121503,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1980",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1978",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -121759,7 +121759,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:344",
+      "site": "packages/keiko-server/src/memory-salience.ts:345",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -122207,7 +122207,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2381",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2379",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125547,14 +125547,14 @@
     {
       "op": "memory.learn.pass",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-learning.ts:562",
+      "site": "packages/keiko-server/src/memory-learning.ts:607",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "memory.learn.pass",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:1099",
+      "site": "packages/keiko-server/src/memory-salience.ts:1107",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125599,7 +125599,7 @@
     {
       "op": "memory.retrieval.semantic-disabled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:474",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:476",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125613,7 +125613,7 @@
     {
       "op": "memory.salience",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-salience.ts:280",
+      "site": "packages/keiko-server/src/memory-salience.ts:281",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126031,7 +126031,7 @@
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:1062",
+      "site": "packages/keiko-server/src/memory-embedding.ts:1064",
       "package": "keiko-server"
     },
     {
