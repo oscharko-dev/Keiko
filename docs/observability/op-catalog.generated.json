@@ -121769,7 +121769,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3392",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3393",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125044,7 +125044,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3816",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3817",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

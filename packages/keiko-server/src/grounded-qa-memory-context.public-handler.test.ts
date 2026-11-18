@@ -30,6 +30,7 @@ import { resetServerLogger } from "../../../tests/support/activity-log-test-supp
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { memoryEmbeddingProviderIdentity } from "./memory-embedding.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 const MODEL = "memory-source-fixture";
 const MEMORY = "Use pnpm for package installs.";
@@ -97,7 +98,11 @@ function fixture(calls: GatewayCallRequest[]): {
   const store = createInMemoryUiStore();
   const memoryDir = join(root, "memory");
   mkdirSync(memoryDir);
-  const vault = createMemoryVault({ memoryDir, redactString: (text) => text });
+  const vault = createMemoryVault({
+    memoryDir,
+    vaultKey: Buffer.alloc(32, 29),
+    redactString: (text) => text,
+  });
   cleanups.push(() => {
     vault.close();
     store.close();
@@ -203,9 +208,11 @@ it.each([true, false] as const)(
       finish({ ok: false, kind: "cancelled" });
     });
     const request = memoryRoute(root, chatId, "Which package manager should I use for installs?");
+    const diagnostics: ServerDiagnosticRecord[] = [];
     const outcome = handleGroundedAsk(request, {
       ...deps,
       config,
+      diagnostics: { record: (record) => diagnostics.push(record) },
       localKnowledgeEmbeddingRequest: (embedding: OpenAIEmbeddingRequest) => {
         queryStarted = true;
         embedding.signal?.addEventListener("abort", cancelled, { once: true });
@@ -218,11 +225,11 @@ it.each([true, false] as const)(
       });
       if (disconnect) request.req.emit("aborted");
       else finish({ ok: true, value: { vector: Float32Array.from([1, 0]), modelId } });
-      const cancellationCount = cancelled.mock.calls.length;
       // Release an unfixed adapter separately, without counting cleanup as cancellation.
       finish({ ok: false, kind: "transport" });
       await expect(outcome).resolves.toMatchObject({ status: disconnect ? 499 : 200 });
-      expect(cancellationCount).toBe(disconnect ? 1 : 0);
+      expect(cancelled).toHaveBeenCalledTimes(disconnect ? 1 : 0);
+      expect(diagnostics.filter(({ operation }) => operation === "grounded.memory")).toEqual([]);
       expect(calls).toHaveLength(disconnect ? 0 : 1);
       expect(sink.events.filter(({ op }) => op === "embedding.memory.failed")).toMatchObject(
         disconnect ? [{ errorKind: "cancelled", extra: { failureKind: "cancelled" } }] : [],

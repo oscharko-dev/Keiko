@@ -3366,6 +3366,7 @@ async function prepareGroundedMemory(
     const refused = rememberRequestRefusedIn(deps, request, context);
     return withPreparedGroundedMemory(prepared, context, result, refused);
   } catch (error) {
+    if (prepared.signal.aborted) return groundedCancelledResult();
     return groundedMemoryPreparationFailure(prepared, deps, error);
   }
 }
