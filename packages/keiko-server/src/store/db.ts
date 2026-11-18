@@ -137,7 +137,7 @@ import {
   replaceWorkspaceManifest as sqlReplaceWorkspaceManifest,
   workspaceManifestRootCountForProject,
 } from "./workspaceManifests.js";
-import { validateProjectPath } from "./validation.js";
+import { canonicalProjectPathKey, validateProjectPath } from "./validation.js";
 import { resolveRegisteredWorkspaceProjectPath } from "../workspace-root-identity.js";
 import { recordWorkspaceRootDenied } from "../workspace-root-denial-log.js";
 import {
@@ -759,12 +759,13 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     },
     listChats: (projectPath: string, limit?: number) =>
       limit === undefined
-        ? sqlListChats(db, projectPath)
-        : sqlListChatsLimited(db, projectPath, limit),
+        ? sqlListChats(db, canonicalProjectPathKey(projectPath))
+        : sqlListChatsLimited(db, canonicalProjectPathKey(projectPath), limit),
     findChatById: (id: string): Chat | undefined => sqlFindChatById(db, id),
     replayChatCreation: (intent): Chat | undefined => {
-      assertChatProjectAvailable(db, intent.projectPath);
-      return replayChatCreationIntent(db, intent);
+      const canonical = { ...intent, projectPath: canonicalProjectPathKey(intent.projectPath) };
+      assertChatProjectAvailable(db, canonical.projectPath);
+      return replayChatCreationIntent(db, canonical);
     },
     readChatDraft: (id) => readChatDraft(db, id),
     updateChatDraft: (id, update) => updateChatDraft(db, id, update),
@@ -776,7 +777,15 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       title: string,
       selectedModel: string,
       opts?: StoreCreateChatOptions,
-    ): Chat => createChatRecord(db, options, projectPath, title, selectedModel, opts),
+    ): Chat =>
+      createChatRecord(
+        db,
+        options,
+        canonicalProjectPathKey(projectPath),
+        title,
+        selectedModel,
+        opts,
+      ),
     updateChat: (id: string, patch: UpdateChatPatch, updateOptions?: UpdateChatOptions): Chat =>
       sqlUpdateChat(db, id, patch, options.now(), updateOptions),
     invalidateJiraPod: (podId, generation, correlationId) =>

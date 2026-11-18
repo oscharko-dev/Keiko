@@ -15,11 +15,12 @@ import type {
   WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
 import { contentFreeErrorClass } from "./diagnostics-log.js";
-import type {
-  Project,
-  UiStore,
-  WorkspaceManifestRecordRow,
-  WorkspaceManifestRootProject,
+import {
+  canonicalProjectPathKey,
+  type Project,
+  type UiStore,
+  type WorkspaceManifestRecordRow,
+  type WorkspaceManifestRootProject,
 } from "./store/index.js";
 import { buildBinding } from "./task-workspace/binding.js";
 import {
@@ -195,7 +196,8 @@ function authorizeDispatch(
 }
 
 function projectByPath(store: UiStore, projectPath: string): Project {
-  const project = store.listProjects().find((candidate) => candidate.path === projectPath);
+  const key = canonicalProjectPathKey(projectPath);
+  const project = store.listProjects().find((candidate) => candidate.path === key);
   if (project === undefined) {
     throw new WorkspaceManifestError(
       "WORKSPACE_PROJECT_NOT_FOUND",
