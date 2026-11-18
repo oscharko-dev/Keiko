@@ -1280,12 +1280,21 @@ closing start and carried out while it still holds the lock, or is turned away, 
 let go, takes the lock, closes it and stops Keiko under it (a lock held for 90 seconds makes the Stop
 say so and not act). While it waits it retries recording: a later start that wins the lock first
 records the Stop in its own lock and carries it out, and the waiting Stop does not act itself. A start writes its token
-to `system/keiko-npm-start-generation` under the lock before it opens Keiko; a Stop reads that record as it is pressed,
-before it asks the lock, and again after it took the lock, and does not act when it changed (a start opened Keiko meanwhile and came
-after the Stop), nor when closing the lock it took reports it is no longer its own. So it can never stop the Keiko a later start opened. A
-lock that only npm of an already ended start holds accepts no Stop, so that Stop acts at once. A start
-that finds a `closing` entry waits up to the same 90 seconds for that holder to let go before it
-reports another start, so a Start pressed while a Stop acts opens Keiko after it. A start that finds the lock held
+to `system/keiko-npm-start-generation` under the lock once its launch of Keiko really happened (the command line was spawned;
+a spawn the system refused records nothing). A Stop reads that record, and the owner tokens of the starts holding the lock,
+as it is pressed, before it asks the lock, and again after it took the lock. It does not act only when the record names a
+start that was neither the one it saw nor one that held the lock when it was pressed (that start opened Keiko after the
+Stop); a start that held the lock at the press and finishes meanwhile came before the Stop, so the Stop still acts. It also
+does not act when closing the lock it took reports it is no longer its own. So it can never stop the Keiko a later start
+opened. Every stop runs while its dispatcher owns the lock: a start that cancelled opening because it saw a Stop carries the
+stop out under its own closing lock, even when the requester withdrew its provisional entry. A lock that only npm of an
+already ended start holds accepts no Stop, so that Stop acts at once, but without a lock of its own: it first leaves
+`system/keiko-npm-stop-handoff-<pid>-<random>`, withdraws it and acts under the lock like any other Stop when a start holds
+the lock after all, and removes it when its stop has ended. A start that holds the lock waits for such an entry (its
+process runs) before it opens Keiko, for up to 90 seconds; after that it releases the lock and ends with exit code 1 and
+asks to start again. A start that finds a `closing` entry waits up to the same 90 seconds for that holder to let go; if the
+lock is still closing then, nothing opens Keiko for it, so it ends with exit code 1 and says that Keiko is still being
+closed (never that another window opens it), and a Start pressed while a Stop acts opens Keiko after it. A start that finds the lock held
 but not renewed by a start (only the npm of a closed start window holds it) waits up to 10 minutes for that npm to end and
 then takes the lock and starts normally; after that it ends with exit code 1 and asks to start again in a minute, never
 reporting another window that no longer exists. A start that finds its lock

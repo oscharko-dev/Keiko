@@ -49,10 +49,15 @@ const STATE_DIR_NAME = ".keiko-standalone";
 // process adds `npm-<pid>-<random>` while it installs and renews only that entry. A start that is about to let go of the lock adds
 // `closing-<pid>-<random>` first: from then on no Stop is accepted by that lock.
 const INSTALL_LOCK = ["system", "keiko-npm-install.lock"];
-// The start that opened Keiko last leaves its token here, written under the lock before Keiko is
-// opened and replaced in one rename. The lock is gone once the start let go; this record is not, so
-// a Stop that waited for the lock can tell that another start opened Keiko meanwhile.
+// The start that opened Keiko last leaves its token here, written under the lock once its launch
+// of Keiko really happened (the CLI was spawned) and replaced in one rename. The lock is gone once
+// the start let go; this record is not, so a Stop that waited for the lock can tell that another
+// start opened Keiko meanwhile. A start whose launch never happened records nothing.
 const START_GENERATION = ["system", "keiko-npm-start-generation"];
+// A Stop that acts while only npm of an ended start holds the lock holds no lock of its own: it
+// leaves `keiko-npm-stop-handoff-<pid>-<random>` in system/ for the time its stop runs, and every
+// start waits for such an entry (whose process runs) before it opens Keiko.
+const STOP_HANDOFF = /^keiko-npm-stop-handoff-(\d+)-[0-9a-f]+$/u;
 const LOCK_ENTRY = /^(owner|npm|stop|closing)-(\d+)-([0-9a-f]+)$/u;
 const START_KINDS = new Set(["owner"]);
 const HOLDER_KINDS = new Set(["owner", "npm"]);
@@ -746,10 +751,11 @@ function createLockEntry(path) {
  * it is either read here or turned away and stops Keiko itself. The lock stays this start's until
  * `removeInstallLock`, so no other start opens Keiko before the recorded Stop is carried out.
  */
-export function closeInstallLock(lock) {
+export function closeInstallLock(lock, pause = () => undefined) {
   if (heldEntries(lock) === undefined) return { owned: false, stopRequested: false };
   const closing = join(lock.dir, `closing-${lock.token}`);
   if (!createLockEntry(closing)) return { owned: false, stopRequested: false };
+  pause("closed");
   const names = heldEntries(lock);
   if (names === undefined) {
     // The lock was replaced while the entry was added: never leave it in a foreign lock.
@@ -1206,7 +1212,9 @@ function reportStartRefused(error) {
   );
 }
 
-function runKeiko(root, args, env, run) {
+// Runs Keiko's command line. `spawned` is false when the system refused to start it: no child ran,
+// so nothing was launched.
+function spawnKeiko(root, args, env, run) {
   const result = run(process.execPath, [keikoCliPath(root), ...args], {
     cwd: root,
     stdio: "inherit",
@@ -1215,9 +1223,13 @@ function runKeiko(root, args, env, run) {
   if (result.error !== undefined) {
     // No child ran, so nothing else would say why Start or Stop ended here.
     reportStartRefused(result.error);
-    return 1;
+    return { code: 1, spawned: false };
   }
-  return result.status ?? 1;
+  return { code: result.status ?? 1, spawned: true };
+}
+
+function runKeiko(root, args, env, run) {
+  return spawnKeiko(root, args, env, run).code;
 }
 
 export function startArgs(root, env) {
@@ -1250,9 +1262,9 @@ export function startGeneration(root) {
   }
 }
 
-// Written under the lock, before the start opens Keiko, in one rename: a reader sees the previous
-// token or this one, never a partial file.
-function recordStartGeneration(root, lock) {
+// Written under the lock once the start's launch of Keiko happened, in one rename: a reader sees
+// the previous token or this one, never a partial file.
+export function recordStartLaunch(root, lock) {
   const target = join(root, ...START_GENERATION);
   const temporary = `${target}.${lock.token}.tmp`;
   try {
@@ -1268,8 +1280,11 @@ function installThenOpen(root, nodeDir, env, run, lock, args) {
   if (!ensureInstalled(root, nodeDir, env, run, lock)) return { outcome: "install-failed" };
   refuseLostLock(lock);
   if (heldStopRecorded(lock)) return { outcome: "cancelled" };
-  recordStartGeneration(root, lock);
-  return { outcome: "opened", code: runKeiko(root, args, env, run) };
+  const launch = spawnKeiko(root, args, env, run);
+  // A launch the system refused started nothing, so it must not make an earlier Stop look as if
+  // Keiko had been started again.
+  if (launch.spawned) recordStartLaunch(root, lock);
+  return { outcome: "opened", code: launch.code };
 }
 
 function reportStoppedWhileLoading(opened) {
@@ -1306,7 +1321,7 @@ function reportStopNotCarriedOut(installed) {
 // A Stop made while this start held the lock stops whatever opened: this start's Keiko, also one
 // that reported a failure, or one an earlier start of the folder opened. Stopping a Keiko that does
 // not run succeeds. `stop.code` is the result of a Stop already carried out under the lock.
-function settleStart(root, env, run, step, stop) {
+function settleStart(step, stop) {
   if (step.outcome === "install-failed") {
     if (stop.stopRequested) reportStopNotCarriedOut(false);
     return 1;
@@ -1315,19 +1330,23 @@ function settleStart(root, env, run, step, stop) {
     if (step.code === 0) reportRunning();
     return step.code;
   }
-  const code = stop.code ?? stopKeiko(root, stateDir(env), env, run);
   // Why Keiko did not open says more than the Stop after it.
   if (step.code !== undefined && step.code !== 0) return step.code;
-  if (code !== 0) return code;
+  if (stop.code !== 0) return stop.code;
   reportStoppedWhileLoading(step.outcome === "opened");
   return 0;
 }
 
 // A Stop this start's lock accepted is carried out while the start still holds that lock, and the
 // lock is let go of only afterwards: no other start can open Keiko in between and see it stopped,
-// and a Stop accepted here can never stop the Keiko a later start opened.
-function closeAndStop(root, env, run, lock, step) {
-  const { stopRequested } = closeInstallLock(lock);
+// and a Stop accepted here can never stop the Keiko a later start opened. A start that cancelled
+// opening Keiko because it saw a Stop also carries it out here, whether or not the requester has
+// withdrawn that provisional entry by now: the requester stops under the lock itself, and a stop
+// of a Keiko that is not running succeeds, so what matters is that no stop runs once the lock is
+// gone.
+function closeAndStop(root, env, run, lock, step, pause) {
+  const closed = closeInstallLock(lock, pause);
+  const stopRequested = closed.stopRequested || step.outcome === "cancelled";
   if (stopRequested && step.outcome !== "install-failed") {
     return { stopRequested, code: stopKeiko(root, stateDir(env), env, run) };
   }
@@ -1336,18 +1355,18 @@ function closeAndStop(root, env, run, lock, step) {
 
 // This start holds the lock until Keiko is open, so a Stop meanwhile is carried out before the lock
 // goes, and a Stop after that finds Keiko open and stops it.
-function installAndOpen(root, nodeDir, env, run, lock, args) {
+function installAndOpen(root, nodeDir, env, run, lock, args, pause) {
   let step;
   let stop;
   try {
     step = installThenOpen(root, nodeDir, env, run, lock, args);
-    stop = closeAndStop(root, env, run, lock, step);
+    stop = closeAndStop(root, env, run, lock, step, pause);
   } catch (error) {
     if (releaseInstallLock(lock)) reportStopNotCarriedOut(true);
     throw error;
   }
   removeInstallLock(lock);
-  return settleStart(root, env, run, step, stop);
+  return settleStart(step, stop);
 }
 
 /**
@@ -1385,6 +1404,8 @@ function reportInstallationRunning() {
 // it. No window reports that installation's result and it cannot open Keiko, so a start that finds
 // the lock so waits for that npm to end and then takes the lock itself. `another` is true when a
 // start that renews holds the lock: that start opens Keiko and its window says whether it did.
+// `closing` is true when the lock is still closing after the wait for it: its holder (a Stop acting
+// under the lock, or a start that already opened Keiko) opens nothing for this start.
 function acquireAfterOrphanedNpm(root, pause) {
   const dir = installLockPath(root);
   const deadline = lockClock.now() + ORPHANED_NPM_WAIT_MS;
@@ -1392,6 +1413,7 @@ function acquireAfterOrphanedNpm(root, pause) {
   for (;;) {
     const lock = acquireInstallLock(root, pause);
     if (lock !== undefined) return { lock };
+    if (lockClosing(root)) return { closing: true };
     if (lockEntries(dir) !== undefined && renewalObserved(dir, START_KINDS)) {
       return { another: true };
     }
@@ -1409,6 +1431,20 @@ function reportAnotherStart() {
   );
 }
 
+function reportStillClosing() {
+  say(
+    "Keiko is still being closed by another window of this folder (a Stop that has not finished). Wait a moment, then start Keiko again.",
+    "Keiko wird noch von einem anderen Fenster dieses Ordners beendet (ein Beenden, das noch nicht fertig ist). Warte einen Moment und starte Keiko dann erneut.",
+  );
+}
+
+function reportStopStillActing() {
+  say(
+    "A Stop of this folder is still stopping Keiko, so this start does not open it yet. Wait a moment, then start Keiko again.",
+    "Ein Beenden dieses Ordners beendet Keiko noch, daher oeffnet dieser Start es noch nicht. Warte einen Moment und starte Keiko dann erneut.",
+  );
+}
+
 function reportInstallationStillRunning() {
   say(
     "An installation of Keiko in this folder is still running and no window reports it. Wait a minute, then start Keiko again.",
@@ -1416,20 +1452,56 @@ function reportInstallationStillRunning() {
   );
 }
 
+// The stop handoffs of Stops that act without a lock of their own and whose process runs; one a
+// Stop that ended left behind is removed.
+function liveStopHandoffs(root) {
+  const system = join(root, "system");
+  return readdirSync(system).filter((name) => {
+    const match = STOP_HANDOFF.exec(name);
+    if (match === null) return false;
+    if (pidAlive(match[1])) return true;
+    rmSync(join(system, name), { force: true });
+    return false;
+  });
+}
+
+// A start that holds the lock waits until no Stop acts under a handoff: that Stop decided before
+// this start took the lock, so its stop must not land on the Keiko this start opens. Returns false
+// when a Stop was still acting after the same wait a Stop gives the lock.
+function awaitStopHandoffs(root) {
+  const deadline = lockClock.now() + STOP_LOCK_WAIT_MS;
+  while (liveStopHandoffs(root).length > 0) {
+    if (lockClock.now() >= deadline) return false;
+    lockClock.sleep(LOCK_OBSERVE_STEP_MS, installLockPath(root));
+  }
+  return true;
+}
+
+function lockRefused(closing, another) {
+  if (closing) {
+    reportStillClosing();
+    return 1;
+  }
+  if (another) {
+    reportAnotherStart();
+    return 0;
+  }
+  reportInstallationStillRunning();
+  return 1;
+}
+
 export function start(root, nodeDir, env, run = spawnSync, pause = () => undefined) {
   const args = startArgs(root, env);
   const acquired = acquireAfterClosing(root, pause);
-  const { lock, another } =
+  const { lock, another, closing } =
     acquired === undefined ? acquireAfterOrphanedNpm(root, pause) : { lock: acquired };
-  if (lock === undefined) {
-    if (another) {
-      reportAnotherStart();
-      return 0;
-    }
-    reportInstallationStillRunning();
+  if (lock === undefined) return lockRefused(closing, another);
+  if (!awaitStopHandoffs(root)) {
+    if (releaseInstallLock(lock)) reportStopNotCarriedOut(true);
+    reportStopStillActing();
     return 1;
   }
-  return installAndOpen(root, nodeDir, env, run, lock, args);
+  return installAndOpen(root, nodeDir, env, run, lock, args, pause);
 }
 
 const STOP_LOCK_WAIT_MS = 90 * 1000;
@@ -1469,6 +1541,25 @@ function reportStartCameAfterStop() {
   );
 }
 
+// What a Stop saw when it was pressed: the start record, and the starts that held the lock then.
+// A start that held the lock at that moment came before the Stop, whenever it finished, so only a
+// record that names neither the one seen nor a holder seen belongs to a start that came after.
+function observeStart(root) {
+  const generation = startGeneration(root);
+  const holders = new Set(
+    (lockEntries(installLockPath(root)) ?? [])
+      .map((name) => LOCK_ENTRY.exec(name))
+      .filter((match) => match?.[1] === "owner")
+      .map((match) => `${match[2]}-${match[3]}`),
+  );
+  return { generation, holders };
+}
+
+function startCameAfter(root, seen) {
+  const current = startGeneration(root);
+  return current !== seen.generation && !seen.holders.has(current.trim());
+}
+
 // A Stop the lock turned away (its start is closing) acts under the lock itself: it waits until
 // that start has let go, takes the lock, closes it so no further Stop is recorded in it, and only
 // then stops Keiko. No start opens Keiko between the Stop's decision and its effect, so the Stop
@@ -1491,13 +1582,43 @@ function stopUnderLock(root, state, env, run, seen) {
       reportStopLockLost();
       return 1;
     }
-    if (startGeneration(root) !== seen) {
+    if (startCameAfter(root, seen)) {
       reportStartCameAfterStop();
       return 0;
     }
     return stopNow(root, state, env, run);
   } finally {
     removeInstallLock(lock);
+  }
+}
+
+// The lock holds a start that runs: it, not npm alone, decides what opens Keiko.
+function startHoldsLock(root) {
+  const names = lockEntries(installLockPath(root));
+  return names !== undefined && hasStartEntry(names);
+}
+
+// Only npm of a start that already ended holds the lock, so this Stop acts without one. It leaves
+// a handoff first, which outlives npm, and every start that takes the lock afterwards waits for it
+// (`awaitStopHandoffs`) before it opens Keiko: the stop can never land on a Keiko that start
+// opened. Written before the lock is looked at again, so a start either sees the handoff or is seen
+// holding the lock; in that case the Stop withdraws and acts under the lock like any other.
+function stopUnderHandoff(root, state, env, run, seen, pause) {
+  const handoff = join(root, "system", `keiko-npm-stop-handoff-${lockToken()}`);
+  closeSync(openSync(handoff, "wx", 0o600));
+  pause("handoff");
+  if (startHoldsLock(root)) {
+    rmSync(handoff, { force: true });
+    return stopUnderLock(root, state, env, run, seen);
+  }
+  try {
+    if (startCameAfter(root, seen)) {
+      reportStartCameAfterStop();
+      return 0;
+    }
+    return stopNow(root, state, env, run);
+  } finally {
+    rmSync(handoff, { force: true });
   }
 }
 
@@ -1528,11 +1649,12 @@ function onlyNpmHoldsLock(root) {
  * in its lock and that start does not leave Keiko open. A folder Keiko was never loaded into has
  * nothing to stop.
  */
-export function stop(root, env, run = spawnSync) {
+export function stop(root, env, run = spawnSync, pause = () => undefined) {
   const state = stateDir(env);
-  // The start record as this Stop was pressed, read before it asks the lock: a start that opens
-  // Keiko while the lock answers, or later while the Stop waits, came after this Stop.
-  const seen = startGeneration(root);
+  // The start record and the starts holding the lock as this Stop was pressed, read before it asks
+  // the lock: a start that opens Keiko while the lock answers, or later while the Stop waits, and
+  // that was not holding the lock now, came after this Stop.
+  const seen = observeStart(root);
   if (requestStop(root)) {
     reportStopRecorded();
     return 0;
@@ -1542,7 +1664,7 @@ export function stop(root, env, run = spawnSync) {
     return 0;
   }
   return onlyNpmHoldsLock(root)
-    ? stopNow(root, state, env, run)
+    ? stopUnderHandoff(root, state, env, run, seen, pause)
     : stopUnderLock(root, state, env, run, seen);
 }
 

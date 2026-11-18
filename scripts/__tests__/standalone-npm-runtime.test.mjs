@@ -61,6 +61,7 @@ import {
   privateFileAccess,
   publishPrivateFile,
   readHidden,
+  recordStartLaunch,
   refuseForeignInstallTarget,
   releaseInstallLock,
   removeInstallLock,
@@ -1152,9 +1153,13 @@ describe("the npm package start", () => {
 
       expect(start(root, nodeDir, env, run)).toBe(0);
       expect(run.mock.calls.map(commandOf)).toEqual(["ci", "stop"]);
-      expect(duringStop).toEqual([true, 0]);
+      // Owner finding L5 on PR #4464: the closing holder here only carries a Stop out and opens
+      // nothing, so a start pressed meanwhile is told to try again (exit 1) instead of being told
+      // that another window opens Keiko (exit 0). It still opens nothing and the lock stays held.
+      expect(duringStop).toEqual([true, 1]);
       expect(other).not.toHaveBeenCalled();
-      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^Another start of this folder/u));
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^Another start of this folder/u));
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(/^Keiko is still being closed/u));
       expect(log).toHaveBeenCalledWith(
         "Keiko was stopped while it was being loaded and does not start. You can close this window.",
       );
@@ -1862,6 +1867,257 @@ describe("the npm package start", () => {
       expect(log).toHaveBeenCalledWith(
         expect.stringMatching(/^Keiko was started again while Stop/u),
       );
+    });
+
+    // The five owner findings on PR #4464 that bind a Stop to the start it saw, to a launch that
+    // really happened, and to the lock (or a handoff a start must honour) it acts under.
+    describe("ordering of a Stop against the starts around it", () => {
+      function stopFixture() {
+        const fixture = installFixture();
+        installKeiko(fixture.root, `${lockfileDigest(fixture.root)}\n`);
+        const commands = [];
+        const run = vi.fn((_node, args) => {
+          commands.push(args[1]);
+          return { status: 0 };
+        });
+        return { ...fixture, commands, run };
+      }
+
+      // The stop handoffs a Stop left in system/.
+      function handoffsOf(root) {
+        return readdirSync(join(root, "system")).filter((name) =>
+          name.startsWith("keiko-npm-stop-handoff-"),
+        );
+      }
+
+      // The lock of an ended start that only npm of its window still holds, renewing.
+      function npmOnlyLock(root) {
+        staleLock(root, endedPid());
+        writeFileSync(join(installLockPath(root), `npm-${String(process.pid)}-0c`), "1\n");
+      }
+
+      it("stops Keiko when the start that held the lock at the press opens it and lets go meanwhile", () => {
+        // Owner finding L1 on PR #4464: the start that held the lock when Stop was pressed finished
+        // during the Stop's observation and recorded its token, so the Stop took that earlier
+        // start for a later one and did not stop Keiko.
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const { root, env, commands, run } = stopFixture();
+        const holder = acquireInstallLock(root);
+        const base = lockClock.sleep.getMockImplementation();
+        let finished = false;
+        vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+          if (!finished) {
+            finished = true;
+            closeInstallLock(holder);
+            recordStartLaunch(root, holder);
+            removeInstallLock(holder);
+          }
+          base(milliseconds, dir);
+        });
+
+        expect(stop(root, env, run)).toBe(0);
+        expect(commands).toEqual(["stop"]);
+        expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^Keiko was started again/u));
+      });
+
+      it("keeps a waiting Stop when a later start never launched Keiko", () => {
+        // Owner finding L2 on PR #4464: the start record was durable before the CLI was spawned,
+        // so a later start whose spawn failed still looked like Keiko had been started again.
+        quiet();
+        const { root, nodeDir, env, commands, run } = stopFixture();
+        const closing = acquireInstallLock(root);
+        closeInstallLock(closing);
+        const base = lockClock.sleep.getMockImplementation();
+        const refused = vi.fn(() => ({
+          error: Object.assign(new Error("spawn"), { code: "EAGAIN" }),
+        }));
+        let later;
+        vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+          if (later === undefined && clock.now >= 30_000) {
+            removeInstallLock(closing);
+            later = start(root, nodeDir, env, refused);
+          }
+          base(milliseconds, dir);
+        });
+
+        expect(stop(root, env, run)).toBe(0);
+        expect(later).toBe(1);
+        expect(commands).toEqual(["stop"]);
+        expect(startGeneration(root)).toBe("");
+      });
+
+      it("lets a start that comes while a Stop acts on the npm-only lock wait for that Stop", () => {
+        // Owner finding L3 on PR #4464: the npm-only observation was obsolete by the time the stop
+        // took effect: npm ended, a later start opened Keiko, and the earlier stop then ended it.
+        quiet();
+        const { root, nodeDir, env } = stopFixture();
+        const dir = installLockPath(root);
+        staleLock(root, endedPid());
+        writeFileSync(join(dir, `npm-${String(process.pid)}-0c`), "1\n");
+        const order = [];
+        let nested;
+        const run = vi.fn((_node, args) => {
+          if (args[1] !== "stop") {
+            order.push(args[1]);
+            return { status: 0 };
+          }
+          order.push("stop-begins");
+          // npm ends and a start takes the free lock while the stop command still runs.
+          rmSync(dir, { recursive: true, force: true });
+          nested = start(root, nodeDir, env, run);
+          order.push("stop-ends");
+          return { status: 0 };
+        });
+
+        expect(stop(root, env, run)).toBe(0);
+        expect(order).toEqual(["stop-begins", "stop-ends"]);
+        expect(nested).toBe(1);
+        // The handoff went with the Stop: the start pressed again afterwards opens Keiko.
+        expect(start(root, nodeDir, env, run)).toBe(0);
+        expect(order).toEqual(["stop-begins", "stop-ends", "start"]);
+        expect(handoffsOf(root)).toEqual([]);
+      });
+
+      it("carries out a Stop whose request the closing start saw only provisionally under the lock", () => {
+        // Owner finding L4 on PR #4464: the requester withdrew its provisional entry once it saw
+        // the closing marker, and the start then dispatched the stop after it had let go of the
+        // lock, so a new start could open Keiko in between.
+        quiet();
+        const { root, nodeDir, env } = installFixture();
+        const npm = fakeNpm(root, true, () => requestStop(root));
+        const withdraw = (step) => {
+          if (step !== "closed") return;
+          for (const name of readdirSync(installLockPath(root))) {
+            if (name.startsWith("stop-")) rmSync(join(installLockPath(root), name));
+          }
+        };
+        const during = [];
+        const commands = [];
+        const run = vi.fn((node, args, options) => {
+          if (args.includes("ci")) return npm.run(node, args, options);
+          commands.push(args[1]);
+          if (args[1] === "stop") during.push(existsSync(installLockPath(root)));
+          return { status: 0 };
+        });
+
+        expect(start(root, nodeDir, env, run, withdraw)).toBe(0);
+        expect(commands).toEqual(["stop"]);
+        expect(during).toEqual([true]);
+        expect(existsSync(installLockPath(root))).toBe(false);
+      });
+
+      it("withdraws its handoff and acts under the lock when a start takes the lock meanwhile", () => {
+        quiet();
+        const { root, env, run } = stopFixture();
+        npmOnlyLock(root);
+        let later;
+        const pause = (step) => {
+          if (step !== "handoff") return;
+          // npm ends and a start takes the free lock right after the handoff was written.
+          expect(handoffsOf(root)).toHaveLength(1);
+          rmSync(installLockPath(root), { recursive: true, force: true });
+          later = acquireInstallLock(root);
+        };
+
+        // The start holds the lock now, so the Stop is recorded in it and that start carries it out.
+        expect(stop(root, env, run, pause)).toBe(0);
+        expect(handoffsOf(root)).toEqual([]);
+        expect(run).not.toHaveBeenCalled();
+        expect(releaseInstallLock(later)).toBe(true);
+      });
+
+      it("does not stop the Keiko a start opened before the handoff was written", () => {
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const { root, env, run } = stopFixture();
+        npmOnlyLock(root);
+        const pause = (step) => {
+          if (step !== "handoff") return;
+          rmSync(installLockPath(root), { recursive: true, force: true });
+          const later = acquireInstallLock(root);
+          recordStartLaunch(root, later);
+          removeInstallLock(later);
+        };
+
+        expect(stop(root, env, run, pause)).toBe(0);
+        expect(run).not.toHaveBeenCalled();
+        expect(handoffsOf(root)).toEqual([]);
+        expect(log).toHaveBeenCalledWith(expect.stringMatching(/^Keiko was started again/u));
+      });
+
+      it("removes the handoff of a Stop that ended and opens Keiko", () => {
+        quiet();
+        const { root, nodeDir, env, commands, run } = stopFixture();
+        writeFileSync(join(root, "system", `keiko-npm-stop-handoff-${String(endedPid())}-0a`), "");
+
+        expect(start(root, nodeDir, env, run)).toBe(0);
+        expect(commands).toEqual(["start"]);
+        expect(handoffsOf(root)).toEqual([]);
+      });
+
+      it("waits for the handoff of a Stop that acts and opens Keiko once it has ended", () => {
+        quiet();
+        const { root, nodeDir, env, commands, run } = stopFixture();
+        const handoff = join(root, "system", `keiko-npm-stop-handoff-${String(process.pid)}-0a`);
+        writeFileSync(handoff, "");
+        const base = lockClock.sleep.getMockImplementation();
+        vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+          if (clock.now >= 30_000) rmSync(handoff, { force: true });
+          base(milliseconds, dir);
+        });
+
+        expect(start(root, nodeDir, env, run)).toBe(0);
+        expect(commands).toEqual(["start"]);
+        expect(clock.now).toBeGreaterThanOrEqual(30_000);
+      });
+
+      it("ends a start with a retryable message when a Stop still acts after the wait", () => {
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const { root, nodeDir, env, run } = stopFixture();
+        writeFileSync(join(root, "system", `keiko-npm-stop-handoff-${String(process.pid)}-0a`), "");
+        const base = lockClock.sleep.getMockImplementation();
+        let recorded;
+        let pressed = false;
+        vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+          // A Stop pressed while this start waits is recorded in its lock.
+          if (!pressed) {
+            pressed = true;
+            recorded = requestStop(root);
+          }
+          base(milliseconds, dir);
+        });
+
+        expect(start(root, nodeDir, env, run)).toBe(1);
+        expect(recorded).toBe(true);
+        expect(run).not.toHaveBeenCalled();
+        expect(clock.now).toBeGreaterThanOrEqual(90_000);
+        expect(existsSync(installLockPath(root))).toBe(false);
+        expect(log).toHaveBeenCalledWith(expect.stringMatching(/^A Stop of this folder is still/u));
+        expect(log).toHaveBeenCalledWith(
+          expect.stringMatching(
+            /^Stop was pressed while Keiko was being loaded, but this start ended/u,
+          ),
+        );
+      });
+
+      it("ends a start with a retryable message when a closing Stop still holds the lock", () => {
+        // Owner finding L5 on PR #4464: a Stop that kept its closing lock beyond the wait was
+        // renewing an owner entry, so the start took it for another start that opens Keiko, said
+        // so, and exited 0 although nobody was going to open it.
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const { root, nodeDir, env, run } = stopFixture();
+        closeInstallLock(acquireInstallLock(root));
+
+        expect(start(root, nodeDir, env, run)).toBe(1);
+        expect(run).not.toHaveBeenCalled();
+        expect(clock.now).toBeGreaterThanOrEqual(90_000);
+        expect(log).not.toHaveBeenCalledWith(
+          expect.stringMatching(/^Another start of this folder/u),
+        );
+        expect(log).toHaveBeenCalledWith(expect.stringMatching(/^Keiko is still being closed/u));
+        expect(log).toHaveBeenCalledWith(
+          expect.stringMatching(/^Keiko wird noch von einem anderen/u),
+        );
+      });
     });
 
     it("stops the Keiko of the start that was closing when no other start came meanwhile", () => {
