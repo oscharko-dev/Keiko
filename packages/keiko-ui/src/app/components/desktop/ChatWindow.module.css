@@ -300,20 +300,20 @@
   background: var(--surface-secondary);
 }
 
-.memoryContextGroup {
+.cmpMemoryContextGroup {
   display: grid;
   gap: 0.4rem;
   min-width: 0;
 }
 
-.memoryContextGroup > h2 {
+.cmpMemoryContextGroup > h2 {
   margin: 0;
   color: var(--text-primary);
   font-size: 0.8125rem;
   font-weight: 650;
 }
 
-.memoryProfileFacts {
+.cmpMemoryProfileFacts {
   display: grid;
   gap: 0.25rem;
   margin: 0;

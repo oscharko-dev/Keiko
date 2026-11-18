@@ -5572,10 +5572,10 @@ function StandingMemoryProfile({
 }): ReactNode {
   useWindowStageEvidence("chat memory profile disclosure");
   return (
-    <section className={styles.memoryContextGroup} aria-label={t("chat.memory.profileHeading")}>
+    <section className={styles.cmpMemoryContextGroup} aria-label={t("chat.memory.profileHeading")}>
       <h2>{t("chat.memory.profileHeading")}</h2>
       <p className="chat-memory-summary">{t("chat.memory.profileDescription")}</p>
-      <ul className={styles.memoryProfileFacts}>
+      <ul className={styles.cmpMemoryProfileFacts}>
         {profile.entries.map((entry) => (
           <li key={entry.memoryId}>{entry.text}</li>
         ))}
@@ -5650,7 +5650,7 @@ function MemoryContextDetails({
     <>
       {memories.length > 0 ? (
         <section
-          className={styles.memoryContextGroup}
+          className={styles.cmpMemoryContextGroup}
           aria-label={t("chat.memory.retrievedHeading")}
         >
           <h2>{t("chat.memory.retrievedHeading")}</h2>
