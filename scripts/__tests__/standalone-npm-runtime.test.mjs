@@ -2239,6 +2239,40 @@ describe("the npm package start", () => {
       expect(existsSync(dir)).toBe(false);
     });
 
+    it("waits for a later start that closes the lock while it waits for a closed window's npm", () => {
+      // Audit of PR #4464: a start waiting for the npm of a closed window took the closing lock
+      // of a later start that had just opened Keiko for a Stop that was still closing it. It
+      // exited 1 and asked to start again although no Stop existed.
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { root, nodeDir, env } = installFixture();
+      installKeiko(root, `${lockfileDigest(root)}\n`);
+      const dir = installLockPath(root);
+      staleLock(root, endedPid());
+      writeFileSync(join(dir, `npm-${String(process.pid)}-0c`), "1\n");
+      const base = lockClock.sleep.getMockImplementation();
+      let later;
+      let released = false;
+      vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, d) => {
+        base(milliseconds, d);
+        if (later === undefined && clock.now >= 120_000) {
+          // npm ends; a later start takes the lock, opens Keiko and closes the lock.
+          rmSync(dir, { recursive: true, force: true });
+          later = acquireInstallLock(root);
+          closeInstallLock(later);
+        } else if (later !== undefined && !released && clock.now >= 150_000) {
+          released = true;
+          removeInstallLock(later);
+        }
+      });
+      const run = vi.fn(() => ({ status: 0 }));
+
+      expect(start(root, nodeDir, env, run)).toBe(0);
+      expect(run).toHaveBeenCalledOnce();
+      expect(run.mock.calls[0][1][1]).toBe("start");
+      expect(clock.now).toBeGreaterThanOrEqual(150_000);
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^Keiko is still being closed/u));
+    });
+
     it("ends with a retryable message when the npm of a closed start window never ends", () => {
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       const { root, nodeDir, env } = installFixture();

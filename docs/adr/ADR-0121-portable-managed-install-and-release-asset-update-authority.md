@@ -1297,7 +1297,8 @@ lock is still closing then, nothing opens Keiko for it, so it ends with exit cod
 closed (never that another window opens it), and a Start pressed while a Stop acts opens Keiko after it. A start that finds the lock held
 but not renewed by a start (only the npm of a closed start window holds it) waits up to 10 minutes for that npm to end and
 then takes the lock and starts normally; after that it ends with exit code 1 and asks to start again in a minute, never
-reporting another window that no longer exists. A start that finds its lock
+reporting another window that no longer exists. A lock that starts closing during that wait is waited for like any
+closing lock. A start that finds its lock
 generation replaced ends with a plain message before it writes the installed marker or dispatches
 the CLI. Renames of the lock folder are retried while Windows holds a passing handle in it. npm's
 own process adds an owner entry of its own when it loads (`--import` of the launcher module with

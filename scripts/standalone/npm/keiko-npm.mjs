@@ -1382,16 +1382,21 @@ function lockClosing(root) {
 
 // A closing lock is let go shortly: its start opened Keiko, or a Stop is stopping it under the
 // lock. A start waits for it and then takes the lock itself, instead of leaving it to a holder
-// that is already done.
+// that is already done. Returns `{ lock }` once it holds the lock, `{ closing: true }` when the
+// lock is still closing after the wait, and `{}` when the lock is held but not closing.
 function acquireAfterClosing(root, pause) {
   const deadline = lockClock.now() + STOP_LOCK_WAIT_MS;
-  let lock = acquireInstallLock(root, pause);
-  while (lock === undefined && lockClosing(root) && lockClock.now() < deadline) {
+  for (;;) {
+    const lock = acquireInstallLock(root, pause);
+    if (lock !== undefined) return { lock };
+    if (!lockClosing(root)) return {};
+    if (lockClock.now() >= deadline) return { closing: true };
     lockClock.sleep(LOCK_OBSERVE_STEP_MS, installLockPath(root));
-    lock = acquireInstallLock(root, pause);
   }
-  return lock;
 }
+
+// The wait for a closing lock ended in the lock or in a lock still closing after the wait.
+const closingSettled = (step) => step.lock !== undefined || step.closing === true;
 
 function reportInstallationRunning() {
   say(
@@ -1404,8 +1409,9 @@ function reportInstallationRunning() {
 // it. No window reports that installation's result and it cannot open Keiko, so a start that finds
 // the lock so waits for that npm to end and then takes the lock itself. `another` is true when a
 // start that renews holds the lock: that start opens Keiko and its window says whether it did.
-// `closing` is true when the lock is still closing after the wait for it: its holder (a Stop acting
-// under the lock, or a start that already opened Keiko) opens nothing for this start.
+// A lock that starts closing meanwhile (a later start opened Keiko and lets go, or a Stop acts under
+// it) is waited for like the first one. `closing` is true when the lock is still closing after
+// that wait: its holder opens nothing for this start.
 function acquireAfterOrphanedNpm(root, pause) {
   const dir = installLockPath(root);
   const deadline = lockClock.now() + ORPHANED_NPM_WAIT_MS;
@@ -1413,7 +1419,11 @@ function acquireAfterOrphanedNpm(root, pause) {
   for (;;) {
     const lock = acquireInstallLock(root, pause);
     if (lock !== undefined) return { lock };
-    if (lockClosing(root)) return { closing: true };
+    if (lockClosing(root)) {
+      const after = acquireAfterClosing(root, pause);
+      if (closingSettled(after)) return after;
+      continue;
+    }
     if (lockEntries(dir) !== undefined && renewalObserved(dir, START_KINDS)) {
       return { another: true };
     }
@@ -1492,9 +1502,10 @@ function lockRefused(closing, another) {
 
 export function start(root, nodeDir, env, run = spawnSync, pause = () => undefined) {
   const args = startArgs(root, env);
-  const acquired = acquireAfterClosing(root, pause);
-  const { lock, another, closing } =
-    acquired === undefined ? acquireAfterOrphanedNpm(root, pause) : { lock: acquired };
+  const first = acquireAfterClosing(root, pause);
+  const { lock, another, closing } = closingSettled(first)
+    ? first
+    : acquireAfterOrphanedNpm(root, pause);
   if (lock === undefined) return lockRefused(closing, another);
   if (!awaitStopHandoffs(root)) {
     if (releaseInstallLock(lock)) reportStopNotCarriedOut(true);

@@ -89,7 +89,8 @@ the lock is held but its start does not renew (its window was closed during the 
 only npm still runs), no window reports that installation and nothing can open Keiko, so the second
 start says so, waits up to 10 minutes for that npm to end, takes the lock and then installs and
 opens Keiko as a normal start; if that npm is still running after the 10 minutes, the start ends
-with exit code 1 and asks to start Keiko again in a minute. Every start keeps the folder's installation lock
+with exit code 1 and asks to start Keiko again in a minute. A lock that starts closing during that wait is waited
+for like any closing lock. Every start keeps the folder's installation lock
 (`system/keiko-npm-install.lock`) until Keiko is open, also one that installs nothing. `Stop Keiko`
 meanwhile is recorded in that lock: the start then does not open Keiko, or stops it again right
 after it opened, also when Keiko reported a failure as it opened. It carries the Stop out before it
