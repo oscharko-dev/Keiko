@@ -120,6 +120,37 @@ HAVING ?1 IS NULL OR (MIN(m.timestamp), m.chat_id) > (?1, ?2)
 ORDER BY first_pending ASC, m.chat_id ASC
 LIMIT ?3`;
 
+// Probe at most one more marked chat than the seek path admits. A wider queue keeps the
+// existing grouped scan; small queues seek past each durable position without reading history.
+const PENDING_CHAT_SEEK_LIMIT = 256;
+const SQL_PENDING_CHAT_KEY_COUNT = `WITH RECURSIVE keys(chat_id) AS (
+ SELECT MIN(chat_id) FROM chat_messages WHERE memory_learning IS NOT NULL
+ UNION ALL SELECT (SELECT MIN(m.chat_id) FROM chat_messages m
+ WHERE m.memory_learning IS NOT NULL AND m.chat_id>keys.chat_id)
+ FROM keys WHERE chat_id IS NOT NULL LIMIT ${String(PENDING_CHAT_SEEK_LIMIT + 1)}
+) SELECT CASE WHEN EXISTS(SELECT 1 FROM chat_memory_learning)
+ THEN (SELECT COUNT(*) FROM keys WHERE chat_id IS NOT NULL) ELSE 0 END AS chat_count`;
+const SQL_LIST_CHATS_SEEK = `WITH RECURSIVE keys(chat_id) AS (
+ SELECT MIN(chat_id) FROM chat_messages WHERE memory_learning IS NOT NULL
+ UNION ALL SELECT (SELECT MIN(m.chat_id) FROM chat_messages m
+ WHERE m.memory_learning IS NOT NULL AND m.chat_id>keys.chat_id)
+ FROM keys WHERE chat_id IS NOT NULL
+), pending AS MATERIALIZED (
+ SELECT c.chat_id,CASE WHEN l.chat_id IS NULL THEN (
+ SELECT m.timestamp FROM chat_messages m WHERE m.chat_id=c.chat_id
+ AND m.memory_learning IS NOT NULL AND m.role='user'
+ ORDER BY m.timestamp,m.rowid LIMIT 1
+ ) ELSE (
+ SELECT m.timestamp FROM chat_messages m WHERE m.chat_id=c.chat_id
+ AND m.memory_learning IS NOT NULL AND m.role='user'
+ AND (m.timestamp,m.rowid)>(l.learned_timestamp,l.learned_rowid)
+ ORDER BY m.timestamp,m.rowid LIMIT 1
+ ) END AS first_pending FROM keys c
+ LEFT JOIN chat_memory_learning l ON l.chat_id=c.chat_id WHERE c.chat_id IS NOT NULL
+) SELECT chat_id,first_pending FROM pending WHERE first_pending IS NOT NULL
+ AND (?1 IS NULL OR (first_pending,chat_id)>(?1,?2))
+ ORDER BY first_pending,chat_id LIMIT ?3`;
+
 function assertLimit(limit: number): void {
   if (!Number.isSafeInteger(limit) || limit <= 0) {
     throw invalidRequest("limit must be a positive integer.");
@@ -155,14 +186,16 @@ function readPosition(db: DatabaseSync, chatId: string): MemoryLearningPosition 
 }
 
 function listPendingChats(
-  db: DatabaseSync,
+  statement: () => StatementSync,
   limit: number,
   after?: PendingLearningChat,
 ): readonly PendingLearningChat[] {
   assertLimit(limit);
-  const rows = db
-    .prepare(SQL_LIST_CHATS)
-    .all(after?.firstPendingTimestamp ?? null, after?.chatId ?? null, limit) as {
+  const rows = statement().all(
+    after?.firstPendingTimestamp ?? null,
+    after?.chatId ?? null,
+    limit,
+  ) as {
     readonly chat_id: string;
     readonly first_pending: number;
   }[];
@@ -172,6 +205,19 @@ function listPendingChats(
 export function createChatMemoryLearningStore(db: DatabaseSync): ChatMemoryLearningStore {
   let pendingPage: StatementSync | undefined;
   let previousUser: StatementSync | undefined;
+  let pendingChats: StatementSync | undefined;
+  let pendingChatSeeks: StatementSync | undefined;
+  let pendingChatKeys: StatementSync | undefined;
+  const pendingChatsStatement = (): StatementSync => {
+    pendingChatKeys ??= db.prepare(SQL_PENDING_CHAT_KEY_COUNT);
+    const { chat_count: count } = pendingChatKeys.get() as { readonly chat_count: number };
+    if (count > 0 && count <= PENDING_CHAT_SEEK_LIMIT) {
+      pendingChatSeeks ??= db.prepare(SQL_LIST_CHATS_SEEK);
+      return pendingChatSeeks;
+    }
+    pendingChats ??= db.prepare(SQL_LIST_CHATS);
+    return pendingChats;
+  };
   return {
     markMessage: (messageId, mark): boolean =>
       Number(db.prepare(SQL_MARK).run(mark.surface, mark.mode ?? null, messageId).changes) > 0,
@@ -191,7 +237,7 @@ export function createChatMemoryLearningStore(db: DatabaseSync): ChatMemoryLearn
       db.prepare(SQL_ADVANCE).run(position.timestamp, position.rowid, chatId);
     },
     listChatsWithPending: (limit): readonly string[] =>
-      listPendingChats(db, limit).map(({ chatId }) => chatId),
-    listPendingChats: (limit, after) => listPendingChats(db, limit, after),
+      listPendingChats(pendingChatsStatement, limit).map(({ chatId }) => chatId),
+    listPendingChats: (limit, after) => listPendingChats(pendingChatsStatement, limit, after),
   };
 }
