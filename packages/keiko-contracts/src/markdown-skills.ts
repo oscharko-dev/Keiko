@@ -73,6 +73,11 @@ export type JiraTemplateOptions =
       /** Omitted when Jira did not return a usable list. */
       readonly fields?: readonly JiraTemplateFieldOption[];
       readonly statuses?: readonly JiraTemplateNamedOption[];
+      /**
+       * Offered field names the instance's full field catalog cannot resolve to exactly one field; a
+       * guided pick of such a name stays unresolved at binding. Omitted when the catalog was unreadable.
+       */
+      readonly ambiguousFieldNames?: readonly string[];
     };
 
 /**

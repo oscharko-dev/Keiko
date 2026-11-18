@@ -2883,6 +2883,16 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "{subject} (mehrere Felder heißen so; schreibe die ID in die Metadaten, um es zu verwenden)",
   "chat.skills.jira.form.statusNotChoosable":
     "{subject} (ein rein numerischer Statusname lässt sich hier nicht wählen)",
+  "chat.skills.jira.form.statusShared":
+    "{subject} (mehrere Status heißen so; schreibe ihn in die Metadaten, um ihn zu verwenden)",
+  "chat.skills.jira.form.typeNotPortable":
+    "{subject} (für diesen Typ gibt es keinen eindeutigen Namen; schreibe ihn in die Metadaten, um ihn zu verwenden)",
+  "chat.skills.jira.form.instanceLocalName":
+    "{subject} (eine instanzlokale ID, kein übertragbarer Name; schreibe sie in die Metadaten, um sie zu verwenden)",
+  "chat.skills.jira.form.rulesLocked":
+    "Die Regeln sind an ein Jira gebunden, das gerade nicht lesbar ist; ändere sie im Metadatentext oder verbinde dich erneut.",
+  "chat.skills.jira.form.fieldCatalogUnknown":
+    "{subject} (die vollständige Feldliste von Jira ließ sich nicht lesen, der Name lässt sich nicht prüfen; schreibe ihn in die Metadaten, um ihn zu verwenden)",
   "chat.skills.jira.form.invalid":
     "Korrigiere die Regeln im Text darunter; die Auswahl folgt wieder, sobald sie stimmen.",
   "chat.skills.jira.starter.epic":

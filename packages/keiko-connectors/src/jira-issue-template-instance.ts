@@ -23,6 +23,7 @@ import {
 } from "./jira-issue-template-check.js";
 import {
   jiraCreateMutationMetadata,
+  type JiraMutationMetadata,
   type JiraMutationRequest,
 } from "./jira-managed-mutation-metadata.js";
 import {
@@ -133,6 +134,8 @@ interface ProjectStatuses {
   readonly refs: readonly { readonly id: string; readonly name: string }[];
   /** Whether Jira listed the wanted workflow (any workflow when no type is wanted); an empty list is not that. */
   readonly listed: boolean;
+  /** Whether every status entry of the read workflow carries a native id and a name. */
+  readonly wellFormed: boolean;
 }
 
 async function readStatuses(
@@ -154,7 +157,7 @@ async function readStatuses(
 /** The id and name of one status entry; an entry without an id is no status a rule can be bound to. */
 function statusRef(value: unknown): { readonly id: string; readonly name: string } | undefined {
   const entry = asRecord(value);
-  return typeof entry?.id === "string" && typeof entry.name === "string"
+  return jiraNativeId(entry?.id) && typeof entry.name === "string"
     ? { id: entry.id, name: entry.name }
     : undefined;
 }
@@ -163,14 +166,18 @@ function statusRef(value: unknown): { readonly id: string; readonly name: string
 function statusesOfType(record: Record<string, unknown> | undefined): {
   readonly names: readonly string[];
   readonly refs: readonly { readonly id: string; readonly name: string }[];
+  /** Whether every entry is a status a rule can be bound to (a native id and a name). */
+  readonly wellFormed: boolean;
 } {
   const entries = asArray(record?.statuses) ?? [];
+  const refs = entries.flatMap((status) => statusRef(status) ?? []);
   return {
+    wellFormed: refs.length === entries.length,
     names: entries.flatMap((status) => {
       const name = asRecord(status)?.name;
       return typeof name === "string" ? [name] : [];
     }),
-    refs: entries.flatMap((status) => statusRef(status) ?? []),
+    refs,
   };
 }
 
@@ -179,15 +186,17 @@ function statusesOf(types: readonly unknown[], wantedId: string | undefined): Pr
   const refs = new Map<string, { id: string; name: string }>();
   const names = new Set<string>();
   let listed = wantedId === undefined;
+  let wellFormed = true;
   for (const type of types) {
     const record = asRecord(type);
     if (wantedId !== undefined && record?.id !== wantedId) continue;
     if (asArray(record?.statuses) !== undefined) listed = true;
     const found = statusesOfType(record);
+    wellFormed &&= found.wellFormed;
     for (const name of found.names) names.add(name);
     for (const ref of found.refs) refs.set(ref.id, ref);
   }
-  return { names: [...names], refs: [...refs.values()], listed };
+  return { names: [...names], refs: [...refs.values()], listed, wellFormed };
 }
 
 async function readParentIssueTypes(request: JiraMutationRequest): Promise<
@@ -248,6 +257,34 @@ async function readTemplateProjects(request: JiraMutationRequest): Promise<Optio
   return { ok: true, options: { kind: "projects", projects } };
 }
 
+/**
+ * The offered field names the full catalog cannot resolve to exactly one field, by the binder's own
+ * rule (`resolveJiraTemplateFieldIds`): a bare name for such a field would stay unresolved at binding.
+ */
+function ambiguousNames(
+  create: Extract<JiraMutationMetadata, { readonly ok: true }>["fields"],
+  catalog: readonly JiraFieldCatalogEntry[] | undefined,
+): readonly string[] | undefined {
+  if (catalog === undefined) return undefined;
+  const full = mergeJiraTemplateFieldCatalogs(catalog, create);
+  const names = new Set(offeredFields(create).map(({ name }) => name));
+  return [...names].filter((name) => resolveJiraTemplateFieldIds(name, full).length !== 1);
+}
+
+function offeredFields(
+  fields: Extract<JiraMutationMetadata, { readonly ok: true }>["fields"],
+): readonly { readonly id: string; readonly name: string; readonly required: boolean }[] {
+  return fields
+    .filter(
+      (field) =>
+        field.id !== "project" &&
+        field.id !== "issuetype" &&
+        field.kind !== "unsupported" &&
+        field.operations.includes("set"),
+    )
+    .map(({ id, name, required }) => ({ id, name, required }));
+}
+
 async function readTemplateTypeDetails(
   request: JiraMutationRequest,
   project: ProjectFacts,
@@ -256,28 +293,23 @@ async function readTemplateTypeDetails(
   // The one native id rule, before any detail read: an id the picker never offers asks Jira nothing.
   if (!jiraNativeId(issueTypeId) || !project.issueTypes.some((type) => type.id === issueTypeId))
     return { ok: false, reason: "not-found" };
-  const [metadata, statuses] = await Promise.all([
+  const [metadata, statuses, catalog] = await Promise.all([
     jiraCreateMutationMetadata(request, encodeURIComponent(project.id), issueTypeId),
     readStatuses(request, project.key, issueTypeId),
+    readJiraFieldCatalog(request),
   ]);
-  const fields = metadata.ok
-    ? metadata.fields
-        .filter(
-          (field) =>
-            field.id !== "project" &&
-            field.id !== "issuetype" &&
-            field.kind !== "unsupported" &&
-            field.operations.includes("set"),
-        )
-        .map(({ id, name, required }) => ({ id, name, required }))
-    : undefined;
+  const fields = metadata.ok ? offeredFields(metadata.fields) : undefined;
+  const ambiguousFieldNames = metadata.ok ? ambiguousNames(metadata.fields, catalog) : undefined;
   return {
     ok: true,
     options: {
       kind: "details",
       ...(fields === undefined ? {} : { fields }),
+      // Unknown (omitted) when the full catalog is unreadable: the editor then offers no unbound pick.
+      ...(ambiguousFieldNames === undefined ? {} : { ambiguousFieldNames }),
       // A workflow Jira did not list is unknown, not empty: omitted, so the editor says so.
-      ...(statuses?.listed === true ? { statuses: statuses.refs } : {}),
+      // A malformed workflow is unknown too: no id the editor writes could pass the binding grammar.
+      ...(statuses?.listed === true && statuses.wellFormed ? { statuses: statuses.refs } : {}),
     },
   };
 }
@@ -334,6 +366,16 @@ async function readTemplateFields(
   return metadata.ok ? mergeJiraTemplateFieldCatalogs(fields, metadata.fields) : undefined;
 }
 
+/** A workflow Jira did not list is unknown, not empty: no status names, no ids to rebind with. */
+function listedStatusFacts(
+  statuses: ProjectStatuses | undefined,
+): Pick<JiraTemplateInstanceMetadata, "statuses" | "statusRefs"> {
+  if (statuses?.listed !== true) return {};
+  return statuses.wellFormed
+    ? { statuses: statuses.names, statusRefs: statuses.refs }
+    : { statuses: statuses.names };
+}
+
 /** The live facts one template is validated against; unreadable parts are left out, not guessed. */
 export async function readJiraTemplateInstanceMetadata(
   request: JiraMutationRequest,
@@ -354,7 +396,7 @@ export async function readJiraTemplateInstanceMetadata(
     instance: {
       ...(fields === undefined ? {} : { fields }),
       ...(linkTypes === undefined ? {} : { linkTypes }),
-      ...(statuses === undefined ? {} : { statuses: statuses.names, statusRefs: statuses.refs }),
+      ...listedStatusFacts(statuses),
       ...(parentTypes === undefined ? {} : { parentIssueTypes: parentTypes.types }),
       ...(project === undefined
         ? {}
@@ -736,6 +778,10 @@ function boundStatusIds(
 ): Pick<JiraTemplateBindingIds, "transitionStatusIds"> {
   const targets = jiraTemplateTransitionTargets(template);
   if (targets.length === 0) return {};
+  // An unknown workflow keeps the ids the binding already carries instead of weakening them to `none`.
+  const kept = template.binding?.transitionStatusIds;
+  if (statuses === undefined && kept?.length === targets.length)
+    return { transitionStatusIds: kept };
   return {
     transitionStatusIds: targets.map((target) => {
       const found = exactlyOne(statuses ?? [], target);

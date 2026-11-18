@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  jiraTemplateBindingDigest,
+  parseJiraIssueTemplate,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { field } from "../../../tests/support/jira-managed-remote.js";
 import type { AtlassianWriteHttpOutcome } from "./atlassian-write-http.js";
-import { readJiraTemplateOptions } from "./jira-issue-template-instance.js";
+import {
+  readJiraTemplateInstanceMetadata,
+  readJiraTemplateOptions,
+  resolveJiraTemplateBinding,
+} from "./jira-issue-template-instance.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
 const INSTANCE = "0".repeat(32);
@@ -134,6 +142,52 @@ describe("Jira template editor options", () => {
     });
   });
 
+  it("lists an offered name the full field catalog cannot resolve to one field, and no unique name (P-N)", async () => {
+    const values = [
+      { ...field("customfield_10010", "string"), name: "Team" },
+      { ...field("summary", "string", true), name: "Zusammenfassung" },
+    ];
+    const request = fixture({
+      "project/LAB": object(PROJECT),
+      [CREATE_FIELDS]: object({
+        values,
+        isLast: true,
+        startAt: 0,
+        maxResults: 100,
+        total: values.length,
+      }),
+      // The create screen offers one `Team`; the instance holds a second, hidden one of that name.
+      field: array([
+        { id: "customfield_10010", name: "Team" },
+        { id: "customfield_10011", name: "Team" },
+        { id: "summary", name: "Zusammenfassung" },
+      ]),
+    });
+    const read = await readJiraTemplateOptions(request, DETAILS, INSTANCE);
+    expect(
+      read.ok && read.options.kind === "details" ? read.options.ambiguousFieldNames : [],
+    ).toEqual(["Team"]);
+  });
+
+  it("omits the ambiguous-name list when the full catalog cannot be read (P-N)", async () => {
+    const values = [{ ...field("customfield_10010", "string"), name: "Team" }];
+    const request = fixture({
+      "project/LAB": object(PROJECT),
+      [CREATE_FIELDS]: object({
+        values,
+        isLast: true,
+        startAt: 0,
+        maxResults: 100,
+        total: values.length,
+      }),
+      field: DENIED,
+    });
+    const read = await readJiraTemplateOptions(request, DETAILS, INSTANCE);
+    expect(
+      read.ok && read.options.kind === "details" && "ambiguousFieldNames" in read.options,
+    ).toBe(false);
+  });
+
   it("keeps unavailable catalogs distinct from empty catalogs", async () => {
     const request = fixture({ "project/LAB": object(PROJECT), [CREATE_FIELDS]: DENIED });
     expect(await readJiraTemplateOptions(request, DETAILS, INSTANCE)).toEqual({
@@ -170,6 +224,61 @@ describe("Jira template editor options", () => {
     expect(await readJiraTemplateOptions(noArray, DETAILS, INSTANCE)).toEqual({
       ok: true,
       options: { kind: "details" },
+    });
+  });
+
+  it("omits statuses of a workflow whose ids the binding grammar would refuse (PR #4464)", async () => {
+    const malformed = fixture({
+      "project/LAB": object(PROJECT),
+      [CREATE_FIELDS]: DENIED,
+      "project/LAB/statuses": array([
+        {
+          id: "10003",
+          statuses: [
+            { id: "6", name: "Erledigt" },
+            { id: "9223372036854775808", name: "Ready" },
+          ],
+        },
+      ]),
+    });
+    expect(await readJiraTemplateOptions(malformed, DETAILS, INSTANCE)).toEqual({
+      ok: true,
+      options: { kind: "details" },
+    });
+  });
+
+  it("keeps an unlisted workflow unknown for the binding read and keeps bound status ids (PR #4464)", async () => {
+    const template = parseJiraIssueTemplate(
+      [
+        "---",
+        "keiko: jira-issue-template",
+        "version: 1",
+        "project: LAB",
+        "issueType: Aufgabe",
+        "activateOn: [transition:Erledigt]",
+        "summaryMinLength: 4",
+        "---",
+        "# Aufgabe",
+      ].join("\n"),
+    );
+    if (!template.ok) throw new TypeError("Expected a parseable template");
+    const request = fixture({
+      "project/LAB": object(PROJECT),
+      "project/LAB/statuses": array([{ id: "10004", statuses: [{ id: "7", name: "Other" }] }]),
+    });
+    const read = await readJiraTemplateInstanceMetadata(request, template.template);
+    if (!read.ok) throw new TypeError("Expected a metadata read");
+    expect(read.instance.statuses).toBeUndefined();
+    expect(read.instance.statusRefs).toBeUndefined();
+    // A bound template whose type was renamed is rebound; the unknown workflow keeps its status id.
+    const ids = { issueTypeId: "10999", transitionStatusIds: ["6"] };
+    const bound = {
+      ...template.template,
+      binding: { digest: jiraTemplateBindingDigest(INSTANCE, template.template, ids), ...ids },
+    };
+    expect(resolveJiraTemplateBinding(bound, read.instance, INSTANCE)).toMatchObject({
+      state: "bindable",
+      binding: { issueTypeId: "10003", transitionStatusIds: ["6"] },
     });
   });
 

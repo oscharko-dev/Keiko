@@ -30,6 +30,8 @@ interface ListFieldProps {
   readonly display: (value: string) => string;
   /** Whether Jira offers what a written value names; a value it does not offer is marked. */
   readonly offered?: ((value: string) => boolean) | undefined;
+  /** Whether a written value and an offered choice name the same thing; such a choice is not offered. */
+  readonly equivalent?: ((written: string, choice: string) => boolean) | undefined;
   readonly onChange: (values: readonly string[]) => void;
 }
 
@@ -41,11 +43,15 @@ function ListField({
   max,
   display,
   offered,
+  equivalent,
   onChange,
 }: ListFieldProps): ReactNode {
   const t = useTranslate();
   const id = useId();
-  const choices = options.filter((choice) => !values.includes(choice.value));
+  const same = equivalent ?? ((written: string, choice: string): boolean => written === choice);
+  const choices = options.filter(
+    (choice) => !values.some((written) => written === choice.value || same(written, choice.value)),
+  );
   return (
     <div className={styles.cmpField}>
       <label htmlFor={id}>{label}</label>
@@ -206,7 +212,14 @@ function portableReference(
 ): string | undefined {
   const named = resolveJiraTemplateFieldIds(field.name, fields);
   const fits = field.name.trim() === field.name && portableText(field.name);
-  return named.length === 1 && named[0] === field.id && fits ? field.name : undefined;
+  return named.length === 1 && named[0] === field.id && fits && !instanceLocalId(field.name)
+    ? field.name
+    : undefined;
+}
+
+/** An id form Jira assigns per instance: as a name it would name another field on another Jira. */
+function instanceLocalId(name: string): boolean {
+  return /^customfield_\d+$/iu.test(name.trim());
 }
 
 function portableText(text: string): boolean {
@@ -215,18 +228,60 @@ function portableText(text: string): boolean {
   );
 }
 
+/**
+ * What the instance's full field catalog says about the offered names: the names it cannot resolve
+ * to one field, or undefined while it was unreadable. An unbound template is bound later against
+ * that catalog, so only a name proved unique there may be picked into it.
+ */
+interface CatalogUniqueness {
+  readonly ambiguous: ReadonlySet<string> | undefined;
+  readonly unbound: boolean;
+}
+
+function catalogUniqueness(
+  details: JiraOptionsRead,
+  template: JiraIssueTemplate | undefined,
+): CatalogUniqueness {
+  const names =
+    details.state === "ready" && details.options.kind === "details"
+      ? details.options.ambiguousFieldNames
+      : undefined;
+  return {
+    ambiguous: names === undefined ? undefined : new Set(names),
+    unbound: template?.binding === undefined,
+  };
+}
+
 function fieldChoices(
   offered: readonly JiraTemplateFieldOption[],
   fields: readonly JiraTemplateFieldOption[],
   t: Translate,
+  uniqueness: CatalogUniqueness,
 ): readonly RuleChoice[] {
   return offered.map((field) => {
     const label = fieldLabel(field, fields);
     const reference = portableReference(field, fields);
-    if (reference === undefined)
+    if (reference !== undefined && uniqueness.ambiguous?.has(field.name) === true)
       return {
         value: field.id,
         label: t("chat.skills.jira.form.sharedName", { subject: label }),
+        disabled: true,
+      };
+    if (reference !== undefined && uniqueness.ambiguous === undefined && uniqueness.unbound)
+      return {
+        value: field.id,
+        label: t("chat.skills.jira.form.fieldCatalogUnknown", { subject: label }),
+        disabled: true,
+      };
+    if (reference === undefined)
+      return {
+        value: field.id,
+        label: t(
+          instanceLocalId(field.name)
+            ? "chat.skills.jira.form.instanceLocalName"
+            : "chat.skills.jira.form.sharedName",
+          { subject: label },
+        ),
         disabled: true,
       };
     return {
@@ -248,27 +303,43 @@ function fieldIdsByReference(
   return ids;
 }
 
+/** The one normalisation of a status name: the template parser trims it, the gate compares it folded. */
+function statusKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
 /** A status name a transition target can carry without being taken for a transition id. */
 function portableStatusName(name: string): boolean {
-  return portableText(name) && !/^\d+$/u.test(name);
+  return portableText(name) && !/^\d+$/u.test(name.trim());
 }
 
 function statusChoices(
   statuses: readonly JiraTemplateNamedOption[],
   t: Translate,
 ): readonly RuleChoice[] {
+  const counts = new Map<string, number>();
+  for (const { name } of statuses)
+    counts.set(statusKey(name), (counts.get(statusKey(name)) ?? 0) + 1);
   const names = new Set(statuses.map(({ name }) => name).filter(portableText));
+  const choice = (name: string): RuleChoice => {
+    const value = `transition:${name}`;
+    if ((counts.get(statusKey(name)) ?? 0) > 1)
+      return {
+        value,
+        label: t("chat.skills.jira.form.statusShared", { subject: name }),
+        disabled: true,
+      };
+    if (!portableStatusName(name))
+      return {
+        value,
+        label: t("chat.skills.jira.form.statusNotChoosable", { subject: name }),
+        disabled: true,
+      };
+    return { value, label: name };
+  };
   return [
     { value: "transition", label: t("chat.skills.jira.form.anyStatus") },
-    ...Array.from(names, (name) =>
-      portableStatusName(name)
-        ? { value: `transition:${name}`, label: name }
-        : {
-            value: `transition:${name}`,
-            label: t("chat.skills.jira.form.statusNotChoosable", { subject: name }),
-            disabled: true,
-          },
-    ),
+    ...Array.from(names, choice),
   ];
 }
 
@@ -279,7 +350,7 @@ function statusIdsByName(
   const ids = new Map<string, string>();
   const seen = new Set<string>();
   for (const { id, name } of statuses) {
-    const key = name.trim().toLowerCase();
+    const key = statusKey(name);
     if (seen.has(key)) ids.delete(key);
     else ids.set(key, id);
     seen.add(key);
@@ -287,11 +358,29 @@ function statusIdsByName(
   return ids;
 }
 
+/** Two activation values name the same target: the same folded name, or the same native status id. */
+function sameActivation(
+  ids: ReadonlyMap<string, string>,
+): (written: string, choice: string) => boolean {
+  const target = (value: string): string | undefined =>
+    value.startsWith("transition:") ? value.slice("transition:".length) : undefined;
+  return (written, choice) => {
+    const a = target(written);
+    const b = target(choice);
+    if (a === undefined || b === undefined) return written === choice;
+    if (statusKey(a) === statusKey(b)) return true;
+    const idA = ids.get(statusKey(a));
+    return idA !== undefined && idA === ids.get(statusKey(b));
+  };
+}
+
 interface RuleFieldsProps {
   readonly form: JiraTemplateForm;
   /** The whole template as it governs this Jira, once it reads; its binding names fields by id. */
   readonly template: JiraIssueTemplate | undefined;
   readonly details: JiraOptionsRead;
+  /** The rules are bound to a Jira this editor cannot read now: guided edits would unbind them. */
+  readonly locked?: boolean;
   /** `resolved` carries the ids Jira gave the references a pick adds, so a bound template keeps them. */
   readonly onChange: (patch: Partial<JiraTemplateForm>, resolved?: JiraTemplateEditedIds) => void;
 }
@@ -333,6 +422,7 @@ function ActivationField({
         help={t("chat.skills.jira.form.statusHelp")}
         values={transitions}
         options={statusChoices(metadata?.statuses ?? [], t)}
+        equivalent={sameActivation(statusIds.statusIds)}
         max={JIRA_ISSUE_TEMPLATE_LIMITS.activations - writes.length}
         display={(value) =>
           value === "transition"
@@ -351,6 +441,7 @@ function FieldRequirement({ form, template, details, onChange }: RuleFieldsProps
     details.state === "ready" && details.options.kind === "details"
       ? details.options.fields
       : undefined;
+  const uniqueness = catalogUniqueness(details, template);
   const hint =
     fields === undefined
       ? "chat.skills.jira.form.selectForFields"
@@ -364,9 +455,11 @@ function FieldRequirement({ form, template, details, onChange }: RuleFieldsProps
         unwrittenFields(fields ?? [], form.requiredFields, template),
         fields ?? [],
         t,
+        uniqueness,
       )}
       max={JIRA_ISSUE_TEMPLATE_LIMITS.listItems}
       display={(value) => fieldName(fields ?? [], value, template)}
+      equivalent={(written, choice) => sameField(fields ?? [], written, choice, template)}
       offered={
         fields === undefined
           ? undefined
@@ -378,6 +471,19 @@ function FieldRequirement({ form, template, details, onChange }: RuleFieldsProps
       }
     />
   );
+}
+
+/** Two references name the same field: the same normalised name or the same Jira id. */
+function sameField(
+  fields: readonly JiraTemplateFieldOption[],
+  written: string,
+  choice: string,
+  template: JiraIssueTemplate | undefined,
+): boolean {
+  if (written.trim().toLowerCase() === choice.trim().toLowerCase()) return true;
+  const ids = resolveJiraTemplateFieldIds(written, fields, template);
+  const other = resolveJiraTemplateFieldIds(choice, fields, template);
+  return ids.length === 1 && other.length === 1 && ids[0] === other[0];
 }
 
 function DetailsStatus({ details }: { readonly details: JiraOptionsRead }): ReactNode {
@@ -407,10 +513,13 @@ export function JiraTemplateRuleFields(props: RuleFieldsProps): ReactNode {
     <details className={styles.cmpRules}>
       <summary>{t("chat.skills.jira.form.rules")}</summary>
       <DetailsStatus details={props.details} />
-      <div className={styles.cmpChoices}>
-        <ActivationField {...props} />
-        <FieldRequirement {...props} />
-      </div>
+      {props.locked === true ? <output>{t("chat.skills.jira.form.rulesLocked")}</output> : null}
+      <fieldset className={styles.cmpFieldset} disabled={props.locked === true}>
+        <div className={styles.cmpChoices}>
+          <ActivationField {...props} />
+          <FieldRequirement {...props} />
+        </div>
+      </fieldset>
     </details>
   );
 }

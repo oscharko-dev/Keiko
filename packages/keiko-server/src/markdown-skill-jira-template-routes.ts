@@ -135,7 +135,8 @@ function readyPod(
   if (!isReadyJiraPod(pod)) {
     throw new UiStoreError("INVALID_REQUEST", "The Jira Pod is not ready.", 409);
   }
-  return pod;
+  // A snapshot: the credential generation the read is made for cannot move under it.
+  return { ...pod };
 }
 
 function podRequest(
@@ -147,17 +148,19 @@ function podRequest(
   if (factory === undefined) throw notFound("Jira Pod");
   const signal = AbortSignal.timeout(READ_TIMEOUT_MS);
   const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  // A revoked session sends nothing more to Jira: the same check gates every dispatch and effect.
+  const permitted = (): boolean => !signal.aborted && sessionHeld(ctx, deps);
   return createJiraReadRequest(
     {
       baseUrl: pod.baseUrl,
       deployment: pod.deployment,
-      http: factory(pod, correlationId, { beforeDispatch: () => !signal.aborted }),
+      http: factory(pod, correlationId, { beforeDispatch: permitted }),
     },
     {
       invocationId: correlationId,
       correlationId,
       signal,
-      beforeEffect: () => !signal.aborted,
+      beforeEffect: permitted,
     },
   );
 }
@@ -166,8 +169,29 @@ function podRequest(
  * A session can expire or be revoked while Jira is being read: what the read returned is then
  * disclosed to no one, and nothing is counted or written.
  */
-function assertSessionHeld(ctx: RouteContext, deps: TemplateRouteDeps): void {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) throw notFound("Skill");
+function sessionHeld(ctx: RouteContext, deps: TemplateRouteDeps): boolean {
+  return resolveAppSessionReadAuthority(deps, ctx.req) !== undefined;
+}
+
+/**
+ * After an awaited Jira read: the session is still held, and the Pod the read was made for is still
+ * owned, ready and at the same credential generation. A removed or replaced Pod never discloses or
+ * saves what an older Jira credential read.
+ */
+function assertReadHeld(
+  ctx: RouteContext,
+  deps: TemplateRouteDeps,
+  pod: ReturnType<typeof readyPod>,
+): void {
+  if (!sessionHeld(ctx, deps)) throw notFound("Skill");
+  const current = findOwnedJiraPod(deps, pod.livePod.podId);
+  if (
+    current === undefined ||
+    !isReadyJiraPod(current) ||
+    current.authRef !== pod.authRef ||
+    current.generation !== pod.generation
+  )
+    throw notFound("Jira Pod");
 }
 
 function jiraReadFailure(reason: string): UiStoreError {
@@ -210,7 +234,7 @@ export function handleJiraTemplateOptions(
         selection,
         jiraInstanceIdentity(pod.baseUrl),
       );
-      assertSessionHeld(ctx, deps);
+      assertReadHeld(ctx, deps, pod);
       if (!read.ok) {
         if (read.reason === "not-found") throw notFound("Jira project or issue type");
         throw jiraReadFailure(read.reason);
@@ -257,7 +281,7 @@ export function handleValidateJiraTemplate(
       // A binding made for another Jira means nothing here: the typed names are what this Jira sees.
       const template = jiraTemplateForInstance(parsed.template, instanceId);
       const read = await readJiraTemplateInstanceMetadata(podRequest(deps, ctx, pod), template);
-      assertSessionHeld(ctx, deps);
+      assertReadHeld(ctx, deps, pod);
       if (!read.ok) throw jiraReadFailure(read.reason);
       const findings = validateJiraIssueTemplateAgainstInstance(template, read.instance);
       accounting = {
@@ -324,7 +348,7 @@ export function handleProposeJiraTemplates(
       }
       const pod = readyPod(deps, podId);
       const result = await proposeJiraIssueTemplates(podRequest(deps, ctx, pod), projectKey);
-      assertSessionHeld(ctx, deps);
+      assertReadHeld(ctx, deps, pod);
       if (!result.ok) {
         if (result.reason === "not-found") throw notFound("Jira project");
         throw jiraReadFailure(result.reason);
@@ -438,7 +462,7 @@ export function handleBindJiraTemplate(
       const instanceId = jiraInstanceIdentity(pod.baseUrl);
       const template = jiraTemplateForInstance(stored, instanceId);
       const read = await readJiraTemplateInstanceMetadata(podRequest(deps, ctx, pod), template);
-      assertSessionHeld(ctx, deps);
+      assertReadHeld(ctx, deps, pod);
       if (!read.ok) throw jiraReadFailure(read.reason);
       const resolution = resolveJiraTemplateBinding(template, read.instance, instanceId);
       accounting = {

@@ -10,14 +10,64 @@ export interface MarkdownDocumentParts {
   readonly body: string;
 }
 
-// A fence may carry trailing blanks, as the server's template parser reads it (it trims line ends).
-const FRONT_MATTER = /^---[^\S\r\n]*\r?\n([\s\S]*?)\r?\n---[^\S\r\n]*(?:\r?\n|$)/u;
+// A fence may carry trailing blanks, as the contracts template parser reads it (it trims line ends).
+const FENCE_LINE = /^---[^\S\r\n]*$/u;
+
+interface FrontMatterSpan {
+  /** The YAML between the fences. */
+  readonly yaml: string;
+  /** Offset of the first YAML character (the start of the closing fence for an empty block). */
+  readonly yamlStart: number;
+  /** True when the closing fence directly follows the opening fence. */
+  readonly emptyBlock: boolean;
+  /** Offset just past the closing fence line, including its line break when it has one. */
+  readonly end: number;
+  /** The line break after the opening fence. */
+  readonly eol: string;
+}
+
+function lineEnd(text: string, from: number): { readonly stop: number; readonly next: number } {
+  const lf = text.indexOf("\n", from);
+  if (lf === -1) return { stop: text.length, next: text.length };
+  return { stop: text[lf - 1] === "\r" && lf > from ? lf - 1 : lf, next: lf + 1 };
+}
+
+/**
+ * Finds the front matter the way the contracts parser does: an opening fence on the first line and
+ * the first following line that is a fence (trailing blanks allowed, other text rejected).
+ */
+function findFrontMatter(text: string): FrontMatterSpan | undefined {
+  const first = lineEnd(text, 0);
+  if (first.next === first.stop || !FENCE_LINE.test(text.slice(0, first.stop))) return undefined;
+  const eol = text.slice(first.stop, first.next);
+  let from = first.next;
+  while (from < text.length) {
+    const line = lineEnd(text, from);
+    if (FENCE_LINE.test(text.slice(from, line.stop))) {
+      const emptyBlock = from === first.next;
+      const yamlEnd = emptyBlock ? from : from - eolLengthBefore(text, from);
+      return {
+        yaml: text.slice(first.next, yamlEnd),
+        yamlStart: first.next,
+        emptyBlock,
+        end: line.next,
+        eol,
+      };
+    }
+    from = line.next;
+  }
+  return undefined;
+}
+
+function eolLengthBefore(text: string, offset: number): number {
+  return text[offset - 2] === "\r" ? 2 : 1;
+}
 
 export function splitMarkdownDocument(text: string): MarkdownDocumentParts {
-  const match = FRONT_MATTER.exec(text);
-  if (match === null) return { frontMatter: undefined, body: text };
-  const rest = text.slice(match[0].length);
-  return { frontMatter: match[1] ?? "", body: rest.replace(/^\r?\n/u, "") };
+  const span = findFrontMatter(text);
+  if (span === undefined) return { frontMatter: undefined, body: text };
+  const rest = text.slice(span.end);
+  return { frontMatter: span.yaml, body: rest.replace(/^\r?\n/u, "") };
 }
 
 export function joinMarkdownDocument(parts: MarkdownDocumentParts): string {
@@ -28,22 +78,31 @@ export function joinMarkdownDocument(parts: MarkdownDocumentParts): string {
 
 /**
  * The text with its body replaced and everything before the body kept byte for byte: the fences (with
- * any trailing blanks), the line endings and the front matter. A document without front matter is its body.
+ * any trailing blanks), the line endings, the front matter and an existing blank separator. A
+ * document without front matter is its body.
  */
 export function replaceMarkdownBody(text: string, body: string): string {
-  const match = FRONT_MATTER.exec(text);
-  if (match === null) return body;
-  if (body.length === 0) return match[0];
-  const head = match[0].endsWith("\n") ? match[0] : `${match[0]}\n`;
-  const blank = /^\r?\n/u.exec(text.slice(match[0].length))?.[0];
-  return head + (blank ?? "") + body;
+  const span = findFrontMatter(text);
+  if (span === undefined) return body;
+  const head = text.slice(0, span.end);
+  const separator = /^\r?\n/u.exec(text.slice(span.end))?.[0];
+  if (body.length === 0) return head + (separator ?? "");
+  const closed = head.endsWith("\n") ? head : head + span.eol;
+  if (separator !== undefined) return closed + separator + body;
+  // The body's own leading line break must survive the next split, which consumes one separator.
+  return /^\r?\n/u.test(body) ? closed + span.eol + body : closed + body;
 }
 
 export function replaceMarkdownFrontMatter(text: string, frontMatter: string): string {
-  const match = FRONT_MATTER.exec(text);
-  if (match === null) return text;
-  const start = text.indexOf("\n") + 1;
-  return text.slice(0, start) + frontMatter + text.slice(start + (match[1]?.length ?? 0));
+  const span = findFrontMatter(text);
+  if (span === undefined) return text;
+  if (span.emptyBlock) {
+    if (frontMatter.length === 0) return text;
+    return text.slice(0, span.yamlStart) + frontMatter + span.eol + text.slice(span.yamlStart);
+  }
+  return (
+    text.slice(0, span.yamlStart) + frontMatter + text.slice(span.yamlStart + span.yaml.length)
+  );
 }
 
 /**

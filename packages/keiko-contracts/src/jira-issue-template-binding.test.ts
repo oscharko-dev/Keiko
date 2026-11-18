@@ -390,3 +390,44 @@ describe("a guided edit of a bound template's rules", () => {
     ).toBeUndefined();
   });
 });
+
+// PR #4464 review: the rebind and the strict reader must sign the same slots, and positional id
+// lists keep equal ids in place instead of dropping the whole binding.
+describe("a guided edit with repeated or equivalent entries", () => {
+  const governing = (): JiraIssueTemplate => jiraTemplateForInstance(template(BOUND), INSTANCE);
+
+  it("signs one slot for a repeated activation token, as the strict reader does", () => {
+    const activateOn = [
+      "create",
+      "edit",
+      "transition:In Arbeit",
+      "transition:In Arbeit",
+      "transition:21",
+    ];
+    const binding = rebindJiraTemplateAfterEdit(governing(), INSTANCE, {
+      requiredFields: ["Fälligkeitsdatum", "Priorität"],
+      activateOn,
+    });
+    expect(binding?.transitionStatusIds).toEqual(["3", "none"]);
+    const front = editJiraTemplateForm(PLAIN_FRONT, { activateOn }, binding);
+    const edited = jiraTemplateForInstance(
+      template(["---", front, "---", "# Aufgabe"].join("\n")),
+      INSTANCE,
+    );
+    expect(edited.binding).toEqual(binding);
+  });
+
+  it("keeps positional ids when distinct labels resolve to the same native id", () => {
+    const markdown = PLAIN.replace(
+      "activateOn: [create, edit, transition:In Arbeit, transition:21]",
+      "activateOn: [create, transition:ready, transition:Ready]",
+    );
+    const ids: JiraTemplateBindingIds = { ...IDS, transitionStatusIds: ["5", "5"] };
+    const written = bindJiraIssueTemplateText(markdown, bindingFor(markdown, INSTANCE, ids));
+    expect(template(written ?? "").binding?.transitionStatusIds).toEqual(["5", "5"]);
+    expect(jiraTemplateForInstance(template(written ?? ""), INSTANCE).binding).toBeDefined();
+    const unresolved = { ...IDS, requiredFieldIds: ["none", "none"] };
+    const second = bindJiraIssueTemplateText(PLAIN, bindingFor(PLAIN, INSTANCE, unresolved));
+    expect(template(second ?? "").binding?.requiredFieldIds).toEqual(["none", "none"]);
+  });
+});

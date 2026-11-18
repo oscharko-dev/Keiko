@@ -283,6 +283,7 @@ describe("Jira starter templates", () => {
       if (selection.issueTypeId !== undefined)
         return Promise.resolve({
           kind: "details",
+          ambiguousFieldNames: [],
           fields: [
             { id: "customfield_10016", name: "Fachlicher Ansprechpartner", required: false },
           ],
@@ -418,6 +419,7 @@ describe("Jira starter templates", () => {
       if (selection.issueTypeId !== undefined)
         return Promise.resolve({
           kind: "details",
+          ambiguousFieldNames: [],
           fields: [
             { id: "customfield_10016", name: "Fachlicher Ansprechpartner", required: false },
             { id: "duedate", name: "Fälligkeitsdatum", required: true },
@@ -470,6 +472,7 @@ describe("Jira starter templates", () => {
       if (selection.issueTypeId !== undefined)
         return Promise.resolve({
           kind: "details",
+          ambiguousFieldNames: [],
           fields: [
             { id: "customfield_10010", name: "Team", required: false },
             { id: "customfield_10011", name: "Team", required: true },
@@ -544,6 +547,7 @@ describe("Jira starter templates", () => {
       if (selection.issueTypeId !== undefined)
         return Promise.resolve({
           kind: "details",
+          ambiguousFieldNames: [],
           fields: [
             { id: "customfield_10010", name: "Team", required: false },
             { id: "customfield_10011", name: "Team", required: false },
@@ -584,6 +588,31 @@ describe("Jira starter templates", () => {
     expect(new Set(labels).size).toBe(3);
     for (const id of ["customfield_10010", "customfield_10011", "customfield_10012"])
       expect(labels.some((text) => text?.includes(`(${id})`))).toBe(true);
+  });
+
+  it("shows distinct labels on the selected rows of fields whose final labels would collide (Seh)", async () => {
+    mockGuidedJira({
+      fields: [
+        { id: "customfield_10010", name: "Team", required: false },
+        { id: "customfield_10011", name: "Team", required: false },
+        { id: "customfield_10012", name: "Team (customfield_10010)", required: false },
+      ],
+    });
+    const { dialog } = await openGuidedTemplate(
+      GUIDED_FRONT.replace(
+        "requiredFields: [Fachlicher Ansprechpartner]",
+        "requiredFields: [customfield_10010, customfield_10011, customfield_10012]",
+      ),
+    );
+    const rows = await waitFor((): string[] => {
+      const found: string[] = dialog
+        .getAllByRole("listitem")
+        .map((row: HTMLElement) => row.textContent ?? "")
+        .filter((text: string) => text.includes("Team"));
+      expect(found).toHaveLength(3);
+      return found;
+    });
+    expect(new Set(rows.map((text: string) => text.replace(/×$/u, ""))).size).toBe(3);
   });
 
   it("keeps the user's draft if the Pod is removed while confirming a switch", async () => {
@@ -666,21 +695,33 @@ function mockGuidedJira(options: {
   readonly fields?: readonly { id: string; name: string; required: boolean }[];
   readonly statuses?: readonly { id: string; name: string }[];
   readonly typeName?: string;
+  readonly issueTypes?: readonly { id: string; name: string }[];
+  /** The issue-type lookup fails: there is no Jira instance context. */
+  readonly typesFail?: boolean;
+  /** Field names the full instance catalog cannot resolve to one field. */
+  readonly ambiguous?: readonly string[];
+  /** The full field catalog could not be read: the answer carries no ambiguous-name list. */
+  readonly catalogUnreadable?: boolean;
 }): void {
   vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
   vi.mocked(jiraTemplates.fetchJiraTemplateOptions).mockImplementation((selection) => {
     if (selection.issueTypeId !== undefined)
       return Promise.resolve({
         kind: "details",
+        ...(options.catalogUnreadable === true
+          ? {}
+          : { ambiguousFieldNames: options.ambiguous ?? [] }),
         fields: options.fields ?? [],
         statuses: options.statuses ?? [],
       });
-    if (selection.projectKey !== undefined)
+    if (selection.projectKey !== undefined) {
+      if (options.typesFail === true) return Promise.reject(new Error("synthetic read failure"));
       return Promise.resolve({
         kind: "types",
         instanceId: JIRA_INSTANCE,
-        issueTypes: [{ id: "1", name: options.typeName ?? "Aufgabe" }],
+        issueTypes: options.issueTypes ?? [{ id: "1", name: options.typeName ?? "Aufgabe" }],
       });
+    }
     return Promise.resolve({ kind: "projects", projects: [{ key: "LAB", name: "Lab project" }] });
   });
 }
@@ -828,6 +869,154 @@ describe("guided edits of a bound template (Ux7, UyB, Uy9)", () => {
     expect(save).toBeDisabled();
     fireEvent.change(yaml, { target: { value: GUIDED_FRONT } });
     await waitFor(() => expect(save).toBeEnabled());
+  });
+});
+
+describe("guided choices that cannot be written safely (review of #4464)", () => {
+  const statusPicker = (dialog: ReturnType<typeof within>): HTMLElement =>
+    dialog.getByRole("combobox", { name: "Apply on entering a status" });
+
+  it("disables a status name that several statuses share, by its normalized name (P-T)", async () => {
+    mockGuidedJira({
+      statuses: [
+        { id: "3", name: "Ready" },
+        { id: "4", name: " ready " },
+        { id: "6", name: "Erledigt" },
+      ],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(GUIDED_FRONT);
+    const status = statusPicker(dialog);
+    await waitFor(() =>
+      expect(within(status).getByRole("option", { name: "Erledigt" })).toBeEnabled(),
+    );
+    const shared = within(status).getAllByRole("option", { name: /several statuses share/u });
+    expect(shared).toHaveLength(2);
+    for (const option of shared) expect(option).toBeDisabled();
+    fireEvent.change(status, { target: { value: "transition:Ready" } });
+    expect(yaml.value).not.toContain("transition:Ready");
+  });
+
+  it("rejects a numeric status name after the same trim the template parser applies (6p-)", async () => {
+    mockGuidedJira({
+      statuses: [
+        { id: "3", name: " 31 " },
+        { id: "6", name: "Erledigt" },
+      ],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(GUIDED_FRONT);
+    const status = statusPicker(dialog);
+    await waitFor(() =>
+      expect(within(status).getByRole("option", { name: "Erledigt" })).toBeEnabled(),
+    );
+    expect(
+      within(status).getByRole("option", { name: /a numeric status name cannot be chosen/u }),
+    ).toBeDisabled();
+    fireEvent.change(status, { target: { value: "transition: 31 " } });
+    expect(yaml.value).not.toContain("31");
+  });
+
+  it("never offers an instance-local field id as a portable name (SeU)", async () => {
+    mockGuidedJira({
+      fields: [
+        { id: "customfield_10016", name: "customfield_10016", required: false },
+        { id: "duedate", name: "Fälligkeitsdatum", required: false },
+      ],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(GUIDED_FRONT);
+    const picker = dialog.getByRole("combobox", { name: "Add required field" });
+    await waitFor(() =>
+      expect(within(picker).getByRole("option", { name: "Fälligkeitsdatum" })).toBeEnabled(),
+    );
+    const local = within(picker).getByRole("option", { name: /an instance-local id/u });
+    expect(local).toBeDisabled();
+    fireEvent.change(picker, { target: { value: "customfield_10016" } });
+    expect(yaml.value).not.toMatch(/requiredFields:.*customfield_10016/u);
+  });
+
+  it("refuses a field name the full catalog cannot resolve to one field, and keeps a unique name selectable (P-N)", async () => {
+    mockGuidedJira({
+      fields: [
+        { id: "customfield_10010", name: "Team", required: false },
+        { id: "duedate", name: "Fälligkeitsdatum", required: false },
+      ],
+      ambiguous: ["Team"],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(GUIDED_FRONT);
+    const picker = dialog.getByRole("combobox", { name: "Add required field" });
+    await waitFor(() =>
+      expect(within(picker).getByRole("option", { name: "Fälligkeitsdatum" })).toBeEnabled(),
+    );
+    expect(within(picker).getByRole("option", { name: /^Team \(several fields/u })).toBeDisabled();
+    fireEvent.change(picker, { target: { value: "customfield_10010" } });
+    expect(yaml.value).not.toContain("Team");
+    fireEvent.change(picker, { target: { value: "Fälligkeitsdatum" } });
+    await waitFor(() => expect(yaml.value).toContain("Fälligkeitsdatum"));
+  });
+
+  it("offers no unbound field pick while the full field catalog could not be read (P-N)", async () => {
+    mockGuidedJira({
+      fields: [{ id: "duedate", name: "Fälligkeitsdatum", required: false }],
+      catalogUnreadable: true,
+    });
+    const { dialog } = await openGuidedTemplate(GUIDED_FRONT);
+    const picker = dialog.getByRole("combobox", { name: "Add required field" });
+    const option = await within(picker).findByRole("option", { name: /could not be read/u });
+    expect(option).toBeDisabled();
+  });
+
+  it("makes an issue type without an unambiguous portable name unavailable, never writing its id (6pE)", async () => {
+    mockGuidedJira({
+      issueTypes: [
+        { id: "1", name: "Aufgabe" },
+        { id: "2", name: "Aufgabe" },
+        { id: "3", name: "Fehler" },
+      ],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(GUIDED_FRONT);
+    const type = dialog.getByRole("combobox", { name: "Issue type" });
+    await waitFor(() => expect(within(type).getByRole("option", { name: "Fehler" })).toBeEnabled());
+    const shared = within(type).getAllByRole("option", { name: /no unique name for this type/u });
+    expect(shared).toHaveLength(2);
+    for (const option of shared) expect(option).toBeDisabled();
+    fireEvent.change(type, { target: { value: "2" } });
+    expect(yaml.value).toContain("issueType: Aufgabe");
+    expect(yaml.value).not.toMatch(/issueType: 2/u);
+    fireEvent.change(type, { target: { value: "3" } });
+    await waitFor(() => expect(yaml.value).toContain('issueType: "Fehler"'));
+  });
+
+  it("disables guided rule edits of a bound template while no Jira context is readable (6pL)", async () => {
+    mockGuidedJira({ typesFail: true });
+    const bound = boundFront(GUIDED_FRONT, {
+      issueTypeId: "1",
+      requiredFieldIds: ["customfield_10016"],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(bound);
+    await waitFor(() =>
+      expect(dialog.getByText(/bound to a Jira that is not readable/u)).toBeVisible(),
+    );
+    expect(dialog.getByRole("combobox", { name: "Add required field" })).toBeDisabled();
+    expect(
+      dialog.getByRole("checkbox", { name: "Apply when creating and editing issues" }),
+    ).toBeDisabled();
+    expect(yaml.value).toContain("jiraBinding");
+  });
+
+  it("does not offer a status equivalent to one already written, by name or native id (6pW)", async () => {
+    mockGuidedJira({
+      statuses: [
+        { id: "3", name: "Ready" },
+        { id: "6", name: "Erledigt" },
+      ],
+    });
+    const { dialog } = await openGuidedTemplate(
+      GUIDED_FRONT.replace("activateOn: [create]", "activateOn: [create, transition:ready]"),
+    );
+    const status = statusPicker(dialog);
+    await waitFor(() =>
+      expect(within(status).getByRole("option", { name: "Erledigt" })).toBeEnabled(),
+    );
+    expect(within(status).queryByRole("option", { name: "Ready" })).toBeNull();
   });
 });
 

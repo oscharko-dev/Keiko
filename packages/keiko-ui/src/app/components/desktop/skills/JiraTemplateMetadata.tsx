@@ -39,6 +39,16 @@ function governingTemplate(
   return parsed.ok ? jiraTemplateForInstance(parsed.template, instanceId) : undefined;
 }
 
+/**
+ * A template carrying a binding while no Jira context is available: a rule edit would leave the
+ * binding's digest and ids behind, so guided rule edits wait for the context (YAML stays editable).
+ */
+function rulesLocked(markdown: string, instanceId: string | undefined): boolean {
+  if (instanceId !== undefined) return false;
+  const parsed = parseJiraIssueTemplate(markdown);
+  return parsed.ok && parsed.template.binding !== undefined;
+}
+
 function matchingType(
   options: readonly JiraTemplateNamedOption[],
   issueType: string,
@@ -50,16 +60,21 @@ function matchingType(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+/**
+ * The portable name a pick writes for an issue type, or undefined when the type has none: a name
+ * several types answer to, or one too long for the grammar. The native id is instance-local and is
+ * never written into the portable `issueType` field by a pick.
+ */
 function typeReference(
   type: JiraTemplateNamedOption,
   types: readonly JiraTemplateNamedOption[],
-): string {
+): string | undefined {
   const matches = types.filter((option) =>
     jiraTemplateIssueTypeMatches({ issueType: type.name }, option),
   );
   return matches.length === 1 && type.name.length <= JIRA_ISSUE_TEMPLATE_LIMITS.textChars
     ? type.name
-    : type.id;
+    : undefined;
 }
 
 function statusMessage(read: JiraOptionsRead, hint: string, empty: boolean, t: Translate): string {
@@ -148,6 +163,20 @@ function ProjectChoice({
   );
 }
 
+function TypeOptions({ types }: { readonly types: readonly JiraTemplateNamedOption[] }): ReactNode {
+  const t = useTranslate();
+  return types.map((type) => {
+    const portable = typeReference(type, types) !== undefined;
+    return (
+      <option key={type.id} value={type.id} disabled={!portable}>
+        {portable
+          ? type.name
+          : t("chat.skills.jira.form.typeNotPortable", { subject: `${type.name} (${type.id})` })}
+      </option>
+    );
+  });
+}
+
 function IssueTypeChoice({
   read,
   types,
@@ -175,15 +204,12 @@ function IssueTypeChoice({
         disabled={types.length === 0}
         onChange={(event) => {
           const type = types.find((item) => item.id === event.target.value);
-          onType(type === undefined ? "" : typeReference(type, types));
+          const reference = type === undefined ? "" : typeReference(type, types);
+          if (reference !== undefined) onType(reference);
         }}
       >
         <option value="">{t("chat.skills.jira.form.chooseType")}</option>
-        {types.map((type) => (
-          <option key={type.id} value={type.id}>
-            {typeReference(type, types) === type.name ? type.name : `${type.name} (${type.id})`}
-          </option>
-        ))}
+        <TypeOptions types={types} />
       </select>
       <ChoiceHelp
         id={`${id}-help`}
@@ -259,6 +285,7 @@ function formEdits(props: MetadataProps, reads: MetadataReads): FormEdits {
   const edit = (patch: Partial<JiraTemplateForm>): void =>
     props.onChange(editJiraTemplateForm(props.value, patch));
   const editRules = (patch: Partial<JiraTemplateForm>, resolved?: JiraTemplateEditedIds): void => {
+    if (rulesLocked(props.markdown, instanceId)) return;
     // A binding in force for this Jira keeps every untouched rule on the id it was bound to, and
     // keeps the issue type it names by id: only the references this edit adds are resolved.
     const bound =
@@ -278,7 +305,10 @@ function formEdits(props: MetadataProps, reads: MetadataReads): FormEdits {
       return;
     }
     // Without a binding, rebinding after a rule change must use a name this Pod can resolve.
-    const viewedType = selected === undefined ? form.issueType : typeReference(selected, choices);
+    const viewedType =
+      selected === undefined
+        ? form.issueType
+        : (typeReference(selected, choices) ?? form.issueType);
     edit(viewedType === form.issueType ? patch : { ...patch, issueType: viewedType });
   };
   return { edit, editRules };
@@ -314,6 +344,7 @@ export function JiraTemplateMetadata(props: MetadataProps): ReactNode {
           form={form}
           template={template}
           details={details}
+          locked={rulesLocked(props.markdown, reads.instanceId)}
           onChange={editRules}
         />
       </fieldset>

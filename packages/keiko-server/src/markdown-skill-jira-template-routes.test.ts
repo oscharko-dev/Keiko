@@ -153,6 +153,8 @@ function fixture(
   deps: RouteDeps;
   cookie: string;
   http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
+  signOut: () => boolean;
+  pod: { generation: number };
 } {
   const channel = createCodingAppSessionChannel({
     registry: createSessionRegistry(),
@@ -193,10 +195,18 @@ function fixture(
           ? undefined
           : ({
               custody: { list: () => [metadata] },
-              httpBodyPortFactory: () => http,
+              // The real port refuses a dispatch its lifecycle gate does not confirm.
+              httpBodyPortFactory:
+                (_pod: unknown, _id: unknown, gate?: { beforeDispatch?: () => boolean }) =>
+                (request: Parameters<AtlassianHttpBodyPort>[0]) =>
+                  gate?.beforeDispatch?.() === false
+                    ? Promise.reject(new Error("dispatch refused"))
+                    : http(request),
             } as never),
     },
     cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`,
+    signOut: () => channel.signOut(paired.cookieToken),
+    pod: metadata,
   };
 }
 
@@ -218,6 +228,51 @@ function context(cookie: string, body: unknown = {}, id = ""): RouteContext {
 afterEach(() => {
   for (const store of stores.splice(0)) store.close();
   resetServerLogger();
+});
+
+describe("a Jira read that outlives its session or its Pod (PR #4464)", () => {
+  it("sends no further Jira request once the session is revoked", async () => {
+    const f = fixture();
+    let revoked = false;
+    f.http.mockImplementation((request) => {
+      if (!revoked) {
+        revoked = true;
+        f.signOut();
+      }
+      return jiraGet(request);
+    });
+    const result = await handleJiraTemplateOptions(
+      context(f.cookie, { podId: POD, projectKey: "SYN", issueTypeId: "10001" }),
+      f.deps,
+    ).catch((error: unknown) => error);
+    // Only the project lookup went out; the concurrent detail reads were never dispatched.
+    expect(f.http).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: 404 });
+  });
+
+  it("does not save a binding read for a Pod that was replaced during the read", async () => {
+    const f = fixture();
+    const markdown = TEMPLATE.replace("project: SYN", "project: SYN\nsummaryMinLength: 4");
+    expect(
+      (await handleImportMarkdownSkill(context(f.cookie, upload(markdown)), f.deps)).status,
+    ).toBe(201);
+    const skill = f.deps.store.markdownSkills.list()[0];
+    if (skill === undefined) throw new TypeError("The uploaded skill must be persisted");
+    let replaced = false;
+    f.http.mockImplementation((request) => {
+      if (!replaced) {
+        replaced = true;
+        f.pod.generation = 2;
+      }
+      return jiraGet(request);
+    });
+    const result = await handleBindJiraTemplate(
+      context(f.cookie, { podId: POD, skillId: skill.id, revision: skill.revision }),
+      f.deps,
+    ).catch((error: unknown) => error);
+    expect(result).toMatchObject({ status: 404 });
+    expect(f.deps.store.markdownSkills.get(skill.id)?.revision).toBe(skill.revision);
+  });
 });
 
 describe("guided Jira template options", () => {
@@ -274,6 +329,7 @@ describe("guided Jira template options", () => {
     });
     expect(await read({ projectKey: "SYN", issueTypeId: "10001" })).toEqual({
       kind: "details",
+      ambiguousFieldNames: [],
       fields: [
         { id: "summary", name: "summary", required: true },
         { id: "customfield_10016", name: "Story Points", required: true },

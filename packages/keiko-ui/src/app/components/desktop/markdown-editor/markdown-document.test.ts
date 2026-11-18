@@ -46,6 +46,31 @@ describe("replaceMarkdownBody", () => {
   });
 });
 
+describe("front matter fences match the contracts parser (review P92, P98, P-H)", () => {
+  it("closes an empty block at the first fence and never reaches a later one (P92)", () => {
+    const text = "---  \n---\nDraft\n---\nText";
+    expect(splitMarkdownDocument(text)).toEqual({ frontMatter: "", body: "Draft\n---\nText" });
+    expect(replaceMarkdownFrontMatter(text, "a: 1")).toBe("---  \na: 1\n---\nDraft\n---\nText");
+    expect(replaceMarkdownFrontMatter(text, "")).toBe(text);
+    expect(splitMarkdownDocument("---\na: 1\n--- x\nb\n---\n").frontMatter).toBe("a: 1\n--- x\nb");
+  });
+
+  it("keeps the blank separator when the body is cleared (P98)", () => {
+    expect(replaceMarkdownBody("---\r\na: 1\r\n---\r\n\r\nOld", "")).toBe(
+      "---\r\na: 1\r\n---\r\n\r\n",
+    );
+    expect(replaceMarkdownBody("---\na: 1\n---", "")).toBe("---\na: 1\n---");
+  });
+
+  it("keeps a newly typed leading newline through the next split (P-H)", () => {
+    const next = replaceMarkdownBody("---\na: 1\n---\nOld", "\nOld");
+    expect(next).toBe("---\na: 1\n---\n\n\nOld");
+    expect(splitMarkdownDocument(next).body).toBe("\nOld");
+    const crlf = replaceMarkdownBody("---\r\na: 1\r\n---\r\nOld", "\r\nOld");
+    expect(splitMarkdownDocument(crlf).body).toBe("\r\nOld");
+  });
+});
+
 describe("splitMarkdownDocument / joinMarkdownDocument", () => {
   it("opens the front matter of a fence with trailing blanks, as the template parser does (UyK)", () => {
     expect(splitMarkdownDocument("---  \na: 1\n---\nbody")).toEqual({

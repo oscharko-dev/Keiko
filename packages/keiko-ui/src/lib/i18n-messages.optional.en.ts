@@ -2723,6 +2723,16 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "{subject} (several fields share this name; write its id in the metadata to use it)",
   "chat.skills.jira.form.statusNotChoosable":
     "{subject} (a numeric status name cannot be chosen here)",
+  "chat.skills.jira.form.statusShared":
+    "{subject} (several statuses share this name; write it in the metadata to use it)",
+  "chat.skills.jira.form.typeNotPortable":
+    "{subject} (no unique name for this type; write it in the metadata to use it)",
+  "chat.skills.jira.form.instanceLocalName":
+    "{subject} (an instance-local id, not a portable name; write it in the metadata to use it)",
+  "chat.skills.jira.form.rulesLocked":
+    "The rules are bound to a Jira that is not readable right now; change them in the metadata text or reconnect.",
+  "chat.skills.jira.form.fieldCatalogUnknown":
+    "{subject} (Jira's full field list could not be read, so this name cannot be checked; write it in the metadata to use it)",
   "chat.skills.jira.form.invalid":
     "Correct the rules in the text below; the choices follow again once they read correctly.",
   "chat.skills.jira.starter.epic":

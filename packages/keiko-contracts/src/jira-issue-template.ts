@@ -660,7 +660,12 @@ class Reader {
     return parsed;
   }
 
-  public list(key: TemplateKey, max: number, itemChars: number): readonly string[] {
+  public list(
+    key: TemplateKey,
+    max: number,
+    itemChars: number,
+    positional = false,
+  ): readonly string[] {
     const entry = entryOf(this.entries, key);
     if (entry === undefined) return [];
     if (!entry.list) {
@@ -675,7 +680,8 @@ class Reader {
       this.errors.push({ code: "invalid-value", key, line: entry.line });
       return [];
     }
-    return [...new Set(entry.values)];
+    // A binding id list is positional: one id per typed name, so equal ids must stay in place.
+    return positional ? [...entry.values] : [...new Set(entry.values)];
   }
 
   public pattern(key: TemplateKey): string | undefined {
@@ -850,7 +856,7 @@ function lined(found: BindingValues, typed: TypedNames): boolean {
 
 function readBindingValues(reader: Reader, entries: readonly RawEntry[]): BindingValues {
   const listOf = (key: TemplateKey, chars: number): readonly string[] | undefined => {
-    const ids = reader.list(key, JIRA_ISSUE_TEMPLATE_LIMITS.listItems, chars);
+    const ids = reader.list(key, JIRA_ISSUE_TEMPLATE_LIMITS.listItems, chars, true);
     return entryOf(entries, key) === undefined ? undefined : ids;
   };
   return {
@@ -1201,7 +1207,8 @@ export function rebindJiraTemplateAfterEdit(
   resolved: JiraTemplateEditedIds = {},
 ): JiraTemplateBinding | undefined {
   const bound = jiraTemplateForInstance(template, instance).binding;
-  const parsed = edit.activateOn.map(parseActivation);
+  // The strict reader (`Reader.list`) drops repeated tokens, so the digest is built over the same set.
+  const parsed = [...new Set(edit.activateOn)].map(parseActivation);
   const activations = parsed.filter((item): item is JiraTemplateActivation => item !== undefined);
   if (instance === undefined || bound === undefined || activations.length !== parsed.length)
     return undefined;
