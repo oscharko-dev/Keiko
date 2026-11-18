@@ -540,6 +540,7 @@
   "memory.learn.pass.started": "memory-knowledge",
   "memory.learn.relation": "memory-knowledge",
   "memory.maintenance.candidates.selected": "memory-knowledge",
+  "memory.vault.records.selected": "memory-knowledge",
   "native-file-dialog.selection.projected": "ui",
   "portable.launch.failed": "lifecycle-crash",
   "portable.normal-startup-recovery.completed": "runtime-packages",

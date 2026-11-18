@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c61bbdb4792945de9a8d76e07bf6f634a151117da77015ce2c1262acd4fe4fb2",
+    "catalogDigest": "de3a0ab5a74855e7b970a0583c83c0058f5405055a9e023b050b4df9ebeb5c17",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -39802,6 +39802,50 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "memory.vault.records.selected",
+        "category": "memory",
+        "owner": "keiko-server",
+        "emitter": "memory-handlers.logVaultRecordSelection",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "selection": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["list", "review-queue"]
+          },
+          "decodedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "selectedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["memory-vault-selection"],
+        "proofIds": ["memory.vault.records.selected.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/memory-handlers.ts:117",
+        "emitterSites": ["packages/keiko-server/src/memory-handlers.ts:149"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "native-file-dialog.selection.projected",
         "category": "diagnostic",
         "owner": "keiko-server",
@@ -60622,6 +60666,27 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "memory-vault-selection",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["memory.vault.records.selected"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["memory.vault.records.selected"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["memory.vault.records.selected"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["memory.vault.records.selected"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "memory-audit-state-cache",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -63870,8 +63935,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 407,
-      "completeClassCount": 407,
+      "supportedClassCount": 408,
+      "completeClassCount": 408,
       "completeness": "complete",
       "classes": [
         {
@@ -106830,6 +106895,68 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "memory-vault-selection",
+          "requirementContract": "memory-vault-selection",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["memory.vault.records.selected"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "memory.vault.records.selected",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["memory.vault.records.selected"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "memory.vault.records.selected",
+              "owner": "keiko-server",
+              "category": "memory",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "decodedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "selectedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "selection",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["memory.vault.records.selected.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "native-file-dialog-projection",
           "requirementContract": "native-file-dialog-projection",
           "productSurfaces": ["keiko-server"],
@@ -121248,7 +121375,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1955",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1961",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -121497,7 +121624,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-handlers.ts:171",
+      "site": "packages/keiko-server/src/memory-handlers.ts:216",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -121952,7 +122079,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2356",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2362",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125357,6 +125484,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "memory.vault.records.selected",
+      "category": "memory",
+      "site": "packages/keiko-server/src/memory-handlers.ts:120",
+      "package": "keiko-server"
+    },
+    {
       "op": "native-file-dialog.selection.projected",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/native-file-dialog/route.ts:51",
@@ -127003,6 +127136,7 @@
     "memory.retrieval.semantic-disabled",
     "memory.retrieval.semantic-skipped",
     "memory.salience",
+    "memory.vault.records.selected",
     "native-file-dialog.selection.projected",
     "portable.launch.failed",
     "portable.normal-startup-recovery.completed",

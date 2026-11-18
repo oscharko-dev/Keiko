@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c61bbdb4792945de9a8d76e07bf6f634a151117da77015ce2c1262acd4fe4fb2"
+    "catalogDigest": "de3a0ab5a74855e7b970a0583c83c0058f5405055a9e023b050b4df9ebeb5c17"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 714,
-    "proofCount": 737,
-    "resolvedProofCount": 737,
-    "failureClassCount": 407,
+    "operationCount": 715,
+    "proofCount": 738,
+    "resolvedProofCount": 738,
+    "failureClassCount": 408,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -641,6 +641,7 @@
         "memory.learn.pass.started",
         "memory.learn.relation",
         "memory.maintenance.candidates.selected",
+        "memory.vault.records.selected",
         "repository.fingerprint-diff.completed",
         "search.answer.assessed",
         "search.citations.reconciled",
@@ -1198,6 +1199,7 @@
     "lsp-process-termination": ["editor-delivery.crash"],
     "chat-content-policy": ["lifecycle-crash.dependency-failure"],
     "memory-maintenance-selection": ["memory-knowledge.dependency-failure"],
+    "memory-vault-selection": ["memory-knowledge.dependency-failure"],
     "memory-audit-state-cache": ["lifecycle-crash.dependency-failure"],
     "memory-capture-novelty": ["memory-knowledge.dependency-failure"],
     "memory-explicit-statement": ["memory-knowledge.dependency-failure"],
@@ -2934,6 +2936,7 @@
     "memory.maintenance.candidates.selected.line": [
       "packages/keiko-server/src/memory-maintenance-handlers.test.ts"
     ],
+    "memory.vault.records.selected.line": ["packages/keiko-server/src/memory-handlers.test.ts"],
     "native-file-dialog.selection.projected.counts": [
       "packages/keiko-server/src/native-file-dialog/route.test.ts"
     ],

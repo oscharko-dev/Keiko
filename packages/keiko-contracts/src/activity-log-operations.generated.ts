@@ -38235,6 +38235,48 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "memory.vault.records.selected",
+    category: "memory",
+    owner: "keiko-server",
+    emitter: "memory-handlers.logVaultRecordSelection",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      selection: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["list", "review-queue"],
+      },
+      decodedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      selectedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["memory-vault-selection"],
+    proofIds: ["memory.vault.records.selected.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "native-file-dialog.selection.projected",
     category: "diagnostic",
     owner: "keiko-server",

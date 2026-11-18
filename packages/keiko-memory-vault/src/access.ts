@@ -7,6 +7,7 @@
 // concatenation with caller data, so SQL injection is structurally impossible at this layer.
 
 import type { DatabaseSync } from "node:sqlite";
+import { toUSVString } from "node:util";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import { cachedPrepare } from "./statements.js";
 
@@ -220,7 +221,7 @@ export function getAccessStatsRows(
   }
   if (ids.length === 0) return new Map();
   const rows = cachedPrepare(db, SELECT_SCOPED_SQL).all(
-    JSON.stringify(ids),
+    JSON.stringify(ids.map(toUSVString)),
   ) as unknown as readonly AccessRow[];
   return rowsToMap(rows);
 }

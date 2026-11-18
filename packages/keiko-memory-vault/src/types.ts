@@ -162,6 +162,8 @@ export interface MemoryDeleteResult {
 }
 
 export interface ListMemoriesOptions {
+  /** Filter for a recorded stale reason before decoding any bodies. */
+  readonly requireStaleReason?: boolean;
   readonly sensitivity?: readonly MemorySensitivity[];
   readonly type?: readonly MemoryType[];
   readonly status?: readonly MemoryStatus[];

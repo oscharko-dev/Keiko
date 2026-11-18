@@ -94,6 +94,11 @@ import { memoryTextSecretEgressRejectionReason } from "@oscharko-dev/keiko-memor
 import { readJsonRequestBodyOutcome, type JsonRequestBodyOutcome } from "./bounded-request-body.js";
 import { processServerLogSink, processServerLogSinkFor } from "./process-log-sink.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { getServerLogger } from "./observability/index.js";
 import { resolveMemoryTargetRecords } from "./memory-target-resolver.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -108,6 +113,46 @@ const MAX_MEMORY_EXCERPT_CHARS = 240;
 const MAX_TOMBSTONE_CURSOR_CHARS = 1_024;
 const MAX_TOMBSTONE_ID_CHARS = 200;
 const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted", "expired"];
+
+const MEMORY_VAULT_RECORDS_SELECTED = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory.vault.records.selected",
+  category: "memory",
+  owner: "keiko-server",
+  emitter: "memory-handlers.logVaultRecordSelection",
+  fields: {
+    selection: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["list", "review-queue"],
+    },
+    decodedCount: { type: "integer", dataClass: "count", required: true },
+    selectedCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["memory-vault-selection"],
+  proofIds: ["memory.vault.records.selected.line"],
+  releaseImpact: "patch",
+});
+
+function logVaultRecordSelection(
+  ctx: RouteContext,
+  selection: "list" | "review-queue",
+  decodedCount: number,
+  selectedCount: number,
+): void {
+  getServerLogger().debug(() =>
+    activityLogEvent(
+      MEMORY_VAULT_RECORDS_SELECTED,
+      { correlationId: handlerCorrelationId(ctx) },
+      { selection, decodedCount, selectedCount },
+    ),
+  );
+}
 
 // KEIKO-0216 / KEIKO-0348: closed-vocabulary sanitisation for user-supplied 'reason'
 // fields on conflict-resolution, proposal-rejection, and explicit-archive routes.
@@ -350,7 +395,6 @@ interface ListAcrossScopesOptions {
   readonly types?: readonly MemoryType[];
   readonly statuses?: readonly MemoryStatus[];
   readonly sensitivities?: readonly MemorySensitivity[];
-  readonly query?: string;
 }
 
 function sortMemories(records: readonly MemoryRecord[]): readonly MemoryRecord[] {
@@ -382,7 +426,7 @@ function memoryMatchesQuery(record: MemoryRecord, query: string | undefined): bo
   return haystack.includes(query);
 }
 
-function listMemoriesAcrossScopes(
+function listMemoryCandidates(
   vault: MemoryVaultStore,
   options: ListAcrossScopesOptions,
 ): readonly MemoryRecord[] {
@@ -394,51 +438,28 @@ function listMemoriesAcrossScopes(
         options.scopeKinds.length === 0 ||
         options.scopeKinds.includes(scope.kind),
     );
-  const records = vault.listMemoriesAcrossScopes(scopes, {
+  return vault.listMemoriesAcrossScopes(scopes, {
     ...(options.types !== undefined && options.types.length > 0 ? { type: options.types } : {}),
     ...(options.statuses !== undefined && options.statuses.length > 0
       ? { status: options.statuses }
       : {}),
+    ...(options.sensitivities === undefined ? {} : { sensitivity: options.sensitivities }),
     includeExpired: true,
   });
-  const filtered = records.filter((record) => {
-    if (
-      options.sensitivities !== undefined &&
-      options.sensitivities.length > 0 &&
-      !options.sensitivities.includes(record.provenance.sensitivity)
-    ) {
-      return false;
-    }
-    if (!memoryMatchesQuery(record, options.query)) {
-      return false;
-    }
-    return true;
-  });
-  return sortMemories(filtered);
-}
-
-function isStaleReviewCandidate(record: MemoryRecord): boolean {
-  return (
-    record.staleReason !== undefined &&
-    record.status !== "proposed" &&
-    record.status !== "conflicted" &&
-    record.status !== "expired" &&
-    record.status !== "rejected" &&
-    record.status !== "archived" &&
-    record.status !== "forgotten"
-  );
 }
 
 function listReviewQueueMemories(vault: MemoryVaultStore): readonly MemoryRecord[] {
-  const byStatus = listMemoriesAcrossScopes(vault, {
-    statuses: REVIEW_QUEUE_STATUSES,
+  const scopes = vault.listMemoryScopes();
+  const pending = vault.listMemoriesAcrossScopes(scopes, {
+    status: REVIEW_QUEUE_STATUSES,
+    includeExpired: true,
   });
-  const stale = listMemoriesAcrossScopes(vault, {}).filter(isStaleReviewCandidate);
-  const byId = new Map<MemoryId, MemoryRecord>();
-  for (const record of [...byStatus, ...stale]) {
-    byId.set(record.id, record);
-  }
-  return sortMemories([...byId.values()]);
+  const stale = vault.listMemoriesAcrossScopes(scopes, {
+    status: ["accepted", "superseded"],
+    requireStaleReason: true,
+    includeExpired: true,
+  });
+  return sortMemories([...pending, ...stale]);
 }
 
 // ─── Handler: GET /api/memory ─────────────────────────────────────────────────
@@ -678,24 +699,27 @@ function handleRecentMemories(
 }
 
 function handleLegacyMemories(
+  ctx: RouteContext,
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   params: LegacyListParams,
 ): RouteResult {
   const { scopeKinds, types, statuses, sensitivities, query, limit, offset } = params;
-  const filtered = listMemoriesAcrossScopes(vault, {
+  const candidates = listMemoryCandidates(vault, {
     ...(scopeKinds.length > 0 ? { scopeKinds: scopeKinds as readonly MemoryScopeKind[] } : {}),
     ...(types.length > 0 ? { types: types as readonly MemoryType[] } : {}),
     ...(statuses.length > 0 ? { statuses: statuses as readonly MemoryStatus[] } : {}),
     ...(sensitivities.length > 0
       ? { sensitivities: sensitivities as readonly MemorySensitivity[] }
       : {}),
-    ...(query !== undefined ? { query } : {}),
   });
+  const filtered = sortMemories(candidates.filter((record) => memoryMatchesQuery(record, query)));
   const page = filtered.slice(offset, offset + limit);
+  const memories = redactMemories(deps, page);
+  logVaultRecordSelection(ctx, "list", candidates.length, page.length);
   return {
     status: 200,
-    body: { memories: redactMemories(deps, page), total: filtered.length, limit, offset },
+    body: { memories, total: filtered.length, limit, offset },
   };
 }
 
@@ -708,7 +732,7 @@ export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): Rout
 
   try {
     if (params.kind === "recent") return handleRecentMemories(deps, vault, params);
-    return handleLegacyMemories(deps, vault, params);
+    return handleLegacyMemories(ctx, deps, vault, params);
   } catch (err) {
     const correlationId = handlerCorrelationId(ctx);
     if (err instanceof MemoryCaptureProjectionReadError) {
@@ -811,10 +835,12 @@ export function handleMemoryReviewQueue(ctx: RouteContext, deps: UiHandlerDeps):
 
   try {
     const proposed = listReviewQueueMemories(vault);
+    const memories = redactMemories(deps, proposed);
+    logVaultRecordSelection(ctx, "review-queue", proposed.length, proposed.length);
     return {
       status: 200,
       body: {
-        memories: redactMemories(deps, proposed),
+        memories,
         total: proposed.length,
       },
     };

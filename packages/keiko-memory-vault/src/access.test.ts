@@ -140,6 +140,19 @@ describe("getAccessStatsRows", () => {
     }
   });
 
+  it("matches SQLite text binding for identifiers containing an unpaired surrogate", () => {
+    const db = openTestDb();
+    try {
+      const requested = seedMemory(db, "stored-\ud800");
+      recordAccessRows(db, [requested], 1000);
+      const all = getAccessStatsRows(db);
+      expect(all.size).toBe(1);
+      expect(getAccessStatsRows(db, [requested])).toEqual(all);
+    } finally {
+      db.close();
+    }
+  });
+
   it("omits ids that have no access row", () => {
     const db = openTestDb();
     const m1 = seedMemory(db, "m1");

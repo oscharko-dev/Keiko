@@ -8336,6 +8336,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "memory-vault-selection",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["memory.vault.records.selected"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["memory.vault.records.selected"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["memory.vault.records.selected"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["memory.vault.records.selected"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "memory-audit-state-cache",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

@@ -1,3 +1,10 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
@@ -17,6 +24,7 @@ import {
 } from "@oscharko-dev/keiko-memory-vault";
 import { runConsolidation } from "@oscharko-dev/keiko-memory-consolidation";
 import {
+  MEMORY_STATUSES,
   MEMORY_STATUS_TRANSITIONS,
   PROFILE_EXCLUDED_MEMORY_TAG,
   STANDING_FACT_RETENTION_POLICY_KEY,
@@ -651,6 +659,94 @@ describe("memory handlers", () => {
     for (const path of paths) {
       expect(handleListMemories(makeCtx(path, {}), deps).status).toBe(400);
     }
+  });
+
+  it("reads only the requested sensitivity before matching a list search", () => {
+    const vault = makeVault();
+    const base = makeMemory("listed-public", "shared search term");
+    vault.insertMemory(base);
+    vault.insertMemory({
+      ...base,
+      id: memoryId("outside-sensitivity"),
+      provenance: { ...base.provenance, sensitivity: "confidential" },
+    });
+    const reads = vi.spyOn(vault, "listMemoriesAcrossScopes");
+    const result = handleListMemories(
+      makeCtx("/api/memory?sensitivity=public&q=shared", {}),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(result.status).toBe(200);
+    expect(asJson(result).total).toBe(1);
+    expect(reads.mock.results[0]?.value).toEqual([base]);
+  });
+
+  it("records only selection counts for an operator's list and review queue reads", () => {
+    const vault = makeVault();
+    vault.insertMemory(
+      makeMemory("selection-fixture", "selection-fixture-body", { status: "proposed" }),
+    );
+    const deps = makeDeps({ memoryVault: vault });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      expect(
+        handleListMemories(makeCtx("/api/memory?q=missing-fixture-query", {}), deps).status,
+      ).toBe(200);
+      expect(handleMemoryReviewQueue(makeCtx("/api/memory/review-queue", {}), deps).status).toBe(
+        200,
+      );
+    } finally {
+      resetServerLogger();
+    }
+    const lines = sink.events
+      .filter((event) => event.op === "memory.vault.records.selected")
+      .map(formatActivityLogProofLine);
+    const observations = lines.map((line) =>
+      expectActivityLogProof("memory.vault.records.selected.line", line),
+    );
+    expect(observations).toMatchObject([
+      { selection: "list", decodedCount: 1, selectedCount: 0 },
+      { selection: "review-queue", decodedCount: 1, selectedCount: 1 },
+    ]);
+    expect(lines.join(" ")).not.toContain("fixture");
+  });
+
+  it("decrypts each reviewable memory once across every current status", () => {
+    const vault = makeVault();
+    for (const status of MEMORY_STATUSES) {
+      for (const state of ["current", "stale"]) {
+        const id = `${status}-${state}`;
+        vault.insertMemory(
+          makeMemory(id, id, {
+            status,
+            createdAt: 1,
+            updatedAt: 1,
+            ...(state === "stale" ? { staleReason: "superseded-source" } : {}),
+          }),
+        );
+      }
+    }
+    const reads = vi.spyOn(vault, "listMemoriesAcrossScopes");
+    const result = handleMemoryReviewQueue(
+      makeCtx("/api/memory/review-queue", {}),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(result.status).toBe(200);
+    const queued = (asJson(result).memories as readonly MemoryRecord[]).map((memory) => memory.id);
+    expect(queued).toEqual([
+      "accepted-stale",
+      "conflicted-current",
+      "conflicted-stale",
+      "expired-current",
+      "expired-stale",
+      "proposed-current",
+      "proposed-stale",
+      "superseded-stale",
+    ]);
+    const decoded = reads.mock.results.flatMap((call) =>
+      (call.value as readonly MemoryRecord[]).map((memory) => memory.id),
+    );
+    expect(decoded.sort((left, right) => left.localeCompare(right))).toEqual(queued);
   });
 
   it("includes non-global conflicts in the review queue", () => {

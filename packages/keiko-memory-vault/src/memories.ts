@@ -241,6 +241,7 @@ function appendListFilters(
   options: ListMemoriesOptions,
   nowMs: number,
 ): void {
+  if (options.requireStaleReason === true) where.push("stale_reason IS NOT NULL");
   for (const built of [
     buildEnumClause("type", options.type),
     buildEnumClause("status", options.status),

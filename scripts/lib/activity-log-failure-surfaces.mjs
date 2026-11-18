@@ -210,6 +210,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
     emitterPrefix: "memory-learned-facts-log",
     surface: "memory-knowledge",
   },
+  { owner: "keiko-server", emitterPrefix: "memory-handlers", surface: "memory-knowledge" },
   { owner: "keiko-server", emitterPrefix: "memory-learning-log", surface: "memory-knowledge" },
   {
     owner: "keiko-server",
