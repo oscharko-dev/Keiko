@@ -1013,6 +1013,8 @@ export const REVIEW_RUN_REFUSAL_REASONS = [
   "active-review-exists",
   "policy-invalid",
   "model-unavailable",
+  // R4130-079/R4130-082: a role model nobody activated in Settings > Models in this server process.
+  "model-not-activated",
   "request-invalid",
 ] as const;
 export type ReviewRunRefusalReason = (typeof REVIEW_RUN_REFUSAL_REASONS)[number];

@@ -47096,12 +47096,6 @@
               "required": true
             },
             {
-              "name": "modelCause",
-              "type": "string",
-              "dataClass": "closed-enum",
-              "required": false
-            },
-            {
               "name": "reason",
               "type": "string",
               "dataClass": "closed-enum",

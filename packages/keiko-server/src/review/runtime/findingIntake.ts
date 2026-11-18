@@ -104,6 +104,8 @@ type Verdict =
       readonly ok: false;
       readonly reason: Exclude<ReviewReportRejectionReason, "limit-reached">;
       readonly issues?: readonly ReviewContractIssue[];
+      /** A Git read that did not answer (R4130-013), not a fact about the report (R4130-080). */
+      readonly transient?: true;
     };
 
 function emptyRejections(): Record<ReviewReportRejectionReason, number> {
@@ -176,13 +178,22 @@ async function checkLocations(
   reader: HeadFileReader,
   report: ReviewFindingReport,
   signal: AbortSignal | undefined,
-): Promise<Exclude<ReviewReportRejectionReason, "limit-reached"> | undefined> {
+): Promise<Extract<Verdict, { readonly ok: false }> | undefined> {
   for (const location of locations(report)) {
     const file = await reader.read(location.file, signal);
-    if (file.kind === "refused") return file.reason;
-    if (location.endLine > file.lines.length) return "range-invalid";
+    if (file.kind === "refused") return refusedVerdict(file);
+    if (location.endLine > file.lines.length) return { ok: false, reason: "range-invalid" };
   }
   return undefined;
+}
+
+/** A head file's refusal as a verdict; a transient one keeps its flag (R4130-080). */
+function refusedVerdict(
+  file: Extract<HeadFile, { readonly kind: "refused" }>,
+): Extract<Verdict, { readonly ok: false }> {
+  return file.transient === true
+    ? { ok: false, reason: file.reason, transient: true }
+    : { ok: false, reason: file.reason };
 }
 
 /**
@@ -219,11 +230,11 @@ async function judge(
   }
   const report = validated.value;
   const refused = await checkLocations(reader, report, signal);
-  if (refused !== undefined) return { ok: false, reason: refused };
+  if (refused !== undefined) return refused;
   const defect = backingDefect(report);
   if (defect === undefined) return { ok: false, reason: "evidence-mismatch" };
   const file = await reader.read(defect.file, signal);
-  if (file.kind === "refused") return { ok: false, reason: file.reason };
+  if (file.kind === "refused") return refusedVerdict(file);
   const defectExcerpt = file.lines.slice(defect.startLine - 1, defect.endLine).join("\n");
   if (defectExcerpt.trim().length === 0) return { ok: false, reason: "evidence-mismatch" };
   const occurrence = reviewDefectExcerptOccurrence(file.lines, defect.startLine, defect.endLine);
@@ -320,8 +331,16 @@ function acknowledgeRejection(
   verdict: Extract<Verdict, { readonly ok: false }>,
 ): ReviewReportAcknowledgement {
   state.rejected[verdict.reason] += 1;
-  const key = rejectedReportKey(verdict.reason, value);
-  const guidance = countRepeat(state, key, REVIEW_REPORT_GUIDANCE.rejected);
+  // A Git read that did not answer may be retried with the same report (R4130-013), so it is
+  // never a repeat and never ends the session (R4130-080).
+  const guidance =
+    verdict.transient === true
+      ? REVIEW_REPORT_GUIDANCE.rejected
+      : countRepeat(
+          state,
+          rejectedReportKey(verdict.reason, value),
+          REVIEW_REPORT_GUIDANCE.rejected,
+        );
   const issues = verdict.issues === undefined ? {} : { issues: verdict.issues };
   return record(state, { status: "rejected", reason: verdict.reason, ...issues, guidance });
 }

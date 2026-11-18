@@ -1779,6 +1779,37 @@ describe("turn port terminal semantics", () => {
     expect(records.every((diagnostic) => diagnostic.diagnosticOutcome === "routine")).toBe(true);
   });
 
+  // R4130-081: the deadline can also abort the wait for pending mutations of a turn that answered
+  // `succeeded`; it then ends the turn at the run's bound like the terminal wait does.
+  it.each([
+    ["the envelope deadline", "failed", true, ["stage=dispatch:reason=turn-expired"]],
+    ["a person's stop", "cancelled", false, []],
+  ] as const)(
+    "settles a turn whose pending-mutation wait %s aborted as %s",
+    async (_cause, expected, deadline, codes) => {
+      const records: ServerDiagnosticRecord[] = [];
+      const run = record("run-open", {
+        submitTurn: () => Promise.resolve(true),
+        abortTurn: () => Promise.resolve(true),
+        waitForTerminal: () => Promise.resolve("succeeded" as const),
+      });
+      const waitForPendingMutations = vi.fn(() => {
+        if (deadline) abortAtEnvelopeDeadline(run.controller);
+        else run.controller.abort();
+        return Promise.resolve("not-idle" as const);
+      });
+      const dispatcher = createProductionRuntimeTaskDispatcher(
+        new Map([["run-open", { ...run, waitForPendingMutations }]]),
+        { record: (diagnostic): void => void records.push(diagnostic) },
+      );
+
+      const dispatched = await dispatcher.dispatch(operation("run-open", "req-1", 1, "task"));
+      if (!dispatched.ok) throw new Error("expected accepted task");
+      await expect(dispatched.completion).resolves.toBe(expected);
+      expect(records.map((diagnostic) => diagnostic.code)).toEqual(codes);
+    },
+  );
+
   it("reports pending-mutations-unsettled only when the coordinator never went idle", async () => {
     const records: ServerDiagnosticRecord[] = [];
     const run = record("run-open", {

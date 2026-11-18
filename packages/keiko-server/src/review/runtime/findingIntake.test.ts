@@ -375,6 +375,35 @@ describe("createReviewFindingIntake", () => {
     });
   });
 
+  // R4130-080: a refusal because Git did not answer (an aborted or timed-out head read) is not a fact
+  // about the report, so the same report may be sent again (R4130-013). It must not count as a
+  // repeat: three of them told the model not to resend a valid report and ended the session.
+  it("never counts a refusal for a head read that did not answer as a repeat", async () => {
+    let ends = 0;
+    const intake = intakeFor(createBufferedServerLogSink(), undefined, () => {
+      ends += 1;
+    });
+    const aborted = new AbortController();
+    aborted.abort();
+
+    const answers = [];
+    for (let sent = 0; sent < REVIEW_REPORT_REPEAT_LIMIT; sent += 1) {
+      answers.push(await intake.submit(report(), aborted.signal)); // NOSONAR typescript:S9382 -- the order of the reports is the point
+    }
+
+    expect(answers.map((answer) => answer.status)).toEqual(["rejected", "rejected", "rejected"]);
+    expect(
+      answers.map((answer) => (answer.status === "rejected" ? answer.guidance : undefined)),
+    ).toEqual([
+      REVIEW_REPORT_GUIDANCE.rejected,
+      REVIEW_REPORT_GUIDANCE.rejected,
+      REVIEW_REPORT_GUIDANCE.rejected,
+    ]);
+    expect(ends).toBe(0);
+    expect(intake.repeatLimitReached()).toBe(false);
+    await expect(intake.submit(report())).resolves.toMatchObject({ status: "accepted" });
+  });
+
   it("counts again after an accepted report or a different report", async () => {
     let ends = 0;
     const intake = intakeFor(createBufferedServerLogSink(), undefined, () => {

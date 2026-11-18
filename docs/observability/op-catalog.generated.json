@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "aba0a6c0b426f1191f188dfd091010bb25f3a9708ee16520f5fa1ca82488ed1e",
+    "catalogDigest": "26f6a7ac6a4e9aa0c6091adcdcaa4beef804d0ec17f3a4a85bf090cbf3b22ee9",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -18250,7 +18250,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:125",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1307"
+          "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1330"
         ]
       },
       {
@@ -41112,7 +41112,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:154",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1850"
+          "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1873"
         ]
       },
       {
@@ -42891,7 +42891,7 @@
         "lifecycle": "state",
         "analyzerProjection": "timeline",
         "proofIds": ["review.run.part.line"],
-        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:164",
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:165",
         "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:400"]
       },
       {
@@ -42996,7 +42996,7 @@
         "lifecycle": "state",
         "analyzerProjection": "timeline",
         "proofIds": ["review.run.phase.line"],
-        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:125",
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:126",
         "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:352"]
       },
       {
@@ -43087,6 +43087,7 @@
               "active-review-exists",
               "policy-invalid",
               "model-unavailable",
+              "model-not-activated",
               "request-invalid"
             ]
           },
@@ -43094,19 +43095,13 @@
             "type": "boolean",
             "dataClass": "closed-enum",
             "required": true
-          },
-          "modelCause": {
-            "type": "string",
-            "dataClass": "closed-enum",
-            "required": false,
-            "values": ["not-activated"]
           }
         },
         "lifecycle": "failure",
         "analyzerProjection": "failure-cluster",
         "proofIds": ["review.run.refused.line"],
-        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:270",
-        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:549"]
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:271",
+        "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:548"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43477,7 +43472,7 @@
         "lifecycle": "end",
         "analyzerProjection": "timeline",
         "proofIds": ["review.run.settled.line"],
-        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:208",
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:209",
         "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:511"]
       },
       {
@@ -43549,7 +43544,7 @@
         "lifecycle": "start",
         "analyzerProjection": "timeline",
         "proofIds": ["review.run.started.line"],
-        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:96",
+        "registrationSite": "packages/keiko-server/src/review/service/activity-log.ts:97",
         "emitterSites": ["packages/keiko-server/src/review/service/activity-log.ts:307"]
       },
       {
@@ -114043,12 +114038,6 @@
                   "required": true
                 },
                 {
-                  "name": "modelCause",
-                  "type": "string",
-                  "dataClass": "closed-enum",
-                  "required": false
-                },
-                {
                   "name": "reason",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -128372,14 +128361,14 @@
     {
       "op": "coding-runtime.task-dispatch",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1265",
+      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1288",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.task-dispatch",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1292",
+      "site": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts:1315",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -130609,13 +130598,13 @@
     {
       "op": "review.run.part",
       "category": "process",
-      "site": "packages/keiko-server/src/review/service/activity-log.ts:166",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:167",
       "package": "keiko-server"
     },
     {
       "op": "review.run.phase",
       "category": "process",
-      "site": "packages/keiko-server/src/review/service/activity-log.ts:127",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:128",
       "package": "keiko-server"
     },
     {
@@ -130627,7 +130616,7 @@
     {
       "op": "review.run.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/review/service/activity-log.ts:272",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:273",
       "package": "keiko-server"
     },
     {
@@ -130651,13 +130640,13 @@
     {
       "op": "review.run.settled",
       "category": "process",
-      "site": "packages/keiko-server/src/review/service/activity-log.ts:210",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:211",
       "package": "keiko-server"
     },
     {
       "op": "review.run.started",
       "category": "process",
-      "site": "packages/keiko-server/src/review/service/activity-log.ts:98",
+      "site": "packages/keiko-server/src/review/service/activity-log.ts:99",
       "package": "keiko-server"
     },
     {

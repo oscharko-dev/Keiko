@@ -1195,6 +1195,38 @@ function abortedAtEnvelopeDeadline(record: ProductionRuntimeRunRecord): boolean 
  * or as `cancelled` although nobody stopped it. Reported as `failed`, the settlement reads the
  * exhausted envelope (`envelope-duration-exhausted`), as for a turn wait that ran out (W9, #4068).
  */
+/**
+ * A succeeded turn's outcome once its pending mutations settled. The envelope deadline can abort
+ * that wait too; it then ends the turn at the run's bound (`failed`, routine `turn-expired`), and
+ * only an abort without that reason, a person's Stop, is `cancelled` (R4130-081).
+ */
+async function pendingMutationsOutcome(
+  record: ProductionRuntimeRunRecord,
+  waitForPendingMutations: NonNullable<ProductionRuntimeRunRecord["waitForPendingMutations"]>,
+  runId: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<CodingRuntimeTaskOutcome> {
+  const idle = await waitForPendingMutations(record.controller.signal);
+  if (idle === "idle-succeeded") return "succeeded";
+  if (abortedAtEnvelopeDeadline(record)) {
+    recordFailedTerminal(record, runId, diagnostics);
+    return "failed";
+  }
+  if (record.controller.signal.aborted) return "cancelled";
+  // "idle-failed" (every lease settled, but a CLAIMED mutation did not succeed) and "not-idle"
+  // (a lease was still outstanding when the wait was abandoned) are reported under distinct
+  // reasons: a REFUSED edit that never reached the commit boundary (NO_ACTIVE_SESSION,
+  // WORKSPACE_ACCESS_LOST -- codingToolReadEditPorts.ts) resolves "idle-succeeded" and never
+  // reaches here at all, so "pending-mutations-unsettled" is reserved for a coordinator that
+  // genuinely never went idle (epic #3384 cascade).
+  recordRuntimeDispatchFailure(
+    diagnostics,
+    runId,
+    idle === "idle-failed" ? "mutation-failed" : "pending-mutations-unsettled",
+  );
+  return "failed";
+}
+
 async function terminalCompletion(
   record: ProductionRuntimeRunRecord,
   runId: string,
@@ -1205,21 +1237,12 @@ async function terminalCompletion(
     const outcome = waited === "cancelled" && abortedAtEnvelopeDeadline(record) ? "failed" : waited;
     if (outcome === "failed") recordFailedTerminal(record, runId, diagnostics);
     if (outcome !== "succeeded" || record.waitForPendingMutations === undefined) return outcome;
-    const idle = await record.waitForPendingMutations(record.controller.signal);
-    if (idle === "idle-succeeded") return "succeeded";
-    if (record.controller.signal.aborted) return "cancelled";
-    // "idle-failed" (every lease settled, but a CLAIMED mutation did not succeed) and "not-idle"
-    // (a lease was still outstanding when the wait was abandoned) are reported under distinct
-    // reasons: a REFUSED edit that never reached the commit boundary (NO_ACTIVE_SESSION,
-    // WORKSPACE_ACCESS_LOST -- codingToolReadEditPorts.ts) resolves "idle-succeeded" and never
-    // reaches here at all, so "pending-mutations-unsettled" is reserved for a coordinator that
-    // genuinely never went idle (epic #3384 cascade).
-    recordRuntimeDispatchFailure(
-      diagnostics,
+    return await pendingMutationsOutcome(
+      record,
+      record.waitForPendingMutations,
       runId,
-      idle === "idle-failed" ? "mutation-failed" : "pending-mutations-unsettled",
+      diagnostics,
     );
-    return "failed";
   } catch (error) {
     recordRuntimeDispatchFailure(diagnostics, runId, "terminal-exception", error);
     // Consumers treat an unprovable terminal outcome as a failed turn; never leave it unhandled.

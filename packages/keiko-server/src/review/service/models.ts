@@ -70,14 +70,14 @@ export interface ReviewRoleModels {
   readonly counterCheckerModelId: string;
 }
 
-export type ReviewModelValidation =
+/** Eligibility of both role models against the gateway's capability data. */
+export type ReviewModelEligibility =
   | { readonly ok: true }
-  | {
-      readonly ok: false;
-      readonly reason: "policy-invalid" | "model-unavailable";
-      /** A role model nobody activated in Settings > Models (R4130-079). */
-      readonly cause?: "not-activated";
-    };
+  | { readonly ok: false; readonly reason: "policy-invalid" | "model-unavailable" };
+
+/** A dry run's validation: eligibility, or a role model nobody activated (R4130-079). */
+export type ReviewModelValidation =
+  ReviewModelEligibility | { readonly ok: false; readonly reason: "model-not-activated" };
 
 /**
  * The operator and user policy alone (R4130-003): a run checks it before anything reads, probes or
@@ -96,7 +96,7 @@ export function evaluateReviewRoleModels(
   port: ReviewModelPort,
   models: ReviewRoleModels,
   nowMs: number,
-): ReviewModelValidation {
+): ReviewModelEligibility {
   const verdicts = [
     evaluateReviewRoleEligibility(
       port.capability(models.reviewerModelId),
@@ -134,7 +134,7 @@ export async function validateReviewRoleModels(
     return { ok: false, reason: "policy-invalid" };
   }
   if (inactiveReviewRoleModels(port, models).length > 0) {
-    return { ok: false, reason: "model-unavailable", cause: "not-activated" };
+    return { ok: false, reason: "model-not-activated" };
   }
   await ensureReviewRoleModelsReady(port, models, correlationId);
   return evaluateReviewRoleModels(port, models, now());

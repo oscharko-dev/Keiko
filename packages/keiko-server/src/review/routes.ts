@@ -35,7 +35,15 @@ const REFUSAL_STATUS: Readonly<Record<ReviewRunRefusalReason, { status: number; 
   "active-review-exists": { status: 409, code: "REVIEW_ACTIVE" },
   "policy-invalid": { status: 422, code: "REVIEW_POLICY_INVALID" },
   "model-unavailable": { status: 503, code: "REVIEW_MODEL_UNAVAILABLE" },
+  // R4130-082: a retry does not help; the person activates the models first.
+  "model-not-activated": { status: 409, code: "REVIEW_MODEL_NOT_ACTIVATED" },
   "request-invalid": { status: 400, code: "BAD_REQUEST" },
+};
+
+/** The message of a refusal: the one that needs a person's step names it (R4130-082). */
+const REFUSAL_MESSAGE: Partial<Readonly<Record<ReviewRunRefusalReason, string>>> = {
+  "model-not-activated":
+    "Activate both review models in Settings > Models, then start the review again.",
 };
 
 function failure(ctx: RouteContext, status: number, code: string, message: string): RouteResult {
@@ -62,7 +70,8 @@ function refused(
   activeRunId?: string,
 ): RouteResult {
   const mapped = REFUSAL_STATUS[reason];
-  const body = errorBody(mapped.code, "The review could not be started.", ctx.correlationId);
+  const message = REFUSAL_MESSAGE[reason] ?? "The review could not be started.";
+  const body = errorBody(mapped.code, message, ctx.correlationId);
   return {
     status: mapped.status,
     body: activeRunId === undefined ? body : { ...body, activeRunId },

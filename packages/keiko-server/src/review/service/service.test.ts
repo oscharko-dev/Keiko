@@ -823,14 +823,17 @@ describe("review run service: reads, dry run and evaluation switches", () => {
       },
     });
     const refused = await start(h, startBody({ dryRun: true }));
-    expect(refused.status).toBe(503);
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({ error: { code: "REVIEW_MODEL_NOT_ACTIVATED" } });
     expect(asked).toEqual([]);
     expect(h.log.events.find((event) => event.op === "review.run.refused")).toMatchObject({
-      extra: { reason: "model-unavailable", dryRun: true, modelCause: "not-activated" },
+      extra: { reason: "model-not-activated", dryRun: true },
     });
   });
 
-  it("skips a run whose role model nobody activated before it prepares a worktree", async () => {
+  // R4130-082: the refusal reached only the Activity Log, and a person got a 503 that read like an
+  // outage. A start now answers before a run record exists, with a step the person can take.
+  it("refuses a start whose role model nobody activated, naming Settings > Models", async () => {
     const asked: string[] = [];
     const h = setUp({
       activated: (modelId) => modelId !== "reviewer-model",
@@ -839,9 +842,29 @@ describe("review run service: reads, dry run and evaluation switches", () => {
         return Promise.resolve();
       },
     });
+    const refused = await start(h);
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({ error: { code: "REVIEW_MODEL_NOT_ACTIVATED" } });
+    expect(JSON.stringify(refused.body)).toContain("Settings > Models");
+    expect(asked).toEqual([]);
+    expect(h.runtimeRequests).toEqual([]);
+    expect(h.store.unsettled()).toEqual([]);
+    expect(h.log.events.find((event) => event.op === "review.run.refused")).toMatchObject({
+      extra: { reason: "model-not-activated", dryRun: false },
+    });
+  });
+
+  it("settles a run whose role model was deactivated after its start, naming the cause", async () => {
+    let checks = 0;
+    const h = setUp({
+      // Activated when the start is checked, no longer when the run prepares.
+      activated: () => {
+        checks += 1;
+        return checks <= 2;
+      },
+    });
     const view = await settled(h, await start(h));
     expect(view.settlement).toEqual({ kind: "skipped", reason: "model-unavailable" });
-    expect(asked).toEqual([]);
     expect(h.runtimeRequests).toEqual([]);
     expect(h.log.events.find((event) => event.op === "review.run.settled")?.extra).toMatchObject({
       settlement: "skipped",

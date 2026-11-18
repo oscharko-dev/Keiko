@@ -66,11 +66,12 @@ export const REVIEW_RUN_LOG_REFUSAL_REASONS = [
   "active-review-exists",
   "policy-invalid",
   "model-unavailable",
+  "model-not-activated",
   "request-invalid",
 ] as const;
 
-// R4130-079: a `model-unavailable` refusal or skip because a person has not activated a role model
-// in Settings > Models in this server process. Present only then.
+// R4130-079: a `skipped/model-unavailable` run whose role model was deactivated in Settings >
+// Models after its start, which refuses a model that is not activated. Present only then.
 const MODEL_CAUSE = {
   type: "string",
   dataClass: "closed-enum",
@@ -280,7 +281,6 @@ const REVIEW_RUN_REFUSED = defineActivityLogOperation({
       values: REVIEW_RUN_LOG_REFUSAL_REASONS,
     },
     dryRun: { type: "boolean", dataClass: "closed-enum", required: true },
-    modelCause: MODEL_CAUSE,
   },
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
@@ -543,7 +543,6 @@ export function logReviewRunRefused(
   correlationId: string,
   reason: ReviewRunRefusalReason,
   dryRun: boolean,
-  modelCause?: "not-activated",
 ): void {
   log.write(
     activityLogEvent(
@@ -553,7 +552,7 @@ export function logReviewRunRefused(
         level: "warn",
         errorKind: reason === "active-review-exists" ? "conflict" : "invalid-request",
       },
-      { reason, dryRun, ...(modelCause === undefined ? {} : { modelCause }) },
+      { reason, dryRun },
     ),
   );
 }
