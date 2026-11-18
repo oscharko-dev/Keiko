@@ -334,6 +334,7 @@ export async function fetchMemory(
 // ---------------------------------------------------------------------------
 
 export interface EditMemoryInput {
+  readonly expectedUpdatedAt?: number;
   readonly body?: string;
   readonly tags?: readonly string[];
   readonly sensitivity?: MemorySensitivity;

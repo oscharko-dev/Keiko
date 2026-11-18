@@ -4965,6 +4965,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "memoria.dialog.tags": "Schlagwörter",
   "memoria.dialog.commaSeparated": "(kommagetrennt)",
   "memoria.dialog.save": "Speichern",
+  "memoria.dialog.editConflict":
+    "Diese Erinnerung wurde während der Bearbeitung geändert. Dein Entwurf ist noch da. Kopiere ihn, bevor du die aktuelle Erinnerung erneut öffnest.",
   "memoria.dialog.saving": "Speichere…",
   "memoria.dialog.submitCorrection": "Korrektur einreichen",
   "memoria.dialog.submitting": "Reiche ein…",

@@ -1212,6 +1212,32 @@ describe("memory handlers", () => {
     expect(settled.extra).toMatchObject({ outcome: "updated", attemptCount: conflicts + 1 });
   });
 
+  it("refuses a stale editor revision and accepts the current revision", async () => {
+    const vault = makeVault();
+    const initial = makeMemory("review-edit", "Initial body");
+    vault.insertMemory(initial);
+    const other = vault.updateMemory(
+      initial.id,
+      { body: "Edit from another window" },
+      initial.updatedAt,
+    );
+    const deps = makeDeps({ memoryVault: vault });
+    const edit = (expectedUpdatedAt: unknown): ReturnType<typeof handleEditMemory> =>
+      handleEditMemory(
+        makeCtx(
+          "/api/memory/review-edit",
+          { body: "My draft", expectedUpdatedAt },
+          { id: initial.id },
+        ),
+        deps,
+      );
+    expect((await edit(initial.updatedAt)).status).toBe(409);
+    expect(vault.getMemory(initial.id)?.body).toBe(other.body);
+    expect((await edit("unversioned")).status).toBe(400);
+    expect((await edit(other.updatedAt)).status).toBe(200);
+    expect(vault.getMemory(initial.id)?.body).toBe("My draft");
+  });
+
   it("returns a bounded edit conflict without embedding or overwriting a competing update", async () => {
     const dir = makeVaultDirectory();
     const reader = makeVault(dir);

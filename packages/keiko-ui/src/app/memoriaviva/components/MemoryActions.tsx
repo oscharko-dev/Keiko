@@ -315,6 +315,7 @@ function ActionDialogs({
 }
 
 interface MemoryActionsProps {
+  readonly contentPending?: boolean;
   readonly record: MemoryRecord;
   readonly onRecordChange: (updated: MemoryRecord | null) => void;
   readonly acceptImpl?: typeof acceptMemoryProposal;
@@ -328,6 +329,7 @@ interface MemoryActionsProps {
 
 export function MemoryActions({
   record,
+  contentPending = false,
   onRecordChange,
   acceptImpl = acceptMemoryProposal,
   rejectImpl = rejectMemoryProposal,
@@ -443,6 +445,8 @@ export function MemoryActions({
     record.status === "conflicted" ||
     record.status === "expired";
   const isForgotten = record.status === "forgotten";
+
+  if (contentPending && !showEdit && !showCorrect) return null;
 
   return (
     <fieldset

@@ -934,12 +934,23 @@ export function handleGetMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
 
 interface EditInput {
   readonly newBody: string | undefined;
+  readonly expectedUpdatedAt: number | undefined;
   readonly tags: unknown;
   readonly sensitivity: unknown;
 }
 
+function isOptionalEditBody(value: unknown): value is string | undefined {
+  return value === undefined || (typeof value === "string" && value.trim().length > 0);
+}
+
+function isOptionalEditRevision(value: unknown): value is number | undefined {
+  return (
+    value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+  );
+}
+
 function parseEditInput(raw: Record<string, unknown>): EditInput | RouteResult {
-  const { body: newBody, tags, sensitivity } = raw;
+  const { body: newBody, tags, sensitivity, expectedUpdatedAt } = raw;
 
   if (newBody === undefined && tags === undefined && sensitivity === undefined) {
     return {
@@ -950,7 +961,7 @@ function parseEditInput(raw: Record<string, unknown>): EditInput | RouteResult {
       ),
     };
   }
-  if (newBody !== undefined && (typeof newBody !== "string" || newBody.trim().length === 0)) {
+  if (!isOptionalEditBody(newBody)) {
     return { status: 400, body: errorBody("BAD_REQUEST", "body must be a non-empty string.") };
   }
   if (sensitivity !== undefined && !isMemorySensitivity(sensitivity)) {
@@ -962,8 +973,15 @@ function parseEditInput(raw: Record<string, unknown>): EditInput | RouteResult {
       ),
     };
   }
+  if (!isOptionalEditRevision(expectedUpdatedAt)) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "expectedUpdatedAt must be a nonnegative safe integer."),
+    };
+  }
   return {
-    newBody: typeof newBody === "string" ? newBody : undefined,
+    newBody,
+    expectedUpdatedAt,
     tags,
     sensitivity,
   };
@@ -1034,28 +1052,38 @@ async function readEditRouteInput(ctx: RouteContext): Promise<EditInput | RouteR
   return parseEditInput(body);
 }
 
+function updateEditedMemory(
+  vault: MemoryVaultStore,
+  existing: MemoryRecord,
+  input: EditInput,
+): MemoryRecord {
+  const [updated] = vault.updateMemories([
+    {
+      id: existing.id,
+      patch: buildEditPatch(input, existing),
+      nowMs: Date.now(),
+      expectedUpdatedAt: input.expectedUpdatedAt ?? existing.updatedAt,
+    },
+  ]);
+  if (updated === undefined) throw new TypeError("Memory edit produced no record.");
+  return updated;
+}
+
 function editCurrentMemoryVersion(
   ctx: RouteContext,
   vault: MemoryVaultStore,
   id: MemoryId,
   input: EditInput,
 ): MemoryRecord | undefined {
-  for (let attempt = 1; attempt <= MAX_MEMORY_EDIT_ATTEMPTS; attempt += 1) {
+  const attempts = input.expectedUpdatedAt === undefined ? MAX_MEMORY_EDIT_ATTEMPTS : 1;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const existing = vault.getMemory(id);
     if (existing === undefined) {
       logMemoryEditSettlement(ctx, attempt, "not-found");
       return undefined;
     }
     try {
-      const [updated] = vault.updateMemories([
-        {
-          id,
-          patch: buildEditPatch(input, existing),
-          nowMs: Date.now(),
-          expectedUpdatedAt: existing.updatedAt,
-        },
-      ]);
-      if (updated === undefined) throw new TypeError("Memory edit produced no record.");
+      const updated = updateEditedMemory(vault, existing, input);
       logMemoryEditSettlement(ctx, attempt, "updated");
       return updated;
     } catch (error) {
@@ -1067,7 +1095,7 @@ function editCurrentMemoryVersion(
       }
     }
   }
-  logMemoryEditSettlement(ctx, MAX_MEMORY_EDIT_ATTEMPTS, "conflict");
+  logMemoryEditSettlement(ctx, attempts, "conflict");
   throw new MemoryStoragePreconditionError("updatedAt", id);
 }
 

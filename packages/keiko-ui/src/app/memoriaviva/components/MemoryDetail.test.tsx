@@ -206,6 +206,33 @@ describe("MemoryDetail — live vault state", () => {
     expect(screen.queryByTestId("memory-actions")).not.toBeInTheDocument();
   });
 
+  it.each([true, false])(
+    "restores focus after a removal only when the detail owned it (inside: %s)",
+    async (inside) => {
+      const record = makeRecord();
+      render(
+        <>
+          <input aria-label="Other chat" />
+          <MemoryDetail id={record.id} fetchMemoryImpl={resolvesWith(record)} onBack={vi.fn()} />
+        </>,
+      );
+      expect(await screen.findByText(record.body)).toBeInTheDocument();
+      const chatInput = screen.getByRole("textbox", { name: "Other chat" });
+      const back = screen.getByRole("button", { name: /back/i });
+      (inside ? back : chatInput).focus();
+      await act(async () => {
+        await deleteMemory(record.id, async () => ({
+          deleted: true,
+          memoryId: record.id,
+          memoryIds: [record.id],
+          count: 1,
+        }));
+      });
+      expect(screen.getByText("Memory removed")).toBeInTheDocument();
+      expect(inside ? screen.getByRole("button", { name: /back/i }) : chatInput).toHaveFocus();
+    },
+  );
+
   it("does not reopen a deleted detail when an earlier edit confirmation arrives later", async () => {
     const original = makeRecord({ body: "Before the edit" });
     const edited = { ...original, body: "Earlier edit result" };

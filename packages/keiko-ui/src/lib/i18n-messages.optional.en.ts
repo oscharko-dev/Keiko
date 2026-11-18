@@ -4732,6 +4732,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "memoria.dialog.tags": "Tags",
   "memoria.dialog.commaSeparated": "(comma-separated)",
   "memoria.dialog.save": "Save",
+  "memoria.dialog.editConflict":
+    "This memory changed while you were editing. Your draft is still here. Copy it before reopening the current memory.",
   "memoria.dialog.saving": "Saving...",
   "memoria.dialog.submitCorrection": "Submit correction",
   "memoria.dialog.submitting": "Submitting...",
