@@ -54,6 +54,8 @@ export type {
   MemoryRetentionHint,
   MemoryStructuredPayload,
   MemoryStructuredPayloadKind,
+  MemorySuppressionReason,
+  MemorySuppressionResult,
   MemoryUpdatePreImage,
   MemoryValidityInterval,
 } from "./memory-records.js";
@@ -61,6 +63,7 @@ export {
   MEMORY_STRUCTURED_PAYLOAD_KINDS,
   PROFILE_EXCLUDED_MEMORY_TAG,
   STANDING_FACT_RETENTION_POLICY_KEY,
+  evaluateMemorySuppression,
   personMemoryTags,
 } from "./memory-records.js";
 

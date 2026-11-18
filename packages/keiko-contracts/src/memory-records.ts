@@ -1,7 +1,6 @@
 // Memory record contracts for the Governed Enterprise Memory Vault (Epic #204, Issue
-// #205). Split from `memory.ts` to keep each file under the 400-LOC budget. Pure types
-// only — no IO, no clock reads, no randomness. Leaf-package rule (ADR-0019 direction 1):
-// no `@oscharko-dev/keiko-*` imports.
+// #205). Record types and pure operations use caller-supplied values. This contracts leaf
+// has no IO, clock reads, randomness or workspace package imports (ADR-0019 direction 1).
 //
 // Foundational invariants encoded structurally:
 //  1. `MemoryRecord.scope` is the discriminated scope coordinate from `MemoryScope`.
@@ -30,6 +29,7 @@ import type {
   MemoryType,
   WorkflowRunId,
 } from "./memory-contracts.js";
+import { isUnitInterval } from "./memory-internal.js";
 
 // ─── Model identity (completion model, not embedding model) ───────────────────
 // When a memory was authored or transformed with model assistance (e.g. a consolidation
@@ -202,4 +202,53 @@ export const PROFILE_EXCLUDED_MEMORY_TAG = "profile:excluded";
 /** The tags a person sees and edits: Keiko's own tags are left out. */
 export function personMemoryTags(tags: readonly string[]): readonly string[] {
   return tags.filter((tag) => tag !== PROFILE_EXCLUDED_MEMORY_TAG);
+}
+
+export type MemorySuppressionReason =
+  Exclude<MemoryStatus, "accepted" | "superseded"> | "not-yet-valid" | "stale-low-confidence";
+
+export interface MemorySuppressionResult {
+  readonly suppressed: boolean;
+  readonly reason?: MemorySuppressionReason;
+}
+
+const NOT_SUPPRESSED: MemorySuppressionResult = Object.freeze({ suppressed: false });
+
+function unsupportedMemoryStatus(_status: never): never {
+  throw new Error("Unsupported memory status");
+}
+
+function suppressionByStatus(status: MemoryStatus): MemorySuppressionResult | undefined {
+  switch (status) {
+    case "archived":
+    case "forgotten":
+    case "conflicted":
+    case "rejected":
+    case "expired":
+    case "proposed":
+      return { suppressed: true, reason: status };
+    case "accepted":
+    case "superseded":
+      return undefined;
+    default:
+      return unsupportedMemoryStatus(status);
+  }
+}
+
+/** Shared by governance and retrieval. Those packages translate an invalid threshold to their own error. */
+export function evaluateMemorySuppression(
+  record: MemoryRecord,
+  nowMs: number,
+  staleConfidenceThreshold: number,
+): MemorySuppressionResult | "invalid-threshold" {
+  if (!isUnitInterval(staleConfidenceThreshold)) return "invalid-threshold";
+  const byStatus = suppressionByStatus(record.status);
+  if (byStatus !== undefined) return byStatus;
+  if (nowMs < record.validity.validFrom) return { suppressed: true, reason: "not-yet-valid" };
+  if (record.validity.validUntil === undefined || record.validity.validUntil > nowMs) {
+    return record.provenance.confidence > staleConfidenceThreshold
+      ? NOT_SUPPRESSED
+      : { suppressed: true, reason: "stale-low-confidence" };
+  }
+  return { suppressed: true, reason: "expired" };
 }

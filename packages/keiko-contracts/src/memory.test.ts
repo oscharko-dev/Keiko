@@ -15,7 +15,8 @@ import {
   MEMORY_STATUS_TRANSITIONS,
   MEMORY_TYPES,
 } from "./memory-contracts.js";
-import { MEMORY_STRUCTURED_PAYLOAD_KINDS } from "./memory-records.js";
+import { makeMemoryRecord } from "./memory-fixtures.js";
+import { evaluateMemorySuppression, MEMORY_STRUCTURED_PAYLOAD_KINDS } from "./memory-records.js";
 import { MEMORY_AUDIT_INITIATOR_SURFACES, MEMORY_UPDATE_FIELDS } from "./memory-operations.js";
 import type {
   MemoryEdgeId,
@@ -614,6 +615,42 @@ describe("validateMemoryEdge", () => {
   it("rejects empty memory IDs", () => {
     expect(validateMemoryEdge({ ...happyEdge(), fromMemoryId: "" }).ok).toBe(false);
     expect(validateMemoryEdge({ ...happyEdge(), toMemoryId: "" }).ok).toBe(false);
+  });
+});
+
+describe("shared retrieval suppression", () => {
+  it.each([
+    ["archived", 99, 0.3, "archived"],
+    ["forgotten", 200, 0.3, "forgotten"],
+    ["conflicted", 100, 0.3, "conflicted"],
+    ["proposed", 100, 0.3, "proposed"],
+    ["rejected", 100, 0.3, "rejected"],
+    ["expired", 100, 0.3, "expired"],
+    ["accepted", 99, 0.3, "not-yet-valid"],
+    ["accepted", 100, 0.3, null],
+    ["superseded", 199, 0.3, null],
+    ["accepted", 200, 0.9, "expired"],
+    ["accepted", 199, 0.9, "stale-low-confidence"],
+  ] as const)("status %s at %i with threshold %f yields %s", (status, now, threshold, reason) => {
+    const base = makeMemoryRecord();
+    const record = {
+      ...base,
+      status,
+      validity: { validFrom: 100, validUntil: 200 },
+      provenance: { ...base.provenance, confidence: 0.9 },
+    };
+    expect(evaluateMemorySuppression(record, now, threshold)).toEqual(
+      reason === null ? { suppressed: false } : { suppressed: true, reason },
+    );
+  });
+
+  it("keeps an open-ended record eligible and rejects invalid input before checking status", () => {
+    const base = makeMemoryRecord();
+    const record = { ...base, status: "accepted" as const, validity: { validFrom: 0 } };
+    expect(evaluateMemorySuppression(record, 100, 0)).toEqual({ suppressed: false });
+    const unknown = { ...record, status: "unknown" as MemoryStatus };
+    expect(evaluateMemorySuppression(unknown, 100, Number.NaN)).toBe("invalid-threshold");
+    expect(() => evaluateMemorySuppression(unknown, 100, 0)).toThrow("Unsupported memory status");
   });
 });
 
