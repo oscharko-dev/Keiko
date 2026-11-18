@@ -533,6 +533,7 @@ interface LearningTrace {
   readonly sourceMessageId?: string | undefined;
   readonly sourcePosition?: MemoryLearningPosition | undefined;
   readonly conversationId: string;
+  readonly scopes: readonly MemoryScope[];
   readonly signal: AbortSignal;
   // What the person said in the turn, which they may have forgotten while this capture was running.
   readonly statement: string;
@@ -602,18 +603,21 @@ function restsOn(record: MemoryRecord | undefined, sourceMessageId: string | und
   return (record.provenance.sourceMessageIds ?? []).includes(sourceMessageId);
 }
 
-// A fact the learner already knew, with the same words, learned from this very message.
+// Durable source identity is independent of the model's comparison window and of a fact's later
+// expiry or supersession. The source filter selects metadata before decrypting matching bodies.
 function learnedFromThisMessage(
   vault: MemoryVaultStore,
   body: string,
   trace: LearningTrace,
 ): boolean {
   if (trace.sourceMessageId === undefined) return false;
-  for (const id of trace.seen.keys()) {
-    const record = vault.getMemory(id);
-    if (record?.body === body && restsOn(record, trace.sourceMessageId)) return true;
-  }
-  return false;
+  return vault
+    .listMemoriesAcrossScopes(trace.scopes, {
+      sourceMessageId: trace.sourceMessageId,
+      sensitivity: ["public"],
+      includeExpired: true,
+    })
+    .some((record) => record.body === body && restsOn(record, trace.sourceMessageId));
 }
 
 function standsAsSeen(vault: MemoryVaultStore, id: MemoryId, seen: SeenFact | undefined): boolean {
@@ -631,12 +635,13 @@ function settleBeforeInsert(
   trace: LearningTrace,
   refuse: (reason: RejectionReason) => PersistedCandidate,
 ): PersistedCandidate | null {
+  const exactSuppression = personRefused(vault, record, trace.statement);
+  if (exactSuppression !== null) return refuse(exactSuppression);
   if (learnedFromThisMessage(vault, record.body, trace)) {
     recordRelation(outcome, "merged", trace);
     return { action: null, disposition: "merged" };
   }
-  const exactSuppression = personRefused(vault, record, trace.statement);
-  return exactSuppression === null ? null : refuse(exactSuppression);
+  return null;
 }
 
 // Persists one learned candidate and returns its wire action plus how it settled. Returns a null
@@ -1004,6 +1009,7 @@ async function runSalienceCapture(
     sourceMessageId: request.sourceMessageId,
     sourcePosition: inputs.sourcePosition,
     conversationId: context.conversationId,
+    scopes: conversationMemoryScopes(context),
     signal: inputs.signal,
     statement: request.content,
     seen,

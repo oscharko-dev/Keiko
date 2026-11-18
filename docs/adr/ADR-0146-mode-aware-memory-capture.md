@@ -411,6 +411,10 @@ learned from the Chat's earlier, still pending messages. An audit or storage fai
 forget pending for a retry. `memory.learn.pass.started` and
 `memory.learn.pass.settled` record each pass body-free. Triggers, bounds and the measurement:
 [MemoriaViva learning passes](../memory/memoria-viva-learning-passes.md).
+Replaying a stored source message does not create or reinforce the same fact again. Its persisted
+source identity is checked within the conversation's scopes independently of the model's bounded
+comparison window, including facts later superseded or expired. A person's rejection or forget
+still takes precedence and records a refusal. Other facts stated by the same source remain learnable.
 A private fact the learner labels `identity` or `constraint` carries the retention hint
 `policyKey: "standing"`, which places it in the standing profile every Chat answer receives (#4228);
 membership, order and caps:

@@ -163,6 +163,8 @@ export interface MemoryDeleteResult {
 }
 
 export interface ListMemoriesOptions {
+  /** Records whose persisted source message IDs contain this exact message. */
+  readonly sourceMessageId?: string;
   readonly sensitivity?: readonly MemorySensitivity[];
   readonly type?: readonly MemoryType[];
   readonly status?: readonly MemoryStatus[];

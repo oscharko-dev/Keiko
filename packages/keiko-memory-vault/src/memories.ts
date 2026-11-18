@@ -249,6 +249,19 @@ function buildRetentionPolicyClause(policyKey: string | undefined): ListClauseBu
   return { clauses: ["retention_policy_key = ?"], params: [policyKey] };
 }
 
+function buildSourceMessageClause(
+  sourceMessageId: string | undefined,
+): ListClauseBuild | undefined {
+  if (sourceMessageId === undefined) return undefined;
+  return {
+    clauses: [
+      `EXISTS (SELECT 1 FROM json_each(source_message_ids_json) source_message
+        WHERE source_message.type = 'text' AND source_message.value = ?)`,
+    ],
+    params: [sourceMessageId],
+  };
+}
+
 // The filters every list query shares, then its paging parameters.
 function appendListFilters(
   where: string[],
@@ -262,6 +275,7 @@ function appendListFilters(
     buildEnumClause("sensitivity", options.sensitivity),
     buildPinnedClause(options.pinned),
     buildRetentionPolicyClause(options.retentionPolicyKey),
+    buildSourceMessageClause(options.sourceMessageId),
     buildExpiryClause(options.includeExpired, nowMs),
   ]) {
     if (built === undefined) continue;

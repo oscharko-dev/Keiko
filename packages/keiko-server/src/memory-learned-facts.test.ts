@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchMode, NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type {
   ConversationId,
+  MemoryId,
   MemoryRecord,
   ProjectId,
   UserId,
@@ -192,6 +193,145 @@ function liveBodies(
 ): readonly string[] {
   return recordsWith(vault, ctx, "accepted").map((record) => record.body);
 }
+
+function sourceLearner(
+  vault: MemoryVaultStore,
+  ctx: ConversationMemoryRuntimeContext,
+  content: string,
+  sourceMessageId: string,
+): (items: readonly ScriptedItem[]) => ReturnType<typeof learnStoredTurn> {
+  const sourcePosition = { timestamp: Date.now(), rowid: 1 };
+  return (items) =>
+    learnStoredTurn(
+      makeDeps(vault, items),
+      {
+        request: { content, sourceMessageId, memory: { enabled: true } },
+        context: ctx,
+        modelId: "gpt-test",
+        assistantText: "ok",
+        surface: "desktop",
+        correlationId: sourceMessageId,
+        parentCorrelationId: "source-replay-pass",
+        sourcePosition,
+      },
+      new AbortController().signal,
+    );
+}
+
+function fillComparisonWindow(vault: MemoryVaultStore, older: MemoryRecord): void {
+  for (let i = 0; i < 200; i += 1) {
+    const body = `I use unrelated tool Item${String(i)}.`;
+    vault.insertMemory({
+      ...older,
+      id: `source-window-${String(i)}` as MemoryId,
+      body,
+      payload: { kind: "string-list", items: [body] },
+      tags: [],
+      provenance: {
+        ...older.provenance,
+        evidenceSpan: body,
+        sourceMessageIds: [`source-window-message-${String(i)}`],
+      },
+      createdAt: older.createdAt + i + 1,
+      updatedAt: older.updatedAt + i + 1,
+    });
+  }
+}
+
+describe("durable source replay identity", () => {
+  it("keeps a replay unique after its fact leaves the comparison window", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const fact = "I use Vim.";
+    const learn = sourceLearner(vault, ctx, fact, "source-window-replay");
+    const item = { body: fact, type: "fact" };
+    await learn([item]);
+    const [original] = recordsWith(vault, ctx, "accepted");
+    if (original === undefined) throw new Error("expected the first source fact");
+    await learn([item]);
+    expect(liveBodies(vault, ctx).filter((body) => body === fact)).toHaveLength(1);
+    fillComparisonWindow(vault, original);
+    await learn([item]);
+    expect(recordsWith(vault, ctx, "accepted").filter((record) => record.body === fact)).toEqual([
+      original,
+    ]);
+    expect(vault.getAccessStats([original.id]).get(original.id)?.accessCount ?? 0).toBe(0);
+  });
+
+  it("checks only source records for repeated candidates and keeps additional source facts", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const first = "I use Vim.";
+    const second = "I work with Rust.";
+    const learn = sourceLearner(vault, ctx, `${first} ${second}`, "source-window-work");
+    await learn([{ body: first, type: "fact" }]);
+    const [original] = recordsWith(vault, ctx, "accepted");
+    if (original === undefined) throw new Error("expected the first source fact");
+    fillComparisonWindow(vault, original);
+    const reads = vi.spyOn(vault, "getMemory");
+    try {
+      await learn([
+        { body: first, type: "fact" },
+        { body: second, type: "fact" },
+      ]);
+      expect(reads).not.toHaveBeenCalled();
+      expect(liveBodies(vault, ctx).filter((body) => body === first || body === second)).toEqual(
+        expect.arrayContaining([first, second]),
+      );
+      expect(liveBodies(vault, ctx).filter((body) => body === first)).toHaveLength(1);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
+  it.each(["superseded", "expired", "rejected"] as const)(
+    "does not recreate a source that was already %s",
+    async (state) => {
+      const vault = makeVault();
+      const ctx = context();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const fact = "I use Vim.";
+      const learn = sourceLearner(vault, ctx, fact, `source-history-${state}`);
+      const item = { body: fact, type: "fact" };
+      await learn([item]);
+      const [original] = recordsWith(vault, ctx, "accepted");
+      if (original === undefined) throw new Error("expected the original source fact");
+      const nowMs = original.validity.validFrom + 100;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+      try {
+        vault.updateMemory(
+          original.id,
+          state === "expired"
+            ? { validity: { ...original.validity, validUntil: nowMs - 50 } }
+            : { status: state },
+          nowMs,
+        );
+        await learn([item]);
+        expect(
+          vault
+            .listMemoriesAcrossScopes(conversationMemoryScopes(ctx), { includeExpired: true })
+            .filter((record) => record.body === fact)
+            .map((record) => record.id),
+        ).toEqual([original.id]);
+        if (state === "rejected") {
+          const relation = sink.events
+            .filter((event) => event.op === "memory.learn.relation")
+            .at(-1);
+          if (relation === undefined) throw new Error("expected rejection evidence");
+          expect(
+            expectActivityLogProof(
+              "memory.learn.relation.line",
+              formatActivityLogProofLine(relation),
+            ),
+          ).toMatchObject({ decision: "refused" });
+        }
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+});
 
 function acceptRoute(id: string): RouteContext {
   return {
