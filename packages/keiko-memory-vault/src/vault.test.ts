@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
 import {
@@ -1080,6 +1080,115 @@ describe("list filters", () => {
     ).toEqual(["m-user"]);
     expect(v.listMemoriesAcrossScopes([], { includeExpired: true })).toEqual([]);
     v.close();
+  });
+
+  it("lists more than 1,000 stored scopes with exact pairs and database pagination", () => {
+    const vault = openVault(freshDir());
+    const projectScopes = Array.from({ length: 1_250 }, (_, index) => ({
+      kind: "project" as const,
+      projectId: `scope-${String(index)}` as ProjectId,
+    }));
+    const user = { kind: "user" as const, userId: "scope-0" as UserId };
+    const workspace = { kind: "workspace" as const, workspaceId: "workspace-only" as WorkspaceId };
+    const global = { kind: "global" as const };
+    const crossKindWorkspace = {
+      kind: "workspace" as const,
+      workspaceId: "scope-0" as WorkspaceId,
+    };
+    const crossKindUser = { kind: "user" as const, userId: "workspace-only" as UserId };
+    try {
+      for (const [index, scope] of projectScopes.entries()) {
+        vault.insertMemory(
+          makeMemory({ id: `project-${String(index)}` as MemoryId, scope, createdAt: index }),
+        );
+      }
+      for (const [id, scope, createdAt] of [
+        ["global", global, 2_000],
+        ["workspace", workspace, 2_001],
+        ["user", user, 2_002],
+        ["other-workspace", crossKindWorkspace, 2_003],
+        ["other-user", crossKindUser, 2_004],
+      ] as const) {
+        vault.insertMemory(makeMemory({ id: id as MemoryId, scope, createdAt }));
+      }
+      expect(vault.listMemoryScopes()).toHaveLength(1_255);
+      const requested = [
+        ...projectScopes,
+        user,
+        workspace,
+        global,
+        user,
+        ...projectScopes.slice(0, 1),
+      ];
+      const listed = vault.listMemoriesAcrossScopes(requested, { includeExpired: true });
+      expect(listed).toHaveLength(1_253);
+      expect(new Set(listed.map(({ id }) => id)).size).toBe(1_253);
+      expect(listed.slice(0, 4).map(({ id }) => id)).toEqual([
+        "user",
+        "workspace",
+        "global",
+        "project-1249",
+      ]);
+      expect(listed.map(({ id }) => id)).not.toContain("other-workspace");
+      expect(listed.map(({ id }) => id)).not.toContain("other-user");
+      expect(
+        vault
+          .listMemoriesAcrossScopes(requested, {
+            includeExpired: true,
+            limit: 4,
+            offset: 1_249,
+            orderDir: "asc",
+          })
+          .map(({ id }) => id),
+      ).toEqual(["project-1249", "global", "workspace", "user"]);
+    } finally {
+      vault.close();
+    }
+  });
+
+  it("uses the existing ordered index when only one distinct scope is requested", () => {
+    const dir = freshDir();
+    const vault = openVault(dir);
+    const db = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    const scope = { kind: "user" as const, userId: "u-1" as UserId };
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    try {
+      vault.insertMemory(makeMemory({ id: "m1" as MemoryId, scope }));
+      expect(
+        vault
+          .listMemoriesAcrossScopes([scope, scope], { includeExpired: true, limit: 1 })
+          .map(({ id }) => id),
+      ).toEqual(["m1"]);
+      const sql = prepare.mock.calls.find(([text]) =>
+        text.startsWith("SELECT * FROM memories WHERE"),
+      )?.[0];
+      expect(sql).toBeDefined();
+      const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql ?? ""}`).all("user", "u-1", 1);
+      expect(plan.map((step) => step.detail)).toEqual([
+        expect.stringMatching(
+          /SEARCH memories USING INDEX idx_memories_scope_created .*scope_kind=\? AND scope_coordinate=\?/u,
+        ),
+      ]);
+    } finally {
+      prepare.mockRestore();
+      db.close();
+      vault.close();
+    }
+  });
+
+  it("matches existing SQLite text bindings for unusual scope coordinates", () => {
+    const vault = openVault(freshDir());
+    const scope = { kind: "user" as const, userId: 'quoted"\u0000🧭\ud800' as UserId };
+    try {
+      vault.insertMemory(makeMemory({ id: "encoded-coordinate" as MemoryId, scope }));
+      expect(
+        vault
+          .listMemoriesAcrossScopes([scope, { kind: "global" }], { includeExpired: true })
+          .map(({ id }) => id),
+      ).toEqual(["encoded-coordinate"]);
+    } finally {
+      vault.close();
+    }
   });
 
   it("supports root listing order, limit, and offset options", () => {

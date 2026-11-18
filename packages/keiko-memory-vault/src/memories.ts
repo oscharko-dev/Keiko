@@ -4,6 +4,7 @@
 // inputs are already shape-valid and only owes the SQL.
 
 import type { DatabaseSync } from "node:sqlite";
+import { toUSVString } from "node:util";
 import type {
   MemoryId,
   MemoryRecord,
@@ -368,14 +369,29 @@ function dedupeScopes(scopes: readonly MemoryScope[]): readonly MemoryScope[] {
 
 function buildScopesClause(scopes: readonly MemoryScope[]): ListClauseBuild | undefined {
   const uniqueScopes = dedupeScopes(scopes);
-  if (uniqueScopes.length === 0) return undefined;
-  const clauses: string[] = [];
-  const params: (string | number)[] = [];
-  for (const scope of uniqueScopes) {
-    clauses.push("(scope_kind = ? AND scope_coordinate = ?)");
-    params.push(scopeKindOf(scope), scopeCoordinateOf(scope));
+  const [first] = uniqueScopes;
+  if (first === undefined) return undefined;
+  if (uniqueScopes.length === 1) {
+    return {
+      clauses: ["scope_kind = ?", "scope_coordinate = ?"],
+      params: [scopeKindOf(first), scopeCoordinateOf(first)],
+    };
   }
-  return { clauses: [`(${clauses.join(" OR ")})`], params };
+  // A JSON parameter keeps the SQL expression and placeholder count independent of vault size.
+  // Tuple membership preserves exact scope pairs and lets SQLite use the composite scope index.
+  // Match SQLite text bindings when a coordinate contains a lone UTF-16 surrogate.
+  return {
+    clauses: [
+      `(scope_kind, scope_coordinate) IN (
+        SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)
+      )`,
+    ],
+    params: [
+      JSON.stringify(
+        uniqueScopes.map((scope) => [scopeKindOf(scope), toUSVString(scopeCoordinateOf(scope))]),
+      ),
+    ],
+  };
 }
 
 function appendPagingParams(params: (string | number)[], options: ListMemoriesOptions): void {
