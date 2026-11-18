@@ -1294,7 +1294,7 @@ function generationRecords(dir) {
     }
   }
   return written
-    .sort((a, b) => a.at - b.at || a.name.localeCompare(b.name))
+    .toSorted((a, b) => a.at - b.at || a.name.localeCompare(b.name))
     .map(({ name }) => name);
 }
 
