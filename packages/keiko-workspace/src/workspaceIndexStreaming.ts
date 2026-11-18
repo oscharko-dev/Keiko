@@ -66,7 +66,7 @@ interface ShardFamilyHost {
   readonly active: () => boolean;
   readonly usable: () => boolean;
   readonly load: (key: WorkspaceIndexScopeKey) => Promise<WorkspaceIndexSnapshot | undefined>;
-  readonly save: (key: WorkspaceIndexScopeKey, records: WorkspaceIndexRecord[]) => Promise<boolean>;
+  readonly save: (key: WorkspaceIndexScopeKey, records: WorkspaceIndexRecord[]) => Promise<void>;
   readonly dropRecord: () => false;
 }
 
@@ -171,20 +171,19 @@ class ShardFamily {
     return true;
   }
 
-  public async finalize(): Promise<boolean> {
+  public async finalize(): Promise<void> {
     for (const pending of this.shards.values()) {
-      if (!this.host.usable()) return true;
+      if (!this.host.usable()) return;
       const shard = await pending;
-      if (!this.host.active()) return true;
+      if (!this.host.active()) return;
       // Unseen advisory records may release capacity even when every new record was refused.
       // Eviction never asserts file deletion or changes fresh traversal's coverage authority.
       if (!shard.dirty && shard.seen.size === shard.records.size) continue;
       const records = [...shard.records.values()].filter((record) =>
         shard.seen.has(record.scopePath),
       );
-      if (!(await this.host.save(shard.key, records))) return false;
+      await this.host.save(shard.key, records);
     }
-    return true;
   }
 }
 
@@ -275,23 +274,17 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
     }
   }
 
+  /** Rejects when the store fails; `finalize` owns that failure for both shard families. */
   private async saveSnapshot(
     key: WorkspaceIndexScopeKey,
     records: WorkspaceIndexRecord[],
-  ): Promise<boolean> {
+  ): Promise<void> {
     const snapshot = this.snapshot(key, records);
-    if (!this.active()) return true;
-    try {
-      await raceStructuralExecution(
-        this.index.saveSnapshot(key, snapshot, () => this.active()),
-        this.control,
-      );
-      return true;
-    } catch {
-      // The observed owning adapter records the failure; the answer keeps its live evidence.
-      this.available = false;
-      return false;
-    }
+    if (!this.active()) return;
+    await raceStructuralExecution(
+      this.index.saveSnapshot(key, snapshot, () => this.active()),
+      this.control,
+    );
   }
 
   private dropRecord(): false {
@@ -418,8 +411,13 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
   public async finalize(): Promise<void> {
     this.pendingReads.clear();
     if (!this.usable()) return;
-    if (!(await this.matches.finalize())) return;
-    await this.contents.finalize();
+    try {
+      await this.matches.finalize();
+      await this.contents.finalize();
+    } catch {
+      // The observed owning adapter records the failure; the answer keeps its live evidence.
+      this.available = false;
+    }
   }
 
   public report(): WorkspaceIndexPreparationReport {

@@ -157,6 +157,8 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "The observed index adapter owns durable load-failure evidence. The request marks acceleration unavailable, returns no cached result and retains fresh live traversal; an expired request remains fenced by structural execution control.",
     "packages/keiko-workspace/src/workspaceIndexStreaming.ts:StreamingWorkspaceIndex.finalize":
       "The observed index adapter owns durable save-failure evidence. The request marks acceleration unavailable and stops publication; already collected live source evidence and request cancellation remain authoritative.",
+    "packages/keiko-workspace/src/workspaceIndexContent.ts:decodeWorkspaceIndexContent":
+      "#4457: a stored lane text that does not inflate within its bound to its recorded length and SHA-256 is a cache miss, never content: the streaming index counts a dropped record (indexSearchMode=persistent-reconciled on the existing completion-details line) and the file is read live through the redacting reader.",
     "packages/keiko-activity-log/src/reader/support-analyze.ts:registeredRecordClassification":
       "The catch deterministically classifies hostile persisted evidence as incomplete or corrupt.",
     "packages/keiko-sandbox/src/darwin-git.ts:chooseAttestedDarwinGit":
