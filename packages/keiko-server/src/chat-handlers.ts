@@ -1460,7 +1460,10 @@ async function retrieveChatMemory(
   content: string,
   budgetTokens: number | undefined,
   nowMs: number,
-  profile: StandingProfile = EMPTY_STANDING_PROFILE,
+  {
+    profile,
+    signal,
+  }: { readonly profile: StandingProfile; readonly signal?: AbortSignal | undefined },
 ): Promise<ReturnType<typeof retrieveMemoryContext>> {
   const port = vaultAsQueryPort(vault);
   if (budgetTokens === 0) return retrieveMemoryWithZeroBudget(deps, port, scopes, nowMs);
@@ -1476,6 +1479,7 @@ async function retrieveChatMemory(
     scopes,
     nowMs,
     semanticGate,
+    signal,
   );
   return retrieveMemoryContext(
     {
@@ -1518,6 +1522,7 @@ export async function buildMemoryResult(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
   context: ConversationMemoryRuntimeContext,
+  signal?: AbortSignal,
 ): Promise<ConversationMemoryResultWire> {
   const memory = request.memory;
   if (memory === undefined) {
@@ -1532,6 +1537,7 @@ export async function buildMemoryResult(
   if (budgetTokens === 0) {
     return emptyMemoryResult(true);
   }
+  signal?.throwIfAborted();
   const nowMs = Date.now();
   // The profile is part of the person's memory budget; retrieval gets what it leaves.
   const memoryBudget = budgetTokens ?? DEFAULT_BUDGET_TOKENS;
@@ -1546,7 +1552,7 @@ export async function buildMemoryResult(
     request.content,
     Math.max(0, memoryBudget - profile.tokens),
     nowMs,
-    profile,
+    { profile, signal },
   );
   // Autonomous maintenance (#204, O-V4): now that memory is actively in use, opportunistically run
   // ONE bounded, rate-limited maintenance pass so the decay/forget curve advances without a
@@ -2590,7 +2596,7 @@ async function resolveBufferedMemory(
     memory =
       memoryContext === undefined
         ? emptyMemoryResult(false)
-        : await buildMemoryResult(request, deps, memoryContext);
+        : await buildMemoryResult(request, deps, memoryContext, abortSignal);
   } catch (error) {
     const cancelled = requestSignalAborted(abortSignal);
     settleRejectedDesktopChatTurn(deps, prepared, admitted, cancelled ? "cancelled" : "failed");

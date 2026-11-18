@@ -65,6 +65,7 @@ import type {
   GatewayStreamChunk,
   NormalizedResponse,
   OpenAIEmbeddingOutcome,
+  OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   Gateway,
@@ -346,6 +347,32 @@ function deferred<T>(): {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+function pausedMemoryQuery(): {
+  readonly started: Promise<undefined>;
+  readonly cancel: () => void;
+  readonly request: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>;
+  readonly releaseAfterDisconnect: () => void;
+} {
+  const response = deferred<OpenAIEmbeddingOutcome>();
+  const started = deferred<undefined>();
+  const cancel = vi.fn(() => {
+    response.resolve({ ok: false, kind: "cancelled" });
+  });
+  return {
+    started: started.promise,
+    cancel,
+    request: (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+      request.signal?.addEventListener("abort", cancel, { once: true });
+      started.resolve(undefined);
+      return response.promise;
+    },
+    releaseAfterDisconnect: (): void => {
+      // Free the fixture if the regression recurs, without crediting cleanup as an adapter abort.
+      if (cancel.mock.calls.length === 0) response.resolve({ ok: false, kind: "transport" });
+    },
+  };
 }
 
 interface StreamingModel {
@@ -2271,13 +2298,14 @@ describe("desktop chat SSE streaming handler", () => {
   });
 
   it("does not start a provider stream after cancellation during memory retrieval", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const chatId = seedChat();
     const memoryDir = join(tmp, "stream-memory-retrieval-disconnect");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
     insertAcceptedMemoryWithEmbedding(memoryVault, "retrieve this candidate before streaming");
-    const embedding = deferred<OpenAIEmbeddingOutcome>();
-    const embeddingStarted = deferred<undefined>();
+    const embedding = pausedMemoryQuery();
     let streamCalls = 0;
     const model: ModelPort = {
       call: () => Promise.resolve(normalizedResponse("unused")),
@@ -2290,10 +2318,7 @@ describe("desktop chat SSE streaming handler", () => {
     const sharedDeps = deps(model, {
       config: chatAndEmbeddingConfig(),
       memoryVault,
-      localKnowledgeEmbeddingRequest: () => {
-        embeddingStarted.resolve(undefined);
-        return embedding.promise;
-      },
+      localKnowledgeEmbeddingRequest: embedding.request,
     });
     const captured = captureResWithEvents();
     const outcome = handleSendDesktopChatStream(
@@ -2309,16 +2334,10 @@ describe("desktop chat SSE streaming handler", () => {
       ),
       sharedDeps,
     );
-    await expect(Promise.race([embeddingStarted.promise, outcome])).resolves.toBeUndefined();
+    await expect(Promise.race([embedding.started, outcome])).resolves.toBeUndefined();
 
     captured.emitClose();
-    embedding.resolve({
-      ok: true,
-      value: {
-        vector: Float32Array.from([1, 0]),
-        modelId: "text-embedding-3-small",
-      },
-    });
+    embedding.releaseAfterDisconnect();
 
     await expect(outcome).resolves.toBe(STREAMING);
     // The disconnect can return before the serialized memory work settles the turn.
@@ -2338,6 +2357,10 @@ describe("desktop chat SSE streaming handler", () => {
       { role: "user", content: "retrieve memory before streaming" },
     ]);
     memoryVault.close();
+    expect(embedding.cancel).toHaveBeenCalledTimes(1);
+    expect(sink.events.filter(({ op }) => op === "embedding.memory.failed")).toMatchObject([
+      { errorKind: "cancelled", extra: { failureKind: "cancelled" } },
+    ]);
   });
 
   it("logs a streamed send rejected by the admission-time readiness observation", async () => {
@@ -3020,6 +3043,59 @@ describe("desktop chat SSE streaming handler", () => {
     expect(providerCalls).toBe(0);
     expect(sharedDeps.store.countMessages(chatId)).toBe(messagesBefore);
     memoryVault.close();
+  });
+
+  it("cancels the buffered query adapter on disconnect and discards the legacy user row", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "legacy-buffered-query-disconnect");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    insertAcceptedMemoryWithEmbedding(memoryVault, "buffered query cancellation candidate");
+    const embedding = pausedMemoryQuery();
+    const call = vi.fn(() => Promise.resolve(normalizedResponse("must not run")));
+    const config = chatAndEmbeddingConfig();
+    const sharedDeps = deps(
+      { call },
+      {
+        config,
+        gatewayConfig: readyRuntimeGatewayConfig(config),
+        memoryVault,
+        localKnowledgeEmbeddingRequest: embedding.request,
+      },
+    );
+    const messagesBefore = store.countMessages(chatId);
+    const captured = captureResWithEvents();
+    const outcome = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "retrieve memory before buffered response",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        captured.res,
+      ),
+      sharedDeps,
+    );
+    await expect(Promise.race([embedding.started, outcome])).resolves.toBeUndefined();
+    captured.emitClose();
+    embedding.releaseAfterDisconnect();
+
+    await expect(outcome).resolves.toMatchObject({
+      status: 499,
+      body: { error: { code: "REQUEST_CANCELLED" } },
+    });
+    await vi.waitFor(() => {
+      expect(store.countMessages(chatId)).toBe(messagesBefore);
+    });
+    expect(call).not.toHaveBeenCalled();
+    memoryVault.close();
+    expect(embedding.cancel).toHaveBeenCalledTimes(1);
+    expect(sink.events.filter(({ op }) => op === "embedding.memory.failed")).toMatchObject([
+      { errorKind: "cancelled", extra: { failureKind: "cancelled" } },
+    ]);
   });
 
   it("rejects regeneration when the gateway generation changes during memory retrieval", async () => {
@@ -5207,4 +5283,44 @@ it("publishes a complete code block larger than the real HTTP high-water mark to
   expect(store.listMessages(chatId).find((message) => message.role === "assistant")?.content).toBe(
     source,
   );
+});
+
+it("stops publishing fragments when the client disconnects between HTTP writes", async () => {
+  const chatId = seedChat();
+  const source = "```text\n" + "synthetic content\n".repeat(96) + "```\n";
+  const captured = captureResWithEvents();
+  Object.defineProperty(captured.res, "writableHighWaterMark", { value: 256 });
+  const write = captured.res.write.bind(captured.res);
+  let disconnectScheduled = false;
+  vi.spyOn(captured.res, "write").mockImplementation((chunk: string | Uint8Array) => {
+    const accepted = write(chunk);
+    if (typeof chunk === "string" && chunk.startsWith("event: token\n") && !disconnectScheduled) {
+      disconnectScheduled = true;
+      setImmediate(captured.emitClose);
+    }
+    return accepted;
+  });
+  const model: ModelPort = {
+    call: () => Promise.resolve(normalizedResponse(source)),
+    async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+      yield { type: "delta", token: source };
+      await Promise.resolve();
+      yield { type: "done", response: normalizedResponse(source) };
+    },
+  };
+  const outcome = await handleSendDesktopChatStream(
+    routeContext(
+      makeReq({ chatId, projectPath: projectDir, content: "Show the example" }),
+      captured.res,
+    ),
+    deps(model),
+  );
+  expect(outcome).toBe(STREAMING);
+  await vi.waitFor(() => {
+    expect(captured.ended).toBe(true);
+  });
+  const events = parseSse(captured.writes);
+  expect(events.filter((entry) => entry.event === "token")).toHaveLength(1);
+  expect(events.some((entry) => entry.event === "done")).toBe(false);
+  expect(store.listMessages(chatId).map((message) => message.role)).toEqual(["user"]);
 });
