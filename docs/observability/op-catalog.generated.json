@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "686e9a01c7a3fdb783e69da1dbcaed4b1ceb0af19851481c2661378fc5d0e38c",
+    "catalogDigest": "b52fc7dcf6c5b0f66a01e8068fc01277ed9168cd7c7d7041fccfe9990cc7dbb0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -39155,6 +39155,7 @@
               "customer-identifier",
               "denied-category",
               "instruction-override",
+              "expired-preference",
               "empty-content",
               "exceeds-length-limit",
               "ambiguous-forget",
@@ -39208,8 +39209,8 @@
           }
         },
         "proofIds": ["memory.capture.decision.line"],
-        "registrationSite": "packages/keiko-server/src/memory-capture-decision-log.ts:84",
-        "emitterSites": ["packages/keiko-server/src/memory-capture-decision-log.ts:151"]
+        "registrationSite": "packages/keiko-server/src/memory-capture-decision-log.ts:85",
+        "emitterSites": ["packages/keiko-server/src/memory-capture-decision-log.ts:152"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -121502,7 +121503,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1979",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1980",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -122206,7 +122207,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2380",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2381",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125458,7 +125459,7 @@
     {
       "op": "memory.capture.decision",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-capture-decision-log.ts:88",
+      "site": "packages/keiko-server/src/memory-capture-decision-log.ts:89",
       "package": "keiko-server"
     },
     {

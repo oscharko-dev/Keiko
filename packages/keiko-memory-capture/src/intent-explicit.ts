@@ -18,7 +18,7 @@ import { MEMORY_BODY_MAX_CHARS_DEFAULT } from "./_constants.js";
 import { buildForget, buildProposal, buildUpdate } from "./_envelopes.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
-import { statedValidUntil } from "./stated-validity.js";
+import { statedDateEnd } from "./stated-validity.js";
 import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
 import {
   foldWordCase,
@@ -99,7 +99,7 @@ const REMEMBER_PATTERNS: readonly RegExp[] = [
 const NOT_A_FACT_START_RE =
   /^(?:nicht|nie|niemals|not|never|when|how|if|why|what|where|who|wann|wie|ob|warum|was|wo|wer)\b/iu;
 // Parse the imperative before interpreting the scope qualifier. Ordinary mentions of a project in
-// a stated fact keep the caller's default. "For this project:" is a qualifier only with its colon.
+// a stated fact keep the caller's default. The qualifier ends at its recognized clause separator.
 const REMEMBER_ABOUT_PATTERNS: readonly RegExp[] = [
   /^\s*(?:please\s+)?remember\s+about\s+/iu,
   /^\s*(?:bitte\s+)?merke?\s+dir(?:\s+bitte)?\s+(?:zu|über|ueber)\s+/iu,
@@ -113,7 +113,7 @@ const ABOUT_SCOPE_PATTERNS = [
 ];
 const FOR_SCOPE_PATTERNS = [
   /^for\s+this\s+(project|workspace)\s*:\s*/iu,
-  /^(?:für|fuer)\s+dies(?:em|es|en)\s+(projekt|arbeitsbereich|workspace)\s*:\s*/iu,
+  /^(?:für|fuer)\s+dies(?:em|es|en)\s+(projekt|arbeitsbereich|workspace)\s*(?::|,\s*dass\b)\s*/iu,
 ];
 const PROJECT_NOUNS = new Set(["project", "projekt"]);
 const FORGET_PATTERNS: readonly RegExp[] = [
@@ -347,6 +347,36 @@ interface ForgetRequest {
   readonly onlyIfStored: boolean;
 }
 
+// Read the retraction separately from the requested follow-up ("tell me when it is gone").
+// A negated different task or a reminder about a different object leaves the first request intact.
+const RETRACTION_CLAUSES = /[.!?…;–—]|,(?=\s*(?:nein|actually|on second thought)\b)/iu;
+const ENGLISH_RETRACTION =
+  /^(?:actually|on second thought|no),?\s+(?:please\s+)?(?:don['’]t|do not)\s+forget\s+/iu;
+const GERMAN_RETRACTION = /^(?:nein|doch|halt|stopp),?\s+(?:bitte\s+)?vergiss\s+/iu;
+const RETRACTED_PRONOUN = new Set(["it", "that", "this", "ihn", "sie", "es", "das"]);
+
+function withdrawnObject(clause: string): string | undefined {
+  const english = ENGLISH_RETRACTION.exec(clause);
+  if (english !== null) return clause.slice(english[0].length).trim();
+  const german = GERMAN_RETRACTION.exec(clause);
+  if (german === null) return undefined;
+  const object = clause.slice(german[0].length);
+  const negation = /\s+(?:bitte\s+)?nicht$/iu.exec(object);
+  return negation === null ? undefined : object.slice(0, negation.index).trim();
+}
+
+function withdrawsNamedForget(body: string, sentence: string): boolean {
+  const clauses = body.split(RETRACTION_CLAUSES);
+  return clauses.slice(1).some((clause) => {
+    const object = withdrawnObject(clause.trim().toLowerCase());
+    if (object === undefined) return false;
+    return (
+      RETRACTED_PRONOUN.has(object) ||
+      object === trimForgetTarget(sentence.slice(0, continuationOf(sentence)?.at)).toLowerCase()
+    );
+  });
+}
+
 // The thing a "Vergiss …" / "Forget …" sentence names, before reading how it goes on.
 function statedForgetTarget(text: string): string | null {
   const prefixMatch = forgetPrefixMatch(text);
@@ -354,6 +384,7 @@ function statedForgetTarget(text: string): string | null {
   const body = bodyAfterPrefix(prefixMatch, text);
   if (body === null || FORGET_WITHDRAWALS.some((pattern) => pattern.test(body))) return null;
   const sentence = firstSentence(body);
+  if (withdrawsNamedForget(body, sentence)) return null;
   if (sentence.endsWith("?")) return null;
   const target = trimForgetTarget(sentence);
   return target === "" || NEVER_MIND_TARGETS.has(target.toLowerCase()) ? null : target;
@@ -683,10 +714,16 @@ function readRememberInstruction(text: string): {
 }
 
 // After German "dass", the person's present-tense "bevorzuge" can close the clause.
-function explicitPreferenceEnd(body: string, nowMs: number): number | null {
+function explicitPreferenceEnd(body: string, nowMs: number): number | "expired" | null {
   const preference =
     startsWithStatedPreference(body) || (/^ich\s/iu.test(body) && /\bbevorzuge[.!]?$/iu.test(body));
-  return preference ? statedValidUntil(body, nowMs) : null;
+  const namedPreference =
+    /^(?:my preferred [\p{L} -]+ (?:is|are)|mein(?:e|en|er|es)? bevorzugt\p{L}* [\p{L} -]+ (?:ist|sind))\b/iu.test(
+      body,
+    );
+  if (!preference && !namedPreference) return null;
+  const end = statedDateEnd(body, nowMs);
+  return end !== null && end <= nowMs ? "expired" : end;
 }
 
 // ─── tryExtractRemember ──────────────────────────────────────────────────────
@@ -723,6 +760,7 @@ export function tryExtractRemember(
     }),
   });
   const validUntil = explicitPreferenceEnd(body, context.nowMs);
+  if (validUntil === "expired") return { kind: "rejected", reason: "expired-preference" };
   const proposal = buildProposal(
     {
       context,

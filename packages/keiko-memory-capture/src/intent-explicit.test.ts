@@ -36,6 +36,7 @@ function ctx(overrides: Partial<CaptureContext> = {}): CaptureContext {
 describe("tryExtractRemember", () => {
   it.each([
     "Please remember that I prefer tables until November 18, 2026.",
+    "Please remember that my preferred format is tables until November 18, 2026.",
     "Merke dir: Ich bevorzuge Tabellen bis zum 18. November 2026.",
     "Bitte merke dir, dass ich Tabellen bis zum 18. November 2026 bevorzuge.",
   ])("carries a current preference's stated local deadline in %s", (statement) => {
@@ -48,6 +49,30 @@ describe("tryExtractRemember", () => {
           validUntil: new Date(2026, 10, 18, 23, 59, 59, 999).getTime(),
         },
       },
+    });
+  });
+
+  it("declines a present preference whose explicitly stated end has passed", () => {
+    const nowMs = new Date(2026, 10, 17, 12).getTime();
+    expect(
+      tryExtractRemember(
+        "Please remember that I prefer tables until November 12, 2026.",
+        ctx({ nowMs }),
+      ),
+    ).toMatchObject({ kind: "rejected", reason: "expired-preference" });
+  });
+
+  it("accepts the German project qualifier with a comma and dass", () => {
+    const projectId = "project-one" as ProjectId;
+    expect(
+      tryExtractRemember(
+        "Bitte merke dir für dieses Projekt, dass wir Vitest nutzen.",
+        ctx({ projectId }),
+        { rememberScopeKind: "user" },
+      ),
+    ).toMatchObject({
+      kind: "candidate",
+      proposal: { scope: { kind: "project", projectId }, body: "wir Vitest nutzen." },
     });
   });
 
@@ -232,6 +257,9 @@ describe("tryExtractForget", () => {
     "Please forget the report. Actually, don't.",
     "Please forget the report. Actually, don't forget it.",
     "Please forget the report. Actually, do not.",
+    "Please forget the report. Actually, don't forget the report.",
+    "Please forget the report. Actually, please don't forget it.",
+    "Vergiss den Bericht und sag Bescheid – nein, vergiss ihn bitte nicht.",
     "Please forget the report. On second thought, do not forget that.",
     "Bitte vergiss den Bericht. Doch lieber nicht.",
   ])("honours an explicit withdrawal before resolving a memory in %s", (text) => {
@@ -579,6 +607,7 @@ describe("explicit German forget and remember statements (#4211)", () => {
       "meine Telefonnummer",
     ],
     ["Please forget the report. Actually, don't publish it.", "the report"],
+    ["Please forget the report. Actually, don't forget my umbrella.", "the report"],
     ["Forget my address, phone and email", "my address, phone and email"],
     ["Vergiss meine Adresse und alles andere", "meine Adresse und alles andere"],
     ["Vergiss meine Adresse, ich bin umgezogen", "meine Adresse, ich bin umgezogen"],

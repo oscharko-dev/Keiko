@@ -203,7 +203,11 @@ introduce its fact with a colon or with a comma followed by “dass”. “Speic
 Protokolle” remains a file task. A withdrawal such as “Actually, do not forget it” preserves the
 memory. In “Vergiss meine Telefonnummer und sag bitte nicht …”, the negation governs the separate
 request about what to say, and the named memory is forgotten. A directly remembered present-tense
-preference with a stated end remains current through the local end of that day. Dates in explicitly
+preference with a stated end remains current through the local end of that day. An already elapsed
+preference is refused. A new turn that restates a yearless preference after its previous interval
+ended can start a new interval. Replaying the same explicit turn preserves its original interval.
+Deferred learning resolves calendar expressions on the source turn's day and checks eligibility on
+the processing day. Independent statements in a sentence keep their own deadlines. Dates in explicitly
 remembered historical events remain part of the event.
 
 Only a clear statement acts this way, because it changes memory with no question. "Merke dir" and

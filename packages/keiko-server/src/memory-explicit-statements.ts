@@ -232,11 +232,18 @@ export async function persistExplicitStatement(
   canonicalCapture: boolean,
   correlationId: string,
 ): Promise<ExplicitStatementPersistence> {
-  if (canonicalCapture && vault.getMemory(candidate.id) !== undefined) {
+  const previousTurn = canonicalCapture ? vault.getMemory(candidate.id) : undefined;
+  if (previousTurn !== undefined) {
     logExplicitMemoryRemember("replayed", correlationId);
     return {
       kind: "persisted",
-      persisted: persistCapturedMemory(vault, candidate, true),
+      // A replay may run a year later. Keep the original source-bound interval while the
+      // canonical comparison still verifies body, scope, provenance and the remaining fields.
+      persisted: persistCapturedMemory(
+        vault,
+        { ...candidate, validity: previousTurn.validity },
+        true,
+      ),
       confirmed: false,
     };
   }

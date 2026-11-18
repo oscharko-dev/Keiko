@@ -81,7 +81,10 @@ export function confirmRestatedMemory(
 ): PersistedCapturedMemory | undefined {
   const bodyHash = memoryBodySuppressionHash(record.body);
   const existing = vault
-    .listMemoriesByScope(record.scope, { status: ["proposed", "accepted"], includeExpired: true })
+    .listMemoriesByScope(record.scope, {
+      status: ["proposed", "accepted"],
+      nowMs: record.updatedAt,
+    })
     .find((memory) => memoryBodySuppressionHash(memory.body) === bodyHash);
   return existing === undefined ? undefined : confirmExistingMemory(vault, existing, record);
 }

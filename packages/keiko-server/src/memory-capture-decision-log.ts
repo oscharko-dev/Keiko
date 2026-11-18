@@ -34,6 +34,7 @@ export const MEMORY_CAPTURE_DECISION_LOG_REASONS = [
   "customer-identifier",
   "denied-category",
   "instruction-override",
+  "expired-preference",
   "empty-content",
   "exceeds-length-limit",
   "ambiguous-forget",
