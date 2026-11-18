@@ -353,9 +353,11 @@ async function readTemplateFields(
     ...template.requiredFields,
     ...(template.parent.field === undefined ? [] : [template.parent.field]),
   ];
+  // Only a reference that names exactly one field in the global catalog needs no create metadata: a
+  // name two fields carry may be one field on the selected type's screen, as the guided picker reads it.
   if (
     references.every(
-      (reference) => resolveJiraTemplateFieldIds(reference, fields, template).length > 0,
+      (reference) => resolveJiraTemplateFieldIds(reference, fields, template).length === 1,
     )
   )
     return fields;
@@ -373,11 +375,13 @@ async function readTemplateFields(
 /** A workflow Jira did not list is unknown, not empty: no status names, no ids to rebind with. */
 function listedStatusFacts(
   statuses: ProjectStatuses | undefined,
-): Pick<JiraTemplateInstanceMetadata, "statuses" | "statusRefs"> {
+): Pick<JiraTemplateInstanceMetadata, "statuses" | "statusRefs" | "statusRefsComplete"> {
   if (statuses?.listed !== true) return {};
-  return statuses.wellFormed
-    ? { statuses: statuses.names, statusRefs: statuses.refs }
-    : { statuses: statuses.names };
+  return {
+    statuses: statuses.names,
+    statusRefs: statuses.refs,
+    ...(statuses.wellFormed ? {} : { statusRefsComplete: false }),
+  };
 }
 
 /** The live facts one template is validated against; unreadable parts are left out, not guessed. */
@@ -704,11 +708,12 @@ export function resolveJiraTemplateBinding(
   if (!("found" in own)) return unresolvedOrDead(template, own);
   const parents = parentTypeIds(template, instance.parentIssueTypes ?? []);
   if ("state" in parents) return parents;
+  const kept = sameInstanceBinding(template, instanceId);
   const ids: JiraTemplateBindingIds = {
     issueTypeId: own.found.id,
     ...(template.parent.issueTypes === undefined ? {} : { parentIssueTypeIds: parents }),
-    ...boundFieldIds(template, instance.fields),
-    ...boundStatusIds(template, instance.statusRefs),
+    ...boundFieldIds(template, instance.fields, kept),
+    ...boundStatusIds(template, trustedStatusRefs(instance), kept),
   };
   return {
     state: "bindable",
@@ -787,7 +792,7 @@ function completedBinding(
 ): JiraTemplateBinding | undefined {
   const bound = template.binding;
   if (bound === undefined) return undefined;
-  const statusIds = completedStatusIds(template, instance.statusRefs, bound);
+  const statusIds = completedStatusIds(template, trustedStatusRefs(instance), bound);
   if (instance.fields === undefined && statusIds === undefined) return undefined;
   const ids: JiraTemplateBindingIds = {
     ...bound,
@@ -806,18 +811,61 @@ function completedBinding(
     : undefined;
 }
 
+/** The workflow rows when every row carried an id; a partial list confirms and refutes nothing. */
+function trustedStatusRefs(
+  instance: JiraTemplateInstanceMetadata,
+): JiraTemplateInstanceMetadata["statusRefs"] {
+  return instance.statusRefsComplete === false ? undefined : instance.statusRefs;
+}
+
+/** The template's own binding when its digest proves it was made for this instance and these rules. */
+function sameInstanceBinding(
+  template: JiraIssueTemplate,
+  instanceId: string,
+): JiraTemplateBinding | undefined {
+  const bound = template.binding;
+  if (bound === undefined) return undefined;
+  const { digest, ...ids } = bound;
+  return digest === jiraTemplateBindingDigest(instanceId, template, ids) ? bound : undefined;
+}
+
+/** A confirmed id that the view still shows (or cannot refute), else the resolver's answer. */
+function survivingOrResolved(
+  existing: string | undefined,
+  present: (id: string) => boolean,
+  resolve: () => string,
+): string {
+  return existing !== undefined && existing !== JIRA_BINDING_UNRESOLVED && present(existing)
+    ? existing
+    : resolve();
+}
+
 /** The field ids of the typed references in the author's view; a name that is not exactly one field stays `none`. */
 function boundFieldIds(
   template: JiraIssueTemplate,
   catalog: readonly JiraFieldCatalogEntry[] | undefined,
+  kept?: JiraTemplateBinding,
 ): Pick<JiraTemplateBindingIds, "requiredFieldIds" | "parentFieldId"> {
+  const present = (id: string): boolean =>
+    catalog === undefined || catalog.some((entry) => entry.id === id);
+  const { parent } = template;
   return {
     ...(template.requiredFields.length === 0
       ? {}
-      : { requiredFieldIds: template.requiredFields.map((field) => oneFieldId(catalog, field)) }),
-    ...(template.parent.field === undefined
+      : {
+          requiredFieldIds: template.requiredFields.map((field, index) =>
+            survivingOrResolved(kept?.requiredFieldIds?.[index], present, () =>
+              oneFieldId(catalog, field),
+            ),
+          ),
+        }),
+    ...(parent.field === undefined
       ? {}
-      : { parentFieldId: oneFieldId(catalog, template.parent.field) }),
+      : {
+          parentFieldId: survivingOrResolved(kept?.parentFieldId, present, () =>
+            oneFieldId(catalog, parent.field ?? ""),
+          ),
+        }),
   };
 }
 
@@ -825,15 +873,20 @@ function boundFieldIds(
 function boundStatusIds(
   template: JiraIssueTemplate,
   statuses: readonly TypeRef[] | undefined,
+  kept?: JiraTemplateBinding,
 ): Pick<JiraTemplateBindingIds, "transitionStatusIds"> {
   const targets = jiraTemplateTransitionTargets(template);
   if (targets.length === 0) return {};
-  // An unknown workflow keeps the ids the binding already carries instead of weakening them to `none`.
-  const kept = template.binding?.transitionStatusIds;
-  if (statuses === undefined && kept?.length === targets.length)
-    return { transitionStatusIds: kept };
+  // An unknown workflow keeps the ids the binding already carries instead of weakening them to `none`;
+  // a known one keeps every id it still lists and resolves only the slots whose status is gone.
+  const present = (id: string): boolean =>
+    statuses === undefined || statuses.some((status) => status.id === id);
   return {
-    transitionStatusIds: targets.map((target) => oneStatusId(statuses ?? [], target)),
+    transitionStatusIds: targets.map((target, index) =>
+      survivingOrResolved(kept?.transitionStatusIds?.[index], present, () =>
+        oneStatusId(statuses ?? [], target),
+      ),
+    ),
   };
 }
 
@@ -878,7 +931,7 @@ function boundIdsExist(
     ) &&
     allKnown(
       bound.transitionStatusIds,
-      instance.statusRefs?.map((status) => status.id),
+      trustedStatusRefs(instance)?.map((status) => status.id),
     )
   );
 }

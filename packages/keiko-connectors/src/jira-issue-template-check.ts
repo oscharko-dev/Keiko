@@ -469,6 +469,8 @@ export interface JiraTemplateInstanceMetadata {
   readonly statuses?: readonly string[];
   /** The same statuses with their ids, for binding a transition target to a status id (#4354). */
   readonly statusRefs?: readonly { readonly id: string; readonly name: string }[];
+  /** False when a workflow row carried no native id: `statusRefs` then lists only the verified rows. */
+  readonly statusRefsComplete?: boolean;
   /** Global native type names/IDs, read only when a parent-type clause needs validation. */
   readonly parentIssueTypes?: readonly { readonly id: string; readonly name: string }[];
 }
@@ -514,7 +516,9 @@ function transitionFindings(
     const statusId = jiraTemplateBoundStatusId(template, activation);
     const known =
       statusId !== undefined && instance.statusRefs !== undefined
-        ? instance.statusRefs.some((status) => status.id === statusId)
+        ? // An id missing from an incomplete list may be the row without an id: unverifiable, not unknown.
+          instance.statusRefsComplete === false ||
+          instance.statusRefs.some((status) => status.id === statusId)
         : statuses.some((status) => same(status, target));
     return known ? [] : [{ code: "unknown-transition-target", subject: target }];
   });
