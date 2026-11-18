@@ -50,6 +50,7 @@ import type {
   MemoryScope,
   MemoryType,
   MemoryUserId,
+  MemoryProjectId,
 } from "@oscharko-dev/keiko-contracts";
 import { memoryEmbeddingProviderIdentity } from "./memory-embedding.js";
 import {
@@ -194,9 +195,9 @@ function insertAccepted(
   id: string,
   body: string,
   type: MemoryType = "semantic-fact",
+  scope: MemoryScope = { kind: "user", userId: memoryUserId("local-operator") },
 ): MemoryRecord {
   const now = Date.now();
-  const scope: MemoryScope = { kind: "user", userId: memoryUserId("local-operator") };
   const record: MemoryRecord = {
     id: id as MemoryId,
     schemaVersion: "1",
@@ -226,6 +227,7 @@ function storeEmbedding(
   id: string,
   text: string,
   embeddingBaseUrl = EXTERNAL_EMBEDDING_BASE_URL,
+  modelId = EMBEDDING_MODEL,
 ): void {
   const provider = embeddingConfig(true, embeddingBaseUrl).providers.find(
     (configured) => configured.modelId === EMBEDDING_MODEL,
@@ -235,7 +237,7 @@ function storeEmbedding(
   }
   const input: MemoryEmbeddingInput = {
     provider: memoryEmbeddingProviderIdentity(provider),
-    modelId: EMBEDDING_MODEL,
+    modelId,
     metric: "cosine",
     vector: vectorFor(text),
   };
@@ -260,7 +262,7 @@ async function restart(handlerDeps: UiHandlerDeps): Promise<void> {
 interface SendResult {
   readonly memory?: {
     readonly context: {
-      readonly memories: { readonly memoryId: string }[];
+      readonly memories: { readonly memoryId: string; readonly inclusionReason: string }[];
       readonly profile?: {
         readonly entries: readonly { readonly memoryId: string; readonly text: string }[];
         readonly tokens: number;
@@ -688,6 +690,76 @@ describe("semantic memory retrieval (#204)", () => {
         expect(ids).toEqual(compatible ? [id] : []);
       } finally {
         vault.close();
+      }
+    },
+  );
+
+  it.each([19, 80])(
+    "preserves lexical Chat order and reasons with incompatible vectors at budget %i",
+    async (budgetTokens) => {
+      const query = "release approval tests";
+      const queryCalls = [];
+      const selected = [];
+      for (const embedding of ["none", "old-endpoint", "old-model", "below-floor"] as const) {
+        const vault = createMemoryVault({
+          memoryDir: join(tmp, embedding),
+          redactString: (value) => value,
+        });
+        try {
+          const calls: string[] = [];
+          const scope = { kind: "project", projectId: projectDir as MemoryProjectId } as const;
+          const weak = insertAccepted(
+            vault,
+            "a-weak",
+            "release parking rules",
+            "semantic-fact",
+            scope,
+          );
+          const exact = insertAccepted(vault, "z-pinned", query, "semantic-fact", scope);
+          vault.updateMemory(exact.id, { pinned: true }, Date.now());
+          const endpoint =
+            embedding === "old-endpoint"
+              ? IN_TENANT_EMBEDDING_BASE_URL
+              : EXTERNAL_EMBEDDING_BASE_URL;
+          storeEmbedding(
+            vault,
+            weak.id,
+            "weather",
+            endpoint,
+            embedding === "old-model" ? "historical-model" : EMBEDDING_MODEL,
+          );
+          await restart(
+            deps(
+              {
+                memoryVault: vault,
+                localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(calls),
+              },
+              embedding !== "none",
+            ),
+          );
+          const result = await sendChat(await createChat(), query, {
+            enabled: true,
+            budgetTokens,
+            context: {},
+          });
+          queryCalls.push(calls);
+          selected.push(
+            result.memory?.context.memories.map(({ memoryId, inclusionReason }) => ({
+              memoryId,
+              inclusionReason,
+            })),
+          );
+        } finally {
+          vault.close();
+        }
+      }
+      expect(queryCalls).toEqual([[], [], [query], [query]]);
+      expect(selected[0]?.map((entry) => entry.memoryId)).toEqual(
+        budgetTokens === 19 ? ["z-pinned"] : ["z-pinned", "a-weak"],
+      );
+      expect(selected.slice(1)).toEqual([selected[0], selected[0], selected[0]]);
+      if (budgetTokens === 80) {
+        expect(selected[0]?.at(1)?.inclusionReason).not.toContain("pinned memory");
       }
     },
   );

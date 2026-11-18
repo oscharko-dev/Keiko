@@ -317,12 +317,14 @@ function rrfRank(
   const entries = memories.map((m): IncludedMemory => {
     let fused = 0;
     let bestSig = firstSignal;
-    let bestContrib = -1;
+    let bestContrib = 0;
+    const subscores = requireEntry(subscoresById, m.id);
     for (const sig of signals) {
       const rank = requireEntry(requireEntry(rankBySignal, sig), m.id);
       const contrib = weights[sig] / (RRF_K + rank);
       fused += contrib;
-      if (contrib > bestContrib) {
+      // RRF gives a tied zero a rank. It supplies no evidence for an inclusion reason.
+      if (subscores[sig] > 0 && contrib > bestContrib) {
         bestContrib = contrib;
         bestSig = sig;
       }
@@ -330,7 +332,7 @@ function rrfRank(
     return {
       memoryId: m.id,
       score: maxFused > 0 ? fused / maxFused : 0,
-      subscores: requireEntry(subscoresById, m.id),
+      subscores,
       inclusionReason: inclusionReasonText(bestSig, bestContrib),
     };
   });

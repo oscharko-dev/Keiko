@@ -420,7 +420,7 @@ async function semanticScoresFrom(
   // model only in its response, including when the alias itself looks like a familiar model ID.
   if (!candidateIds.some((id) => embeddings.get(id)?.provider === gate.providerIdentity)) {
     warnSkippedIncompatible(deps, embeddings.size, candidateIds.length);
-    return new Map<MemoryId, number>();
+    return undefined;
   }
   const queryEmbedding = await gate.embedQuery(signal);
   throwIfAborted(signal);
@@ -436,7 +436,7 @@ async function semanticScoresFrom(
     embeddings,
   );
   warnSkippedIncompatible(deps, compatible.skipped, candidateIds.length);
-  if (compatible.entries.length === 0) return new Map<MemoryId, number>();
+  if (compatible.entries.length === 0) return undefined;
   throwIfAborted(signal);
   const result = await createMemoryVectorIndexPort(queryIdentity, compatible.entries).search({
     namespace: "memory",
