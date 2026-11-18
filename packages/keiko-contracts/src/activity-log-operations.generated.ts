@@ -38256,6 +38256,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      promotionSkippedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       consolidationCandidateCount: {
         type: "integer",
         dataClass: "count",

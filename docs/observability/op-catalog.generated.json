@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c33ea9eb96e51c922340dce9d7ca80af29b95ab821740686c6b3790065e95362",
+    "catalogDigest": "44f6e1a5f660553fc23a57bc287b122732f45451bcfebedbcbbbc0d9cade3b50",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -39823,6 +39823,11 @@
             "dataClass": "count",
             "required": true
           },
+          "promotionSkippedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "consolidationCandidateCount": {
             "type": "integer",
             "dataClass": "count",
@@ -39835,8 +39840,8 @@
         "failureClasses": ["memory-maintenance-selection"],
         "proofIds": ["memory.maintenance.candidates.selected.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/memory-maintenance-handlers.ts:63",
-        "emitterSites": ["packages/keiko-server/src/memory-maintenance-handlers.ts:88"]
+        "registrationSite": "packages/keiko-server/src/memory-maintenance-handlers.ts:67",
+        "emitterSites": ["packages/keiko-server/src/memory-maintenance-handlers.ts:94"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -106583,6 +106588,12 @@
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "promotionSkippedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 }
               ],
               "evidenceClasses": ["completeness-state", "count", "loss-state"],
@@ -125567,20 +125578,20 @@
     {
       "op": "memory.maintenance.autonomy-mode",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:678",
+      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:729",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "memory.maintenance.candidates.selected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:66",
+      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:70",
       "package": "keiko-server"
     },
     {
       "op": "memory.maintenance.retention-policy",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:697",
+      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:748",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

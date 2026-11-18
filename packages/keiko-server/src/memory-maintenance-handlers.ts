@@ -41,7 +41,11 @@ import type {
   MemoryScope,
   MemoryType,
 } from "@oscharko-dev/keiko-contracts";
-import { MemoryStorageError, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  MemoryStorageError,
+  MemoryStoragePreconditionError,
+  type MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { currentAuditRedactString, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -69,6 +73,7 @@ const MEMORY_MAINTENANCE_CANDIDATES_SELECTED_OPERATION = defineActivityLogOperat
   emitter: "memory-maintenance-handlers.logMaintenanceCandidateSelection",
   fields: {
     promotionCandidateCount: { type: "integer", dataClass: "count", required: true },
+    promotionSkippedCount: { type: "integer", dataClass: "count", required: false },
     consolidationCandidateCount: { type: "integer", dataClass: "count", required: true },
   },
   causal: "correlation",
@@ -83,12 +88,13 @@ function logMaintenanceCandidateSelection(
   correlationId: string,
   promotionCandidateCount: number,
   consolidationCandidateCount: number,
+  promotionSkippedCount: number,
 ): void {
   getServerLogger().debug(() =>
     activityLogEvent(
       MEMORY_MAINTENANCE_CANDIDATES_SELECTED_OPERATION,
       { correlationId },
-      { promotionCandidateCount, consolidationCandidateCount },
+      { promotionCandidateCount, consolidationCandidateCount, promotionSkippedCount },
     ),
   );
 }
@@ -259,6 +265,34 @@ function applyFadeEffects(
   applyForgets(vault, auditSink, nowMs, plan.forget, byId, counts);
 }
 
+function promoteSelectedVersion(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  nowMs: number,
+): MemoryRecord | undefined {
+  try {
+    const [updated] = vault.updateMemories([
+      {
+        id: record.id,
+        patch: { status: "accepted" },
+        nowMs,
+        expectedStatus: "proposed",
+        expectedUpdatedAt: record.updatedAt,
+      },
+    ]);
+    if (updated === undefined) throw new TypeError("Memory promotion produced no record.");
+    return updated;
+  } catch (error) {
+    if (
+      error instanceof MemoryStoragePreconditionError ||
+      (error instanceof MemoryStorageError && error.code === "not-found")
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 function applyPromotions(
   vault: MemoryVaultStore,
   auditSink: MemoryAuditSink | undefined,
@@ -266,11 +300,15 @@ function applyPromotions(
   ids: readonly MemoryId[],
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceAccumulator,
-): void {
+): number {
+  let skipped = 0;
   for (const id of ids) {
     const record = byId.get(id);
-    if (record === undefined) continue;
-    vault.updateMemory(id, { status: "accepted" }, nowMs);
+    const updated = record === undefined ? undefined : promoteSelectedVersion(vault, record, nowMs);
+    if (updated === undefined) {
+      skipped += 1;
+      continue;
+    }
     counts.promoted += 1;
     // `retention`, not `memory-center`: this promotion is the unattended maintenance sweep, not an
     // operator acting in the Memory Center. The audit envelope must not attribute an autonomous
@@ -281,9 +319,10 @@ function applyPromotions(
       "memory:accepted",
       "retention",
       "Promoted a strong proposed memory.",
-      { memoryId: id, scope: record.scope },
+      { memoryId: updated.id, scope: updated.scope },
     );
   }
+  return skipped;
 }
 
 function applyArchives(
@@ -478,7 +517,7 @@ function runPromotionPhase(
   planPolicy: Partial<MemoryMaintenancePolicy>,
   counts: MaintenanceAccumulator,
   scopes: readonly MemoryScope[],
-): number {
+): { readonly candidateCount: number; readonly skippedCount: number } {
   const beforePromote = vault.listMemoriesAcrossScopes(scopes, {
     includeExpired: true,
     status: ["proposed"],
@@ -489,8 +528,15 @@ function runPromotionPhase(
     nowMs,
     policy: planPolicy,
   });
-  applyPromotions(vault, auditSink, nowMs, promotePlan.promote, recordsById(beforePromote), counts);
-  return beforePromote.length;
+  const skippedCount = applyPromotions(
+    vault,
+    auditSink,
+    nowMs,
+    promotePlan.promote,
+    recordsById(beforePromote),
+    counts,
+  );
+  return { candidateCount: beforePromote.length, skippedCount };
 }
 
 // Split out of `runMemoryMaintenance` solely to keep that function's cyclomatic complexity at the
@@ -521,9 +567,9 @@ export function runMemoryMaintenance(
   // promotion is unattended ACCEPTANCE, so it runs only where the resolved autonomy mode admits it.
   // In "Ask for approval" the pass still archives, expires and forgets — none of those accept
   // anything on the human's behalf — but nothing is promoted (0.3.0 audit P0, #2802).
-  const promotionCandidateCount = memoryUnattendedAcceptanceAllowed(options?.autonomyMode)
+  const promotion = memoryUnattendedAcceptanceAllowed(options?.autonomyMode)
     ? runPromotionPhase(vault, auditSink, nowMs, planPolicy, counts, scopes)
-    : 0;
+    : { candidateCount: 0, skippedCount: 0 };
   // Phase 2 — consolidate live reviewable records: link safe near-duplicate metadata and surface
   // proposed/conflicted conflicts or merges as explicit review items. Status mutations require a
   // later governed review.
@@ -531,7 +577,12 @@ export function runMemoryMaintenance(
     includeExpired: true,
     status: ["accepted", "proposed", "conflicted"],
   });
-  logMaintenanceCandidateSelection(correlationId, promotionCandidateCount, reviewable.length);
+  logMaintenanceCandidateSelection(
+    correlationId,
+    promotion.candidateCount,
+    reviewable.length,
+    promotion.skippedCount,
+  );
   runConsolidationPass(vault, nowMs, reviewable, counts, correlationId);
   // Phase 3 — archive / forget on the post-consolidation snapshot. The access stats feed the
   // strength model; confidence itself is never mutated (O-V2).

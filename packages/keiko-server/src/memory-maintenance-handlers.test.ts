@@ -11,8 +11,11 @@ import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { validateActivityLogOperationRecord } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   CodingWorkbenchMode,
+  MemoryAuditEvent,
   MemoryId,
   MemoryRecord,
   MemoryScope,
@@ -106,6 +109,20 @@ function makeVault(): MemoryVaultStore {
   return vault;
 }
 
+function makeConcurrentVaults(): readonly [MemoryVaultStore, MemoryVaultStore] {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-maintenance-concurrent-"));
+  tmpDirs.push(dir);
+  const options = {
+    memoryDir: dir,
+    vaultKey: Buffer.alloc(32, 67),
+    redactString: (s: string): string => s,
+  };
+  const reader = createMemoryVault(options);
+  const writer = createMemoryVault(options);
+  activeVaults.push(reader, writer);
+  return [reader, writer];
+}
+
 function mid(value: string): MemoryId {
   return value as unknown as MemoryId;
 }
@@ -178,6 +195,119 @@ describe("handleRunMaintenance", () => {
     expect(result.status).toBe(200);
     expect(counts(result).promoted).toBe(1);
     expect(vault.getMemory(mid("m"))?.status).toBe("accepted");
+  });
+
+  it.each(["unchanged", "unrelated", "confidential", "accepted", "body", "deleted"] as const)(
+    "checks promotion eligibility at commit after a same-millisecond %s update",
+    (change) => {
+      const [reader, writer] = makeConcurrentVaults();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(RETENTION_NOW);
+      const record = insert(reader, {
+        id: "promotion-race",
+        status: "proposed",
+        sensitivity: "public",
+        confidence: 0.9,
+      });
+      const other = insert(reader, { id: "unrelated", status: "archived" });
+      const select = reader.listMemoriesAcrossScopes;
+      vi.spyOn(reader, "listMemoriesAcrossScopes").mockImplementationOnce((...args) => {
+        const snapshot = select(...args);
+        if (change === "confidential") {
+          writer.updateMemory(
+            record.id,
+            {
+              provenance: { ...record.provenance, sensitivity: "confidential" },
+            },
+            RETENTION_NOW,
+          );
+        } else if (change === "accepted") {
+          writer.updateMemory(record.id, { status: "accepted" }, RETENTION_NOW);
+        } else if (change === "body") {
+          writer.updateMemory(record.id, { body: "Changed synthetic preference" }, RETENTION_NOW);
+        } else if (change === "deleted") {
+          writer.deleteMemory(record.id, {
+            tombstone: true,
+            forgetterSurface: "memoria",
+            nowMs: RETENTION_NOW,
+          });
+        } else if (change === "unrelated") {
+          writer.updateMemory(other.id, { tags: ["changed"] }, RETENTION_NOW);
+        }
+        return snapshot;
+      });
+      const evidenceStore = createInMemoryEvidenceStore();
+      let result: RouteResult;
+      try {
+        result = handleRunMaintenance(makeCtx(), { ...makeUnattendedDeps(reader), evidenceStore });
+      } finally {
+        clock.mockRestore();
+      }
+      const promoted = change === "unchanged" || change === "unrelated" ? 1 : 0;
+      expect(result.status).toBe(200);
+      expect(counts(result).promoted).toBe(promoted);
+      const acceptanceEvents = evidenceStore.list().flatMap((id) => {
+        const events = JSON.parse(evidenceStore.get(id) ?? "[]") as readonly MemoryAuditEvent[];
+        return events.filter((event) => event.kind === "memory:accepted");
+      });
+      expect(acceptanceEvents).toHaveLength(promoted);
+      const stored = writer.getMemory(record.id);
+      if (change === "deleted") {
+        expect(stored).toBeUndefined();
+      } else {
+        expect(stored?.updatedAt).toBe(record.updatedAt + 1);
+        expect(stored).toMatchObject({
+          status: promoted === 1 || change === "accepted" ? "accepted" : "proposed",
+          provenance: { sensitivity: change === "confidential" ? "confidential" : "public" },
+        });
+        if (change === "body") expect(stored?.body).toBe("Changed synthetic preference");
+      }
+    },
+  );
+
+  it.each([false, true])("logs only promotion outcome counts with stale selection %s", (stale) => {
+    const [reader, writer] = makeConcurrentVaults();
+    const record = insert(reader, {
+      id: "counted-promotion",
+      status: "proposed",
+      sensitivity: "public",
+    });
+    const select = reader.listMemoriesAcrossScopes;
+    vi.spyOn(reader, "listMemoriesAcrossScopes").mockImplementationOnce((...args) => {
+      const snapshot = select(...args);
+      if (stale) {
+        writer.updateMemory(record.id, { status: "accepted" }, record.updatedAt);
+      }
+      return snapshot;
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      expect(handleRunMaintenance(makeCtx(), makeUnattendedDeps(reader)).status).toBe(200);
+    } finally {
+      resetServerLogger();
+    }
+    const selection = sink.events.find(
+      (event) => event.op === "memory.maintenance.candidates.selected",
+    );
+    expect(selection?.extra).toMatchObject({
+      promotionCandidateCount: 1,
+      promotionSkippedCount: stale ? 1 : 0,
+    });
+    if (selection === undefined) throw new TypeError("Missing maintenance selection");
+    const line = formatActivityLogProofLine(selection);
+    expectActivityLogProof("memory.maintenance.candidates.selected.line", line);
+    expect(line).not.toContain(record.body);
+    expect(line).not.toContain(record.id);
+    const legacyExtra: Record<string, unknown> = { ...selection.extra };
+    delete legacyExtra.promotionSkippedCount;
+    expect(() =>
+      validateActivityLogOperationRecord(
+        "memory.maintenance.candidates.selected",
+        "memory",
+        { correlationId: "promotion-legacy-check" },
+        legacyExtra,
+      ),
+    ).not.toThrow();
   });
 
   it("reads only applicable promotion and review records while fading across all scopes", () => {
