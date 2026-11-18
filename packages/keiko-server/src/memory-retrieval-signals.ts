@@ -67,6 +67,7 @@ export type SemanticRetrievalGateReason =
   | "no-query"
   | "no-embeddings"
   | "no-embedder"
+  | "query-mismatch"
   | "identity-mismatch"
   | "vector-index-failed";
 
@@ -74,11 +75,12 @@ type SemanticRetrievalGate =
   | {
       readonly allowed: true;
       readonly reason: "allowed";
+      readonly matchesQuery: (query: string | undefined) => boolean;
       readonly embedQuery: () => Promise<MemoryEmbeddingInput | null>;
     }
   | {
       readonly allowed: false;
-      readonly reason: "blocked-by-policy" | "no-query" | "no-embedder";
+      readonly reason: "blocked-by-policy" | "no-query" | "no-embedder" | "query-mismatch";
     };
 
 const SECRET_EGRESS_REJECTION_REASONS = new Set<RejectionReason>([
@@ -164,6 +166,7 @@ export function semanticRetrievalGateForText(
   return {
     allowed: true,
     reason: "allowed",
+    matchesQuery: (query) => query === queryText,
     embedQuery: bindMemoryQueryEmbedding(deps, provider, queryText),
   };
 }
@@ -443,7 +446,9 @@ function warnSemanticRetrievalDisabled(
     operation: "memory.retrieval.semantic-disabled",
     source: "memory-retrieval-signals",
     errorClass: "SemanticRetrievalDisabled",
-    ...(reason === "vector-index-failed" || reason === "identity-mismatch"
+    ...(reason === "vector-index-failed" ||
+    reason === "identity-mismatch" ||
+    reason === "query-mismatch"
       ? {}
       : { diagnosticOutcome: "routine" as const }),
     message: "Semantic memory retrieval was disabled for this turn.",
@@ -540,6 +545,7 @@ function warnSemanticGate(
 export async function buildConversationRetrievalSignals(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
+  queryText: string | undefined,
   scopes: readonly MemoryScope[],
   nowMs: number,
   semanticGate: SemanticRetrievalGate,
@@ -556,10 +562,14 @@ export async function buildConversationRetrievalSignals(
       : new Map<MemoryId, MemoryEmbeddingRow>();
   throwIfAborted(signal);
   const embeddingSignals = collectEmbeddingSignals(deps, embeddings, signal);
-  warnSemanticGate(deps, semanticGate, embeddings, candidateIds.length);
+  const gate: SemanticRetrievalGate =
+    semanticGate.allowed && !semanticGate.matchesQuery(queryText)
+      ? { allowed: false, reason: "query-mismatch" }
+      : semanticGate;
+  warnSemanticGate(deps, gate, embeddings, candidateIds.length);
   const semanticById =
-    semanticGate.allowed && embeddings.size > 0
-      ? await semanticScoresFrom(deps, semanticGate.embedQuery, candidateIds, embeddings, signal)
+    gate.allowed && embeddings.size > 0
+      ? await semanticScoresFrom(deps, gate.embedQuery, candidateIds, embeddings, signal)
       : undefined;
   return {
     strengthById,

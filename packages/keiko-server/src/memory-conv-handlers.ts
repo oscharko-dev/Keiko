@@ -276,7 +276,14 @@ async function retrieveConversationMemory(
     input.queryText,
     memoryCapturePolicyForDeps(deps),
   );
-  const signals = await buildConversationRetrievalSignals(deps, vault, scopes, nowMs, semanticGate);
+  const signals = await buildConversationRetrievalSignals(
+    deps,
+    vault,
+    input.queryText,
+    scopes,
+    nowMs,
+    semanticGate,
+  );
   const result = retrieveMemoryContext(
     buildRetrievalRequest(scopes, input, nowMs, signals, conversationFusionMode(deps)),
     port,

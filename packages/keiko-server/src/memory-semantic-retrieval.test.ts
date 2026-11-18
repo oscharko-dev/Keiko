@@ -15,6 +15,7 @@ import { join } from "node:path";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { UI_HOST } from "./server.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -454,6 +455,7 @@ describe("semantic memory retrieval (#204)", () => {
     const signals = await buildConversationRetrievalSignals(
       d,
       spiedVault,
+      query,
       [scope],
       Date.now(),
       gate,
@@ -490,7 +492,7 @@ describe("semantic memory retrieval (#204)", () => {
     const query = "Which candidate matters?";
     const gate = semanticRetrievalGateForText(d, query, {});
 
-    await buildConversationRetrievalSignals(d, spiedVault, [scope], Date.now(), gate);
+    await buildConversationRetrievalSignals(d, spiedVault, query, [scope], Date.now(), gate);
 
     expect(requestedIds).toHaveLength(160);
     vault.close();
@@ -658,6 +660,62 @@ describe("semantic memory retrieval (#204)", () => {
     },
   );
 
+  it("dispatches only when the requested query matches the bound authorization", async () => {
+    const memoryDir = join(tmp, "vault-query-binding");
+    mkdirSync(memoryDir);
+    const vault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    try {
+      const content = "The user is building a product named Keiko";
+      const record = insertAccepted(vault, "mem-product", content);
+      storeEmbedding(vault, "mem-product", content);
+      const requests: string[] = [];
+      const diagnostics: ServerDiagnosticRecord[] = [];
+      const handlerDeps = deps(
+        {
+          memoryVault: vault,
+          localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(requests),
+          diagnostics: { record: (entry) => diagnostics.push(entry) },
+        },
+        true,
+      );
+      const query = "Wie heißt mein Produkt?";
+      const staleGate = semanticRetrievalGateForText(handlerDeps, "Welche Farbe ist es?", {});
+      const noMatch = await buildConversationRetrievalSignals(
+        handlerDeps,
+        vault,
+        query,
+        [record.scope],
+        Date.now(),
+        staleGate,
+      );
+      expect(noMatch.semanticById).toBeUndefined();
+      expect(requests).toEqual([]);
+      expect(diagnostics).toContainEqual(
+        expect.objectContaining({
+          operation: "memory.retrieval.semantic-disabled",
+          code: "query-mismatch",
+          semanticCandidateCount: 1,
+        }),
+      );
+      expect(JSON.stringify(diagnostics)).not.toContain(query);
+      expect(JSON.stringify(diagnostics)).not.toContain("Welche Farbe ist es?");
+
+      const gate = semanticRetrievalGateForText(handlerDeps, query, {});
+      const matched = await buildConversationRetrievalSignals(
+        handlerDeps,
+        vault,
+        query,
+        [record.scope],
+        Date.now(),
+        gate,
+      );
+      expect(matched.semanticById?.get(record.id)).toBe(1);
+      expect(requests).toEqual([query]);
+    } finally {
+      vault.close();
+    }
+  });
+
   it("allows restricted-default semantic retrieval only for in-tenant embedding providers", async () => {
     const scope: MemoryScope = { kind: "user", userId: memoryUserId("local-operator") };
     const query = "restricted policy query";
@@ -688,6 +746,7 @@ describe("semantic memory retrieval (#204)", () => {
     const allowedSignals = await buildConversationRetrievalSignals(
       inTenantDeps,
       inTenantVault,
+      query,
       [scope],
       Date.now(),
       allowedGate,
@@ -716,6 +775,7 @@ describe("semantic memory retrieval (#204)", () => {
     const blockedSignals = await buildConversationRetrievalSignals(
       externalDeps,
       externalVault,
+      query,
       [scope],
       Date.now(),
       blockedGate,

@@ -121131,7 +121131,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:1942",
+      "site": "packages/keiko-server/src/chat-handlers.ts:1949",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -121835,7 +121835,7 @@
     {
       "op": "chat.compaction.summary.scheduled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-handlers.ts:2343",
+      "site": "packages/keiko-server/src/chat-handlers.ts:2350",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125215,14 +125215,14 @@
     {
       "op": "memory.retrieval.semantic-disabled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:443",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:446",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "memory.retrieval.semantic-skipped",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:266",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:269",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
