@@ -13,9 +13,17 @@ import { mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
+import {
+  formatActivityLogProofLine,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { UI_HOST } from "./server.js";
-import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { defaultServerDiagnosticSink, type ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -44,6 +52,11 @@ import type {
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
 import { memoryEmbeddingProviderIdentity } from "./memory-embedding.js";
+import {
+  createActivityLogSink,
+  createServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
@@ -356,27 +369,60 @@ describe("semantic memory retrieval (#204)", () => {
     vault.close();
   });
 
-  it("ranks purely lexically when no embedding model is configured (graceful degradation)", async () => {
-    const memoryDir = join(tmp, "vault-no-model");
-    mkdirSync(memoryDir);
-    const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
-    // mem-lexical lexically matches the query "pnpm installs"; mem-semantic is embedding-close to
-    // the query concept but has NO lexical overlap. With NO embedding model, embedMemoryText
-    // returns null -> semanticById is undefined -> the ranker is byte-identical to the lexical-only
-    // ranker, so the LEXICAL match must win even though the other memory holds a stored vector that
-    // would have dominated had the embedding path been active.
-    insertAccepted(vault, "mem-lexical", "Always use pnpm installs in this repo");
-    insertAccepted(vault, "mem-semantic", "The user is building a product named Keiko");
-    storeEmbedding(vault, "mem-semantic", "The user is building a product named Keiko");
-    await restart(deps({ memoryVault: vault }, false));
+  it.each([
+    { query: "pnpm installs", storedVector: true, expectedEvents: 1 },
+    { query: "pnpm installs", storedVector: false, expectedEvents: 0 },
+    { query: "pnpm installs for dev@example.com", storedVector: true, expectedEvents: 0 },
+  ])(
+    "ranks lexically without an embedding model (vector=$storedVector, query=$query)",
+    async ({ query, storedVector, expectedEvents }) => {
+      const memoryDir = join(tmp, "vault-no-model");
+      mkdirSync(memoryDir);
+      const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
+      const sink = createBufferedServerLogSink();
+      try {
+        insertAccepted(vault, "mem-lexical", "Always use pnpm installs in this repo");
+        const content = "The user is building a product named Keiko";
+        insertAccepted(vault, "mem-semantic", content);
+        if (storedVector) storeEmbedding(vault, "mem-semantic", content);
+        const requests: string[] = [];
+        await restart(
+          deps(
+            {
+              memoryVault: vault,
+              localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(requests),
+            },
+            false,
+          ),
+        );
+        setServerLogger(createServerLogger({ sink, level: "debug" }));
+        const result = await sendChat(await createChat(), query);
 
-    const chatId = await createChat();
-    const result = await sendChat(chatId, "pnpm installs");
-
-    const ids = result.memory?.context.memories.map((m) => m.memoryId) ?? [];
-    expect(ids[0]).toBe("mem-lexical");
-    vault.close();
-  });
+        expect(result.memory?.context.memories.map((m) => m.memoryId)).toEqual(["mem-lexical"]);
+        expect(requests).toEqual([]);
+        const operation = "embedding.memory.unavailable";
+        const events = sink.events.filter((entry) => entry.op === operation);
+        expect(events).toHaveLength(expectedEvents);
+        if (expectedEvents === 1) {
+          const line = formatActivityLogProofLine(events[0] ?? {});
+          expect(JSON.parse(line)).toMatchObject({
+            op: operation,
+            level: "debug",
+            reason: "no-embedding-capable-model",
+            providerCount: 0,
+          });
+          expect(line).not.toContain(content);
+          expect(line).not.toContain(query);
+          expect(analyzeLogText(line).clusters).toContainEqual(
+            expect.objectContaining({ op: operation, count: 1 }),
+          );
+        }
+      } finally {
+        resetServerLogger();
+        vault.close();
+      }
+    },
+  );
 
   it("records only the use, not a reinforcement, after the assistant uses a surfaced memory (#4212)", async () => {
     const memoryDir = join(tmp, "vault-access");
@@ -729,6 +775,10 @@ describe("semantic memory retrieval (#204)", () => {
     const memoryDir = join(tmp, "vault-query-binding");
     mkdirSync(memoryDir);
     const vault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    const stateDir = join(tmp, "query-binding-state");
+    mkdirSync(stateDir, { mode: 0o700 });
+    const sink = createActivityLogSink(stateDir);
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
     try {
       const content = "The user is building a product named Keiko";
       const record = insertAccepted(vault, "mem-product", content);
@@ -739,7 +789,12 @@ describe("semantic memory retrieval (#204)", () => {
         {
           memoryVault: vault,
           localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(requests),
-          diagnostics: { record: (entry) => diagnostics.push(entry) },
+          diagnostics: {
+            record(entry) {
+              diagnostics.push(entry);
+              defaultServerDiagnosticSink.record(entry);
+            },
+          },
         },
         true,
       );
@@ -755,15 +810,33 @@ describe("semantic memory retrieval (#204)", () => {
       );
       expect(noMatch.semanticById).toBeUndefined();
       expect(requests).toEqual([]);
-      expect(diagnostics).toContainEqual(
-        expect.objectContaining({
-          operation: "memory.retrieval.semantic-disabled",
-          code: "query-mismatch",
-          semanticCandidateCount: 1,
-        }),
+      const operation = "memory.retrieval.semantic-disabled";
+      const diagnostic = diagnostics.find((entry) => entry.operation === operation);
+      expect(diagnostic).toMatchObject({ code: "query-mismatch", semanticCandidateCount: 1 });
+      expect(diagnostic?.diagnosticOutcome).toBeUndefined();
+      sink.flush?.();
+      const log = readPersistedActivityLog(stateDir);
+      const lines = persistedActivityLogLines(log, "server.diagnostic.failure");
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+        correlationId: diagnostic?.correlationId,
+        level: "error",
+        errorKind: "internal",
+        diagnosticOperation: operation,
+        code: "query-mismatch",
+        semanticCandidateCount: 1,
+      });
+      expect(log).not.toContain(query);
+      expect(log).not.toContain("Welche Farbe ist es?");
+      const timeline = analyzeLogText(log).timelines.find(
+        (entry) => entry.correlationId === diagnostic?.correlationId,
       );
-      expect(JSON.stringify(diagnostics)).not.toContain(query);
-      expect(JSON.stringify(diagnostics)).not.toContain("Welche Farbe ist es?");
+      const failure = timeline?.lines.find((line) => line.op === "server.diagnostic.failure");
+      expect(failure).toMatchObject({
+        level: "error",
+        errorKind: "internal",
+        extra: { diagnosticOperation: operation, code: "query-mismatch" },
+      });
 
       const gate = semanticRetrievalGateForText(handlerDeps, query, {});
       const matched = await buildConversationRetrievalSignals(
@@ -777,6 +850,8 @@ describe("semantic memory retrieval (#204)", () => {
       expect(matched.semanticById?.get(record.id)).toBe(1);
       expect(requests).toEqual([query]);
     } finally {
+      vi.unstubAllEnvs();
+      sink.close?.();
       vault.close();
     }
   });

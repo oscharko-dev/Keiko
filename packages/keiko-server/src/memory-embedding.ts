@@ -327,6 +327,10 @@ function logEmbeddingUnavailable(
   );
 }
 
+export function logMemoryEmbeddingProviderUnavailable(): void {
+  logEmbeddingUnavailable("no-embedding-capable-model", 0, false);
+}
+
 function closedEmbeddingErrorKind(errorKind: string): ActivityLogErrorKind {
   return activityLogErrorKindOr(errorKind, "unknown");
 }
@@ -408,7 +412,7 @@ export function createMemoryEmbedder(
 ): MemoryEmbedder | null {
   const providers = configuredEmbeddingProviders(config);
   if (providers.length === 0) {
-    logEmbeddingUnavailable("no-embedding-capable-model", 0, false);
+    logMemoryEmbeddingProviderUnavailable();
     return null;
   }
   const provider = providers[0];

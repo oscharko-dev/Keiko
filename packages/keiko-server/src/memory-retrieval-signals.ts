@@ -64,6 +64,7 @@ import { emitServerDiagnostic } from "./diagnostics-log.js";
 import { configuredEmbeddingProviders } from "./local-knowledge-handlers.js";
 import {
   bindMemoryQueryEmbedding,
+  logMemoryEmbeddingProviderUnavailable,
   memoryEmbeddingCalibrationFor,
   memoryEmbeddingProviderIdentity,
 } from "./memory-embedding.js";
@@ -89,7 +90,12 @@ type SemanticRetrievalGate =
     }
   | {
       readonly allowed: false;
-      readonly reason: "blocked-by-policy" | "no-query" | "no-embedder" | "query-mismatch";
+      readonly reason: "blocked-by-policy" | "no-query" | "query-mismatch";
+    }
+  | {
+      readonly allowed: false;
+      readonly reason: "no-embedder";
+      readonly eligibleForAnyProvider: boolean;
     };
 
 const SECRET_EGRESS_REJECTION_REASONS = new Set<RejectionReason>([
@@ -167,7 +173,7 @@ export function semanticRetrievalGateForText(
   // the checked text to it so a different gateway configuration cannot change the dispatch.
   const provider = configuredEmbeddingProviders(currentGatewayConfig(deps))[0];
   if (provider === undefined) {
-    return { allowed: false, reason: "no-embedder" };
+    return { allowed: false, reason: "no-embedder", eligibleForAnyProvider: rejection === null };
   }
   if (rejection !== null && !isInTenantEndpoint(provider.baseUrl)) {
     return { allowed: false, reason: "blocked-by-policy" };
@@ -557,9 +563,12 @@ function warnSemanticGate(
   embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
   candidateCount: number,
 ): void {
-  if (semanticGate.allowed && embeddings.size === 0) {
+  const missingEligibleProvider =
+    semanticGate.reason === "no-embedder" && semanticGate.eligibleForAnyProvider;
+  if ((semanticGate.allowed || missingEligibleProvider) && embeddings.size === 0) {
     warnSemanticRetrievalDisabled(deps, "no-embeddings", candidateCount);
   } else if (!semanticGate.allowed && semanticGate.reason !== "no-query") {
+    if (missingEligibleProvider) logMemoryEmbeddingProviderUnavailable();
     warnSemanticRetrievalDisabled(deps, semanticGate.reason, candidateCount);
   }
 }

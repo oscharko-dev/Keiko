@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4830f0d6ca5148858078cf8f818bc50fc3c58774a0094be7aac96aa33918e37f",
+    "catalogDigest": "5c746d381ab90b8c87c50ab12b9909ff36a9b040e634e56c3bd5bf455e9820eb",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -23247,7 +23247,7 @@
         "failureClasses": ["memory-embedding-request"],
         "proofIds": ["embedding.memory.failed.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:95",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:346"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:350"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23298,7 +23298,7 @@
         "failureClasses": ["memory-embedding-request"],
         "proofIds": ["embedding.memory.succeeded.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:139",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:388"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:392"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39270,7 +39270,7 @@
         "failureClasses": ["memory-capture-novelty"],
         "proofIds": ["memory.capture.novelty-gate.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:180",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:927"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:931"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39304,7 +39304,7 @@
         "failureClasses": ["memory-embedding-invalidation"],
         "proofIds": ["memory.embedding.invalidated.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:161",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:544"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:548"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39338,7 +39338,7 @@
         "failureClasses": ["memory-embedding-invalidation"],
         "proofIds": ["memory.embedding.invalidation-failed.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:125",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:377"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:381"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39372,7 +39372,7 @@
         "failureClasses": ["memory-embedding-storage"],
         "proofIds": ["memory.embedding.store-rejected.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:111",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:372"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:376"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -124687,7 +124687,7 @@
     {
       "op": "invalidation-failed",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:553",
+      "site": "packages/keiko-server/src/memory-embedding.ts:557",
       "package": "keiko-server"
     },
     {
@@ -125217,14 +125217,14 @@
     {
       "op": "memory.retrieval.semantic-disabled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:468",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:474",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "memory.retrieval.semantic-skipped",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:286",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:292",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125643,19 +125643,19 @@
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:1040",
+      "site": "packages/keiko-server/src/memory-embedding.ts:1044",
       "package": "keiko-server"
     },
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:514",
+      "site": "packages/keiko-server/src/memory-embedding.ts:518",
       "package": "keiko-server"
     },
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:537",
+      "site": "packages/keiko-server/src/memory-embedding.ts:541",
       "package": "keiko-server"
     },
     {
