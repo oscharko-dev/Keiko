@@ -16,6 +16,7 @@ import {
   PROFILE_EXCLUDED_MEMORY_TAG,
   STANDING_FACT_RETENTION_POLICY_KEY,
 } from "@oscharko-dev/keiko-contracts/runtime/memory";
+import { DEFAULT_STALE_CONFIDENCE_THRESHOLD } from "@oscharko-dev/keiko-memory-retrieval";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 import { buildMemoryResult, type SendDesktopChatRequest } from "./chat-handlers.js";
@@ -49,7 +50,7 @@ interface Seed {
   readonly type?: MemoryType;
   readonly createdAt?: number;
   readonly validFrom?: number;
-  readonly sensitivity?: MemoryRecord["provenance"]["sensitivity"];
+  readonly provenance?: Pick<MemoryRecord["provenance"], "sensitivity" | "confidence">;
   readonly pinned?: boolean;
   readonly tags?: readonly string[];
   readonly project?: boolean;
@@ -71,7 +72,8 @@ function seed(store: MemoryVaultStore, entry: Seed): void {
       sourceKind: "explicit-user-instruction",
       capturedAt: createdAt,
       confidence: 1,
-      sensitivity: entry.sensitivity ?? "public",
+      sensitivity: "public",
+      ...entry.provenance,
     },
     validity: { validFrom: entry.validFrom ?? createdAt },
     status: entry.status ?? "accepted",
@@ -192,13 +194,34 @@ describe("standingProfileForUser (#4228)", () => {
   });
 
   it.each([
-    { label: "future", validFrom: NOW + 1, sensitivity: "public" },
-    { label: "confidential", validFrom: NOW - 100, sensitivity: "confidential" },
+    { label: "future", validFrom: NOW + 1, sensitivity: "public", confidence: 1 },
+    { label: "confidential", validFrom: NOW - 100, sensitivity: "confidential", confidence: 1 },
+    {
+      label: "threshold-confidence",
+      validFrom: NOW - 100,
+      sensitivity: "public",
+      confidence: DEFAULT_STALE_CONFIDENCE_THRESHOLD,
+    },
+    {
+      label: "below-threshold-confidence",
+      validFrom: NOW - 100,
+      sensitivity: "public",
+      confidence: DEFAULT_STALE_CONFIDENCE_THRESHOLD / 2,
+    },
   ] as const)(
     "does not spend the profile read bound on $label records",
-    ({ validFrom, sensitivity }) => {
+    ({ validFrom, sensitivity, confidence }) => {
       const store = vault();
-      seed(store, { id: "eligible", body: "Use tables.", createdAt: NOW - 10_000, validFrom: NOW });
+      seed(store, {
+        id: "eligible",
+        body: "Use tables.",
+        createdAt: NOW - 10_000,
+        validFrom: NOW,
+        provenance: {
+          confidence: DEFAULT_STALE_CONFIDENCE_THRESHOLD + Number.EPSILON,
+          sensitivity: "public",
+        },
+      });
       for (let index = 0; index < 64; index += 1) {
         seed(store, {
           id: `skipped-${String(index)}`,
@@ -206,7 +229,7 @@ describe("standingProfileForUser (#4228)", () => {
           createdAt: NOW - 100 + index,
           pinned: true,
           validFrom,
-          sensitivity,
+          provenance: { sensitivity, confidence },
         });
       }
 

@@ -12,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { ConversationStandingProfileWire } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  DEFAULT_STALE_CONFIDENCE_THRESHOLD,
   DEFAULT_STANDING_PROFILE_CAPS,
   STANDING_PROFILE_TYPES,
   compareStandingProfileOrder,
@@ -51,7 +52,9 @@ function profileMetadata(
     }),
     ...vault.listMemoryMetadataByScope(scope, { ...options, pinned: true }),
   ]) {
-    if (meta.validity.validFrom > nowMs) continue;
+    if (meta.validity.validFrom > nowMs || meta.confidence <= DEFAULT_STALE_CONFIDENCE_THRESHOLD) {
+      continue;
+    }
     byId.set(meta.id, meta);
   }
   return [...byId.values()];
