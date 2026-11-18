@@ -1518,6 +1518,18 @@ function wholeRetrievedIds(
   );
 }
 
+function standingProfileForAnswer(
+  vault: MemoryVaultStore,
+  userId: ConversationMemoryRuntimeContext["userId"],
+  nowMs: number,
+  budgetTokens: number,
+): StandingProfile {
+  return standingProfileForUser(vault, userId, nowMs, {
+    ...DEFAULT_STANDING_PROFILE_CAPS,
+    maxTokens: Math.max(0, Math.min(DEFAULT_STANDING_PROFILE_CAPS.maxTokens, budgetTokens)),
+  });
+}
+
 export async function buildMemoryResult(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
@@ -1539,12 +1551,12 @@ export async function buildMemoryResult(
   }
   signal?.throwIfAborted();
   const nowMs = Date.now();
+  // Maintenance may change eligibility or remove records. Complete it before choosing any text
+  // for this answer, so its own sweep cannot invalidate a selection made in the same turn.
+  maybeRunChatAutoMaintenance(deps, vault);
   // The profile is part of the person's memory budget; retrieval gets what it leaves.
   const memoryBudget = budgetTokens ?? DEFAULT_BUDGET_TOKENS;
-  const profile = standingProfileForUser(vault, context.userId, nowMs, {
-    ...DEFAULT_STANDING_PROFILE_CAPS,
-    maxTokens: Math.min(DEFAULT_STANDING_PROFILE_CAPS.maxTokens, memoryBudget),
-  });
+  const profile = standingProfileForAnswer(vault, context.userId, nowMs, memoryBudget);
   const retrieval = await retrieveChatMemory(
     deps,
     vault,
@@ -1554,17 +1566,23 @@ export async function buildMemoryResult(
     nowMs,
     { profile, signal },
   );
-  // Autonomous maintenance (#204, O-V4): now that memory is actively in use, opportunistically run
-  // ONE bounded, rate-limited maintenance pass so the decay/forget curve advances without a
-  // free-running background loop.
-  maybeRunChatAutoMaintenance(deps, vault);
+  signal?.throwIfAborted();
+  // Recall awaits a model. Re-read the current profile afterwards: a confirmed forget, edit or
+  // eligibility change during that wait must govern this new answer. Completed answer evidence
+  // keeps its own immutable selection. Retrieval has spent only its reserved part of the budget.
+  const currentProfile = standingProfileForAnswer(
+    vault,
+    context.userId,
+    Date.now(),
+    memoryBudget - retrieval.budget.used,
+  );
   // A profile fact the question is about reaches the answer once, with the retrieved memories.
-  const retrievedIds = wholeRetrievedIds(retrieval, profile);
-  const answerProfile = standingProfileWithout(profile, retrievedIds);
+  const retrievedIds = wholeRetrievedIds(retrieval, currentProfile);
+  const answerProfile = standingProfileWithout(currentProfile, retrievedIds);
   const result = toMemoryResult(
     retrieval,
     answerProfile,
-    profile.entries.length - answerProfile.entries.length,
+    currentProfile.entries.length - answerProfile.entries.length,
   );
   recordConversationMemoryRetrieval(deps, context, result.context.memories);
   return result;
