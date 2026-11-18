@@ -661,8 +661,10 @@ it("clears a preview and its directory when an unchanged root resolves elsewhere
     active.mockClear();
     replaced = true;
     act(() => notifyWorkspaceFileMutated(native.root, { relativePath: "README.md" }));
-    await waitFor(() => expect(active).toHaveBeenCalled());
-    expect(active).toHaveBeenLastCalledWith(null, resolved, null);
+    // A directory read already in flight before the mutation may still confirm the old root
+    // (same root, same selection) before the read that observes the replacement settles; the
+    // contract is the settled report, so wait for it rather than for the first call.
+    await waitFor(() => expect(active).toHaveBeenLastCalledWith(null, resolved, null));
     expect(screen.queryByRole("button", { name: "Back to files" })).toBeNull();
     expect(await screen.findByRole("treeitem", { name: /two\.ts/u })).toBeInTheDocument();
   } finally {
