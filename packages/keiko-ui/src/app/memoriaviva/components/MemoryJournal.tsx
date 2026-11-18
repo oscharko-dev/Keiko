@@ -166,9 +166,13 @@ function JournalMetadata({
         <span className={styles.mvJournalMetaBadge}>{modeLabel(capture, t)}</span>
       ) : null}
       <span>{t("memoria.journal.surface", { surface: surfaceLabel(capture, t) })}</span>
-      <span>
-        {t("memoria.journal.source", { source: sourceKindLabel(capture.provenance.sourceKind, t) })}
-      </span>
+      {capture.outcome === "forgotten" ? null : (
+        <span>
+          {t("memoria.journal.source", {
+            source: sourceKindLabel(capture.provenance.sourceKind, t),
+          })}
+        </span>
+      )}
       <span data-reason={capture.reason}>
         {t("memoria.journal.reason", { reason: reasonLabel(capture, t) })}
       </span>

@@ -10,6 +10,7 @@ import {
   type MemoryRecentCapture,
   type MemoryRecentCapturesResponse,
 } from "@/lib/memory-api";
+import { I18N_STORAGE_KEY, I18nProvider } from "@/lib/i18n";
 import { MemoryJournal, orderJournalCaptures } from "./MemoryJournal";
 import { deferred } from "./__tests__/test-support";
 
@@ -257,6 +258,45 @@ describe("MemoryJournal loading and ordering", () => {
     const row = await screen.findByTestId("memory-journal-row");
     expect(within(row).getByText("Surface Voice")).toBeInTheDocument();
   });
+
+  it.each([
+    ["en", "Why: You asked Keiko to forget it.", "Source You asked Keiko to remember it"],
+    [
+      "de",
+      "Warum: Du hast Keiko gebeten, es zu vergessen.",
+      "Quelle Du hast Keiko gebeten, es zu merken",
+    ],
+  ] as const)(
+    "labels an explicit Forget and Capture correctly in %s",
+    async (locale, reason, source) => {
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      const saved = makeCapture("explicit", 100, {
+        provenance: {
+          initiatorSurface: "conversation-center",
+          sourceKind: "explicit-user-instruction",
+        },
+      });
+      const forgotten: MemoryRecentCapture = {
+        eventId: "event-forgotten",
+        outcome: "forgotten",
+        scope: saved.scope,
+        provenance: saved.provenance,
+        occurredAt: 200,
+        reason: "forgotten-by-person",
+      };
+      render(
+        <I18nProvider>
+          <MemoryJournal onBack={vi.fn()} fetchRecentCapturesImpl={fetchWith([saved, forgotten])} />
+        </I18nProvider>,
+      );
+
+      await screen.findByText(reason);
+      const [decision, capture] = screen.getAllByTestId("memory-journal-row");
+      expect(within(decision!).getByText(reason)).toBeInTheDocument();
+      expect(within(capture!).getByText(source)).toBeInTheDocument();
+      expect(within(decision!).queryByText(source)).not.toBeInTheDocument();
+    },
+  );
 });
 
 describe("MemoryJournal Keep and Forget", () => {
