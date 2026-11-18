@@ -11,17 +11,17 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1034940,
-    "loadedTotalBytes": 1034940,
+    "shipsTotalBytes": 1034988,
+    "loadedTotalBytes": 1034988,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 110901,
+    "largestWorkerBytes": 110927,
     "largestWorkerLabel": "editor",
-    "largestLoadedWorkerBytes": 110901,
+    "largestLoadedWorkerBytes": 110927,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
     "shipsOk": true,
@@ -30,8 +30,8 @@
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 110901,
-      "path": "dist/ui/static/_next/static/chunks/3-vp5mbiz_k0a.js"
+      "gzipBytes": 110927,
+      "path": "dist/ui/static/_next/static/chunks/3yogj6ro-lqay.js"
     },
     {
       "label": "editor",
@@ -54,15 +54,15 @@
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/1ka7n7_t88nku.js",
-      "gzipBytes": 288480,
-      "rawBytes": 1212214,
+      "path": "dist/ui/static/_next/static/chunks/0dttat8nssvs3.js",
+      "gzipBytes": 288502,
+      "rawBytes": 1212264,
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/3-vp5mbiz_k0a.js",
-      "gzipBytes": 110901,
-      "rawBytes": 362727,
+      "path": "dist/ui/static/_next/static/chunks/3yogj6ro-lqay.js",
+      "gzipBytes": 110927,
+      "rawBytes": 363080,
       "workerLabel": "editor"
     },
     {
@@ -78,5 +78,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "f5256723802e35d6f27c536824e70c7122bd5f739bb9c66cefc989789ded324c"
+  "measurementSha256": "2aba34b07ddc3df22854410635ae7b3299ad5530c351c6b2fbfc7c75b8c91c6d"
 }
