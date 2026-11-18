@@ -10,6 +10,10 @@ import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-me
 import type { CodingWorkbenchMode, NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import type {
+  OpenAIEmbeddingOutcome,
+  OpenAIEmbeddingRequest,
+} from "@oscharko-dev/keiko-model-gateway";
 
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, createNodeUiStore, type UiStore } from "./store/index.js";
@@ -32,6 +36,14 @@ import { resetServerLogger } from "../../../tests/support/activity-log-test-supp
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 
 const USER_SAID = "User said:\n";
+
+function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
 
 // A plain Chat message: no workflow run is attached to it.
 const NO_RUN = {
@@ -418,6 +430,57 @@ describe("memory learning passes", () => {
     const settled = sink.events.find((event) => event.op === "memory.learn.pass.settled");
     expect(settled?.extra).toMatchObject({ outcome: "cancelled", pendingChatCount: 1 });
     expect(settled?.extra?.cancelLatencyMs).toEqual(expect.any(Number));
+  });
+
+  it("cancels an in-flight learning embedding and learns the turn on the next pass", async () => {
+    const requested = deferred<OpenAIEmbeddingRequest>();
+    const pending = deferred<OpenAIEmbeddingOutcome>();
+    const modelId = "text-embedding-3-large";
+    const embedding = { ok: true, value: { vector: Float32Array.from([1, 0]), modelId } } as const;
+    let firstRequest = true;
+    const deps = makeDeps({
+      config: {
+        providers: [
+          {
+            modelId,
+            baseUrl: "https://gateway.example.test/v1",
+            apiKey: "fixture",
+            timeoutMs: 1000,
+            maxRetries: 0,
+            retryBaseDelayMs: 100,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+      },
+      localKnowledgeEmbeddingRequest: (request) => {
+        if (!firstRequest) return Promise.resolve(embedding);
+        firstRequest = false;
+        requested.resolve(request);
+        return pending.promise;
+      },
+    });
+    const chat = makeChat(deps);
+    writeTurn(deps, chat, "I use Vim.");
+    const runtime = memoryLearningRuntime(deps);
+    const pass = runtime.runPass("inactivity", undefined);
+    const request = await requested.promise;
+    const foreground = runSerializedChatTurn(
+      deps,
+      chat.chatId,
+      new AbortController().signal,
+      () => "ok",
+    );
+    // Even a provider that returns a late success after cancellation must not write.
+    pending.resolve(embedding);
+    await expect(foreground).resolves.toBe("ok");
+    await expect(pass).resolves.toBe("cancelled");
+    expect(request.signal?.aborted).toBe(true);
+    expect(bodies(deps, chat)).toEqual([]);
+    expect(deps.store.memoryLearning?.listChatsWithPending(8)).toEqual([chat.chatId]);
+
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+    expect(bodies(deps, chat)).toEqual(["I use Vim."]);
+    expect(deps.store.memoryLearning?.listChatsWithPending(8)).toEqual([]);
   });
 
   it("records a pass's start and end under its own id, linked to what triggered it", async () => {

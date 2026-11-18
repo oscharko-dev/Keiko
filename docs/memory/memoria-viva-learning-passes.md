@@ -49,9 +49,9 @@ unavailable Chats. The usual backoff begins after the remaining Chats have had t
 ## Foreground work wins
 
 Any serialized Chat turn (send, stream, grounded answer, delete) is foreground work. A pass does not
-start while one runs, and a starting turn aborts a running pass. The abort reaches the provider
-request (`ModelPort.call` signal, gateway cancellation, `fetch`), so the model slot is free for the
-person at once. The cancelled turn stays pending and is learned by the next pass.
+start while one runs, and a starting turn aborts a running pass. The abort reaches both extraction and
+document embedding through the gateway. A response that arrives after cancellation cannot write the
+affected candidate. The cancelled turn stays pending for the next pass.
 
 ## Outcomes per turn
 

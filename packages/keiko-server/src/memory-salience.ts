@@ -485,6 +485,7 @@ function noveltyOptions(
   const confirmDuplicate = (id: MemoryId): void => {
     recordLearningConfirmation(vault, id, trace);
   };
+  const common = { signal: trace.signal, refusedSinceStart, confirmDuplicate };
   // A paraphrased repeat with another end date replaces the fact it repeats, if the learner may.
   const replaceDuplicate = (
     record: MemoryRecord,
@@ -498,12 +499,11 @@ function noveltyOptions(
     return applied.record;
   };
   if (relation.kind === "same-unconfirmed") {
-    return { onlyConfirm: true, refusedSinceStart, replaceDuplicate, confirmDuplicate };
+    return { ...common, onlyConfirm: true, replaceDuplicate };
   }
-  if (relation.kind === "new") return { refusedSinceStart, replaceDuplicate, confirmDuplicate };
+  if (relation.kind === "new") return { ...common, replaceDuplicate };
   return {
-    refusedSinceStart,
-    confirmDuplicate,
+    ...common,
     replaces: relation.memoryId,
     insert: (record): MemoryRecord => {
       const applied = applyLearnedSupersession(
@@ -529,6 +529,7 @@ interface LearningTrace {
   readonly sourceMessageId?: string | undefined;
   readonly sourcePosition?: MemoryLearningPosition | undefined;
   readonly conversationId: string;
+  readonly signal: AbortSignal;
   // What the person said in the turn, which they may have forgotten while this capture was running.
   readonly statement: string;
   // How the facts the learner compared with stood before the model call.
@@ -646,6 +647,7 @@ async function persistCandidate(
   vault: MemoryVaultStore,
   trace: LearningTrace,
 ): Promise<PersistedCandidate> {
+  trace.signal.throwIfAborted();
   if (outcome.kind === "confirmation") return confirmKnownFact(vault, outcome, trace);
   const { mode } = trace;
   const refuse = (reason: RejectionReason): PersistedCandidate => {
@@ -981,6 +983,7 @@ async function runSalienceCapture(
     captureContext,
     inputs,
   );
+  inputs.signal.throwIfAborted();
   if (extraction.kind === "unavailable") return { kind: "unavailable" };
   if (extraction.kind === "refused") {
     recordTurnCaptureRefusal(deps, decisionTrace, context, captureContext.nowMs, extraction.reason);
@@ -998,6 +1001,7 @@ async function runSalienceCapture(
     sourceMessageId: request.sourceMessageId,
     sourcePosition: inputs.sourcePosition,
     conversationId: context.conversationId,
+    signal: inputs.signal,
     statement: request.content,
     seen,
   });

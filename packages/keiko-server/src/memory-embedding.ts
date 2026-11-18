@@ -303,6 +303,7 @@ function toEmbeddingInput(
 export type MemoryEmbedder = (
   text: string,
   kind?: MemoryEmbeddingKind,
+  signal?: AbortSignal,
 ) => Promise<MemoryEmbeddingInput | null>;
 
 // Graceful degradation is silent by design — every failure below returns `null` and the caller
@@ -436,7 +437,9 @@ function bindMemoryEmbedder(
   return (
     text: string,
     kind: MemoryEmbeddingKind = "document",
-  ): Promise<MemoryEmbeddingInput | null> => requestMemoryEmbedding(adapter, provider, text, kind);
+    signal?: AbortSignal,
+  ): Promise<MemoryEmbeddingInput | null> =>
+    requestMemoryEmbedding(adapter, provider, text, kind, signal);
 }
 
 export function bindMemoryQueryEmbedding(
@@ -459,6 +462,7 @@ async function requestMemoryEmbedding(
   provider: ModelProviderConfig,
   text: string,
   kind: MemoryEmbeddingKind,
+  signal?: AbortSignal,
 ): Promise<MemoryEmbeddingInput | null> {
   if (text.length === 0) return null;
   const elapsed = startLogTimer();
@@ -468,6 +472,7 @@ async function requestMemoryEmbedding(
       apiKey: provider.apiKey,
       modelId: provider.modelId,
       input: formatEmbeddingInput(provider.modelId, text, kind),
+      ...(signal === undefined ? {} : { signal }),
       ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
     });
     if (outcome.ok) {
@@ -490,6 +495,7 @@ export async function embedMemoryText(
   deps: UiHandlerDeps,
   text: string,
   kind: MemoryEmbeddingKind = "document",
+  signal?: AbortSignal,
 ): Promise<MemoryEmbeddingInput | null> {
   const embedder = createMemoryEmbedder(
     currentGatewayConfig(deps),
@@ -497,7 +503,7 @@ export async function embedMemoryText(
     deps.activityLog ?? processServerLogSink(),
   );
   if (embedder === null) return null;
-  return embedder(text, kind);
+  return embedder(text, kind, signal);
 }
 
 // Best-effort embed-on-capture. Embeds the memory body and upserts the vector. A null embedding
@@ -790,6 +796,7 @@ export type NoveltyInsertOutcome =
   | { readonly kind: "unconfirmed" };
 
 export interface NoveltyInsertOptions {
+  readonly signal?: AbortSignal;
   // Store nothing unless a semantic duplicate confirms the candidate.
   readonly onlyConfirm?: boolean;
   // The fact this candidate replaces: it is no duplicate of what it replaces.
@@ -982,13 +989,20 @@ function storeCandidate(
   return options.insert?.(record) ?? vault.insertMemory(record);
 }
 
+function assertCaptureNotCancelled(signal: AbortSignal | undefined): void {
+  signal?.throwIfAborted();
+}
+
 export async function insertSalienceMemoryWithNoveltyGate(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   record: MemoryRecord,
   options: NoveltyInsertOptions = {},
 ): Promise<NoveltyInsertOutcome> {
-  const embedding = await embedMemoryText(deps, record.body, "document");
+  assertCaptureNotCancelled(options.signal);
+  const embedding = await embedMemoryText(deps, record.body, "document", options.signal);
+  // A late provider response cannot write after the person's next Chat turn has started.
+  assertCaptureNotCancelled(options.signal);
   const embedded = embedding !== null;
   const scopeKind = record.scope.kind;
   const calibration = embedding === null ? {} : memoryEmbeddingCalibrationFor(deps.env, embedding);
