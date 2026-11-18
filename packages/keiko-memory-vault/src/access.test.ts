@@ -125,6 +125,21 @@ describe("getAccessStatsRows", () => {
     db.close();
   });
 
+  it("reads counters beyond the host parameter limit without returning other memories", () => {
+    const db = openTestDb();
+    try {
+      const requested = seedMemory(db, 'quoted-"identifier');
+      const other = seedMemory(db, "other");
+      recordAccessRows(db, [requested, other], 1000);
+      const ids = Array.from({ length: 260_000 }, (_, index) => id(`absent-${String(index)}`));
+      const stats = getAccessStatsRows(db, [requested, ...ids, requested]);
+      expect([...stats.keys()]).toEqual([requested]);
+      expect(stats.get(requested)?.accessCount).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it("omits ids that have no access row", () => {
     const db = openTestDb();
     const m1 = seedMemory(db, "m1");

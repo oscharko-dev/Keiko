@@ -106,6 +106,10 @@ ON CONFLICT(memory_id) DO UPDATE SET last_used_at = excluded.last_used_at
 const SELECT_ALL_SQL =
   "SELECT memory_id, last_accessed_at, access_count, outcome_count, utility_sum, last_used_at FROM memory_access";
 
+// A standing profile can contain more IDs than SQLite permits host parameters. A bound JSON
+// array keeps the indexed lookup and reuses one prepared statement at every profile size.
+const SELECT_SCOPED_SQL = `${SELECT_ALL_SQL} WHERE memory_id IN (SELECT value FROM json_each(?))`;
+
 interface AccessRow {
   readonly memory_id: string;
   readonly last_accessed_at: number;
@@ -215,9 +219,9 @@ export function getAccessStatsRows(
     return rowsToMap(rows);
   }
   if (ids.length === 0) return new Map();
-  const placeholders = ids.map(() => "?").join(",");
-  const sql = `${SELECT_ALL_SQL} WHERE memory_id IN (${placeholders})`;
-  const rows = cachedPrepare(db, sql).all(...ids) as unknown as readonly AccessRow[];
+  const rows = cachedPrepare(db, SELECT_SCOPED_SQL).all(
+    JSON.stringify(ids),
+  ) as unknown as readonly AccessRow[];
   return rowsToMap(rows);
 }
 
