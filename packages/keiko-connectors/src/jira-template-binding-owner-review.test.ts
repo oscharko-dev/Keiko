@@ -13,6 +13,7 @@ import {
   resolveJiraTemplateBinding,
 } from "./jira-issue-template-instance.js";
 import {
+  checkJiraIssueTemplate,
   jiraTransitionsFullyChecked,
   type JiraTemplateInstanceMetadata,
 } from "./jira-issue-template-check.js";
@@ -232,5 +233,122 @@ describe("a bound status the partial workflow list cannot verify is not a checke
 
   it("is not checked at all when the workflow was not read", () => {
     expect(jiraTransitionsFullyChecked(bound("3"), {})).toBe(false);
+  });
+});
+
+describe("a failed create read never stores the global catalog's field as the selected type's field", () => {
+  const SELECTED_SCREEN = [
+    {
+      fieldId: "parent",
+      name: "Übergeordnet",
+      required: true,
+      schema: { type: "issuelink", system: "parent" },
+      operations: ["set"],
+    },
+    {
+      fieldId: "customfield_1",
+      name: "Parent",
+      required: false,
+      schema: { type: "string", custom: "x:text", customId: 1 },
+      operations: ["set"],
+    },
+  ];
+  function screen(typeId: string): string {
+    return `issue/createmeta/10000/issuetypes/${typeId}?startAt=0&maxResults=100`;
+  }
+  function saveBinding(
+    template: JiraIssueTemplate,
+    binding: JiraTemplateBindingIds,
+  ): JiraIssueTemplate {
+    return withBinding(template, {
+      issueTypeId: binding.issueTypeId,
+      ...(binding.requiredFieldIds === undefined
+        ? {}
+        : { requiredFieldIds: binding.requiredFieldIds }),
+    });
+  }
+  function request(issueTypeId: string, createReadable: () => boolean): JiraMutationRequest {
+    return (path) => {
+      if (path === "project/SYN")
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          body: { id: "10000", key: "SYN", issueTypes: [{ id: issueTypeId, name: "Sub-task" }] },
+        });
+      if (path === "field") return Promise.resolve(items([{ id: "parent", name: "Parent" }]));
+      if (path === screen(issueTypeId))
+        return Promise.resolve(
+          createReadable()
+            ? {
+                ok: true,
+                status: 200,
+                body: {
+                  values: SELECTED_SCREEN,
+                  isLast: true,
+                  startAt: 0,
+                  maxResults: 100,
+                  total: 2,
+                },
+              }
+            : { ok: false, reason: "permission-denied" },
+        );
+      return Promise.resolve({ ok: false, reason: "not-found" });
+    };
+  }
+  const typed = parse("issueType: Sub-task", "activateOn: [create]", "requiredFields: [Parent]");
+
+  async function bindingOf(
+    read: JiraMutationRequest,
+    template: JiraIssueTemplate,
+  ): Promise<ReturnType<typeof resolveJiraTemplateBinding>> {
+    const metadata = await readJiraTemplateInstanceMetadata(read, template);
+    if (!metadata.ok) throw new TypeError("Expected metadata");
+    return resolveJiraTemplateBinding(template, metadata.instance, INSTANCE);
+  }
+
+  it("keeps the slot unresolved, then a healthy read binds the custom field and the check sees it", async () => {
+    let readable = true;
+    const live = request("10003", () => readable);
+    const options = await readJiraTemplateOptions(
+      live,
+      { projectKey: "SYN", issueTypeId: "10003" },
+      INSTANCE,
+    );
+    expect(options.ok).toBe(true);
+    readable = false;
+    const first = await bindingOf(live, typed);
+    if (first.state !== "bindable") throw new TypeError("Expected a bindable template");
+    expect(first.binding.requiredFieldIds).toEqual(["none"]);
+    const saved = saveBinding(typed, first.binding);
+    readable = true;
+    const healthy = await bindingOf(live, saved);
+    if (healthy.state !== "bindable") throw new TypeError("Expected a rebind");
+    expect(healthy.binding.requiredFieldIds).toEqual(["customfield_1"]);
+    const rebound = saveBinding(saved, healthy.binding);
+    const metadata = await readJiraTemplateInstanceMetadata(live, rebound);
+    if (!metadata.ok) throw new TypeError("Expected metadata");
+    const violations = checkJiraIssueTemplate(
+      rebound,
+      {
+        operation: "create",
+        projectKey: "SYN",
+        issueType: { id: "10003", name: "Sub-task" },
+        fields: { summary: "A summary", parent: { key: "SYN-1" } },
+      },
+      metadata.instance.fields ?? [],
+    );
+    expect(violations).toMatchObject([{ ruleId: "field-missing", subject: "Parent" }]);
+  });
+
+  it("uses the retired type's replacement for the workflow, the create read and the binding", async () => {
+    const saved = withBinding(typed, { issueTypeId: "3", requiredFieldIds: ["none"] });
+    const resolution = await bindingOf(
+      request("12", () => true),
+      saved,
+    );
+    expect(resolution).toMatchObject({
+      state: "bindable",
+      binding: { issueTypeId: "12", requiredFieldIds: ["customfield_1"] },
+    });
   });
 });
