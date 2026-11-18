@@ -19,6 +19,7 @@ import type {
 
 export interface MemoryActionResponse {
   readonly memory: MemoryRecord;
+  readonly supersededMemoryIds?: readonly MemoryId[];
 }
 
 export interface MemoryForgetResponse {
@@ -86,8 +87,15 @@ export async function acceptMemoryProposal(
     body: JSON.stringify(options),
   });
   if (result?.memory !== undefined) {
-    const ids = options.predecessorId === undefined ? [id] : [id, options.predecessorId];
-    notifyMemoryVaultViewChange({ kind: "updated", ids });
+    const origins =
+      result.supersededMemoryIds ??
+      (options.predecessorId === undefined ? [] : [options.predecessorId]);
+    if (options.bodyOverride === undefined) {
+      notifyMemoryVaultViewChange({ kind: "updated", ids: [id, ...origins] });
+    } else {
+      notifyMemoryVaultViewChange({ kind: "edited", ids: [id] });
+      notifyMemoryVaultViewChange({ kind: "updated", ids: origins });
+    }
   }
   return result;
 }

@@ -232,27 +232,35 @@ describe("MemoryDetail — live vault state", () => {
     expect(load).toHaveBeenCalledOnce();
   });
 
-  it("refreshes the predecessor's live status after its correction is accepted", async () => {
-    const original = makeRecord();
-    const correction = makeRecord({ id: makeMemoryId("correction"), body: "Corrected fact" });
-    const superseded = { ...original, status: "superseded" as const };
-    const load = vi
-      .fn()
-      .mockResolvedValueOnce({ memory: original })
-      .mockResolvedValueOnce({ memory: superseded });
-    render(<MemoryDetail id={original.id} fetchMemoryImpl={load} />);
-    expect(await screen.findByText("Accepted")).toBeInTheDocument();
+  it.each([true, false])(
+    "refreshes the predecessor's live status after its correction is accepted (caller selected: %s)",
+    async (explicit) => {
+      const original = makeRecord();
+      const correction = makeRecord({ id: makeMemoryId("correction"), body: "Corrected fact" });
+      const superseded = { ...original, status: "superseded" as const };
+      const load = vi
+        .fn()
+        .mockResolvedValueOnce({ memory: original })
+        .mockResolvedValueOnce({ memory: superseded });
+      render(<MemoryDetail id={original.id} fetchMemoryImpl={load} />);
+      expect(await screen.findByText("Accepted")).toBeInTheDocument();
 
-    await act(async () => {
-      await acceptMemoryProposal(correction.id, { predecessorId: original.id }, async () => ({
-        memory: correction,
-      }));
-    });
+      await act(async () => {
+        await acceptMemoryProposal(
+          correction.id,
+          explicit ? { predecessorId: original.id } : {},
+          async () => ({
+            memory: correction,
+            ...(explicit ? {} : { supersededMemoryIds: [original.id] }),
+          }),
+        );
+      });
 
-    expect(screen.getByText("Superseded")).toBeInTheDocument();
-    expect(screen.queryByText("Accepted")).not.toBeInTheDocument();
-    expect(screen.getByText(original.body)).toBeInTheDocument();
-  });
+      expect(screen.getByText("Superseded")).toBeInTheDocument();
+      expect(screen.queryByText("Accepted")).not.toBeInTheDocument();
+      expect(screen.getByText(original.body)).toBeInTheDocument();
+    },
+  );
 });
 
 describe("MemoryDetail — error state", () => {

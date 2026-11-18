@@ -2498,7 +2498,13 @@ function acceptMemoryProposal(
     vault.recordOutcome(supersededOriginIds, 0, committed.nowMs);
   }
   recordCorrectionSupersessionAudits(deps, committed.updated, origins, committed.nowMs);
-  return { status: 200, body: { memory: redactMemory(deps, committed.updated) } };
+  return {
+    status: 200,
+    body: {
+      memory: redactMemory(deps, committed.updated),
+      ...(supersededOriginIds.length > 0 && { supersededMemoryIds: supersededOriginIds }),
+    },
+  };
 }
 
 function parseAcceptBody(

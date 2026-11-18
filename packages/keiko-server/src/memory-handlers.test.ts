@@ -1418,6 +1418,7 @@ describe("memory handlers", () => {
     );
 
     expect(acceptResult.status).toBe(200);
+    expect(asJson(acceptResult).supersededMemoryIds).toEqual([memoryId("memory-correct-accept")]);
     const superseded = vault.getMemory(memoryId("memory-correct-accept"));
     expect(superseded?.status).toBe("superseded");
     // Bi-temporal-lite (#204, C1): the superseded fact's belief window is CLOSED at acceptance, so

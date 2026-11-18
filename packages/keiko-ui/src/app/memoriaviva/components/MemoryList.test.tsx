@@ -184,27 +184,35 @@ describe("MemoryListContent — loading state", () => {
     expect(document.activeElement).toBe(row);
   });
 
-  it("hides obsolete edited text without detaching a focused record", async () => {
-    const record = makeRecord({ body: "Obsolete private preference" });
-    const edited = { ...record, body: "Corrected preference" };
-    const reload = deferred<MemoryListResponse>();
-    const load = vi
-      .fn()
-      .mockResolvedValueOnce(makeListResponse([record]))
-      .mockReturnValueOnce(reload.promise);
-    renderDefaultList(load);
-    const row = await screen.findByRole("link", { name: /Obsolete private preference/u });
-    row.focus();
-    await act(async () => {
-      await editMemory(record.id, { body: edited.body }, async () => ({ memory: edited }));
-    });
+  it.each(["edit", "edit-and-approve"] as const)(
+    "hides obsolete edited text without detaching a focused record after %s",
+    async (operation) => {
+      const record = makeRecord({ body: "Obsolete private preference" });
+      const edited = { ...record, body: "Corrected preference" };
+      const reload = deferred<MemoryListResponse>();
+      const load = vi
+        .fn()
+        .mockResolvedValueOnce(makeListResponse([record]))
+        .mockReturnValueOnce(reload.promise);
+      renderDefaultList(load);
+      const row = await screen.findByRole("link", { name: /Obsolete private preference/u });
+      row.focus();
+      await act(async () => {
+        if (operation === "edit")
+          await editMemory(record.id, { body: edited.body }, async () => ({ memory: edited }));
+        else
+          await acceptMemoryProposal(record.id, { bodyOverride: edited.body }, async () => ({
+            memory: edited,
+          }));
+      });
 
-    expect(screen.queryByText(record.body)).not.toBeInTheDocument();
-    expect(row).toHaveFocus();
-    await act(async () => reload.resolve(makeListResponse([edited])));
-    expect(row).toHaveTextContent(edited.body);
-    expect(document.activeElement).toBe(row);
-  });
+      expect(screen.queryByText(record.body)).not.toBeInTheDocument();
+      expect(row).toHaveFocus();
+      await act(async () => reload.resolve(makeListResponse([edited])));
+      expect(row).toHaveTextContent(edited.body);
+      expect(document.activeElement).toBe(row);
+    },
+  );
 
   it("reloads the open list after forgetting in another surface and discards its older response", async () => {
     const forgotten = makeRecord({ body: "Forgotten from a different surface" });
