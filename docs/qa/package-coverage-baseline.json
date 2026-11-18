@@ -78,7 +78,7 @@
       }
     },
     "keiko-evidence": {
-      "files": 35,
+      "files": 36,
       "uncoveredFiles": 0,
       "uncoveredLines": 176,
       "totalLines": 2304,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 1216,
+      "files": 1217,
       "uncoveredFiles": 1,
       "uncoveredLines": 6338,
       "totalLines": 113259,
