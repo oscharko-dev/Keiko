@@ -59,7 +59,11 @@ import {
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { emitServerDiagnostic } from "./diagnostics-log.js";
 import { configuredEmbeddingProviders } from "./local-knowledge-handlers.js";
-import { bindMemoryQueryEmbedding, memoryEmbeddingCalibrationFor } from "./memory-embedding.js";
+import {
+  bindMemoryQueryEmbedding,
+  memoryEmbeddingCalibrationFor,
+  memoryEmbeddingProviderIdentity,
+} from "./memory-embedding.js";
 
 export type SemanticRetrievalGateReason =
   | "allowed"
@@ -76,6 +80,7 @@ type SemanticRetrievalGate =
       readonly allowed: true;
       readonly reason: "allowed";
       readonly matchesQuery: (query: string | undefined) => boolean;
+      readonly providerIdentity: string;
       readonly embedQuery: () => Promise<MemoryEmbeddingInput | null>;
     }
   | {
@@ -167,6 +172,7 @@ export function semanticRetrievalGateForText(
     allowed: true,
     reason: "allowed",
     matchesQuery: (query) => query === queryText,
+    providerIdentity: memoryEmbeddingProviderIdentity(provider),
     embedQuery: bindMemoryQueryEmbedding(deps, provider, queryText),
   };
 }
@@ -386,13 +392,18 @@ function createMemoryVectorIndexPort(
 
 async function semanticScoresFrom(
   deps: UiHandlerDeps,
-  embedQuery: () => Promise<MemoryEmbeddingInput | null>,
+  gate: Extract<SemanticRetrievalGate, { readonly allowed: true }>,
   candidateIds: readonly MemoryId[],
   embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
   signal?: AbortSignal,
 ): Promise<ReadonlyMap<MemoryId, number> | undefined> {
   throwIfAborted(signal);
-  const queryEmbedding = await embedQuery();
+  // The bound provider cannot produce a comparable query vector for an old provider's rows.
+  if (!candidateIds.some((id) => embeddings.get(id)?.provider === gate.providerIdentity)) {
+    warnSkippedIncompatible(deps, embeddings.size, candidateIds.length);
+    return new Map<MemoryId, number>();
+  }
+  const queryEmbedding = await gate.embedQuery();
   if (queryEmbedding === null) {
     warnSemanticRetrievalDisabled(deps, "no-embedder", candidateIds.length);
     return undefined;
@@ -569,7 +580,7 @@ export async function buildConversationRetrievalSignals(
   warnSemanticGate(deps, gate, embeddings, candidateIds.length);
   const semanticById =
     gate.allowed && embeddings.size > 0
-      ? await semanticScoresFrom(deps, gate.embedQuery, candidateIds, embeddings, signal)
+      ? await semanticScoresFrom(deps, gate, candidateIds, embeddings, signal)
       : undefined;
   return {
     strengthById,

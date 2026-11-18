@@ -109,6 +109,7 @@ const ALLOWED_GATE = {
   allowed: true,
   reason: "allowed",
   matchesQuery: (query: string | undefined) => query === QUERY_TEXT,
+  providerIdentity: IDENTITY.provider,
   embedQuery: embedMock,
 } as const;
 

@@ -223,16 +223,6 @@ function storeEmbedding(
   vault.upsertEmbedding(id as MemoryId, input);
 }
 
-function storeIncompatibleEmbedding(vault: MemoryVaultStore, id: string, text: string): void {
-  const input: MemoryEmbeddingInput = {
-    provider: "legacy-openai",
-    modelId: EMBEDDING_MODEL,
-    metric: "cosine",
-    vector: vectorFor(text),
-  };
-  vault.upsertEmbedding(id as MemoryId, input);
-}
-
 async function restart(handlerDeps: UiHandlerDeps): Promise<void> {
   await new Promise<void>((resolve) => {
     server.close(() => {
@@ -328,19 +318,35 @@ describe("semantic memory retrieval (#204)", () => {
     vault.close();
   });
 
-  it("does not surface a semantic-only memory when its stored embedding identity is incompatible", async () => {
+  it("uses lexical recall without dispatching a query when the embedding provider changes", async () => {
     const memoryDir = join(tmp, "vault-incompatible-semantic");
     mkdirSync(memoryDir);
     const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
     insertAccepted(vault, "mem-product", "The user is building a product named Keiko");
-    storeIncompatibleEmbedding(vault, "mem-product", "The user is building a product named Keiko");
-    await restart(deps({ memoryVault: vault }, true));
+    storeEmbedding(
+      vault,
+      "mem-product",
+      "The user is building a product named Keiko",
+      IN_TENANT_EMBEDDING_BASE_URL,
+    );
+    insertAccepted(vault, "mem-lexical", "Das Produkt erscheint im Frühling.");
+    const embeddingCalls: string[] = [];
+    await restart(
+      deps(
+        {
+          memoryVault: vault,
+          localKnowledgeEmbeddingRequest: countingEmbeddingAdapter(embeddingCalls),
+        },
+        true,
+      ),
+    );
 
     const chatId = await createChat();
     const result = await sendChat(chatId, "Wie heißt mein Produkt");
 
     const ids = result.memory?.context.memories.map((m) => m.memoryId) ?? [];
-    expect(ids).not.toContain("mem-product");
+    expect(ids).toEqual(["mem-lexical"]);
+    expect(embeddingCalls).toEqual([]);
     vault.close();
   });
 
