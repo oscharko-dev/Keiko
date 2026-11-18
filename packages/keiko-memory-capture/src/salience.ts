@@ -28,7 +28,7 @@ import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
 import { looksLikePersonalIdentifier } from "./secret-patterns.js";
 import { startsWithStatedPreference } from "./fact-text.js";
-import { statedEndPassed, statedReason, statedValidUntil } from "./stated-validity.js";
+import { statedDateDots, statedDateEnd, statedReason } from "./stated-validity.js";
 import type {
   CaptureContext,
   CapturePolicyOptions,
@@ -400,6 +400,7 @@ interface AdmittedFact {
   // The person's verbatim words the fact rests on, as admission settled them.
   readonly evidence: string;
   readonly sentence: string;
+  readonly validUntil: number | null;
   readonly subject: "self" | "team";
   readonly confidence: number;
 }
@@ -425,7 +426,11 @@ function admitItem(
     turn.drop(admission.reason);
     return null;
   }
-  if (statedEndPassed(admission.sentence, turn.context.nowMs)) {
+  const validUntil = statedDateEnd(
+    admission.validityClause,
+    turn.input.sourceTimestampMs ?? turn.context.nowMs,
+  );
+  if (validUntil !== null && validUntil <= turn.context.nowMs) {
     turn.drop("past-statement");
     return null;
   }
@@ -445,6 +450,7 @@ function admitItem(
     body,
     evidence: admission.evidence,
     sentence: admission.sentence,
+    validUntil,
     subject: admission.subject,
     confidence: admission.confidence,
     subjectless: admission.subjectless,
@@ -474,7 +480,7 @@ function learnedCandidate(
       defaultSensitivity: turn.policy.defaultSensitivity,
     }),
   });
-  const validUntil = statedValidUntil(fact.sentence, turn.context.nowMs);
+  const { validUntil } = fact;
   const payload = decisionPayload(fact.type, fact.body, fact.sentence, turn.policy);
   const proposal = buildProposal(
     {
@@ -516,7 +522,7 @@ function confirmationOf(
   turn: LearningTurn,
 ): SalienceOutcome | null {
   const known = turn.known.find((candidate) => candidate.id === factId);
-  const validUntil = statedValidUntil(fact.sentence, turn.context.nowMs);
+  const { validUntil } = fact;
   const newEnd =
     validUntil !== null &&
     known !== undefined &&
@@ -674,9 +680,11 @@ function endsInAbbreviation(text: string): boolean {
 function sentencesOf(userText: string): readonly string[] {
   const sentences: string[] = [];
   for (const line of userText.split(LINE_BREAK_RE)) {
+    const dateDots = statedDateDots(line);
     let start = 0;
     for (const match of line.matchAll(STOP_BEFORE_CAPITAL_RE)) {
-      if (endsInAbbreviation(line.slice(start, match.index))) continue;
+      if (dateDots.has(match.index - 1) || endsInAbbreviation(line.slice(start, match.index)))
+        continue;
       sentences.push(line.slice(start, match.index).trim());
       start = match.index + match[0].length;
     }

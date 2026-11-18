@@ -761,6 +761,7 @@ type TurnSalienceExtraction =
 // needs (`surface`), rather than widening this shape for a field `extractTurnSalienceOutcomes`
 // never reads.
 interface TurnSalienceInputs {
+  readonly sourcePosition?: MemoryLearningPosition | undefined;
   readonly modelId: string;
   readonly assistantText: string;
   readonly correlationId: string;
@@ -808,6 +809,7 @@ async function extractTurnSalienceOutcomes(
   const outcomes = await extractSalientMemories(
     {
       userText: request.content,
+      sourceTimestampMs: inputs.sourcePosition?.timestamp ?? captureContext.nowMs,
       ...(previous === undefined ? {} : { previousUserText: previous }),
       assistantText,
       knownFacts: known.facts,
@@ -954,7 +956,6 @@ function activeSalienceVault(
 
 interface SalienceCaptureInputs extends TurnSalienceInputs {
   readonly surface: SalienceCaptureSurface;
-  readonly sourcePosition?: MemoryLearningPosition | undefined;
 }
 
 // The turn-scoped work `captureSalientFromTurn` runs inside its own try/catch. Split out so that

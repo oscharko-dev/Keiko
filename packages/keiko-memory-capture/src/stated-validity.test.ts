@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { statedReason, statedValidUntil } from "./stated-validity.js";
+import { statedDateDots, statedReason, statedValidUntil } from "./stated-validity.js";
 
 const NOW = Date.UTC(2026, 10, 5);
 // A stated day ends where the person lives: Keiko runs on their own machine.
@@ -21,6 +21,14 @@ describe("statedValidUntil", () => {
     ["I use Slack until 2027-03-31.", endOfDay(2027, 2, 31)],
   ])("reads %s", (sentence, expected) => {
     expect(statedValidUntil(sentence, NOW)).toBe(expected);
+  });
+
+  it("keeps genuine sentence stops outside recognized calendar punctuation", () => {
+    const text = "Fertig.bis Ende Feb. 2029. Bis zum 14. Februar. Danach folgt 2028.";
+    const preserved = [...statedDateDots(text)];
+    expect(preserved).toEqual([text.indexOf("Feb.") + 3, text.indexOf("14.") + 2]);
+    expect(statedValidUntil("bis Ende Feb. 2029", NOW)).toBe(endOfMonth(2029, 1));
+    expect(statedValidUntil("bis Ende Feb. 2020", NOW)).toBeNull();
   });
 
   it.each([

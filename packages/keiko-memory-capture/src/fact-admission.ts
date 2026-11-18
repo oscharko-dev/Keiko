@@ -2,7 +2,7 @@
 // person's own words only. "Im Zweifel zu wenig": a check that cannot confirm a fact drops it, and
 // the reason stays a closed value.
 
-import { statedDateOrdinalDots } from "./stated-validity.js";
+import { statedDateDots } from "./stated-validity.js";
 import { REDACTION_PLACEHOLDER } from "@oscharko-dev/keiko-security";
 
 import {
@@ -67,6 +67,7 @@ export type FactAdmission =
   | {
       readonly admitted: true;
       readonly sentence: string;
+      readonly validityClause: string;
       // The person's verbatim words the fact rests on: the model's span, opened at its clause.
       readonly evidence: string;
       // The person's own words for the fact, a leading pronoun replaced by what it stood for in
@@ -89,7 +90,7 @@ const QUOTE_CLOSERS = new Set(["”", "»"]);
 const QUOTE_TOGGLES = new Set(['"', "“"]);
 const SENTENCE_END_RE = /[.!?…\n]/u;
 const DIGIT_RE = /\p{N}/u;
-const INNER_SENTENCE_RE = /[.!?…]\s+\p{Lu}/u;
+const INNER_SENTENCE_RE = /[.!?…](?=\s+\p{Lu})/gu;
 const SUBORDINATE_LEAD_RE = /(?:^|[^\p{L}])(?:dass|that)\s*$/iu;
 const SUBORDINATE_OPENING_RE = /^(?:dass|that)\s+(?=(?:ich|i|wir|we)(?![\p{L}\p{N}]))/iu;
 const CLAUSE_LEAD_RE = /(?:^|[\s,;:([–—-])(?:dass|that|und|and|aber|but|doch|denn)\s*$/iu;
@@ -930,23 +931,22 @@ function asksForTextWork(lead: string): boolean {
 const SPEAKER_REACH = 3;
 
 // A dot between digits ("31.12.2027", "3.5") is part of a number, not the end of a sentence.
-function endsSentenceAt(text: string, at: number, ordinalDots: ReadonlySet<number>): boolean {
+function endsSentenceAt(text: string, at: number, dateDots: ReadonlySet<number>): boolean {
   const char = text.charAt(at);
   if (!SENTENCE_END_RE.test(char)) return false;
   return !(
     char === "." &&
-    DIGIT_RE.test(text.charAt(at - 1)) &&
-    (DIGIT_RE.test(text.charAt(at + 1)) || ordinalDots.has(at))
+    (dateDots.has(at) || (DIGIT_RE.test(text.charAt(at - 1)) && DIGIT_RE.test(text.charAt(at + 1))))
   );
 }
 
 function sentenceAround(text: string, start: number, end: number): { from: number; to: number } {
-  const ordinalDots = statedDateOrdinalDots(text);
+  const dateDots = statedDateDots(text);
   let from = start;
-  while (from > 0 && !endsSentenceAt(text, from - 1, ordinalDots)) from -= 1;
-  if (end > start && endsSentenceAt(text, end - 1, ordinalDots)) return { from, to: end };
+  while (from > 0 && !endsSentenceAt(text, from - 1, dateDots)) from -= 1;
+  if (end > start && endsSentenceAt(text, end - 1, dateDots)) return { from, to: end };
   let to = end;
-  while (to < text.length && !endsSentenceAt(text, to, ordinalDots)) to += 1;
+  while (to < text.length && !endsSentenceAt(text, to, dateDots)) to += 1;
   return { from, to: Math.min(text.length, to + 1) };
 }
 
@@ -1550,7 +1550,11 @@ function spanDropReason(evidence: string, text: string): FactDropReason | null {
   if (!text.includes(evidence)) {
     return quotesMaskedIdentifier(evidence, text) ? "personal-identifier" : "evidence-not-verbatim";
   }
-  return INNER_SENTENCE_RE.test(evidence) ? "not-clause-boundary" : null;
+  const dateDots = statedDateDots(evidence);
+  for (const stop of evidence.matchAll(INNER_SENTENCE_RE)) {
+    if (!dateDots.has(stop.index)) return "not-clause-boundary";
+  }
+  return null;
 }
 
 // "Sie beginnen immer mit einer Zusammenfassung" after "… meine Berichte": the claim's subject is the
@@ -1634,7 +1638,12 @@ export function admitProposedFact(
     surroundingDropReason(userText, span, fact.about);
   if (reason !== null) return dropped(reason);
   const claim = resolvedClaim(fact.body, words, context);
-  return admittedClaim(fact, { claim, evidence: words, opensSentence: start === from }, sentence);
+  return admittedClaim(
+    fact,
+    { claim, evidence: words, opensSentence: start === from },
+    sentence,
+    start - from,
+  );
 }
 
 interface ClauseSpan {
@@ -1726,10 +1735,29 @@ interface ClaimWords {
   readonly opensSentence: boolean;
 }
 
+// A calendar qualifier may follow the copied words. Keep it with the same assertion. A comma
+// before a year and a conjunction inside a noun phrase both stay in that assertion.
+const JOINING_WORD = "and|but|und|aber|doch|while|whereas|während";
+const NEW_SUBJECT = String.raw`I|we|he|she|they|my|our|ich|wir|er|sie|mein\w*|unser\w*`;
+const INDEPENDENT_CLAUSE_RE = new RegExp(
+  String.raw`;|,\s*(?:${JOINING_WORD})\b|\b(?:${JOINING_WORD})\b(?=\s+(?:${NEW_SUBJECT})\b)`,
+  "giu",
+);
+
+function validityClauseAt(sentence: string, anchor: number): string {
+  let from = 0;
+  for (const boundary of sentence.matchAll(INDEPENDENT_CLAUSE_RE)) {
+    if (boundary.index > anchor) return sentence.slice(from, boundary.index);
+    from = boundary.index + boundary[0].length;
+  }
+  return sentence.slice(from);
+}
+
 function admittedClaim(
   fact: ProposedFact,
   { claim, evidence, opensSentence }: ClaimWords,
   sentence: string,
+  anchor: number,
 ): FactAdmission {
   const reason =
     subjectDropReason(fact.about, claim) ?? polarityDropReason(fact.body.trim(), claim);
@@ -1739,6 +1767,7 @@ function admittedClaim(
   return {
     admitted: true,
     sentence,
+    validityClause: validityClauseAt(sentence, anchor),
     evidence,
     claim: opensSentence ? withoutTrailingMarks(claim) : sentenceCase(withoutTrailingMarks(claim)),
     subject,

@@ -340,6 +340,59 @@ describe("captureSalientFromTurn", () => {
     expect(new Date(live[0]?.validity.validUntil ?? 0).getUTCFullYear()).toBe(2027);
   });
 
+  it.each([
+    [17, 2026],
+    [19, undefined],
+  ] as const)(
+    "anchors a stored yearless deadline to its source day when processed on November %s",
+    async (day, expectedYear) => {
+      const sourceAt = new Date(2026, 10, 17, 9).getTime();
+      const processedAt = new Date(2026, 10, day, 12).getTime();
+      const vault = makeVault();
+      const ctx = context();
+      const deps = makeDeps({
+        memoryVault: vault,
+        configPresent: true,
+        config: salienceConfig("gpt-test", false),
+        codingRuntimeDeploymentCeiling: "autonomous-delivery",
+        modelPortFactory: () => fakeModel("[]"),
+      });
+      const clock = vi.spyOn(Date, "now").mockReturnValue(processedAt);
+      try {
+        await learnStoredTurn(
+          deps,
+          {
+            request: {
+              content: "I prefer tables until November 18.",
+              sourceMessageId: "deadline-turn",
+              memory: { enabled: true, mode: "autonomous-delivery" },
+            },
+            context: ctx,
+            modelId: "gpt-test",
+            assistantText: "OK.",
+            surface: "desktop",
+            correlationId: "deadline-pass",
+            parentCorrelationId: "deadline-parent",
+            sourcePosition: { timestamp: sourceAt, rowid: 1 },
+          },
+          new AbortController().signal,
+        );
+        const records = readMemories(vault, ctx);
+        if (expectedYear === undefined) expect(records).toHaveLength(0);
+        else {
+          expect(records).toHaveLength(1);
+          expect(records[0]?.validity).toEqual({
+            validFrom: processedAt,
+            validUntil: new Date(expectedYear, 10, 18, 23, 59, 59, 999).getTime(),
+          });
+          expect(records[0]?.createdAt).toBe(processedAt);
+        }
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   // #4213: a learning pass owns the signal of its model call; a new message aborts the pass, and the
   // abort reaches the provider request instead of a signal nobody can abort.
   it("hands a stored turn's model call the pass's signal and reports the cancellation", async () => {
