@@ -250,6 +250,23 @@ describe("an administrator's package", () => {
     });
   });
 
+  it("turns the reranker's sealed reference into the team's key too", () => {
+    const root = tempRoot();
+    const sealed = JSON.stringify({
+      providers: [{ modelId: "chat", baseUrl: "https://g.example.test", apiKey: "sk-kept" }],
+      reranker: { modelId: "rerank", baseUrl: "https://g.example.test", apiKeySecretRef: "cred:r" },
+    });
+    const options = { config: configFile(root, sealed) };
+
+    expect(() => build("macos-arm64", { options })).toThrow("pass --api-key-env NAME");
+    const { result } = build("macos-arm64", {
+      options: { ...options, apiKeyEnv: "KEIKO_TEAM_KEY", env: { KEIKO_TEAM_KEY: "sk-team" } },
+    });
+    expect(
+      JSON.parse(entriesByName(result.outputPath).get("Keiko/keiko.config.json")).reranker,
+    ).toEqual({ modelId: "rerank", baseUrl: "https://g.example.test", apiKey: "sk-team" });
+  });
+
   it("refuses a config that still refers to a key sealed on the administrator's computer", () => {
     const root = tempRoot();
     const sealed =

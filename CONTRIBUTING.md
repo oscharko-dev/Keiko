@@ -78,6 +78,18 @@ is downloaded at start. Run `scripts/__tests__/build-standalone-package.test.mjs
 `portable-in-place` and `provisioned-config` suites of `keiko-cli`. The operator guide is
 [`docs/release/standalone-folder-package.md`](docs/release/standalone-folder-package.md).
 
+### npm folder package
+
+The npm folder package (ADR-0121 D9) carries a portable archive's Node.js runtime and a pinned
+lockfile; its first start installs Keiko into the folder with `npm ci --ignore-scripts` from the
+registry the folder's `.npmrc` names. `scripts/build-standalone-npm-package.mjs` builds it; the start
+logic and start files live in `scripts/standalone/npm/`. A change here must keep three things true:
+nothing is written outside the folder and the state directory, no install script runs, and every
+package npm downloads carries a public-registry sha512 integrity. Run
+`scripts/__tests__/build-standalone-npm-package.test.mjs` and
+`scripts/__tests__/standalone-npm-runtime.test.mjs`. The operator guide is
+[`docs/release/standalone-npm-package.md`](docs/release/standalone-npm-package.md).
+
 ### Activity Log runtime changes
 
 What a person reads and what the model receives lose only the credential floor by default (owner

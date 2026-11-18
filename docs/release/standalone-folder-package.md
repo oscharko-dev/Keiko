@@ -15,6 +15,10 @@ payload: no file is added, removed or changed.
 | Portable managed install | Copies Keiko to its managed install folder | In-app, one click  | People who may install software     |
 | Standalone folder        | Nothing                                    | Replace the folder | People who may not install anything |
 
+Where an npm registry, often an internal mirror, is the approved way in, the smaller
+[npm folder package](standalone-npm-package.md) ships the same folder without the program and loads
+Keiko from that registry at the first start.
+
 Targets: `macos-arm64`, `macos-x64` and `windows-x64`
 ([ADR-0183](../adr/ADR-0183-linux-desktop-community-tier.md)).
 
@@ -180,6 +184,7 @@ in the [portable guide](portable-launch-setup-guide.md#verifying-a-downloaded-ar
 
 ## Related Documents
 
+- [npm Folder Package](standalone-npm-package.md)
 - [Standalone folder package troubleshooting](../troubleshooting/standalone-folder-package.md)
 - [Portable Launch And Setup Guide](portable-launch-setup-guide.md)
 - [Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md)

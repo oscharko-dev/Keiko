@@ -52,7 +52,7 @@ const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 // Windows refuses paths beyond 260 characters when the archive is extracted with Explorer. The
 // package's own longest entry stays well below that, so a user folder such as
 // C:\Users\<name>\Documents\ still fits in front of it.
-const WINDOWS_MAX_ENTRY_NAME_LENGTH = 180;
+export const WINDOWS_MAX_ENTRY_NAME_LENGTH = 180;
 
 const MACOS_RESOURCES = ["Keiko", "Keiko.app", "Contents", "Resources"];
 const MACOS_LAYOUT = Object.freeze({
@@ -177,7 +177,7 @@ function validSha256(value, label) {
   return value;
 }
 
-function verifyArchive(archivePath, expected) {
+export function verifyArchive(archivePath, expected) {
   if (!existsSync(archivePath) || !statSync(archivePath).isFile()) {
     refuse(`archive not found: ${archivePath}`);
   }
@@ -188,7 +188,7 @@ function verifyArchive(archivePath, expected) {
   return actual;
 }
 
-function assertPayloadEntryNames(archivePath, target) {
+export function assertPayloadEntryNames(archivePath, target) {
   const names = readZipArchiveEntryNames(archivePath, { requireRegularEntries: true });
   if (names.length === 0) refuse("the archive is empty");
   const foreign = names.find((name) => !name.startsWith(PAYLOAD_ROOT_PREFIX));
@@ -295,12 +295,16 @@ export function readProvisionedConfig(configPath, apiKeyEnv = undefined, env = p
   providers.forEach((provider, index) => {
     assertProviderOutline(provider, index);
   });
+  // Gateway Setup seals the reranker's key like a provider's.
+  const reranker = withTeamApiKey(config.reranker, apiKey);
   // The administrator's own text when nothing was sealed (without a byte order mark).
-  const unchanged = providers.every((provider, index) => provider === config.providers[index]);
+  const unchanged =
+    reranker === config.reranker &&
+    providers.every((provider, index) => provider === config.providers[index]);
+  const team =
+    config.reranker === undefined ? { ...config, providers } : { ...config, providers, reranker };
   return Buffer.from(
-    unchanged
-      ? readTextWithoutByteOrderMark(configPath)
-      : `${JSON.stringify({ ...config, providers }, null, 2)}\n`,
+    unchanged ? readTextWithoutByteOrderMark(configPath) : `${JSON.stringify(team, null, 2)}\n`,
     "utf8",
   );
 }
@@ -330,7 +334,7 @@ function templateText(name, layout) {
   return layout.os === "windows" ? text.replaceAll(/\r?\n/gu, "\r\n") : text;
 }
 
-function writePackageFile(path, content, mode) {
+export function writePackageFile(path, content, mode) {
   writeFileSync(path, content, { mode });
   chmodSync(path, mode);
 }
@@ -384,7 +388,11 @@ function assemblePackage(input) {
   return { packageRoot, packageVersion };
 }
 
-function resolveBuildInput(options) {
+/**
+ * The checked build input every package form shares. `form` names the kept folder
+ * (`keiko-<target>-<form>`): `standalone` here, `npm` for the npm package.
+ */
+export function resolveBuildInput(options, form = "standalone") {
   const target = requireOption(options, "target", "--target");
   if (!Object.hasOwn(STANDALONE_TARGETS, target)) {
     refuse(`unsupported target ${target}: use ${Object.keys(STANDALONE_TARGETS).join(", ")}`);
@@ -400,7 +408,7 @@ function resolveBuildInput(options) {
       ? undefined
       : readProvisionedConfig(resolve(options.config), options.apiKeyEnv, options.env);
   const keptFolder =
-    options.keepFolder === true ? join(outDir, `keiko-${target}-standalone`) : undefined;
+    options.keepFolder === true ? join(outDir, `keiko-${target}-${form}`) : undefined;
   // Before any work: a kept folder is never replaced, and its absence is cheap to check now.
   if (keptFolder !== undefined && existsSync(keptFolder)) {
     refuse(`--keep-folder: ${keptFolder} already exists; remove it first`);
@@ -408,7 +416,7 @@ function resolveBuildInput(options) {
   return { target, archivePath, outDir, expected, configBytes, keptFolder };
 }
 
-function publishFolder(packageRoot, keptFolder) {
+export function publishFolder(packageRoot, keptFolder) {
   mkdirSync(keptFolder);
   renameSync(packageRoot, join(keptFolder, PACKAGE_ROOT_NAME));
   return join(keptFolder, PACKAGE_ROOT_NAME);

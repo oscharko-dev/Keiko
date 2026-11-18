@@ -9,7 +9,9 @@ Accepted (Issue #1946, 2026-07-05); amended for the Windows setup companion (Iss
 D8 amended by the `dev` release rehearsal of ADR-0177 (2026-09-14). The `linux-x64` archive is a
 community-tier asset without a parity commitment for new operating-system features
 ([ADR-0183](ADR-0183-linux-desktop-community-tier.md), 2026-11-12). D9 adds the standalone folder
-package, an in-place delivery form of the same payload (2026-11-17).
+package, an in-place delivery form of the same payload (2026-11-17), and the npm folder package,
+which carries the payload's Node.js runtime and installs Keiko into the folder from an npm
+registry at the first start (2026-11-18).
 
 ## Context
 
@@ -1210,6 +1212,31 @@ adopted. Every decision leaves one `cli.lifecycle.provisioned-config` line with 
 and an error class, never a path or content. The file may carry a plaintext `apiKey`; ADR-0046
 states its custody.
 
+**npm folder package.** Where an npm registry, often an internal mirror, is the approved way in, a
+second folder form ships without the program: `keiko-<target>-npm.zip`, built by
+`scripts/build-standalone-npm-package.mjs` from the same verified portable archive. It carries that
+archive's Node.js runtime with npm, moved unchanged to `system/node`, a `package.json` that pins
+`@oscharko-dev/keiko` to the archive's version, and a `package-lock.json` resolved against the
+public registry. The builder runs npm with no configuration of the person who builds and refuses a
+lockfile that does not install exactly that version, names a link, or names a downloaded package
+without a public-registry sha512 integrity (packages bundled inside Keiko's own tarball are covered
+by its integrity). The first start runs `npm ci --ignore-scripts` in the folder, so
+npm installs exactly those packages, checks every integrity and runs no install script; an `.npmrc`
+beside the start files names the organization's registry, and npm replaces the registry host while
+keeping every checksum. npm's cache and log live in the state directory, which the start creates
+owner-private as Keiko does, and a successful installation removes them; npm writes nothing else
+outside the folder. A marker holding the lockfile's SHA-256 skips the installation at later starts
+until the lockfile changes. The start then runs `keiko start` with the same state directory,
+management declaration and provisioned configuration as the folder package. An administrator's
+access step (`system/Zugang speichern`) reads the configuration Gateway Setup saved, replaces each
+key sealed on that computer (providers and reranker) with a token typed without echo and writes
+`keiko.config.json`, owner-readable on macOS; it is a step the administrator runs, never part of a
+start. The only programs a double-click runs are the system shell and the signed Node.js binary,
+and npm writes no download mark on what it installs; the ZIP itself takes the mark like the folder
+package, and the paragraph below applies to it unchanged. npm publishes no Windows coding-runtime
+package, so this form on Windows reports Coding as unavailable; on macOS npm installs the coding
+runtime package for the computer.
+
 **What this form does not do.** It does not bypass the operating system's download checks. A
 package that still carries the download mark (the macOS quarantine attribute, the Windows Mark of
 the Web) is blocked exactly as before; an administrator removes the mark before distributing the
@@ -1384,6 +1411,7 @@ Security review for implementation under this ADR must cover:
 | 1.2     | 2026-09-14 | Amended D8 for the ADR-0177 `dev` release rehearsal: rehearsal attestations name `refs/heads/dev`, and every documented verifier binds the signer workflow and the stable tag. |
 | 1.3     | 2026-10-24 | The macOS application job declares the `Interactive` process type instead of `Background`, which throttled the app's runtime below its startup grant on a busy machine. |
 | 1.4     | 2026-11-17 | Added D9: the standalone folder package runs the portable payload in place, declares itself managed outside the app and can adopt an administrator-provisioned gateway configuration. |
+| 1.5     | 2026-11-18 | Amended D9 with the npm folder package: the release's Node.js runtime and a pinned, integrity-checked lockfile; Keiko is installed into the folder from the organization's npm registry at the first start. |
 
 ## Amendment history
 
@@ -1447,6 +1475,12 @@ Security review for implementation under this ADR must cover:
   management declaration also keeps the one-step Windows gateway setup away: no service, no UAC
   prompt, no Repair (`gateway-service-managed-outside`). D1 to D8 are unchanged; the operating
   system's download checks and D7 are not relaxed.
+- **2026-11-18 — D9, npm folder package:** Added the second folder form for workplaces that reach
+  an npm registry but may not install software. It carries the portable archive's Node.js runtime
+  and a lockfile whose every package has a public-registry sha512 integrity, installs Keiko into
+  the folder with `npm ci --ignore-scripts` at the first start and then starts it exactly like the
+  folder package. Windows Coding stays unavailable in this form, because npm publishes no Windows
+  coding-runtime package. The folder package and D1 to D8 are unchanged.
 - **2026-11-17 — One-step Windows setup:** Amended D5. The relaunch that completes an update, the
   first launch and the manual re-download fallback bring the Windows `KeikoRuntimeGateway` service
   to the new helper after the healthy start (ADR-0043 D19), at most one UAC prompt per helper pin.
