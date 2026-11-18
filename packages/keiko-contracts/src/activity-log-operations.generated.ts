@@ -41513,6 +41513,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         values: [
           "runtime-disabled",
           "platform-unqualified",
+          "npm-runtime-package-missing",
+          "portable-runtime-unverified",
           "dev-lane-refused",
           "payload-missing",
           "payload-unapproved",
@@ -41526,6 +41528,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "gateway-service-stale",
           "gateway-service-unknown",
           "gateway-service-unqualified",
+          "gateway-service-managed-outside",
           "install-volume-not-local",
           "install-volume-unverified",
           "host-unavailable",
