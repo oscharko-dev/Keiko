@@ -647,6 +647,51 @@ describe("semantic memory retrieval (#204)", () => {
     vault.close();
   });
 
+  it.each([true, false])(
+    "resolves a same-endpoint display alias from the actual model response (compatible=%s)",
+    async (compatible) => {
+      const memoryDir = join(tmp, "vault-same-endpoint-alias");
+      mkdirSync(memoryDir);
+      const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
+      try {
+        const id = "mem-product";
+        const text = "The user is building a product named Keiko";
+        const storedModel = "text-embedding-3-small";
+        insertAccepted(vault, id, text);
+        storeEmbedding(vault, id, text);
+        const existing = vault.getEmbedding(id as MemoryId);
+        if (existing === undefined) throw new TypeError("Missing test vector");
+        vault.upsertEmbedding(id as MemoryId, { ...existing, modelId: storedModel });
+        const requests: string[] = [];
+        await restart(
+          deps(
+            {
+              memoryVault: vault,
+              localKnowledgeEmbeddingRequest: (req) => {
+                requests.push(req.modelId);
+                return Promise.resolve({
+                  ok: true,
+                  value: {
+                    vector: vectorFor(req.input),
+                    modelId: compatible ? storedModel : EMBEDDING_MODEL,
+                  },
+                });
+              },
+            },
+            true,
+          ),
+        );
+        const chatId = await createChat();
+        const result = await sendChat(chatId, "Wie heißt mein Produkt");
+        const ids = result.memory?.context.memories.map((m) => m.memoryId) ?? [];
+        expect(requests).toEqual([EMBEDDING_MODEL]);
+        expect(ids).toEqual(compatible ? [id] : []);
+      } finally {
+        vault.close();
+      }
+    },
+  );
+
   it("uses lexical recall without dispatching a query when the embedding provider changes", async () => {
     const memoryDir = join(tmp, "vault-incompatible-semantic");
     mkdirSync(memoryDir);

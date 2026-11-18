@@ -416,6 +416,8 @@ async function semanticScoresFrom(
 ): Promise<ReadonlyMap<MemoryId, number> | undefined> {
   throwIfAborted(signal);
   // The bound provider cannot produce a comparable query vector for an old provider's rows.
+  // The configured model name can be a same-endpoint alias. The gateway supplies the canonical
+  // model only in its response, including when the alias itself looks like a familiar model ID.
   if (!candidateIds.some((id) => embeddings.get(id)?.provider === gate.providerIdentity)) {
     warnSkippedIncompatible(deps, embeddings.size, candidateIds.length);
     return new Map<MemoryId, number>();
