@@ -796,3 +796,11 @@ retired surfaces of #4448 change the core and optional English and German catalo
 `--init`, Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`, and `npm run check:update-ui-evidence`
 passed. The three producer-generated records bind the updated source digests and generation time.
 The fourteen committed captures retain the typography of their original renderer.
+
+## MemoriaViva profile disclosure — 2026-11-18 (#4215)
+
+The new Chat disclosure labels update both optional message catalogs. The original nine Chromium
+cases passed in 2.4 minutes in the Linux arm64 gates container with Node 26.13.1, an init process,
+and Liberation fonts. The three records bind the new catalog digests. The committed screenshots
+show the previously qualified updater rendering. The Editor B1–B3 gates also passed against the
+Linux static export with the existing measurement fingerprint.
