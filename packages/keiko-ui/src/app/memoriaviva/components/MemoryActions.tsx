@@ -340,7 +340,7 @@ export function MemoryActions({
   correctImpl = correctMemory,
 }: MemoryActionsProps): ReactNode {
   const t = useTranslate();
-  const [actionInFlight, setBusy] = useState<BusyAction>(null);
+  const [actionInFlight, setActionInFlight] = useState<BusyAction>(null);
   // The dialog's trigger stays mounted and focusable while the canonical record reloads.
   const busy = contentPending ? "refresh" : actionInFlight;
   const [error, setError] = useState<string | null>(null);
@@ -355,7 +355,7 @@ export function MemoryActions({
   const run = useCallback(
     async (action: BusyAction, fn: () => Promise<void>): Promise<void> => {
       if (busy !== null) return;
-      setBusy(action);
+      setActionInFlight(action);
       setError(null);
       setNotice(null);
       try {
@@ -363,7 +363,7 @@ export function MemoryActions({
       } catch (err) {
         setError(formatError(err));
       } finally {
-        setBusy(null);
+        setActionInFlight(null);
       }
     },
     [busy],
