@@ -3556,6 +3556,7 @@
     "keiko-workspace/ownedRootMint",
     "keiko-workspace/ownedRootPreserve",
     "keiko-workspace/paths",
+    "keiko-workspace/physicalLines",
     "keiko-workspace/realpath",
     "keiko-workspace/realpathPolicy",
     "keiko-workspace/repoSearch",

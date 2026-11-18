@@ -53,7 +53,10 @@ describe("line endings in excerpts and index lines (#4439)", () => {
     const lfTrailing = content.endsWith("\n") ? `${LF}\n` : LF;
     for (const lane of [undefined, "editor"] as const) {
       expect(await excerptOf(content, 1, 5, lane)).toEqual(await excerptOf(lfTrailing, 1, 5, lane));
-      expect(await excerptOf(content, 2, 3, lane)).toEqual({ content: "  return 1;\n}", endLine: 3 });
+      expect(await excerptOf(content, 2, 3, lane)).toEqual({
+        content: "  return 1;\n}",
+        endLine: 3,
+      });
       expect((await excerptOf(content, 5, 5, lane)).content).toBe("const beta = 2;");
     }
   });
