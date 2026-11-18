@@ -1261,9 +1261,10 @@ the owner entry of its start already inside, naming when it was written, so no s
 empty. A lock whose start no longer runs is cleared entry by entry and only then removed, so of two
 starts that find it so one takes it. Neither a process number nor a timestamp proves that a start
 still runs: the system reuses the numbers of ended processes (Windows soon after) and a clock can
-jump, so liveness is observed renewal. Every holder (the start, whose renewal runs in a worker thread
-so it continues while the start is blocked in npm, and npm's process with its `npm-` entry) rewrites
-its entry every 15 seconds. A start that finds a lock without any entry whose process number runs
+jump, so liveness is observed renewal. Every holder rewrites its own entry every 15 seconds: the
+start, whose renewal runs in a worker thread so it continues while the start is blocked in npm, its
+`owner-` entry, and npm's process its `npm-` entry only. npm never renews the start's entry and only
+verifies that it is still there, so a start window that was closed cannot look alive behind npm. A start that finds a lock without any entry whose process number runs
 takes it over at once; otherwise it watches the entries for up to 60 seconds on its own monotonic
 clock, and any entry that changes (or appears) means the lock is held, while none means the number
 was reused or the holder is frozen and the lock is taken over. No wall-clock comparison across
@@ -1278,21 +1279,27 @@ entry; a Stop adds its entry and then looks for the closing entry, so a Stop is 
 closing start and carried out while it still holds the lock, or is turned away, waits until that start has
 let go, takes the lock, closes it and stops Keiko under it (a lock held for 90 seconds makes the Stop
 say so and not act). While it waits it retries recording: a later start that wins the lock first
-records the Stop in its own lock and carries it out, and the waiting Stop does not act itself. So it can never stop the Keiko a later start opened. A
+records the Stop in its own lock and carries it out, and the waiting Stop does not act itself. A start writes its token
+to `system/keiko-npm-start-generation` under the lock before it opens Keiko; the waiting Stop reads that record when it is
+turned away and again after it took the lock, and does not act when it changed (a start opened Keiko meanwhile and came
+after the Stop), nor when closing the lock it took reports it is no longer its own. So it can never stop the Keiko a later start opened. A
 lock that only npm of an already ended start holds accepts no Stop, so that Stop acts at once. A start
 that finds a `closing` entry waits up to the same 90 seconds for that holder to let go before it
-reports another start, so a Start pressed while a Stop acts opens Keiko after it. A start that finds its lock
+reports another start, so a Start pressed while a Stop acts opens Keiko after it. A start that finds the lock held
+but not renewed by a start (only the npm of a closed start window holds it) waits up to 10 minutes for that npm to end and
+then takes the lock and starts normally; after that it ends with exit code 1 and asks to start again in a minute, never
+reporting another window that no longer exists. A start that finds its lock
 generation replaced ends with a plain message before it writes the installed marker or dispatches
 the CLI. Renames of the lock folder are retried while Windows holds a passing handle in it. npm's
 own process adds an owner entry of its own when it loads (`--import` of the launcher module with
 the lock folder and the start's owner entry as a query, which only holds the lock), so a start that
 ends while npm still installs leaves the lock held until that npm ends. While npm runs, its process
-renews its own entry and the start's every 15 seconds on a timer that never keeps npm running,
-so an installation of any length keeps its lock; at exit it renews the start's entry once
-more and removes its own, so the lock passes back to the start until Keiko is open. A renewal
+renews its own entry every 15 seconds on a timer that never keeps npm running,
+so an installation of any length keeps its lock; at exit it removes its own entry, and the lock stays with
+the start until Keiko is open. A renewal
 rewrites the timestamp of an entry still in the lock in place and never empties the file, never
 recreates an entry that went with a release or takeover, and accepts no name outside the lock; a
-failed renewal is said once, keeps the last valid timestamp and never ends npm, but a renewal that
+failed renewal is said once, keeps the last valid timestamp and never ends npm, but a renewal check that
 finds its own entry or the start's gone ends npm at once (the lock was taken over). Two npm
 processes never install into the same folder: when the start requested the hold, the preload ends
 npm with a non-zero exit before npm does anything if the lock is absent, the start's owner entry is
