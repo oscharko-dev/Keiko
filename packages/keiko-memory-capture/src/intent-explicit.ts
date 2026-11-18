@@ -117,24 +117,22 @@ const FORGET_PATTERNS: readonly RegExp[] = [
   // Bare "Lösche die Datei" is a task. It must never reach a memory.
   /^\s*lösche(?:\s+bitte)?\s+die\s+erinnerung\s+(?:an|zu|über|ueber)\s+/iu,
 ];
-// "Vergiss nicht, ..." and "Vergiss nie, ..." mean the opposite of forgetting, so they are no forget.
-const VERGISS_NICHT_RE = /^\s*vergiss\s+(?:es\s+|das\s+)?(?:bitte\s+)?(?:nicht|nie|niemals)\b/iu;
+// A leading negation may follow a pronoun or modal particle: "Vergiss es bitte nicht".
+const VERGISS_NEGATION_PREFIX_RE =
+  /^\s*vergiss\s+(?:(?:es|das|bitte|ja|doch|bloß|bloss|noch|lieber|einfach|nur)\s+)*/iu;
+const GERMAN_NEGATION = String.raw`nicht|nie|niemals|auf\s+(?:gar\s+)?keinen\s+fall`;
+const NEGATED_START_RE = new RegExp(String.raw`^(?:${GERMAN_NEGATION})\b`, "iu");
 const VERGISS_RE = /^\s*vergiss\b/iu;
-const DASS_RE = /\bdass\b/iu;
-const NEGATED_ENDINGS: readonly string[] = [" nicht", " nie", " niemals"];
+const VERGISS_DASS_RE = /^\s*vergiss(?:\s+bitte)?,?\s+dass\b/iu;
+const NEGATED_END_RE = new RegExp(String.raw`(?:^|\s)(?:${GERMAN_NEGATION})$`, "iu");
 // "Vergiss es" and "Forget it" mean "never mind", so they name nothing to forget.
 const NEVER_MIND_TARGETS: ReadonlySet<string> = new Set(["es", "it"]);
 
-// "Vergiss den Bericht nicht" keeps the negation for the end. "Vergiss, dass ich das nicht mag"
-// is a real forget: its "nicht" belongs to the fact.
-function endsNegated(text: string): boolean {
-  if (!VERGISS_RE.test(text) || DASS_RE.test(text)) return false;
-  const lower = trimForgetTarget(text.trim()).toLowerCase();
-  return NEGATED_ENDINGS.some((ending) => lower.endsWith(ending));
-}
-
 function forgetPrefixMatch(text: string): RegExpExecArray | null {
-  if (VERGISS_NICHT_RE.test(text) || endsNegated(text)) return null;
+  const germanPrefix = VERGISS_NEGATION_PREFIX_RE.exec(text);
+  if (germanPrefix !== null && NEGATED_START_RE.test(text.slice(germanPrefix[0].length))) {
+    return null;
+  }
   return execFirst(FORGET_PATTERNS, text);
 }
 
@@ -153,6 +151,7 @@ const FORGET_REFERENCE_WORDS: ReadonlySet<string> = new Set([
 ]);
 const FORGET_TARGET_END_MARKS = new Set([" ", "\t", ".", "!", "?", "…"]);
 const FORGET_TARGET_POLITE_TAILS: readonly string[] = [" bitte", " please"];
+const POLITE_FORGET_OPENING = /^[ \t]*(?:bitte[ \t]+(?=vergiss\b)|please[ \t]+(?=forget\b))/iu;
 
 // Plain string walks: a regex anchored at the end would rescan a long run of spaces per position.
 function trimForgetTarget(target: string): string {
@@ -219,6 +218,22 @@ function firstNamingWord(target: string): string | undefined {
 // introduces what is forgotten ("Forget the address: Take Street 5"), never a request after it.
 const CONTINUATION_SEPARATORS = String.raw`[,;，；–—]|\s-\s|\s(?:und|and|dann|then)(?!\p{L})`;
 const CONTINUATION_RE = new RegExp(CONTINUATION_SEPARATORS, "gu");
+const FORGET_NEGATION_BOUNDARIES = new RegExp(
+  String.raw`${CONTINUATION_SEPARATORS}|[:：]|[.!?…](?=\s)`,
+  "u",
+);
+
+// A trailing German negation still governs the imperative before a follow-up. A direct "dass"
+// clause names the fact itself, where a negation belongs to that fact.
+function negatesForgetTarget(text: string, target: string): boolean {
+  return (
+    VERGISS_RE.test(text) &&
+    !VERGISS_DASS_RE.test(text) &&
+    target
+      .split(FORGET_NEGATION_BOUNDARIES)
+      .some((part) => NEGATED_END_RE.test(trimForgetTarget(part.trim())))
+  );
+}
 // "Forget that, tell me the rest": a word that refers to what was just said, directly followed by
 // the clause that goes on.
 const REFERENCE_THEN_CONTINUATION_RE = new RegExp(
@@ -323,8 +338,10 @@ function statedForgetTarget(text: string): string | null {
   const prefixMatch = forgetPrefixMatch(text);
   if (prefixMatch === null) return null;
   const body = bodyAfterPrefix(prefixMatch, text);
-  if (body === null || firstSentence(body).endsWith("?")) return null;
-  const target = trimForgetTarget(firstSentence(body));
+  if (body === null) return null;
+  const sentence = firstSentence(body);
+  if (sentence.endsWith("?") || negatesForgetTarget(text, sentence)) return null;
+  const target = trimForgetTarget(sentence);
   return target === "" || NEVER_MIND_TARGETS.has(target.toLowerCase()) ? null : target;
 }
 
@@ -332,7 +349,8 @@ function forgetRequestOf(text: string): ForgetRequest | null {
   for (const [pattern, target] of FORGET_REFERENCE_STATEMENTS) {
     if (pattern.test(text)) return { target, lookup: target, onlyIfStored: false };
   }
-  const target = statedForgetTarget(text);
+  // Run every guard, including negation and task continuations, on the same imperative.
+  const target = statedForgetTarget(text.replace(POLITE_FORGET_OPENING, ""));
   if (target === null) return null;
   const continuation = continuationOf(target);
   if (continuation === null) return statedForget(target, target);

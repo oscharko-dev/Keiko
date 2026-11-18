@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "id": "polite-forget-no-de",
+  "language": "de",
+  "class": "forget-not",
+  "difficulty": "plain",
+  "description": "A negated polite request preserves the preference.",
+  "truth": [
+    {
+      "key": "format-preference",
+      "seed": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "must": true,
+      "private": true,
+      "terms": [["Tabelle*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": [
+        {
+          "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "Bitte vergiss das nicht.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie sollst du mir Zahlen zeigen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabelle*"]]
+      }
+    }
+  ]
+}

@@ -435,6 +435,23 @@ describe("explicit German forget and remember statements (#4211)", () => {
   };
 
   it.each([
+    "Bitte vergiss das nicht.",
+    "Bitte vergiss nie, dass ich Tabellen mag.",
+    "Bitte vergiss den Bericht nicht!",
+    "Bitte vergiss meine Formatvorliebe nicht. Danke.",
+    "Bitte vergiss den Bericht nicht, vielen Dank.",
+    "Bitte vergiss den Bericht nicht – das ist mir wichtig.",
+    "Bitte vergiss den Bericht nicht: Ich brauche ihn.",
+    "Bitte vergiss meine Aussage, dass ich im Team arbeite, nicht. Danke.",
+    "Bitte vergiss doch nicht meine Formatvorliebe.",
+    "Bitte vergiss bloß nicht, dass ich Tabellen mag.",
+    "Bitte vergiss auf gar keinen Fall den Bericht.",
+    "Bitte vergiss den Bericht auf keinen Fall, vielen Dank.",
+    "Please don't forget that.",
+    "Please forget not the report.",
+    "Please forget it.",
+    "Please forget the old API and use the new one.",
+    "She said: Please forget my address.",
     "Vergiss nicht, den Bericht zu schicken",
     "Vergiss bitte nicht den Bericht",
     "vergiss es nicht",
@@ -467,6 +484,15 @@ describe("explicit German forget and remember statements (#4211)", () => {
   });
 
   it.each([
+    ["Bitte vergiss meine Formatvorliebe.", "meine Formatvorliebe"],
+    ["Please forget my formatting preference.", "my formatting preference"],
+    ["Bitte vergiss, dass ich Tabellen mag.", "ich Tabellen mag"],
+    [
+      "Bitte vergiss, dass ich Tabellen mag, aber Layouts nicht. Danke.",
+      "ich Tabellen mag, aber Layouts nicht",
+    ],
+    ["Please forget that I use tables.", "I use tables"],
+    ["Please forget that I don't use tables. Thanks.", "I don't use tables"],
     ["Vergiss, dass ich Tabellen mag", "ich Tabellen mag"],
     ["Vergiss bitte, dass ich Tabellen mag.", "ich Tabellen mag"],
     ["Forget that I like tables.", "I like tables"],

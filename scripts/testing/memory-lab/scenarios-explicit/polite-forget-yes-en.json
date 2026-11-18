@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "polite-forget-yes-en",
+  "language": "en",
+  "class": "forget",
+  "difficulty": "plain",
+  "description": "A polite forget request removes the preference.",
+  "truth": [],
+  "turns": [
+    {
+      "user": "I prefer tables when you show me numbers.",
+      "learner": [
+        {
+          "body": "I prefer tables when you show me numbers.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "Please forget that.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "How should you show me numbers?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    }
+  ],
+  "forgotten": [
+    {
+      "terms": [["table*"]]
+    }
+  ]
+}
