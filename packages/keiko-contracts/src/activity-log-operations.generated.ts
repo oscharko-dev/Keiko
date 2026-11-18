@@ -9752,6 +9752,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      pathCase: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["case-sensitive", "case-insensitive"],
+      },
       deniedEntries: {
         type: "integer",
         dataClass: "count",

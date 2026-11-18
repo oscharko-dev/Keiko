@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "aaab8226ce64ce40cc6f3882925506f8575e28cf4c3235e5b5bcb815b508a990",
+    "catalogDigest": "b3c2dc298b5c9bccc8c4075ee4b4218fa837d054b9c647ac99be1c7e323ddb59",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -10138,6 +10138,12 @@
             "dataClass": "count",
             "required": false
           },
+          "pathCase": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["case-sensitive", "case-insensitive"]
+          },
           "deniedEntries": {
             "type": "integer",
             "dataClass": "count",
@@ -10192,9 +10198,9 @@
         "failureClasses": ["coding-repository-search"],
         "proofIds": ["coding-repository-handler.settled.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:39",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:40",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:207"
+          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:216"
         ]
       },
       {
@@ -10222,9 +10228,9 @@
         "failureClasses": ["coding-repository-search"],
         "proofIds": ["coding-repository-handler.started.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:23",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:24",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:281"
+          "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:291"
         ]
       },
       {
@@ -75465,6 +75471,12 @@
                   "required": false
                 },
                 {
+                  "name": "pathCase",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "policyMode",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -122424,13 +122436,13 @@
     {
       "op": "coding-repository-handler.settled",
       "category": "search",
-      "site": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:42",
+      "site": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:43",
       "package": "keiko-server"
     },
     {
       "op": "coding-repository-handler.started",
       "category": "search",
-      "site": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:26",
+      "site": "packages/keiko-server/src/coding-runtime/codingRepositorySearchHandler.ts:27",
       "package": "keiko-server"
     },
     {

@@ -11562,6 +11562,12 @@
               "required": false
             },
             {
+              "name": "pathCase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "policyMode",
               "type": "string",
               "dataClass": "closed-enum",

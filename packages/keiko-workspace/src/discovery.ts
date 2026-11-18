@@ -17,7 +17,7 @@ import {
   type WorkspaceFs,
   type WorkspaceStat,
 } from "./fs.js";
-import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
+import { compileWorkspaceIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import {
   admittedSearchScopeEntry,
@@ -566,7 +566,7 @@ function createWalk(
     fs: realRoot === undefined ? fs : workspaceFsBoundToCanonicalRoot(fs, realRoot),
     root: realRoot ?? workspace.root,
     realRoot,
-    matcher: compileIgnore(workspace.ignoreLines),
+    matcher: compileWorkspaceIgnore(workspace),
     opts,
     applyGitignore: opts.applyGitignore,
     out: [],

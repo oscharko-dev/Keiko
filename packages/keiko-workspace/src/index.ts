@@ -31,6 +31,7 @@ export type {
   TestFramework,
   WorkspaceInfo,
   WorkspaceLanguage,
+  WorkspacePathCase,
   WorkspaceSummary,
 } from "./types.js";
 
@@ -72,6 +73,7 @@ export {
 
 export {
   compileIgnore,
+  compileWorkspaceIgnore,
   DEFAULT_DENY_PATTERNS,
   isDenied,
   isIgnored,
@@ -80,6 +82,16 @@ export {
 } from "./ignore.js";
 
 export { detectWorkspace, detectWorkspaceAt } from "./detect.js";
+
+export {
+  isCaseInsensitivePathCase,
+  parseGitCoreIgnoreCase,
+  pathCaseFromGitIgnoreCase,
+  pathCaseKey,
+  pathGlobCaseSensitive,
+  platformPathCase,
+  workspacePathCase,
+} from "./pathCase.js";
 
 export {
   discoverFiles,
