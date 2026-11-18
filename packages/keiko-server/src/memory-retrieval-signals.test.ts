@@ -31,11 +31,6 @@ vi.mock("@oscharko-dev/keiko-local-knowledge", async (importOriginal) => {
   return { ...actual, searchUsearchAnnIndex: searchMock };
 });
 
-vi.mock("./memory-embedding.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./memory-embedding.js")>();
-  return { ...actual, embedMemoryText: embedMock };
-});
-
 const { buildConversationRetrievalSignals } = await import("./memory-retrieval-signals.js");
 
 const NOW_MS = 10_000;
@@ -106,11 +101,10 @@ function vaultFor(
 function collectSignals(
   vault: MemoryVaultStore,
 ): ReturnType<typeof buildConversationRetrievalSignals> {
-  return buildConversationRetrievalSignals(DEPS, vault, "memory query", [SCOPE], NOW_MS, {
-    allowed: true,
-    reason: "allowed",
-  });
+  return buildConversationRetrievalSignals(DEPS, vault, [SCOPE], NOW_MS, ALLOWED_GATE);
 }
+
+const ALLOWED_GATE = { allowed: true, reason: "allowed", embedQuery: embedMock } as const;
 
 // A recording diagnostics sink, so a test can assert on the redaction-safe record a degraded
 // semantic-retrieval path emits instead of on a console.warn call (#2902 O-F4).
@@ -235,10 +229,9 @@ describe("buildConversationRetrievalSignals", () => {
     const signals = await buildConversationRetrievalSignals(
       deps,
       vault,
-      "memory query",
       [SCOPE],
       NOW_MS,
-      { allowed: true, reason: "allowed" },
+      ALLOWED_GATE,
     );
 
     expect(observations[0]?.ids).toEqual(["valid"]);
@@ -263,10 +256,13 @@ describe("buildConversationRetrievalSignals", () => {
       const alpha = memoryId("alpha");
       const vault = vaultFor(() => [metadata(alpha, 100)], new Map());
       const { deps, calls } = depsWithDiagnostics();
-      await buildConversationRetrievalSignals(deps, vault, "memory query", [SCOPE], NOW_MS, {
-        allowed: reason === "no-embeddings",
-        reason,
-      });
+      await buildConversationRetrievalSignals(
+        deps,
+        vault,
+        [SCOPE],
+        NOW_MS,
+        reason === "no-embeddings" ? ALLOWED_GATE : { allowed: false, reason },
+      );
       expect(calls).toContainEqual(
         expect.objectContaining({
           operation: "memory.retrieval.semantic-disabled",
@@ -289,10 +285,9 @@ describe("buildConversationRetrievalSignals", () => {
     const signals = await buildConversationRetrievalSignals(
       deps,
       vault,
-      "memory query",
       [SCOPE],
       NOW_MS,
-      { allowed: true, reason: "allowed" },
+      ALLOWED_GATE,
     );
 
     expect(signals.semanticById).toBeUndefined();
@@ -318,10 +313,7 @@ describe("buildConversationRetrievalSignals", () => {
     searchMock.mockResolvedValueOnce({ ok: false, reason: "runtime-integrity-failed" });
     const { deps, calls } = depsWithDiagnostics();
 
-    await buildConversationRetrievalSignals(deps, vault, "memory query", [SCOPE], NOW_MS, {
-      allowed: true,
-      reason: "allowed",
-    });
+    await buildConversationRetrievalSignals(deps, vault, [SCOPE], NOW_MS, ALLOWED_GATE);
 
     const disabled = calls.find(
       (record) => record.operation === "memory.retrieval.semantic-disabled",

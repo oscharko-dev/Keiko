@@ -902,7 +902,6 @@ async function runMemoryRetrieval(
   const signals = await buildConversationRetrievalSignals(
     ctx.deps,
     vault,
-    queryText,
     scopes,
     ctx.nowMs,
     semanticGate,

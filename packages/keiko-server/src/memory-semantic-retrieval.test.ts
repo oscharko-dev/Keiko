@@ -454,7 +454,6 @@ describe("semantic memory retrieval (#204)", () => {
     const signals = await buildConversationRetrievalSignals(
       d,
       spiedVault,
-      query,
       [scope],
       Date.now(),
       gate,
@@ -491,7 +490,7 @@ describe("semantic memory retrieval (#204)", () => {
     const query = "Which candidate matters?";
     const gate = semanticRetrievalGateForText(d, query, {});
 
-    await buildConversationRetrievalSignals(d, spiedVault, query, [scope], Date.now(), gate);
+    await buildConversationRetrievalSignals(d, spiedVault, [scope], Date.now(), gate);
 
     expect(requestedIds).toHaveLength(160);
     vault.close();
@@ -584,6 +583,81 @@ describe("semantic memory retrieval (#204)", () => {
     vault.close();
   });
 
+  it.each([
+    {
+      scenario: "sensitive query with the external provider selected",
+      preferred: EXTERNAL_EMBEDDING_BASE_URL,
+      secondary: IN_TENANT_EMBEDDING_BASE_URL,
+      query: "My private support email is dev@example.com; Wie heißt mein Produkt?",
+      expectedEndpoints: [],
+    },
+    {
+      scenario: "sensitive query with the in-tenant provider selected",
+      preferred: IN_TENANT_EMBEDDING_BASE_URL,
+      secondary: EXTERNAL_EMBEDDING_BASE_URL,
+      query: "My private support email is dev@example.com; Wie heißt mein Produkt?",
+      expectedEndpoints: [IN_TENANT_EMBEDDING_BASE_URL],
+    },
+    {
+      scenario: "public query with the external provider selected",
+      preferred: EXTERNAL_EMBEDDING_BASE_URL,
+      secondary: IN_TENANT_EMBEDDING_BASE_URL,
+      query: "Wie heißt mein Produkt?",
+      expectedEndpoints: [EXTERNAL_EMBEDDING_BASE_URL],
+    },
+    {
+      scenario: "credential-shaped query with the in-tenant provider selected",
+      preferred: IN_TENANT_EMBEDDING_BASE_URL,
+      secondary: EXTERNAL_EMBEDDING_BASE_URL,
+      query: `Wie heißt mein Produkt? api_key=${["sk-", "abcdefghijklmnopqrstuvwxyz12345"].join("")}`,
+      expectedEndpoints: [],
+    },
+  ])(
+    "honors the embedding egress policy for $scenario",
+    async ({ preferred, secondary, query, expectedEndpoints }) => {
+      const memoryDir = join(tmp, "vault-mixed-embedding-providers");
+      mkdirSync(memoryDir);
+      const vault = createMemoryVault({ memoryDir, redactString: (value) => value });
+      try {
+        const content = "The user is building a product named Keiko";
+        insertAccepted(vault, "mem-product", content);
+        storeEmbedding(vault, "mem-product", content, preferred);
+        const config = embeddingConfig(true, preferred);
+        const embeddingProvider = config.providers.find(
+          (provider) => provider.modelId === EMBEDDING_MODEL,
+        );
+        if (embeddingProvider === undefined) throw new Error("test embedding provider missing");
+        const endpoints: string[] = [];
+        const embed = embeddingAdapter();
+        await restart(
+          deps(
+            {
+              memoryVault: vault,
+              config: {
+                ...config,
+                providers: [
+                  ...config.providers,
+                  { ...embeddingProvider, modelId: "text-embedding-auxiliary", baseUrl: secondary },
+                ],
+              },
+              localKnowledgeEmbeddingRequest: (request) => {
+                endpoints.push(request.endpoint);
+                return embed(request);
+              },
+            },
+            true,
+          ),
+        );
+
+        await sendChat(await createChat(), query);
+
+        expect(endpoints).toEqual(expectedEndpoints);
+      } finally {
+        vault.close();
+      }
+    },
+  );
+
   it("allows restricted-default semantic retrieval only for in-tenant embedding providers", async () => {
     const scope: MemoryScope = { kind: "user", userId: memoryUserId("local-operator") };
     const query = "restricted policy query";
@@ -610,11 +684,10 @@ describe("semantic memory retrieval (#204)", () => {
     const allowedGate = semanticRetrievalGateForText(inTenantDeps, query, {
       defaultSensitivity: "restricted",
     });
-    expect(allowedGate).toEqual({ allowed: true, reason: "allowed" });
+    expect(allowedGate).toMatchObject({ allowed: true, reason: "allowed" });
     const allowedSignals = await buildConversationRetrievalSignals(
       inTenantDeps,
       inTenantVault,
-      query,
       [scope],
       Date.now(),
       allowedGate,
@@ -643,7 +716,6 @@ describe("semantic memory retrieval (#204)", () => {
     const blockedSignals = await buildConversationRetrievalSignals(
       externalDeps,
       externalVault,
-      query,
       [scope],
       Date.now(),
       blockedGate,

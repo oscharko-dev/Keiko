@@ -416,6 +416,14 @@ export function createMemoryEmbedder(
     logEmbeddingUnavailable("provider-absent", providers.length, true);
     return null;
   }
+  return bindMemoryEmbedder(provider, requestImpl, log);
+}
+
+function bindMemoryEmbedder(
+  provider: ModelProviderConfig,
+  requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
+  log: EmbeddingLogSink,
+): MemoryEmbedder {
   const adapter = buildAdapter(provider, requestImpl, log);
   // NOT `async`: an async arrow that merely returns an inner promise adopts it, adding two
   // microtask ticks before the caller observes the result. Chat streaming interleaves cancellation
@@ -425,6 +433,19 @@ export function createMemoryEmbedder(
     text: string,
     kind: MemoryEmbeddingKind = "document",
   ): Promise<MemoryEmbeddingInput | null> => requestMemoryEmbedding(adapter, provider, text, kind);
+}
+
+export function bindMemoryQueryEmbedding(
+  deps: UiHandlerDeps,
+  provider: ModelProviderConfig,
+  queryText: string,
+): () => Promise<MemoryEmbeddingInput | null> {
+  const embed = bindMemoryEmbedder(
+    provider,
+    requestEmbeddingImpl(deps),
+    deps.activityLog ?? processServerLogSink(),
+  );
+  return () => embed(queryText, "query");
 }
 
 // Split out of the factory so the request path stays inside the function-length bar once the three

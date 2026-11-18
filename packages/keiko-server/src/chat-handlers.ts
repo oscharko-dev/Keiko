@@ -1463,14 +1463,7 @@ async function retrieveChatMemory(
     content,
     memoryCapturePolicyForDeps(deps),
   );
-  const signals = await buildConversationRetrievalSignals(
-    deps,
-    vault,
-    content,
-    scopes,
-    nowMs,
-    semanticGate,
-  );
+  const signals = await buildConversationRetrievalSignals(deps, vault, scopes, nowMs, semanticGate);
   return retrieveMemoryContext(
     {
       scopes,
