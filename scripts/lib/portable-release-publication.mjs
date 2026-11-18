@@ -557,6 +557,13 @@ export function manifestBindingsFromAssets(assets, head, releaseTag, snapshot) {
 
 // A rerun's signed manifests must name the very GitHub objects of the live release; ids that
 // differ mean the manifests describe another release or asset set (PR #4464).
+// A signed setup asset for a target without a live one is as foreign as a differing id.
+function setupIdPairs(binding, expected) {
+  return expected.expectsSetup === true || binding?.setupAsset !== undefined
+    ? [["setup asset", binding?.setupAsset?.assetId, expected.setupAssetId]]
+    : [];
+}
+
 function signedIdFailures(manifest, expected) {
   if (!("releaseId" in expected)) return [];
   const binding = manifest.releaseImpact?.reviewedBinding;
@@ -565,9 +572,7 @@ function signedIdFailures(manifest, expected) {
     ["release (reviewed binding)", binding?.releaseId, expected.releaseId],
     ["archive asset", manifest.artifact?.assetId, expected.archiveAssetId],
     ["archive asset (reviewed binding)", binding?.assetId, expected.archiveAssetId],
-    ...(expected.expectsSetup === true
-      ? [["setup asset", binding?.setupAsset?.assetId, expected.setupAssetId]]
-      : []),
+    ...setupIdPairs(binding, expected),
   ];
   return pairs
     .filter(([, signed, live]) => signed !== live || live === undefined)

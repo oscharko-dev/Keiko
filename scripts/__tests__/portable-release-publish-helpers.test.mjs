@@ -85,7 +85,7 @@ describe("makeDownloadSeams bounds (PR #4464)", () => {
 describe("published rerun reconciles signed ids (PR #4464)", () => {
   const manifestName = "linux-x64-portable-manifest.json";
   const smoked = [];
-  function run(live) {
+  function run(live, { setup = true } = {}) {
     smoked.length = 0;
     const manifest = {
       artifact: { assetId: 11 },
@@ -118,7 +118,7 @@ describe("published rerun reconciles signed ids (PR #4464)", () => {
         {
           archiveAssetName: "keiko-linux-x64.zip",
           platformTarget: "linux-x64",
-          setupAssetName: "keiko-linux-x64-setup.zip",
+          ...(setup ? { setupAssetName: "keiko-linux-x64-setup.zip" } : {}),
           evidenceFiles: [
             {
               assetName: manifestName,
@@ -128,18 +128,20 @@ describe("published rerun reconciles signed ids (PR #4464)", () => {
           ],
         },
       ],
-      archiveExpected: ["keiko-linux-x64.zip", "keiko-linux-x64-setup.zip"].map((assetName) => ({
-        assetName,
-        expectedSha256: "f".repeat(64),
-        expectedSize: 3,
-        firstClassArchive: false,
-      })),
+      archiveExpected: ["keiko-linux-x64.zip", ...(setup ? ["keiko-linux-x64-setup.zip"] : [])].map(
+        (assetName) => ({
+          assetName,
+          expectedSha256: "f".repeat(64),
+          expectedSize: 3,
+          firstClassArchive: false,
+        }),
+      ),
       archiveSnapshot: {
         id: live.releaseId,
         assets: [
           { name: manifestName, digest, size: text.length },
           { name: "keiko-linux-x64.zip", id: live.archiveId },
-          { name: "keiko-linux-x64-setup.zip", id: live.setupId },
+          ...(setup ? [{ name: "keiko-linux-x64-setup.zip", id: live.setupId }] : []),
         ],
       },
       verifyAssets: () => undefined,
@@ -155,6 +157,14 @@ describe("published rerun reconciles signed ids (PR #4464)", () => {
       /linux-x64: signed release id 10 differs from the live GitHub id 90.*signed archive asset id 11 differs from the live GitHub id 99/su,
     );
     // The recovery refused before the public smoke step, so nothing proceeds toward npm.
+    expect(smoked).toStrictEqual([]);
+  });
+
+  it("refuses a signed setup asset for a target the live release has none for", () => {
+    // Independent audit of PR #4464: the setup id was compared only when the target expects one.
+    expect(() => run({ releaseId: 10, archiveId: 11 }, { setup: false })).toThrow(
+      /linux-x64: signed setup asset id 12 differs from the live GitHub id undefined/u,
+    );
     expect(smoked).toStrictEqual([]);
   });
 

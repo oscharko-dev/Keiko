@@ -804,7 +804,11 @@ describe("binding a template to this Jira", () => {
       "# Story template",
     ].join("\n");
     vi.mocked(skills.readMarkdownSkill).mockResolvedValue({ ...DOCUMENT, body: owned });
-    vi.mocked(templates.validateJiraTemplate).mockResolvedValue(bindable);
+    // The server, which knows the instance, says the file's binding is not this Jira's.
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue({
+      ...bindable,
+      bindingUnconfirmed: true,
+    });
     vi.mocked(templates.bindJiraTemplate).mockResolvedValue({
       changed: true,
       issueType: "Story",
@@ -824,6 +828,41 @@ describe("binding a template to this Jira", () => {
       expect.any(String),
       true,
     );
+  });
+
+  it("still completes a binding this Jira confirms on its own, without a migration (PR #4464)", async () => {
+    // A file bound to this Jira whose view now resolves a further slot is bindable as well: that
+    // completion stays automatic, because the server does not call the binding unconfirmed.
+    const confirmed = [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Story",
+      'issueTypeId: "10001"',
+      `jiraBinding: "${"a".repeat(32)}"`,
+      "activateOn: [create]",
+      "summaryMinLength: 4",
+      "---",
+      "# Story template",
+    ].join("\n");
+    vi.mocked(skills.readMarkdownSkill).mockResolvedValue({ ...DOCUMENT, body: confirmed });
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue(bindable);
+    vi.mocked(templates.bindJiraTemplate).mockResolvedValue({
+      changed: true,
+      issueType: "Story",
+      parentTypeCount: 0,
+      skill: BOUND_SKILL,
+    });
+    render(<Panel stored={stored} />);
+    await waitFor(() => {
+      expect(templates.bindJiraTemplate).toHaveBeenCalledWith(
+        "pod-1",
+        ENTRY.id,
+        ENTRY.revision,
+        expect.any(String),
+      );
+    });
   });
 
   it("says what a bound template is and does not bind it again", async () => {

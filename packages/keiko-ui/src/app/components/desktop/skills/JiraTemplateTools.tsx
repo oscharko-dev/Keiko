@@ -267,8 +267,12 @@ export function PodSelect({ jira }: { readonly jira: JiraTemplates }): ReactNode
   );
 }
 
+// The server says when the file's binding is not confirmed for this Jira: replacing that binding is
+// the person's explicit choice, never automatic (PR #4464).
 function ownedElsewhere(check: AutomaticTemplateCheck | undefined): boolean {
-  return check !== undefined && check !== "failed" && check.bindingOwnedElsewhere === true;
+  return (
+    check !== undefined && check !== "failed" && check.valid && check.bindingUnconfirmed === true
+  );
 }
 
 function bindable(check: AutomaticTemplateCheck | undefined): boolean {

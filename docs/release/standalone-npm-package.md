@@ -102,8 +102,8 @@ and only then stops the open Keiko, so no start opens Keiko between its decision
 it can never stop the Keiko a later start opened (if the lock stays held for 90 seconds it says so
 and does not act). A start that opens Keiko writes its token into `system/keiko-npm-start-generation`
 under the lock, in one rename, before it opens Keiko; the record outlives the lock. A Stop reads it
-when the closing lock turns it away and again once it holds the lock: if it changed, another start
-opened Keiko while the Stop waited, that start came after the Stop, and the Stop says so and leaves
+as it is pressed, before it asks the lock, and again once it holds the lock: if it changed, another
+start opened Keiko while the Stop asked or waited, that start came after the Stop, and the Stop says so and leaves
 Keiko open (press Stop again to end it). A Stop whose lock was taken over before it could close it
 does not act either and asks to be pressed again. If a later start wins the lock first, the Stop is recorded in that start's lock
 instead and that start, which does not leave Keiko open, carries it out; the Stop does not act itself. A

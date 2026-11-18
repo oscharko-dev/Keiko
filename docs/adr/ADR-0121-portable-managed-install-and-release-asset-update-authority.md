@@ -1280,8 +1280,8 @@ closing start and carried out while it still holds the lock, or is turned away, 
 let go, takes the lock, closes it and stops Keiko under it (a lock held for 90 seconds makes the Stop
 say so and not act). While it waits it retries recording: a later start that wins the lock first
 records the Stop in its own lock and carries it out, and the waiting Stop does not act itself. A start writes its token
-to `system/keiko-npm-start-generation` under the lock before it opens Keiko; the waiting Stop reads that record when it is
-turned away and again after it took the lock, and does not act when it changed (a start opened Keiko meanwhile and came
+to `system/keiko-npm-start-generation` under the lock before it opens Keiko; a Stop reads that record as it is pressed,
+before it asks the lock, and again after it took the lock, and does not act when it changed (a start opened Keiko meanwhile and came
 after the Stop), nor when closing the lock it took reports it is no longer its own. So it can never stop the Keiko a later start opened. A
 lock that only npm of an already ended start holds accepts no Stop, so that Stop acts at once. A start
 that finds a `closing` entry waits up to the same 90 seconds for that holder to let go before it

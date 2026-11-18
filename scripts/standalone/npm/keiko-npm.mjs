@@ -1473,9 +1473,7 @@ function reportStartCameAfterStop() {
 // that start has let go, takes the lock, closes it so no further Stop is recorded in it, and only
 // then stops Keiko. No start opens Keiko between the Stop's decision and its effect, so the Stop
 // can never end the Keiko a newer start opened.
-function stopUnderLock(root, state, env, run) {
-  // What this Stop was turned away from: a start that opened Keiko later than this came after it.
-  const seen = startGeneration(root);
+function stopUnderLock(root, state, env, run, seen) {
   const { lock, recorded } = waitForStopLock(root);
   if (recorded) {
     reportStopRecorded();
@@ -1532,6 +1530,9 @@ function onlyNpmHoldsLock(root) {
  */
 export function stop(root, env, run = spawnSync) {
   const state = stateDir(env);
+  // The start record as this Stop was pressed, read before it asks the lock: a start that opens
+  // Keiko while the lock answers, or later while the Stop waits, came after this Stop.
+  const seen = startGeneration(root);
   if (requestStop(root)) {
     reportStopRecorded();
     return 0;
@@ -1542,7 +1543,7 @@ export function stop(root, env, run = spawnSync) {
   }
   return onlyNpmHoldsLock(root)
     ? stopNow(root, state, env, run)
-    : stopUnderLock(root, state, env, run);
+    : stopUnderLock(root, state, env, run, seen);
 }
 
 // The gateway connection Gateway Setup verified, and what it built from it. One token covers only

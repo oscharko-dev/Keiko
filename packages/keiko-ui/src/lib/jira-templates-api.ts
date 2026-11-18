@@ -52,6 +52,8 @@ export type JiraTemplateValidation =
   | {
       readonly valid: true;
       readonly binding?: JiraTemplateBindingState;
+      /** The file's binding is not confirmed for this Jira: replacing it needs an explicit choice. */
+      readonly bindingUnconfirmed?: true;
       readonly findings: readonly JiraTemplateFinding[];
       readonly checked: {
         readonly project: boolean;

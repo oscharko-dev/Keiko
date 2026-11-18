@@ -913,6 +913,30 @@ describe("binding a template to this Jira", () => {
     expect(f.deps.store.markdownSkills.get(skill.id)?.revision).toBe(1);
   });
 
+  it("tells the list which binding this Jira does not confirm, so only that one waits for a choice (PR #4464)", async () => {
+    const f = fixture();
+    const validate = (markdown: string): ReturnType<typeof handleValidateJiraTemplate> =>
+      handleValidateJiraTemplate(context(f.cookie, { podId: POD, markdown }), f.deps);
+    const foreign = typed(
+      "Story",
+      'issueTypeId: "999"',
+      'parentIssueTypeIds: ["998"]',
+      'parentFieldId: "parent"',
+      `jiraBinding: "${FOREIGN}"`,
+    );
+    expect((await validate(foreign)).body).toMatchObject({
+      valid: true,
+      bindingUnconfirmed: true,
+    });
+    // A binding this Jira made and still confirms carries no such mark, nor does an unbound file.
+    const skill = await stored(f, typed("Story"));
+    expect((await bind(f, skill)).body).toMatchObject({ changed: true });
+    const confirmed = f.deps.store.markdownSkills.get(skill.id)?.body ?? "";
+    expect(confirmed).toContain("jiraBinding:");
+    expect((await validate(confirmed)).body).not.toHaveProperty("bindingUnconfirmed");
+    expect((await validate(typed("Story"))).body).not.toHaveProperty("bindingUnconfirmed");
+  });
+
   it("ignores a binding made for another Jira and replaces it with this one's ids on an explicit migration", async () => {
     const f = fixture();
     const skill = await stored(

@@ -296,6 +296,7 @@ export function handleValidateJiraTemplate(
           valid: true,
           template: templateSummary(template),
           binding: resolveJiraTemplateBinding(template, read.instance, instanceId),
+          ...unconfirmedBinding(parsed.template, template),
           findings,
           checked: {
             project: read.instance.project !== undefined,
@@ -440,6 +441,21 @@ function saveBinding(
   });
 }
 
+/**
+ * Marks a file whose binding this Jira does not confirm (another Jira's, or one whose typed names
+ * were edited by hand): replacing that binding is the person's explicit choice (PR #4464).
+ */
+function bindingUnconfirmed(stored: JiraIssueTemplate, forInstance: JiraIssueTemplate): boolean {
+  return stored.binding !== undefined && forInstance.binding === undefined;
+}
+
+function unconfirmedBinding(
+  stored: JiraIssueTemplate,
+  forInstance: JiraIssueTemplate,
+): { readonly bindingUnconfirmed?: true } {
+  return bindingUnconfirmed(stored, forInstance) ? { bindingUnconfirmed: true } : {};
+}
+
 function readAccounting(fields: readonly unknown[] | undefined): MarkdownSkillTemplateAccounting {
   return {
     ...(fields === undefined ? {} : { checkedFieldCount: fields.length }),
@@ -453,7 +469,7 @@ function assertMigrationAsked(
   template: JiraIssueTemplate,
   migrate: unknown,
 ): void {
-  if (stored.binding === undefined || template.binding !== undefined || migrate === true) return;
+  if (!bindingUnconfirmed(stored, template) || migrate === true) return;
   throw new UiStoreError(
     "INVALID_REQUEST",
     `The template "${jiraIssueTemplateLabel(stored)}" is bound to another Jira. Migrate it to this Jira explicitly to replace that binding.`,

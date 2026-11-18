@@ -1829,6 +1829,41 @@ describe("the npm package start", () => {
       expect(existsSync(installLockPath(root))).toBe(false);
     });
 
+    it("does not stop the Keiko of a start that finished while the Stop was still asking the lock", () => {
+      // Independent audit of PR #4464: the Stop read the start record only after the lock had
+      // turned it away, so a start B that opened Keiko during that very question became the
+      // generation the Stop "saw", and the Stop then stopped B's Keiko although B came after it.
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { root, nodeDir, env } = installFixture();
+      installKeiko(root, `${lockfileDigest(root)}\n`);
+      const closing = acquireInstallLock(root);
+      closeInstallLock(closing);
+      const base = lockClock.sleep.getMockImplementation();
+      const commands = [];
+      const run = vi.fn((_node, args) => {
+        commands.push(args[1]);
+        return { status: 0 };
+      });
+      let pressed = false;
+      let started;
+      vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+        if (!pressed) {
+          // The first wait is the Stop's own question to the lock: A lets go and B opens Keiko.
+          pressed = true;
+          removeInstallLock(closing);
+          started = start(root, nodeDir, env, run);
+        }
+        base(milliseconds, dir);
+      });
+
+      expect(stop(root, env, run)).toBe(0);
+      expect(started).toBe(0);
+      expect(commands).toEqual(["start"]);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringMatching(/^Keiko was started again while Stop/u),
+      );
+    });
+
     it("stops the Keiko of the start that was closing when no other start came meanwhile", () => {
       quiet();
       const { root, nodeDir, env } = installFixture();
