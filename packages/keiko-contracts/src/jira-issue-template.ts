@@ -1269,6 +1269,9 @@ export function rebindJiraTemplateAfterEdit(
 /** Which typed clause a field reference belongs to: a `requiredFields` entry or the `parentField`. */
 export type JiraTemplateFieldRole = "required" | "parent";
 
+/** The parts of a template that say which field a typed reference is bound to. */
+type JiraTemplateBoundFields = Pick<JiraIssueTemplate, "binding" | "requiredFields" | "parent">;
+
 /**
  * The field id a bound template carries for a typed field reference, or undefined where the template
  * is unbound or that name did not resolve: such a reference is matched by name or by a typed id, as
@@ -1276,7 +1279,7 @@ export type JiraTemplateFieldRole = "required" | "parent";
  * `parentField` only the parent slot, so one name used by both clauses never answers with the other's id.
  */
 export function jiraTemplateBoundFieldId(
-  template: Pick<JiraIssueTemplate, "binding" | "requiredFields" | "parent">,
+  template: JiraTemplateBoundFields,
   reference: string,
   role: JiraTemplateFieldRole,
 ): string | undefined {
@@ -1303,13 +1306,13 @@ export function resolveJiraTemplateFieldIds(
 export function resolveJiraTemplateFieldIds(
   reference: string,
   catalog: readonly { readonly id: string; readonly name: string }[],
-  template: Pick<JiraIssueTemplate, "binding" | "requiredFields" | "parent"> | undefined,
+  template: JiraTemplateBoundFields | undefined,
   role: JiraTemplateFieldRole,
 ): readonly string[];
 export function resolveJiraTemplateFieldIds(
   reference: string,
   catalog: readonly { readonly id: string; readonly name: string }[],
-  template?: Pick<JiraIssueTemplate, "binding" | "requiredFields" | "parent">,
+  template?: JiraTemplateBoundFields,
   role?: JiraTemplateFieldRole,
 ): readonly string[] {
   const bound =
