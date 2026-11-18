@@ -354,6 +354,37 @@ describe("memory learning passes", () => {
     expect(bodies(deps, chat)).toEqual(["I drink tea.", "I use Vim."]);
   });
 
+  it("does not read through a memory-off turn when resolving a later pronoun", async () => {
+    const earlier = "Ich habe eine neue Regel für meine Berichte.";
+    const memoryOff = "Meine Berichte sind für das Review der Orion-Migration.";
+    const evidence = "Sie beginnen immer mit einer Zusammenfassung";
+    const body = "Meine Berichte beginnen immer mit einer Zusammenfassung";
+    const prompts: string[] = [];
+    const model: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        const prompt = request.messages.at(-1)?.content;
+        const text = typeof prompt === "string" ? prompt : "";
+        prompts.push(text);
+        const items = text.endsWith(`${evidence}.`)
+          ? [{ body, evidence, about: "self", type: "procedural", relation: "new", related: null }]
+          : [];
+        return Promise.resolve(response(request.modelId, JSON.stringify({ items })));
+      },
+    };
+    const deps = makeDeps({ modelPortFactory: () => model });
+    const chat = makeChat(deps);
+    const runtime = memoryLearningRuntime(deps);
+    writeTurn(deps, chat, earlier);
+    writeTurn(deps, chat, memoryOff, false);
+    expect(await runtime.runPass("inactivity", undefined)).toBe("completed");
+    writeTurn(deps, chat, `${evidence}.`);
+    expect(await runtime.runPass("inactivity", undefined)).toBe("completed");
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts.at(-1)).toBe(`${USER_SAID}${evidence}.`);
+    expect(bodies(deps, chat)).toEqual([]);
+  });
+
   it("cancels a running pass for new Chat work and aborts the provider request", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));

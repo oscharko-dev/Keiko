@@ -35,6 +35,8 @@ export interface ChatMemoryLearningStore {
   readonly markMessage: (messageId: string, mark: MemoryLearningMark) => boolean;
   readonly readPosition: (chatId: string) => MemoryLearningPosition | undefined;
   readonly listPending: (chatId: string, limit: number) => readonly PendingLearningMessage[];
+  /** Reads only the immediate preceding user message, and only if it was marked for learning. */
+  readonly readPreviousUserText: (chatId: string, messageId: string) => string | undefined;
   /** Moves the position forward only; an older position leaves it unchanged. */
   readonly advance: (chatId: string, position: MemoryLearningPosition) => void;
   /** Chats holding a message written with memory on after their position, oldest work first. */
@@ -63,6 +65,16 @@ WHERE m.chat_id = ?
     OR (m.timestamp = l.learned_timestamp AND m.rowid > l.learned_rowid))
 ORDER BY m.timestamp ASC, m.rowid ASC
 LIMIT ?`;
+// Select the preceding message before consulting its mark so an unmarked turn is a barrier.
+const SQL_READ_PREVIOUS_USER_TEXT = `
+SELECT CASE WHEN previous.memory_learning IS NOT NULL THEN previous.content END AS content
+FROM chat_messages current
+JOIN chat_messages previous ON previous.chat_id = current.chat_id
+WHERE current.chat_id = ? AND current.id = ? AND current.role = 'user'
+  AND previous.role = 'user'
+  AND (previous.timestamp, previous.rowid) < (current.timestamp, current.rowid)
+ORDER BY previous.timestamp DESC, previous.rowid DESC
+LIMIT 1`;
 // The position never moves back: a pass that finishes after a later one leaves the later position.
 const SQL_ADVANCE = `
 INSERT INTO chat_memory_learning (chat_id, learned_timestamp, learned_rowid)
@@ -127,6 +139,11 @@ export function createChatMemoryLearningStore(db: DatabaseSync): ChatMemoryLearn
       return (db.prepare(SQL_LIST_PENDING).all(chatId, limit) as unknown as PendingRow[]).map(
         pendingMessage,
       );
+    },
+    readPreviousUserText: (chatId, messageId): string | undefined => {
+      const row = db.prepare(SQL_READ_PREVIOUS_USER_TEXT).get(chatId, messageId) as
+        { readonly content: string | null } | undefined;
+      return row?.content ?? undefined;
     },
     advance: (chatId, position): void => {
       db.prepare(SQL_ADVANCE).run(position.timestamp, position.rowid, chatId);

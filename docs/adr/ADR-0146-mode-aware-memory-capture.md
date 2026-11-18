@@ -382,10 +382,11 @@ a measured pause without Chat work (default 15 s, `KEIKO_MEMORY_LEARNING_IDLE_MS
 opens another Chat, at startup, on a backoff retry when the model was unavailable, and as a
 continuation when a pass reached its bounds. Every serialized Chat turn is foreground work: a pass
 does not start while one runs, and a starting turn aborts a running pass down to the provider
-request. A turn written with memory off is never learned. A clear statement (D4b) still acts at
-message time; a forget the pass reaches is applied again to facts the same pass learned from the
-Chat's earlier, still pending messages. `memory.learn.pass.started` and `memory.learn.pass.settled`
-record each pass body-free. Triggers, bounds and the measurement:
+request. A turn written with memory off is never learned. Pronoun resolution uses the immediately
+preceding user message only if it was written with memory on. An unmarked message blocks this
+lookup. A clear statement (D4b) still acts at message time. The pass reapplies a forget to facts it
+learned from the Chat's earlier, still pending messages. `memory.learn.pass.started` and
+`memory.learn.pass.settled` record each pass body-free. Triggers, bounds and the measurement:
 [MemoriaViva learning passes](../memory/memoria-viva-learning-passes.md).
 A private fact the learner labels `identity` or `constraint` carries the retention hint
 `policyKey: "standing"`, which places it in the standing profile every Chat answer receives (#4228);

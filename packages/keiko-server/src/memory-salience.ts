@@ -742,8 +742,8 @@ interface TurnSalienceInputs {
   readonly signal: AbortSignal;
 }
 
-// The person's message just before this one, so a pronoun can point back to it. A message the
-// learner may not see stays out, like the current one would.
+// A pronoun can point back only to the person's immediate preceding message when they wrote it
+// with Memory on. The same content policy applies to both messages.
 function previousUserText(
   deps: UiHandlerDeps,
   request: SalienceTurnRequest,
@@ -751,16 +751,13 @@ function previousUserText(
   policy: ReturnType<typeof memoryCapturePolicyForDeps>,
 ): string | undefined {
   if (request.sourceMessageId === undefined) return undefined;
-  const messages = deps.store.listMessages(context.conversationId);
-  const current = messages.findIndex((message) => message.id === request.sourceMessageId);
-  for (let index = current - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== "user") continue;
-    return memoryTextSecretEgressRejectionReason(message.content, policy) === null
-      ? message.content
-      : undefined;
-  }
-  return undefined;
+  const previous = deps.store.memoryLearning?.readPreviousUserText(
+    context.conversationId,
+    request.sourceMessageId,
+  );
+  return previous !== undefined && memoryTextSecretEgressRejectionReason(previous, policy) === null
+    ? previous
+    : undefined;
 }
 
 async function extractTurnSalienceOutcomes(

@@ -764,7 +764,8 @@ describe("what a pronoun and a team's decision become", () => {
     deps.store.createProject(base.projectId, "Fixture");
     const chatId = deps.store.createChat(base.projectId, "Fixture", "gpt-test").id;
     const ctx = { ...base, conversationId: chatId as ConversationId };
-    userMessage(deps, chatId, "Ich habe eine neue Regel fuer meine Berichte.", 1);
+    const previous = userMessage(deps, chatId, "Ich habe eine neue Regel fuer meine Berichte.", 1);
+    expect(deps.store.memoryLearning?.markMessage(previous.id, { surface: "desktop" })).toBe(true);
     const current = userMessage(deps, chatId, `${evidence}.`, 2);
     const request = {
       content: current.content,
