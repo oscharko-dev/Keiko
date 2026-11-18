@@ -591,6 +591,7 @@ function ghStubBody() {
     "const sub = argv[0];",
     'if (sub === "attestation" && argv[1] === "verify") {',
     "  if (state().failSetupAttestation) { process.stderr.write('setup provenance verification failed\\n'); process.exit(46); }",
+    "  if (state().failFolderAttestation && String(argv[2]).endsWith('.standalone.zip')) { process.stderr.write('folder package provenance verification failed\\n'); process.exit(46); }",
     "  process.exit(0);",
     "}",
     'if (sub === "api") {',
@@ -2023,8 +2024,19 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       // The folder packages and their .sha256 files go into the same draft, before publication,
       // and are downloaded back and compared like every other asset.
       const uploads = lastRun.calls.slice(0, publish).filter((l) => l.includes('"upload"'));
+      // Each package's build provenance is verified before anything reaches the draft; its
+      // .sha256 file is derived from that digest and carries none of its own.
+      const attestations = lastRun.calls.filter((l) => l.startsWith('gh ["attestation","verify"'));
+      expect(attestations.some((l) => l.includes('.standalone.zip.sha256"'))).toBe(false);
       for (const target of FOLDER_RELEASE_TARGETS) {
         const name = folderPackageArchiveName(target, "standalone");
+        const attestation = attestations.find((l) => l.includes(`/${name}"`));
+        expect(attestation).toContain(
+          '"--signer-workflow","oscharko-dev/Keiko/.github/workflows/portable-assets.yml"',
+        );
+        expect(attestation).toContain(`"--source-digest","${HEAD_SHA}"`);
+        expect(attestation).toContain(`"--source-ref","refs/tags/v${RELEASE_VERSION}"`);
+        expect(indexOfCall(lastRun.calls, (l) => l === attestation)).toBeLessThan(firstUpload);
         expect(uploads.some((l) => l.includes(`/${name}"`))).toBe(true);
         expect(uploads.some((l) => l.includes(`/${name}.sha256"`))).toBe(true);
         expect(lastRun.calls.some((l) => l.startsWith("curl [") && l.endsWith(`/${name}"]`))).toBe(
@@ -2257,6 +2269,22 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain("setup provenance verification failed");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    // A package replaced together with its manifest entry still matches that entry; only its
+    // build provenance shows it was not built by the stable-tag workflow.
+    it("rejects an unattested folder package before release upload or npm publication", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { failFolderAttestation: true, published: true, tagged: true },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("folder package provenance verification failed");
       expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
       expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
     });

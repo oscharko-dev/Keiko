@@ -1249,10 +1249,18 @@ file. The stable-tag workflow builds them in its assemble job from the archives 
 assembled (`scripts/build-folder-release-assets.mjs`), checks each archive against its checksum
 evidence and attests the packages' build provenance with the archives. They carry no
 `keiko.config.json`. The publisher refuses a portable asset bundle without them, or with a package
-of another Keiko version, another archive, other bytes or another target set. It uploads them into
-the same draft as the archives, verifies GitHub's size and digest of each and downloads each back
-unauthenticated before it publishes the release, so the release is published with them or not at
-all. A folder package is a download for people, not an update candidate: it carries no Ed25519
+of another Keiko version, another archive, other bytes or another target set, and verifies each
+package's build provenance from the stable-tag workflow (`gh attestation verify`, the same signer
+workflow, source digest and tag as the setup companion) before anything reaches the draft. It
+uploads them into the same draft as the archives and verifies GitHub's size and digest of each
+before it publishes the release, so the release is published with them or not at all. After
+publication it downloads every asset back unauthenticated as a smoke check; a failure there stops
+the run before npm publication, with the GitHub release already public. The rule binds every
+publish that supplies the portable asset bundle, which the stable-tag workflow does for every
+stable `latest` release. A stable publish under another dist-tag without a bundle uploads and
+verifies no portable asset at all, so it neither adds nor checks folder packages, on a new release
+or on one that already exists. A folder package
+is a download for people, not an update candidate: it carries no Ed25519
 release-trust signature, and no updater reads it. Its name keeps a dot before the form on purpose.
 Every shipped updater requires the release assets that match `keiko-[a-z0-9-]+.zip` to be exactly
 the portable archives, so a hyphenated package name would stop every installed Keiko from

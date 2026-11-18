@@ -160,6 +160,21 @@ describe("the folder packages of a release", () => {
     );
   });
 
+  // A linked directory on the way passes a lexical prefix check, and the file itself is regular:
+  // only the canonical path shows that the read would leave the bundle.
+  it("refuses a target directory that links out of the bundle", () => {
+    const { root } = portableBundle();
+    const outside = mkdtempSync(join(tmpdir(), "keiko-folder-outside-"));
+    tempRoots.push(outside);
+    const targetRoot = join(root, "artifacts", "macos-arm64");
+    renameSync(targetRoot, join(outside, "macos-arm64"));
+    symlinkSync(join(outside, "macos-arm64"), targetRoot, "junction");
+
+    expect(() => buildFolderReleaseAssets({ bundleRoot: root, version: "1.2.3" })).toThrow(
+      /macos-arm64 archivePath must stay inside the bundle/u,
+    );
+  });
+
   it("refuses an archive that is not the one its digest names", () => {
     const { root } = portableBundle();
     const archive = join(root, "artifacts", "macos-x64", "keiko-macos-x64.zip");

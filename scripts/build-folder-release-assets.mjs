@@ -12,7 +12,7 @@
  * The packages are generic: they carry no `keiko.config.json` and no access of any kind.
  */
 
-import { existsSync, lstatSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, resolve, sep } from "node:path";
 
 import {
@@ -58,13 +58,17 @@ export function parseFolderReleaseArgs(argv) {
 }
 
 // A file the bundle names: inside it and a regular file, never a link, like the publisher reads
-// the packages.
+// the packages. Containment is checked on the canonical paths too, so a linked directory on the
+// way cannot lead the read out of the bundle.
 function containedPath(root, relativePath, label) {
   if (typeof relativePath !== "string" || relativePath.length === 0) refuse(`${label} is missing`);
   const path = resolve(root, relativePath);
   if (!path.startsWith(`${root}${sep}`)) refuse(`${label} must stay inside the bundle`);
   if (lstatSync(path, { throwIfNoEntry: false })?.isFile() !== true) {
     refuse(`${label} must name a regular file in the bundle`);
+  }
+  if (!realpathSync(path).startsWith(`${realpathSync(root)}${sep}`)) {
+    refuse(`${label} must stay inside the bundle`);
   }
   return path;
 }

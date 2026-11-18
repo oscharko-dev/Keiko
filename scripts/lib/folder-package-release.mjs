@@ -136,13 +136,22 @@ function packageUpload(directory, entry, failures) {
   if (readFileSync(checksumPath, "utf8") !== checksumText) {
     failures.push(`${checksumName} must bind ${entry.assetName}.`);
   }
+  // The stable-tag workflow attests each package's build provenance; its `.sha256` file is text
+  // derived from the attested digest and checked above.
   return [
-    { path: zipPath, assetName: entry.assetName, sha256: entry.sha256, size: entry.sizeBytes },
+    {
+      path: zipPath,
+      assetName: entry.assetName,
+      sha256: entry.sha256,
+      size: entry.sizeBytes,
+      attested: true,
+    },
     {
       path: checksumPath,
       assetName: checksumName,
       sha256: sha256(checksumText),
       size: Buffer.byteLength(checksumText),
+      attested: false,
     },
   ];
 }

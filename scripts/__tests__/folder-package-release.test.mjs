@@ -128,6 +128,12 @@ describe("the folder packages of a bundle", () => {
       }),
     );
     const [zip, checksum] = result.uploads;
+    // Only the package carries build provenance; its .sha256 file is derived from that digest.
+    expect(
+      result.uploads.filter((upload) => upload.attested).map((upload) => upload.assetName),
+    ).toEqual(
+      FOLDER_RELEASE_TARGETS.map((target) => folderPackageArchiveName(target, "standalone")),
+    );
     expect(zip.sha256).toBe(sha256(Buffer.from("package macos-arm64")));
     expect(checksum.sha256).toBe(sha256(folderChecksumText(zip.sha256, zip.assetName)));
     expect(checksum.size).toBe(Buffer.byteLength(folderChecksumText(zip.sha256, zip.assetName)));

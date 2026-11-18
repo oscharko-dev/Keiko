@@ -1369,7 +1369,7 @@ function publishPortableReleaseAssets(options, assets, releaseInfo, folderPackag
     console.log("release-publish: portable assets validated; upload skipped.");
     return;
   }
-  verifyPortableSetupAttestations(assets, releaseInfo);
+  verifyPortableBuildAttestations(assets, folderPackages, releaseInfo);
   const evidenceUpload = preparePortableEvidenceUploadRoot();
   try {
     const publisher = portablePublisher();
@@ -1412,18 +1412,24 @@ function publishPortableReleaseAssets(options, assets, releaseInfo, folderPackag
   }
 }
 
-function verifyPortableSetupAttestations(assets, releaseInfo) {
+// The setup companion and every folder package carry no release-trust signature, so their build
+// provenance from the stable-tag workflow is verified before either reaches the draft: a package
+// replaced together with its manifest entry fails here.
+function verifyPortableBuildAttestations(assets, folderPackages, releaseInfo) {
   const signerWorkflow = `${releaseInfo.repo}/${portableAssetsWorkflowPath}`;
   const sourceDigest = process.env.KEIKO_PORTABLE_ASSETS_SOURCE_SHA;
   if (!/^[a-f0-9]{40}$/u.test(sourceDigest ?? "")) {
     fail("portable setup attestation source SHA must be exact.");
   }
-  for (const asset of assets) {
-    if (asset.setupPath === undefined) continue;
+  const paths = [
+    ...assets.flatMap((asset) => (asset.setupPath === undefined ? [] : [asset.setupPath])),
+    ...folderPackages.filter((upload) => upload.attested).map((upload) => upload.path),
+  ];
+  for (const path of paths) {
     runGh([
       "attestation",
       "verify",
-      asset.setupPath,
+      path,
       "--repo",
       releaseInfo.repo,
       "--signer-workflow",

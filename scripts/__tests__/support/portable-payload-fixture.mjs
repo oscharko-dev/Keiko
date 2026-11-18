@@ -5,10 +5,10 @@ import { writeZipArchiveEntries } from "../../lib/zip-archive.mjs";
 // Small real portable archives for the folder package builders (ADR-0121 D9): the payload layout
 // of each desktop target, with the setup manifest the builders read the Keiko version from.
 
-export const EXECUTABLE = 0o100755;
-export const REGULAR = 0o100644;
+const EXECUTABLE = 0o100755;
+const REGULAR = 0o100644;
 
-export function setupManifest(target, overrides = {}) {
+function setupManifest(target, overrides = {}) {
   return `${JSON.stringify({
     schemaVersion: 1,
     platformTarget: target,

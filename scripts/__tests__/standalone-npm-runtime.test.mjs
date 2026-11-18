@@ -1,7 +1,9 @@
+import { EventEmitter } from "node:events";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -12,7 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ensureInstalled,
@@ -26,8 +28,12 @@ import {
   npmCacheDir,
   npmCliCandidates,
   npmEnv,
+  readHidden,
+  saveConfig,
+  start,
   startArgs,
   stateDir,
+  stop,
   teamConfig,
   tokenInput,
 } from "../standalone/npm/keiko-npm.mjs";
@@ -38,8 +44,14 @@ import {
 const tempRoots = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+// The messages a person reads are not what these tests check.
+function quiet() {
+  vi.spyOn(console, "log").mockImplementation(() => undefined);
+}
 
 function packageRoot() {
   const root = mkdtempSync(join(tmpdir(), "keiko-npm-runtime-"));
@@ -163,6 +175,50 @@ describe("the npm package start", () => {
       expect(readdirSync(cache)).toEqual(["_logs"]);
       expect(existsSync(join(root, "node_modules", ".keiko-npm-installed"))).toBe(false);
     });
+
+    it("reports a failed attempt that left no cache behind", () => {
+      quiet();
+      const { root, nodeDir, env, cache } = installFixture();
+
+      expect(ensureInstalled(root, nodeDir, env, () => ({ status: 1 }))).toBe(false);
+      expect(existsSync(cache)).toBe(false);
+    });
+
+    it("starts nothing when the folder carries no npm", () => {
+      quiet();
+      const root = packageRoot();
+      const run = vi.fn();
+
+      expect(start(root, join(root, "system", "node"), { KEIKO_STATE_DIR: "/s" }, run)).toBe(1);
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it("starts the installed Keiko declared managed outside the app, with its exit code", () => {
+      const { root, nodeDir, env } = installFixture();
+      installKeiko(root, `${lockfileDigest(root)}\n`);
+      const run = vi.fn(() => ({ status: 0 }));
+
+      expect(start(root, nodeDir, env, run)).toBe(0);
+      expect(run).toHaveBeenCalledOnce();
+      const [node, args, options] = run.mock.calls[0];
+      expect(node).toBe(process.execPath);
+      expect(args).toEqual([keikoCliPath(root), ...startArgs(root, env)]);
+      expect(options.env.KEIKO_PORTABLE_MANAGEMENT).toBe("organization-managed");
+      // A Keiko that ended by a signal carries no exit code; the start reports a failure.
+      expect(start(root, nodeDir, env, () => ({ status: null }))).toBe(1);
+    });
+  });
+
+  it("stops Keiko only in a folder it was loaded into", () => {
+    const root = packageRoot();
+    const env = { KEIKO_STATE_DIR: "/s" };
+    const run = vi.fn(() => ({ status: 3 }));
+
+    expect(stop(root, env, run)).toBe(0);
+    expect(run).not.toHaveBeenCalled();
+    installKeiko(root);
+    expect(stop(root, env, run)).toBe(3);
+    expect(run.mock.calls[0][1]).toEqual([keikoCliPath(root), "stop", "--state-dir", "/s"]);
   });
 
   it("starts when the folder is reached through a symbolic link", () => {
@@ -283,6 +339,144 @@ describe("the administrator's access step", () => {
     expect(tokenInput(escaped.value, "\r", escaped.escape)).toMatchObject({
       value: "a",
       end: "enter",
+    });
+  });
+
+  // A read can end inside a key sequence; the next Enter or Ctrl+C must still end the input, or
+  // the prompt would wait in raw mode for a key that never comes.
+  it.each([
+    ["an unfinished key", "\u001b["],
+    ["an unfinished key with parameters", "\u001b[3"],
+    ["an unfinished key in application mode", "\u001bO"],
+  ])("ends the input with Enter or Ctrl+C after %s", (_name, unfinished) => {
+    const first = tokenInput("sk", unfinished);
+    expect(first).toMatchObject({ value: "sk", end: undefined });
+    expect(first.escape).not.toBe("none");
+    expect(tokenInput(first.value, "\r", first.escape)).toEqual({
+      value: "sk",
+      end: "enter",
+      escape: "none",
+    });
+    expect(tokenInput(first.value, "\n", first.escape)).toMatchObject({ end: "enter" });
+    expect(tokenInput(first.value, "\u0003", first.escape)).toEqual({
+      value: "",
+      end: "cancel",
+      escape: "none",
+    });
+  });
+
+  // What readHidden needs of process.stdin and process.stdout.
+  function fakeTerminal(isTTY = true) {
+    const stdin = Object.assign(new EventEmitter(), {
+      isTTY,
+      rawModes: [],
+      encoding: undefined,
+      flowing: false,
+      setRawMode(mode) {
+        this.rawModes.push(mode);
+      },
+      setEncoding(encoding) {
+        this.encoding = encoding;
+      },
+      resume() {
+        this.flowing = true;
+      },
+      pause() {
+        this.flowing = false;
+      },
+    });
+    const written = [];
+    return { io: { stdin, stdout: { write: (text) => written.push(text) } }, stdin, written };
+  }
+
+  it("reads a token without showing it and leaves raw mode", async () => {
+    const terminal = fakeTerminal();
+    const token = readHidden("Token: ", terminal.io);
+    expect(terminal.stdin).toMatchObject({ encoding: "utf8", flowing: true });
+    terminal.stdin.emit("data", "sk-a");
+    terminal.stdin.emit("data", "bc \r");
+
+    await expect(token).resolves.toBe("sk-abc");
+    expect(terminal.stdin.flowing).toBe(false);
+    expect(terminal.stdin.rawModes).toEqual([true, false]);
+    expect(terminal.written).toEqual(["Token: ", "\n"]);
+    expect(terminal.stdin.listenerCount("data")).toBe(0);
+  });
+
+  it.each([
+    ["an unfinished key", "\u001b["],
+    ["an unfinished key in application mode", "\u001bO"],
+  ])("ends a terminal read with Enter or Ctrl+C after %s", async (_name, unfinished) => {
+    const entered = fakeTerminal();
+    const token = readHidden("Token: ", entered.io);
+    entered.stdin.emit("data", `sk${unfinished}`);
+    entered.stdin.emit("data", "\r");
+    await expect(token).resolves.toBe("sk");
+    expect(entered.stdin.rawModes).toEqual([true, false]);
+
+    const cancelled = fakeTerminal();
+    const refused = readHidden("Token: ", cancelled.io);
+    cancelled.stdin.emit("data", `sk${unfinished}`);
+    cancelled.stdin.emit("data", "\u0003");
+    await expect(refused).rejects.toThrow(/cancelled/u);
+    expect(cancelled.stdin.rawModes).toEqual([true, false]);
+  });
+
+  it("reads no token without a terminal", async () => {
+    const terminal = fakeTerminal(false);
+
+    await expect(readHidden("Token: ", terminal.io)).rejects.toThrow(/no terminal/u);
+    expect(terminal.stdin.rawModes).toEqual([]);
+  });
+
+  describe("saving the team's configuration", () => {
+    function savedConfig(config) {
+      const root = packageRoot();
+      const env = { KEIKO_STATE_DIR: join(root, "state") };
+      if (config !== undefined) {
+        mkdirSync(join(env.KEIKO_STATE_DIR, "ui"), { recursive: true });
+        writeFileSync(join(env.KEIKO_STATE_DIR, "ui", "keiko.config.json"), JSON.stringify(config));
+      }
+      return { root, env, target: join(root, "keiko.config.json") };
+    }
+
+    it("asks for Gateway Setup first when nothing was set up", async () => {
+      quiet();
+      const { root, env, target } = savedConfig();
+      const readToken = vi.fn();
+
+      await expect(saveConfig(root, env, readToken)).resolves.toBe(1);
+      expect(readToken).not.toHaveBeenCalled();
+      expect(existsSync(target)).toBe(false);
+    });
+
+    it("writes the token in place of every sealed key, readable only by its owner", async () => {
+      quiet();
+      const { root, env, target } = savedConfig({ providers: [sealed] });
+
+      await expect(saveConfig(root, env, async () => "team-token")).resolves.toBe(0);
+      const written = JSON.parse(readFileSync(target, "utf8"));
+      expect(written.providers[0]).toMatchObject({ modelId: "chat", apiKey: "team-token" });
+      expect(written.providers[0].apiKeySecretRef).toBeUndefined();
+      if (process.platform !== "win32") expect(statSync(target).mode & 0o777).toBe(0o600);
+    });
+
+    it("asks for no token when no key was sealed", async () => {
+      quiet();
+      const open = { modelId: "chat", baseUrl: "https://gw" };
+      const { root, env, target } = savedConfig({ providers: [open] });
+      const readToken = vi.fn();
+
+      await expect(saveConfig(root, env, readToken)).resolves.toBe(0);
+      expect(readToken).not.toHaveBeenCalled();
+      expect(JSON.parse(readFileSync(target, "utf8")).providers).toEqual([open]);
+    });
+
+    it("refuses to save without the token a sealed key needs", async () => {
+      const { root, env, target } = savedConfig({ providers: [sealed] });
+
+      await expect(saveConfig(root, env, async () => "")).rejects.toThrow(/no token entered/u);
+      expect(existsSync(target)).toBe(false);
     });
   });
 

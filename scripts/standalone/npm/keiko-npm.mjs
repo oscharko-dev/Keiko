@@ -165,8 +165,8 @@ export function ensureInstalled(root, nodeDir, env, run = spawnSync) {
   return true;
 }
 
-function runKeiko(root, args, env) {
-  const result = spawnSync(process.execPath, [keikoCliPath(root), ...args], {
+function runKeiko(root, args, env, run) {
+  const result = run(process.execPath, [keikoCliPath(root), ...args], {
     cwd: root,
     stdio: "inherit",
     env: keikoEnv(env),
@@ -180,14 +180,16 @@ export function startArgs(root, env) {
   return existsSync(config) ? [...args, "--provisioned-config", config] : args;
 }
 
-function start(root, nodeDir, env) {
-  if (!ensureInstalled(root, nodeDir, env)) return 1;
-  return runKeiko(root, startArgs(root, env), env);
+/** Installs Keiko when needed and starts it; returns Keiko's exit code. */
+export function start(root, nodeDir, env, run = spawnSync) {
+  if (!ensureInstalled(root, nodeDir, env, run)) return 1;
+  return runKeiko(root, startArgs(root, env), env, run);
 }
 
-function stop(root, env) {
+/** Stops a running Keiko; a folder Keiko was never loaded into has nothing to stop. */
+export function stop(root, env, run = spawnSync) {
   if (!existsSync(keikoCliPath(root))) return 0;
-  return runKeiko(root, ["stop", "--state-dir", stateDir(env)], env);
+  return runKeiko(root, ["stop", "--state-dir", stateDir(env)], env, run);
 }
 
 // Gateway Setup asks for one gateway token, so every key it sealed becomes that token.
@@ -249,15 +251,17 @@ function typeCharacter(token, character) {
 /**
  * Applies one chunk of raw terminal input to the token typed so far. A terminal may hand one key
  * over in two reads, so `escape` carries the state of an unfinished key into the next chunk.
+ * Enter and Ctrl+C are never part of a key sequence, so they end the input in every state: an
+ * unfinished key cannot swallow them and leave the terminal in raw mode.
  */
 export function tokenInput(value, chunk, escape = "none") {
   const token = [...value];
   let state = escape;
   for (const character of chunk) {
+    if (ENTER.has(character)) return { value: token.join(""), end: "enter", escape: "none" };
+    if (character === CANCEL) return { value: "", end: "cancel", escape: "none" };
     const next = state === "none" ? undefined : escapeState(state, character);
     if (next !== undefined) state = next;
-    else if (ENTER.has(character)) return { value: token.join(""), end: "enter", escape: "none" };
-    else if (character === CANCEL) return { value: "", end: "cancel", escape: "none" };
     else if (character === ESCAPE) state = "escape";
     else {
       state = "none";
@@ -267,9 +271,12 @@ export function tokenInput(value, chunk, escape = "none") {
   return { value: token.join(""), end: undefined, escape: state };
 }
 
-// The token is typed or pasted without being shown. Enter ends it, Ctrl+C cancels.
-function readHidden(prompt) {
-  const { stdin, stdout } = process;
+/**
+ * The token is typed or pasted without being shown. Enter ends it, Ctrl+C cancels; either way the
+ * terminal leaves raw mode. `io` is the process's terminal unless a caller hands in another.
+ */
+export function readHidden(prompt, io = process) {
+  const { stdin, stdout } = io;
   if (!stdin.isTTY) {
     return Promise.reject(
       new Error("no terminal to read the token from / kein Terminal fuer die Eingabe des Tokens"),
@@ -301,7 +308,11 @@ function readHidden(prompt) {
   });
 }
 
-async function saveConfig(root, env) {
+/**
+ * The administrator's access step: writes the team's keiko.config.json from the configuration
+ * Gateway Setup saved. Returns the exit code; a token that was needed and not entered throws.
+ */
+export async function saveConfig(root, env, readToken = readHidden) {
   const saved = join(stateDir(env), "ui", CONFIG_NAME);
   if (!existsSync(saved)) {
     say(
@@ -312,7 +323,7 @@ async function saveConfig(root, env) {
   }
   const config = JSON.parse(readFileSync(saved, "utf8"));
   const token = needsToken(config)
-    ? await readHidden("API token (not shown) / API-Token (wird nicht angezeigt): ")
+    ? await readToken("API token (not shown) / API-Token (wird nicht angezeigt): ")
     : "";
   if (needsToken(config) && token.length === 0) throw new Error("no token entered");
   const target = join(root, CONFIG_NAME);
