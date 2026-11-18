@@ -1,4 +1,4 @@
-# Public API surface — 1.5.2
+# Public API surface — 1.5.3
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -110,6 +110,12 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 `KEIKO_PRODUCT_VERSION`.
 
 ## Stability notes
+
+- 1.5.3: root exports and CLI entrypoints remain stable. Every stable release carries the npm folder
+  package and the standalone folder package of each desktop target as release assets. The Jira
+  template API adds `POST /api/skills/jira-templates/options` for guided template editing. Figma
+  Snapshot records without a provenance version stay readable. Existing stores carry forward
+  unchanged.
 
 - 1.5.2: root exports remain stable. `keiko start` accepts `--provisioned-config PATH`, which adopts an
   administrator's gateway configuration for the standalone folder package; `keiko portable launch`
