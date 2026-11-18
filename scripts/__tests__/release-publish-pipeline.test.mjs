@@ -2185,70 +2185,87 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
-    it("downloads every asset again when it reruns over a published release (PR #4464)", () => {
+    describe("a rerun over a published release (PR #4464)", () => {
       // Review finding on PR #4464 (P2): the first run published the release and then failed its
       // public download of a folder package. The rerun found the release published, checked the
       // API metadata and returned before any download, so npm published Keiko beside a package
       // nobody could fetch.
+      // Each run below is one full orchestrator subprocess graph (about 20 s under the bounded
+      // two-worker scheduler), so the published first run is built once with its own deadline and
+      // each rerun keeps the suite's per-test deadline instead of three runs sharing one.
       const signingKeyPair = generateKeyPairSync("ed25519");
       const failing = folderPackageArchiveName("macos-arm64", "standalone");
-      const first = runPublish({
-        npmBody: npmStub(registryVersionBody()),
-        initState: { immutableReleases: true, published: false, failPublicDownloads: [failing] },
-        signingKeyPair,
-      });
-      expect(first.status).toBe(1);
-      expect(first.stderr).toContain(
-        `unauthenticated portable asset download failed for ${failing}.`,
-      );
-      expect(first.state.releasePublished).toBe(true);
-      expect(first.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      let first;
 
-      const rerun = runPublish({
-        npmBody: npmStub(registryVersionBody()),
-        initState: first.state,
-        signingKeyPair,
-      });
-      expect(rerun.status).toBe(1);
-      expect(rerun.stderr).toContain(
-        `unauthenticated portable asset download failed for ${failing}.`,
-      );
-      expect(rerun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
-      expect(rerun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      beforeAll(() => {
+        first = runPublish({
+          npmBody: npmStub(registryVersionBody()),
+          initState: { immutableReleases: true, published: false, failPublicDownloads: [failing] },
+          signingKeyPair,
+        });
+      }, RELEASE_PIPELINE_TEST_TIMEOUT_MS);
 
-      // Once the download works, the same rerun proves every asset publicly and publishes npm.
-      const recovered = runPublish({
-        npmBody: npmStub(registryVersionBody()),
-        initState: { ...first.state, failPublicDownloads: [] },
-        signingKeyPair,
+      it("publishes the release on the first run and stops before npm when a download fails", () => {
+        lastRun = first;
+        expect(first.status).toBe(1);
+        expect(first.stderr).toContain(
+          `unauthenticated portable asset download failed for ${failing}.`,
+        );
+        expect(first.state.releasePublished).toBe(true);
+        expect(first.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
       });
-      expect(recovered.status, recovered.stderr).toBe(0);
-      expect(recovered.stdout).toContain("portable assets verified and downloaded on published");
-      const downloads = recovered.calls.filter(
-        (l) => l.startsWith("curl [") && l.includes("/releases/download/"),
-      );
-      // No user configuration (.curlrc) may apply to the unauthenticated smoke download, and no
-      // redirect may leave HTTPS.
-      for (const line of downloads) {
-        expect(JSON.parse(line.slice("curl ".length)).slice(0, 5)).toEqual([
-          "-q",
-          "--proto",
-          "=https",
-          "--proto-redir",
-          "=https",
-        ]);
-      }
-      const downloadedNames = downloads
-        .map((line) =>
-          String(JSON.parse(line.slice("curl ".length)).at(-1))
-            .split("/")
-            .at(-1),
-        )
-        .sort();
-      const expectedNames = first.state.uploadedAssets.map((asset) => asset.name).sort();
-      expect(downloadedNames).toEqual(expectedNames);
-      expect(recovered.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
-      expect(recovered.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(true);
+
+      it("downloads every asset again and still refuses npm while the download fails", () => {
+        const rerun = runPublish({
+          npmBody: npmStub(registryVersionBody()),
+          initState: first.state,
+          signingKeyPair,
+        });
+        lastRun = rerun;
+        expect(rerun.status).toBe(1);
+        expect(rerun.stderr).toContain(
+          `unauthenticated portable asset download failed for ${failing}.`,
+        );
+        expect(rerun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+        expect(rerun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      });
+
+      it("downloads every asset again when it reruns over a published release (PR #4464)", () => {
+        // Once the download works, the same rerun proves every asset publicly and publishes npm.
+        const recovered = runPublish({
+          npmBody: npmStub(registryVersionBody()),
+          initState: { ...first.state, failPublicDownloads: [] },
+          signingKeyPair,
+        });
+        lastRun = recovered;
+        expect(recovered.status, recovered.stderr).toBe(0);
+        expect(recovered.stdout).toContain("portable assets verified and downloaded on published");
+        const downloads = recovered.calls.filter(
+          (l) => l.startsWith("curl [") && l.includes("/releases/download/"),
+        );
+        // No user configuration (.curlrc) may apply to the unauthenticated smoke download, and no
+        // redirect may leave HTTPS.
+        for (const line of downloads) {
+          expect(JSON.parse(line.slice("curl ".length)).slice(0, 5)).toEqual([
+            "-q",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+          ]);
+        }
+        const downloadedNames = downloads
+          .map((line) =>
+            String(JSON.parse(line.slice("curl ".length)).at(-1))
+              .split("/")
+              .at(-1),
+          )
+          .sort();
+        const expectedNames = first.state.uploadedAssets.map((asset) => asset.name).sort();
+        expect(downloadedNames).toEqual(expectedNames);
+        expect(recovered.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+        expect(recovered.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(true);
+      });
     });
 
     it("bounds every portable download by time, stall and bytes and names the asset (PR #4464)", () => {
