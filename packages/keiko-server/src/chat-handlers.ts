@@ -203,7 +203,7 @@ import { type RouteContext, type RouteResult, errorBody } from "./routes.js";
 import {
   forgetActionFromOutcome,
   persistExplicitStatement,
-  previousUserMessage,
+  previousUserMessageReader,
   refusedCandidateAction,
   recordForgetNotStored,
   rejectedActionFromOutcome,
@@ -1862,9 +1862,8 @@ function turnCaptureOutcomes(
   vault: MemoryVaultStore,
   deps: UiHandlerDeps,
   context: ConversationMemoryRuntimeContext,
+  previousMessage = previousUserMessageReader(deps, request.content, context.conversationId),
 ): readonly CaptureOutcome[] {
-  const previousMessage = (): ChatMessage | undefined =>
-    previousUserMessage(deps, request.content, context.conversationId);
   return extractCandidatesFromUserText(
     request.content,
     buildCaptureContext(context, request.clientTurnId),
@@ -1939,9 +1938,8 @@ function captureMemoryActions(
   if (request.memory === undefined || !request.memory.enabled || deps.memoryVault === undefined) {
     return Promise.resolve([]);
   }
-  const previousMessage = (): ChatMessage | undefined =>
-    previousUserMessage(deps, request.content, context.conversationId);
-  const outcomes = turnCaptureOutcomes(request, deps.memoryVault, deps, context);
+  const previousMessage = previousUserMessageReader(deps, request.content, context.conversationId);
+  const outcomes = turnCaptureOutcomes(request, deps.memoryVault, deps, context, previousMessage);
   recordForgetNotStored(request.content, outcomes, correlationId);
   const mode = resolveMemoryCaptureAutonomyMode(deps, request.memory.mode);
   const surface = request.memory.surface ?? "desktop";
@@ -4382,8 +4380,7 @@ function canonicalMessageMemoryActions(
 ): Promise<ConversationMemoryActionWire[]> {
   const scopes = conversationMemoryScopes(context);
   // A grounded request holds only this turn, so the last turn comes from the conversation.
-  const previousMessage = (): ChatMessage | undefined =>
-    previousUserMessage(deps, message.content, context.conversationId);
+  const previousMessage = previousUserMessageReader(deps, message.content, context.conversationId);
   const previousStatement = (): string | undefined =>
     previousContent(request.messages, message.ordinal) ?? previousMessage()?.content;
   const outcomes = extractCandidatesFromUserText(

@@ -13,7 +13,7 @@ import {
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 import type { UiHandlerDeps } from "./deps.js";
-import type { ChatMessage } from "./store/types.js";
+import type { PreviousUserStatement } from "./store/chatMemoryLearning.js";
 import {
   confirmRestatedMemory,
   persistCapturedMemory,
@@ -50,14 +50,35 @@ export type ExplicitStatementPersistence =
 
 // The person's message before this one. The list holds this turn's own message already when the
 // caller admitted it first, so a same-text newest row is skipped.
-export function previousUserMessage(
+function previousUserMessage(
   deps: UiHandlerDeps,
   content: string,
   conversationId: string,
-): ChatMessage | undefined {
+): PreviousUserStatement | undefined {
+  if (deps.store.memoryLearning !== undefined) {
+    return deps.store.memoryLearning.readPreviousUserMessage(conversationId, content);
+  }
   const messages = deps.store.listMessages(conversationId).filter((m) => m.role === "user");
   const newest = messages.at(-1);
   return newest?.content === content ? messages.at(-2) : newest;
+}
+
+// Resolve timestamp, source id and fallback text from one snapshot. The reader belongs to this
+// capture decision only; a later decision gets a new reader after any intervening edit or deletion.
+export function previousUserMessageReader(
+  deps: UiHandlerDeps,
+  content: string,
+  conversationId: string,
+): () => PreviousUserStatement | undefined {
+  let resolved = false;
+  let previous: PreviousUserStatement | undefined;
+  return () => {
+    if (!resolved) {
+      previous = previousUserMessage(deps, content, conversationId);
+      resolved = true;
+    }
+    return previous;
+  };
 }
 
 function statementRefused(reason: string): ConversationMemoryActionWire {

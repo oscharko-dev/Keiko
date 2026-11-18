@@ -246,6 +246,10 @@ asked a question or said a fact. Both touches name their chat, so another chat o
 touching the memory in the same window never makes it "das", and a touch without a chat never counts.
 After any other sentence the memory an answer happened to use is not "das". Every chat path reads the last turn from the conversation, grounded
 turns included; with no earlier turn nothing was left behind and no older memory is "das".
+For one capture decision, its timestamp, source id and fallback text come from one snapshot of at
+most two latest user rows; a matching latest row of the current turn is skipped. An unmarked user
+statement is still erasable by this explicit request. A later capture decision resolves the history
+again, so an intervening change never reuses an earlier decision's snapshot.
 If that turn left nothing, "das" is the statement before it, not an older memory; a question or a
 pasted document is no such statement, so the person is asked:
 `recordForgottenStatements` writes a tombstone in each scope of the conversation, so a later

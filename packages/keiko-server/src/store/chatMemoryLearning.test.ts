@@ -126,3 +126,33 @@ describe("user predecessor seeks across non-user message gaps", () => {
     },
   );
 });
+
+describe("bounded explicit statement predecessor", () => {
+  it("reads the latest two user rows including unmarked statements within their Chat", () => {
+    using db = new DatabaseSync(":memory:");
+    seedTiedChat(db);
+    const readSteps = observeSteps(db);
+    const store = createChatMemoryLearningStore(db);
+    // A newer assistant row is not a statement, and an uncommitted current turn is not skipped.
+    expect(store.readPreviousUserMessage("c", "Not stored yet.")).toEqual({
+      id: "tie-4096",
+      content: "entry",
+      timestamp: -1,
+    });
+    const steps = readSteps();
+    expect(steps).toBeGreaterThan(0);
+    expect(steps).toBeLessThan(256);
+    // The matching newest row is this already-stored turn. The next user is unmarked but erasable.
+    expect(store.readPreviousUserMessage("c", "entry")).toEqual({
+      id: "tie-4095",
+      content: "entry",
+      timestamp: -1,
+    });
+    expect(store.readPreviousUserMessage("other", "Not stored yet.")).toEqual({
+      id: "other",
+      content: "other",
+      timestamp: -1,
+    });
+    expect(store.readPreviousUserMessage("missing", "Not stored yet.")).toBeUndefined();
+  });
+});

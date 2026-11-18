@@ -35,6 +35,13 @@ export interface PendingLearningChat {
   readonly firstPendingTimestamp: number;
 }
 
+/** A bounded snapshot for a person's explicit reference to their preceding statement. */
+export interface PreviousUserStatement {
+  readonly id: string;
+  readonly content: string;
+  readonly timestamp: number;
+}
+
 export interface ChatMemoryLearningStore {
   /** Records that memory was on for this message. Returns false for no such message. */
   readonly markMessage: (messageId: string, mark: MemoryLearningMark) => boolean;
@@ -42,6 +49,11 @@ export interface ChatMemoryLearningStore {
   readonly listPending: (chatId: string, limit: number) => readonly PendingLearningMessage[];
   /** Reads only the immediate preceding user message, and only if it was marked for learning. */
   readonly readPreviousUserText: (chatId: string, messageId: string) => string | undefined;
+  /** Explicit erasure also covers unmarked text. Skip a matching latest row of this current turn. */
+  readonly readPreviousUserMessage: (
+    chatId: string,
+    currentContent: string,
+  ) => PreviousUserStatement | undefined;
   /** Moves the position forward only; an older position leaves it unchanged. */
   readonly advance: (chatId: string, position: MemoryLearningPosition) => void;
   /** Chats holding a message written with memory on after their position, oldest work first. */
@@ -99,6 +111,8 @@ JOIN chat_messages previous ON previous.rowid = COALESCE(
    WHERE p.chat_id = current.chat_id AND p.role = 'user' AND p.timestamp < current.timestamp
    ORDER BY p.timestamp DESC, p.rowid DESC LIMIT 1))
 WHERE current.chat_id = ? AND current.id = ? AND current.role = 'user'`;
+const SQL_READ_LAST_USER_MESSAGES = `SELECT id, content, timestamp FROM chat_messages
+WHERE chat_id = ? AND role = 'user' ORDER BY timestamp DESC, rowid DESC LIMIT 2`;
 // The position never moves back: a pass that finishes after a later one leaves the later position.
 const SQL_ADVANCE = `
 INSERT INTO chat_memory_learning (chat_id, learned_timestamp, learned_rowid)
@@ -205,6 +219,7 @@ function listPendingChats(
 export function createChatMemoryLearningStore(db: DatabaseSync): ChatMemoryLearningStore {
   let pendingPage: StatementSync | undefined;
   let previousUser: StatementSync | undefined;
+  let lastUserMessages: StatementSync | undefined;
   let pendingChats: StatementSync | undefined;
   let pendingChatSeeks: StatementSync | undefined;
   let pendingChatKeys: StatementSync | undefined;
@@ -232,6 +247,12 @@ export function createChatMemoryLearningStore(db: DatabaseSync): ChatMemoryLearn
       const row = previousUser.get(chatId, messageId) as
         { readonly content: string | null } | undefined;
       return row?.content ?? undefined;
+    },
+    readPreviousUserMessage: (chatId, currentContent): PreviousUserStatement | undefined => {
+      lastUserMessages ??= db.prepare(SQL_READ_LAST_USER_MESSAGES);
+      const rows = lastUserMessages.all(chatId) as unknown as PreviousUserStatement[];
+      const newest = rows[0];
+      return newest?.content === currentContent ? rows[1] : newest;
     },
     advance: (chatId, position): void => {
       db.prepare(SQL_ADVANCE).run(position.timestamp, position.rowid, chatId);

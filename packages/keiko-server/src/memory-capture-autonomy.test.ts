@@ -695,6 +695,29 @@ describe("mode-aware memory capture journey", () => {
 
 // #4211: a clear forget statement acts at once, in every mode, and across the scopes of the
 // conversation, because the learner chooses a memory's scope and the person does not name it.
+function withHistory(deps: UiHandlerDeps, messages: readonly ChatMessage[]): UiHandlerDeps {
+  const memoryLearning = deps.store.memoryLearning;
+  return {
+    ...deps,
+    store: {
+      ...deps.store,
+      listMessages: () => messages,
+      ...(memoryLearning === undefined
+        ? {}
+        : {
+            memoryLearning: {
+              ...memoryLearning,
+              readPreviousUserMessage: (_chatId, currentContent): ChatMessage | undefined => {
+                const users = messages.filter((message) => message.role === "user");
+                const newest = users.at(-1);
+                return newest?.content === currentContent ? users.at(-2) : newest;
+              },
+            },
+          }),
+    },
+  };
+}
+
 // The conversation's history as the store reports it: one earlier message of the person.
 function withPreviousStatement(
   deps: UiHandlerDeps,
@@ -702,7 +725,7 @@ function withPreviousStatement(
   timestamp = Date.now(),
 ): UiHandlerDeps {
   const message = { id: "m1", role: "user", content, timestamp } as ChatMessage;
-  return { ...deps, store: { ...deps.store, listMessages: () => [message] } };
+  return withHistory(deps, [message]);
 }
 
 function captureActivityLog(): BufferedServerLogSink {
@@ -1323,16 +1346,10 @@ describe("explicit forget statement in chat", () => {
     if (record === undefined) throw new Error("expected a memory");
     vault.recordUse([record.id], asked + 1, ctx.conversationId);
     const said = { role: "user", content: "Vergiss das." } as ChatMessage;
-    const deps = {
-      ...learned,
-      store: {
-        ...learned.store,
-        listMessages: (): ChatMessage[] => [
-          { ...said, id: "m1", timestamp: asked },
-          { ...said, id: "m2", timestamp: asked + 2 },
-        ],
-      },
-    };
+    const deps = withHistory(learned, [
+      { ...said, id: "m1", timestamp: asked },
+      { ...said, id: "m2", timestamp: asked + 2 },
+    ]);
 
     const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
 
@@ -1508,10 +1525,7 @@ describe("explicit forget statement in chat", () => {
     const vault = makeVault();
     const ctx = context();
     const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project");
-    const deps = {
-      ...learned,
-      store: { ...learned.store, listMessages: (): readonly ChatMessage[] => [] },
-    };
+    const deps = withHistory(learned, []);
 
     await groundedForget(deps, ctx);
 
@@ -1639,10 +1653,7 @@ describe("explicit forget statement in chat", () => {
       { id: "m1", role: "user", content: "Ich mag Kaffee.", timestamp: now + 60_000 },
       { id: "m2", role: "user", content: "Vergiss das.", timestamp: now + 120_000 },
     ] as ChatMessage[];
-    const deps = {
-      ...learned,
-      store: { ...learned.store, listMessages: (): readonly ChatMessage[] => rows },
-    };
+    const deps = withHistory(learned, rows);
 
     await groundedForget(deps, ctx);
 
