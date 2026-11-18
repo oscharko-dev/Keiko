@@ -190,6 +190,13 @@ Chromium cases passed in 1.5 minutes in the Linux gates image with an init proce
 26.13.1, and `npm run check:update-ui-evidence` passes. Only the three records were kept; the 14
 committed screenshots, updater assertions and harness inputs retain their existing values.
 
+The third review round of the guided Jira template editor (PR #4464) added the notices for a
+same-named field that only its id can choose and for a numeric status name to both optional
+catalogs. On 2026-11-18 (UTC) the original nine Chromium cases passed in 1.6 minutes in the Linux
+gates image with an init process and Node 26.13.1, `npm run check:update-ui-evidence` passes and
+the Linux Editor bundle gates pass unchanged. Only the three records were kept; the 14 committed
+screenshots, updater assertions and harness inputs retain their existing values.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
