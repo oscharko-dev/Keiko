@@ -854,6 +854,9 @@ describe("a rule announcement without the rule's content", () => {
 
   it.each([
     "Ich habe eine neue Regel fuer meine Berichte.",
+    "Ich habe eine neue Regel für meine wöchentlichen Berichte.",
+    "I have a new rule for my weekly reports.",
+    "I have a new rule for my annual financial reports.",
     "Ich habe eine Regel für meine Notizen.",
     "Ich habe eine neue Regel.",
     "I have a new rule for my reports.",
@@ -874,6 +877,9 @@ describe("a rule announcement without the rule's content", () => {
     "I have no rule for my reports.",
     "Ich habe eine neue Regel für meine Berichte, außer für Entwürfe.",
     "I have a new rule for my reports, except for drafts.",
+    "I have a new rule for my weekly reports, except for drafts.",
+    "I have a new rule for my weekly reports to begin with a summary.",
+    "Ich habe eine neue Regel für meine wöchentlichen Berichte nur im Winter.",
     "Meine Berichte beginnen mit einer Zusammenfassung, dafür habe ich eine neue Regel.",
     "My reports begin with a summary, and I have a new rule for my reports.",
     "Meine Regel ist, meine Berichte nicht ohne Zusammenfassung abzugeben.",

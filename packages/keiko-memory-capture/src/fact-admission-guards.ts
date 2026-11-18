@@ -112,12 +112,14 @@ interface RuleAnnouncementForm {
   readonly noun: string;
   readonly prepositions: ReadonlySet<string>;
   readonly possessives: ReadonlySet<string>;
+  readonly modifier: RegExp;
 }
 
 const RULE_ANNOUNCEMENT_FORMS: readonly RuleAnnouncementForm[] = [
   {
     opening: ["ich", "habe", "eine"],
     qualifier: "neue",
+    modifier: /(?:e|en|er|em|es)$/u,
     noun: "regel",
     prepositions: new Set(["für", "fuer", "zu"]),
     possessives: new Set(["mein", "meine", "meinem", "meinen", "meiner", "meines"]),
@@ -125,6 +127,7 @@ const RULE_ANNOUNCEMENT_FORMS: readonly RuleAnnouncementForm[] = [
   {
     opening: ["i", "have", "a"],
     qualifier: "new",
+    modifier: /(?:ly|al|ic|ive|ous|ible|able|ary|ful|less|ular)$/u,
     noun: "rule",
     prepositions: new Set(["for", "about"]),
     possessives: new Set(["my"]),
@@ -134,10 +137,13 @@ const ANNOUNCEMENT_TOPIC_WORD_RE = /^\p{L}+(?:-\p{L}+)*$/u;
 
 function isOwnedAnnouncementTopic(words: readonly string[], form: RuleAnnouncementForm): boolean {
   return (
-    words.length === 3 &&
+    words.length >= 3 &&
     form.prepositions.has(words[0] ?? "") &&
     form.possessives.has(words[1] ?? "") &&
-    ANNOUNCEMENT_TOPIC_WORD_RE.test(words[2] ?? "")
+    words
+      .slice(2, -1)
+      .every((word) => ANNOUNCEMENT_TOPIC_WORD_RE.test(word) && form.modifier.test(word)) &&
+    ANNOUNCEMENT_TOPIC_WORD_RE.test(words.at(-1) ?? "")
   );
 }
 
