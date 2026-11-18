@@ -1114,6 +1114,30 @@ describe("memory learning passes", () => {
     },
   );
 
+  it("does not continue into unmarked trailing work after the final marked source", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const learner = fakeLearner();
+    const deps = makeDeps({
+      env: { KEIKO_MEMORY_LEARNING_IDLE_MS: "3600000" },
+      modelPortFactory: () => learner.port,
+    });
+    const chat = makeChat(deps);
+    writeTurn(deps, chat, "I use Vim.");
+    for (let index = 0; index < 32; index += 1) {
+      writeTurn(deps, chat, "I work with Rust.", false);
+    }
+    const runtime = memoryLearningRuntime(deps);
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+    const position = deps.store.memoryLearning?.readPosition(chat.chatId);
+    expect(deps.store.memoryLearning?.listChatsWithPending(1)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(deps.store.memoryLearning?.readPosition(chat.chatId)).toEqual(position);
+    expect(sink.events.filter((event) => event.op === "memory.learn.pass.settled")).toHaveLength(1);
+    expect(learner.calls()).toBe(1);
+  });
+
   it("applies a forget to what was still waiting to be learned", async () => {
     const deps = makeDeps();
     const chat = makeChat(deps);

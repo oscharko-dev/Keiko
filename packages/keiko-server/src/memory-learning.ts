@@ -492,7 +492,7 @@ export class MemoryLearningRuntime {
     );
     const bounded = rows.length === PENDING_PAGE || plan.turns.length > MAX_TURNS_PER_CHAT_PASS;
     const advanced = plan.leadingEnd !== undefined || plan.turns.length > 0;
-    if (outcome === "done" && bounded && advanced && store.listPending(chatId, 1).length > 0) {
+    if (outcome === "done" && bounded && advanced && store.hasPendingMarkedUser(chatId)) {
       this.readyChats.add(chatId);
     }
     return outcome;

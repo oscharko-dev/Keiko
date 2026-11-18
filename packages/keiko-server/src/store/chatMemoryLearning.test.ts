@@ -37,6 +37,27 @@ function seedTiedChat(db: DatabaseSync): void {
 }
 
 describe("pending learning pages", () => {
+  it("seeks marked continuation work without reading old history or unmarked trailing rows", () => {
+    using db = new DatabaseSync(":memory:");
+    seedTiedChat(db);
+    db.exec("UPDATE chat_messages SET memory_learning = 'desktop' WHERE chat_id = 'c'");
+    const readSteps = observeSteps(db);
+    const store = createChatMemoryLearningStore(db);
+    expect(store.hasPendingMarkedUser("c")).toBe(true);
+    expect(readSteps()).toBeGreaterThan(0);
+    expect(readSteps()).toBeLessThan(256);
+    for (const message of store.listPending("c", 2)) store.advance("c", message.position);
+    // The later assistant is marked too, but only a person's marked message is a learning source.
+    expect(store.hasPendingMarkedUser("c")).toBe(false);
+    expect(store.hasPendingMarkedUser("other")).toBe(false);
+    expect(store.hasPendingMarkedUser("missing")).toBe(false);
+    expect(store.markMessage("other", { surface: "desktop" })).toBe(true);
+    expect(store.hasPendingMarkedUser("other")).toBe(true);
+    db.exec(`INSERT INTO chat_messages (id,chat_id,role,content,timestamp,memory_learning)
+      VALUES ('later-marked','c','user','A later source.',1,'voice')`);
+    expect(store.hasPendingMarkedUser("c")).toBe(true);
+  });
+
   it("seeks past learned rows sharing a timestamp and keeps newer messages in Chat order", () => {
     using db = new DatabaseSync(":memory:");
     seedTiedChat(db);

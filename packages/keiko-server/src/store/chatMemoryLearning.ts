@@ -47,6 +47,8 @@ export interface ChatMemoryLearningStore {
   readonly markMessage: (messageId: string, mark: MemoryLearningMark) => boolean;
   readonly readPosition: (chatId: string) => MemoryLearningPosition | undefined;
   readonly listPending: (chatId: string, limit: number) => readonly PendingLearningMessage[];
+  /** Whether marked user work remains after this Chat's durable position; reads metadata only. */
+  readonly hasPendingMarkedUser: (chatId: string) => boolean;
   /** Reads only the immediate preceding user message, and only if it was marked for learning. */
   readonly readPreviousUserText: (chatId: string, messageId: string) => string | undefined;
   /** Explicit erasure also covers unmarked text. Skip a matching latest row of this current turn. */
@@ -97,6 +99,23 @@ SELECT page.position_rowid, m.id, m.role, m.content, page.timestamp, m.memory_le
   m.memory_learning_mode
 FROM page JOIN chat_messages m ON m.rowid = page.position_rowid
 ORDER BY page.timestamp, page.position_rowid`;
+const SQL_HAS_PENDING_MARKED_USER = `
+WITH cursor AS (
+  SELECT learned_timestamp, learned_rowid FROM chat_memory_learning WHERE chat_id = ?1
+)
+SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM cursor) THEN EXISTS (
+  SELECT 1 FROM chat_messages m WHERE m.chat_id = ?1
+    AND m.memory_learning IS NOT NULL AND m.role = 'user'
+) ELSE EXISTS (
+  SELECT 1 FROM chat_messages m WHERE m.chat_id = ?1
+    AND m.memory_learning IS NOT NULL AND m.role = 'user'
+    AND m.timestamp = (SELECT learned_timestamp FROM cursor)
+    AND m.rowid > (SELECT learned_rowid FROM cursor)
+) OR EXISTS (
+  SELECT 1 FROM chat_messages m WHERE m.chat_id = ?1
+    AND m.memory_learning IS NOT NULL AND m.role = 'user'
+    AND m.timestamp > (SELECT learned_timestamp FROM cursor)
+) END AS pending`;
 // Find the immediately preceding user by rowid within this timestamp, then by earlier timestamp.
 // Inspect the mark on that row only: an unmarked user turn is a consent barrier.
 const SQL_READ_PREVIOUS_USER_TEXT = `
@@ -216,8 +235,19 @@ function listPendingChats(
   return rows.map((row) => ({ chatId: row.chat_id, firstPendingTimestamp: row.first_pending }));
 }
 
+function readPreviousStatement(
+  statement: StatementSync,
+  chatId: string,
+  currentContent: string,
+): PreviousUserStatement | undefined {
+  const rows = statement.all(chatId) as unknown as PreviousUserStatement[];
+  const newest = rows[0];
+  return newest?.content === currentContent ? rows[1] : newest;
+}
+
 export function createChatMemoryLearningStore(db: DatabaseSync): ChatMemoryLearningStore {
   let pendingPage: StatementSync | undefined;
+  let pendingMarkedUser: StatementSync | undefined;
   let previousUser: StatementSync | undefined;
   let lastUserMessages: StatementSync | undefined;
   let pendingChats: StatementSync | undefined;
@@ -242,6 +272,11 @@ export function createChatMemoryLearningStore(db: DatabaseSync): ChatMemoryLearn
       pendingPage ??= db.prepare(SQL_LIST_PENDING);
       return (pendingPage.all(chatId, limit) as unknown as PendingRow[]).map(pendingMessage);
     },
+    hasPendingMarkedUser: (chatId): boolean => {
+      pendingMarkedUser ??= db.prepare(SQL_HAS_PENDING_MARKED_USER);
+      const row = pendingMarkedUser.get(chatId) as { readonly pending: number };
+      return row.pending === 1;
+    },
     readPreviousUserText: (chatId, messageId): string | undefined => {
       previousUser ??= db.prepare(SQL_READ_PREVIOUS_USER_TEXT);
       const row = previousUser.get(chatId, messageId) as
@@ -250,9 +285,7 @@ export function createChatMemoryLearningStore(db: DatabaseSync): ChatMemoryLearn
     },
     readPreviousUserMessage: (chatId, currentContent): PreviousUserStatement | undefined => {
       lastUserMessages ??= db.prepare(SQL_READ_LAST_USER_MESSAGES);
-      const rows = lastUserMessages.all(chatId) as unknown as PreviousUserStatement[];
-      const newest = rows[0];
-      return newest?.content === currentContent ? rows[1] : newest;
+      return readPreviousStatement(lastUserMessages, chatId, currentContent);
     },
     advance: (chatId, position): void => {
       db.prepare(SQL_ADVANCE).run(position.timestamp, position.rowid, chatId);

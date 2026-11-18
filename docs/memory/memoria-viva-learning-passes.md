@@ -47,7 +47,9 @@ A continuation visits pending Chats after the previous pass's last Chat before r
 unavailable Chats. Healthy Chats that reach a turn or message-page bound keep their own one-second
 continuations; they take turns again after that Chat page tour. Advancing past a full page of system
 messages is progress too. The usual backoff begins after these continuations have drained, and does
-not retry unavailable Chats early. A pass that makes no cursor progress keeps the existing backoff.
+not retry unavailable Chats early. A continuation requires marked user work after its durable
+position; unmarked trailing messages alone never start another pass. A pass that makes no cursor
+progress keeps the existing backoff.
 
 ## Foreground work wins
 
