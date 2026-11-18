@@ -450,16 +450,12 @@ function listMemoryCandidates(
 
 function listReviewQueueMemories(vault: MemoryVaultStore): readonly MemoryRecord[] {
   const scopes = vault.listMemoryScopes();
-  const pending = vault.listMemoriesAcrossScopes(scopes, {
+  const records = vault.listMemoriesAcrossScopes(scopes, {
     status: REVIEW_QUEUE_STATUSES,
+    includeStaleStatuses: ["accepted", "superseded"],
     includeExpired: true,
   });
-  const stale = vault.listMemoriesAcrossScopes(scopes, {
-    status: ["accepted", "superseded"],
-    requireStaleReason: true,
-    includeExpired: true,
-  });
-  return sortMemories([...pending, ...stale]);
+  return sortMemories(records);
 }
 
 // ─── Handler: GET /api/memory ─────────────────────────────────────────────────

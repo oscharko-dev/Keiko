@@ -931,6 +931,45 @@ describe("namespace isolation regression", () => {
 });
 
 describe("list filters", () => {
+  it("keeps both review status alternatives within the requested scope and sensitivity", () => {
+    const vault = openVault(freshDir());
+    try {
+      const sample = makeMemory({
+        id: "stale" as MemoryId,
+        status: "accepted",
+        staleReason: "changed-source",
+      });
+      const provenance = { ...sample.provenance, sensitivity: "public" as const };
+      const stale = { ...sample, provenance };
+      vault.insertMemory(stale);
+      vault.insertMemory({
+        ...stale,
+        id: "confidential" as MemoryId,
+        provenance: { ...stale.provenance, sensitivity: "confidential" },
+      });
+      vault.insertMemory({ ...stale, id: "foreign" as MemoryId, scope: { kind: "global" } });
+      vault.insertMemory(
+        makeMemory({ id: "ordinary" as MemoryId, status: "proposed", provenance }),
+      );
+      vault.insertMemory(
+        makeMemory({ id: "accepted-current" as MemoryId, status: "accepted", provenance }),
+      );
+      const matches = vault.listMemoriesAcrossScopes([stale.scope], {
+        status: ["proposed"],
+        includeStaleStatuses: ["accepted"],
+        sensitivity: ["public"],
+      });
+      expect(matches.map((record) => record.id).sort()).toEqual(["ordinary", "stale"]);
+      const staleOnly = vault.listMemoriesAcrossScopes([stale.scope], {
+        includeStaleStatuses: ["accepted"],
+        sensitivity: ["public"],
+      });
+      expect(staleOnly.map((record) => record.id)).toEqual(["stale"]);
+    } finally {
+      vault.close();
+    }
+  });
+
   it("filters by type, status, pinned, and excludes expired by default", () => {
     const dir = freshDir();
     const v = openVault(dir);

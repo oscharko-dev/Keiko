@@ -162,11 +162,11 @@ export interface MemoryDeleteResult {
 }
 
 export interface ListMemoriesOptions {
-  /** Filter for a recorded stale reason before decoding any bodies. */
-  readonly requireStaleReason?: boolean;
   readonly sensitivity?: readonly MemorySensitivity[];
   readonly type?: readonly MemoryType[];
   readonly status?: readonly MemoryStatus[];
+  /** Match these additional statuses only when the record has a stale reason. */
+  readonly includeStaleStatuses?: readonly MemoryStatus[];
   readonly pinned?: boolean;
   // Only records whose retention hint carries this policy key (the column is not sealed).
   readonly retentionPolicyKey?: string;

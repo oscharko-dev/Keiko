@@ -212,13 +212,27 @@ interface ListClauseBuild {
   readonly params: readonly (string | number)[];
 }
 
+function enumPredicate(column: string, values: readonly string[]): string {
+  return `${column} IN (${values.map(() => "?").join(",")})`;
+}
+
 function buildEnumClause(
   column: string,
   values: readonly string[] | undefined,
 ): ListClauseBuild | undefined {
   if (values === undefined || values.length === 0) return undefined;
-  const placeholders = values.map(() => "?").join(",");
-  return { clauses: [`${column} IN (${placeholders})`], params: values };
+  return { clauses: [enumPredicate(column, values)], params: values };
+}
+
+function buildStatusClause(options: ListMemoriesOptions): ListClauseBuild | undefined {
+  const { status, includeStaleStatuses } = options;
+  if (!includeStaleStatuses?.length) return buildEnumClause("status", status);
+  const stale = `(stale_reason IS NOT NULL AND ${enumPredicate("status", includeStaleStatuses)})`;
+  if (!status?.length) return { clauses: [stale], params: includeStaleStatuses };
+  return {
+    clauses: [`(${enumPredicate("status", status)} OR ${stale})`],
+    params: [...status, ...includeStaleStatuses],
+  };
 }
 
 function buildExpiryClause(
@@ -241,10 +255,9 @@ function appendListFilters(
   options: ListMemoriesOptions,
   nowMs: number,
 ): void {
-  if (options.requireStaleReason === true) where.push("stale_reason IS NOT NULL");
   for (const built of [
     buildEnumClause("type", options.type),
-    buildEnumClause("status", options.status),
+    buildStatusClause(options),
     buildEnumClause("sensitivity", options.sensitivity),
     buildPinnedClause(options.pinned),
     buildRetentionPolicyClause(options.retentionPolicyKey),

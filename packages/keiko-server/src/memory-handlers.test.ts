@@ -138,9 +138,13 @@ afterEach(() => {
   }
 });
 
-function makeVault(): MemoryVaultStore {
+function makeVaultDirectory(): string {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-memory-handlers-"));
   tmpDirs.push(dir);
+  return dir;
+}
+
+function makeVault(dir = makeVaultDirectory()): MemoryVaultStore {
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   activeVaults.push(vault);
   return vault;
@@ -748,6 +752,44 @@ describe("memory handlers", () => {
     );
     expect(decoded.sort((left, right) => left.localeCompare(right))).toEqual(queued);
   });
+
+  it.each([
+    ["proposed", "accepted"],
+    ["accepted", "conflicted"],
+  ] as const)(
+    "reads one queue snapshot when another connection changes %s to %s",
+    (before, after) => {
+      const dir = makeVaultDirectory();
+      const reader = makeVault(dir);
+      const writer = makeVault(dir);
+      const record = makeMemory("moving-review-record", "Synthetic review record", {
+        status: before,
+        staleReason: "changed-source",
+      });
+      reader.insertMemory(record);
+      const read = reader.listMemoriesAcrossScopes;
+      const selections = vi
+        .spyOn(reader, "listMemoriesAcrossScopes")
+        .mockImplementationOnce((...args) => {
+          const rows = read(...args);
+          writer.updateMemory(record.id, { status: after }, record.updatedAt + 1);
+          return rows;
+        });
+      const statuses = (): readonly string[] => {
+        const response = handleMemoryReviewQueue(
+          makeCtx("/api/memory/review-queue", {}),
+          makeDeps({ memoryVault: reader }),
+        );
+        expect(response.status).toBe(200);
+        return (asJson(response).memories as readonly MemoryRecord[]).map(
+          (memory) => memory.status,
+        );
+      };
+      expect(statuses()).toEqual([before]);
+      expect(selections).toHaveBeenCalledTimes(1);
+      expect(statuses()).toEqual([after]);
+    },
+  );
 
   it("includes non-global conflicts in the review queue", () => {
     const vault = makeVault();
