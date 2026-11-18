@@ -333,12 +333,33 @@ export function ensureInstalled(root, nodeDir, env, run = spawnSync) {
   return true;
 }
 
+/** Why the system refused to start Keiko's process: only its error code, never a path. */
+function reportStartRefused(error) {
+  const code = typeof error?.code === "string" ? error.code : undefined;
+  if (code === "ENOENT") {
+    say(
+      'Keiko is incomplete: the Node.js runtime is missing in the folder "system". Unpack the folder again.',
+      'Keiko ist unvollstaendig: Im Ordner "system" fehlt die Node.js-Laufzeit. Entpacke den Ordner noch einmal.',
+    );
+    return;
+  }
+  say(
+    `Keiko could not be started (${code ?? "unknown error"}).`,
+    `Keiko konnte nicht gestartet werden (${code ?? "unbekannter Fehler"}).`,
+  );
+}
+
 function runKeiko(root, args, env, run) {
   const result = run(process.execPath, [keikoCliPath(root), ...args], {
     cwd: root,
     stdio: "inherit",
     env: keikoEnv(env),
   });
+  if (result.error !== undefined) {
+    // No child ran, so nothing else would say why Start or Stop ended here.
+    reportStartRefused(result.error);
+    return 1;
+  }
   return result.status ?? 1;
 }
 

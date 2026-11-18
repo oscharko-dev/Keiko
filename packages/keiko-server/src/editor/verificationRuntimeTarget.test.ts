@@ -201,8 +201,15 @@ function dockerEngineFromResult(output: tools.CommandResult): "linux" | "windows
 // five seconds while its later ones took milliseconds (PR #4464, 2026-11-18), and a query that
 // runs out still fails the qualification instead of skipping it.
 const DOCKER_ENGINE_QUERY_TIMEOUT_MS = 30_000;
-// A test that queries the real engine keeps its own 20-second budget on top of that bound.
-const REAL_ENGINE_TEST_TIMEOUT_MS = DOCKER_ENGINE_QUERY_TIMEOUT_MS + 20_000;
+// The runtime-metadata probe's own bound; the probe tests below pin this value to production.
+const RUNTIME_METADATA_TIMEOUT_MS = 15_000;
+/**
+ * A real-engine test's budget: the engine query, each bounded metadata probe it runs after it, and
+ * 20 seconds of its own, so a slow but bounded run fails on its assertions, never on the budget.
+ */
+function realEngineTestTimeout(probes: number): number {
+  return DOCKER_ENGINE_QUERY_TIMEOUT_MS + probes * RUNTIME_METADATA_TIMEOUT_MS + 20_000;
+}
 
 async function realDockerEngine(
   workspace: ReturnType<typeof detectWorkspace>,
@@ -449,7 +456,11 @@ it("binds the child metadata and actual selected backend without assuming host C
   expect(target.runtimeIdentitySha256).toMatch(/^[a-f0-9]{64}$/u);
   expect(Object.isFrozen(target)).toBe(true);
   const [input, deps] = run.mock.calls[0] ?? [];
-  expect(input).toMatchObject({ command: "node", cwd: undefined, timeoutMs: 15_000 });
+  expect(input).toMatchObject({
+    command: "node",
+    cwd: undefined,
+    timeoutMs: RUNTIME_METADATA_TIMEOUT_MS,
+  });
   expect(input?.args).toHaveLength(2);
   expect(input?.args[0]).toBe("-e");
   expect(deps?.policy).toMatchObject({
@@ -623,7 +634,7 @@ it(
     expect(output.exitCode).toBe(0);
     expect(output.truncated).toBe(false);
   },
-  REAL_ENGINE_TEST_TIMEOUT_MS,
+  realEngineTestTimeout(1),
 );
 
 it(
@@ -703,7 +714,7 @@ it(
     );
     expect(diagnostic).toHaveBeenCalledOnce();
   },
-  REAL_ENGINE_TEST_TIMEOUT_MS,
+  realEngineTestTimeout(1),
 );
 
 it("preserves accepted cancellation after the bounded command settles", async () => {
@@ -890,7 +901,7 @@ it(
     vi.stubEnv("NODE_VERSION", before.nodeVersion.slice(1));
     expect(await resolveObservedRuntimeTarget(input, observed)).toEqual(before);
   },
-  REAL_ENGINE_TEST_TIMEOUT_MS,
+  realEngineTestTimeout(2),
 );
 
 it(
@@ -937,7 +948,7 @@ it(
     expect(observed[0]?.stdout.includes("[REDACTED]")).toBe(true);
     expect(observed[0]?.stdout.includes(baseline.nodeVersion)).toBe(false);
   },
-  REAL_ENGINE_TEST_TIMEOUT_MS,
+  realEngineTestTimeout(2),
 );
 
 it("keeps scrubbing the same ordinary value for every other command under the default policy", async () => {
@@ -948,7 +959,7 @@ it("keeps scrubbing the same ordinary value for every other command under the de
       command: "node",
       args: ["-e", "process.stdout.write(process.version)"],
       cwd: undefined,
-      timeoutMs: 15_000,
+      timeoutMs: RUNTIME_METADATA_TIMEOUT_MS,
       signal: new AbortController().signal,
     },
     {

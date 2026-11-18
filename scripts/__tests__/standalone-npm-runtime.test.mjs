@@ -356,6 +356,27 @@ describe("the npm package start", () => {
       expect(start(root, nodeDir, env, () => ({ status: null }))).toBe(1);
     });
 
+    it("names why Keiko could not be started when the system refuses to run it", () => {
+      // CodeRabbit on PR #4464: a refused spawn ended Start and Stop with exit code 1 and no reason.
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { root, nodeDir, env } = installFixture();
+      installKeiko(root, `${lockfileDigest(root)}\n`);
+      const refused = (code) => () => ({
+        status: null,
+        error: Object.assign(new Error(`spawn ${root}`), code === undefined ? {} : { code }),
+      });
+
+      expect(start(root, nodeDir, env, refused("EACCES"))).toBe(1);
+      expect(log).toHaveBeenCalledWith("Keiko could not be started (EACCES).");
+      expect(stop(root, env, refused("ENOENT"))).toBe(1);
+      expect(log).toHaveBeenCalledWith(
+        'Keiko is incomplete: the Node.js runtime is missing in the folder "system". Unpack the folder again.',
+      );
+      expect(start(root, nodeDir, env, refused(undefined))).toBe(1);
+      expect(log).toHaveBeenCalledWith("Keiko could not be started (unknown error).");
+      expect(log.mock.calls.flat().join("\n")).not.toContain(root);
+    });
+
     it("installs and then starts Keiko, releasing the folder's installation lock", () => {
       quiet();
       const { root, nodeDir, env } = installFixture();
