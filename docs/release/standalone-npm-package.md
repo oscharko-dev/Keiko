@@ -102,15 +102,23 @@ lock closed is not recorded: it waits until that start has let go, takes the loc
 and only then stops the open Keiko, so no start opens Keiko between its decision and its effect and
 it can never stop the Keiko a later start opened (if the lock stays held for 90 seconds it says so
 and does not act). A start that has launched Keiko writes its token into `system/keiko-npm-start-generation`
-under the lock, in one rename, after the launch really happened (a start whose command line the system refused to run records
-nothing); the record outlives the lock. A Stop reads it as it is pressed, together with the starts that hold the lock at that moment,
-before it asks the lock, and again once it holds the lock: if it names a start that neither the Stop saw nor held the lock at the press,
+under the lock, in one rename, only when its command line ended with success, so Keiko really opened. A start whose command line
+the system refused to run, that refused at once (for example while another start is busy), or that failed records nothing, so it
+never makes a waiting Stop think Keiko was restarted. A start that no longer owns its lock, because another start took it over while
+its command line ran, leaves the record alone and never writes its own token over the newer one. The record outlives the lock. A Stop reads it as it is pressed, together with the starts that hold the lock at that moment,
+before it asks the lock, and again once it holds the lock. The Stop reads the record on both sides of the lock listing and reads
+them again when the record changed in between, so a start that finishes while the Stop looks is never taken for a later one: if it names a start that neither the Stop saw nor held the lock at the press,
 that start opened Keiko after the Stop, and the Stop says so and leaves Keiko open (press Stop again to end it). A start that held
 the lock at the press and finishes while the Stop waits came before it, so the Stop still stops Keiko. Every stop is carried out while the one
 who runs it owns the lock; a Stop that finds only the npm of an ended start holding the lock leaves a handoff
-(`system/keiko-npm-stop-handoff-<pid>-<random>`) for as long as its stop runs, and a start that takes the lock waits for it
-(up to 90 seconds, then it ends with exit code 1 and asks to start again) before it opens Keiko, so the stop never lands on that
-Keiko. A Stop whose lock was taken over before it could close it
+(`system/keiko-npm-stop-handoff-<pid>-<random>`) for as long as its stop runs and renews it every 15 seconds from a worker thread. A
+start that takes the lock waits for a handoff that renews (up to 90 seconds, then it ends with exit code 1 and asks to start again)
+before it opens Keiko. A handoff whose process number does not run, or whose entry does not change for 60 seconds on the start's
+own monotonic clock, belongs to a Stop that ended (its number was reused): the start removes it and goes on. A start whose lock
+was taken over while it closed it carries out no Stop request, confirmed or provisional, and ends with a plain message. A start
+that watches an orphaned installation checks, once the renewal is seen, that the renewing start is still in the lock and has not
+closed it; otherwise it waits for the closing lock like any other. With the handoff, the stop never lands on the Keiko that start
+opened. A Stop whose lock was taken over before it could close it
 does not act either and asks to be pressed again. If a later start wins the lock first, the Stop is recorded in that start's lock
 instead and that start, which does not leave Keiko open, carries it out; the Stop does not act itself. A
 start pressed while a Stop holds the closed lock waits for that Stop (up to 90 seconds) and then opens

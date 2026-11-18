@@ -90,14 +90,21 @@ const tempRoots = [];
 const clock = { renewing: true, now: 0, last: 0, writes: 0, frozen: new Set() };
 const realRenewalStart = lockRenewal.start;
 
-function renewHolders(dir) {
+function renewEntries(dir, pattern) {
   const names = existsSync(dir) ? readdirSync(dir) : [];
-  for (const name of names.filter((entry) => /^(owner|npm)-\d+-/u.test(entry))) {
+  for (const name of names.filter((entry) => pattern.test(entry))) {
     const path = join(dir, name);
     if (clock.frozen.has(name) || !statSync(path).isFile()) continue;
     clock.writes += 1;
     writeFileSync(path, `${String(clock.now)}-${String(clock.writes)}\n`);
   }
+}
+
+// The holders of the lock renew, and so does a Stop that acts under a handoff in system/ (the
+// worker thread of the real Stop does it); a test freezes one to stand in for a Stop that ended.
+function renewHolders(dir) {
+  renewEntries(dir, /^(owner|npm)-\d+-/u);
+  renewEntries(dirname(dir), /^keiko-npm-stop-handoff-\d+-/u);
 }
 
 beforeEach(() => {
@@ -2118,6 +2125,179 @@ describe("the npm package start", () => {
           expect.stringMatching(/^Keiko wird noch von einem anderen/u),
         );
       });
+
+      it("stops Keiko when the one running start records its launch and lets go between the Stop's two observations", () => {
+        // Owner finding on PR #4464 (thread GMvW): the Stop read the start record, then the lock
+        // listing. The one start that was running recorded its launch and released the lock between
+        // the two reads, so the Stop saw the earlier record and no holder, took that start for a
+        // later one and returned 0 without stopping Keiko.
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const { root, env, commands, run } = stopFixture();
+        const holder = acquireInstallLock(root);
+        let finished = false;
+        const pause = (step) => {
+          if (step !== "observe" || finished) return;
+          finished = true;
+          closeInstallLock(holder);
+          recordStartLaunch(root, holder);
+          removeInstallLock(holder);
+        };
+
+        expect(stop(root, env, run, pause)).toBe(0);
+        expect(finished).toBe(true);
+        expect(commands).toEqual(["stop"]);
+        expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^Keiko was started again/u));
+      });
+
+      it("keeps a waiting Stop when a later start's command line refuses before it opens anything", () => {
+        // Owner finding on PR #4464 (thread GMvb): the command line was spawned but refused at
+        // once (its lifecycle was busy) and ended with a failure. The launch was recorded because a
+        // child existed, so the waiting Stop reported a restart and left the running Keiko alone.
+        quiet();
+        const { root, nodeDir, env, commands, run } = stopFixture();
+        const closing = acquireInstallLock(root);
+        closeInstallLock(closing);
+        const base = lockClock.sleep.getMockImplementation();
+        const busy = vi.fn(() => ({ status: 1 }));
+        let later;
+        vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+          if (later === undefined && clock.now >= 30_000) {
+            removeInstallLock(closing);
+            later = start(root, nodeDir, env, busy);
+          }
+          base(milliseconds, dir);
+        });
+
+        expect(stop(root, env, run)).toBe(0);
+        expect(busy).toHaveBeenCalledOnce();
+        expect(later).toBe(1);
+        expect(commands).toEqual(["stop"]);
+        expect(startGeneration(root)).toBe("");
+      });
+
+      it("does not carry out a Stop request when the start lost its lock while it was closing it", () => {
+        // Owner finding on PR #4464 (thread GMve): the lock was taken over while the old start was
+        // closing it (`owned` false), and the start still dispatched the provisional request it saw
+        // before. The replacement start had opened Keiko, so the old owner's Stop ended it.
+        quiet();
+        const { root, nodeDir, env } = installFixture();
+        const npm = fakeNpm(root, true, () => requestStop(root));
+        const replacement = `owner-${String(process.pid)}-0b`;
+        let taken = false;
+        const takeOver = (step) => {
+          if (step !== "closed" || taken) return;
+          taken = true;
+          rmSync(installLockPath(root), { recursive: true, force: true });
+          mkdirSync(installLockPath(root));
+          writeFileSync(join(installLockPath(root), replacement), "");
+        };
+        const commands = [];
+        const run = vi.fn((node, args, options) => {
+          if (args.includes("ci")) return npm.run(node, args, options);
+          commands.push(args[1]);
+          return { status: 0 };
+        });
+
+        expect(() => start(root, nodeDir, env, run, takeOver)).toThrow(LauncherRefusal);
+        expect(taken).toBe(true);
+        expect(commands).toEqual([]);
+        expect(lockOwners(root)).toEqual([replacement]);
+      });
+
+      it("opens Keiko after a Stop that closed the lock while a start observed an orphaned installation", () => {
+        // Owner finding on PR #4464 (thread GMvg): the start watched for renewal of a start entry
+        // while the orphaned installation ended and a Stop took and closed the lock. The Stop's new
+        // owner entry satisfied the renewal, so the start reported that another start opens Keiko,
+        // launched nothing and left a closing Stop as the only holder.
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const { root, nodeDir, env } = installFixture();
+        installKeiko(root, `${lockfileDigest(root)}\n`);
+        const dir = installLockPath(root);
+        // A frozen start entry whose number runs, and npm of its window still renewing.
+        staleLock(root, process.pid);
+        clock.frozen.add(`owner-${String(process.pid)}-0a`);
+        writeFileSync(join(dir, `npm-${String(process.pid)}-0c`), "1\n");
+        const base = lockClock.sleep.getMockImplementation();
+        let stopLock;
+        let released = false;
+        vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, d) => {
+          base(milliseconds, d);
+          if (stopLock === undefined && clock.now >= 40_000) {
+            // npm ends; a Stop takes the free lock and closes it.
+            rmSync(dir, { recursive: true, force: true });
+            stopLock = acquireInstallLock(root);
+            closeInstallLock(stopLock);
+          } else if (stopLock !== undefined && !released && clock.now >= 100_000) {
+            removeInstallLock(stopLock);
+            released = true;
+          }
+        });
+        const run = vi.fn(() => ({ status: 0 }));
+
+        expect(start(root, nodeDir, env, run)).toBe(0);
+        expect(run).toHaveBeenCalledOnce();
+        expect(run.mock.calls[0][1][1]).toBe("start");
+        expect(log).not.toHaveBeenCalledWith(
+          expect.stringMatching(/^Another start of this folder/u),
+        );
+      });
+
+      it("reclaims the handoff of a Stop that ended and whose process number was reused", () => {
+        // Owner finding on PR #4464 (thread M0FE): a Stop ended before it removed its handoff and
+        // the system gave its number to another process, so the handoff looked alive for good. Each
+        // start then waited the whole wait and ended without opening Keiko.
+        quiet();
+        const { root, nodeDir, env, commands, run } = stopFixture();
+        const name = `keiko-npm-stop-handoff-${String(process.pid)}-0a`;
+        writeFileSync(join(root, "system", name), "");
+        // Nobody renews it: the number runs, the Stop does not.
+        clock.frozen.add(name);
+
+        expect(start(root, nodeDir, env, run)).toBe(0);
+        expect(commands).toEqual(["start"]);
+        expect(handoffsOf(root)).toEqual([]);
+        expect(clock.now).toBeGreaterThanOrEqual(60_000);
+        expect(clock.now).toBeLessThan(90_000);
+      });
+
+      it("renews its handoff for as long as the Stop acts and stops renewing when it ends", () => {
+        // Owner finding on PR #4464 (thread M0FE): the handoff proves its Stop by renewal.
+        quiet();
+        const { root, env, run } = stopFixture();
+        npmOnlyLock(root);
+        const stopRenewing = vi.fn();
+        const renewed = [];
+        lockRenewal.start.mockImplementation((path) => {
+          renewed.push(path);
+          return stopRenewing;
+        });
+
+        expect(stop(root, env, run)).toBe(0);
+        expect(renewed).toHaveLength(1);
+        expect(renewed[0]).toMatch(/keiko-npm-stop-handoff-\d+-[0-9a-f]+$/u);
+        expect(stopRenewing).toHaveBeenCalledOnce();
+        expect(handoffsOf(root)).toEqual([]);
+      });
+
+      it("leaves the newer start record alone when a former owner returns from its command line", () => {
+        // Owner finding on PR #4464 (thread M0FQ): the launcher lost its lock while its command line
+        // ran, a replacement start opened Keiko and recorded its token, and the old launcher then
+        // wrote its own token over it, so a waiting Stop ended the replacement's Keiko.
+        quiet();
+        const { root, nodeDir, env } = stopFixture();
+        let replacement;
+        const run = vi.fn(() => {
+          rmSync(installLockPath(root), { recursive: true, force: true });
+          replacement = acquireInstallLock(root);
+          recordStartLaunch(root, replacement);
+          removeInstallLock(replacement);
+          return { status: 0 };
+        });
+
+        expect(start(root, nodeDir, env, run)).toBe(0);
+        expect(run).toHaveBeenCalledOnce();
+        expect(startGeneration(root)).toBe(`${replacement.token}\n`);
+      });
     });
 
     it("stops the Keiko of the start that was closing when no other start came meanwhile", () => {
@@ -2704,6 +2884,25 @@ describe("the administrator's access step", () => {
     await expect(refused).rejects.toThrow(/cancelled/u);
     expect(cancelled.stdin.rawModes).toEqual([true, false]);
   });
+
+  it.each(["end", "close"])(
+    "ends a terminal read when the terminal input emits %s before Enter",
+    async (event) => {
+      // CodeRabbit on PR #4464: a terminal that closed before Enter left the read pending, so the
+      // access step hung without saving or saying anything.
+      const terminal = fakeTerminal();
+      const token = readHidden("Token: ", terminal.io);
+      terminal.stdin.emit("data", "sk-a");
+      terminal.stdin.emit(event);
+
+      await expect(token).rejects.toThrow(/terminal closed/u);
+      expect(terminal.stdin.rawModes).toEqual([true, false]);
+      expect(terminal.stdin.flowing).toBe(false);
+      for (const name of ["data", "end", "close"]) {
+        expect(terminal.stdin.listenerCount(name)).toBe(0);
+      }
+    },
+  );
 
   it("reads no token without a terminal", async () => {
     const terminal = fakeTerminal(false);

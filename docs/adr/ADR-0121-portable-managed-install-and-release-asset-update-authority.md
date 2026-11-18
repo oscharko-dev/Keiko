@@ -11,7 +11,7 @@ community-tier asset without a parity commitment for new operating-system featur
 ([ADR-0183](ADR-0183-linux-desktop-community-tier.md), 2026-11-12). D9 adds the standalone folder
 package, an in-place delivery form of the same payload (2026-11-17), and the npm folder package,
 which carries the payload's Node.js runtime and installs Keiko into the folder from an npm
-registry at the first start (2026-11-18). From 2026-11-18 every stable release also carries the
+registry at the first start (2026-11-18). From 2026-11-18 every stable `latest` release also carries the
 generic standalone folder package of each desktop target as a release asset (D9).
 
 ## Context
@@ -1280,25 +1280,30 @@ closing start and carried out while it still holds the lock, or is turned away, 
 let go, takes the lock, closes it and stops Keiko under it (a lock held for 90 seconds makes the Stop
 say so and not act). While it waits it retries recording: a later start that wins the lock first
 records the Stop in its own lock and carries it out, and the waiting Stop does not act itself. A start writes its token
-to `system/keiko-npm-start-generation` under the lock once its launch of Keiko really happened (the command line was spawned;
-a spawn the system refused records nothing). A Stop reads that record, and the owner tokens of the starts holding the lock,
-as it is pressed, before it asks the lock, and again after it took the lock. It does not act only when the record names a
+to `system/keiko-npm-start-generation` under the lock only when its launch of Keiko succeeded (the command line ended with
+success). A spawn the system refused, a command line that refused before it opened anything and a failed start record nothing.
+A start that no longer owns its lock leaves the record alone, so a returning former owner never replaces a newer token. A Stop reads that record, and the owner tokens of the starts holding the lock,
+as it is pressed, before it asks the lock, and again after it took the lock. The record is read on both sides of the holder
+listing and the pair is read again when it changed in between. It does not act only when the record names a
 start that was neither the one it saw nor one that held the lock when it was pressed (that start opened Keiko after the
 Stop); a start that held the lock at the press and finishes meanwhile came before the Stop, so the Stop still acts. It also
-does not act when closing the lock it took reports it is no longer its own. So it can never stop the Keiko a later start
+does not act when closing the lock it took reports it is no longer its own. A start that lost its lock while closing it carries
+out no Stop request, confirmed or provisional. So it can never stop the Keiko a later start
 opened. Every stop runs while its dispatcher owns the lock: a start that cancelled opening because it saw a Stop carries the
 stop out under its own closing lock, even when the requester withdrew its provisional entry. A lock that only npm of an
 already ended start holds accepts no Stop, so that Stop acts at once, but without a lock of its own: it first leaves
 `system/keiko-npm-stop-handoff-<pid>-<random>`, withdraws it and acts under the lock like any other Stop when a start holds
-the lock after all, and removes it when its stop has ended. A start that holds the lock waits for such an entry (its
-process runs) before it opens Keiko, for up to 90 seconds; after that it releases the lock and ends with exit code 1 and
+the lock after all, and removes it when its stop has ended. The Stop renews the entry every 15 seconds from a worker thread while it acts. A start
+that holds the lock waits for such an entry that renews before it opens Keiko, for up to 90 seconds; an entry whose process does
+not run, or that does not change for 60 seconds on the start's monotonic clock (a reused process number), is removed; after that it releases the lock and ends with exit code 1 and
 asks to start again. A start that finds a `closing` entry waits up to the same 90 seconds for that holder to let go; if the
 lock is still closing then, nothing opens Keiko for it, so it ends with exit code 1 and says that Keiko is still being
 closed (never that another window opens it), and a Start pressed while a Stop acts opens Keiko after it. A start that finds the lock held
 but not renewed by a start (only the npm of a closed start window holds it) waits up to 10 minutes for that npm to end and
 then takes the lock and starts normally; after that it ends with exit code 1 and asks to start again in a minute, never
 reporting another window that no longer exists. A lock that starts closing during that wait is waited for like any
-closing lock. A start that finds its lock
+closing lock, also when it closes while the start watches for renewal: the renewing entry must still be in the lock and not
+closed before the start reports another start. A start that finds its lock
 generation replaced ends with a plain message before it writes the installed marker or dispatches
 the CLI. Renames of the lock folder are retried while Windows holds a passing handle in it. npm's
 own process adds an owner entry of its own when it loads (`--import` of the launcher module with
@@ -1370,7 +1375,7 @@ paragraph below applies to it unchanged. npm publishes no Windows coding-runtime
 form on Windows reports Coding as unavailable; on macOS npm installs the coding runtime package for
 the computer.
 
-**Release assets.** Every stable release carries the generic standalone folder package of each
+**Release assets.** Every stable `latest` release carries the generic standalone folder package of each
 desktop target beside the four archives, as `keiko-<target>.standalone.zip` with its `.sha256`
 file. The stable-tag workflow builds them in its assemble job from the archives it has just
 assembled (`scripts/build-folder-release-assets.mjs`), checks each archive against its checksum

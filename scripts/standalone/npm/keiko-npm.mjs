@@ -64,6 +64,7 @@ const HOLDER_KINDS = new Set(["owner", "npm"]);
 // A lock on its way in or out: `<lock>.<pid>-<random>.candidate` or `.released`.
 const LOCK_LEFTOVER = /^keiko-npm-install\.lock\.(\d+)-[0-9a-f]+\.(?:candidate|released)$/u;
 const LOCK_ATTEMPTS = 8;
+const OBSERVE_ATTEMPTS = 8;
 // What renaming or removing the lock folder answers while another start holds or changes it.
 const LOCK_CONTENDED = new Set(["EEXIST", "ENOTEMPTY", "EPERM", "EACCES", "EBUSY"]);
 const RENAME_ATTEMPTS = 40;
@@ -503,12 +504,19 @@ export const lockClock = {
   sleep: (milliseconds) => sleepSync(milliseconds),
 };
 
-// The content of each entry of one of the kinds whose process number runs.
-function renewalSnapshot(dir, names, kinds) {
+// Whether a lock entry is of one of the kinds and its process number runs.
+function lockEntryOf(kinds) {
+  return (name) => {
+    const match = LOCK_ENTRY.exec(name);
+    return match !== null && kinds.has(match[1]) && pidAlive(match[2]);
+  };
+}
+
+// The content of each entry that `accepts` says is to be watched.
+function renewalSnapshot(dir, names, accepts) {
   const seen = new Map();
   for (const name of names) {
-    const match = LOCK_ENTRY.exec(name);
-    if (match === null || !kinds.has(match[1]) || !pidAlive(match[2])) continue;
+    if (!accepts(name)) continue;
     try {
       seen.set(name, readFileSync(join(dir, name), "utf8"));
     } catch (error) {
@@ -519,25 +527,32 @@ function renewalSnapshot(dir, names, kinds) {
 }
 
 /**
- * Whether the lock `dir` has a holder of one of the kinds that is renewing. Without an entry whose
- * process number runs the lock is stale at once. Otherwise its entries are watched for up to
+ * The entries of the folder `dir` that `accepts` and that are renewing. Without an entry that
+ * `accepts` the answer is empty at once. Otherwise the entries are watched for up to
  * LOCK_OBSERVE_MS: one that changed (or appeared) is renewal; none means the number was reused or
- * the holder is frozen. Only the observer's monotonic clock counts, never a timestamp.
+ * the holder is frozen. Only the observer's monotonic clock counts, never a timestamp. `sleepDir`
+ * is what the clock's sleep is told.
  */
-function renewalObserved(dir, kinds) {
+function renewedEntries(dir, accepts, sleepDir = dir) {
   const names = lockEntries(dir);
-  if (names === undefined) return false;
-  const first = renewalSnapshot(dir, names, kinds);
-  if (first.size === 0) return false;
+  if (names === undefined) return [];
+  const first = renewalSnapshot(dir, names, accepts);
+  if (first.size === 0) return [];
   const deadline = lockClock.now() + LOCK_OBSERVE_MS;
   while (lockClock.now() < deadline) {
-    lockClock.sleep(LOCK_OBSERVE_STEP_MS, dir);
+    lockClock.sleep(LOCK_OBSERVE_STEP_MS, sleepDir);
     const current = lockEntries(dir);
-    if (current === undefined) return false;
-    const next = renewalSnapshot(dir, current, kinds);
-    if ([...next].some(([name, content]) => first.get(name) !== content)) return true;
+    if (current === undefined) return [];
+    const next = renewalSnapshot(dir, current, accepts);
+    const renewed = [...next].filter(([name, content]) => first.get(name) !== content);
+    if (renewed.length > 0) return renewed.map(([name]) => name);
   }
-  return false;
+  return [];
+}
+
+// Whether the lock `dir` has a holder of one of the kinds that is renewing.
+function renewalObserved(dir, kinds) {
+  return renewedEntries(dir, lockEntryOf(kinds)).length > 0;
 }
 
 // Whether an entry of a start (not npm) with a running process number is in the lock.
@@ -716,12 +731,16 @@ function heldEntries(lock) {
 // A start that no longer owns the lock generation it published ends here: another start took the
 // lock over, so this one must neither write completion state nor open Keiko over a newer Stop or
 // into a tree that start reinstalls.
-function refuseLostLock(lock) {
-  if (lock === undefined || heldEntries(lock) !== undefined) return;
-  throw new LauncherRefusal(
+function lostLockRefusal() {
+  return new LauncherRefusal(
     "Another start of this folder took over the installation of Keiko, so this start ends without opening Keiko. Start Keiko again.",
     "Ein anderer Start dieses Ordners hat die Installation von Keiko uebernommen, daher endet dieser Start, ohne Keiko zu oeffnen. Starte Keiko erneut.",
   );
+}
+
+function refuseLostLock(lock) {
+  if (lock === undefined || heldEntries(lock) !== undefined) return;
+  throw lostLockRefusal();
 }
 
 // Whether a Stop was recorded in the lock this start still holds, from one read of it. A lock
@@ -1263,8 +1282,12 @@ export function startGeneration(root) {
 }
 
 // Written under the lock once the start's launch of Keiko happened, in one rename: a reader sees
-// the previous token or this one, never a partial file.
+// the previous token or this one, never a partial file. A start that no longer owns the lock
+// generation it published (a replacement start took it over while its command line ran) leaves
+// the record alone, so a returning former owner never puts its token over a newer one. Returns
+// whether the record was written.
 export function recordStartLaunch(root, lock) {
+  if (heldEntries(lock) === undefined) return false;
   const target = join(root, ...START_GENERATION);
   const temporary = `${target}.${lock.token}.tmp`;
   try {
@@ -1273,6 +1296,7 @@ export function recordStartLaunch(root, lock) {
   } finally {
     rmSync(temporary, { force: true });
   }
+  return true;
 }
 
 // While it holds the lock, this start installs Keiko and opens it, unless a Stop came first.
@@ -1281,9 +1305,11 @@ function installThenOpen(root, nodeDir, env, run, lock, args) {
   refuseLostLock(lock);
   if (heldStopRecorded(lock)) return { outcome: "cancelled" };
   const launch = spawnKeiko(root, args, env, run);
-  // A launch the system refused started nothing, so it must not make an earlier Stop look as if
-  // Keiko had been started again.
-  if (launch.spawned) recordStartLaunch(root, lock);
+  // Only a start that opened Keiko (its command line ended with success) can supersede a Stop that
+  // waits. A launch the system refused, or one the command line refused before it opened anything
+  // (its lifecycle was busy), started nothing, and a failed one leaves it uncertain: none of them
+  // may make an earlier Stop look as if Keiko had been started again.
+  if (launch.spawned && launch.code === 0) recordStartLaunch(root, lock);
   return { outcome: "opened", code: launch.code };
 }
 
@@ -1343,9 +1369,14 @@ function settleStart(step, stop) {
 // opening Keiko because it saw a Stop also carries it out here, whether or not the requester has
 // withdrawn that provisional entry by now: the requester stops under the lock itself, and a stop
 // of a Keiko that is not running succeeds, so what matters is that no stop runs once the lock is
-// gone.
+// gone. A start that no longer owns its lock carries out neither kind of request: the lock, and
+// every Stop recorded in it, belongs to the start that took it over.
 function closeAndStop(root, env, run, lock, step, pause) {
   const closed = closeInstallLock(lock, pause);
+  if (!closed.owned) {
+    if (step.outcome === "cancelled") throw lostLockRefusal();
+    return { stopRequested: false, code: undefined };
+  }
   const stopRequested = closed.stopRequested || step.outcome === "cancelled";
   if (stopRequested && step.outcome !== "install-failed") {
     return { stopRequested, code: stopKeiko(root, stateDir(env), env, run) };
@@ -1405,6 +1436,18 @@ function reportInstallationRunning() {
   );
 }
 
+// Whether one of the start entries seen renewing is still in the lock and its start has not closed
+// it: the lock may have changed hands while the renewal was observed, and an entry that renewed in
+// a lock a Stop now closes belongs to a holder that opens nothing for this start.
+function startStillOpening(dir, renewed) {
+  const names = lockEntries(dir);
+  if (names === undefined) return false;
+  return renewed.some((name) => {
+    const match = LOCK_ENTRY.exec(name);
+    return names.includes(name) && !names.includes(`closing-${match[2]}-${match[3]}`);
+  });
+}
+
 // A lock that is held but whose start does not renew: only npm of a start that was closed holds
 // it. No window reports that installation's result and it cannot open Keiko, so a start that finds
 // the lock so waits for that npm to end and then takes the lock itself. `another` is true when a
@@ -1424,7 +1467,7 @@ function acquireAfterOrphanedNpm(root, pause) {
       if (closingSettled(after)) return after;
       continue;
     }
-    if (lockEntries(dir) !== undefined && renewalObserved(dir, START_KINDS)) {
+    if (startStillOpening(dir, renewedEntries(dir, lockEntryOf(START_KINDS)))) {
       return { another: true };
     }
     if (lockClock.now() >= deadline) return { another: false };
@@ -1462,16 +1505,20 @@ function reportInstallationStillRunning() {
   );
 }
 
-// The stop handoffs of Stops that act without a lock of their own and whose process runs; one a
-// Stop that ended left behind is removed.
+// The stop handoffs of Stops that act without a lock of their own and are renewing. A Stop renews
+// its handoff for as long as it acts, so one whose process number runs but whose handoff does not
+// change while it is watched belongs to a Stop that ended (its number was reused): it is removed,
+// like one whose process number does not run at all.
 function liveStopHandoffs(root) {
   const system = join(root, "system");
   return readdirSync(system).filter((name) => {
     const match = STOP_HANDOFF.exec(name);
     if (match === null) return false;
-    if (pidAlive(match[1])) return true;
-    rmSync(join(system, name), { force: true });
-    return false;
+    const acts =
+      pidAlive(match[1]) &&
+      renewedEntries(system, (entry) => entry === name, installLockPath(root)).length > 0;
+    if (!acts) rmSync(join(system, name), { force: true });
+    return acts;
   });
 }
 
@@ -1555,15 +1602,24 @@ function reportStartCameAfterStop() {
 // What a Stop saw when it was pressed: the start record, and the starts that held the lock then.
 // A start that held the lock at that moment came before the Stop, whenever it finished, so only a
 // record that names neither the one seen nor a holder seen belongs to a start that came after.
-function observeStart(root) {
-  const generation = startGeneration(root);
-  const holders = new Set(
-    (lockEntries(installLockPath(root)) ?? [])
-      .map((name) => LOCK_ENTRY.exec(name))
-      .filter((match) => match?.[1] === "owner")
-      .map((match) => `${match[2]}-${match[3]}`),
-  );
-  return { generation, holders };
+// The two reads must agree: a start that records its launch and lets go of the lock between them
+// would show the earlier record and no holder, and look like a start that came after the Stop. The
+// reads are repeated until the record is the same on both sides of the holder listing.
+function observeStart(root, pause = () => undefined) {
+  let generation = startGeneration(root);
+  for (let attempt = 0; attempt < OBSERVE_ATTEMPTS; attempt += 1) {
+    pause("observe");
+    const holders = new Set(
+      (lockEntries(installLockPath(root)) ?? [])
+        .map((name) => LOCK_ENTRY.exec(name))
+        .filter((match) => match?.[1] === "owner")
+        .map((match) => `${match[2]}-${match[3]}`),
+    );
+    const after = startGeneration(root);
+    if (after === generation) return { generation, holders };
+    generation = after;
+  }
+  return { generation, holders: new Set([generation.trim()]) };
 }
 
 function startCameAfter(root, seen) {
@@ -1617,8 +1673,11 @@ function startHoldsLock(root) {
 function stopUnderHandoff(root, state, env, run, seen, pause) {
   const handoff = join(root, "system", `keiko-npm-stop-handoff-${lockToken()}`);
   closeSync(openSync(handoff, "wx", 0o600));
+  // Renewed from a worker thread, because the stop command blocks this one.
+  const stopRenewing = lockRenewal.start(handoff);
   pause("handoff");
   if (startHoldsLock(root)) {
+    stopRenewing();
     rmSync(handoff, { force: true });
     return stopUnderLock(root, state, env, run, seen);
   }
@@ -1629,6 +1688,7 @@ function stopUnderHandoff(root, state, env, run, seen, pause) {
     }
     return stopNow(root, state, env, run);
   } finally {
+    stopRenewing();
     rmSync(handoff, { force: true });
   }
 }
@@ -1665,7 +1725,7 @@ export function stop(root, env, run = spawnSync, pause = () => undefined) {
   // The start record and the starts holding the lock as this Stop was pressed, read before it asks
   // the lock: a start that opens Keiko while the lock answers, or later while the Stop waits, and
   // that was not holding the lock now, came after this Stop.
-  const seen = observeStart(root);
+  const seen = observeStart(root, pause);
   if (requestStop(root)) {
     reportStopRecorded();
     return 0;
@@ -1953,8 +2013,9 @@ export function tokenInput(value, chunk, escape = "none") {
 }
 
 /**
- * The token is typed or pasted without being shown. Enter ends it, Ctrl+C cancels; either way the
- * terminal leaves raw mode. `io` is the process's terminal unless a caller hands in another.
+ * The token is typed or pasted without being shown. Enter ends it, Ctrl+C cancels, and a terminal
+ * that closes before Enter ends it with an error; each way the terminal leaves raw mode. `io` is
+ * the process's terminal unless a caller hands in another.
  */
 export function readHidden(prompt, io = process) {
   const { stdin, stdout } = io;
@@ -1967,10 +2028,15 @@ export function readHidden(prompt, io = process) {
   return new Promise((resolveToken, rejectToken) => {
     let value = "";
     let escape = "none";
+    let settled = false;
     const finish = (error) => {
-      stdin.setRawMode(false);
+      if (settled) return;
+      settled = true;
+      if (stdin.destroyed !== true) stdin.setRawMode(false);
       stdin.pause();
       stdin.off("data", onData);
+      stdin.off("end", onClosed);
+      stdin.off("close", onClosed);
       stdout.write("\n");
       if (error === undefined) resolveToken(value.trim());
       else rejectToken(error);
@@ -1982,9 +2048,17 @@ export function readHidden(prompt, io = process) {
       if (step.end === "enter") finish();
       else if (step.end === "cancel") finish(new Error("cancelled / abgebrochen"));
     };
+    const onClosed = () =>
+      finish(
+        new Error(
+          "the terminal closed before the token was entered / das Terminal wurde geschlossen, bevor der Token eingegeben war",
+        ),
+      );
     stdin.setRawMode(true);
     stdin.setEncoding("utf8");
     stdin.on("data", onData);
+    stdin.on("end", onClosed);
+    stdin.on("close", onClosed);
     stdin.resume();
   });
 }
