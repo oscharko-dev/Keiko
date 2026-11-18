@@ -19,7 +19,7 @@ import {
 } from "@/lib/optional-widget-i18n";
 import { Icons } from "../../Icons";
 import { useChatSessionActions, useChatSessionCatalog } from "../../context/ChatSessionContext";
-import { notifyChatUpsert } from "../../hooks/useChatSession";
+import { availableProjectPath, notifyChatUpsert } from "../../hooks/useChatSession";
 import { effectiveLocalKnowledgeScopes, effectiveScopes } from "../../hooks/workspaceActions";
 import { ChatHistoryDeleteConfirm } from "./ChatHistoryDeleteConfirm";
 import { moveHistoryChatsToDeleted } from "./chatHistoryDeletion";
@@ -76,13 +76,17 @@ function chatMatches(chat: Chat, query: string): boolean {
   );
 }
 
+// Opens a created chat only while the person stayed with the project the New request started from.
+// A request that named no folder (no project yet, or the remembered folder is gone) lets the server
+// pick one, so the chat may land in a different folder than the one the request started from.
 function createdChatMatchesCurrentProject(
   created: Chat,
   requestedProjectPath: string | undefined,
+  startedProjectPath: string | undefined,
   currentProjectPath: string | undefined,
 ): boolean {
   if (requestedProjectPath === undefined) {
-    return currentProjectPath === undefined || currentProjectPath === created.projectPath;
+    return currentProjectPath === startedProjectPath || currentProjectPath === created.projectPath;
   }
   return (
     created.projectPath === requestedProjectPath && currentProjectPath === requestedProjectPath
@@ -110,8 +114,8 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
   const selectionRef = useRef<HTMLInputElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
   const focusedDeletionRef = useRef(0);
-  const activeProjectPathRef = useRef(session.activeProject?.path);
-  activeProjectPathRef.current = session.activeProject?.path;
+  const activeProjectRef = useRef(session.activeProject);
+  activeProjectRef.current = session.activeProject;
   const tabActiveId = useId();
   const tabDeletedId = useId();
   const panelId = useId();
@@ -230,11 +234,17 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
 
   const createNew = async (): Promise<void> => {
     setError(null);
-    const requestedProjectPath = activeProjectPathRef.current;
+    const startedProjectPath = activeProjectRef.current?.path;
+    const requestedProjectPath = availableProjectPath(activeProjectRef.current);
     const created = await actions.openNewChat(undefined, "New chat");
     if (
       created !== undefined &&
-      createdChatMatchesCurrentProject(created, requestedProjectPath, activeProjectPathRef.current)
+      createdChatMatchesCurrentProject(
+        created,
+        requestedProjectPath,
+        startedProjectPath,
+        activeProjectRef.current?.path,
+      )
     ) {
       openChatWindow(created);
     }

@@ -1229,6 +1229,9 @@ describe("gatewayServiceMessageKey", () => {
     expect(gatewayServiceMessageKey("gateway-service-unqualified")).toBe(
       "codingWorkbench.gatewayService.unqualified",
     );
+    expect(gatewayServiceMessageKey("gateway-service-managed-outside")).toBe(
+      "codingWorkbench.gatewayService.managedOutside",
+    );
     expect(gatewayServiceMessageKey("runtime-unqualified")).toBeUndefined();
     expect(gatewayServiceMessageKey("constructor")).toBeUndefined();
     expect(gatewayServiceMessageKey(undefined)).toBeUndefined();
@@ -1248,6 +1251,14 @@ describe("runtimeUnavailableMessageKey", () => {
     );
     expect(runtimeUnavailableMessageKey("runtime-outdated")).toBe(
       "codingWorkbench.runtime.outdated",
+    );
+    // #4404, #4410: an npm installation without this computer's runtime package is named as such,
+    // never with the generic install-the-runtime advice that sent a Windows person in circles.
+    expect(runtimeUnavailableMessageKey("npm-runtime-package-missing")).toBe(
+      "codingWorkbench.runtime.npmRuntimePackageMissing",
+    );
+    expect(runtimeUnavailableMessageKey("npm-runtime-package-missing")).not.toBe(
+      "codingWorkbench.runtime.platformUnqualified",
     );
     expect(runtimeUnavailableMessageKey("runtime-unqualified")).toBeUndefined();
     expect(runtimeUnavailableMessageKey("constructor")).toBeUndefined();

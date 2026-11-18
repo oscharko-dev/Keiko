@@ -781,6 +781,8 @@ const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOpe
   fields: {
     scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    // #4456: code index builds whose parsed source budget ended the source list.
+    codeIndexSourceBudgetReachedCount: { type: "integer", dataClass: "count", required: false },
     activityDetailStatus: {
       type: "string",
       dataClass: "closed-enum",
@@ -789,12 +791,6 @@ const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOpe
     },
     codeRedactionRevision: { type: "integer", dataClass: "count", required: false },
     sourceDescriptorPathCount: { type: "integer", dataClass: "count", required: false },
-    // #4456: code index builds whose parsed source budget ended the source list.
-    structuralCodeIndexSourceBudgetReachedCount: {
-      type: "integer",
-      dataClass: "count",
-      required: false,
-    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -11141,8 +11137,7 @@ function logSourceEvidenceDetails(
         scopeIdentitySha256: identity.scopeIdentitySha256,
         queryIdentitySha256: identity.queryIdentitySha256,
         ...observation,
-        structuralCodeIndexSourceBudgetReachedCount:
-          execution.structural.codeIndexSourceBudgetReachedCount,
+        codeIndexSourceBudgetReachedCount: execution.structural.codeIndexSourceBudgetReachedCount,
         completeness: "complete",
         loss: "none",
       },

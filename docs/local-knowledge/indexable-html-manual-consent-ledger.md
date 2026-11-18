@@ -1,5 +1,7 @@
 # Indexable HTML Manual Consent Ledger
 
+> Historical evidence. PR #4448 retired the standalone Documentation Browser and its indexing proposal and approval routes. Chat now checks existing HTML citations in place. The Knowledge Pod source and refresh contracts are documented in ADR-0113.
+
 Status: implementation and verification ledger for Epic #1852 and child issues #1865–#1870.
 
 This ledger records evidence only. It is not a substitute for local gate output, PR review, or

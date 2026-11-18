@@ -5,7 +5,18 @@ import { useWorkspace } from "./useWorkspace";
 import type { AppWindow } from "../windows/types";
 
 function savedWindow(id: string): AppWindow {
-  return { id, type: "agents", x: 40, y: 40, w: 360, h: 320, z: 1, cfg: {}, max: false, zoom: 1 };
+  return {
+    id,
+    type: "agents",
+    x: 40,
+    y: 40,
+    w: 360,
+    h: 320,
+    z: 1,
+    cfg: { runId: "run-existing", workflow: "verify" },
+    max: false,
+    zoom: 1,
+  };
 }
 
 function Harness({ scope }: { readonly scope: string }): ReactElement {

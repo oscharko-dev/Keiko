@@ -102,7 +102,6 @@ import { readJsonObject } from "./files.js";
 import { safetyMarginTokensFor } from "@oscharko-dev/keiko-contracts/context-engineering";
 import {
   awaitInitializedConversationReadiness,
-  checkSelectedConversationModel,
   ensureCodingWorkbenchContextWindows,
   joinRunningWorkbenchProof,
   isAnyCodingWorkbenchProbePending,
@@ -110,6 +109,7 @@ import {
   isCodingWorkbenchProbePending,
   isCodingWorkbenchProbeUnanswered,
   isConversationReadinessCheckRunning,
+  pendingConversationReadiness,
   renewConversationReadinessFromAnswer,
   withholdRunningWorkbenchProbesForLiveRun,
 } from "./gateway-readiness.js";
@@ -4856,15 +4856,9 @@ function resolveFreshCodingProfile(
   if (fresh.status === "available") return fresh;
   // Preserve a structural window refusal; an untested connection cannot repair that shortfall.
   if (!codingContextFits(configured)) return configured;
-  const unknown = resolveCodingSafeSidecarGatewayProfile(
-    configuredConversationSubset(config, holder, false),
-    options,
-  );
-  return {
-    status: "unavailable",
-    reason:
-      unknown.status === "available" ? "model-verification-pending" : "conversation-not-ready",
-  };
+  // Startup checks no model (ADR-0171 D2, amended 2026-11-16): a model without a positive
+  // observation is not activated, not about to be checked.
+  return { status: "unavailable", reason: "conversation-not-ready" };
 }
 
 /**
@@ -4881,6 +4875,12 @@ function resolveUsableCodingProfile(
 ): CodingWorkbenchSidecarGatewayResult {
   const configured = resolveCodingSafeSidecarGatewayProfile(config, options);
   if (configured.status !== "available" || config === undefined) return configured;
+  // An activated model is elected ahead of one nobody activated (ADR-0171 D2, amended 2026-11-16).
+  const activated = resolveCodingSafeSidecarGatewayProfile(
+    configuredConversationSubset(config, holder, true),
+    options,
+  );
+  if (activated.status === "available") return activated;
   const usable = resolveCodingSafeSidecarGatewayProfile(
     configuredConversationSubset(config, holder, false),
     options,
@@ -4903,17 +4903,19 @@ function usableCodingProfile(
 }
 
 // "Keiko is still checking" is said only while a check of that model actually runs; the Workbench
-// re-reads until it settles. Without a running check the projection names the model's own answer.
+// re-reads until it settles. A tracked model nobody activated in Settings > Models is not ready:
+// startup checks no model, so an unknown answer is no longer "about to be checked" (2026-11-16).
 function passiveCodingProfile(
   deps: UiHandlerDeps,
   modelId: string | undefined,
 ): CodingWorkbenchSidecarGatewayResult {
   const result = withModelVerification(deps, usableCodingProfile(deps, modelId));
-  return result.status === "available" &&
-    result.verification !== "verified" &&
-    isConversationReadinessCheckRunning(deps, result.modelAlias)
-    ? { status: "unavailable", reason: "model-verification-pending" }
-    : result;
+  if (result.status !== "available" || result.verification === "verified") return result;
+  if (isConversationReadinessCheckRunning(deps, result.modelAlias))
+    return { status: "unavailable", reason: "model-verification-pending" };
+  return deps.gatewayConfig === undefined
+    ? result
+    : { status: "unavailable", reason: "conversation-not-ready" };
 }
 
 /**
@@ -5128,6 +5130,9 @@ function readinessProbePending(
 ): boolean {
   const config = currentGatewayConfig(deps);
   if (config === undefined) return false;
+  // A running activation check from Settings > Models precedes the tool-calling proof: the
+  // shortfall is not a verdict yet (ADR-0171 D2, amended 2026-11-16).
+  if (pendingConversationReadiness(deps).length > 0) return true;
   // An unavailable projection (an unverified tool-calling proof) names no model: its verification
   // is open while any model the Workbench could still elect has an open probe.
   return result.status === "available"
@@ -5210,16 +5215,12 @@ function profileChecksFor(
   subject: string | undefined,
 ): readonly Promise<unknown>[] {
   if (checkParam === "1") {
-    return [
-      Promise.all([
-        // A person's pick or Start asks: a probe the gateway never answered runs again. The
-        // model picked is the one proven, even while its own shortfall (a lapsed or missing
-        // tool-call proof) keeps it unavailable; without a pick, the model elected now. No
-        // other listed model receives a request.
-        ensureCodingWorkbenchContextWindows(deps, subject, ctx.correlationId, true),
-        electedConversationReadiness(ctx, deps, subject),
-      ]),
-    ];
+    // A person's pick or Start asks: a probe the gateway never answered runs again. The model
+    // picked is the one proven, even while its own shortfall (a lapsed or missing tool-call proof)
+    // keeps it unavailable; without a pick, the model elected now. Only a model the person
+    // activated in Settings > Models is proven; the pick never starts its basic-chat check
+    // (ADR-0171 D2, amended 2026-11-16). No other listed model receives a request.
+    return [ensureCodingWorkbenchContextWindows(deps, subject, ctx.correlationId, true)];
   }
   // A window opening (`check=use`) waits, bounded, for a proof that already runs; a read that
   // asks nothing answers at once with the state it has.
@@ -5252,24 +5253,6 @@ export async function handleCodingSidecarGatewayProfile(
     await settleProfileChecks(ctx, deps, profileChecksFor(checkParam, ctx, deps, subject));
   }
   return { status: 200, body: gatewayReadinessProjection(ctx, deps, modelId) };
-}
-
-// A picker selection (`check=1`) starts the one check of the picked model when it has no current
-// observation and joins a check that already runs (#4351). Every other read describes cached
-// readiness immediately and starts no check at all.
-function electedConversationReadiness(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-  subjectModelId: string | undefined,
-): Promise<void> {
-  if (
-    subjectModelId === undefined ||
-    currentConversationReadinessObservation(deps, subjectModelId) === true
-  )
-    return Promise.resolve();
-  // The person picked this model: the explicit choice starts one check of it when it has no current
-  // observation, or joins the check that is already running (#4351).
-  return checkSelectedConversationModel(deps, subjectModelId, ctx.correlationId);
 }
 
 // Bounded wait for the checks a profile read asks for. A check that fails is reported under this

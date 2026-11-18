@@ -1,15 +1,29 @@
-/* The measured canvas excludes these controls. A tiled or freely moved window cannot
-   place its actions under the new-window or zoom buttons (#4416). */
+/* The workspace frame covers the window viewport and the controls. The viewport
+   reserves the same space for the controls in every window layout. */
 .cmpWorkspaceLayout {
+  position: relative;
   display: flex;
   flex: 1;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  overflow: clip;
+  border-radius: var(--radius-surface);
+  border: 1px solid
+    color-mix(in oklch, var(--accent) var(--frame-border-strength, 34%), var(--border-default));
+  background: color-mix(
+    in oklab,
+    var(--background-primary),
+    white var(--workspace-bg-brightness, 0%)
+  );
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.025),
+    inset 0 0 0 1px color-mix(in oklch, var(--border-subtle) 52%, transparent);
 }
 
 .cmpWorkspaceViewport {
   min-height: 0;
+  z-index: 2;
 }
 
 .cmpWorkspaceViewport [aria-labelledby="palette-title"] {
@@ -27,10 +41,6 @@
   border: 0;
 }
 
-.cmpWorkspaceLayout[data-canvas-overlays-hidden="true"] .cmpWorkspaceDock {
-  display: none;
-}
-
 html[data-keiko-modal-open="true"] .cmpWorkspaceDock {
   pointer-events: none;
 }
@@ -40,6 +50,10 @@ html[data-keiko-modal-open="true"] .cmpWorkspaceDock {
 }
 
 @media (max-width: 700px), (max-height: 430px) {
+  .cmpWorkspaceLayout {
+    border-radius: 12px;
+  }
+
   .cmpWorkspaceViewport {
     container-type: size;
   }
@@ -48,4 +62,9 @@ html[data-keiko-modal-open="true"] .cmpWorkspaceDock {
   .cmpViewportWindow.cmpViewportWindow {
     max-height: max(180px, 100cqh);
   }
+}
+
+.cmpViewportWindow[data-max="true"] {
+  max-width: none;
+  max-height: none;
 }

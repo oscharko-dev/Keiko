@@ -5,6 +5,7 @@
 
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
+import type { HtmlManualCitationCheckResult } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   CapsuleSetId,
   CapsuleContextualRetrievalSettings,
@@ -676,6 +677,15 @@ export async function refreshCapsuleChangedFiles(
 // POST /api/local-knowledge/manual-pods/refresh — start a live HTML-manual refresh (Issue #2063)
 // GET  /api/local-knowledge/manual-pods/jobs/:jobId — poll the live refresh job
 // ---------------------------------------------------------------------------
+
+export async function checkHtmlManualCitation(
+  target: string,
+): Promise<HtmlManualCitationCheckResult> {
+  return fetchJson<HtmlManualCitationCheckResult>("/api/local-knowledge/manual-citation/check", {
+    method: "POST",
+    body: JSON.stringify({ target }),
+  });
+}
 
 export async function startHtmlManualPodRefresh(
   capsuleId: KnowledgeCapsuleId,

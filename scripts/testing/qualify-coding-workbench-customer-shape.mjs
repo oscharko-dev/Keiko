@@ -324,6 +324,23 @@ async function pairWorkbench(page, repository, pairingSecret) {
   await expect(page.locator('section[aria-label="Coding Workbench"][data-state]')).toBeVisible();
 }
 
+// ADR-0171 D2 (amended 2026-11-16): a server process checks no chat model at start, and the
+// Workbench refuses a start until the person activates the model in Settings > Models. The lane
+// sends the same explicit check that activation sends, as a customer would before a first run.
+// The check streams through the twin like a turn does, so a phase arms its twin behaviour only
+// after activation (`onActivated`): a delayed, truncated or rejected stream belongs to the
+// Workbench run under proof, and the activation's own requests never count as that run's evidence.
+const ACTIVATION_TIMEOUT_MS = 120_000;
+
+async function activateModel(page) {
+  const activated = await page.request.post("/api/gateway/readiness", {
+    headers: CSRF,
+    data: { modelId: CUSTOMER_SHAPE_MODEL },
+    timeout: ACTIVATION_TIMEOUT_MS,
+  });
+  if (!activated.ok()) throw new Error(`model activation failed (HTTP ${activated.status()})`);
+}
+
 async function provision(page, repository, taskId) {
   const created = await page.request.post("/api/task-workspaces", {
     headers: CSRF,
@@ -494,9 +511,19 @@ async function expectWorkbenchOnRepository(page, repository, project, phase) {
   }
 }
 
-async function runTurn(page, repository, scpRepository, project, pairingSecret, phase) {
+async function runTurn(
+  page,
+  repository,
+  scpRepository,
+  project,
+  pairingSecret,
+  phase,
+  onActivated,
+) {
   const expectToolCall = phase === "tool-proof";
   await pairWorkbench(page, repository, pairingSecret);
+  await activateModel(page);
+  onActivated();
   const scpBound = await page.request.post("/api/task-workspaces", {
     headers: CSRF,
     data: {
@@ -622,21 +649,42 @@ function forbiddenReportValues(project, stateDir, configPath, twin) {
   ];
 }
 
-async function qualifyInstalled(
-  project,
-  stateDir,
-  configPath,
-  twin,
-  repository,
-  scpRepository,
-  phase = "qualification",
-) {
+function openWorkbenchPage(browser, port) {
+  return browser.newPage({
+    baseURL: `http://127.0.0.1:${String(port)}`,
+    viewport: { width: 1440, height: 1400 },
+  });
+}
+
+async function assertPhaseEvidence(context, stateDir, firstRequest, runId, phase) {
+  const { project, configPath, twin } = context;
   const expectFailure = phase === "failure-proof" || phase === "truncation-proof";
-  const expectToolCall = phase === "tool-proof";
+  if (expectFailure) await awaitProjectedTurnFailure(stateDir, runId);
+  else await awaitSettledUsage(stateDir, runId);
+  const lines = activityLines(stateDir);
+  assertGatewayEvidence(twin, firstRequest, lines, runId, phase);
+  if (phase === "tool-proof") assertToolRoundTrip(twin, firstRequest);
+  if (expectFailure)
+    assertAnalyzableFailure(
+      project,
+      stateDir,
+      lines,
+      runId,
+      forbiddenReportValues(project, stateDir, configPath, twin),
+    );
+}
+
+async function qualifyInstalled(context, stateDir, phase, configureTwin) {
+  const { project, configPath, twin, repository, scpRepository } = context;
   const port = await reservePort();
   const pairingSecret = randomBytes(32).toString("hex");
   const cli = lifecycle(project, stateDir, port, configPath, pairingSecret);
-  const firstRequest = twin.requests.length;
+  // Until activation settles, a failure report also shows the activation's own requests.
+  let firstRequest = twin.requests.length;
+  const onActivated = () => {
+    firstRequest = twin.requests.length;
+    configureTwin();
+  };
   let started = false;
   let browser;
   try {
@@ -645,24 +693,17 @@ async function qualifyInstalled(
     const health = await globalThis.fetch(`http://127.0.0.1:${String(port)}/api/health`);
     if (!health.ok) throw new Error(`installed UI unhealthy (HTTP ${health.status})`);
     browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage({
-      baseURL: `http://127.0.0.1:${String(port)}`,
-      viewport: { width: 1440, height: 1400 },
-    });
-    const runId = await runTurn(page, repository, scpRepository, project, pairingSecret, phase);
-    if (expectFailure) await awaitProjectedTurnFailure(stateDir, runId);
-    else await awaitSettledUsage(stateDir, runId);
-    const lines = activityLines(stateDir);
-    assertGatewayEvidence(twin, firstRequest, lines, runId, phase);
-    if (expectToolCall) assertToolRoundTrip(twin, firstRequest);
-    if (expectFailure)
-      assertAnalyzableFailure(
-        project,
-        stateDir,
-        lines,
-        runId,
-        forbiddenReportValues(project, stateDir, configPath, twin),
-      );
+    const page = await openWorkbenchPage(browser, port);
+    const runId = await runTurn(
+      page,
+      repository,
+      scpRepository,
+      project,
+      pairingSecret,
+      phase,
+      onActivated,
+    );
+    await assertPhaseEvidence(context, stateDir, firstRequest, runId, phase);
   } catch (error) {
     reportQualificationFailure(stateDir, twin, firstRequest, phase);
     throw error;
@@ -672,53 +713,28 @@ async function qualifyInstalled(
   }
 }
 
-async function qualifyGovernedReadTool(project, configPath, twin, repository, scpRepository) {
-  const stateDir = mkdtempSync(join(homedir(), ".keiko-customer-shape-tool-state-"));
-  try {
-    twin.planSingleWorkspaceDiscovery();
-    await qualifyInstalled(
-      project,
-      stateDir,
-      configPath,
-      twin,
-      repository,
-      scpRepository,
-      "tool-proof",
-    );
-  } finally {
-    rmSync(stateDir, { recursive: true, force: true });
-  }
-}
-
-async function qualifyScenario(
-  project,
-  configPath,
-  twin,
-  repository,
-  scpRepository,
-  phase,
-  configureTwin,
-) {
+// Every phase starts its own installed server over the same staged install and twin, and arms its
+// twin behaviour only once the model is activated (see `activateModel`).
+async function qualifyPhase(context, phase, configureTwin) {
   const stateDir = mkdtempSync(join(homedir(), `.keiko-customer-shape-${phase}-state-`));
   try {
-    configureTwin();
-    await qualifyInstalled(project, stateDir, configPath, twin, repository, scpRepository, phase);
+    await qualifyInstalled(context, stateDir, phase, configureTwin);
   } finally {
     rmSync(stateDir, { recursive: true, force: true });
   }
 }
 
-async function qualifyProxyReinsertion(project, configPath, twin, repository, scpRepository) {
-  await qualifyScenario(
-    project,
-    configPath,
-    twin,
-    repository,
-    scpRepository,
-    "proxy-reinsertion-proof",
-    () => twin.simulateProxyStreamOptionReinsertion(),
+async function qualifyPhases(context) {
+  const { twin } = context;
+  await qualifyPhase(context, "qualification", () => twin.delayAcceptedStreamingBy(35_000));
+  twin.delayAcceptedStreamingBy(0);
+  await qualifyPhase(context, "tool-proof", () => twin.planSingleWorkspaceDiscovery());
+  await qualifyPhase(context, "proxy-reinsertion-proof", () =>
+    twin.simulateProxyStreamOptionReinsertion(),
   );
   twin.stopProxyStreamOptionReinsertion();
+  await qualifyPhase(context, "truncation-proof", () => twin.truncateNextAcceptedStream());
+  await qualifyPhase(context, "failure-proof", () => twin.rejectAllStreaming());
 }
 
 function reportQualification(start) {
@@ -734,7 +750,6 @@ async function main() {
   // the product stores a selection (a registered, canonical path); an alias never matches the
   // canonical root of the task workspace bound to it (#4271).
   const project = realpathSync(mkdtempSync(join(tmpdir(), "keiko-customer-shape-yarn-")));
-  const stateDir = mkdtempSync(join(homedir(), ".keiko-customer-shape-state-"));
   const twin = await startCustomerShapeLiteLlmTwin();
   let artifact;
   try {
@@ -752,35 +767,12 @@ async function main() {
     artifact = seeded.artifact;
     seedVendoredRegistry(vendorTmp, undefined, artifact.manifest, seeded.vendored);
     await installIntoWithYarn(project, artifact, seeded.vendored);
-    twin.delayAcceptedStreamingBy(35_000);
-    await qualifyInstalled(project, stateDir, configPath, twin, repository, scpRepository);
-    twin.delayAcceptedStreamingBy(0);
-    await qualifyGovernedReadTool(project, configPath, twin, repository, scpRepository);
-    await qualifyProxyReinsertion(project, configPath, twin, repository, scpRepository);
-    await qualifyScenario(
-      project,
-      configPath,
-      twin,
-      repository,
-      scpRepository,
-      "truncation-proof",
-      () => twin.truncateNextAcceptedStream(),
-    );
-    await qualifyScenario(
-      project,
-      configPath,
-      twin,
-      repository,
-      scpRepository,
-      "failure-proof",
-      () => twin.rejectAllStreaming(),
-    );
+    await qualifyPhases({ project, configPath, twin, repository, scpRepository });
     reportQualification(start);
   } finally {
     await twin.close();
     artifact?.cleanup();
     rmSync(project, { recursive: true, force: true });
-    rmSync(stateDir, { recursive: true, force: true });
   }
 }
 

@@ -763,7 +763,7 @@ describe("retrieveConnectedContextPack activity log", () => {
         activityDetailStatus: "complete",
         sourceDescriptorPathCount: 0,
         // #4456: a healthy small scope never reaches the parsed source budget.
-        structuralCodeIndexSourceBudgetReachedCount: 0,
+        codeIndexSourceBudgetReachedCount: 0,
         completeness: "complete",
         loss: "none",
       });

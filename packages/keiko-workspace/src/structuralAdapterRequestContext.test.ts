@@ -173,6 +173,8 @@ describe("cooperative code-index construction", () => {
 
   // #4456: the request context records when the parsed source budget ended a code index build, so
   // the Activity Log can tell a memory-bounded index from a complete one.
+  // Crossing the parsed source budget needs more than 32 MiB of real source text, which the
+  // coverage-instrumented CI run reads in about 15 s; the default bound is far below that.
   it("counts code index builds that the parsed source budget truncated", async () => {
     // A comment-only source costs its full size in the budget but almost nothing to parse.
     const twoMiB = 2_097_152;
@@ -203,7 +205,7 @@ describe("cooperative code-index construction", () => {
       codeIndexBuildCount: 1,
       codeIndexSourceBudgetReachedCount: 1,
     });
-  });
+  }, 60_000);
 
   it("observes cancellation delivered by the event loop during source intake", async () => {
     const controller = new AbortController();

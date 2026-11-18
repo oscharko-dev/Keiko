@@ -1,4 +1,5 @@
 import { workspaceStorageArgs } from "./support/workspace-storage.js";
+import { activateChatModel } from "./support/chat-model-activation.js";
 import {
   expect,
   test,
@@ -21,6 +22,9 @@ import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 const projects: string[] = [];
 const title = "Support download regression";
 test.use({ viewport: { width: 1280, height: 960 } });
+test.beforeEach(async ({ request }): Promise<void> => {
+  await activateChatModel(request);
+});
 test.afterEach((): void => {
   for (const path of projects.splice(0)) rmSync(path, { recursive: true, force: true });
 });

@@ -446,3 +446,16 @@ Supervised workspace ask, Full access acts inside the validated Authority Envelo
 revoked, changed, not-ready or foreign Pod is a mode-independent hard denial that fails closed
 before any request. A run without a choice has no Jira tools and is unchanged. See
 [ADR-0181](ADR-0181-shared-managed-mcp-host.md) for the mechanism.
+
+## Amendment — the Windows runtime gateway is installed with Keiko (2026-11-17)
+
+On Windows every runtime launch needs the `KeikoRuntimeGateway` broker (ADR-0043 D19). Setting it
+up is a host installation step, not a coding action: it sits outside the three modes, grants no run
+authority and changes no Authority Envelope, deployment ceiling or mode default. A healthy
+`keiko start` (first launch, the relaunch after an update, an npm start) brings the broker to the
+current helper, and the Workbench offers one Repair action for an absent, stopped, stale or
+unreadable broker. In both cases Windows asks the local human through UAC, so the decision stays
+the human's; a declined approval changes nothing and is not repeated until the helper changes. A
+runtime that no lane offers names the installation kind the server found
+(`npm-runtime-package-missing`, `portable-runtime-unverified`), so the Workbench states the one
+step for it; no install kind relaxes a hard denial or the fail-closed launch.

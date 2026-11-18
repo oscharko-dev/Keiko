@@ -4,7 +4,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_EMBEDDING, freshStore } from "../_support.js";
 import { createDefaultParserRegistry } from "../parsers/index.js";

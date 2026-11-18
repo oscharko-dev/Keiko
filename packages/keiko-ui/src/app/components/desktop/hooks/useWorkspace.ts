@@ -779,6 +779,64 @@ function interpolateView(from: View, to: View, progress: number): View {
   };
 }
 
+function viewportAtView(rect: Pick<DOMRect, "width" | "height">, view: View): ViewportWorld {
+  return {
+    x: -view.x / view.zoom,
+    y: -view.y / view.zoom,
+    w: rect.width / view.zoom,
+    h: rect.height / view.zoom,
+  };
+}
+
+function cameraClockNow(): number {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+function hasOpenMaximizedWindow(windows: readonly AppWindow[] | null | undefined): boolean {
+  return windows?.some((window) => window.max && window.minimized !== true) === true;
+}
+
+function fitMaximizedWindowsToView(
+  workspace: HTMLElement | null,
+  setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
+  target: View,
+): void {
+  const viewport = workspace?.getBoundingClientRect();
+  if (viewport === undefined || viewport.width <= 0 || viewport.height <= 0) return;
+  const bounds = viewportAtView(viewport, target);
+  setWins((current) => (current === null ? current : fitMaximizedWindows(current, bounds)));
+}
+
+interface CameraJump {
+  readonly target: View;
+  readonly effectiveSmoothness: number;
+  readonly windows: readonly AppWindow[] | null | undefined;
+  readonly workspace: HTMLElement | null;
+  readonly animationFrameRef: { current: number | null };
+  readonly setView: Dispatch<SetStateAction<View>>;
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+}
+
+/**
+ * Moves the camera in one step when it may not animate or a maximized window is open. With a
+ * maximized window the camera and that window move together: this keeps window actions in view and
+ * avoids persisting a different window geometry for every animation frame. False when the caller
+ * animates instead.
+ */
+function jumpCameraWithoutAnimation(jump: CameraJump): boolean {
+  const hasMaximizedWindow = hasOpenMaximizedWindow(jump.windows);
+  if (!hasMaximizedWindow && supportsCameraAnimation(jump.effectiveSmoothness)) return false;
+  if (jump.animationFrameRef.current !== null) {
+    window.cancelAnimationFrame(jump.animationFrameRef.current);
+    jump.animationFrameRef.current = null;
+  }
+  if (hasMaximizedWindow) fitMaximizedWindowsToView(jump.workspace, jump.setWins, jump.target);
+  jump.setView(jump.target);
+  return true;
+}
+
 function usePanZoom({
   storageScope,
   layoutLocked,
@@ -885,22 +943,21 @@ function usePanZoom({
     (target: View, smoothnessScale = 1, minDurationMs = MIN_CAMERA_ANIMATION_DURATION_MS): void => {
       if (isLayoutLocked()) return;
       const effectiveSmoothness = Math.min(100, Math.max(0, cameraSmoothness * smoothnessScale));
-      if (!supportsCameraAnimation(effectiveSmoothness)) {
-        if (animationFrameRef.current !== null) {
-          window.cancelAnimationFrame(animationFrameRef.current);
-          animationFrameRef.current = null;
-        }
-        setView(target);
-        return;
-      }
+      const jumped = jumpCameraWithoutAnimation({
+        target,
+        effectiveSmoothness,
+        windows: winsRef.current,
+        workspace: wsRef.current,
+        animationFrameRef,
+        setView,
+        setWins,
+      });
+      if (jumped) return;
 
       const durationMs =
         minDurationMs +
         ((MAX_CAMERA_ANIMATION_DURATION_MS - minDurationMs) * effectiveSmoothness) / 100;
-      const now =
-        typeof performance !== "undefined" && typeof performance.now === "function"
-          ? performance.now()
-          : Date.now();
+      const now = cameraClockNow();
       animationStartRef.current =
         animationFrameRef.current === null
           ? renderedViewRef.current
@@ -933,7 +990,7 @@ function usePanZoom({
       };
       animationFrameRef.current = window.requestAnimationFrame(step);
     },
-    [cameraSmoothness, isLayoutLocked, setView],
+    [cameraSmoothness, isLayoutLocked, setView, setWins, winsRef, wsRef],
   );
 
   const settleCameraAnimation = useCallback((): void => {
@@ -964,7 +1021,7 @@ function usePanZoom({
         typeof window.cancelAnimationFrame !== "function"
       ) {
         pendingViewRef.current = null;
-        setView(resolved);
+        animateView(resolved, smoothnessScale, minDurationMs);
         return;
       }
 
@@ -980,7 +1037,7 @@ function usePanZoom({
         if (pending !== null) animateView(pending, pendingSmoothnessScale, pendingMinDurationMs);
       });
     },
-    [animateView, isLayoutLocked, scheduleViewPersist, markViewActive, setView],
+    [animateView, isLayoutLocked, scheduleViewPersist, markViewActive],
   );
 
   useEffect(() => {
@@ -1052,8 +1109,7 @@ function usePanZoom({
   const worldVP = useCallback((): ViewportWorld | null => {
     const r = rect();
     if (r === null) return null;
-    const v = viewRef.current;
-    return { x: -v.x / v.zoom, y: -v.y / v.zoom, w: r.width / v.zoom, h: r.height / v.zoom };
+    return viewportAtView(r, viewRef.current);
   }, [rect]);
 
   const zoomTo = useCallback(
@@ -1509,8 +1565,8 @@ function fitSnapshotMaximized(
   vp: ViewportWorld | null,
 ): WorkspaceSnapshot {
   if (vp === null || vp.w <= 0 || vp.h <= 0) return snapshot;
-  const wins = snapshot.wins.map((win) => (win.max ? fitWindowToViewport(win, vp) : win));
-  if (wins.every((win, index) => win === snapshot.wins[index])) return snapshot;
+  const wins = fitMaximizedWindows(snapshot.wins, vp);
+  if (wins === snapshot.wins) return snapshot;
   reportClientDiagnostic("Workspace maximized geometry fitted to local viewport.", {
     composerActivity: "workspace-viewport-fitted",
   });
@@ -2194,6 +2250,13 @@ export function fitWindowsToViewport(
   return next.every((w, i) => w === wins[i]) ? wins : next;
 }
 
+function fitMaximizedWindows(windows: AppWindow[], viewport: ViewportWorld): AppWindow[] {
+  const next = windows.map((window) =>
+    window.max ? fitWindowToViewport(window, viewport) : window,
+  );
+  return next.every((window, index) => window === windows[index]) ? windows : next;
+}
+
 function fitCurrentWorkspaceWindows(
   windows: AppWindow[] | null,
   viewport: ViewportWorld,
@@ -2213,13 +2276,7 @@ function useFitMaximized({ wsRef, viewRef, setWins, automatic }: UseFitMaximized
     if (el === null || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
       const r = el.getBoundingClientRect();
-      const v = viewRef.current;
-      const vp: ViewportWorld = {
-        x: -v.x / v.zoom,
-        y: -v.y / v.zoom,
-        w: r.width / v.zoom,
-        h: r.height / v.zoom,
-      };
+      const vp = viewportAtView(r, viewRef.current);
       setWins((ws) => fitCurrentWorkspaceWindows(ws, vp, automatic.geometries.current));
     });
     ro.observe(el);
@@ -3292,7 +3349,6 @@ export function useWorkspace(
       linkedFigmaSnapshotSources: connectActions.linkedFigmaSnapshotSources,
       linkedImageSources: connectActions.linkedImageSources,
       linkedGitChangeComparisons: connectActions.linkedGitChangeComparisons,
-      currentFilesContext: connectActions.currentFilesContext,
       zoomTo,
       fitView,
       resetView,

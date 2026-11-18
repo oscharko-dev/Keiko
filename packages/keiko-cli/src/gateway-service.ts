@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import {
@@ -157,15 +156,16 @@ const CLI_GATEWAY_SERVICE_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-type GatewayServiceState = ActivityLogFields<
+export type GatewayServiceState = ActivityLogFields<
   typeof CLI_GATEWAY_SERVICE_COMPLETED_OPERATION
 >["state"];
-type GatewayServiceFailure = ActivityLogFields<
+export type GatewayServiceFailure = ActivityLogFields<
   typeof CLI_GATEWAY_SERVICE_FAILED_OPERATION
 >["reason"];
+export type { GatewayServiceLane };
 
 // The exit codes of the native --gateway-service-* commands (gateway_install.h).
-const NATIVE_STATES: Readonly<Record<number, GatewayServiceState>> = {
+export const NATIVE_STATES: Readonly<Record<number, GatewayServiceState>> = {
   0: "ready",
   10: "absent",
   11: "stopped",
@@ -173,7 +173,7 @@ const NATIVE_STATES: Readonly<Record<number, GatewayServiceState>> = {
   13: "state-unknown",
 };
 
-const NATIVE_FAILURES: Readonly<Record<number, GatewayServiceFailure>> = {
+export const NATIVE_FAILURES: Readonly<Record<number, GatewayServiceFailure>> = {
   20: "elevation-declined",
   21: "source-mismatch",
   22: "target-unsafe",
@@ -317,7 +317,7 @@ export interface GatewayServiceCliDeps {
     env: Readonly<Record<string, string | undefined>>,
     lane: GatewayServiceLane,
   ) => Promise<WindowsGatewayHelper | undefined>;
-  readonly runHelper?: (helperPath: string, args: readonly string[]) => Promise<number>;
+  readonly runHelper?: (helper: WindowsGatewayHelper, args: readonly string[]) => Promise<number>;
 }
 
 interface GatewayServiceRequest {
@@ -364,28 +364,46 @@ function failedEvent(
   );
 }
 
-async function defaultResolveHelper(
+export async function defaultResolveHelper(
   env: Readonly<Record<string, string | undefined>>,
   lane: GatewayServiceLane,
 ): Promise<WindowsGatewayHelper | undefined> {
   return resolveWindowsGatewayHelper(await loadServer(), env, lane);
 }
 
-function defaultRunHelper(helperPath: string, args: readonly string[]): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(helperPath, [...args], {
-      stdio: "ignore",
-      windowsHide: true,
-      shell: false,
-    });
-    child.once("error", reject);
-    child.once("close", (code) => {
-      resolve(code ?? -1);
-    });
-  });
+// A status answer is quick; an install or removal waits on the human's UAC approval.
+const HELPER_STATUS_TIMEOUT_MS = 30_000;
+const HELPER_CHANGE_TIMEOUT_MS = 15 * 60_000;
+
+/** The verified helper did not run to an exit: a refused digest, a spawn failure or the timeout. */
+export class GatewayHelperNotRunError extends Error {
+  override readonly name = "GatewayHelperNotRunError";
 }
 
-function helperArguments(action: GatewayServiceAction, pin: string): readonly string[] {
+/**
+ * Runs the helper the way the Workbench's Repair does: its bytes are checked against the pin and a
+ * private copy runs, never the discovered path, which a user-level process could swap between
+ * discovery and the elevated install. Bounded, so an unanswered approval cannot hold a start.
+ */
+export async function defaultRunHelper(
+  helper: WindowsGatewayHelper,
+  args: readonly string[],
+): Promise<number> {
+  const timeoutMs =
+    args[0] === "--gateway-service-status" ? HELPER_STATUS_TIMEOUT_MS : HELPER_CHANGE_TIMEOUT_MS;
+  const { runVerifiedWindowsGatewayHelper } = await loadServer();
+  const exitCode = await runVerifiedWindowsGatewayHelper(
+    helper.helperPath,
+    helper.helperSha256,
+    args,
+    timeoutMs,
+  );
+  if (exitCode === null)
+    throw new GatewayHelperNotRunError("gateway helper did not run to an exit");
+  return exitCode;
+}
+
+export function helperArguments(action: GatewayServiceAction, pin: string): readonly string[] {
   if (action === "status") return ["--gateway-service-status", pin];
   if (action === "uninstall") return ["--gateway-service-uninstall"];
   return ["--gateway-service-install", pin];
@@ -450,7 +468,7 @@ async function runAction(
       return reportFailure(run, missingHelperReason(run.lane), "NotQualified");
     }
     const exitCode = await (deps.runHelper ?? defaultRunHelper)(
-      helper.helperPath,
+      helper,
       helperArguments(run.action, helper.helperSha256),
     );
     // The start line names the requested lane; the outcome names the lane the helper came from.

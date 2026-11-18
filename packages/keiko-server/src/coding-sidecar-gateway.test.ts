@@ -6,7 +6,7 @@ import {
 } from "../../../tests/support/buffered-server-log.js";
 import {
   initializeConfiguredConversationReadiness,
-  initializeLiteLlmCodingReadiness,
+  ensureCodingWorkbenchContextWindows,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
 import { OPENCODE_PINNED_VERSION } from "./coding-runtime/opencodeRuntimeVersions.js";
@@ -207,6 +207,19 @@ function freshServingHolder(config: GatewayConfig): NonNullable<UiHandlerDeps["g
     );
   }
   return holder;
+}
+
+// The person activated every model in Settings > Models: only an activated model is verified
+// automatically for the Workbench (ADR-0171 D2, amended 2026-11-16).
+function activatedAtGeneration(
+  generation: number,
+): NonNullable<UiHandlerDeps["gatewayConfig"]>["verifiedCapability"] {
+  return (modelId) => ({
+    modelId,
+    generation,
+    checkedAt: new Date().toISOString(),
+    fields: { conversationReady: true },
+  });
 }
 
 function freshProfileDeps(deps: UiHandlerDeps): UiHandlerDeps {
@@ -4219,7 +4232,7 @@ describe("coding-sidecar gateway", () => {
           generation: () => 0,
           verification: () => "verified",
           recordVerification: () => undefined,
-          verifiedCapability: () => undefined,
+          verifiedCapability: activatedAtGeneration(0),
           recordVerifiedCapability: () => undefined,
           clearVerifiedCapability: () => false,
         },
@@ -4295,7 +4308,7 @@ describe("coding-sidecar gateway", () => {
           generation: () => 0,
           verification: () => "verified",
           recordVerification: () => undefined,
-          verifiedCapability: () => undefined,
+          verifiedCapability: activatedAtGeneration(0),
           recordVerifiedCapability: () => undefined,
           clearVerifiedCapability: () => false,
         },
@@ -4360,7 +4373,7 @@ describe("coding-sidecar gateway", () => {
           generation: () => 0,
           verification: () => "verified",
           recordVerification: () => undefined,
-          verifiedCapability: () => undefined,
+          verifiedCapability: activatedAtGeneration(0),
           recordVerifiedCapability: () => undefined,
           clearVerifiedCapability: () => false,
         },
@@ -10456,20 +10469,20 @@ describe("configuration-bound chat serving for new coding tasks", () => {
     }
   });
 
-  // Missing startup evidence never authorizes a run or starts a hidden provider check.
+  // A model nobody activated never authorizes a run or starts a hidden provider check; the
+  // Workbench names it not ready instead of a check that is not happening (2026-11-16).
   it("keeps unobserved new-task admission strict without request-time probes", async () => {
     const deps = servingDeps();
     const fetch = vi.fn(() => Promise.resolve(Response.json({})));
     try {
       expect(() => liveAdmission(deps)).toThrow(
-        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+        expect.objectContaining({ reason: "conversation-not-ready" }) as Error,
       );
-      const profile = await handleCodingSidecarGatewayProfile(servingContext(), deps);
-      expect(profile.body).toMatchObject({
-        status: "available",
-        modelAlias: "azure-coding-model",
-        verification: "unverified",
+      const profile = await handleCodingSidecarGatewayProfile(servingContext(), {
+        ...deps,
+        gatewayReadinessFetch: fetch,
       });
+      expect(profile.body).toEqual({ status: "unavailable", reason: "conversation-not-ready" });
       await awaitCodingRunModelReadiness(
         { ...deps, gatewayReadinessFetch: fetch },
         "azure-coding-model",
@@ -10477,9 +10490,9 @@ describe("configuration-bound chat serving for new coding tasks", () => {
       );
       expect(fetch).not.toHaveBeenCalled();
       expect(() => liveAdmission(deps)).toThrow(
-        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+        expect.objectContaining({ reason: "conversation-not-ready" }) as Error,
       );
-      // Explicit Settings verification supplies the same generation-bound observation.
+      // Activation in Settings > Models supplies the same generation-bound observation.
       await observeChat(deps, true);
       expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
     } finally {
@@ -10566,7 +10579,7 @@ describe("configuration-bound chat serving for new coding tasks", () => {
         profileId: "healthy-alternative",
       });
       expect(() => liveAdmission(deps)).toThrow(
-        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+        expect.objectContaining({ reason: "conversation-not-ready" }) as Error,
       );
       await observeChat(deps, true);
       expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
@@ -10593,11 +10606,11 @@ describe("configuration-bound chat serving for new coding tasks", () => {
         true,
       );
       expect(() => liveAdmission(deps)).toThrow(
-        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+        expect.objectContaining({ reason: "conversation-not-ready" }) as Error,
       );
       expect(() =>
         admitCodingRunModel(config, "azure-coding-model", undefined, deps.gatewayConfig),
-      ).toThrow(expect.objectContaining({ reason: "model-verification-pending" }) as Error);
+      ).toThrow(expect.objectContaining({ reason: "conversation-not-ready" }) as Error);
       deps.gatewayConfig.set({ ...config, providers: [], capabilities: [] }, true);
       expect(() => liveAdmission(deps)).toThrow(
         expect.objectContaining({ failureCode: "model-unavailable" }) as Error,
@@ -10608,7 +10621,7 @@ describe("configuration-bound chat serving for new coding tasks", () => {
   });
 
   it.each(["invalid-time", "2999-01-01T00:00:00.000Z"])(
-    "keeps malformed or future chat observations pending: %s",
+    "keeps malformed or future chat observations not ready: %s",
     (checkedAt) => {
       const deps = servingDeps();
       try {
@@ -10619,7 +10632,7 @@ describe("configuration-bound chat serving for new coding tasks", () => {
           deps.gatewayConfig.generation(),
         );
         expect(() => liveAdmission(deps)).toThrow(
-          expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+          expect.objectContaining({ reason: "conversation-not-ready" }) as Error,
         );
       } finally {
         deps.store.close();
@@ -10682,7 +10695,12 @@ describe("pending readiness original cause evidence", () => {
           });
         },
       };
-      const probe = initializeLiteLlmCodingReadiness(deps, "corr-stored-shortfall");
+      const probe = ensureCodingWorkbenchContextWindows(
+        deps,
+        undefined,
+        "corr-stored-shortfall",
+        true,
+      );
       try {
         const read = handleCodingSidecarGatewayProfile(
           {

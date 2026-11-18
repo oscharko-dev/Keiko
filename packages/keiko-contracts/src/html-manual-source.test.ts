@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
-  type DocumentationIndexingApproval,
-} from "./documentation-manual-proposal.js";
 import { validateKnowledgeSourceScope } from "./local-knowledge-validation.js";
 import {
-  deriveHtmlManualSource,
+  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
   htmlManualSourceFingerprintTag,
   htmlManualLocalFolderScope,
   htmlManualReachableFilesScope,
@@ -25,22 +21,6 @@ import {
 } from "./html-manual-source.js";
 
 const RLO = String.fromCodePoint(0x202e);
-
-function approvalFixture(
-  overrides: Partial<DocumentationIndexingApproval> = {},
-): DocumentationIndexingApproval {
-  return {
-    schemaVersion: "1",
-    approved: true,
-    sourceKind: "html-manual-http",
-    sourceFingerprint: "fp-abc123",
-    originSummary: "https://docs.internal",
-    pathPrefixSummary: "/…",
-    proposedPodName: "docs.internal manual",
-    limits: DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
-    ...overrides,
-  };
-}
 
 function httpScope(overrides: Partial<{ origin: string; pathPrefix: string | null }> = {}): {
   readonly kind: "html-manual-http";
@@ -231,43 +211,6 @@ describe("validateHtmlManualSource", () => {
     expect(
       validateHtmlManualSource(sourceFixture({ sourceFingerprint: "/Users/alice/secret" })).ok,
     ).toBe(false);
-  });
-});
-
-describe("deriveHtmlManualSource", () => {
-  it("builds an internal source when the fingerprint and kind match the approval", () => {
-    const approval = approvalFixture();
-    const result = deriveHtmlManualSource({
-      approval,
-      scope: httpScope(),
-      computedFingerprint: approval.sourceFingerprint,
-    });
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.sourceFingerprint).toBe("fp-abc123");
-      expect(result.value.proposedPodName).toBe("docs.internal manual");
-      expect(result.value.limits).toEqual(DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS);
-    }
-  });
-
-  it("fails closed when the recomputed fingerprint does not match the approval", () => {
-    const approval = approvalFixture();
-    const result = deriveHtmlManualSource({
-      approval,
-      scope: httpScope(),
-      computedFingerprint: "fp-different",
-    });
-    expect(result.ok).toBe(false);
-  });
-
-  it("fails closed when the scope kind does not match the approved sourceKind", () => {
-    const approval = approvalFixture({ sourceKind: "html-manual-local" });
-    const result = deriveHtmlManualSource({
-      approval,
-      scope: httpScope(),
-      computedFingerprint: approval.sourceFingerprint,
-    });
-    expect(result.ok).toBe(false);
   });
 });
 

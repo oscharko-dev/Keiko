@@ -12,7 +12,7 @@ import {
   type SetStateAction,
 } from "react";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
-import { fetchGitStatus } from "@/lib/api";
+import { ApiError, fetchGitStatus } from "@/lib/api";
 import { selectFolderWorkspace, selectLocalCheckout } from "@/lib/task-workspace-api";
 import { bindVerifiedTaskWorkspace } from "@/lib/verified-task-workspace-binding";
 import { secureRandomId } from "@/lib/secure-random";
@@ -123,7 +123,27 @@ export interface WorkbenchExecutionLocationState {
    * does not guess another one (#4371).
    */
   readonly denied: boolean;
+  /**
+   * The cause the server named for a failed checkout, when its closed code has exactly one plain
+   * explanation; absent for every other failure, which keeps the generic sentence (#4404).
+   */
+  readonly reason?: LocationFailureReason;
   readonly retry: () => void;
+}
+
+/** A failed checkout whose closed server code tells the person what to do. */
+export type LocationFailureReason = "unregistered" | "git-unreadable";
+
+const LOCATION_FAILURE_REASONS: Readonly<Record<string, LocationFailureReason>> = {
+  // The folder is no longer among the registered folders under its real path.
+  MISSING_REPOSITORY: "unregistered",
+  // Git could not be run for the checkout, or did not report the selected folder as the
+  // repository's top folder: the two answers the server gives under this code.
+  REPOSITORY_UNREACHABLE: "git-unreadable",
+};
+
+function locationFailureReason(error: unknown): LocationFailureReason | undefined {
+  return error instanceof ApiError ? LOCATION_FAILURE_REASONS[error.code] : undefined;
 }
 
 interface LocationInput {
@@ -262,11 +282,13 @@ interface BindingAttempt {
   readonly inFlight: RefObject<string | null>;
   readonly setPending: Dispatch<SetStateAction<boolean>>;
   readonly setErrorKey: Dispatch<SetStateAction<string | null>>;
+  readonly setErrorReason: Dispatch<SetStateAction<LocationFailureReason | undefined>>;
   readonly setSelectionEpoch: Dispatch<SetStateAction<number>>;
 }
 
 async function runBindingAttempt(attempt: BindingAttempt): Promise<void> {
   const { input, key, latest, inFlight, setPending, setErrorKey, setSelectionEpoch } = attempt;
+  const { setErrorReason } = attempt;
   if (input.root === null) return;
   const correlationId = newClientCorrelationId();
   try {
@@ -297,6 +319,7 @@ async function runBindingAttempt(attempt: BindingAttempt): Promise<void> {
     setErrorKey(null);
   } catch (error) {
     reportBindingFailure(error, correlationId);
+    setErrorReason(locationFailureReason(error));
     setErrorKey(key);
   } finally {
     inFlight.current = null;
@@ -308,6 +331,7 @@ async function runBindingAttempt(attempt: BindingAttempt): Promise<void> {
 interface BindingAttemptState {
   readonly pending: boolean;
   readonly errorKey: string | null;
+  readonly errorReason: LocationFailureReason | undefined;
   readonly handledKey: string | null;
   readonly retry: () => void;
 }
@@ -318,6 +342,7 @@ function useBindingAttempt(input: LocationInput, ready: boolean, key: string): B
   const [selectionEpoch, setSelectionEpoch] = useState(0);
   const [handledKey, setHandledKey] = useState<string | null>(null);
   const [errorKey, setErrorKey] = useState<string | null>(null);
+  const [errorReason, setErrorReason] = useState<LocationFailureReason | undefined>(undefined);
   const inFlight = useRef<string | null>(null);
   const latest = useRef(stableInput);
   useLayoutEffect(() => {
@@ -345,6 +370,7 @@ function useBindingAttempt(input: LocationInput, ready: boolean, key: string): B
       inFlight,
       setPending,
       setErrorKey,
+      setErrorReason,
       setSelectionEpoch,
     });
   }, [errorKey, handledKey, stableInput, key, ready, selectionEpoch]);
@@ -354,7 +380,7 @@ function useBindingAttempt(input: LocationInput, ready: boolean, key: string): B
     setSelectionEpoch((epoch) => epoch + 1);
     if (workspaceError || branchError) void refresh();
   }, [refresh, workspaceError, branchError]);
-  return { pending, errorKey, handledKey, retry };
+  return { pending, errorKey, errorReason, handledKey, retry };
 }
 
 function bindingError(
@@ -369,6 +395,15 @@ function bindingError(
     input.workspaceError ||
     (!ready && !pending && (input.branchError || attempt.handledKey === key))
   );
+}
+
+/** The named cause of THIS selection's failed attempt; a reason of an earlier selection is not. */
+function failureReason(
+  attempt: BindingAttemptState,
+  key: string,
+): { readonly reason?: LocationFailureReason } {
+  const reason = attempt.errorKey === key ? attempt.errorReason : undefined;
+  return reason === undefined ? {} : { reason };
 }
 
 /** A failure is a refusal only when the server named the folder's branch read as one. */
@@ -392,5 +427,12 @@ export function useWorkbenchExecutionLocation(
     input.workspaceLoading ||
     (!ready && input.branchLoading);
   const error = bindingError(input, ready, pending, key, attempt);
-  return { ready, pending, error, denied: bindingDenied(error, input), retry: attempt.retry };
+  return {
+    ready,
+    pending,
+    error,
+    denied: bindingDenied(error, input),
+    ...failureReason(attempt, key),
+    retry: attempt.retry,
+  };
 }

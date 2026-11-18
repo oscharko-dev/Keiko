@@ -819,17 +819,6 @@ function canCollapseAssistantAnswer(
   return !streaming && !isUser && !isRunSummary && isCollapsibleAssistantAnswer(content);
 }
 
-// Extracted from ChatBubbleImpl (SonarCloud S3776) — the branchy body of
-// openDocumentationTarget's useCallback, kept as a plain function so the callback itself is a
-// one-line delegation.
-function resolveDocumentationTarget(
-  previewWindows: PdfCitationPreviewWindowApi | undefined,
-  target: string,
-): boolean {
-  if (previewWindows === undefined) return false;
-  return previewWindows.add("docbrowser", { target }) !== null;
-}
-
 // Extracted from ChatBubbleImpl (SonarCloud S3776) — registers the bubble element as the PDF
 // citation preview's scroll target for its assistant message. Same effect body/deps as before,
 // now isolated as a named hook so the orchestrating component reads as a flat list of steps.
@@ -1115,7 +1104,6 @@ function ChatBubbleGroundedSection({
   repositoryRoots,
   openRepositoryReference,
   citationPreview,
-  openDocumentationTarget,
   onReadPaths,
 }: {
   readonly onReadPaths: (runId: string, paths: readonly string[]) => void;
@@ -1124,7 +1112,6 @@ function ChatBubbleGroundedSection({
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly citationPreview: CitationPreviewController | undefined;
-  readonly openDocumentationTarget: (target: string) => boolean;
 }): ReactNode {
   if (isUser || message.groundedAnswer === undefined) return null;
   return (
@@ -1136,7 +1123,6 @@ function ChatBubbleGroundedSection({
         repositoryRoots={repositoryRoots}
         openRepositoryReference={openRepositoryReference}
         citationPreview={citationPreview}
-        openDocumentationTarget={openDocumentationTarget}
       />
       <ContextStatusPanel contextSummary={contextSummaryOf(message.groundedAnswer)} />
     </div>
@@ -1219,13 +1205,6 @@ function ChatBubbleImpl({
     windows: previewWindows,
     openEditorFile: openRepositoryReference,
   });
-  // Epic #1854 (#1881) — opens the target in the existing governed documentation browser widget
-  // (ADR-0113) rather than calling navigateDocumentation directly, so the widget's own reason/
-  // severity rendering stays the single source of truth for the navigation outcome.
-  const openDocumentationTarget = useCallback(
-    (target: string): boolean => resolveDocumentationTarget(previewWindows, target),
-    [previewWindows],
-  );
   const canCollapse = canCollapseAssistantAnswer(
     streaming,
     isUser,
@@ -1331,7 +1310,6 @@ function ChatBubbleImpl({
           repositoryRoots={repositoryRoots}
           openRepositoryReference={openRepositoryReference}
           citationPreview={citationPreview}
-          openDocumentationTarget={openDocumentationTarget}
         />
       </div>
     </article>

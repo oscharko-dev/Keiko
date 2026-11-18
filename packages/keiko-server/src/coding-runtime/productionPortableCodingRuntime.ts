@@ -246,6 +246,48 @@ export function readWindowsGatewayServiceStatus(
   helperPath: string,
   helperSha256: string,
 ): Promise<number | null> {
+  return runVerifiedWindowsGatewayHelper(
+    helperPath,
+    helperSha256,
+    ["--gateway-service-status", helperSha256],
+    2_000,
+  );
+}
+
+// A UAC approval waits on the human; past this bound the request ends as failed, never as ready.
+const GATEWAY_INSTALL_TIMEOUT_MS = 15 * 60_000;
+
+/**
+ * The Workbench's Repair: the same idempotent `--gateway-service-install` command `keiko
+ * gateway-service repair` runs. The helper raises the one UAC prompt itself and re-verifies its own
+ * bytes against the pin before anything is copied; Node never runs elevated. Resolves to the exit
+ * code, or null when it did not run to an exit.
+ */
+export function installWindowsGatewayService(
+  helperPath: string,
+  helperSha256: string,
+): Promise<number | null> {
+  return runVerifiedWindowsGatewayHelper(
+    helperPath,
+    helperSha256,
+    ["--gateway-service-install", helperSha256],
+    GATEWAY_INSTALL_TIMEOUT_MS,
+  );
+}
+
+/**
+ * Runs one `--gateway-service-*` command of the attested helper: the digest is checked and a
+ * private copy of the verified bytes runs, never the path that could be swapped after discovery.
+ * Resolves to the exit code, or null when it did not run to an exit (a refused digest, a spawn
+ * failure or the timeout). It never rejects, and the private copy is removed on every path. The
+ * Workbench, `keiko gateway-service` and the automatic setup after `keiko start` share it.
+ */
+export function runVerifiedWindowsGatewayHelper(
+  helperPath: string,
+  helperSha256: string,
+  args: readonly string[],
+  timeoutMs: number,
+): Promise<number | null> {
   return new Promise((resolve) => {
     // The same digest check a launch applies: bytes that do not match the pin never execute, and the
     // helper that runs is a private copy of the verified bytes, not the path that could be swapped.
@@ -266,11 +308,11 @@ export function readWindowsGatewayServiceStatus(
       }
     };
     try {
-      const child = spawn(copy.path, ["--gateway-service-status", helperSha256], {
+      const child = spawn(copy.path, [...args], {
         stdio: "ignore",
         windowsHide: true,
         shell: false,
-        timeout: 2_000,
+        timeout: timeoutMs,
       });
       child.once("error", (error) => {
         recordGatewayStatusFailure("coding.runtime.windows-gateway-service.spawn", error);
@@ -304,6 +346,19 @@ export function discoverReleasedWindowsGatewayHelper(input: PortableOpenCodeDisc
             ? "release-qualified"
             : "portable-evaluation",
       };
+}
+
+/**
+ * Whether this Keiko runs from a desktop (portable) package layout at all, whatever its runtime
+ * verified to: a runtime that failed verification is then the desktop package's, not a missing
+ * npm package (the Workbench names the right step). Structural only: no file is read or trusted.
+ */
+export function portableInstallLayoutPresent(input: PortableOpenCodeDiscoveryInput): boolean {
+  const target = runtimeTarget(input.platform ?? process.platform, input.arch ?? process.arch);
+  if (target === undefined) return false;
+  // An injected resource root is a portable fixture by construction.
+  if (input.installRoot !== undefined) return true;
+  return portablePackageLayout(target, productionUpdateFacts(input.env).packageRoot) !== undefined;
 }
 
 /** Why a Windows portable install cannot offer its bundled runtime although it is one (#4358). */

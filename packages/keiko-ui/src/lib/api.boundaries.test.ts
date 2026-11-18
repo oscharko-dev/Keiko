@@ -24,7 +24,6 @@ import {
   sendDesktopChat,
   sendDesktopChatStream,
   setupGateway,
-  startRun,
   updateChat,
   updateChatConnectedScopes,
   updateChatLocalKnowledgeScope,
@@ -182,7 +181,6 @@ describe("API BFF boundary helpers", () => {
     await fetchWorkflows();
     await setupGateway({ baseUrl: "https://llm.example/v1", apiKey: "secret" });
     await runGatewayReadiness("model-a", { includeDeepProbes: true });
-    await startRun({ taskType: "verify", input: { target: "src/app.ts" }, modelId: "model-a" });
     await cancelRun("run 1");
     await fetchRunReport("run 1");
     await applyRun("run 1");
@@ -368,36 +366,6 @@ describe("API BFF boundary helpers", () => {
     expect("instanceId" in health).toBe(false);
     expect(health.diagnostics).toEqual(REAL_HEALTH.diagnostics);
     expect(health.memory).toEqual(REAL_HEALTH.memory);
-  });
-
-  it("fails closed when a run-start governance projection violates its response contract", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(
-          jsonResponse({
-            runId: "run-1",
-            fingerprint: "fp-1",
-            governance: {
-              requestedMode: "invented-mode",
-              effectiveMode: "supervised-coding",
-              deploymentCeiling: "supervised-coding",
-              connectorExecution: "unavailable",
-              deliveryExecution: "unavailable",
-            },
-          }),
-        ),
-      ),
-    );
-
-    await expect(
-      startRun({
-        workflowId: "unit-test-generation",
-        input: { workspaceRoot: "/repo", target: { kind: "file", filePath: "src/app.ts" } },
-        modelId: "model-a",
-        requestedMode: "governed-assist",
-      }),
-    ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED", status: 502 });
   });
 
   it("dispatches real SSE token, done, error, and cancellation events", async () => {

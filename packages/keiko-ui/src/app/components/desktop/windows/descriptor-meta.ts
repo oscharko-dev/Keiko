@@ -88,12 +88,6 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "transient",
   },
-  docbrowser: {
-    lifecycle: ["idle", "live", "error"],
-    trustBoundary: ["ui", "network"],
-    authority: "user-confirm",
-    persistence: "transient",
-  },
   terminal: {
     lifecycle: ["idle", "running", "blocked", "cancelled", "error"],
     trustBoundary: ["ui", "tool"],
@@ -145,7 +139,7 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     lifecycle: ["proposed", "running", "blocked", "needs-review", "verified", "cancelled"],
     trustBoundary: ["ui", "model", "tool", "evidence"],
     authority: "user-confirm",
-    persistence: "durable.ui",
+    persistence: "evidence-reference",
   },
   integ: {
     lifecycle: ["idle", "connecting", "connected", "degraded", "disconnected", "error"],

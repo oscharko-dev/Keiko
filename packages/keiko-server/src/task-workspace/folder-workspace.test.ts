@@ -209,6 +209,29 @@ describe("folder workspace selection (owner decision 2026-10-30)", () => {
     }
   });
 
+  it("binds a folder registered under another spelling of the same directory (#4404)", () => {
+    // Windows keeps the spelling a person typed or a dialog returned (drive-letter case, 8.3 short
+    // names, a mapped drive, a junction), while the route passes the native real path. A symbolic
+    // link is the portable stand-in for such a spelling: both name one directory.
+    const alias = `${root}-alias`;
+    symlinkSync(root, alias, "junction");
+    const other = realpathSync(mkdtempSync(join(tmpdir(), "keiko other folder-")));
+    try {
+      const { service } = fixture(createBufferedServerLogSink(), alias);
+      const active = service.selectFolder({ root, requestedBy: "test" });
+      expect(active.binding.activeRoot).toBe(root);
+      expect(service.getActive()?.instance.workspaceId).toBe(active.instance.workspaceId);
+
+      const unrelated = fixture(createBufferedServerLogSink(), other);
+      expect(() => unrelated.service.selectFolder({ root, requestedBy: "test" })).toThrow(
+        /registered folder/u,
+      );
+    } finally {
+      rmSync(alias, { force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed when the bound folder is replaced under the same path", () => {
     const { service } = fixture();
     service.selectFolder({ root, requestedBy: "test" });

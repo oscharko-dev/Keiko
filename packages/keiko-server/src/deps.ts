@@ -2076,6 +2076,20 @@ export function currentConversationReady(
 }
 
 /**
+ * The models an automatic election may choose from: the activated ones when any is (ADR-0171 D2,
+ * amended 2026-11-16). A model nobody activated in Settings > Models is not usable, so it must not
+ * outrank an activated one merely by its rank tier. Without any activated model the full list is
+ * returned, so the caller keeps its precise "not ready" refusal.
+ */
+export function preferActivatedModels<T extends { readonly id: string }>(
+  deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  models: readonly T[],
+): readonly T[] {
+  const activated = models.filter((model) => currentConversationReady(deps, model.id));
+  return activated.length > 0 ? activated : models;
+}
+
+/**
  * Process-local result of the startup or explicit Settings check. A configuration replacement
  * invalidates it. Age alone never schedules provider work or turns a known success into unknown;
  * malformed and future timestamps remain unavailable. Actual calls still surface provider errors.
