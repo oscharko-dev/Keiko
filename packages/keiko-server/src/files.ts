@@ -66,11 +66,11 @@ import type { UiHandlerDeps } from "./deps.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { Project, UiStore } from "./store/index.js";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import { decodeTextFileBytes } from "@oscharko-dev/keiko-workspace";
 import {
-  decodeTextFileBytes,
+  WorkspaceDescriptorReadError,
   workspaceEntryAvailabilityFailure,
-} from "@oscharko-dev/keiko-workspace";
-import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   createOrdinaryWorkspaceRootAccess,
   requiresConfiguredManagedWorkspaceAuthority,

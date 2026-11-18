@@ -22,6 +22,13 @@ import { lstat, open, opendir, type FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
+// Internal walk helpers share the per-entry availability classification through this subpath;
+// it is not part of the root SDK surface (#4434, #4435).
+export {
+  type WorkspaceEntryAvailability,
+  workspaceEntryAvailabilityFailure,
+} from "./entryAvailability.js";
+
 export interface WorkspaceStat {
   readonly size: number;
   readonly isFile: boolean;

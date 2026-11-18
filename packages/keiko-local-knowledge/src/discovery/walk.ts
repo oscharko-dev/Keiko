@@ -29,12 +29,12 @@ import {
   isIgnored,
   PathDeniedError,
   resolveExistingAllowedWorkspaceRealRoot,
-  workspaceEntryAvailabilityFailure,
 } from "@oscharko-dev/keiko-workspace";
 import {
   isWorkspaceDirectoryIdentityCurrent,
   isWorkspacePathSnapshotCurrent,
   WorkspaceDescriptorReadError,
+  workspaceEntryAvailabilityFailure,
 } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { compileGlobList, matchesAny, type CompiledGlob } from "./glob.js";
