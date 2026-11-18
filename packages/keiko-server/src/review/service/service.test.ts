@@ -854,6 +854,23 @@ describe("review run service: reads, dry run and evaluation switches", () => {
     });
   });
 
+  // R4130-083: the replay of an accepted start must answer by its record, also when the models were
+  // deactivated in between (a restart leaves every model inactive since dev 1.5.2).
+  it("replays an accepted start although its models were deactivated since", async () => {
+    let activated = true;
+    const h = setUp({ activated: () => activated });
+    const first = await start(h);
+    expect(first.status).toBe(202);
+    await settled(h, first);
+    activated = false;
+
+    const repeat = await start(h);
+
+    // A replay answers 200 with the recorded run; a new start would be 202.
+    expect(repeat.status).toBe(200);
+    expect(runOf(repeat).runId).toBe(runOf(first).runId);
+  });
+
   it("settles a run whose role model was deactivated after its start, naming the cause", async () => {
     let checks = 0;
     const h = setUp({

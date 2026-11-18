@@ -193,16 +193,17 @@ class ReviewRunServiceImpl implements ReviewRunService {
   public async start(input: ReviewRunStartInput): Promise<ReviewRunStartOutcome> {
     const repositoryId = deriveRepositoryId(input.repositoryRoot);
     if (input.request.dryRun === true) return this.dryRun(input);
-    // R4130-082: a role model nobody activated is refused before a run record exists, so the person
-    // learns the step from the answer. It reads only this process's activation, never the model.
-    if (inactiveReviewRoleModels(this.deps.models, input.request).length > 0) {
-      return this.refuse("model-not-activated", input);
-    }
     const replayed = this.deps.store.findByClientRequest(
       repositoryId,
       input.request.clientRequestId,
     );
     if (replayed !== undefined) return this.replay(replayed, input.correlationId);
+    // R4130-082: a role model nobody activated is refused before a run record exists, so the person
+    // learns the step from the answer. It reads only this process's activation, never the model.
+    // A repeated start whose record exists answers by its record instead (R4130-083).
+    if (inactiveReviewRoleModels(this.deps.models, input.request).length > 0) {
+      return this.refuse("model-not-activated", input);
+    }
     return this.insertAndLaunch(input, repositoryId);
   }
 
