@@ -853,6 +853,8 @@ system that exists, never beside it:
   actual cold or warm request work remains visible even when saving its snapshot fails.
   Conversation continuity records only its closed referent source and source/admitted/rejected
   counts on selection-details; assistant path text never enters activity evidence.
+  A previous-answer path stays a continuity hint: it never replaces the current question's own
+  keep-one fallback, which remains low confidence beside it within the same grants (#4458).
   The closed `retrievalIntent` vocabulary is `project-metadata`, `repository-overview`,
   `targeted-code-search`, `diagnostic-search`, `conversational-follow-up` and `clarification-needed`.
   An eligible `conversational-follow-up` retains the previous targeted or diagnostic intent for

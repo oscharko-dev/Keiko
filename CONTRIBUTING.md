@@ -381,7 +381,8 @@ excerpt assembly and final prompt fitting, an unobserved compound hint lowers se
 without removing evidence or claiming a keep-one fallback; fresh and cached packs share this rule.
 Contextual natural-language keep-one fallback retains the first lexical producer's order only for
 the same live content identities, without semantic evidence or successful reranking. It remains
-low confidence and changes no floor, exclusion or grant. Ordinary document excerpts include the
+low confidence and changes no floor, exclusion or grant. A path admitted only from the previous
+answer never counts as that fallback's own evidence, so it cannot displace it (#4458). Ordinary document excerpts include the
 complete current redacted source when it fits the existing window and total budgets; explicit
 selections, certified ranges and source-code excerpts keep their requested geometry (ADR-0022).
 Returned and persisted answers use the confidence of their actual sent source; another source cannot

@@ -22,20 +22,25 @@ export interface SelectionQualityInput {
   readonly relative: RelativeFloorObservation;
   readonly reranker: PreselectionRerankerResult;
   readonly fallbackOrder?: readonly string[] | undefined;
+  /** #4458: previous-answer continuity paths; they never certify the current question's selection. */
+  readonly continuityOnlyPaths?: ReadonlySet<string> | undefined;
 }
 
 export function selectionQuality(input: SelectionQualityInput): ContextSelectionDiagnostics {
+  const continuity = input.continuityOnlyPaths ?? new Set<string>();
+  const selected = input.selected.filter((candidate) => !continuity.has(candidate.scopePath));
   const fallback =
     input.scopeKind !== "files" &&
-    input.selected.length > 0 &&
+    selected.length > 0 &&
     !input.candidates.some(
       (candidate) =>
-        candidate.score >= input.absoluteFloor ||
-        input.minScoreExemptPaths.has(candidate.scopePath),
+        !continuity.has(candidate.scopePath) &&
+        (candidate.score >= input.absoluteFloor ||
+          input.minScoreExemptPaths.has(candidate.scopePath)),
     );
   return {
     selectionConfidence: fallback ? "low" : "high",
-    keepOneFallbackApplied: fallback && input.selected.length === 1,
+    keepOneFallbackApplied: fallback && selected.length === 1,
     ...(fallback
       ? {
           fallbackRankingSource: input.selected.some(
