@@ -353,6 +353,7 @@ function pausedMemoryQuery(): {
   readonly started: Promise<undefined>;
   readonly cancel: () => void;
   readonly request: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>;
+  readonly complete: () => void;
   readonly releaseAfterDisconnect: () => void;
 } {
   const response = deferred<OpenAIEmbeddingOutcome>();
@@ -367,6 +368,12 @@ function pausedMemoryQuery(): {
       request.signal?.addEventListener("abort", cancel, { once: true });
       started.resolve(undefined);
       return response.promise;
+    },
+    complete: (): void => {
+      response.resolve({
+        ok: true,
+        value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+      });
     },
     releaseAfterDisconnect: (): void => {
       // Free the fixture if the regression recurs, without crediting cleanup as an adapter abort.
@@ -3097,6 +3104,69 @@ describe("desktop chat SSE streaming handler", () => {
       { errorKind: "cancelled", extra: { failureKind: "cancelled" } },
     ]);
   });
+
+  it.each([true, false] as const)(
+    "handles regeneration query lifetime with disconnect=%s",
+    async (disconnect) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const chatId = seedChat();
+      seedMessage(chatId, "user", "original regeneration question");
+      seedMessage(chatId, "assistant", "original regeneration answer");
+      const assistant = store.listMessages(chatId).at(-1);
+      if (assistant === undefined) throw new Error("missing assistant fixture");
+      const memoryDir = join(tmp, "regeneration-query-disconnect");
+      mkdirSync(memoryDir);
+      const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+      insertAcceptedMemoryWithEmbedding(memoryVault, "regeneration cancellation candidate");
+      const embedding = pausedMemoryQuery();
+      const call = vi.fn(() => Promise.resolve(normalizedResponse("replacement answer")));
+      const config = chatAndEmbeddingConfig();
+      const captured = captureResWithEvents();
+      const before = store.listMessages(chatId);
+      const outcome = handleRegenerateDesktopChat(
+        routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            assistantMessageId: assistant.id,
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+          captured.res,
+        ),
+        deps(
+          { call },
+          {
+            config,
+            gatewayConfig: readyRuntimeGatewayConfig(config),
+            memoryVault,
+            localKnowledgeEmbeddingRequest: embedding.request,
+          },
+        ),
+      );
+      try {
+        await expect(Promise.race([embedding.started, outcome])).resolves.toBeUndefined();
+        if (disconnect) {
+          captured.emitClose();
+          embedding.releaseAfterDisconnect();
+        } else {
+          embedding.complete();
+        }
+        await expect(outcome).resolves.toMatchObject({ status: disconnect ? 499 : 200 });
+        expect(embedding.cancel).toHaveBeenCalledTimes(disconnect ? 1 : 0);
+        expect(call).toHaveBeenCalledTimes(disconnect ? 0 : 1);
+        if (disconnect) expect(store.listMessages(chatId)).toEqual(before);
+        else expect(store.listMessages(chatId).at(-1)?.content).toBe("replacement answer");
+        expect(sink.events.filter(({ op }) => op === "embedding.memory.failed")).toMatchObject(
+          disconnect ? [{ errorKind: "cancelled", extra: { failureKind: "cancelled" } }] : [],
+        );
+      } finally {
+        embedding.releaseAfterDisconnect();
+        await outcome.catch(() => undefined);
+        memoryVault.close();
+      }
+    },
+  );
 
   it("rejects regeneration when the gateway generation changes during memory retrieval", async () => {
     const sink = createBufferedServerLogSink();

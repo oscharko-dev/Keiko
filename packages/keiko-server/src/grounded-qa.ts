@@ -3362,7 +3362,7 @@ async function prepareGroundedMemory(
       memory: memoryRequest,
       discussionMode: undefined,
     };
-    const result = await buildMemoryResult(request, deps, context);
+    const result = await buildMemoryResult(request, deps, context, prepared.signal);
     const refused = rememberRequestRefusedIn(deps, request, context);
     return withPreparedGroundedMemory(prepared, context, result, refused);
   } catch (error) {

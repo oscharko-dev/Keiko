@@ -4741,11 +4741,12 @@ function captureGatewayGeneration(deps: UiHandlerDeps): DesktopChatExecutionAdmi
 function resolveRegenerateMemory(
   deps: UiHandlerDeps,
   prepared: PreparedDesktopChatRegenerate,
+  signal: AbortSignal,
 ): Promise<ConversationMemoryResultWire> {
   const { memoryRequest, memoryContext } = prepared;
   return memoryContext === undefined
     ? Promise.resolve(emptyMemoryResult(false))
-    : buildMemoryResult(memoryRequest, deps, memoryContext);
+    : buildMemoryResult(memoryRequest, deps, memoryContext, signal);
 }
 
 async function buildRegenerateContext(
@@ -4888,7 +4889,7 @@ async function persistRegeneratedChatTurn(
     surface: "desktop-chat",
   });
   try {
-    const memory = await resolveRegenerateMemory(deps, prepared);
+    const memory = await resolveRegenerateMemory(deps, prepared, signal);
     const response = await withAdoptedContextWindowRetry(
       deps,
       { modelId, surface: "chat-buffered", correlationId },
