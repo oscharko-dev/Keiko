@@ -113,6 +113,8 @@ describe("the npm package start", () => {
     expect(args).toContain("--no-update-notifier");
     // npm keeps its logs in <cache>/_logs, so nothing lands in the person's ~/.npm.
     expect(args[args.indexOf("--cache") + 1]).toBe(cache);
+    // Set on the command line, so neither an npm_config_* variable nor an .npmrc moves the log.
+    expect(args[args.indexOf("--logs-dir") + 1]).toBe(join(cache, "_logs"));
   });
 
   describe("the installation", () => {
@@ -238,12 +240,50 @@ describe("the administrator's access step", () => {
   });
 
   it("reads a pasted token and keeps keys that are not text out of it", () => {
-    expect(tokenInput("", "sk-abc\r\n")).toEqual({ value: "sk-abc", end: "enter" });
-    expect(tokenInput("sk", "-ab\u007fc")).toEqual({ value: "sk-ac", end: undefined });
+    expect(tokenInput("", "sk-abc\r\n")).toMatchObject({ value: "sk-abc", end: "enter" });
+    expect(tokenInput("sk", "-ab\u007fc")).toMatchObject({ value: "sk-ac", end: undefined });
     // An arrow key, the Delete key and Ctrl+D send no token characters.
-    expect(tokenInput("", "a\u001b[Db\u001b[3~c\u0004")).toEqual({ value: "abc", end: undefined });
-    expect(tokenInput("😀", "\b")).toEqual({ value: "", end: undefined });
-    expect(tokenInput("secret", "\u0003")).toEqual({ value: "", end: "cancel" });
+    expect(tokenInput("", "a\u001b[Db\u001b[3~c\u0004")).toEqual({
+      value: "abc",
+      end: undefined,
+      escape: "none",
+    });
+    expect(tokenInput("😀", "\b")).toMatchObject({ value: "", end: undefined });
+    expect(tokenInput("secret", "\u0003")).toMatchObject({ value: "", end: "cancel" });
+  });
+
+  // A terminal may hand one key over in two reads; its tail must not reach the saved token.
+  it.each([
+    ["an arrow key", "\u001b[D"],
+    ["the Delete key", "\u001b[3~"],
+    ["an arrow key in application mode", "\u001bOD"],
+  ])("keeps %s out of the token at every split", (_name, key) => {
+    const typed = `a${key}b`;
+    const expected = { value: "ab", end: undefined, escape: "none" };
+    expect(tokenInput("", typed)).toEqual(expected);
+    for (let cut = 1; cut < typed.length; cut += 1) {
+      const first = tokenInput("", typed.slice(0, cut));
+      expect(tokenInput(first.value, typed.slice(cut), first.escape)).toEqual(expected);
+    }
+    const byCharacter = [...typed].reduce(
+      (step, character) => tokenInput(step.value, character, step.escape),
+      { value: "", escape: "none" },
+    );
+    expect(byCharacter).toEqual(expected);
+  });
+
+  it("types what follows the Escape key pressed on its own", () => {
+    const escaped = tokenInput("a", "\u001b");
+    expect(escaped).toEqual({ value: "a", end: undefined, escape: "escape" });
+    expect(tokenInput(escaped.value, "b", escaped.escape)).toEqual({
+      value: "ab",
+      end: undefined,
+      escape: "none",
+    });
+    expect(tokenInput(escaped.value, "\r", escaped.escape)).toMatchObject({
+      value: "a",
+      end: "enter",
+    });
   });
 
   it("refuses a configuration that names no usable model", () => {

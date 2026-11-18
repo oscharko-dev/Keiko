@@ -78,6 +78,14 @@ is downloaded at start. Run `scripts/__tests__/build-standalone-package.test.mjs
 `portable-in-place` and `provisioned-config` suites of `keiko-cli`. The operator guide is
 [`docs/release/standalone-folder-package.md`](docs/release/standalone-folder-package.md).
 
+Every stable release carries the generic package of each desktop target. The assemble job of
+`portable-assets.yml` builds them with `scripts/build-folder-release-assets.mjs`, and the publisher
+uploads them in the same draft as the archives (`scripts/lib/folder-package-release.mjs`). Keep the
+dot before the form in a package name (`keiko-<target>.standalone.zip`): shipped updaters read
+every dot-free `keiko-*.zip` asset as an update archive, so a hyphenated name stops every update.
+Run `scripts/__tests__/folder-package-release.test.mjs`, which checks the names against the
+updater, and `scripts/__tests__/build-folder-release-assets.test.mjs`.
+
 ### npm folder package
 
 The npm folder package (ADR-0121 D9) carries a portable archive's Node.js runtime and a pinned

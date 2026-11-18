@@ -36,6 +36,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { sha256File } from "./lib/digest.mjs";
+import { folderChecksumText, folderPackageArchiveName } from "./lib/folder-package-release.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import {
   extractZipArchiveEntries,
@@ -177,7 +178,7 @@ function validSha256(value, label) {
   return value;
 }
 
-export function verifyArchive(archivePath, expected) {
+function verifyArchive(archivePath, expected) {
   if (!existsSync(archivePath) || !statSync(archivePath).isFile()) {
     refuse(`archive not found: ${archivePath}`);
   }
@@ -188,7 +189,7 @@ export function verifyArchive(archivePath, expected) {
   return actual;
 }
 
-export function assertPayloadEntryNames(archivePath, target) {
+function assertPayloadEntryNames(archivePath, target) {
   const names = readZipArchiveEntryNames(archivePath, { requireRegularEntries: true });
   if (names.length === 0) refuse("the archive is empty");
   const foreign = names.find((name) => !name.startsWith(PAYLOAD_ROOT_PREFIX));
@@ -361,10 +362,6 @@ function writeStandaloneManifest(packageRoot, record) {
   );
 }
 
-function archiveName(target, provisioned) {
-  return provisioned ? `keiko-${target}-standalone-team.zip` : `keiko-${target}-standalone.zip`;
-}
-
 function assemblePackage(input) {
   const { archivePath, target, workRoot, archiveSha256, configBytes } = input;
   const layout = STANDALONE_TARGETS[target];
@@ -392,7 +389,7 @@ function assemblePackage(input) {
  * The checked build input every package form shares. `form` names the kept folder
  * (`keiko-<target>-<form>`): `standalone` here, `npm` for the npm package.
  */
-export function resolveBuildInput(options, form = "standalone") {
+function resolveBuildInput(options, form) {
   const target = requireOption(options, "target", "--target");
   if (!Object.hasOwn(STANDALONE_TARGETS, target)) {
     refuse(`unsupported target ${target}: use ${Object.keys(STANDALONE_TARGETS).join(", ")}`);
@@ -416,51 +413,56 @@ export function resolveBuildInput(options, form = "standalone") {
   return { target, archivePath, outDir, expected, configBytes, keptFolder };
 }
 
-export function publishFolder(packageRoot, keptFolder) {
+function publishFolder(packageRoot, keptFolder) {
   mkdirSync(keptFolder);
   renameSync(packageRoot, join(keptFolder, PACKAGE_ROOT_NAME));
   return join(keptFolder, PACKAGE_ROOT_NAME);
 }
 
-/** Builds the standalone package and returns what was written. */
-export function buildStandalonePackage(options) {
-  const { target, archivePath, outDir, expected, configBytes, keptFolder } =
-    resolveBuildInput(options);
+/**
+ * The build every folder form shares. It checks the archive, lets the form's `assemble` build the
+ * package in a private work directory, writes the ZIP and its checksum file, and keeps the folder
+ * when asked. `assemble` receives the checked input and returns `{ packageRoot, packageVersion }`.
+ */
+export function buildFolderPackage(options, form, assemble) {
+  const { target, archivePath, outDir, expected, configBytes, keptFolder } = resolveBuildInput(
+    options,
+    form,
+  );
   const archiveSha256 = verifyArchive(archivePath, expected);
   assertPayloadEntryNames(archivePath, target);
   mkdirSync(outDir, { recursive: true });
-  const workRoot = mkdtempSync(join(outDir, ".standalone-work-"));
+  const workRoot = mkdtempSync(join(outDir, `.${form}-work-`));
   try {
-    const { packageRoot, packageVersion } = assemblePackage({
+    const { packageRoot, packageVersion } = assemble({
       archivePath,
       target,
       workRoot,
       archiveSha256,
       configBytes,
     });
-    const outputPath = join(outDir, archiveName(target, configBytes !== undefined));
+    const provisioned = configBytes !== undefined;
+    const outputPath = join(outDir, folderPackageArchiveName(target, form, provisioned));
     writeZipArchiveFromDirectory(packageRoot, outputPath, {
       rootName: PACKAGE_ROOT_NAME,
       requireRegularEntries: true,
     });
     const outputSha256 = sha256File(outputPath);
-    writeFileSync(`${outputPath}.sha256`, `${outputSha256}  ${basename(outputPath)}\n`);
+    writeFileSync(`${outputPath}.sha256`, folderChecksumText(outputSha256, basename(outputPath)));
     const folder = keptFolder === undefined ? undefined : publishFolder(packageRoot, keptFolder);
-    return {
-      target,
-      packageVersion,
-      outputPath,
-      outputSha256,
-      folder,
-      provisioned: configBytes !== undefined,
-    };
+    return { target, packageVersion, outputPath, outputSha256, folder, provisioned };
   } finally {
     rmSync(workRoot, { recursive: true, force: true });
   }
 }
 
-function report(result) {
-  console.log(`PASS standalone package ${result.target} (Keiko ${result.packageVersion})`);
+/** Builds the standalone package and returns what was written. */
+export function buildStandalonePackage(options) {
+  return buildFolderPackage(options, "standalone", assemblePackage);
+}
+
+function reportFolderPackage(form, result) {
+  console.log(`PASS ${form} package ${result.target} (Keiko ${result.packageVersion})`);
   console.log(`  archive: ${result.outputPath}`);
   console.log(`  sha256:  ${result.outputSha256}`);
   if (result.folder !== undefined) console.log(`  folder:  ${result.folder}`);
@@ -471,21 +473,30 @@ function report(result) {
   }
 }
 
-function main(argv) {
+/**
+ * The command line every folder form shares: `--help` prints `usage`, a refused build prints one
+ * FAIL line under `command` and exits 1, any other error is thrown.
+ */
+export function runFolderPackageCli(argv, { form, command, usage, build }) {
   if (argv.includes("--help") || argv.includes("-h")) {
-    console.log(USAGE);
+    console.log(usage);
     return 0;
   }
   try {
-    report(buildStandalonePackage(parseStandaloneArgs(argv)));
+    reportFolderPackage(form, build(parseStandaloneArgs(argv)));
     return 0;
   } catch (error) {
     if (!(error instanceof StandaloneBuildError)) throw error;
-    console.error(`FAIL build-standalone-package: ${error.message}`);
+    console.error(`FAIL ${command}: ${error.message}`);
     return 1;
   }
 }
 
 if (isMainModule(import.meta.url)) {
-  process.exitCode = main(process.argv.slice(2));
+  process.exitCode = runFolderPackageCli(process.argv.slice(2), {
+    form: "standalone",
+    command: "build-standalone-package",
+    usage: USAGE,
+    build: buildStandalonePackage,
+  });
 }

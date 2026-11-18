@@ -163,7 +163,7 @@ describe("an npm package", () => {
       lockfileSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
       provisionedConfig: false,
     });
-    expect(result.outputPath.endsWith("keiko-macos-arm64-npm.zip")).toBe(true);
+    expect(result.outputPath.endsWith("keiko-macos-arm64.npm.zip")).toBe(true);
   });
 
   it("keeps the start files, the access step and Node.js executable after extraction", () => {
@@ -204,7 +204,7 @@ describe("an npm package", () => {
     const extracted = join(root, "extracted");
     extractZipArchiveEntries(result.outputPath, extracted);
 
-    expect(result.outputPath.endsWith("keiko-windows-x64-npm-team.zip")).toBe(true);
+    expect(result.outputPath.endsWith("keiko-windows-x64.npm-team.zip")).toBe(true);
     expect(result.provisioned).toBe(true);
     expect(statSync(join(extracted, "Keiko", "keiko.config.json")).mode & 0o777).toBe(0o600);
   });

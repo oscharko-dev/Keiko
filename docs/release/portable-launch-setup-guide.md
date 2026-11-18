@@ -51,6 +51,10 @@ Users who need the archive-first fallback may still download, extract, and open
 lifecycle. Reopening setup validates and launches an existing managed installation without
 replacing it. Governed in-app update remains the upgrade path.
 
+For workplaces that may not install anything, the release also carries the
+[standalone folder package](standalone-folder-package.md#download-from-a-release) of each desktop
+target (`keiko-<target>.standalone.zip`). It is a download for people, not an update input.
+
 macOS arm64 and macOS x64 have the same release-blocking importance. A release is not
 portable-complete when either macOS architecture is missing or not covered by the same digest,
 provenance, release-trust, and launch/setup verification.

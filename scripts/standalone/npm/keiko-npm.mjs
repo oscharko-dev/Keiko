@@ -60,6 +60,8 @@ export function npmCacheDir(env, home = homedir()) {
 }
 
 // --ignore-scripts: Keiko needs no install script, and none of its dependencies may run one here.
+// The cache and the log are set on the command line, which no npm_config_* variable and no .npmrc
+// overrides: npm writes nothing outside the folder and Keiko's data folder.
 export function installArgs(npmCli, cacheDir) {
   return [
     npmCli,
@@ -70,6 +72,8 @@ export function installArgs(npmCli, cacheDir) {
     "--no-update-notifier",
     "--cache",
     cacheDir,
+    "--logs-dir",
+    join(cacheDir, "_logs"),
   ];
 }
 
@@ -223,11 +227,18 @@ const ERASE = new Set(["\u007f", "\b"]);
 const CANCEL = "\u0003";
 const ESCAPE = "\u001b";
 
-// ESC [ parameters final-byte: an arrow, Home or Delete key, never part of a token.
+// ESC [ parameters final-byte (CSI) or ESC O final-byte (SS3): an arrow, Home or Delete key, never
+// part of a token. Returns the next state, or undefined when the character is not part of a key:
+// after a lone ESC (the Escape key itself) a character is typed as usual.
 function escapeState(state, character) {
-  if (state === "escape") return character === "[" ? "sequence" : "none";
+  if (state === "escape") {
+    if (character === "[") return "csi";
+    if (character === "O") return "ss3";
+    return character === ESCAPE ? "escape" : undefined;
+  }
+  if (state === "ss3") return "none";
   const code = character.codePointAt(0);
-  return code >= 0x40 && code <= 0x7e ? "none" : "sequence";
+  return code >= 0x40 && code <= 0x7e ? "none" : "csi";
 }
 
 function typeCharacter(token, character) {
@@ -235,18 +246,25 @@ function typeCharacter(token, character) {
   else if (character.codePointAt(0) >= 0x20) token.push(character);
 }
 
-/** Applies one chunk of raw terminal input to the token typed so far. */
-export function tokenInput(value, chunk) {
+/**
+ * Applies one chunk of raw terminal input to the token typed so far. A terminal may hand one key
+ * over in two reads, so `escape` carries the state of an unfinished key into the next chunk.
+ */
+export function tokenInput(value, chunk, escape = "none") {
   const token = [...value];
-  let escape = "none";
+  let state = escape;
   for (const character of chunk) {
-    if (escape !== "none") escape = escapeState(escape, character);
-    else if (ENTER.has(character)) return { value: token.join(""), end: "enter" };
-    else if (character === CANCEL) return { value: "", end: "cancel" };
-    else if (character === ESCAPE) escape = "escape";
-    else typeCharacter(token, character);
+    const next = state === "none" ? undefined : escapeState(state, character);
+    if (next !== undefined) state = next;
+    else if (ENTER.has(character)) return { value: token.join(""), end: "enter", escape: "none" };
+    else if (character === CANCEL) return { value: "", end: "cancel", escape: "none" };
+    else if (character === ESCAPE) state = "escape";
+    else {
+      state = "none";
+      typeCharacter(token, character);
+    }
   }
-  return { value: token.join(""), end: undefined };
+  return { value: token.join(""), end: undefined, escape: state };
 }
 
 // The token is typed or pasted without being shown. Enter ends it, Ctrl+C cancels.
@@ -260,6 +278,7 @@ function readHidden(prompt) {
   stdout.write(prompt);
   return new Promise((resolveToken, rejectToken) => {
     let value = "";
+    let escape = "none";
     const finish = (error) => {
       stdin.setRawMode(false);
       stdin.pause();
@@ -269,8 +288,9 @@ function readHidden(prompt) {
       else rejectToken(error);
     };
     const onData = (chunk) => {
-      const step = tokenInput(value, chunk);
+      const step = tokenInput(value, chunk, escape);
       value = step.value;
+      escape = step.escape;
       if (step.end === "enter") finish();
       else if (step.end === "cancel") finish(new Error("cancelled / abgebrochen"));
     };

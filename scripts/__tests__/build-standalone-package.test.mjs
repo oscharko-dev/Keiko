@@ -19,17 +19,12 @@ import {
   parseStandaloneArgs,
 } from "../build-standalone-package.mjs";
 import { sha256File } from "../lib/digest.mjs";
-import {
-  extractZipArchiveEntries,
-  readZipArchiveEntries,
-  writeZipArchiveEntries,
-} from "../lib/zip-archive.mjs";
+import { extractZipArchiveEntries, readZipArchiveEntries } from "../lib/zip-archive.mjs";
+import { payloadRecords, portableArchive } from "./support/portable-payload-fixture.mjs";
 
 // A standalone package is the portable payload, byte for byte, plus start/stop files and a README
 // (ADR-0121 D9). These tests build real packages from small real archives and read the result back.
 
-const EXECUTABLE = 0o100755;
-const REGULAR = 0o100644;
 const tempRoots = [];
 
 afterEach(() => {
@@ -40,47 +35,6 @@ function tempRoot() {
   const root = mkdtempSync(join(tmpdir(), "keiko-standalone-package-"));
   tempRoots.push(root);
   return root;
-}
-
-function setupManifest(target, overrides = {}) {
-  return `${JSON.stringify({
-    schemaVersion: 1,
-    platformTarget: target,
-    packageName: "@oscharko-dev/keiko",
-    packageVersion: "1.2.3",
-    stable: true,
-    ...overrides,
-  })}\n`;
-}
-
-function payloadRecords(target, manifestOverrides = {}) {
-  if (target === "windows-x64") {
-    return [
-      { name: "Keiko/Keiko.exe", data: "launcher", mode: REGULAR },
-      {
-        name: "Keiko/.portable/setup-manifest.json",
-        data: setupManifest(target, manifestOverrides),
-      },
-      { name: "Keiko/app/dist/cli/index.js", data: "cli" },
-      { name: "Keiko/runtime/node/node.exe", data: "node" },
-    ];
-  }
-  const resources = "Keiko/Keiko.app/Contents/Resources";
-  return [
-    { name: "Keiko/Keiko.app/Contents/MacOS/Keiko", data: "launcher", mode: EXECUTABLE },
-    {
-      name: `${resources}/.portable/setup-manifest.json`,
-      data: setupManifest(target, manifestOverrides),
-    },
-    { name: `${resources}/app/dist/cli/index.js`, data: "cli" },
-    { name: `${resources}/runtime/node/bin/node`, data: "node", mode: EXECUTABLE },
-  ];
-}
-
-function portableArchive(root, target, records = payloadRecords(target)) {
-  const archive = join(root, `keiko-${target}.zip`);
-  writeZipArchiveEntries(archive, records);
-  return archive;
 }
 
 function build(target, overrides = {}) {
@@ -175,11 +129,11 @@ describe("a standalone package", () => {
     const { outDir, result } = build("windows-x64");
 
     expect(readFileSync(`${result.outputPath}.sha256`, "utf8")).toBe(
-      `${sha256File(result.outputPath)}  keiko-windows-x64-standalone.zip\n`,
+      `${sha256File(result.outputPath)}  keiko-windows-x64.standalone.zip\n`,
     );
     expect(readdirSync(outDir).sort()).toEqual([
-      "keiko-windows-x64-standalone.zip",
-      "keiko-windows-x64-standalone.zip.sha256",
+      "keiko-windows-x64.standalone.zip",
+      "keiko-windows-x64.standalone.zip.sha256",
     ]);
   });
 
@@ -212,7 +166,7 @@ describe("an administrator's package", () => {
     const { result } = build("macos-arm64", { options: { config: configFile(root, content) } });
     const built = entriesByName(result.outputPath);
 
-    expect(result.outputPath.endsWith("keiko-macos-arm64-standalone-team.zip")).toBe(true);
+    expect(result.outputPath.endsWith("keiko-macos-arm64.standalone-team.zip")).toBe(true);
     expect(result.provisioned).toBe(true);
     expect(built.get("Keiko/keiko.config.json")).toBe(content);
     expect(JSON.parse(built.get("Keiko/system/standalone.json")).provisionedConfig).toBe(true);

@@ -50,6 +50,7 @@ import {
   portableSetupCompanionRecord,
 } from "./lib/portable-setup-companion.mjs";
 import { PORTABLE_EVALUATION_MANIFEST_ASSET_NAME } from "./lib/portable-evaluation-manifest.mjs";
+import { FIRST_CLASS_ARCHIVE_NAME, folderPackageUploads } from "./lib/folder-package-release.mjs";
 import { provenancePublishArgs, releaseImpactChildEnv } from "./lib/npm-publish-preflight.mjs";
 import {
   jsonFromCommand,
@@ -653,6 +654,28 @@ function loadPortableAssets(rootManifest, options) {
     rootManifest,
     qualification,
   );
+}
+
+// The standalone folder packages ride with the archives they were built from (ADR-0121 D9): a
+// bundle that carries archives carries them too, and they are checked here, before anything is
+// published. A missing or foreign package refuses the publish.
+function loadFolderPackages(rootManifest, options, portableAssets) {
+  if (portableAssets.length === 0) return [];
+  const archives = new Map(
+    portableAssets.map((asset) => [
+      asset.platformTarget,
+      { assetName: asset.archiveAssetName, sha256: asset.manifest.artifact.sha256 },
+    ]),
+  );
+  const { failures, uploads } = folderPackageUploads({
+    bundleRoot: dirname(resolve(options.portableAssetsManifest)),
+    version: rootManifest.version,
+    archives,
+  });
+  if (failures.length > 0) {
+    fail(`folder package validation failed:\n  - ${failures.join("\n  - ")}`);
+  }
+  return uploads;
 }
 
 function requiredPortableQualification(rootManifest) {
@@ -1340,7 +1363,7 @@ function portablePublisher() {
   };
 }
 
-function publishPortableReleaseAssets(options, assets, releaseInfo) {
+function publishPortableReleaseAssets(options, assets, releaseInfo, folderPackages) {
   if (assets.length === 0) return;
   if (!portableUploadEnabled(options)) {
     console.log("release-publish: portable assets validated; upload skipped.");
@@ -1350,7 +1373,7 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
   const evidenceUpload = preparePortableEvidenceUploadRoot();
   try {
     const publisher = portablePublisher();
-    const archiveUpload = portableArchiveUploadFiles(assets);
+    const archiveUpload = portableArchiveUploadFiles(assets, folderPackages);
     uploadIntoDraft(publisher, releaseInfo, archiveUpload.paths);
     const archiveSnapshot = githubReleaseSnapshot(releaseInfo);
     refuseIncompletePublishedRelease(
@@ -1418,7 +1441,7 @@ function preparePortableEvidenceUploadRoot() {
   return { root };
 }
 
-function portableArchiveUploadFiles(assets) {
+function portableArchiveUploadFiles(assets, folderPackages) {
   const paths = [];
   const names = new Set();
   const expected = [];
@@ -1439,6 +1462,16 @@ function portableArchiveUploadFiles(assets) {
         firstClassArchive: false,
       });
     }
+  }
+  // The folder packages go into the same draft, so the release is published with them or not at all.
+  for (const upload of folderPackages) {
+    addUploadPath(upload.path, upload.assetName, names, paths);
+    expected.push({
+      assetName: upload.assetName,
+      expectedSha256: upload.sha256,
+      expectedSize: upload.size,
+      firstClassArchive: false,
+    });
   }
   return { expected, paths };
 }
@@ -1630,7 +1663,7 @@ function verifyFirstClassArchiveSet(remoteAssets, failures) {
   const expected = new Set(PORTABLE_TARGETS.map((target) => target.assetName));
   const actual = remoteAssets
     .map((asset) => asset.name)
-    .filter((name) => /^keiko-[a-z0-9-]+\.zip$/u.test(name));
+    .filter((name) => FIRST_CLASS_ARCHIVE_NAME.test(name));
   const actualSet = new Set(actual);
   if (
     actual.length !== expected.size ||
@@ -1963,6 +1996,7 @@ run("npm", ["run", options.planOnly ? "check:release-impact" : "check:release-im
 });
 // Assets first: the notes may only advertise portable downloads this release actually carries.
 const portableAssets = loadPortableAssets(rootManifest, options);
+const folderPackages = loadFolderPackages(rootManifest, options, portableAssets);
 const githubReleaseNotes = releaseNotes(rootManifest, options);
 
 if (options.planOnly) {
@@ -2009,7 +2043,7 @@ try {
       ? ensurePortableRelease(rootPackage, options, githubReleaseNotes)
       : undefined;
   if (releaseInfo !== undefined) {
-    publishPortableReleaseAssets(options, portableAssets, releaseInfo);
+    publishPortableReleaseAssets(options, portableAssets, releaseInfo, folderPackages);
     assertUploadedPortableSetComplete(releaseInfo);
   }
   for (const pkg of workspacePackages) {
@@ -2025,7 +2059,7 @@ try {
   runRegistrySmoke(rootPackage, options, npmEnv);
   if (releaseInfo === undefined) {
     const finalReleaseInfo = ensureGithubRelease(rootPackage, options, githubReleaseNotes);
-    publishPortableReleaseAssets(options, portableAssets, finalReleaseInfo);
+    publishPortableReleaseAssets(options, portableAssets, finalReleaseInfo, folderPackages);
   }
   if (options.tag === "latest" && !options.dryRun) {
     recordAndVerifyReleaseAlignment(rootPackage, options, npmEnv);

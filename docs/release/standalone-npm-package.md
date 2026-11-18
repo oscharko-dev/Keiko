@@ -45,7 +45,8 @@ The lockfile is resolved against the public registry; an `.npmrc` that names ano
 makes npm load the same packages from there (npm replaces the registry host and keeps every
 checksum). Without one, npm follows the person's own npm configuration, if there is one, and
 otherwise the public registry. npm's cache and its log lie in `.keiko-standalone/npm-cache` during
-the installation; a successful installation removes them, a failed one keeps the log. A later start
+the installation, set on npm's command line so that no `npm_config_*` variable moves them; a
+successful installation removes them, a failed one keeps the log. A later start
 installs again only when the lockfile changed or an earlier installation did not finish. Keiko then
 runs `keiko start` with its data in `.keiko-standalone` in the person's user folder, the same data
 folder as the folder package, so replacing the folder keeps chats, settings and credentials.
@@ -63,11 +64,11 @@ applies unchanged: remove the mark from the ZIP before extracting it, or distrib
 through an internal share.
 
 ```bash
-xattr -d com.apple.quarantine keiko-macos-arm64-npm.zip
+xattr -d com.apple.quarantine keiko-macos-arm64.npm.zip
 ```
 
 ```powershell
-Unblock-File .\keiko-windows-x64-npm.zip
+Unblock-File .\keiko-windows-x64.npm.zip
 ```
 
 ## What This Form Does Not Do
@@ -79,11 +80,17 @@ Unblock-File .\keiko-windows-x64-npm.zip
   the computer, the same one a global npm installation uses.
 - **No in-app update.** A new version arrives as a new folder.
 - **One Keiko per computer account,** on loopback port 1983, as for the folder package.
+- **No release asset.** A release carries the
+  [standalone folder packages](standalone-folder-package.md#download-from-a-release), not this
+  one. Its lockfile needs the integrity the npm registry reports for the released version. npm
+  learns that version only after the release publisher has published the immutable GitHub
+  release, so this package is built from the published release.
 
 ## Build A Package
 
 The builder takes the Node.js runtime and the Keiko version from a portable release archive and
-resolves the lockfile against the public npm registry.
+resolves the lockfile against the public npm registry. Build it once the release is published and
+npm reports its version.
 
 ```bash
 gh release download v<version> --repo oscharko-dev/Keiko \
@@ -96,12 +103,12 @@ node scripts/build-standalone-npm-package.mjs \
   --out-dir out
 ```
 
-The result is `out/keiko-windows-x64-npm.zip` and its `.sha256`. An unverified archive is refused,
+The result is `out/keiko-windows-x64.npm.zip` and its `.sha256`. An unverified archive is refused,
 and so is a lockfile that does not install exactly that Keiko version or names a downloaded package
 without a sha512 integrity from the public registry. The build sees no npm configuration of the person who
 runs it. `--config` and `--api-key-env` work as for the
 [folder package](standalone-folder-package.md#prepare-a-package-for-a-team) and write
-`keiko-<target>-npm-team.zip`.
+`keiko-<target>.npm-team.zip`.
 
 ## Prepare A Package For A Team
 
@@ -140,8 +147,8 @@ A new version arrives as a new folder: stop Keiko, delete the old folder, use th
 ## Verify A Package
 
 ```bash
-shasum -a 256 -c keiko-windows-x64-npm.zip.sha256
-unzip -p keiko-windows-x64-npm.zip Keiko/system/npm-package.json
+shasum -a 256 -c keiko-windows-x64.npm.zip.sha256
+unzip -p keiko-windows-x64.npm.zip Keiko/system/npm-package.json
 ```
 
 `npm-package.json` names the target, the Keiko version, the portable archive the Node.js runtime

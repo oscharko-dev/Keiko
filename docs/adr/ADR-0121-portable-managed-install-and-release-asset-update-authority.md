@@ -11,7 +11,8 @@ community-tier asset without a parity commitment for new operating-system featur
 ([ADR-0183](ADR-0183-linux-desktop-community-tier.md), 2026-11-12). D9 adds the standalone folder
 package, an in-place delivery form of the same payload (2026-11-17), and the npm folder package,
 which carries the payload's Node.js runtime and installs Keiko into the folder from an npm
-registry at the first start (2026-11-18).
+registry at the first start (2026-11-18). From 2026-11-18 every stable release also carries the
+generic standalone folder package of each desktop target as a release asset (D9).
 
 ## Context
 
@@ -71,6 +72,10 @@ Authenticode signature; the
 Windows ZIP remains the manual and troubleshooting fallback. The setup companion embeds the exact
 reviewed `windows-x64` archive and delegates installation and launch to the same portable lifecycle.
 It does not create another platform target, payload authority, or update channel.
+
+Stable releases also carry the standalone folder packages of D9 (`keiko-<target>.standalone.zip`).
+They are downloads for people, not update inputs, and their names stay outside the archive name
+pattern that updaters read.
 
 The four platform targets are release-blocking as a set, and the Windows setup companion is
 release-blocking for `windows-x64`. A stable release is not portable-complete when a required
@@ -1150,7 +1155,7 @@ there. On macOS it copies Keiko to `/Applications`, which a standard user cannot
 it adds a per-user program folder and a Start Menu entry. D9 adds a delivery form for those
 endpoints. It does not replace D1 to D8, and the npm path stays the primary developer path.
 
-**Form.** A standalone folder package is one folder, shipped as `keiko-<target>-standalone.zip` for
+**Form.** A standalone folder package is one folder, shipped as `keiko-<target>.standalone.zip` for
 `macos-arm64`, `macos-x64` and `windows-x64` (ADR-0183 scopes new delivery forms to macOS and
 Windows):
 
@@ -1213,7 +1218,7 @@ and an error class, never a path or content. The file may carry a plaintext `api
 states its custody.
 
 **npm folder package.** Where an npm registry, often an internal mirror, is the approved way in, a
-second folder form ships without the program: `keiko-<target>-npm.zip`, built by
+second folder form ships without the program: `keiko-<target>.npm.zip`, built by
 `scripts/build-standalone-npm-package.mjs` from the same verified portable archive. It carries that
 archive's Node.js runtime with npm, moved unchanged to `system/node`, a `package.json` that pins
 `@oscharko-dev/keiko` to the archive's version, and a `package-lock.json` resolved against the
@@ -1224,8 +1229,9 @@ by its integrity). The first start runs `npm ci --ignore-scripts` in the folder,
 npm installs exactly those packages, checks every integrity and runs no install script; an `.npmrc`
 beside the start files names the organization's registry, and npm replaces the registry host while
 keeping every checksum. npm's cache and log live in the state directory, which the start creates
-owner-private as Keiko does, and a successful installation removes them; npm writes nothing else
-outside the folder. A marker holding the lockfile's SHA-256 skips the installation at later starts
+owner-private as Keiko does, and a successful installation removes them. The start sets both on
+npm's command line (`--cache`, `--logs-dir`), which no inherited `npm_config_*` variable and no
+`.npmrc` overrides, so npm writes nothing else outside the folder. A marker holding the lockfile's SHA-256 skips the installation at later starts
 until the lockfile changes. The start then runs `keiko start` with the same state directory,
 management declaration and provisioned configuration as the folder package. An administrator's
 access step (`system/Zugang speichern`) reads the configuration Gateway Setup saved, replaces each
@@ -1236,6 +1242,24 @@ and npm writes no download mark on what it installs; the ZIP itself takes the ma
 package, and the paragraph below applies to it unchanged. npm publishes no Windows coding-runtime
 package, so this form on Windows reports Coding as unavailable; on macOS npm installs the coding
 runtime package for the computer.
+
+**Release assets.** Every stable release carries the generic standalone folder package of each
+desktop target beside the four archives, as `keiko-<target>.standalone.zip` with its `.sha256`
+file. The stable-tag workflow builds them in its assemble job from the archives it has just
+assembled (`scripts/build-folder-release-assets.mjs`), checks each archive against its checksum
+evidence and attests the packages' build provenance with the archives. They carry no
+`keiko.config.json`. The publisher refuses a portable asset bundle without them, or with a package
+of another Keiko version, another archive, other bytes or another target set. It uploads them into
+the same draft as the archives, verifies GitHub's size and digest of each and downloads each back
+unauthenticated before it publishes the release, so the release is published with them or not at
+all. A folder package is a download for people, not an update candidate: it carries no Ed25519
+release-trust signature, and no updater reads it. Its name keeps a dot before the form on purpose.
+Every shipped updater requires the release assets that match `keiko-[a-z0-9-]+.zip` to be exactly
+the portable archives, so a hyphenated package name would stop every installed Keiko from
+updating to that release. The npm folder package is not a release asset. Its lockfile needs the
+integrity the npm registry reports for the released version, and npm learns that version only
+after the publisher has published the immutable GitHub release; the publisher keeps that order, so
+the npm folder package is built from the published release.
 
 **What this form does not do.** It does not bypass the operating system's download checks. A
 package that still carries the download mark (the macOS quarantine attribute, the Windows Mark of
@@ -1412,6 +1436,7 @@ Security review for implementation under this ADR must cover:
 | 1.3     | 2026-10-24 | The macOS application job declares the `Interactive` process type instead of `Background`, which throttled the app's runtime below its startup grant on a busy machine. |
 | 1.4     | 2026-11-17 | Added D9: the standalone folder package runs the portable payload in place, declares itself managed outside the app and can adopt an administrator-provisioned gateway configuration. |
 | 1.5     | 2026-11-18 | Amended D9 with the npm folder package: the release's Node.js runtime and a pinned, integrity-checked lockfile; Keiko is installed into the folder from the organization's npm registry at the first start. |
+| 1.6     | 2026-11-18 | Amended D1 and D9: stable releases carry the standalone folder packages as release assets, built and attested in the stable-tag run and published in the same draft as the archives. |
 
 ## Amendment history
 
@@ -1477,10 +1502,20 @@ Security review for implementation under this ADR must cover:
   system's download checks and D7 are not relaxed.
 - **2026-11-18 — D9, npm folder package:** Added the second folder form for workplaces that reach
   an npm registry but may not install software. It carries the portable archive's Node.js runtime
-  and a lockfile whose every package has a public-registry sha512 integrity, installs Keiko into
+  and a lockfile in which every package npm downloads has a public-registry sha512 integrity
+  (packages bundled inside Keiko's own tarball are covered by its integrity), installs Keiko into
   the folder with `npm ci --ignore-scripts` at the first start and then starts it exactly like the
   folder package. Windows Coding stays unavailable in this form, because npm publishes no Windows
   coding-runtime package. The folder package and D1 to D8 are unchanged.
+- **2026-11-18 — D1 and D9, release assets:** Stable releases carry the generic standalone folder
+  package of `macos-arm64`, `macos-x64` and `windows-x64` with its `.sha256` file. The stable-tag
+  run builds them from the archives it assembled and attests them; the publisher refuses a bundle
+  without them and publishes them in the same draft as the archives. The names
+  (`keiko-<target>.standalone.zip`, `keiko-<target>.npm.zip`) keep a dot before the form, because
+  every shipped updater requires the `keiko-*.zip` assets with no dot before `.zip` to be exactly
+  the archives.
+  The npm folder package stays a build from the published release: npm learns the version only
+  after the GitHub release is published.
 - **2026-11-17 — One-step Windows setup:** Amended D5. The relaunch that completes an update, the
   first launch and the manual re-download fallback bring the Windows `KeikoRuntimeGateway` service
   to the new helper after the healthy start (ADR-0043 D19), at most one UAC prompt per helper pin.

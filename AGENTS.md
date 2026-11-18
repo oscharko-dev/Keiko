@@ -140,7 +140,11 @@ This shapes the product _and_ how you work on it:
   folder form perform or suggest an installation, and never weaken the operating system's download
   checks to make a package start: an administrator removes the download mark before internal
   distribution. A team's `keiko.config.json` beside the start files is an administrator-owned
-  input; Keiko adopts it and seals its key, and never writes to it (ADR-0046 D5).
+  input; Keiko adopts it and seals its key, and never writes to it (ADR-0046 D5). Every stable
+  release carries the generic package of each desktop target as `keiko-<target>.standalone.zip`,
+  built and attested in the stable-tag run (`scripts/build-folder-release-assets.mjs`). A folder
+  package's name keeps the dot before its form: shipped updaters read every dot-free `keiko-*.zip`
+  release asset as an update archive and refuse a release with one too many.
 - **npm folder package (owner decision, 2026-11-18):** where an npm registry, often an internal
   mirror, is the approved way in, the same folder form ships without the program: the release's
   Node.js runtime, a `package.json` that pins `@oscharko-dev/keiko` exactly and a lockfile with a

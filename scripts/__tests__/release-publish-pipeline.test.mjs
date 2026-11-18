@@ -64,6 +64,14 @@ import {
 } from "../portable-runtime.mjs";
 import { readZipArchiveUncompressedSize, writeZipArchiveEntries } from "../lib/zip-archive.mjs";
 import {
+  FOLDER_PACKAGES_DIRECTORY,
+  FOLDER_PACKAGES_MANIFEST,
+  FOLDER_RELEASE_TARGETS,
+  folderChecksumText,
+  folderPackageArchiveName,
+  folderPackagesManifest,
+} from "../lib/folder-package-release.mjs";
+import {
   buildPortableEvaluationManifest,
   PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
   PORTABLE_EVALUATION_TARGET_NAMES,
@@ -948,7 +956,40 @@ function writePortableAssetsFixture(root, options = {}) {
   const bundle = { schemaVersion: 1, artifacts };
   options.mutateBundle?.(bundle);
   writeFileSync(manifestPath, JSON.stringify(bundle, null, 2) + "\n");
+  if (options.folderPackages !== false) writeFolderPackagesFixture(root, options);
   return manifestPath;
+}
+
+// The folder packages the stable-tag build writes into the bundle (scripts/build-folder-release-
+// assets.mjs): one small package per desktop target, bound to that target's archive.
+function writeFolderPackagesFixture(root, options) {
+  const directory = join(root, FOLDER_PACKAGES_DIRECTORY);
+  mkdirSync(directory);
+  const packages = FOLDER_RELEASE_TARGETS.map((platformTarget) => {
+    const target = PORTABLE_TARGETS.find((entry) => entry.platformTarget === platformTarget);
+    const archivePath = join(root, platformTarget, target.assetName);
+    const assetName = folderPackageArchiveName(platformTarget, "standalone");
+    const zipPath = join(directory, assetName);
+    writeZipArchiveEntries(zipPath, [
+      { name: "Keiko/README.txt", data: Buffer.from(`folder package for ${platformTarget}\n`) },
+    ]);
+    const sha256 = digestFor(readFileSync(zipPath));
+    writeFileSync(`${zipPath}.sha256`, folderChecksumText(sha256, assetName));
+    return {
+      platformTarget,
+      form: "standalone",
+      assetName,
+      sha256,
+      sizeBytes: statSync(zipPath).size,
+      sourceArchive: { assetName: target.assetName, sha256: digestFor(readFileSync(archivePath)) },
+    };
+  });
+  const manifest = folderPackagesManifest(RELEASE_VERSION, packages);
+  options.mutateFolderPackages?.(manifest, directory);
+  writeFileSync(
+    join(directory, FOLDER_PACKAGES_MANIFEST),
+    JSON.stringify(manifest, null, 2) + "\n",
+  );
 }
 
 function writeNativeHelperFixture(targetRoot, target) {
@@ -1979,6 +2020,61 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         false,
       );
       expect(lastRun.stdout).toContain("portable assets uploaded and verified");
+      // The folder packages and their .sha256 files go into the same draft, before publication,
+      // and are downloaded back and compared like every other asset.
+      const uploads = lastRun.calls.slice(0, publish).filter((l) => l.includes('"upload"'));
+      for (const target of FOLDER_RELEASE_TARGETS) {
+        const name = folderPackageArchiveName(target, "standalone");
+        expect(uploads.some((l) => l.includes(`/${name}"`))).toBe(true);
+        expect(uploads.some((l) => l.includes(`/${name}.sha256"`))).toBe(true);
+        expect(lastRun.calls.some((l) => l.startsWith("curl [") && l.endsWith(`/${name}"]`))).toBe(
+          true,
+        );
+      }
+    });
+
+    it.each([
+      ["no folder packages", { folderPackages: false }, "carries no folder packages"],
+      [
+        "a folder package built from another archive",
+        {
+          mutateFolderPackages: (manifest) => {
+            manifest.packages[0].sourceArchive.sha256 = "0".repeat(64);
+          },
+        },
+        "must be built from this release's archive",
+      ],
+      [
+        "a folder package whose bytes changed",
+        {
+          mutateFolderPackages: (manifest, directory) => {
+            writeFileSync(join(directory, manifest.packages[1].assetName), "other bytes");
+          },
+        },
+        "does not have the digest and size its manifest declares",
+      ],
+      [
+        "a folder package missing a target",
+        {
+          mutateFolderPackages: (manifest) => {
+            manifest.packages = manifest.packages.slice(0, -1);
+          },
+        },
+        "the folder package of windows-x64 is missing",
+      ],
+    ])("refuses a bundle with %s before the release or npm publication", (_, options, message) => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { immutableReleases: true, published: false },
+        portableFixtureOptions: options,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("folder package validation failed");
+      expect(lastRun.stderr).toContain(message);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["api","--method","POST"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
     it("refuses to upload into a release that is already published without its downloads", () => {
@@ -1989,6 +2085,41 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain("an immutable release cannot be repaired");
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses a published release that carries the archives but not the folder packages", () => {
+      // A re-run after publication can only verify: nothing can add the folder packages to an
+      // immutable release, so a release published without them fails closed, naming only them.
+      const archivesOnly = [
+        ...PORTABLE_TARGETS.map((target) => target.assetName),
+        WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+      ].map((name, index) => ({
+        id: 200000 + index,
+        name,
+        size: 1,
+        digest: `sha256:${"0".repeat(64)}`,
+        content: "",
+      }));
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: {
+          immutableReleases: true,
+          published: false,
+          releasePublished: true,
+          uploadedAssets: archivesOnly,
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("an immutable release cannot be repaired");
+      for (const target of FOLDER_RELEASE_TARGETS) {
+        const name = folderPackageArchiveName(target, "standalone");
+        expect(lastRun.stderr).toContain(`${name},`);
+        expect(lastRun.stderr).toContain(`${name}.sha256`);
+      }
+      expect(lastRun.stderr).not.toMatch(/lacks[^\n]*keiko-macos-arm64\.zip/u);
       expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });

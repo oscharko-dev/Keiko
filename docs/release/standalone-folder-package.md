@@ -22,6 +22,36 @@ Keiko from that registry at the first start.
 Targets: `macos-arm64`, `macos-x64` and `windows-x64`
 ([ADR-0183](../adr/ADR-0183-linux-desktop-community-tier.md)).
 
+## Download From A Release
+
+From Keiko 1.5.3 on, every stable release carries the generic package of each target beside the
+portable archives, each with a `.sha256` file:
+
+| Target        | Release asset                      |
+| ------------- | ---------------------------------- |
+| `macos-arm64` | `keiko-macos-arm64.standalone.zip` |
+| `macos-x64`   | `keiko-macos-x64.standalone.zip`   |
+| `windows-x64` | `keiko-windows-x64.standalone.zip` |
+
+A release package holds no gateway access; a team's access is prepared as
+[described below](#prepare-a-package-for-a-team). The release build makes the packages from the
+archives it publishes in the same run and attests their build provenance like the archives. The
+release is published only after GitHub serves every package with the digest it was built with.
+
+```console
+TAG=v<version>
+SIGNER=oscharko-dev/Keiko/.github/workflows/portable-assets.yml
+gh release download "$TAG" --repo oscharko-dev/Keiko --pattern 'keiko-windows-x64.standalone.zip*'
+shasum -a 256 -c keiko-windows-x64.standalone.zip.sha256
+gh attestation verify keiko-windows-x64.standalone.zip --repo oscharko-dev/Keiko --signer-workflow "$SIGNER" --source-ref "refs/tags/$TAG"
+```
+
+A browser download carries the operating system's [download mark](#the-download-mark).
+
+The name keeps a dot before `standalone`. A shipped Keiko reads every release asset named like
+`keiko-<name>.zip` as an update archive. A hyphenated package name would therefore stop every
+installed Keiko from updating to that release.
+
 ## What Is In The Folder
 
 ```text
@@ -56,7 +86,7 @@ node scripts/build-standalone-package.mjs \
   --out-dir out
 ```
 
-The result is `out/keiko-macos-arm64-standalone.zip` and its `.sha256`. The archive must match the
+The result is `out/keiko-macos-arm64.standalone.zip` and its `.sha256`. The archive must match the
 checksum the caller supplies (`--sha256sums` or `--sha256`); an unverified archive is refused. Build
 the macOS package on macOS or Linux, where file permissions exist; the Windows package can be built
 anywhere.
@@ -85,7 +115,7 @@ sees a setup dialog.
    ```
 
    The builder replaces every sealed reference with the key from the named environment variable
-   and writes `out/keiko-windows-x64-standalone-team.zip`. Every provider in the file must name
+   and writes `out/keiko-windows-x64.standalone-team.zip`. Every provider in the file must name
    its `modelId` and `baseUrl`: a package cannot rely on another computer's environment. A configuration that still refers to a
    key sealed on your computer is refused: on another computer that reference names nothing.
 
@@ -131,11 +161,11 @@ If you downloaded a ready standalone archive with a browser, remove the mark fro
 before you extract it:
 
 ```bash
-xattr -d com.apple.quarantine keiko-macos-arm64-standalone.zip
+xattr -d com.apple.quarantine keiko-macos-arm64.standalone.zip
 ```
 
 ```powershell
-Unblock-File .\keiko-windows-x64-standalone.zip
+Unblock-File .\keiko-windows-x64.standalone.zip
 ```
 
 This does not bypass the operating system's check. An organization that allows only approved
@@ -174,8 +204,8 @@ A new version arrives as a new folder: stop Keiko, delete the old folder, use th
 ## Verify A Package
 
 ```bash
-shasum -a 256 -c keiko-macos-arm64-standalone.zip.sha256
-unzip -p keiko-macos-arm64-standalone.zip Keiko/system/standalone.json
+shasum -a 256 -c keiko-macos-arm64.standalone.zip.sha256
+unzip -p keiko-macos-arm64.standalone.zip Keiko/system/standalone.json
 ```
 
 `standalone.json` names the target, the Keiko version and the name and SHA-256 of the portable

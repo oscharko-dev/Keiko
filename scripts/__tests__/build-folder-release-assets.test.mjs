@@ -1,0 +1,182 @@
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  FolderReleaseBuildError,
+  buildFolderReleaseAssets,
+  parseFolderReleaseArgs,
+} from "../build-folder-release-assets.mjs";
+import { StandaloneBuildError } from "../build-standalone-package.mjs";
+import { sha256File } from "../lib/digest.mjs";
+import {
+  FOLDER_PACKAGES_DIRECTORY,
+  FOLDER_RELEASE_TARGETS,
+  folderPackageUploads,
+} from "../lib/folder-package-release.mjs";
+import { readZipArchiveEntries } from "../lib/zip-archive.mjs";
+import { portableArchive } from "./support/portable-payload-fixture.mjs";
+
+// The stable-tag build turns each desktop archive of the portable asset bundle into its standalone
+// folder package (ADR-0121 D9). These tests build from a small real bundle and hand the result to
+// the publisher's own check.
+
+const tempRoots = [];
+
+afterEach(() => {
+  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+// The layout scripts/assemble-portable-release-assets.mjs writes: artifacts/<target>/ with the
+// archive, its manifest and its checksum evidence, and portable-assets.json naming them.
+function portableBundle({ evidenceSha256 } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "keiko-folder-bundle-"));
+  tempRoots.push(root);
+  const artifacts = ["linux-x64", ...FOLDER_RELEASE_TARGETS].map((target) => {
+    const targetRoot = join(root, "artifacts", target);
+    mkdirSync(join(targetRoot, "manifest"), { recursive: true });
+    mkdirSync(join(targetRoot, "evidence"));
+    const archive = portableArchive(targetRoot, target);
+    const sha256 = sha256File(archive);
+    const manifest = {
+      artifact: { assetName: `keiko-${target}.zip`, sha256 },
+      evidence: { checksumsPath: "evidence/SHA256SUMS.txt" },
+    };
+    writeFileSync(join(targetRoot, "manifest", "portable-manifest.json"), JSON.stringify(manifest));
+    writeFileSync(
+      join(targetRoot, "evidence", "SHA256SUMS.txt"),
+      `${evidenceSha256 ?? sha256}  keiko-${target}.zip\n`,
+    );
+    return {
+      platformTarget: target,
+      archivePath: `artifacts/${target}/keiko-${target}.zip`,
+      manifestPath: `artifacts/${target}/manifest/portable-manifest.json`,
+      sha256,
+    };
+  });
+  writeFileSync(
+    join(root, "portable-assets.json"),
+    JSON.stringify({ schemaVersion: 1, artifacts }),
+  );
+  return { root, artifacts };
+}
+
+describe("the folder packages of a release", () => {
+  it("are built from the bundle's archives and pass the publisher's check", () => {
+    const { root, artifacts } = portableBundle();
+
+    const manifest = buildFolderReleaseAssets({ bundleRoot: root, version: "1.2.3" });
+
+    expect(manifest.packages.map((entry) => entry.assetName)).toEqual([
+      "keiko-macos-arm64.standalone.zip",
+      "keiko-macos-x64.standalone.zip",
+      "keiko-windows-x64.standalone.zip",
+    ]);
+    const archives = new Map(
+      artifacts.map((artifact) => [
+        artifact.platformTarget,
+        { assetName: `keiko-${artifact.platformTarget}.zip`, sha256: artifact.sha256 },
+      ]),
+    );
+    const checked = folderPackageUploads({ bundleRoot: root, version: "1.2.3", archives });
+    expect(checked.failures).toEqual([]);
+    expect(checked.uploads).toHaveLength(6);
+    // A generic package: the payload and the start files, never an access file.
+    const windows = join(root, FOLDER_PACKAGES_DIRECTORY, "keiko-windows-x64.standalone.zip");
+    const names = readZipArchiveEntries(windows).map((entry) => entry.name);
+    expect(names).toContain("Keiko/Start Keiko.cmd");
+    expect(names).toContain("Keiko/system/Keiko/Keiko.exe");
+    expect(names.some((name) => name.endsWith("keiko.config.json"))).toBe(false);
+  });
+
+  it("are built once: an existing folder is never replaced", () => {
+    const { root } = portableBundle();
+    mkdirSync(join(root, FOLDER_PACKAGES_DIRECTORY));
+
+    expect(() => buildFolderReleaseAssets({ bundleRoot: root, version: "1.2.3" })).toThrow(
+      FolderReleaseBuildError,
+    );
+  });
+
+  it("refuses an archive its checksum evidence does not bind", () => {
+    const { root } = portableBundle({ evidenceSha256: "0".repeat(64) });
+
+    expect(() => buildFolderReleaseAssets({ bundleRoot: root, version: "1.2.3" })).toThrow(
+      /checksum evidence of macos-arm64 does not match its manifest/u,
+    );
+  });
+
+  it("refuses archives of another Keiko version", () => {
+    const { root } = portableBundle();
+
+    expect(() => buildFolderReleaseAssets({ bundleRoot: root, version: "9.9.9" })).toThrow(
+      /holds Keiko 1\.2\.3, not 9\.9\.9/u,
+    );
+  });
+
+  it("refuses an archive outside the bundle", () => {
+    const { root } = portableBundle();
+    const bundlePath = join(root, "portable-assets.json");
+    const bundle = JSON.parse(readFileSync(bundlePath, "utf8"));
+    bundle.artifacts[1].archivePath = "../keiko-macos-arm64.zip";
+    writeFileSync(bundlePath, JSON.stringify(bundle));
+
+    expect(() => buildFolderReleaseAssets({ bundleRoot: root, version: "1.2.3" })).toThrow(
+      /macos-arm64 archivePath must stay inside the bundle/u,
+    );
+  });
+
+  it("refuses an entry that names no archive", () => {
+    const { root } = portableBundle();
+    const bundlePath = join(root, "portable-assets.json");
+    const bundle = JSON.parse(readFileSync(bundlePath, "utf8"));
+    delete bundle.artifacts[1].archivePath;
+    writeFileSync(bundlePath, JSON.stringify(bundle));
+
+    expect(() => buildFolderReleaseAssets({ bundleRoot: root, version: "1.2.3" })).toThrow(
+      /macos-arm64 archivePath is missing/u,
+    );
+  });
+
+  // The digest binds the bytes either way; the bundle is still read only as regular files, like
+  // the publisher reads the packages.
+  it("refuses an archive that is a link", () => {
+    const { root } = portableBundle();
+    const archive = join(root, "artifacts", "macos-x64", "keiko-macos-x64.zip");
+    renameSync(archive, join(root, "keiko-macos-x64.zip"));
+    symlinkSync(join(root, "keiko-macos-x64.zip"), archive);
+
+    expect(() => buildFolderReleaseAssets({ bundleRoot: root, version: "1.2.3" })).toThrow(
+      /macos-x64 archivePath must name a regular file in the bundle/u,
+    );
+  });
+
+  it("refuses an archive that is not the one its digest names", () => {
+    const { root } = portableBundle();
+    const archive = join(root, "artifacts", "macos-x64", "keiko-macos-x64.zip");
+    writeFileSync(archive, "not the archive");
+
+    expect(() => buildFolderReleaseAssets({ bundleRoot: root, version: "1.2.3" })).toThrow(
+      StandaloneBuildError,
+    );
+  });
+
+  it("reads exactly a bundle root and a version", () => {
+    expect(parseFolderReleaseArgs(["--bundle-root", "b", "--version", "1.2.3"])).toEqual({
+      bundleRoot: "b",
+      version: "1.2.3",
+    });
+    expect(() => parseFolderReleaseArgs(["--bundle-root", "b"])).toThrow(/--version is required/u);
+    expect(() => parseFolderReleaseArgs(["--other", "x"])).toThrow(/unknown argument --other/u);
+    expect(() => parseFolderReleaseArgs(["--version"])).toThrow(/--version needs a value/u);
+  });
+});

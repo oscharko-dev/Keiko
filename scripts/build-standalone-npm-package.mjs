@@ -41,17 +41,14 @@ import {
   STANDALONE_TARGETS,
   StandaloneBuildError,
   WINDOWS_MAX_ENTRY_NAME_LENGTH,
-  assertPayloadEntryNames,
+  buildFolderPackage,
   inspectPayload,
-  parseStandaloneArgs,
-  publishFolder,
-  resolveBuildInput,
-  verifyArchive,
+  runFolderPackageCli,
   writePackageFile,
 } from "./build-standalone-package.mjs";
 import { sha256File } from "./lib/digest.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
-import { extractZipArchiveEntries, writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
+import { extractZipArchiveEntries } from "./lib/zip-archive.mjs";
 
 const TEMPLATE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "standalone", "npm");
 const PACKAGE_NAME = "@oscharko-dev/keiko";
@@ -288,77 +285,19 @@ function assemblePackage(input) {
   return { packageRoot, packageVersion };
 }
 
-function archiveName(target, provisioned) {
-  return provisioned ? `keiko-${target}-npm-team.zip` : `keiko-${target}-npm.zip`;
-}
-
 /** Builds the npm package and returns what was written. */
 export function buildNpmPackage(options) {
-  const { target, archivePath, outDir, expected, configBytes, keptFolder } = resolveBuildInput(
-    options,
-    "npm",
+  const createLockfile = options.createLockfile ?? resolveLockfile;
+  return buildFolderPackage(options, "npm", (input) =>
+    assemblePackage({ ...input, createLockfile }),
   );
-  const archiveSha256 = verifyArchive(archivePath, expected);
-  assertPayloadEntryNames(archivePath, target);
-  mkdirSync(outDir, { recursive: true });
-  const workRoot = mkdtempSync(join(outDir, ".npm-package-work-"));
-  try {
-    const { packageRoot, packageVersion } = assemblePackage({
-      archivePath,
-      target,
-      workRoot,
-      archiveSha256,
-      configBytes,
-      createLockfile: options.createLockfile ?? resolveLockfile,
-    });
-    const outputPath = join(outDir, archiveName(target, configBytes !== undefined));
-    writeZipArchiveFromDirectory(packageRoot, outputPath, {
-      rootName: PACKAGE_ROOT_NAME,
-      requireRegularEntries: true,
-    });
-    const outputSha256 = sha256File(outputPath);
-    writeFileSync(`${outputPath}.sha256`, `${outputSha256}  ${basename(outputPath)}\n`);
-    const folder = keptFolder === undefined ? undefined : publishFolder(packageRoot, keptFolder);
-    return {
-      target,
-      packageVersion,
-      outputPath,
-      outputSha256,
-      folder,
-      provisioned: configBytes !== undefined,
-    };
-  } finally {
-    rmSync(workRoot, { recursive: true, force: true });
-  }
-}
-
-function report(result) {
-  console.log(`PASS npm package ${result.target} (Keiko ${result.packageVersion})`);
-  console.log(`  archive: ${result.outputPath}`);
-  console.log(`  sha256:  ${result.outputSha256}`);
-  if (result.folder !== undefined) console.log(`  folder:  ${result.folder}`);
-  if (result.provisioned) {
-    console.log(
-      "  This package holds credentials. Distribute it internally only; never publish it.",
-    );
-  }
-}
-
-function main(argv) {
-  if (argv.includes("--help") || argv.includes("-h")) {
-    console.log(USAGE);
-    return 0;
-  }
-  try {
-    report(buildNpmPackage(parseStandaloneArgs(argv)));
-    return 0;
-  } catch (error) {
-    if (!(error instanceof StandaloneBuildError)) throw error;
-    console.error(`FAIL build-standalone-npm-package: ${error.message}`);
-    return 1;
-  }
 }
 
 if (isMainModule(import.meta.url)) {
-  process.exitCode = main(process.argv.slice(2));
+  process.exitCode = runFolderPackageCli(process.argv.slice(2), {
+    form: "npm",
+    command: "build-standalone-npm-package",
+    usage: USAGE,
+    build: buildNpmPackage,
+  });
 }
