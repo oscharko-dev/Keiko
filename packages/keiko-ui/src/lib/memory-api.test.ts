@@ -26,7 +26,7 @@ import {
 } from "./memory-api";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 import {
-  notifyCompletedChatForgets,
+  notifyCompletedChatMemoryChanges,
   subscribeMemoryVaultViewChanges,
 } from "./memory-vault-view-changes";
 
@@ -172,8 +172,8 @@ describe("memory governance API helpers", () => {
       forgotten: true,
     };
     try {
-      notifyCompletedChatForgets(undefined);
-      notifyCompletedChatForgets({
+      notifyCompletedChatMemoryChanges(undefined);
+      notifyCompletedChatMemoryChanges({
         context,
         actions: [
           { ...applied, forgotten: false },
@@ -181,8 +181,54 @@ describe("memory governance API helpers", () => {
         ],
       });
       expect(listener).not.toHaveBeenCalled();
-      notifyCompletedChatForgets({ context, actions: [applied, applied] });
+      notifyCompletedChatMemoryChanges({ context, actions: [applied, applied] });
       expect(listener).toHaveBeenCalledExactlyOnceWith({ kind: "removed", ids: ["done"] });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("refreshes persisted Chat candidates once and ignores a shown update proposal", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeMemoryVaultViewChanges(listener);
+    const context = { enabled: true, text: "", memories: [], budget: { used: 0, tokens: 100 } };
+    const candidate = {
+      kind: "candidate",
+      proposalId: "new",
+      body: "Synthetic fact",
+      scopeLabel: "private",
+      requiresApproval: false,
+      status: "accepted",
+    } as const;
+    try {
+      notifyCompletedChatMemoryChanges({
+        context,
+        actions: [
+          candidate,
+          candidate,
+          { ...candidate, proposalId: "pending", status: "proposed", requiresApproval: true },
+          { kind: "update", memoryId: "review-update" },
+          { kind: "rejected", reason: "unavailable" },
+        ],
+      });
+      expect(listener).toHaveBeenCalledExactlyOnceWith({
+        kind: "updated",
+        ids: ["new", "pending"],
+      });
+      listener.mockClear();
+      notifyCompletedChatMemoryChanges({
+        context,
+        actions: [
+          candidate,
+          {
+            kind: "forget",
+            memoryId: candidate.proposalId,
+            forgotten: true,
+            requiresConfirmation: false,
+          },
+        ],
+      });
+      expect(listener).toHaveBeenCalledExactlyOnceWith({ kind: "removed", ids: ["new"] });
     } finally {
       unsubscribe();
     }

@@ -36,6 +36,48 @@ function makeRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
 }
 
 describe("EditMemoryDialog — rendering", () => {
+  it("restores keyboard focus during a slow canonical reload without reopening stale content", async () => {
+    const original = makeRecord();
+    const edited = {
+      ...original,
+      body: "Revised keyboard note",
+      updatedAt: original.updatedAt + 1,
+    };
+    const refresh = deferred<MemoryDetailResponse>();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ memory: original })
+      .mockReturnValue(refresh.promise);
+    const user = userEvent.setup();
+    const network = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ memory: edited }));
+    try {
+      render(<MemoryDetail id={original.id} fetchMemoryImpl={load} />);
+      const trigger = await screen.findByRole("button", { name: /edit memory body/i });
+      trigger.focus();
+      await user.keyboard("{Enter}");
+      const field = screen.getByRole("textbox", { name: /^body/i });
+      await user.clear(field);
+      await user.type(field, edited.body);
+      await user.click(screen.getByRole("button", { name: /^save/i }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await waitFor(() => expect(trigger).toHaveFocus());
+      expect(trigger).toHaveAttribute("aria-disabled", "true");
+      await user.keyboard("{Enter}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.queryByText(original.body)).not.toBeInTheDocument();
+      await act(async () => {
+        refresh.resolve({ memory: edited });
+      });
+      expect(await screen.findByText(edited.body)).toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+      expect(trigger).toHaveAttribute("aria-disabled", "false");
+    } finally {
+      network.mockRestore();
+    }
+  });
+
   it("preserves the open form and draft when another view accepts the proposal", async () => {
     const proposed = makeRecord({ status: "proposed" });
     const accepted = {

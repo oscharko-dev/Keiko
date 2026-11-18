@@ -1,6 +1,6 @@
 "use client";
 
-import { notifyCompletedChatForgets } from "@/lib/memory-vault-view-changes";
+import { notifyCompletedChatMemoryChanges } from "@/lib/memory-vault-view-changes";
 import {
   applyChatReadConsent,
   applyChatToolExchange,
@@ -4736,7 +4736,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           rafHandle ??= requestAnimationFrame(flush);
         },
         onDone: (payload: SseDonePayload): void => {
-          notifyCompletedChatForgets(payload.memory);
+          notifyCompletedChatMemoryChanges(payload.memory);
           cancelFlush();
           flush();
           if (isSupersededOrAborted(chatId, signal)) {
@@ -4936,7 +4936,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           request.correlationId,
           ...pendingLeaseOptOut(request.retainPendingApproval),
         );
-        notifyCompletedChatForgets(result.memory);
+        notifyCompletedChatMemoryChanges(result.memory);
         if (signal.aborted) return { status: "cancelled" };
         const outcome = completedSendOutcome(result.messages, result.attachmentDeliveries);
         if (!isStillActiveChat(chat.id)) return outcome;
@@ -5040,7 +5040,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           correlationId,
           ...pendingLeaseOptOut(retainPendingApproval),
         );
-        notifyCompletedChatForgets(result.memory);
+        notifyCompletedChatMemoryChanges(result.memory);
         if (!isStillActiveChat(chat.id)) {
           return { status: "completed", assistantMessageId: result.assistantMessageId };
         }
@@ -6084,7 +6084,7 @@ export function useChatSession(options: UseChatSessionOptions = {}): UseChatSess
           },
           controller.signal,
         );
-        notifyCompletedChatForgets(result.memory);
+        notifyCompletedChatMemoryChanges(result.memory);
         if (controller.signal.aborted) {
           updateOwnedSendStatus(controller.signal, "cancelled");
           return;

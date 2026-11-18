@@ -32,7 +32,7 @@ import { formatError } from "./format-error";
 import { EditMemoryDialog } from "./EditMemoryDialog";
 import { ForgetConfirmDialog } from "./ForgetConfirmDialog";
 
-type BusyAction = "accept" | "reject" | "pin" | "unpin" | "archive" | null;
+type BusyAction = "accept" | "reject" | "pin" | "unpin" | "archive" | "refresh" | null;
 
 interface ProposedActionButtonsProps {
   readonly isProposed: boolean;
@@ -340,7 +340,9 @@ export function MemoryActions({
   correctImpl = correctMemory,
 }: MemoryActionsProps): ReactNode {
   const t = useTranslate();
-  const [busy, setBusy] = useState<BusyAction>(null);
+  const [actionInFlight, setBusy] = useState<BusyAction>(null);
+  // The dialog's trigger stays mounted and focusable while the canonical record reloads.
+  const busy = contentPending ? "refresh" : actionInFlight;
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showEdit, setShowEdit] = useState(false);
@@ -446,8 +448,6 @@ export function MemoryActions({
     record.status === "expired";
   const isForgotten = record.status === "forgotten";
 
-  if (contentPending && !showEdit && !showCorrect) return null;
-
   return (
     <fieldset
       className="mc-actions"
@@ -499,8 +499,8 @@ export function MemoryActions({
         record={record}
         showEdit={showEdit}
         showCorrect={showCorrect}
-        showForget={showForget}
-        showDelete={showDelete}
+        showForget={showForget && !contentPending}
+        showDelete={showDelete && !contentPending}
         correctImpl={correctImpl}
         deleteImpl={deleteImpl}
         onEditSave={(updated) => {

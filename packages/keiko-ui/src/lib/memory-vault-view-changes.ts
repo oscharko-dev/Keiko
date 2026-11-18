@@ -18,16 +18,22 @@ export function subscribeMemoryVaultViewChanges(listener: Listener): () => void 
   };
 }
 
-// A live turn may have already committed a Forget on the server. Historical Chat messages
-// carry the same action wire for display but do not publish a new Vault change.
-export function notifyCompletedChatForgets(memory: ConversationMemoryResultWire | undefined): void {
+// Completed live turns carry server-persisted candidates and confirmed removals. The same wire
+// on a historical turn is for display and does not announce a new change.
+export function notifyCompletedChatMemoryChanges(
+  memory: ConversationMemoryResultWire | undefined,
+): void {
+  const updated = new Set<string>();
   const removed = new Set<string>();
   for (const action of memory?.actions ?? []) {
+    if (action.kind === "candidate") updated.add(action.proposalId);
     if (action.kind === "forget" && action.forgotten === true && !action.requiresConfirmation) {
       removed.add(action.memoryId);
     }
   }
+  for (const id of removed) updated.delete(id);
   notifyMemoryVaultViewChange({ kind: "removed", ids: [...removed] });
+  notifyMemoryVaultViewChange({ kind: "updated", ids: [...updated] });
 }
 
 export function notifyMemoryVaultViewChange(change: MemoryVaultViewChange): void {
