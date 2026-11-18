@@ -374,6 +374,39 @@ describe("extractSalientMemories", () => {
     );
   });
 
+  it.each([
+    ["I use Python daily", "and use Slack until March 14, 2020"],
+    ["I use Python daily", "and use Slack until March 14, 2029"],
+    ["Ich nutze Python täglich", "und nutze Slack bis zum 14. März 2020"],
+    ["Ich nutze Python täglich", "und nutze Slack bis zum 14. März 2029"],
+  ])("keeps a coordinated predicate's deadline off %s in %s", async (first, next) => {
+    const learned = candidates(await learn(`${first} ${next}.`, [fact(first, first)]));
+    expect(learned.map(({ proposal }) => [proposal.body, proposal.validity.validUntil])).toEqual([
+      [first, undefined],
+    ]);
+  });
+
+  it.each(["I use Python and Slack", "I document the design and use of tools"])(
+    "keeps a shared date on the coordinated objects in %s",
+    async (claim) => {
+      const [learned] = candidates(
+        await learn(`${claim} until March 14, 2029.`, [fact(claim, claim)]),
+      );
+      expect(learned?.proposal.validity.validUntil).toBe(
+        new Date(2029, 2, 14, 23, 59, 59, 999).getTime(),
+      );
+    },
+  );
+
+  it("keeps an abbreviated English deadline in a whole preference", async () => {
+    const claim = "I prefer tables until Feb. 14, 2029";
+    const [learned] = candidates(await learn(`${claim}. Tomorrow is the deadline.`, []));
+    expect(learned?.proposal.body).toBe(claim);
+    expect(learned?.proposal.validity.validUntil).toBe(
+      new Date(2029, 1, 14, 23, 59, 59, 999).getTime(),
+    );
+  });
+
   it("keeps the later German clause's deadline off an earlier independent fact", async () => {
     const first = "Ich nutze Python täglich";
     const second = "ich nutze Slack";

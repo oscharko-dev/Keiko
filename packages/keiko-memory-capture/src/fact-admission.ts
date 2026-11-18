@@ -1770,8 +1770,11 @@ interface ClaimWords {
 // before a year and a conjunction inside a noun phrase both stay in that assertion.
 const JOINING_WORD = "and|but|und|aber|doch|while|whereas|während";
 const NEW_SUBJECT = String.raw`I|we|he|she|they|my|our|ich|wir|er|sie|mein\w*|unser\w*`;
+// These predicates can share the preceding subject. Noun phrases such as "design and use of tools"
+// and "work and use cases" keep their common qualifier.
+const COORDINATED_PREDICATE = String.raw`use(?!\s+(?:of|cases?)\b)|prefer|am|have|need|rely\s+on|work\s+(?:with|at|as|for)|live\s+in|nutze|benutze|verwende|bevorzuge|arbeite|wohne|bin|habe|brauche|benötige`;
 const INDEPENDENT_CLAUSE_RE = new RegExp(
-  String.raw`;|,\s*(?:${JOINING_WORD})\b|\b(?:${JOINING_WORD})\b(?=\s+(?:${NEW_SUBJECT})\b)`,
+  String.raw`;|,\s*(?:${JOINING_WORD})\b|\b(?:${JOINING_WORD})\b(?=\s+(?:${NEW_SUBJECT}|${COORDINATED_PREDICATE})\b)`,
   "giu",
 );
 

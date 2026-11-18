@@ -57,10 +57,13 @@ const GERMAN_DATE_RE = /(?:^|[^\p{L}])bis(?:\s+zum)?\s+(\d{1,2})\.(\d{1,2})\.(\d
 const ISO_DATE_RE = /(?:^|[^\p{L}])(?:bis|until|till|through)\s+(\d{4})-(\d{2})-(\d{2})(?!\d)/iu;
 const GERMAN_NAMED_DAY = String.raw`\bbis(?:[ \t]+zum)?[ \t]+(\d{1,2})\.[ \t]+(${MONTH_WITH_OPTIONAL_DOT})(?:[ \t]+(\d{4})\b)?`;
 const GERMAN_NAMED_DAY_RE = new RegExp(GERMAN_NAMED_DAY, "iu");
-const STATED_NAMED_DATES_RE = new RegExp(`${GERMAN_NAMED_DAY}|${MONTH_END}`, "giu");
-const ENGLISH_NAMED_DAY_RE = new RegExp(
-  String.raw`\b(?:until|till|through)[ \t]+(${NAMED_MONTH})[ \t]+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?[ \t]+(\d{4})\b)?`,
-  "iu",
+// In English the day follows the abbreviated month. Its dot is internal only when the day follows.
+const ENGLISH_DAY_MONTH = String.raw`(?:${MONTH_ABBREVIATION})\.|(?:${NAMED_MONTH})`;
+const ENGLISH_NAMED_DAY = String.raw`\b(?:until|till|through)[ \t]+(${ENGLISH_DAY_MONTH})[ \t]+(\d{1,2})(?:st|nd|rd|th)?\b(?:,?[ \t]+(\d{4})\b)?`;
+const ENGLISH_NAMED_DAY_RE = new RegExp(ENGLISH_NAMED_DAY, "iu");
+const STATED_NAMED_DATES_RE = new RegExp(
+  `${GERMAN_NAMED_DAY}|${ENGLISH_NAMED_DAY}|${MONTH_END}`,
+  "giu",
 );
 const REASON_RE = /(?:^|[^\p{L}])(?:weil|denn|da|because|since)\s+([^.!?…\n]{3,300})/iu;
 

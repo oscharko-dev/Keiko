@@ -359,7 +359,7 @@ describe("captureSalientFromTurn", () => {
       });
       const clock = vi.spyOn(Date, "now").mockReturnValue(processedAt);
       try {
-        await learnStoredTurn(
+        const outcome = await learnStoredTurn(
           deps,
           {
             request: {
@@ -377,7 +377,13 @@ describe("captureSalientFromTurn", () => {
           },
           new AbortController().signal,
         );
-        const records = readMemories(vault, ctx);
+        const records = vault.listMemoriesAcrossScopes(conversationMemoryScopes(ctx), {
+          includeExpired: true,
+        });
+        expect(outcome).toEqual({
+          outcome: "learned",
+          actionCount: expectedYear === undefined ? 0 : 1,
+        });
         if (expectedYear === undefined) expect(records).toHaveLength(0);
         else {
           expect(records).toHaveLength(1);
