@@ -1844,6 +1844,12 @@ the approval.
   of an existing project from its create metadata and the description headings most sampled issues
   share. Both read Jira with GET only and never write to Jira or the library; the lead edits and
   saves what is proposed through the skill routes.
+  `POST /api/skills/jira-templates/options` supplies the Skills editor with visible projects, their
+  native issue types and the selected type's create fields and workflow statuses, through the same
+  authenticated Pod and bounded GET transport. The editor writes choices into the existing
+  Markdown front matter. The YAML source remains editable for advanced rules. A binding returned
+  after a save advances the open editor's saved revision and preserves any edits made in the meantime.
+  The options read records only response status and counts on `skills.library.operation`.
 - **Evidence.** `jira.template.metadata` records only matched, returned, omitted and unreadable
   template counts through the composing owner's existing Activity Log port; no template reference,
   field name, section title or body enters it. `jira.template.admission` (warn, stage `pre-approval` or `dispatch`) records the

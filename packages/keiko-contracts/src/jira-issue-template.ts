@@ -387,12 +387,16 @@ function addBlockItem(scan: Scan, text: string, line: number): void {
   last.values.push(value);
 }
 
+function isBlockItem(text: string): boolean {
+  return text.startsWith("-") && (text.length === 1 || /\s/u.test(text.charAt(1)));
+}
+
 function scanFrontMatter(lines: readonly string[]): Scan {
   const scan: Scan = { entries: [], errors: [] };
   lines.forEach((source, offset) => {
     const text = source.trim();
     if (text.length === 0 || text.startsWith("#")) return;
-    if (text.startsWith("-") && (text.length === 1 || /\s/u.test(text.charAt(1)))) {
+    if (isBlockItem(text)) {
       addBlockItem(scan, text, offset + 2);
     } else {
       addKeyedLine(scan, text, offset + 2);
@@ -403,6 +407,71 @@ function scanFrontMatter(lines: readonly string[]): Scan {
 
 function entryOf(entries: readonly RawEntry[], key: TemplateKey): RawEntry | undefined {
   return entries.find((entry) => entry.key === key);
+}
+
+/** The guided editor may hold an incomplete draft while the person selects its project and type. */
+export interface JiraTemplateForm {
+  readonly project: string;
+  readonly issueType: string;
+  readonly activateOn: readonly string[];
+  readonly requiredFields: readonly string[];
+}
+
+function isEmptyFormSelection(line: string): boolean {
+  const entry = keyedLine(line.trim());
+  return (entry?.key === "project" || entry?.key === "issueType") && entry.value === '""';
+}
+
+/** Reads editable values using the template grammar, before the document is complete enough to save. */
+export function readJiraTemplateForm(frontMatter: string): JiraTemplateForm | undefined {
+  // The strict save parser rejects empty selections. In the form they are empty slots.
+  const lines = frontMatter
+    .split(/\r?\n/u)
+    .map((line) => (isEmptyFormSelection(line) ? line.trimEnd().slice(0, -2) + "[]" : line));
+  if (!lines.some(isMarkerLine)) return undefined;
+  const { entries, errors } = scanFrontMatter(lines);
+  if (errors.length > 0) return undefined;
+  const values = (key: TemplateKey): readonly string[] => entryOf(entries, key)?.values ?? [];
+  return {
+    project: values("project")[0] ?? "",
+    issueType: values("issueType")[0] ?? "",
+    activateOn: values("activateOn"),
+    requiredFields: values("requiredFields"),
+  };
+}
+
+function formUpdateLines(patch: Partial<JiraTemplateForm>): Map<string, string | undefined> {
+  const updates = new Map<string, string | undefined>(
+    Object.entries(patch).map(([key, value]) => [key, `${key}: ${JSON.stringify(value)}`]),
+  );
+  if (patch.project !== undefined || patch.issueType !== undefined)
+    updates.set("jiraBinding", undefined);
+  return updates;
+}
+
+/** Update only fields edited in the form. Unrelated rules, comments and their order are preserved. */
+export function editJiraTemplateForm(
+  frontMatter: string,
+  patch: Partial<JiraTemplateForm>,
+): string {
+  const updates = formUpdateLines(patch);
+  const lines: string[] = [];
+  let replacingList = false;
+  for (const line of frontMatter.split(/\r?\n/u)) {
+    const text = line.trim();
+    const entry = keyedLine(text);
+    if (entry !== undefined) {
+      const updating = updates.has(entry.key);
+      replacingList = updating && entry.value === "";
+      const replacement = updating ? updates.get(entry.key) : line;
+      if (replacement !== undefined) lines.push(replacement);
+      updates.delete(entry.key);
+    } else if (!replacingList || !isBlockItem(text)) {
+      lines.push(line);
+    }
+  }
+  for (const line of updates.values()) if (line !== undefined) lines.push(line);
+  return lines.join("\n");
 }
 
 function boundedText(value: string, max: number): boolean {

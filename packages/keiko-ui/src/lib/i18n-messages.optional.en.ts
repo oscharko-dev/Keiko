@@ -2687,7 +2687,37 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.starter.title": "Jira starter templates",
   "chat.skills.jira.starter.connect": "Activate a Jira Pod to use the starter templates.",
   "chat.skills.jira.starter.edit":
-    "Open a starter template and complete the project key and issue type under Metadata (YAML).",
+    "Open a starter template and select its project and issue type in the editor.",
+  "chat.skills.jira.form.title": "Jira metadata",
+  "chat.skills.jira.form.project": "Jira project",
+  "chat.skills.jira.form.issueType": "Issue type",
+  "chat.skills.jira.form.chooseProject": "Select a project",
+  "chat.skills.jira.form.chooseType": "Select an issue type",
+  "chat.skills.jira.form.projectHelp": "Choose where this template applies.",
+  "chat.skills.jira.form.typeHelp": "The list uses Jira’s names for the selected project.",
+  "chat.skills.jira.form.unmatchedType":
+    "Jira did not match “{subject}”. Select the intended type from the list.",
+  "chat.skills.jira.form.connect": "Connect a Jira Pod to load projects and issue types.",
+  "chat.skills.jira.form.loading": "Loading from Jira…",
+  "chat.skills.jira.form.empty": "Jira returned no options.",
+  "chat.skills.jira.form.projectMissing":
+    "This Jira Pod could not find or open the selected project.",
+  "chat.skills.jira.form.readFailed": "Could not load options from Jira.",
+  "chat.skills.jira.form.detailsUnavailable":
+    "Some fields or statuses could not be read from Jira.",
+  "chat.skills.jira.form.retry": "Try again",
+  "chat.skills.jira.form.rules": "Template rules",
+  "chat.skills.jira.form.onWrite": "Apply when creating and editing issues",
+  "chat.skills.jira.form.activationRequired": "Choose when this template applies.",
+  "chat.skills.jira.form.addStatus": "Apply on entering a status",
+  "chat.skills.jira.form.anyStatus": "Any status change",
+  "chat.skills.jira.form.statusHelp": "Select a target status to check when an issue enters it.",
+  "chat.skills.jira.form.addField": "Add required field",
+  "chat.skills.jira.form.selectForFields": "Select an issue type to load its fields.",
+  "chat.skills.jira.form.fieldsHelp": "Choose fields this template requires.",
+  "chat.skills.jira.form.requiredByJira": "{subject} (required by Jira)",
+  "chat.skills.jira.form.choose": "Select an option",
+  "chat.skills.jira.form.remove": "Remove {subject}",
   "chat.skills.jira.starter.epic":
     "## Objective\n\nDescribe the goal of the epic.\n\n## Scope\n\nList the work included.\n\n## Acceptance criteria\n\nDescribe how to verify the goal is met.",
   "chat.skills.jira.starter.issue":
@@ -2706,7 +2736,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.check.transitions": "workflow statuses",
   "chat.skills.jira.finding.unknown-project": "Project {subject} does not exist or is not visible.",
   "chat.skills.jira.finding.unknown-issue-type":
-    "Issue type {subject} does not exist in the project.",
+    "Jira could not match “{subject}” to an issue type in this project. Select the issue type in Jira metadata.",
   "chat.skills.jira.finding.unknown-field":
     "Field {subject} does not exist. Writes it governs will be refused.",
   "chat.skills.jira.finding.ambiguous-field":

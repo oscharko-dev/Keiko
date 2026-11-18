@@ -38,6 +38,7 @@ export interface SkillWorkspace {
   readonly importFile: (file: File) => void;
   readonly show: (kind: "author" | "propose" | "empty") => void;
   readonly edit: (text: string) => void;
+  readonly adoptBinding: (previousRevision: number, skill: MarkdownSkillDocument) => void;
   readonly save: () => void;
   readonly discard: () => void;
   readonly keepEditing: () => void;
@@ -94,6 +95,22 @@ function storedDocument(
       text,
     },
   };
+}
+
+function adoptBinding(
+  current: SkillWorkspaceView,
+  previousRevision: number,
+  skill: MarkdownSkillDocument,
+): SkillWorkspaceView {
+  if (current.kind !== "document") return current;
+  const { document } = current;
+  if (document.stored?.id !== skill.id || document.stored.revision !== previousRevision)
+    return current;
+  return storedDocument(
+    document.key,
+    skill,
+    document.text === document.saved ? skill.body : document.text,
+  );
 }
 
 /**
@@ -182,6 +199,8 @@ export function useSkillWorkspace(library: MarkdownSkillLibrary): SkillWorkspace
       !library.busy,
     // The question is about unsaved text: once the text is saved there is nothing left to discard.
     confirming: pending !== undefined && dirty,
+    adoptBinding: (previousRevision, skill) =>
+      setView((current) => adoptBinding(current, previousRevision, skill)),
     guard,
     ...workspaceActions({ library, document, expected, drafts, setView, setPending, pending }),
   };

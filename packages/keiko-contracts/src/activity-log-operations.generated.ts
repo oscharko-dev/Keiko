@@ -44954,6 +44954,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "jira-template-validate",
           "jira-template-propose",
           "jira-template-bind",
+          "jira-template-options",
         ],
       },
       phase: {
@@ -45018,6 +45019,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       partialProposalCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      projectCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      statusCount: {
         type: "integer",
         dataClass: "count",
         required: false,

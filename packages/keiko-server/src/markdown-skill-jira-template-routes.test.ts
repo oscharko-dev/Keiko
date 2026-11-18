@@ -21,6 +21,7 @@ import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
 import { handleImportMarkdownSkill, handleReplaceMarkdownSkill } from "./markdown-skill-routes.js";
 import {
   handleBindJiraTemplate,
+  handleJiraTemplateOptions,
   handleListJiraTemplates,
   handleProposeJiraTemplates,
   handleValidateJiraTemplate,
@@ -73,11 +74,22 @@ function jiraGet(
 ): ReturnType<AtlassianHttpBodyPort> {
   const url = new URL(request.url);
   const path = url.pathname;
+  if (path.endsWith("/project"))
+    return Promise.resolve(response([{ id: "10000", key: "SYN", name: "Synthetic project" }]));
   if (path.endsWith("/project/SYN"))
     return Promise.resolve(response({ id: "10000", key: "SYN", issueTypes: projectTypes }));
   if (path.endsWith("/project/SYN/statuses"))
     return Promise.resolve(
-      response([{ id: "10001", name: "Story", statuses: [{ name: "To Do" }, { name: "Done" }] }]),
+      response([
+        {
+          id: "10001",
+          name: "Story",
+          statuses: [
+            { id: "1", name: "To Do" },
+            { id: "6", name: "Done" },
+          ],
+        },
+      ]),
     );
   if (path.endsWith("/field"))
     return Promise.resolve(
@@ -206,6 +218,90 @@ function context(cookie: string, body: unknown = {}, id = ""): RouteContext {
 afterEach(() => {
   for (const store of stores.splice(0)) store.close();
   resetServerLogger();
+});
+
+describe("guided Jira template options", () => {
+  it("records option counts under the request correlation", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const { deps, cookie } = fixture();
+
+    expect((await handleJiraTemplateOptions(context(cookie, { podId: POD }), deps)).status).toBe(
+      200,
+    );
+    const events = sink.events.filter(
+      (event) =>
+        event.op === "skills.library.operation" && event.extra?.action === "jira-template-options",
+    );
+    expect(events.map((event) => event.extra?.phase)).toEqual(["started", "completed"]);
+    const completed = events.at(-1);
+    expect(completed).toMatchObject({
+      correlationId: "template-routes",
+      extra: { httpStatus: 200, projectCount: 1 },
+    });
+    const line = formatActivityLogProofLine(completed ?? {});
+    expectActivityLogProof("skills.library.operation.lifecycle", line);
+    expect(line).not.toMatch(/Synthetic project|example\.invalid|\bSYN\b/u);
+  });
+
+  it("returns project, localized types, and scoped field and status choices via read-only requests", async () => {
+    const { deps, cookie, http } = fixture({
+      projectTypes: [
+        { id: "10001", name: "Aufgabe" },
+        { id: "10002", name: "Fachliche Aufgabe" },
+      ],
+    });
+    const read = async (selection: object): Promise<unknown> => {
+      const result = await handleJiraTemplateOptions(
+        context(cookie, { podId: POD, ...selection }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(result.headers).toMatchObject({ "Cache-Control": "no-store" });
+      return result.body;
+    };
+    expect(await read({})).toEqual({
+      kind: "projects",
+      projects: [{ key: "SYN", name: "Synthetic project" }],
+    });
+    expect(await read({ projectKey: "SYN" })).toEqual({
+      kind: "types",
+      instanceId: jiraInstanceIdentity(BASE_URL),
+      issueTypes: [
+        { id: "10001", name: "Aufgabe" },
+        { id: "10002", name: "Fachliche Aufgabe" },
+      ],
+    });
+    expect(await read({ projectKey: "SYN", issueTypeId: "10001" })).toEqual({
+      kind: "details",
+      fields: [
+        { id: "summary", name: "summary", required: true },
+        { id: "customfield_10016", name: "Story Points", required: true },
+      ],
+      statuses: [
+        { id: "1", name: "To Do" },
+        { id: "6", name: "Done" },
+      ],
+    });
+    expect(http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    expect(deps.store.markdownSkills.list()).toEqual([]);
+  });
+
+  it("refuses an unknown Pod and never loads fields for a type outside the project", async () => {
+    const { deps, cookie, http } = fixture();
+    expect((await handleJiraTemplateOptions(context("", { podId: POD }), deps)).status).toBe(404);
+    expect(
+      (await handleJiraTemplateOptions(context(cookie, { podId: "other" }), deps)).status,
+    ).toBe(404);
+    expect(http).not.toHaveBeenCalled();
+    const result = await handleJiraTemplateOptions(
+      context(cookie, { podId: POD, projectKey: "SYN", issueTypeId: "10099" }),
+      deps,
+    );
+    expect(result.status).toBe(404);
+    expect(http).toHaveBeenCalledOnce();
+    expect(http.mock.calls[0]?.[0].url).toMatch(/\/project\/SYN$/u);
+  });
 });
 
 describe("template documents in the skill library", () => {

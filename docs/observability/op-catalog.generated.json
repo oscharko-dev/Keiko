@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "aaab8226ce64ce40cc6f3882925506f8575e28cf4c3235e5b5bcb815b508a990",
+    "catalogDigest": "78818f70acf077bd71da40bbeeca548c4243418f8a9675e04a216f1592729b61",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -46771,7 +46771,8 @@
               "jira-template-list",
               "jira-template-validate",
               "jira-template-propose",
-              "jira-template-bind"
+              "jira-template-bind",
+              "jira-template-options"
             ]
           },
           "phase": {
@@ -46840,6 +46841,16 @@
             "dataClass": "count",
             "required": false
           },
+          "projectCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "statusCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "checkedFieldCount": {
             "type": "integer",
             "dataClass": "count",
@@ -46863,7 +46874,7 @@
         "proofIds": ["skills.library.operation.lifecycle"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:10",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:135"]
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:142"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -46930,8 +46941,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["skills.workflow.attached.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:151",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:206"]
+        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:158",
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:213"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -104783,6 +104794,12 @@
                   "required": true
                 },
                 {
+                  "name": "projectCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "proposalCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -104792,6 +104809,12 @@
                   "name": "refusalReason",
                   "type": "string",
                   "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "statusCount",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": false
                 },
                 {
@@ -125614,7 +125637,7 @@
     {
       "op": "skills.workflow.attached",
       "category": "gateway",
-      "site": "packages/keiko-server/src/markdown-skill-log.ts:154",
+      "site": "packages/keiko-server/src/markdown-skill-log.ts:161",
       "package": "keiko-server"
     },
     {

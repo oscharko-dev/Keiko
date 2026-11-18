@@ -33,6 +33,7 @@ import {
   type BindOutcome,
 } from "./useJiraTemplateBinding";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
+import type { SkillWorkspace } from "./useSkillWorkspace";
 import styles from "./MarkdownSkillControl.module.css";
 
 /**
@@ -380,23 +381,27 @@ function TemplateRow({
 }
 
 /** The templates in the library column; each opens in the editor. */
-export function JiraTemplateList({
-  jira,
-  library,
-  openId,
-  onOpen,
-  chat,
-}: {
+interface JiraTemplateListProps {
   readonly jira: JiraTemplates;
   readonly library: MarkdownSkillLibrary;
   readonly openId: string | undefined;
   readonly onOpen: (skill: MarkdownSkillMetadata) => void;
   /** Offers choosing a stored template for the chat beside its row. */
   readonly chat?: { readonly skill: ChatMarkdownSkill; readonly disabled: boolean };
-}): ReactNode {
+  readonly adoptBinding?: SkillWorkspace["adoptBinding"];
+}
+
+export function JiraTemplateList({
+  jira,
+  library,
+  openId,
+  onOpen,
+  chat,
+  adoptBinding,
+}: JiraTemplateListProps): ReactNode {
   const t = useTranslate();
   const { tools } = jira;
-  const binding = useJiraTemplateBinding(jira.podId, library);
+  const binding = useJiraTemplateBinding(jira.podId, library, adoptBinding);
   useAutomaticTemplateBinding(binding.bind, useBindableEntries(tools), jira.podId);
   if (tools.failed)
     return (

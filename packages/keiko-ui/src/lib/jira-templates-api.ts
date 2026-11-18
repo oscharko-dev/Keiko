@@ -1,6 +1,11 @@
 "use client";
 
 import type { JiraTemplateParseError } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  JiraTemplateOptions,
+  JiraTemplateOptionsRequest,
+  MarkdownSkillDocument,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 import { bffFetchJson } from "./http";
 
@@ -116,6 +121,13 @@ export function validateJiraTemplate(
   return request("/api/skills/jira-templates/validate", { podId, markdown }, correlationId);
 }
 
+export function fetchJiraTemplateOptions(
+  selection: JiraTemplateOptionsRequest,
+  correlationId?: string,
+): Promise<JiraTemplateOptions> {
+  return request("/api/skills/jira-templates/options", selection, correlationId);
+}
+
 export async function proposeJiraTemplates(
   podId: string,
   projectKey: string,
@@ -133,6 +145,7 @@ export interface JiraTemplateBound {
   readonly changed: boolean;
   readonly issueType: string;
   readonly parentTypeCount?: number;
+  readonly skill?: MarkdownSkillDocument;
 }
 
 /** Writes the ids of this Jira's issue types into the template as a new revision (#4354). */

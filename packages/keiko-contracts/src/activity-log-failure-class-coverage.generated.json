@@ -40609,6 +40609,12 @@
               "required": true
             },
             {
+              "name": "projectCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "proposalCount",
               "type": "integer",
               "dataClass": "count",
@@ -40618,6 +40624,12 @@
               "name": "refusalReason",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "statusCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {

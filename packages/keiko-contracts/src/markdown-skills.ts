@@ -44,6 +44,37 @@ export interface MarkdownSkillUpload {
   readonly contentBase64: string;
 }
 
+/** Each choice is read through the selected, verified Jira Pod. */
+export type JiraTemplateOptionsRequest =
+  | { readonly podId: string; readonly projectKey?: undefined; readonly issueTypeId?: undefined }
+  | { readonly podId: string; readonly projectKey: string; readonly issueTypeId?: string };
+
+export interface JiraTemplateNamedOption {
+  readonly id: string;
+  readonly name: string;
+}
+
+export interface JiraTemplateFieldOption extends JiraTemplateNamedOption {
+  readonly required: boolean;
+}
+
+export type JiraTemplateOptions =
+  | {
+      readonly kind: "projects";
+      readonly projects: readonly { readonly key: string; readonly name: string }[];
+    }
+  | {
+      readonly kind: "types";
+      readonly issueTypes: readonly JiraTemplateNamedOption[];
+      readonly instanceId: string;
+    }
+  | {
+      readonly kind: "details";
+      /** Omitted when Jira did not return a usable list. */
+      readonly fields?: readonly JiraTemplateFieldOption[];
+      readonly statuses?: readonly JiraTemplateNamedOption[];
+    };
+
 /**
  * Why the server refused to store a Markdown skill, as a closed vocabulary the browser turns into
  * one plain sentence each. A Jira template parse failure keeps its own closed code behind the
