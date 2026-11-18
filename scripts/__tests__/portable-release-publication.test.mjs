@@ -477,6 +477,33 @@ describe("publishVerifiedPortableRelease", () => {
     expect(calls.some((call) => call[2] === "edit")).toBe(false);
   });
 
+  it.each([
+    [
+      "an asset this run did not validate",
+      [...verified, { digest: `sha256:${SHA}`, name: "keiko-linux-x64.standalone.zip" }],
+      immutableReleaseRepairFailure(
+        TAG,
+        "carries assets this run did not validate: keiko-linux-x64.standalone.zip",
+      ),
+    ],
+    [
+      "other bytes",
+      [{ digest: `sha256:${"d".repeat(64)}`, name: "keiko-linux-x64.zip" }],
+      `GitHub release ${TAG} is already published and differs:`,
+    ],
+    ["no download", [], immutableReleaseRepairFailure(TAG, "lacks keiko-linux-x64.zip")],
+  ])("stops before npm when the public release carries %s (PR #4464)", (_, publicAssets, error) => {
+    // Review finding on PR #4464 (P2): the public release was checked asset by asset only, so a
+    // folder ZIP that appeared after the draft was verified let the first run go on to npm.
+    const { calls, publisher } = fakePublisher({ publicAssets });
+    const releaseInfo = { draft: true, id: 42, latestArgs: ["--latest"], repo: REPO, tag: TAG };
+
+    expect(() =>
+      publishVerifiedPortableRelease(publisher, releaseInfo, verified, expected),
+    ).toThrow(error);
+    expect(calls.some((call) => call[0] === "snapshot")).toBe(true);
+  });
+
   it("refuses to publish a draft whose digests do not match", () => {
     const { calls, publisher } = fakePublisher();
     const releaseInfo = { draft: true, id: 42, latestArgs: ["--latest"], repo: REPO, tag: TAG };

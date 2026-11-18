@@ -1232,14 +1232,32 @@ it as in the portable payload, so Knowledge Pods search with their ANN index. Th
 packages into the folder even inside another npm project or workspace, checks every integrity and
 runs no install script. The folder's `.npmrc` may name one global `registry`; it then wins over an
 inherited `npm_config_registry`, npm replaces the registry host while keeping every checksum, and a
-scoped `@scope:registry` line or a repeated `registry` is refused before npm runs. Each attempt gets
-its own npm cache `npm-cache-<random>` in the state directory, removed when it ends; npm's log lies in
-`npm-logs` there. The start sets both on npm's command line (`--cache`, `--logs-dir`), which no
+scoped `@scope:registry` line or a repeated `registry` is refused before npm runs. The file is read
+as npm reads it: keys keep their case, quotes and comments follow npm's ini rules, and `${NAME}` is
+replaced from the environment. A spelling npm does not read (`REGISTRY=`), a list (`registry[]=`), a
+`registry` inside a `[section]` and an address that is no http or https URL with a host are refused
+too, since npm would ignore each of them and ask the public registry. Each attempt gets its own npm
+cache `npm-cache-<random>` in the state directory, removed when it ends; npm's log lies in
+`npm-logs` there, which must be a real folder of the person's account inside the state directory:
+a link, a file or another account's folder is refused before npm writes. The start sets both on
+npm's command line (`--cache`, `--logs-dir`), which no
 inherited `npm_config_*` variable and no `.npmrc` overrides, so npm writes nothing else outside the
 folder. The state directory lies in the home folder, created owner-private as Keiko does; a
-`KEIKO_STATE_DIR` outside it is refused before anything is written. An exclusive install lock in
-`system/` keeps a second start from installing concurrently, and `Stop Keiko` during an installation
-lets it finish and keeps Keiko from starting. A marker holding the lockfile's SHA-256 skips the
+`KEIKO_STATE_DIR` outside it is refused before anything is written. The install lock in `system/`
+keeps a second start from installing concurrently. It is a folder that appears in one rename with
+the owner entry of its start already inside, naming when it was written, so no start can find it
+empty. A lock whose start no longer runs is cleared entry by entry and only then removed, so of two
+starts that find it so one takes it. A process number alone does not prove that a start still runs,
+because the system reuses the numbers of ended processes (Windows soon after), so an owner written
+before the computer started (ten minutes of clock correction aside) or more than an hour ago no
+longer holds the lock; a start whose lock was taken over leaves the new lock alone when it ends.
+Renames of the lock folder are retried while Windows holds a passing handle in it. Every start holds
+the lock until Keiko is open, also one that installs nothing. `Stop Keiko` meanwhile adds its entry
+to the lock; the start releases the lock in one rename, reads the entry there and stops Keiko, also
+one that reported a failure as it opened, or does not open it when the Stop came first. A Stop that
+finds no lock stops the open Keiko itself. The start says how it ended (Keiko open, opened by
+another start of the folder, or stopped while it was being loaded), and the start and stop files
+add only a failure line. A marker holding the lockfile's SHA-256 skips the
 installation at later starts until the lockfile changes. The start then runs `keiko start` with the
 same state directory and provisioned configuration as the folder package and pins the management
 declaration to `organization-managed` whatever the environment declared, so both the CLI and the
@@ -1249,11 +1267,14 @@ then makes no registry or release request. An administrator's access step
 (`system/Zugang speichern`) reads the configuration Gateway Setup saved and replaces with one token,
 typed without echo, only the keys sealed for the gateway connection Gateway Setup verified: the
 primary provider, the providers it built on the same endpoint style, API version, base URL and key
-header (its discovered models and gateway-managed voice) and a reranker on that address and header.
+header (its discovered models and gateway-managed voice, whose capability is read as the gateway's
+loader merges it: the top-level `capabilities` entry, else the provider's own `capability`) and a
+reranker on that address and header.
 A provider or reranker with its own connection is refused before the token is read, so one token
 never reaches another service. The step refuses while `KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR`
 names another configuration, and it writes `keiko.config.json` owner-readable through a temporary
-file that replaces the old one only when complete; it is a step the administrator runs, never part
+file that replaces the old one only when every byte is written and synced (a short write is
+continued, one that writes nothing fails); it is a step the administrator runs, never part
 of a start. The folder package's builder applies the same rule to `--api-key-env`. The only
 programs a double-click runs are the system shell and the signed Node.js binary, and npm writes no
 download mark on what it installs; the ZIP itself takes the mark like the folder package, and the
@@ -1273,7 +1294,9 @@ workflow, source digest and tag as the setup companion) before anything reaches 
 uploads them into the same draft as the archives and verifies GitHub's size and digest of each
 before it publishes the release, so the release is published with them or not at all. A draft
 that carries any asset this run did not validate, such as a package an earlier run left behind, is
-not published. After publication it downloads every asset back unauthenticated as a smoke check; a
+not published. The public release is read once more after publication and must carry exactly that
+set with the same digests again, so assets that changed between the two reads stop the run before
+npm, as a rerun would. After publication it downloads every asset back unauthenticated as a smoke check; a
 failure there stops the run before npm publication, with the GitHub release already public. A rerun
 over that published release verifies the same metadata, refuses an asset outside the validated set
 and repeats the unauthenticated download of every asset before npm publication. It reads the

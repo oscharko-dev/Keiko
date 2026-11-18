@@ -452,6 +452,69 @@ describe("Jira starter templates", () => {
     expect(add.getByRole("option", { name: "Fälligkeitsdatum (required by Jira)" })).toBeVisible();
   });
 
+  it("tells same-named Jira fields apart by their id and saves the one chosen", async () => {
+    // Review finding on PR #4464 (P2): two Team fields rendered as two identical choices with two
+    // different ids, so an operator could not tell which field would govern writes.
+    seedStore([]);
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+    vi.mocked(jiraTemplates.fetchJiraTemplateOptions).mockImplementation((selection) => {
+      if (selection.issueTypeId !== undefined)
+        return Promise.resolve({
+          kind: "details",
+          fields: [
+            { id: "customfield_10010", name: "Team", required: false },
+            { id: "customfield_10011", name: "Team", required: true },
+            { id: "duedate", name: "Fälligkeitsdatum", required: false },
+          ],
+          statuses: [],
+        });
+      if (selection.projectKey !== undefined)
+        return Promise.resolve({
+          kind: "types",
+          instanceId: "synthetic-instance",
+          issueTypes: [{ id: "1", name: "Aufgabe" }],
+        });
+      return Promise.resolve({ kind: "projects", projects: [{ key: "LAB", name: "Lab project" }] });
+    });
+    const dialog = within(await openDialog());
+    fireEvent.click(dialog.getByRole("button", { name: "Jira Issue" }));
+    const yaml = dialog.getByLabelText<HTMLTextAreaElement>("Metadata (YAML)");
+    fireEvent.change(yaml, {
+      target: {
+        value: yaml.value
+          .replace('project: ""', "project: LAB")
+          .replace("issueType: Task", "issueType: Aufgabe"),
+      },
+    });
+    fireEvent.click(dialog.getByText("Template rules"));
+
+    const picker = await dialog.findByRole(
+      "combobox",
+      { name: "Add required field" },
+      { timeout: 3000 },
+    );
+    const add = within(picker);
+    await waitFor(() =>
+      expect(add.getByRole("option", { name: "Team (customfield_10010)" })).toBeVisible(),
+    );
+    expect(
+      add.getByRole("option", { name: "Team (customfield_10011) (required by Jira)" }),
+    ).toHaveValue("customfield_10011");
+    // A name only one field carries stays as Jira writes it.
+    expect(add.getByRole("option", { name: "Fälligkeitsdatum" })).toHaveValue("duedate");
+
+    fireEvent.change(picker, { target: { value: "customfield_10011" } });
+    await waitFor(() => expect(yaml.value).toMatch(/customfield_10011/u));
+    expect(yaml.value).not.toMatch(/customfield_10010/u);
+    // The written rule shows which of the two fields it names, and that one is no longer offered.
+    expect(dialog.getByText("Team (customfield_10011)").closest("li")).toHaveAttribute(
+      "data-offered",
+      "true",
+    );
+    expect(add.queryByRole("option", { name: /customfield_10011/u })).toBeNull();
+    expect(add.getByRole("option", { name: "Team (customfield_10010)" })).toBeVisible();
+  });
+
   it("keeps the user's draft if the Pod is removed while confirming a switch", async () => {
     seedStore([]);
     vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);

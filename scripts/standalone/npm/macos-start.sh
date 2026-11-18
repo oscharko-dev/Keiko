@@ -14,14 +14,13 @@ if [ ! -x "$node" ] || [ ! -f "$script" ]; then
   exit 1
 fi
 
+# The launcher says how the start ended: Keiko open, loaded by another start of this folder, or
+# stopped while it was being loaded.
 "$node" "$script" start
 status=$?
-echo
 if [ "$status" -ne 0 ]; then
+  echo
   echo "Keiko could not start. Read the message above, then start Keiko again."
   echo "Keiko konnte nicht starten. Lies die Meldung oben und starte Keiko dann erneut."
-else
-  echo "Keiko is running in your browser. You can close this window."
-  echo "Keiko laeuft in deinem Browser. Du kannst dieses Fenster schliessen."
 fi
 exit "$status"

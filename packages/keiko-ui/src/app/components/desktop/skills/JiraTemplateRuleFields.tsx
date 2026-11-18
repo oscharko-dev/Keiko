@@ -110,6 +110,18 @@ function appliesToWrites(value: string): boolean {
 
 type Translate = ReturnType<typeof useTranslate>;
 
+/**
+ * A field's name, with its id when the name alone does not name exactly this field by the gate's
+ * rule: Jira can return several fields of one name, and the id tells which one governs writes.
+ */
+function fieldLabel(
+  field: JiraTemplateFieldOption,
+  fields: readonly JiraTemplateFieldOption[],
+): string {
+  const named = resolveJiraTemplateFieldIds(field.name, fields);
+  return named.length === 1 && named[0] === field.id ? field.name : `${field.name} (${field.id})`;
+}
+
 /** Jira's name for the one field a written reference names, by the gate's rule; else the reference. */
 function fieldName(
   fields: readonly JiraTemplateFieldOption[],
@@ -118,7 +130,7 @@ function fieldName(
 ): string {
   const ids = resolveJiraTemplateFieldIds(value, fields, template);
   const only = ids.length === 1 ? fields.find((field) => field.id === ids[0]) : undefined;
-  return only?.name ?? value;
+  return only === undefined ? value : fieldLabel(only, fields);
 }
 
 /** The fields no written reference already names, so one field is never offered twice. */
@@ -134,13 +146,17 @@ function unwrittenFields(
 }
 
 function fieldChoices(
+  offered: readonly JiraTemplateFieldOption[],
   fields: readonly JiraTemplateFieldOption[],
   t: Translate,
 ): readonly RuleChoice[] {
-  return fields.map(({ id, name, required }) => ({
-    value: id,
-    label: required ? t("chat.skills.jira.form.requiredByJira", { subject: name }) : name,
-  }));
+  return offered.map((field) => {
+    const label = fieldLabel(field, fields);
+    return {
+      value: field.id,
+      label: field.required ? t("chat.skills.jira.form.requiredByJira", { subject: label }) : label,
+    };
+  });
 }
 
 function statusChoices(
@@ -227,7 +243,11 @@ function FieldRequirement({ form, template, details, onChange }: RuleFieldsProps
       label={t("chat.skills.jira.form.addField")}
       help={t(hint)}
       values={form.requiredFields}
-      options={fieldChoices(unwrittenFields(fields ?? [], form.requiredFields, template), t)}
+      options={fieldChoices(
+        unwrittenFields(fields ?? [], form.requiredFields, template),
+        fields ?? [],
+        t,
+      )}
       max={JIRA_ISSUE_TEMPLATE_LIMITS.listItems}
       display={(value) => fieldName(fields ?? [], value, template)}
       offered={

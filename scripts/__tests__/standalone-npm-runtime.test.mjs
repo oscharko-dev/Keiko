@@ -12,6 +12,7 @@ import {
   statSync,
   symlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
@@ -36,6 +37,7 @@ import {
   installArgs,
   installLockPath,
   installationCurrent,
+  installerActive,
   isEntryPoint,
   keikoCliPath,
   keikoEnv,
@@ -45,17 +47,20 @@ import {
   npmCliCandidates,
   npmEnv,
   npmLogsDir,
+  ownerExpired,
   publishPrivateFile,
   readHidden,
+  releaseInstallLock,
+  requestStop,
   runCommand,
   saveConfig,
   start,
   startArgs,
   stateDir,
   stop,
-  stopRequestPath,
   teamConfig,
   tokenInput,
+  writeNewPrivateFile,
 } from "../standalone/npm/keiko-npm.mjs";
 
 // The start logic that ships inside an npm package (system/keiko-npm.mjs). It runs with Node.js
@@ -106,6 +111,30 @@ function ownedCaches(state) {
   return existsSync(state)
     ? readdirSync(state).filter((name) => name.startsWith("npm-cache-"))
     : [];
+}
+
+// The owner entries of the folder's installation lock.
+function lockOwners(root) {
+  return readdirSync(installLockPath(root)).filter((name) => name.startsWith("owner-"));
+}
+
+// A lock on its way in or out that a start left in system/.
+function lockLeftovers(root) {
+  return readdirSync(join(root, "system")).filter((name) =>
+    name.startsWith("keiko-npm-install.lock."),
+  );
+}
+
+// The lock of a start that no longer runs, with the further entries it held.
+function staleLock(root, pid, extra = [], writtenAt = "") {
+  const dir = installLockPath(root);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `owner-${String(pid)}-0a`), writtenAt);
+  for (const name of extra) writeFileSync(join(dir, name), "");
+}
+
+function endedPid() {
+  return spawnSync(process.execPath, ["-e", ""]).pid;
 }
 
 describe("the npm package start", () => {
@@ -211,6 +240,42 @@ describe("the npm package start", () => {
     expect(() => folderRegistry(root)).toThrow(/more than once/u);
   });
 
+  it("refuses a registry line npm would not read, before any request", () => {
+    // Review finding on PR #4464 (P2): `REGISTRY=` counted as the folder's registry and dropped the
+    // inherited one, while npm ignores the key and asks the public registry.
+    const root = packageRoot();
+    const npmrc = join(root, ".npmrc");
+    const env = { MIRROR: "https://mirror.example/" };
+    for (const read of [
+      "registry=https://mirror.example/\n",
+      'registry = "https://mirror.example/"\n',
+      "registry='https://mirror.example/'\n",
+      "registry=https://mirror.example/ ; the team mirror\n",
+      "registry=${MIRROR}\n",
+      "registry=${MIRROR?}\n",
+    ]) {
+      writeFileSync(npmrc, read);
+      expect(folderRegistry(root, env), read).toBe(true);
+    }
+    for (const [ignored, reason] of [
+      ["REGISTRY=https://mirror.example/\n", /form npm does not read/u],
+      ["Registry=https://mirror.example/\n", /form npm does not read/u],
+      ["registry[]=https://mirror.example/\n", /form npm does not read/u],
+      ["[mirror]\nregistry=https://mirror.example/\n", /form npm does not read/u],
+      ["@Oscharko-Dev:Registry=https://mirror.example/\n", /@scope:registry/u],
+      ["registry=mirror.example\n", /no http or https address/u],
+      ["registry=ftp://mirror.example/\n", /no http or https address/u],
+      ['registry="https://mirror.example/" ; quoted, then commented\n', /no http or https/u],
+      ["registry=\n", /no http or https address/u],
+      ["registry\n", /no http or https address/u],
+      ["registry=${UNSET}\n", /no http or https address/u],
+      ["registry=${UNSET?}\n", /no http or https address/u],
+    ]) {
+      writeFileSync(npmrc, ignored);
+      expect(() => folderRegistry(root, env), ignored).toThrow(reason);
+    }
+  });
+
   it("declares Keiko managed outside the app, whatever the environment declares", () => {
     // Review finding on PR #4464 (P1): an inherited user-local declaration let Keiko of the folder
     // look for a Windows gateway service helper.
@@ -307,6 +372,27 @@ describe("the npm package start", () => {
       expect(existsSync(join(root, "node_modules", ".keiko-npm-installed"))).toBe(false);
     });
 
+    it.each(["link", "file"])(
+      "refuses an npm-logs %s in the data folder before npm writes anything",
+      (kind) => {
+        // Review finding on PR #4464 (P2): npm wrote and rotated its log through an npm-logs that
+        // led out of Keiko's data folder.
+        quiet();
+        const { root, nodeDir, env, state } = installFixture();
+        const elsewhere = tempDir();
+        mkdirSync(state, { recursive: true });
+        if (kind === "link") symlinkSync(elsewhere, npmLogsDir(state), "dir");
+        else writeFileSync(npmLogsDir(state), "");
+        const run = vi.fn();
+
+        expect(() => ensureInstalled(root, nodeDir, env, run)).toThrow(LauncherRefusal);
+        expect(() => ensureInstalled(root, nodeDir, env, run)).toThrow(/npm-logs/u);
+        expect(run).not.toHaveBeenCalled();
+        expect(readdirSync(elsewhere)).toEqual([]);
+        expect(ownedCaches(state)).toEqual([]);
+      },
+    );
+
     it("refuses a data folder outside the home folder before npm or any folder is touched", () => {
       const { root, nodeDir } = installFixture();
       const outside = join(tempDir(), "state");
@@ -378,7 +464,7 @@ describe("the npm package start", () => {
     });
 
     it("installs and then starts Keiko, releasing the folder's installation lock", () => {
-      quiet();
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       const { root, nodeDir, env } = installFixture();
       const npm = fakeNpm(root, true);
       const run = vi.fn((node, args, options) =>
@@ -389,6 +475,11 @@ describe("the npm package start", () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run.mock.calls[1][1]).toEqual([keikoCliPath(root), ...startArgs(root, env)]);
       expect(existsSync(installLockPath(root))).toBe(false);
+      expect(lockLeftovers(root)).toEqual([]);
+      // The start says itself that Keiko is open: the start file prints only a failure.
+      expect(log).toHaveBeenCalledWith(
+        "Keiko is running in your browser. You can close this window.",
+      );
     });
 
     it("reports a failed first start and leaves the lock free for the next one", () => {
@@ -401,52 +492,280 @@ describe("the npm package start", () => {
 
     it("lets one start of a folder install and tells a second start so", () => {
       // Review finding on PR #4464 (P2): two starts could both run `npm ci` on the same tree.
-      quiet();
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       const { root, nodeDir, env } = installFixture();
-      expect(acquireInstallLock(root)).toBe(true);
+      const lock = acquireInstallLock(root);
+      expect(lock).toBeDefined();
       const run = vi.fn();
 
       expect(start(root, nodeDir, env, run)).toBe(0);
       expect(run).not.toHaveBeenCalled();
-      expect(acquireInstallLock(root)).toBe(false);
-      rmSync(installLockPath(root));
-      expect(acquireInstallLock(root)).toBe(true);
+      // The second start says another one is opening Keiko, never that Keiko is open.
+      expect(log).toHaveBeenCalledWith(
+        expect.stringMatching(/^Another start of this folder is opening Keiko\./u),
+      );
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/running in your browser/u));
+      expect(acquireInstallLock(root)).toBeUndefined();
+      expect(releaseInstallLock(lock)).toBe(false);
+      expect(existsSync(installLockPath(root))).toBe(false);
+      expect(acquireInstallLock(root)).toBeDefined();
     });
 
-    it("takes over the lock of a start that no longer runs", () => {
+    it("publishes the lock complete, so a start that comes meanwhile never finds it empty", () => {
+      // Review finding on PR #4464 (P2): the lock file existed before its pid was written, and a
+      // second start took that empty lock for a stale one; both starts installed.
       const { root } = installFixture();
-      const ended = spawnSync(process.execPath, ["-e", ""]);
-      writeFileSync(installLockPath(root), `${String(ended.pid)}\n`);
+      const seen = [];
+      const first = acquireInstallLock(root, (step) => {
+        // The first start's lock is prepared, not yet in place: the second start finds no lock at
+        // all and takes it, and the first start then finds the second one holding it.
+        if (step === "publish") seen.push(installerActive(root), acquireInstallLock(root));
+      });
 
-      expect(acquireInstallLock(root)).toBe(true);
-      expect(readFileSync(installLockPath(root), "utf8")).toBe(`${String(process.pid)}\n`);
+      expect(seen[0]).toBe(false);
+      expect(seen[1]).toBeDefined();
+      expect(first).toBeUndefined();
+      expect(lockOwners(root)).toEqual([`owner-${seen[1].token}`]);
+      expect(lockLeftovers(root)).toEqual([]);
     });
 
-    it("keeps Keiko from starting when Stop comes while it is being loaded", () => {
-      // Review finding on PR #4464 (P2): Stop reported success before the CLI existed while the
-      // pending start still opened Keiko.
-      quiet();
+    it("lets one of two starts take over a lock whose start no longer runs", () => {
+      const { root } = installFixture();
+      const ended = endedPid();
+      staleLock(root, ended);
+      let second;
+      const first = acquireInstallLock(root, (step) => {
+        // Both starts read the stale lock; the second clears and takes it while the first waits.
+        if (step === "clear" && second === undefined) second = acquireInstallLock(root);
+      });
+
+      expect(second).toBeDefined();
+      expect(first).toBeUndefined();
+      expect(lockOwners(root)).toEqual([`owner-${second.token}`]);
+    });
+
+    it("takes over the lock of a start that no longer runs, with what that start left", () => {
+      const { root } = installFixture();
+      const ended = endedPid();
+      staleLock(root, ended, [`stop-${String(ended)}-ab`]);
+      mkdirSync(join(root, "system", `keiko-npm-install.lock.${String(ended)}-cd.candidate`));
+      mkdirSync(join(root, "system", `keiko-npm-install.lock.${String(ended)}-ef.released`));
+      // A leftover of a start that still runs is still on its way and stays.
+      const running = `keiko-npm-install.lock.${String(process.pid)}-12.candidate`;
+      mkdirSync(join(root, "system", running));
+
+      const lock = acquireInstallLock(root);
+      expect(lock).toBeDefined();
+      expect(readdirSync(installLockPath(root))).toEqual([`owner-${lock.token}`]);
+      expect(lockLeftovers(root)).toEqual([running]);
+      // The Stop that went to the start that ended does not cancel this one.
+      expect(releaseInstallLock(lock)).toBe(false);
+    });
+
+    it("takes over a lock written before the computer started, though its number runs again", () => {
+      // Audit of PR #4464 (P2): the system gives an ended start's process number to a new process,
+      // and that process held the lock for every later start and Stop.
+      const { root } = installFixture();
+      staleLock(root, process.pid, [], "1\n");
+
+      expect(installerActive(root)).toBe(false);
+      expect(requestStop(root)).toBe(false);
+      const lock = acquireInstallLock(root);
+      expect(lock).toBeDefined();
+      expect(lockOwners(root)).toEqual([`owner-${lock.token}`]);
+      // The lock this start wrote names its own time, so it holds against the next start.
+      expect(installerActive(root)).toBe(true);
+      expect(acquireInstallLock(root)).toBeUndefined();
+    });
+
+    it("lets an owner hold the lock only within the computer's run and one hour", () => {
+      const now = 10_000_000_000;
+      const up = 5 * 60 * 60 * 1000;
+      const minute = 60 * 1000;
+
+      expect(ownerExpired(now - minute, now, up)).toBe(false);
+      // A clock set back after the owner was written does not end it.
+      expect(ownerExpired(now + minute, now, up)).toBe(false);
+      // Written before the computer started, beyond what a clock correction explains.
+      expect(ownerExpired(now - up - 11 * minute, now, up)).toBe(true);
+      expect(ownerExpired(now - minute, now, 4 * minute)).toBe(false);
+      expect(ownerExpired(now - 61 * minute, now, up)).toBe(true);
+      expect(ownerExpired(now - 59 * minute, now, up)).toBe(false);
+    });
+
+    it("leaves a lock another start took over to that start when it ends", () => {
+      const { root } = installFixture();
+      const lock = acquireInstallLock(root);
+      // Another start judged this one's lock expired and took it over.
+      rmSync(installLockPath(root), { recursive: true });
+      const other = acquireInstallLock(root);
+      requestStop(root);
+
+      expect(releaseInstallLock(lock)).toBe(false);
+      expect(lockOwners(root)).toEqual([`owner-${other.token}`]);
+      expect(releaseInstallLock(other)).toBe(true);
+    });
+
+    it("holds the lock also when Keiko is already loaded, so a Stop meanwhile is carried out", () => {
+      // Audit of PR #4464 (P2): a start that installed nothing opened Keiko without the lock, and
+      // a Stop in that time stopped nothing.
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       const { root, nodeDir, env } = installFixture();
+      installKeiko(root, `${lockfileDigest(root)}\n`);
       const stopRun = vi.fn();
       const stopped = [];
-      const npm = fakeNpm(root, true, () => stopped.push(stop(root, env, stopRun)));
-      const run = vi.fn((node, args, options) => npm.run(node, args, options));
+      const run = vi.fn((_node, args) => {
+        if (args[1] === "start") stopped.push(stop(root, env, stopRun));
+        return { status: 0 };
+      });
 
       expect(start(root, nodeDir, env, run)).toBe(0);
       expect(stopped).toEqual([0]);
       expect(stopRun).not.toHaveBeenCalled();
-      // Only npm ran: the start did not open Keiko.
-      expect(run).toHaveBeenCalledOnce();
-      expect(existsSync(stopRequestPath(root))).toBe(false);
-      expect(existsSync(installLockPath(root))).toBe(false);
-      // A Stop request left by an earlier start does not cancel the next one.
-      writeFileSync(stopRequestPath(root), "1\n");
-      rmSync(join(root, "node_modules", ".keiko-npm-installed"));
-      const next = vi.fn((node, args, options) =>
-        args[1] === "ci" ? fakeNpm(root, true).run(node, args, options) : { status: 0 },
+      expect(run.mock.calls.map((call) => call[1][1])).toEqual(["start", "stop"]);
+      expect(log).toHaveBeenCalledWith(
+        "Keiko is still being loaded. It does not stay open: the start that loads it stops it.",
       );
-      expect(start(root, nodeDir, env, next)).toBe(0);
-      expect(next).toHaveBeenCalledTimes(2);
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/running in your browser/u));
+    });
+
+    it("keeps Keiko from opening when Stop comes while it is being loaded", () => {
+      // Review finding on PR #4464 (P2): Stop reported success before the CLI existed while the
+      // pending start still opened Keiko.
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { root, nodeDir, env } = installFixture();
+      const stopRun = vi.fn();
+      const stopped = [];
+      const npm = fakeNpm(root, true, () => stopped.push(stop(root, env, stopRun)));
+      const run = vi.fn((node, args, options) =>
+        args[1] === "ci" ? npm.run(node, args, options) : { status: 0 },
+      );
+
+      expect(start(root, nodeDir, env, run)).toBe(0);
+      expect(stopped).toEqual([0]);
+      expect(stopRun).not.toHaveBeenCalled();
+      // npm ran and Keiko was not opened; the start carried the Stop out, so a Keiko an earlier
+      // start of the folder opened stops as well.
+      expect(run.mock.calls.map((call) => call[1][1])).toEqual(["ci", "stop"]);
+      expect(log).toHaveBeenCalledWith(
+        "Keiko was stopped while it was being loaded and does not start. You can close this window.",
+      );
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/running in your browser/u));
+      expect(existsSync(installLockPath(root))).toBe(false);
+      expect(lockLeftovers(root)).toEqual([]);
+    });
+
+    it("stops Keiko again when Stop comes while the loading start opens it", () => {
+      // Review finding on PR #4464 (P2): the start let go of its lock before it opened Keiko, so a
+      // Stop in between ran an ordinary stop of nothing and Keiko opened afterwards.
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { root, nodeDir, env } = installFixture();
+      const npm = fakeNpm(root, true);
+      const stopRun = vi.fn();
+      const stopped = [];
+      const run = vi.fn((node, args, options) => {
+        if (args[1] === "ci") return npm.run(node, args, options);
+        // Keiko opens while the start still holds the lock; this Stop lands in it.
+        if (args[1] === "start") stopped.push(stop(root, env, stopRun));
+        return { status: 0 };
+      });
+
+      expect(start(root, nodeDir, env, run)).toBe(0);
+      expect(stopped).toEqual([0]);
+      expect(stopRun).not.toHaveBeenCalled();
+      expect(run.mock.calls.map((call) => call[1][1])).toEqual(["ci", "start", "stop"]);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringMatching(/^Keiko was stopped again right after it opened/u),
+      );
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/running in your browser/u));
+    });
+
+    it("leaves a Stop after the loading start to stop the opened Keiko itself", () => {
+      quiet();
+      const { root, nodeDir, env } = installFixture();
+      const npm = fakeNpm(root, true);
+      const run = vi.fn((node, args, options) =>
+        args[1] === "ci" ? npm.run(node, args, options) : { status: 0 },
+      );
+      expect(start(root, nodeDir, env, run)).toBe(0);
+
+      // The start let go of its lock only once Keiko was open: this Stop finds no lock.
+      expect(requestStop(root)).toBe(false);
+      const stopRun = vi.fn(() => ({ status: 0 }));
+      expect(stop(root, env, stopRun)).toBe(0);
+      expect(stopRun.mock.calls.map((call) => call[1][1])).toEqual(["stop"]);
+    });
+
+    it("reports Keiko's own exit code when it fails to open after the installation", () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { root, nodeDir, env } = installFixture();
+      const npm = fakeNpm(root, true);
+      const run = vi.fn((node, args, options) =>
+        args[1] === "ci" ? npm.run(node, args, options) : { status: 4 },
+      );
+
+      expect(start(root, nodeDir, env, run)).toBe(4);
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/running in your browser/u));
+      expect(existsSync(installLockPath(root))).toBe(false);
+    });
+
+    it("reports a Stop it could not carry out with the stop's exit code", () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { root, nodeDir, env } = installFixture();
+      const npm = fakeNpm(root, true, () => requestStop(root));
+      const run = vi.fn((node, args, options) =>
+        args[1] === "ci" ? npm.run(node, args, options) : { status: 5 },
+      );
+
+      expect(start(root, nodeDir, env, run)).toBe(5);
+      expect(run.mock.calls.map((call) => call[1][1])).toEqual(["ci", "stop"]);
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/was stopped/u));
+    });
+
+    it("carries out a Stop also when Keiko reported a failure as it opened", () => {
+      quiet();
+      const { root, nodeDir, env } = installFixture();
+      const npm = fakeNpm(root, true);
+      const run = vi.fn((node, args, options) => {
+        if (args[1] === "ci") return npm.run(node, args, options);
+        if (args[1] !== "start") return { status: 0 };
+        requestStop(root);
+        return { status: 6 };
+      });
+
+      // Whatever part of Keiko came up stops, and the start reports why Keiko did not open.
+      expect(start(root, nodeDir, env, run)).toBe(6);
+      expect(run.mock.calls.map((call) => call[1][1])).toEqual(["ci", "start", "stop"]);
+    });
+
+    it("refuses a lock it cannot take instead of waiting for it", () => {
+      const { root } = installFixture();
+      const dir = installLockPath(root);
+      const ended = endedPid();
+      staleLock(root, ended);
+      let added = 0;
+      // Every clearing finds one more entry, so the lock never empties.
+      const pause = (step) => {
+        if (step !== "clear") return;
+        added += 1;
+        writeFileSync(join(dir, `stop-${String(ended)}-${added.toString(16)}`), "");
+      };
+
+      expect(() => acquireInstallLock(root, pause)).toThrow(LauncherRefusal);
+      expect(() => acquireInstallLock(root, pause)).toThrow(/cannot be taken/u);
+      expect(lockLeftovers(root)).toEqual([]);
+    });
+
+    it("records no Stop in the lock of a start that no longer runs", () => {
+      quiet();
+      const { root, env } = installFixture();
+      staleLock(root, endedPid());
+      installKeiko(root);
+      const stopRun = vi.fn(() => ({ status: 0 }));
+
+      expect(requestStop(root)).toBe(false);
+      expect(stop(root, env, stopRun)).toBe(0);
+      expect(stopRun).toHaveBeenCalledOnce();
     });
   });
 
@@ -568,6 +887,43 @@ describe("the administrator's access step", () => {
 
     expect(credentialScope(config).foreign).toEqual([]);
     expect(teamConfig(config, "token").providers[1]).toMatchObject({ apiKey: "token" });
+  });
+
+  it("reads a capability Gateway Setup stored on its provider, and a listed one first", () => {
+    // Review finding on PR #4464 (P2): only the top-level list was read, so a gateway-managed
+    // voice deployment stored on its provider was refused as another connection.
+    const capability = {
+      id: "stt",
+      kind: "voice",
+      supportsSpeechInput: true,
+      voiceProviderLocality: "gateway-managed",
+    };
+    const voice = { modelId: "stt", baseUrl: "https://gw", apiKeySecretRef: "vault:3", capability };
+    const config = { providers: [sealed, voice] };
+
+    expect(credentialScope(config).foreign).toEqual([]);
+    expect(teamConfig(config, "token").providers[1]).toEqual({
+      modelId: "stt",
+      baseUrl: "https://gw",
+      capability,
+      apiKey: "token",
+    });
+    // A provider with its own credential stays its own connection, however its capability is stored.
+    const speech = {
+      modelId: "own-tts",
+      baseUrl: "https://speech.example",
+      apiKeySecretRef: "vault:5",
+      capability: { kind: "voice", voiceProviderLocality: "gateway-managed" },
+    };
+    expect(credentialScope({ providers: [sealed, voice, speech] }).foreign).toEqual(["own-tts"]);
+    // The stored kind decides the main connection: a voice model listed first is not it.
+    expect(credentialScope({ providers: [speech, sealed] }).foreign).toEqual(["own-tts"]);
+    // A listed capability wins over the provider's own, as the gateway's loader merges them.
+    const listed = {
+      ...config,
+      capabilities: [{ id: "stt", kind: "voice", voiceProviderLocality: "azure-foundry" }],
+    };
+    expect(credentialScope(listed).foreign).toEqual(["stt"]);
   });
 
   it("reads the main connection from the first chat model, wherever it is listed", () => {
@@ -848,6 +1204,26 @@ describe("the administrator's access step", () => {
       expect(readdirSync(root).filter((name) => name.endsWith(".tmp"))).toEqual([]);
     });
 
+    it("keeps the previous file as it was when the system writes only part of the new one", async () => {
+      // Review finding on PR #4464 (P2): writeSync returned a short count without an error (a
+      // file-size limit), and the truncated configuration replaced the previous one.
+      quiet();
+      const { root, env, target } = savedConfig({ providers: [sealed] });
+      writeFileSync(target, "previous\n");
+      let calls = 0;
+      const short = (fd, bytes, offset, length) => {
+        calls += 1;
+        return calls === 1 ? writeSync(fd, bytes, offset, Math.min(length, 5)) : 0;
+      };
+      const writeNew = (path, text) => writeNewPrivateFile(path, text, short);
+
+      await expect(
+        saveConfig(root, env, { readToken: async () => "team-token", writeNew }),
+      ).rejects.toThrow(/could not be written completely/u);
+      expect(readFileSync(target, "utf8")).toBe("previous\n");
+      expect(readdirSync(root).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+    });
+
     it.each(["KEIKO_CONFIG_FILE", "KEIKO_UI_DATA_DIR"])(
       "refuses to export while %s points Keiko at another configuration",
       async (name) => {
@@ -895,6 +1271,18 @@ describe("the administrator's access step", () => {
       );
       expect(existsSync(target)).toBe(false);
     });
+  });
+
+  it("finishes a write the system takes in parts", () => {
+    const path = join(tempDir(), "file.json");
+    const parts = [];
+    writeNewPrivateFile(path, "Grüße, Keiko\n", (fd, bytes, offset, length) => {
+      parts.push(length);
+      return writeSync(fd, bytes, offset, Math.min(length, 3));
+    });
+
+    expect(readFileSync(path, "utf8")).toBe("Grüße, Keiko\n");
+    expect(parts.length).toBeGreaterThan(1);
   });
 
   it("publishes a file in one step and leaves nothing behind", () => {

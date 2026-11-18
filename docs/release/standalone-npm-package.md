@@ -51,21 +51,33 @@ The lockfile is resolved against the public registry. The folder's `.npmrc` may 
 registry with a single `registry=` line; npm then loads the same packages from there (npm replaces
 the registry host and keeps every checksum), and a `registry` inherited from an `npm_config_*`
 variable cannot override it. A scoped `@scope:registry` line, or `registry` named twice, is refused
-before npm runs, because it would send packages of that scope elsewhere. Without an `.npmrc`, npm
-follows the person's own npm configuration, if there is one, and otherwise the public registry.
+before npm runs, because it would send packages of that scope elsewhere. So is every line npm would
+ignore and answer with the public registry: another spelling such as `REGISTRY=`, a list
+(`registry[]=`), a `registry` inside a `[section]`, and an address that is no http or https URL.
+The line may be quoted and may use `${NAME}` for an environment variable, as npm allows. Without an
+`.npmrc`, npm follows the person's own npm configuration, if there is one, and otherwise the public
+registry.
 
 Each installation gets its own npm cache, `.keiko-standalone/npm-cache-<random>`, which is removed
 when it ends; an npm cache that already exists there is never touched. npm's log lies in
-`.keiko-standalone/npm-logs`, and a failed installation names its log. Both are set on npm's command
+`.keiko-standalone/npm-logs`, and a failed installation names its log; an `npm-logs` that is a
+link, a file or another account's folder is refused before npm writes. Both are set on npm's command
 line so that no `npm_config_*` variable moves them. Keiko's data folder is `.keiko-standalone` in the
 person's user folder, the same data folder as the folder package, so replacing the folder keeps
 chats, settings and credentials. A `KEIKO_STATE_DIR` outside the user folder is refused before
 anything is written.
 
-A second start while the first is still installing waits for nothing and starts no second
-installation: it says that Keiko is being loaded. `Stop Keiko` during the installation lets it finish
-and keeps Keiko from starting afterwards. A later start installs again only when the lockfile
-changed or an earlier installation did not finish. Keiko then runs `keiko start`.
+A second start while the first is still installing or opening Keiko waits for nothing and starts
+no second installation: it says that another start is opening Keiko and that its window says
+whether Keiko opened. Every start keeps the folder's installation lock
+(`system/keiko-npm-install.lock`) until Keiko is open, also one that installs nothing. `Stop Keiko`
+meanwhile is recorded in that lock: the start then does not open Keiko, or stops it again right
+after it opened, also when Keiko reported a failure as it opened. A `Stop Keiko` after that stops
+the open Keiko as usual. A lock whose start was closed or crashed is taken over by the next start:
+its process no longer runs, or the lock was written before the computer started or more than an
+hour ago, since the system gives an ended start's process number to new processes. Each start and
+stop says how it ended. A later start installs again only when the lockfile changed or an earlier
+installation did not finish. Keiko then runs `keiko start`.
 
 The start declares Keiko managed outside the app, as the folder package does, whatever the
 computer's environment declares, so on Windows it sets up no gateway service and asks for no

@@ -280,20 +280,31 @@ export function refuseIncompletePublishedRelease(publisher, releaseInfo, remoteA
   }
 }
 
+function refuseUnvalidatedAssets(publisher, releaseInfo, assets, expected, published) {
+  const unvalidated = unvalidatedReleaseAssets(assets, expected);
+  if (unvalidated === undefined) return;
+  publisher.fail(
+    published
+      ? immutableReleaseRepairFailure(releaseInfo.tag, unvalidated)
+      : `the draft GitHub release ${releaseInfo.tag} ${unvalidated}; delete them from the draft, then run the publish again.`,
+  );
+}
+
 /**
  * Proves the complete download set on GitHub, then publishes this run's draft as the last GitHub
- * step. Returns the assets as the public release lists them.
+ * step. The public release is read once more and must carry exactly that set again, so assets that
+ * changed between the two reads stop this run before npm, as a rerun would. Returns the assets as
+ * the public release lists them.
  */
 export function publishVerifiedPortableRelease(publisher, releaseInfo, remoteAssets, expected) {
   refuseIncompletePublishedRelease(publisher, releaseInfo, remoteAssets, expected);
-  const unvalidated = unvalidatedReleaseAssets(remoteAssets, expected);
-  if (unvalidated !== undefined) {
-    publisher.fail(
-      releaseInfo.published === true
-        ? immutableReleaseRepairFailure(releaseInfo.tag, unvalidated)
-        : `the draft GitHub release ${releaseInfo.tag} ${unvalidated}; delete them from the draft, then run the publish again.`,
-    );
-  }
+  refuseUnvalidatedAssets(
+    publisher,
+    releaseInfo,
+    remoteAssets,
+    expected,
+    releaseInfo.published === true,
+  );
   publisher.verifyAssets(remoteAssets, expected, releaseInfo);
   const digestFailures = remoteDigestFailures(remoteAssets, expected);
   if (digestFailures.length > 0) {
@@ -315,7 +326,14 @@ export function publishVerifiedPortableRelease(publisher, releaseInfo, remoteAss
   ]);
   publisher.log(`published GitHub release ${releaseInfo.tag}.`);
   const publicSnapshot = publisher.snapshot({ repo: releaseInfo.repo, tag: releaseInfo.tag });
+  refuseUnvalidatedAssets(publisher, releaseInfo, publicSnapshot.assets, expected, true);
   publisher.verifyAssets(publicSnapshot.assets, expected, releaseInfo);
+  refuseIncompletePublishedRelease(
+    publisher,
+    { ...releaseInfo, published: true },
+    publicSnapshot.assets,
+    expected,
+  );
   return publicSnapshot.assets;
 }
 
