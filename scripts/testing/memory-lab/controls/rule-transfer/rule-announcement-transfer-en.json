@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "id": "rule-announcement-transfer-en",
+  "language": "en",
+  "class": "multi-turn",
+  "difficulty": "split",
+  "description": "Only the concrete instruction belongs in memory. The preceding announcement contains no actionable content. A separate announcement is an unnecessary entry. One positive, one near negative and one missing attribute in new Chats.",
+  "truth": [
+    {
+      "key": "concrete-rule",
+      "seed": "My packing lists always start with the crate number.",
+      "must": true,
+      "private": true,
+      "terms": [
+        [
+          "crate number",
+          "crate ID",
+          "crate identifier",
+          "box number"
+        ]
+      ]
+    }
+  ],
+  "turns": [
+    {
+      "user": "I've got a new rule for my packing lists.",
+      "learner": []
+    },
+    {
+      "user": "They always start with the crate number.",
+      "learner": [
+        {
+          "body": "They always start with the crate number.",
+          "type": "procedural"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "positive",
+      "question": "What goes first on my packing lists?",
+      "expect": {
+        "kind": "answer",
+        "terms": [
+          [
+            "crate number",
+            "crate ID",
+            "crate identifier",
+            "box number"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "unrelated-near",
+      "question": "What goes first on the theatre's cast lists?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    },
+    {
+      "id": "unknown-attribute",
+      "question": "Which ink colour do I use for my packing lists?",
+      "expect": {
+        "kind": "abstain"
+      }
+    }
+  ]
+}
