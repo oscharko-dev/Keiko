@@ -71,3 +71,29 @@ Revisit condition: drop this entry once the eslint plugins move to minimatch >= 
 publishes a patched 3.x release. Recorded during #3907 (PR #4167): GitHub reviewed the advisory on
 2026-10-30 at 23:09 UTC and the OSV scan of every branch failed from then on.
 """
+
+[[IgnoredVulns]]
+id = "GHSA-fc5q-39xc-vjpf"
+ignoreUntil = 2026-12-01
+reason = """
+picomatch regular-expression denial of service through single-branch repeated extglobs (CWE-1333,
+high; CVSS 8.7). Build-time only and unfixable upstream at the time of writing: the advisory covers
+every release through 4.0.7, which is the latest published picomatch, and names no patched version.
+
+Reach: the lockfile holds two instances, both flagged dev: picomatch@4.0.7 for dependency-cruiser,
+fdir, tinyglobby, jest-util, jest-message-util, knip, vite and vitest, and picomatch@2.3.2 for
+micromatch@4.0.8 (the eslint-config-next fast-glob path of the braces entry above).
+`npm ls --omit=dev --all picomatch` is empty, and neither `dist/` nor the UI's static export
+contains it. These tools compile glob patterns from configuration this repository authors (test
+include globs, the dependency-cruiser and knip rules, Vite's file watching) and match them against
+repository paths while a build, a lint or a test runs. No user and no untrusted input supplies a
+pattern; the worst case is a slow developer or CI process over a pattern a committer wrote.
+
+No upgrade path exists: 4.0.7 is the latest release on the only maintained line, and every
+consumer above already resolves to it or to micromatch's latest 2.x requirement.
+
+Revisit condition: drop this entry as soon as picomatch publishes a patched release and the
+lockfile moves to it. Recorded on dev during #4455 (PR #4460): GitHub updated the advisory on
+2026-11-17 at 15:56 UTC to cover 4.0.7, and OSV matched it from then on. Ported unchanged to the
+epic #3914 branch, whose lockfile holds the same two instances for the same consumers.
+"""
