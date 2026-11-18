@@ -93,6 +93,7 @@ describe("MemoryJournal loading and ordering", () => {
     const user = userEvent.setup();
     const capture = makeCapture("removed-from-detail", 100);
     const retained = makeCapture("retained", 200, { outcome: "proposed" });
+    const recent = makeCapture("learned-in-chat", 250);
     const stale = deferred<MemoryRecentCapturesResponse>();
     const reload = deferred<MemoryRecentCapturesResponse>();
     const load = vi
@@ -102,6 +103,7 @@ describe("MemoryJournal loading and ordering", () => {
       .mockReturnValueOnce(reload.promise);
     renderJournal([], { fetchRecentCapturesImpl: load });
     expect(await screen.findByText(capture.bodyExcerpt ?? "")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("2 recent captures loaded");
 
     await user.tab();
     const back = screen.getByRole("button", { name: "Back" });
@@ -129,6 +131,7 @@ describe("MemoryJournal loading and ordering", () => {
     await act(async () => {
       reload.resolve(
         response([
+          recent,
           retained,
           {
             eventId: "forgotten-decision",
@@ -143,6 +146,7 @@ describe("MemoryJournal loading and ordering", () => {
     });
     expect(screen.getByText("Forgotten")).toBeInTheDocument();
     expect(screen.queryByText(capture.bodyExcerpt ?? "")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("3 recent captures loaded");
   });
 
   it("renders the empty and error states with a single Journal status region", async () => {
@@ -429,6 +433,53 @@ describe("MemoryJournal Keep and Forget", () => {
     await waitFor(() => expect(screen.getAllByTestId("memory-journal-row")).toHaveLength(1));
     expect(screen.queryByText("Memory newest")).not.toBeInTheDocument();
     expect(forgetImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the Forget announcement after the canonical Journal refresh", async () => {
+    const user = userEvent.setup();
+    const removed = makeCapture("remove", 200);
+    const retained = makeCapture("retain", 100);
+    const forgotten: MemoryRecentCapture = {
+      eventId: "decision-forget",
+      outcome: "forgotten",
+      scope: removed.scope,
+      provenance: removed.provenance,
+      occurredAt: 300,
+      reason: "forgotten-by-person",
+    };
+    const reload = deferred<MemoryRecentCapturesResponse>();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce(response([removed, retained]))
+      .mockReturnValueOnce(reload.promise)
+      .mockResolvedValueOnce(response([forgotten, retained, makeCapture("recent", 400)]));
+    renderJournal([], {
+      fetchRecentCapturesImpl: load,
+      forgetMemoryImpl: (id) =>
+        forgetMemory(id, async () => ({ forgotten: true, memoryIds: [id], count: 1 })),
+    });
+    const [first, next] = await screen.findAllByTestId("memory-journal-row");
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("2 recent captures loaded");
+    await user.click(within(first!).getByRole("button", { name: "Forget" }));
+
+    expect(status).toHaveTextContent("Memory forgotten");
+    expect(next).toHaveFocus();
+    expect(load).toHaveBeenCalledTimes(2);
+    await act(async () => reload.resolve(response([forgotten, retained])));
+    expect(screen.getByText("Forgotten", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText(removed.bodyExcerpt ?? "")).not.toBeInTheDocument();
+    expect(next).toHaveFocus();
+    expect(status).toHaveTextContent("Memory forgotten");
+
+    await act(async () => {
+      await acceptMemoryProposal(
+        "retain",
+        vi.fn().mockResolvedValue({ memory: { id: "retain", status: "accepted" } }),
+      );
+    });
+    expect(screen.getByText("Memory recent")).toBeInTheDocument();
+    expect(status).toHaveTextContent("3 recent captures loaded");
   });
 
   it("focuses the correct rejected row after Forget when rejected decisions share occurredAt/mode/reason", async () => {
