@@ -6,7 +6,6 @@
 // never diverge between lanes.
 
 const PHYSICAL_LINE_BREAK = /\r?\n/u;
-const CRLF = /\r\n/gu;
 
 export interface PhysicalLineSpan {
   /** Offset of the line's first code unit in the original text. */
@@ -21,7 +20,7 @@ export function splitPhysicalLines(text: string): string[] {
 
 // Rewrites every "\r\n" terminator to "\n"; equivalent to splitPhysicalLines(text).join("\n").
 export function normalizePhysicalLineBreaks(text: string): string {
-  return text.includes("\r\n") ? text.replace(CRLF, "\n") : text;
+  return text.replaceAll("\r\n", "\n");
 }
 
 // Original-text coordinates of every physical line, so a caller that slices the raw source keeps
