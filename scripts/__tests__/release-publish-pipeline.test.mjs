@@ -45,6 +45,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -2336,6 +2337,9 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       }
 
       // No Content-Length is involved: the stub writes a file larger than the expected size.
+      // CodeRabbit on PR #4464: the failure exited inside the download's try, so its temporary
+      // folder with the partial archive stayed behind. The publisher's own TMPDIR shows it.
+      const publisherTemp = mkdtempSync(join(tmpdir(), "keiko-release-publish-tmp-"));
       const oversized = runPublish({
         npmBody: npmStub(registryVersionBody()),
         initState: {
@@ -2344,12 +2348,17 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
           oversizeRemoteDownloads: [target],
         },
         signingKeyPair,
+        qualificationEnv: { TMPDIR: publisherTemp },
       });
       expect(oversized.status).toBe(1);
       expect(oversized.stderr).toContain(
         `portable asset download exceeded the expected size for ${target}.`,
       );
       expect(oversized.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      expect(
+        readdirSync(publisherTemp).filter((name) => name.startsWith("keiko-portable-download-")),
+      ).toEqual([]);
+      rmSync(publisherTemp, { force: true, recursive: true });
 
       // A download that never ends is stopped at the deadline and named.
       const hung = runPublish({

@@ -35,7 +35,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { sha256File } from "./lib/digest.mjs";
+import { sha256FileChunked } from "./lib/digest.mjs";
 import { folderChecksumText, folderPackageArchiveName } from "./lib/folder-package-release.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { credentialScope, teamConfig } from "./standalone/npm/keiko-npm.mjs";
@@ -183,7 +183,7 @@ function verifyArchive(archivePath, expected) {
   if (!existsSync(archivePath) || !statSync(archivePath).isFile()) {
     refuse(`archive not found: ${archivePath}`);
   }
-  const actual = sha256File(archivePath);
+  const actual = sha256FileChunked(archivePath);
   if (actual !== expected) {
     refuse(`archive checksum mismatch: expected ${expected}, got ${actual}`);
   }
@@ -452,7 +452,7 @@ export function buildFolderPackage(options, form, assemble, { sizeSourceEntries 
       rootName: PACKAGE_ROOT_NAME,
       requireRegularEntries: true,
     });
-    const outputSha256 = sha256File(outputPath);
+    const outputSha256 = sha256FileChunked(outputPath);
     writeFileSync(`${outputPath}.sha256`, folderChecksumText(outputSha256, basename(outputPath)));
     const folder = keptFolder === undefined ? undefined : publishFolder(packageRoot, keptFolder);
     return { target, packageVersion, outputPath, outputSha256, folder, provisioned };

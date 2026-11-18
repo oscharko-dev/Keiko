@@ -78,7 +78,7 @@ is downloaded at start. Run `scripts/__tests__/build-standalone-package.test.mjs
 `portable-in-place` and `provisioned-config` suites of `keiko-cli`. The operator guide is
 [`docs/release/standalone-folder-package.md`](docs/release/standalone-folder-package.md).
 
-Every stable release carries the generic package of each desktop target. The assemble job of
+Every stable `latest` release carries the generic package of each desktop target. The assemble job of
 `portable-assets.yml` builds them with `scripts/build-folder-release-assets.mjs`, and the publisher
 uploads them in the same draft as the archives (`scripts/lib/folder-package-release.mjs`). Keep the
 dot before the form in a package name (`keiko-<target>.standalone.zip`): shipped updaters read

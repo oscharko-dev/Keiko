@@ -1714,37 +1714,46 @@ function runPortableDownloadSmoke(remoteAssets, expectedAssets) {
   }
 }
 
+// The temporary folder is removed before a failure ends the process: `fail` exits at once, so a
+// failure inside the `try` would skip the `finally` and leave the partial download behind.
 function smokePortableDownloadUrl(expected, url) {
   const root = mkdtempSync(join(tmpdir(), "keiko-portable-download-"));
-  const destination = join(root, expected.assetName);
+  let failure;
   try {
-    const maxTimeSeconds = portableDownloadMaxTimeSeconds();
-    const command = boundedCurlCommand(
-      portableDownloadCurlArgs({
-        expectedSize: expected.expectedSize,
-        destination,
-        url,
-        maxTimeSeconds,
-      }),
-      expected.expectedSize,
-    );
-    const result = commandResult(command.cmd, command.args, {
-      env: networkEnvironment(),
-      killSignal: "SIGKILL",
-      timeout: portableDownloadTimeoutMs(maxTimeSeconds),
-    });
-    if (result.error !== undefined || result.status !== 0) {
-      fail(portableDownloadFailure(result, expected, destination));
-    }
-    if (
-      statSync(destination).size !== expected.expectedSize ||
-      sha256FileChunked(destination) !== expected.expectedSha256
-    ) {
-      fail(`downloaded portable asset bytes do not match ${expected.assetName}.`);
-    }
+    failure = portableDownloadMismatch(expected, url, join(root, expected.assetName));
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
+  if (failure !== undefined) fail(failure);
+}
+
+// Why the download of one asset did not give its verified bytes, or undefined when it did.
+function portableDownloadMismatch(expected, url, destination) {
+  const maxTimeSeconds = portableDownloadMaxTimeSeconds();
+  const command = boundedCurlCommand(
+    portableDownloadCurlArgs({
+      expectedSize: expected.expectedSize,
+      destination,
+      url,
+      maxTimeSeconds,
+    }),
+    expected.expectedSize,
+  );
+  const result = commandResult(command.cmd, command.args, {
+    env: networkEnvironment(),
+    killSignal: "SIGKILL",
+    timeout: portableDownloadTimeoutMs(maxTimeSeconds),
+  });
+  if (result.error !== undefined || result.status !== 0) {
+    return portableDownloadFailure(result, expected, destination);
+  }
+  if (
+    statSync(destination).size !== expected.expectedSize ||
+    sha256FileChunked(destination) !== expected.expectedSha256
+  ) {
+    return `downloaded portable asset bytes do not match ${expected.assetName}.`;
+  }
+  return undefined;
 }
 
 function npmViewVersionResult(pkg, registry) {

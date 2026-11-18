@@ -24,7 +24,7 @@ Targets: `macos-arm64`, `macos-x64` and `windows-x64`
 
 ## Download From A Release
 
-From Keiko 1.5.3 on, every stable release carries the generic package of each target beside the
+From Keiko 1.5.3 on, every stable `latest` release carries the generic package of each target beside the
 portable archives, each with a `.sha256` file:
 
 | Target        | Release asset                      |
