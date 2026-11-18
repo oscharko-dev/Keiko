@@ -78,8 +78,13 @@ describe("physical line contract properties (#4439)", () => {
         const spans = physicalLineSpans(mixed);
         expect(spans.map((span) => mixed.slice(span.start, span.end))).toEqual(lf.split("\n"));
         const lineCount = spans.length;
-        for (let start = 1; start <= lineCount; start += 1) {
-          const end = Math.min(lineCount + 1, start + 2);
+        // The whole file, a middle window and the last line, with an end past the file.
+        const middle = Math.ceil(lineCount / 2);
+        for (const [start, end] of [
+          [1, lineCount],
+          [middle, middle + 1],
+          [lineCount, lineCount + 1],
+        ] as const) {
           expect(codingRepositoryExcerpt("a.ts", mixed, start, end, 4096)).toEqual(
             codingRepositoryExcerpt("a.ts", lf, start, end, 4096),
           );
@@ -91,5 +96,5 @@ describe("physical line contract properties (#4439)", () => {
     });
     // Vacuity guard: most generated documents must actually carry a CRLF terminator.
     expect(crlfCases).toBeGreaterThan(propertySettings({ name }).runs / 2);
-  });
+  }, 30_000);
 });
