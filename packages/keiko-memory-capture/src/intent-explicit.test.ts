@@ -93,6 +93,7 @@ describe("tryExtractRemember", () => {
   it.each([
     "Please remember about this workspace: keep diagrams local",
     "Merke dir zu diesem Arbeitsbereich: keep diagrams local",
+    "Bitte speichere zu diesem Arbeitsbereich, dass keep diagrams local",
     "Bitte merke dir für diesen Arbeitsbereich: keep diagrams local",
   ])("honours the named workspace and the caller's scope constraint in %s", (statement) => {
     const context = ctx({ projectId: "p-1" as ProjectId, workspaceId: "w-1" as WorkspaceId });
@@ -201,6 +202,9 @@ describe("tryExtractForget", () => {
     "Vergiss den Bericht. Oder besser nicht.",
     "Bitte vergiss den Bericht nicht mehr.",
     "Please forget the report. Actually, don't.",
+    "Please forget the report. Actually, don't forget it.",
+    "Please forget the report. Actually, do not.",
+    "Please forget the report. On second thought, do not forget that.",
     "Bitte vergiss den Bericht. Doch lieber nicht.",
   ])("honours an explicit withdrawal before resolving a memory in %s", (text) => {
     const resolver = vi.fn(() => ["memory-report" as MemoryId]);
@@ -542,6 +546,11 @@ describe("explicit German forget and remember statements (#4211)", () => {
     ],
     ["Vergiss, dass ich Tabellen mag und gern lese", "ich Tabellen mag und gern lese"],
     ["Forget my address and phone", "my address and phone"],
+    [
+      "Vergiss meine Telefonnummer und sag bitte nicht, dass ich sie gespeichert hatte.",
+      "meine Telefonnummer",
+    ],
+    ["Please forget the report. Actually, don't publish it.", "the report"],
     ["Forget my address, phone and email", "my address, phone and email"],
     ["Vergiss meine Adresse und alles andere", "meine Adresse und alles andere"],
     ["Vergiss meine Adresse, ich bin umgezogen", "meine Adresse, ich bin umgezogen"],

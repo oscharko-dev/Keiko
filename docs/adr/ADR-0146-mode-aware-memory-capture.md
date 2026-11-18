@@ -198,7 +198,11 @@ to answer stays a memory. Everything learned from natural
 conversation follows D2 (accepted at once unless an operator restricts it); capture-from-conversation
 follows the same rule.
 Such a statement lands in the private user scope unless it names a project or workspace, and the
-learner does not read its turn, so it cannot store the statement itself.
+learner does not read its turn, so it cannot store the statement itself. A German scoped save can
+introduce its fact with a colon or with a comma followed by “dass”. “Speichere über Nacht die
+Protokolle” remains a file task. A withdrawal such as “Actually, do not forget it” preserves the
+memory. In “Vergiss meine Telefonnummer und sag bitte nicht …”, the negation governs the separate
+request about what to say, and the named memory is forgotten.
 
 Only a clear statement acts this way, because it changes memory with no question. "Merke dir" and
 "Remember" count, "Speichere" and "Notiere" only with "dass" or a colon, and "Lösche" only with "die

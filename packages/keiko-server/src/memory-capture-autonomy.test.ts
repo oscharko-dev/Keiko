@@ -1095,9 +1095,54 @@ describe("explicit forget statement in chat", () => {
     expect(readMemories(vault, ctx)).toHaveLength(0);
   });
 
+  it("keeps a stored report after a retracted Forget and removes it after a clear request", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    await collectMemoryActions(
+      deps,
+      turnRequest("Remember that my report is formatted as a table."),
+      ctx,
+    );
+    for (const withdrawal of ["Actually, do not.", "Actually, don't forget it."]) {
+      await collectMemoryActions(deps, turnRequest("Please forget the report. " + withdrawal), ctx);
+      expect(readMemories(vault, ctx)).toHaveLength(1);
+    }
+    await collectMemoryActions(
+      deps,
+      turnRequest("Please forget the report. Actually, don't publish it."),
+      ctx,
+    );
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it("keeps German project instructions within their project and treats a file task as ordinary Chat", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "autonomous-delivery" });
+    await collectMemoryActions(
+      deps,
+      turnRequest("Bitte speichere über Nacht die Protokolle."),
+      ctx,
+    );
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+    await collectMemoryActions(
+      deps,
+      turnRequest("Bitte speichere zu diesem Projekt, dass wir Vitest nutzen."),
+      ctx,
+    );
+    expect(readMemories(vault, ctx)).toMatchObject([
+      { body: "wir Vitest nutzen.", scope: { kind: "project", projectId: ctx.projectId } },
+    ]);
+    expect(readMemories(vault, context())).toHaveLength(0);
+  });
+
   // A telephone number stated today is refused (#4206), but one kept before that change is still the
   // person's to forget by its name, with the clause that goes on asking for the answer.
-  it("forgets a telephone number kept before #4206 by its name", async () => {
+  it.each([
+    "Vergiss einfach meine Telefonnummer; sag mir Bescheid, wenn sie weg ist",
+    "Vergiss meine Telefonnummer und sag bitte nicht, dass ich sie gespeichert hatte.",
+  ])("forgets a telephone number kept before #4206 by its name in %s", async (request) => {
     const vault = makeVault();
     const ctx = context();
     const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
@@ -1128,11 +1173,9 @@ describe("explicit forget statement in chat", () => {
     );
     expect(readMemories(vault, ctx)).toHaveLength(2);
 
-    const actions = await collectMemoryActions(
-      deps,
-      turnRequest("Vergiss einfach meine Telefonnummer; sag mir Bescheid, wenn sie weg ist"),
-      ctx,
-    );
+    await collectMemoryActions(deps, turnRequest("Vergiss meine Telefonnummer bitte nicht."), ctx);
+    expect(readMemories(vault, ctx)).toHaveLength(2);
+    const actions = await collectMemoryActions(deps, turnRequest(request), ctx);
 
     expect(actions).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
     // Only the telephone number goes; the other fact stays.

@@ -98,11 +98,13 @@ const NOT_A_FACT_START_RE =
 const REMEMBER_ABOUT_PATTERNS: readonly RegExp[] = [
   /^\s*(?:please\s+)?remember\s+about\s+/iu,
   /^\s*(?:bitte\s+)?merke?\s+dir(?:\s+bitte)?\s+(?:zu|über|ueber)\s+/iu,
-  /^\s*(?:bitte\s+)?speichere?\s+(?:zu|über|ueber)\s+/iu,
 ];
+// "Speichere über Nacht …" is an ordinary file task. Only a complete scope qualifier makes
+// this form a memory instruction; "Speichere, dass …" and "Speichere: …" have their own prefix.
+const SAVE_ABOUT_PREFIX = /^\s*(?:bitte\s+)?speichere?\s+(?:zu|über|ueber)\s+/iu;
 const ABOUT_SCOPE_PATTERNS = [
   /^this\s+(project|workspace)(?:[:,\s]+|$)/iu,
-  /^dies(?:em|es|en)\s+(projekt|arbeitsbereich|workspace)\s*:\s*/iu,
+  /^dies(?:em|es|en)\s+(projekt|arbeitsbereich|workspace)\s*(?::|,\s*dass\b)\s*/iu,
 ];
 const FOR_SCOPE_PATTERNS = [
   /^for\s+this\s+(project|workspace)\s*:\s*/iu,
@@ -129,7 +131,8 @@ const NEGATED_END_RE = new RegExp(String.raw`(?:^|\s)(?:${GERMAN_NEGATION}|nicht
 // A separate sentence can take back the whole instruction before any target is resolved.
 const FORGET_WITHDRAWALS = [
   /[.!?…]\s+(?:oder|doch|nein,?)\s+(?:(?:besser|lieber|doch)\s+)?nicht(?=[.!?…]|$)/iu,
-  /[.!?…]\s+(?:actually|on second thought|no),?\s+don['’]t(?=[.!?…]|$)/iu,
+  /[.!?…]\s+(?:actually|on second thought|no),?\s+(?:don['’]t|do not)(?=[.!?…]|$)/iu,
+  /[.!?…]\s+(?:actually|on second thought|no),?\s+(?:don['’]t|do not)\s+forget(?:\s+(?:it|that))?(?=[.!?…]|$)/iu,
 ];
 // "Vergiss es" and "Forget it" mean "never mind", so they name nothing to forget.
 const NEVER_MIND_TARGETS: ReadonlySet<string> = new Set(["es", "it"]);
@@ -346,7 +349,7 @@ function statedForgetTarget(text: string): string | null {
   const body = bodyAfterPrefix(prefixMatch, text);
   if (body === null || FORGET_WITHDRAWALS.some((pattern) => pattern.test(body))) return null;
   const sentence = firstSentence(body);
-  if (sentence.endsWith("?") || negatesForgetTarget(text, sentence)) return null;
+  if (sentence.endsWith("?")) return null;
   const target = trimForgetTarget(sentence);
   return target === "" || NEVER_MIND_TARGETS.has(target.toLowerCase()) ? null : target;
 }
@@ -356,9 +359,11 @@ function forgetRequestOf(text: string): ForgetRequest | null {
     if (pattern.test(text)) return { target, lookup: target, onlyIfStored: false };
   }
   // Run every guard, including negation and task continuations, on the same imperative.
-  const target = statedForgetTarget(text.replace(POLITE_FORGET_OPENING, ""));
+  const imperative = text.replace(POLITE_FORGET_OPENING, "");
+  const target = statedForgetTarget(imperative);
   if (target === null) return null;
   const continuation = continuationOf(target);
+  if (negatesForgetTarget(imperative, target.slice(0, continuation?.at))) return null;
   if (continuation === null) return statedForget(target, target);
   if (continuation.kind === "task") return null;
   return answeredForget(target, continuation);
@@ -658,13 +663,14 @@ function readRememberInstruction(text: string): {
   readonly remainder: string;
   readonly scopeKind?: ExplicitScopeKind;
 } | null {
-  const about = execFirst(REMEMBER_ABOUT_PATTERNS, text);
+  const scopedSave = SAVE_ABOUT_PREFIX.exec(text);
+  const about = scopedSave ?? execFirst(REMEMBER_ABOUT_PATTERNS, text);
   const command = about ?? execFirst(REMEMBER_PATTERNS, text);
   if (command === null) return null;
   const remainder = text.slice(command[0].length);
   const scope = execFirst(about === null ? FOR_SCOPE_PATTERNS : ABOUT_SCOPE_PATTERNS, remainder);
   const noun = scope?.[1];
-  if (scope === null || noun === undefined) return { remainder };
+  if (scope === null || noun === undefined) return scopedSave === null ? { remainder } : null;
   return {
     scopeKind: PROJECT_NOUNS.has(noun.toLowerCase()) ? "project" : "workspace",
     remainder: remainder.slice(scope[0].length),
