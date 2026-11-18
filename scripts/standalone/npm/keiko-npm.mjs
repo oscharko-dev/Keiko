@@ -605,15 +605,28 @@ function heldStopRequested(lock) {
  * lock afterwards and stops Keiko itself.
  */
 export function releaseInstallLock(lock) {
-  // A lock another start took over, because this one held it too long, is that start's.
-  if (!existsSync(join(lock.dir, `owner-${lock.token}`))) return false;
   const released = `${lock.dir}.${lock.token}.released`;
-  // A Stop holds its entry open only while it creates it.
-  renameRetrying(lock.dir, released);
+  // A Stop holds its entry open only while it creates it. The lock is moved first and its owner
+  // read afterwards, so no other start can take it over or release it between the two.
+  if (!renameUnlessGone(lock.dir, released)) return false;
   try {
-    return hasStopEntry(readdirSync(released));
+    const names = readdirSync(released);
+    if (names.includes(`owner-${lock.token}`)) return hasStopEntry(names);
+    // A lock another start took over, because this one held it too long, is that start's.
+    renameRetrying(released, lock.dir);
+    return false;
   } finally {
     rmSync(released, { recursive: true, force: true });
+  }
+}
+
+// false when the lock is gone: another start took it over and has released it.
+function renameUnlessGone(from, to) {
+  try {
+    return renameRetrying(from, to);
+  } catch (error) {
+    if (error?.code === "ENOENT") return false;
+    throw error;
   }
 }
 

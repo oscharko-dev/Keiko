@@ -870,6 +870,21 @@ describe("the npm package start", () => {
       expect(releaseInstallLock(other)).toBe(true);
     });
 
+    it("ends quietly when another start took its lock over and has released it", () => {
+      // Audit of PR #4464: the owner check and the rename were two steps, so a lock released in
+      // between ended the start with ENOENT instead of its message.
+      const { root } = installFixture();
+      const lock = acquireInstallLock(root);
+      rmSync(installLockPath(root), { recursive: true });
+      releaseInstallLock(acquireInstallLock(root));
+
+      expect(releaseInstallLock(lock)).toBe(false);
+      expect(existsSync(installLockPath(root))).toBe(false);
+      expect(
+        readdirSync(dirname(installLockPath(root))).filter((name) => /released/u.test(name)),
+      ).toEqual([]);
+    });
+
     it("holds the lock also when Keiko is already loaded, so a Stop meanwhile is carried out", () => {
       // Audit of PR #4464 (P2): a start that installed nothing opened Keiko without the lock, and
       // a Stop in that time stopped nothing.
