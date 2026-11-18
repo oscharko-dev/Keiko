@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
-import { getAccessStatsRows, recordAccessRows, recordOutcomeRows } from "./access.js";
+import {
+  getAccessStatsRows,
+  getConversationTouchRows,
+  recordAccessRows,
+  recordLearnedConfirmationRows,
+  recordOutcomeRows,
+  recordUseRows,
+} from "./access.js";
 import { insertMemoryRow } from "./memories.js";
 import { makeRecord, memId, openTestDb, TEST_CIPHER } from "./_support.js";
 
@@ -13,6 +20,50 @@ function seedMemory(db: DatabaseSync, value: string): MemoryId {
 function id(value: string): MemoryId {
   return memId(value);
 }
+
+describe("learned confirmation time", () => {
+  it("attributes the conversational touch to its source while retaining the processing clock", () => {
+    const db = openTestDb();
+    try {
+      const memory = seedMemory(db, "delayed-confirmation");
+      expect(
+        recordLearnedConfirmationRows(db, memory, "chat-a", { timestamp: 100, rowid: 4 }, 300),
+      ).toBe(true);
+      expect(getConversationTouchRows(db, "chat-a").get(memory)).toEqual({ confirmedAt: 100 });
+      expect(getAccessStatsRows(db, [memory]).get(memory)).toMatchObject({
+        lastAccessedAt: 300,
+        accessCount: 1,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps a newer confirmation and answer use when an older source is learned later", () => {
+    const db = openTestDb();
+    try {
+      const memory = seedMemory(db, "newer-confirmation");
+      recordAccessRows(db, [memory], 250, "chat-a");
+      recordUseRows(db, [memory], 275, "chat-a");
+      expect(
+        recordLearnedConfirmationRows(db, memory, "chat-a", { timestamp: 100, rowid: 4 }, 300),
+      ).toBe(true);
+      expect(getConversationTouchRows(db, "chat-a").get(memory)).toEqual({
+        confirmedAt: 250,
+        usedAt: 275,
+      });
+      expect(
+        recordLearnedConfirmationRows(db, memory, "chat-a", { timestamp: 100, rowid: 4 }, 400),
+      ).toBe(false);
+      expect(getAccessStatsRows(db, [memory]).get(memory)).toMatchObject({
+        lastAccessedAt: 300,
+        accessCount: 2,
+      });
+    } finally {
+      db.close();
+    }
+  });
+});
 
 describe("recordAccessRows", () => {
   it("inserts a fresh access row with count 1", () => {

@@ -373,6 +373,9 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   computed is stored beside it and replaces nothing.
 - **Reinforcement.** Only the person strengthens a memory: saying it again in a separate message
   records a confirmation. Paraphrases learned from the same message merge without reinforcement.
+  A delayed learned confirmation attributes conversation references to its source turn's timestamp
+  and preserves a newer confirmation already recorded there. Access recency and audit timestamps
+  retain the processing clock, so a delayed repeat cannot become an unrelated later turn's "that".
   An answer that repeats a memory records a use for "Vergiss das" and never a reinforcement, so a
   false memory cannot entrench itself by being repeated back.
 - **Forgotten while learning.** A capture still running when the person forgot that turn's

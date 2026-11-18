@@ -61,12 +61,14 @@ SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM memories WHERE id = ?1)
 ON CONFLICT(memory_id, conversation_id) DO UPDATE SET confirmed_at = excluded.confirmed_at
 `;
 
+// Conversational references follow the source turn. A later foreground confirmation stays later
+// even when an older learning pass finishes after it; access recency keeps the processing clock.
 const CONFIRM_LEARNED_TURN_SQL = `
 INSERT INTO memory_conversation_touches
   (memory_id, conversation_id, confirmed_at, learned_confirmation_timestamp, learned_confirmation_rowid)
 SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM memories WHERE id = ?1)
 ON CONFLICT(memory_id, conversation_id) DO UPDATE SET
-  confirmed_at = excluded.confirmed_at,
+  confirmed_at = MAX(COALESCE(confirmed_at, excluded.confirmed_at), excluded.confirmed_at),
   learned_confirmation_timestamp = excluded.learned_confirmation_timestamp,
   learned_confirmation_rowid = excluded.learned_confirmation_rowid
 WHERE learned_confirmation_timestamp IS NULL
@@ -148,7 +150,7 @@ export function recordLearnedConfirmationRows(
     const result = cachedPrepare(db, CONFIRM_LEARNED_TURN_SQL).run(
       memoryId,
       conversationId,
-      nowMs,
+      position.timestamp,
       position.timestamp,
       position.rowid,
     );

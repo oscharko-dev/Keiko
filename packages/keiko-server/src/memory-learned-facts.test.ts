@@ -8,7 +8,7 @@ import type { IncomingMessage } from "node:http";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchMode, NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type {
   ConversationId,
@@ -52,7 +52,7 @@ import {
   MEMORY_LEARN_DROP_REASONS,
   MEMORY_LEARN_RELATION_LABELS,
 } from "./memory-learned-facts-log.js";
-import { captureSalientFromTurn } from "./memory-salience.js";
+import { captureSalientFromTurn, learnStoredTurn } from "./memory-salience.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore } from "./store/index.js";
@@ -754,6 +754,73 @@ describe("what a pronoun and a team's decision become", () => {
       taskType: undefined,
     });
   }
+
+  it.each([false, true])(
+    "binds delayed confirmation to its source before Forget (unrelated later turn: %s)",
+    async (unrelatedLaterTurn) => {
+      const start = Date.UTC(2026, 0, 1);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+      try {
+        const vault = makeVault();
+        const base = context();
+        const fact = "Ich nutze Vim.";
+        let items: readonly ScriptedItem[] = [{ body: fact, type: "fact" }];
+        const deps = {
+          ...makeDeps(vault, []),
+          modelPortFactory: (): ModelPort => scriptedModel(items),
+        };
+        deps.store.createProject(base.projectId, "Fixture");
+        const chatId = deps.store.createChat(base.projectId, "Fixture", "gpt-test").id;
+        const ctx = { ...base, conversationId: chatId as ConversationId };
+        const first = userMessage(deps, chatId, fact, start);
+        await captureSalientFromTurn(
+          deps,
+          { content: fact, sourceMessageId: first.id, memory: { enabled: true } },
+          ctx,
+          "gpt-test",
+          "ok",
+        );
+        const repeat = userMessage(deps, chatId, fact, start + 100);
+        deps.store.memoryLearning?.markMessage(repeat.id, { surface: "desktop" });
+        if (unrelatedLaterTurn) {
+          userMessage(deps, chatId, "Was ist zwei plus zwei?", start + 200);
+        }
+        const position = deps.store.memoryLearning
+          ?.listPending(chatId, 10)
+          .find((message) => message.id === repeat.id)?.position;
+        if (position === undefined) throw new Error("expected the repeated source position");
+        items = [{ body: fact, type: "fact", relation: "same", related: 1 }];
+        clock.mockReturnValue(start + 300);
+        await expect(
+          learnStoredTurn(
+            deps,
+            {
+              request: { content: fact, sourceMessageId: repeat.id, memory: { enabled: true } },
+              context: ctx,
+              modelId: "gpt-test",
+              assistantText: "ok",
+              surface: "desktop",
+              correlationId: "delayed-confirmation",
+              parentCorrelationId: "delayed-pass",
+              sourcePosition: position,
+            },
+            new AbortController().signal,
+          ),
+        ).resolves.toMatchObject({ outcome: "learned" });
+        clock.mockReturnValue(start + 400);
+        const forget = "Please forget that.";
+        userMessage(deps, chatId, forget, start + 400);
+        await collectMemoryActions(
+          deps,
+          { chatId, content: forget, memory: { enabled: true } } as SendDesktopChatRequest,
+          ctx,
+        );
+        expect(liveBodies(vault, ctx)).toEqual(unrelatedLaterTurn ? [fact] : []);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   it.each([
     [

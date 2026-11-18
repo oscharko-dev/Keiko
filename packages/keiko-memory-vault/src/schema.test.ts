@@ -196,7 +196,7 @@ describe("runMigrations", () => {
         lastAccessedAt: 2_200,
       });
       expect(getConversationTouchRows(db, "chat-a").get(record.id)).toEqual({
-        confirmedAt: 2_200,
+        confirmedAt: 1_500,
         usedAt: 1_100,
       });
     } finally {
