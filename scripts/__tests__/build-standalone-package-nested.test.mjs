@@ -287,8 +287,18 @@ const RECORDING_CLI = [
   "writeFileSync(process.env.KEIKO_TEST_ARGS_OUT, JSON.stringify(process.argv.slice(2)));",
 ].join("\n");
 
+// Only the package's own two batch files, by fixed relative names resolved against `cwd`, so no
+// path from the environment (the temporary directory) ever enters the command line. The explicit
+// `.\` keeps working where NoDefaultCurrentDirectoryInExePath stops cmd.exe searching `cwd`.
+const CMD_FILES = new Map([
+  ["start.cmd", String.raw`.\start.cmd`],
+  ["stop.cmd", String.raw`.\stop.cmd`],
+]);
+
 function runCmd(folder, name, env) {
-  return spawnSync("cmd.exe", ["/d", "/c", join(folder, name)], {
+  const command = CMD_FILES.get(name);
+  if (command === undefined) throw new TypeError(`not a package batch file: ${name}`);
+  return spawnSync("cmd.exe", ["/d", "/c", command], {
     cwd: folder,
     env: { ...process.env, ...env },
     input: "",
