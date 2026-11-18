@@ -138,6 +138,43 @@ describe("fetchWithBackoff", () => {
     expect(delays).toEqual([]);
   });
 
+  it("reports an explicit Retry-After on the error even when no retry is allowed", async () => {
+    const op = scriptedOperation([{ status: 429, headers: { "retry-after": "60" } }]);
+    const { sleep, delays } = recordingSleep();
+
+    await expect(
+      fetchWithBackoff(op.run, { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 }, sleep),
+    ).rejects.toMatchObject({ code: "FIGMA_RATE_LIMITED", retryAfterMs: 60_000 });
+    expect(op.calls()).toBe(1);
+    expect(delays).toEqual([]);
+  });
+
+  it("reads an HTTP-date Retry-After against the injected clock", async () => {
+    const now = Date.parse("2026-01-01T00:00:00Z");
+    const op = scriptedOperation([
+      { status: 429, headers: { "retry-after": "Thu, 01 Jan 2026 00:01:00 GMT" } },
+    ]);
+    const { sleep } = recordingSleep();
+
+    await expect(
+      fetchWithBackoff(op.run, { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 }, sleep, () => now),
+    ).rejects.toMatchObject({ retryAfterMs: 60_000 });
+  });
+
+  it("carries no retry delay on a 429 without Retry-After (control)", async () => {
+    const op = scriptedOperation([{ status: 429 }]);
+    const { sleep } = recordingSleep();
+
+    const failure = await fetchWithBackoff(
+      op.run,
+      { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 },
+      sleep,
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(FigmaConnectorError);
+    expect((failure as FigmaConnectorError).retryAfterMs).toBeUndefined();
+  });
+
   it("does not retry a 5xx — only 429 is rate-limit-retryable here", async () => {
     const op = scriptedOperation([{ status: 503 }]);
     const { sleep, delays } = recordingSleep();

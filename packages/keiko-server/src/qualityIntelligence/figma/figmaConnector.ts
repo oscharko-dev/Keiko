@@ -105,6 +105,11 @@ export interface FigmaScopedResult {
    * can surface honest coverage instead of silently under-feeding the IR.
    */
   readonly coverage?: FigmaScopeCoverage;
+  /**
+   * Deep reads not sent because Figma named a Retry-After for this capture; absent when none. Kept
+   * beside, not inside, `coverage`, whose persisted shape is a closed key set.
+   */
+  readonly rateLimitDeferredCount?: number;
 }
 
 export interface FigmaConnector {
@@ -337,6 +342,13 @@ const doFetchScopedNodes = async (
   };
 };
 
+/** One capture's deep-read cooldown: set once Figma names a positive Retry-After. */
+interface DeepFetchCooldown {
+  requested: boolean;
+  /** Deep reads the capture did not send because of that cooldown. */
+  deferredCount: number;
+}
+
 // The per-screen deepening fetcher: a hard (auth/rate/egress) code aborts the build; any other
 // per-node failure degrades that branch to its shallow content (recorded as truncation in coverage).
 const makeDeepFetcher = (
@@ -345,8 +357,15 @@ const makeDeepFetcher = (
   target: FigmaTarget,
   version: string | undefined,
   initial: ScopedDocument,
+  cooldown: DeepFetchCooldown,
 ): ScopedNodeFetcher => {
+  // Once Figma names a Retry-After, no further deep read for this capture goes out: the queued
+  // reads degrade to the existing shallow branch and the partial structure returns without waiting.
   return async (nodeId, depth = rt.paginationLimits.pageDepth) => {
+    if (cooldown.requested) {
+      cooldown.deferredCount += 1;
+      return undefined;
+    }
     try {
       const result = await fetchDocumentAt(
         rt,
@@ -362,6 +381,9 @@ const makeDeepFetcher = (
       return result.document;
     } catch (err) {
       if (err instanceof FigmaConnectorError && DEEP_FETCH_ABORT_CODES.has(err.code)) throw err;
+      if (err instanceof FigmaConnectorError && (err.retryAfterMs ?? 0) > 0) {
+        cooldown.requested = true;
+      }
       return undefined;
     }
   };
@@ -387,7 +409,8 @@ const doFetchScopedNodesDeep = async (
     options.version,
   );
   validateTree(discovery.document, Number.MAX_SAFE_INTEGER);
-  const fetchNode = makeDeepFetcher(rt, token, target, options.version, discovery);
+  const cooldown: DeepFetchCooldown = { requested: false, deferredCount: 0 };
+  const fetchNode = makeDeepFetcher(rt, token, target, options.version, discovery, cooldown);
   const { document, coverage } = await paginateScopedDocument(
     discovery.document,
     fetchNode,
@@ -399,6 +422,7 @@ const doFetchScopedNodesDeep = async (
     provenance: provenanceFor(target, options),
     readiness: readinessFor(rt, document, options.version),
     coverage,
+    ...(cooldown.deferredCount === 0 ? {} : { rateLimitDeferredCount: cooldown.deferredCount }),
     ...(options.version === undefined &&
     (discovery.version !== undefined || discovery.lastModified !== undefined)
       ? {

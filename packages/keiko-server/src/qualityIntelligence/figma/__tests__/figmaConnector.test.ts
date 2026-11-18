@@ -679,6 +679,65 @@ describe("createFigmaConnector — deep scoped pagination (#837)", () => {
     });
   });
 
+  describe("deep reads after a 429", () => {
+    const requestedIds = (
+      retryAfter: string | undefined,
+    ): { readonly ids: string[]; readonly port: FigmaHttpPort } => {
+      const ids: string[] = [];
+      const base = treePort(fullTree(["s1", "s2"]));
+      const port: FigmaHttpPort = (req) => {
+        const id = new URL(req.url).searchParams.get("ids") ?? "";
+        ids.push(id);
+        if (id === "s1") {
+          return Promise.resolve({
+            status: 429,
+            json: {},
+            headers: retryAfter === undefined ? {} : { "retry-after": retryAfter },
+          });
+        }
+        return base(req);
+      };
+      return { ids, port };
+    };
+    const serialConfig = {
+      depth: 2,
+      pagination: { pageDepth: 2, fetchConcurrency: 1 },
+    } as const;
+
+    it("issues no further deep read for the capture once Figma names a Retry-After", async () => {
+      const { ids, port } = requestedIds("60");
+      const connector = createFigmaConnector({
+        http: port,
+        env: { FIGMA_ACCESS_TOKEN: TOKEN },
+        config: serialConfig,
+        sleep: () => Promise.resolve(),
+      });
+
+      const deep = await connector.fetchScopedNodesDeep(URL_OK);
+
+      expect(ids).toEqual(["12:34", "s1"]);
+      expect(countText(deep.nodes)).toBe(0);
+      expect(deep.coverage).toMatchObject({ screensDeepFetched: 0, screensTruncated: 2 });
+      expect(deep.rateLimitDeferredCount).toBe(1);
+    });
+
+    it("keeps reading queued screens after a 429 without Retry-After (control)", async () => {
+      const { ids, port } = requestedIds(undefined);
+      const connector = createFigmaConnector({
+        http: port,
+        env: { FIGMA_ACCESS_TOKEN: TOKEN },
+        config: serialConfig,
+        sleep: () => Promise.resolve(),
+      });
+
+      const deep = await connector.fetchScopedNodesDeep(URL_OK);
+
+      expect(ids).toEqual(["12:34", "s1", "s2", "s2-b"]);
+      expect(countText(deep.nodes)).toBe(1);
+      expect(deep.rateLimitDeferredCount).toBeUndefined();
+    });
+  });
+
   // A hard forward-proxy failure (#802) surfaces from the transport boundary as a FigmaConnectorError
   // (figmaHttpPort maps an OutboundHttpEgressError → the coded proxy error). On a per-screen deep
   // fetch it MUST abort the build (symmetric with RENDER_EGRESS_ABORT_CODES), never soft-skip the

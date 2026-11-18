@@ -22,3 +22,12 @@ export function fixturePng(pixel = 0): Buffer {
     chunk("IEND", Buffer.alloc(0)),
   ]);
 }
+
+/** Valid PNG padded with an ancillary text chunk so its total size is at least `minBytes`. */
+export function fixturePngOfSize(minBytes: number, pixel = 0): Buffer {
+  const base = fixturePng(pixel);
+  const padLength = Math.max(0, minBytes - base.length - 12);
+  const iend = base.subarray(base.length - 12);
+  const beforeIend = base.subarray(0, base.length - 12);
+  return Buffer.concat([beforeIend, chunk("tEXt", Buffer.alloc(padLength, 0x61)), iend]);
+}

@@ -66,6 +66,20 @@ describe("createDefaultFigmaRenderPort", () => {
     ).rejects.toBeInstanceOf(FigmaConnectorError);
   });
 
+  it("tightens the body cap to a per-request maxBytes", async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(new Response(new Uint8Array(200).buffer, { status: 200 })),
+    );
+    const port = createDefaultFigmaRenderPort(undefined, fetchImpl, { maxResponseBytes: 1000 });
+
+    await expect(
+      port({ url: "https://ephemeral.figma/render.png", headers: {}, maxBytes: 50 }),
+    ).rejects.toMatchObject({ code: "FIGMA_RESPONSE_TOO_LARGE" });
+    await expect(
+      port({ url: "https://ephemeral.figma/render.png", headers: {}, maxBytes: 5000 }),
+    ).resolves.toMatchObject({ status: 200 });
+  });
+
   it("forwards maxResponseBytes to the gateway prefetch cap", async () => {
     vi.resetModules();
     const gatewayFetch = vi.fn(() =>

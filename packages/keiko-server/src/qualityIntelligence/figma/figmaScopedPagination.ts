@@ -427,6 +427,56 @@ function completeDiscoveryScreenIds(root: RawFigmaNode, discoveryDepth?: number)
   return ids;
 }
 
+function tallyOutcomes(
+  outcomes: readonly ScreenOutcome[],
+  discoveryFetchCount: number,
+): {
+  readonly deepById: ReadonlyMap<string, RawFigmaNode>;
+  readonly screensDeepFetched: number;
+  readonly screensTruncated: number;
+  readonly fetchCount: number;
+} {
+  const deepById = new Map<string, RawFigmaNode>();
+  let screensDeepFetched = 0;
+  let screensTruncated = 0;
+  let fetchCount = discoveryFetchCount;
+  for (const outcome of outcomes) {
+    deepById.set(idOf(outcome.node), outcome.node);
+    if (outcome.deepFetched) screensDeepFetched += 1;
+    if (outcome.truncated) screensTruncated += 1;
+    fetchCount += outcome.fetchCount;
+  }
+  return { deepById, screensDeepFetched, screensTruncated, fetchCount };
+}
+
+// Fetch slots go, in design order, to screens that still need a fetch. A screen the discovery
+// response already loaded completely costs no request, so it never consumes a slot; it keeps only
+// the per-screen node bound. Screens that need a fetch once the slots are spent stay shallow and
+// are reported as capped.
+function planScreenSlots(
+  screens: readonly RawFigmaNode[],
+  completeIds: ReadonlySet<string>,
+  maxScreensDeep: number,
+): {
+  readonly planned: readonly { readonly screen: RawFigmaNode; readonly complete: boolean }[];
+  readonly skippedCount: number;
+} {
+  const planned: { screen: RawFigmaNode; complete: boolean }[] = [];
+  let slots = maxScreensDeep;
+  let skippedCount = 0;
+  for (const screen of screens) {
+    if (completeIds.has(idOf(screen))) {
+      planned.push({ screen, complete: true });
+    } else if (slots > 0) {
+      slots -= 1;
+      planned.push({ screen, complete: false });
+    } else {
+      skippedCount += 1;
+    }
+  }
+  return { planned, skippedCount };
+}
+
 /**
  * Deepen a shallow scoped document into a per-screen-paginated one, bounded by {@link limits}.
  * `fetchNode` performs one bounded `depth=pageDepth` scoped fetch (with the connector's 429 backoff).
@@ -453,41 +503,35 @@ export const paginateScopedDocument = async (
           fetchNode,
         );
   const screens = discoverScreenNodes(shallowRoot);
-  const deepable = screens.slice(0, resolvedLimits.maxScreensDeep);
+  const { planned, skippedCount } = planScreenSlots(
+    screens,
+    completeIds,
+    resolvedLimits.maxScreensDeep,
+  );
   const gatedFetch = createFetchGate(fetchNode, resolvedLimits.fetchConcurrency);
 
   // All deep-fetchable screens run concurrently; the shared gate bounds total in-flight fetches.
   // Each screen's result depends only on its own budgets, so order-of-completion never changes it.
   const outcomes = await Promise.all(
-    deepable.map(async (screen) =>
-      completeIds.has(idOf(screen))
+    planned.map(async ({ screen, complete }) =>
+      complete
         ? retainCompleteScreen(screen, resolvedLimits.maxNodesPerScreen)
         : await completeScreen(screen, gatedFetch, resolvedLimits),
     ),
   );
 
-  const deepById = new Map<string, RawFigmaNode>();
-  let screensDeepFetched = 0;
-  let screensTruncated = 0;
-  let fetchCount = discovery?.fetchCount ?? 0;
-  for (const outcome of outcomes) {
-    deepById.set(idOf(outcome.node), outcome.node);
-    if (outcome.deepFetched) screensDeepFetched += 1;
-    if (outcome.truncated) screensTruncated += 1;
-    fetchCount += outcome.fetchCount;
-  }
-
+  const tally = tallyOutcomes(outcomes, discovery?.fetchCount ?? 0);
   // When the root IS the single screen, the rebuild replaces the root itself with its deep version.
-  const document = rebuildWithDeepScreens(shallowRoot, deepById);
+  const document = rebuildWithDeepScreens(shallowRoot, tally.deepById);
   return {
     document,
     coverage: {
       screenCount: screens.length,
-      screensDeepFetched,
-      screensTruncated,
+      screensDeepFetched: tally.screensDeepFetched,
+      screensTruncated: tally.screensTruncated,
       nodeCount: countNodes(document),
-      fetchCount,
-      capped: discovery?.capped === true || deepable.length < screens.length,
+      fetchCount: tally.fetchCount,
+      capped: discovery?.capped === true || skippedCount > 0,
     },
   };
 };

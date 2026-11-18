@@ -32,6 +32,12 @@ export const MAX_FIGMA_RENDER_BYTES = 25 * 1024 * 1024;
 export interface FigmaRenderRequest {
   readonly url: string;
   readonly headers: Readonly<Record<string, string>>;
+  /**
+   * Per-request body cap in bytes. The port reads at most `min(maxBytes, its own cap)` and fails
+   * with FIGMA_RESPONSE_TOO_LARGE beyond it, so the caller can bound the aggregate transfer
+   * volume before a download starts.
+   */
+  readonly maxBytes?: number;
 }
 
 export interface FigmaRenderResponse {
@@ -84,14 +90,15 @@ export const createDefaultFigmaRenderPort = (
   const maxResponseBytes = options?.maxResponseBytes ?? MAX_FIGMA_RENDER_BYTES;
 
   return async (request: FigmaRenderRequest): Promise<FigmaRenderResponse> => {
+    const requestCap = Math.min(maxResponseBytes, request.maxBytes ?? maxResponseBytes);
     try {
       const response = await figmaGetFetch(
         request,
-        { timeoutMs, maxResponseBytes, correlationId: options?.correlationId },
+        { timeoutMs, maxResponseBytes: requestCap, correlationId: options?.correlationId },
         egress,
         fetchImpl,
       );
-      return await readRenderResponse(response, maxResponseBytes);
+      return await readRenderResponse(response, requestCap);
     } catch (err) {
       if (err instanceof FigmaConnectorError) throw err;
       if (err instanceof GatewayResponseBodyValidationError && err.validation === "size-exceeded") {

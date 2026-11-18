@@ -122,11 +122,14 @@ export const figmaConnectorErrorBody = (
 
 export class FigmaConnectorError extends Error {
   readonly code: FigmaConnectorErrorCode;
+  /** Delay Figma explicitly asked for with `Retry-After` on a 429; absent when it named none. */
+  readonly retryAfterMs: number | undefined;
 
-  constructor(code: FigmaConnectorErrorCode) {
+  constructor(code: FigmaConnectorErrorCode, retryAfterMs?: number) {
     super(SAFE_MESSAGES[code]);
     this.name = "FigmaConnectorError";
     this.code = code;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 

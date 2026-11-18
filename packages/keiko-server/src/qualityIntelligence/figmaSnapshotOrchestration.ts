@@ -89,6 +89,8 @@ export interface GovernedSnapshotDeps {
 export interface GovernedSnapshotResult {
   readonly provenance: FigmaProvenance;
   readonly coverage: FigmaScopeCoverage | undefined;
+  /** Deep reads held back after Figma named a Retry-After; absent when none. Never persisted. */
+  readonly rateLimitDeferredCount?: number;
   readonly snapshot: FigmaSnapshot;
   readonly ir: ScreenIrResult;
   readonly metrics: FigmaConnectorMetrics;
@@ -348,6 +350,9 @@ export const governedSnapshotBuild = async (
   return {
     provenance: scoped.provenance,
     coverage: scoped.coverage,
+    ...(scoped.rateLimitDeferredCount === undefined
+      ? {}
+      : { rateLimitDeferredCount: scoped.rateLimitDeferredCount }),
     snapshot: observed.snapshot,
     ir,
     metrics: observed.metrics,

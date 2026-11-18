@@ -846,6 +846,7 @@ const FIGMA_SNAPSHOT_CAPTURED_OPERATION = defineActivityLogOperation({
     truncatedCount: REQUIRED_COUNT_FIELD,
     scopedFetchCount: REQUIRED_COUNT_FIELD,
     scopeCapped: { type: "boolean", dataClass: "closed-enum", required: true },
+    rateLimitDeferredCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -983,6 +984,9 @@ function logSnapshotCaptured(result: GovernedSnapshotResult, correlationId: stri
         truncatedCount: result.coverage?.screensTruncated ?? 0,
         scopedFetchCount: result.coverage?.fetchCount ?? 0,
         scopeCapped: result.coverage?.capped ?? false,
+        ...(result.rateLimitDeferredCount === undefined
+          ? {}
+          : { rateLimitDeferredCount: result.rateLimitDeferredCount }),
       },
     ),
   );
@@ -1201,8 +1205,11 @@ function startCoalescedBuild(
   return promise;
 }
 
-// A retained capture answers a retry only while its record is still stored; one deleted meanwhile,
-// or no longer readable, lets the retry capture afresh.
+// A retained capture answers a retry only while it can still serve the whole capture it promises:
+// the full verified read covers the record and every image side file, so a capture whose record
+// survives but whose image went missing is not handed off with image URLs that fail. One deleted
+// meanwhile, or no longer readable, lets the retry capture afresh; an unreadable one is recorded
+// as the `retained.verify` stage. The check runs once per handoff, not per image view.
 function retainedCaptureStillStored(
   entry: CoalescedBuildEntry,
   evidenceDir: string,
@@ -1212,9 +1219,9 @@ function retainedCaptureStillStored(
   if (entry.storedRunId === undefined) return true;
   try {
     const store = openFigmaSnapshotStore(evidenceDir, deps, correlationId);
-    return store.loadMetadata(entry.storedRunId) !== undefined;
+    return store.load(entry.storedRunId) !== undefined;
   } catch (err) {
-    logFigmaInternal("retained.load", err, deps, correlationId);
+    logFigmaInternal("retained.verify", err, deps, correlationId);
     return false;
   }
 }
@@ -1667,6 +1674,9 @@ interface LoadedSnapshotRecord {
   readonly record: FigmaSnapshotRecord;
 }
 
+// The single-image route verifies the record's metadata and then only the requested side file
+// (loadImage checks its size and digest against that verified metadata). A full `load` would read
+// and hash every screen's PNG for each request, turning N views into N squared side-file reads.
 function loadSnapshotRecordForImage(
   evidenceDir: string,
   runId: string,
@@ -1676,7 +1686,7 @@ function loadSnapshotRecordForImage(
   const store = openFigmaSnapshotStore(evidenceDir, deps, correlationId);
   let record: FigmaSnapshotRecord | undefined;
   try {
-    record = store.load(runId);
+    record = store.loadMetadata(runId);
   } catch {
     return { status: 500, body: figmaErrorBody("FIGMA_INTERNAL") };
   }

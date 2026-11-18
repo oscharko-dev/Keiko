@@ -24,7 +24,7 @@
 
 import { mkdtemp, rm } from "node:fs/promises";
 import { EventEmitter } from "node:events";
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage, Server } from "node:http";
@@ -661,6 +661,36 @@ describe("POST /api/figma/snapshots — in-flight coalescing", () => {
     ).toMatchObject({ renderedCount: 1, skippedCount: 0, scopeCapped: false });
   });
 
+  it("records the deep reads a Retry-After held back on the capture line and still stores the capture", async () => {
+    await recordConsent(evidenceDir);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const orchModule = await import("./figmaSnapshotOrchestration.js");
+    const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
+    spy.mockImplementation(async (boardLink, deps) => {
+      spy.mockRestore();
+      const result = await orchModule.governedSnapshotBuild(boardLink, {
+        ...deps,
+        httpPort: fakeHttpPort,
+        renderPort: fakeRenderPort,
+      });
+      return { ...result, rateLimitDeferredCount: 2 };
+    });
+
+    const response = await handleFigmaTriggerSnapshot(
+      makeCtx(triggerBody()),
+      makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+      makeInFlightMap(),
+    );
+
+    expect(response.status).toBe(201);
+    const event = sink.events.find(({ op }) => op === "figma.snapshot.captured");
+    if (event === undefined) throw new Error("expected a snapshot capture event");
+    expect(
+      expectActivityLogProof("figma.snapshot.captured.line", formatActivityLogProofLine(event)),
+    ).toMatchObject({ rateLimitDeferredCount: 2, renderedCount: 1 });
+  });
+
   it("keeps an unpinned waiter separate from a pinned waiter and from another evidence store", async () => {
     const orchModule = await import("./figmaSnapshotOrchestration.js");
     let release = (): void => undefined;
@@ -1008,6 +1038,48 @@ describe("POST /api/figma/snapshots — capture stops and retained captures", ()
       expect(retry.status).toBe(201);
       expect((retry.body as { runId: string }).runId).not.toBe(storedRunId);
       expect(build.calls()).toBe(2);
+    } finally {
+      build.restore();
+    }
+  });
+
+  it("captures afresh, and records why, when a retained capture lost an image side file (#4464)", async () => {
+    await recordConsent(evidenceDir);
+    const build = await gatedRealBuild();
+    const sharedMap = makeInFlightMap();
+    const diagnostics: ServerDiagnosticRecord[] = [];
+
+    try {
+      const storedRunId = await captureAfterClosedRequest(sharedMap, build);
+      await vi.waitFor(() => {
+        expect(sharedMap.size).toBe(1);
+      });
+      const sideFiles = (readdirSync(evidenceDir, { recursive: true }) as string[])
+        .filter((entry) => entry.includes(storedRunId) && !entry.endsWith(".json"))
+        .map((entry) => join(evidenceDir, entry))
+        .filter((entry) => statSync(entry).isFile());
+      expect(sideFiles.length).toBeGreaterThan(0);
+      for (const file of sideFiles) rmSync(file);
+      // The record itself still exists, so a metadata-only check would hand it off.
+      expect(createNodeFigmaSnapshotStore(evidenceDir).loadMetadata(storedRunId)).toBeDefined();
+
+      const retry = await handleFigmaTriggerSnapshot(
+        makeCtx(triggerBody(), { correlationId: "corr-retained-verify" }),
+        {
+          ...makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+          diagnostics: { record: (record) => diagnostics.push(record) },
+        },
+        sharedMap,
+      );
+      expect(retry.status).toBe(201);
+      expect((retry.body as { runId: string }).runId).not.toBe(storedRunId);
+      expect(build.calls()).toBe(2);
+      expect(diagnostics).toHaveLength(1);
+      expect(diagnostics[0]).toMatchObject({
+        correlationId: "corr-retained-verify",
+        source: "figmaSnapshotRoutes.logFigmaInternal.retained.verify",
+        errorClass: "EvidenceReadError",
+      });
     } finally {
       build.restore();
     }
@@ -1834,6 +1906,81 @@ describe("GET /api/figma/snapshots/:runId/screens/:screenIndex/image", () => {
     expect(imageRes.headers.get("cache-control")).toBe("no-store");
     expect(imageRes.headers.get("etag")).toMatch(/^"sha256-[a-f0-9]{64}"$/u);
     expect(Array.from(new Uint8Array(await imageRes.arrayBuffer()))).toEqual(Array.from(PNG_BYTES));
+  });
+
+  it("reads only the requested image: a damaged sibling does not block it (#4464)", async () => {
+    const store = createNodeFigmaSnapshotStore(evidenceDir);
+    const runId = "fs-00000000-0000-0000-0000-000000000031";
+    const other = new Uint8Array([...PNG_BYTES, 0x01]);
+    const result = store.record({
+      runId,
+      provenance: PROVENANCE,
+      integrityHash: "placeholder",
+      screens: [PNG_BYTES, other].map((bytes, index) => ({
+        screenId: `image-screen-${String(index)}`,
+        irJson: { name: "Image Screen", root: { interactionHint: null, children: [] } },
+        integrityHash: "placeholder",
+        image: { mimeType: "image/png" as const, bytes },
+      })),
+      skippedScreens: [],
+    });
+    const sibling = readdirSync(result.sideFileDir)
+      .map((name) => join(result.sideFileDir, name))
+      .find((file) => readFileSync(file).byteLength === other.byteLength);
+    if (sibling === undefined) throw new Error("expected the sibling side file");
+    rmSync(sibling);
+
+    const first = await fetch(`${baseUrl()}/api/figma/snapshots/${runId}/screens/0/image`);
+    expect(first.status).toBe(200);
+    expect(Array.from(new Uint8Array(await first.arrayBuffer()))).toEqual(Array.from(PNG_BYTES));
+    // The damaged image itself still fails its own integrity check.
+    const damaged = await fetch(`${baseUrl()}/api/figma/snapshots/${runId}/screens/1/image`);
+    expect(damaged.status).toBe(500);
+  });
+
+  it("serves one image with one metadata load and one image read, never a full load (#4464)", async () => {
+    const evidenceModule = await import("@oscharko-dev/keiko-evidence");
+    const real = createNodeFigmaSnapshotStore(evidenceDir);
+    const runId = "fs-00000000-0000-0000-0000-000000000032";
+    real.record({
+      runId,
+      provenance: PROVENANCE,
+      integrityHash: "placeholder",
+      screens: [0, 1, 2].map((index) => ({
+        screenId: `image-screen-${String(index)}`,
+        irJson: { name: "Image Screen", root: { interactionHint: null, children: [] } },
+        integrityHash: "placeholder",
+        image: { mimeType: "image/png" as const, bytes: new Uint8Array([...PNG_BYTES, index]) },
+      })),
+      skippedScreens: [],
+    });
+    const calls = { load: 0, loadMetadata: 0, loadImage: 0 };
+    const spy = vi.spyOn(evidenceModule, "createNodeFigmaSnapshotStore").mockImplementation(() => ({
+      ...real,
+      load: (id: string): ReturnType<typeof real.load> => {
+        calls.load += 1;
+        return real.load(id);
+      },
+      loadMetadata: (id: string): ReturnType<typeof real.loadMetadata> => {
+        calls.loadMetadata += 1;
+        return real.loadMetadata(id);
+      },
+      loadImage: (
+        id: string,
+        ref: Parameters<typeof real.loadImage>[1],
+      ): ReturnType<typeof real.loadImage> => {
+        calls.loadImage += 1;
+        return real.loadImage(id, ref);
+      },
+    }));
+
+    try {
+      const res = await fetch(`${baseUrl()}/api/figma/snapshots/${runId}/screens/2/image`);
+      expect(res.status).toBe(200);
+      expect(calls).toEqual({ load: 0, loadMetadata: 1, loadImage: 1 });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("returns a coded 404 when the requested screen image is missing", async () => {

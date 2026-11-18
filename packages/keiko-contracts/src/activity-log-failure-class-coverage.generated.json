@@ -27743,6 +27743,12 @@
               "required": true
             },
             {
+              "name": "rateLimitDeferredCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "renderBudgetSkipCount",
               "type": "integer",
               "dataClass": "count",

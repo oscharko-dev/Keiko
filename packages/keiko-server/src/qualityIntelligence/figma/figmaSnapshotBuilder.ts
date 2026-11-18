@@ -17,7 +17,11 @@
 import { FigmaConnectorError } from "./figmaConnectorErrors.js";
 import { mapWithConcurrency } from "../../bounded-concurrency.js";
 import type { FigmaHttpPort } from "./figmaHttpPort.js";
-import { MAX_FIGMA_RENDER_BYTES, type FigmaRenderPort } from "./figmaRenderPort.js";
+import {
+  MAX_FIGMA_RENDER_BYTES,
+  type FigmaRenderPort,
+  type FigmaRenderResponse,
+} from "./figmaRenderPort.js";
 import { isFigmaRenderPng, MIN_FIGMA_PNG_BYTES } from "./figmaRenderPng.js";
 import type { FigmaProvenance } from "./figmaConnector.js";
 import { classifyTokenFailure } from "./figmaTokenSource.js";
@@ -302,55 +306,216 @@ const classifyRenderError = (err: unknown): FigmaSkippedScreenReason => {
   return "render-fetch-failed";
 };
 
-// Downloads one screen's render bytes and classifies the result into a kept screen or a skip.
-// A single screen failing after retries degrades to a skip (partial render), never aborting.
-// Exception: hard egress errors (TLS/proxy misconfiguration) abort via classifyRenderError.
-const resolveScreen = async (
-  input: BuildFigmaSnapshotInput,
-  ir: ScreenIr,
-  renderUrl: string | null,
-): Promise<ScreenOutcome> => {
-  if (renderUrl === null) return structuralOnly(ir, "render-url-missing");
-  if (!isRenderUrlSafe(renderUrl)) return structuralOnly(ir, "render-url-blocked");
-  const maxBytes = boundedPositiveInt(
-    input.maxImageBytes,
-    MAX_FIGMA_RENDER_BYTES,
-    MAX_FIGMA_RENDER_BYTES,
-  );
-  const policy = input.retryPolicy ?? DEFAULT_FIGMA_RETRY_POLICY;
-  const sleep = input.sleep ?? realFigmaRetrySleep;
-  let response: { readonly status: number; readonly bytes: Uint8Array };
-  try {
-    response = await fetchWithBackoff(
-      () => input.renderPort({ url: renderUrl, headers: {} }),
-      policy,
-      sleep,
-    );
-  } catch (err) {
-    return structuralOnly(ir, classifyRenderError(err));
+// Aggregate download allowance for one capture. A download reserves its per-request cap before it
+// starts and settles the bytes it actually transferred afterwards, accepted or rejected, so the
+// transfer volume — not only the stored volume — stays within the aggregate limit even while
+// several downloads are in flight.
+class RenderAllowance {
+  private remainingBytes: number;
+  private reservedBytes = 0;
+
+  constructor(total: number) {
+    this.remainingBytes = total;
   }
-  const reason = renderSkipReason(response, maxBytes);
-  if (reason !== null) return structuralOnly(ir, reason);
-  const sha256 = hashBytes(response.bytes);
-  const screen: FigmaSnapshotScreen = {
+
+  get inFlightBytes(): number {
+    return this.reservedBytes;
+  }
+
+  /** Reserve up to `cap` bytes; returns 0 when too little is unreserved to hold any PNG. */
+  reserve(cap: number): number {
+    const available = this.remainingBytes - this.reservedBytes;
+    if (available < MIN_FIGMA_PNG_BYTES) return 0;
+    const grant = Math.min(cap, available);
+    this.reservedBytes += grant;
+    return grant;
+  }
+
+  // The bytes actually transferred are charged, never fewer: a port that read past its cap still
+  // spends the capture's allowance.
+  settle(grant: number, transferredBytes: number): void {
+    this.reservedBytes -= grant;
+    this.remainingBytes -= transferredBytes;
+  }
+}
+
+interface DownloadResult {
+  readonly outcome: ScreenOutcome;
+  readonly transferredBytes: number;
+}
+
+const toScreen = (ir: ScreenIr, bytes: Uint8Array): FigmaSnapshotScreen => {
+  const sha256 = hashBytes(bytes);
+  return {
     screenId: ir.id,
     ir,
-    image: {
-      mimeType: "image/png",
-      bytes: response.bytes,
-      byteLength: response.bytes.length,
-      sha256,
-    },
+    image: { mimeType: "image/png", bytes, byteLength: bytes.length, sha256 },
     integrityHash: hashScreen(ir.id, ir, sha256),
   };
-  return { screen };
+};
+
+// A thrown download becomes a skip. How much a refused, interrupted or failed transfer read is not
+// known, only that the port never read past the reservation, so the whole reservation is charged:
+// an unknown amount is never counted as zero. A cap tighter than the per-image limit is a budget skip.
+const failedDownload = (
+  ir: ScreenIr,
+  err: unknown,
+  cappedByBudget: boolean,
+  grant: number,
+): DownloadResult => {
+  const reason = classifyRenderError(err);
+  const tooLarge = err instanceof FigmaConnectorError && err.code === "FIGMA_RESPONSE_TOO_LARGE";
+  return {
+    outcome: structuralOnly(ir, tooLarge && cappedByBudget ? "render-budget-exceeded" : reason),
+    transferredBytes: grant,
+  };
+};
+
+// One screen's attempts share its reservation: each attempt (a rate-limited answer is retried) may
+// read only what the earlier attempts left, and every byte read counts.
+const reservedAttempts = (
+  input: BuildFigmaSnapshotInput,
+  renderUrl: string,
+  grant: number,
+): { readonly attempt: () => Promise<FigmaRenderResponse>; readonly consumed: () => number } => {
+  let consumed = 0;
+  return {
+    attempt: async (): Promise<FigmaRenderResponse> => {
+      const left = grant - consumed;
+      if (left < MIN_FIGMA_PNG_BYTES) throw new FigmaConnectorError("FIGMA_RESPONSE_TOO_LARGE");
+      const response = await input.renderPort({ url: renderUrl, headers: {}, maxBytes: left });
+      consumed += response.bytes.length;
+      return response;
+    },
+    consumed: () => consumed,
+  };
+};
+
+// Downloads one screen's render bytes under its reserved cap and classifies the result into a kept
+// screen or a skip. A single screen failing after retries degrades to a skip (partial render),
+// never aborting. Exception: hard egress errors (TLS/proxy misconfiguration) abort via
+// classifyRenderError. A body that hits a cap tighter than the per-image limit is a budget skip.
+const downloadScreen = async (
+  input: BuildFigmaSnapshotInput,
+  ir: ScreenIr,
+  renderUrl: string,
+  maxBytes: number,
+  grant: number,
+): Promise<DownloadResult> => {
+  const policy = input.retryPolicy ?? DEFAULT_FIGMA_RETRY_POLICY;
+  const sleep = input.sleep ?? realFigmaRetrySleep;
+  const cappedByBudget = grant < maxBytes;
+  const attempts = reservedAttempts(input, renderUrl, grant);
+  let response: { readonly status: number; readonly bytes: Uint8Array };
+  try {
+    response = await fetchWithBackoff(attempts.attempt, policy, sleep);
+  } catch (err) {
+    return failedDownload(ir, err, cappedByBudget, grant);
+  }
+  const transferredBytes = attempts.consumed();
+  if (transferredBytes > grant && cappedByBudget) {
+    return { outcome: structuralOnly(ir, "render-budget-exceeded"), transferredBytes };
+  }
+  const reason = renderSkipReason(response, maxBytes);
+  if (reason !== null) return { outcome: structuralOnly(ir, reason), transferredBytes };
+  return { outcome: { screen: toScreen(ir, response.bytes) }, transferredBytes };
 };
 
 interface SnapshotRows {
-  readonly screens: readonly FigmaSnapshotScreen[];
-  readonly skippedScreens: readonly FigmaSkippedScreen[];
-  readonly structuralScreens: readonly FigmaSnapshotStructuralScreen[];
+  readonly screens: FigmaSnapshotScreen[];
+  readonly skippedScreens: FigmaSkippedScreen[];
+  readonly structuralScreens: FigmaSnapshotStructuralScreen[];
 }
+
+const newSnapshotRows = (): SnapshotRows => ({
+  screens: [],
+  skippedScreens: [],
+  structuralScreens: [],
+});
+
+type PlannedScreen =
+  | { readonly kind: "outcome"; readonly outcome: StructuralOnlyOutcome }
+  | {
+      readonly kind: "download";
+      readonly ir: ScreenIr;
+      readonly url: string;
+      readonly grant: number;
+    };
+
+interface BatchPlan {
+  readonly planned: readonly PlannedScreen[];
+  readonly deferred: readonly ScreenIr[];
+}
+
+const planScreen = (
+  allowance: RenderAllowance,
+  ir: ScreenIr,
+  url: string | null,
+  maxBytes: number,
+): PlannedScreen | "defer" => {
+  if (url === null) return { kind: "outcome", outcome: structuralOnly(ir, "render-url-missing") };
+  if (!isRenderUrlSafe(url)) {
+    return { kind: "outcome", outcome: structuralOnly(ir, "render-url-blocked") };
+  }
+  const grant = allowance.reserve(maxBytes);
+  if (grant > 0) return { kind: "download", ir, url, grant };
+  if (allowance.inFlightBytes > 0) return "defer";
+  return { kind: "outcome", outcome: structuralOnly(ir, "render-budget-exceeded") };
+};
+
+// Reserves the aggregate allowance for one batch in design order, before any byte is read. A screen
+// the in-flight reservations leave no room for waits for the next batch, together with every later
+// screen so design order is preserved; with nothing in flight the allowance is exhausted for good.
+const planBatch = (
+  allowance: RenderAllowance,
+  batch: readonly ScreenIr[],
+  renderUrls: ReadonlyMap<string, string | null>,
+  maxBytes: number,
+): BatchPlan => {
+  const planned: PlannedScreen[] = [];
+  const deferred: ScreenIr[] = [];
+  for (const ir of batch) {
+    const plan =
+      deferred.length > 0
+        ? "defer"
+        : planScreen(allowance, ir, renderUrls.get(ir.id) ?? null, maxBytes);
+    if (plan === "defer") deferred.push(ir);
+    else planned.push(plan);
+  }
+  return { planned, deferred };
+};
+
+const downloadBatch = (
+  input: BuildFigmaSnapshotInput,
+  allowance: RenderAllowance,
+  planned: readonly PlannedScreen[],
+  concurrency: number,
+  maxBytes: number,
+): Promise<readonly ScreenOutcome[]> =>
+  mapWithConcurrency(planned, concurrency, async (item): Promise<ScreenOutcome> => {
+    if (item.kind === "outcome") return item.outcome;
+    const result = await downloadScreen(input, item.ir, item.url, maxBytes, item.grant);
+    allowance.settle(item.grant, result.transferredBytes);
+    return result.outcome;
+  });
+
+const downloadLimits = (
+  input: BuildFigmaSnapshotInput,
+): { concurrency: number; maxBytes: number; allowance: RenderAllowance } => ({
+  concurrency: boundedPositiveInt(
+    input.downloadConcurrency,
+    DEFAULT_DOWNLOAD_CONCURRENCY,
+    MAX_DOWNLOAD_CONCURRENCY,
+  ),
+  maxBytes: boundedPositiveInt(input.maxImageBytes, MAX_FIGMA_RENDER_BYTES, MAX_FIGMA_RENDER_BYTES),
+  allowance: new RenderAllowance(
+    boundedPositiveInt(
+      input.maxSnapshotImageBytes,
+      MAX_SNAPSHOT_IMAGE_BYTES,
+      MAX_SNAPSHOT_IMAGE_BYTES,
+    ),
+  ),
+});
 
 async function collectSnapshotRows(
   input: BuildFigmaSnapshotInput,
@@ -358,51 +523,41 @@ async function collectSnapshotRows(
   cappedScreens: readonly ScreenIr[],
   renderUrls: ReadonlyMap<string, string | null>,
 ): Promise<SnapshotRows> {
-  const concurrency = boundedPositiveInt(
-    input.downloadConcurrency,
-    DEFAULT_DOWNLOAD_CONCURRENCY,
-    MAX_DOWNLOAD_CONCURRENCY,
-  );
-  let remainingBytes = boundedPositiveInt(
-    input.maxSnapshotImageBytes,
-    MAX_SNAPSHOT_IMAGE_BYTES,
-    MAX_SNAPSHOT_IMAGE_BYTES,
-  );
-  const screens: FigmaSnapshotScreen[] = [];
-  const skippedScreens: FigmaSkippedScreen[] = [];
-  const structuralScreens: FigmaSnapshotStructuralScreen[] = [];
-  const addSkip = ({ skipped, structuralScreen }: StructuralOnlyOutcome): void => {
-    skippedScreens.push(skipped);
-    structuralScreens.push(structuralScreen);
+  const { concurrency, maxBytes, allowance } = downloadLimits(input);
+  const rows = newSnapshotRows();
+  const addOutcome = (outcome: ScreenOutcome): void => {
+    if ("skipped" in outcome) {
+      rows.skippedScreens.push(outcome.skipped);
+      rows.structuralScreens.push(outcome.structuralScreen);
+    } else {
+      rows.screens.push(outcome.screen);
+    }
   };
-  for (const batch of chunk(renderableScreens, concurrency)) {
-    if (remainingBytes < MIN_FIGMA_PNG_BYTES) {
-      for (const ir of batch) addSkip(structuralOnly(ir, "render-budget-exceeded"));
-      continue;
-    }
+  const queue = [...renderableScreens];
+  while (queue.length > 0) {
     // Process each bounded batch in design order so completion order cannot choose which images
-    // fit the remaining budget. Only this batch's rejected images are held temporarily in memory.
+    // fit the remaining budget; the previous batch's settled bytes decide what is left.
+    const { planned, deferred } = planBatch(
+      allowance,
+      queue.splice(0, concurrency),
+      renderUrls,
+      maxBytes,
+    );
+    queue.unshift(...deferred);
     const outcomes =
-      await /* NOSONAR typescript:S9382 -- the previous batch determines how much of the shared render budget is left. */ mapWithConcurrency(
-        batch,
+      await /* NOSONAR typescript:S9382 -- the previous batch determines how much of the shared render budget is left. */ downloadBatch(
+        input,
+        allowance,
+        planned,
         concurrency,
-        (ir) => resolveScreen(input, ir, renderUrls.get(ir.id) ?? null),
+        maxBytes,
       );
-    for (const outcome of outcomes) {
-      if ("skipped" in outcome) {
-        addSkip(outcome);
-      } else if (outcome.screen.image.byteLength > remainingBytes) {
-        addSkip(structuralOnly(outcome.screen.ir, "render-budget-exceeded"));
-      } else {
-        screens.push(outcome.screen);
-        remainingBytes -= outcome.screen.image.byteLength;
-      }
-    }
+    outcomes.forEach(addOutcome);
   }
   for (const ir of cappedScreens) {
-    addSkip(structuralOnly(ir, "render-screen-cap-exceeded"));
+    addOutcome(structuralOnly(ir, "render-screen-cap-exceeded"));
   }
-  return { screens, skippedScreens, structuralScreens };
+  return rows;
 }
 
 /**

@@ -6,7 +6,7 @@ import type { FigmaRenderPort, FigmaRenderRequest } from "../figmaRenderPort.js"
 import { FigmaConnectorError } from "../figmaConnectorErrors.js";
 import type { FigmaRetrySleep } from "../figmaRetry.js";
 import { buildFigmaSnapshot, type BuildFigmaSnapshotInput } from "../figmaSnapshotBuilder.js";
-import { fixturePng as png } from "./figmaRenderFixture.js";
+import { fixturePng as png, fixturePngOfSize } from "./figmaRenderFixture.js";
 
 const TOKEN = "figd_unit-test-secret-pat-value-1234567890";
 
@@ -236,7 +236,131 @@ describe("buildFigmaSnapshot", () => {
       { screenId: "1:2", reason: "render-budget-exceeded" },
       { screenId: "1:3", reason: "render-budget-exceeded" },
     ]);
-    expect(renders.requests).toHaveLength(2);
+    expect(renders.requests).toHaveLength(1);
+  });
+
+  describe("aggregate download allowance (#4464)", () => {
+    // A port that honours the per-request byte cap like the real one: a body larger than the cap
+    // is cut at the cap (the transfer volume) and surfaces FIGMA_RESPONSE_TOO_LARGE.
+    const cappedRenderPort = (
+      sizeByUrl: Record<string, number>,
+    ): { readonly port: FigmaRenderPort; readonly bytesRead: () => number } => {
+      let total = 0;
+      const port: FigmaRenderPort = (request) => {
+        const body = fixturePngOfSize(sizeByUrl[request.url] ?? 0);
+        const cap = request.maxBytes ?? Number.POSITIVE_INFINITY;
+        if (body.length > cap) {
+          total += cap;
+          return Promise.reject(new FigmaConnectorError("FIGMA_RESPONSE_TOO_LARGE"));
+        }
+        total += body.length;
+        return Promise.resolve({ status: 200, bytes: body, headers: {} });
+      };
+      return { port, bytesRead: () => total };
+    };
+    const urlOf = (id: string): string => `https://s3-alpha-sig.figma.com/${id}.png`;
+
+    it.each([1, 2, 4])(
+      "never reads more than the aggregate limit across kept and rejected downloads (concurrency %i)",
+      async (downloadConcurrency) => {
+        const ids = ["1:1", "1:2", "1:3", "1:4", "1:5", "1:6"];
+        const screens = ids.map((id) => screen(id, id));
+        const imageSize = fixturePngOfSize(1000).length;
+        const limit = imageSize * 2 + 500;
+        const renders = cappedRenderPort(Object.fromEntries(ids.map((id) => [urlOf(id), 1000])));
+
+        const snapshot = await buildFigmaSnapshot({
+          ...baseInput(screens, imagesPort().port, renders.port),
+          downloadConcurrency,
+          maxSnapshotImageBytes: limit,
+        });
+
+        expect(renders.bytesRead()).toBeLessThanOrEqual(limit);
+        expect(snapshot.screens.map(({ screenId }) => screenId)).toEqual(["1:1", "1:2"]);
+        expect(snapshot.skippedScreens).toEqual(
+          ids.slice(2).map((screenId) => ({ screenId, reason: "render-budget-exceeded" })),
+        );
+      },
+    );
+
+    it("starts no download once nothing remains", async () => {
+      const ids = ["1:1", "1:2", "1:3"];
+      const screens = ids.map((id) => screen(id, id));
+      const imageSize = fixturePngOfSize(500).length;
+      const renders = cappedRenderPort(Object.fromEntries(ids.map((id) => [urlOf(id), 500])));
+      const requests: FigmaRenderRequest[] = [];
+      const port: FigmaRenderPort = (request) => {
+        requests.push(request);
+        return renders.port(request);
+      };
+
+      await buildFigmaSnapshot({
+        ...baseInput(screens, imagesPort().port, port),
+        downloadConcurrency: 1,
+        maxSnapshotImageBytes: imageSize,
+      });
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.maxBytes).toBe(imageSize);
+    });
+
+    it("charges a failed download its whole reservation, never zero", async () => {
+      const ids = ["1:1", "1:2"];
+      const screens = ids.map((id) => screen(id, id));
+      const imageSize = fixturePngOfSize(1000).length;
+      const requests: string[] = [];
+      const port: FigmaRenderPort = (request) => {
+        requests.push(request.url);
+        if (request.url === urlOf("1:1")) return Promise.reject(new Error("connection reset"));
+        return Promise.resolve({ status: 200, bytes: fixturePngOfSize(1000), headers: {} });
+      };
+
+      const snapshot = await buildFigmaSnapshot({
+        ...baseInput(screens, imagesPort().port, port),
+        downloadConcurrency: 1,
+        retryPolicy: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 },
+        maxSnapshotImageBytes: imageSize + 500,
+      });
+
+      expect(requests).toEqual([urlOf("1:1")]);
+      expect(snapshot.skippedScreens).toEqual([
+        { screenId: "1:1", reason: "render-fetch-failed" },
+        { screenId: "1:2", reason: "render-budget-exceeded" },
+      ]);
+    });
+
+    it("counts the body of a rate-limited attempt against the same reservation", async () => {
+      const ids = ["1:1", "1:2"];
+      const screens = ids.map((id) => screen(id, id));
+      const imageSize = fixturePngOfSize(1000).length;
+      const limit = imageSize * 2 + 100;
+      const caps: (number | undefined)[] = [];
+      let firstScreenCalls = 0;
+      const port: FigmaRenderPort = (request) => {
+        caps.push(request.maxBytes);
+        const body = fixturePngOfSize(1000);
+        if (request.url === urlOf("1:1") && firstScreenCalls++ === 0) {
+          return Promise.resolve({ status: 429, bytes: body, headers: {} });
+        }
+        return Promise.resolve({ status: 200, bytes: body, headers: {} });
+      };
+      const { sleep } = recordingSleep();
+
+      const snapshot = await buildFigmaSnapshot({
+        ...baseInput(screens, imagesPort().port, port),
+        downloadConcurrency: 1,
+        retryPolicy: { maxRetries: 1, baseDelayMs: 1, maxDelayMs: 10 },
+        sleep,
+        maxSnapshotImageBytes: limit,
+      });
+
+      // The retry may read only what the 429 body left; the next screen gets just the remainder.
+      expect(caps).toEqual([limit, limit - imageSize, limit - imageSize * 2]);
+      expect(snapshot.screens.map(({ screenId }) => screenId)).toEqual(["1:1"]);
+      expect(snapshot.skippedScreens).toEqual([
+        { screenId: "1:2", reason: "render-budget-exceeded" },
+      ]);
+    });
   });
 
   it("checks the revision after requesting renders and before downloading any bytes", async () => {

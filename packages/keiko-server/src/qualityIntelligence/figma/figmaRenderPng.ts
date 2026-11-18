@@ -9,12 +9,43 @@ const CHUNK_OVERHEAD = 12;
 const MAX_FIGMA_RENDER_PIXELS = 32 * 1024 * 1024;
 export const MIN_FIGMA_PNG_BYTES = PNG_SIGNATURE.length + HEADER_LENGTH + CHUNK_OVERHEAD * 3;
 
+const MAX_PNG_DIMENSION = 0x7fffffff;
+// Legal IHDR bit depths per colour type (PNG specification, table 11.1).
+const LEGAL_BIT_DEPTHS: ReadonlyMap<number, ReadonlySet<number>> = new Map([
+  [0, new Set([1, 2, 4, 8, 16])],
+  [2, new Set([8, 16])],
+  [3, new Set([1, 2, 4, 8])],
+  [4, new Set([8, 16])],
+  [6, new Set([8, 16])],
+]);
+
+function hasLegalHeaderFields(data: DataView, offset: number): boolean {
+  const bitDepth = data.getUint8(offset + 16);
+  const colorType = data.getUint8(offset + 17);
+  const compression = data.getUint8(offset + 18);
+  const filter = data.getUint8(offset + 19);
+  const interlace = data.getUint8(offset + 20);
+  return (
+    LEGAL_BIT_DEPTHS.get(colorType)?.has(bitDepth) === true &&
+    compression === 0 &&
+    filter === 0 &&
+    (interlace === 0 || interlace === 1)
+  );
+}
+
 function hasValidPngHeader(data: DataView): boolean {
   const offset = PNG_SIGNATURE.length;
   if (data.getUint32(offset) !== HEADER_LENGTH || data.getUint32(offset + 4) !== IHDR) return false;
   const width = data.getUint32(offset + 8);
   const height = data.getUint32(offset + 12);
-  return width > 0 && height > 0 && width * height <= MAX_FIGMA_RENDER_PIXELS;
+  return (
+    width > 0 &&
+    height > 0 &&
+    width <= MAX_PNG_DIMENSION &&
+    height <= MAX_PNG_DIMENSION &&
+    width * height <= MAX_FIGMA_RENDER_PIXELS &&
+    hasLegalHeaderFields(data, offset)
+  );
 }
 
 function hasValidPngChunks(data: DataView, bytes: Uint8Array): boolean {

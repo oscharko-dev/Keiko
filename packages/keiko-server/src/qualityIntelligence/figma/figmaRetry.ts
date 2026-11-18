@@ -57,32 +57,42 @@ const computeBackoffMs = (attempt: number, policy: FigmaRetryPolicy): number => 
   return Math.min(exponential, policy.maxDelayMs);
 };
 
+// Retry-After is either whole seconds or an HTTP date; anything else is ignored. A date in the
+// past means "now", so it reads as a zero delay.
 const retryAfterMs = (
   headers: Readonly<Record<string, string>> | undefined,
+  now: () => number,
 ): number | undefined => {
   const raw = headers?.["retry-after"]?.trim();
-  if (raw === undefined || !/^\d+$/u.test(raw)) return undefined;
-  return Number(raw) * 1000;
+  if (raw === undefined) return undefined;
+  if (/^\d+$/u.test(raw)) return Number(raw) * 1000;
+  const at = Date.parse(raw);
+  return Number.isNaN(at) ? undefined : Math.max(0, at - now());
 };
 
 /**
  * Run `operation` (a single attempt), retrying ONLY on HTTP 429 with deterministic exponential
- * backoff up to `policy.maxRetries`. Honours a numeric `Retry-After` over the computed delay.
+ * backoff up to `policy.maxRetries`. Honours `Retry-After` (seconds or HTTP date) over the computed
+ * delay, and reports it on the error.
  * Throws FIGMA_RATE_LIMITED once the bounded retries are exhausted; never retries a non-429.
  */
 export const fetchWithBackoff = async <R extends FigmaBackoffResponse>(
   operation: () => Promise<R>,
   policy: FigmaRetryPolicy,
   sleep: FigmaRetrySleep,
+  now: () => number = Date.now,
 ): Promise<R> => {
+  let explicitDelay: number | undefined;
   for (let attempt = 0; attempt <= policy.maxRetries; attempt += 1) {
     const response = await operation(); // NOSONAR typescript:S9382 -- the current status determines whether another attempt is needed.
     if (response.status !== FIGMA_RATE_LIMIT_STATUS) return response;
+    // Read the header before any exit so the error keeps what Figma asked for, even with no retry.
+    explicitDelay = retryAfterMs(response.headers, now);
     if (attempt === policy.maxRetries) break;
-    const delay = retryAfterMs(response.headers) ?? computeBackoffMs(attempt, policy);
+    const delay = explicitDelay ?? computeBackoffMs(attempt, policy);
     // A shorter wait would send requests while the provider has instructed us to stop.
     if (delay > policy.maxDelayMs) break;
     await sleep(delay); // NOSONAR typescript:S9382 -- wait before another attempt to respect Retry-After.
   }
-  throw new FigmaConnectorError("FIGMA_RATE_LIMITED");
+  throw new FigmaConnectorError("FIGMA_RATE_LIMITED", explicitDelay);
 };

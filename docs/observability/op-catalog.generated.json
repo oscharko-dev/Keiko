@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ae88f54dda0798f1ee7ab9c3db5458b7d6b54a6f6fd6262ffad3ac275ce52abc",
+    "catalogDigest": "f9c12c6f7ea0605c4cdb4a0391db9d3c942e168ed47777ddea0ba89e54b1cadc",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -24258,8 +24258,8 @@
         "failureClasses": ["figma-snapshot"],
         "proofIds": ["figma.snapshot.capture-failed.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:918",
-        "emitterSites": ["packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:961"]
+        "registrationSite": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:919",
+        "emitterSites": ["packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:962"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -24313,6 +24313,11 @@
             "type": "boolean",
             "dataClass": "closed-enum",
             "required": true
+          },
+          "rateLimitDeferredCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -24322,7 +24327,7 @@
         "proofIds": ["figma.snapshot.captured.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:834",
-        "emitterSites": ["packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:971"]
+        "emitterSites": ["packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:972"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -92001,6 +92006,12 @@
                   "required": true
                 },
                 {
+                  "name": "rateLimitDeferredCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "renderBudgetSkipCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -124122,7 +124133,7 @@
     {
       "op": "figma.snapshot.capture-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:921",
+      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:922",
       "package": "keiko-server"
     },
     {
