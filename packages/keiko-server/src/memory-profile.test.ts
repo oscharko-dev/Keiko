@@ -48,6 +48,8 @@ interface Seed {
   readonly body: string;
   readonly type?: MemoryType;
   readonly createdAt?: number;
+  readonly validFrom?: number;
+  readonly sensitivity?: MemoryRecord["provenance"]["sensitivity"];
   readonly pinned?: boolean;
   readonly tags?: readonly string[];
   readonly project?: boolean;
@@ -69,9 +71,9 @@ function seed(store: MemoryVaultStore, entry: Seed): void {
       sourceKind: "explicit-user-instruction",
       capturedAt: createdAt,
       confidence: 1,
-      sensitivity: "public",
+      sensitivity: entry.sensitivity ?? "public",
     },
-    validity: { validFrom: createdAt },
+    validity: { validFrom: entry.validFrom ?? createdAt },
     status: entry.status ?? "accepted",
     pinned: entry.pinned ?? false,
     tags: [...(entry.tags ?? [])],
@@ -187,6 +189,64 @@ describe("standingProfileForUser (#4228)", () => {
     const reads = vi.spyOn(store, "getMemory");
     expect(profileIds(store)).toHaveLength(8);
     expect(reads.mock.calls.length).toBeLessThanOrEqual(16);
+  });
+
+  it.each([
+    { label: "future", validFrom: NOW + 1, sensitivity: "public" },
+    { label: "confidential", validFrom: NOW - 100, sensitivity: "confidential" },
+  ] as const)(
+    "does not spend the profile read bound on $label records",
+    ({ validFrom, sensitivity }) => {
+      const store = vault();
+      seed(store, { id: "eligible", body: "Use tables.", createdAt: NOW - 10_000, validFrom: NOW });
+      for (let index = 0; index < 64; index += 1) {
+        seed(store, {
+          id: `skipped-${String(index)}`,
+          body: `Synthetic fixture ${String(index)}.`,
+          createdAt: NOW - 100 + index,
+          pinned: true,
+          validFrom,
+          sensitivity,
+        });
+      }
+
+      const reads = vi.spyOn(store, "getMemory");
+      const profile = standingProfileForUser(store, USER, NOW);
+      expect([profile.entries.length, reads.mock.calls.length]).toEqual([1, 1]);
+      expect(reads.mock.calls).toEqual([["eligible"]]);
+      expect(standingProfileWire(profile).entries.map(({ memoryId }) => memoryId)).toEqual([
+        "eligible",
+      ]);
+      expect(standingProfileWire(profile).droppedCount).toBe(0);
+    },
+  );
+
+  it("keeps the body-read bound when the exclusion can only be seen in sealed tags", () => {
+    const store = vault();
+    seed(store, { id: "eligible", body: "Use tables.", createdAt: NOW - 10_000 });
+    for (let index = 0; index < 63; index += 1) {
+      seed(store, {
+        id: `excluded-${String(index)}`,
+        body: `Synthetic fixture ${String(index)}.`,
+        createdAt: NOW - 100 + index,
+        tags: [PROFILE_EXCLUDED_MEMORY_TAG],
+      });
+    }
+
+    const reads = vi.spyOn(store, "getMemory");
+    expect(profileIds(store)).toEqual(["eligible"]);
+    expect(reads.mock.calls).toHaveLength(64);
+
+    seed(store, {
+      id: "excluded-last",
+      body: "Another exclusion.",
+      tags: [PROFILE_EXCLUDED_MEMORY_TAG],
+    });
+    reads.mockClear();
+    const profile = standingProfileForUser(store, USER, NOW);
+    expect(profile.entries).toEqual([]);
+    expect(reads.mock.calls).toHaveLength(64);
+    expect(standingProfileWire(profile).droppedCount).toBe(0);
   });
 
   it("is empty for a person without standing facts", () => {

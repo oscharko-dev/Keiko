@@ -1,10 +1,8 @@
 // The person's standing profile for a Chat answer (MemoriaViva 1.5, #4228).
 //
-// The vault is asked for the metadata of the person's private standing facts and pinned facts, which
-// needs no body reads and is not limited by the retrieval layer's newest-500 window, so the profile
-// holds at any vault size. The metadata is ordered exactly as the profile orders facts, and
-// bodies are read in that order only until the profile is full. The selection itself is the pure
-// selectStandingProfile; this module only feeds it.
+// The vault supplies metadata for the person's public-sensitivity standing and pinned facts
+// independently of retrieval's newest-500 window. The metadata is filtered and ordered before
+// the bounded body reads. The pure selectStandingProfile still checks each record it receives.
 
 import {
   STANDING_FACT_RETENTION_POLICY_KEY,
@@ -24,8 +22,8 @@ import {
 } from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryMetadata, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
-// Bodies read per batch and at most per answer. Ineligible facts (excluded, suppressed) cost a read
-// each, so the bound is a multiple of the entry cap rather than the cap itself.
+// Bodies read per batch and at most per answer. Exclusions in sealed tags still cost a read, so
+// the bound is a multiple of the entry cap.
 const PROFILE_READ_BATCH = 16;
 const PROFILE_READS_PER_ENTRY = 8;
 
@@ -43,7 +41,7 @@ function profileMetadata(
   nowMs: number,
 ): readonly MemoryMetadata[] {
   const scope = { kind: "user", userId } as const;
-  const options = { status: ["accepted"], nowMs } as const;
+  const options = { status: ["accepted"], sensitivity: ["public"], nowMs } as const;
   const byId = new Map<MemoryId, MemoryMetadata>();
   for (const meta of [
     ...vault.listMemoryMetadataByScope(scope, { ...options, type: STANDING_PROFILE_TYPES }),
@@ -53,6 +51,7 @@ function profileMetadata(
     }),
     ...vault.listMemoryMetadataByScope(scope, { ...options, pinned: true }),
   ]) {
+    if (meta.validity.validFrom > nowMs) continue;
     byId.set(meta.id, meta);
   }
   return [...byId.values()];
