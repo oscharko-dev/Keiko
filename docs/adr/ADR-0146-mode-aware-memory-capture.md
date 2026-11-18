@@ -385,7 +385,8 @@ does not start while one runs, and a starting turn aborts a running pass down to
 request. A turn written with memory off is never learned. Pronoun resolution uses the immediately
 preceding user message only if it was written with memory on. An unmarked message blocks this
 lookup. A clear statement (D4b) still acts at message time. The pass reapplies a forget to facts it
-learned from the Chat's earlier, still pending messages. `memory.learn.pass.started` and
+learned from the Chat's earlier, still pending messages. An audit or storage failure leaves the
+forget pending for a retry. `memory.learn.pass.started` and
 `memory.learn.pass.settled` record each pass body-free. Triggers, bounds and the measurement:
 [MemoriaViva learning passes](../memory/memoria-viva-learning-passes.md).
 A private fact the learner labels `identity` or `constraint` carries the retention hint

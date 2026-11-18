@@ -447,13 +447,18 @@ export class MemoryLearningRuntime {
       tally.memoryOffTurnCount += 1;
       return "done";
     }
-    const forgotten = replayPendingForget(this.deps, {
+    const forget = replayPendingForget(this.deps, {
       statement: turn.user,
       context,
       correlationId: turn.correlationId,
     });
-    if (forgotten !== undefined) {
-      tally.forgottenPendingCount += forgotten;
+    if (forget !== undefined) {
+      tally.forgottenPendingCount += forget.forgotten;
+      // A failed privacy-critical action must remain pending until the audit and vault can commit it.
+      if (forget.failed) {
+        tally.failedTurnCount += 1;
+        return "unavailable";
+      }
       tally.skippedTurnCount += 1;
       return "done";
     }

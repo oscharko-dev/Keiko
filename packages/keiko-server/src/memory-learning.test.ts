@@ -859,6 +859,45 @@ describe("memory learning passes", () => {
     expect(bodies(deps, chat)).toEqual(["I write Atlas in Rust."]);
   });
 
+  it("resumes a pending forget after its audit store becomes writable", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    let auditWritable = false;
+    const deps = makeDeps({
+      env: { KEIKO_MEMORY_LEARNING_IDLE_MS: "3600000" },
+      evidenceStore: {
+        put: (_id, json) => {
+          if (!auditWritable && json === "[]") throw new Error("synthetic audit preflight failure");
+          return "";
+        },
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+    });
+    const chat = makeChat(deps);
+    const runtime = memoryLearningRuntime(deps);
+    writeTurn(deps, chat, "I use Vim.");
+    writeTurn(deps, chat, "Forget that I use Vim.");
+    writeTurn(deps, chat, "I drink tea.");
+
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("unavailable");
+    expect(bodies(deps, chat)).toEqual(["I use Vim."]);
+    expect(deps.store.memoryLearning?.listChatsWithPending(8)).toEqual([chat.chatId]);
+    expect(
+      sink.events.find((event) => event.op === "memory.learn.pass.settled")?.extra,
+    ).toMatchObject({ failedTurnCount: 1, forgottenPendingCount: 0, pendingChatCount: 1 });
+
+    auditWritable = true;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(bodies(deps, chat)).toEqual(["I drink tea."]);
+    expect(deps.store.memoryLearning?.listChatsWithPending(8)).toEqual([]);
+    expect(
+      sink.events.filter((event) => event.op === "memory.learn.pass.settled").at(-1)?.extra,
+    ).toMatchObject({ trigger: "retry", forgottenPendingCount: 1, pendingChatCount: 0 });
+  });
+
   it("keeps a statement forgotten by reference from being learned", async () => {
     const deps = makeDeps();
     const chat = makeChat(deps);

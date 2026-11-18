@@ -51,10 +51,10 @@ person at once. The cancelled turn stays pending and is learned by the next pass
 - **Memory off**: a message written with memory off is never learned, even if memory is switched on
   later. It is also excluded from the learner's context for pronoun resolution and blocks that
   lookup from reaching any earlier message.
-- **Unavailable**: no model port or a `GATEWAY_*` failure; the turn stays pending and a `retry` pass
-  follows.
-- **Failed**: any other error is recorded as a body-free diagnostic and retried; after three attempts
-  the turn is skipped so it cannot hold the Chat back.
+- **Unavailable**: the model is unavailable or a pending forget could not commit because of an audit
+  or storage failure. The turn stays pending and a `retry` pass follows.
+- **Failed**: other extraction errors are recorded as body-free diagnostics and retried. After three
+  attempts the turn is skipped so it cannot hold the Chat back.
 
 A forget the pass reaches in Chat order ("Vergiss, dass …") is applied again to the facts the pass
 has just learned from the same Chat's earlier messages, which were still pending when the person
