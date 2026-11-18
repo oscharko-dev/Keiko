@@ -113,22 +113,27 @@ function isTemplate(document: SkillDocument, jira: JiraTemplates): boolean {
   return splitMarkdownDocument(document.text).frontMatter !== undefined;
 }
 
-function formComplete(form: JiraTemplateForm | undefined): boolean {
-  return (
-    form === undefined ||
-    (form.project.trim() !== "" && form.issueType.trim() !== "" && form.activateOn.length > 0)
-  );
+/**
+ * Whether the open file may be saved as far as its Jira metadata goes. A Jira template whose metadata
+ * does not read right now (an open list, a stray quote) is never complete, so Save waits for a text
+ * the guided form can read; a file that is no Jira template has no form to complete.
+ */
+function formComplete(form: JiraTemplateForm | undefined, jiraTemplate: boolean): boolean {
+  if (form === undefined) return !jiraTemplate;
+  return form.project.trim() !== "" && form.issueType.trim() !== "" && form.activateOn.length > 0;
 }
 
 interface GuidedForm {
   readonly form: JiraTemplateForm;
   /** The front matter does not read right now; `form` is the last one of this document that did. */
   readonly stale: boolean;
+  /** The text `form` was read from: the binding context a held form keeps while the text is half typed. */
+  readonly markdown: string;
 }
 
 interface ReadForm {
   readonly key: string;
-  readonly frontMatter: string;
+  readonly markdown: string;
   readonly form: JiraTemplateForm;
 }
 
@@ -145,23 +150,19 @@ function useGuidedForm(
     [frontMatter],
   );
   const [last, setLast] = useState<ReadForm>();
-  if (
-    current !== undefined &&
-    frontMatter !== undefined &&
-    (last?.key !== document.key || last.frontMatter !== frontMatter)
-  )
-    setLast({ key: document.key, frontMatter, form: current });
-  if (current !== undefined) return { current, guided: { form: current, stale: false } };
+  if (current !== undefined && (last?.key !== document.key || last.markdown !== document.text))
+    setLast({ key: document.key, markdown: document.text, form: current });
+  if (current !== undefined)
+    return { current, guided: { form: current, stale: false, markdown: document.text } };
   const held =
     last?.key === document.key && isJiraIssueTemplateDocument(document.text)
-      ? { form: last.form, stale: true }
+      ? { form: last.form, stale: true, markdown: last.markdown }
       : undefined;
   return { current, guided: held };
 }
 
 function metadataEditor(
   guided: GuidedForm | undefined,
-  markdown: string,
   jira: JiraTemplates,
 ): Pick<MarkdownEditorProps, "renderFrontMatter"> {
   if (guided === undefined) return {};
@@ -171,7 +172,7 @@ function metadataEditor(
         {...field}
         form={guided.form}
         stale={guided.stale}
-        markdown={markdown}
+        markdown={guided.markdown}
         podId={jira.podReady ? jira.podId : undefined}
       />
     ),
@@ -184,7 +185,8 @@ function DocumentEditor(props: PaneProps & { readonly document: SkillDocument })
   const template = isTemplate(document, props.jira);
   const frontMatter = splitMarkdownDocument(document.text).frontMatter;
   const { current, guided } = useGuidedForm(document, frontMatter);
-  const canSave = workspace.canSave && formComplete(current);
+  const canSave =
+    workspace.canSave && formComplete(current, isJiraIssueTemplateDocument(document.text));
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
@@ -207,7 +209,7 @@ function DocumentEditor(props: PaneProps & { readonly document: SkillDocument })
           placeholder={t("chat.skills.editorPlaceholder")}
           maxLength={MARKDOWN_SKILL_LIMITS.importBytes}
           selectTitleOnOpen={document.stored === undefined}
-          {...metadataEditor(guided, document.text, props.jira)}
+          {...metadataEditor(guided, props.jira)}
         />
       </div>
       {skillTextFits(document.text) ? null : (

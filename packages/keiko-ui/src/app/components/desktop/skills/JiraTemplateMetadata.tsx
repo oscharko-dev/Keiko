@@ -8,7 +8,9 @@ import {
   jiraTemplateIssueTypeMatches,
   JIRA_ISSUE_TEMPLATE_LIMITS,
   parseJiraIssueTemplate,
+  rebindJiraTemplateAfterEdit,
   type JiraIssueTemplate,
+  type JiraTemplateEditedIds,
   type JiraTemplateForm,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
@@ -202,6 +204,8 @@ interface MetadataReads {
   readonly typesRead: JiraOptionsRead;
   readonly choices: readonly JiraTemplateNamedOption[];
   readonly template: JiraIssueTemplate | undefined;
+  /** The identity of the Jira that supplied the choices; what a binding is confirmed against. */
+  readonly instanceId: string | undefined;
   readonly selected: JiraTemplateNamedOption | undefined;
   readonly details: JiraOptionsRead;
 }
@@ -220,14 +224,15 @@ function useMetadataReads(
       ? typesRead.options
       : undefined;
   const choices = types?.issueTypes ?? [];
-  const template = governingTemplate(markdown, types?.instanceId);
+  const instanceId = types?.instanceId;
+  const template = governingTemplate(markdown, instanceId);
   const selected = matchingType(choices, form.issueType, template);
   const details = useJiraTemplateOptions(
     selected === undefined ? undefined : podId,
     project,
     selected?.id,
   );
-  return { project, projects, typesRead, choices, template, selected, details };
+  return { project, projects, typesRead, choices, template, instanceId, selected, details };
 }
 
 function MetadataNotices({ podId, stale }: Pick<MetadataProps, "podId" | "stale">): ReactNode {
@@ -242,22 +247,50 @@ function MetadataNotices({ podId, stale }: Pick<MetadataProps, "podId" | "stale"
   );
 }
 
+interface FormEdits {
+  readonly edit: (patch: Partial<JiraTemplateForm>) => void;
+  readonly editRules: (patch: Partial<JiraTemplateForm>, resolved?: JiraTemplateEditedIds) => void;
+}
+
+/** How the form writes its choices into the front matter, for the Jira the reads came from. */
+function formEdits(props: MetadataProps, reads: MetadataReads): FormEdits {
+  const { form } = props;
+  const { template, instanceId, selected, choices } = reads;
+  const edit = (patch: Partial<JiraTemplateForm>): void =>
+    props.onChange(editJiraTemplateForm(props.value, patch));
+  const editRules = (patch: Partial<JiraTemplateForm>, resolved?: JiraTemplateEditedIds): void => {
+    // A binding in force for this Jira keeps every untouched rule on the id it was bound to, and
+    // keeps the issue type it names by id: only the references this edit adds are resolved.
+    const bound =
+      template === undefined
+        ? undefined
+        : rebindJiraTemplateAfterEdit(
+            template,
+            instanceId,
+            {
+              requiredFields: patch.requiredFields ?? form.requiredFields,
+              activateOn: patch.activateOn ?? form.activateOn,
+            },
+            resolved,
+          );
+    if (bound !== undefined) {
+      props.onChange(editJiraTemplateForm(props.value, patch, bound));
+      return;
+    }
+    // Without a binding, rebinding after a rule change must use a name this Pod can resolve.
+    const viewedType = selected === undefined ? form.issueType : typeReference(selected, choices);
+    edit(viewedType === form.issueType ? patch : { ...patch, issueType: viewedType });
+  };
+  return { edit, editRules };
+}
+
 export function JiraTemplateMetadata(props: MetadataProps): ReactNode {
   const t = useTranslate();
   const id = useId();
   const { podId, form } = props;
-  const { project, projects, typesRead, choices, template, selected, details } = useMetadataReads(
-    podId,
-    form,
-    props.markdown,
-  );
-  const edit = (patch: Partial<JiraTemplateForm>): void =>
-    props.onChange(editJiraTemplateForm(props.value, patch));
-  const editRules = (patch: Partial<JiraTemplateForm>): void => {
-    // Rebinding after a rule change must use a name this Pod can resolve.
-    const viewedType = selected === undefined ? form.issueType : typeReference(selected, choices);
-    edit(viewedType === form.issueType ? patch : { ...patch, issueType: viewedType });
-  };
+  const reads = useMetadataReads(podId, form, props.markdown);
+  const { project, projects, typesRead, choices, template, selected, details } = reads;
+  const { edit, editRules } = formEdits(props, reads);
   return (
     <section className={styles.cmpForm} aria-labelledby={id}>
       <h4 id={id}>{t("chat.skills.jira.form.title")}</h4>

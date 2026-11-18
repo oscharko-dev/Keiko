@@ -14,7 +14,7 @@ import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widge
 import { SafeMarkdown } from "../SafeMarkdown";
 import type { ComposerEditorLabels } from "../composer/composer-editor-types";
 import {
-  joinMarkdownDocument,
+  replaceMarkdownBody,
   replaceMarkdownFrontMatter,
   splitMarkdownDocument,
   supportsFormattedEditing,
@@ -126,8 +126,7 @@ function useMarkdownEditorState(props: MarkdownEditorProps): {
   });
   const changeBody = (next: string): void => {
     setNotice("");
-    const frontMatter = splitMarkdownDocument(latest.current.value).frontMatter;
-    latest.current.onChange(joinMarkdownDocument({ frontMatter, body: next }));
+    latest.current.onChange(replaceMarkdownBody(latest.current.value, next));
   };
   const keepPasteAsSource = (next: string): void => {
     reportClientDiagnostic("Keiko Markdown editor kept pasted Markdown in source.", {

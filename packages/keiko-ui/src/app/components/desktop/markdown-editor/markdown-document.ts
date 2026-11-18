@@ -10,7 +10,8 @@ export interface MarkdownDocumentParts {
   readonly body: string;
 }
 
-const FRONT_MATTER = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/u;
+// A fence may carry trailing blanks, as the server's template parser reads it (it trims line ends).
+const FRONT_MATTER = /^---[^\S\r\n]*\r?\n([\s\S]*?)\r?\n---[^\S\r\n]*(?:\r?\n|$)/u;
 
 export function splitMarkdownDocument(text: string): MarkdownDocumentParts {
   const match = FRONT_MATTER.exec(text);
@@ -23,6 +24,19 @@ export function joinMarkdownDocument(parts: MarkdownDocumentParts): string {
   if (parts.frontMatter === undefined) return parts.body;
   const body = parts.body.length > 0 ? `\n${parts.body}` : "";
   return `---\n${parts.frontMatter}\n---\n${body}`;
+}
+
+/**
+ * The text with its body replaced and everything before the body kept byte for byte: the fences (with
+ * any trailing blanks), the line endings and the front matter. A document without front matter is its body.
+ */
+export function replaceMarkdownBody(text: string, body: string): string {
+  const match = FRONT_MATTER.exec(text);
+  if (match === null) return body;
+  if (body.length === 0) return match[0];
+  const head = match[0].endsWith("\n") ? match[0] : `${match[0]}\n`;
+  const blank = /^\r?\n/u.exec(text.slice(match[0].length))?.[0];
+  return head + (blank ?? "") + body;
 }
 
 export function replaceMarkdownFrontMatter(text: string, frontMatter: string): string {

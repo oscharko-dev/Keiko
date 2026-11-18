@@ -2879,6 +2879,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.form.choose": "Option auswählen",
   "chat.skills.jira.form.remove": "{subject} entfernen",
   "chat.skills.jira.form.notOffered": "{subject} (für diesen Vorgangstyp nicht angeboten)",
+  "chat.skills.jira.form.sharedName":
+    "{subject} (mehrere Felder heißen so; schreibe die ID in die Metadaten, um es zu verwenden)",
+  "chat.skills.jira.form.statusNotChoosable":
+    "{subject} (ein rein numerischer Statusname lässt sich hier nicht wählen)",
   "chat.skills.jira.form.invalid":
     "Korrigiere die Regeln im Text darunter; die Auswahl folgt wieder, sobald sie stimmen.",
   "chat.skills.jira.starter.epic":

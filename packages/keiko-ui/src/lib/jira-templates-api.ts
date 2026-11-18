@@ -2,9 +2,9 @@
 
 import type { JiraTemplateParseError } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
+  JiraTemplateBound,
   JiraTemplateOptions,
   JiraTemplateOptionsRequest,
-  MarkdownSkillDocument,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 import { bffFetchJson } from "./http";
@@ -140,13 +140,7 @@ export async function proposeJiraTemplates(
   );
 }
 
-/** What binding a template to this Jira did: the issue type it now names by id. */
-export interface JiraTemplateBound {
-  readonly changed: boolean;
-  readonly issueType: string;
-  readonly parentTypeCount?: number;
-  readonly skill?: MarkdownSkillDocument;
-}
+export type { JiraTemplateBound };
 
 /** Writes the ids of this Jira's issue types into the template as a new revision (#4354). */
 export function bindJiraTemplate(

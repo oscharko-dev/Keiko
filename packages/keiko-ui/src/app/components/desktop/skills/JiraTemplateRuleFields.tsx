@@ -7,6 +7,7 @@ import {
   JIRA_ISSUE_TEMPLATE_LIMITS,
   resolveJiraTemplateFieldIds,
   type JiraIssueTemplate,
+  type JiraTemplateEditedIds,
   type JiraTemplateForm,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
@@ -16,6 +17,8 @@ import styles from "./JiraTemplateMetadata.module.css";
 interface RuleChoice {
   readonly value: string;
   readonly label: string;
+  /** Shown with its reason in the label, but not selectable: the guided form cannot write it safely. */
+  readonly disabled?: boolean;
 }
 
 interface ListFieldProps {
@@ -53,12 +56,14 @@ function ListField({
         disabled={choices.length === 0 || values.length >= max}
         onChange={(event) => {
           const value = event.target.value;
-          if (value !== "") onChange([...values, value]);
+          // A choice the form cannot write safely is shown, never taken.
+          const blocked = options.find((choice) => choice.value === value)?.disabled === true;
+          if (value !== "" && !blocked) onChange([...values, value]);
         }}
       >
         <option value="">{t("chat.skills.jira.form.choose")}</option>
         {choices.map((choice) => (
-          <option key={choice.value} value={choice.value}>
+          <option key={choice.value} value={choice.value} disabled={choice.disabled === true}>
             {choice.label}
           </option>
         ))}
@@ -145,6 +150,27 @@ function unwrittenFields(
   return fields.filter((field) => !named.has(field.id));
 }
 
+/**
+ * The text a guided pick writes for a field: its name, which is portable across Jira instances, and
+ * only when that name names exactly this field by the gate's rule and fits the template grammar. A
+ * name several fields share, or a bare instance-local id, is never written by a pick: it would name a
+ * different field on another Jira, so the author writes such an id explicitly (UyB).
+ */
+function portableReference(
+  field: JiraTemplateFieldOption,
+  fields: readonly JiraTemplateFieldOption[],
+): string | undefined {
+  const named = resolveJiraTemplateFieldIds(field.name, fields);
+  const fits = field.name.trim() === field.name && portableText(field.name);
+  return named.length === 1 && named[0] === field.id && fits ? field.name : undefined;
+}
+
+function portableText(text: string): boolean {
+  return (
+    text.length > 0 && text.length <= JIRA_ISSUE_TEMPLATE_LIMITS.textChars && !/\p{Cc}/u.test(text)
+  );
+}
+
 function fieldChoices(
   offered: readonly JiraTemplateFieldOption[],
   fields: readonly JiraTemplateFieldOption[],
@@ -152,28 +178,69 @@ function fieldChoices(
 ): readonly RuleChoice[] {
   return offered.map((field) => {
     const label = fieldLabel(field, fields);
+    const reference = portableReference(field, fields);
+    if (reference === undefined)
+      return {
+        value: field.id,
+        label: t("chat.skills.jira.form.sharedName", { subject: label }),
+        disabled: true,
+      };
     return {
-      value: field.id,
+      value: reference,
       label: field.required ? t("chat.skills.jira.form.requiredByJira", { subject: label }) : label,
     };
   });
+}
+
+/** The id Jira gave each field a pick can write, by the reference the pick writes. */
+function fieldIdsByReference(
+  fields: readonly JiraTemplateFieldOption[],
+): ReadonlyMap<string, string> {
+  const ids = new Map<string, string>();
+  for (const field of fields) {
+    const reference = portableReference(field, fields);
+    if (reference !== undefined) ids.set(reference, field.id);
+  }
+  return ids;
+}
+
+/** A status name a transition target can carry without being taken for a transition id. */
+function portableStatusName(name: string): boolean {
+  return portableText(name) && !/^\d+$/u.test(name);
 }
 
 function statusChoices(
   statuses: readonly JiraTemplateNamedOption[],
   t: Translate,
 ): readonly RuleChoice[] {
-  const names = new Set(
-    statuses
-      .map(({ name }) => name)
-      .filter(
-        (name) => name.length <= JIRA_ISSUE_TEMPLATE_LIMITS.textChars && !/\p{Cc}/u.test(name),
-      ),
-  );
+  const names = new Set(statuses.map(({ name }) => name).filter(portableText));
   return [
     { value: "transition", label: t("chat.skills.jira.form.anyStatus") },
-    ...Array.from(names, (name) => ({ value: `transition:${name}`, label: name })),
+    ...Array.from(names, (name) =>
+      portableStatusName(name)
+        ? { value: `transition:${name}`, label: name }
+        : {
+            value: `transition:${name}`,
+            label: t("chat.skills.jira.form.statusNotChoosable", { subject: name }),
+            disabled: true,
+          },
+    ),
   ];
+}
+
+/** The id of each status a pick can name, by its name; a name two statuses share names none. */
+function statusIdsByName(
+  statuses: readonly JiraTemplateNamedOption[],
+): ReadonlyMap<string, string> {
+  const ids = new Map<string, string>();
+  const seen = new Set<string>();
+  for (const { id, name } of statuses) {
+    const key = name.trim().toLowerCase();
+    if (seen.has(key)) ids.delete(key);
+    else ids.set(key, id);
+    seen.add(key);
+  }
+  return ids;
 }
 
 interface RuleFieldsProps {
@@ -181,7 +248,8 @@ interface RuleFieldsProps {
   /** The whole template as it governs this Jira, once it reads; its binding names fields by id. */
   readonly template: JiraIssueTemplate | undefined;
   readonly details: JiraOptionsRead;
-  readonly onChange: (patch: Partial<JiraTemplateForm>) => void;
+  /** `resolved` carries the ids Jira gave the references a pick adds, so a bound template keeps them. */
+  readonly onChange: (patch: Partial<JiraTemplateForm>, resolved?: JiraTemplateEditedIds) => void;
 }
 
 function ActivationField({
@@ -194,16 +262,21 @@ function ActivationField({
   const transitions = form.activateOn.filter((value) => !appliesToWrites(value));
   const metadata =
     details.state === "ready" && details.options.kind === "details" ? details.options : undefined;
+  const statusIds = { statusIds: statusIdsByName(metadata?.statuses ?? []) };
+  // Adding the write activation to a full list would exceed the limit; removing it stays possible.
+  const full = writes.length === 0 && transitions.length >= JIRA_ISSUE_TEMPLATE_LIMITS.activations;
   return (
     <div className={styles.cmpField}>
       <label className={styles.cmpCheckbox}>
         <input
           type="checkbox"
           checked={writes.length > 0}
+          disabled={full}
           onChange={(event) =>
-            onChange({
-              activateOn: event.target.checked ? ["create", ...transitions] : transitions,
-            })
+            onChange(
+              { activateOn: event.target.checked ? ["create", ...transitions] : transitions },
+              statusIds,
+            )
           }
         />
         {t("chat.skills.jira.form.onWrite")}
@@ -222,7 +295,7 @@ function ActivationField({
             ? t("chat.skills.jira.form.anyStatus")
             : value.replace(/^transition:/u, "")
         }
-        onChange={(values) => onChange({ activateOn: [...writes, ...values] })}
+        onChange={(values) => onChange({ activateOn: [...writes, ...values] }, statusIds)}
       />
     </div>
   );
@@ -256,7 +329,9 @@ function FieldRequirement({ form, template, details, onChange }: RuleFieldsProps
           : (value: string): boolean =>
               resolveJiraTemplateFieldIds(value, fields, template).length > 0
       }
-      onChange={(requiredFields) => onChange({ requiredFields })}
+      onChange={(requiredFields) =>
+        onChange({ requiredFields }, { fieldIds: fieldIdsByReference(fields ?? []) })
+      }
     />
   );
 }

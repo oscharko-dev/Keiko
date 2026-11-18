@@ -5,6 +5,10 @@ import type {
   MarkdownSkillDocument,
   MarkdownSkillMetadata,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  replaceMarkdownFrontMatter,
+  splitMarkdownDocument,
+} from "../markdown-editor/markdown-document";
 import { skillTextFits } from "./useMarkdownSkillAuthor";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 
@@ -98,9 +102,25 @@ function storedDocument(
 }
 
 /**
+ * The person's newer text with the server's binding written into it. The binding is front matter the
+ * server added to the revision the person started from; it is merged only while the person left the
+ * front matter of that revision untouched, so their body edits stay theirs and the next Save keeps the
+ * binding. An edit of the front matter overlaps the binding: undefined, a conflict, never a silent merge.
+ */
+function withBinding(base: string, text: string, bound: string): string | undefined {
+  const mine = splitMarkdownDocument(text).frontMatter;
+  const theirs = splitMarkdownDocument(bound).frontMatter;
+  if (mine !== splitMarkdownDocument(base).frontMatter) return undefined;
+  if (mine === undefined) return theirs === undefined ? text : undefined;
+  return theirs === undefined ? undefined : replaceMarkdownFrontMatter(text, theirs);
+}
+
+/**
  * A binding the server wrote is a new revision of the open file. It replaces only the saved baseline
- * of the exact revision it was written over; the document key stays, so the editor keeps its state,
- * and text typed since stays the person's newer work instead of being replaced by the bound copy.
+ * of the exact revision it was written over; the document key stays, so the editor keeps its state.
+ * Text typed since is the person's newer work and receives the binding when it can (see
+ * `withBinding`). When it cannot, the file stays on the revision it was opened at, so the next Save is
+ * refused as stale by the server instead of replacing the binding with text that lacks it.
  */
 function adoptBinding(
   current: SkillWorkspaceView,
@@ -111,11 +131,11 @@ function adoptBinding(
   const { document } = current;
   if (document.stored?.id !== skill.id || document.stored.revision !== previousRevision)
     return current;
-  return storedDocument(
-    document.key,
-    skill,
-    document.text === document.saved ? skill.body : document.text,
-  );
+  const text =
+    document.text === document.saved
+      ? skill.body
+      : withBinding(document.saved, document.text, skill.body);
+  return text === undefined ? current : storedDocument(document.key, skill, text);
 }
 
 /**

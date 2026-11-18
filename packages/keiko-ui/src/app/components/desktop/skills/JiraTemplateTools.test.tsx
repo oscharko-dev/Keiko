@@ -7,6 +7,7 @@ import * as templates from "@/lib/jira-templates-api";
 import * as skills from "@/lib/markdown-skills-api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { ApiError } from "@/lib/api";
+import type { MarkdownSkillDocument } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { JiraTemplateValidation } from "@/lib/jira-templates-api";
 import {
   JiraTemplateList,
@@ -139,6 +140,17 @@ async function row(name: string): Promise<HTMLElement> {
 }
 
 const SYN_MATCH = /SYN · Story — Matches Jira\./u;
+
+/** The revision a binding writes: the bind answer carries it whenever the binding changed. */
+const BOUND_SKILL: MarkdownSkillDocument = {
+  id: "story",
+  revision: 2,
+  digest: "c".repeat(64),
+  name: "Story template",
+  byteCount: 10,
+  createdAt: 1,
+  body: "# Story template\n",
+};
 
 describe("the template list", () => {
   it("reads the templates at once and names which stored skills are templates", async () => {
@@ -761,6 +773,7 @@ describe("binding a template to this Jira", () => {
       changed: true,
       issueType: "Story",
       parentTypeCount: 0,
+      skill: BOUND_SKILL,
     });
     render(<Panel stored={stored} />);
     const story = await row("Story template");
@@ -819,6 +832,7 @@ describe("binding a template to this Jira", () => {
       changed: true,
       issueType: "Story",
       parentTypeCount: 0,
+      skill: BOUND_SKILL,
     });
     await user.click(within(story).getByRole("button", { name: "Bind to this Jira" }));
     expect(await within(story).findByText(/Bound to the issue type “Story”/u)).toBeInTheDocument();
