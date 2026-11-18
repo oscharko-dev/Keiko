@@ -10,6 +10,7 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type {
   SupportQueryClass,
   SupportQueryResult,
@@ -158,9 +159,7 @@ export type SupportQuerySurface = "query" | "export" | "rebuild" | "verify";
 export type SupportQueryFailureStage = "store-listing" | "incident-lookup" | "manifest" | "scan";
 
 /** The one write port these emitters need; the CLI hands in the file sink of the state dir. */
-export interface SupportQueryEvidenceSink {
-  write(event: object): void;
-}
+export type SupportQueryEvidenceSink = Pick<ServerLogSink, "write">;
 
 export function emitSupportManifestEvidence(
   sink: SupportQueryEvidenceSink,

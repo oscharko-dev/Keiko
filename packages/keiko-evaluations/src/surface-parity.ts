@@ -23,7 +23,7 @@ export type SurfaceParityCliRunner = (
   io: SurfaceParityCliIo,
   env: Record<string, string | undefined>,
   opts: Record<string, unknown>,
-) => unknown;
+) => Promise<number>;
 
 interface SurfaceParityParsedRunRequest {
   readonly kind?: unknown;
@@ -154,7 +154,7 @@ function captureCliHelp(
     args: readonly string[],
     io: SurfaceParityCliIo,
     env: Record<string, string | undefined>,
-  ) => unknown,
+  ) => Promise<number>,
 ): string {
   const chunks: string[] = [];
   const io: SurfaceParityCliIo = {
@@ -167,7 +167,7 @@ function captureCliHelp(
   };
   // The handlers print their usage string synchronously before any async work when --help fails to
   // parse as a real invocation, so the captured chunks already contain the flag names we assert.
-  run(["--help"], io, {});
+  void run(["--help"], io, {});
   return chunks.join("");
 }
 

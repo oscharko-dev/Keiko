@@ -727,7 +727,6 @@
       "anti-slop/require-safety-comment-for-type-assertion": 7
     },
     "packages/keiko-cli/src/support-incident.ts": {
-      "anti-slop/no-object-parameters": 1,
       "anti-slop/no-runtime-typeof": 1,
       "anti-slop/no-unknown-parameters": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 1
@@ -744,8 +743,7 @@
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-cli/src/support-query-evidence.ts": {
-      "anti-slop/no-conditional-empty-object-spread": 1,
-      "anti-slop/no-object-parameters": 1
+      "anti-slop/no-conditional-empty-object-spread": 1
     },
     "packages/keiko-cli/src/support-query.activity-log-proof.test.ts": {
       "anti-slop/no-known-value-widening": 1,
@@ -3516,13 +3514,11 @@
     },
     "packages/keiko-evaluations/src/surface-parity.test.ts": {
       "anti-slop/no-runtime-typeof": 6,
-      "anti-slop/no-unknown-returns": 1,
       "anti-slop/no-unsafe-dictionary-type": 4,
       "anti-slop/require-safety-comment-for-type-assertion": 4
     },
     "packages/keiko-evaluations/src/surface-parity.ts": {
       "anti-slop/no-runtime-typeof": 5,
-      "anti-slop/no-unknown-returns": 2,
       "anti-slop/no-unsafe-dictionary-type": 4
     },
     "packages/keiko-evaluations/src/voice-acoustic/scorer.test.ts": {

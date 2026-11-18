@@ -108,6 +108,7 @@ const ZERO_FINDING_SCOPES = {
     "workspace",
   ]),
   "anti-slop/no-unknown-returns": zeroFindingScopes([
+    "evaluations",
     "git",
     "harness",
     "mcp",
@@ -122,6 +123,7 @@ const ZERO_FINDING_SCOPES = {
     "workflows",
   ]),
   "anti-slop/no-object-parameters": zeroFindingScopes([
+    "cli",
     "connectors",
     "editor",
     "evaluations",
