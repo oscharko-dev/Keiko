@@ -25,15 +25,24 @@ const EXTERNAL_LINK_TARGET = /^(?:[a-z][a-z0-9+.-]*:\/\/|mailto:|tel:|data:|java
 const isExternalLinkTarget = (targetNodeId: string): boolean =>
   targetNodeId.startsWith("url:") || EXTERNAL_LINK_TARGET.test(targetNodeId);
 
-const readDestination = (action: Record<string, unknown>): string | undefined => {
-  const direct = readString(action.destinationId);
-  if (direct !== undefined) return isExternalLinkTarget(direct) ? undefined : direct;
-  const nav = asNode(action.navigation);
-  if (nav !== undefined) {
-    const nested = readString(nav.destinationId);
-    return nested !== undefined && !isExternalLinkTarget(nested) ? nested : undefined;
+const nodeTarget = (value: unknown): string | undefined => {
+  const id = readString(value);
+  return id !== undefined && id.length > 0 && !isExternalLinkTarget(id) ? id : undefined;
+};
+
+export const readNavigationTarget = (action: Record<string, unknown>): string | undefined => {
+  if (action.type !== undefined && action.type !== "NODE") return undefined;
+  const navigation = asNode(action.navigation);
+  const mode = navigation?.type ?? action.navigation;
+  if (mode === "SCROLL_TO" || mode === "CHANGE_TO") return undefined;
+  return nodeTarget(action.destinationId ?? navigation?.destinationId);
+};
+
+export const readLegacyTransitionTarget = (node: FigmaSourceNode): string | undefined => {
+  if (readArray(node.interactions).length > 0 || readArray(node.reactions).length > 0) {
+    return undefined;
   }
-  return undefined;
+  return nodeTarget(node.transitionNodeID);
 };
 
 const triggerType = (entry: Record<string, unknown>): string => {
@@ -50,7 +59,7 @@ const collectFromActions = (
   for (const action of actions) {
     const record = asNode(action);
     if (record === undefined) continue;
-    const targetNodeId = readDestination(record);
+    const targetNodeId = readNavigationTarget(record);
     if (targetNodeId !== undefined) out.push({ sourceNodeId, trigger, targetNodeId });
   }
 };
@@ -65,10 +74,17 @@ const collectInteractions = (node: FigmaSourceNode, out: InterScreenLink[]): voi
   for (const entry of readArray(node.reactions)) {
     const record = asNode(entry);
     if (record === undefined) continue;
-    const action = asNode(record.action);
-    if (action === undefined) continue;
-    collectFromActions(sourceNodeId, triggerType(record), [action], out);
+    const actions = readArray(record.actions);
+    collectFromActions(
+      sourceNodeId,
+      triggerType(record),
+      actions.length > 0 ? actions : [record.action],
+      out,
+    );
   }
+  const targetNodeId = readLegacyTransitionTarget(node);
+  if (targetNodeId !== undefined)
+    out.push({ sourceNodeId, trigger: UNKNOWN_TRIGGER, targetNodeId });
 };
 
 function visitAt(pruned: PrunedNode, out: InterScreenLink[], depth: number): void {
@@ -85,10 +101,10 @@ const collectFlowEntries = (root: FigmaSourceNode, out: InterScreenLink[]): void
   const sourceNodeId = nodeId(root);
   for (const point of readArray(root.flowStartingPoints)) {
     const record = asNode(point);
-    const target = record !== undefined ? readString(record.nodeId) : undefined;
+    const target = nodeTarget(record?.nodeId);
     if (target !== undefined) out.push({ sourceNodeId, trigger: FLOW_START, targetNodeId: target });
   }
-  const start = readString(root.prototypeStartNodeID);
+  const start = nodeTarget(root.prototypeStartNodeID);
   if (start !== undefined) out.push({ sourceNodeId, trigger: FLOW_START, targetNodeId: start });
 };
 

@@ -25,6 +25,7 @@ import { impactFromCatalog } from "./update-preflight-impact.js";
 import {
   currentVersionReport,
   degradedRegistryReport,
+  externallyManagedReport,
   portableCurrentVersionReport,
   portableInstallModeBlockedReport,
   portableReleaseUnavailableReport,
@@ -175,12 +176,18 @@ function portableBlockedReport(
   base: ReturnType<typeof reportBase>,
   mode: UpdateInstallMode,
 ): UpdatePreflightReport {
+  const message =
+    mode.manualInstructions ?? "This portable install is not eligible for in-app self-update.";
+  // Managed outside the app without a portable payload: there is no release asset to name.
+  if (mode.portable === undefined && mode.reason === "portable-it-managed") {
+    return externallyManagedReport(base, message);
+  }
   const target = mode.portable?.target ?? "windows-x64";
   const code = portableBlockerCode(mode.reason);
   return portableInstallModeBlockedReport(
     base,
     portableInstallability(target, "install-mode-ineligible"),
-    mode.manualInstructions ?? "This portable install is not eligible for in-app self-update.",
+    message,
     code,
   );
 }

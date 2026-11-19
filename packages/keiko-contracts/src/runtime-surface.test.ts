@@ -8,6 +8,7 @@ import { KEIKO_CONTRACTS_VERSION } from "./version.js";
 const runtimeContractSubpaths = [
   "./runtime/evaluation-gates",
   "./runtime/figma-codegen",
+  "./runtime/figma-url",
   "./runtime/git-delivery-provider",
   "./runtime/qualityIntelligence/editableRevision",
   "./runtime/verification-summary",

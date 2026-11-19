@@ -18,6 +18,7 @@ export function registryVersionEndpoint(pkg, registry) {
 
 export function registryVersionProbeArgs(pkg, registry) {
   return [
+    "-q",
     "--silent",
     "--show-error",
     "--location",

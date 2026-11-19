@@ -15,16 +15,23 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import yauzl from "yauzl";
 
 import {
   extractZipArchiveEntries,
   readZipArchiveEntries,
+  readZipArchiveEntryNames,
   readZipArchiveUncompressedSize,
   writeZipArchiveEntries,
   writeZipArchiveFromDirectory,
 } from "../lib/zip-archive.mjs";
+
+// Wraps the real `readFileSync` so a test can see which paths a reader pulled in whole.
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
 
 const temporaryRoots = [];
 
@@ -677,5 +684,94 @@ describe("extractZipArchiveEntries", () => {
     expect(() => extractZipArchiveEntries(archivePath, join(root, "out"))).toThrow(
       /does not match its declared size or checksum/u,
     );
+  });
+
+  it("refuses an excluded entry whose local header is marked encrypted", () => {
+    // A clear central flag over a set local flag is a metadata lie even when the caller does not
+    // ship the entry; excluding it must not skip the header check (PR #4464).
+    const root = temporaryRoot();
+    const archivePath = join(root, "excluded-encrypted.zip");
+    writeZipArchiveEntries(archivePath, [
+      { name: "skip.bin", data: "skipped bytes" },
+      { name: "keep.txt", data: "kept bytes" },
+    ]);
+    const bytes = readFileSync(archivePath);
+    bytes.writeUInt16LE(bytes.readUInt16LE(6) | 0x1, 6); // first local header, general-purpose flags
+    writeFileSync(archivePath, bytes);
+    const options = { requireRegularEntries: true, include: (name) => name === "keep.txt" };
+
+    expect(() => extractZipArchiveEntries(archivePath, join(root, "out"), options)).toThrow(
+      /skip\.bin is marked encrypted/u,
+    );
+  });
+});
+
+describe("readZipArchiveEntryNames", () => {
+  it("lists names without reading the whole archive into memory (PR #4464)", async () => {
+    const root = temporaryRoot();
+    const archivePath = join(root, "listing.zip");
+    writeZipArchiveEntries(archivePath, [
+      { name: "Keiko/a.txt", data: "a" },
+      { name: "Keiko/dir/b.bin", data: Buffer.alloc(4096, 7) },
+    ]);
+    const fs = await import("node:fs");
+    fs.readFileSync.mockClear();
+
+    expect(readZipArchiveEntryNames(archivePath, { requireRegularEntries: true })).toEqual([
+      "Keiko/a.txt",
+      "Keiko/dir/b.bin",
+    ]);
+    const wholeArchiveReads = fs.readFileSync.mock.calls.filter(([path]) => path === archivePath);
+    expect(wholeArchiveReads).toEqual([]);
+  });
+
+  it("keeps its refusals: special types, encrypted local headers, bad names, non-archives", () => {
+    const root = temporaryRoot();
+    const archivePath = join(root, "refusals.zip");
+    writeZipArchiveEntries(archivePath, [{ name: "Keiko/a.txt", data: "a" }]);
+    const bytes = readFileSync(archivePath);
+    const centralOffset = centralDirectoryOffset(bytes);
+
+    const link = Buffer.from(bytes);
+    link.writeUInt32LE((0o120777 << 16) >>> 0, centralOffset + 38);
+    const linkPath = join(root, "link.zip");
+    writeFileSync(linkPath, link);
+    expect(() => readZipArchiveEntryNames(linkPath, { requireRegularEntries: true })).toThrow(
+      /unsupported special entry type/u,
+    );
+
+    const encrypted = Buffer.from(bytes);
+    encrypted.writeUInt16LE(encrypted.readUInt16LE(centralOffset + 8) | 0x1, centralOffset + 8);
+    const encryptedPath = join(root, "encrypted.zip");
+    writeFileSync(encryptedPath, encrypted);
+    expect(() => readZipArchiveEntryNames(encryptedPath, { requireRegularEntries: true })).toThrow(
+      /marked encrypted/u,
+    );
+
+    const hostilePath = join(root, "hostile.zip");
+    writeZipArchiveEntries(hostilePath, [{ name: "../evil.txt", data: "x" }], {
+      allowUnsafeEntryNames: true,
+    });
+    expect(() => readZipArchiveEntryNames(hostilePath)).toThrow(/unsafe/u);
+
+    const garbagePath = join(root, "garbage.zip");
+    writeFileSync(garbagePath, Buffer.alloc(64, 1));
+    expect(() => readZipArchiveEntryNames(garbagePath)).toThrow(/end-of-central-directory/u);
+
+    // The recorded directory size bounds the windowed read (audit of PR #4464): beyond the room
+    // before the end record, beyond the directory ceiling, or short of an entry's own name.
+    const sizeOffset = bytes.length - 22 + 12;
+    for (const [label, recorded, refusal] of [
+      ["overrun", bytes.readUInt32LE(sizeOffset) + 1, /exceeds the entry ceiling/u],
+      ["ceiling", 32 * 1024 * 1024 + 1, /exceeds the entry ceiling/u],
+      ["cut", bytes.readUInt32LE(sizeOffset) - 1, /entry is malformed/u],
+    ]) {
+      const forged = Buffer.from(bytes);
+      forged.writeUInt32LE(recorded, sizeOffset);
+      const forgedPath = join(root, `${label}.zip`);
+      writeFileSync(forgedPath, forged);
+      expect(() => readZipArchiveEntryNames(forgedPath)).toThrow(refusal);
+      expect(() => extractZipArchiveEntries(forgedPath, join(root, label))).toThrow(refusal);
+    }
   });
 });

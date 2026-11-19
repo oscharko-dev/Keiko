@@ -51,6 +51,11 @@ portable assets as a release-blocking set:
 The release is not portable-complete when any target is missing, mislabeled, checksum-mismatched,
 missing a valid Keiko release signature, or not represented in reviewed release-impact metadata.
 
+Stable releases also publish the generic standalone folder package of `macos-arm64`, `macos-x64`
+and `windows-x64` (`keiko-<target>.standalone.zip` and its `.sha256` file, ADR-0121 D9). These are
+neither platform targets nor update inputs. Their names keep a dot before the form, so a shipped
+updater, which reads the dot-free `keiko-*.zip` assets as the exact archive set, ignores them.
+
 Stable releases also publish `keiko-windows-x64-setup.exe` as a companion to the canonical Windows
 ZIP. Authenticode is optional; the signed manifest binds the setup digest, size, asset id, and name.
 The setup embeds that exact ZIP, installs it under the per-user managed
