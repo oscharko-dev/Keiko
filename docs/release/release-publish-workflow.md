@@ -406,8 +406,8 @@ The first Windows publication is an owner-only step, in this order:
 3. Bootstrap, bind, publish. `npm trust` cannot bind a package that does not exist on the registry
    (`npm view @oscharko-dev/keiko-coding-runtime-win32-x64` answers `E404` until a first version
    exists; the darwin packages predate their binding), so the name is reserved once. This is an
-   explicit owner-decided exception to "never from a workstation", limited to an empty placeholder
-   that carries no runtime bytes: the owner publishes `0.0.0-name-reservation` by hand from his own
+   reviewed exception to "never from a workstation", limited to an empty placeholder that carries
+   no runtime bytes: the package owner publishes `0.0.0-name-reservation` by hand from an
    authenticated workstation. Its files are `package.json` and `README.md` only:
 
    ```json
@@ -513,7 +513,10 @@ publishes only reviewed bytes.
    `coding-runtime-1.1.6` is Windows-only, the next runtime version for every target is 1.1.7 or
    higher. One reviewed transport per version keeps one approval. The tag and the npm version number
    can never be reused, so a wrong tarball, a missing receipt or a receipt not named as above can
-   only be repaired by a new version and another reviewed catalog change. Run this pre-flight first:
+   only be repaired by a new version and another reviewed catalog change. `--verify-only` runs `provideApprovedSourceCommits`, which needs
+   each approved helper source commit in the checkout: run `git fetch origin <helperSourceCommit>`
+   first (the commit `helperSourceCommit` names in `NPM_LANE_RUNTIME_APPROVALS`). Run this
+   pre-flight first:
 
    ```sh
    shasum -a 256 <asset-dir>/<tarball>
@@ -531,14 +534,15 @@ publishes only reviewed bytes.
    names and digests against the tarball and receipt before the last command publishes it. Where the
    receipt exists as `receipt.json`, copy it to its renamed asset name in `<asset-dir>` first.
 
-3. Bind each package to the workflow once; the package must already exist on the registry (a first
-   publication of a new package needs the placeholder of the first Windows publication above), and
-   a new binding must complete its first publish within two days, so bind immediately before the
-   dispatch. The package owner runs, logged in to npm:
+3. Only a package without a binding is bound to the workflow, once. Both darwin packages are
+   already bound, and re-binding an existing package is not part of a publication. The package
+   must already exist on the registry (a first publication of a new package needs the placeholder
+   of the first Windows publication above), and a new binding must complete its first publish
+   within two days, so bind immediately before the dispatch. The package owner runs, logged in to
+   npm, for the package that has no binding (the existing bindings of the darwin packages were
+   made with the same command, for `-darwin-arm64` and `-darwin-x64`):
 
    ```sh
-   npm trust github @oscharko-dev/keiko-coding-runtime-darwin-arm64 --file coding-runtime-publish.yml --repo oscharko-dev/Keiko --env npm-runtime-publish --allow-publish
-   npm trust github @oscharko-dev/keiko-coding-runtime-darwin-x64 --file coding-runtime-publish.yml --repo oscharko-dev/Keiko --env npm-runtime-publish --allow-publish
    npm trust github @oscharko-dev/keiko-coding-runtime-win32-x64 --file coding-runtime-publish.yml --repo oscharko-dev/Keiko --env npm-runtime-publish --allow-publish
    ```
 

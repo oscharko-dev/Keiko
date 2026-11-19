@@ -384,6 +384,9 @@ describe("coding runtime npm package", () => {
     expect(existsSync(join(fixture.artifactDir, "receipt.json"))).toBe(false);
   });
 
+  // Every file's bytes are pinned before packing (LICENSE.md included), so a byte edit made during
+  // pack is refused by the post-pack recheck's pin check; an attribute change is what only the
+  // "changed during packing" comparison catches. Neither may certify a receipt.
   it("does not certify package bytes that change during npm pack", async () => {
     const fixture = await releaseFixture();
     await expect(
@@ -391,15 +394,31 @@ describe("coding runtime npm package", () => {
         ...fixture.deps,
         pack: (...args) => {
           const packed = fixture.deps.pack(...args);
-          // Every file's bytes are pinned now (LICENSE.md included, so a byte edit is refused by the
-          // pin itself); a change of attributes after packing is what only the recheck catches.
-          chmodSync(join(fixture.packageDir, "LICENSE.md"), 0o600);
+          writeFileSync(join(fixture.packageDir, "runtime/native/rg"), "changed after packing");
           return packed;
         },
       }),
-    ).rejects.toThrow("changed during packing");
+    ).rejects.toThrow(/digest mismatch|changed during packing/u);
     expect(existsSync(join(fixture.artifactDir, "receipt.json"))).toBe(false);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "does not certify a package whose permissions change during npm pack",
+    async () => {
+      const fixture = await releaseFixture();
+      await expect(
+        packCodingRuntimeNpmCandidate(releaseInput(fixture), {
+          ...fixture.deps,
+          pack: (...args) => {
+            const packed = fixture.deps.pack(...args);
+            chmodSync(join(fixture.packageDir, "LICENSE.md"), 0o600);
+            return packed;
+          },
+        }),
+      ).rejects.toThrow("changed during packing");
+      expect(existsSync(join(fixture.artifactDir, "receipt.json"))).toBe(false);
+    },
+  );
 
   it.each(["receipt", "tarball", "missing-tarball"])(
     "rejects a changed %s on independent verification",
