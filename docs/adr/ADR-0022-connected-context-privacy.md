@@ -833,10 +833,29 @@ and descriptor lookahead. A legacy response without that observation does not fa
 #### Filesystem consistency and redaction
 
 Streaming directory enumeration distinguishes membership changes from directory identity changes.
-Concurrent additions or disappeared entries retain safely observed evidence and sibling traversal,
-with `io-error` incomplete coverage; they never certify a stable snapshot. Local child-directory
-`ENOENT`, `ENOTDIR`, `EACCES`, `EPERM`, `EIO`, and `ESTALE` failures at opening, iteration or closing
-are recoverable only after the connected root is freshly revalidated. Root failures, process-wide
+Office lock files and sync clients add and remove entries constantly, so membership churn is not a
+coverage gap (#4435): a directory whose membership moved during enumeration is re-read once and only
+names the first pass did not hand out are visited, so every entry is visited at most once. Churn
+that persists through that retry, or a directory above the per-directory memory ceiling (whose
+name set is not retained), keeps `io-error` incomplete coverage. A listed entry that no longer
+exists when inspected (`ENOENT`, `ENOTDIR`, `ESTALE`) is skipped and counted as vanished; because
+it was listed but never read, it keeps `io-error` incomplete coverage rather than certifying the
+folder. A locked or protected entry (`EACCES`, `EPERM`, `EBUSY`, which carries Windows sharing
+violations, and `EIO`) is skipped, counted and disclosed as `io-error` incomplete coverage plus an
+explicit locked-or-protected count in the answer's coverage uncertainty (#4434). A realpath failure
+is counted by its cause and never recorded as a skipped symbolic link; a cause outside both classes
+(a disconnected mount point inside the folder) counts as unavailable. Descriptor exhaustion at the
+entry's metadata read still fails closed.
+The counts reach `search.connected-context.evidence-details` as
+`discoveryUnavailableEntryCount`, `discoveryVanishedEntryCount` and
+`discoveryMembershipRetryCount`; the Files filename search applies the same classification and
+records `files.search.completed`; the Knowledge Pod walk checks root and directory identity rather
+than membership metadata, re-reads a directory once after membership churn, skips vanished entries,
+keeps a locked entry a per-entry `READ_FAILED`, and records `vanishedEntryCount` and
+`directoryRetryCount` on `indexing.source.completed`. Every skip first revalidates the connected
+root. Local child-directory
+`ENOENT`, `ENOTDIR`, `EACCES`, `EPERM`, `EBUSY`, `EIO`, and `ESTALE` failures at opening, iteration
+or closing are recoverable only after the connected root is freshly revalidated. Root failures, process-wide
 descriptor exhaustion, programming errors, replaced inode/device identity, unsafe aliases, and
 root containment changes still fail closed. A transient connected-root filesystem or server-resource
 outage is classified separately from an invalid or missing folder selection: the remaining healthy

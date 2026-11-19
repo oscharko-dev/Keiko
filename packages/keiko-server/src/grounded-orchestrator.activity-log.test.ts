@@ -657,6 +657,63 @@ describe("retrieveConnectedContextPack activity log", () => {
     );
   });
 
+  it("records skipped locked entries on evidence-details without failing retrieval (#4434)", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const target = "PRIVATE_LITERAL_TARGET";
+    const input: OrchestratorInput = {
+      ...fixtureInput(),
+      scope: {
+        ...fixtureScope(),
+        kind: "workspace-root",
+        relativePaths: [],
+        explicitConnection: true,
+      },
+      query: { ...fixtureQuery(), text: `Search for "${target}"` },
+    };
+    const base = memFs(FIXTURE_ROOT, {
+      [PRIVATE_SCOPE_FILE]: `export const value = "${target}";
+`,
+      [`${PRIVATE_SCOPE_PATH}/locked.ts`]: `export const locked = "${target}";
+`,
+    });
+    const locked = (path: string): boolean =>
+      path.replaceAll("\\", "/").endsWith(`/${PRIVATE_SCOPE_PATH}/locked.ts`);
+    const busy = (): Error => Object.assign(new Error("PRIVATE_LOCK_DETAIL"), { code: "EBUSY" });
+    const output = await retrieveConnectedContextPack(input, {
+      ...fixtureDeps(activityLog, CORRELATION_ID),
+      fs: {
+        ...base,
+        stat: (path) => {
+          if (locked(path)) throw busy();
+          return base.stat(path);
+        },
+        realPath: (path) => {
+          if (locked(path)) throw busy();
+          return base.realPath(path);
+        },
+      },
+    });
+    expect(output.pack.files.map((file) => file.scopePath)).toEqual([PRIVATE_SCOPE_FILE]);
+    expect(output.pack.diagnostics?.coverage).toMatchObject({
+      incomplete: true,
+      unavailableEntriesByDiscovery: 1,
+    });
+    const evidenceDetails = activityLog.events.find(
+      (event) => event.op === "search.connected-context.evidence-details",
+    );
+    expect(evidenceDetails?.extra).toMatchObject({
+      discoveryUnavailableEntryCount: 1,
+      discoveryVanishedEntryCount: 0,
+      discoveryMembershipRetryCount: 0,
+    });
+    expectActivityLogProof(
+      "search.connected-context.evidence-details.line",
+      formatActivityLogProofLine(evidenceDetails ?? {}),
+    );
+    expect(JSON.stringify(activityLog.events)).not.toContain("PRIVATE_LOCK_DETAIL");
+    expect(JSON.stringify(activityLog.events)).not.toContain("locked.ts");
+  });
+
   it("logs actual selected excerpt observations without hypothetical source eviction", async () => {
     const activityLog = createBufferedServerLogSink();
     const profile = deriveContextProfile({

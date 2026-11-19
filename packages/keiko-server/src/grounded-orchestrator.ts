@@ -771,6 +771,13 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
   releaseImpact: "patch",
 });
 
+// Discovery churn of the actual walk (#4434, #4435); absent when no coverage was reported.
+const DISCOVERY_CHURN_ACTIVITY_FIELDS = {
+  discoveryUnavailableEntryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryVanishedEntryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryMembershipRetryCount: { type: "integer", dataClass: "count", required: false },
+} as const;
+
 const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -779,6 +786,7 @@ const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOpe
   owner: "keiko-server",
   emitter: "grounded-orchestrator.logSourceEvidenceDetails",
   fields: {
+    ...DISCOVERY_CHURN_ACTIVITY_FIELDS,
     scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     // #4456: code index builds whose parsed source budget ended the source list.
@@ -1805,6 +1813,13 @@ function discoveryCoverageMarker(
   };
 }
 
+// A locked or protected entry was skipped, never read; the answer names it as an explicit gap
+// (#4434). The count is added only when present so ordinary coverage markers stay unchanged.
+function lockedOrProtectedCoverageDetail(coverage: ContextCoverageDiagnostics): readonly string[] {
+  const count = coverage.unavailableEntriesByDiscovery ?? 0;
+  return count > 0 ? [`locked or protected entries ${String(count)}`] : [];
+}
+
 function coverageUncertainty(
   result: Awaited<ReturnType<typeof searchText>>,
   nowMs: number,
@@ -1828,6 +1843,7 @@ function coverageUncertainty(
           `ignored ${String(coverage.ignoredByDiscovery)}`,
           `denied ${String(coverage.deniedByDiscovery)}`,
           `unrepresentable entries ${String(coverage.unrepresentablePathsByDiscovery ?? 0)}`,
+          ...lockedOrProtectedCoverageDetail(coverage),
           `depth-pruned ${String(coverage.depthPrunedByDiscovery)}`,
           `max-files-pruned ${String(coverage.maxFilesPrunedByDiscovery)}`,
         ].join(", ");
@@ -11133,6 +11149,19 @@ function excerptSchedulingActivityExtra(
   };
 }
 
+function discoveryChurnActivityExtra(coverage: ContextCoverageDiagnostics | undefined): {
+  readonly discoveryUnavailableEntryCount?: number;
+  readonly discoveryVanishedEntryCount?: number;
+  readonly discoveryMembershipRetryCount?: number;
+} {
+  if (coverage === undefined) return {};
+  return {
+    discoveryUnavailableEntryCount: coverage.unavailableEntriesByDiscovery ?? 0,
+    discoveryVanishedEntryCount: coverage.vanishedEntriesByDiscovery ?? 0,
+    discoveryMembershipRetryCount: coverage.membershipRetriesByDiscovery ?? 0,
+  };
+}
+
 function logSourceEvidenceDetails(
   logger: ServerLogger,
   identity: ConnectedContextActivityIdentity,
@@ -11156,7 +11185,11 @@ function logSourceEvidenceDetails(
         scopeIdentitySha256: identity.scopeIdentitySha256,
         queryIdentitySha256: identity.queryIdentitySha256,
         ...observation,
+<<<<<<< HEAD
         codeIndexSourceBudgetReachedCount: execution.structural.codeIndexSourceBudgetReachedCount,
+=======
+        ...discoveryChurnActivityExtra(execution.output.pack.diagnostics?.coverage),
+>>>>>>> origin/fix/4434-4435-tolerant-walk
         completeness: "complete",
         loss: "none",
       },

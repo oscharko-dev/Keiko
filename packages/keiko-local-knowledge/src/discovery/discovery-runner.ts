@@ -24,7 +24,12 @@ import {
 import type { KnowledgeStore } from "../store.js";
 
 import { extractDocument, recordExtractionFailure } from "./extract.js";
-import { DEFAULT_DISCOVERY_OPTIONS, type DiscoveryOptions, type ExtractionEvent } from "./types.js";
+import {
+  DEFAULT_DISCOVERY_OPTIONS,
+  type DiscoveryOptions,
+  type ExtractionEvent,
+  type WalkChurnKind,
+} from "./types.js";
 import { walkSource, type WalkYield } from "./walk.js";
 
 export interface DiscoverAndExtractDeps {
@@ -52,6 +57,8 @@ interface RunCounters {
   extracted: number;
   skipped: number;
   failed: number;
+  vanished: number;
+  directoryRetries: number;
 }
 
 function makeParserOptions(
@@ -70,12 +77,19 @@ function makeParserOptions(
 function makeDiscoveryOptions(
   params: DiscoverAndExtractParams,
   signal: AbortSignal | undefined,
+  counters: RunCounters,
 ): DiscoveryOptions {
   const base = params.discovery ?? DEFAULT_DISCOVERY_OPTIONS;
+  const callerObserver = base.onWalkChurn;
+  const onWalkChurn = (kind: WalkChurnKind): void => {
+    if (kind === "vanished-entry") counters.vanished += 1;
+    else counters.directoryRetries += 1;
+    callerObserver?.(kind);
+  };
   if (signal === undefined || base.signal !== undefined) {
-    return base;
+    return { ...base, onWalkChurn };
   }
-  return { ...base, signal };
+  return { ...base, signal, onWalkChurn };
 }
 
 function bumpCounters(counters: RunCounters, kind: "persisted" | "skipped" | "failed"): void {
@@ -137,6 +151,8 @@ function completionEvent(counters: RunCounters): ExtractionEvent {
     totalExtracted: counters.extracted,
     totalSkipped: counters.skipped,
     totalFailed: counters.failed,
+    totalVanished: counters.vanished,
+    totalDirectoryRetries: counters.directoryRetries,
   };
 }
 
@@ -151,9 +167,16 @@ export async function* discoverAndExtract(
   params: DiscoverAndExtractParams,
 ): AsyncGenerator<ExtractionEvent> {
   const signal = params.discovery?.signal ?? params.parserOptions?.signal;
-  const discovery = makeDiscoveryOptions(params, signal);
+  const counters: RunCounters = {
+    discovered: 0,
+    extracted: 0,
+    skipped: 0,
+    failed: 0,
+    vanished: 0,
+    directoryRetries: 0,
+  };
+  const discovery = makeDiscoveryOptions(params, signal, counters);
   const parserOptions = makeParserOptions(params, signal);
-  const counters: RunCounters = { discovered: 0, extracted: 0, skipped: 0, failed: 0 };
   let cancelled = false;
   for (const yld of walkSource(deps.fs, params.source.scope, discovery)) {
     if (aborted(signal)) {

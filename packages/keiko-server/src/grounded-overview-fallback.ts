@@ -3,15 +3,32 @@ import type { SearchResult } from "@oscharko-dev/keiko-workspace";
 
 type Diagnostics = NonNullable<SearchResult["diagnostics"]>;
 
-type UnsupportedPaths = Pick<ContextCoverageDiagnostics, "unrepresentablePathsByDiscovery">;
+type OptionalDiscoveryCount =
+  | "unrepresentablePathsByDiscovery"
+  | "unavailableEntriesByDiscovery"
+  | "vanishedEntriesByDiscovery"
+  | "membershipRetriesByDiscovery";
 
+type UnsupportedPaths = Pick<ContextCoverageDiagnostics, OptionalDiscoveryCount>;
+
+const OPTIONAL_DISCOVERY_COUNTS: readonly OptionalDiscoveryCount[] = [
+  "unrepresentablePathsByDiscovery",
+  "unavailableEntriesByDiscovery",
+  "vanishedEntriesByDiscovery",
+  "membershipRetriesByDiscovery",
+];
+
+// Optional discovery counts are summed and stay absent when neither side observed any.
 function combinedUnsupportedPaths(
   first: UnsupportedPaths,
   second: UnsupportedPaths,
 ): UnsupportedPaths {
-  const count =
-    (first.unrepresentablePathsByDiscovery ?? 0) + (second.unrepresentablePathsByDiscovery ?? 0);
-  return count > 0 ? { unrepresentablePathsByDiscovery: count } : {};
+  const combined: Partial<Record<OptionalDiscoveryCount, number>> = {};
+  for (const key of OPTIONAL_DISCOVERY_COUNTS) {
+    const count = (first[key] ?? 0) + (second[key] ?? 0);
+    if (count > 0) combined[key] = count;
+  }
+  return combined;
 }
 
 function combinedExclusions(
