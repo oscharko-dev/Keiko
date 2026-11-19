@@ -17,22 +17,38 @@ const FAMILY_CLASSES = Object.freeze({
   E: "earlier-value",
   F: "near-miss",
 });
+// The closed classification of what a failing scenario means (a baseline is reported per kind):
+// `defect` the product does something wrong today, `capability` one that does not exist yet,
+// `design` a design question, `control` expected to pass today. Five scenarios are being measured
+// live and keep their text unchanged, so their kind is recorded here instead of in the description.
+const KINDS = Object.freeze(["defect", "capability", "design", "control"]);
+const KIND_OF_UNCHANGED = Object.freeze({
+  "long-horizon-distractors-en": "defect",
+  "scale-duplikat-en": "defect",
+  "two-memories-batch-en": "capability",
+  "two-memories-compare-en": "defect",
+  "earlier-rueckkehr-de": "defect",
+});
+function kindOf(scenario) {
+  const tagged = /Kind: (\w+)\./u.exec(scenario.description)?.[1];
+  return tagged ?? KIND_OF_UNCHANGED[scenario.id];
+}
 const DEMONSTRATIONS = new Set(["seed-needs-two-en", "seed-earlier-value-en"]);
 
 const scenarios = loadScenarioDirectory(NEXT);
 const corpus = scenarios.filter((scenario) => !DEMONSTRATIONS.has(scenario.id));
 
 describe("the next corpus", () => {
-  it("keeps the two demonstrations and holds 26 scenarios of its own", () => {
-    expect(scenarios).toHaveLength(28);
-    expect(corpus).toHaveLength(26);
+  it("keeps the two demonstrations and holds 25 scenarios of its own", () => {
+    expect(scenarios).toHaveLength(27);
+    expect(corpus).toHaveLength(25);
     for (const id of DEMONSTRATIONS) expect(scenarios.map((s) => s.id)).toContain(id);
   });
 
   it("is split between German and English, with the cross-language scenarios mixed", () => {
     const count = (language) => corpus.filter((scenario) => scenario.language === language).length;
     expect(count("de")).toBe(13);
-    expect(count("en")).toBe(11);
+    expect(count("en")).toBe(10);
     expect(count("mixed")).toBe(2);
     expect(count("de") + count("en") + count("mixed")).toBe(corpus.length);
   });
@@ -56,6 +72,20 @@ describe("the next corpus", () => {
       expect(scenario.description, scenario.id).toMatch(/Failure means: \S.{20,}/u);
       expect(scenario.description, scenario.id).toMatch(/Maintenance: \S.{20,}/u);
     }
+  });
+
+  it("classifies every scenario with one closed kind", () => {
+    for (const scenario of corpus) expect(KINDS, scenario.id).toContain(kindOf(scenario));
+    for (const id of Object.keys(KIND_OF_UNCHANGED))
+      expect(
+        scenarios.map((s) => s.id),
+        id,
+      ).toContain(id);
+    // A kind named in the description is the only one it names.
+    for (const scenario of corpus)
+      expect(scenario.description.match(/Kind: /gu)?.length ?? 0, scenario.id).toBeLessThanOrEqual(
+        1,
+      );
   });
 
   it("gives every scenario a probe the scorer can decide and a seed or a turn to learn from", () => {
