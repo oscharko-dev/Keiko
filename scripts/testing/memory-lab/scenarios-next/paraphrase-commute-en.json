@@ -4,33 +4,36 @@
   "id": "paraphrase-commute-en",
   "language": "en",
   "class": "paraphrase",
-  "description": "An English fact asked about with a synonym and no shared content word, with a lexical control question. Limit: recall is word overlap only when no embedding model is configured. Failure means: expected without embeddings (the synonym question cannot be retrieved); with a real embedding model it is expected to pass, and the control probe must pass in both runs. Maintenance: no seed, so maintenance on or off changes nothing; run with both embedding settings.",
+  "description": "An English fact with an unguessable value (seeded as a plain, non-standing fact, so the standing profile cannot carry it) asked about with a synonym and no shared content word, with a lexical control question. Limit: recall is word overlap only when no embedding model is configured. Failure means: expected without embeddings (the synonym question cannot be retrieved); with a real embedding model it is expected to pass, and the control probe must pass in both runs. Maintenance: no seed, so maintenance on or off changes nothing; run with both embedding settings. Kind: capability.",
+  "seed": {
+    "records": [
+      {
+        "key": "commute",
+        "body": "I take the cable car to the office every morning.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 10,
+        "truth": "commute"
+      }
+    ]
+  },
   "truth": [
     {
       "key": "commute",
-      "seed": "I take the tram to the office every morning.",
+      "seed": "I take the cable car to the office every morning.",
       "must": false,
-      "terms": [["tram"]]
+      "terms": [["cable car", "cable-car", "gondola"]]
     }
   ],
-  "turns": [
-    {
-      "user": "I take the tram to the office every morning.",
-      "learner": [
-        {
-          "body": "I take the tram to the office every morning.",
-          "type": "fact"
-        }
-      ]
-    }
-  ],
+  "turns": [],
   "probes": [
     {
       "id": "synonym",
       "question": "How do I commute?",
       "expect": {
         "kind": "answer",
-        "terms": [["tram"]]
+        "terms": [["cable car", "cable-car", "gondola"]]
       }
     },
     {
@@ -38,7 +41,7 @@
       "question": "How do I get to the office?",
       "expect": {
         "kind": "answer",
-        "terms": [["tram"]]
+        "terms": [["cable car", "cable-car", "gondola"]]
       }
     }
   ]
