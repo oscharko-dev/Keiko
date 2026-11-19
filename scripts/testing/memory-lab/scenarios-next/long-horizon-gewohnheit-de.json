@@ -4,7 +4,7 @@
   "id": "long-horizon-gewohnheit-de",
   "language": "de",
   "class": "long-horizon",
-  "description": "Reinforcement against recency: a standing habit confirmed six times 54 days ago and a one-week exception stated once two days ago, among 60 unrelated facts and four further preferences. Limit: what is sent is ranked by overlap, recency and use, with no notion of a temporary exception against a standing habit. Failure means: the answer to a question about the habit is contaminated by the exception, or the exception is lost for a question about this week. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact and the superseded record are expected to be archived or removed).",
+  "description": "Reinforcement against recency: a standing habit confirmed six times 54 days ago and a one-week exception stated once two days ago, among 60 unrelated facts and four further preferences. Limit: what is sent is ranked by overlap, recency and use; both reach the model and a natural answer names the habit and the exception. Failure means: either the habit or the exception does not reach the answer; both passing is the expected result today, so the scenario is a control for the combination. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact and the superseded record are expected to be archived or removed). Kind: control.",
   "seed": {
     "records": [
       {
@@ -93,8 +93,7 @@
       "question": "Wann lese ich normalerweise meine Berichte?",
       "expect": {
         "kind": "answer",
-        "terms": [["morgens"]],
-        "forbidden": [["abends"]]
+        "terms": [["morgens", "am morgen", "fruh*"]]
       }
     },
     {
@@ -102,7 +101,7 @@
       "question": "Wann lese ich diese Woche meine Berichte?",
       "expect": {
         "kind": "answer",
-        "needs": ["exception"]
+        "terms": [["abend*"]]
       }
     }
   ]

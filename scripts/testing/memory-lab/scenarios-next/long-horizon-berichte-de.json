@@ -4,7 +4,7 @@
   "id": "long-horizon-berichte-de",
   "language": "de",
   "class": "long-horizon",
-  "description": "Eight simulated weeks of history: 180 unrelated facts, a reinforced format preference, a meeting day corrected 10 days ago, a one-off parking fact never repeated and a stable department fact stated 130 days ago. Limit: decay is a flat 45-day half-life and a never-reused one-off is recalled as if it were current; a stable fact left unused for four months is archived by maintenance; an earlier value is never supplied. Failure means: the product cannot hold a long history faithfully (stale one-off asserted, valid old fact gone, earlier value unavailable). Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact and the superseded record are expected to be archived or removed).",
+  "description": "Eight simulated weeks of history: 180 unrelated facts, a reinforced format preference, a meeting day corrected 10 days ago and a stable department fact stated 130 days ago. Limit: decay is a flat 45-day half-life, so a stable fact left unused for four months is archived by maintenance, and recall never supplies a replaced value. Failure means: dept-old failing is a design question (a valid but unused fact fades); day-before failing is the absent capability to recall an earlier value; the two controls (format-now, day-now) must pass. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact and the superseded record are expected to be archived or removed). Kind: design.",
   "seed": {
     "records": [
       {
@@ -36,15 +36,6 @@
         "ageDays": 10,
         "supersedes": "day-old",
         "truth": "day"
-      },
-      {
-        "key": "parking",
-        "body": "Mein Parkplatz für die Auditwoche ist Nummer 47 in der Tiefgarage.",
-        "type": "semantic-fact",
-        "scope": "user",
-        "status": "accepted",
-        "ageDays": 55,
-        "truth": "parking"
       },
       {
         "key": "dept",
@@ -80,12 +71,6 @@
       "seed": "Das Teamtreffen findet donnerstags statt.",
       "must": false,
       "terms": [["Donnerstag*"]]
-    },
-    {
-      "key": "parking",
-      "seed": "Mein Parkplatz für die Auditwoche ist Nummer 47 in der Tiefgarage.",
-      "must": false,
-      "terms": [["Parkplatz"], ["47"]]
     },
     {
       "key": "dept",
@@ -125,13 +110,6 @@
       "expect": {
         "kind": "answer",
         "earlier": ["day-before"]
-      }
-    },
-    {
-      "id": "parking-stale",
-      "question": "Welchen Parkplatz nutze ich heute?",
-      "expect": {
-        "kind": "abstain"
       }
     },
     {

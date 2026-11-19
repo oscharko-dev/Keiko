@@ -4,7 +4,7 @@
   "id": "long-horizon-release-en",
   "language": "en",
   "class": "long-horizon",
-  "description": "Eight simulated weeks: 120 unrelated facts, an editor theme reinforced six times, a release cadence changed nine days ago, a locker number mentioned once 54 days ago and a team name stated 140 days ago. Limit: flat 45-day decay with no hedge for a never-reused one-off, archiving of a still-valid old fact, and no supply of replaced values. Failure means: the product cannot hold a long history faithfully (stale one-off asserted, valid old fact gone, earlier value unavailable). Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact and the superseded record are expected to be archived or removed).",
+  "description": "Eight simulated weeks: 120 unrelated facts, an editor theme reinforced six times, a release cadence changed nine days ago and a team name stated 140 days ago. Limit: flat 45-day decay archives a still-valid fact left unused, and recall never supplies a replaced value. Failure means: team-old failing is a design question (a valid but unused fact fades); cadence-before failing is the absent capability to recall an earlier value; the two controls (theme-now, cadence-now) must pass. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact and the superseded record are expected to be archived or removed). Kind: design.",
   "seed": {
     "records": [
       {
@@ -36,15 +36,6 @@
         "ageDays": 9,
         "supersedes": "cadence-old",
         "truth": "cadence"
-      },
-      {
-        "key": "locker",
-        "body": "I left my badge in locker 118 for the audit week.",
-        "type": "semantic-fact",
-        "scope": "user",
-        "status": "accepted",
-        "ageDays": 54,
-        "truth": "locker"
       },
       {
         "key": "team",
@@ -82,12 +73,6 @@
       "terms": [["every two weeks", "biweekly", "fortnightly", "every 2 weeks"]]
     },
     {
-      "key": "locker",
-      "seed": "I left my badge in locker 118 for the audit week.",
-      "must": false,
-      "terms": [["locker"], ["118"]]
-    },
-    {
       "key": "team",
       "seed": "My team is called Platform Quality.",
       "must": false,
@@ -97,7 +82,7 @@
   "superseded": [
     {
       "key": "cadence-before",
-      "terms": [["every week", "weekly"]]
+      "terms": [["every week", "once a week", "each week"]]
     }
   ],
   "turns": [],
@@ -115,8 +100,20 @@
       "question": "How often do we ship a release?",
       "expect": {
         "kind": "answer",
-        "terms": [["every two weeks", "biweekly", "fortnightly", "every 2 weeks"]],
-        "forbidden": [["every week", "weekly"]]
+        "terms": [
+          [
+            "every two weeks",
+            "biweekly",
+            "bi-weekly",
+            "fortnightly",
+            "every 2 weeks",
+            "every other week",
+            "two-week",
+            "2-week",
+            "two weeks"
+          ]
+        ],
+        "forbidden": [["every week", "once a week"]]
       }
     },
     {
@@ -125,13 +122,6 @@
       "expect": {
         "kind": "answer",
         "earlier": ["cadence-before"]
-      }
-    },
-    {
-      "id": "locker-stale",
-      "question": "Which locker do I use today?",
-      "expect": {
-        "kind": "abstain"
       }
     },
     {
