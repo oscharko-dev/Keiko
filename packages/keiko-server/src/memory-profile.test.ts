@@ -479,17 +479,29 @@ describe("Chat memory with the standing profile (#4228)", () => {
     const long =
       "Bevorzugt Tabellen mit Spaltenköpfen, Einheiten und Summenzeile, wenn du mir Zahlen zeigst.";
     seed(store, { id: "tables", body: long });
-    const request = {
-      content: "Wie zeigst du mir Zahlen?",
-      memory: { enabled: true, budgetTokens: 30, context: {} },
-    } as unknown as SendDesktopChatRequest;
-    const result = await buildMemoryResult(request, deps(store), ctx);
+    const askWithBudget = (budgetTokens: number): ReturnType<typeof buildMemoryResult> =>
+      buildMemoryResult(
+        {
+          content: "Wie zeigst du mir Zahlen?",
+          memory: { enabled: true, budgetTokens, context: {} },
+        } as unknown as SendDesktopChatRequest,
+        deps(store),
+        ctx,
+      );
+    // The profile line costs 16 tokens. Recall renders its reason beside the excerpt, and the
+    // truthful "lexical relevance" reason is longer than the "pinned memory" label an unpinned
+    // fact used to carry, so a partial excerpt needs 20 tokens of recall budget.
+    const result = await askWithBudget(36);
     const excerpt = result.context.memories[0]?.bodyExcerpt ?? "";
     const line = result.context.profile?.entries[0]?.text ?? "";
     // Recall had room only for part of the fact, so its full profile line stays.
     expect(excerpt.length).toBeGreaterThan(0);
     expect(excerpt.length).toBeLessThan(long.length);
     expect(line).toBe(long);
+    // With no room for any excerpt the fact still reaches the answer whole, through the profile.
+    const tight = await askWithBudget(30);
+    expect(tight.context.memories).toEqual([]);
+    expect(tight.context.profile?.entries[0]?.text).toBe(long);
   });
 
   it("supplies nothing when memory is off for the Chat", async () => {

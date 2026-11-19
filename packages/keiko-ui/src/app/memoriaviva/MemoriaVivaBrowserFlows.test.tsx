@@ -340,6 +340,8 @@ describe("MemoriaViva browser-tier flows", () => {
         body: edited.body,
         tags: ["typescript", "review"],
         sensitivity: "confidential",
+        // The edit names the revision it was made against, so a concurrent change is refused.
+        expectedUpdatedAt: record.updatedAt,
       });
       expect(onEditSave).toHaveBeenCalledWith(edited);
     });
