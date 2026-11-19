@@ -211,15 +211,16 @@ describe("the seeded demonstration scenarios", () => {
       const earlier = unit(root, "no-maintenance", "seed-earlier-value-en", "product");
       expect(earlier.seed.after).toMatchObject({ gone: 0, supersededRemoved: 0 });
       // The recall trace (on by default) says where the earlier value was lost: the record is still
-      // stored, but the product's retrieval admits no superseded record.
+      // stored, but recall leaves a superseded record out at the query (#4223), so the route never
+      // sees it as a candidate.
       expect(manifest.metadata.recallTrace).toBe("on");
       const traced = earlier.probes.find((probe) => probe.id === "before").recallTrace;
       expect(traced.needed).toMatchObject([
-        { key: "earlier:format-before", suppliedByChat: false, stage: "not-admitted" },
+        { key: "earlier:format-before", suppliedByChat: false, stage: "not-a-candidate" },
       ]);
       expect(summary.failureClasses.byArm.product.total).toEqual({
         "needed-memory-missing": 1,
-        "needed-not-admitted": 1,
+        "needed-not-a-candidate": 1,
       });
     },
     RUN_TIMEOUT_MS,
