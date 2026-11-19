@@ -7788,7 +7788,7 @@ describe("handleGatewaySetup", () => {
   });
 
   it("falls back to the runtime view when the persisted file is not a valid gateway config", async () => {
-    // The documented fail-safe of durableStoredGatewayConfig: a stored file the gateway parser
+    // The documented fail-safe of durableStoredGatewayView: a stored file the gateway parser
     // refuses must not fail the setup — classification degrades to the env-resolved runtime
     // view (exactly the pre-change behavior) and the rotation still completes. The file stays
     // VALID JSON on purpose: byte-corrupt JSON is refused by the separate egress-preservation

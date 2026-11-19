@@ -4,7 +4,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
-import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { ServerResponse, type IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
@@ -409,6 +409,15 @@ async function setupFixture(
   return { deps };
 }
 
+// Store a configuration the way an earlier setup leaves it: the durable file AND the running view.
+// Only the file can prove that a reranker rides the gateway connection (audit of #4464).
+function storeGatewayConfig(deps: UiHandlerDeps, raw: Record<string, unknown>): void {
+  const storagePath = deps.gatewayConfig?.storagePath;
+  if (storagePath === undefined) throw new Error("expected a gateway config store");
+  writeFileSync(storagePath, JSON.stringify(raw));
+  deps.gatewayConfig?.set(parseGatewayConfig(raw), true);
+}
+
 const CHAT_AND_RERANKER: readonly Record<string, unknown>[] = [
   { model_name: "qwen-chat", model_info: { mode: "chat" } },
   { model_name: "house-reranker", model_info: { mode: "rerank" } },
@@ -568,14 +577,11 @@ describe("reranker wiring from discovery", () => {
     const port = answeringRerankPort();
     const { deps } = await setupFixture(CHAT_AND_RERANKER, port);
     const stored = "https://llm-gateway.example.com/v1/chat/completions";
-    deps.gatewayConfig?.set(
-      parseGatewayConfig({
-        providers: [{ modelId: "qwen-chat", baseUrl: stored, apiKey: "token" }],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        reranker: { modelId: "house-reranker", baseUrl: stored, apiKey: "token" },
-      }),
-      true,
-    );
+    storeGatewayConfig(deps, {
+      providers: [{ modelId: "qwen-chat", baseUrl: stored, apiKey: "token" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      reranker: { modelId: "house-reranker", baseUrl: stored, apiKey: "token" },
+    });
     const result = await handleGatewaySetup(
       ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" }),
       deps,
@@ -586,20 +592,17 @@ describe("reranker wiring from discovery", () => {
 
   it("marks a reranker that shares the gateway credential, also one saved before the mark", async () => {
     const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
-    deps.gatewayConfig?.set(
-      parseGatewayConfig({
-        providers: [
-          { modelId: "qwen-chat", baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" },
-        ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        reranker: {
-          modelId: "house-reranker",
-          baseUrl: "https://llm-gateway.example.com/v1",
-          apiKey: "token",
-        },
-      }),
-      true,
-    );
+    storeGatewayConfig(deps, {
+      providers: [
+        { modelId: "qwen-chat", baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      reranker: {
+        modelId: "house-reranker",
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "token",
+      },
+    });
     await handleGatewaySetup(
       ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" }),
       deps,
@@ -614,22 +617,19 @@ describe("reranker wiring from discovery", () => {
     // Review finding on PR #4464: a team export handed the gateway token to every reranker on the
     // gateway's address and header, also one the operator gave its own key.
     const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
-    deps.gatewayConfig?.set(
-      parseGatewayConfig({
-        providers: [
-          { modelId: "qwen-chat", baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" },
-        ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        reranker: {
-          modelId: "operator-reranker",
-          baseUrl: "https://llm-gateway.example.com/v1",
-          apiKey: "operator-rerank-token",
-          // A mark written by hand proves nothing: setup compares the credential itself.
-          credentialOrigin: "gateway-connection",
-        },
-      }),
-      true,
-    );
+    storeGatewayConfig(deps, {
+      providers: [
+        { modelId: "qwen-chat", baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      reranker: {
+        modelId: "operator-reranker",
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "operator-rerank-token",
+        // A mark written by hand proves nothing: setup compares the credential itself.
+        credentialOrigin: "gateway-connection",
+      },
+    });
     await handleGatewaySetup(
       ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" }),
       deps,
@@ -644,24 +644,21 @@ describe("reranker wiring from discovery", () => {
 
   it("never moves a reranker with its own connection onto the gateway's new credential", async () => {
     const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
-    deps.gatewayConfig?.set(
-      parseGatewayConfig({
-        providers: [
-          {
-            modelId: "qwen-chat",
-            baseUrl: "https://llm-gateway.example.com/v1",
-            apiKey: "old-token",
-          },
-        ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        reranker: {
-          modelId: "operator-reranker",
-          baseUrl: "https://rerank.example.com",
-          apiKey: "operator-rerank-token",
+    storeGatewayConfig(deps, {
+      providers: [
+        {
+          modelId: "qwen-chat",
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "old-token",
         },
-      }),
-      true,
-    );
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      reranker: {
+        modelId: "operator-reranker",
+        baseUrl: "https://rerank.example.com",
+        apiKey: "operator-rerank-token",
+      },
+    });
     await handleGatewaySetup(
       ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "rotated-token" }),
       deps,
@@ -1351,6 +1348,41 @@ describe("a reranker's credential provenance comes from its durable key", () => 
       }),
       true,
     );
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: GATEWAY, apiKey: "gateway-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.reranker).toMatchObject({ modelId: "house-reranker" });
+    expect(currentGatewayConfig(deps)?.reranker).not.toHaveProperty("credentialOrigin");
+    deps.store.close();
+  });
+
+  it.each([
+    { state: "on a first setup, before anything is stored", storedFile: undefined },
+    {
+      // Valid JSON on purpose: corrupt bytes are refused earlier by the egress-preservation guard.
+      state: "over a stored file the gateway parser refuses",
+      storedFile: JSON.stringify({ providers: [{ modelId: "half-a-provider" }] }),
+    },
+  ])("never marks a reranker $state", async ({ storedFile }) => {
+    // Independent audit of the round above: with no stored file, or one the parser refuses, the
+    // durable view fell back to the running configuration, so a reranker only that configuration
+    // named was judged on itself.
+    const uiDir = await tempDir("keiko-rerank-first-ui-");
+    const evidenceDir = await tempDir("keiko-rerank-first-ev-");
+    const deps = depsFor(uiDir, evidenceDir, VAULT_ENV);
+    const storagePath = deps.gatewayConfig?.storagePath ?? "";
+    if (storedFile !== undefined) writeFileSync(storagePath, storedFile, "utf8");
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [{ modelId: "qwen-chat", baseUrl: GATEWAY, apiKey: "gateway-token" }],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        reranker: { modelId: "house-reranker", baseUrl: GATEWAY, apiKey: "gateway-token" },
+      }),
+      true,
+    );
+    expect(existsSync(storagePath)).toBe(storedFile !== undefined);
     const result = await handleGatewaySetup(
       ctx({ baseUrl: GATEWAY, apiKey: "gateway-token" }),
       deps,
