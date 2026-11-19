@@ -39,16 +39,16 @@ const scenarios = loadScenarioDirectory(NEXT);
 const corpus = scenarios.filter((scenario) => !DEMONSTRATIONS.has(scenario.id));
 
 describe("the next corpus", () => {
-  it("keeps the two demonstrations and holds 25 scenarios of its own", () => {
-    expect(scenarios).toHaveLength(27);
-    expect(corpus).toHaveLength(25);
+  it("keeps the two demonstrations and holds 26 scenarios of its own", () => {
+    expect(scenarios).toHaveLength(28);
+    expect(corpus).toHaveLength(26);
     for (const id of DEMONSTRATIONS) expect(scenarios.map((s) => s.id)).toContain(id);
   });
 
   it("is split between German and English, with the cross-language scenarios mixed", () => {
     const count = (language) => corpus.filter((scenario) => scenario.language === language).length;
     expect(count("de")).toBe(13);
-    expect(count("en")).toBe(10);
+    expect(count("en")).toBe(11);
     expect(count("mixed")).toBe(2);
     expect(count("de") + count("en") + count("mixed")).toBe(corpus.length);
   });
