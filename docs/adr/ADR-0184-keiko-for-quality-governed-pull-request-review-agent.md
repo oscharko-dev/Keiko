@@ -452,7 +452,11 @@ readability, style, naming, maintainability, a missing test or configurability) 
 `evidence-mismatch`, unless a demand of the review rules requires that finding. The counter-check
 task therefore carries the same nonce-bound rules block as the Reviewer's task, or the line that
 there are none (R4130-047). The runtime result hands the loaded rules text to the run's
-counter-checks in memory only; the run record keeps its digest, never the text. On the seed runs of 2026-11-06 to
+counter-checks in memory only; the run record keeps its digest, never the text. A refutation
+takes the first reason code that applies, in the order `guarded-elsewhere`, `cause-not-in-change`,
+`evidence-mismatch`, and the task says that the code changes nothing for a refuted candidate: in
+development iteration 11 both counter-check turns that used up their output budget had decided to
+refute early and spent the rest weighing these codes. On the seed runs of 2026-11-06 to
 2026-11-09, the Reviewer filed a report that itself said "no defect" on the named-constants clean
 control twice, and the Counter-checker confirmed both. In two runs the Reviewer named a consequence
 of the off-by-one seed that a later guard catches, so the Counter-checker refuted a real defect.

@@ -40,10 +40,14 @@ Method:
 3. Look for what would make the finding wrong: a guard, a check or handling elsewhere (search for it), a cause outside the change, or evidence that does not show what the candidate claims.
 4. Decide:
    - "confirmed" with reasonCode "defect-reproduced-in-code" only if the code itself proves the defect: the input you followed produces the wrong result, failure or access the candidate describes, or the code breaks the demand of the review rules that the candidate names. Give at least one evidence range you read yourself, in the head commit, overlapping the reported location or the candidate's evidence.
-   - "refuted" with reasonCode "guarded-elsewhere", "cause-not-in-change" or "evidence-mismatch" when the code shows the finding is wrong; give the evidence that shows it.
+   - "refuted" when the code shows the finding is wrong, with the first of these reasonCodes that applies, and the evidence that shows it:
+     1. "guarded-elsewhere": a guard, check or handling you read prevents the wrong result.
+     2. "cause-not-in-change": the wrong result can happen, but its cause lies in code the change did not touch.
+     3. "evidence-mismatch": any other way the code shows the finding wrong, including evidence that does not show what the candidate claims.
+     A refutation's reasonCode only explains it: every refuted candidate is handled the same way. Do not weigh one reasonCode against another.
    - "refuted" with reasonCode "evidence-mismatch" also when the candidate describes no wrong behaviour and no demand of the review rules below requires it: it says there is no defect, its consequence is none, or it names only readability, style, naming, maintainability, a missing test or that a value is not configurable.
    - "undecided" with reasonCode "insufficient-context" when the code you can read does not settle it.
-5. Call ${TOOLS.verdict} exactly once. Text outside it is ignored.
+5. Call ${TOOLS.verdict} exactly once, as soon as you have decided. Text outside it is ignored.
 
 Time is limited: the counter-check ends after a few minutes, and a check that runs out of time counts as undecided. Keep your reasoning short and read only the lines that settle the question. You have ${String(maxReadCalls)} read, list and search calls in all. After them these three tools answer nothing more and only ${TOOLS.verdict} works, so record your verdict before they are used up; most candidates are settled by four calls.`;
 }

@@ -13,11 +13,31 @@ import {
 } from "./prompt.js";
 
 describe("COUNTER_CHECK_INSTRUCTION", () => {
+  // #4130 dev-11: two turns that used up their 4,096-token output budget had decided to refute
+  // within the first paragraphs, then spent the rest weighing "guarded-elsewhere",
+  // "cause-not-in-change" and "evidence-mismatch" against each other. The codes are defined, ordered,
+  // and said not to change what happens to a refuted candidate.
+  it("orders the refutation reason codes and says that the choice changes nothing", () => {
+    const at = (text: string): number => COUNTER_CHECK_INSTRUCTION.indexOf(text);
+    expect(
+      at('1. "guarded-elsewhere": a guard, check or handling you read prevents'),
+    ).toBeGreaterThan(0);
+    expect(at('2. "cause-not-in-change"')).toBeGreaterThan(at('1. "guarded-elsewhere"'));
+    expect(at('3. "evidence-mismatch"')).toBeGreaterThan(at('2. "cause-not-in-change"'));
+    expect(COUNTER_CHECK_INSTRUCTION).toContain("with the first of these reasonCodes that applies");
+    expect(COUNTER_CHECK_INSTRUCTION).toContain(
+      "every refuted candidate is handled the same way. Do not weigh one reasonCode against another.",
+    );
+    expect(COUNTER_CHECK_INSTRUCTION).toContain("exactly once, as soon as you have decided.");
+  });
+
   it("names the four counter-check tools and the verdict as the only output", () => {
     for (const alias of Object.values(REVIEW_COUNTER_CHECK_TOOL_ALIASES)) {
       expect(COUNTER_CHECK_INSTRUCTION).toContain(alias);
     }
-    expect(COUNTER_CHECK_INSTRUCTION).toContain("exactly once. Text outside it is ignored.");
+    expect(COUNTER_CHECK_INSTRUCTION).toContain(
+      "exactly once, as soon as you have decided. Text outside it is ignored.",
+    );
   });
 
   it("asks for a short check because a check out of time counts as undecided", () => {
