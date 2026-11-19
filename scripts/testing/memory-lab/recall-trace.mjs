@@ -1,17 +1,15 @@
 // Where a needed memory was lost, per answer probe (#4205). When a memory an answer needs never
 // reaches the model, `neededNotSupplied` only says so. The trace asks the product's own retrieval
 // route (`POST /api/memory/context`) AFTER the answer was received, so it cannot influence it, and
-// names the stage (recall-stage.mjs): not stored, not a candidate, not admitted, refused by the chat,
-// beyond the chat's limit, or moved down by the reorder. Ids, positions, scores and closed values
-// only: no memory text, no question, no excerpt. The route's own token budget is made so large that it
-// cuts nothing: a budget cut would only blur the order the stages are read from.
+// names the stage (recall-stage.mjs): not stored, not a candidate, not admitted, or admitted but not
+// supplied. Ids, positions, scores and closed values only: no memory text, no question, no excerpt.
+// The route's own token budget is made so large that it cuts nothing.
 //
-// An honest limit, repeated in docs/qa/memoria-viva-lab.md: the route ranks with the same signals,
-// fusion and reorder as the chat path, but without the chat path's strict relevance floor and
-// standing profile, and with its own limit (12) on included memories where the chat keeps fewer. It
-// is a diagnostic approximation of the chat path, not the chat path.
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+// An honest limit, repeated in docs/qa/memoria-viva-lab.md: the route is a diagnostic approximation of
+// the chat path, not the chat path. It uses the lenient relevance floor and ranks over one window where
+// the chat ranks its admitted memories among themselves under the strict floor, has no standing
+// profile, and keeps up to 12 included memories where the chat keeps fewer. Its position of a memory is
+// recorded as a fact and says nothing certain about the chat's.
 import { listMemories } from "./instance.mjs";
 import { neededVerdict } from "./recall-stage.mjs";
 import { carrierIds, matchesTermGroups, suppliedCarries, wantedOf } from "./score.mjs";
@@ -87,31 +85,15 @@ function chosenCarrier(ids, { suppliedIds, positionOf, live }) {
   return null;
 }
 
-// What the chat supplied as retrieved memories (never the standing profile), each with the place the
-// route gave it: its listed position, `Infinity` when the route omitted it by its limit, null when the
-// route did not rank it at all.
-function suppliedRetrieved(retrievedIds, { positionOf, omittedBy }) {
-  const positions = retrievedIds.map((id) => {
-    if (positionOf.has(id)) return positionOf.get(id);
-    return omittedBy.get(id) === "max-included-exceeded" ? Number.POSITIVE_INFINITY : null;
-  });
-  return { count: retrievedIds.length, positions };
-}
-
 /**
  * One entry per wanted fact. `wanted` carries labels, `carriers` maps a label to the ids of the stored
- * memories that carry it, `suppliedLabels` holds the labels the chat supplied, `retrievedIds` the
- * retrieved memories the chat supplied, `limit` the chat's limit on them (null when unreadable).
- * `response` is the route's answer, or undefined when the call failed.
+ * memories that carry it, `suppliedLabels` holds the labels the chat supplied. `response` is the route's answer, or undefined when the call failed.
  */
 function neededEntries({
   wanted,
   carriers,
   suppliedLabels,
   suppliedIds,
-  retrievedIds,
-  limit,
-  orderPremise = true,
   response,
   memories,
   storeKnown = true,
@@ -127,7 +109,6 @@ function neededEntries({
   const live = new Set(
     memories.filter((memory) => memory.status === "accepted").map((memory) => memory.id),
   );
-  const supplied = suppliedRetrieved(retrievedIds, { positionOf, omittedBy });
   return wanted.map((item) => {
     const ids = carriers.get(item.label) ?? [];
     const id = chosenCarrier(ids, { suppliedIds, positionOf, live });
@@ -139,9 +120,6 @@ function neededEntries({
     const { stage, reason } = neededVerdict({
       storeKnown,
       traceAvailable: response !== undefined,
-      limit,
-      supplied,
-      orderPremise,
       ...entry,
     });
     return {
@@ -154,20 +132,15 @@ function neededEntries({
 }
 
 /**
- * The body-free trace from the route's answer, or from a closed failure when there is none. It names
- * the chat's limit it compared with (`chatLimit`, null with `limitFailure` when it could not be read)
- * and how many retrieved memories the chat supplied.
+ * The body-free trace from the route's answer, or from a closed failure when there is none. The
+ * route's position and score rank of a needed memory are recorded as facts; no chat stage is derived
+ * from them. `chatRetrievedCount` is how many retrieved memories the chat supplied.
  */
-export function buildRecallTrace({ response, failure, limitFailure, ...rest }) {
+export function buildRecallTrace({ response, failure, ...rest }) {
   const base = {
     source: TRACE_SOURCE,
     strictFloor: false,
-    // Whether the detailed stages were derivable: they rest on both paths ordering identically, which
-    // holds only without an embedder (recall-stage.mjs).
-    orderPremise: rest.orderPremise !== false,
-    chatLimit: rest.limit,
     chatRetrievedCount: rest.retrievedIds.length,
-    ...(limitFailure === undefined ? {} : { limitFailure }),
   };
   if (response === undefined)
     return {
@@ -220,47 +193,6 @@ async function storedMemories(instance) {
   }
 }
 
-/** The closed reason the chat's limit could not be read. */
-export const LIMIT_UNREADABLE = "chat-limit-unreadable";
-
-/**
- * The chat's limit on retrieved memories, read from the SUBJECT's built server (the exported
- * `CHAT_MAX_RETRIEVED_MEMORIES` of `packages/keiko-server/dist/chat-handlers.js`), never assumed.
- * `{limit}` or `{failure: "chat-limit-unreadable"}`.
- */
-export function readChatRetrievalLimit(subjectRoot) {
-  try {
-    const source = readFileSync(
-      join(subjectRoot, "packages", "keiko-server", "dist", "chat-handlers.js"),
-      "utf8",
-    );
-    return limitFromSource(source);
-  } catch {
-    return { failure: LIMIT_UNREADABLE };
-  }
-}
-
-// Exactly one declaration at a line start (a commented-out line is no declaration) whose value is a
-// plain positive integer literal; anything else, including a constant that has gone, fails closed.
-// The number itself is never assumed: it is read, so it may change.
-export function limitFromSource(source) {
-  const declarations = [...source.matchAll(/^export const CHAT_MAX_RETRIEVED_MEMORIES\b.*$/gmu)];
-  if (declarations.length !== 1) return { failure: LIMIT_UNREADABLE };
-  const literal = /^export const CHAT_MAX_RETRIEVED_MEMORIES\s*=\s*(\d+)\s*;\s*(?:\/\/.*)?$/u.exec(
-    declarations[0][0],
-  );
-  const limit = literal === null ? Number.NaN : Number(literal[1]);
-  return Number.isSafeInteger(limit) && limit > 0 ? { limit } : { failure: LIMIT_UNREADABLE };
-}
-
-// The limit read from the build, unless the chat supplied more retrieved memories than it: then the
-// build contradicts the observation and the limit is unreadable.
-function limitFor(chatLimit, retrievedCount) {
-  if (chatLimit.limit !== undefined && retrievedCount > chatLimit.limit)
-    return { failure: LIMIT_UNREADABLE };
-  return chatLimit;
-}
-
 // A term probe is linked to a truth only when the truth's own terms carry the probe's complete
 // requirement: every term group of the probe has an alternative that the scorer's matcher finds in one
 // of the truth's own term spellings (normalisation, whole words, the `*` prefix). The body is not
@@ -291,9 +223,8 @@ export function traceWanted(scenario, probe) {
 /**
  * Records the trace of one answered probe on the same chat and question. Never throws: a route or
  * store failure becomes a closed failure value on the trace, and the probe result stands. `supplied`
- * is everything that reached the model, `retrievedIds` the retrieved part of it, `chatLimit` the
- * result of `readChatRetrievalLimit`, `embedder` the run's kind of embedding (`none`, `scripted` or
- * `configured`). The time the trace took is its `durationMs`.
+ * is everything that reached the model, `retrievedIds` the retrieved part of it. The time the trace
+ * took is its `durationMs`.
  */
 export async function traceRecall({
   instance,
@@ -301,14 +232,11 @@ export async function traceRecall({
   probe,
   supplied,
   retrievedIds,
-  chatLimit,
-  embedder = "none",
   chatId,
   queryText,
   links,
 }) {
   const startedAt = Date.now();
-  const readLimit = limitFor(chatLimit, retrievedIds.length);
   const wanted = traceWanted(scenario, probe);
   const stored = await storedMemories(instance);
   const memories = stored.memories ?? [];
@@ -320,9 +248,6 @@ export async function traceRecall({
     carriers,
     memories,
     storeKnown: stored.failure === undefined,
-    limit: readLimit.limit ?? null,
-    orderPremise: embedder === "none",
-    ...(readLimit.failure === undefined ? {} : { limitFailure: readLimit.failure }),
     suppliedLabels: new Set(
       wanted.filter((item) => suppliedCarries(supplied, item, links)).map((item) => item.label),
     ),

@@ -151,7 +151,7 @@ describe("the failure class of a failed check", () => {
     ]);
   });
 
-  it("adds the stage where each wanted memory the chat did not supply was lost, per fact, from a trace", () => {
+  it("adds the stage where each wanted memory the chat did not supply was lost, per fact, from a trace (new stages and the stage names an old run recorded)", () => {
     const trace = (...entries) => ({
       source: "memory-context-route",
       needed: entries.map(([key, stage, suppliedByChat = false]) => ({
@@ -201,15 +201,37 @@ describe("the failure class of a failed check", () => {
     ]);
   });
 
-  it("counts every stage as a class of its own, after needed-memory-missing", () => {
+  it("counts a memory the route admitted and the chat did not supply as admitted-not-supplied", () => {
+    const failures = unitFailures(
+      unit({
+        probes: [
+          answer({
+            id: "p",
+            neededNotSupplied: ["a"],
+            recallTrace: {
+              needed: [{ key: "a", stage: "admitted-not-supplied", suppliedByChat: false }],
+            },
+          }),
+        ],
+      }),
+    );
+    expect(failures.map((failure) => failure.class)).toEqual([
+      "needed-memory-missing",
+      "needed-admitted-not-supplied",
+    ]);
+  });
+
+  it("counts every stage as a class of its own, and keeps the classes of old runs' stages", () => {
     for (const stage of [
       "not-stored",
       "not-a-candidate",
       "not-admitted",
+      "admitted-not-supplied",
+      "trace-unavailable",
+      // No longer derived; an old run that recorded them is still counted and rendered.
       "refused-by-chat",
       "beyond-limit",
       "moved-down",
-      "trace-unavailable",
     ])
       expect(FAILURE_CLASSES).toContain(`needed-${stage}`);
     expect(FAILURE_CLASSES).not.toContain("needed-supplied");
@@ -481,6 +503,24 @@ describe("comparing failure classes between two runs", () => {
     expect(renderFailureClasses({ arm: "product", failureClasses: null }, "m")).toEqual([]);
     const same = compareFailureClasses(baseline, baseline);
     expect(same.every((row) => row.newlyFailing.length === 0)).toBe(true);
+  });
+
+  it("still compares and renders an old run that recorded the removed stage names", () => {
+    const oldRun = { summary: summarizeLabRun([unit({ probes: [answer({ id: "p1" })] })]) };
+    oldRun.summary.failureClasses.byArm.product.total["needed-beyond-limit"] = 2;
+    oldRun.summary.failureClasses.byArm.product.keys["needed-beyond-limit"] = [
+      "a:product:r0:probe:p1:caterer",
+    ];
+    const rows = compareFailureClasses(oldRun, candidate);
+    expect(rows.find((row) => row.class === "needed-beyond-limit")).toEqual({
+      class: "needed-beyond-limit",
+      baseline: 2,
+      candidate: 0,
+      newlyFailing: [],
+    });
+    expect(
+      renderFailureClasses({ arm: "product", failureClasses: rows }, "m").join("\n"),
+    ).toContain("needed-beyond-limit: 2 -> 0");
   });
 
   it("calls a side that recorded no failure classes unavailable, never zero, in both directions", () => {

@@ -38,7 +38,7 @@ import { CEILINGS, pendingGatewayCalls, startLabInstance } from "./instance.mjs"
 import { readActivityEvents } from "../coding-workbench-lab/activity-log-events.mjs";
 import { digestFiles, instrumentDigest, productDistDigest } from "./instrument.mjs";
 import { conversationTextInLog } from "./log-text.mjs";
-import { factlessProbes, readChatRetrievalLimit, recallTraceCoverage } from "./recall-trace.mjs";
+import { factlessProbes, recallTraceCoverage } from "./recall-trace.mjs";
 import {
   LabConfigurationError,
   assertGatewayConfigUnchanged,
@@ -305,8 +305,6 @@ function runContext(options, arm, fixture, instance) {
     confirmForget: true,
     retainBodies: options.retainBodies,
     recallTrace: options.recallTrace,
-    chatLimit: readChatRetrievalLimit(options.subjectRoot ?? REPO_ROOT),
-    embedder: options.embedder,
     labelPass: options.labelPass,
     turnTimeoutMs: options.turnTimeoutMs,
     learning: {

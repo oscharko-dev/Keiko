@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { mapSequential } from "./corpus/sequence.mjs";
 import { awaitLearning, captureTotal, listMemories, readCaptures } from "./instance.mjs";
 import { isAnchorScenario, retainBodiesFor } from "./isolation.mjs";
-import { LIMIT_UNREADABLE, traceRecall } from "./recall-trace.mjs";
+import { traceRecall } from "./recall-trace.mjs";
 import { matchesTermGroups, scoreProbe, scoreStore } from "./score.mjs";
 import { countBy, seedLoss } from "./seed-plan.mjs";
 
@@ -344,8 +344,6 @@ async function runProbes(scenario, instance, context) {
         probe,
         supplied: sent.supplied,
         retrievedIds: sent.retrieved.map((entry) => entry.memoryId),
-        chatLimit: context.chatLimit ?? { failure: LIMIT_UNREADABLE },
-        embedder: context.embedder ?? "none",
         chatId,
         queryText: asked,
         links,
@@ -434,8 +432,7 @@ function timingOf(startedAt, learnedAt, probes) {
 /**
  * Runs one scenario for one arm on a fresh instance and returns the scored evidence. `requested`
  * carries arm, memoryMode, budgetTokens, confirmForget, retainBodies, recallTrace (`true` records the
- * recall trace of every answer probe, see recall-trace.mjs), chatLimit (the chat's limit on retrieved
- * memories, from `readChatRetrievalLimit`), turnTimeoutMs, learning
+ * recall trace of every answer probe, see recall-trace.mjs), turnTimeoutMs, learning
  * (quietMs, maxMs, pendingLearner) and, offline, the scripted model fixture. Bodies are retained
  * only when the scenario is not anchor text, whatever the run asked for (the labelling pass,
  * `labelPass`, excepted): real conversations leave counts and verdicts, never text.

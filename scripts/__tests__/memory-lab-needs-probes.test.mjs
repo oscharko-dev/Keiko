@@ -199,7 +199,7 @@ describe("a sealed run's view of such a probe", () => {
           passed: false,
           neededMissing: ["room", "earlier:before"],
           neededNotSupplied: ["day"],
-          recallTrace: { needed: [{ key: "room", id: "m-room", stage: "beyond-limit" }] },
+          recallTrace: { needed: [{ key: "room", id: "m-room", stage: "admitted-not-supplied" }] },
         },
       ],
       seed: { total: 40, filler: 38 },

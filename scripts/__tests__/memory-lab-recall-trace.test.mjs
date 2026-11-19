@@ -1,53 +1,43 @@
 // The recall trace (#4205): where a needed memory was lost, per answer probe. The stage derivation is
-// one pure function over the route's order, what the chat actually supplied and the chat's limit; the
-// trace is recorded against a fake product that answers `POST /api/memory/context` like the real
-// route, only after the chat answer, and a route that fails never fails the probe.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { URL, fileURLToPath } from "node:url";
+// one pure function over what the route reported and what the chat actually supplied; the route's
+// position is a recorded fact, never a source of a chat stage. The trace is recorded against a fake
+// product that answers `POST /api/memory/context` like the real route, only after the chat answer, and
+// a route that fails never fails the probe.
 import { describe, expect, it } from "vitest";
+import { URL, fileURLToPath } from "node:url";
 import { runScenario } from "../testing/memory-lab/driver.mjs";
 import {
+  LEGACY_RECALL_STAGES,
   RECALL_STAGES,
   UNAVAILABLE_REASONS,
   neededStage,
   neededVerdict,
 } from "../testing/memory-lab/recall-stage.mjs";
 import {
-  LIMIT_UNREADABLE,
   TRACE_BUDGET_TOKENS,
   buildRecallTrace,
   factlessProbes,
-  limitFromSource,
-  readChatRetrievalLimit,
   recallTraceCoverage,
   traceWanted,
 } from "../testing/memory-lab/recall-trace.mjs";
-import { REPO_ROOT } from "../testing/coding-workbench-lab/lab-common.mjs";
 import { loadScenarioDirectory, validateScenario } from "../testing/memory-lab/scenario.mjs";
+import { join } from "node:path";
 
 const labRoot = () => fileURLToPath(new URL("../testing/memory-lab/", import.meta.url));
-const LIMIT = 6;
 const base = {
   traceAvailable: true,
-  limit: LIMIT,
   suppliedByChat: false,
   id: "m1",
   position: null,
-  scoreRank: null,
   omittedReason: null,
-  // A full chat block whose memories the route ranks first.
-  supplied: { count: LIMIT, positions: [1, 2, 3, 4, 5, 6] },
 };
 
 describe("the stage of a needed memory", () => {
   it.each([
-    ["supplied", { suppliedByChat: true, position: 9, scoreRank: 1 }],
+    ["supplied", { suppliedByChat: true, position: 9 }],
     ["not-stored", { id: null }],
     ["trace-unavailable", { traceAvailable: false }],
     ["trace-unavailable", { storeKnown: false, id: null }],
-    ["trace-unavailable", { position: 8, scoreRank: 8, limit: null }],
     ["not-a-candidate", {}],
     ["not-admitted", { omittedReason: "suppressed-by-status" }],
     ["not-admitted", { omittedReason: "below-threshold" }],
@@ -60,155 +50,48 @@ describe("the stage of a needed memory", () => {
     expect(RECALL_STAGES).toContain(stage);
   });
 
-  it.each([
-    // Position 7 to 12 behind a full chat block: beyond the chat's limit, never close.
-    ["beyond-limit", { position: 7, scoreRank: 7 }],
-    ["beyond-limit", { position: 9, scoreRank: 9 }],
-    ["beyond-limit", { position: 12, scoreRank: 12 }],
-    // The route omitted it by its own limit: it ranks behind everything listed.
-    ["beyond-limit", { omittedReason: "max-included-exceeded" }],
-    // Its score rank was inside the limit; the reorder put it outside.
-    ["moved-down", { position: 8, scoreRank: 3 }],
-    // The chat kept a memory the route ranks behind it.
-    [
-      "refused-by-chat",
-      { position: 3, scoreRank: 3, supplied: { count: 6, positions: [1, 2, 4, 5, 6, 7] } },
-    ],
-    // The chat kept fewer than its limit although the memory ranked high enough.
-    [
-      "refused-by-chat",
-      { position: 8, scoreRank: 8, supplied: { count: 3, positions: [1, 2, 3] } },
-    ],
-    ["refused-by-chat", { position: 2, scoreRank: 2, supplied: { count: 0, positions: [] } }],
-    [
-      "refused-by-chat",
-      { omittedReason: "max-included-exceeded", supplied: { count: 2, positions: [1, 2] } },
-    ],
-    // A supplied memory the route omitted by its limit ranks behind a listed one.
-    [
-      "refused-by-chat",
-      { position: 9, supplied: { count: 6, positions: [1, 2, 3, 4, 5, Infinity] } },
-    ],
-    // Two memories both omitted by the route's limit have no known order: not "below".
-    [
-      "beyond-limit",
-      {
-        omittedReason: "max-included-exceeded",
-        supplied: { count: 6, positions: [1, 2, 3, 4, 5, Infinity] },
-      },
-    ],
-    // A supplied memory the route did not rank at all says nothing about the order.
-    [
-      "beyond-limit",
-      { position: 9, scoreRank: 9, supplied: { count: 6, positions: [1, 2, 3, 4, 5, null] } },
-    ],
-  ])("is %s for a memory the route admitted", (stage, fields) => {
-    expect(neededStage({ ...base, ...fields })).toBe(stage);
-    expect(RECALL_STAGES).toContain(stage);
+  it("is admitted-not-supplied for every memory the route admitted and the chat did not supply", () => {
+    // Listed at any position, or omitted only by the route's own limit: the same single stage, because
+    // the route's order says nothing certain about the chat's (the chat ranks its admitted memories
+    // among themselves under the strict floor, the route ranks one window under the lenient floor).
+    for (const fields of [
+      { position: 1 },
+      { position: 3 },
+      { position: 7 },
+      { position: 12 },
+      { omittedReason: "max-included-exceeded" },
+    ])
+      expect(neededVerdict({ ...base, ...fields })).toEqual({ stage: "admitted-not-supplied" });
   });
 
-  it("has no basis to compare when a full chat block holds nothing the route ranked against the memory", () => {
-    // The chat's block is full of memories the route did not rank; the needed memory is listed
-    // inside the limit. Beyond-limit would be a wrong cause: the stage says it cannot tell.
-    const unrankedBlock = { count: LIMIT, positions: Array(LIMIT).fill(null) };
-    const inside = { position: 3, scoreRank: 3, supplied: unrankedBlock };
-    expect(neededVerdict({ ...base, ...inside })).toEqual({
-      stage: "trace-unavailable",
-      reason: "chat-block-unplaceable",
-    });
-    // Both omitted by the route's limit: no known order between them.
-    expect(
-      neededVerdict({
-        ...base,
-        omittedReason: "max-included-exceeded",
-        supplied: { count: LIMIT, positions: Array(LIMIT).fill(Infinity) },
-      }),
-    ).toEqual({ stage: "trace-unavailable", reason: "chat-block-unplaceable" });
-    // A fewer-than-limit block, or one holding a memory ranked behind it, is still a refusal.
-    expect(
-      neededStage({ ...base, ...inside, supplied: { count: 2, positions: [null, null] } }),
-    ).toBe("refused-by-chat");
-    expect(
-      neededStage({
-        ...base,
-        ...inside,
-        supplied: { count: LIMIT, positions: [null, 9, null, null, null, null] },
-      }),
-    ).toBe("refused-by-chat");
-    // One placed memory above it gives the comparison its basis.
-    expect(
-      neededStage({
-        ...base,
-        position: 9,
-        scoreRank: 9,
-        supplied: { count: LIMIT, positions: [1, null, null, null, null, null] },
-      }),
-    ).toBe("beyond-limit");
+  it("derives nothing from the route's position or score rank beyond whether it was admitted", () => {
+    const near = neededVerdict({ ...base, position: 2, scoreRank: 2 });
+    const far = neededVerdict({ ...base, position: 12, scoreRank: 1 });
+    expect(near).toEqual(far);
+  });
+
+  it("names exactly the closed stage set, and no stage that reads a chat cut out of the route's order", () => {
+    expect(RECALL_STAGES).toEqual([
+      "supplied",
+      "not-stored",
+      "not-a-candidate",
+      "not-admitted",
+      "admitted-not-supplied",
+      "trace-unavailable",
+    ]);
+    for (const old of ["refused-by-chat", "beyond-limit", "moved-down"])
+      expect(RECALL_STAGES).not.toContain(old);
+    // They survive only as names an old run may carry.
+    expect(LEGACY_RECALL_STAGES).toEqual(["refused-by-chat", "beyond-limit", "moved-down"]);
   });
 
   it("gives every unavailable stage a closed reason", () => {
     const reasons = [
       neededVerdict({ ...base, storeKnown: false }).reason,
       neededVerdict({ ...base, traceAvailable: false }).reason,
-      neededVerdict({ ...base, position: 8, scoreRank: 8, limit: null }).reason,
-      neededVerdict({
-        ...base,
-        position: 3,
-        scoreRank: 3,
-        supplied: { count: LIMIT, positions: [] },
-      }).reason,
     ];
     expect(reasons.toSorted()).toEqual([...UNAVAILABLE_REASONS].toSorted());
-    expect(neededVerdict({ ...base, position: 9, scoreRank: 9 })).toEqual({
-      stage: "beyond-limit",
-    });
-  });
-
-  it("names one stage for an admitted but not supplied memory when the run has an embedder", () => {
-    // The auditor's case: the route's set holds a neighbour X that the chat's set does not (the
-    // relaxed floor admits it), and the diversity reorder, which depends on the set, can put the
-    // route's order against the chat's. The detailed stages rest on that order, so with an embedder
-    // none of them is claimed.
-    const routeOnlyNeighbour = { position: 1, scoreRank: 1 };
-    const needed = { position: 2, scoreRank: 2 };
-    const block = { count: 1, positions: [3] };
-    // Without an embedder the route's order is the chat's: the chat kept a memory ranked behind it.
-    expect(neededStage({ ...base, ...needed, supplied: block })).toBe("refused-by-chat");
-    // With one, the same facts name only what is known.
-    for (const fields of [
-      { ...needed, supplied: block },
-      { ...routeOnlyNeighbour, supplied: { count: LIMIT, positions: [1, 2, 3, 4, 5, 6] } },
-      { position: 9, scoreRank: 9, supplied: { count: LIMIT, positions: [1, 2, 3, 4, 5, 6] } },
-      { position: 8, scoreRank: 3, supplied: { count: LIMIT, positions: [1, 2, 3, 4, 5, 6] } },
-      { omittedReason: "max-included-exceeded", supplied: block },
-    ])
-      expect(neededVerdict({ ...base, ...fields, orderPremise: false })).toEqual({
-        stage: "admitted-not-supplied",
-      });
-    // It needs no limit, and it says nothing about what was never admitted or stored.
-    expect(neededStage({ ...base, ...needed, limit: null, orderPremise: false })).toBe(
-      "admitted-not-supplied",
-    );
-    expect(neededStage({ ...base, omittedReason: "out-of-scope", orderPremise: false })).toBe(
-      "not-admitted",
-    );
-    expect(neededStage({ ...base, orderPremise: false })).toBe("not-a-candidate");
-    expect(neededStage({ ...base, id: null, orderPremise: false })).toBe("not-stored");
-    expect(neededStage({ ...base, suppliedByChat: true, orderPremise: false })).toBe("supplied");
-  });
-
-  it("names no stage that suggests a near miss or a budget cut", () => {
-    expect(RECALL_STAGES).toEqual([
-      "supplied",
-      "not-stored",
-      "not-a-candidate",
-      "not-admitted",
-      "refused-by-chat",
-      "beyond-limit",
-      "moved-down",
-      "admitted-not-supplied",
-      "trace-unavailable",
-    ]);
+    expect(neededVerdict({ ...base, position: 9 })).toEqual({ stage: "admitted-not-supplied" });
   });
 
   it("lets what the chat supplied win, and what the store cannot say beat a guess", () => {
@@ -217,13 +100,6 @@ describe("the stage of a needed memory", () => {
     );
     expect(neededStage({ ...base, id: null, traceAvailable: false })).toBe("not-stored");
     expect(neededStage({ ...base, storeKnown: false, id: null })).toBe("trace-unavailable");
-  });
-
-  it("does not need the chat's limit to say a memory was not admitted", () => {
-    expect(neededStage({ ...base, limit: null, omittedReason: "out-of-scope" })).toBe(
-      "not-admitted",
-    );
-    expect(neededStage({ ...base, limit: null })).toBe("not-a-candidate");
   });
 });
 
@@ -257,7 +133,6 @@ describe("the trace built from the route's answer", () => {
     suppliedLabels: new Set(),
     suppliedIds: new Set(),
     retrievedIds: [],
-    limit: 2,
     memories: [
       { id: "m-room", status: "accepted" },
       { id: "m-day", status: "accepted" },
@@ -265,15 +140,16 @@ describe("the trace built from the route's answer", () => {
   };
   const trace = buildRecallTrace(input);
 
-  it("records the final order, the place by score, the counts per closed reason and the limit", () => {
+  it("records the final order, the place by score and the counts per closed reason, and no chat limit", () => {
     expect(trace).toMatchObject({
       source: "memory-context-route",
       strictFloor: false,
-      chatLimit: 2,
       chatRetrievedCount: 0,
       includedCount: 3,
       omittedByReason: { "max-included-exceeded": 1, "out-of-scope": 2, unknown: 1 },
     });
+    for (const gone of ["orderPremise", "chatLimit", "limitFailure"])
+      expect(trace).not.toHaveProperty(gone);
     expect(trace.included.map((row) => [row.id, row.position])).toEqual([
       ["a", 1],
       ["m-room", 2],
@@ -282,18 +158,8 @@ describe("the trace built from the route's answer", () => {
     expect(trace.included[1]).toEqual({ id: "m-room", position: 2, score: 0.9, subscores: sub });
   });
 
-  it("says per needed fact where it stands from the route's order, the chat's block and its limit", () => {
-    // The chat supplied nothing although it could have: it refused both.
-    expect(trace.needed.map((entry) => [entry.key, entry.stage])).toEqual([
-      ["room", "refused-by-chat"],
-      ["day", "refused-by-chat"],
-    ]);
-    const full = buildRecallTrace({
-      ...input,
-      retrievedIds: ["a", "b"],
-      suppliedIds: new Set(["a", "b"]),
-    });
-    expect(full.needed).toEqual([
+  it("records position and score rank as facts and derives one stage from them", () => {
+    expect(trace.needed).toEqual([
       {
         key: "room",
         id: "m-room",
@@ -302,7 +168,7 @@ describe("the trace built from the route's answer", () => {
         scoreRank: 1,
         omittedReason: null,
         carrierCount: 1,
-        stage: "refused-by-chat",
+        stage: "admitted-not-supplied",
       },
       {
         key: "day",
@@ -312,21 +178,9 @@ describe("the trace built from the route's answer", () => {
         scoreRank: null,
         omittedReason: "max-included-exceeded",
         carrierCount: 1,
-        stage: "beyond-limit",
+        stage: "admitted-not-supplied",
       },
     ]);
-  });
-
-  it("reads a score rank inside the limit and a position outside it as moved down", () => {
-    const moved = buildRecallTrace({
-      ...input,
-      limit: 1,
-      carriers: new Map([["room", ["m-room"]]]),
-      wanted: [wanted[0]],
-      retrievedIds: ["a"],
-      suppliedIds: new Set(["a"]),
-    });
-    expect(moved.needed[0]).toMatchObject({ position: 2, scoreRank: 1, stage: "moved-down" });
   });
 
   it("never reads equal scores as a reorder, and carries no text", () => {
@@ -340,15 +194,12 @@ describe("the trace built from the route's answer", () => {
         omitted: [],
       },
       wanted: [wanted[0]],
-      limit: 1,
-      retrievedIds: ["a"],
-      suppliedIds: new Set(["a"]),
     });
-    expect(tied.needed[0]).toMatchObject({ position: 2, scoreRank: 2, stage: "beyond-limit" });
+    expect(tied.needed[0]).toMatchObject({ position: 2, scoreRank: 2 });
     expect(JSON.stringify(trace)).not.toContain("free text");
   });
 
-  it("reports a fact no stored memory carries as not stored, and a failed call as unavailable", () => {
+  it("reports a failed call as unavailable with its closed reason", () => {
     const failed = buildRecallTrace({
       ...input,
       response: undefined,
@@ -360,172 +211,7 @@ describe("the trace built from the route's answer", () => {
       ["room", "m-room", "trace-unavailable"],
       ["day", "m-day", "trace-unavailable"],
     ]);
-  });
-
-  it("says when the chat's limit could not be read, and stages only what needs it as unavailable", () => {
-    const unread = buildRecallTrace({ ...input, limit: null, limitFailure: LIMIT_UNREADABLE });
-    expect(unread).toMatchObject({ chatLimit: null, limitFailure: "chat-limit-unreadable" });
-    expect(unread.needed.map((entry) => entry.stage)).toEqual([
-      "trace-unavailable",
-      "trace-unavailable",
-    ]);
-  });
-});
-
-describe("the trace of a run with an embedder", () => {
-  const response = {
-    included: [
-      { memoryId: "x", score: 0.9, subscores: sub },
-      { memoryId: "m-room", score: 0.8, subscores: sub },
-      { memoryId: "a", score: 0.5, subscores: sub },
-    ],
-    omitted: [],
-  };
-  const input = {
-    response,
-    wanted: [wanted[0]],
-    carriers: new Map([["room", ["m-room"]]]),
-    suppliedLabels: new Set(),
-    suppliedIds: new Set(["a"]),
-    retrievedIds: ["a"],
-    limit: 6,
-    memories: [{ id: "m-room", status: "accepted" }],
-  };
-
-  it("records that the order premise was not assumed, and names the single stage", () => {
-    const without = buildRecallTrace(input);
-    expect(without.orderPremise).toBe(true);
-    expect(without.needed[0].stage).toBe("refused-by-chat");
-    const withEmbedder = buildRecallTrace({ ...input, orderPremise: false });
-    expect(withEmbedder.orderPremise).toBe(false);
-    expect(withEmbedder.needed[0]).toMatchObject({ key: "room", stage: "admitted-not-supplied" });
-  });
-
-  it("reaches the stage through the driver: the run's embedder decides", async () => {
-    const run = async (embedder) => {
-      const product = fakeProduct({
-        memories: [ROOM, { id: "a", body: "Something else.", status: "accepted" }],
-        supply: (memory) => memory.id === "a",
-        route: answered(
-          [
-            { memoryId: "m-room", score: 0.9, subscores: {} },
-            { memoryId: "a", score: 0.4, subscores: {} },
-          ],
-          [],
-        ),
-      });
-      const result = await runScenario(scenario([NEEDS]), product.instance, context({ embedder }));
-      return result.probes[0].recallTrace;
-    };
-    expect((await run("none")).needed[0].stage).toBe("refused-by-chat");
-    for (const kind of ["scripted", "configured"]) {
-      const trace = await run(kind);
-      expect(trace.orderPremise).toBe(false);
-      expect(trace.needed[0].stage).toBe("admitted-not-supplied");
-    }
-  });
-});
-
-describe("the chat's limit", () => {
-  it("is read from the subject's built server, never assumed", () => {
-    const root = mkdtempSync(join(tmpdir(), "memory-lab-limit-"));
-    try {
-      const dist = join(root, "packages", "keiko-server", "dist");
-      mkdirSync(dist, { recursive: true });
-      writeFileSync(
-        join(dist, "chat-handlers.js"),
-        "export const OTHER = 1;\nexport const CHAT_MAX_RETRIEVED_MEMORIES = 9;\n",
-      );
-      expect(readChatRetrievalLimit(root)).toEqual({ limit: 9 });
-      writeFileSync(
-        join(dist, "chat-handlers.js"),
-        "export const CHAT_MAX_RETRIEVED_MEMORIES = x;\n",
-      );
-      expect(readChatRetrievalLimit(root)).toEqual({ failure: "chat-limit-unreadable" });
-      expect(readChatRetrievalLimit(join(root, "missing"))).toEqual({
-        failure: "chat-limit-unreadable",
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it.each([
-    ["a plain declaration", "export const CHAT_MAX_RETRIEVED_MEMORIES = 6;\n", { limit: 6 }],
-    ["a changed number", "export const CHAT_MAX_RETRIEVED_MEMORIES = 24;\n", { limit: 24 }],
-    [
-      "a trailing comment",
-      "export const CHAT_MAX_RETRIEVED_MEMORIES = 8; // budget cap\n",
-      { limit: 8 },
-    ],
-    [
-      "a commented-out declaration before a literal one",
-      "// export const CHAT_MAX_RETRIEVED_MEMORIES = 6;\nexport const CHAT_MAX_RETRIEVED_MEMORIES = 9;\n",
-      { limit: 9 },
-    ],
-    [
-      "a commented-out declaration before a computed one",
-      "// export const CHAT_MAX_RETRIEVED_MEMORIES = 6;\nexport const CHAT_MAX_RETRIEVED_MEMORIES = readEnv(9);\n",
-      { failure: "chat-limit-unreadable" },
-    ],
-    [
-      "two declarations",
-      "export const CHAT_MAX_RETRIEVED_MEMORIES = 6;\nexport const CHAT_MAX_RETRIEVED_MEMORIES = 9;\n",
-      { failure: "chat-limit-unreadable" },
-    ],
-    [
-      "a non-literal value",
-      "export const CHAT_MAX_RETRIEVED_MEMORIES = Math.max(6, 9);\n",
-      { failure: "chat-limit-unreadable" },
-    ],
-    [
-      "an indented line inside a block",
-      "function f() {\n  export const CHAT_MAX_RETRIEVED_MEMORIES = 6;\n}\n",
-      { failure: "chat-limit-unreadable" },
-    ],
-    [
-      "a zero",
-      "export const CHAT_MAX_RETRIEVED_MEMORIES = 0;\n",
-      { failure: "chat-limit-unreadable" },
-    ],
-    ["a constant that has gone", "export const OTHER = 6;\n", { failure: "chat-limit-unreadable" }],
-  ])("reads %s from the source of the build", (_name, source, expected) => {
-    expect(limitFromSource(source)).toEqual(expected);
-  });
-
-  it("is unreadable for a probe whose chat supplied more retrieved memories than the limit read", async () => {
-    const product = fakeProduct({
-      memories: [
-        ROOM,
-        { id: "x1", body: "One.", status: "accepted" },
-        { id: "x2", body: "Two.", status: "accepted" },
-      ],
-      supply: () => true,
-      route: answered([{ memoryId: "m-room", score: 0.4, subscores: {} }], []),
-    });
-    const result = await runScenario(
-      scenario([NEEDS]),
-      product.instance,
-      context({ chatLimit: { limit: 2 } }),
-    );
-    const trace = result.probes[0].recallTrace;
-    expect(trace).toMatchObject({
-      chatLimit: null,
-      chatRetrievedCount: 3,
-      limitFailure: "chat-limit-unreadable",
-    });
-    expect(trace.needed.find((entry) => entry.key === "day").stage).toBe("not-stored");
-    const unplaced = scenario([NEEDS]);
-    expect(unplaced.probes).toHaveLength(1);
-  });
-
-  it("equals the product's own export in this checkout", () => {
-    const source = readFileSync(
-      join(REPO_ROOT, "packages", "keiko-server", "src", "chat-handlers.ts"),
-      "utf8",
-    );
-    const declared = /export const CHAT_MAX_RETRIEVED_MEMORIES = (\d+);/u.exec(source);
-    expect(readChatRetrievalLimit(REPO_ROOT)).toEqual({ limit: Number(declared[1]) });
+    expect(failed.needed[0].unavailableReason).toBe("route-failed");
   });
 });
 
@@ -598,7 +284,6 @@ function context(overrides = {}) {
     confirmForget: true,
     retainBodies: true,
     recallTrace: true,
-    chatLimit: { limit: LIMIT },
     turnTimeoutMs: 5000,
     learning: { quietMs: 0, maxMs: 2000 },
     ...overrides,
@@ -625,21 +310,16 @@ describe("the trace on an answer probe", () => {
         [{ memoryId: "m-day", reason: "suppressed-by-status" }],
       ),
     });
-    const result = await runScenario(
-      scenario([NEEDS, UNRELATED]),
-      product.instance,
-      context({ chatLimit: { limit: 1 } }),
-    );
+    const result = await runScenario(scenario([NEEDS, UNRELATED]), product.instance, context());
     const [probe, unrelated] = result.probes;
     expect(probe.recallTrace.needed.map((entry) => [entry.key, entry.id, entry.stage])).toEqual([
-      ["room", "m-room", "moved-down"],
+      ["room", "m-room", "admitted-not-supplied"],
       ["day", "m-day", "not-admitted"],
       ["desk", null, "not-stored"],
     ]);
     expect(probe.recallTrace).toMatchObject({
       source: "memory-context-route",
       strictFloor: false,
-      chatLimit: 1,
       includedCount: 2,
       omittedByReason: { "suppressed-by-status": 1 },
     });
@@ -711,24 +391,6 @@ describe("the trace on an answer probe", () => {
     expect(product.calls).not.toContain("POST /api/memory/context");
   });
 
-  it("says the limit could not be read when the run passes none", async () => {
-    const product = fakeProduct({
-      memories: [ROOM],
-      supply: () => false,
-      route: answered([{ memoryId: "m-room", score: 0.4, subscores: {} }], []),
-    });
-    const result = await runScenario(
-      scenario([NEEDS]),
-      product.instance,
-      context({ chatLimit: undefined }),
-    );
-    expect(result.probes[0].recallTrace).toMatchObject({
-      chatLimit: null,
-      limitFailure: "chat-limit-unreadable",
-    });
-    expect(result.probes[0].recallTrace.needed[0].stage).toBe("trace-unavailable");
-  });
-
   it.each([
     ["an HTTP error", async () => ({ status: 500, json: {} }), "http-error", 500],
     [
@@ -780,7 +442,7 @@ describe("a probe that expects answer terms", () => {
     });
     const result = await runScenario(s, product.instance, context());
     expect(result.probes[0].recallTrace.needed).toMatchObject([
-      { key: "room", id: "m-room", suppliedByChat: false, stage: "refused-by-chat" },
+      { key: "room", id: "m-room", suppliedByChat: false, stage: "admitted-not-supplied" },
     ]);
     // The score never sees it.
     expect(result.probes[0]).not.toHaveProperty("neededMissing");
