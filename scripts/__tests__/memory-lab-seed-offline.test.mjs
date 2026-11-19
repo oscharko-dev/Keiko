@@ -58,10 +58,15 @@ describe("the seeded demonstration scenarios", () => {
     if (root) rmSync(root, { recursive: true, force: true });
   });
 
+  // The lexical-only run is made once, by whichever test needs it first, and shared: a test that
+  // compares with it must not depend on another test having run, and the lab is not run twice.
+  let lexicalRun;
+  const lexical = () => (lexicalRun ??= runLab(options(root, "lexical"), () => undefined));
+
   it(
     "seeds the store, answers a two-memory question, names why an earlier value is missing, and scores no seeded record as learned",
     async () => {
-      const summary = await runLab(options(root, "lexical"), () => undefined);
+      const summary = await lexical();
       expect(summary.runs).toBe(4);
       expect(summary.failedUnits).toBe(0);
       expect(summary.evidenceFindings).toBe(0);
@@ -129,6 +134,7 @@ describe("the seeded demonstration scenarios", () => {
   it(
     "embeds the accepted seeded records when the run has the scripted embedding model, and the two runs cannot be compared",
     async () => {
+      await lexical();
       await runLab(options(root, "embedded", { embedder: true }), () => undefined);
       const needs = unit(root, "embedded", "seed-needs-two-en", "product");
       // 32 accepted records (2 explicit and 30 filler) are embedded; the 10 archived are not.
