@@ -366,9 +366,13 @@ fail-closed by `scenario.mjs`):
   in one unit, a sentence or a list item. Units are the pieces of the answer split on `.`, `!`, `?`,
   `;` and line breaks, nothing smarter. So "Atlas uses PostgreSQL. Borealis uses MongoDB." and a list
   with one item per project pass, while the swapped answer fails, although it carries both terms. A
-  fact without `with` is carried wherever its terms occur in the answer, exactly as before. Limit: one
-  sentence that names both subjects before both values ("Atlas and Borealis use PostgreSQL and
-  MongoDB") passes either way round. Keys are unique within `truth`; a duplicate is refused.
+  fact without `with` is carried wherever its terms occur in the answer, exactly as before. Limits in
+  both directions: one sentence that names both subjects before both values ("Atlas and Borealis use
+  PostgreSQL and MongoDB") passes either way round; and a correct answer fails when subject and value
+  fall into different units, for example a heading or a parent list item above the value
+  ("**Atlas**" on one line, "PostgreSQL" on the next), a dot between them ("Atlas 2.0 uses
+  PostgreSQL") or a pronoun in a later sentence. Read the answer before calling such a probe a
+  failure of the product. Keys are unique within `truth`; a duplicate is refused.
 - `superseded[]`, `forgotten[]`: facts that were true and replaced, or forgotten; a surviving memory
   is stale or a hard violation.
 - `forbidden[]`: content that must never be stored, with a class (`credential`, `identifier`,
@@ -546,7 +550,8 @@ check is called newly failing or gone against it. The totals are sums over every
 of the run, so a run with three repetitions counts a failing check up to three times. A sealed run reports per-arm totals only, never a scenario or a check; its store verdicts
 are masked, so each unit is classified from its unmasked result before it is masked, and only the
 class names and whole-number counts travel on (`failureClassCounts`, also through the encrypted
-progress journal and `--resume`); the sealed totals equal what an open run reports.
+progress journal and `--resume`); the sealed totals equal what an open run without the recall trace
+reports (a sealed run never traces, so it has none of the `needed-*` stage classes).
 
 ### Recall trace
 
