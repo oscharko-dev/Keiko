@@ -132,8 +132,7 @@ embedding family and the 8B size (case-insensitive `8b`: `qwen3-embedding-8b`,
 nobody measured is never judged at the calibrated floor.
 
 Measured 2026-11-19 with qwen3-embedding-8b in the product's own format (the question with the
-instruction, the memory raw), recomputable from
-`/Users/oscharko/keiko-memory-lab-runs/2026-11-19/geometry/query-all.out`: 54 probes of the lab's
+instruction, the memory raw): 54 probes of the lab's
 seeded scenarios, 34 of them with a needed memory. The 43 needed memories score 0.461 at the lowest,
 0.569 at the tenth percentile and 0.712 at the median. On the 21 probes whose store holds 60 to 560
 unrelated memories, the highest unrelated memory per probe has a median of 0.312 and a maximum of
