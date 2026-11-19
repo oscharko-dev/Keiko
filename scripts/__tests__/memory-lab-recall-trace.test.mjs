@@ -853,6 +853,8 @@ describe("the fact a probe's trace follows", () => {
       fact("spaces", "I prefer spaces over tabs.", [["spaces over tabs"]]),
       fact("theme", "I use the dark theme.", [["dark theme"]]),
       fact("evening", "I read reports abends.", [["abends"]]),
+      // Unrelated to every probe below, but its body shares the common word "dark" with `theme`.
+      fact("font", "I keep a dark terminal font.", [["terminal font"]]),
     ],
     turns: [{ user: "Hello." }],
     probes: [
@@ -868,10 +870,24 @@ describe("the fact a probe's trace follows", () => {
   it("links a term probe to a truth by the scorer's own matcher: its wording, its prefix mark", () => {
     // The failure this pins: raw `includes` linked none of these, so each got `needed: []`.
     expect(keysOf(twoFacts.probes[0])).toEqual(["spaces"]);
+    // The failure this pins: the body of the unrelated `font` truth also contains "dark", so it was
+    // linked too and a stage class was counted for a fact the probe never needed.
     expect(keysOf(twoFacts.probes[1])).toEqual(["theme"]);
     expect(keysOf(twoFacts.probes[2])).toEqual(["evening"]);
     expect(keysOf(twoFacts.probes[3])).toEqual(["spaces"]);
     expect(keysOf(twoFacts.probes[4])).toEqual([]);
+  });
+
+  it("links a truth only when its terms carry every group of the probe's requirement", () => {
+    const two = { id: "g", question: "?", expect: { kind: "answer", terms: [["dark"], ["font"]] } };
+    // `theme` carries "dark" but not "font", `font` carries "font" but not "dark": neither carries both.
+    expect(keysOf(two)).toEqual([]);
+    const both = validateScenario({
+      ...twoFacts,
+      truth: [fact("pair", "Dark terminal font.", [["dark terminal font"]])],
+      probes: [two],
+    });
+    expect(traceWanted(both, two).map((item) => item.label)).toEqual(["pair"]);
   });
 
   it("finds a fact for every answer probe of the shipped corpora", () => {

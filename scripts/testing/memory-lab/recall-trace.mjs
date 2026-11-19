@@ -261,18 +261,28 @@ function limitFor(chatLimit, retrievedCount) {
   return chatLimit;
 }
 
+// A term probe is linked to a truth only when the truth's own terms carry the probe's complete
+// requirement: every term group of the probe has an alternative that the scorer's matcher finds in one
+// of the truth's own term spellings (normalisation, whole words, the `*` prefix). The body is not
+// consulted, so an unrelated truth that merely contains a common word of the probe stays unlinked.
+function carriesAllGroups(truth, probeTerms) {
+  const spellings = truth.terms.flat();
+  return probeTerms.every((group) =>
+    spellings.some((spelling) => matchesTermGroups(spelling, [group])),
+  );
+}
+
 /**
  * The facts a probe's trace follows: the ones it needs (`wantedOf`) and, for a probe that expects
- * answer terms, every truth whose own body the probe's terms match, by the scorer's own matcher
- * (normalisation, whole words, the `*` prefix): the rule the recall analyzer uses to name a probe's
- * target. The second kind exists for the trace only; the score never sees it.
+ * answer terms, every truth whose own terms carry the probe's complete term requirement (all groups,
+ * by the scorer's matcher). The second kind exists for the trace only; the score never sees it.
  */
 export function traceWanted(scenario, probe) {
   const wanted = wantedOf(scenario, probe);
   const terms = probe.expect.terms;
   if (terms === undefined) return wanted;
   const own = scenario.truth
-    .filter((fact) => matchesTermGroups(fact.seed, terms))
+    .filter((fact) => carriesAllGroups(fact, terms))
     .filter((fact) => !wanted.some((item) => item.label === fact.key))
     .map((fact) => ({ label: fact.key, link: { truth: fact.key }, terms: fact.terms }));
   return [...wanted, ...own];
