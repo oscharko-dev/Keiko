@@ -158,6 +158,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "gitChangeSnapshotService", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "gitDelivery", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "gitDiffView", surface: "editor-delivery" },
+  { owner: "keiko-server", emitterPrefix: "gitStatusBounded", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "gitProcessActivity", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "grounded-citation-log", surface: "memory-knowledge" },
   {

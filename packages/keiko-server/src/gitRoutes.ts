@@ -58,6 +58,7 @@ import { DENIED_MESSAGE } from "./files-deny.js";
 import { parseGitBlamePorcelain } from "./gitBlameParser.js";
 import { parseGitEditorUnifiedDiff } from "./gitDiffParser.js";
 import { redactedDiffViewBody, type DiffViewLog } from "./gitDiffView.js";
+import { settleCapCutStatus } from "./gitStatusBounded.js";
 
 // The git core moved to @oscharko-dev/keiko-git (shared with keiko-tools). Route modules and
 // their tests keep importing the process surface from here so the BFF has one seam for it.
@@ -639,7 +640,8 @@ export function parseStatus(
     available: true,
     branch: collected.branch,
     detached: collected.detached,
-    clean: !counts.dirty,
+    // A cut listing proves only the records it shows; the unseen remainder is not "clean".
+    clean: !counts.dirty && !processTruncated,
     stagedCount: counts.stagedCount,
     unstagedCount: counts.unstagedCount,
     untrackedCount: counts.untrackedCount,
@@ -1261,7 +1263,7 @@ export async function handleGitStatus(
       }
       await assertOptionalContainedGitPath(repo, path);
       const relativePath = gitPath(repo.selectedRootPrefix, path);
-      const status = await options.runner(
+      const statusRun = await options.runner(
         [
           ...GIT_BASE_ARGS,
           "-C",
@@ -1279,9 +1281,17 @@ export async function handleGitStatus(
           cwd: repo.repositoryRoot,
           maxBytes: options.maxStatusBytes,
           timeoutMs: options.timeoutMs,
+          // A cap-terminated status is the bounded, truncated answer, not a failed git run (#4113).
+          expectedTruncation: true,
           ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
         },
       );
+      const status = settleCapCutStatus(statusRun, {
+        format: "v1",
+        surface: "status",
+        maxBytes: options.maxStatusBytes,
+        log: diffViewLog(ctx, deps, rawOptions),
+      });
       if (status.exitCode !== 0) {
         const reason = classifyFailure(status);
         const body = genericUnavailable(

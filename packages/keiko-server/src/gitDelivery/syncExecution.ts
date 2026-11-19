@@ -36,6 +36,7 @@ import {
 } from "../gitRoutes.js";
 import { parsePorcelainV2Branch, type PorcelainV2Status } from "../gitPorcelainStatus.js";
 import { observedGitRunner } from "../gitProcessActivity.js";
+import { settleCapCutStatus, type BoundedStatusLog } from "../gitStatusBounded.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
@@ -74,6 +75,8 @@ interface NormalizedSyncSeams {
   readonly networkRunner: GitProcessRunner;
   readonly maxBytes: number;
   readonly timeoutMs: number;
+  // Where a byte-cap-cut status read records that it was bounded (never a failed run).
+  readonly statusLog: BoundedStatusLog;
 }
 
 // An injected `seams.runner` overrides BOTH runners so tests stay deterministic; in production the
@@ -91,7 +94,36 @@ function normalizeSeams(seams: GitDeliverySyncSeams): NormalizedSyncSeams {
     networkRunner: observe(seams.runner ?? defaultGitNetworkProcessRunner),
     maxBytes: seams.maxBytes ?? DEFAULT_SYNC_MAX_BYTES,
     timeoutMs: seams.timeoutMs ?? DEFAULT_SYNC_TIMEOUT_MS,
+    statusLog: {
+      sink: seams.activityLog ?? processServerLogSink(),
+      correlationId: seams.correlationId,
+    },
   };
+}
+
+// `git status` over a large untracked tree can outgrow the sync byte cap. The cut is a bounded
+// read: the branch header (branch, upstream, ahead, behind) survives and only the change records
+// are partial, so the read must not fail the preview or the post-sync re-read (#4113).
+function readStatus(
+  repoRoot: string,
+  seams: NormalizedSyncSeams,
+  surface: "sync-preview" | "sync-post-state",
+): Promise<GitProcessResult> {
+  return runWith(
+    seams.readRunner,
+    repoRoot,
+    seams,
+    ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"],
+    undefined,
+    true,
+  ).then((result) =>
+    settleCapCutStatus(result, {
+      format: "v2",
+      surface,
+      maxBytes: seams.maxBytes,
+      log: seams.statusLog,
+    }),
+  );
 }
 
 function runWith(
@@ -100,11 +132,13 @@ function runWith(
   seams: NormalizedSyncSeams,
   args: readonly string[],
   classifyFailure?: (result: GitProcessResult) => string | undefined,
+  expectedTruncation = false,
 ): Promise<GitProcessResult> {
   return runner([...GIT_BASE_ARGS, "-C", repoRoot, ...args], {
     cwd: repoRoot,
     maxBytes: seams.maxBytes,
     timeoutMs: seams.timeoutMs,
+    ...(expectedTruncation ? { expectedTruncation: true } : {}),
     ...(classifyFailure === undefined ? {} : { classifyFailure }),
   });
 }
@@ -203,20 +237,17 @@ export async function buildSyncPreview(
   seams: GitDeliverySyncSeams = {},
 ): Promise<GitSyncPreview> {
   const normalized = normalizeSeams(seams);
-  const status = await runGit(repoRoot, normalized, [
-    "status",
-    "--porcelain=v2",
-    "--branch",
-    "-z",
-    "--untracked-files=all",
-  ]);
+  const status = await readStatus(repoRoot, normalized, "sync-preview");
   if (status.exitCode !== 0) {
     throw new Error("git status failed for the sync preview");
   }
   const parsed = parsePorcelainV2Branch(status.stdout);
   const remotesResult = await runGit(repoRoot, normalized, ["remote"]);
   const remoteNames = remotesResult.exitCode === 0 ? parseRemoteNames(remotesResult.stdout) : [];
-  return previewFor(operation, parsed, remote, hasRequestedRemote(remoteNames, remote));
+  // A cut status proves the tree changed: only a longer-than-cap listing is ever cut, and the
+  // header (branch/upstream/ahead/behind) it carried is complete, so `dirty` stays truthful.
+  const complete = { ...parsed, dirty: parsed.dirty || status.truncated };
+  return previewFor(operation, complete, remote, hasRequestedRemote(remoteNames, remote));
 }
 
 // --- execute ---------------------------------------------------------------
@@ -366,13 +397,7 @@ async function readPostState(
   seams: NormalizedSyncSeams,
 ): Promise<Pick<SyncExecuteResult, "branch" | "upstream" | "ahead" | "behind">> {
   try {
-    const status = await runGit(repoRoot, seams, [
-      "status",
-      "--porcelain=v2",
-      "--branch",
-      "-z",
-      "--untracked-files=all",
-    ]);
+    const status = await readStatus(repoRoot, seams, "sync-post-state");
     if (status.exitCode !== 0) return {};
     const parsed = parsePorcelainV2Branch(status.stdout);
     return {

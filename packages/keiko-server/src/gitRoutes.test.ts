@@ -657,6 +657,192 @@ describe("GET /api/git/status", () => {
   });
 });
 
+// A large untracked tree makes `git status` outgrow the byte cap; the runner then kills git and
+// returns this exact shape. That cut is a bounded, truncated answer, not a failed status.
+describe("GET /api/git/status — byte-cap cut (large untracked tree)", () => {
+  const capCut = (
+    stdout: string,
+    overrides: Partial<Awaited<ReturnType<GitProcessRunner>>> = {},
+  ): Awaited<ReturnType<GitProcessRunner>> => ({
+    exitCode: null,
+    signal: "SIGTERM",
+    stdout,
+    stderr: "",
+    truncated: true,
+    ...overrides,
+  });
+
+  async function statusFor(
+    statusRun: Awaited<ReturnType<GitProcessRunner>>,
+    activityLog?: ServerLogSink,
+  ): Promise<Awaited<ReturnType<typeof handleGitStatus>>> {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(statusRun);
+    const base = deps(runner);
+    return handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}`, "corr-status-cut-01"),
+      activityLog === undefined
+        ? base
+        : { ...base, gitRouteOptions: { ...base.gitRouteOptions, runner, activityLog } },
+    );
+  }
+
+  it.each([
+    {
+      name: "inside a plain record",
+      stdout: "## main...origin/main [ahead 1]\0 M a.ts\0?? node_modules/pkg/ind",
+      paths: ["a.ts"],
+    },
+    {
+      name: "right after a NUL",
+      stdout: "## main\0 M a.ts\0?? b.ts\0",
+      paths: ["a.ts", "b.ts"],
+    },
+    {
+      name: "inside the old-path record of a rename",
+      stdout: "## main\0 M a.ts\0R  renamed.ts\0old-na",
+      paths: ["a.ts"],
+    },
+    {
+      name: "right after the first record of a rename",
+      stdout: "## main\0 M a.ts\0R  renamed.ts\0",
+      paths: ["a.ts"],
+    },
+    {
+      name: "after a complete rename pair",
+      stdout: "## main\0R  renamed.ts\0old.ts\0?? half",
+      paths: ["renamed.ts"],
+    },
+  ])("answers a bounded status when the cap cut it $name", async ({ stdout, paths }) => {
+    const activity = captureActivityLog();
+
+    const result = await statusFor(capCut(stdout), activity.sink);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      state: "available",
+      available: true,
+      branch: "main",
+      truncated: true,
+      clean: false,
+    });
+    const body = result.body as { readonly changes: readonly { readonly path: string }[] };
+    expect(body.changes.map((change) => change.path)).toEqual(paths);
+    expect(JSON.stringify(body.changes)).not.toContain("old-na");
+    expect(JSON.stringify(body.changes)).not.toContain("node_modules");
+    // The cap is the declared outcome of this read, so the observer records no failed git run.
+    expect(activity.withOp("git.process.failed")).toHaveLength(0);
+    expect(activity.withOp("git.status.bounded")).toHaveLength(1);
+  });
+
+  it("keeps a rename pair whole and reads its old path", async () => {
+    const result = await statusFor(capCut("## main\0R  renamed.ts\0old.ts\0?? half"));
+
+    expect(result.body).toMatchObject({
+      changes: [{ path: "renamed.ts", oldPath: "old.ts", staged: true }],
+    });
+  });
+
+  it("answers available and truncated when the branch header is the only complete record", async () => {
+    const result = await statusFor(capCut("## feature/x...origin/feature/x [behind 2]\0?? node_"));
+
+    expect(result.body).toMatchObject({
+      available: true,
+      branch: "feature/x",
+      truncated: true,
+      changes: [],
+      // The unseen remainder is not "clean".
+      clean: false,
+    });
+  });
+
+  it("records the bounded cut on the activity log without a body", async () => {
+    const activity = captureActivityLog();
+
+    await statusFor(capCut("## main\0 M a.ts\0?? secret-path/ha"), activity.sink);
+
+    const lines = activity.withOp("git.status.bounded");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      correlationId: "corr-status-cut-01",
+      extra: {
+        surface: "status",
+        shownRecordCount: 2,
+        partialRecordDropped: true,
+        maxBytes: 4096,
+      },
+    });
+    expect(JSON.stringify(lines[0])).not.toContain("secret-path");
+    const persisted = expectActivityLogProof(
+      "git.status.bounded.emitted-line",
+      formatActivityLogProofLine(lines[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ surface: "status", partialRecordDropped: true });
+  });
+
+  it.each([
+    { name: "a cut header", run: capCut("## ma") },
+    { name: "an empty cut", run: capCut("") },
+    { name: "a timeout", run: capCut("## main\0 M a.ts\0", { timedOut: true }) },
+    { name: "an abort", run: capCut("## main\0 M a.ts\0", { aborted: true }) },
+    { name: "git error output", run: capCut("## main\0 M a.ts\0", { stderr: "fatal: oops" }) },
+    { name: "an exit status git chose itself", run: capCut("## main\0", { exitCode: 128 }) },
+    {
+      name: "a refusal",
+      run: capCut("## main\0", { refusal: "config-override" as GitRefusalClass }),
+    },
+  ])("keeps $name a failure", async ({ run }) => {
+    const result = await statusFor(run);
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ available: false, state: "unavailable" });
+  });
+
+  it("reads a status larger than the cap from a real repository as bounded and truncated", async () => {
+    await runRealGit(["init", "--quiet", "--initial-branch=trunk"]);
+    for (let dir = 0; dir < 6; dir += 1) {
+      const folder = join(root, "node_modules", `pkg-${String(dir)}`);
+      await mkdir(folder, { recursive: true });
+      for (let file = 0; file < 40; file += 1) {
+        await writeFile(join(folder, `file-with-a-long-name-${String(file)}.js`), "x", "utf8");
+      }
+    }
+    const base = deps(defaultGitProcessRunner);
+    const activity = captureActivityLog();
+
+    const result = await handleGitStatus(
+      ctx(`/api/git/status?root=${encodeURIComponent(root)}`, "corr-status-real-01"),
+      {
+        ...base,
+        gitRouteOptions: {
+          ...base.gitRouteOptions,
+          runner: defaultGitProcessRunner,
+          maxStatusBytes: 2048,
+          maxChanges: 500,
+          activityLog: activity.sink,
+        },
+      },
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      available: true,
+      state: "available",
+      branch: "trunk",
+      truncated: true,
+    });
+    const changes = (result.body as { readonly changes: readonly { readonly path: string }[] })
+      .changes;
+    expect(changes.length).toBeGreaterThan(0);
+    expect(changes.every((change) => change.path.startsWith("node_modules/pkg-"))).toBe(true);
+    expect(changes.every((change) => change.path.endsWith(".js"))).toBe(true);
+    expect(activity.withOp("git.process.failed")).toHaveLength(0);
+    expect(activity.withOp("git.status.bounded")).toHaveLength(1);
+  });
+});
+
 describe("GET /api/git/branches", () => {
   it("returns local branches with current marker and head refs", async () => {
     const runner = vi
