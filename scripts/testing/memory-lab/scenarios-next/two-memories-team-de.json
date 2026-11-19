@@ -4,13 +4,35 @@
   "id": "two-memories-team-de",
   "language": "de",
   "class": "two-memories",
-  "description": "A role fact and a team fact learned in conversation; a direct question that repeats both subjects and an indirect one that shares no word with either. Limit: an answer that needs two memories needs both of them retrieved, and recall matches by word overlap, at most six memories per question. Failure means: needed-memory-missing names the fact that did not reach the model; a direct pass with an indirect failure shows retrieval, not the model, is the limit offline; live it also shows whether the model joins the two. Maintenance: no aged records, so on or off changes nothing; seeded distractors are younger than 94 days.",
+  "description": "A role fact and a reports fact (seeded as plain, non-standing facts, so the standing profile cannot carry them); a direct question that repeats both subjects and an indirect one that shares no word with either. Limit: an answer that needs two memories needs both of them retrieved, and recall matches by word overlap, at most six memories per question. Failure means: needed-memory-missing names the fact that did not reach the model; a direct pass with an indirect failure shows retrieval, not the model, is the limit offline; live it also shows whether the model joins the two. Maintenance: no aged records, so on or off changes nothing; seeded distractors are younger than 94 days. Kind: capability.",
+  "seed": {
+    "records": [
+      {
+        "key": "role",
+        "body": "Ich leite das Team Kreditrisiko.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 6,
+        "truth": "role"
+      },
+      {
+        "key": "reports",
+        "body": "Ich bekomme montags die Berichte meines Teams.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 5,
+        "truth": "reports"
+      }
+    ]
+  },
   "truth": [
     {
       "key": "role",
       "seed": "Ich leite das Team Kreditrisiko.",
       "must": false,
-      "terms": [["Kreditrisiko"]]
+      "terms": [["Kreditrisiko*"]]
     },
     {
       "key": "reports",
@@ -19,26 +41,7 @@
       "terms": [["montags", "Montag*"]]
     }
   ],
-  "turns": [
-    {
-      "user": "Ich leite das Team Kreditrisiko.",
-      "learner": [
-        {
-          "body": "Ich leite das Team Kreditrisiko.",
-          "type": "fact"
-        }
-      ]
-    },
-    {
-      "user": "Ich bekomme montags die Berichte meines Teams.",
-      "learner": [
-        {
-          "body": "Ich bekomme montags die Berichte meines Teams.",
-          "type": "fact"
-        }
-      ]
-    }
-  ],
+  "turns": [],
   "probes": [
     {
       "id": "direct",

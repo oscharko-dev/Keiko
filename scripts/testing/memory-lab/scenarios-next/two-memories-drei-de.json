@@ -4,9 +4,36 @@
   "id": "two-memories-drei-de",
   "language": "de",
   "class": "two-memories",
-  "description": "Three facts that together answer one question (role, team size, location) among eight near-topic facts about another team. Limit: at most six memories are sent per question, ranked by word overlap, so near-topic facts can crowd out facts the answer needs. Failure means: needed-memory-missing names the fact or facts that did not reach the model. Maintenance: no aged records, so on or off changes nothing; seeded distractors are younger than 94 days.",
+  "description": "Three facts (seeded as plain, non-standing facts, so the standing profile cannot carry them) that together answer one question (role, team size, location) among eight near-topic facts about another team. Limit: at most six memories are sent per question, ranked by word overlap, so near-topic facts can crowd out facts the answer needs. Failure means: needed-memory-missing names the fact or facts that did not reach the model. Maintenance: no aged records, so on or off changes nothing; seeded distractors are younger than 94 days. Kind: defect.",
   "seed": {
     "records": [
+      {
+        "key": "role",
+        "body": "Ich bin Teamleiterin der Kundenbetreuung.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 6,
+        "truth": "role"
+      },
+      {
+        "key": "size",
+        "body": "Ich führe sieben Mitarbeitende.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 5,
+        "truth": "size"
+      },
+      {
+        "key": "place",
+        "body": "Ich arbeite in Hannover.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 4,
+        "truth": "place"
+      },
       {
         "key": "revision-1",
         "body": "Das Team Revision hat zwölf Mitarbeitende am Ort Leipzig im Bereich Innenrevision.",
@@ -93,35 +120,7 @@
       "terms": [["Hannover"]]
     }
   ],
-  "turns": [
-    {
-      "user": "Ich bin Teamleiterin der Kundenbetreuung.",
-      "learner": [
-        {
-          "body": "Ich bin Teamleiterin der Kundenbetreuung.",
-          "type": "fact"
-        }
-      ]
-    },
-    {
-      "user": "Ich führe sieben Mitarbeitende.",
-      "learner": [
-        {
-          "body": "Ich führe sieben Mitarbeitende.",
-          "type": "fact"
-        }
-      ]
-    },
-    {
-      "user": "Ich arbeite in Hannover.",
-      "learner": [
-        {
-          "body": "Ich arbeite in Hannover.",
-          "type": "fact"
-        }
-      ]
-    }
-  ],
+  "turns": [],
   "probes": [
     {
       "id": "three",

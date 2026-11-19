@@ -4,7 +4,7 @@
   "id": "two-memories-format-de",
   "language": "de",
   "class": "two-memories",
-  "description": "A format preference and a narrower exception learned as two statements; a direct question and an indirect one. Limit: an answer that needs both the rule and its exception needs both retrieved; the profile carries the preference to every answer but not the exception. Failure means: needed-memory-missing names the exception (or the rule) that did not reach the model. Maintenance: no aged records, so on or off changes nothing; seeded distractors are younger than 94 days.",
+  "description": "A format preference and a narrower exception learned as two statements; a direct question and an indirect one. Limit: an answer that needs both the rule and its exception needs both retrieved; the profile carries the preference to every answer but not the exception. Failure means: needed-memory-missing names the exception (or the rule) that did not reach the model. Maintenance: no aged records, so on or off changes nothing; seeded distractors are younger than 94 days. Kind: capability.",
   "truth": [
     {
       "key": "rule",
@@ -50,7 +50,7 @@
     },
     {
       "id": "indirect",
-      "question": "In welcher Form erreichen mich Zusammenfassungen, selbst wenn es um Unternehmenskunden geht?",
+      "question": "In welcher Form erreichen mich Zusammenfassungen, auch wenn es um Kunden aus dem Mittelstand geht?",
       "expect": {
         "kind": "answer",
         "needs": ["rule", "exception"]
