@@ -56,6 +56,15 @@ const MAX_LEVEL: Readonly<Record<SignalName, number>> = {
 const SIGNALS = Object.keys(MAX_LEVEL) as readonly SignalName[];
 const RUNS = 300;
 
+// A frequency floor says that the generator reaches a situation often enough for the property to
+// mean something. It is checked from the suite's own run count upwards, where it was validated. A
+// shorter run is a replay of one seed (KEIKO_PROPERTY_RUNS=1 with KEIKO_PROPERTY_SEED): there the
+// correctness assertions alone decide, and a sampling quota must not replace the counterexample.
+function expectFloor(count: number, runs: number, share: number): void {
+  if (runs < RUNS) return;
+  expect(count).toBeGreaterThan(runs * share);
+}
+
 function randomSpec(random: Random, constant: ReadonlyMap<SignalName, number>): Spec {
   const draw = (name: SignalName): number =>
     constant.get(name) ?? random.integer(0, MAX_LEVEL[name]);
@@ -269,12 +278,12 @@ describe("rrf fusion — tie-aware properties (#4228)", () => {
     const { runs } = propertySettings({ name, runs: RUNS });
     // Vacuity: most cases held exactly equal AND different fused scores, and the other ids did
     // reorder the records inside an equal run (the id tie-break was exercised, not skipped).
-    expect(tiedCases).toBeGreaterThan(runs * 0.5);
-    expect(distinctCases).toBeGreaterThan(runs * 0.9);
-    expect(idOrderedTies).toBeGreaterThan(runs * 0.2);
+    expectFloor(tiedCases, runs, 0.5);
+    expectFloor(distinctCases, runs, 0.9);
+    expectFloor(idOrderedTies, runs, 0.2);
     // Vacuity for the graph signal: a tied group straddled the cut, and an edge pointed into it.
-    expect(straddled).toBeGreaterThan(runs * 0.2);
-    expect(edgeIntoGroup).toBeGreaterThan(runs * 0.1);
+    expectFloor(straddled, runs, 0.2);
+    expectFloor(edgeIntoGroup, runs, 0.1);
   });
 
   it("a signal that is constant across all candidates never changes the order", async () => {
@@ -314,8 +323,8 @@ describe("rrf fusion — tie-aware properties (#4228)", () => {
     });
     const { runs } = propertySettings({ name, runs: RUNS });
     // Vacuity: a zero constant is trivial, so most cases used a positive one; pairs were compared.
-    expect(positiveConstant).toBeGreaterThan(runs * 0.3);
-    expect(comparedPairs).toBeGreaterThan(runs * 10);
+    expectFloor(positiveConstant, runs, 0.3);
+    expectFloor(comparedPairs, runs, 10);
   });
 
   it("raising one record's subscore on one signal never lowers its position", async () => {
@@ -355,7 +364,7 @@ describe("rrf fusion — tie-aware properties (#4228)", () => {
     });
     const { runs } = propertySettings({ name, runs: RUNS });
     // Vacuity: nearly every case raised a signal, and the record actually climbed in a share of them.
-    expect(raised).toBeGreaterThan(runs * 0.9);
-    expect(climbed).toBeGreaterThan(runs * 0.1);
+    expectFloor(raised, runs, 0.9);
+    expectFloor(climbed, runs, 0.1);
   });
 });
