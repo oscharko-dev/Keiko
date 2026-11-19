@@ -1056,14 +1056,14 @@ describe("applyForgets refuses to delete history even from a plan that names it 
     const puts: unknown[] = [];
     const sink: MemoryAuditSink = {
       evidenceStore: {
-        put: (...args: unknown[]) => {
+        put: (...args: unknown[]): string => {
           puts.push(args);
           return "";
         },
         list: () => [],
         get: () => undefined,
         delete: () => undefined,
-      } as unknown as MemoryAuditSink["evidenceStore"],
+      },
       redactString: (value) => value,
     };
     const counts = zeroCounts();
