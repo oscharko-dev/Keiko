@@ -67,25 +67,9 @@ function beyondLimit({ position, scoreRank, limit }) {
 
 const verdict = (stage, reason) => (reason === undefined ? { stage } : { stage, reason });
 
-/**
- * The one derivation of a needed fact's stage, with the closed reason when it is `trace-unavailable`.
- * Inputs as `neededStage`.
- */
-export function neededVerdict({
-  storeKnown = true,
-  traceAvailable,
-  limit,
-  suppliedByChat,
-  id,
-  position,
-  scoreRank,
-  omittedReason,
-  supplied,
-}) {
-  if (suppliedByChat) return verdict("supplied");
-  if (!storeKnown) return verdict("trace-unavailable", "store-unreadable");
-  if (id === null) return verdict("not-stored");
-  if (!traceAvailable) return verdict("trace-unavailable", "route-failed");
+// The stage of a memory the route knows (it exists and the route answered), by what the route and the
+// chat's block say about it.
+function routeVerdict({ limit, position, scoreRank, omittedReason, supplied }) {
   const ranked = routePosition({ position, omittedReason });
   if (ranked === null) return verdict(omittedReason === null ? "not-a-candidate" : "not-admitted");
   if (limit === null) return verdict("trace-unavailable", "chat-limit-unreadable");
@@ -93,6 +77,18 @@ export function neededVerdict({
   if (block === "refused") return verdict("refused-by-chat");
   if (block === "unplaceable") return verdict("trace-unavailable", "chat-block-unplaceable");
   return verdict(beyondLimit({ position, scoreRank, limit }));
+}
+
+/**
+ * The one derivation of a needed fact's stage, with the closed reason when it is `trace-unavailable`.
+ * Inputs as `neededStage`.
+ */
+export function neededVerdict({ storeKnown = true, traceAvailable, suppliedByChat, id, ...route }) {
+  if (suppliedByChat) return verdict("supplied");
+  if (!storeKnown) return verdict("trace-unavailable", "store-unreadable");
+  if (id === null) return verdict("not-stored");
+  if (!traceAvailable) return verdict("trace-unavailable", "route-failed");
+  return routeVerdict(route);
 }
 
 /**
