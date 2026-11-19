@@ -186,7 +186,7 @@
       }
     },
     "keiko-memory-vault": {
-      "files": 24,
+      "files": 25,
       "uncoveredFiles": 0,
       "uncoveredLines": 97,
       "totalLines": 1106,
