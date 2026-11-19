@@ -57,12 +57,15 @@ const SIGNALS = Object.keys(MAX_LEVEL) as readonly SignalName[];
 const RUNS = 300;
 
 // A frequency floor says that the generator reaches a situation often enough for the property to
-// mean something. It is checked from the suite's own run count upwards, where it was validated. A
-// shorter run is a replay of one seed (KEIKO_PROPERTY_RUNS=1 with KEIKO_PROPERTY_SEED): there the
-// correctness assertions alone decide, and a sampling quota must not replace the counterexample.
+// mean something. The exact share is checked from the suite's own run count upwards, where it was
+// validated. A shorter but still substantial run (KEIKO_PROPERTY_RUNS set lower on purpose) must at
+// least have reached the situation once, so it cannot pass vacuously. A handful of runs is a replay
+// of one seed (KEIKO_PROPERTY_RUNS=1 with KEIKO_PROPERTY_SEED): there the correctness assertions
+// alone decide, and a sampling quota must not replace the counterexample.
+const MIN_RUNS_FOR_ANY_FLOOR = 50;
 function expectFloor(count: number, runs: number, share: number): void {
-  if (runs < RUNS) return;
-  expect(count).toBeGreaterThan(runs * share);
+  if (runs >= RUNS) expect(count).toBeGreaterThan(runs * share);
+  else if (runs >= MIN_RUNS_FOR_ANY_FLOOR) expect(count).toBeGreaterThan(0);
 }
 
 function randomSpec(random: Random, constant: ReadonlyMap<SignalName, number>): Spec {
@@ -228,6 +231,24 @@ function* shrinkSpecs<T extends { readonly specs: readonly Spec[] }>(
 }
 
 describe("rrf fusion — tie-aware properties (#4228)", () => {
+  it("enforces a frequency floor wherever a run is long enough to mean something", () => {
+    expect(() => {
+      expectFloor(RUNS * 0.2, RUNS, 0.2);
+    }).toThrow();
+    expect(() => {
+      expectFloor(RUNS * 0.2 + 1, RUNS, 0.2);
+    }).not.toThrow();
+    expect(() => {
+      expectFloor(0, MIN_RUNS_FOR_ANY_FLOOR, 0.2);
+    }).toThrow();
+    expect(() => {
+      expectFloor(1, MIN_RUNS_FOR_ANY_FLOOR, 0.2);
+    }).not.toThrow();
+    expect(() => {
+      expectFloor(0, 1, 0.2);
+    }).not.toThrow();
+  });
+
   it("permutation invariance: other ids change the order only between exactly equal fused scores", async () => {
     const name = "rrf: permuting memory ids never reorders records with different fused scores";
     let tiedCases = 0;

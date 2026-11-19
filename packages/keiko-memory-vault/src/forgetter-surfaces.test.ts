@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -28,12 +28,25 @@ function scanSources(directory: string): readonly string[] {
   }
 }
 
+// True for a directory, false only when nothing exists at the path. Any other error (for example a
+// src/ directory that cannot be read) is thrown, so it cannot drop a package from the inventory.
+function isExistingDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw new Error(`cannot inspect ${path} for forgetter surface writers`, { cause: error });
+  }
+}
+
 function allProductionSources(): readonly string[] {
   // An entry of packages/ without a src/ directory holds no production source and is skipped on
-  // purpose; every src/ directory that exists is scanned completely.
+  // purpose; every src/ directory that exists is scanned completely. Tombstones are written by
+  // TypeScript sources of the packages and of the root src/ only (.ts, .mts); the UI never writes
+  // one, so .tsx is not part of this inventory.
   const packageSrcDirs = readdirSync(PACKAGES_DIR)
     .map((name) => join(PACKAGES_DIR, name, "src"))
-    .filter((dir) => existsSync(dir) && statSync(dir).isDirectory());
+    .filter(isExistingDirectory);
   return [...packageSrcDirs, ROOT_SRC_DIR].flatMap(scanSources);
 }
 
@@ -68,6 +81,14 @@ describe("forgetter surface classification (#4223)", () => {
   it("fails the inventory when a source tree cannot be scanned, naming the directory", () => {
     const missing = join(PACKAGES_DIR, "no-such-package", "src");
     expect(() => scanSources(missing)).toThrow(`cannot scan ${missing}`);
+  });
+
+  it("skips a path where nothing exists and fails for one it cannot inspect", () => {
+    expect(isExistingDirectory(join(PACKAGES_DIR, "no-such-package", "src"))).toBe(false);
+    expect(isExistingDirectory(PACKAGES_DIR)).toBe(true);
+    // A path below a regular file cannot be inspected (ENOTDIR): that is an error, not an absence.
+    const belowAFile = join(fileURLToPath(import.meta.url), "src");
+    expect(() => isExistingDirectory(belowAFile)).toThrow(`cannot inspect ${belowAFile}`);
   });
 
   it("classifies each surface exactly once, as a person's or as unattended", () => {

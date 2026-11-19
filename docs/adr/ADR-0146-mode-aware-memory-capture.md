@@ -462,8 +462,10 @@ bodies or user text.
   (`memory-center`), and also when the surface is unknown: a new or mistyped writer fails closed, so
   a forgotten fact never comes back. Only the explicitly unattended surfaces do not refuse:
   `memory-maintenance` and operator `retention`, a storage policy that records that Keiko removed a
-  record, not that a person refused the fact. Their tombstones stay in the ledger. Operator retention tombstones therefore no longer refuse a statement, which reverses what the first
-  #4223 change recorded. Retention and maintenance never revive a fact the person rejected: an
+  record, not that a person refused the fact. Their tombstones stay in the ledger.
+
+  Operator retention tombstones therefore no longer refuse a statement, which reverses what the
+  first #4223 change recorded. Retention and maintenance never revive a fact the person rejected: an
   unattended tombstone still refuses when it removed a `rejected` record (its stored original
   status). It also refuses when it records no original status at all: such a row was written before
   vault schema v4 added the column, a rejection can no longer be ruled out for it, and the predicate
