@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "long-horizon-berichte-de",
+  "language": "de",
+  "class": "long-horizon",
+  "description": "Eight simulated weeks of history: 180 unrelated facts, a reinforced format preference, a meeting day corrected 10 days ago, a one-off parking fact never repeated and a stable department fact stated 130 days ago. Limit: decay is a flat 45-day half-life and a never-reused one-off is recalled as if it were current; a stable fact left unused for four months is archived by maintenance; an earlier value is never supplied. Failure means: the product cannot hold a long history faithfully (stale one-off asserted, valid old fact gone, earlier value unavailable). Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact and the superseded record are expected to be archived or removed).",
+  "seed": {
+    "records": [
+      {
+        "key": "format",
+        "body": "Ich bevorzuge Statusberichte als Tabellen mit einer Zeile pro Vorgang.",
+        "type": "preference",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 50,
+        "accessCount": 6,
+        "lastAccessDays": 3,
+        "truth": "format"
+      },
+      {
+        "key": "day-old",
+        "body": "Das Teamtreffen findet dienstags statt.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "superseded",
+        "ageDays": 40,
+        "earlier": "day-before"
+      },
+      {
+        "key": "day-new",
+        "body": "Das Teamtreffen findet donnerstags statt.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 10,
+        "supersedes": "day-old",
+        "truth": "day"
+      },
+      {
+        "key": "parking",
+        "body": "Mein Parkplatz für die Auditwoche ist Nummer 47 in der Tiefgarage.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 55,
+        "truth": "parking"
+      },
+      {
+        "key": "dept",
+        "body": "Meine Abteilung heißt Kreditrisiko Mittelstand.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 130,
+        "truth": "dept"
+      }
+    ],
+    "filler": [
+      {
+        "count": 180,
+        "status": "accepted",
+        "minAgeDays": 1,
+        "maxAgeDays": 56,
+        "seed": 101,
+        "scope": "user",
+        "type": "semantic-fact"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "format",
+      "seed": "Ich bevorzuge Statusberichte als Tabellen mit einer Zeile pro Vorgang.",
+      "must": false,
+      "terms": [["Tabelle*"]]
+    },
+    {
+      "key": "day",
+      "seed": "Das Teamtreffen findet donnerstags statt.",
+      "must": false,
+      "terms": [["Donnerstag*"]]
+    },
+    {
+      "key": "parking",
+      "seed": "Mein Parkplatz für die Auditwoche ist Nummer 47 in der Tiefgarage.",
+      "must": false,
+      "terms": [["Parkplatz"], ["47"]]
+    },
+    {
+      "key": "dept",
+      "seed": "Meine Abteilung heißt Kreditrisiko Mittelstand.",
+      "must": false,
+      "terms": [["Kreditrisiko"]]
+    }
+  ],
+  "superseded": [
+    {
+      "key": "day-before",
+      "terms": [["Dienstag*"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "format-now",
+      "question": "Wie soll ich meine Statusberichte aufbauen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabelle*"]]
+      }
+    },
+    {
+      "id": "day-now",
+      "question": "An welchem Tag findet das Teamtreffen statt?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Donnerstag*"]],
+        "forbidden": [["Dienstag*"]]
+      }
+    },
+    {
+      "id": "day-before",
+      "question": "An welchem Tag fand das Teamtreffen früher statt?",
+      "expect": {
+        "kind": "answer",
+        "earlier": ["day-before"]
+      }
+    },
+    {
+      "id": "parking-stale",
+      "question": "Welchen Parkplatz nutze ich heute?",
+      "expect": {
+        "kind": "abstain"
+      }
+    },
+    {
+      "id": "dept-old",
+      "question": "Wie heißt meine Abteilung?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Kreditrisiko"]]
+      }
+    }
+  ]
+}

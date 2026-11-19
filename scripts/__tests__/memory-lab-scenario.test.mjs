@@ -191,6 +191,18 @@ describe("memory lab scenario format", () => {
     expect(() => loadScenarioDirectory(directory)).toThrow(/not valid JSON/u);
   });
 
+  it("knows the classes of the next corpus families", () => {
+    for (const name of [
+      "long-horizon",
+      "paraphrase",
+      "scale-window",
+      "two-memories",
+      "earlier-value",
+      "near-miss",
+    ])
+      expect(SCENARIO_CLASSES).toContain(name);
+  });
+
   it("ships a curated set whose classes are all known and whose manifest is stable", () => {
     const scenarios = loadScenarioDirectory(DEFAULT_SCENARIO_DIR);
     expect(scenarios.length).toBeGreaterThanOrEqual(10);

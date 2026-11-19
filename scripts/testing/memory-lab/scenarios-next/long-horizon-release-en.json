@@ -1,0 +1,146 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "long-horizon-release-en",
+  "language": "en",
+  "class": "long-horizon",
+  "description": "Eight simulated weeks: 120 unrelated facts, an editor theme reinforced six times, a release cadence changed nine days ago, a locker number mentioned once 54 days ago and a team name stated 140 days ago. Limit: flat 45-day decay with no hedge for a never-reused one-off, archiving of a still-valid old fact, and no supply of replaced values. Failure means: the product cannot hold a long history faithfully (stale one-off asserted, valid old fact gone, earlier value unavailable). Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact and the superseded record are expected to be archived or removed).",
+  "seed": {
+    "records": [
+      {
+        "key": "theme",
+        "body": "I use the dark theme in my editor.",
+        "type": "preference",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 52,
+        "accessCount": 6,
+        "lastAccessDays": 4,
+        "truth": "theme"
+      },
+      {
+        "key": "cadence-old",
+        "body": "We ship a release every week.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "superseded",
+        "ageDays": 38,
+        "earlier": "cadence-before"
+      },
+      {
+        "key": "cadence-new",
+        "body": "We ship a release every two weeks.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 9,
+        "supersedes": "cadence-old",
+        "truth": "cadence"
+      },
+      {
+        "key": "locker",
+        "body": "I left my badge in locker 118 for the audit week.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 54,
+        "truth": "locker"
+      },
+      {
+        "key": "team",
+        "body": "My team is called Platform Quality.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 140,
+        "truth": "team"
+      }
+    ],
+    "filler": [
+      {
+        "count": 120,
+        "status": "accepted",
+        "minAgeDays": 1,
+        "maxAgeDays": 56,
+        "seed": 102,
+        "scope": "user",
+        "type": "semantic-fact"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "theme",
+      "seed": "I use the dark theme in my editor.",
+      "must": false,
+      "terms": [["dark theme"]]
+    },
+    {
+      "key": "cadence",
+      "seed": "We ship a release every two weeks.",
+      "must": false,
+      "terms": [["every two weeks", "biweekly", "fortnightly", "every 2 weeks"]]
+    },
+    {
+      "key": "locker",
+      "seed": "I left my badge in locker 118 for the audit week.",
+      "must": false,
+      "terms": [["locker"], ["118"]]
+    },
+    {
+      "key": "team",
+      "seed": "My team is called Platform Quality.",
+      "must": false,
+      "terms": [["Platform Quality"]]
+    }
+  ],
+  "superseded": [
+    {
+      "key": "cadence-before",
+      "terms": [["every week", "weekly"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "theme-now",
+      "question": "Which editor theme do I use?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["dark"]]
+      }
+    },
+    {
+      "id": "cadence-now",
+      "question": "How often do we ship a release?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["every two weeks", "biweekly", "fortnightly", "every 2 weeks"]],
+        "forbidden": [["every week", "weekly"]]
+      }
+    },
+    {
+      "id": "cadence-before",
+      "question": "How often did we ship a release before?",
+      "expect": {
+        "kind": "answer",
+        "earlier": ["cadence-before"]
+      }
+    },
+    {
+      "id": "locker-stale",
+      "question": "Which locker do I use today?",
+      "expect": {
+        "kind": "abstain"
+      }
+    },
+    {
+      "id": "team-old",
+      "question": "What is my team called?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Platform Quality"]]
+      }
+    }
+  ]
+}

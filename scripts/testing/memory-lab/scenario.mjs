@@ -40,6 +40,12 @@ export const SCENARIO_CLASSES = Object.freeze([
   "unrelated",
   "anchor-real",
   "anchor-benchmark",
+  "long-horizon",
+  "paraphrase",
+  "scale-window",
+  "two-memories",
+  "earlier-value",
+  "near-miss",
 ]);
 const SCENARIO_DIFFICULTIES = Object.freeze(["plain", "embedded", "split", "noisy"]);
 const FORBIDDEN_CLASSES = Object.freeze([
