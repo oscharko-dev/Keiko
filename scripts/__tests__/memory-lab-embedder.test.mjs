@@ -86,6 +86,31 @@ describe("the configuration with and without an embedding model", () => {
   });
 });
 
+// Starts a scripted server, runs the body, and always closes the server, whatever the body does.
+async function withScriptedServer(options, body) {
+  const server = await startScriptedModelServer(options);
+  try {
+    return await body(server);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+}
+
+describe("the scripted embedding model fixture", () => {
+  it("closes its server when the body throws, so a failed assertion leaks no listener", async () => {
+    let started;
+    await expect(
+      withScriptedServer({}, async (server) => {
+        started = server;
+        expect(server.listening).toBe(true);
+        throw new Error("assertion failed inside the body");
+      }),
+    ).rejects.toThrow("assertion failed");
+    expect(started.listening).toBe(false);
+  });
+});
+
 describe("the scripted embedding model", () => {
   const cosine = (a, b) => a.reduce((sum, value, index) => sum + value * b[index], 0);
 
@@ -108,13 +133,13 @@ describe("the scripted embedding model", () => {
   });
 
   it("serves /v1/embeddings in the OpenAI shape only when asked to, and counts the calls", async () => {
-    const without = await startScriptedModelServer({});
-    const response = await globalThis.fetch(`${without.baseUrl}/embeddings`, {
-      method: "POST",
-      body: JSON.stringify({ model: EMBEDDER_MODEL_ID, input: "x" }),
+    await withScriptedServer({}, async (without) => {
+      const response = await globalThis.fetch(`${without.baseUrl}/embeddings`, {
+        method: "POST",
+        body: JSON.stringify({ model: EMBEDDER_MODEL_ID, input: "x" }),
+      });
+      expect(response.status).toBe(404);
     });
-    expect(response.status).toBe(404);
-    await new Promise((resolve) => without.close(resolve));
     const server = await startScriptedModelServer({ embedder: true });
     try {
       const served = await globalThis.fetch(`${server.baseUrl}/embeddings`, {
