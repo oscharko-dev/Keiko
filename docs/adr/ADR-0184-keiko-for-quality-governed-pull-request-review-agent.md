@@ -452,7 +452,19 @@ readability, style, naming, maintainability, a missing test or configurability) 
 `evidence-mismatch`, unless a demand of the review rules requires that finding. The counter-check
 task therefore carries the same nonce-bound rules block as the Reviewer's task, or the line that
 there are none (R4130-047). The runtime result hands the loaded rules text to the run's
-counter-checks in memory only; the run record keeps its digest, never the text. On the seed runs of 2026-11-06 to
+counter-checks in memory only; the run record keeps its digest, never the text. A refutation
+takes the first reason code that applies, in one ordered list: `evidence-mismatch` for a
+candidate without wrong behaviour (as above, and also when its wrong result needs another
+component to leave out a call that the reviewed code offers as opt-in and no such component exists
+in the head commit; a wrong result that an input to the reviewed code alone produces is confirmed,
+never refuted this way), then
+`guarded-elsewhere`, `cause-not-in-change` and `evidence-mismatch` for any other refutation. The
+task says that the code changes nothing for a refuted candidate. In development iteration 11 one
+counter-check used up its output budget in its attempt, its steered repair and its second session,
+on a candidate whose wrong result needed another component to omit an opt-in hook. The attempt and
+the second session spent most of their budget deciding whether that is a defect; the repair
+decided to refute about halfway and spent much of the rest weighing `evidence-mismatch` against
+`cause-not-in-change`. On the seed runs of 2026-11-06 to
 2026-11-09, the Reviewer filed a report that itself said "no defect" on the named-constants clean
 control twice, and the Counter-checker confirmed both. In two runs the Reviewer named a consequence
 of the off-by-one seed that a later guard catches, so the Counter-checker refuted a real defect.

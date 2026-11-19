@@ -13,11 +13,51 @@ import {
 } from "./prompt.js";
 
 describe("COUNTER_CHECK_INSTRUCTION", () => {
+  // #4130 dev-11: one counter-check used up its 4,096-token output budget in its attempt, its
+  // steered repair and its second session. Its candidate's wrong result needed another component to
+  // omit an opt-in hook. The attempt and the second session spent most of their budget deciding
+  // whether that is a defect; the repair decided to refute about halfway and spent much of the rest
+  // weighing "evidence-mismatch" against "cause-not-in-change", quoting the separate non-defect
+  // rule. The refutation codes are one ordered list, the non-defect rule first. That rule names a
+  // wrong result that needs a component leaving out an opt-in call when no such component exists,
+  // and confirmation takes precedence over it (R4130-090).
+  it("orders the refutation reason codes, the non-defect rule first, and says the choice changes nothing", () => {
+    const at = (text: string): number => COUNTER_CHECK_INSTRUCTION.indexOf(text);
+    const nonDefect = at(
+      '1. "evidence-mismatch" when the candidate describes no wrong behaviour and no demand of the review rules below requires it',
+    );
+    expect(nonDefect).toBeGreaterThan(0);
+    expect(
+      at('2. "guarded-elsewhere": a guard, check or handling you read prevents'),
+    ).toBeGreaterThan(nonDefect);
+    expect(at('3. "cause-not-in-change"')).toBeGreaterThan(at('2. "guarded-elsewhere"'));
+    expect(at('4. "evidence-mismatch": any other way')).toBeGreaterThan(
+      at('3. "cause-not-in-change"'),
+    );
+    // The non-defect rule exists once, inside the list, so no second rule can give another code.
+    expect(COUNTER_CHECK_INSTRUCTION.split("describes no wrong behaviour")).toHaveLength(2);
+    expect(COUNTER_CHECK_INSTRUCTION).toContain(
+      "needs another component to leave out a call that the reviewed code offers as opt-in, and your search finds no such component in the head commit",
+    );
+    // R4130-090: a defect that an input to the reviewed code alone reproduces is confirmed, never
+    // refuted as misuse; an out-of-range argument from a future caller is such an input.
+    expect(COUNTER_CHECK_INSTRUCTION).toContain(
+      "This never applies when an input to the reviewed code alone produces the wrong result: then confirm.",
+    );
+    expect(COUNTER_CHECK_INSTRUCTION).not.toContain("misuses");
+    expect(COUNTER_CHECK_INSTRUCTION).toContain("with the first of these reasonCodes that applies");
+    expect(COUNTER_CHECK_INSTRUCTION).toContain(
+      "every refuted candidate is handled the same way. Do not weigh one reasonCode against another.",
+    );
+  });
+
   it("names the four counter-check tools and the verdict as the only output", () => {
     for (const alias of Object.values(REVIEW_COUNTER_CHECK_TOOL_ALIASES)) {
       expect(COUNTER_CHECK_INSTRUCTION).toContain(alias);
     }
-    expect(COUNTER_CHECK_INSTRUCTION).toContain("exactly once. Text outside it is ignored.");
+    expect(COUNTER_CHECK_INSTRUCTION).toContain(
+      "exactly once, as soon as you have decided. Text outside it is ignored.",
+    );
   });
 
   it("asks for a short check because a check out of time counts as undecided", () => {
