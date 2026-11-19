@@ -84,20 +84,27 @@ export function sourceImportance(record: MemoryRecord): number {
   return SOURCE_IMPORTANCE[record.provenance.sourceKind];
 }
 
+// A subscore that is not a finite number (NaN, ±Infinity) says nothing: it counts as 0. This is the
+// one place it is decided, so the fractional ranks, the weighted-sum baseline that selects the graph
+// high-rank set, the weighted sum itself and the returned subscores all see the same finite value.
+function finite(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
 function baselineSubscores(record: MemoryRecord, query: RankMemoriesQuery): IncludedSubscores {
   return {
-    relevance: lexicalRelevance(query.queryText, record),
-    recency: recencyScore(record.updatedAt, query.nowMs),
-    confidence: record.provenance.confidence,
+    relevance: finite(lexicalRelevance(query.queryText, record)),
+    recency: finite(recencyScore(record.updatedAt, query.nowMs)),
+    confidence: finite(record.provenance.confidence),
     pinned: record.pinned ? 1 : 0,
     correction:
       record.type === "correction" || record.provenance.sourceKind === "accepted-correction"
         ? 1
         : 0,
     graph: 0,
-    semantic: query.semanticById?.get(record.id) ?? 0,
-    strength: query.strengthById?.get(record.id) ?? 0,
-    importance: sourceImportance(record),
+    semantic: finite(query.semanticById?.get(record.id) ?? 0),
+    strength: finite(query.strengthById?.get(record.id) ?? 0),
+    importance: finite(sourceImportance(record)),
   };
 }
 
@@ -317,12 +324,6 @@ export function buildRankBySignal(
   return rankBySignal;
 }
 
-// A subscore that is not a finite number (NaN, ±Infinity) says nothing: it counts as 0, so it can
-// neither poison the sort order of the other records nor earn a better rank than a real zero.
-function signalValue(value: number): number {
-  return Number.isFinite(value) ? value : 0;
-}
-
 // Fractional ("1 2.5 2.5 4") ranking, best subscore first: an equal run occupying positions i..j
 // (1-based) gets the mean rank (i + j) / 2. The ordering inside a run is irrelevant by construction.
 function fractionalRanks(
@@ -330,7 +331,7 @@ function fractionalRanks(
   sig: keyof IncludedSubscores,
 ): ReadonlyMap<MemoryId, number> {
   const ordered = scored
-    .map((m) => ({ id: m.id, value: signalValue(m.subscores[sig]) }))
+    .map((m) => ({ id: m.id, value: m.subscores[sig] }))
     .sort((a, b) => b.value - a.value);
   const ranks = new Map<MemoryId, number>();
   let start = 0;
@@ -370,7 +371,7 @@ function rrfRank(
       const contrib = weights[sig] / (RRF_K + rank);
       fused += contrib;
       // A tied zero still gets a rank, but it supplies no evidence for an inclusion reason.
-      if (signalValue(subscores[sig]) > 0 && contrib > bestContrib) {
+      if (subscores[sig] > 0 && contrib > bestContrib) {
         bestContrib = contrib;
         bestSig = sig;
       }

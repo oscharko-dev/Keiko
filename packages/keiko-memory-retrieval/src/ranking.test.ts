@@ -631,4 +631,59 @@ describe("rankMemories — non-finite subscores say nothing (#4228)", () => {
       expect(ranked.every((e) => Number.isFinite(e.score))).toBe(true);
     }
   });
+
+  // B1 of the audit: the guarantee holds on every path, not only inside the rank building. A
+  // non-finite subscore is sanitised where the subscores are produced, so the weighted sum, the
+  // baseline that selects the graph high-rank set and the returned subscores all see a plain 0.
+  describe("on every path (sanitised where the subscores are produced)", () => {
+    const ids = ["a", "b", "c", "d"];
+    const semantic = (b: number): Map<ReturnType<typeof memoryId>, number> =>
+      new Map([
+        [memoryId("a"), 0.9],
+        [memoryId("b"), b],
+        [memoryId("c"), 0.5],
+        [memoryId("d"), 0.1],
+      ]);
+    const recordsFor = (order: readonly string[]): ReturnType<typeof buildRecord>[] =>
+      order.map((id) => buildRecord({ id, body: "x", updatedAt: now }));
+
+    it.each(["weighted-sum", "rrf"] as const)(
+      "scores, orders and reports a NaN semantic subscore exactly as a 0 (%s)",
+      (fusion) => {
+        const base = { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS, fusion } as const;
+        const dirty = rankMemories(recordsFor(ids), { ...base, semanticById: semantic(NaN) });
+        const zero = rankMemories(recordsFor(ids), { ...base, semanticById: semantic(0) });
+        expect(dirty).toEqual(zero);
+        const entry = dirty.find((e) => e.memoryId === "b");
+        expect(entry?.subscores.semantic).toBe(0);
+        expect(Number.isFinite(entry?.score)).toBe(true);
+      },
+    );
+
+    it.each(["weighted-sum", "rrf"] as const)(
+      "does not let the input order change a graph score next to a NaN record (%s)",
+      (fusion) => {
+        // Cut 2: the NaN record would sit inside or outside depending on the input order of an
+        // inconsistent sort. Its neighbour must score the same for every order.
+        const edge = buildEdge({ from: "n", to: "b" });
+        const edgesByMemory = new Map([
+          [memoryId("n"), [edge]],
+          [memoryId("b"), [edge]],
+        ]);
+        const all = [...ids, "n"];
+        const query = {
+          nowMs: now,
+          weights: DEFAULT_RANKING_WEIGHTS,
+          fusion,
+          semanticById: new Map([...semantic(NaN), [memoryId("n"), 0.2]]),
+        } as const;
+        const options = { edgesByMemory, graphHighRankCount: 2 };
+        const forward = rankMemories(recordsFor(all), query, options);
+        const reversed = rankMemories(recordsFor([...all].reverse()), query, options);
+        expect(reversed).toEqual(forward);
+        // b counts as 0 semantic and is low-ranked, so it is outside the set and n gets no graph score.
+        expect(forward.find((e) => e.memoryId === "n")?.subscores.graph).toBe(0);
+      },
+    );
+  });
 });
