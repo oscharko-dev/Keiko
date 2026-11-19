@@ -6,6 +6,8 @@ import { isRecord, nonEmptyString } from "./set-files.mjs";
 import {
   MAX_FILLER_RECORDS,
   MEMORY_TYPES,
+  LEARNED_CONFIDENCE_RANGE,
+  LEARNED_TYPES,
   SEED_ORIGINS,
   SEED_SCOPES,
   SEED_STATUSES,
@@ -28,6 +30,9 @@ const RECORD_FIELDS = Object.freeze([
   "pinned",
   "origin",
   "standing",
+  "confidence",
+  "mustStay",
+  "explained",
   "supersedes",
   "accessCount",
   "lastAccessDays",
@@ -77,15 +82,48 @@ function validateRecordShape(fail, id, where, record, keys) {
   oneOfIn(fail, id, where, record.status, SEED_STATUSES, "status");
   oneOfIn(fail, id, where, record.scope ?? "project", SEED_SCOPES, "scope");
   ageIn(fail, id, where, record.ageDays, "ageDays");
+  validateLoss(fail, id, where, record);
   optionalBoolean(fail, id, where, record.pinned, "pinned");
   validateOrigin(fail, id, where, record);
 }
 
+// `mustStay` makes the record's disappearance a failure; `explained` says the scenario's own turns
+// (a correction, a forget) account for its loss. Both are about an accepted record.
+function validateLoss(fail, id, where, record) {
+  optionalBoolean(fail, id, where, record.mustStay, "mustStay");
+  optionalBoolean(fail, id, where, record.explained, "explained");
+  if (record.mustStay === true && record.explained === true)
+    fail(id, `${where} cannot be both mustStay and explained`);
+  if ((record.mustStay === true || record.explained === true) && record.status !== "accepted")
+    fail(id, `${where}.mustStay and explained are about an accepted record`);
+}
+
+// A learned record is one the learner could have written: its types, user scope for a self fact, no
+// pin, the standing mark only on a self identity or constraint fact (a semantic fact in user scope),
+// and a confidence in the range its checks derive. A stated record is the explicit-instruction form.
 function validateOrigin(fail, id, where, record) {
   optionalBoolean(fail, id, where, record.standing, "standing");
   oneOfIn(fail, id, where, record.origin ?? "learned", SEED_ORIGINS, "origin");
-  if (record.standing === true && record.origin === "stated")
-    fail(id, `${where}.standing is a mark of a learned fact; a stated record cannot carry it`);
+  if (record.origin === "stated") {
+    if (record.standing === true || record.confidence !== undefined)
+      fail(id, `${where}: standing and confidence belong to a learned record, not a stated one`);
+    return;
+  }
+  validateLearned(fail, id, where, record);
+}
+
+function validateLearned(fail, id, where, record) {
+  if (!LEARNED_TYPES.includes(record.type))
+    fail(id, `${where}.type must be one of ${LEARNED_TYPES.join("|")} for a learned record`);
+  if (record.pinned === true)
+    fail(id, `${where}: the learner never pins a fact; use origin "stated" for a pinned record`);
+  if (record.standing === true && (record.type !== "semantic-fact" || record.scope === "project"))
+    fail(id, `${where}.standing needs a semantic-fact in user scope`);
+  const { confidence } = record;
+  if (confidence === undefined) return;
+  const { min, max } = LEARNED_CONFIDENCE_RANGE;
+  if (!Number.isFinite(confidence) || confidence < min || confidence > max)
+    fail(id, `${where}.confidence must be between ${String(min)} and ${String(max)}`);
 }
 
 function validateReinforcement(fail, id, where, record) {
@@ -154,6 +192,12 @@ function validateRecords(fail, id, records, scenario) {
   });
 }
 
+function validateFillerOrigin(fail, id, where, group) {
+  oneOfIn(fail, id, where, group.origin ?? "learned", SEED_ORIGINS, "origin");
+  const types = group.origin === "stated" ? MEMORY_TYPES : LEARNED_TYPES;
+  oneOfIn(fail, id, where, group.type ?? "semantic-fact", types, "type");
+}
+
 function validateFillerShape(fail, id, where, group) {
   if (!isRecord(group)) fail(id, `${where} must be an object`);
   unknownFields(fail, id, where, group, FILLER_FIELDS);
@@ -162,8 +206,7 @@ function validateFillerShape(fail, id, where, group) {
   if (!Number.isSafeInteger(group.seed)) fail(id, `${where}.seed must be an integer`);
   oneOfIn(fail, id, where, group.status, SEED_STATUSES, "status");
   oneOfIn(fail, id, where, group.scope ?? "user", SEED_SCOPES, "scope");
-  oneOfIn(fail, id, where, group.origin ?? "learned", SEED_ORIGINS, "origin");
-  oneOfIn(fail, id, where, group.type ?? "semantic-fact", MEMORY_TYPES, "type");
+  validateFillerOrigin(fail, id, where, group);
   ageIn(fail, id, where, group.minAgeDays, "minAgeDays");
   ageIn(fail, id, where, group.maxAgeDays, "maxAgeDays");
   if (group.minAgeDays > group.maxAgeDays) fail(id, `${where}.minAgeDays exceeds maxAgeDays`);

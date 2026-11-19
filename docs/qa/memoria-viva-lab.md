@@ -36,13 +36,13 @@ never imports a memory package; what it measures is what a user would get.
 Offline, deterministic, no network, the curated set:
 
 ```bash
-node scripts/testing/memory-lab/run.mjs --out /tmp/memory-lab/offline
+node scripts/testing/memory-lab/run.mjs --out ~/keiko-memory-lab-runs/offline
 ```
 
 Live, against a local OpenAI-compatible endpoint named in an existing gateway configuration:
 
 ```bash
-node scripts/testing/memory-lab/run.mjs --mode live --out /tmp/memory-lab/live --config ~/.keiko-lab/gateway.json --answer-model gemma-4-31b-it --learn-model gemma-4-31b-it --repetitions 3
+node scripts/testing/memory-lab/run.mjs --mode live --out ~/keiko-memory-lab-runs/live --config ~/.keiko-lab/gateway.json --answer-model gemma-4-31b-it --learn-model gemma-4-31b-it --repetitions 3
 ```
 
 A product-arm turn may declare `requireStoredBefore` with the same term groups as a store check.
@@ -404,14 +404,24 @@ then does the instance start. A scenario with a seed may have no `turns` (the hi
   (what its checks derive for a named subject with covered evidence), public, the person's words as the
   evidence span (which is what lets a later statement replace it), and a capture rationale.
   `origin: "stated"` writes what an explicit "Merke dir" writes: `explicit-user-instruction`,
-  confidence 1, no evidence span. Filler groups take `origin` too (default learned).
+  confidence 1, no evidence span, project scope by default (the explicit route stores there today);
+  it may be pinned. Filler groups take `origin` too (default learned).
+- **A learned record must be one the learner could write**, and loading refuses the rest: its type is
+  `semantic-fact`, `preference`, `decision` or `procedural`; it is never `pinned`; `standing` only on
+  a `semantic-fact` in user scope (the learner sets the mark on a self fact labelled identity or
+  constraint); its optional `confidence` lies between 0.4 and 0.85 (default 0.85); and its scope
+  **defaults to `user`**, the scope of a learned fact about the person (a team's fact is project
+  scope and is named explicitly). Remaining differences from a learned record: no source conversation
+  or message ids, no decision payload, and an evidence span equal to the body.
 - A seed is refused in a real-conversation scenario (class `anchor-*`) and in a sealed holdout.
 - A record has a `key` (a slug, unique in the seed), `body`, `type` (the contracts' memory types),
   `scope` (`user` or `project`; default `project`), `status` (`accepted`, `superseded`, `archived` or
   `proposed`) and `ageDays` (how long ago it was created; a superseded record ends when its successor
   began). Optional: `pinned`; `origin` (`learned`, the default, or `stated`, see below) and `standing`
   (the standing-profile mark the learner gives a fact about the person; learned records only);
-  `supersedes` (the key of an older, `superseded`
+  `mustStay` (its disappearance is a failure) and `explained` (the scenario's own turns correct or
+  forget it, so its loss is not charged; a body that matches the scenario's `superseded` or
+  `forgotten` terms counts as explained without the mark); `supersedes` (the key of an older, `superseded`
   record: a `supersedes` edge runs from that record to this one, as in the product's own correction
   path); `accessCount` and `lastAccessDays` (reinforcement: the access counter and the age of the last
   access); `truth` (the key of a scenario truth this record states) or `earlier` (the key of a
@@ -452,12 +462,13 @@ around it: it has no source-message membership (`sourceMessageIds`) and no row i
 so nothing that reads either sees it. Timestamps are backdated, but the product's own access counters
 and the maintenance pass act on them as on any aged record.
 
-After the probes the lab checks the seed. A record that was `accepted` when seeded and is gone or no
-longer accepted is the failure `seeded-record-lost` (its index is the check's key; this includes aged
-filler that the product's maintenance archived, which is a finding, not noise). A seeded superseded
-record the product removed is reported only as information (`after.supersededRemoved` per unit,
-`seedInformation.supersededRemoved` in the summary and a line in `summary.md`): it explains why an
-earlier value could not be recalled. `--no-maintenance` sets the product's own
+After the probes the lab checks the seed. An explicit record that was `accepted` when seeded and is
+gone or no longer accepted is the failure `seeded-record-lost` (its index is the check's key), unless
+the scenario's own turns explain it (see `explained` above); a truth-linked or `mustStay` record is
+never explained away. Reported only as information, never as a failure class: a seeded superseded
+record the product removed (`after.supersededRemoved`), and aged filler that the product's maintenance
+archived or removed (`after.fillerFaded`), as `seedInformation` in the summary and lines in
+`summary.md`. They explain, for instance, why an earlier value could not be recalled. `--no-maintenance` sets the product's own
 `KEIKO_MEMORY_AUTO_MAINTAIN=0` for every instance (the product runs one maintenance pass on the first
 memory-enabled turn), and the manifest records `maintenance` (`on` or `off`); it is provenance like
 the embedder.
@@ -510,7 +521,8 @@ class, per arm and, in an open run, per scenario. Every class is derived from wh
 records, by one rule for every run: `fact-not-stored` (a `must` truth not live in the store and not stored at all), `fact-parked` (stored
 but left `proposed` or archived), `unnecessary-fact-stored`, `stale-fact-live` (both only while the
 record is live, i.e. accepted), `forgotten-fact-returned`, `forbidden-fact-stored` (any status),
-`private-in-project` (the hard counter, one check per record), `seeded-record-lost`, then for a failed answer probe, most
+`private-in-project` (the hard counter, one check per record; a forbidden entry of that class is
+counted once, as this class), `seeded-record-lost`, then for a failed answer probe, most
 specific first, `forbidden-term-in-answer`, `needed-memory-missing` (a `needs` or `earlier` fact never
 reached the model), `relevant-memory-not-supplied` (nothing relevant reached the model),
 `supplied-answer-wrong` (it reached the model and the answer is still wrong); for the other probes
@@ -985,6 +997,16 @@ One row per measured run; raw results stay outside the repository.
 <!-- memory-lab-ledger:end -->
 
 ## Known limits of this version
+
+- **Scores of the existing scenarios are unchanged** by the seed, needs, embedder, maintenance and
+  failure-class work of #4207: the scorecard of `scenarios/` (arms off, product, oracle, offline) is
+  byte-identical (SHA-256 `c6cfbeed516e15129a5b81a91c6ff702dd8b1fa7ff63e9732c316b60dc738529`), and
+  `memory-lab-golden.test.mjs` pins the digest of a three-scenario subset in the suite. What was
+  extended: the manifest (`embedder`, `embeddingModelIds`, `maintenance`), the summary (failure
+  classes, seed information) and the failure-class keys. The instrument digest changed with them.
+- **An `earlier` probe passes on "Markdown, not PDF".** Term matching cannot tell "was" from "is not":
+  an answer that names the replaced value only to deny it still carries its terms. The validator
+  keeps the replaced terms out of the current value, but the scorer cannot read the sentence.
 
 - **Time.** Decay, validity windows and multi-day gaps cannot be exercised live: the server composes
   `now` as an injected function but exposes no override, and handlers call `Date.now()` directly.

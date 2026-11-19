@@ -189,7 +189,7 @@ describe("what a seeded record looks like to the product", () => {
       validateScenario(
         scenario({ seed: { records: [record({ origin: "stated", standing: true })] }, probes: [] }),
       ),
-    ).toThrow("a stated record cannot carry");
+    ).toThrow("belong to a learned record");
   });
 });
 

@@ -332,10 +332,12 @@ function failedUnitList(results) {
 // Seeded superseded records the product removed during the run: information, not a failure. A sealed
 // run carries no seed, so it reports none.
 function seedInformation(results, sealed) {
-  const removed = sealed
-    ? 0
-    : sum(results.map((result) => result.seed?.after?.supersededRemoved ?? 0));
-  return { supersededRemoved: removed };
+  const after = sealed ? [] : results.map((result) => result.seed?.after ?? {});
+  return {
+    supersededRemoved: sum(after.map((entry) => entry.supersededRemoved ?? 0)),
+    fillerArchived: sum(after.map((entry) => entry.fillerFaded?.archived ?? 0)),
+    fillerRemoved: sum(after.map((entry) => entry.fillerFaded?.removed ?? 0)),
+  };
 }
 
 function oracleScopes(results) {
@@ -491,11 +493,17 @@ function scenarioClassLines(arm, byScenario) {
 }
 
 function seedInformationLines(information) {
-  if ((information?.supersededRemoved ?? 0) === 0) return [];
-  return [
-    `Information, not a failure: ${String(information.supersededRemoved)} seeded superseded record(s) were removed by the product during the run, so an earlier value could not be recalled from them.`,
-    "",
-  ];
+  const { supersededRemoved = 0, fillerArchived = 0, fillerRemoved = 0 } = information ?? {};
+  const lines = [];
+  if (supersededRemoved > 0)
+    lines.push(
+      `Information, not a failure: ${String(supersededRemoved)} seeded superseded record(s) were removed by the product during the run, so an earlier value could not be recalled from them.`,
+    );
+  if (fillerArchived + fillerRemoved > 0)
+    lines.push(
+      `Information, not a failure: the product's maintenance faded seeded filler (${String(fillerArchived)} archived, ${String(fillerRemoved)} removed).`,
+    );
+  return lines.length === 0 ? [] : [...lines, ""];
 }
 
 // The failed checks of the run as counts per class (and per scenario in an open run), never a rate.

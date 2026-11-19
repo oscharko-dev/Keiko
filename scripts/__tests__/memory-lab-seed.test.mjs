@@ -45,6 +45,7 @@ function chain() {
         status: "accepted",
         ageDays: 10,
         pinned: true,
+        origin: "stated",
         supersedes: "old",
         accessCount: 3,
         lastAccessDays: 2,

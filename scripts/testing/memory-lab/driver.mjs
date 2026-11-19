@@ -7,7 +7,7 @@ import { mapSequential } from "./corpus/sequence.mjs";
 import { awaitLearning, captureTotal, listMemories, readCaptures } from "./instance.mjs";
 import { retainBodiesFor } from "./isolation.mjs";
 import { matchesTermGroups, scoreProbe, scoreStore } from "./score.mjs";
-import { countBy } from "./seed-plan.mjs";
+import { countBy, seedLoss } from "./seed-plan.mjs";
 
 export const ARMS = Object.freeze(["off", "product", "oracle"]);
 // The explicit path recognizes "Merke dir <fact>"; a colon after "dir" is not an intent today.
@@ -355,13 +355,13 @@ function optionalEvidence({ oracle, poison, poisonIds, seed }) {
 // settled before the store and the ledger are read, otherwise probeCaptures would depend on timing.
 // Learning runs on probe questions too (memory is one switch for recall and learning), so a question
 // the product turns into a memory is counted here instead of passing as recall.
-async function settledAfterProbes(instance, context, memories) {
+async function settledAfterProbes(scenario, instance, context, memories) {
   if (context.arm !== "off")
     await awaitLearning(instance, { ...context.learning, phase: "after the probes" });
   const afterProbes = await listMemories(instance);
   const known = new Set(memories.map((memory) => memory.id));
   return {
-    seed: seedOutcome(instance, afterProbes),
+    seed: seedOutcome(scenario, instance, afterProbes),
     probeCaptures: afterProbes.filter((memory) => !known.has(memory.id)).length,
     captures: await readCaptures(instance),
   };
@@ -369,23 +369,17 @@ async function settledAfterProbes(instance, context, memories) {
 
 // What became of the records the lab placed in the vault before the run: how many exist now, per
 // status, and how many are gone (forgotten or deleted by the product). Counts only.
-function seedOutcome(instance, memories) {
+function seedOutcome(scenario, instance, memories) {
   if (instance.seed === undefined) return undefined;
   const byId = new Map(memories.map((memory) => [memory.id, memory]));
   const { entries, ids } = instance.seed;
   const present = ids.filter((id) => byId.has(id));
-  // Lost: live when seeded, gone or no longer live now (a failure). A removed superseded record is
-  // information only: the product's maintenance may drop it, and the answer then cannot use it.
-  const lostIndexes = entries.flatMap((entry, index) =>
-    entry.status === "accepted" && byId.get(entry.id)?.status !== "accepted" ? [index] : [],
-  );
   return {
     ...instance.seed.report,
     after: {
       byStatus: countBy(present.map((id) => byId.get(id).status)),
       gone: ids.length - present.length,
-      lostIndexes,
-      supersededRemoved: entries.filter((e) => e.status === "superseded" && !byId.has(e.id)).length,
+      ...seedLoss(entries, byId, scenario),
     },
   };
 }
@@ -417,7 +411,7 @@ export async function runScenario(scenario, instance, requested) {
   const memories = await listMemories(instance);
   const scored = memories.filter((memory) => !labIds.has(memory.id));
   const probes = await runProbes(scenario, instance, context);
-  const after = await settledAfterProbes(instance, context, memories);
+  const after = await settledAfterProbes(scenario, instance, context, memories);
   return {
     scenario: scenario.id,
     language: scenario.language,

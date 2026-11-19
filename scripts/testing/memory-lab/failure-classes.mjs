@@ -35,7 +35,10 @@ const LIVE = "accepted";
 function verdictClass(verdict) {
   switch (verdict.verdict) {
     case "forbidden":
-      return "forbidden-fact-stored";
+      // A forbidden entry that names the hard counter's own class is that class, and is counted once.
+      return verdict.class === "private-in-project"
+        ? "private-in-project"
+        : "forbidden-fact-stored";
     case "forgotten-returned":
       return "forgotten-fact-returned";
     case "stale":
@@ -68,10 +71,14 @@ function judgedFailures(verdicts) {
   });
 }
 
+// The counter also counts a private fact stored in project scope, which has no verdict of its own;
+// a verdict already classed private-in-project is one of the counted records, not another.
 function privateInProject(store) {
-  return Array.from({ length: store.counters?.["private-in-project"] ?? 0 }, (_, index) => ({
+  const named = store.verdicts.filter((verdict) => verdictClass(verdict) === "private-in-project");
+  const rest = Math.max(0, (store.counters?.["private-in-project"] ?? 0) - named.length);
+  return Array.from({ length: rest }, (_, index) => ({
     class: "private-in-project",
-    ref: `store:private-in-project:${String(index + 1)}`,
+    ref: `store:private-in-project:${String(named.length + index + 1)}`,
   }));
 }
 

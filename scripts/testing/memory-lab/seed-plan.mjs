@@ -4,6 +4,7 @@
 // replaying weeks of conversation. Nothing here reads a clock, a file or the network: the caller
 // passes `nowMs`, and the same seed and the same `nowMs` always plan the same records, ids and edges.
 import { createHash } from "node:crypto";
+import { matchesTermGroups } from "./score.mjs";
 
 export const SEED_STATUSES = Object.freeze(["accepted", "superseded", "archived", "proposed"]);
 export const SEED_SCOPES = Object.freeze(["user", "project"]);
@@ -27,7 +28,14 @@ const DEFAULT_FILLER_TYPE = "semantic-fact";
 // subject + 0.15 for evidence coverage, the usual routine fact), public, the person's words as the
 // evidence span, and, for a standing fact about the person, the standing retention hint.
 export const SEED_ORIGINS = Object.freeze(["learned", "stated"]);
-const LEARNED_CONFIDENCE = 0.85;
+export const LEARNED_CONFIDENCE_RANGE = Object.freeze({ min: 0.4, max: 0.85 });
+/** The types the learner writes (`TYPE_MAP` of salience.ts); a learned record has no other. */
+export const LEARNED_TYPES = Object.freeze([
+  "semantic-fact",
+  "preference",
+  "decision",
+  "procedural",
+]);
 const LEARNED_RATIONALE = "Automatically inferred from conversation (salience capture)";
 const STANDING_POLICY_KEY = "standing";
 const SUPERSEDED_REASON = "A newer statement by the person replaced this fact.";
@@ -91,11 +99,17 @@ function provenanceOf(spec, atMs) {
   return {
     sourceKind: "system-default",
     capturedAt: atMs,
-    confidence: LEARNED_CONFIDENCE,
+    confidence: spec.confidence ?? LEARNED_CONFIDENCE_RANGE.max,
     sensitivity: "public",
     captureRationale: LEARNED_RATIONALE,
     evidenceSpan: spec.body,
   };
+}
+
+// A learned fact about the person is written in user scope (a team's fact, in project scope, is named
+// explicitly); an explicit "Merke dir" is stored in project scope today.
+function defaultScope(spec) {
+  return spec.scope ?? (spec.origin === "stated" ? "project" : "user");
 }
 
 function recordOf(spec, id, atMs, supersededAtMs, projectId) {
@@ -103,7 +117,7 @@ function recordOf(spec, id, atMs, supersededAtMs, projectId) {
   return {
     id,
     schemaVersion: "1",
-    scope: scopeOf(spec.scope ?? "project", projectId),
+    scope: scopeOf(defaultScope(spec), projectId),
     type: spec.type,
     body: spec.body,
     status: spec.status,
@@ -215,6 +229,9 @@ export function planSeed(seed, { nowMs, projectId }) {
         truth: spec.truth,
         earlier: spec.earlier,
         status: spec.status,
+        body: spec.body,
+        mustStay: spec.mustStay === true,
+        explained: spec.explained === true,
         pinned: spec.pinned === true,
         filler: false,
       })),
@@ -240,5 +257,44 @@ export function describePlan(plan) {
     byScope: countBy(plan.records.map((record) => record.scope.kind)),
     supersedesEdges: plan.edges.length,
     reinforced: plan.access.length,
+  };
+}
+
+// Whether the scenario's own turns account for the loss of an explicit record: the author said so
+// (`explained`), or its body states a replaced or forgotten value of the scenario. A truth-linked or
+// `mustStay` record is never explained away.
+function lossExplained(entry, scenario) {
+  if (entry.mustStay || entry.truth !== undefined) return false;
+  if (entry.explained) return true;
+  const stale = [...(scenario.superseded ?? []), ...(scenario.forgotten ?? [])];
+  return stale.some((fact) => matchesTermGroups(entry.body, fact.terms));
+}
+
+/**
+ * What became of the seeded records after the probes. `lostIndexes` are the failures: an explicit
+ * record that was accepted and is gone or no longer accepted, unless the scenario's own turns explain
+ * it. Information only: seeded superseded records removed, and aged filler the product's maintenance
+ * archived or removed (`fillerFaded`), which is the product's fade, not a defect of one record.
+ */
+export function seedLoss(entries, byId, scenario) {
+  const liveNow = (entry) => byId.get(entry.id)?.status === "accepted";
+  const lostIndexes = entries.flatMap((entry, index) =>
+    !entry.filler &&
+    entry.status === "accepted" &&
+    !liveNow(entry) &&
+    !lossExplained(entry, scenario)
+      ? [index]
+      : [],
+  );
+  const faded = entries.filter(
+    (entry) => entry.filler && entry.status === "accepted" && !liveNow(entry),
+  );
+  return {
+    lostIndexes,
+    fillerFaded: {
+      archived: faded.filter((entry) => byId.has(entry.id)).length,
+      removed: faded.filter((entry) => !byId.has(entry.id)).length,
+    },
+    supersededRemoved: entries.filter((e) => e.status === "superseded" && !byId.has(e.id)).length,
   };
 }

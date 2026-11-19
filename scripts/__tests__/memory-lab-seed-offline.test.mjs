@@ -93,7 +93,9 @@ describe("the seeded demonstration scenarios", () => {
       expect(summary.seedInformation.supersededRemoved).toBe(2);
       const classes = summary.failureClasses.byArm.product;
       expect(classes.total["needed-memory-missing"]).toBe(1);
-      expect(classes.total["seeded-record-lost"]).toBeGreaterThan(0);
+      // Faded filler is information, never a failure class.
+      expect(classes.total["seeded-record-lost"]).toBeUndefined();
+      expect(summary.seedInformation.fillerArchived).toBeGreaterThan(0);
       expect(classes.keys["needed-memory-missing"]).toEqual([
         "seed-earlier-value-en:product:r0:probe:before",
       ]);
