@@ -353,6 +353,8 @@ describe("mostSimilarFacts", () => {
     ["Das war falsch.", "supersede"],
     ["Correction:", "supersede"],
     ["Hallo zusammen.", "new"],
+    ["Das war falsch?", "new"],
+    ["Korrektur?", "new"],
     ["Das war falsch mit dem Termin am Montag in Bonn.", "new"],
   ])("reads the remark %s before a corrected fact (#4223)", (remark, kind) => {
     const known = { id: "old", body: "Ich arbeite in Köln." };
@@ -365,6 +367,15 @@ describe("mostSimilarFacts", () => {
       remark,
     });
     expect(decision.kind).toBe(kind);
+  });
+
+  it.each([
+    ["Ich arbeite im Projekt Atlas an der Korrektur.", "Ich arbeite im Projekt Atlas in Köln."],
+    ["I work on the correction for Atlas.", "I work on Atlas in Cologne."],
+  ])("never reads the noun in %s as a correction", (body, old) => {
+    for (const label of ["update", "contradiction"] as const) {
+      expect(decide(body, body, label, old)).toEqual({ kind: "new" });
+    }
   });
 
   it.each([

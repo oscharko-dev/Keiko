@@ -130,12 +130,13 @@ const STATED_CHANGE_RE = anyWordPattern([
   "das war falsch",
   "das ist falsch",
   "das stimmt nicht",
-  "korrektur",
+  // Only as an introduction: "Korrektur: …", never the noun "an der Korrektur".
+  String.raw`korrektur\s*:`,
   "ich meinte",
   "that was wrong",
   "that['’]s wrong",
   "that is wrong",
-  "correction",
+  String.raw`correction\s*:`,
   "i meant",
 ]);
 // A return to an earlier value: "I use the Everforest theme again". It says the new value is recent,
@@ -533,7 +534,10 @@ export interface FactRelationInput {
 
 // A remark that states a change and no fact of its own: "Das war falsch.", "Korrektur:".
 function changeEvidence(evidence: string, remark: string | undefined): string {
-  if (remark === undefined || !STATED_CHANGE_RE.test(remark)) return evidence;
+  // A question states nothing: "Das war falsch?" asks, it does not correct.
+  if (remark === undefined || remark.trim().endsWith("?") || !STATED_CHANGE_RE.test(remark)) {
+    return evidence;
+  }
   return factWords(remark).length <= MAX_SLOT_WORDS ? `${remark} ${evidence}` : evidence;
 }
 
