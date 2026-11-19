@@ -688,11 +688,12 @@ function calibrationKeys(identity: EmbeddingCalibrationIdentity): readonly strin
 }
 
 // The model the built-in floor was measured on: the Qwen3 embedding family (the one that selects
-// the query instruction) at the 8B size, named by the configured provider model id.
+// the query instruction) at the 8B size, named by the configured provider model id. "8b" must
+// stand alone: neither a longer number ("18b", "0.8b") nor a longer word ("8bit") names that size.
 function isQwen3Embedding8bModel(modelId: string): boolean {
   return (
     isQwen3EmbeddingModel(modelId) &&
-    /(?<![a-z0-9])8b(?![a-z0-9])/u.test(modelId.toLocaleLowerCase("en-US"))
+    /(?<![a-z0-9.])8b(?![a-z0-9])/u.test(modelId.toLocaleLowerCase("en-US"))
   );
 }
 
