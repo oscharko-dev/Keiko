@@ -516,9 +516,80 @@ the embedder.
 
 `scripts/testing/memory-lab/scenarios-next/` holds two tiny demonstration scenarios of these abilities
 (`seed-needs-two-en`, `seed-earlier-value-en`), run offline by `memory-lab-seed-offline.test.mjs`
-(`--scenarios scripts/testing/memory-lab/scenarios-next`). The curated sets in `scenarios/` and
-`scenarios-explicit/` are unchanged, and a new family belongs in a directory of its own until it is
-adopted into a baseline.
+(`--scenarios scripts/testing/memory-lab/scenarios-next`), and the 26 scenarios of the next corpus,
+described below. The curated sets in `scenarios/` and `scenarios-explicit/` are unchanged, and a new
+family belongs in a directory of its own until it is adopted into a baseline.
+
+### The next corpus (`scenarios-next/`)
+
+The next corpus (#4208) is written for headroom: each scenario probes one limit of today's product and
+says what a failure of it means, so a red result can be classified before anyone reads a log. It has six
+families, one scenario class each, in German and English (the paraphrase family also crosses the
+languages, class `paraphrase`, language `mixed`):
+
+| Family | Class           | Scenarios | What it probes                                                                                                                                                                                    |
+| ------ | --------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A      | `long-horizon`  | 5         | Eight simulated weeks of history: a stable fact left unused, a reinforced habit against a newer exception, a fact among near-topic facts, an often-used neighbour that crowds a once-stated fact. |
+| B      | `paraphrase`    | 4         | A fact asked about in other words (or the other language) with no shared content word, with a lexical control question: only an embedding model can pass the paraphrase probe.                    |
+| C      | `scale-window`  | 4         | A valid fact older than 550 archived, ended (superseded) or proposed rows of its scope, and the same statement said again after 210 newer ones.                                                   |
+| D      | `two-memories`  | 5         | An answer that needs two or three memories, direct and indirect, one of them bound to its subject with `with`.                                                                                    |
+| E      | `earlier-value` | 4         | A correction chain, a reversal and a return: the current value, and the value that held before.                                                                                                   |
+| F      | `near-miss`     | 4         | A fact stated for one object asked about for another: the abstain probe and the no-memory probe.                                                                                                  |
+
+Every scenario states the limit, the failure and the kind in its `description`. The contract is a
+sentence each, in this order, and `memory-lab-corpus-next.test.mjs` holds it:
+
+- `Limit:` the product limit the scenario probes, in the product's own terms.
+- `Failure means:` what a red probe says (`needed-memory-missing`, `fact-not-stored`, a leak, ...), so the
+  result is classified without a rerun.
+- `Maintenance:` whether the maintenance pass matters (run with maintenance on or off). It says there is
+  no seed where there is none and speaks of seeded records only where there are some; a seeded
+  accepted record is younger than the age at which maintenance archives it, or reinforced, wherever it
+  says so; a superseded record is spoken of as staying only where one is seeded, and maintenance is
+  never said to remove a superseded row, because since #4223 it keeps it as history.
+- `Kind:` one of four, so a baseline is reported per kind: `defect` (the product does something wrong
+  today), `capability` (one that does not exist yet), `design` (a design question: a valid fact that
+  fades unused is one) and `control` (expected to pass today, so a red result is a regression of the
+  lab or of the product). `long-horizon-distractors-en` and `scale-duplikat-en` are measured live with
+  their text unchanged, so their kind is recorded in the test instead.
+
+The test also scores every probe: an answer built from its own terms passes, an empty one fails, each
+abstain probe fails on a wrong answer, and every answer probe fails on the answer a model gives with no
+memory (recorded per probe in `memory-lab-corpus-next-probes.test.mjs`).
+
+The scale scenarios lean on product constants. They are the product's, the lab restates none of them
+in code, and a scenario written against a changed value is wrong, not the product:
+
+- **500 rows per scope** are read before eligibility: `DEFAULT_LIST_BY_SCOPE_MAX_RESULTS` in
+  `packages/keiko-memory-retrieval/src/types.ts`, passed as `maxResults` by `fetchScoped` in
+  `packages/keiko-memory-retrieval/src/retrieve.ts`, which also asks for forgotten, archived and
+  expired rows. That is why 550 retired or parked rows can push a valid one out of the window.
+- **6 retrieved memories** reach one chat question: `CHAT_MAX_RETRIEVED_MEMORIES` in
+  `packages/keiko-server/src/chat-handlers.ts` (the retrieval default is 12,
+  `DEFAULT_MAX_INCLUDED` in the retrieval `types.ts`).
+- **200 known facts** are compared when the salience pass judges whether a statement is new:
+  `MAX_KNOWN_FACTS` in `packages/keiko-server/src/memory-salience.ts`, gathered scope by scope from
+  accepted and proposed public records. The vault lists a scope pinned first, then by confirmations,
+  then newest first (`listMemoriesByScopeRows` in `packages/keiko-memory-vault/src/memories.ts`), so
+  "the 200 newest" is an approximation. This is the limit `scale-duplikat-en` probes.
+- **94 days** is not a product constant. It is the number the scenario descriptions cite, and it
+  reproduces as the age at which `effectiveStrength` (confidence times a frequency boost, a recency
+  factor and a utility factor) drops an unused record below the archive threshold, for a type whose
+  decay multiplier is 1 and the highest confidence the lab gives a learned record:
+  45 days times log2(0.85 / 0.2), about 93.9 days, where 45 days is `halfLifeMs` and 0.2 is `archiveMaxStrength`
+  of `MEMORY_MAINTENANCE_DEFAULTS` in `packages/keiko-memory-governance/src/maintenance.ts`, 0.85 is
+  `LEARNED_CONFIDENCE_RANGE.max` in `seed-plan.mjs`, and the multipliers are
+  `MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS` in `packages/keiko-contracts/src/memory-contracts.ts`
+  (semantic facts and preferences decay more slowly, so for them the age is higher; episodic records
+  decay faster, so for them it is lower). The corpus uses 94 days as one bound for the types it seeds.
+
+Measurements made with the files of this directory before the scoring audit (the near-miss abstain
+probes without forbidden terms; values a model would pick unprompted in the probes of
+`long-horizon-berichte-de`, `long-horizon-release-en`, `earlier-hotfix-en`, `earlier-theme-en`,
+`earlier-rueckkehr-de`, `paraphrase-pendeln-de`, `paraphrase-buero-de-en`, `scale-archiviert-de`,
+`scale-vorschlaege-en`, `seed-earlier-value-en`, `two-memories-batch-en`, `two-memories-compare-en` and
+`two-memories-format-de`) were taken with different expectations and are not comparable with a run of
+the current files.
 
 ### Probes that need several memories, and probes about an earlier value
 
