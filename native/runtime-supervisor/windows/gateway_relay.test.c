@@ -1,4 +1,4 @@
-/* Rules of the pipe relay's plan and port rewrite (#4068, ADR-0043 D20). Needs no administrator
+/* Rules of the pipe relay's plan and port rewrite (#4068, ADR-0043 D21). Needs no administrator
  * rights and no network: the end-to-end relay through a real AppContainer runs in
  * scripts/testing/test-windows-relay-confinement.mjs. */
 #include "gateway_relay.h"

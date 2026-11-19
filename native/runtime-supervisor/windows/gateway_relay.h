@@ -1,4 +1,4 @@
-/* Pipe-relayed confinement without an installed broker (#4068, ADR-0043 D20).
+/* Pipe-relayed confinement without an installed broker (#4068, ADR-0043 D21).
  *
  * The supervised tree runs in an AppContainer that holds NO network capability, so Windows itself
  * refuses every connection out of it: loopback to the host as well as the internet. A standard user

@@ -441,7 +441,7 @@ static wchar_t *relay_command_line(const wchar_t *self, const wchar_t *plan, con
 }
 
 /* The container a launch runs in: the broker's (with its loopback capability) or, for a relayed
- * launch, one this supervisor created without any network capability (#4068, ADR-0043 D20). */
+ * launch, one this supervisor created without any network capability (#4068, ADR-0043 D21). */
 struct confinement {
   PSID sid;
   /* NULL for a relayed launch: the tree holds no network capability at all. */
@@ -750,7 +750,7 @@ int wmain(int argc, wchar_t **argv) {
   unsigned char launched[8];
   int environment_closed = 0;
   int brokered = argc == 2 && wcscmp(argv[1], L"--gateway-supervised") == 0;
-  /* #4068 (ADR-0043 D20): the same confinement without an installed broker or elevation. */
+  /* #4068 (ADR-0043 D21): the same confinement without an installed broker or elevation. */
   int relayed = argc == 2 && wcscmp(argv[1], L"--relay-supervised") == 0;
   int confined = brokered || relayed;
   struct relay_container relay = {0};

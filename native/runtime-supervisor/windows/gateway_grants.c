@@ -248,6 +248,55 @@ static int inheritable_read_present(PACL dacl, PSID sid) {
   return 0;
 }
 
+/* Whether `ace` allows `sid` the read mask, in specific or generic rights. */
+static int read_allowed(const ACCESS_ALLOWED_ACE *ace, PSID sid) {
+  DWORD read = grant_mask(KEIKO_GRANT_READ);
+  DWORD generic = GENERIC_READ | GENERIC_EXECUTE;
+  return ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && EqualSid((PSID)&ace->SidStart, sid) &&
+         ((ace->Mask & read) == read || (ace->Mask & generic) == generic);
+}
+
+/* Whether the DACL already lets every AppContainer read the directory and everything below it:
+ * an allow entry for the directory itself, one inherited by files and directories, and no deny
+ * entry for the group. A runtime under Program Files carries these by default (#4068). */
+static int packages_read_present(PACL dacl, PSID packages) {
+  ACL_SIZE_INFORMATION size;
+  BYTE inherit = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+  int object = 0, children = 0;
+  if (dacl == NULL || !GetAclInformation(dacl, &size, sizeof(size), AclSizeInformation)) return 0;
+  for (DWORD index = 0; index < size.AceCount; index++) {
+    ACCESS_ALLOWED_ACE *ace = NULL;
+    if (!GetAce(dacl, index, (LPVOID *)&ace) || ace == NULL) return 0;
+    if (ace->Header.AceType == ACCESS_DENIED_ACE_TYPE && EqualSid((PSID)&ace->SidStart, packages))
+      return 0;
+    if (!read_allowed(ace, packages)) continue;
+    if ((ace->Header.AceFlags & INHERIT_ONLY_ACE) == 0 &&
+        (ace->Mask & grant_mask(KEIKO_GRANT_READ)) == grant_mask(KEIKO_GRANT_READ))
+      object = 1;
+    if ((ace->Header.AceFlags & inherit) == inherit) children = 1;
+  }
+  return object && children;
+}
+
+int keiko_gateway_grants_packages_read(_In_z_ const wchar_t *path) {
+  SID_IDENTIFIER_AUTHORITY app = SECURITY_APP_PACKAGE_AUTHORITY;
+  PSID packages = NULL;
+  PACL dacl = NULL;
+  PSECURITY_DESCRIPTOR descriptor = NULL;
+  int present = 0;
+  if (!AllocateAndInitializeSid(&app, SECURITY_BUILTIN_APP_PACKAGE_RID_COUNT,
+                                SECURITY_APP_PACKAGE_BASE_RID, SECURITY_BUILTIN_PACKAGE_ANY_PACKAGE,
+                                0, 0, 0, 0, 0, 0, &packages))
+    return 0;
+  if (GetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, &dacl,
+                            NULL, &descriptor) == ERROR_SUCCESS) {
+    present = packages_read_present(dacl, packages);
+    LocalFree(descriptor);
+  }
+  FreeSid(packages);
+  return present;
+}
+
 typedef BOOL(WINAPI *derive_capability_sids)(LPCWSTR, PSID **, DWORD *, PSID **, DWORD *);
 
 /* Resolved from the already loaded kernelbase.dll: only the umbrella import libraries export it,
@@ -297,13 +346,19 @@ static int ensure_capability(struct keiko_gateway_grant *grant) {
     return 0;
   present = inheritable_read_present(dacl, grant->capability_sid);
   LocalFree(descriptor);
-  return present || change_entry(grant->path, grant->capability_sid, GRANT_ACCESS,
-                                 grant_mask(KEIKO_GRANT_READ)) == ERROR_SUCCESS;
+  return present || keiko_gateway_grants_packages_read(grant->path) ||
+         change_entry(grant->path, grant->capability_sid, GRANT_ACCESS,
+                      grant_mask(KEIKO_GRANT_READ)) == ERROR_SUCCESS;
 }
 
 static int apply_entry(struct keiko_gateway_grants *grants, struct keiko_gateway_grant *grant,
                        PSID tree) {
   if (!plain_directory(grant->path)) return KEIKO_GRANTS_REFUSED_DIRECTORY;
+  /* A directory every AppContainer already reads needs no entry of its own, and one installed by
+   * an administrator could not take one: nothing is written, so nothing is revoked (#4068). */
+  if (grant->principal == KEIKO_GRANT_TREE && grant->access == KEIKO_GRANT_READ &&
+      keiko_gateway_grants_packages_read(grant->path))
+    return KEIKO_GRANTS_APPLIED;
   if (grant->principal == KEIKO_GRANT_TREE) {
     if (change_entry(grant->path, tree, GRANT_ACCESS, grant_mask(grant->access)) != ERROR_SUCCESS)
       return KEIKO_GRANTS_REFUSED_ACL;
