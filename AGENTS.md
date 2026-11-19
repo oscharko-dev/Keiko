@@ -1354,8 +1354,9 @@ cancellation; the successful-turn compaction manifest remains separate. These ar
 not provider-measured usage, and no conversation or image content is recorded. With memory on it and
 the grounded `chat.response.message` also count the standing profile and recall (#4228):
 `profileEntryCount`, `profileTokens`, `profileDroppedCount`, `profileRetrievedCount` (profile
-facts the question was about, sent once with recall), `retrievedMemoryCount` and
-`belowFloorMemoryCount`, never a fact
+facts the question was about, sent once with recall), `retrievedMemoryCount`,
+`belowFloorMemoryCount` and `semanticFloor` (the cosine floor in force, only with semantic scores),
+never a fact
 ([MemoriaViva standing profile](docs/memory/memoria-viva-standing-profile.md)).
 
 Gateway admission additionally records `imageCount`, optional `documentCount`, the selected

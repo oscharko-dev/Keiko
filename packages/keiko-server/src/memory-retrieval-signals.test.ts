@@ -114,6 +114,7 @@ const ALLOWED_GATE = {
   reason: "allowed",
   matchesQuery: (query: string | undefined) => query === QUERY_TEXT,
   providerIdentity: IDENTITY.provider,
+  configuredModelId: IDENTITY.modelId,
   embedQuery: embedMock,
 } as const;
 
@@ -424,63 +425,70 @@ describe("semantic candidate validity before the bounded sweep", () => {
 });
 
 describe("semantic floor of the embedding model (#4228)", () => {
+  // `configured` is the provider model id that selects the query instruction; `response` is the
+  // model the gateway reports for the query vector and the stored rows.
   async function floorFor(
-    modelId: string | undefined,
+    configured: string,
+    response: string = configured,
     env: Readonly<Record<string, string | undefined>> = {},
   ): ReturnType<typeof buildConversationRetrievalSignals> {
     const alpha = memoryId("alpha");
-    const model = modelId ?? IDENTITY.modelId;
     const vault = vaultFor(
       () => [metadata(alpha, 100)],
-      new Map([[alpha, { ...embedding(alpha, new Float32Array([1, 0])), modelId: model }]]),
+      new Map([[alpha, { ...embedding(alpha, new Float32Array([1, 0])), modelId: response }]]),
     );
-    embedMock.mockResolvedValue({ ...QUERY_EMBEDDING, modelId: model });
+    embedMock.mockResolvedValue({ ...QUERY_EMBEDDING, modelId: response });
     return buildConversationRetrievalSignals(
       { env } as unknown as UiHandlerDeps,
       vault,
       QUERY_TEXT,
       [SCOPE],
       NOW_MS,
-      ALLOWED_GATE,
+      { ...ALLOWED_GATE, configuredModelId: configured },
     );
   }
+  const operator = (key: string, entry: unknown): Readonly<Record<string, string>> => ({
+    KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({ [key]: entry }),
+  });
 
-  it.each(["qwen3-embedding-8b", "Qwen3-Embedding-0.6B", "QWEN3_EMBEDDING", "org/qwen3/embedding"])(
-    "carries the built-in floor 0.42 for %s",
-    async (modelId) => {
-      expect((await floorFor(modelId)).semanticMinScore).toBe(0.42);
+  it.each(["qwen3-embedding-8b", "Qwen/Qwen3-Embedding-8B", "openai/qwen3-embedding:8b"])(
+    "carries the built-in floor 0.4 for the configured model %s",
+    async (configured) => {
+      expect((await floorFor(configured)).semanticMinScore).toBe(0.4);
     },
   );
 
-  it("lets an operator's semanticMinScore win over the built-in floor", async () => {
-    const env = {
-      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
-        "qwen3-embedding-8b": { semanticMinScore: 0.5 },
-      }),
-    };
-    expect((await floorFor("qwen3-embedding-8b", env)).semanticMinScore).toBe(0.5);
+  it.each(["qwen3-embedding", "qwen3-embedding-4b", "Qwen3-Embedding-0.6B", "qwen3-reranker-8b"])(
+    "carries the default 0.3 for the unmeasured configured model %s",
+    async (configured) => {
+      expect((await floorFor(configured)).semanticMinScore).toBe(0.3);
+    },
+  );
+
+  it("follows the configured model, not the response model, for the built-in floor", async () => {
+    // An alias that is not Qwen3 whose response names the 8B model: no instruction was sent.
+    expect((await floorFor("embedding-alias", "qwen3-embedding-8b")).semanticMinScore).toBe(0.3);
+    // The configured 8B id whose response names another model keeps the measured floor.
+    expect((await floorFor("qwen3-embedding-8b", "other-model")).semanticMinScore).toBe(0.4);
+  });
+
+  it.each([
+    ["qwen3-embedding-8b", "qwen3-embedding-8b"],
+    ["qwen3-embedding", "qwen3-embedding"],
+    ["qwen3-embedding-4b", "qwen3-embedding-4b"],
+    ["embedding-alias", "qwen3-embedding-8b"],
+  ])("lets an operator's semanticMinScore win (configured %s, response %s)", async (c, r) => {
+    const env = operator(r, { semanticMinScore: 0.5 });
+    expect((await floorFor(c, r, env)).semanticMinScore).toBe(0.5);
   });
 
   it("keeps the built-in floor when the operator's entry has no semanticMinScore", async () => {
-    const env = {
-      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
-        "qwen3-embedding-8b": { mmrLambda: 0.6 },
-      }),
-    };
-    expect((await floorFor("qwen3-embedding-8b", env)).semanticMinScore).toBe(0.42);
+    const env = operator("qwen3-embedding-8b", { mmrLambda: 0.6 });
+    expect((await floorFor("qwen3-embedding-8b", undefined, env)).semanticMinScore).toBe(0.4);
   });
 
   it("carries retrieval's default 0.3 explicitly for another model", async () => {
-    expect((await floorFor(undefined)).semanticMinScore).toBe(0.3);
-  });
-
-  it("applies an operator floor to another model", async () => {
-    const env = {
-      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
-        "test-embedding": { semanticMinScore: 0.37 },
-      }),
-    };
-    expect((await floorFor(undefined, env)).semanticMinScore).toBe(0.37);
+    expect((await floorFor("test-embedding")).semanticMinScore).toBe(0.3);
   });
 
   it("carries no floor without semantic scores", async () => {

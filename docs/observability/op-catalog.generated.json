@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "89fc7fdf604f1d88e3af0c1137f9b4ac4b34e488ef08b028ae3b3d37ffb52fb4",
+    "catalogDigest": "fc55095f8dfe61eb9bf5eb9defb67403259e0517d9a6b3de1258b68dc07633fc",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -39480,7 +39480,7 @@
         "failureClasses": ["memory-capture-novelty"],
         "proofIds": ["memory.capture.novelty-gate.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:199",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:1017"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:1035"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -126229,14 +126229,14 @@
     {
       "op": "memory.retrieval.semantic-disabled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:497",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:501",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "memory.retrieval.semantic-skipped",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:294",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:298",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126661,7 +126661,7 @@
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:1137",
+      "site": "packages/keiko-server/src/memory-embedding.ts:1155",
       "package": "keiko-server"
     },
     {

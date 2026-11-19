@@ -67,6 +67,7 @@ import {
   bindMemoryQueryEmbedding,
   logMemoryEmbeddingProviderUnavailable,
   memoryEmbeddingCalibrationFor,
+  memorySemanticFloorFor,
   memoryEmbeddingProviderIdentity,
 } from "./memory-embedding.js";
 
@@ -87,6 +88,8 @@ type SemanticRetrievalGate =
       readonly reason: "allowed";
       readonly matchesQuery: (query: string | undefined) => boolean;
       readonly providerIdentity: string;
+      // The configured provider model id: it selects the query instruction and the built-in floor.
+      readonly configuredModelId: string;
       readonly embedQuery: (signal?: AbortSignal) => Promise<MemoryEmbeddingInput | null>;
     }
   | {
@@ -184,6 +187,7 @@ export function semanticRetrievalGateForText(
     reason: "allowed",
     matchesQuery: (query) => query === queryText,
     providerIdentity: memoryEmbeddingProviderIdentity(provider),
+    configuredModelId: provider.modelId,
     embedQuery: bindMemoryQueryEmbedding(deps, provider, queryText),
   };
 }
@@ -463,19 +467,19 @@ async function semanticScoresFrom(
     );
     return undefined;
   }
-  return semanticScoresOf(deps, queryIdentity, result.candidates);
+  return semanticScoresOf(deps, gate.configuredModelId, queryIdentity, result.candidates);
 }
 
 function semanticScoresOf(
   deps: UiHandlerDeps,
+  configuredModelId: string,
   identity: EmbeddingModelIdentity,
   candidates: readonly { readonly id: string; readonly score: number }[],
 ): SemanticScores {
   return {
     byId: new Map(candidates.map((candidate) => [candidate.id as MemoryId, candidate.score])),
     minScore:
-      memoryEmbeddingCalibrationFor(deps.env, identity).semanticMinScore ??
-      DEFAULT_SEMANTIC_MIN_SCORE,
+      memorySemanticFloorFor(deps.env, configuredModelId, identity) ?? DEFAULT_SEMANTIC_MIN_SCORE,
   };
 }
 

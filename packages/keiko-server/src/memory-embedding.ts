@@ -634,18 +634,22 @@ export interface MemoryEmbeddingCalibration {
   readonly semanticMinScore?: number;
 }
 
-// Built-in semantic floor of the Qwen3 embedding family, the one family this product embeds with a
-// dedicated query instruction. The retrieval default of 0.3 lies inside the range of UNRELATED
-// memories for it, so unrelated memories were supplied to the model. Measured 2026-11-19 with
-// qwen3-embedding-8b in the product's own format (question with the instruction, memory raw) over
-// 45 probes of the lab's seeded scenarios: memories an answer needs (n=43) score 0.461 at the
-// lowest, 0.569 at the tenth percentile, 0.712 at the median; the highest unrelated memory per
-// probe (21 probes of 120 to 300 unrelated memories each) has a median of 0.312 and a maximum of
-// 0.410; real sentences about another topic of the same person score 0.311 to 0.391 (n=7) and
-// loosely related ones of the same domain 0.400 to 0.480 (n=4). Replaying production retrieval:
-// floor 0.30 supplied fourteen unrelated memories, 0.40 four, 0.42 none, while the probes whose
-// needed memory is supplied stayed at 26 of 28 from 0.30 up to 0.42 (none lost up to 0.50).
-export const QWEN3_EMBEDDING_SEMANTIC_MIN_SCORE = 0.42;
+// Built-in semantic floor of the one embedding model that was measured, Qwen3-Embedding-8B embedded
+// in the product's own format (the question with the query instruction, the memory raw). The
+// retrieval default of 0.3 lies inside the range of unrelated memories for it, so unrelated memories
+// reached the model. Measurement of 2026-11-19 (qwen3-embedding-8b; 54 probes of the lab's seeded
+// scenarios, 34 of them with a needed memory): the 43 memories an answer needs score 0.461 at the
+// lowest, 0.569 at the tenth percentile and 0.712 at the median; on the 21 probes whose store holds
+// 60 to 560 unrelated memories, the highest unrelated memory per probe has a median of 0.312 and a
+// maximum of 0.410. Replaying the production retrieval over 53 probes at the chat's limit supplied
+// 14 unrelated memories at floor 0.30, 4 at 0.40 and none at 0.42, and the needed memory on 32 of 34
+// probes at each of these floors; with a higher limit the needed memory at 0.461 is lost from 0.48
+// on. Losing a needed memory is the worse error, so the floor sits at the low end of that gap, 0.061
+// below the lowest needed memory; four unrelated memories of one probe (0.404 to 0.410) still pass.
+// The unrelated memories of the measurement are pseudo-word filler, both margins are in-sample on
+// one model, and the value is a starting point an operator overrides through
+// KEIKO_MEMORY_EMBEDDING_CALIBRATION. The 0.6B and 4B sizes are unmeasured and keep the default.
+export const QWEN3_EMBEDDING_8B_SEMANTIC_MIN_SCORE = 0.4;
 
 interface EmbeddingCalibrationIdentity {
   readonly provider: string;
@@ -683,21 +687,35 @@ function calibrationKeys(identity: EmbeddingCalibrationIdentity): readonly strin
   ];
 }
 
-function builtInCalibrationFor(modelId: string): MemoryEmbeddingCalibration {
-  return isQwen3EmbeddingModel(modelId)
-    ? { semanticMinScore: QWEN3_EMBEDDING_SEMANTIC_MIN_SCORE }
-    : {};
+// The model the built-in floor was measured on: the Qwen3 embedding family (the one that selects
+// the query instruction) at the 8B size, named by the configured provider model id.
+function isQwen3Embedding8bModel(modelId: string): boolean {
+  return (
+    isQwen3EmbeddingModel(modelId) &&
+    /(?<![a-z0-9])8b(?![a-z0-9])/u.test(modelId.toLocaleLowerCase("en-US"))
+  );
 }
 
-// The built-in calibration of the model family, overridden field by field by the operator's entry.
+// The semantic floor of an embedding. The built-in follows the CONFIGURED provider model id, the
+// same signal that selects the query instruction, so it applies only to a geometry that was
+// measured; the operator's entry, looked up on the response identity, wins when it names a floor.
+// Undefined when neither applies: retrieval's default then stands.
+export function memorySemanticFloorFor(
+  env: Readonly<Record<string, string | undefined>>,
+  configuredModelId: string,
+  identity: EmbeddingCalibrationIdentity,
+): number | undefined {
+  return (
+    operatorCalibrationFor(env, identity).semanticMinScore ??
+    (isQwen3Embedding8bModel(configuredModelId) ? QWEN3_EMBEDDING_8B_SEMANTIC_MIN_SCORE : undefined)
+  );
+}
+
 export function memoryEmbeddingCalibrationFor(
   env: Readonly<Record<string, string | undefined>>,
   identity: EmbeddingCalibrationIdentity,
 ): MemoryEmbeddingCalibration {
-  return {
-    ...builtInCalibrationFor(identity.modelId),
-    ...operatorCalibrationFor(env, identity),
-  };
+  return operatorCalibrationFor(env, identity);
 }
 
 function operatorCalibrationFor(

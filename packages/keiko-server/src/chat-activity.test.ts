@@ -133,7 +133,7 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
     });
     if (assembly === undefined) throw new Error("Missing fixture assembly");
     const context = { enabled: true, text: "", memories: [], budget: { tokens: 1_200, used: 0 } };
-    const lines = [{ semanticFloor: 0.42 }, {}].map((extra) => {
+    const lines = [{ semanticFloor: 0.4 }, {}].map((extra) => {
       const sink = captureServerLog();
       logChatContextSelection("floor-proof", assembly, 0, undefined, {
         context: { ...context, ...extra },
@@ -144,7 +144,7 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
         formatActivityLogProofLine(sink.events[0] ?? {}),
       );
     });
-    expect(lines[0]).toMatchObject({ semanticFloor: 0.42 });
+    expect(lines[0]).toMatchObject({ semanticFloor: 0.4 });
     expect("semanticFloor" in (lines[1] ?? {})).toBe(false);
   });
 

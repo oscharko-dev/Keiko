@@ -651,11 +651,28 @@ describe("semantic memory retrieval (#204)", () => {
   });
 
   it.each([
-    { model: "text-embedding-3-large", floor: 0.3, supplied: ["mem-product", "mem-weather"] },
-    { model: "Qwen3-Embedding-8B", floor: 0.42, supplied: ["mem-product"] },
+    {
+      configured: "text-embedding-3-large",
+      model: "text-embedding-3-large",
+      floor: 0.3,
+      supplied: ["mem-product", "mem-weather"],
+    },
+    {
+      configured: "qwen3-embedding-8b",
+      model: "qwen3-embedding-8b",
+      floor: 0.4,
+      supplied: ["mem-product"],
+    },
+    // The size is unmeasured when the configured id names none, whatever the response names.
+    {
+      configured: "qwen3-embedding",
+      model: "qwen3-embedding-8b",
+      floor: 0.3,
+      supplied: ["mem-product", "mem-weather"],
+    },
   ])(
-    "judges semantic scores against the floor of $model: $floor (#4228)",
-    async ({ model, floor, supplied }) => {
+    "judges semantic scores against the floor of configured $configured ($model): $floor (#4228)",
+    async ({ configured, model, floor, supplied }) => {
       const memoryDir = join(tmp, "vault-semantic-floor");
       mkdirSync(memoryDir);
       const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
@@ -674,10 +691,19 @@ describe("semantic memory retrieval (#204)", () => {
           vector[1] = Math.sqrt(1 - cosine * cosine);
           vault.upsertEmbedding(id as MemoryId, { ...stored, vector });
         }
+        const base = embeddingConfig(true);
         await restart(
           deps(
             {
               memoryVault: vault,
+              config: {
+                ...base,
+                providers: base.providers.map((provider) =>
+                  provider.modelId === EMBEDDING_MODEL
+                    ? { ...provider, modelId: configured }
+                    : provider,
+                ),
+              },
               localKnowledgeEmbeddingRequest: () =>
                 Promise.resolve({
                   ok: true,

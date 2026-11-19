@@ -35,6 +35,7 @@ import {
   findSemanticDuplicate,
   insertSalienceMemoryWithNoveltyGate,
   memoryEmbeddingCalibrationFor,
+  memorySemanticFloorFor,
   type NoveltyInsertOutcome,
   memoryEmbeddingProviderIdentity,
   refreshMemoryEmbeddingAfterBodyEdit,
@@ -513,8 +514,6 @@ describe("memoryEmbeddingCalibrationFor", () => {
       semanticDedupThreshold: 0.91,
       relatedLinkThreshold: 0.76,
       mmrLambda: 0.62,
-      // The operator's entry names no floor, so the family's built-in one stays (#4228).
-      semanticMinScore: 0.42,
     });
     expect(
       memoryEmbeddingCalibrationFor(env, {
@@ -540,22 +539,33 @@ describe("memoryEmbeddingCalibrationFor", () => {
     expect(memoryEmbeddingCalibrationFor(entry("0.4"), identity)).toEqual({});
   });
 
-  it("gives the Qwen3 family its built-in floor and lets the operator win field by field", () => {
-    const identity = { provider: "p", modelId: "Qwen3-Embedding-8B" };
-    expect(memoryEmbeddingCalibrationFor({}, identity)).toEqual({ semanticMinScore: 0.42 });
-    const operator = (entry: unknown): Readonly<Record<string, string>> => ({
-      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({ "Qwen3-Embedding-8B": entry }),
-    });
-    expect(
-      memoryEmbeddingCalibrationFor(operator({ semanticMinScore: 0.5, mmrLambda: 0.6 }), identity),
-    ).toEqual({ semanticMinScore: 0.5, mmrLambda: 0.6 });
-    expect(memoryEmbeddingCalibrationFor(operator({ mmrLambda: 0.6 }), identity)).toEqual({
-      semanticMinScore: 0.42,
-      mmrLambda: 0.6,
-    });
-    expect(
-      memoryEmbeddingCalibrationFor({}, { provider: "p", modelId: "text-embedding-3-large" }),
-    ).toEqual({});
+  it.each([
+    ["qwen3-embedding-8b", 0.4],
+    ["Qwen/Qwen3-Embedding-8B", 0.4],
+    ["openai/qwen3-embedding:8b", 0.4],
+    ["qwen3-embedding", undefined],
+    ["qwen3-embedding-4b", undefined],
+    ["Qwen3-Embedding-0.6B", undefined],
+    ["qwen3-embedding-18b", undefined],
+    ["qwen3-reranker-8b", undefined],
+    ["text-embedding-3-large", undefined],
+  ])("memorySemanticFloorFor the configured model %s is %s", (configured, expected) => {
+    const identity = { provider: "p", modelId: "response-model" };
+    expect(memorySemanticFloorFor({}, configured, identity)).toBe(expected);
+  });
+
+  it("lets the operator's floor, looked up on the response identity, win (#4228)", () => {
+    const env = {
+      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+        "response-model": { semanticMinScore: 0.5 },
+        "other-model": { mmrLambda: 0.6 },
+      }),
+    };
+    const floorOf = (configured: string, modelId: string): number | undefined =>
+      memorySemanticFloorFor(env, configured, { provider: "p", modelId });
+    expect(floorOf("qwen3-embedding-8b", "response-model")).toBe(0.5);
+    expect(floorOf("qwen3-embedding-8b", "other-model")).toBe(0.4);
+    expect(floorOf("text-embedding-3-large", "response-model")).toBe(0.5);
   });
 
   it("ignores malformed calibration config and out-of-range values", () => {

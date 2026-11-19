@@ -123,26 +123,42 @@ the query to the selected destination.
 The Git change description no longer retrieves memory (R10): it never sent what it retrieved.
 
 **The semantic floor belongs to the embedding model.** The retrieval default is a cosine of 0.30
-(`DEFAULT_SEMANTIC_MIN_SCORE`). For the Qwen3 embedding family, the one family embedded with a
-dedicated query instruction, 0.30 lies inside the range of unrelated memories, so its built-in floor
-is 0.42 (`semanticMinScore` in the embedding calibration). Measured 2026-11-19 with
-qwen3-embedding-8b in the product's own format (the question with the instruction, the memory raw)
-over 45 probes of the lab's seeded scenarios: memories an answer needs (n=43) score 0.461 at the
-lowest, 0.569 at the tenth percentile and 0.712 at the median; the highest unrelated memory per
-probe (21 probes, 120 to 300 unrelated memories each) has a median of 0.312 and a maximum of 0.410;
-real sentences about another topic of the same person score 0.311 to 0.391 (n=7) and loosely related
-ones of the same domain 0.400 to 0.480 (n=4). Replaying production retrieval on those stores, floor
-0.30 supplied fourteen unrelated memories, 0.40 four and 0.42 none, while the probes whose needed
-memory is supplied stayed at 26 of 28 from 0.30 up to 0.42 (none lost up to 0.50).
+(`DEFAULT_SEMANTIC_MIN_SCORE`). For the one model that was measured, Qwen3-Embedding-8B, 0.30 lies
+inside the range of unrelated memories, so its built-in floor is 0.40. The built-in applies when the
+configured provider model id, the same signal that selects the query instruction, names the Qwen3
+embedding family and the 8B size (case-insensitive `8b`: `qwen3-embedding-8b`,
+`Qwen/Qwen3-Embedding-8B` and `openai/qwen3-embedding:8b` match; `qwen3-embedding`,
+`qwen3-embedding-4b` and `qwen3-reranker-8b` do not). Every other model keeps 0.30, so a geometry
+nobody measured is never judged at the calibrated floor.
+
+Measured 2026-11-19 with qwen3-embedding-8b in the product's own format (the question with the
+instruction, the memory raw), recomputable from
+`/Users/oscharko/keiko-memory-lab-runs/2026-11-19/geometry/query-all.out`: 54 probes of the lab's
+seeded scenarios, 34 of them with a needed memory. The 43 needed memories score 0.461 at the lowest,
+0.569 at the tenth percentile and 0.712 at the median. On the 21 probes whose store holds 60 to 560
+unrelated memories, the highest unrelated memory per probe has a median of 0.312 and a maximum of
+0.410. Replaying the production retrieval over 53 probes at the chat's limit supplied 14 unrelated
+memories at floor 0.30, 4 at 0.40 and none at 0.42, and the needed memory on 32 of 34 probes at each
+of these floors; with a higher limit the needed memory at 0.461, which shares no informative word with
+its question and is admitted by its semantic score alone, is lost from 0.48 on. Losing a needed memory
+is the worse error, so the floor sits at the low end of the gap, 0.061 below the lowest needed
+memory. It is not above every unrelated memory: four unrelated memories of one probe (0.404 to 0.410)
+still pass. The unrelated memories of the measurement are pseudo-word filler, both margins are
+in-sample on one model, and the value is a starting point an operator can override.
+
+A memory admitted by a shared word whose cosine is below the floor is ranked without a semantic
+subscore (`semanticScoresAboveFloor`), so with the 8B floor this applies to cosines up to 0.40
+instead of 0.30; its admission is unchanged.
 
 An operator sets or overrides the floor per embedding model with `semanticMinScore` (a number from 0
 to 1) in `KEIKO_MEMORY_EMBEDDING_CALIBRATION`, a JSON object keyed by `provider/model@revision`,
-`provider/model`, `model@revision` or `model`, next to `semanticDedupThreshold`,
-`relatedLinkThreshold` and `mmrLambda`. An operator field wins over the built-in value field by
-field, and an invalid value is ignored. To calibrate another model, measure question-to-memory
-cosines in the product's format for memories the answer needs and for unrelated ones, and put the
-floor just above the range of the unrelated memories and below the lowest needed one. Every other
-model keeps 0.30.
+`provider/model`, `model@revision` or `model` of the embedding the response names, next to
+`semanticDedupThreshold`, `relatedLinkThreshold` and `mmrLambda`. The operator's field wins over the
+built-in value, and an invalid value is ignored. To calibrate another model, measure
+question-to-memory cosines in the product's format for memories the answer needs and for unrelated
+ones, and put the floor just above the range of the unrelated memories and below the lowest needed
+one; where the two overlap, prefer the lower floor, because a lost needed memory costs more than a
+supplied unrelated one.
 
 ## Evidence
 
