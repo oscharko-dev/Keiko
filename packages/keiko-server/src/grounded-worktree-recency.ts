@@ -18,7 +18,7 @@ import {
 } from "@oscharko-dev/keiko-git";
 import { isGeneratedRankingPath } from "@oscharko-dev/keiko-workflows";
 import {
-  compileIgnore,
+  compileWorkspaceIgnore,
   containedRealPathInfo,
   isDenied,
   isIgnored,
@@ -112,7 +112,7 @@ function admittedPath(inputs: WorktreeRecencyInputs, path: string): boolean {
   if (stopped(inputs) || !selectedPath(inputs, path)) return false;
   if (
     isGeneratedRankingPath(path) ||
-    isIgnored(compileIgnore(inputs.searchScope.workspace.ignoreLines), path, false)
+    isIgnored(compileWorkspaceIgnore(inputs.searchScope.workspace), path, false)
   )
     return false;
   try {

@@ -13,6 +13,8 @@ import {
   TOOL_STATE_PATH_DENY_PATTERNS,
 } from "@oscharko-dev/keiko-contracts/sensitive-path-patterns";
 import { memoizeByStringKey, PATH_MEMO_MAX_ENTRIES } from "./boundedMemo.js";
+import { isCaseInsensitivePathCase, platformPathCase, workspacePathCase } from "./pathCase.js";
+import type { WorkspaceInfo, WorkspacePathCase } from "./types.js";
 
 // The pattern names live in keiko-contracts (the leaf both this predicate and the native sandbox
 // profile read), so the kernel-enforced credential subset can never drift from `isDenied`.
@@ -237,9 +239,9 @@ function globBody(glob: string): string {
   return body;
 }
 
-function globToRegExp(glob: string, anchored: boolean): RegExp {
+function globToRegExp(glob: string, anchored: boolean, flags = ""): RegExp {
   const prefix = anchored ? "^" : "^(?:.*/)?";
-  return new RegExp(`${prefix}${globBody(glob)}(?:/.*)?$`);
+  return new RegExp(`${prefix}${globBody(glob)}(?:/.*)?$`, flags);
 }
 
 const PRECOMPILED_DENY_MATCHERS: readonly DenyMatcher[] = DEFAULT_DENY_PATTERNS.map((pattern) => ({
@@ -248,9 +250,9 @@ const PRECOMPILED_DENY_MATCHERS: readonly DenyMatcher[] = DEFAULT_DENY_PATTERNS.
 
 // Matches the path that names the directory itself (no nested suffix), used so a `dir/` rule
 // can distinguish a real subdirectory from a same-named file at another depth.
-function globToDirEntryRegExp(glob: string, anchored: boolean): RegExp {
+function globToDirEntryRegExp(glob: string, anchored: boolean, flags: string): RegExp {
   const prefix = anchored ? "^" : "^(?:.*/)?";
-  return new RegExp(`${prefix}${globBody(glob)}$`);
+  return new RegExp(`${prefix}${globBody(glob)}$`, flags);
 }
 
 function escapeLiteral(char: string): string {
@@ -268,7 +270,7 @@ function stripAnchors(value: string, anchored: boolean, dirOnly: boolean): strin
   return core;
 }
 
-function buildRule(rawLine: string): IgnoreRule | null {
+function buildRule(rawLine: string, flags: string): IgnoreRule | null {
   const line = rawLine.trim();
   if (line.length === 0 || line.startsWith("#")) {
     return null;
@@ -282,22 +284,35 @@ function buildRule(rawLine: string): IgnoreRule | null {
     return null;
   }
   return {
-    regex: globToRegExp(core, anchored),
-    dirEntryRegex: dirOnly ? globToDirEntryRegExp(core, anchored) : null,
+    regex: globToRegExp(core, anchored, flags),
+    dirEntryRegex: dirOnly ? globToDirEntryRegExp(core, anchored, flags) : null,
     negated,
     dirOnly,
   };
 }
 
-export function compileIgnore(lines: readonly string[]): IgnoreMatcher {
+// `pathCase` is the workspace's letter-case rule (pathCase.ts, #4436): on Windows, or when the
+// repository states `core.ignorecase=true`, `build/` also ignores `Build/`, as Git does.
+export function compileIgnore(
+  lines: readonly string[],
+  pathCase: WorkspacePathCase = platformPathCase(),
+): IgnoreMatcher {
+  const flags = isCaseInsensitivePathCase(pathCase) ? "i" : "";
   const rules: IgnoreRule[] = [];
   for (const line of lines) {
-    const rule = buildRule(line);
+    const rule = buildRule(line, flags);
     if (rule !== null) {
       rules.push(rule);
     }
   }
   return { rules };
+}
+
+/** A workspace's `.gitignore` rules under its own letter-case rule (#4436). */
+export function compileWorkspaceIgnore(
+  workspace: Pick<WorkspaceInfo, "ignoreLines" | "pathCase">,
+): IgnoreMatcher {
+  return compileIgnore(workspace.ignoreLines, workspacePathCase(workspace));
 }
 
 export function isIgnored(matcher: IgnoreMatcher, relPath: string, isDir: boolean): boolean {

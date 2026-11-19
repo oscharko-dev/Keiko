@@ -6,9 +6,15 @@
 // NOT supported — adding them now would let a malformed glob slip past the path-safety
 // gate, and callers who really need them can keep multiple entries instead.
 //
+// Letter case follows the shared workspace path-case rule (#4436): on Windows `*.pdf` matches
+// `SCAN.PDF`, as the file system and Git for Windows do; elsewhere matching stays case-sensitive.
+//
 // Pure function — no FS access, no clock, no regex source built from the input character-
 // for-character (which would risk ReDoS); we compile a single anchored RegExp per glob
 // with linear-time alternation only.
+
+import { isCaseInsensitivePathCase, platformPathCase } from "@oscharko-dev/keiko-workspace";
+import type { WorkspacePathCase } from "@oscharko-dev/keiko-workspace";
 
 interface CompiledGlob {
   readonly source: string;
@@ -48,11 +54,15 @@ function compileGlobSource(glob: string): string {
   return `${out}$`;
 }
 
-export function compileGlob(glob: string): CompiledGlob {
+export function compileGlob(
+  glob: string,
+  pathCase: WorkspacePathCase = platformPathCase(),
+): CompiledGlob {
   const source = compileGlobSource(glob);
   // The compiled pattern has bounded alternation (`.*`, `[^/]*`, `[^/]`, literals only),
-  // so backtracking is linear in input length — safe against ReDoS even on hostile globs.
-  return { source, regex: new RegExp(source) };
+  // so backtracking is linear in input length — safe against ReDoS even on hostile globs. The
+  // `i` flag folds letter case only; it adds no alternation.
+  return { source, regex: new RegExp(source, isCaseInsensitivePathCase(pathCase) ? "i" : "") };
 }
 
 export function matchesGlob(glob: CompiledGlob, relativePath: string): boolean {
@@ -79,11 +89,14 @@ export function matchesAny(
   return false;
 }
 
-export function compileGlobList(globs: readonly string[] | undefined): readonly CompiledGlob[] {
+export function compileGlobList(
+  globs: readonly string[] | undefined,
+  pathCase: WorkspacePathCase = platformPathCase(),
+): readonly CompiledGlob[] {
   if (globs === undefined || globs.length === 0) {
     return [];
   }
-  return globs.map((glob) => compileGlob(glob));
+  return globs.map((glob) => compileGlob(glob, pathCase));
 }
 
 export type { CompiledGlob };

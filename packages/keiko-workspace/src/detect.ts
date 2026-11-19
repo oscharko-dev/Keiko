@@ -21,6 +21,8 @@ import {
   workspaceLanguageForPath,
 } from "./ecosystems.js";
 import { discoverCandidateInventory } from "./discovery.js";
+import { readGitCoreIgnoreCase } from "./gitHistory.js";
+import { pathCaseFromGitIgnoreCase } from "./pathCase.js";
 
 const EXTRA_ROOT_MARKERS = [
   ".java-version",
@@ -320,6 +322,18 @@ function readPackageMeta(root: string, fs: WorkspaceFs): PackageMeta {
   }
 }
 
+type WorkspaceIgnoreSettings = Pick<WorkspaceInfo, "ignoreLines" | "pathCase">;
+
+// The repository's explicit `core.ignorecase` is recorded; without one the field stays absent and
+// every matcher applies the platform default (pathCase.ts, #4436).
+function readIgnoreSettings(root: string, fs: WorkspaceFs): WorkspaceIgnoreSettings {
+  const ignoreLines = readIgnoreLines(root, fs);
+  const ignoreCase = readGitCoreIgnoreCase(fs, root);
+  return ignoreCase === undefined
+    ? { ignoreLines }
+    : { ignoreLines, pathCase: pathCaseFromGitIgnoreCase(ignoreCase) };
+}
+
 function readIgnoreLines(root: string, fs: WorkspaceFs): readonly string[] {
   const path = join(root, ".gitignore");
   const raw = readContainedText(root, path, fs);
@@ -342,7 +356,7 @@ function discoveryWorkspace(
   meta: PackageMeta,
   sourceDirs: readonly string[],
   testDirs: readonly string[],
-  ignoreLines: readonly string[],
+  ignore: WorkspaceIgnoreSettings,
 ): WorkspaceInfo {
   return {
     root,
@@ -354,7 +368,7 @@ function discoveryWorkspace(
     sourceDirs,
     testDirs,
     languages: [],
-    ignoreLines,
+    ...ignore,
   };
 }
 
@@ -368,7 +382,7 @@ function detectLanguages(
   meta: PackageMeta,
   sourceDirs: readonly string[],
   testDirs: readonly string[],
-  ignoreLines: readonly string[],
+  ignore: WorkspaceIgnoreSettings,
   scanSourceFiles: boolean,
 ): readonly WorkspaceLanguage[] {
   const languages = new Set<WorkspaceLanguage>();
@@ -379,7 +393,7 @@ function detectLanguages(
   }
   try {
     if (!scanSourceFiles) return detectedLanguagesOrDefault(languages);
-    const workspace = discoveryWorkspace(root, meta, sourceDirs, testDirs, ignoreLines);
+    const workspace = discoveryWorkspace(root, meta, sourceDirs, testDirs, ignore);
     const files = discoverCandidateInventory(workspace, LANGUAGE_DISCOVERY, fs).files;
     for (const file of files) {
       const language =
@@ -414,7 +428,7 @@ function inspectCanonicalWorkspace(
   const meta = readPackageMeta(root, fs);
   const sourceDirs = detectDirs(root, fs, ["src"]);
   const testDirs = detectDirs(root, fs, ["tests", "test", "__tests__"]);
-  const ignoreLines = readIgnoreLines(root, fs);
+  const ignore = readIgnoreSettings(root, fs);
   return {
     root,
     selectedRoot: detected.selectedRoot,
@@ -423,8 +437,8 @@ function inspectCanonicalWorkspace(
     testFramework: meta.testFramework,
     sourceDirs,
     testDirs,
-    languages: detectLanguages(root, fs, meta, sourceDirs, testDirs, ignoreLines, scanSourceFiles),
-    ignoreLines,
+    languages: detectLanguages(root, fs, meta, sourceDirs, testDirs, ignore, scanSourceFiles),
+    ...ignore,
   };
 }
 

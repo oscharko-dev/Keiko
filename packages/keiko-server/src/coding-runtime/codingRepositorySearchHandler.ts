@@ -9,7 +9,8 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceInfo, WorkspacePathCase } from "@oscharko-dev/keiko-contracts";
+import { workspacePathCase } from "@oscharko-dev/keiko-workspace";
 import {
   CodingRepositorySearchError,
   codingRepositoryBackendReady,
@@ -123,6 +124,13 @@ const CODING_REPOSITORY_HANDLER_SETTLED_OPERATION = defineActivityLogOperation({
       ],
     },
     ignoredEntries: { type: "integer", dataClass: "count", required: false },
+    // The letter-case rule the search's `.gitignore` and include/exclude globs applied (#4436).
+    pathCase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["case-sensitive", "case-insensitive"],
+    },
     deniedEntries: { type: "integer", dataClass: "count", required: false },
     binaryFilesSkipped: { type: "integer", dataClass: "count", required: false },
     oversizedFilesSkipped: { type: "integer", dataClass: "count", required: false },
@@ -201,6 +209,7 @@ function terminalEvent(
   result: CodingRepositoryResult,
   correlationId: string,
   durationMs: number,
+  pathCase: WorkspacePathCase,
   error?: unknown,
   observation?: CodingRepositorySearchObservation,
 ): ServerLogEvent {
@@ -215,6 +224,7 @@ function terminalEvent(
       state: result.ok ? "completed" : "failed",
       reason: result.ok ? "none" : result.reason,
       progressStatus: observationStatus(result, observation),
+      pathCase,
       ...observation?.metrics,
       ...observation?.diagnostics,
       ...(result.ok
@@ -308,8 +318,10 @@ async function invoke(
       reason: error instanceof CodingRepositorySearchError ? error.reason : "failed",
     };
   }
+  const durationMs = Math.max(0, nowMs() - startedAtMs);
+  const pathCase = workspacePathCase(options.workspace);
   options.log.write(
-    terminalEvent(result, correlationId, Math.max(0, nowMs() - startedAtMs), failure, observation),
+    terminalEvent(result, correlationId, durationMs, pathCase, failure, observation),
   );
   return result;
 }

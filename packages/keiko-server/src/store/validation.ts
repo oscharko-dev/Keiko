@@ -114,6 +114,18 @@ function statAsDirectory(resolved: string): void {
   if (!s.isDirectory()) throw pathNotDirectory();
 }
 
+// Issue #4459 — the lookup key for a project path an API or CLI caller supplies to find an already
+// registered project. A Windows drive path takes the separator form the store persists, so
+// `D:/work/corpus` and `D:\work\corpus` name the same project. Every other shape is returned
+// unchanged: a POSIX path keeps a literal backslash in a file name, and input the validator rejects
+// (traversal, null bytes) is never collapsed into a registered path. This grants no authority; the
+// caller still looks the key up and every containment, realpath and deny check still applies.
+export function canonicalProjectPathKey(input: string): string {
+  if (classifyPathShape(input) !== "windows-drive") return input;
+  if (input.includes("\0") || TRAVERSAL_SEGMENT_RE.test(input)) return input;
+  return winPath.normalize(input);
+}
+
 // Validates and normalizes a project path. Returns the canonical absolute path on success; throws a
 // typed UiStoreError otherwise. When `mustExist` is false, the stat-as-directory step is skipped
 // (PATCH/DELETE callers identify a project by its previously normalized path; the directory may

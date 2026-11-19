@@ -227,7 +227,8 @@ describe("decoder upgrades cannot reuse historical negative matching authority",
     expect(warm.atoms).toEqual(cold.atoms);
     expect(reads).not.toHaveBeenCalled();
     const entries = readdirSync(runtimeDir).filter((entry) => entry.endsWith(".json"));
-    expect(entries).toHaveLength(1);
+    // One query-match shard and, since #4457, one content shard for the single fixture file.
+    expect(entries).toHaveLength(2);
     for (const entry of entries) {
       const path = join(runtimeDir, entry);
       expect(readFileSync(path, "utf8")).not.toContain("Ölwechsel");

@@ -387,7 +387,12 @@ describe("containedRealPathInfo — unresolvable symlink leaf (#3347)", () => {
       withDiskRoot((root) => {
         const missing = containedRealPathInfo(nodeWorkspaceFs, root, join(root, "new.ts"));
 
-        expect(missing).toEqual({ path: join(root, "new.ts"), realRelative: "", realBase: root });
+        expect(missing).toEqual({
+          path: join(root, "new.ts"),
+          realRelative: "",
+          realBase: root,
+          unresolved: "vanished",
+        });
         expect(isAllowedContainedPathParent(missing, root, "new.ts")).toBe(true);
       });
     },

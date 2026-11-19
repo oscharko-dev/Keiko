@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { compileGlob, compileGlobList, matchesAny, matchesGlob } from "./glob.js";
 
@@ -69,5 +69,39 @@ describe("matchesAny + compileGlobList", () => {
   it("compileGlobList returns an empty readonly array for undefined", () => {
     expect(compileGlobList(undefined)).toStrictEqual([]);
     expect(compileGlobList([])).toStrictEqual([]);
+  });
+});
+
+// #4436: Knowledge Pod scope globs follow the shared workspace path-case rule.
+describe("glob letter case", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("matches every case spelling under the case-insensitive rule", () => {
+    const g = compileGlob("**/*.pdf", "case-insensitive");
+    expect(matchesGlob(g, "Scans/SCAN.PDF")).toBe(true);
+    expect(matchesGlob(g, "scan.pdf")).toBe(true);
+    expect(matchesGlob(g, "scan.pdfx")).toBe(false);
+    // Folding adds no wildcard: metacharacters stay literal and `*` still stops at `/`.
+    const literal = compileGlob("Notes(1)+.MD", "case-insensitive");
+    expect(matchesGlob(literal, "notes(1)+.md")).toBe(true);
+    expect(matchesGlob(literal, "notes1.md")).toBe(false);
+    expect(matchesGlob(compileGlob("*.MD", "case-insensitive"), "a/b.md")).toBe(false);
+  });
+
+  it("keeps exact case under the case-sensitive rule", () => {
+    const g = compileGlob("**/*.pdf", "case-sensitive");
+    expect(matchesGlob(g, "Scans/SCAN.PDF")).toBe(false);
+    expect(matchesGlob(g, "Scans/scan.pdf")).toBe(true);
+  });
+
+  it("defaults to the platform rule for single globs and lists", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    expect(matchesGlob(compileGlob("*.pdf"), "SCAN.PDF")).toBe(true);
+    expect(matchesAny(compileGlobList(["*.pdf"]), "SCAN.PDF", false)).toBe(true);
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    expect(matchesGlob(compileGlob("*.pdf"), "SCAN.PDF")).toBe(false);
+    expect(matchesAny(compileGlobList(["*.pdf"]), "SCAN.PDF", false)).toBe(false);
   });
 });

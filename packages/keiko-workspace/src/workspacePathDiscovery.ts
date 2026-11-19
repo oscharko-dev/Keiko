@@ -8,8 +8,9 @@ import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparator
 import { visitWorkspaceFiles, type StreamingDiscoveryStats } from "./discovery.js";
 import { PathDeniedError, RepoSearchInvalidQueryError } from "./errors.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
-import { compileIgnore, isDenied, isIgnored } from "./ignore.js";
+import { compileWorkspaceIgnore, isDenied, isIgnored } from "./ignore.js";
 import { admittedSearchScopeEntry, resolveEntryWalkRoot } from "./repoSearchEntries.js";
+import { pathCaseKey, pathGlobCaseSensitive, workspacePathCase } from "./pathCase.js";
 import { compileGlob } from "./repoSearchMatchers.js";
 import { RetainedAtomHeap } from "./repoSearchRetention.js";
 import { workspaceFsBoundToCanonicalRoot } from "./realpath.js";
@@ -23,6 +24,7 @@ import {
   WORKSPACE_PATH_DISCOVERY_MODES,
   type DiscoveredFile,
   type WorkspaceInfo,
+  type WorkspacePathCase,
   type WorkspacePathDiscoveryEntry,
   type WorkspacePathDiscoveryMode,
   type WorkspacePathDiscoveryRequest,
@@ -95,7 +97,7 @@ function admittedDirectoryFs(
   }
   const bound = workspaceFsBoundToCanonicalRoot(fs, workspace.root);
   if (directory === "") return bound;
-  if (isDenied(directory) || isIgnored(compileIgnore(workspace.ignoreLines), directory, true)) {
+  if (isDenied(directory) || isIgnored(compileWorkspaceIgnore(workspace), directory, true)) {
     throw new PathDeniedError("Selected discovery directory is excluded.", ".");
   }
   const entry = admittedSearchScopeEntry(bound, workspace.root, directory);
@@ -109,16 +111,22 @@ function admittedDirectoryFs(
 // relative to that directory, as a model naming `directory: "src"` writes `query: "*.js"`; only
 // root-relative matching found nothing there and the coding agent reported existing files as
 // missing (#4068). Discovery walks only the selected directory, so no path outside it can match.
-function globMatcher(request: WorkspacePathDiscoveryRequest): (path: string) => boolean {
-  const glob = compileGlob(request.query);
+function globMatcher(
+  request: WorkspacePathDiscoveryRequest,
+  pathCase: WorkspacePathCase,
+): (path: string) => boolean {
+  const glob = compileGlob(request.query, pathGlobCaseSensitive(pathCase));
   if (request.directory === "") return (path) => glob.test(path);
   const prefix = `${request.directory}/`;
   return (path) =>
     glob.test(path) || (path.startsWith(prefix) && glob.test(path.slice(prefix.length)));
 }
 
-function pathMatcher(request: WorkspacePathDiscoveryRequest): (path: string) => boolean {
-  if (request.mode === "glob") return globMatcher(request);
+function pathMatcher(
+  request: WorkspacePathDiscoveryRequest,
+  pathCase: WorkspacePathCase,
+): (path: string) => boolean {
+  if (request.mode === "glob") return globMatcher(request, pathCase);
   if (request.query === "*") return () => true;
   const terms = request.query
     .toLowerCase()
@@ -248,12 +256,16 @@ interface BasenameDiscoveryControl extends StructuralExecutionControl {
 function discoveryPathMatcher(
   request: WorkspacePathDiscoveryRequest,
   control: BasenameDiscoveryControl,
+  pathCase: WorkspacePathCase,
 ): (path: string) => boolean {
   const stem = control.documentStem;
   if (stem !== undefined) return (path) => matchesDocumentBasenameStem(path, stem);
   const basename = control.exactBasename;
-  if (basename !== undefined) return (path) => path.split("/").at(-1) === basename;
-  return pathMatcher(request);
+  if (basename !== undefined) {
+    const key = pathCaseKey(basename, pathCase);
+    return (path) => pathCaseKey(path.split("/").at(-1) ?? "", pathCase) === key;
+  }
+  return pathMatcher(request, pathCase);
 }
 
 /** Path-only streaming discovery with bounded results and caller-owned execution control. */
@@ -264,7 +276,7 @@ export async function discoverWorkspacePaths(
   fs: WorkspaceFs = nodeWorkspaceFs,
 ): Promise<WorkspacePathDiscoveryResult> {
   const selected = validateRequest(request);
-  const matches = discoveryPathMatcher(selected, control);
+  const matches = discoveryPathMatcher(selected, control, workspacePathCase(workspace));
   const retained = new RetainedAtomHeap<WorkspacePathDiscoveryEntry>(
     selected.maxResults,
     (left, right) => compareStrings(left.relativePath, right.relativePath),

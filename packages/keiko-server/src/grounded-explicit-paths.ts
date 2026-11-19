@@ -30,7 +30,7 @@ import {
   discoverWorkspacePaths,
   PathEscapeError,
   RepoSearchUnsupportedFileError,
-  compileIgnore,
+  compileWorkspaceIgnore,
   containedRealPathInfo,
   findFiles,
   isDenied,
@@ -225,7 +225,7 @@ function relativePathPolicyRejection(
     return "generated";
   if (
     !humanSelectedPath(path, inputs) &&
-    isIgnored(compileIgnore(inputs.searchScope.workspace.ignoreLines), path, false)
+    isIgnored(compileWorkspaceIgnore(inputs.searchScope.workspace), path, false)
   )
     return "ignored";
   return undefined;

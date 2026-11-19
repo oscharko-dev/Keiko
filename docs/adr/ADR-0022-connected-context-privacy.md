@@ -49,10 +49,32 @@ excerpt content, so its retention contract is explicit: bounded TTL, bounded siz
 disk persistence, and deterministic cleanup hooks on chat/project lifecycle changes.
 
 Repository search may separately persist its bounded acceleration index. That store is not a
-`ConnectedContextPack`: it contains discovery metadata, fingerprints, and lexical hashes rather than
-queries or excerpts, and its complete snapshot is AES-256-GCM sealed before the atomic owner-only
-write. The key uses an independent `KEIKO_WORKSPACE_INDEX_KEY` → OS keychain → hardened keyfile
-namespace. Missing, legacy-plaintext, tampered, or wrong-key snapshots fail closed to a live rescan.
+`ConnectedContextPack`: it contains discovery metadata, fingerprints, lexical hashes and completed
+query-match metadata (line ranges and scores under a query digest, never query text or excerpts),
+and its complete snapshot is AES-256-GCM sealed before the atomic owner-only write. The key uses an
+independent `KEIKO_WORKSPACE_INDEX_KEY` → OS keychain → hardened keyfile namespace. Missing,
+legacy-plaintext, tampered, or wrong-key snapshots fail closed to a live rescan.
+
+**Stored lane text (owner decision, 2026-11-18, #4457).** A per-query match cache made every
+differently worded question read, redact and match every file again. The uncapped streaming search
+therefore also keeps a query-independent content layer in the same sealed store: separate content
+shards hold, per file, the evidence-lane text the redacting read already produced (deflated, with
+its SHA-256 and byte length), or only that the file is binary. Raw bytes and editor-lane text never
+enter it. A stored text stands in for exactly the text a live read returns, so matching, line
+selection and scoring are unchanged; a file is reused only while its strong stat identity (size,
+nanosecond timestamps, file identity, link count) is current, and the decoded bytes must prove the
+stored digest. The storage key binds `CODE_REDACTION_REVISION`, the content policy and the
+configured secret literals, so a newly configured secret, a policy change or a redaction revision
+leaves every earlier text unreachable. Content snapshots keep the existing 16 MiB per-snapshot,
+entry and snapshot-count bounds (their plaintext stays under two thirds of the byte bound to leave
+room for sealing), stay out of the process-wide parsed-snapshot cache, and live in memory only for
+the request that loaded them, with a 96 MiB request bound. A file that does not fit is counted as
+a dropped record and read live. This persists redacted file content on the user's own device,
+encrypted at rest, under the content threshold above; it is still not a `ConnectedContextPack`
+and never leaves the machine. The existing completion-details Activity Log fields describe it:
+`indexReusedRecords` counts files settled without a read from either layer, a new question over
+an unchanged folder reports `indexSearchMode=persistent-warm`, and
+`workspaceIoContentReadCalls` counts only the reads that still happened.
 
 Why: the pack carries the full excerpt content (with the raw scope-relative paths and
 file bytes). Persisting it to disk would create a second redaction surface co-equal
@@ -355,7 +377,12 @@ bounds.
 
 Structural AST, import, symbol, endpoint and source/test intake likewise honor the actual caller
 file-scan ceiling. A null ceiling uses all eligible entries in the finite admitted candidate
-inventory. Resolver metadata reservation follows that same ceiling. The request-local AST reader
+inventory. Resolver metadata reservation follows that same ceiling. The code intelligence build
+additionally keeps every parsed syntax tree alive until its last stage, so the source text one build
+parses is bounded (32 MiB, each source charged at most the per-file read cap from its discovered
+size, in the existing preference order). The bound ends the source list as a candidate limit
+(`candidateLimitReached`, `scope-incomplete` uncertainty) instead of exhausting the server heap; the
+existing `evidence-details` line counts such builds (#4456). The request-local AST reader
 fixes its current-source metadata capacity once from the admitted inventory and caller ceiling;
 guarded reading, currentness, cancellation and partial-source uncertainty still apply. Complete-text
 reuse retains the independent bounds stated below, and optional enrichment retains its finite grants.
@@ -806,10 +833,29 @@ and descriptor lookahead. A legacy response without that observation does not fa
 #### Filesystem consistency and redaction
 
 Streaming directory enumeration distinguishes membership changes from directory identity changes.
-Concurrent additions or disappeared entries retain safely observed evidence and sibling traversal,
-with `io-error` incomplete coverage; they never certify a stable snapshot. Local child-directory
-`ENOENT`, `ENOTDIR`, `EACCES`, `EPERM`, `EIO`, and `ESTALE` failures at opening, iteration or closing
-are recoverable only after the connected root is freshly revalidated. Root failures, process-wide
+Office lock files and sync clients add and remove entries constantly, so membership churn is not a
+coverage gap (#4435): a directory whose membership moved during enumeration is re-read once and only
+names the first pass did not hand out are visited, so every entry is visited at most once. Churn
+that persists through that retry, or a directory above the per-directory memory ceiling (whose
+name set is not retained), keeps `io-error` incomplete coverage. A listed entry that no longer
+exists when inspected (`ENOENT`, `ENOTDIR`, `ESTALE`) is skipped and counted as vanished; because
+it was listed but never read, it keeps `io-error` incomplete coverage rather than certifying the
+folder. A locked or protected entry (`EACCES`, `EPERM`, `EBUSY`, which carries Windows sharing
+violations, and `EIO`) is skipped, counted and disclosed as `io-error` incomplete coverage plus an
+explicit locked-or-protected count in the answer's coverage uncertainty (#4434). A realpath failure
+is counted by its cause and never recorded as a skipped symbolic link; a cause outside both classes
+(a disconnected mount point inside the folder) counts as unavailable. Descriptor exhaustion at the
+entry's metadata read still fails closed.
+The counts reach `search.connected-context.evidence-details` as
+`discoveryUnavailableEntryCount`, `discoveryVanishedEntryCount` and
+`discoveryMembershipRetryCount`; the Files filename search applies the same classification and
+records `files.search.completed`; the Knowledge Pod walk checks root and directory identity rather
+than membership metadata, re-reads a directory once after membership churn, skips vanished entries,
+keeps a locked entry a per-entry `READ_FAILED`, and records `vanishedEntryCount` and
+`directoryRetryCount` on `indexing.source.completed`. Every skip first revalidates the connected
+root. Local child-directory
+`ENOENT`, `ENOTDIR`, `EACCES`, `EPERM`, `EBUSY`, `EIO`, and `ESTALE` failures at opening, iteration
+or closing are recoverable only after the connected root is freshly revalidated. Root failures, process-wide
 descriptor exhaustion, programming errors, replaced inode/device identity, unsafe aliases, and
 root containment changes still fail closed. A transient connected-root filesystem or server-resource
 outage is classified separately from an invalid or missing folder selection: the remaining healthy
@@ -828,9 +874,15 @@ failure reason and cause metadata. Unexpected programming failures retain their 
 and reach the terminal retrieval diagnostic. Secret redaction uses
 linear private-key boundary scans and scheme-start guards, including conservative redaction of an
 unterminated private-key body, so eligible large text does not trigger repeated suffix scans.
-Workspace search and excerpt projection preserve each masked secret span's original LF/CRLF
+Workspace search and excerpt projection preserve each masked secret span's physical line
 delimiters without retaining its body or columns. Facts between separate secret blocks therefore
 keep their physical source lines in lexical matches, numbered model context, and source navigation.
+LF and CRLF both terminate a source line and a lone CR is line content: the shared
+`splitSourceLines` rule (`keiko-workspace/src/sourceLines.ts`) numbers lines for search,
+classification, the workspace index and excerpts, and excerpt reads fold CRLF into LF before
+redaction, so a file with Windows or mixed line endings yields the same excerpts, ranges and
+citations as its LF copy (#4439). File-size caps still count the original bytes; files on disk are
+never rewritten.
 Source redaction now uses the shared security projection for TypeScript/JavaScript, Java, JSON/JSONC,
 YAML and the existing ordinary two-sided unified-diff subset. Credential assignments mask literal values while preserving syntax metadata and physical
 line delimiters. Java ownership follows its CST after JLS Unicode translation; parsed YAML aliases
@@ -957,8 +1009,9 @@ pending streaming context, including nested emphasis. Completed public prose lab
 strict check in whole-text inference and publication; YAML anchor/alias grammar remains unchanged.
 Native JSON lexical boundaries retain malformed scalar continuations with structured values, while
 ordinary numbered/quoted prose receives no JSON exemption or refusal solely for naming a field.
-Index snapshot version 16 invalidates previously projected text even when source bytes and stat
-metadata are unchanged. The existing body-free projection revision 8 records this change without
+Index snapshot version 16 invalidated previously projected text even when source bytes and stat
+metadata were unchanged; version 17 (#4457) adds the content shards and again starts every index
+afresh. The existing body-free projection revision 8 records this change without
 logging source content. Earlier versions, including 15, remain ineligible after the privacy repair.
 Malformed YAML block-header classification scans line boundaries and disjoint header prefixes
 once. A comment with a near-miss terminator cannot make earlier candidates rescan the remaining
@@ -1437,6 +1490,11 @@ relative scoring floors, and read/byte/time grants remain unchanged; peers share
 below-floor fallback and remain low confidence. A higher-confidence ordinary selection does not
 admit them. The existing selected-file count records actual retained size, while
 `keepOneFallbackApplied` is true only for a single retained fallback source.
+A path admitted only from the previous answer's citations (#4458) stays admitted and prioritized,
+but it is not the current question's evidence: when nothing else clears the floor, the question's
+strongest below-floor candidate is still retained beside it, within the same grants, and the
+selection reports low confidence. A previous-answer path the question names or lexically matches
+is the question's own evidence.
 The existing selection-details event records the closed fallback ranking source. Ordinary fallback
 records low selection confidence and the
 `low-confidence-selection` prompt caveat; high/low is the same closed vocabulary on pack, wire,
