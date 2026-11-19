@@ -95,6 +95,18 @@ signal follows the same principle: the set of top memories that graph proximity 
 contains part of a group tied on score and update time, so a neighbour's graph score never depends on
 which of equal memories the id happened to put inside the cut (this applies to both fusion modes).
 
+**The admitted memories are ranked among themselves.** A fused rank is relative to the set it is
+computed over. Recall therefore decides admission on a ranking of the whole read window (up to 500
+records), and then ranks again over the memories the floor admitted, and orders the selection by that
+second ranking (#4228). Ranked over the window, the hundreds of records the floor then removes sat
+between two admitted memories in every signal that does not depend on the question (recency,
+strength, pin, importance); reciprocal ranks turned that distance into a lead the semantic order could
+not outweigh, and in the lab the needed memory fell to position seven or later behind newer, less
+similar ones. Now a record the question does not touch never decides the order of those it does:
+removing every refused record from the store changes neither the selection nor its order (a property
+test pins this). Under the weighted sum the scores do not depend on the set, so only the graph
+signal's top set can differ.
+
 **Corrections keep their topic.** Under the strict floor a standing profile fact also shares the
 informative words of the facts it superseded (`supersedes` edges, up to four steps back on each
 lineage, forgotten facts excluded). Only the match reads them; a superseded fact never reaches the

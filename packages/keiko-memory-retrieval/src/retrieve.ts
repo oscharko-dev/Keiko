@@ -532,6 +532,24 @@ function buildRankQuery(
   };
 }
 
+// Rank fusion over the memories the floor admitted, not over the whole read window (#4228). A
+// fused rank is relative to the set it is computed over: ranked over the window, the hundreds of
+// records the floor then removes sit between two admitted memories in every question-independent
+// signal (recency, strength, pinned, importance), and 1/(k + rank) turns that distance into a
+// difference the semantic order of the admitted memories cannot outweigh. Ranked over the admitted
+// set, a memory the question does not touch no longer decides the order of those it does.
+// Admission itself is unchanged: the floor decides it on the first ranking, this only orders.
+function rankAdmitted(
+  admitted: readonly IncludedMemory[],
+  candidates: readonly MemoryRecord[],
+  rankQuery: RankMemoriesQuery,
+  edgesByMemory: ReturnType<typeof buildEdgesIndex>,
+): readonly IncludedMemory[] {
+  const admittedIds = new Set<string>(admitted.map((entry) => entry.memoryId));
+  const records = candidates.filter((record) => admittedIds.has(record.id));
+  return rankMemories(records, rankQuery, edgesByMemory === undefined ? {} : { edgesByMemory });
+}
+
 function reorderSelection(
   ranked: readonly IncludedMemory[],
   request: MemoryRetrievalRequest,
@@ -574,7 +592,13 @@ export function retrieveMemoryContext(
   );
   // MMR diversity (#204, O-F3): re-order the ranked candidates so near-duplicates do not all consume
   // the token budget. Inert (byte-identical greedy-by-rank) when the caller supplies no embeddings.
-  const selectionOrder = reorderSelection(thresholded.ranked, request);
+  const admittedOrder = rankAdmitted(
+    thresholded.ranked,
+    filtered.candidates,
+    rankQuery,
+    edgesByMemory,
+  );
+  const selectionOrder = reorderSelection(admittedOrder, request);
   const assembled = assembleContextBlock(selectionOrder, filtered.candidates, {
     budgetTokens: resolved.budgetTokens,
     maxIncluded: resolved.maxIncluded,
