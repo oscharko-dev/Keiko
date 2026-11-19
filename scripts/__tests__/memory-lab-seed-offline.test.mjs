@@ -3,7 +3,7 @@
 // measured lexical-only and with the scripted embedding model. This proves the harness: the seeded
 // records reach the product's own recall, are never scored as something it learned, and a failure
 // names the class it belongs to. What the product answers beyond that is evidence, not assertion.
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -17,12 +17,15 @@ import { startScriptedModelServer } from "../testing/memory-lab/scripted-model.m
 
 const RUN_TIMEOUT_MS = 300_000;
 const NEXT = join(REPO_ROOT, "scripts", "testing", "memory-lab", "scenarios-next");
+// The directory also holds the larger corpus (memory-lab-corpus-next.test.mjs checks it); this
+// proof runs only the two small demonstrations, copied to a directory of their own.
+const DEMOS = ["seed-needs-two-en.json", "seed-earlier-value-en.json"];
 
 function options(root, name, extra = {}) {
   return normalizeOptions({
     mode: "offline",
     out: join(root, name),
-    scenarios: NEXT,
+    scenarios: join(root, "demo-scenarios"),
     arms: "product,oracle",
     repetitions: "1",
     "memory-mode": "autonomous-delivery",
@@ -48,6 +51,8 @@ describe("the seeded demonstration scenarios", () => {
     if (!existsSync(join(REPO_ROOT, "packages", "keiko-server", "dist", "index.js")))
       throw new Error("memory lab needs built packages; run npm run build:packages");
     root = mkdtempSync(join(tmpdir(), "memory-lab-seed-offline-"));
+    mkdirSync(join(root, "demo-scenarios"));
+    for (const name of DEMOS) copyFileSync(join(NEXT, name), join(root, "demo-scenarios", name));
   });
   afterAll(() => {
     if (root) rmSync(root, { recursive: true, force: true });
