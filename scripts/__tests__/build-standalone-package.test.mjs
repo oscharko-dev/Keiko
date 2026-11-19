@@ -99,16 +99,27 @@ describe("a standalone package", () => {
 
   it("keeps the start files and the bundled Node executable after extraction", () => {
     const { root, result } = build("macos-arm64");
+    const paths = {
+      "Start Keiko.command": true,
+      "Stop Keiko.command": true,
+      "system/Keiko/Keiko.app/Contents/Resources/runtime/node/bin/node": true,
+      "README.txt": false,
+    };
+    // The package declares the modes on every build host.
+    const modes = new Map(
+      readZipArchiveEntries(result.outputPath).map((entry) => [entry.name, entry.mode]),
+    );
+    for (const [path, expected] of Object.entries(paths)) {
+      expect(((modes.get(`Keiko/${path}`) ?? 0) & 0o111) !== 0, path).toBe(expected);
+    }
+    // A Windows file system has no execute bits, so only a POSIX host can show them extracted.
+    if (process.platform === "win32") return;
     const extracted = join(root, "extracted");
     extractZipArchiveEntries(result.outputPath, extracted);
-
     const executable = (path) => (statSync(join(extracted, "Keiko", path)).mode & 0o111) !== 0;
-    expect(executable("Start Keiko.command")).toBe(true);
-    expect(executable("Stop Keiko.command")).toBe(true);
-    expect(executable("system/Keiko/Keiko.app/Contents/Resources/runtime/node/bin/node")).toBe(
-      true,
-    );
-    expect(executable("README.txt")).toBe(false);
+    for (const [path, expected] of Object.entries(paths)) {
+      expect(executable(path), path).toBe(expected);
+    }
   });
 
   it("writes the Windows start files and READMEs with CRLF line endings", () => {

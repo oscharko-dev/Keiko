@@ -6,11 +6,6 @@ on:
   push:
     branches: [fix/3666-windows-coding-runtime, feature/4068-windows-workbench]
   workflow_dispatch:
-    inputs:
-      verify_transport:
-        description: "Require a real gateway connection and hostile port denial through the installed Workbench adapter"
-        type: boolean
-        default: false
 
 permissions: {}
 
@@ -57,10 +52,8 @@ jobs:
         run: node scripts/testing/test-windows-gateway-filters.mjs --inbound-control-proof
       - name: Prove the confined root's process, file and network boundaries
         run: node scripts/testing/test-windows-runtime-boundary.mjs
-      - name: Exercise the installed service and Workbench adapter transport
-        env:
-          VERIFY_TRANSPORT: ${{ (github.event_name == 'push' && github.ref_name == 'feature/4068-windows-workbench') || inputs.verify_transport }}
-        run: ./scripts/testing/test-windows-gateway-scm.ps1 -VerifyTransport:($env:VERIFY_TRANSPORT -eq 'true')
+      - name: Exercise the installed service lifecycle
+        run: ./scripts/testing/test-windows-gateway-scm.ps1
         shell: pwsh
 
   # #4068 (ADR-0043 D20): the pipe-relayed confinement that needs no installed service. Builds the

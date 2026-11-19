@@ -329,16 +329,17 @@ The Windows package (#4068, owner decision 2026-11-09) is built on a Windows hos
 native executables are linked with `/Brepro`, so identical sources reproduce the bytes pinned in
 `npmLaneRuntimeApprovals.ts`; the supervisor is pinned to the source tree of
 `native/runtime-supervisor/windows` as the helper is to its own. A Windows npm installation needs no
-separate step: its first healthy `keiko start` installs the broker for this package's supervisor
-(one UAC prompt), and every later start after an update repairs it when the pin changed (ADR-0043
-D19, one-step Windows setup). Until the package is published, a Windows npm installation reports
-`npm-runtime-package-missing`, and the Workbench points to `keiko-windows-x64-setup.exe`.
+separate step and no administrator: each run is confined by the pipe-relayed AppContainer of
+ADR-0043 D20, which the supervisor sets up for the signed-in user alone. Until the package is
+published, a Windows npm installation reports `npm-runtime-package-missing`.
 
 **One set of Windows native bytes (owner decision 2026-11-17, "Ja, umstellen").** The npm package
-carries exactly the Windows helper and supervisor of the portable release: secure-read helper
-`65cc98c3…` (129,024 bytes) and supervisor `888130331e…` (237,056 bytes), both built by the
-release workflow with MSVC 14.51 (`windows-latest`) and `/Brepro` at `1906b6a5f28a…` from the
-unchanged source trees. `npmLaneRuntimeApprovals.ts` pins the npm lane to those bytes, and
+carries exactly the Windows helper and supervisor of the portable release. The secure-read helper
+`65cc98c3…` (129,024 bytes) was built by the release workflow at `1906b6a5f28a…`. The pipe-relay
+supervisor `111ce061…` (252,416 bytes, source tree `425710fb…`) was built by the
+`relay-confinement` job of `windows-gateway-confinement.yml` (#4068), on the same `windows-latest`
+image, with MSVC 14.51 and `/Brepro` as the release builds it; the first portable release that
+carries it is 1.5.4. `npmLaneRuntimeApprovals.ts` pins the npm lane to those bytes, and
 `npmLaneRuntimeApprovals.test.ts` fails when the npm and portable Windows pins diverge.
 
 Why: a from-source build with Visual Studio 2022 BuildTools 17.14 (MSVC 14.44) reproduces neither
@@ -356,7 +357,7 @@ release.
 prerelease `coding-runtime-1.1.5` was published with the two macOS tarballs only, and a published
 release is immutable, so no Windows tarball can be added to it. The Windows package therefore takes
 the next runtime version, 1.1.6, with its own transport prerelease `coding-runtime-1.1.6`; it
-carries the same OpenCode 2.2.5 and the same native bytes as the 1.5.3 portable release. The two
+carries the same OpenCode 2.2.5 and the same native bytes as the 1.5.4 portable release. The two
 macOS packages stay at 1.1.5: the root manifest pins each runtime package on its own, and
 `selectedCodingRuntimeFailures` checks each pin against its own reviewed entry. Because
 `coding-runtime-1.1.6` will be an immutable Windows-only transport, 1.1.6 can never carry a macOS
@@ -365,8 +366,8 @@ the published form in the change that selects the package (step 4 below).
 
 _Reproducing the pinned bytes._ The reviewed 1.1.6 candidate has 10 files, every file mode 0644
 (`--pack` fixes the modes of a `windows-x64` package by target, so a POSIX host cannot change the
-tarball), and the tarball SHA-256 `261bbc5c555d9e770b0098d046416788aed928afd582191c2c491b08fd41b3bb`
-(123,461,366 bytes). The two MSVC-built executables are not rebuilt on a host without MSVC 14.51;
+tarball), and the tarball SHA-256 `7faa866be2cba38cc26dfbe64ef78194d559b5c3e8a6a730665418595634334d`
+(123,466,461 bytes). The two MSVC-built executables are not rebuilt on a host without MSVC 14.51;
 `--prebuilt-native-dir` names a directory holding `keiko-secure-workspace-read.exe` and
 `keiko-runtime-supervisor.exe` from the release archive. The builder checks each against the digest
 and size pinned in `npmLaneRuntimeApprovals.ts` before anything is staged and stops on any
@@ -379,10 +380,10 @@ node scripts/build-coding-runtime-npm-package.mjs --pack windows-x64 1.1.6 /abs/
 node scripts/build-coding-runtime-npm-package.mjs --verify windows-x64 1.1.6 /abs/runtime-1.1.6/pkg /abs/runtime-1.1.6/artifacts
 ```
 
-Checked on 2026-11-19 on a macOS host: with the two executables extracted from the candidate
-tarball as `native/`, these commands produced a tarball with SHA-256 `261bbc5c…` and a
+Checked on 2026-11-19 on a macOS host: with the two executables of the candidate
+tarball as `native/`, these commands produced a tarball with SHA-256 `7faa866b…` and a
 `receipt.json` byte-identical to the candidate's. The candidate tarball and its receipt are kept,
-owner-held, in the owner's lab folder `keiko-standalone-lab/win-153/runtime-1.1.6/artifacts/` until
+owner-held, in the owner's lab folder `keiko-standalone-lab/win-153/runtime-1.1.6-relay/artifacts/` until
 they are uploaded; if they are lost, the commands above regenerate them from the release's
 executables.
 
