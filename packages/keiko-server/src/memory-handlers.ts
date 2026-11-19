@@ -1320,7 +1320,8 @@ export async function handleArchiveMemory(
 // ─── Handler: POST /api/memory/:id/forget + POST /api/memory/forget ───────────
 // The public destructive surfaces all use the same governed path:
 //   1. require explicit acknowledgement,
-//   2. let the governance selector protect pinned/forgotten records,
+//   2. let the governance selector protect pinned/forgotten records (the one exception is an entry
+//      the person picked in the Memory window; see `ForgetCaller`),
 //   3. delete with an audit tombstone.
 
 interface DestructiveInput {
@@ -1503,13 +1504,34 @@ function listForgetCandidates(
   return sortMemories(vault.listMemoriesByScope(selector.scope, { includeExpired: true }));
 }
 
+// Who asks for a forget decides whether a pin protects the entry. Only the Memory window shows the
+// person a row they pick and confirm, so only there does a by-id forget ignore the pin (#4214). In a
+// Chat the id comes from words that matched a record or from what "das" refers to, which is a
+// heuristic: the pin stays the person's protection against it (ADR-0146 D4b). The exemption is a
+// property of the call site, never of the selector kind.
+interface ForgetCaller {
+  readonly forgetterSurface: string;
+  readonly personPickedEntry: boolean;
+}
+
+const MEMORY_WINDOW_FORGET_CALLER: ForgetCaller = {
+  forgetterSurface: MEMORY_CENTER_FORGETTER_SURFACE,
+  personPickedEntry: true,
+};
+
+const CHAT_STATEMENT_FORGET_CALLER: ForgetCaller = {
+  forgetterSurface: MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE,
+  personPickedEntry: false,
+};
+
 function executeForgetSelection(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   selector: ForgetSelector,
   reason: MemoryForgetReason,
-  forgetterSurface = MEMORY_CENTER_FORGETTER_SURFACE,
+  caller: ForgetCaller,
 ): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
+  const { forgetterSurface } = caller;
   const nowMs = Date.now();
   const authorizedScopes = authorizedMemoryScopes(deps, vault);
   const requestedScope = selectorScope(selector);
@@ -1521,11 +1543,11 @@ function executeForgetSelection(
   if (records.some((record) => !scopeAuthorized(record.scope, authorizedScopes))) {
     return forbiddenMemoryScopeResult();
   }
-  // Pinning protects a fact from a sweep by scope or type. An entry the person names is their own
-  // decision: it is forgotten whether or not it is pinned.
+  // Pinning protects a fact from a sweep by scope or type and from a Chat's word match. An entry the
+  // person picked in the Memory window is their own decision: it is forgotten pinned or not.
   const candidates = selectMemoriesForForget(records, selector, {
     nowMs,
-    protectPinned: selector.kind !== "by-id",
+    protectPinned: !(caller.personPickedEntry && selector.kind === "by-id"),
   });
   if (candidates.length === 0) {
     return {
@@ -1584,7 +1606,13 @@ function forgetFromMemoryWindow(
   });
   try {
     scopeKind = forgetSelectorScopeKind(vault, selector);
-    const result = executeForgetSelection(deps, vault, selector, reason);
+    const result = executeForgetSelection(
+      deps,
+      vault,
+      selector,
+      reason,
+      MEMORY_WINDOW_FORGET_CALLER,
+    );
     if (isRouteResult(result)) {
       logExplicitMemoryForget(forgetRouteOutcome(result), correlationId, detail(false));
     } else {
@@ -1680,7 +1708,7 @@ export function forgetMemoryFromStatement(
       vault,
       { kind: "by-id", memoryId },
       MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
-      MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE,
+      CHAT_STATEMENT_FORGET_CALLER,
     );
     return isRouteResult(result) ? "refused" : "forgotten";
   } catch (error) {

@@ -232,6 +232,13 @@ looked up by its name alone and keeps the question when nothing matches. Any oth
 reaches a memory only through the same word or an inflection of it, so "Java" does not reach
 "JavaScript".
 
+A pin protects a fact from every forget that does not come from a row the person picked. In the
+Memory window a forget by id names exactly the entry the person selected and confirmed, so it
+ignores the pin (#4214). In a Chat, and in the pending-forget replay of a learning pass, the id comes
+from a word match or from what "das" refers to; the pin keeps protecting there, the forget is not
+applied and the Chat says so (#4223). The exemption belongs to the call site, never to the selector
+kind.
+
 Saying a statement again confirms the existing memory through `recordAccess`, naming the chat,
 instead of storing a second record: in the same words without an embedder, and as a paraphrase through the existing
 novelty gate with one. A paraphrase of a forgotten fact is suppressed the same way.

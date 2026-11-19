@@ -1622,3 +1622,36 @@ describe("a corrected fact stays as history (#4223)", () => {
     expect(text).not.toContain(first);
   });
 });
+
+// #4223: what a forget covers. A fact and the values it replaced are one fact.
+function forgetByWords(
+  vault: MemoryVaultStore,
+  ctx: ConversationMemoryRuntimeContext,
+  content: string,
+): ReturnType<typeof collectMemoryActions> {
+  return collectMemoryActions(
+    makeDeps(vault, []),
+    { content, memory: { enabled: true } } as SendDesktopChatRequest,
+    ctx,
+  );
+}
+
+describe("what a forget covers (#4223)", () => {
+  const first = "Ich bevorzuge Tabs über Spaces";
+
+  it("keeps a pinned fact the person's words resolved to", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    const [live] = recordsWith(vault, ctx, "accepted");
+    if (live === undefined) throw new Error("expected the learned fact");
+    vault.updateMemory(live.id, { pinned: true }, Date.now());
+
+    const actions = await forgetByWords(vault, ctx, "Vergiss, dass ich Tabs über Spaces bevorzuge");
+
+    expect(actions).toEqual([
+      { kind: "rejected", reason: "forget-not-applied", explicitStatement: true },
+    ]);
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+  });
+});

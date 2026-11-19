@@ -59,7 +59,9 @@ MemoriaViva exposes separate lifecycle controls:
   accepted.
 - **Pin / unpin** controls retention priority. Pinned memories are not eligible
   for retention cleanup, and a forget by any other selector (scope, type, source conversation or time window) leaves them in place. An
-  entry the person names is forgotten whether or not it is pinned.
+  entry the person picks in the Memory window is forgotten whether or not it is pinned. A "Vergiss
+  …" in a Chat does not pick a row: Keiko matches the person's words, so a pinned fact stays and the
+  Chat says the forget was not applied; the person unpins or deletes it in the Memory window.
 - **Archive** removes a memory from the active working set without deleting the
   audit trail.
 - **Forget / delete** removes the active memory record and writes a tombstone so

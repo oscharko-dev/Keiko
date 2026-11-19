@@ -1150,6 +1150,21 @@ describe("memory learning passes", () => {
     expect(bodies(deps, chat)).toEqual(["I write Atlas in Rust."]);
   });
 
+  it("keeps a pinned fact a pending forget names (#4223)", async () => {
+    const deps = makeDeps();
+    const vault = vaultOf(deps);
+    const insert = vault.insertMemory.bind(vault);
+    vi.spyOn(vault, "insertMemory").mockImplementation((record) =>
+      insert({ ...record, pinned: true }),
+    );
+    const chat = makeChat(deps);
+    writeTurn(deps, chat, "I live in Hamburg.");
+    writeTurn(deps, chat, "Forget that I live in Hamburg.");
+    await memoryLearningRuntime(deps).runPass("inactivity", undefined);
+    // The id came from a word match, not from a row the person picked: the pin protects it.
+    expect(bodies(deps, chat)).toEqual(["I live in Hamburg."]);
+  });
+
   it("resumes a pending forget after its audit store becomes writable", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const sink = createBufferedServerLogSink();

@@ -68,6 +68,7 @@ import {
   handleRejectMemoryProposal,
   handleResolveMemoryConflict,
   handleUnpinMemory,
+  forgetMemoryFromStatement,
 } from "./memory-handlers.js";
 import { standingProfileForUser } from "./memory-profile.js";
 import { handleMemoryCaptureFromConversation } from "./memory-conv-handlers.js";
@@ -2689,6 +2690,58 @@ describe("memory handlers", () => {
     expect(vault.listTombstonesByScope({ kind: "global" }).map((t) => t.memoryId)).toEqual([
       memoryId("pinned-named"),
     ]);
+  });
+
+  // The Chat gets its id from a word match or from what "das" refers to, not from a row the person
+  // picked, so the pin keeps protecting there (ADR-0146 D4b, #4223).
+  it("keeps a pinned memory a Chat statement resolved to, and forgets it once the person picks it", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("pinned-chat", "pinned and unwanted", { pinned: true }));
+    const deps = makeDeps({ memoryVault: vault });
+
+    expect(forgetMemoryFromStatement(deps, vault, memoryId("pinned-chat"), "corr-chat")).toBe(
+      "refused",
+    );
+    expect(vault.getMemory(memoryId("pinned-chat"))).toBeDefined();
+    expect(vault.listTombstonesByScope({ kind: "global" })).toEqual([]);
+
+    const picked = await handleForgetMemory(
+      makeCtx("/api/memory/pinned-chat/forget", { acknowledged: true }, { id: "pinned-chat" }),
+      deps,
+    );
+    expect(picked.status).toBe(200);
+    expect(vault.getMemory(memoryId("pinned-chat"))).toBeUndefined();
+  });
+
+  it("forgets an unpinned memory a Chat statement resolved to", () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("unpinned-chat", "unwanted"));
+    const deps = makeDeps({ memoryVault: vault });
+    expect(forgetMemoryFromStatement(deps, vault, memoryId("unpinned-chat"), "corr-chat")).toBe(
+      "forgotten",
+    );
+    expect(vault.getMemory(memoryId("unpinned-chat"))).toBeUndefined();
+  });
+
+  it("sweeps a scope over pinned and unpinned memories and keeps the pinned ones", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("sweep-pinned", "keep me", { pinned: true }));
+    vault.insertMemory(makeMemory("sweep-loose-1", "drop me"));
+    vault.insertMemory(makeMemory("sweep-loose-2", "drop me too"));
+
+    const result = await handleForgetMemories(
+      makeCtx("/api/memory/forget", {
+        acknowledged: true,
+        selector: { kind: "by-scope", scope: { kind: "global" } },
+      }),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(asJson(result).count).toBe(2);
+    expect(vault.getMemory(memoryId("sweep-pinned"))).toBeDefined();
+    expect(vault.getMemory(memoryId("sweep-loose-1"))).toBeUndefined();
+    expect(vault.getMemory(memoryId("sweep-loose-2"))).toBeUndefined();
   });
 
   it("selectively forgets matching records through one batch delete", async () => {
