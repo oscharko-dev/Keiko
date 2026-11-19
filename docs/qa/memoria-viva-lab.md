@@ -57,12 +57,22 @@ failure-first proofs, `--allow-folded-env` (see "Isolation"). `--out` must lie o
 outside every other git work tree, and a directory that already holds a scorecard is never
 overwritten.
 
-`--memory-mode` and `--ceiling` both default to `autonomous-delivery` (Full access), the
-configuration in which a learned fact is stored at all. In `governed-assist` (Ask for approval)
-every learned fact is parked as `proposed`, so recall is zero for any learner and a result there says
-nothing about extraction; that configuration is measured explicitly for the baseline of #4209 with
-`--ceiling governed-assist --memory-mode governed-assist`. The three product configurations of #4209
-are memory off (the `off` arm), `governed-assist`, and `autonomous-delivery` with the same ceiling.
+`--memory-mode` and `--ceiling` both default to `autonomous-delivery` (Full access). Since #4206 a
+routine private fact (user scope) a person states is accepted at once in every mode, and only a fact
+about a team or a project keeps the mode's rule: in `governed-assist` (Ask for approval) such a fact
+is parked as `proposed` and is not recalled (`memoryCaptureAutoAcceptEligible` in
+`memory-capture-policy.ts`; hard denials such as credentials, and confidential or restricted content,
+are refused in every mode, and an explicit "Merke dir" acts in every mode). A Memory ceiling that an
+operator configured explicitly as `governed-assist` also holds routine private facts for review, and
+then no learned fact is recalled whatever the learner does. The lab always names a ceiling (it passes
+`KEIKO_CODING_DEPLOYMENT_CEILING`), so `--ceiling governed-assist` is that explicit restriction: an
+offline check parked the user-scope preference of `preference-tables-en` as `proposed`, while
+`--memory-mode governed-assist` with the default ceiling accepted it (user scope) and holds only
+project-scope facts. A result under `--ceiling governed-assist --memory-mode governed-assist` says
+nothing about extraction when the scorecard's `live` count is zero, which is the configuration measured
+explicitly for the baseline of #4209.
+The three product configurations of #4209 are memory off (the `off` arm), `governed-assist`, and
+`autonomous-delivery` with the same ceiling.
 
 The exit code is 0 when the run completed, 4 with `--fail-on-hard-counters` when a product-arm hard
 counter is above zero, and 5 when a unit could not be measured.
@@ -71,7 +81,7 @@ The offline curated set runs in `npm test` through `scripts/__tests__/memory-lab
 (three scenarios plus one broken-learner proof, so the suite stays short); the full set is the CLI
 run above. The proof is a pair: for the same scenario the correct learner turns the store green and
 the related question is answered, and the whole-message learner turns it red with precision 0. Both
-halves run in Full access; in Ask for approval the "red" half would hold for the correct learner too.
+halves run in Full access; under an explicit `--ceiling governed-assist` the "red" half would hold for the correct learner too.
 
 ## How it works
 
