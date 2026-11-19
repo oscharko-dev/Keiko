@@ -40,6 +40,7 @@ export {
   planDirectTargetedTests,
   planPackageTargetedTests,
   NATIVE_SHELL_SKIP_PREFIX,
+  ISOLATION_UNAVAILABLE_DENIAL_PREFIX,
 } from "./plan.js";
 export type { PlanOptions } from "./plan.js";
 

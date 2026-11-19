@@ -44,6 +44,7 @@ import {
 } from "./codingRuntimeOrchestrator.js";
 import {
   VERIFICATION_CONTINUATION_INTENT,
+  VERIFICATION_CONTINUATION_INTENT_WITHOUT_SHELL,
   VERIFICATION_CONTINUATION_MAX,
 } from "./codingRuntimeVerificationContinuation.js";
 import type { CodingRuntimeProjectMemoryPort } from "./codingRuntimeOrchestratorTypes.js";
@@ -122,6 +123,7 @@ type OptionalOrchestratorDeps = Pick<
   | "terminalFacts"
   | "runEffort"
   | "runtimeVersion"
+  | "taskHasShellTool"
 >;
 type ProjectMemoryRequest = Parameters<CodingRuntimeProjectMemoryPort["getContextForRun"]>[0];
 type TaskDispatchRequest = Parameters<CodingRuntimeTaskDispatcher["dispatch"]>[0];
@@ -187,6 +189,7 @@ function optionalOrchestratorDeps(input: {
   readonly terminalFacts?: CodingRuntimeTerminalFacts | undefined;
   readonly runEffort?: ((runId: string) => CodingRuntimeHostRunEffort | undefined) | undefined;
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+  readonly taskHasShellTool?: boolean | undefined;
 }): Partial<OptionalOrchestratorDeps> {
   return {
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
@@ -199,6 +202,7 @@ function optionalOrchestratorDeps(input: {
     ...(input.terminalFacts ? { terminalFacts: input.terminalFacts } : {}),
     ...(input.runEffort ? { runEffort: input.runEffort } : {}),
     ...(input.runtimeVersion ? { runtimeVersion: input.runtimeVersion } : {}),
+    ...(input.taskHasShellTool === undefined ? {} : { taskHasShellTool: input.taskHasShellTool }),
   };
 }
 
@@ -302,6 +306,8 @@ interface FixtureOptions {
   readonly workspaceInventory?: readonly WorkspaceInstance[] | undefined;
   // #4359: the activated runtime's version facts, named on the run's start line.
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
+  // Whether the composed tool profile hands the model a shell tool; unset reads as unknown.
+  readonly taskHasShellTool?: boolean | undefined;
 }
 
 /** The positional form every older suite uses; new inputs are named through `fixtureFrom`. */
@@ -367,6 +373,7 @@ function fixtureFrom({
   sessionContinuity,
   workspaceInventory,
   runtimeVersion,
+  taskHasShellTool,
 }: FixtureOptions) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -604,6 +611,7 @@ function fixtureFrom({
         terminalFacts,
         runEffort,
         runtimeVersion,
+        taskHasShellTool,
       }),
       ...(history === undefined ? {} : { history }),
       ...(sessionContinuity === undefined ? {} : { sessionContinuity }),
@@ -8285,9 +8293,13 @@ describe("run effort roll-up (#3873)", () => {
 });
 
 describe("verification truth at task settlement", () => {
-  async function runningTask() {
+  async function runningTask(taskHasShellTool?: boolean) {
     const log = captureActivityLog();
-    const f = fixture(undefined, undefined, [], undefined, log.activityLog);
+    const f = fixtureFrom({
+      seededRows: [],
+      activityLog: log.activityLog,
+      taskHasShellTool,
+    });
     let finish: ((outcome: CodingRuntimeTaskOutcome) => void) | undefined;
     const completion = new Promise<CodingRuntimeTaskOutcome>((resolve) => {
       finish = resolve;
@@ -8417,6 +8429,141 @@ describe("verification truth at task settlement", () => {
         formatActivityLogProofLine(settled),
       ),
     ).toMatchObject({ state: "not-evidenced", attempt: 0, blockedReason: "NO_RUNNABLE_STEPS" });
+  });
+
+  // Keiko 1.5.3 (Windows, no container runtime): the change was applied, the only verification step
+  // was denied for want of an isolation backend, and the run kept asking a model that has no shell
+  // to run a command in it before it settled as an internal failure.
+  describe("a host that cannot isolate a verification step", () => {
+    async function isolationBlockedRun(taskHasShellTool?: boolean) {
+      const run = await runningTask(taskHasShellTool);
+      run.f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+      const target = "c".repeat(64);
+      // The production port reports the not-run target first: nobody selected it, so on its own it
+      // blocks nothing and the continuation would run (see the unselected-target test below).
+      run.f.orchestrator.observeVerificationBlocked("run-1", "VERIFICATION_NOT_RUN", target);
+      run.f.orchestrator.observeVerificationBlocked("run-1", "VERIFICATION_ISOLATION_UNAVAILABLE");
+      return run;
+    }
+
+    it("runs no futile continuation and names the cause on the continuation line", async () => {
+      const { f, log, finish } = await isolationBlockedRun(false);
+      finish();
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+      });
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+      const line = requireLoggedEvent(
+        log.records.find(
+          (event) =>
+            event.op === "coding-runtime.run.verification-continuation" &&
+            event.extra?.state === "not-evidenced",
+        ),
+        "Expected the not-evidenced line",
+      );
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.run.verification-continuation.emitted-line",
+          formatActivityLogProofLine(line),
+        ),
+      ).toMatchObject({
+        state: "not-evidenced",
+        attempt: 0,
+        blockedReason: "VERIFICATION_ISOLATION_UNAVAILABLE",
+      });
+    });
+
+    it("keeps the not-verified outcome and settles as unavailable, not as an internal failure", async () => {
+      const { f, log, finish } = await isolationBlockedRun(false);
+      finish();
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+          state: "failed",
+          failureCode: "verification-not-evidenced",
+        });
+      });
+      const settled = requireLoggedEvent(
+        log.records.find(
+          (event) => event.op === "coding-runtime.run.settled" && event.extra?.terminal === true,
+        ),
+        "Expected the terminal settlement line",
+      );
+      expect(settled.errorKind).toBe("unavailable");
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.run.settled.emitted-line",
+          formatActivityLogProofLine(settled),
+        ),
+      ).toMatchObject({
+        state: "failed",
+        failureCode: "verification-not-evidenced",
+        verificationBlockedReason: "VERIFICATION_ISOLATION_UNAVAILABLE",
+      });
+    });
+
+    it("still settles a human-denied verification as an internal not-verified failure", async () => {
+      const { f, log, finish } = await runningTask(false);
+      f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+      f.orchestrator.observeVerificationBlocked("run-1", "verification-command-denied");
+      finish();
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+      });
+      const settled = requireLoggedEvent(
+        log.records.find(
+          (event) => event.op === "coding-runtime.run.settled" && event.extra?.terminal === true,
+        ),
+        "Expected the terminal settlement line",
+      );
+      expect(settled.errorKind).toBe("internal");
+      expect(settled.extra).toMatchObject({
+        verificationBlockedReason: "verification-command-denied",
+      });
+    });
+
+    it("lets a later executed check clear the host blocker so repair may continue", async () => {
+      const { f, finish } = await runningTask(false);
+      f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+      f.orchestrator.observeVerificationBlocked("run-1", "VERIFICATION_ISOLATION_UNAVAILABLE");
+      // Isolation became available (a container runtime was started): a check ran and went red.
+      const executed = f.orchestrator.verificationAdmitted("run-1");
+      const target = "d".repeat(64);
+      executed?.(target);
+      await verification(f, "failed", undefined, target);
+      finish();
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+      });
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("the continuation a run's tool profile can follow", () => {
+    async function continuedIntent(taskHasShellTool: boolean | undefined): Promise<string> {
+      const { f, finish } = await runningTask(taskHasShellTool);
+      f.orchestrator.observeEditOutcome("run-1", { kind: "applied" });
+      await verification(f, "failed");
+      finish();
+      await vi.waitFor(() => {
+        expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+      });
+      const request = f.taskDispatcher.dispatch.mock.calls[1]?.[0] as { taskIntent: string };
+      return request.taskIntent;
+    }
+
+    it("never tells a model without a shell tool to use its shell", async () => {
+      const intent = await continuedIntent(false);
+      expect(intent).toBe(VERIFICATION_CONTINUATION_INTENT_WITHOUT_SHELL);
+      expect(intent.toLowerCase()).not.toContain("shell");
+      expect(intent).toContain("governed verification tool");
+    });
+
+    it.each([true, undefined])(
+      "keeps the shell continuation unchanged where the shell is available or unknown (%s)",
+      async (hasShell) => {
+        await expect(continuedIntent(hasShell)).resolves.toBe(VERIFICATION_CONTINUATION_INTENT);
+      },
+    );
   });
 
   it("still repairs a selected failing test when unrelated lint is unavailable", async () => {

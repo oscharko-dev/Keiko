@@ -129,6 +129,12 @@ export interface CodingRuntimeOrchestratorDeps {
   readonly taskDispatcher: CodingRuntimeTaskDispatcher;
   readonly questionPort: CodingRuntimeQuestionPort;
   readonly permissionPort?: CodingRuntimePermissionPort | undefined;
+  /**
+   * Whether the composed tool profile hands the model a shell tool. Only the native profile does;
+   * the mapped profiles run commands through `keiko_verification` alone. Absent reads as unknown:
+   * the continuation keeps its shell form, as before.
+   */
+  readonly taskHasShellTool?: boolean | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   readonly contextUsage?: ((runId: string) => CodingWorkbenchContextUsage | undefined) | undefined;
   /**

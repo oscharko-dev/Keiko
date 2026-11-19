@@ -96,7 +96,13 @@ const CODING_RUNTIME_TOOL_RESULT_RENDERED_OPERATION = defineActivityLogOperation
   diagnosticWhen: [
     {
       field: "verificationOutcome",
-      values: ["failed-check", "waiting-for-trust", "no-runnable-steps", "not-run"],
+      values: [
+        "failed-check",
+        "waiting-for-trust",
+        "no-runnable-steps",
+        "not-run",
+        "isolation-unavailable",
+      ],
     },
     // A Git step that was refused or did not complete is a failure fact; one still waiting on the
     // human, like a completed one, stays optional context.

@@ -241,6 +241,7 @@ const OPTIONAL_RUNTIME_CAPABILITY_KEYS = [
   "secureWorkspaceTextRead",
   "runEffort",
   "envelopeDurationExhausted",
+  "taskHasShellTool",
   "sweepOrphanedRunState",
 ] as const;
 

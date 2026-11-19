@@ -809,6 +809,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.waiting-for-trust": "Wartet auf Freigabe",
   "codingWorkbench.activity.toolState.no-runnable-steps": "Nichts auszuführen",
   "codingWorkbench.activity.toolState.not-run": "Nicht ausgeführt",
+  "codingWorkbench.activity.toolState.isolation-unavailable": "Hier nicht möglich",
   "codingWorkbench.activity.toolState.not-done": "Nicht durchgeführt",
   "codingWorkbench.activity.toolState.waiting-for-approval": "Wartet auf Freigabe",
   "codingWorkbench.activity.toolState.denied": "Abgelehnt",
@@ -1419,6 +1420,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Verifizierung ist nicht gelaufen: Der Verifizierer hat für diese Anfrage nichts gefunden, was er ausführen kann, etwa weil das gewählte Paket kein test-, lint- oder build-Skript hat. Das ist keine fehlgeschlagene Prüfung.",
   "codingWorkbench.activity.verification.not-run":
     "Die Verifizierung ist nicht vollständig gelaufen: Ein Schritt wurde übersprungen, abgelehnt oder abgebrochen. Das ist keine fehlgeschlagene Prüfung.",
+  "codingWorkbench.activity.verification.isolation-unavailable":
+    "Die Verifizierung konnte auf diesem Computer nicht laufen: Er hat keine Container-Laufzeit (Docker oder Podman), die Keiko hier braucht, um Projektbefehle sicher auszuführen. Deine Änderung bleibt erhalten. Starte eine Container-Laufzeit und führe die Prüfung erneut aus, oder prüfe die Änderung selbst.",
   "codingWorkbench.activity.git.waiting-for-approval":
     "Wartet auf eine Entscheidung, bevor dieser Schritt ausgeführt wird.",
   "codingWorkbench.activity.git.verification-failed":

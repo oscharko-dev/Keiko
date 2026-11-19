@@ -21,6 +21,22 @@ export const SHELL_VERIFICATION_STATUS_RULE =
   "In your shell, run the check as its own line, or chain it with && only to cd or other checks: a pipe (such as | tail), ;, ||, & or a second line lets another command decide the exit status, and such a line does not count as verification.";
 export const VERIFICATION_CONTINUATION_INTENT = `Verification is not complete for the accepted task. Continue within its original scope and authority: inspect the latest governed verification result, read the relevant source and test files, repair the diagnosed cause without weakening assertions, and rerun the same smallest relevant verification. Where the governed verifier cannot run that check, run the repository's own test command in your shell, where its result counts. ${SHELL_VERIFICATION_STATUS_RULE} A nonempty verification must pass after the final edit before you claim completion. If authority or the test environment prevents verification, explain the blocker accurately; do not claim success.`;
 
+/**
+ * The same continuation for a run whose tool profile hands the model no shell tool (the mapped
+ * profiles: `keiko_verification` is their only command runner). Telling that model to "run the
+ * repository's own test command in your shell" cannot be followed, and cost the 1.5.3 Windows lab run
+ * two futile turns, so this form names only the governed verifier.
+ */
+export const VERIFICATION_CONTINUATION_INTENT_WITHOUT_SHELL =
+  "Verification is not complete for the accepted task. Continue within its original scope and authority: inspect the latest governed verification result, read the relevant source and test files, repair the diagnosed cause without weakening assertions, and rerun the same smallest relevant verification with the governed verification tool. A nonempty verification must pass after the final edit before you claim completion. If authority or the test environment prevents verification, explain the blocker accurately; do not claim success.";
+
+/** The continuation task for a run: the shell form only where the run's profile has a shell tool. */
+export function verificationContinuationIntent(hasShellTool: boolean | undefined): string {
+  return hasShellTool === false
+    ? VERIFICATION_CONTINUATION_INTENT_WITHOUT_SHELL
+    : VERIFICATION_CONTINUATION_INTENT;
+}
+
 type ContinuationState =
   "continued" | "dispatch-refused" | "dispatch-threw" | "run-superseded" | "not-evidenced";
 

@@ -63,10 +63,11 @@ import {
   type CodingRuntimeTerminalFailure,
   type CodingRuntimeTerminalFailureCode,
 } from "./codingRuntimeTerminalCause.js";
-import type {
-  CodingVerificationBlockedReason,
-  CodingVerificationExecutedObserver,
-  CodingToolEditOutcome,
+import {
+  CODING_VERIFICATION_BLOCKED_REASONS,
+  type CodingVerificationBlockedReason,
+  type CodingVerificationExecutedObserver,
+  type CodingToolEditOutcome,
 } from "./codingToolFacadePorts.js";
 import {
   CodingRuntimeRunEffortLedger,
@@ -74,7 +75,7 @@ import {
 } from "./codingRuntimeRunEffort.js";
 import {
   recordVerificationContinuation,
-  VERIFICATION_CONTINUATION_INTENT,
+  verificationContinuationIntent,
   VERIFICATION_CONTINUATION_MAX,
 } from "./codingRuntimeVerificationContinuation.js";
 import type {
@@ -761,6 +762,15 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
       values: [...EDIT_REFUSAL_REASON_CODES],
+    },
+    // The blocker the run's verification ledger held when it settled as not verified: why no
+    // governed check could be evidenced (for example `VERIFICATION_ISOLATION_UNAVAILABLE`, a host
+    // with no container runtime, which is not an internal failure).
+    verificationBlockedReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...CODING_VERIFICATION_BLOCKED_REASONS],
     },
     taskOutcomeStatus: {
       type: "string",
@@ -1744,8 +1754,9 @@ function recordRuntimeRunSettled(
   effort: CodingRuntimeRunEffortRollUp | { readonly wallDurationMs: number },
   failureCode?: CodingWorkbenchRuntimeFailureCode,
   cause?: RunSettlementCause,
+  verificationBlockedReason?: CodingVerificationBlockedReason,
 ): void {
-  const errorKind = settlementErrorKind(state, cause);
+  const errorKind = settlementErrorKind(state, cause, verificationBlockedReason);
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_RUN_SETTLED_OPERATION,
@@ -1762,6 +1773,7 @@ function recordRuntimeRunSettled(
         modelSource: snapshot.modelSource,
         terminal: TERMINAL_STATES.has(state),
         ...(failureCode === undefined ? {} : { failureCode }),
+        ...(verificationBlockedReason === undefined ? {} : { verificationBlockedReason }),
         ...settlementCauseLogFields(cause),
         ...runtimeResultLogFields(snapshot.result),
         ...effort,
@@ -1787,7 +1799,13 @@ function isRefusalEscalation(cause: RunSettlementCause): cause is CodingRuntimeR
 function settlementErrorKind(
   state: CodingWorkbenchRuntimeStateName,
   cause: RunSettlementCause | undefined,
+  verificationBlockedReason: CodingVerificationBlockedReason | undefined,
 ): ActivityLogErrorKind | undefined {
+  // A change kept but not verifiable on this computer is a capability the host lacks, not a Keiko
+  // fault: it never settles as `internal`.
+  if (cause === undefined && verificationBlockedReason === "VERIFICATION_ISOLATION_UNAVAILABLE") {
+    return "unavailable";
+  }
   if (cause === undefined) return runtimeRunSettledErrorKind(state);
   return isRefusalEscalation(cause) ? cause.errorKind : terminalFailureErrorKind(cause);
 }
@@ -3560,7 +3578,7 @@ export class CodingRuntimeOrchestrator {
         runId: live.runId,
         requestId: `verification-continuation-${String(attempt)}`,
         expectedRevision: live.revision,
-        taskIntent: VERIFICATION_CONTINUATION_INTENT,
+        taskIntent: verificationContinuationIntent(this.deps.taskHasShellTool),
         origin: "verification-continuation",
       });
     } catch (error) {
@@ -5074,6 +5092,9 @@ export class CodingRuntimeOrchestrator {
       this.effort.rollUp(next, this.deps.runEffort?.(next.runId)),
       failureCode,
       cause,
+      failureCode === "verification-not-evidenced"
+        ? this.effort.verificationBlockedReason(next.runId)
+        : undefined,
     );
     if (TERMINAL_STATES.has(state)) this.effort.forget(next.runId);
     this.publishSettlement(next, state, failureCode);

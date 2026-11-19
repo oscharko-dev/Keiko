@@ -50,6 +50,12 @@ function resolveLimits(overrides: PlanOptions["limits"]): VerificationResourceLi
 // the caller's shell; the closed prefix is what the tool maps to `native-shell-required`.
 export const NATIVE_SHELL_SKIP_PREFIX = "native shell required: ";
 
+// What a step denied for want of an enforcing isolation backend says. The denial is a host
+// condition (no container runtime, sandbox or confinement tool qualified on this computer), not an
+// authority or policy decision, so the closed prefix is what the governed tool maps to its own
+// reason instead of the generic `denied`.
+export const ISOLATION_UNAVAILABLE_DENIAL_PREFIX = "isolation unavailable: ";
+
 function nativeShellSkipReason(pkg: VerificationPackage | undefined): string | undefined {
   return pkg === undefined || pkg.manager === "npm" || pkg.installed
     ? undefined

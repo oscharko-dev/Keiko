@@ -2048,21 +2048,33 @@ describe("production managed worktree tools", () => {
     const events: CodingWorkbenchRuntimeEvent[] = [];
     const log: ServerLogEvent[] = [];
     const completeVerification = vi.fn<VerifiedCommitService["completeVerification"]>();
+    const verificationBlocked = vi.fn();
     const facade = verificationFacade({
       runToReport: () => Promise.resolve(report),
       records: [],
       events,
       log,
+      verificationBlocked,
       verifiedCommitService: { ...verificationService(), completeVerification },
     });
     const result = await executeVerification(facade, "verification-no-backend");
+    // Keiko 1.5.3 Windows lab: the model read "denied by policy" and kept asking for a shell. The
+    // host condition is now named; the denial itself and "not a failed check" are unchanged.
     expect(result).toMatchObject({
       status: "failed",
-      reasonCode: "VERIFICATION_NOT_RUN",
-      detail: "These verification steps did not run: test (denied by policy).",
+      reasonCode: "VERIFICATION_ISOLATION_UNAVAILABLE",
+      detail:
+        "These verification steps did not run: test (this computer has no container runtime (Docker or Podman), so Keiko cannot run project commands safely here).",
     });
     expect(result).not.toHaveProperty("verificationFailure");
-    expect(codingToolVerificationPresentation(result)).toEqual({ verificationOutcome: "not-run" });
+    expect(codingToolVerificationPresentation(result)).toEqual({
+      verificationOutcome: "isolation-unavailable",
+    });
+    expect(verificationBlocked).toHaveBeenCalledWith(
+      "VERIFICATION_NOT_RUN",
+      expect.any(String) as unknown,
+    );
+    expect(verificationBlocked).toHaveBeenLastCalledWith("VERIFICATION_ISOLATION_UNAVAILABLE");
     expect(events.find((entry) => entry.kind === "verification-summarized")).toMatchObject({
       kind: "verification-summarized",
       verificationStatus: "failed",
@@ -2080,7 +2092,12 @@ describe("production managed worktree tools", () => {
       "coding-runtime.verification.emitted-line",
       formatActivityLogProofLine(observed ?? {}),
     );
-    expect(persisted).toMatchObject({ state: "not-run", stepCount: 1, steps: ["test:denied"] });
+    expect(persisted).toMatchObject({
+      state: "not-run",
+      stepCount: 1,
+      steps: ["test:isolation-unavailable"],
+    });
+    expect(observed?.errorKind).toBe("unavailable");
   });
 
   it.each([

@@ -777,6 +777,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.waiting-for-trust": "Waiting for approval",
   "codingWorkbench.activity.toolState.no-runnable-steps": "Nothing to run",
   "codingWorkbench.activity.toolState.not-run": "Not run",
+  "codingWorkbench.activity.toolState.isolation-unavailable": "Cannot run here",
   "codingWorkbench.activity.toolState.not-done": "Not done",
   "codingWorkbench.activity.toolState.waiting-for-approval": "Waiting for approval",
   "codingWorkbench.activity.toolState.denied": "Denied",
@@ -1373,6 +1374,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Verification has not run: the verifier found nothing it can run for this request, for example because the selected package has no test, lint or build script. That is not a failing check.",
   "codingWorkbench.activity.verification.not-run":
     "Verification did not run to completion: a step was skipped, denied or cancelled. That is not a failing check.",
+  "codingWorkbench.activity.verification.isolation-unavailable":
+    "Verification could not run on this computer: it has no container runtime (Docker or Podman), which Keiko needs here to run project commands safely. The change is kept. Start a container runtime and run the check again, or check the change yourself.",
   "codingWorkbench.activity.git.waiting-for-approval":
     "Waiting for a decision before this step is carried out.",
   "codingWorkbench.activity.git.verification-failed":
