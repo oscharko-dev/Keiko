@@ -714,6 +714,73 @@ describe("retrieveConnectedContextPack activity log", () => {
     expect(JSON.stringify(activityLog.events)).not.toContain("locked.ts");
   });
 
+  it("records skipped links and unreadable directories on evidence-details (#4431)", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const target = "PRIVATE_LITERAL_TARGET";
+    const input: OrchestratorInput = {
+      ...fixtureInput(),
+      scope: {
+        ...fixtureScope(),
+        kind: "workspace-root",
+        relativePaths: [],
+        explicitConnection: true,
+      },
+      query: { ...fixtureQuery(), text: `Search for "${target}"` },
+    };
+    const base = memFs(FIXTURE_ROOT, {
+      [PRIVATE_SCOPE_FILE]: `export const value = "${target}";\n`,
+      [`${PRIVATE_SCOPE_PATH}/vault/notes.ts`]: `export const hidden = "${target}";\n`,
+    });
+    // The memory port reads its own tree through `this`.
+    const iterate = base.iterateDirectory?.bind(base);
+    if (iterate === undefined) throw new TypeError("Expected the streaming directory port");
+    const endsWith = (path: string, suffix: string): boolean =>
+      path.replaceAll("\\", "/").endsWith(`/${suffix}`);
+    const output = await retrieveConnectedContextPack(input, {
+      ...fixtureDeps(activityLog, CORRELATION_ID),
+      fs: {
+        ...base,
+        iterateDirectory: async function* (path) {
+          if (endsWith(path, "vault")) {
+            throw Object.assign(new Error("PRIVATE_DIRECTORY_DETAIL"), { code: "EACCES" });
+          }
+          yield* iterate(path);
+          if (endsWith(path, PRIVATE_SCOPE_PATH)) {
+            yield { name: "linked", isDirectory: true, isFile: false, isSymbolicLink: true };
+          }
+        },
+      },
+    });
+    expect(output.pack.files.map((file) => file.scopePath)).toEqual([PRIVATE_SCOPE_FILE]);
+    expect(output.pack.diagnostics?.coverage).toMatchObject({
+      incomplete: true,
+      deniedByDiscovery: 0,
+      skippedSymbolicLinksByDiscovery: 1,
+      unavailableDirectoriesByDiscovery: 1,
+    });
+    expect(JSON.stringify(output.pack.uncertainty)).toContain("unreadable directories 1");
+    const evidenceDetails = activityLog.events.find(
+      (event) => event.op === "search.connected-context.evidence-details",
+    );
+    expect(evidenceDetails?.correlationId).toBe(CORRELATION_ID);
+    expect(evidenceDetails?.extra).toMatchObject({
+      discoverySkippedLinkCount: 1,
+      discoveryUnavailableDirectoryCount: 1,
+      discoveryOversizedDirectoryCount: 0,
+      discoveryUnavailableEntryCount: 0,
+      discoveryDeniedCount: 0,
+      discoveryUnrepresentablePathCount: 0,
+    });
+    expect(typeof evidenceDetails?.extra?.discoveryIgnoredCount).toBe("number");
+    expectActivityLogProof(
+      "search.connected-context.evidence-details.line",
+      formatActivityLogProofLine(evidenceDetails ?? {}),
+    );
+    const logged = JSON.stringify(activityLog.events);
+    for (const secret of ["PRIVATE_DIRECTORY_DETAIL", "vault", "linked"])
+      expect(logged).not.toContain(secret);
+  });
+
   it("logs actual selected excerpt observations without hypothetical source eviction", async () => {
     const activityLog = createBufferedServerLogSink();
     const profile = deriveContextProfile({

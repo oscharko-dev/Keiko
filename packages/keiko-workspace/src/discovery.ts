@@ -93,6 +93,10 @@ interface Walk {
   vanishedEntries?: number;
   // Streaming-walk directories re-read once after benign membership churn (#4435).
   membershipRetries?: number;
+  // Streaming-walk symbolic links and reparse points skipped without being followed (#4431).
+  skippedLinks?: number;
+  // Streaming-walk directories too large to re-read after churn; also counted in ioErrors (#4431).
+  oversizedDirectories?: number;
 }
 
 function unavailableWalkRoot(error: unknown, failOnReadError: boolean): undefined {
@@ -373,7 +377,9 @@ function currentEntryStat(
 
 function recordSkippedSymbolicLink(walk: Walk, relPath: string): void {
   if (walk.retainMembership === false) {
-    walk.denied += 1;
+    // The streaming walk retains no path inventory, so a skipped link is counted on its own
+    // instead of being folded into the policy denial count (#4431).
+    walk.skippedLinks = (walk.skippedLinks ?? 0) + 1;
     return;
   }
   if (walk.skippedSymbolicLinks.length >= walk.opts.maxFiles) {
@@ -713,6 +719,12 @@ export interface StreamingDiscoveryStats {
   readonly vanishedEntries?: number;
   /** Directories re-read once after benign membership churn (#4435). */
   readonly membershipRetries?: number;
+  /** Symbolic links and reparse points skipped without being followed; not part of `denied`. */
+  readonly skippedSymbolicLinks?: number;
+  /** Directories whose listing could not be completed; `ioErrors` minus oversized ones (#4431). */
+  readonly unavailableDirectories?: number;
+  /** Directories too large to re-read after membership churn; part of `ioErrors` (#4431). */
+  readonly oversizedDirectories?: number;
   readonly directoriesDiscovered?: number;
   readonly directoriesPruned?: number;
 }
@@ -856,7 +868,9 @@ async function* admittedStreamingDirectoryEntries(
   const seen: StreamedDirectoryNames = { names: new Set(), overflowed: false };
   const first = yield* streamedDirectoryPass(walk, absolute, relativeDir, seen);
   if (first === "settled") return;
-  if (!seen.overflowed) {
+  if (seen.overflowed) {
+    walk.oversizedDirectories = (walk.oversizedDirectories ?? 0) + 1;
+  } else {
     walk.membershipRetries = (walk.membershipRetries ?? 0) + 1;
     const retry = yield* streamedDirectoryPass(walk, absolute, relativeDir, seen);
     if (retry === "settled") return;
@@ -961,20 +975,35 @@ async function visitSelectedStreamingPath(state: StreamingWalk, path: string): P
   }
 }
 
-interface StreamingChurnStats {
-  readonly unavailableEntries?: number;
-  readonly vanishedEntries?: number;
-  readonly membershipRetries?: number;
+type StreamingChurnStats = Pick<
+  StreamingDiscoveryStats,
+  | "unavailableEntries"
+  | "vanishedEntries"
+  | "membershipRetries"
+  | "skippedSymbolicLinks"
+  | "unavailableDirectories"
+  | "oversizedDirectories"
+>;
+
+type StreamingChurnCount = keyof StreamingChurnStats;
+
+// Only positive counts are reported, so a walk without drops keeps its existing stats shape.
+function positiveCount<Key extends StreamingChurnCount>(
+  key: Key,
+  value: number | undefined,
+): Partial<Record<Key, number>> {
+  return value !== undefined && value > 0 ? ({ [key]: value } as Record<Key, number>) : {};
 }
 
 function streamingChurnStats(walk: Walk): StreamingChurnStats {
-  const unavailable = walk.unavailableEntries ?? 0;
-  const vanished = walk.vanishedEntries ?? 0;
-  const retries = walk.membershipRetries ?? 0;
+  const oversized = walk.oversizedDirectories ?? 0;
   return {
-    ...(unavailable > 0 ? { unavailableEntries: unavailable } : {}),
-    ...(vanished > 0 ? { vanishedEntries: vanished } : {}),
-    ...(retries > 0 ? { membershipRetries: retries } : {}),
+    ...positiveCount("unavailableEntries", walk.unavailableEntries),
+    ...positiveCount("vanishedEntries", walk.vanishedEntries),
+    ...positiveCount("membershipRetries", walk.membershipRetries),
+    ...positiveCount("skippedSymbolicLinks", walk.skippedLinks),
+    ...positiveCount("unavailableDirectories", (walk.ioErrors ?? 0) - oversized),
+    ...positiveCount("oversizedDirectories", oversized),
   };
 }
 

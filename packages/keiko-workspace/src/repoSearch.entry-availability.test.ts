@@ -12,11 +12,13 @@ import { PathDeniedError } from "./errors.js";
 import {
   nodeWorkspaceFs,
   WorkspaceDescriptorReadError,
+  type WorkspaceDirEntry,
   type WorkspaceFs,
   type WorkspaceStat,
 } from "./fs.js";
 import { DEFAULT_SEARCH_LIMITS, searchText, type SearchScope } from "./repoSearch.js";
 import { createStructuralExecutionControl } from "./structuralExecution.js";
+import { discoverWorkspacePaths } from "./workspacePathDiscovery.js";
 
 let root: string;
 
@@ -250,7 +252,9 @@ describe("recursive search under benign directory churn (#4435)", () => {
       incomplete: true,
       reasons: ["io-error"],
       membershipRetriesByDiscovery: 1,
+      unavailableDirectoriesByDiscovery: 1,
     });
+    expect(result.coverage.oversizedDirectoriesByDiscovery).toBeUndefined();
   });
 
   it("does not retry a directory above the per-directory name ceiling", async () => {
@@ -277,7 +281,13 @@ describe("recursive search under benign directory churn (#4435)", () => {
     const result = await searchText(scope(), query(), DEFAULT_SEARCH_LIMITS, { fs });
     expect(passes).toBe(1);
     expect(result.coverage.membershipRetriesByDiscovery).toBeUndefined();
-    expect(result.coverage).toMatchObject({ incomplete: true, reasons: ["io-error"] });
+    expect(result.coverage).toMatchObject({
+      incomplete: true,
+      reasons: ["io-error"],
+      oversizedDirectoriesByDiscovery: 1,
+    });
+    // The oversized directory is its own cause, not also an unreadable one (#4431).
+    expect(result.coverage.unavailableDirectoriesByDiscovery).toBeUndefined();
   });
 
   it("still fails closed when the enumerated directory changes identity", async () => {
@@ -289,5 +299,93 @@ describe("recursive search under benign directory churn (#4435)", () => {
       },
     };
     await expect(searchText(scope(), query(), DEFAULT_SEARCH_LIMITS, { fs })).rejects.toThrow();
+  });
+});
+
+describe("recursive search discloses every discovery drop by cause (#4431)", () => {
+  const linkEntry = { name: "linked", isDirectory: true, isFile: false, isSymbolicLink: true };
+
+  function fsWithDocsListing(
+    listing: (path: string) => AsyncIterable<WorkspaceDirEntry>,
+  ): WorkspaceFs {
+    return {
+      ...nodeWorkspaceFs,
+      iterateDirectory: (path) => (isDocsDirectory(path) ? listing(path) : iterate()(path)),
+    };
+  }
+
+  it("reports no drop counts for a walk that considered every entry", async () => {
+    const result = await searchText(scope(), query(), DEFAULT_SEARCH_LIMITS, {
+      fs: nodeWorkspaceFs,
+    });
+    expect(result.coverage.skippedSymbolicLinksByDiscovery).toBeUndefined();
+    expect(result.coverage.unavailableDirectoriesByDiscovery).toBeUndefined();
+    expect(result.coverage.oversizedDirectoriesByDiscovery).toBeUndefined();
+  });
+
+  it("counts an unreadable subdirectory and keeps its readable siblings", async () => {
+    mkdirSync(join(root, "vault"));
+    writeFileSync(join(root, "vault", "notes.txt"), "EntryAvailabilityProbe vault");
+    const fs: WorkspaceFs = {
+      ...nodeWorkspaceFs,
+      iterateDirectory: async function* (path) {
+        if (path.replaceAll("\\", "/").endsWith("/vault")) throw errno("EACCES");
+        yield* iterate()(path);
+      },
+    };
+    const result = await searchText(scope(), query(), DEFAULT_SEARCH_LIMITS, { fs });
+    expect(result.atoms).toHaveLength(3);
+    expect(result.coverage).toMatchObject({
+      incomplete: true,
+      reasons: ["io-error"],
+      unavailableDirectoriesByDiscovery: 1,
+    });
+    expect(JSON.stringify(result.coverage)).not.toContain("vault");
+  });
+
+  it("counts a skipped link on its own instead of as a denied path", async () => {
+    const fs = fsWithDocsListing(async function* (path) {
+      yield* iterate()(path);
+      yield linkEntry;
+    });
+    const result = await searchText(scope(), query(), DEFAULT_SEARCH_LIMITS, { fs });
+    expect(result.atoms).toHaveLength(3);
+    expect(result.coverage).toMatchObject({
+      skippedSymbolicLinksByDiscovery: 1,
+      deniedByDiscovery: 0,
+    });
+    // The skipped link still counts as a skipped entry, as it did while it was a denial.
+    expect(result.coverage.filesSkipped).toBeGreaterThanOrEqual(1);
+  });
+
+  it("reports a skipped link apart from denied entries in the walk stats", async () => {
+    const fs = fsWithDocsListing(async function* (path) {
+      yield* iterate()(path);
+      yield linkEntry;
+    });
+    const stats = await visitWorkspaceFiles(
+      scope().workspace,
+      [],
+      false,
+      fs,
+      createStructuralExecutionControl(null),
+      { onFile: () => Promise.resolve() },
+    );
+    expect(stats).toMatchObject({ denied: 0, skippedSymbolicLinks: 1 });
+  });
+
+  it("keeps reporting a skipped link as denied to path discovery", async () => {
+    const fs = fsWithDocsListing(async function* (path) {
+      yield* iterate()(path);
+      yield linkEntry;
+    });
+    const result = await discoverWorkspacePaths(
+      scope().workspace,
+      { mode: "keywords", directory: "", query: "readable", maxResults: 10 },
+      createStructuralExecutionControl(5_000),
+      fs,
+    );
+    expect(result.entries.map((entry) => entry.relativePath)).toEqual(["docs/readable.txt"]);
+    expect(result.stats).toMatchObject({ denied: 1 });
   });
 });

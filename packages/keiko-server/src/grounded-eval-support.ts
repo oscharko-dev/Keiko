@@ -165,6 +165,8 @@ export interface ConnectedRetrievalEvalInput {
   readonly answer?: string;
   readonly detectWorkspace?: OrchestratorDeps["detectWorkspace"];
   readonly contentRedaction?: OrchestratorDeps["contentRedaction"];
+  /** Fault-injecting filesystem port over the materialized fixture, e.g. a locked entry. */
+  readonly fs?: OrchestratorDeps["fs"];
 }
 
 function connectedEvalRuntime(): UiHandlerDeps {
@@ -276,6 +278,7 @@ function connectedEvalRetrievalDeps(fixture: ConnectedRetrievalEvalInput): Orche
     correlationId: fixture.correlationId,
     activityLog: fixture.activityLog,
     ...(fixture.detectWorkspace === undefined ? {} : { detectWorkspace: fixture.detectWorkspace }),
+    ...(fixture.fs === undefined ? {} : { fs: fixture.fs }),
     ...(fixture.contentRedaction === undefined
       ? {}
       : { contentRedaction: fixture.contentRedaction }),

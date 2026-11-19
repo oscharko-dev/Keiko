@@ -362,6 +362,9 @@ interface CoverageStats {
   readonly unavailableEntriesByDiscovery: number;
   readonly vanishedEntriesByDiscovery: number;
   readonly membershipRetriesByDiscovery: number;
+  readonly skippedSymbolicLinksByDiscovery: number;
+  readonly unavailableDirectoriesByDiscovery: number;
+  readonly oversizedDirectoriesByDiscovery: number;
   readonly filesDiscovered: number;
   readonly filesAfterPolicy: number;
   readonly ignoredByDiscovery: number;
@@ -377,6 +380,9 @@ const EMPTY_COVERAGE_STATS: CoverageStats = {
   unavailableEntriesByDiscovery: 0,
   vanishedEntriesByDiscovery: 0,
   membershipRetriesByDiscovery: 0,
+  skippedSymbolicLinksByDiscovery: 0,
+  unavailableDirectoriesByDiscovery: 0,
+  oversizedDirectoriesByDiscovery: 0,
   filesDiscovered: 0,
   filesAfterPolicy: 0,
   ignoredByDiscovery: 0,
@@ -386,6 +392,29 @@ const EMPTY_COVERAGE_STATS: CoverageStats = {
   lowValueRescueFilesDiscovered: 0,
   lowValueRescueFilesScanned: 0,
 };
+
+const DISCOVERY_DROP_COVERAGE_KEYS = [
+  "unavailableEntriesByDiscovery",
+  "vanishedEntriesByDiscovery",
+  "membershipRetriesByDiscovery",
+  "skippedSymbolicLinksByDiscovery",
+  "unavailableDirectoriesByDiscovery",
+  "oversizedDirectoriesByDiscovery",
+] as const satisfies readonly (keyof CoverageStats)[];
+
+type DiscoveryDropKey = (typeof DISCOVERY_DROP_COVERAGE_KEYS)[number];
+
+// Absent historical or unobserved drop counts read as zero for the coverage arithmetic.
+function discoveryDropStats(diagnostics: SearchDiagnostics): Record<DiscoveryDropKey, number> {
+  return {
+    unavailableEntriesByDiscovery: diagnostics.unavailableEntriesByDiscovery ?? 0,
+    vanishedEntriesByDiscovery: diagnostics.vanishedEntriesByDiscovery ?? 0,
+    membershipRetriesByDiscovery: diagnostics.membershipRetriesByDiscovery ?? 0,
+    skippedSymbolicLinksByDiscovery: diagnostics.skippedSymbolicLinksByDiscovery ?? 0,
+    unavailableDirectoriesByDiscovery: diagnostics.unavailableDirectoriesByDiscovery ?? 0,
+    oversizedDirectoriesByDiscovery: diagnostics.oversizedDirectoriesByDiscovery ?? 0,
+  };
+}
 
 function coverageStats(diagnostics: SearchDiagnostics | undefined): CoverageStats {
   if (diagnostics === undefined) {
@@ -397,9 +426,7 @@ function coverageStats(diagnostics: SearchDiagnostics | undefined): CoverageStat
     ignoredByDiscovery: diagnostics.ignoredByDiscovery,
     deniedByDiscovery: diagnostics.deniedByDiscovery,
     unrepresentablePathsByDiscovery: diagnostics.unrepresentablePathsByDiscovery ?? 0,
-    unavailableEntriesByDiscovery: diagnostics.unavailableEntriesByDiscovery ?? 0,
-    vanishedEntriesByDiscovery: diagnostics.vanishedEntriesByDiscovery ?? 0,
-    membershipRetriesByDiscovery: diagnostics.membershipRetriesByDiscovery ?? 0,
+    ...discoveryDropStats(diagnostics),
     depthPrunedByDiscovery: diagnostics.depthPrunedByDiscovery,
     maxFilesPrunedByDiscovery: diagnostics.maxFilesPrunedByDiscovery,
     lowValueRescueFilesDiscovered: diagnostics.lowValueRescueFilesDiscovered ?? 0,
@@ -453,23 +480,15 @@ function skippedFileCount(inputs: CoverageInputs, stats: CoverageStats): number 
   );
 }
 
-function discoveryChurnCoverage(
-  stats: CoverageStats,
-): Pick<
-  ContextCoverageDiagnostics,
-  "unavailableEntriesByDiscovery" | "vanishedEntriesByDiscovery" | "membershipRetriesByDiscovery"
-> {
-  return {
-    ...(stats.unavailableEntriesByDiscovery > 0
-      ? { unavailableEntriesByDiscovery: stats.unavailableEntriesByDiscovery }
-      : {}),
-    ...(stats.vanishedEntriesByDiscovery > 0
-      ? { vanishedEntriesByDiscovery: stats.vanishedEntriesByDiscovery }
-      : {}),
-    ...(stats.membershipRetriesByDiscovery > 0
-      ? { membershipRetriesByDiscovery: stats.membershipRetriesByDiscovery }
-      : {}),
-  };
+type DiscoveryDropCoverage = Pick<ContextCoverageDiagnostics, DiscoveryDropKey>;
+
+// Only positive counts are reported, so a walk without drops keeps its existing coverage shape.
+function discoveryChurnCoverage(stats: CoverageStats): DiscoveryDropCoverage {
+  const coverage: { -readonly [Key in keyof DiscoveryDropCoverage]?: number } = {};
+  for (const key of DISCOVERY_DROP_COVERAGE_KEYS) {
+    if (stats[key] > 0) coverage[key] = stats[key];
+  }
+  return coverage;
 }
 
 function buildCoverageDiagnostics(inputs: CoverageInputs): ContextCoverageDiagnostics {
@@ -2386,6 +2405,7 @@ function preserveCandidateMembership(ranked: CandidateSet, membership: Candidate
       ignoredByDiscovery: membership.diagnostics.ignoredByDiscovery,
       deniedByDiscovery: membership.diagnostics.deniedByDiscovery,
       unrepresentablePathsByDiscovery: membership.diagnostics.unrepresentablePathsByDiscovery,
+      skippedSymbolicLinksByDiscovery: membership.diagnostics.skippedSymbolicLinksByDiscovery,
       depthPrunedByDiscovery: membership.diagnostics.depthPrunedByDiscovery,
       maxFilesPrunedByDiscovery: membership.diagnostics.maxFilesPrunedByDiscovery,
     },
@@ -2689,6 +2709,7 @@ function streamedCoverage(
       collected.filesSkipped +
       collected.ignored +
       collected.denied +
+      (collected.diagnostics.skippedSymbolicLinksByDiscovery ?? 0) +
       (collected.diagnostics.unavailableEntriesByDiscovery ?? 0),
     oversizedFilesScanned: 0,
     lowValueRescueFilesDiscovered: collected.diagnostics.lowValueRescueFilesDiscovered ?? 0,

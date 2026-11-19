@@ -771,11 +771,18 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
   releaseImpact: "patch",
 });
 
-// Discovery churn of the actual walk (#4434, #4435); absent when no coverage was reported.
+// Discovery churn and drops of the actual walk (#4434, #4435, #4431): every entry the walk did not
+// consider, by closed cause and as a count only. Absent when no coverage was reported.
 const DISCOVERY_CHURN_ACTIVITY_FIELDS = {
   discoveryUnavailableEntryCount: { type: "integer", dataClass: "count", required: false },
   discoveryVanishedEntryCount: { type: "integer", dataClass: "count", required: false },
   discoveryMembershipRetryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryIgnoredCount: { type: "integer", dataClass: "count", required: false },
+  discoveryDeniedCount: { type: "integer", dataClass: "count", required: false },
+  discoveryUnrepresentablePathCount: { type: "integer", dataClass: "count", required: false },
+  discoverySkippedLinkCount: { type: "integer", dataClass: "count", required: false },
+  discoveryUnavailableDirectoryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryOversizedDirectoryCount: { type: "integer", dataClass: "count", required: false },
 } as const;
 
 const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOperation({
@@ -1815,9 +1822,21 @@ function discoveryCoverageMarker(
 
 // A locked or protected entry was skipped, never read; the answer names it as an explicit gap
 // (#4434). The count is added only when present so ordinary coverage markers stay unchanged.
-function lockedOrProtectedCoverageDetail(coverage: ContextCoverageDiagnostics): readonly string[] {
-  const count = coverage.unavailableEntriesByDiscovery ?? 0;
-  return count > 0 ? [`locked or protected entries ${String(count)}`] : [];
+function discoveryDropCoverageDetail(coverage: ContextCoverageDiagnostics): readonly string[] {
+  return [
+    ...positiveCoverageDetail(
+      "locked or protected entries",
+      coverage.unavailableEntriesByDiscovery,
+    ),
+    // Skipped links, unreadable and oversized directories are named the same way (#4431).
+    ...positiveCoverageDetail("skipped links", coverage.skippedSymbolicLinksByDiscovery),
+    ...positiveCoverageDetail("unreadable directories", coverage.unavailableDirectoriesByDiscovery),
+    ...positiveCoverageDetail("oversized directories", coverage.oversizedDirectoriesByDiscovery),
+  ];
+}
+
+function positiveCoverageDetail(label: string, count: number | undefined): readonly string[] {
+  return count !== undefined && count > 0 ? [`${label} ${String(count)}`] : [];
 }
 
 function coverageUncertainty(
@@ -1843,7 +1862,7 @@ function coverageUncertainty(
           `ignored ${String(coverage.ignoredByDiscovery)}`,
           `denied ${String(coverage.deniedByDiscovery)}`,
           `unrepresentable entries ${String(coverage.unrepresentablePathsByDiscovery ?? 0)}`,
-          ...lockedOrProtectedCoverageDetail(coverage),
+          ...discoveryDropCoverageDetail(coverage),
           `depth-pruned ${String(coverage.depthPrunedByDiscovery)}`,
           `max-files-pruned ${String(coverage.maxFilesPrunedByDiscovery)}`,
         ].join(", ");
@@ -11149,16 +11168,20 @@ function excerptSchedulingActivityExtra(
   };
 }
 
-function discoveryChurnActivityExtra(coverage: ContextCoverageDiagnostics | undefined): {
-  readonly discoveryUnavailableEntryCount?: number;
-  readonly discoveryVanishedEntryCount?: number;
-  readonly discoveryMembershipRetryCount?: number;
-} {
+function discoveryChurnActivityExtra(
+  coverage: ContextCoverageDiagnostics | undefined,
+): Partial<Record<keyof typeof DISCOVERY_CHURN_ACTIVITY_FIELDS, number>> {
   if (coverage === undefined) return {};
   return {
     discoveryUnavailableEntryCount: coverage.unavailableEntriesByDiscovery ?? 0,
     discoveryVanishedEntryCount: coverage.vanishedEntriesByDiscovery ?? 0,
     discoveryMembershipRetryCount: coverage.membershipRetriesByDiscovery ?? 0,
+    discoveryIgnoredCount: coverage.ignoredByDiscovery,
+    discoveryDeniedCount: coverage.deniedByDiscovery,
+    discoveryUnrepresentablePathCount: coverage.unrepresentablePathsByDiscovery ?? 0,
+    discoverySkippedLinkCount: coverage.skippedSymbolicLinksByDiscovery ?? 0,
+    discoveryUnavailableDirectoryCount: coverage.unavailableDirectoriesByDiscovery ?? 0,
+    discoveryOversizedDirectoryCount: coverage.oversizedDirectoriesByDiscovery ?? 0,
   };
 }
 

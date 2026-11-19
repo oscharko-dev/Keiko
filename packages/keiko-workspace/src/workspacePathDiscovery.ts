@@ -144,7 +144,8 @@ function pathDiscoveryStats(stats: StreamingDiscoveryStats): WorkspacePathDiscov
     filesDiscovered: stats.filesDiscovered,
     directoriesDiscovered: stats.directoriesDiscovered ?? 0,
     directoriesPruned: stats.directoriesPruned ?? 0,
-    denied: stats.denied,
+    // Path discovery keeps reporting skipped links as denied entries, as it did before #4431.
+    denied: stats.denied + (stats.skippedSymbolicLinks ?? 0),
     ignored: stats.ignored,
     ioErrors: stats.ioErrors,
     unrepresentablePaths: stats.unrepresentablePaths ?? 0,

@@ -51,12 +51,25 @@ interface TurnObservation {
   readonly started: boolean;
 }
 
+// Entries the walk listed or reached but could not consider; each one alone establishes the
+// `discovery-dropped-entries` cause (#4431).
+const DISCOVERY_DROP_FIELDS = [
+  "discoveryUnavailableEntryCount",
+  "discoveryUnavailableDirectoryCount",
+  "discoveryOversizedDirectoryCount",
+  "discoverySkippedLinkCount",
+  "discoveryUnrepresentablePathCount",
+] as const;
+// Ordinary policy exclusions: context for a drop finding, never a cause on their own.
+const DISCOVERY_POLICY_FIELDS = ["discoveryDeniedCount", "discoveryIgnoredCount"] as const;
 const COUNT_FIELDS = [
   "declaredUnreadInScopeCount",
   "explicitPathRejectedCount",
   "addressedBasenameDedupDemotedCount",
   "followUpPassCount",
   "selectedFileCount",
+  ...DISCOVERY_DROP_FIELDS,
+  ...DISCOVERY_POLICY_FIELDS,
 ] as const;
 const REJECTION_REASONS = [
   "outside-scope",
@@ -396,6 +409,8 @@ function basicReasons(fields: SupportRetrievalMissFields): readonly SupportRetri
     reasons.push("basename-dedup-demoted-explicit");
   if (stillInsufficient(fields)) reasons.push("follow-up-still-insufficient");
   if (overviewOnFollowUp(fields)) reasons.push("intent-overview-on-follow-up");
+  if (DISCOVERY_DROP_FIELDS.some((field) => (fields[field] ?? 0) > 0))
+    reasons.push("discovery-dropped-entries");
   return reasons;
 }
 
@@ -440,6 +455,7 @@ const TRIGGER_FIELDS = {
     "retrievalIntent",
   ],
   "intent-overview-on-follow-up": ["retrievalIntent", "continuityReferentSource"],
+  "discovery-dropped-entries": [...DISCOVERY_DROP_FIELDS, ...DISCOVERY_POLICY_FIELDS],
 } as const satisfies Readonly<
   Record<SupportRetrievalMissReason, readonly (keyof SupportRetrievalMissFields)[]>
 >;

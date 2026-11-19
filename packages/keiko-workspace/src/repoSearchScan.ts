@@ -697,6 +697,10 @@ function orderCollectedCandidates(
     diagnostics: {
       ...ordered.diagnostics,
       filesDiscovered: result.filesDiscovered,
+      // The bounded inventory retains skipped links by path; the count reaches coverage (#4431).
+      ...(result.skippedSymbolicLinks.length > 0
+        ? { skippedSymbolicLinksByDiscovery: result.skippedSymbolicLinks.length }
+        : {}),
     },
   };
 }

@@ -848,7 +848,16 @@ is counted by its cause and never recorded as a skipped symbolic link; a cause o
 entry's metadata read still fails closed.
 The counts reach `search.connected-context.evidence-details` as
 `discoveryUnavailableEntryCount`, `discoveryVanishedEntryCount` and
-`discoveryMembershipRetryCount`; the Files filename search applies the same classification and
+`discoveryMembershipRetryCount`. The same line names every other entry the walk did not consider,
+by closed cause and as a count only (#4431): `discoveryIgnoredCount`, `discoveryDeniedCount`,
+`discoveryUnrepresentablePathCount`, `discoverySkippedLinkCount` (symbolic links and reparse points
+the streaming walk skips without following; no longer folded into the denial count),
+`discoveryUnavailableDirectoryCount` (a child directory whose listing could not be completed) and
+`discoveryOversizedDirectoryCount` (a directory above the per-directory ceiling whose churn could
+not be retried). The answer's coverage uncertainty names positive link, unreadable-directory and
+oversized-directory counts beside the locked-or-protected count, and `keiko support analyze`
+derives the `discovery-dropped-entries` retrieval-miss finding from them. The Files filename search
+applies the same classification, keeps counting skipped links as denied entries, and
 records `files.search.completed`; the Knowledge Pod walk checks root and directory identity rather
 than membership metadata, re-reads a directory once after membership churn, skips vanished entries,
 keeps a locked entry a per-entry `READ_FAILED`, and records `vanishedEntryCount` and

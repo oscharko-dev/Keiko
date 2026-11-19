@@ -386,12 +386,18 @@ interface DiscoveryChurnCounts {
   readonly unavailableEntriesByDiscovery: number;
   readonly vanishedEntriesByDiscovery: number;
   readonly membershipRetriesByDiscovery: number;
+  readonly skippedSymbolicLinksByDiscovery: number;
+  readonly unavailableDirectoriesByDiscovery: number;
+  readonly oversizedDirectoriesByDiscovery: number;
 }
 
 const EMPTY_DISCOVERY_CHURN: DiscoveryChurnCounts = {
   unavailableEntriesByDiscovery: 0,
   vanishedEntriesByDiscovery: 0,
   membershipRetriesByDiscovery: 0,
+  skippedSymbolicLinksByDiscovery: 0,
+  unavailableDirectoriesByDiscovery: 0,
+  oversizedDirectoriesByDiscovery: 0,
 };
 
 function discoveryChurnCounts(stats: StreamingDiscoveryStats): DiscoveryChurnCounts {
@@ -399,21 +405,28 @@ function discoveryChurnCounts(stats: StreamingDiscoveryStats): DiscoveryChurnCou
     unavailableEntriesByDiscovery: stats.unavailableEntries ?? 0,
     vanishedEntriesByDiscovery: stats.vanishedEntries ?? 0,
     membershipRetriesByDiscovery: stats.membershipRetries ?? 0,
+    skippedSymbolicLinksByDiscovery: stats.skippedSymbolicLinks ?? 0,
+    unavailableDirectoriesByDiscovery: stats.unavailableDirectories ?? 0,
+    oversizedDirectoriesByDiscovery: stats.oversizedDirectories ?? 0,
   };
 }
 
+const DISCOVERY_CHURN_KEYS = [
+  "unavailableEntriesByDiscovery",
+  "vanishedEntriesByDiscovery",
+  "membershipRetriesByDiscovery",
+  "skippedSymbolicLinksByDiscovery",
+  "unavailableDirectoriesByDiscovery",
+  "oversizedDirectoriesByDiscovery",
+] as const satisfies readonly (keyof DiscoveryChurnCounts)[];
+
+// Only positive counts are reported, so a walk without drops keeps its existing diagnostics shape.
 function reportedDiscoveryChurn(churn: DiscoveryChurnCounts): Partial<DiscoveryChurnCounts> {
-  return {
-    ...(churn.unavailableEntriesByDiscovery > 0
-      ? { unavailableEntriesByDiscovery: churn.unavailableEntriesByDiscovery }
-      : {}),
-    ...(churn.vanishedEntriesByDiscovery > 0
-      ? { vanishedEntriesByDiscovery: churn.vanishedEntriesByDiscovery }
-      : {}),
-    ...(churn.membershipRetriesByDiscovery > 0
-      ? { membershipRetriesByDiscovery: churn.membershipRetriesByDiscovery }
-      : {}),
-  };
+  const reported: { -readonly [Key in keyof DiscoveryChurnCounts]?: number } = {};
+  for (const key of DISCOVERY_CHURN_KEYS) {
+    if (churn[key] > 0) reported[key] = churn[key];
+  }
+  return reported;
 }
 
 function collectionResult(

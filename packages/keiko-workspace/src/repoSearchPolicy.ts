@@ -101,6 +101,11 @@ export interface SearchDiagnostics {
   readonly vanishedEntriesByDiscovery?: number | undefined;
   // Directories re-read once after benign membership churn (#4435).
   readonly membershipRetriesByDiscovery?: number | undefined;
+  // Symbolic links and reparse points skipped without being followed (#4431).
+  readonly skippedSymbolicLinksByDiscovery?: number | undefined;
+  // Directories whose listing could not be completed, and those too large to re-read (#4431).
+  readonly unavailableDirectoriesByDiscovery?: number | undefined;
+  readonly oversizedDirectoriesByDiscovery?: number | undefined;
   readonly policyMode: SearchPolicyMode;
   readonly intent: SearchIntent;
   readonly filesDiscovered: number;

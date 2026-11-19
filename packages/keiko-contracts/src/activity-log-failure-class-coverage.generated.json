@@ -22197,13 +22197,49 @@
               "required": false
             },
             {
+              "name": "discoveryDeniedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoveryIgnoredCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "discoveryMembershipRetryCount",
               "type": "integer",
               "dataClass": "count",
               "required": false
             },
             {
+              "name": "discoveryOversizedDirectoryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoverySkippedLinkCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoveryUnavailableDirectoryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "discoveryUnavailableEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "discoveryUnrepresentablePathCount",
               "type": "integer",
               "dataClass": "count",
               "required": false

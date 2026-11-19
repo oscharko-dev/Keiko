@@ -478,6 +478,12 @@ export interface ContextCoverageDiagnostics {
   readonly vanishedEntriesByDiscovery?: number | undefined;
   // Directories re-read once after benign membership churn (#4435).
   readonly membershipRetriesByDiscovery?: number | undefined;
+  // Symbolic links and reparse points the walk skipped without following them (#4431).
+  readonly skippedSymbolicLinksByDiscovery?: number | undefined;
+  // Directories whose listing could not be completed; their subtree stays unseen (#4431).
+  readonly unavailableDirectoriesByDiscovery?: number | undefined;
+  // Directories too large to re-read after membership churn; also an io-error (#4431).
+  readonly oversizedDirectoriesByDiscovery?: number | undefined;
   readonly incomplete: boolean;
   readonly reasons: readonly ContextCoverageTruncationReason[];
   readonly filesDiscovered: number;
@@ -1673,6 +1679,12 @@ const REQUIRED_COVERAGE_FIELDS = [
 
 const OPTIONAL_COVERAGE_FIELDS = [
   "unrepresentablePathsByDiscovery",
+  "unavailableEntriesByDiscovery",
+  "vanishedEntriesByDiscovery",
+  "membershipRetriesByDiscovery",
+  "skippedSymbolicLinksByDiscovery",
+  "unavailableDirectoriesByDiscovery",
+  "oversizedDirectoriesByDiscovery",
   "oversizedFilesScanned",
   "lowValueRescueFilesDiscovered",
   "lowValueRescueFilesScanned",
