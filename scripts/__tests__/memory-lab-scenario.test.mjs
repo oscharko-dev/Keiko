@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { URL } from "node:url";
+import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   SCENARIO_CLASSES,
@@ -28,11 +28,27 @@ function valid() {
   };
 }
 
+// The lab directory as a filesystem path. `URL.pathname` keeps `%20` for a space and a drive letter
+// as `/C:/`, so it names another path; `fileURLToPath` converts the URL.
+function labRoot(base = import.meta.url) {
+  return fileURLToPath(new URL("../testing/memory-lab/", base));
+}
+
 describe("memory lab scenario format", () => {
   let directory;
   afterEach(() => {
     if (directory) rmSync(directory, { recursive: true, force: true });
     directory = undefined;
+  });
+
+  describe("the lab directory in a test", () => {
+    it("is a real path when the checkout path contains a space", () => {
+      directory = mkdtempSync(join(tmpdir(), "memory lab space-"));
+      const base = pathToFileURL(join(directory, "scripts", "__tests__", "x.test.mjs")).href;
+      expect(new URL("../testing/memory-lab/", base).pathname).toContain("%20");
+      expect(labRoot(base)).toBe(join(directory, "scripts", "testing", "memory-lab") + "/");
+      expect(labRoot()).not.toContain("%20");
+    });
   });
 
   describe("truth keys", () => {
@@ -48,7 +64,7 @@ describe("memory lab scenario format", () => {
     });
 
     it("holds for every scenario of the three scenario directories", () => {
-      const root = new URL("../testing/memory-lab/", import.meta.url).pathname;
+      const root = labRoot();
       for (const name of ["scenarios", "scenarios-next", "scenarios-explicit"]) {
         for (const scenario of loadScenarioDirectory(join(root, name))) {
           const keys = scenario.truth.map((entry) => entry.key);
