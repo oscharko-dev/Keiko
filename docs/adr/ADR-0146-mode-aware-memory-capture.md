@@ -462,7 +462,10 @@ bodies or user text.
   (`memory-center`), and also when the surface is unknown: a new or mistyped writer fails closed, so
   a forgotten fact never comes back. Only the explicitly unattended surfaces do not refuse:
   `memory-maintenance` and operator `retention`, a storage policy that records that Keiko removed a
-  record, not that a person refused the fact. Their tombstones stay in the ledger. A test enumerates
+  record, not that a person refused the fact. Their tombstones stay in the ledger. Operator retention tombstones therefore no longer refuse a statement, which reverses what the first
+  #4223 change recorded. Retention and maintenance never revive a fact the person rejected: an
+  unattended tombstone still refuses when it removed a `rejected` record (its stored original
+  status; an unknown original status does not refuse). A test enumerates
   every production writer and fails for one that is not classified. Superseded records are kept as
   history until the person deletes them or an operator's opt-in retention removes them, and history
   is never sent to the model: default recall and the standing profile hide closed validity windows.

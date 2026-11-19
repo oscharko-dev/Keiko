@@ -33,8 +33,15 @@ export function isUnattendedForgetterSurface(surface: string | undefined): boole
   return surface !== undefined && MEMORY_UNATTENDED_FORGETTER_SURFACES.includes(surface);
 }
 
-// SQL predicate (no bind parameters) that keeps only tombstones allowed to refuse a statement: every
-// surface except the explicitly unattended ones. The values are fixed constants, never user input.
-export const REFUSING_TOMBSTONE_SQL = `forgetter_surface NOT IN (${MEMORY_UNATTENDED_FORGETTER_SURFACES.map(
+// SQL predicate (no bind parameters) that keeps only tombstones allowed to refuse a statement. It is
+// shared by exact and semantic suppression. A tombstone refuses unless its surface is explicitly
+// unattended, and even an unattended one refuses when it removed a record the person REJECTED
+// (`original_status`, written by deleteMemory(ies) for every writer): removal by retention or
+// maintenance must never let a rejected fact be captured again. A NULL `original_status` (a row
+// written before the column existed) does not refuse, which is also how an unattended tombstone of
+// superseded history behaves. The surface comparison fails closed for a NULL surface; the column is
+// `NOT NULL` in the schema, so that is unreachable today. The values are fixed constants, never
+// user input.
+export const REFUSING_TOMBSTONE_SQL = `(COALESCE(forgetter_surface, '') NOT IN (${MEMORY_UNATTENDED_FORGETTER_SURFACES.map(
   (surface) => `'${surface}'`,
-).join(", ")})`;
+).join(", ")}) OR original_status = 'rejected')`;

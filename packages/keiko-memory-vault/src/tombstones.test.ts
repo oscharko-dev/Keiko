@@ -145,38 +145,48 @@ describe("tombstones", () => {
   // that Keiko removed a record, not that the person refused the fact. It stays in the ledger and
   // never refuses a statement. Every other surface, including an unknown one, still refuses.
   it.each([
-    [MEMORY_MAINTENANCE_FORGETTER_SURFACE, false],
-    [MEMORY_RETENTION_FORGETTER_SURFACE, false],
-    [MEMORY_CENTER_FORGETTER_SURFACE, true],
-    [MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE, true],
-    ["a-surface-nobody-classified", true],
-  ])("a tombstone from %s refuses a statement: %s (exact and semantic)", (surface, refuses) => {
-    const db = openTestDb();
-    try {
-      const hash = memoryBodySuppressionHash("Ich bevorzuge Tabellen");
-      const vector = Float32Array.from([1, 0, 0]);
-      insertTombstoneRow(
-        db,
-        makeTombstone({
-          id: "t-1",
-          memoryId: "m-1" as MemoryId,
-          bodyHash: hash,
-          forgetterSurface: surface,
-        }),
-        TEST_CIPHER,
-        vector,
-      );
-      expect(selectForgetSuppressionBodyHashPresence(db, userScope, hash, hash).current).toBe(
-        refuses,
-      );
-      expect(
-        hasSemanticallySimilarForgetTombstoneRow(db, userScope, TEST_CIPHER, vector, 0.95),
-      ).toBe(refuses);
-      expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER)).toHaveLength(1);
-    } finally {
-      db.close();
-    }
-  });
+    [MEMORY_MAINTENANCE_FORGETTER_SURFACE, "superseded", false],
+    [MEMORY_MAINTENANCE_FORGETTER_SURFACE, "proposed", false],
+    [MEMORY_MAINTENANCE_FORGETTER_SURFACE, undefined, false],
+    [MEMORY_MAINTENANCE_FORGETTER_SURFACE, "rejected", true],
+    [MEMORY_RETENTION_FORGETTER_SURFACE, "superseded", false],
+    [MEMORY_RETENTION_FORGETTER_SURFACE, "accepted", false],
+    [MEMORY_RETENTION_FORGETTER_SURFACE, undefined, false],
+    [MEMORY_RETENTION_FORGETTER_SURFACE, "rejected", true],
+    [MEMORY_CENTER_FORGETTER_SURFACE, "superseded", true],
+    [MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE, undefined, true],
+    ["a-surface-nobody-classified", "superseded", true],
+  ] as const)(
+    "a %s tombstone of a %s record refuses a statement: %s (exact and semantic)",
+    (surface, originalStatus, refuses) => {
+      const db = openTestDb();
+      try {
+        const hash = memoryBodySuppressionHash("Ich bevorzuge Tabellen");
+        const vector = Float32Array.from([1, 0, 0]);
+        insertTombstoneRow(
+          db,
+          makeTombstone({
+            id: "t-1",
+            memoryId: "m-1" as MemoryId,
+            bodyHash: hash,
+            forgetterSurface: surface,
+            ...(originalStatus === undefined ? {} : { originalStatus }),
+          }),
+          TEST_CIPHER,
+          vector,
+        );
+        expect(selectForgetSuppressionBodyHashPresence(db, userScope, hash, hash).current).toBe(
+          refuses,
+        );
+        expect(
+          hasSemanticallySimilarForgetTombstoneRow(db, userScope, TEST_CIPHER, vector, 0.95),
+        ).toBe(refuses);
+        expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER)).toHaveLength(1);
+      } finally {
+        db.close();
+      }
+    },
+  );
 
   it("finds an older semantic refusal through bounded indexed pages", () => {
     const db = openTestDb();

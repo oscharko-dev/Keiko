@@ -1480,6 +1480,58 @@ describe("a corrected fact stays as history (#4223)", () => {
     expect(liveBodies(other, otherCtx)).toEqual([]);
   });
 
+  it("still refuses a statement the person rejected after retention removed the rejected record", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    const [live] = recordsWith(vault, ctx, "accepted");
+    if (live === undefined) throw new Error("expected the learned fact");
+    vault.updateMemory(live.id, { status: "rejected" }, Date.now());
+    applyMemoryRetention({
+      vault,
+      scopes: conversationMemoryScopes(ctx),
+      policy: { maxAgeMs: 30 * DAY_MS },
+      nowMs: Date.now() + 400 * DAY_MS,
+    });
+    expect(vault.getMemory(live.id)).toBeUndefined();
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([]);
+  });
+
+  it("does not refuse a statement after retention removed superseded history", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    await say(vault, ctx, second, [stated(second)]);
+    applyMemoryRetention({
+      vault,
+      scopes: conversationMemoryScopes(ctx),
+      policy: { maxAgeMs: 30 * DAY_MS },
+      nowMs: Date.now() + 400 * DAY_MS,
+    });
+    expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+  });
+
+  it("still refuses a rejected statement after maintenance removed it for a stated end", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    const [live] = recordsWith(vault, ctx, "accepted");
+    if (live === undefined) throw new Error("expected the learned fact");
+    const endedAt = live.validity.validFrom + 1;
+    vault.updateMemory(
+      live.id,
+      { status: "rejected", validity: { ...live.validity, validUntil: endedAt } },
+      endedAt,
+    );
+    maintain(vault);
+    expect(vault.getMemory(live.id)).toBeUndefined();
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([]);
+  });
+
   it("chains old-A, B and new-A after a return, with recall supplying A once", async () => {
     const vault = makeVault();
     const ctx = context();
@@ -1523,9 +1575,12 @@ describe("a corrected fact stays as history (#4223)", () => {
       maintain(vault);
     }
     expect(liveBodies(vault, ctx)).toEqual([second]);
-    expect(recordsWith(vault, ctx, "superseded").map((record) => record.body)).toEqual(
-      expect.arrayContaining([first, first, second]),
-    );
+    expect(recordsWith(vault, ctx, "accepted")).toHaveLength(1);
+    expect(
+      recordsWith(vault, ctx, "superseded")
+        .map((record) => record.body)
+        .sort(),
+    ).toEqual([first, first, second].sort());
   });
 
   it("never sends the earlier value to an answer once the fact changed", async () => {
