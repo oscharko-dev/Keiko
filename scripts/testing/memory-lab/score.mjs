@@ -497,7 +497,7 @@ function carriesWanted(entry, item, links) {
   const linked =
     (link?.truth !== undefined && link.truth === item.link.truth) ||
     (link?.earlier !== undefined && link.earlier === item.link.earlier);
-  return linked || matchesTermGroups(entry.bodyExcerpt ?? "", item.terms);
+  return linked || answerCarries(entry.bodyExcerpt ?? "", item);
 }
 
 export function suppliedCarries(supplied, item, links) {

@@ -5,7 +5,13 @@
 import { describe, expect, it } from "vitest";
 import { maskHoldoutResult } from "../testing/memory-lab/corpus/holdout.mjs";
 import { validateScenario } from "../testing/memory-lab/scenario.mjs";
-import { answerUnits, scoreProbe } from "../testing/memory-lab/score.mjs";
+import {
+  answerUnits,
+  carrierIds,
+  scoreProbe,
+  suppliedCarries,
+  wantedOf,
+} from "../testing/memory-lab/score.mjs";
 
 function scenario(probes, overrides = {}) {
   return validateScenario({
@@ -301,6 +307,26 @@ describe("a needed truth bound to its subject with `with`", () => {
       "Limit 5.000 Euro",
       " Next 3.5 days",
     ]);
+  });
+
+  it("applies the binding when it decides which supplied memory carries a fact", () => {
+    // The failure this pins: the text fallback ignored `with`, so a memory about Atlas "carried"
+    // the Borealis fact and the diagnostics called a retrieved fact missing the wrong one.
+    const [atlas, borealis] = wantedOf(bound, compare);
+    const memories = [
+      { id: "m0", body: "Atlas uses MongoDB." },
+      { id: "m1", body: "Borealis uses MongoDB." },
+    ];
+    expect(carrierIds(memories, borealis)).toEqual(["m1"]);
+    expect(carrierIds(memories, atlas)).toEqual([]);
+    expect(suppliedCarries(supply("Atlas uses MongoDB."), borealis, undefined)).toBe(false);
+    expect(suppliedCarries(supply("Borealis uses MongoDB."), borealis, undefined)).toBe(true);
+    // The exact seed link still carries the fact whatever the text says.
+    expect(
+      suppliedCarries(supply("anything"), borealis, new Map([["m0", { truth: "borealis" }]])),
+    ).toBe(true);
+    const asked = scoreProbe(bound, compare, "x", supply("Atlas uses MongoDB."), undefined);
+    expect(asked.neededNotSupplied).toEqual(["atlas", "borealis"]);
   });
 
   it("leaves a truth without the field exactly as it was, wherever its term occurs", () => {

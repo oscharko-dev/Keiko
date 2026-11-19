@@ -376,7 +376,9 @@ fail-closed by `scenario.mjs`):
   pairings are equally close) and is not carried; a unit with more than six bound facts is not read;
   and a correct answer fails when subject and value fall into different units, for example a heading
   or a parent list item above the value ("**Atlas**" on one line, "PostgreSQL" on the next) or a
-  pronoun in a later sentence. Read
+  pronoun in a later sentence. The same rule decides whether a supplied memory carries the fact, so a
+  memory that names another subject ("Atlas uses MongoDB") does not count as carrying the Borealis
+  fact; a memory the lab seeded for the fact carries it by its seed link whatever its text says. Read
   the answer before calling such a probe a
   failure of the product. Keys are unique within `truth`; a duplicate is refused.
 - `superseded[]`, `forgotten[]`: facts that were true and replaced, or forgotten; a surviving memory
