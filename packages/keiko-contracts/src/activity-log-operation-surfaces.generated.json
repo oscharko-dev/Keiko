@@ -445,6 +445,7 @@
   "git.snapshot.released": "editor-delivery",
   "git.snapshot.reserve-denied": "editor-delivery",
   "git.snapshot.reserved": "editor-delivery",
+  "git.status.bounded": "editor-delivery",
   "git.verified-commit": "editor-delivery",
   "git.verified-commit.authority": "tools-workflows",
   "harness.context.compacted": "tools-workflows",
