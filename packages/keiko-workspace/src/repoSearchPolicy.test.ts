@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
@@ -15,6 +15,7 @@ import {
 } from "./repoSearchPolicy.js";
 import type { DiscoveredFile } from "./types.js";
 import { selectContentPrescoreFiles } from "./repoSearchScan.js";
+import * as classification from "./repoSearchSourceClassification.js";
 
 const file = (relativePath: string): DiscoveredFile => ({ relativePath, sizeBytes: 10 });
 
@@ -305,6 +306,28 @@ describe("orderCandidatesForSearch", () => {
       ),
     ).toBeGreaterThan(scoreContentForSearch(exactQuery, "await dispatchWorkUnit();", policy));
   });
+
+  // #4457: every candidate of a definition question was classified line by line to look for the
+  // symbol's declaration; a file that never spells the symbol cannot declare it.
+  it.each([
+    ["Where is reconcileInvoice implemented?", false],
+    ["Where is reconcileInvoice implemented?", true],
+    ["Wo ist ReconcileInvoice definiert?", false],
+  ] as const)(
+    "classifies %s candidates only when they spell the symbol (case-sensitive: %s)",
+    (text, caseSensitive) => {
+      const definition: RetrievalQuery = { ...query(text), caseSensitive };
+      const prose = "invoices are reconciled nightly; where it is implemented is documented.";
+      const declaration = "export function reconcileInvoice(): void {}";
+      const spy = vi.spyOn(classification, "repositorySourceLines");
+      const proseScore = scoreContentForSearch(definition, prose, policy);
+      expect(spy).not.toHaveBeenCalled();
+      const declarationScore = scoreContentForSearch(definition, declaration, policy);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(declarationScore).toBeGreaterThan(proseScore);
+      spy.mockRestore();
+    },
+  );
 
   it("path-prioritizes files before applying the bounded content-prescore cap", () => {
     const files = [file("src/noise-a.ts"), file("src/noise-b.ts"), file("src/zz-routes.ts")];

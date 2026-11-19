@@ -155,6 +155,20 @@ describe("request-local source preparation from the actual streamed search produ
     expect(spy).toHaveBeenCalledExactlyOnceWith(text, "src/source.ts");
   });
 
+  // #4457: classification ran for every candidate file of every question, although only definition
+  // and route intent read its masks; an explanatory question scores the same raw lines without it.
+  it.each([
+    "How are invoices reconciled?",
+    "Wie werden Rechnungen mit reconcileInvoice abgeglichen?",
+    "Which orders does the /orders/{id} path return?",
+  ])("matches %s without classifying any file", async (text) => {
+    const spy = vi.spyOn(classification, "repositorySourceLines");
+    const source = "export function reconcileInvoice(orders) {\n  return orders.invoice;\n}\n";
+    const result = await search("src/source.ts", source, { ...ROUTE_QUERY, text });
+    expect(result.atoms.length).toBeGreaterThan(0);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it("retains distinct raw and entity-decoded structural interpretations", async () => {
     const row = CASES.at(-1);
     if (row === undefined) throw new Error("missing encoded HTML fixture");
