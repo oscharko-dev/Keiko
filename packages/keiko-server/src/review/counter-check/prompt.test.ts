@@ -35,7 +35,7 @@ describe("COUNTER_CHECK_INSTRUCTION", () => {
       at('3. "cause-not-in-change"'),
     );
     // The non-defect rule exists once, inside the list, so no second rule can give another code.
-    expect(COUNTER_CHECK_INSTRUCTION.split("describes no wrong behaviour").length).toBe(2);
+    expect(COUNTER_CHECK_INSTRUCTION.split("describes no wrong behaviour")).toHaveLength(2);
     expect(COUNTER_CHECK_INSTRUCTION).toContain(
       "needs another component to leave out a call that the reviewed code offers as opt-in, and your search finds no such component in the head commit",
     );
