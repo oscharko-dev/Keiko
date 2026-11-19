@@ -66,7 +66,12 @@ MemoriaViva exposes separate lifecycle controls:
   audit trail.
 - **Forget / delete** removes the active memory record and writes a tombstone so
   reviewers can audit that deletion happened without retaining the raw body in
-  diagnostics.
+  diagnostics. When a fact was corrected, Keiko keeps the earlier values as history. A fact and the
+  values it replaced are one fact: forgetting the current entry, in the Memory window or with a
+  "Vergiss …" in a Chat, forgets its earlier values too, each with its own tombstone, so none of
+  them is learned again by itself. Picking a history row in the Memory window forgets only that
+  value and leaves the newer one. Without an operator retention policy, history stays until the
+  person forgets it.
 - **Tombstone retention** purges expired tombstones through the local vault port
   when a tombstone-retention threshold is configured.
 

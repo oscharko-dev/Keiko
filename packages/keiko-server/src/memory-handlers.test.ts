@@ -2744,6 +2744,154 @@ describe("memory handlers", () => {
     expect(vault.getMemory(memoryId("sweep-loose-2"))).toBeUndefined();
   });
 
+  // #4223: a fact and the earlier values it replaced are one fact. The person's own corrections go
+  // through the production correction and acceptance routes.
+  describe("forgetting a corrected fact from the Memory window", () => {
+    async function correctAndAccept(
+      vault: MemoryVaultStore,
+      id: string,
+      body: string,
+    ): Promise<MemoryId> {
+      const proposal = await handleCorrectMemory(
+        makeCtx(`/api/memory/${id}/correct`, { body }, { id }),
+        makeDeps({ memoryVault: vault }),
+      );
+      const correction = asJson(proposal).correction as MemoryRecord;
+      const accepted = await handleAcceptMemoryProposal(
+        makeCtx(`/api/memory/proposals/${String(correction.id)}/accept`, {}, { id: correction.id }),
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(accepted.status).toBe(200);
+      return correction.id;
+    }
+
+    async function forgetById(vault: MemoryVaultStore, id: string): Promise<RouteResult> {
+      return handleForgetMemory(
+        makeCtx(`/api/memory/${id}/forget`, { acknowledged: true }, { id }),
+        makeDeps({ memoryVault: vault }),
+      );
+    }
+
+    async function threeValues(vault: MemoryVaultStore): Promise<{
+      readonly first: MemoryId;
+      readonly second: MemoryId;
+      readonly third: MemoryId;
+    }> {
+      vault.insertMemory(makeMemory("lineage-1", "Ich wohne in Köln"));
+      const second = await correctAndAccept(vault, "lineage-1", "Ich wohne in Düsseldorf");
+      const third = await correctAndAccept(vault, String(second), "Ich wohne in Bonn");
+      return { first: memoryId("lineage-1"), second, third };
+    }
+
+    it("forgets every earlier value with the current entry, each with its own tombstone", async () => {
+      const vault = makeVault();
+      const { first, second, third } = await threeValues(vault);
+      vault.insertMemory(makeMemory("lineage-other", "Ich nutze Vim"));
+
+      const result = await forgetById(vault, String(third));
+
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(3);
+      expect(new Set(asJson(result).memoryIds as readonly MemoryId[])).toEqual(
+        new Set([first, second, third]),
+      );
+      for (const id of [first, second, third]) expect(vault.getMemory(id)).toBeUndefined();
+      expect(vault.getMemory(memoryId("lineage-other"))).toBeDefined();
+      const tombstones = vault.listTombstonesByScope({ kind: "global" });
+      expect(tombstones.map((tombstone) => tombstone.forgetterSurface)).toEqual([
+        "memory-center",
+        "memory-center",
+        "memory-center",
+      ]);
+      for (const body of ["Ich wohne in Köln", "Ich wohne in Düsseldorf", "Ich wohne in Bonn"]) {
+        expect(vault.hasForgetTombstoneForBody({ kind: "global" }, body)).toBe(true);
+      }
+    });
+
+    it("forgets only the picked history row and keeps the chain whole", async () => {
+      const vault = makeVault();
+      const { first, second, third } = await threeValues(vault);
+
+      const result = await forgetById(vault, String(second));
+
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(1);
+      expect(vault.getMemory(second)).toBeUndefined();
+      expect(vault.getMemory(first)?.status).toBe("superseded");
+      expect(vault.getMemory(third)?.status).toBe("accepted");
+      // The earlier value is still linked to the live one, so forgetting the fact later reaches it.
+      expect(
+        vault
+          .listOutgoingEdges(first)
+          .some((edge) => edge.kind === "supersedes" && edge.toMemoryId === third),
+      ).toBe(true);
+
+      const later = await forgetById(vault, String(third));
+      expect(later.status).toBe(200);
+      expect(vault.getMemory(first)).toBeUndefined();
+    });
+
+    it("ends on a cycle of supersession edges", async () => {
+      const vault = makeVault();
+      const { first, third } = await threeValues(vault);
+      vault.insertEdge({
+        id: "lineage-cycle" as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: third,
+        toMemoryId: first,
+        kind: "supersedes",
+        createdAt: Date.now(),
+      });
+
+      const result = await forgetById(vault, String(third));
+
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(3);
+    });
+
+    it("refuses and deletes nothing when the history is too long to forget whole", async () => {
+      const vault = makeVault();
+      const total = 260;
+      for (let index = 0; index < total; index += 1) {
+        const last = index === total - 1;
+        vault.insertMemory(
+          makeMemory(`long-${String(index)}`, `Value ${String(index)}`, {
+            status: last ? "accepted" : "superseded",
+          }),
+        );
+        if (index > 0) {
+          vault.insertEdge({
+            id: `long-edge-${String(index)}` as MemoryEdgeId,
+            schemaVersion: "1",
+            fromMemoryId: memoryId(`long-${String(index - 1)}`),
+            toMemoryId: memoryId(`long-${String(index)}`),
+            kind: "supersedes",
+            createdAt: Date.now(),
+          });
+        }
+      }
+
+      const result = await forgetById(vault, `long-${String(total - 1)}`);
+
+      expect(result.status).toBe(409);
+      expect(vault.getMemory(memoryId(`long-${String(total - 1)}`))).toBeDefined();
+      expect(vault.listTombstonesByScope({ kind: "global" })).toEqual([]);
+    });
+
+    it("keeps a pinned live entry and its history when a Chat statement named it", async () => {
+      const vault = makeVault();
+      const { first, third } = await threeValues(vault);
+      vault.updateMemory(third, { pinned: true }, Date.now());
+
+      const deps = makeDeps({ memoryVault: vault });
+      expect(forgetMemoryFromStatement(deps, vault, third, "corr-lineage")).toBe("refused");
+
+      expect(vault.getMemory(third)).toBeDefined();
+      expect(vault.getMemory(first)).toBeDefined();
+      expect(vault.listTombstonesByScope({ kind: "global" })).toEqual([]);
+    });
+  });
+
   it("selectively forgets matching records through one batch delete", async () => {
     const vault = makeVault();
     vault.insertMemory(

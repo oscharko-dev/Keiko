@@ -102,6 +102,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { getServerLogger } from "./observability/index.js";
+import { bridgeSupersessionAround, supersededPredecessors } from "./memory-lineage.js";
 import { resolveMemoryTargetRecords } from "./memory-target-resolver.js";
 import {
   logExplicitMemoryForget,
@@ -1524,15 +1525,42 @@ const CHAT_STATEMENT_FORGET_CALLER: ForgetCaller = {
   personPickedEntry: false,
 };
 
-function executeForgetSelection(
+// A fact and the earlier values it replaced are one fact (#4223): forgetting a live record by id
+// forgets every superseded predecessor with it, each with its own tombstone, so no earlier value can
+// be learned again unattended. A superseded record picked on its own is forgotten alone. A pin that
+// protects the live record protects its history too, because nothing is selected then.
+function withSupersededHistory(
+  vault: MemoryVaultStore,
+  selected: readonly MemoryRecord[],
+  caller: ForgetCaller,
+  authorizedScopes: readonly MemoryScope[],
+): readonly MemoryRecord[] | RouteResult {
+  const [record] = selected;
+  if (record === undefined || record.status === "superseded") return selected;
+  const history = supersededPredecessors(vault, record);
+  if (!history.complete) {
+    return {
+      status: 409,
+      body: errorBody(
+        "GOVERNANCE_ERROR",
+        "The history of this memory is too long to forget in one step.",
+      ),
+    };
+  }
+  if (history.records.some((earlier) => !scopeAuthorized(earlier.scope, authorizedScopes))) {
+    return forbiddenMemoryScopeResult();
+  }
+  const keepPinned = !caller.personPickedEntry;
+  return [...selected, ...history.records.filter((earlier) => !(keepPinned && earlier.pinned))];
+}
+
+function selectForgetTargets(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   selector: ForgetSelector,
-  reason: MemoryForgetReason,
   caller: ForgetCaller,
-): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
-  const { forgetterSurface } = caller;
-  const nowMs = Date.now();
+  nowMs: number,
+): readonly MemoryRecord[] | RouteResult {
   const authorizedScopes = authorizedMemoryScopes(deps, vault);
   const requestedScope = selectorScope(selector);
   if (requestedScope !== undefined && !scopeAuthorized(requestedScope, authorizedScopes)) {
@@ -1555,11 +1583,31 @@ function executeForgetSelection(
       body: errorBody("GOVERNANCE_ERROR", "No matching memories can be forgotten."),
     };
   }
+  return selector.kind === "by-id"
+    ? withSupersededHistory(vault, candidates, caller, authorizedScopes)
+    : candidates;
+}
+
+function executeForgetSelection(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  selector: ForgetSelector,
+  reason: MemoryForgetReason,
+  caller: ForgetCaller,
+): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
+  const nowMs = Date.now();
+  const targets = selectForgetTargets(deps, vault, selector, caller, nowMs);
+  if (isRouteResult(targets)) return targets;
   const operations = buildForgetOperations(
-    candidates,
+    targets,
     { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
     { reason, writeTombstone: true },
   );
+  const [first] = targets;
+  // One history record forgotten on its own must not cut the earlier values off from the newer one.
+  if (selector.kind === "by-id" && first?.status === "superseded") {
+    bridgeSupersessionAround(vault, first, nowMs);
+  }
   vault.deleteMemories(
     operations.map((operation) => ({
       id: operation.memoryId,
@@ -1567,7 +1615,7 @@ function executeForgetSelection(
         tombstone: true,
         reviewerId: operation.reviewerId,
         reason: operation.reason,
-        forgetterSurface,
+        forgetterSurface: caller.forgetterSurface,
         nowMs: operation.forgottenAt,
       },
     })),

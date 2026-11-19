@@ -378,6 +378,15 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   the human correction path, in one transaction with a precondition on the older fact. A superseded
   record is history (#4223): the maintenance pass never forgets it, even though its closed window has
   ended, and only the person's own forget, or an operator's opt-in retention policy, deletes it. A
+  fact and the earlier values it replaced are one fact to the person: forgetting a live record, by a
+  statement in a Chat or by picking it in the Memory window, forgets every superseded predecessor
+  reachable over its `supersedes` edges with it, each with its own tombstone, so no earlier value is
+  learned again unattended. A named forget counts a live record and its own predecessors as one
+  match (the lineage collapses to the live record when it matches, otherwise to the matching
+  superseded one); two different facts that both match are still asked about. Picking a history row
+  in the Memory window, or naming only the old value, forgets exactly that record and the newer
+  value stays; the chain is kept whole around it. A pin that protects the live record in a Chat
+  protects its history too (#4223). A
   maintenance pass still forgets a record whose AUTHOR-STATED validity ended, but only one in a
   status `shouldForget` forgets: `proposed`, `rejected`, `conflicted` or `expired`. An `accepted` or
   `archived` record with an ended validity is kept (recall hides it), as is a `superseded` one. In every mode
