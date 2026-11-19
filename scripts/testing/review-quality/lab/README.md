@@ -32,9 +32,13 @@ Neither set touches the holdout. The holdout was measured once on 2026-11-06 and
 - About 115 GB of free disk for both pairs in the Hugging Face cache (`~/.cache/huggingface`).
 - `python3` (the holdout used 3.14), `node` and `npm` in the versions the root `package.json` `engines`
   require, `git`, `curl`, `openssl` and `lsof`.
-- A Keiko checkout of branch `claude/4130-8bit-diagnostic-kit` or later, with `npm ci` and
-  `npm run build:packages` done. The checkout must have no uncommitted changes, because the gate
+- A Keiko checkout of the epic branch `feat/epic-4130-keiko-for-quality`, with `npm ci` and
+  `npm run build:packages` done. From the merge of dev 1.5.0 on, that means Node 26; under Node 24
+  even `cleanup-proof.sh` aborts. The checkout must have no uncommitted changes, because the gate
   refuses to run on uncommitted review code.
+- The machine on power with its lid open for the whole run. A sleeping Mac stops the models but not
+  the wall clock: in development iteration 10 three counter-checks reached their 900-second limit
+  while the machine slept, and the review they blocked counted as incomplete.
 - No other model server or LiteLLM on ports 8080, 8081 and 4000. To use other ports, set
   `KEIKO_REVIEW_LAB_REVIEWER_PORT`, `KEIKO_REVIEW_LAB_COUNTER_PORT` and
   `KEIKO_REVIEW_LAB_GATEWAY_PORT` for every `lab.sh` command.
@@ -90,6 +94,15 @@ memory, and it leaves the first run's servers alone.
 servers on ports 18080, 18081 and 14000. It checks that a failing gate, Ctrl-C, SIGTERM and a taken
 port each keep the right exit status and leave no server or gate process running, and that a
 second run is refused without touching the first.
+
+## Gateway settings
+
+`lab.sh setup` writes the gateway config the development iterations 9 to 12 ran with: two retries
+per call (the Gateway Setup default), a 900-second timeout, and for the Counter-checker
+`reasoningHistory: "current-turn"`, which returns the reasoning of the current turn's earlier
+tool-call steps to the model. Both models are served with their model cards' sampling: Qwen in its
+non-thinking mode (temperature 0.7, top-p 0.8, top-k 20) and Gemma at temperature 1.0, top-p 0.95,
+top-k 64.
 
 ## Model builds
 
