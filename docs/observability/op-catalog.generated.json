@@ -126209,7 +126209,7 @@
     {
       "op": "memory.maintenance.autonomy-mode",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:750",
+      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:753",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126222,21 +126222,21 @@
     {
       "op": "memory.maintenance.retention-policy",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:769",
+      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:772",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "memory.retrieval.semantic-disabled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:501",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:504",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "memory.retrieval.semantic-skipped",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:298",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:301",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
