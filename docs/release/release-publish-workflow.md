@@ -330,7 +330,24 @@ source. Without it, build the package directory as usual and replace
 `runtime/native/keiko-secure-workspace-read.exe` and `runtime/native/keiko-runtime-supervisor.exe`
 with the bytes of a release archive whose checksum matches its `windows-x64-SHA256SUMS.txt`; `--pack`
 and `--verify` then check them against the pins. Such a 1.1.5 candidate passed `--pack` and
-`--verify` on 2026-11-17 (10 files; tarball SHA-256 `3f74a03a…`).
+`--verify` on 2026-11-17 (10 files; tarball SHA-256 `3f74a03a…`); it was never attached to a
+release.
+
+**The Windows package is published as 1.1.6 (2026-11-19).** The transport prerelease
+`coding-runtime-1.1.5` was published with the two macOS tarballs only, and a published release is
+immutable, so no Windows tarball can be added to it. The Windows package therefore takes the next
+runtime version, 1.1.6, with its own transport prerelease `coding-runtime-1.1.6`; it carries the
+same OpenCode 2.2.5 and the same native bytes as the 1.5.3 portable release. The two macOS packages
+stay at 1.1.5: the root manifest pins each runtime package on its own, and
+`selectedCodingRuntimeFailures` checks each pin against its own reviewed entry. The reviewed 1.1.6
+candidate was assembled with the repository builder from the release's two native executables
+(`windows-x64-SHA256SUMS.txt` verified) and passes `--pack` and `--verify`: 10 files, every file
+mode 0644 as a Windows host packs it, tarball SHA-256 `261bbc5c…` (123,461,366 bytes). A
+non-Windows host can assemble and verify it, because the target decides the checks, not the host
+(the publisher verifies on Linux). On a Windows test guest a plain npm installation of Keiko 1.5.3
+with the same package content beside it activated the `npm-runtime-package` lane, installed the
+broker with `keiko gateway-service install` from an administrator session and completed Workbench
+runs (a read-only run, and a reviewed edit in a managed worktree).
 
 ```sh
 node scripts/build-coding-runtime-npm-package.mjs windows-x64 1.2.0 C:\keiko-runtime-1.2.0\windows-x64
@@ -346,13 +363,16 @@ lockfile entry in one change (step 3 below).
 
 The first Windows publication is an owner-only step, in this order:
 
-1. Build, `--pack` and `--verify` the `windows-x64` candidate on a Windows host at the version
-   recorded for its OpenCode (1.1.5 for OpenCode 2.2.5), with MSVC 14.51 or the verified release
-   binaries described above, and attach the tarball and its receipt to the runtime prerelease.
+1. Build, `--pack` and `--verify` the `windows-x64` candidate at a runtime version whose transport
+   prerelease does not exist yet (1.1.6 for OpenCode 2.2.5, see above), with MSVC 14.51 on a
+   Windows host or with the verified release binaries described above.
 2. Add the `windows-x64` entry to `docs/release/coding-runtime-npm-packages.json` under that
-   version, and run `npm trust github @oscharko-dev/keiko-coding-runtime-win32-x64 …` as for the
-   macOS packages.
-3. Publish the package through the trusted-publishing workflow (never from a workstation).
+   version through a reviewed change to `dev`. Then create the prerelease
+   `coding-runtime-<version>` (never marked latest) with the tarball and its receipt renamed
+   `<tarball without .tgz>.receipt.json`, and run
+   `npm trust github @oscharko-dev/keiko-coding-runtime-win32-x64 …` as for the macOS packages.
+3. Publish the package through the trusted-publishing workflow (never from a workstation): run
+   "Coding runtime packages" on `dev` with that version.
 4. In one change: remove `firstPublication: "pending"`, add
    `"@oscharko-dev/keiko-coding-runtime-win32-x64": "<version>"` to the root
    `optionalDependencies` beside the two darwin packages, regenerate `package-lock.json` against
@@ -425,8 +445,10 @@ same change.
 
 The 1.1.5 runtime packages (#4359) carry OpenCode 2.2.5, the one OpenCode every Keiko channel runs.
 Their reviewed entry is in `docs/release/coding-runtime-npm-packages.json` for `macos-arm64` and
-`macos-x64`; `win32-x64` stays `firstPublication: "pending"`, because its package is built on a
-Windows host and Windows customers use the portable archive, which already carries 2.2.5. Build each
+`macos-x64`. The Windows package's reviewed entry is under 1.1.6 (see "The Windows package is
+published as 1.1.6" above); `win32-x64` keeps `firstPublication: "pending"` until the registry
+holds that version and the root manifest selects it, because a Windows npm installation has no
+other way to a Coding Workbench where a desktop package may not be installed. Build each macOS
 target as above at 1.1.5 from a clean `dev` checkout: first the three-argument build, which writes
 the package directory (`node scripts/build-coding-runtime-npm-package.mjs <target> 1.1.5 <package dir>`),
 then `--pack`, then `--verify`; `--pack` and `--verify` only inspect an existing package directory.
