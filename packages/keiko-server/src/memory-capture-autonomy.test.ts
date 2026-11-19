@@ -1037,7 +1037,7 @@ describe("explicit forget statement in chat", () => {
           sink.events.find((event) => event.op === "memory.explicit.forget") ?? {},
         ),
       );
-      expect(persisted).toMatchObject({ outcome: "forgotten" });
+      expect(persisted).toMatchObject({ outcome: "forgotten", surface: "chat" });
       expect(sink.lines().join("\n")).not.toContain("Tabellen");
 
       await captureSalientFromTurn(deps, salienceRequest(mode), ctx, "fake-model", "ok");
@@ -1071,7 +1071,7 @@ describe("explicit forget statement in chat", () => {
         "memory.explicit.forget.line",
         formatActivityLogProofLine(notStored ?? {}),
       ),
-    ).toMatchObject({ outcome: "not-stored" });
+    ).toMatchObject({ outcome: "not-stored", surface: "chat" });
     expect(readMemories(vault, ctx)).toHaveLength(1);
 
     const named = await collectMemoryActions(
@@ -1088,6 +1088,38 @@ describe("explicit forget statement in chat", () => {
         .filter((event) => event.op === "memory.explicit.forget")
         .map((event) => event.extra?.outcome),
     ).toEqual(["not-stored", "forgotten"]);
+    expect(
+      sink.events
+        .filter((event) => event.op === "memory.explicit.forget")
+        .map((event) => event.extra?.surface),
+    ).toEqual(["chat", "chat"]);
+  });
+
+  // Pinning protects a fact from a sweep, not from the person who names it (#4214): a Chat forget that
+  // resolves to a pinned fact forgets it and writes its tombstone.
+  it("forgets a pinned fact the person names in Chat and leaves its tombstone", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    await collectMemoryActions(deps, turnRequest("Remember that my editor is Vim"), ctx);
+    const [stored] = readMemories(vault, ctx);
+    if (stored === undefined) throw new Error("expected the remembered fact");
+    vault.updateMemory(stored.id, { pinned: true }, Date.now());
+    expect(vault.getMemory(stored.id)?.pinned).toBe(true);
+    const sink = captureActivityLog();
+
+    const actions = await collectMemoryActions(deps, turnRequest("Forget the editor"), ctx);
+
+    expect(actions).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
+    expect(vault.getMemory(stored.id)).toBeUndefined();
+    expect(
+      vault.listTombstonesByScope(stored.scope).map((tombstone) => tombstone.memoryId),
+    ).toEqual([stored.id]);
+    expect(
+      sink.events
+        .filter((event) => event.op === "memory.explicit.forget")
+        .map((event) => [event.extra?.outcome, event.extra?.surface]),
+    ).toEqual([["forgotten", "chat"]]);
   });
 
   // The person's own fact, then a request for the answer (#4212): the real resolver finds it by its

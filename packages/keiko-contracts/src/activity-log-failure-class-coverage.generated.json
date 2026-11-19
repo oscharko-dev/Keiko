@@ -42054,7 +42054,7 @@
               "name": "surface",
               "type": "string",
               "dataClass": "closed-enum",
-              "required": false
+              "required": true
             },
             {
               "name": "tombstoneWritten",

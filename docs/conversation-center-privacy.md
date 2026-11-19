@@ -58,7 +58,7 @@ MemoriaViva exposes separate lifecycle controls:
   proposed correction and preserve a body-free supersession audit record when
   accepted.
 - **Pin / unpin** controls retention priority. Pinned memories are not eligible
-  for retention cleanup, and a forget by scope or type leaves them in place. An
+  for retention cleanup, and a forget by any other selector (scope, type, source conversation or time window) leaves them in place. An
   entry the person names is forgotten whether or not it is pinned.
 - **Archive** removes a memory from the active working set without deleting the
   audit trail.

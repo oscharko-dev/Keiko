@@ -35,11 +35,12 @@ const MEMORY_EXPLICIT_FORGET_OUTCOMES = [
 
 export type MemoryExplicitForgetOutcome = (typeof MEMORY_EXPLICIT_FORGET_OUTCOMES)[number];
 
-// `not-found`: a forget from the Memory window named a memory that does not exist. Where the forget
-// came from: a chat statement records only `outcome`; the Memory window (Journal and Memory Center
-// share one API) also records the rest, so a person's deletion is reconstructable from the log
+// `not-found`: a forget from the Memory window named a memory that does not exist. Every line names
+// where the forget came from: `chat` (a "Vergiss das" statement) or `memory-center` (the Memory
+// window routes; Journal and Memory Center share one API). The Memory window also records the scope
+// kind and whether a tombstone was written, so a person's deletion is reconstructable from the log
 // alone (#4206 AC 5). No id, body or scope value: closed kinds and one flag.
-const MEMORY_FORGET_SURFACES = ["memory-center"] as const;
+const MEMORY_FORGET_SURFACES = ["chat", "memory-center"] as const;
 
 const MEMORY_FORGET_SCOPE_KINDS = [
   "user",
@@ -54,8 +55,10 @@ export type MemoryForgetSurface = (typeof MEMORY_FORGET_SURFACES)[number];
 export interface MemoryForgetSurfaceDetail {
   readonly surface: MemoryForgetSurface;
   readonly scopeKind?: MemoryScopeKind | undefined;
-  readonly tombstoneWritten: boolean;
+  readonly tombstoneWritten?: boolean | undefined;
 }
+
+export const CHAT_FORGET_SURFACE: MemoryForgetSurfaceDetail = { surface: "chat" };
 
 const MEMORY_EXPLICIT_FORGET_OPERATION = defineActivityLogOperation({
   ...MEMORY_EXPLICIT_OPERATION_BASE,
@@ -71,7 +74,7 @@ const MEMORY_EXPLICIT_FORGET_OPERATION = defineActivityLogOperation({
     surface: {
       type: "string",
       dataClass: "closed-enum",
-      required: false,
+      required: true,
       values: MEMORY_FORGET_SURFACES,
     },
     scopeKind: {
@@ -88,7 +91,7 @@ const MEMORY_EXPLICIT_FORGET_OPERATION = defineActivityLogOperation({
 export function logExplicitMemoryForget(
   outcome: MemoryExplicitForgetOutcome,
   correlationId: string,
-  detail?: MemoryForgetSurfaceDetail,
+  detail: MemoryForgetSurfaceDetail,
 ): void {
   getServerLogger().info(
     activityLogEvent(
@@ -96,13 +99,11 @@ export function logExplicitMemoryForget(
       { correlationId },
       {
         outcome,
-        ...(detail === undefined
+        surface: detail.surface,
+        ...(detail.tombstoneWritten === undefined
           ? {}
-          : {
-              surface: detail.surface,
-              tombstoneWritten: detail.tombstoneWritten,
-              ...(detail.scopeKind === undefined ? {} : { scopeKind: detail.scopeKind }),
-            }),
+          : { tombstoneWritten: detail.tombstoneWritten }),
+        ...(detail.scopeKind === undefined ? {} : { scopeKind: detail.scopeKind }),
       },
     ),
   );

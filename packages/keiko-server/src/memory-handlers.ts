@@ -1595,12 +1595,15 @@ function forgetFromMemoryWindow(
   }
 }
 
-// The audit preflight refused before any selection: nothing was forgotten and no tombstone written.
-function logMemoryWindowForgetAuditRefused(correlationId: string): void {
-  logExplicitMemoryForget("failed", correlationId, {
+// A Memory window forget that ended before any selection (vault unavailable, invalid id, rejected
+// body, missing acknowledgement, rejected selector, refused audit preflight): nothing was forgotten
+// and no tombstone written. An unavailable service (5xx) is `failed`, a rejected request `refused`.
+function logMemoryWindowForgetEarlyExit(result: RouteResult, correlationId: string): RouteResult {
+  logExplicitMemoryForget(result.status >= 500 ? "failed" : "refused", correlationId, {
     surface: "memory-center",
     tombstoneWritten: false,
   });
+  return result;
 }
 
 function formatForgetBody(memoryIds: readonly MemoryId[]): Record<string, unknown> {
@@ -1752,16 +1755,13 @@ async function readForgetByIdRequest(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<ForgetByIdRequest | RouteResult> {
-  const request = await readMemoryBodyRequest(ctx, deps);
-  if (isRouteResult(request)) return request;
-  const input = parseDestructiveInput(request.body);
-  if (isRouteResult(input)) return input;
   const correlationId = handlerCorrelationId(ctx);
+  const request = await readMemoryBodyRequest(ctx, deps);
+  if (isRouteResult(request)) return logMemoryWindowForgetEarlyExit(request, correlationId);
+  const input = parseDestructiveInput(request.body);
+  if (isRouteResult(input)) return logMemoryWindowForgetEarlyExit(input, correlationId);
   const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
-  if (auditReady !== undefined) {
-    logMemoryWindowForgetAuditRefused(correlationId);
-    return auditReady;
-  }
+  if (auditReady !== undefined) return logMemoryWindowForgetEarlyExit(auditReady, correlationId);
   return { vault: request.vault, id: request.id, reason: input.reason, correlationId };
 }
 
@@ -1798,21 +1798,20 @@ export async function handleForgetMemories(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  const correlationId = handlerCorrelationId(ctx);
   const vault = resolveVault(deps);
-  if (isRouteResult(vault)) return vault;
+  if (isRouteResult(vault)) return logMemoryWindowForgetEarlyExit(vault, correlationId);
 
   const outcome = await readJsonBody(ctx.req, ctx.correlationId);
-  if (outcome.kind === "rejected") return outcome.response;
+  if (outcome.kind === "rejected") {
+    return logMemoryWindowForgetEarlyExit(outcome.response, correlationId);
+  }
   const body = outcome.value;
 
   const input = parseForgetSelectionInput(body);
-  if (isRouteResult(input)) return input;
-  const correlationId = handlerCorrelationId(ctx);
+  if (isRouteResult(input)) return logMemoryWindowForgetEarlyExit(input, correlationId);
   const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
-  if (auditReady !== undefined) {
-    logMemoryWindowForgetAuditRefused(correlationId);
-    return auditReady;
-  }
+  if (auditReady !== undefined) return logMemoryWindowForgetEarlyExit(auditReady, correlationId);
 
   try {
     const result = forgetFromMemoryWindow(deps, vault, input.selector, input.reason, correlationId);

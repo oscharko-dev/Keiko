@@ -1215,13 +1215,26 @@ describe("memory learning passes", () => {
   // user message's content and no UI path rewrites one, so a person who changes what they said sends
   // a new message. The edit is therefore learned as the person's later words, and the ordinary
   // supersession rule decides: the corrected fact replaces the old one (docs/memory/
-  // memoria-viva-learning-passes.md).
-  it("learns a changed statement as a later turn that supersedes the old fact", async () => {
-    const earlier = "I prefer tables for numbers.";
-    const edited = "From now on I prefer lists for numbers.";
+  // memoria-viva-learning-passes.md). Removing `applyLearnedSupersession`
+  // (memory-learned-facts.ts) turns the positive case red; the negative control below keeps the
+  // rule honest: a model that does not call the second statement an update replaces nothing.
+  const EARLIER = "I prefer tables for numbers.";
+  const EDITED = "From now on I prefer lists for numbers.";
+
+  async function learnEarlierThenEdited(secondRelation: "update" | "new"): Promise<{
+    readonly deps: UiHandlerDeps;
+    readonly chat: ChatFixture;
+    readonly replacementId: string;
+    readonly calls: () => number;
+  }> {
     const answers = [
-      { body: earlier, evidence: earlier, relation: "new", related: null },
-      { body: edited, evidence: edited, relation: "update", related: 1 },
+      { body: EARLIER, evidence: EARLIER, relation: "new", related: null },
+      {
+        body: EDITED,
+        evidence: EDITED,
+        relation: secondRelation,
+        related: secondRelation === "update" ? 1 : null,
+      },
     ];
     let calls = 0;
     const port: ModelPort = {
@@ -1235,12 +1248,29 @@ describe("memory learning passes", () => {
     const deps = makeDeps({ modelPortFactory: () => port });
     const chat = makeChat(deps);
     const runtime = memoryLearningRuntime(deps);
-    writeTurn(deps, chat, earlier);
+    writeTurn(deps, chat, EARLIER);
     await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
-    expect(bodies(deps, chat)).toEqual([earlier]);
+    expect(bodies(deps, chat)).toEqual([EARLIER]);
+    const replacement = writeTurn(deps, chat, EDITED);
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+    return { deps, chat, replacementId: replacement.userId, calls: () => calls };
+  }
 
-    const replacement = writeTurn(deps, chat, edited);
-    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+  it("keeps both facts when the model does not call the later statement an update", async () => {
+    const { deps, chat } = await learnEarlierThenEdited("new");
+    expect(bodies(deps, chat)).toEqual([EARLIER, EDITED].sort());
+    expect(learned(deps, chat, ["superseded"])).toEqual([]);
+    const vault = vaultOf(deps);
+    for (const record of learned(deps, chat)) {
+      expect(vault.listOutgoingEdges(record.id)).toEqual([]);
+    }
+  });
+
+  it("learns a changed statement as a later turn that supersedes the old fact", async () => {
+    const earlier = EARLIER;
+    const edited = EDITED;
+    const { deps, chat, replacementId, calls } = await learnEarlierThenEdited("update");
+    const runtime = memoryLearningRuntime(deps);
 
     expect(bodies(deps, chat)).toEqual([edited]);
     const vault = vaultOf(deps);
@@ -1250,11 +1280,11 @@ describe("memory learning passes", () => {
       expect.objectContaining({ kind: "supersedes" }),
     ]);
     const [live] = learned(deps, chat);
-    expect(live?.provenance.sourceMessageIds).toEqual([replacement.userId]);
+    expect(live?.provenance.sourceMessageIds).toEqual([replacementId]);
 
     // The earlier message is not read again, and nothing relearns the old value.
     await runtime.runPass("inactivity", undefined);
-    expect(calls).toBe(2);
+    expect(calls()).toBe(2);
     expect(bodies(deps, chat)).toEqual([edited]);
 
     const request = {

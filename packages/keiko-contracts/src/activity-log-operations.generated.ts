@@ -38113,8 +38113,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       surface: {
         type: "string",
         dataClass: "closed-enum",
-        required: false,
-        values: ["memory-center"],
+        required: true,
+        values: ["chat", "memory-center"],
       },
       scopeKind: {
         type: "string",

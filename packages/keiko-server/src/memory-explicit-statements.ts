@@ -26,6 +26,7 @@ import {
   type NoveltyInsertOptions,
 } from "./memory-embedding.js";
 import {
+  CHAT_FORGET_SURFACE,
   logExplicitMemoryForget,
   logExplicitMemoryRemember,
 } from "./memory-explicit-statement-log.js";
@@ -97,7 +98,7 @@ export function forgetActionFromOutcome(
   if (deps.memoryVault === undefined) return null;
   const { memoryId } = outcome.operation;
   const result = forgetMemoryFromStatement(deps, deps.memoryVault, memoryId, correlationId);
-  logExplicitMemoryForget(result, correlationId);
+  logExplicitMemoryForget(result, correlationId, CHAT_FORGET_SURFACE);
   return result === "forgotten"
     ? forgotAction(String(memoryId))
     : statementRefused("forget-not-applied");
@@ -111,7 +112,7 @@ export function recordForgetNotStored(
   correlationId: string,
 ): void {
   if (outcomes.length === 0 && forgetsOnlyIfStored(content)) {
-    logExplicitMemoryForget("not-stored", correlationId);
+    logExplicitMemoryForget("not-stored", correlationId, CHAT_FORGET_SURFACE);
   }
 }
 
@@ -124,7 +125,7 @@ async function forgetPreviousStatement(
   const { correlationId } = statement;
   const body = statement.previousStatement();
   if (body === undefined || deps.memoryVault === undefined || !isForgettableStatement(body)) {
-    logExplicitMemoryForget("ambiguous", correlationId);
+    logExplicitMemoryForget("ambiguous", correlationId, CHAT_FORGET_SURFACE);
     return statementRefused("ambiguous-forget");
   }
   const result = await forgetStatementNotLearned(
@@ -134,7 +135,7 @@ async function forgetPreviousStatement(
     statement.scopes,
     correlationId,
   );
-  logExplicitMemoryForget(result, correlationId);
+  logExplicitMemoryForget(result, correlationId, CHAT_FORGET_SURFACE);
   return result === "forgotten"
     ? forgotAction(correlationId)
     : statementRefused("forget-not-applied");
@@ -145,6 +146,7 @@ function logRefusedStatement(outcome: RejectedCaptureOutcome, correlationId: str
     logExplicitMemoryForget(
       outcome.reason === "ambiguous-forget" ? "ambiguous" : "refused",
       correlationId,
+      CHAT_FORGET_SURFACE,
     );
   } else if (outcome.statement === "remember") {
     logExplicitMemoryRemember("refused", correlationId);

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "19cbd6ec7bed08b380bd2fa48caec86fd4d7f690d8034591771dd6410f5b72c0",
+    "catalogDigest": "27338deb646cca84254bd43d017ff20fc4c4ae62eab62b06c11d39a32791b2a7",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -39679,8 +39679,8 @@
           "surface": {
             "type": "string",
             "dataClass": "closed-enum",
-            "required": false,
-            "values": ["memory-center"]
+            "required": true,
+            "values": ["chat", "memory-center"]
           },
           "scopeKind": {
             "type": "string",
@@ -39695,8 +39695,8 @@
           }
         },
         "proofIds": ["memory.explicit.forget.line"],
-        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:60",
-        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:94"]
+        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:63",
+        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:97"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39729,8 +39729,8 @@
           }
         },
         "proofIds": ["memory.explicit.remember.line"],
-        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:121",
-        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:141"]
+        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:122",
+        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:142"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -106740,7 +106740,7 @@
                   "name": "surface",
                   "type": "string",
                   "dataClass": "closed-enum",
-                  "required": false
+                  "required": true
                 },
                 {
                   "name": "tombstoneWritten",
@@ -126131,13 +126131,13 @@
     {
       "op": "memory.explicit.forget",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:62",
+      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:65",
       "package": "keiko-server"
     },
     {
       "op": "memory.explicit.remember",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:123",
+      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:124",
       "package": "keiko-server"
     },
     {

@@ -2281,6 +2281,182 @@ describe("memory handlers", () => {
       ]);
     });
 
+    // Every request that ends before the selection still leaves one body-free line under the
+    // request's correlation id, with no tombstone.
+    async function expectEarlyExitLine(
+      ctx: RouteContext,
+      deps: UiHandlerDeps,
+      handler: typeof handleForgetMemory,
+      expected: { readonly status: number; readonly outcome: "failed" | "refused" },
+    ): Promise<void> {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      let result: RouteResult;
+      try {
+        result = await handler({ ...ctx, correlationId: "corr-early-exit" }, deps);
+      } finally {
+        resetServerLogger();
+      }
+      expect(result.status).toBe(expected.status);
+      const events = forgetEvents(sink.events);
+      expect(events).toHaveLength(1);
+      const [event] = events;
+      if (event === undefined) throw new TypeError("missing forget line");
+      expect(event.correlationId).toBe("corr-early-exit");
+      expect(
+        expectActivityLogProof("memory.explicit.forget.line", formatActivityLogProofLine(event)),
+      ).toMatchObject({
+        outcome: expected.outcome,
+        surface: "memory-center",
+        tombstoneWritten: false,
+      });
+    }
+
+    it.each([
+      ["handleForgetMemory", handleForgetMemory],
+      ["handleDeleteMemory", handleDeleteMemory],
+    ])("records failed when the vault is unavailable (%s)", async (_name, handler) => {
+      await expectEarlyExitLine(
+        makeCtx("/api/memory/x/forget", { acknowledged: true }, { id: "x" }),
+        makeDeps({ memoryVault: undefined }),
+        handler,
+        { status: 503, outcome: "failed" },
+      );
+    });
+
+    it.each([
+      ["handleForgetMemory", handleForgetMemory],
+      ["handleDeleteMemory", handleDeleteMemory],
+    ])("records refused for a missing id (%s)", async (_name, handler) => {
+      await expectEarlyExitLine(
+        makeCtx("/api/memory/forget", { acknowledged: true }),
+        makeDeps({ memoryVault: makeVault() }),
+        handler,
+        { status: 400, outcome: "refused" },
+      );
+    });
+
+    it.each([
+      ["handleForgetMemory", handleForgetMemory],
+      ["handleDeleteMemory", handleDeleteMemory],
+    ])("records refused for a rejected body (%s)", async (_name, handler) => {
+      await expectEarlyExitLine(
+        makeCtx("/api/memory/x/forget", ["not", "an", "object"], { id: "x" }),
+        makeDeps({ memoryVault: makeVault() }),
+        handler,
+        { status: 400, outcome: "refused" },
+      );
+    });
+
+    it.each([
+      ["handleForgetMemory", handleForgetMemory],
+      ["handleDeleteMemory", handleDeleteMemory],
+    ])("records refused for a missing acknowledgement (%s)", async (_name, handler) => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-no-ack", "must remain"));
+      await expectEarlyExitLine(
+        makeCtx("/api/memory/window-no-ack/forget", {}, { id: "window-no-ack" }),
+        makeDeps({ memoryVault: vault }),
+        handler,
+        { status: 400, outcome: "refused" },
+      );
+      expect(vault.getMemory(memoryId("window-no-ack"))).toBeDefined();
+    });
+
+    it("records the early exits of the bulk route", async () => {
+      const ack = { acknowledged: true };
+      const bulk = async (
+        payload: unknown,
+        deps: UiHandlerDeps,
+        expected: { readonly status: number; readonly outcome: "failed" | "refused" },
+      ): Promise<void> =>
+        expectEarlyExitLine(
+          makeCtx("/api/memory/forget", payload),
+          deps,
+          handleForgetMemories,
+          expected,
+        );
+      const deps = makeDeps({ memoryVault: makeVault() });
+      await bulk(ack, makeDeps({ memoryVault: undefined }), { status: 503, outcome: "failed" });
+      await bulk(["x"], deps, { status: 400, outcome: "refused" });
+      await bulk({}, deps, { status: 400, outcome: "refused" });
+      await bulk({ ...ack, selector: { kind: "unknown" } }, deps, {
+        status: 400,
+        outcome: "refused",
+      });
+      await bulk({ ...ack, selector: { kind: "by-id", memoryId: "" } }, deps, {
+        status: 400,
+        outcome: "refused",
+      });
+    });
+
+    it("records refused when a bulk selector matches only pinned records (409)", async () => {
+      const vault = makeVault();
+      vault.insertMemory(
+        makeMemory("window-pinned-only", "pinned preference", { type: "preference", pinned: true }),
+      );
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      let result: RouteResult;
+      try {
+        result = await handleForgetMemories(
+          makeCtx("/api/memory/forget", {
+            acknowledged: true,
+            selector: { kind: "by-type", scope: { kind: "global" }, type: "preference" },
+          }),
+          makeDeps({ memoryVault: vault }),
+        );
+      } finally {
+        resetServerLogger();
+      }
+      expect(result.status).toBe(409);
+      expect(vault.getMemory(memoryId("window-pinned-only"))).toBeDefined();
+      expect(vault.listTombstonesByScope({ kind: "global" })).toEqual([]);
+      expect(forgetEvents(sink.events).map((event) => event.extra)).toEqual([
+        expect.objectContaining({
+          outcome: "refused",
+          scopeKind: "global",
+          tombstoneWritten: false,
+        }),
+      ]);
+    });
+
+    it("forgets a pinned record through a by-id selector on the bulk route", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-bulk-pinned", "pinned and unwanted", { pinned: true }));
+      const result = await handleForgetMemories(
+        makeCtx("/api/memory/forget", {
+          acknowledged: true,
+          selector: { kind: "by-id", memoryId: "window-bulk-pinned" },
+        }),
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(200);
+      expect(vault.getMemory(memoryId("window-bulk-pinned"))).toBeUndefined();
+      expect(vault.listTombstonesByScope({ kind: "global" }).map((t) => t.memoryId)).toEqual([
+        memoryId("window-bulk-pinned"),
+      ]);
+    });
+
+    it("records failed when getMemory throws inside the guarded block", async () => {
+      const vault = makeVault();
+      vi.spyOn(vault, "getMemory").mockImplementation(() => {
+        throw new MemoryStorageError("internal", "vault unreadable");
+      });
+      const { result, events } = await forgetWithLog(
+        "window-getmemory-throws",
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(500);
+      expect(events.map((event) => event.extra)).toEqual([
+        expect.objectContaining({
+          outcome: "failed",
+          surface: "memory-center",
+          tombstoneWritten: false,
+        }),
+      ]);
+    });
+
     it("records failed when the vault throws and when the audit preflight refuses", async () => {
       const vault = makeVault();
       vault.insertMemory(makeMemory("window-throws", "body"));

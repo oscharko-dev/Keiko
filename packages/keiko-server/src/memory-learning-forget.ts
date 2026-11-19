@@ -21,7 +21,7 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { memoryCapturePolicyForDeps } from "./memory-capture-policy.js";
-import { logExplicitMemoryForget } from "./memory-explicit-statement-log.js";
+import { CHAT_FORGET_SURFACE, logExplicitMemoryForget } from "./memory-explicit-statement-log.js";
 import { forgetMemoryFromStatement } from "./memory-handlers.js";
 import {
   createMemoryForgetResolver,
@@ -116,7 +116,7 @@ export function replayPendingForget(
   let failed = false;
   for (const id of pendingForgetTargets(deps, vault, input)) {
     const result = forgetMemoryFromStatement(deps, vault, id, input.correlationId);
-    logExplicitMemoryForget(result, input.correlationId);
+    logExplicitMemoryForget(result, input.correlationId, CHAT_FORGET_SURFACE);
     if (result === "forgotten") forgotten += 1;
     if (result === "failed") failed = true;
   }
