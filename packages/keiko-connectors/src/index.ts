@@ -355,6 +355,7 @@ export {
   jiraTemplateViolationGuidance,
   jiraTemplateGuidanceVariants,
   jiraNoGoverningTemplateGuidance,
+  jiraTemplateFieldsFullyChecked,
   jiraTransitionsFullyChecked,
   validateJiraIssueTemplateAgainstInstance,
   type JiraFieldCatalogEntry,

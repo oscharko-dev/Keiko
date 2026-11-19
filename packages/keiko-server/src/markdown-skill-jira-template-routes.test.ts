@@ -1340,3 +1340,80 @@ describe("validation says transitions were not fully checked for an unverifiable
     expect(await checked("3")).toMatchObject({ findings: [], checked: { transitions: true } });
   });
 });
+
+// PR #4464 owner review: a screen that could not be read leaves its field references unverified, so
+// validation neither judges them by the global catalog nor reports the field check complete.
+describe("validation when the selected screen could not be read", () => {
+  const markdown = [
+    "---",
+    "keiko: jira-issue-template",
+    "version: 1",
+    "project: SYN",
+    "issueType: Story",
+    "activateOn: [create]",
+    "summaryMinLength: 4",
+    "parentField: Anchor",
+    "---",
+    "# Story template",
+  ].join("\n");
+  const storyTypes: readonly { id: string; name: string }[] = [
+    { id: "10001", name: "Story", subtask: false } as { id: string; name: string },
+  ];
+  async function validated(
+    screen: "healthy" | "denied",
+    projectTypes: readonly { id: string; name: string }[] = storyTypes,
+  ): Promise<{ checked?: unknown }> {
+    const f = fixture({ projectTypes });
+    f.http.mockImplementation((request) => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/field"))
+        return Promise.resolve(
+          response([
+            { id: "parent", name: "Parent" },
+            {
+              id: "customfield_10014",
+              name: "Epic Link",
+              schema: { type: "any", custom: "com.pyxis.greenhopper.jira:gh-epic-link" },
+            },
+            {
+              id: "customfield_10015",
+              name: "Anchor",
+              schema: { type: "any", custom: "com.atlassian.jpo:jpo-custom-field-parent" },
+            },
+          ]),
+        );
+      if (!path.includes("createmeta")) return jiraGet(request, projectTypes);
+      return Promise.resolve(
+        screen === "denied"
+          ? response({}, 403)
+          : response({
+              values: [{ ...field("customfield_10015", "any", true), name: "Anchor" }],
+              startAt: 0,
+              maxResults: 100,
+              isLast: true,
+              total: 1,
+            }),
+      );
+    });
+    const result = await handleValidateJiraTemplate(
+      context(f.cookie, { podId: POD, markdown }),
+      f.deps,
+    );
+    return result.body as { checked?: unknown };
+  }
+
+  it("reports a healthy screen as checked with no finding", async () => {
+    expect(await validated("healthy")).toMatchObject({ findings: [], checked: { fields: true } });
+  });
+
+  it("judges nothing by the global field's relation type and reports the field check incomplete", async () => {
+    expect(await validated("denied")).toMatchObject({ findings: [], checked: { fields: false } });
+  });
+
+  // Audit of the round above: a screen that was never read, because the project offers no type the
+  // template governs, proves no more than one that failed to read.
+  it("reports the field check incomplete when no governed type leaves a screen to read", async () => {
+    const body = await validated("healthy", [{ id: "10002", name: "Bug" }]);
+    expect(body.checked).toMatchObject({ fields: false });
+  });
+});

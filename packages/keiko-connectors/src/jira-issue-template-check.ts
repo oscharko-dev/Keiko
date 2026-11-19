@@ -177,6 +177,16 @@ function sectionContent(description: string): ReadonlyMap<string, boolean> {
 interface RaisedViolation {
   readonly violation: JiraTemplateViolation;
   readonly role: JiraTemplateFieldRole | undefined;
+  /** The clause's own field reference, when the written subject carries more than the reference. */
+  readonly reference?: string;
+  /** The clause names an issue link type, not a field: its source is `issuelinks`. */
+  readonly link?: true;
+}
+
+interface RaiseOptions {
+  readonly role?: JiraTemplateFieldRole;
+  readonly reference?: string;
+  readonly link?: true;
 }
 
 interface Context {
@@ -190,7 +200,7 @@ function raise(
   context: Context,
   ruleId: JiraTemplateViolation["ruleId"],
   subject: string,
-  role?: JiraTemplateFieldRole,
+  options: RaiseOptions = {},
 ): void {
   context.out.push({
     violation: {
@@ -198,7 +208,9 @@ function raise(
       subject: subject.slice(0, 120),
       template: jiraIssueTemplateLabel(context.template),
     },
-    role,
+    role: options.role,
+    ...(options.reference === undefined ? {} : { reference: options.reference }),
+    ...(options.link === undefined ? {} : { link: true as const }),
   });
 }
 
@@ -250,18 +262,19 @@ function fieldPresent(
 function checkFields(context: Context): void {
   for (const field of context.template.requiredFields) {
     const present = fieldPresent(context, field, "required");
-    if (present === undefined) raise(context, "field-unavailable", field, "required");
-    else if (!present) raise(context, "field-missing", field, "required");
+    if (present === undefined) raise(context, "field-unavailable", field, { role: "required" });
+    else if (!present) raise(context, "field-missing", field, { role: "required" });
   }
   const parent = context.template.parent;
   if (parent.field !== undefined) {
     const present = fieldPresent(context, parent.field, "parent");
-    if (present !== true) raise(context, "parent-missing", parent.field, "parent");
+    if (present !== true)
+      raise(context, "parent-missing", parent.field, { role: "parent", reference: parent.field });
   }
   if (parent.link !== undefined) {
     const links = context.subject.linkTypes ?? [];
     if (!links.some((name) => same(name, parent.link ?? ""))) {
-      raise(context, "parent-missing", parent.link);
+      raise(context, "parent-missing", parent.link, { link: true });
     }
   }
 }
@@ -282,7 +295,7 @@ function checkParentType(context: Context): void {
       context,
       "parent-type-mismatch",
       `${field}: ${issueTypes.join(", ")} (found: ${observed.name.slice(0, 60)})`,
-      "parent",
+      { role: "parent", reference: field },
     );
 }
 
@@ -351,6 +364,8 @@ export interface JiraAttributedTemplateViolation {
   readonly violation: JiraTemplateViolation;
   readonly template: JiraIssueTemplate;
   readonly role: JiraTemplateFieldRole | undefined;
+  /** The violation's clause names an issue link type, not a field (its source is `issuelinks`). */
+  readonly link: boolean;
   /** Native field ids the violation is about, resolved for the clause's role; empty if none. */
   readonly fieldIds: ReadonlySet<string>;
 }
@@ -371,14 +386,16 @@ export function collectJiraTemplateViolations(
   );
   const several = found.filter(([, own]) => own.length > 0).length > 1;
   return found.flatMap(([template, own], index) =>
-    own.map(({ violation, role }): JiraAttributedTemplateViolation => {
-      const fieldIds = violationFieldIds(violation, catalog, template, role);
+    own.map((raised): JiraAttributedTemplateViolation => {
+      const { violation, role } = raised;
+      const fieldIds = violationFieldIds(raised, catalog, template);
       return {
         violation: several
           ? { ...violation, template: `${violation.template} #${String(index + 1)}` }
           : violation,
         template,
         role,
+        link: raised.link === true,
         fieldIds,
       };
     }),
@@ -440,11 +457,12 @@ const FIXED_RULE_FIELD: Readonly<Partial<Record<JiraTemplateViolation["ruleId"],
   "label-count": "labels",
 };
 function parentFieldIds(
-  violation: JiraTemplateViolation,
+  raised: RaisedViolation,
   catalog: readonly JiraFieldCatalogEntry[],
   template: JiraIssueTemplate,
 ): ReadonlySet<string> {
-  const field = violation.subject.split(":")[0]?.trim() ?? "";
+  // The clause's own reference: a field name may itself contain a colon.
+  const field = raised.reference ?? raised.violation.subject.split(":")[0]?.trim() ?? "";
   return new Set([
     "parent",
     "issuelinks",
@@ -454,15 +472,16 @@ function parentFieldIds(
 }
 /** The wire field ids a violation is about; an empty result means it is not about one field. */
 function violationFieldIds(
-  violation: JiraTemplateViolation,
+  raised: RaisedViolation,
   catalog: readonly JiraFieldCatalogEntry[],
   template: JiraIssueTemplate,
-  role: JiraTemplateFieldRole | undefined,
 ): ReadonlySet<string> {
+  const { violation, role } = raised;
+  if (raised.link === true) return new Set(["issuelinks"]);
   const fixed = FIXED_RULE_FIELD[violation.ruleId];
   if (fixed !== undefined) return new Set([fixed]);
   if (violation.ruleId === "parent-missing" || violation.ruleId === "parent-type-mismatch")
-    return parentFieldIds(violation, catalog, template);
+    return parentFieldIds(raised, catalog, template);
   return new Set([
     violation.subject,
     ...resolveJiraTemplateFieldIds(violation.subject, catalog, template, role ?? "required"),
@@ -495,9 +514,12 @@ export function evaluateJiraTemplateChange(input: {
   readonly notices: readonly JiraTemplateViolation[];
 } {
   const all = collectJiraTemplateViolations(input.templates, input.after, input.catalog);
-  const presented = dedupeJiraTemplateViolations(all).slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX);
+  const presented = dedupeJiraTemplateViolations(all);
   if (input.before === undefined || presented.length === 0)
-    return { blocking: presented.map((entry) => entry.violation), notices: [] };
+    return {
+      blocking: presented.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX).map((entry) => entry.violation),
+      notices: [],
+    };
   const existing = new Set(
     collectJiraTemplateViolations(input.templates, input.before, input.catalog).map((entry) =>
       attributedId(input.templates, entry),
@@ -512,11 +534,17 @@ export function evaluateJiraTemplateChange(input: {
       )
       .map(presentationKey),
   );
+  // The whole set is classified first; the response limit applies afterwards and a blocker is never
+  // displaced by a notice, so truncation cannot turn a refusal into an admission.
   const blocking: JiraTemplateViolation[] = [];
   const notices: JiraTemplateViolation[] = [];
   for (const entry of presented)
     (blockingKeys.has(presentationKey(entry)) ? blocking : notices).push(entry.violation);
-  return { blocking, notices };
+  const shown = blocking.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX);
+  return {
+    blocking: shown,
+    notices: notices.slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX - shown.length),
+  };
 }
 
 function blocksEdit(
@@ -572,17 +600,29 @@ export interface JiraTemplateInstanceMetadata {
   readonly statusRefsComplete?: boolean;
   /** Global native type names/IDs, read only when a parent-type clause needs validation. */
   readonly parentIssueTypes?: readonly { readonly id: string; readonly name: string }[];
+  /**
+   * References only the global catalog named, because the selected type's screen could not be read.
+   * Such a name proves nothing about the screen's own field: it is neither bound nor judged.
+   */
+  readonly unverifiedFieldReferences?: readonly string[];
+}
+
+function fieldReferences(
+  template: JiraIssueTemplate,
+): readonly (readonly [string, JiraTemplateFieldRole])[] {
+  return [
+    ...template.requiredFields.map((field) => [field, "required"] as const),
+    ...(template.parent.field === undefined ? [] : [[template.parent.field, "parent"] as const]),
+  ];
 }
 
 function fieldFindings(
   template: JiraIssueTemplate,
   catalog: readonly JiraFieldCatalogEntry[],
+  unverified: readonly string[] = [],
 ): readonly JiraTemplateFinding[] {
-  const references: readonly (readonly [string, JiraTemplateFieldRole])[] = [
-    ...template.requiredFields.map((field) => [field, "required"] as const),
-    ...(template.parent.field === undefined ? [] : [[template.parent.field, "parent"] as const]),
-  ];
-  return references.flatMap(([reference, role]): readonly JiraTemplateFinding[] => {
+  return fieldReferences(template).flatMap(([reference, role]): readonly JiraTemplateFinding[] => {
+    if (unverified.includes(reference)) return [];
     const ids = resolveJiraTemplateFieldIds(reference, catalog, template, role);
     if (ids.length === 0) return [{ code: "unknown-field", subject: reference }];
     const exact = catalog.some((entry) => entry.id === reference);
@@ -669,6 +709,20 @@ function projectFindings(
 }
 
 /**
+ * Whether every field reference of the template was actually judged: false when the field list was
+ * not read, or when a reference was named only by the global catalog because the selected type's
+ * screen could not be read. An unverified reference is never reported as a checked match.
+ */
+export function jiraTemplateFieldsFullyChecked(
+  template: JiraIssueTemplate,
+  instance: JiraTemplateInstanceMetadata,
+): boolean {
+  if (instance.fields === undefined) return false;
+  const unverified = instance.unverifiedFieldReferences ?? [];
+  return fieldReferences(template).every(([reference]) => !unverified.includes(reference));
+}
+
+/**
  * Validates a template against the live instance: unknown project, issue type, fields, link types
  * and transition targets. A finding does not block saving; an unknown field makes every write it
  * governs fail with `field-unavailable`, so the lead sees it before a model does.
@@ -679,7 +733,9 @@ export function validateJiraIssueTemplateAgainstInstance(
 ): readonly JiraTemplateFinding[] {
   return [
     ...projectFindings(template, instance),
-    ...(instance.fields === undefined ? [] : fieldFindings(template, instance.fields)),
+    ...(instance.fields === undefined
+      ? []
+      : fieldFindings(template, instance.fields, instance.unverifiedFieldReferences)),
     ...linkFindings(template, instance),
     ...transitionFindings(template, instance),
     ...parentTypeFindings(template, instance),
@@ -701,6 +757,11 @@ function declaredIssueType(
   return found?.subtask === undefined ? undefined : { name: found.name, subtask: found.subtask };
 }
 
+/** A global name the selected screen could not confirm says nothing about the screen's own field. */
+function isUnverifiedReference(instance: JiraTemplateInstanceMetadata, reference: string): boolean {
+  return instance.unverifiedFieldReferences?.includes(reference) === true;
+}
+
 /**
  * What the instance says about the parent relation of the template's own issue type: a sub-task is
  * linked to its parent by the system `parent` field, a task or story to its epic by the Epic Link,
@@ -716,6 +777,7 @@ function parentRelationFindings(
   const reference = template.parent.field;
   const type = declaredIssueType(template, instance);
   if (reference === undefined || type === undefined || instance.fields === undefined) return [];
+  if (isUnverifiedReference(instance, reference)) return [];
   const ids = resolveJiraTemplateFieldIds(reference, instance.fields, template, "parent");
   const named = ids.length === 1 ? instance.fields.find((entry) => entry.id === ids[0]) : undefined;
   if (named === undefined) return [];

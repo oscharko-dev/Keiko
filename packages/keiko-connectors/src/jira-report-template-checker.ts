@@ -3,7 +3,6 @@ import {
   jiraTemplateGovernsWrites,
   type JiraIssueTemplate,
   type JiraTemplateFieldRole,
-  type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   collectJiraTemplateViolations,
@@ -131,6 +130,8 @@ function fieldOf(
   const { violation, role, template } = entry;
   const fixed = RULE_FIELD[violation.ruleId];
   if (fixed !== undefined) return fixed;
+  // A link clause names a link type: its source is the link list, never a field of that name.
+  if (entry.link) return "issuelinks";
   if (!["field-missing", "field-unavailable", "parent-missing"].includes(violation.ruleId))
     return undefined;
   const ids =
@@ -151,11 +152,13 @@ const FIELD_SUBJECT_RULES: ReadonlySet<string> = new Set([
  * template refers to by id, otherwise the template's own element (a section, a label).
  */
 function deviationSubject(
-  violation: JiraTemplateViolation,
+  entry: JiraAttributedTemplateViolation,
   fieldId: string | undefined,
   catalog: readonly JiraFieldCatalogEntry[],
 ): string {
-  if (fieldId === undefined || !FIELD_SUBJECT_RULES.has(violation.ruleId)) return violation.subject;
+  const { violation } = entry;
+  if (entry.link || fieldId === undefined || !FIELD_SUBJECT_RULES.has(violation.ruleId))
+    return violation.subject;
   return catalog.find((entry) => entry.id === fieldId)?.name ?? violation.subject;
 }
 
@@ -168,7 +171,7 @@ function deviation(
   return {
     ruleId: violation.ruleId,
     ...(fieldId === undefined ? {} : { fieldId }),
-    subject: deviationSubject(violation, fieldId, catalog),
+    subject: deviationSubject(entry, fieldId, catalog),
   };
 }
 

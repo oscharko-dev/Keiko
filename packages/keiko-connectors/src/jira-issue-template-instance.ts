@@ -387,9 +387,7 @@ interface FieldRead {
 }
 
 /** The instance facts, plus the field references a binding must not take from the global catalog. */
-export interface JiraTemplateBindingInstance extends JiraTemplateInstanceMetadata {
-  readonly unverifiedFieldReferences?: readonly string[];
-}
+export type JiraTemplateBindingInstance = JiraTemplateInstanceMetadata;
 
 function fieldFacts(
   read: FieldRead,
@@ -412,17 +410,22 @@ async function readTemplateFields(
   project: ProjectFacts | undefined,
 ): Promise<FieldRead> {
   const fields = await readJiraFieldCatalog(request);
-  if (fields === undefined || project === undefined) return { fields };
+  if (fields === undefined) return { fields };
   const references = unverifiedReferences(template, fields);
   if (references.length === 0) return { fields };
-  const type = resolvedGovernedType(template, project);
-  if (type === undefined) return { fields };
-  const metadata = await jiraCreateMutationMetadata(
-    request,
-    encodeURIComponent(project.id),
-    encodeURIComponent(type.id),
-  );
-  if (metadata.ok) return { fields: mergeJiraTemplateFieldCatalogs(fields, metadata.fields) };
+  // Without a project or a governed type there is no selected screen to read, and an unread screen
+  // proves no more than a failed read: both take the same path below.
+  const type = project === undefined ? undefined : resolvedGovernedType(template, project);
+  const metadata =
+    project === undefined || type === undefined
+      ? undefined
+      : await jiraCreateMutationMetadata(
+          request,
+          encodeURIComponent(project.id),
+          encodeURIComponent(type.id),
+        );
+  if (metadata?.ok === true)
+    return { fields: mergeJiraTemplateFieldCatalogs(fields, metadata.fields) };
   const resolvable = references.every(
     ([reference, role]) =>
       resolveJiraTemplateFieldIds(reference, fields, template, role).length === 1,
@@ -431,13 +434,18 @@ async function readTemplateFields(
   // but must not bind one that no verified id or exact id confirms, or a later healthy read would meet
   // a wrong id. Those references bind as unresolved and the healthy read fills the slot.
   return resolvable
-    ? {
-        fields,
-        unverified: references
-          .map(([reference]) => reference)
-          .filter((reference) => !fields.some((field) => field.id === reference)),
-      }
+    ? { fields, unverified: unconfirmedReferences(references, fields) }
     : { fields: undefined };
+}
+
+// The references a selected screen would have to confirm: every one but an exact field id.
+function unconfirmedReferences(
+  references: readonly (readonly [string, JiraTemplateFieldRole])[],
+  fields: readonly JiraFieldCatalogEntry[],
+): string[] {
+  return references
+    .map(([reference]) => reference)
+    .filter((reference) => !fields.some((field) => field.id === reference));
 }
 
 /** A workflow Jira did not list is unknown, not empty: no status names, no ids to rebind with. */
