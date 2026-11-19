@@ -78,6 +78,7 @@ export interface MemoryForgetSurfaceDetail {
   readonly tombstoneWritten?: boolean | undefined;
   readonly forgottenCount?: number | undefined;
   readonly tombstoneCount?: number | undefined;
+  readonly lineageSkippedCount?: number | undefined;
 }
 
 export const CHAT_FORGET_SURFACE: MemoryForgetSurfaceDetail = { surface: "chat" };
@@ -114,9 +115,31 @@ const MEMORY_EXPLICIT_FORGET_OPERATION = defineActivityLogOperation({
     tombstoneWritten: { type: "boolean", dataClass: "closed-enum", required: false },
     forgottenCount: { type: "integer", dataClass: "count", required: false },
     tombstoneCount: { type: "integer", dataClass: "count", required: false },
+    lineageSkippedCount: { type: "integer", dataClass: "count", required: false },
   },
   proofIds: ["memory.explicit.forget.line"],
 });
+
+// The optional fields a line carries are only those the caller knew; an absent one is not a zero.
+function knownForgetFields(
+  detail: MemoryForgetSurfaceDetail,
+): Record<string, string | number | boolean> {
+  const { selectorKind, tombstoneWritten, scopeKind, forgottenCount, tombstoneCount } = detail;
+  const { lineageSkippedCount } = detail;
+  const candidates = {
+    selectorKind,
+    tombstoneWritten,
+    scopeKind,
+    forgottenCount,
+    tombstoneCount,
+    lineageSkippedCount,
+  };
+  const known: Record<string, string | number | boolean> = {};
+  for (const [name, value] of Object.entries(candidates)) {
+    if (value !== undefined) known[name] = value;
+  }
+  return known;
+}
 
 export function logExplicitMemoryForget(
   outcome: MemoryExplicitForgetOutcome,
@@ -127,17 +150,7 @@ export function logExplicitMemoryForget(
     activityLogEvent(
       MEMORY_EXPLICIT_FORGET_OPERATION,
       { correlationId },
-      {
-        outcome,
-        surface: detail.surface,
-        ...(detail.selectorKind === undefined ? {} : { selectorKind: detail.selectorKind }),
-        ...(detail.tombstoneWritten === undefined
-          ? {}
-          : { tombstoneWritten: detail.tombstoneWritten }),
-        ...(detail.scopeKind === undefined ? {} : { scopeKind: detail.scopeKind }),
-        ...(detail.forgottenCount === undefined ? {} : { forgottenCount: detail.forgottenCount }),
-        ...(detail.tombstoneCount === undefined ? {} : { tombstoneCount: detail.tombstoneCount }),
-      },
+      { outcome, surface: detail.surface, ...knownForgetFields(detail) },
     ),
   );
 }

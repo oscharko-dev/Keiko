@@ -2604,6 +2604,42 @@ describe("memory handlers", () => {
       });
     });
 
+    it("does not follow an edge into another scope and counts it", async () => {
+      const vault = makeVault();
+      const { first, second, third } = await threeValues(vault);
+      const foreign = makeMemory("lineage-foreign", "Ich wohne in Ulm", {
+        scope: { kind: "workspace", workspaceId: workspaceId("ws-other") },
+        status: "superseded",
+      });
+      vault.insertMemory(foreign);
+      vault.insertEdge({
+        id: "lineage-cross" as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: foreign.id,
+        toMemoryId: third,
+        kind: "supersedes",
+        createdAt: Date.now(),
+      });
+
+      const { result, events } = await forgetWithLog(
+        String(third),
+        makeDeps({ memoryVault: vault }),
+      );
+
+      expect(result.status).toBe(200);
+      for (const id of [first, second, third]) expect(vault.getMemory(id)).toBeUndefined();
+      expect(vault.getMemory(foreign.id)).toBeDefined();
+      expectForgetLine(events, {
+        outcome: "forgotten",
+        ...WINDOW_BY_ID,
+        scopeKind: "global",
+        tombstoneWritten: true,
+        forgottenCount: 3,
+        tombstoneCount: 3,
+        lineageSkippedCount: 1,
+      });
+    });
+
     it("counts a fact and the earlier values it replaced in one line", async () => {
       const vault = makeVault();
       const { third } = await threeValues(vault);
@@ -3014,6 +3050,62 @@ describe("memory handlers", () => {
       expect(asJson(result).count).toBe(3);
     });
 
+    async function archive(vault: MemoryVaultStore, id: MemoryId): Promise<void> {
+      const result = await handleArchiveMemory(
+        makeCtx(
+          `/api/memory/${String(id)}/archive`,
+          { reason: "user-request" },
+          { id: String(id) },
+        ),
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(200);
+    }
+
+    // Archive is a legal transition from superseded: an archived history row is still a value of the
+    // fact, so forgetting the fact reaches it, and the rows before it.
+    it.each(["the middle", "the oldest", "every earlier"] as const)(
+      "forgets archived history too (%s value archived)",
+      async (which) => {
+        const vault = makeVault();
+        const { first, second, third } = await threeValues(vault);
+        if (which !== "the oldest") await archive(vault, second);
+        if (which !== "the middle") await archive(vault, first);
+
+        const result = await forgetById(vault, String(third));
+
+        expect(result.status).toBe(200);
+        expect(asJson(result).count).toBe(3);
+        for (const id of [first, second, third]) expect(vault.getMemory(id)).toBeUndefined();
+        expect(vault.listTombstonesByScope({ kind: "global" })).toHaveLength(3);
+        for (const body of ["Ich wohne in Köln", "Ich wohne in Düsseldorf", "Ich wohne in Bonn"]) {
+          expect(vault.hasForgetTombstoneForBody({ kind: "global" }, body)).toBe(true);
+        }
+      },
+    );
+
+    it("forgets an expired and a rejected earlier value as well", async () => {
+      const vault = makeVault();
+      const { first, second, third } = await threeValues(vault);
+      vault.updateMemory(first, { status: "archived" }, Date.now());
+      vault.updateMemory(first, { status: "expired" }, Date.now());
+      vault.updateMemory(second, { status: "rejected" }, Date.now());
+      const result = await forgetById(vault, String(third));
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(3);
+    });
+
+    it("picking an archived history row forgets only that row", async () => {
+      const vault = makeVault();
+      const { first, second, third } = await threeValues(vault);
+      await archive(vault, second);
+      const result = await forgetById(vault, String(second));
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(1);
+      expect(vault.getMemory(first)).toBeDefined();
+      expect(vault.getMemory(third)?.status).toBe("accepted");
+    });
+
     it("refuses and deletes nothing when the history is too long to forget whole", async () => {
       const vault = makeVault();
       const total = 260;
@@ -3151,9 +3243,9 @@ describe("memory handlers", () => {
       expectChatLine(unknown.events, { outcome: "not-found", ...CHAT_BY_ID, ...NOTHING });
     });
 
-    // The Chat names no archived entry itself, so only the Memory window acknowledges one: a
-    // governance refusal, not a technical fault.
-    it("records refused, not failed, for an archived entry a Chat statement named", async () => {
+    // The person's own words name the entry, so a Chat forget acts on an archived memory too
+    // (ADR-0146 D4b); a governance refusal thrown by the vault is a plain "not applied", not a fault.
+    it("forgets an archived entry a Chat statement named", async () => {
       const vault = makeVault();
       vault.insertMemory(makeMemory("chat-archived", "body", { status: "archived" }));
       const { value, events } = await withLog(() =>
@@ -3164,14 +3256,35 @@ describe("memory handlers", () => {
           "corr-chat",
         ),
       );
-      expect(value).toBe("refused");
+      expect(value).toBe("forgotten");
+      expect(vault.getMemory(memoryId("chat-archived"))).toBeUndefined();
+      expect(vault.listTombstonesByScope({ kind: "global" })[0]?.originalStatus).toBe("archived");
       expectChatLine(events, {
-        outcome: "refused",
+        outcome: "forgotten",
         ...CHAT_BY_ID,
         scopeKind: "global",
-        ...NOTHING,
+        tombstoneWritten: true,
+        forgottenCount: 1,
+        tombstoneCount: 1,
       });
-      expect(vault.getMemory(memoryId("chat-archived"))).toBeDefined();
+    });
+
+    it("records refused, not failed, when the vault refuses a Chat forget on governance grounds", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("chat-governed", "body"));
+      vi.spyOn(vault, "deleteMemories").mockImplementation(() => {
+        throw new GovernanceError("illegal-status-transition", "not forgettable");
+      });
+      const { value, events } = await withLog(() =>
+        forgetMemoryFromStatement(
+          makeDeps({ memoryVault: vault }),
+          vault,
+          memoryId("chat-governed"),
+          "corr-chat",
+        ),
+      );
+      expect(value).toBe("refused");
+      expectChatLine(events, { outcome: "refused", ...CHAT_BY_ID, ...NOTHING });
     });
 
     it("records failed for a storage fault and for an unwritable audit store", async () => {

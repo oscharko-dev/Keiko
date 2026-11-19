@@ -237,9 +237,10 @@ Memory window a forget by id names exactly the entry the person selected and con
 ignores the pin (#4214). In a Chat, and in the pending-forget replay of a learning pass, the id comes
 from a word match or from what "das" refers to; the pin keeps protecting there, the forget is not
 applied and the Chat says so (#4223). The exemption belongs to the call site, never to the selector
-kind. The same pick is the acknowledgement an archived entry needs: a forget by id from the Memory
-window forgets the archived entry the person named, while a Chat statement or a sweep by scope or
-type never acknowledges one and is refused (400), not failed (#4223).
+kind. A forget by id names its entry, in the Memory window by a pick and in a Chat by the person's
+own words, and that naming is the acknowledgement an archived entry needs: both forget an archived
+memory, with its archived history. A sweep by scope or type names no entry and is refused (400),
+not failed, while it contains an archived memory (#4223).
 
 A forget tombstone the person wrote refuses every capture path. A tombstone an unattended pass wrote
 (the maintenance pass, an operator's retention policy) never makes a rejection stronger than it was
@@ -392,11 +393,12 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   record is history (#4223): the maintenance pass never forgets it, even though its closed window has
   ended, and only the person's own forget, or an operator's opt-in retention policy, deletes it. A
   fact and the earlier values it replaced are one fact to the person: forgetting a live record, by a
-  statement in a Chat or by picking it in the Memory window, forgets every superseded predecessor
-  reachable over its `supersedes` edges with it, each with its own tombstone, so no earlier value is
+  statement in a Chat or by picking it in the Memory window, forgets every predecessor still stored
+  in its scope that is reachable over its `supersedes` edges, whatever its status now (replaced,
+  archived, expired, rejected), with it; an edge into another scope is not followed and is counted
+  as `lineageSkippedCount`, each with its own tombstone, so no earlier value is
   learned again unattended. A named forget counts a live record and its own predecessors as one
-  match (the lineage collapses to the live record when it matches, otherwise to the matching
-  superseded one); two different facts that both match are still asked about. Picking a history row
+  match (the lineage collapses to the newest matching record); two different facts that both match are still asked about. Picking a history row
   in the Memory window, or naming only the old value, forgets exactly that record and the newer
   value stays; the chain is kept whole around it. A pin that protects the live record in a Chat
   protects its history too (#4223). A

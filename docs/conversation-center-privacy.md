@@ -62,16 +62,18 @@ MemoriaViva exposes separate lifecycle controls:
   entry the person picks in the Memory window is forgotten whether or not it is pinned. A "Vergiss
   …" in a Chat does not pick a row: Keiko matches the person's words, so a pinned fact stays and the
   Chat says the forget was not applied; the person unpins or deletes it in the Memory window. An
-  archived entry the person picks in the Memory window is forgotten too; a sweep by scope or type
-  that contains an archived memory is refused as a whole.
+  archived entry the person picks in the Memory window or names with a "Vergiss …" in a Chat is
+  forgotten too; a sweep by scope or type that contains an archived memory is refused as a whole.
 - **Archive** removes a memory from the active working set without deleting the
   audit trail.
 - **Forget / delete** removes the active memory record and writes a tombstone so
   reviewers can audit that deletion happened without retaining the raw body in
   diagnostics. When a fact was corrected, Keiko keeps the earlier values as history. A fact and the
   values it replaced are one fact: forgetting the current entry, in the Memory window or with a
-  "Vergiss …" in a Chat, forgets its earlier values too, each with its own tombstone, so none of
-  them is learned again by itself. Picking a history row in the Memory window forgets only that
+  "Vergiss …" in a Chat, forgets every earlier value of the fact that is still stored in the same
+  scope, whatever its status now (replaced, archived, expired or rejected), each with its own
+  tombstone, so none of them is learned again by itself. An earlier value in another scope is not
+  followed; the activity log counts it. Picking a history row in the Memory window forgets only that
   value and leaves the newer one. Without an operator retention policy, history stays until the
   person forgets it.
 - **Tombstone retention** purges expired tombstones through the local vault port

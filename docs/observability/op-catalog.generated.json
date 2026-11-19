@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "16101c4dc12e7cf8d55de2b9fbd6340883c48e22141da5e7b7f9b24c18407905",
+    "catalogDigest": "e73585397c54fd35e9e88b3007f662f8b27429b1e65489e731f6dad7cc3e3263",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -39725,11 +39725,16 @@
             "type": "integer",
             "dataClass": "count",
             "required": false
+          },
+          "lineageSkippedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "proofIds": ["memory.explicit.forget.line"],
-        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:85",
-        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:127"]
+        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:86",
+        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:150"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39762,8 +39767,8 @@
           }
         },
         "proofIds": ["memory.explicit.remember.line"],
-        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:155",
-        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:175"]
+        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:168",
+        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:188"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -106776,6 +106781,12 @@
                   "required": false
                 },
                 {
+                  "name": "lineageSkippedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "outcome",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -126194,13 +126205,13 @@
     {
       "op": "memory.explicit.forget",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:87",
+      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:88",
       "package": "keiko-server"
     },
     {
       "op": "memory.explicit.remember",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:157",
+      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:170",
       "package": "keiko-server"
     },
     {

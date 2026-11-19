@@ -5,17 +5,23 @@
 // predecessors of a record are the sources of its incoming `supersedes` edges.
 
 import { randomUUID } from "node:crypto";
-import type { MemoryEdgeId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  scopeCoordinateKey,
+  type MemoryEdgeId,
+  type MemoryRecord,
+} from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 // A fact corrected this many times is not a plausible lineage. The walk stops there and says so; the
 // forget then refuses instead of leaving earlier values behind without telling the person.
 const MAX_LINEAGE_RECORDS = 256;
 
-export interface SupersededLineage {
+export interface EarlierValues {
   readonly records: readonly MemoryRecord[];
   /** False when the walk hit its bound, so more predecessors may exist. */
   readonly complete: boolean;
+  /** Predecessors in another scope, which the walk neither follows nor forgets. */
+  readonly crossScopeSkipped: number;
 }
 
 function predecessorIds(vault: MemoryVaultStore, id: MemoryRecord["id"]): readonly string[] {
@@ -26,28 +32,55 @@ function predecessorIds(vault: MemoryVaultStore, id: MemoryRecord["id"]): readon
 }
 
 /**
- * Every superseded record reachable over `supersedes` edges from `record`, transitively. A seen-set
- * ends cycles; a predecessor that is gone or is not itself superseded is not part of the history.
+ * Whether a stored record replaced this one, so that it is a history row and not the fact's newest
+ * value. A record among its own earlier values (a cycle of edges) is no successor.
  */
-export function supersededPredecessors(
+export function hasStoredSuccessor(
   vault: MemoryVaultStore,
   record: MemoryRecord,
-): SupersededLineage {
+  earlier: readonly MemoryRecord[],
+): boolean {
+  const own = new Set(earlier.map((value) => String(value.id)));
+  return vault
+    .listOutgoingEdges(record.id)
+    .some(
+      (edge) =>
+        edge.kind === "supersedes" &&
+        !own.has(String(edge.toMemoryId)) &&
+        vault.getMemory(edge.toMemoryId) !== undefined,
+    );
+}
+
+/**
+ * Every predecessor still stored that is reachable over `supersedes` edges from `record`,
+ * transitively, whatever its status: a history row may have been archived, expired or rejected since
+ * it was replaced, and it is still a value of the same fact. A seen-set ends cycles. A predecessor in
+ * another scope belongs to another owner: it is not followed and is counted instead.
+ */
+export function earlierValues(vault: MemoryVaultStore, record: MemoryRecord): EarlierValues {
+  const home = scopeCoordinateKey(record.scope);
   const seen = new Set<string>([String(record.id)]);
   const found: MemoryRecord[] = [];
+  let crossScopeSkipped = 0;
   const queue: MemoryRecord["id"][] = [record.id];
   for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
     for (const fromId of predecessorIds(vault, next)) {
       if (seen.has(fromId)) continue;
       seen.add(fromId);
       const predecessor = vault.getMemory(fromId as MemoryRecord["id"]);
-      if (predecessor?.status !== "superseded") continue;
-      if (found.length >= MAX_LINEAGE_RECORDS) return { records: found, complete: false };
+      if (predecessor === undefined || predecessor.status === "forgotten") continue;
+      if (scopeCoordinateKey(predecessor.scope) !== home) {
+        crossScopeSkipped += 1;
+        continue;
+      }
+      if (found.length >= MAX_LINEAGE_RECORDS) {
+        return { records: found, complete: false, crossScopeSkipped };
+      }
       found.push(predecessor);
       queue.push(predecessor.id);
     }
   }
-  return { records: found, complete: true };
+  return { records: found, complete: true, crossScopeSkipped };
 }
 
 /**

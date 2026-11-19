@@ -12,7 +12,7 @@ import {
   type MemoryStatus,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryConversationTouch, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import { supersededPredecessors } from "./memory-lineage.js";
+import { earlierValues } from "./memory-lineage.js";
 
 const TARGETABLE_STATUSES: readonly MemoryStatus[] = [
   "accepted",
@@ -229,12 +229,13 @@ function collapseLineages(
   if (matches.length < 2) return matches;
   const covered = new Set<string>();
   for (const record of matches) {
-    if (record.status === "superseded") continue;
-    for (const predecessor of supersededPredecessors(vault, record).records) {
+    for (const predecessor of earlierValues(vault, record).records) {
       covered.add(String(predecessor.id));
     }
   }
-  return matches.filter((record) => !covered.has(String(record.id)));
+  const collapsed = matches.filter((record) => !covered.has(String(record.id)));
+  // A cycle of edges covers every member; the person is asked rather than nothing matching.
+  return collapsed.length === 0 ? matches : collapsed;
 }
 
 // Searches every scope of the conversation, because the learner chose the scope and the person

@@ -102,7 +102,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { getServerLogger } from "./observability/index.js";
-import { bridgeSupersessionAround, supersededPredecessors } from "./memory-lineage.js";
+import { bridgeSupersessionAround, earlierValues, hasStoredSuccessor } from "./memory-lineage.js";
 import { resolveMemoryTargetRecords } from "./memory-target-resolver.js";
 import { logExplicitMemoryForget } from "./memory-explicit-statement-log.js";
 
@@ -1532,25 +1532,35 @@ interface ForgetRefusal {
 interface ForgetDone {
   readonly memoryIds: readonly MemoryId[];
   readonly scopeKind: MemoryScopeKind | undefined;
+  /** Earlier values in another scope that the forget did not follow. */
+  readonly crossScopeSkipped: number;
 }
 
 function isForgetRefusal(value: object): value is ForgetRefusal {
   return "route" in value;
 }
 
-// A fact and the earlier values it replaced are one fact (#4223): forgetting a live record by id
-// forgets every superseded predecessor with it, each with its own tombstone, so no earlier value can
-// be learned again unattended. A superseded record picked on its own is forgotten alone. A pin that
-// protects the live record protects its history too, because nothing is selected then.
-function withSupersededHistory(
+// A fact and the earlier values it replaced are one fact (#4223): forgetting the newest value by id
+// forgets every earlier value still stored in its scope, whatever its status now (a history row may
+// have been archived or expired since), each with its own tombstone, so no earlier value can be
+// learned again unattended. A history row picked on its own is forgotten alone. A pin that protects
+// the newest value protects its history too, because nothing is selected then.
+interface ForgetTargets {
+  readonly records: readonly MemoryRecord[];
+  readonly crossScopeSkipped: number;
+}
+
+function withEarlierValues(
   vault: MemoryVaultStore,
   selected: readonly MemoryRecord[],
   caller: ForgetCaller,
-  authorizedScopes: readonly MemoryScope[],
-): readonly MemoryRecord[] | RouteResult {
+): ForgetTargets | RouteResult {
   const [record] = selected;
-  if (record === undefined || record.status === "superseded") return selected;
-  const history = supersededPredecessors(vault, record);
+  if (record === undefined) return { records: selected, crossScopeSkipped: 0 };
+  const history = earlierValues(vault, record);
+  if (hasStoredSuccessor(vault, record, history.records)) {
+    return { records: selected, crossScopeSkipped: 0 };
+  }
   if (!history.complete) {
     return {
       status: 409,
@@ -1560,11 +1570,11 @@ function withSupersededHistory(
       ),
     };
   }
-  if (history.records.some((earlier) => !scopeAuthorized(earlier.scope, authorizedScopes))) {
-    return forbiddenMemoryScopeResult();
-  }
   const keepPinned = !caller.personPickedEntry;
-  return [...selected, ...history.records.filter((earlier) => !(keepPinned && earlier.pinned))];
+  return {
+    records: [...selected, ...history.records.filter((earlier) => !(keepPinned && earlier.pinned))],
+    crossScopeSkipped: history.crossScopeSkipped,
+  };
 }
 
 interface ForgetCandidates {
@@ -1597,7 +1607,7 @@ function selectForgetTargets(
   selector: ForgetSelector,
   caller: ForgetCaller,
   nowMs: number,
-): readonly MemoryRecord[] | ForgetRefusal {
+): ForgetTargets | ForgetRefusal {
   const authorizedScopes = authorizedMemoryScopes(deps, vault);
   const found = authorizedForgetCandidates(vault, selector, authorizedScopes);
   if (isForgetRefusal(found)) return found;
@@ -1612,15 +1622,20 @@ function selectForgetTargets(
     const none = errorBody("GOVERNANCE_ERROR", "No matching memories can be forgotten.");
     return { route: { status: 409, body: none }, scopeKind };
   }
-  if (selector.kind !== "by-id") return candidates;
-  const targets = withSupersededHistory(vault, candidates, caller, authorizedScopes);
+  if (selector.kind !== "by-id") return { records: candidates, crossScopeSkipped: 0 };
+  const targets = withEarlierValues(vault, candidates, caller);
   return isRouteResult(targets) ? { route: targets, scopeKind } : targets;
 }
 
-// The archived entry a person picks in the Memory window is named exactly, so that pick is the
-// acknowledgement the governance layer demands for an archived record; a sweep names none.
-function acknowledgedArchivedIds(selector: ForgetSelector, caller: ForgetCaller): MemoryId[] {
-  return caller.personPickedEntry && selector.kind === "by-id" ? [selector.memoryId] : [];
+// A forget by id names its entry, in the Memory window by a pick and in a Chat by the person's own
+// words, so that naming is the acknowledgement the governance layer demands for an archived record
+// (the entry and its archived history). A sweep names no entry and acknowledges none.
+function acknowledgedArchivedIds(
+  selector: ForgetSelector,
+  targets: readonly MemoryRecord[],
+): MemoryId[] {
+  if (selector.kind !== "by-id") return [];
+  return targets.filter((record) => record.status === "archived").map((record) => record.id);
 }
 
 function executeForgetSelection(
@@ -1631,8 +1646,9 @@ function executeForgetSelection(
   caller: ForgetCaller,
 ): ForgetDone | ForgetRefusal {
   const nowMs = Date.now();
-  const targets = selectForgetTargets(deps, vault, selector, caller, nowMs);
-  if (isForgetRefusal(targets)) return targets;
+  const selected = selectForgetTargets(deps, vault, selector, caller, nowMs);
+  if (isForgetRefusal(selected)) return selected;
+  const { records: targets, crossScopeSkipped } = selected;
   const scopeKind = targets[0]?.scope.kind;
   let operations: ReturnType<typeof buildForgetOperations>;
   try {
@@ -1642,7 +1658,7 @@ function executeForgetSelection(
       {
         reason,
         writeTombstone: true,
-        acknowledgedArchivedMemoryIds: acknowledgedArchivedIds(selector, caller),
+        acknowledgedArchivedMemoryIds: acknowledgedArchivedIds(selector, targets),
       },
     );
   } catch (error) {
@@ -1651,9 +1667,8 @@ function executeForgetSelection(
   }
   const [first] = targets;
   // One history record forgotten on its own must not cut the earlier values off from the newer one.
-  if (selector.kind === "by-id" && first?.status === "superseded") {
+  if (selector.kind === "by-id" && first !== undefined)
     bridgeSupersessionAround(vault, first, nowMs);
-  }
   vault.deleteMemories(
     operations.map((operation) => ({
       id: operation.memoryId,
@@ -1666,7 +1681,11 @@ function executeForgetSelection(
       },
     })),
   );
-  return { memoryIds: operations.map((operation) => operation.memoryId), scopeKind };
+  return {
+    memoryIds: operations.map((operation) => operation.memoryId),
+    scopeKind,
+    crossScopeSkipped,
+  };
 }
 
 // What a thrown failure of a forget was: a governance refusal or a storage not-found is answered
@@ -1680,6 +1699,11 @@ function forgetFailureOutcome(error: unknown): "refused" | "not-found" | "failed
 
 function forgetRouteOutcome(result: RouteResult): "not-found" | "refused" {
   return result.status === 404 ? "not-found" : "refused";
+}
+
+// A cross-scope edge the forget did not follow is recorded as a count, never silently.
+function skippedField(done: ForgetDone): { readonly lineageSkippedCount?: number } {
+  return done.crossScopeSkipped > 0 ? { lineageSkippedCount: done.crossScopeSkipped } : {};
 }
 
 // The counts of a forget that ended without forgetting anything.
@@ -1721,6 +1745,7 @@ function forgetFromMemoryWindow(
       tombstoneWritten: true,
       forgottenCount: count,
       tombstoneCount: count,
+      ...skippedField(result),
     });
     return { memoryIds: result.memoryIds };
   } catch (error) {
@@ -1834,6 +1859,7 @@ export function forgetMemoryFromStatement(
       tombstoneWritten: true,
       forgottenCount: count,
       tombstoneCount: count,
+      ...skippedField(result),
     });
     return "forgotten";
   } catch (error) {
