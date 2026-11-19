@@ -38126,6 +38126,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["chat", "memory-center"],
       },
+      selectorKind: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "by-id",
+          "by-scope",
+          "by-type",
+          "by-source-conversation",
+          "by-time-window",
+          "statement",
+        ],
+      },
       scopeKind: {
         type: "string",
         dataClass: "closed-enum",
@@ -38135,6 +38148,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       tombstoneWritten: {
         type: "boolean",
         dataClass: "closed-enum",
+        required: false,
+      },
+      forgottenCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      tombstoneCount: {
+        type: "integer",
+        dataClass: "count",
         required: false,
       },
     },

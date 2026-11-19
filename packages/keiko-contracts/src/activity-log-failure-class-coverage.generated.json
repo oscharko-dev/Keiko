@@ -42051,6 +42051,12 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "forgottenCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",
@@ -42063,10 +42069,22 @@
               "required": false
             },
             {
+              "name": "selectorKind",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "surface",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "tombstoneCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "tombstoneWritten",
@@ -42075,7 +42093,7 @@
               "required": false
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false

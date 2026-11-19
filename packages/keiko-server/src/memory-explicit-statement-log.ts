@@ -7,6 +7,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type { MemoryScopeKind } from "@oscharko-dev/keiko-contracts";
+import type { ForgetSelector } from "@oscharko-dev/keiko-memory-governance";
 
 import { getServerLogger } from "./observability/index.js";
 
@@ -37,12 +38,28 @@ export type MemoryExplicitForgetOutcome = (typeof MEMORY_EXPLICIT_FORGET_OUTCOME
 
 // `not-found`: a forget from the Memory window named a memory that does not exist. Every line names
 // where the forget came from: `chat` (a "Vergiss das" statement) or `memory-center` (the Memory
-// window routes; Journal and Memory Center share one API). The Memory window also records the scope
-// kind and whether a tombstone was written, so a person's deletion is reconstructable from the log
-// alone (#4206 AC 5). No id, body or scope value: closed kinds and one flag.
+// window routes; Journal and Memory Center share one API). A line that reached a selection also
+// records the closed selector kind, the scope kind, whether a tombstone was written, and how many
+// memories were forgotten and how many tombstones were written, so a person's deletion is
+// reconstructable from the log alone and one entry, a sweep and a lineage (a fact with the earlier
+// values it replaced) differ (#4206 AC 5, #4223). `statement` is a forget of words nothing was
+// stored from: it forgets no memory and writes one tombstone per scope. No id, body or scope value:
+// closed kinds and counts.
 const MEMORY_FORGET_SURFACES = ["chat", "memory-center"] as const;
 
-const MEMORY_FORGET_SCOPE_KINDS = [
+export const MEMORY_FORGET_SELECTOR_KINDS = [
+  "by-id",
+  "by-scope",
+  "by-type",
+  "by-source-conversation",
+  "by-time-window",
+  "statement",
+] as const satisfies readonly (ForgetSelector["kind"] | "statement")[];
+
+// The registration needs closed literals, so the scope kinds are listed here; the test of this module
+// compares them with the contract's own list, so a sixth scope kind fails there instead of rejecting
+// its line at the sink.
+export const MEMORY_FORGET_SCOPE_KINDS = [
   "user",
   "workspace",
   "project",
@@ -50,12 +67,17 @@ const MEMORY_FORGET_SCOPE_KINDS = [
   "global",
 ] as const satisfies readonly MemoryScopeKind[];
 
+export type MemoryForgetSelectorKind = (typeof MEMORY_FORGET_SELECTOR_KINDS)[number];
+
 export type MemoryForgetSurface = (typeof MEMORY_FORGET_SURFACES)[number];
 
 export interface MemoryForgetSurfaceDetail {
   readonly surface: MemoryForgetSurface;
+  readonly selectorKind?: MemoryForgetSelectorKind | undefined;
   readonly scopeKind?: MemoryScopeKind | undefined;
   readonly tombstoneWritten?: boolean | undefined;
+  readonly forgottenCount?: number | undefined;
+  readonly tombstoneCount?: number | undefined;
 }
 
 export const CHAT_FORGET_SURFACE: MemoryForgetSurfaceDetail = { surface: "chat" };
@@ -77,6 +99,12 @@ const MEMORY_EXPLICIT_FORGET_OPERATION = defineActivityLogOperation({
       required: true,
       values: MEMORY_FORGET_SURFACES,
     },
+    selectorKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: MEMORY_FORGET_SELECTOR_KINDS,
+    },
     scopeKind: {
       type: "string",
       dataClass: "closed-enum",
@@ -84,6 +112,8 @@ const MEMORY_EXPLICIT_FORGET_OPERATION = defineActivityLogOperation({
       values: MEMORY_FORGET_SCOPE_KINDS,
     },
     tombstoneWritten: { type: "boolean", dataClass: "closed-enum", required: false },
+    forgottenCount: { type: "integer", dataClass: "count", required: false },
+    tombstoneCount: { type: "integer", dataClass: "count", required: false },
   },
   proofIds: ["memory.explicit.forget.line"],
 });
@@ -100,10 +130,13 @@ export function logExplicitMemoryForget(
       {
         outcome,
         surface: detail.surface,
+        ...(detail.selectorKind === undefined ? {} : { selectorKind: detail.selectorKind }),
         ...(detail.tombstoneWritten === undefined
           ? {}
           : { tombstoneWritten: detail.tombstoneWritten }),
         ...(detail.scopeKind === undefined ? {} : { scopeKind: detail.scopeKind }),
+        ...(detail.forgottenCount === undefined ? {} : { forgottenCount: detail.forgottenCount }),
+        ...(detail.tombstoneCount === undefined ? {} : { tombstoneCount: detail.tombstoneCount }),
       },
     ),
   );

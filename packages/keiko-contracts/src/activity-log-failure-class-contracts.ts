@@ -8476,7 +8476,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: ["memory.explicit.forget", "memory.explicit.remember"],
     requiredReplayProofIds: [],
     requiredResourceOperations: ["memory.explicit.forget", "memory.explicit.remember"],
-    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
     requiredFrameOperations: [],
     requiredCauseOperations: [],
   },

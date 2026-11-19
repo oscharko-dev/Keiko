@@ -97,8 +97,8 @@ export function forgetActionFromOutcome(
 ): ConversationMemoryActionWire | null {
   if (deps.memoryVault === undefined) return null;
   const { memoryId } = outcome.operation;
+  // The forget leaves its own line on the Activity Log.
   const result = forgetMemoryFromStatement(deps, deps.memoryVault, memoryId, correlationId);
-  logExplicitMemoryForget(result, correlationId, CHAT_FORGET_SURFACE);
   return result === "forgotten"
     ? forgotAction(String(memoryId))
     : statementRefused("forget-not-applied");
@@ -135,7 +135,6 @@ async function forgetPreviousStatement(
     statement.scopes,
     correlationId,
   );
-  logExplicitMemoryForget(result, correlationId, CHAT_FORGET_SURFACE);
   return result === "forgotten"
     ? forgotAction(correlationId)
     : statementRefused("forget-not-applied");

@@ -273,7 +273,12 @@ carries a credential keeps only its hash and never reaches the embedding endpoin
 mean several memories, or there is nothing it could mean, the person is asked in one short sentence
 and nothing is deleted. A named forget that matches no memory is asked about the same way, because a
 clear request is never ignored. Each decision is recorded body-free as `memory.explicit.forget` or
-`memory.explicit.remember`.
+`memory.explicit.remember`. A forget line that reached a selection also carries the closed
+`selectorKind` (`by-id`, a sweep kind, or `statement` for words nothing was stored from), the
+`scopeKind`, `tombstoneWritten`, `forgottenCount` (memories deleted, including the earlier values of
+a corrected fact) and `tombstoneCount`, on the Chat and on the Memory window alike, so one entry, a
+sweep and a lineage can be told apart from the log alone. `failed` is a technical fault only; a
+governance refusal is `refused` and a missing memory is `not-found` (#4223).
 
 Only such a statement gets an answer in the chat, because the person asked. `explicitStatement` on the
 candidate or rejected action carries that; what is only learned, or a refusal of an ordinary message,
