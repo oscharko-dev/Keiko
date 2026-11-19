@@ -4,12 +4,12 @@
   "id": "earlier-hotfix-en",
   "language": "en",
   "class": "earlier-value",
-  "description": "A seeded chain of four hotfix review rules (two reviewers, one reviewer, no review, three reviewers) over 90 days; questions for the current, the previous and the first rule. Limit: replaced rules are superseded history: since #4223 the product keeps it, and recall does not supply it yet. Failure means: the current probe failing is a chain defect, the earlier probes failing is the known absence of history recall. Maintenance: meaningful both ways; with maintenance on the superseded record is expected to stay as history (the earlier-value probe fails because recall does not supply history yet, not because a record was lost), with --no-maintenance it shows whether retrieval could answer at all. Kind: capability.",
+  "description": "A seeded chain of four hotfix review rules (five reviewers, one reviewer, no review, three reviewers) over 90 days; questions for the current, the previous and the first rule. Limit: replaced rules are superseded history: since #4223 the product keeps it, and recall does not supply it yet. Failure means: the current probe failing is a chain defect, the earlier probes failing is the known absence of history recall. Maintenance: meaningful both ways; with maintenance on the superseded record is expected to stay as history (the earlier-value probe fails because recall does not supply history yet, not because a record was lost), with --no-maintenance it shows whether retrieval could answer at all. Kind: capability.",
   "seed": {
     "records": [
       {
         "key": "v1",
-        "body": "Hotfixes go through a pull request with two reviewers.",
+        "body": "Hotfixes go through a pull request with five reviewers.",
         "type": "semantic-fact",
         "scope": "project",
         "status": "superseded",
@@ -53,13 +53,13 @@
       "key": "now",
       "seed": "Hotfixes go through a pull request with three reviewers including the risk officer.",
       "must": false,
-      "terms": [["three reviewers", "3 reviewers"]]
+      "terms": [["three reviewers", "3 reviewers"], ["risk officer"]]
     }
   ],
   "superseded": [
     {
       "key": "first",
-      "terms": [["two reviewers", "2 reviewers"]]
+      "terms": [["five reviewers", "5 reviewers"]]
     },
     {
       "key": "second",
@@ -77,11 +77,11 @@
       "question": "How do hotfixes get reviewed?",
       "expect": {
         "kind": "answer",
-        "terms": [["three reviewers", "3 reviewers"]],
+        "terms": [["three reviewers", "3 reviewers"], ["risk officer"]],
         "forbidden": [
           [
-            "two reviewers",
-            "2 reviewers",
+            "five reviewers",
+            "5 reviewers",
             "one reviewer",
             "1 reviewer",
             "without review",

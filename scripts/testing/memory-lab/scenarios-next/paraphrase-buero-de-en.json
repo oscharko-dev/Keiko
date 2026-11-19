@@ -9,7 +9,7 @@
     "records": [
       {
         "key": "floor",
-        "body": "Mein Büro liegt im dritten Stock des Nordgebäudes.",
+        "body": "Mein Büro liegt im siebzehnten Stock des Nordgebäudes.",
         "type": "semantic-fact",
         "scope": "user",
         "status": "accepted",
@@ -21,9 +21,9 @@
   "truth": [
     {
       "key": "floor",
-      "seed": "Mein Büro liegt im dritten Stock des Nordgebäudes.",
+      "seed": "Mein Büro liegt im siebzehnten Stock des Nordgebäudes.",
       "must": false,
-      "terms": [["dritte*", "third", "3rd", "3. stock", "3. og", "floor 3"]]
+      "terms": [["siebzehnte*", "seventeenth", "17th", "17. stock", "17. og", "floor 17", "17"]]
     }
   ],
   "turns": [],
@@ -33,7 +33,7 @@
       "question": "Which floor is my workplace on?",
       "expect": {
         "kind": "answer",
-        "terms": [["dritte*", "third", "3rd", "3. stock", "3. og", "floor 3"]]
+        "terms": [["siebzehnte*", "seventeenth", "17th", "17. stock", "17. og", "floor 17", "17"]]
       },
       "language": "en"
     },
@@ -42,7 +42,7 @@
       "question": "Wo liegt mein Büro?",
       "expect": {
         "kind": "answer",
-        "terms": [["dritte*", "third", "3rd", "3. stock", "3. og", "floor 3"]]
+        "terms": [["siebzehnte*", "seventeenth", "17th", "17. stock", "17. og", "floor 17", "17"]]
       },
       "language": "de"
     }

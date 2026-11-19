@@ -9,7 +9,7 @@
     "records": [
       {
         "key": "commute",
-        "body": "Ich fahre mit der Fähre zur Arbeit.",
+        "body": "Ich fahre mit der Standseilbahn zur Arbeit.",
         "type": "semantic-fact",
         "scope": "user",
         "status": "accepted",
@@ -21,9 +21,9 @@
   "truth": [
     {
       "key": "commute",
-      "seed": "Ich fahre mit der Fähre zur Arbeit.",
+      "seed": "Ich fahre mit der Standseilbahn zur Arbeit.",
       "must": false,
-      "terms": [["Fähre", "Faehre", "Fähren"]]
+      "terms": [["Standseilbahn", "Seilbahn"]]
     }
   ],
   "turns": [],
@@ -33,7 +33,7 @@
       "question": "Wie pendle ich?",
       "expect": {
         "kind": "answer",
-        "terms": [["Fähre", "Faehre", "Fähren"]]
+        "terms": [["Standseilbahn", "Seilbahn"]]
       }
     },
     {
@@ -41,7 +41,7 @@
       "question": "Womit fahre ich zur Arbeit?",
       "expect": {
         "kind": "answer",
-        "terms": [["Fähre", "Faehre", "Fähren"]]
+        "terms": [["Standseilbahn", "Seilbahn"]]
       }
     }
   ]

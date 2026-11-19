@@ -4,12 +4,12 @@
   "id": "long-horizon-berichte-de",
   "language": "de",
   "class": "long-horizon",
-  "description": "Eight simulated weeks of history: 180 unrelated facts, a reinforced format preference, a meeting day corrected 10 days ago and a stable department fact stated 130 days ago. Limit: decay is a flat 45-day half-life, so a stable fact left unused for four months is archived by maintenance, and recall never supplies a replaced value. Failure means: dept-old failing is a design question (a valid but unused fact fades); day-before failing is the absent capability to recall an earlier value; the two controls (format-now, day-now) must pass. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact, unused and old, is expected to be archived); the superseded record stays as history since #4223, and the earlier-value probe fails because recall does not supply history yet, not because a record was lost. Kind: design.",
+  "description": "Eight simulated weeks of history: 180 unrelated facts, a reinforced format preference, a meeting day and time corrected 10 days ago and a stable department fact stated 130 days ago. Limit: decay is a flat 45-day half-life, so a stable fact left unused for four months is archived by maintenance, and recall never supplies a replaced value. Failure means: dept-old failing is a design question (a valid but unused fact fades); day-before failing is the absent capability to recall an earlier value; the two controls (format-now, day-now) must pass. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact, unused and old, is expected to be archived); the superseded record stays as history since #4223, and the earlier-value probe fails because recall does not supply history yet, not because a record was lost. Kind: design.",
   "seed": {
     "records": [
       {
         "key": "format",
-        "body": "Ich bevorzuge Statusberichte als Tabellen mit einer Zeile pro Vorgang.",
+        "body": "Ich bevorzuge Statusberichte als Tabellen mit einer Zeile pro Kostenstelle.",
         "type": "preference",
         "scope": "user",
         "status": "accepted",
@@ -20,7 +20,7 @@
       },
       {
         "key": "day-old",
-        "body": "Das Teamtreffen findet dienstags statt.",
+        "body": "Das Teamtreffen findet dienstags um 16:30 Uhr statt.",
         "type": "semantic-fact",
         "scope": "project",
         "status": "superseded",
@@ -29,7 +29,7 @@
       },
       {
         "key": "day-new",
-        "body": "Das Teamtreffen findet donnerstags statt.",
+        "body": "Das Teamtreffen findet donnerstags um 7:45 Uhr statt.",
         "type": "semantic-fact",
         "scope": "project",
         "status": "accepted",
@@ -62,27 +62,27 @@
   "truth": [
     {
       "key": "format",
-      "seed": "Ich bevorzuge Statusberichte als Tabellen mit einer Zeile pro Vorgang.",
+      "seed": "Ich bevorzuge Statusberichte als Tabellen mit einer Zeile pro Kostenstelle.",
       "must": false,
-      "terms": [["Tabelle*"]]
+      "terms": [["Tabelle*"], ["Kostenstelle*"]]
     },
     {
       "key": "day",
-      "seed": "Das Teamtreffen findet donnerstags statt.",
+      "seed": "Das Teamtreffen findet donnerstags um 7:45 Uhr statt.",
       "must": false,
-      "terms": [["Donnerstag*"]]
+      "terms": [["Donnerstag*"], ["7:45", "7.45", "7 Uhr 45", "viertel vor acht"]]
     },
     {
       "key": "dept",
       "seed": "Meine Abteilung heißt Kreditrisiko Mittelstand.",
       "must": false,
-      "terms": [["Kreditrisiko"]]
+      "terms": [["Kreditrisiko"], ["Mittelstand*"]]
     }
   ],
   "superseded": [
     {
       "key": "day-before",
-      "terms": [["Dienstag*"]]
+      "terms": [["Dienstag*"], ["16:30", "16.30", "16 Uhr 30", "halb fünf"]]
     }
   ],
   "turns": [],
@@ -92,7 +92,7 @@
       "question": "Wie soll ich meine Statusberichte aufbauen?",
       "expect": {
         "kind": "answer",
-        "terms": [["Tabelle*", "tabellar*"]]
+        "terms": [["Tabelle*", "tabellar*"], ["Kostenstelle*"]]
       }
     },
     {
@@ -100,7 +100,7 @@
       "question": "An welchem Tag findet das Teamtreffen statt?",
       "expect": {
         "kind": "answer",
-        "terms": [["Donnerstag*"]],
+        "terms": [["Donnerstag*"], ["7:45", "7.45", "7 Uhr 45", "viertel vor acht"]],
         "forbidden": [["Dienstag*"]]
       }
     },
@@ -117,7 +117,7 @@
       "question": "Wie heißt meine Abteilung?",
       "expect": {
         "kind": "answer",
-        "terms": [["Kreditrisiko"]]
+        "terms": [["Kreditrisiko"], ["Mittelstand*"]]
       }
     }
   ]

@@ -20,7 +20,7 @@
       },
       {
         "key": "control",
-        "body": "The incident review for the payments gateway is held every Thursday afternoon.",
+        "body": "The incident review for the payments gateway is held every Thursday at 15:40.",
         "type": "semantic-fact",
         "scope": "project",
         "status": "accepted",
@@ -49,9 +49,9 @@
     },
     {
       "key": "review",
-      "seed": "The incident review for the payments gateway is held every Thursday afternoon.",
+      "seed": "The incident review for the payments gateway is held every Thursday at 15:40.",
       "must": false,
-      "terms": [["Thursday*"]]
+      "terms": [["Thursday*"], ["15:40", "3:40 pm", "3:40pm", "15.40"]]
     }
   ],
   "turns": [],
@@ -69,7 +69,7 @@
       "question": "When is the incident review for the payments gateway held?",
       "expect": {
         "kind": "answer",
-        "terms": [["Thursday*"]]
+        "terms": [["Thursday*"], ["15:40", "3:40 pm", "3:40pm", "15.40"]]
       }
     }
   ]

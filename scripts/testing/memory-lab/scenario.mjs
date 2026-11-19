@@ -226,6 +226,35 @@ function validateEarlierApart(id, scenario) {
   }
 }
 
+// The term groups an answer probe wants, labelled: its own terms, the terms of each truth it needs and
+// of each replaced value it asks for.
+function wantedTermLists(scenario, probe) {
+  const { expect } = probe;
+  const named = (list, keys, label) =>
+    (keys ?? []).map((key) => ({
+      label: `${label} "${key}"`,
+      groups: list.find((entry) => entry.key === key).terms,
+    }));
+  return [
+    ...(expect.terms === undefined ? [] : [{ label: "terms", groups: expect.terms }]),
+    ...named(scenario.truth, expect.needs, "needs"),
+    ...named(scenario.superseded ?? [], expect.earlier, "earlier"),
+  ];
+}
+
+// A required term that the probe's own question already contains is passed by an answer that repeats
+// the question. The scorer folds diacritics, so "Fähre" is "fahre" and occurs in "Womit fahre ich".
+function validateWantedApartFromQuestions(id, scenario) {
+  for (const probe of scenario.probes) {
+    if (probe.expect.kind !== "answer") continue;
+    for (const { label, groups } of wantedTermLists(scenario, probe)) {
+      const asked = groups.flat().find((term) => matchesTermGroups(probe.question, [[term]]));
+      if (asked !== undefined)
+        fail(id, `probe ${probe.id}: ${label} term "${asked}" occurs in the probe's own question`);
+    }
+  }
+}
+
 function validateLearnerItems(id, where, items) {
   if (items === undefined) return;
   if (!Array.isArray(items)) fail(id, `${where}.learner must be an array`);
@@ -390,6 +419,7 @@ export function validateScenario(scenario) {
     superseded: new Set((scenario.superseded ?? []).flatMap((entry) => entry.key ?? [])),
   });
   validateEarlierApart(id, scenario);
+  validateWantedApartFromQuestions(id, scenario);
   validatePoisonProbes(id, scenario.poison, scenario.probes);
   return Object.freeze({
     ...scenario,

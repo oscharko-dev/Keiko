@@ -140,34 +140,34 @@
   "truth": [
     {
       "key": "atlas",
-      "seed": "I chose PostgreSQL for the storage of project Atlas.",
+      "seed": "I chose CockroachDB for the storage of project Atlas.",
       "must": false,
-      "terms": [["PostgreSQL", "Postgres"]],
+      "terms": [["CockroachDB", "Cockroach"]],
       "with": [["Atlas"]]
     },
     {
       "key": "borealis",
-      "seed": "I chose MongoDB for the storage of project Borealis.",
+      "seed": "I chose ArangoDB for the storage of project Borealis.",
       "must": false,
-      "terms": [["MongoDB"]],
+      "terms": [["ArangoDB", "Arango"]],
       "with": [["Borealis"]]
     }
   ],
   "turns": [
     {
-      "user": "I chose PostgreSQL for the storage of project Atlas.",
+      "user": "I chose CockroachDB for the storage of project Atlas.",
       "learner": [
         {
-          "body": "I chose PostgreSQL for the storage of project Atlas.",
+          "body": "I chose CockroachDB for the storage of project Atlas.",
           "type": "decision"
         }
       ]
     },
     {
-      "user": "I chose MongoDB for the storage of project Borealis.",
+      "user": "I chose ArangoDB for the storage of project Borealis.",
       "learner": [
         {
-          "body": "I chose MongoDB for the storage of project Borealis.",
+          "body": "I chose ArangoDB for the storage of project Borealis.",
           "type": "decision"
         }
       ]

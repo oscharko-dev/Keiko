@@ -4,12 +4,12 @@
   "id": "earlier-rueckkehr-de",
   "language": "de",
   "class": "earlier-value",
-  "description": "The person returns to an earlier preference in the same words: Tabellen (seeded, superseded 60 days ago), Listen (seeded, accepted 30 days ago), and now Tabellen again in conversation. Limit: since #4223 the product keeps a superseded record as history, so it stays in the store and the return to the earlier preference is learned as a new statement; recall does not supply history yet, so a question about the earlier value is not answered from it. Failure means: the final value is not learned (fact-not-stored) or not answered although the person said it last; the earlier-value probe failing is the known absence of history recall, not a lost record. A superseded seeded record that disappears is a loss (seeded-record-lost). Maintenance: meaningful both ways; with maintenance on the superseded record is expected to stay, with --no-maintenance it shows whether retrieval could answer at all.",
+  "description": "The person returns to an earlier preference in the same words: Tabellen mit Summenzeile (seeded, superseded 60 days ago), Listen mit Nummerierung (seeded, accepted 30 days ago), and now Tabellen mit Summenzeile again in conversation. Limit: since #4223 the product keeps a superseded record as history, so it stays in the store and the return to the earlier preference is learned as a new statement; recall does not supply history yet, so a question about the earlier value is not answered from it. Failure means: the final value is not learned (fact-not-stored) or not answered although the person said it last; the earlier-value probe failing is the known absence of history recall, not a lost record. A superseded seeded record that disappears is a loss (seeded-record-lost). Maintenance: meaningful both ways; with maintenance on the superseded record is expected to stay, with --no-maintenance it shows whether retrieval could answer at all.",
   "seed": {
     "records": [
       {
         "key": "tables-old",
-        "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+        "body": "Ich bevorzuge Tabellen mit Summenzeile, wenn du mir Zahlen zeigst.",
         "type": "preference",
         "scope": "user",
         "status": "superseded",
@@ -17,7 +17,7 @@
       },
       {
         "key": "lists",
-        "body": "Ab jetzt bevorzuge ich Listen, wenn du mir Zahlen zeigst.",
+        "body": "Ab jetzt bevorzuge ich Listen mit Nummerierung, wenn du mir Zahlen zeigst.",
         "type": "preference",
         "scope": "user",
         "status": "accepted",
@@ -29,23 +29,23 @@
   "truth": [
     {
       "key": "now",
-      "seed": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "seed": "Ich bevorzuge Tabellen mit Summenzeile, wenn du mir Zahlen zeigst.",
       "must": true,
-      "terms": [["Tabelle*"]]
+      "terms": [["Tabelle*"], ["Summenzeile*"]]
     }
   ],
   "superseded": [
     {
       "key": "lists",
-      "terms": [["Liste*"]]
+      "terms": [["Liste*"], ["Nummerier*"]]
     }
   ],
   "turns": [
     {
-      "user": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "user": "Ich bevorzuge Tabellen mit Summenzeile, wenn du mir Zahlen zeigst.",
       "learner": [
         {
-          "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+          "body": "Ich bevorzuge Tabellen mit Summenzeile, wenn du mir Zahlen zeigst.",
           "type": "preference",
           "relation": "update",
           "related": 1
@@ -59,7 +59,7 @@
       "question": "Wie sollst du mir Zahlen zeigen?",
       "expect": {
         "kind": "answer",
-        "terms": [["Tabelle*"]],
+        "terms": [["Tabelle*"], ["Summenzeile*"]],
         "forbidden": [["Liste*"]]
       }
     },

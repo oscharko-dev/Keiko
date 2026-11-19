@@ -8,23 +8,23 @@
   "truth": [
     {
       "key": "decision",
-      "seed": "I decided to set the batch window to 02:00.",
+      "seed": "I decided to set the batch window to 02:20.",
       "must": false,
-      "terms": [["02:00", "2 am", "2am", "2:00"]]
+      "terms": [["02:20", "2:20"]]
     },
     {
       "key": "reason",
       "seed": "I keep the batch window because the nightly settlement feed finishes by 01:30.",
       "must": false,
-      "terms": [["settlement"]]
+      "terms": [["settlement"], ["01:30", "1:30"]]
     }
   ],
   "turns": [
     {
-      "user": "I decided to set the batch window to 02:00.",
+      "user": "I decided to set the batch window to 02:20.",
       "learner": [
         {
-          "body": "I decided to set the batch window to 02:00.",
+          "body": "I decided to set the batch window to 02:20.",
           "type": "decision"
         }
       ]

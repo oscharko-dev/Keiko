@@ -9,7 +9,7 @@
     "records": [
       {
         "key": "theme",
-        "body": "I use the dark theme in my editor.",
+        "body": "I use the Poimandres theme in my editor.",
         "type": "preference",
         "scope": "user",
         "status": "accepted",
@@ -20,7 +20,7 @@
       },
       {
         "key": "cadence-old",
-        "body": "We ship a release every week.",
+        "body": "We ship a release every ten days.",
         "type": "semantic-fact",
         "scope": "project",
         "status": "superseded",
@@ -29,7 +29,7 @@
       },
       {
         "key": "cadence-new",
-        "body": "We ship a release every two weeks.",
+        "body": "We ship a release every five weeks.",
         "type": "semantic-fact",
         "scope": "project",
         "status": "accepted",
@@ -62,15 +62,15 @@
   "truth": [
     {
       "key": "theme",
-      "seed": "I use the dark theme in my editor.",
+      "seed": "I use the Poimandres theme in my editor.",
       "must": false,
-      "terms": [["dark theme"]]
+      "terms": [["Poimandres"]]
     },
     {
       "key": "cadence",
-      "seed": "We ship a release every two weeks.",
+      "seed": "We ship a release every five weeks.",
       "must": false,
-      "terms": [["every two weeks", "biweekly", "fortnightly", "every 2 weeks"]]
+      "terms": [["every five weeks", "every 5 weeks"]]
     },
     {
       "key": "team",
@@ -82,7 +82,7 @@
   "superseded": [
     {
       "key": "cadence-before",
-      "terms": [["every week", "once a week", "each week"]]
+      "terms": [["every ten days", "every 10 days"]]
     }
   ],
   "turns": [],
@@ -92,7 +92,7 @@
       "question": "Which editor theme do I use?",
       "expect": {
         "kind": "answer",
-        "terms": [["dark"]]
+        "terms": [["Poimandres"]]
       }
     },
     {
@@ -100,20 +100,8 @@
       "question": "How often do we ship a release?",
       "expect": {
         "kind": "answer",
-        "terms": [
-          [
-            "every two weeks",
-            "biweekly",
-            "bi-weekly",
-            "fortnightly",
-            "every 2 weeks",
-            "every other week",
-            "two-week",
-            "2-week",
-            "two weeks"
-          ]
-        ],
-        "forbidden": [["every week", "once a week"]]
+        "terms": [["every five weeks", "every 5 weeks"]],
+        "forbidden": [["every ten days", "every 10 days"]]
       }
     },
     {

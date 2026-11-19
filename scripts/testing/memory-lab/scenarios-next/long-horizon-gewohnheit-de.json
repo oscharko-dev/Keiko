@@ -20,7 +20,7 @@
       },
       {
         "key": "exception",
-        "body": "Diese Woche lese ich Berichte ausnahmsweise abends.",
+        "body": "Diese Woche lese ich Berichte ausnahmsweise abends im Zug.",
         "type": "semantic-fact",
         "scope": "user",
         "status": "accepted",
@@ -77,13 +77,13 @@
       "key": "habit",
       "seed": "Ich lese Berichte morgens vor dem ersten Termin.",
       "must": false,
-      "terms": [["morgens"]]
+      "terms": [["morgens"], ["ersten Termin", "erstem Termin"]]
     },
     {
       "key": "exception",
-      "seed": "Diese Woche lese ich Berichte ausnahmsweise abends.",
+      "seed": "Diese Woche lese ich Berichte ausnahmsweise abends im Zug.",
       "must": false,
-      "terms": [["abends"]]
+      "terms": [["abend*"], ["Zug", "Bahn"]]
     }
   ],
   "turns": [],
@@ -93,7 +93,10 @@
       "question": "Wann lese ich normalerweise meine Berichte?",
       "expect": {
         "kind": "answer",
-        "terms": [["morgens", "am morgen", "fruh*"]]
+        "terms": [
+          ["morgens", "am morgen", "fruh*"],
+          ["ersten Termin", "erstem Termin"]
+        ]
       }
     },
     {
@@ -101,7 +104,15 @@
       "question": "Wann lese ich diese Woche meine Berichte?",
       "expect": {
         "kind": "answer",
-        "terms": [["abend*"]]
+        "terms": [["abend*"], ["Zug", "Bahn"]]
+      }
+    },
+    {
+      "id": "both",
+      "question": "Wann lese ich normalerweise meine Berichte, und was gilt diese Woche?",
+      "expect": {
+        "kind": "answer",
+        "needs": ["habit", "exception"]
       }
     }
   ]

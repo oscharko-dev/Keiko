@@ -4,12 +4,12 @@
   "language": "en",
   "class": "update",
   "difficulty": "plain",
-  "description": "A seeded correction chain: the report format was PDF, now it is Markdown. One question asks for the current value, one for the earlier one (a superseded record, which retrieval does not supply today).",
+  "description": "A seeded correction chain: the report format was DocBook, now it is AsciiDoc. One question asks for the current value, one for the earlier one (a superseded record, which retrieval does not supply today).",
   "seed": {
     "records": [
       {
         "key": "report-pdf",
-        "body": "Rosa wanted the weekly report as a PDF file.",
+        "body": "Rosa wanted the weekly report as a DocBook file.",
         "type": "preference",
         "scope": "project",
         "status": "superseded",
@@ -18,7 +18,7 @@
       },
       {
         "key": "report-markdown",
-        "body": "Rosa wants the weekly report as a Markdown file.",
+        "body": "Rosa wants the weekly report as an AsciiDoc file.",
         "type": "preference",
         "scope": "project",
         "status": "accepted",
@@ -31,23 +31,34 @@
   "truth": [
     {
       "key": "format-now",
-      "seed": "Rosa wants the weekly report as a Markdown file.",
+      "seed": "Rosa wants the weekly report as an AsciiDoc file.",
       "must": false,
-      "terms": [["Markdown"]]
+      "terms": [["AsciiDoc"]]
     }
   ],
-  "superseded": [{ "key": "format-before", "terms": [["PDF"]] }],
+  "superseded": [
+    {
+      "key": "format-before",
+      "terms": [["DocBook"]]
+    }
+  ],
   "turns": [],
   "probes": [
     {
       "id": "now",
       "question": "Which format does Rosa want for the weekly report?",
-      "expect": { "kind": "answer", "terms": [["Markdown"]] }
+      "expect": {
+        "kind": "answer",
+        "terms": [["AsciiDoc"]]
+      }
     },
     {
       "id": "before",
       "question": "Which format did Rosa want for the weekly report before?",
-      "expect": { "kind": "answer", "earlier": ["format-before"] }
+      "expect": {
+        "kind": "answer",
+        "earlier": ["format-before"]
+      }
     }
   ]
 }

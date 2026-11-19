@@ -20,7 +20,7 @@
       },
       {
         "key": "control",
-        "body": "Die Retrospektive der Kreditplattform findet montags um 10 Uhr statt.",
+        "body": "Die Retrospektive der Kreditplattform findet montags um 9:40 Uhr statt.",
         "type": "semantic-fact",
         "scope": "project",
         "status": "accepted",
@@ -49,9 +49,9 @@
     },
     {
       "key": "retro",
-      "seed": "Die Retrospektive der Kreditplattform findet montags um 10 Uhr statt.",
+      "seed": "Die Retrospektive der Kreditplattform findet montags um 9:40 Uhr statt.",
       "must": false,
-      "terms": [["Montag*"]]
+      "terms": [["Montag*"], ["9:40", "9.40", "9 Uhr 40", "zwanzig vor zehn"]]
     }
   ],
   "turns": [],
@@ -69,7 +69,7 @@
       "question": "Wann findet die Retrospektive der Kreditplattform statt?",
       "expect": {
         "kind": "answer",
-        "terms": [["Montag*"]]
+        "terms": [["Montag*"], ["9:40", "9.40", "9 Uhr 40", "zwanzig vor zehn"]]
       }
     }
   ]
