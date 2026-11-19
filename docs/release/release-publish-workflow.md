@@ -330,13 +330,13 @@ native executables are linked with `/Brepro`, so identical sources reproduce the
 `npmLaneRuntimeApprovals.ts`; the supervisor is pinned to the source tree of
 `native/runtime-supervisor/windows` as the helper is to its own. A Windows npm installation needs no
 separate step and no administrator: each run is confined by the pipe-relayed AppContainer of
-ADR-0043 D20, which the supervisor sets up for the signed-in user alone. Until the package is
+ADR-0043 D21, which the supervisor sets up for the signed-in user alone. Until the package is
 published, a Windows npm installation reports `npm-runtime-package-missing`.
 
 **One set of Windows native bytes (owner decision 2026-11-17, "Ja, umstellen").** The npm package
 carries exactly the Windows helper and supervisor of the portable release. The secure-read helper
 `65cc98c3…` (129,024 bytes) was built by the release workflow at `1906b6a5f28a…`. The pipe-relay
-supervisor `111ce061…` (252,416 bytes, source tree `425710fb…`) was built by the
+supervisor `3c753692…` (253,440 bytes, source tree `2e077a29…`) was built by the
 `relay-confinement` job of `windows-gateway-confinement.yml` (#4068), on the same `windows-latest`
 image, with MSVC 14.51 and `/Brepro` as the release builds it; the first portable release that
 carries it is 1.5.4. `npmLaneRuntimeApprovals.ts` pins the npm lane to those bytes, and
@@ -366,8 +366,8 @@ the published form in the change that selects the package (step 4 below).
 
 _Reproducing the pinned bytes._ The reviewed 1.1.6 candidate has 10 files, every file mode 0644
 (`--pack` fixes the modes of a `windows-x64` package by target, so a POSIX host cannot change the
-tarball), and the tarball SHA-256 `7faa866be2cba38cc26dfbe64ef78194d559b5c3e8a6a730665418595634334d`
-(123,466,461 bytes). The two MSVC-built executables are not rebuilt on a host without MSVC 14.51;
+tarball), and the tarball SHA-256 `fac874c90c6dc3e1b5ecf85ad9e0c2990e7fcaa4cd3776961775e19030ac7acc`
+(123,465,824 bytes). The two MSVC-built executables are not rebuilt on a host without MSVC 14.51;
 `--prebuilt-native-dir` names a directory holding `keiko-secure-workspace-read.exe` and
 `keiko-runtime-supervisor.exe` from the release archive. The builder checks each against the digest
 and size pinned in `npmLaneRuntimeApprovals.ts` before anything is staged and stops on any
@@ -381,9 +381,9 @@ node scripts/build-coding-runtime-npm-package.mjs --verify windows-x64 1.1.6 /ab
 ```
 
 Checked on 2026-11-19 on a macOS host: with the two executables of the candidate
-tarball as `native/`, these commands produced a tarball with SHA-256 `7faa866b…` and a
+tarball as `native/`, these commands produced a tarball with SHA-256 `fac874c9…` and a
 `receipt.json` byte-identical to the candidate's. The candidate tarball and its receipt are kept,
-owner-held, in the owner's lab folder `keiko-standalone-lab/win-153/runtime-1.1.6-relay/artifacts/` until
+owner-held, in the owner's lab folder `keiko-standalone-lab/win-153/runtime-1.1.6-relay2/artifacts/` until
 they are uploaded; if they are lost, the commands above regenerate them from the release's
 executables.
 
@@ -391,12 +391,11 @@ _What the Windows evidence covers._ On a Windows test guest a plain npm installa
 with a 1.1.5-versioned candidate beside it activated the `npm-runtime-package` lane and completed
 Workbench runs (a read-only run, and a reviewed edit in a managed worktree). That candidate is not
 the pinned tarball: compared file by file, its payload is identical to the 1.1.6 tarball and only
-`package.json` differs, in `version`. The pinned 1.1.6 tarball itself has not yet been installed by
-npm on Windows. Two limits remain open: the guest is ARM64 and ran the x64 build under emulation,
-so real x64 hardware is not covered; and the broker was installed with
-`keiko gateway-service install` from an administrator session, so the first-start path described
-above (the broker installed by the first healthy `keiko start`, one UAC prompt) is still unproven
-for the npm lane with this package.
+`package.json` differs, in `version`. On 2026-11-19 the same guest ran Workbench runs as a standard
+user through the pipe relay of ADR-0043 D21, with no service installed and nothing elevated, using
+the CI-built relay supervisor and the then-current server build. The pinned 1.1.6 tarball itself
+has not yet been installed by npm on Windows, and the guest is ARM64 and ran the x64 build under
+emulation, so real x64 hardware is not covered.
 
 On a Windows host with MSVC 14.51, a later Windows package (shown here for an example 1.2.0) is
 built without `--prebuilt-native-dir`:
@@ -483,10 +482,9 @@ The first Windows publication is an owner-only step, in this order:
    `docs/coding-runtime/dev-lane.md` (line 117, "none is published for Windows yet"), the pending
    list pinned in `scripts/__tests__/check-publish-manifests.test.mjs` (lines 211-215), the header
    of `.github/workflows/coding-runtime-publish.yml`, and the published wording of this guide.
-5. On Windows: `npm install -g @oscharko-dev/keiko`, then `keiko start` once; the Workbench must
-   report the runtime as available after the one UAC prompt. This is the acceptance check, and the
-   first-start broker installation of the npm lane with this package has not been run yet (see the
-   evidence above).
+5. On Windows, as a standard user: `npm install -g @oscharko-dev/keiko`, then `keiko start`; the
+   Workbench must report the runtime as available without any prompt and complete a run. This is
+   the acceptance check.
 
 The receipt records SHA-256 file hashes, exact helper and upstream OpenCode source commits,
 helper source-tree identity, native byte capability, and the actual tarball's SHA-256 and SHA-512

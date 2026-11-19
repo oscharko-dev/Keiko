@@ -93,7 +93,7 @@ export interface NativeRuntimeProcessBackendOptions {
   readonly spawnHelper?: NativeRuntimeHelperSpawn | undefined;
   /**
    * macOS derives the exact Seatbelt wrapper from this server-owned policy for both prepared and
-   * direct launches. Windows requires the pinned supervisor, which relays the mapped gateway policy (ADR-0043 D20).
+   * direct launches. Windows requires the pinned supervisor, which relays the mapped gateway policy (ADR-0043 D21).
    */
   readonly gatewayConfinement?: RuntimeGatewayConfinement | undefined;
   /** The directories the confined Windows tree may reach (#4068); sent only with the gateway. */
@@ -230,7 +230,7 @@ function spawnWindowsGateway(
     encodeWindowsGatewayGrants(resolvedWindowsFilesystemGrants(options.windowsFilesystemGrants)),
     encodeWindowsGatewayOpen(policy, request.recoveryHandle),
   ]);
-  // #4068 (ADR-0043 D20): the verified supervisor confines the tree itself, as the signed-in user,
+  // #4068 (ADR-0043 D21): the verified supervisor confines the tree itself, as the signed-in user,
   // in an AppContainer without any network capability; its only way out is the supervisor's
   // per-run pipe to the gateway port the open names. No installed broker and no elevation.
   const child = spawnVerifiedHelper(

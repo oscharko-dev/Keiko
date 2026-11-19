@@ -205,14 +205,11 @@ A new version arrives as a new folder: stop Keiko, delete the old folder, use th
 - **No managed setup.** Nothing is copied to `/Applications` or `%LOCALAPPDATA%\Programs`, and
   there is no Start Menu, Spotlight or Launchpad entry. Do not start `Keiko.app` or `Keiko.exe`
   inside `system`: those are the launchers of the managed install.
-- **No Coding Workbench on Windows.** Windows Coding needs the installed gateway service, which an
-  administrator installs. The folder form never sets that service up: its start asks for no
-  Windows approval, unlike `keiko start` of a managed install, and the Workbench offers no Repair
-  (`gateway-service-managed-outside`). An administrator can install the service separately, for
-  example with `keiko gateway-service install` from a managed Keiko installation; the folder form
-  then uses it and never removes it. Without it, a folder package on Windows offers Chat, Knowledge
-  Pods, Jira and the Editor and reports Coding as unavailable. On macOS the Coding Workbench runs with the
-  evaluation runtime of an unsigned build.
+- **Windows Coding needs no service.** The runtime supervisor in the package confines each run
+  itself, as the signed-in user, without an administrator, a UAC prompt or an installed service
+  (ADR-0043 D21), so the folder form needs no setup step and the Workbench offers no Repair. The
+  governed verification step still needs Docker or Podman, as on macOS. On macOS the Coding
+  Workbench runs with the evaluation runtime of an unsigned build.
 - **One Keiko per computer account.** Keiko listens on loopback port 1983. A second Keiko of the
   same account, or another program on that port, makes the start end with a message that names the
   port.

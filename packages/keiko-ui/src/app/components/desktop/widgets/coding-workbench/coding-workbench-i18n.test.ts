@@ -10,25 +10,6 @@ import {
 } from "./coding-workbench-i18n.en";
 
 describe("Coding Workbench translations", () => {
-  // The sentence still names the one remedy, now the Workbench's own Repair action instead of a
-  // terminal command (one-step Windows setup): each language names its own button label, and no
-  // sentence sends the person to a terminal any more.
-  it.each([
-    "codingWorkbench.gatewayService.absent",
-    "codingWorkbench.gatewayService.stopped",
-    "codingWorkbench.gatewayService.stale",
-    "codingWorkbench.gatewayService.unknown",
-  ] as const)("%s names the Repair action in both languages", (key) => {
-    for (const language of ["en", "de"] as const) {
-      const sentence = translateCodingWorkbench(language, key);
-      expect(sentence).toContain(
-        translateCodingWorkbench(language, "codingWorkbench.gatewayService.repair"),
-      );
-      expect(sentence).not.toContain("keiko gateway-service");
-      expect(sentence).not.toMatch(/terminal/iu);
-    }
-  });
-
   // #4068: the Workbench names the installation kind the server found and the one step for it.
   it.each([
     ["codingWorkbench.runtime.npmRuntimePackageMissing", "npm"],

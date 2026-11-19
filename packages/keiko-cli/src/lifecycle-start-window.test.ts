@@ -121,7 +121,6 @@ async function start(scenario: Scenario): Promise<Start> {
     },
     securityLogSink: { write: (event): void => void events.push(event) },
     // The Windows gateway setup after a healthy start is proven in lifecycle.test.ts.
-    setUpGatewayService: () => Promise.resolve(undefined),
   };
   const code = await runLifecycleCli(
     "start",

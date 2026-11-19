@@ -98,10 +98,6 @@ import { terminateUiProcess, type WindowsTreeKill } from "./ui-process-stop.js";
 import { visibleWindowsHelperSpawnOptions } from "./windows-helper-start.js";
 import { LAUNCH_FAILURE_NOTE_ENV, type LaunchFailureReason } from "./launch-failure-note.js";
 import {
-  setUpWindowsGatewayServiceForStart,
-  type GatewayServiceSetupFn,
-} from "./gateway-service-setup.js";
-import {
   readUiStartupSign,
   type UiStartupProgressFailureRecorder,
   type UiStartupSign,
@@ -256,13 +252,10 @@ export interface LifecycleCliDeps {
   readonly readStartupSign?: StartupSignReader | undefined;
   /** Receives the closed reason of a start that ends non-zero (portable launch, #4358). */
   readonly recordFailure?: ((reason: LaunchFailureReason) => void) | undefined;
-  /** Test seam: the Windows gateway setup after a healthy start (gateway-service-setup.ts). */
-  readonly setUpGatewayService?: GatewayServiceSetupFn | undefined;
 }
 
 interface LifecycleRuntimeDeps {
   readonly nodeVersion?: string | undefined;
-  readonly setUpGatewayService: GatewayServiceSetupFn;
   readonly nativeUiRuntime?: NativeUiRuntime | undefined;
   readonly home: string;
   readonly correlationId: string;
@@ -1417,20 +1410,7 @@ async function startOrReuseUi(
     return startFailed(deps, "native-runtime-unverified");
   }
   const context = { options, io, env, deps, cwd, pairingSecret, launchId };
-  const code =
-    native === undefined ? await startDirectUi(context) : await startOwnedUi(context, native);
-  // One-step Windows setup: only after the UI answered healthy, so a pending Windows approval never
-  // delays the start or an update's restart proof. It never changes the start's exit code.
-  if (code === 0) {
-    await deps.setUpGatewayService({
-      stateDir: options.stateDir,
-      correlationId: deps.correlationId,
-      env,
-      io,
-      sink: deps.securityLogSink,
-    });
-  }
-  return code;
+  return native === undefined ? startDirectUi(context) : startOwnedUi(context, native);
 }
 
 // Windows only; other platforms keep their start path unchanged (the directory is created where
@@ -1849,19 +1829,7 @@ function runtimeDeps(
     readCommandLine: deps.readCommandLine,
     readStartupSign: deps.readStartupSign,
     recordFailure: deps.recordFailure,
-    setUpGatewayService: gatewayServiceSetup(deps, platform),
   };
-}
-
-function gatewayServiceSetup(
-  deps: LifecycleCliDeps,
-  platform: NodeJS.Platform,
-): GatewayServiceSetupFn {
-  return (
-    deps.setUpGatewayService ??
-    ((input): ReturnType<GatewayServiceSetupFn> =>
-      setUpWindowsGatewayServiceForStart(input, { platform }))
-  );
 }
 
 // Wraps parseLifecycleArgs with the LauncherError conversion required by #KEIKO-0330:

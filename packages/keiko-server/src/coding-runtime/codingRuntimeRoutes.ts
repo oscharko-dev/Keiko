@@ -3,7 +3,6 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
-  CodingWorkbenchGatewayServiceRepairResponse,
   CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchMode,
   CodingWorkbenchModelRefusalReason,
@@ -593,7 +592,7 @@ function composedProfileReadiness(
 
 // Both branches name themselves. The available branch's `??` is the fail-closed default: an
 // unthreaded dep yields `undefined`, and `undefined` must never serialize into a verified claim
-// (audit F-01). A Windows runtime is available only while a broker it may use is ready (#4068).
+// (audit F-01).
 function runtimeAvailabilityFacts(
   deps: UiHandlerDeps,
 ): Pick<
@@ -606,10 +605,6 @@ function runtimeAvailabilityFacts(
       runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",
     };
   }
-  const gatewayServiceReason = deps.codingRuntimeGatewayService?.unavailableReason();
-  if (gatewayServiceReason !== undefined) {
-    return { runtimeAvailable: false, runtimeUnavailableReason: gatewayServiceReason };
-  }
   return {
     runtimeAvailable: true,
     runtimeEvidenceClass: deps.codingRuntimeEvidenceClass ?? "functional-not-platform-qualified",
@@ -618,14 +613,6 @@ function runtimeAvailabilityFacts(
       ? {}
       : { runtimeVersion: deps.codingRuntimeVersion }),
   };
-}
-
-// #4068: a runtime behind the Windows broker confines only a Keiko-managed worktree (ADR-0043 D18),
-// so the browser preselects one and does not offer the operator's own checkout.
-function executionLocationFacts(
-  deps: UiHandlerDeps,
-): Pick<CodingWorkbenchRuntimeReadiness, "executionLocations"> {
-  return deps.codingRuntimeGatewayService === undefined ? {} : { executionLocations: ["worktree"] };
 }
 
 export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
@@ -650,7 +637,6 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
       effectiveMode: confirmedEffectiveMode(deps, parsed.value.requestedMode, deploymentCeiling),
       ...runtimeAvailabilityFacts(deps),
       ...composedProfileReadiness(deps),
-      ...executionLocationFacts(deps),
     },
   };
 }
@@ -1318,40 +1304,7 @@ export function handleCodingRuntimeScheduleControl(
   }, ctx.correlationId);
 }
 
-/**
- * The Workbench's Repair of the Windows runtime gateway: the same idempotent native install `keiko
- * gateway-service repair` runs, behind Windows' own UAC approval (ADR-0043 D19). The app session is
- * the person's; the approval itself is Windows'. No request body: there is nothing to choose.
- */
-export async function handleCodingRuntimeGatewayServiceRepair(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
-  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-    return {
-      status: 403,
-      body: errorBody(
-        "CODING_GATEWAY_SERVICE_REPAIR_FORBIDDEN",
-        "Gateway repair needs a paired Keiko session.",
-        ctx.correlationId,
-      ),
-    };
-  }
-  const repair = deps.codingRuntimeGatewayService?.repair;
-  const outcome =
-    repair === undefined
-      ? "unavailable"
-      : await repair(ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
-  const body: CodingWorkbenchGatewayServiceRepairResponse = { outcome };
-  return { status: 200, body };
-}
-
 export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
-  {
-    method: "POST",
-    pattern: "/api/coding-workbench/runtime/gateway-service/repair",
-    handler: handleCodingRuntimeGatewayServiceRepair,
-  },
   {
     method: "GET",
     pattern: "/api/coding-workbench/runtime/schedules",

@@ -69,7 +69,7 @@ import type {
   ProductionOpenCodeBackendInput,
   ResolvedPortableOpenCodeRuntime,
 } from "./productionOpenCodeBackend.js";
-import { windowsGatewayServiceFacts } from "./productionOpenCodeActivation.js";
+import { windowsRuntimeRefusal } from "./productionOpenCodeActivation.js";
 import type { QualifiedPortableOpenCodeRuntime } from "./productionPortableCodingRuntime.js";
 import type { ProductionRuntimeBackendInput } from "./productionCodingRuntimeResolver.js";
 import type {
@@ -565,16 +565,14 @@ describe("production OpenCode backend composition", () => {
             treeBindingId: request.minted.treeBindingId,
           } as RuntimeSupervisorLaunchRequest),
         ).toThrow(GATEWAY_UNSUPPORTED_ON_HOST_REASON);
-        expect(
-          windowsGatewayServiceFacts(portable).windowsGatewayService?.unavailableReason(),
-        ).toBe("gateway-service-unqualified");
+        expect(windowsRuntimeRefusal(portable)).toBe("gateway-service-unqualified");
       } finally {
         rmSync(root, { force: true, recursive: true });
       }
     },
   );
 
-  // #4068 (ADR-0043 D20): every pinned Windows lane runs through its verified supervisor, which
+  // #4068 (ADR-0043 D21): every pinned Windows lane runs through its verified supervisor, which
   // confines the tree itself as the signed-in user; readiness asks no installed service.
   it.each(["dev-checkout", "npm-runtime-package", "portable-evaluation"] as const)(
     "runs a Windows %s through the supervisor it pinned, and readiness asks no service",
@@ -598,7 +596,7 @@ describe("production OpenCode backend composition", () => {
                 principal: "tree",
               },
               expect.objectContaining({ access: "modify", principal: "tree" }),
-              // ADR-0043 D20: the relayed tree's root is the verified supervisor itself.
+              // ADR-0043 D21: the relayed tree's root is the verified supervisor itself.
               {
                 path: dirname(portable.nativeHelperPath ?? ""),
                 access: "read",
@@ -607,7 +605,7 @@ describe("production OpenCode backend composition", () => {
             ],
           }),
         );
-        expect(windowsGatewayServiceFacts(portable)).toEqual({});
+        expect(windowsRuntimeRefusal(portable)).toBeUndefined();
       } finally {
         rmSync(root, { force: true, recursive: true });
       }
@@ -638,17 +636,56 @@ describe("production OpenCode backend composition", () => {
         capability,
       });
       expect(grants.filter((grant) => grant.access === "modify")).toHaveLength(1);
-      // The runtime, the private state and the supervisor's directory; no worktree.
+      // The runtime, the private state and the supervisor's directory; no workspace when its
+      // access is unresolved.
       expect(windowsFilesystemGrants(portable, input, run)).toHaveLength(3);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
   });
 
-  // #4068: a confined Windows tree is granted a workspace only as a Keiko-managed worktree, and its
-  // AppContainer cannot resolve a path on another volume than Windows. Both starts would spawn and
-  // then fail inside the runtime with an opaque error, so each is refused first with its own code.
-  it("refuses a Windows start outside a managed worktree, or on another volume, before spawn", () => {
+  // #4068: the operator's own folder is readable through its capability as well, and a protected
+  // folder (here the profile itself) receives no grant at all.
+  it("grants the operator's own folder read access through its capability", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-windows-own-grants-"));
+    const stateRoot = mkdtempSync(join(tmpdir(), "keiko-windows-own-state-"));
+    try {
+      const portable = windowsDevLaneRuntime(root);
+      const run = runInput(root);
+      const ordinary = {
+        ...run,
+        resolveWorkspaceRootAccess: (): WorkspaceRootAccess =>
+          ({ kind: "ordinary" }) as unknown as WorkspaceRootAccess,
+      };
+      const input = { ...backendInput(root, portable), ripgrep: UNVERIFIED_RIPGREP };
+      const outsideProfile = {
+        ...input,
+        runtimeStateRoot: stateRoot,
+        processEnv: { USERPROFILE: join(stateRoot, "profile") },
+      };
+      expect(windowsFilesystemGrants(portable, outsideProfile, ordinary).at(-1)).toEqual({
+        path: run.context.workspaceRoot,
+        access: "read",
+        principal: "capability",
+        capability: windowsWorkspaceCapability(run.context.workspaceRoot),
+      });
+      const profile = { ...outsideProfile, processEnv: { USERPROFILE: run.context.workspaceRoot } };
+      expect(
+        windowsFilesystemGrants(portable, profile, ordinary).some(
+          (grant) => grant.principal === "capability",
+        ),
+      ).toBe(false);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+      rmSync(stateRoot, { force: true, recursive: true });
+    }
+  });
+
+  // #4068: a confined Windows tree reads its workspace through a capability grant. The operator's own
+  // folder starts as on macOS, unless the inheritable grant would expose a drive, the profile or
+  // Keiko's state; an AppContainer cannot resolve a path on another volume than Windows. Those
+  // starts would spawn and then fail or overreach, so each is refused first with its own code.
+  it("starts a Windows run in an own folder and refuses protected folders or another volume", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-windows-location-"));
     try {
       const portable = windowsDevLaneRuntime(root);
@@ -670,8 +707,12 @@ describe("production OpenCode backend composition", () => {
         }
         throw new Error("Expected the start to be refused.");
       };
-      const env = { SystemDrive: "C:" };
-      const windows = { portable, processEnv: env };
+      const env = { SystemDrive: "C:", USERPROFILE: "C:\\Users\\ada" };
+      const windows = {
+        portable,
+        processEnv: env,
+        runtimeStateRoot: "C:\\Users\\ada\\.keiko-standalone\\ui",
+      };
 
       const start = (
         input: Parameters<typeof assertWindowsWorkspaceLocation>[0],
@@ -683,11 +724,29 @@ describe("production OpenCode backend composition", () => {
         };
       };
 
-      expect(refusal(start(windows, "C:\\repos\\keiko", "ordinary"))).toEqual({
-        ok: false,
-        failureCode: "workspace-location-unsupported",
-      });
+      // The operator's own folders start, inside or outside the profile, as on macOS.
+      expect(start(windows, "C:\\repos\\keiko", "ordinary")).not.toThrow();
+      expect(start(windows, "C:\\Users\\ada\\projects\\keiko", "ordinary")).not.toThrow();
+      // A grant there would cover a drive, the profile and its credentials, or Keiko's own state.
+      for (const folder of [
+        "C:\\",
+        "C:\\Users",
+        "C:\\Users\\ada",
+        "c:\\users\\ADA",
+        "C:\\Users\\ada\\.keiko-standalone",
+        "C:\\Users\\ada\\.keiko-standalone\\ui\\files",
+        "repos\\keiko",
+      ]) {
+        expect(refusal(start(windows, folder, "ordinary")), folder).toEqual({
+          ok: false,
+          failureCode: "workspace-location-unsupported",
+        });
+      }
       expect(refusal(start(windows, "D:\\state\\task-workspaces\\t1", "managed-task"))).toEqual({
+        ok: false,
+        failureCode: "workspace-volume-unsupported",
+      });
+      expect(refusal(start(windows, "D:\\repos\\keiko", "ordinary"))).toEqual({
         ok: false,
         failureCode: "workspace-volume-unsupported",
       });
@@ -695,8 +754,8 @@ describe("production OpenCode backend composition", () => {
       expect(start(windows, "c:\\state\\task-workspaces\\t1", "managed-task")).not.toThrow();
       expect(
         start(
-          { portable: releaseQualifiedNativeRuntime(root), processEnv: env },
-          "D:\\repos\\keiko",
+          { ...windows, portable: releaseQualifiedNativeRuntime(root) },
+          "C:\\Users\\ada",
           "ordinary",
         ),
       ).not.toThrow();
@@ -768,7 +827,7 @@ describe("production OpenCode backend composition", () => {
     }
   });
 
-  // #4068 (ADR-0043 D20): a relayed tree starts the verified supervisor inside its AppContainer,
+  // #4068 (ADR-0043 D21): a relayed tree starts the verified supervisor inside its AppContainer,
   // so that image's directory is readable to the tree, once, and never beyond the runtime root
   // when the supervisor already lies inside it.
   it("grants the tree read access to the verified supervisor's directory exactly once", () => {
@@ -779,7 +838,11 @@ describe("production OpenCode backend composition", () => {
       const supervisorDirectory = dirname(portable.nativeHelperPath ?? "");
       const input = { ...backendInput(root, portable), ripgrep: UNVERIFIED_RIPGREP };
       const grants = windowsFilesystemGrants(portable, input, run);
-      expect(grants).toContainEqual({ path: supervisorDirectory, access: "read", principal: "tree" });
+      expect(grants).toContainEqual({
+        path: supervisorDirectory,
+        access: "read",
+        principal: "tree",
+      });
 
       // The same directory as the verified ripgrep is granted once.
       const shared = windowsFilesystemGrants(
@@ -808,8 +871,8 @@ describe("production OpenCode backend composition", () => {
         ...releaseQualifiedNativeRuntime(root),
         nativeHelperSha256: "a".repeat(64),
       };
-      // ADR-0043 D20: the verified supervisor confines the run; no service gates readiness.
-      expect(windowsGatewayServiceFacts(portable)).toEqual({});
+      // ADR-0043 D21: the verified supervisor confines the run; no service gates readiness.
+      expect(windowsRuntimeRefusal(portable)).toBeUndefined();
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -818,7 +881,7 @@ describe("production OpenCode backend composition", () => {
   it("has no Windows gateway fact for another platform's runtime", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-linux-released-lane-"));
     try {
-      expect(windowsGatewayServiceFacts(releaseQualifiedLinuxRuntime(root))).toEqual({});
+      expect(windowsRuntimeRefusal(releaseQualifiedLinuxRuntime(root))).toBeUndefined();
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

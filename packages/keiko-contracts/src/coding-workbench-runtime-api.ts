@@ -579,15 +579,8 @@ export type CodingWorkbenchRuntimeUnavailableReason =
   | "secure-read-unavailable"
   | "loopback-unavailable"
   | "runtime-unqualified"
-  | "gateway-service-absent"
-  | "gateway-service-stopped"
-  | "gateway-service-stale"
-  | "gateway-service-unknown"
+  // A Windows runtime without a verified supervisor pin: nothing can confine its runs (ADR-0043 D21).
   | "gateway-service-unqualified"
-  // The installation is managed outside the app (a standalone folder package or an IT-managed
-  // deployment): Keiko sets up no system service there, so it neither installs nor offers to
-  // repair the Windows runtime gateway (ADR-0121 D9).
-  | "gateway-service-managed-outside"
   // The Windows installation folder is not on a local disk, or Windows could not check it now.
   | "install-volume-not-local"
   | "install-volume-unverified";
@@ -608,29 +601,10 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
     "secure-read-unavailable",
     "loopback-unavailable",
     "runtime-unqualified",
-    "gateway-service-absent",
-    "gateway-service-stopped",
-    "gateway-service-stale",
-    "gateway-service-unknown",
     "gateway-service-unqualified",
-    "gateway-service-managed-outside",
     "install-volume-not-local",
     "install-volume-unverified",
   ] as const);
-
-/**
- * The Workbench's Repair of the Windows runtime gateway (`POST
- * /api/coding-workbench/runtime/gateway-service/repair`). It runs the same idempotent native install
- * `keiko gateway-service repair` runs, behind Windows' own UAC approval. `ready` means the broker
- * now runs this Keiko version's helper; `declined` that the person refused the approval;
- * `unavailable` that this installation has no repairable gateway; `busy` that a repair already runs.
- */
-export type CodingWorkbenchGatewayServiceRepairOutcome =
-  "ready" | "declined" | "failed" | "unavailable" | "busy";
-
-export interface CodingWorkbenchGatewayServiceRepairResponse {
-  readonly outcome: CodingWorkbenchGatewayServiceRepairOutcome;
-}
 
 /**
  * How much evidence backs an AVAILABLE runtime. `platform-qualified` is the release-signed,

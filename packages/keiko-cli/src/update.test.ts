@@ -766,9 +766,9 @@ describe("keiko update CLI", () => {
       },
     ]);
     expect(c.out()).toContain("Update apply result: restart-required");
-    // The restart is the one remaining step; it also brings the Windows runtime gateway along.
+    // The restart is the one remaining step; it asks Windows for nothing.
     expect(c.out()).toContain("Next step: run `keiko restart`");
-    expect(c.out()).toContain("the restart also updates the runtime gateway");
+    expect(c.out()).not.toContain("runtime gateway");
     expect(output(c)).not.toContain("SECRET_TOKEN");
     expect(output(c)).not.toContain("/Users/private");
   });

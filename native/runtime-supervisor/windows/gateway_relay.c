@@ -468,9 +468,12 @@ static DWORD WINAPI host_inbound_accept(LPVOID parameter) {
     HANDLE pipe;
     if (client == INVALID_SOCKET) continue;
     pipe = take_idle(route);
-    if (pipe == INVALID_HANDLE_VALUE || !pipe_io(pipe, &open, 1, TRUE, &written) ||
-        written != 1) {
-      if (pipe != INVALID_HANDLE_VALUE) CloseHandle(pipe);
+    if (pipe == NULL || pipe == INVALID_HANDLE_VALUE) {
+      closesocket(client);
+      continue;
+    }
+    if (!pipe_io(pipe, &open, 1, TRUE, &written) || written != 1) {
+      CloseHandle(pipe);
       closesocket(client);
       continue;
     }

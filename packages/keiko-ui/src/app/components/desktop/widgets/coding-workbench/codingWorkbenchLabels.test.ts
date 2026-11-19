@@ -32,7 +32,6 @@ import {
   startBlockedReason,
   visibleAlert,
   visibleAlertFailure,
-  gatewayServiceMessageKey,
   runtimeUnavailableMessageKey,
 } from "./codingWorkbenchLabels";
 import type { CodingWorkbenchRunPhase } from "./codingWorkbenchRunFacts";
@@ -1235,37 +1234,13 @@ describe("readinessFacts runtime assurance", () => {
   });
 });
 
-describe("gatewayServiceMessageKey", () => {
-  it("names a sentence only for the Windows broker reasons", () => {
-    expect(gatewayServiceMessageKey("gateway-service-absent")).toBe(
-      "codingWorkbench.gatewayService.absent",
-    );
-    expect(gatewayServiceMessageKey("gateway-service-stopped")).toBe(
-      "codingWorkbench.gatewayService.stopped",
-    );
-    expect(gatewayServiceMessageKey("gateway-service-stale")).toBe(
-      "codingWorkbench.gatewayService.stale",
-    );
-    expect(gatewayServiceMessageKey("gateway-service-unknown")).toBe(
-      "codingWorkbench.gatewayService.unknown",
-    );
-    expect(gatewayServiceMessageKey("gateway-service-unqualified")).toBe(
-      "codingWorkbench.gatewayService.unqualified",
-    );
-    expect(gatewayServiceMessageKey("gateway-service-managed-outside")).toBe(
-      "codingWorkbench.gatewayService.managedOutside",
-    );
-    expect(gatewayServiceMessageKey("runtime-unqualified")).toBeUndefined();
-    expect(gatewayServiceMessageKey("constructor")).toBeUndefined();
-    expect(gatewayServiceMessageKey(undefined)).toBeUndefined();
-  });
-});
-
 describe("runtimeUnavailableMessageKey", () => {
   it("keeps broker and installation causes distinct from an unknown prerequisite", () => {
-    expect(runtimeUnavailableMessageKey("gateway-service-stopped")).toBe(
-      "codingWorkbench.gatewayService.stopped",
+    expect(runtimeUnavailableMessageKey("gateway-service-unqualified")).toBe(
+      "codingWorkbench.gatewayService.unqualified",
     );
+    expect(runtimeUnavailableMessageKey("gateway-service-stopped")).toBeUndefined();
+    expect(runtimeUnavailableMessageKey("constructor")).toBeUndefined();
     expect(runtimeUnavailableMessageKey("install-volume-not-local")).toBe(
       "codingWorkbench.installVolume.notLocal",
     );

@@ -449,6 +449,16 @@ before any request. A run without a choice has no Jira tools and is unchanged. S
 
 ## Amendment — the Windows runtime gateway is installed with Keiko (2026-11-17)
 
+> **Amended 2026-11-19 by ADR-0043 D21 (#4068):** no Windows launch uses the `KeikoRuntimeGateway`
+> broker any more. The supervisor confines every run as the signed-in standard user in an
+> AppContainer, so `keiko start` installs or repairs nothing, readiness reads no service state, the
+> Workbench offers no Repair, and the reasons `gateway-service-absent`, `-stopped`, `-stale`,
+> `-unknown` and `-managed-outside` are removed (`gateway-service-unqualified` remains for a
+> Windows runtime without a verified supervisor pin). Windows Coding needs no administrator and no
+> UAC prompt. The rest of this amendment (no mode, ceiling or Authority Envelope change; the
+> `npm-runtime-package-missing`, `portable-runtime-unverified` and managed-install reasons; hard
+> denials stay) is unchanged. The text below is the superseded 1.5.x behavior.
+
 On Windows every runtime launch needs the `KeikoRuntimeGateway` broker (ADR-0043 D19). Setting it
 up is a host installation step, not a coding action: it sits outside the three modes, grants no run
 authority and changes no Authority Envelope, deployment ceiling or mode default. A healthy

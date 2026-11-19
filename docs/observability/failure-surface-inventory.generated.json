@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a9f0d6ebcbc097711dedb3c0a18148a255906e5caf021dd375db08caa557f8cc"
+    "catalogDigest": "4137435e3d2714df423eb1a962bcfa9999a38e3a70a40d53da21a2f66189ffd9"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 721,
-    "proofCount": 744,
-    "resolvedProofCount": 744,
-    "failureClassCount": 412,
+    "operationCount": 718,
+    "proofCount": 741,
+    "resolvedProofCount": 741,
+    "failureClassCount": 411,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -501,8 +501,6 @@
         "coding-runtime.verification",
         "coding-runtime.verification-summarized",
         "coding-runtime.websearch.performed",
-        "coding-runtime.windows-gateway-service",
-        "coding-runtime.windows-gateway-service.repair",
         "coding-runtime.workspace-discovery",
         "coding-runtime.workspace-read",
         "coding-sidecar.gateway.outcome",
@@ -839,7 +837,6 @@
         "cli.audit.started",
         "cli.gateway-service.completed",
         "cli.gateway-service.failed",
-        "cli.gateway-service.setup",
         "cli.gateway-service.started",
         "cli.install-layout.normalized",
         "cli.lifecycle.provisioned-config",
@@ -953,7 +950,6 @@
     "cli-gateway-service": ["runtime-packages.dependency-failure"],
     "provisioned-config-adoption": ["runtime-packages.dependency-failure"],
     "launch-order-fence": ["ui.dependency-failure"],
-    "windows-gateway-service": ["tools-workflows.dependency-failure"],
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
@@ -1552,9 +1548,6 @@
       "packages/keiko-cli/src/gateway-service.test.ts"
     ],
     "cli.gateway-service.failed.real-sink-line": ["packages/keiko-cli/src/gateway-service.test.ts"],
-    "cli.gateway-service.setup.real-sink-line": [
-      "packages/keiko-cli/src/gateway-service-setup.test.ts"
-    ],
     "cli.gateway-service.started.real-sink-line": [
       "packages/keiko-cli/src/gateway-service.test.ts"
     ],
@@ -2106,12 +2099,6 @@
     ],
     "coding-runtime.websearch.performed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/nativeWebSearch.test.ts"
-    ],
-    "coding-runtime.windows-gateway-service.real-sink-line": [
-      "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.test.ts"
-    ],
-    "coding-runtime.windows-gateway-service.repair.real-sink-line": [
-      "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.test.ts"
     ],
     "coding-runtime.workspace-discovery.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolDiscoveryLifecycle.test.ts",

@@ -607,30 +607,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.repairFailed":
     "Die Reparatur wurde nicht abgeschlossen. Aktualisiere die Task Workspaces und versuche es erneut.",
   "codingWorkbench.setup.findingUnknown": "sein Zustand konnte nicht erneut verifiziert werden",
-  "codingWorkbench.gatewayService.absent":
-    "Coding-Läufe brauchen das Windows-Runtime-Gateway, das nicht installiert ist. Wähle Reparieren; Windows fragt einmal nach der Freigabe.",
-  "codingWorkbench.gatewayService.stopped":
-    "Das Windows-Runtime-Gateway ist gestoppt. Es startet kurz nach dem Windows-Start. Bleibt das so, wähle Reparieren.",
-  "codingWorkbench.gatewayService.stale":
-    "Das Windows-Runtime-Gateway passt nicht zu dieser Keiko-Version. Wähle Reparieren; Windows fragt einmal nach der Freigabe.",
-  "codingWorkbench.gatewayService.unknown":
-    "Keiko konnte den Zustand des Windows-Runtime-Gateways nicht lesen. Wähle Reparieren, um es neu einzurichten.",
-  "codingWorkbench.gatewayService.repair": "Reparieren",
-  "codingWorkbench.gatewayService.repairing":
-    "Warte auf die Freigabe durch Windows. Erscheint kein Dialog, sieh in der Taskleiste nach dem Schild-Symbol.",
-  "codingWorkbench.gatewayService.repairReady": "Das Windows-Runtime-Gateway ist bereit.",
-  "codingWorkbench.gatewayService.repairDeclined":
-    "Die Freigabe durch Windows wurde abgelehnt, deshalb wurde nichts geändert. Wähle Reparieren, um erneut zu fragen.",
-  "codingWorkbench.gatewayService.repairFailed":
-    "Das Windows-Runtime-Gateway konnte nicht repariert werden. Versuch es erneut mit Reparieren; schlägt es weiter fehl, starte Keiko neu.",
-  "codingWorkbench.gatewayService.repairUnavailable":
-    "Diese Keiko-Installation kann das Windows-Runtime-Gateway nicht selbst reparieren. Installiere Keiko mit keiko-windows-x64-setup.exe von der Keiko-Release-Seite.",
-  "codingWorkbench.gatewayService.repairBusy":
-    "Eine Reparatur wartet bereits auf die Freigabe durch Windows.",
   "codingWorkbench.gatewayService.unqualified":
     "Dieser Keiko-Build kann unter Windows keine Coding-Läufe starten. Sie brauchen das Windows-Runtime-Gateway, das nur ein freigegebenes Keiko-Paket nutzen kann. Ein anderes Repository zu wählen, ändert daran nichts.",
-  "codingWorkbench.gatewayService.managedOutside":
-    "Coding-Läufe brauchen unter Windows das Windows-Runtime-Gateway, einen Systemdienst, den dieses Keiko nicht einrichtet. Chat und die anderen Fenster funktionieren wie gewohnt.",
   "codingWorkbench.installVolume.notLocal":
     "Coding-Läufe können nicht starten, weil Keiko in einem Netzwerkordner oder einem umgeleiteten Ordner installiert ist. Installiere Keiko auf einem lokalen Laufwerk dieses Computers.",
   "codingWorkbench.installVolume.unverified":
@@ -1522,7 +1500,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.startEndedModelChanged":
     "Das Modell hat gewechselt, während es geprüft wurde, deshalb wurde kein Lauf gestartet ({code}). Wähle das gewünschte Modell und starte erneut.",
   "codingWorkbench.alert.startRefusedWorkspaceLocation":
-    "Unter Windows führt Keiko eine Coding-Aufgabe nur in einem neuen Worktree aus, nicht in deinem eigenen Checkout oder Ordner ({code}). Wähle „Neuer lokaler Worktree“ als Arbeitsort eines Git-Repositorys und starte erneut.",
+    "Unter Windows führt Keiko keine Coding-Aufgabe in einem ganzen Laufwerk, deinem Benutzerordner selbst oder einem Ordner mit Keikos eigenen Daten aus, weil die Aufgabe sonst alles darunter lesen könnte ({code}). Wähle einen Projektordner darin oder „Neuer lokaler Worktree“ und starte erneut.",
   "codingWorkbench.alert.startRefusedWorkspaceVolume":
     "Keiko legt seine Worktrees auf einem anderen Laufwerk als Windows ab, auf dem die Windows-Sandbox keine Coding-Aufgabe ausführen kann ({code}). Ein Betreiber muss KEIKO_STATE_DIR auf einen Ordner auf dem Windows-Laufwerk, meist C:, setzen und Keiko neu starten.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":

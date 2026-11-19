@@ -56,7 +56,7 @@ jobs:
         run: ./scripts/testing/test-windows-gateway-scm.ps1
         shell: pwsh
 
-  # #4068 (ADR-0043 D20): the pipe-relayed confinement that needs no installed service. Builds the
+  # #4068 (ADR-0043 D21): the pipe-relayed confinement that needs no installed service. Builds the
   # supervisor exactly as the release does (windows-latest, MSVC, /Brepro), proves the relay rules
   # and an end-to-end relayed tree, and keeps the built image so its digest can be pinned.
   relay-confinement:

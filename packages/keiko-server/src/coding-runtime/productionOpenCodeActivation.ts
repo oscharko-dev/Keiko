@@ -78,7 +78,6 @@ import {
   discoverPortableOpenCode,
   portableInstallLayoutPresent,
 } from "./productionPortableCodingRuntime.js";
-import type { WindowsGatewayServiceProbe } from "./windowsGatewayServiceProbe.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 
 type ProductionOpenCodePorts = Pick<
@@ -276,15 +275,12 @@ export type ProductionOpenCodeActivationResult =
       readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass;
       /** What the activated runtime is, from its verified release metadata (#3904 AC4). */
       readonly runtimeVersion: CodingWorkbenchRuntimeVersion;
-      /** Present only for a Windows runtime, whose every launch needs the broker (#4068). */
-      readonly windowsGatewayService?: WindowsGatewayServiceProbe;
       readonly unavailableReason?: undefined;
     }
   | {
       readonly ports?: undefined;
       readonly evidenceClass?: undefined;
       readonly runtimeVersion?: undefined;
-      readonly windowsGatewayService?: undefined;
       readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
     };
 
@@ -475,37 +471,29 @@ export function resolveProductionOpenCodeActivation(
   if (secureWorkspaceTextRead === undefined) {
     return { unavailableReason: "secure-read-unavailable" };
   }
+  const refusal = windowsRuntimeRefusal(runtime.portable);
+  if (refusal !== undefined) return { unavailableReason: refusal };
   return {
     evidenceClass: runtimeEvidenceClass(runtime.portable),
     runtimeVersion: runtimeVersionFacts(runtime.portable),
-    ...windowsGatewayServiceFacts(runtime.portable),
     ports: activatedPorts(input, runtime.portable, endpoints, secureWorkspaceTextRead),
   };
 }
 
 /**
- * Every Windows launch carries the gateway policy, and only the verified supervisor can enforce it.
- * A Windows runtime that yields no supervisor pin therefore refuses every start (ADR-0043), so
- * readiness must not offer one. No host state changes this, hence a constant rather than a probe.
- */
-const UNQUALIFIED_WINDOWS_RUNTIME: {
-  readonly windowsGatewayService: WindowsGatewayServiceProbe;
-} = {
-  windowsGatewayService: { unavailableReason: () => "gateway-service-unqualified" },
-};
-
-/**
- * #4068 (ADR-0043 D20): the verified supervisor confines every Windows run itself, as the signed-in
+ * #4068 (ADR-0043 D21): the verified supervisor confines every Windows run itself, as the signed-in
  * user, in an AppContainer without network capabilities. No installed service gates readiness and
- * nothing asks for elevation; only a runtime without a supervisor pin stays unavailable.
+ * nothing asks for elevation. Every Windows launch carries the gateway policy and only that
+ * supervisor can enforce it, so a Windows runtime without a supervisor pin or helper stays
+ * unavailable. No host state changes this, hence a constant rather than a probe.
  */
-export function windowsGatewayServiceFacts(
+export function windowsRuntimeRefusal(
   portable: ResolvedPortableOpenCodeRuntime,
-): { readonly windowsGatewayService?: WindowsGatewayServiceProbe } {
-  if (portable.target !== "windows-x64") return {};
+): "gateway-service-unqualified" | undefined {
+  if (portable.target !== "windows-x64") return undefined;
   return windowsGatewayHelperPin(portable) === undefined || portable.nativeHelperPath === undefined
-    ? UNQUALIFIED_WINDOWS_RUNTIME
-    : {};
+    ? "gateway-service-unqualified"
+    : undefined;
 }
 
 /**

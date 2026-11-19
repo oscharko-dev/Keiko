@@ -1824,9 +1824,7 @@ describe("CodingWorkbenchWindow", () => {
     ["payload-missing", "Files required by the coding runtime are missing"],
     ["payload-tampered", "could not verify the integrity of its coding runtime files"],
     ["runtime-disabled", "disabled in this installation's configuration"],
-    ["gateway-service-absent", "Select Repair; Windows asks for approval once"],
     ["gateway-service-unqualified", "only a release-qualified Keiko package can use"],
-    ["gateway-service-managed-outside", "a system service that this Keiko does not set up"],
     ["npm-runtime-package-missing", "This Keiko was installed with npm"],
     ["managed-runtime-package-missing", "This Keiko folder brings no coding runtime"],
     ["portable-runtime-unverified", "could not verify its bundled coding runtime"],
@@ -1860,10 +1858,6 @@ describe("CodingWorkbenchWindow", () => {
       expect(start).toHaveAttribute("aria-disabled", "true");
       fireEvent.click(start);
       expect(controls.start).not.toHaveBeenCalled();
-      // Only a broker state the Workbench can repair offers Repair (one-step Windows setup).
-      expect(screen.queryByRole("button", { name: "Repair" }) !== null).toBe(
-        reason === "gateway-service-absent",
-      );
     },
   );
 

@@ -10,7 +10,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
 import { nativeBuildCacheAdmitted } from "./nativeBuildSettings.js";
 import { homedir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, join, win32 } from "node:path";
 
 import type {
   CodingWorkbenchSidecarGatewayRunMetadata,
@@ -301,23 +301,28 @@ export function createProductionOpenCodeBackend(
 }
 
 /**
- * #4068: a confined Windows tree reads only what it is granted, and Keiko grants a workspace only as
- * a Keiko-managed worktree (ADR-0043 D18). A start in the operator's own checkout or folder would
- * spawn and then fail inside the runtime with an opaque error, and an AppContainer cannot resolve a
- * path on another volume than Windows. Both are refused before anything spawns, each with its own
- * code, so the Workbench can name what to change. A workspace whose access cannot be resolved at all
- * is left to the existing checks, which name that cause.
+ * #4068: a confined Windows tree reads only what it is granted. A Keiko-managed worktree and the
+ * operator's own checkout or folder are both granted to the run's workspace capability, as on macOS
+ * either can be the workspace. An own folder that is a drive root, the user's profile or a folder
+ * above it, or one that holds Keiko's own state is refused: an inheritable read grant there would
+ * hand the run credentials and Keiko's state. An AppContainer cannot resolve a path on another
+ * volume than Windows. Each is refused before anything spawns, with its own code, so the Workbench
+ * can name what to change. A workspace whose access cannot be resolved at all is left to the
+ * existing checks, which name that cause.
  */
 export function assertWindowsWorkspaceLocation(
-  input: Pick<ProductionOpenCodeBackendInput, "portable" | "processEnv">,
+  input: Pick<ProductionOpenCodeBackendInput, "portable" | "processEnv" | "runtimeStateRoot">,
   run: Pick<ProductionRuntimeBackendInput, "context" | "resolveWorkspaceRootAccess">,
 ): void {
   if (windowsGatewayHelperPin(input.portable) === undefined) return;
-  if (run.resolveWorkspaceRootAccess()?.kind === "ordinary") {
+  if (
+    run.resolveWorkspaceRootAccess()?.kind === "ordinary" &&
+    !grantableWindowsCheckout(run.context.workspaceRoot, input)
+  ) {
     throw new CodingRuntimeLaunchRejectedError(
       "workspace-location-unsupported",
       false,
-      "local-checkout",
+      "protected-folder",
     );
   }
   if (onAnotherWindowsVolume(run.context.workspaceRoot, input.processEnv ?? process.env)) {
@@ -327,6 +332,31 @@ export function assertWindowsWorkspaceLocation(
       "non-system-volume",
     );
   }
+}
+
+/**
+ * Whether the operator's own folder may receive the run's inheritable read grant: never a drive
+ * root, the user's profile or a folder above it, or a folder that holds or lies in Keiko's state.
+ */
+export function grantableWindowsCheckout(
+  workspaceRoot: string,
+  input: Pick<ProductionOpenCodeBackendInput, "processEnv" | "runtimeStateRoot">,
+): boolean {
+  const root = win32.normalize(workspaceRoot);
+  if (!win32.isAbsolute(root) || win32.parse(root).root === root) return false;
+  const profile = (input.processEnv ?? process.env).USERPROFILE ?? homedir();
+  const state = input.runtimeStateRoot;
+  return (
+    !windowsPathContains(root, profile) &&
+    !windowsPathContains(root, state) &&
+    !windowsPathContains(state, root)
+  );
+}
+
+/** Whether `child` is `parent` or lies inside it; Windows compares paths case-insensitively. */
+function windowsPathContains(parent: string, child: string): boolean {
+  const relative = win32.relative(win32.normalize(parent), win32.normalize(child));
+  return relative === "" || (!relative.startsWith("..") && !win32.isAbsolute(relative));
 }
 
 /**
@@ -1486,7 +1516,7 @@ function devLaneSupervisor(
   if (portable.nativeHelperPath === undefined) throw new Error("dev-lane-supervisor-missing");
   // A checkout's runs go through the supervisor it built and pinned, which confines the tree itself
   // exactly as a release's does; without that pin the native backend refuses the gateway launch
-  // (ADR-0043 D20).
+  // (ADR-0043 D21).
   const supervisorPin = localLaneWindowsGatewayHelperPin(portable);
   return createRuntimeProcessSupervisor({
     ...(supervisorPin ? { planSandbox: planWindowsGatewayRuntimeSandbox } : {}),
@@ -1625,13 +1655,13 @@ function gatewayFilesystem(
 
 /**
  * What a confined Windows tree may reach on disk (#4068, ADR-0043 D18). Its runtime and its private
- * state are granted to the tree alone. A Keiko-managed worktree is readable through that worktree's
- * capability. The mapped profile's tools act through Keiko's facade, so the private state is the
- * only writable grant. A user's own checkout gets none.
+ * state are granted to the tree alone. The workspace, a Keiko-managed worktree or the operator's own
+ * admitted folder, is readable through that workspace's capability. The mapped profile's tools act
+ * through Keiko's facade, so the private state is the only writable grant.
  */
 export function windowsFilesystemGrants(
   portable: ResolvedPortableOpenCodeRuntime,
-  input: Pick<LaunchInput, "runtimeStateRoot" | "ripgrep">,
+  input: Pick<LaunchInput, "runtimeStateRoot" | "ripgrep" | "processEnv">,
   run: ProductionRuntimeBackendInput,
 ): readonly WindowsFilesystemGrant[] {
   const runtimeRoot = join(portable.installRoot, portable.sidecar.payloadRootPath);
@@ -1651,7 +1681,7 @@ export function windowsFilesystemGrants(
     !pathIsContained(runtimeRoot, input.ripgrep.directory)
   )
     grants.push({ path: input.ripgrep.directory, access: "read", principal: "tree" });
-  // The relayed tree's root is the verified supervisor itself (ADR-0043 D20): the AppContainer
+  // The relayed tree's root is the verified supervisor itself (ADR-0043 D21): the AppContainer
   // must be able to run that image. Its directory holds only Keiko's own verified natives.
   const supervisorDirectory =
     portable.nativeHelperPath === undefined ? undefined : dirname(portable.nativeHelperPath);
@@ -1661,7 +1691,7 @@ export function windowsFilesystemGrants(
     !grants.some((grant) => grant.path === supervisorDirectory)
   )
     grants.push({ path: supervisorDirectory, access: "read", principal: "tree" });
-  if (run.resolveWorkspaceRootAccess()?.kind === "managed-task") {
+  if (grantableWindowsWorkspace(input, run)) {
     grants.push({
       path: run.context.workspaceRoot,
       access: "read",
@@ -1670,6 +1700,18 @@ export function windowsFilesystemGrants(
     });
   }
   return grants;
+}
+
+/** A managed worktree, or the operator's own folder outside the protected locations (ADR-0043 D21). */
+function grantableWindowsWorkspace(
+  input: Pick<LaunchInput, "runtimeStateRoot" | "processEnv">,
+  run: ProductionRuntimeBackendInput,
+): boolean {
+  const workspaceAccess = run.resolveWorkspaceRootAccess()?.kind;
+  return (
+    workspaceAccess === "managed-task" ||
+    (workspaceAccess === "ordinary" && grantableWindowsCheckout(run.context.workspaceRoot, input))
+  );
 }
 
 /** One capability per managed worktree, so only that worktree's runs can read it. */

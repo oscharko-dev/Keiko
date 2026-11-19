@@ -493,7 +493,7 @@ describe("production OpenCode activation", () => {
     });
   });
 
-  // #4068 (ADR-0043 D20): the verified supervisor confines a Windows run itself, as the signed-in
+  // #4068 (ADR-0043 D21): the verified supervisor confines a Windows run itself, as the signed-in
   // user, so readiness asks no installed service and offers Coding without elevation, whoever
   // manages the installation. The standalone folder package (managed outside the app, ADR-0121 D9)
   // used to read `gateway-service-managed-outside` here and could never start a run.
@@ -512,11 +512,11 @@ describe("production OpenCode activation", () => {
         ),
       );
 
-      expect(result.windowsGatewayService).toBeUndefined();
+      expect(result.unavailableReason).toBeUndefined();
     },
   );
 
-  it("has no Windows gateway fact for a macOS dev lane", () => {
+  it("has no Windows refusal for a macOS dev lane", () => {
     const staged = devLaneFixture();
     const result = resolveProductionOpenCodeActivation(
       activationInput(
@@ -526,7 +526,6 @@ describe("production OpenCode activation", () => {
     );
 
     expect(result.unavailableReason).toBeUndefined();
-    expect(result.windowsGatewayService).toBeUndefined();
   });
 
   it("prefers an injected secure-read port over dev-lane construction", () => {

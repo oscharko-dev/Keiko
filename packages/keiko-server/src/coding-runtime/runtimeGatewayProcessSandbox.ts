@@ -121,7 +121,11 @@ export function recordWindowsStaleGrantsSwept(
     activityLogEvent(
       RUNTIME_CONFINEMENT_STALE_GRANTS_SWEPT_OPERATION,
       { correlationId: runId },
-      { backend: "windows-appcontainer", removedEntryCount: sweep.removed, failedCount: sweep.failed },
+      {
+        backend: "windows-appcontainer",
+        removedEntryCount: sweep.removed,
+        failedCount: sweep.failed,
+      },
     ),
   );
 }

@@ -1,4 +1,4 @@
-// #4068 (ADR-0043 D20): end-to-end proof of the pipe-relayed confinement on Windows. It speaks the
+// #4068 (ADR-0043 D21): end-to-end proof of the pipe-relayed confinement on Windows. It speaks the
 // server's real wire protocol (KRP1 launch, KGG1 grants, KGB1 open, KRC1 terminate) to the supervisor
 // under test with `--relay-supervised`, which needs no installed service and no elevation. The
 // "runtime" is Node.js inside the run's AppContainer: it serves HTTP, calls the gateway through the
@@ -8,12 +8,14 @@
 //
 //   node scripts/testing/test-windows-relay-confinement.mjs --helper <keiko-runtime-supervisor.exe>
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { clearTimeout, setTimeout } from "node:timers";
 
 const REQUEST_BYTES = 200_000;
 const RESPONSE_BYTES = 300_000;
@@ -147,65 +149,68 @@ async function exercise(child, gatewayPort) {
   return answers;
 }
 
+// Owner-held directories: the supervisor grants the tree access to them by its own token.
+function stageRun(helper, root, gatewayPort) {
+  const runtimeDirectory = join(root, "runtime");
+  const supervisorDirectory = join(root, "supervisor");
+  for (const directory of [runtimeDirectory, supervisorDirectory]) mkdirSync(directory);
+  const supervisor = join(supervisorDirectory, "keiko-runtime-supervisor.exe");
+  copyFileSync(helper, supervisor);
+  copyFileSync(process.execPath, join(runtimeDirectory, "node.exe"));
+  writeFileSync(join(runtimeDirectory, "runtime.js"), RUNTIME_SOURCE);
+  const handle = randomBytes(16).toString("hex");
+  // Node.js resolves C:\ itself unless told to keep symlinked paths, which an AppContainer
+  // may not read; the OpenCode runtime does not need these flags.
+  const args = [
+    "--preserve-symlinks-main",
+    "--preserve-symlinks",
+    join(runtimeDirectory, "runtime.js"),
+  ];
+  const environment = [
+    [
+      "KEIKO_MODEL_GATEWAY_URL",
+      `http://127.0.0.1:${String(gatewayPort)}/api/coding-sidecar/gateway`,
+    ],
+    ["KEIKO_RELAY_TEST_HOST_PORT", String(gatewayPort)],
+    ["TEMP", runtimeDirectory],
+    ["TMP", runtimeDirectory],
+  ].sort(([left], [right]) => left.localeCompare(right));
+  const frames = Buffer.concat([
+    launchFrame(handle, join(runtimeDirectory, "node.exe"), runtimeDirectory, args, environment),
+    grantsFrame([runtimeDirectory, supervisorDirectory]),
+    openFrame(handle, gatewayPort),
+  ]);
+  return { supervisor, frames };
+}
+
+async function superviseRun(child, frames, gatewayPort) {
+  child.stdio[3].write(frames);
+  const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
+  const answers = await exercise(child, gatewayPort);
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.stdio[3].write(header("KRC1", 3, 0));
+  const code = await exited;
+  clearTimeout(deadline);
+  assert.equal(code, 0, "the supervisor reaps the tree and exits cleanly");
+  return answers;
+}
+
 async function main() {
   if (process.platform !== "win32") {
     console.log("windows-relay-confinement: SKIP (requires native Windows)");
     return;
   }
   const helper = helperArgument();
-  // Owner-held directories: the supervisor grants the tree access to them by its own token.
   const root = mkdtempSync(join(tmpdir(), "keiko-relay-confinement-"));
-  const runtimeDirectory = join(root, "runtime");
-  const supervisorDirectory = join(root, "supervisor");
   const gateway = await startGateway();
   let child;
   try {
-    for (const directory of [runtimeDirectory, supervisorDirectory]) mkdirSync(directory);
-    const supervisor = join(supervisorDirectory, "keiko-runtime-supervisor.exe");
-    copyFileSync(helper, supervisor);
-    copyFileSync(process.execPath, join(runtimeDirectory, "node.exe"));
-    writeFileSync(join(runtimeDirectory, "runtime.js"), RUNTIME_SOURCE);
     const gatewayPort = gateway.address().port;
-    const handle = randomBytes(16).toString("hex");
-    // Node.js resolves C:\ itself unless told to keep symlinked paths, which an AppContainer
-    // may not read; the OpenCode runtime does not need these flags.
-    const args = [
-      "--preserve-symlinks-main",
-      "--preserve-symlinks",
-      join(runtimeDirectory, "runtime.js"),
-    ];
-    const environment = [
-      [
-        "KEIKO_MODEL_GATEWAY_URL",
-        `http://127.0.0.1:${String(gatewayPort)}/api/coding-sidecar/gateway`,
-      ],
-      ["KEIKO_RELAY_TEST_HOST_PORT", String(gatewayPort)],
-      ["TEMP", runtimeDirectory],
-      ["TMP", runtimeDirectory],
-    ].sort(([left], [right]) => left.localeCompare(right));
+    const { supervisor, frames } = stageRun(helper, root, gatewayPort);
     child = spawn(supervisor, ["--relay-supervised"], {
       stdio: ["pipe", "pipe", "inherit", "pipe", "pipe"],
     });
-    child.stdio[3].write(
-      Buffer.concat([
-        launchFrame(
-          handle,
-          join(runtimeDirectory, "node.exe"),
-          runtimeDirectory,
-          args,
-          environment,
-        ),
-        grantsFrame([runtimeDirectory, supervisorDirectory]),
-        openFrame(handle, gatewayPort),
-      ]),
-    );
-    const deadline = setTimeout(() => child.kill(), DEADLINE_MS);
-    const answers = await exercise(child, gatewayPort);
-    const exited = new Promise((resolve) => child.once("exit", resolve));
-    child.stdio[3].write(header("KRC1", 3, 0));
-    const code = await exited;
-    clearTimeout(deadline);
-    assert.equal(code, 0, "the supervisor reaps the tree and exits cleanly");
+    const answers = await superviseRun(child, frames, gatewayPort);
     console.log(
       `windows-relay-confinement: PASS (${String(answers.length)} host requests, direct=${answers[0].direct}, internet=${answers[0].internet})`,
     );

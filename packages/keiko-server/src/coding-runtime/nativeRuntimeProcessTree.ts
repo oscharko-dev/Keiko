@@ -48,7 +48,7 @@ const WINDOWS_REFUSALS: RefusalWords = {
   11: "supervisor-gateway-admit",
   // #4068 W1: the user environment key could not be closed to the tree.
   12: "supervisor-environment-guard",
-  // #4068 (ADR-0043 D20): the relayed launch's own steps, all before the job exists.
+  // #4068 (ADR-0043 D21): the relayed launch's own steps, all before the job exists.
   13: "supervisor-relay-frame",
   14: "supervisor-relay-profile",
   15: "supervisor-relay-start",
