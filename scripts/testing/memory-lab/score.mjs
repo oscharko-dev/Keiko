@@ -134,7 +134,10 @@ function containsTerm(haystack, term) {
   return false;
 }
 
+// A probe that names what it needs (`expect.needs`, `expect.earlier`) has no `terms`: with no term
+// groups there is nothing to match, so it matches nothing (never a throw, never a vacuous match).
 function matchesNormalized(haystack, groups) {
+  if (!Array.isArray(groups)) return false;
   return groups.every((group) => group.some((term) => containsTerm(haystack, normalizeText(term))));
 }
 
@@ -365,7 +368,7 @@ function profileCarriesForbidden(profile, probe, never) {
 // What an answer probe wants beyond (or instead of) its own terms: the truths it `needs` and the
 // replaced values it asks for `earlier`, each with the terms the answer must carry. Earlier values
 // are labelled `earlier:<key>` so a result names which kind was missing.
-function wantedOf(scenario, probe) {
+export function wantedOf(scenario, probe) {
   const termsOf = (list, key) => list.find((entry) => entry.key === key).terms;
   const needs = (probe.expect.needs ?? []).map((key) => ({
     label: key,
@@ -382,14 +385,28 @@ function wantedOf(scenario, probe) {
 
 // A wanted fact reached the model when a supplied memory carries its terms, or when the lab seeded
 // that very memory for it (`links`: seeded memory id -> the truth or replaced value it states).
+function carriesWanted(entry, item, links) {
+  const link = links?.get(entry.memoryId);
+  const linked =
+    (link?.truth !== undefined && link.truth === item.link.truth) ||
+    (link?.earlier !== undefined && link.earlier === item.link.earlier);
+  return linked || matchesTermGroups(entry.bodyExcerpt ?? "", item.terms);
+}
+
 function suppliedCarries(supplied, item, links) {
-  return supplied.some((entry) => {
-    const link = links?.get(entry.memoryId);
-    const linked =
-      (link?.truth !== undefined && link.truth === item.link.truth) ||
-      (link?.earlier !== undefined && link.earlier === item.link.earlier);
-    return linked || matchesTermGroups(entry.bodyExcerpt ?? "", item.terms);
-  });
+  return supplied.some((entry) => carriesWanted(entry, item, links));
+}
+
+/**
+ * The ids of the stored memories that carry one wanted fact, by the rule that decides whether a
+ * supplied memory carries it. `memories` are stored records (`{id, body}`); ids only, no text.
+ */
+export function carrierIds(memories, item, links) {
+  return memories
+    .filter((memory) =>
+      carriesWanted({ memoryId: memory.id, bodyExcerpt: memory.body }, item, links),
+    )
+    .map((memory) => memory.id);
 }
 
 function answerTermsMatched(answer, probe, wanted) {
