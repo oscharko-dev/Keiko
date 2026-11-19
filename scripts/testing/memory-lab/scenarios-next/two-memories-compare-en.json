@@ -142,13 +142,15 @@
       "key": "atlas",
       "seed": "I chose PostgreSQL for the storage of project Atlas.",
       "must": false,
-      "terms": [["PostgreSQL", "Postgres"]]
+      "terms": [["PostgreSQL", "Postgres"]],
+      "with": [["Atlas"]]
     },
     {
       "key": "borealis",
       "seed": "I chose MongoDB for the storage of project Borealis.",
       "must": false,
-      "terms": [["MongoDB"]]
+      "terms": [["MongoDB"]],
+      "with": [["Borealis"]]
     }
   ],
   "turns": [

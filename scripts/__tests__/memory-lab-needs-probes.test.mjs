@@ -5,7 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { maskHoldoutResult } from "../testing/memory-lab/corpus/holdout.mjs";
 import { validateScenario } from "../testing/memory-lab/scenario.mjs";
-import { scoreProbe } from "../testing/memory-lab/score.mjs";
+import { answerUnits, scoreProbe } from "../testing/memory-lab/score.mjs";
 
 function scenario(probes, overrides = {}) {
   return validateScenario({
@@ -204,5 +204,95 @@ describe("a sealed run's view of such a probe", () => {
     expect(masked.seed).toBeUndefined();
     expect(masked.probes[0].recallTrace).toBeUndefined();
     expect(JSON.stringify(masked)).not.toMatch(/room|before|day|filler/u);
+  });
+});
+
+describe("a needed truth bound to its subject with `with`", () => {
+  const bound = validateScenario({
+    schemaVersion: 1,
+    id: "bound-fixture-en",
+    language: "en",
+    class: "update",
+    difficulty: "plain",
+    description: "Bound fixture.",
+    truth: [
+      {
+        key: "atlas",
+        seed: "I chose PostgreSQL for project Atlas.",
+        must: false,
+        terms: [["PostgreSQL", "Postgres"]],
+        with: [["Atlas"]],
+      },
+      {
+        key: "borealis",
+        seed: "I chose MongoDB for project Borealis.",
+        must: false,
+        terms: [["MongoDB"]],
+        with: [["Borealis"]],
+      },
+      { key: "plain", seed: "Room Birch.", must: false, terms: [["Birch"]] },
+    ],
+    turns: [{ user: "Hello." }],
+    probes: [
+      {
+        id: "compare",
+        question: "Which storage for Atlas and Borealis?",
+        expect: { kind: "answer", needs: ["atlas", "borealis"] },
+      },
+      {
+        id: "mixed",
+        question: "Storage for Atlas, and the room?",
+        expect: { kind: "answer", needs: ["atlas", "plain"] },
+      },
+    ],
+  });
+  const [compare, mixed] = bound.probes;
+  const run = (probe, answer) => scoreProbe(bound, probe, answer, supply("x"), undefined);
+
+  it("passes the correct answer, in one sentence or in two", () => {
+    expect(run(compare, "Atlas uses PostgreSQL and Borealis uses MongoDB.").passed).toBe(true);
+    expect(run(compare, "Atlas uses PostgreSQL. Borealis uses MongoDB.").passed).toBe(true);
+    expect(run(compare, "Atlas: Postgres; Borealis: MongoDB").passed).toBe(true);
+  });
+
+  it("fails the reversed answer, which carries both terms but binds them wrongly", () => {
+    // The failure this pins: both terms were somewhere in the answer, so the swap passed.
+    const swapped = run(compare, "Atlas uses MongoDB. Borealis uses PostgreSQL.");
+    expect(swapped.passed).toBe(false);
+    expect(swapped.neededMissing).toEqual(["atlas", "borealis"]);
+    expect(
+      run(compare, "Atlas uses PostgreSQL. Borealis is on something else.").neededMissing,
+    ).toEqual(["borealis"]);
+  });
+
+  it("reads a Markdown list with one item per project", () => {
+    expect(run(compare, "- Atlas: PostgreSQL\n- Borealis: MongoDB").passed).toBe(true);
+    expect(run(compare, "- Atlas: MongoDB\n- Borealis: PostgreSQL").passed).toBe(false);
+    expect(answerUnits("- Atlas: PostgreSQL\n- Borealis: MongoDB. Done!")).toEqual([
+      "- Atlas: PostgreSQL",
+      "- Borealis: MongoDB",
+      " Done",
+    ]);
+  });
+
+  it("leaves a truth without the field exactly as it was, wherever its term occurs", () => {
+    expect(run(mixed, "Atlas uses PostgreSQL.\n\nThe room is Birch.").passed).toBe(true);
+    expect(run(mixed, "The room is Birch, but I do not know the storage.").neededMissing).toEqual([
+      "atlas",
+    ]);
+    expect(run(mixed, "Birch. PostgreSQL. Atlas.").neededMissing).toEqual(["atlas"]);
+  });
+
+  it("is a closed field of a scenario: non-empty term groups, or the scenario is refused", () => {
+    const refuse = (withValue) =>
+      expect(() =>
+        validateScenario({
+          ...bound,
+          truth: [{ ...bound.truth[0], with: withValue }, ...bound.truth.slice(1)],
+        }),
+      ).toThrow(/\.with must be non-empty term groups/u);
+    refuse([]);
+    refuse("Atlas");
+    refuse([[]]);
   });
 });

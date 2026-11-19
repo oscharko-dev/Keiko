@@ -107,6 +107,8 @@ function validateTruth(id, truth) {
     if (!validTermGroups(fact.terms)) fail(id, `${where}.terms must be non-empty term groups`);
     if (fact.private !== undefined && typeof fact.private !== "boolean")
       fail(id, `${where}.private must be a boolean when present`);
+    if (fact.with !== undefined && !validTermGroups(fact.with))
+      fail(id, `${where}.with must be non-empty term groups when present`);
   });
 }
 

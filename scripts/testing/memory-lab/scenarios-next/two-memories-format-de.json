@@ -16,7 +16,8 @@
       "key": "exception",
       "seed": "Berichte zu Mittelstandskunden bekomme ich ausnahmsweise als Excel-Datei.",
       "must": false,
-      "terms": [["Excel"]]
+      "terms": [["Excel"]],
+      "with": [["Mittelstand*"]]
     }
   ],
   "turns": [

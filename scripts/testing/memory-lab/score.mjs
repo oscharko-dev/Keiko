@@ -365,6 +365,34 @@ function profileCarriesForbidden(profile, probe, never) {
   });
 }
 
+const withOf = (list, key) => {
+  const binding = list.find((entry) => entry.key === key).with;
+  return binding === undefined ? {} : { with: binding };
+};
+
+// The units an answer is read in for a bound fact: split on sentence punctuation and line breaks, so a
+// sentence and a list item are each one unit. Deliberately simple and deterministic.
+const ANSWER_UNIT_BREAK = /[.!?;\n\r]+/u;
+
+/** The units of an answer: sentences and list items, empty pieces dropped. */
+export function answerUnits(answer) {
+  return String(answer)
+    .split(ANSWER_UNIT_BREAK)
+    .filter((unit) => unit.trim().length > 0);
+}
+
+/**
+ * True when the answer carries a wanted fact's terms. A fact with `with` is carried only where its terms
+ * and every `with` group occur in one unit (a sentence or a list item); a fact without it is carried
+ * wherever its terms occur in the answer, as before.
+ */
+export function answerCarries(answer, item) {
+  if (item.with === undefined) return matchesTermGroups(answer, item.terms);
+  return answerUnits(answer).some(
+    (unit) => matchesTermGroups(unit, item.terms) && matchesTermGroups(unit, item.with),
+  );
+}
+
 // What an answer probe wants beyond (or instead of) its own terms: the truths it `needs` and the
 // replaced values it asks for `earlier`, each with the terms the answer must carry. Earlier values
 // are labelled `earlier:<key>` so a result names which kind was missing.
@@ -374,6 +402,8 @@ export function wantedOf(scenario, probe) {
     label: key,
     link: { truth: key },
     terms: termsOf(scenario.truth, key),
+    // Optional: term groups that must occur in the same sentence or list item as the terms.
+    ...withOf(scenario.truth, key),
   }));
   const earlier = (probe.expect.earlier ?? []).map((key) => ({
     label: `earlier:${key}`,
@@ -410,11 +440,11 @@ export function carrierIds(memories, item, links) {
 }
 
 function answerTermsMatched(answer, probe, wanted) {
-  const groups = [
-    ...(probe.expect.terms === undefined ? [] : [probe.expect.terms]),
-    ...wanted.map((item) => item.terms),
-  ];
-  const matched = groups.length > 0 && groups.every((group) => matchesTermGroups(answer, group));
+  const own = probe.expect.terms === undefined ? [] : [probe.expect.terms];
+  const matched =
+    own.length + wanted.length > 0 &&
+    own.every((group) => matchesTermGroups(answer, group)) &&
+    wanted.every((item) => answerCarries(answer, item));
   // A form is evidence of a preference, never of a fact the probe needs or asks for by key.
   return matched || (wanted.length === 0 && answerHasFormat(answer, probe.expect.format));
 }
@@ -465,7 +495,7 @@ function scoreAnswerProbe(scenario, probe, answer, supplied, links) {
       ? {}
       : {
           neededMissing: wanted
-            .filter((item) => !matchesTermGroups(answer, item.terms))
+            .filter((item) => !answerCarries(answer, item))
             .map((item) => item.label),
           neededNotSupplied: notSupplied,
         }),

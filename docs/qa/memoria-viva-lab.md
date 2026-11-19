@@ -361,6 +361,14 @@ fail-closed by `scenario.mjs`):
   oracle arm stores, `must` (counts for recall), `private` (must never land in project scope) and
   `terms` (groups of alternative spellings; one alternative per group must match; an alternative may
   end in `*` to match at a word start).
+  An optional `with` (term groups, same shape) binds the fact to its subject for a probe that `needs`
+  it: the fact counts as carried by an answer only where its `terms` **and** every `with` group occur
+  in one unit, a sentence or a list item. Units are the pieces of the answer split on `.`, `!`, `?`,
+  `;` and line breaks, nothing smarter. So "Atlas uses PostgreSQL. Borealis uses MongoDB." and a list
+  with one item per project pass, while the swapped answer fails, although it carries both terms. A
+  fact without `with` is carried wherever its terms occur in the answer, exactly as before. Limit: one
+  sentence that names both subjects before both values ("Atlas and Borealis use PostgreSQL and
+  MongoDB") passes either way round. Keys are unique within `truth`; a duplicate is refused.
 - `superseded[]`, `forgotten[]`: facts that were true and replaced, or forgotten; a surviving memory
   is stale or a hard violation.
 - `forbidden[]`: content that must never be stored, with a class (`credential`, `identifier`,
