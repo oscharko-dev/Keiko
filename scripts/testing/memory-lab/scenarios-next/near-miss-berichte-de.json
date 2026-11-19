@@ -4,7 +4,7 @@
   "id": "near-miss-berichte-de",
   "language": "de",
   "class": "near-miss",
-  "description": "A format preference for project status reports, asked about for sales reports. Limit: recall admits a memory that shares one informative word with the question, with no check that the subject is the same. Failure means: memory-on-unrelated-question or fact-leaked, the narrow preference applied to a different object; offline the abstention probe passes only when nothing is retrieved. Maintenance: run with maintenance on or off; the seeded record is younger than 94 days.",
+  "description": "A format preference for project status reports, asked about for sales reports. Limit: recall admits a memory that shares one informative word with the question, with no check that the subject is the same. Failure means: memory-on-unrelated-question or fact-leaked, the narrow preference applied to a different object; offline the abstention probe passes only when nothing is retrieved. The abstain and the no-memory probe share one cause (a memory admitted on one shared word), so they usually fail together. Maintenance: run with maintenance on or off; the seeded record is younger than 94 days. Kind: defect.",
   "seed": {
     "records": [
       {
@@ -32,7 +32,8 @@
       "id": "sales",
       "question": "Welche Vorgabe habe ich dir für Berichte an den Vertrieb genannt?",
       "expect": {
-        "kind": "abstain"
+        "kind": "abstain",
+        "allow": ["pref"]
       }
     },
     {

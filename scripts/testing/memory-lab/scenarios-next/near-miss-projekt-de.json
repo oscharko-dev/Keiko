@@ -4,7 +4,7 @@
   "id": "near-miss-projekt-de",
   "language": "de",
   "class": "near-miss",
-  "description": "A database decision of project Atlas, asked about for project Borealis. Limit: recall admits a memory that shares one informative word with the question, with no check which project it belongs to. Failure means: no-abstention or memory-on-unrelated-question; the decision of the other project is supplied. Maintenance: run with maintenance on or off; the seeded record is younger than 94 days.",
+  "description": "A database decision of project Atlas, asked about for project Borealis. Limit: recall admits a memory that shares one informative word with the question, with no check which project it belongs to. Failure means: no-abstention or memory-on-unrelated-question; the decision of the other project is supplied. The abstain and the no-memory probe share one cause (a memory admitted on one shared word), so they usually fail together. Maintenance: run with maintenance on or off; the seeded record is younger than 94 days. Kind: defect.",
   "seed": {
     "records": [
       {
@@ -32,7 +32,8 @@
       "id": "other-project",
       "question": "Wofür haben wir uns im Projekt Borealis entschieden?",
       "expect": {
-        "kind": "abstain"
+        "kind": "abstain",
+        "allow": ["atlas"]
       }
     },
     {

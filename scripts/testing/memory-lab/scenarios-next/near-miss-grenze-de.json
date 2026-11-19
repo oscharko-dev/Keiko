@@ -4,7 +4,7 @@
   "id": "near-miss-grenze-de",
   "language": "de",
   "class": "near-miss",
-  "description": "An approval limit for transfers, asked about for loan applications. Limit: recall admits a memory that shares one informative word with the question, with no check that the subject is the same. Failure means: no-abstention or memory-on-unrelated-question; the number for another object is supplied and may be asserted. Maintenance: run with maintenance on or off; the seeded record is younger than 94 days.",
+  "description": "An approval limit for transfers, asked about for loan applications. Limit: recall admits a memory that shares one informative word with the question, with no check that the subject is the same. Failure means: no-abstention or memory-on-unrelated-question; the number for another object is supplied and may be asserted. The abstain and the no-memory probe share one cause (a memory admitted on one shared word), so they usually fail together. Maintenance: run with maintenance on or off; the seeded record is younger than 94 days. Kind: defect.",
   "seed": {
     "records": [
       {
@@ -32,7 +32,8 @@
       "id": "other-object",
       "question": "Welche Genehmigungsgrenze habe ich dir für Kreditanträge genannt?",
       "expect": {
-        "kind": "abstain"
+        "kind": "abstain",
+        "allow": ["limit"]
       }
     },
     {
