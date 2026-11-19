@@ -31,6 +31,18 @@ describe("CODING_WORKBENCH_RUNTIME_FAILURE_CODES", () => {
     expect(CODING_WORKBENCH_RUNTIME_FAILURE_CODES).toContain("question-answer-rejected");
   });
 
+  // #4068: a refused Windows launch names the supervisor's step instead of settling `runtime-failed`.
+  it.each([
+    "runtime-supervisor-grants-acl",
+    "runtime-supervisor-grants-directory",
+    "runtime-supervisor-grants-capability",
+    "runtime-supervisor-gateway-connect",
+    "runtime-supervisor-gateway-admit",
+    "runtime-supervisor-refused",
+  ] as const)("carries the %s supervisor refusal", (failureCode) => {
+    expect(CODING_WORKBENCH_RUNTIME_FAILURE_CODES).toContain(failureCode);
+  });
+
   // F9 (#3873): the terminal causes a run that ended on one of its bounds or on a failed model call
   // settles with, so the Workbench never presents an exhausted bound or an unreachable provider as
   // an internal error.

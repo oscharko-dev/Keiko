@@ -5133,6 +5133,14 @@ describe("CodingRuntimeOrchestrator", () => {
   it.each([
     ["workspace-unqualified", "workspace-unqualified"],
     ["runtime-state-unavailable", "runtime-failed"],
+    // #4068: a launch the Windows supervisor refused keeps the refusing step on the run and its
+    // settled line, in place of the internal error.
+    ["runtime-supervisor-grants-acl", "runtime-supervisor-grants-acl"],
+    ["runtime-supervisor-grants-directory", "runtime-supervisor-grants-directory"],
+    ["runtime-supervisor-grants-capability", "runtime-supervisor-grants-capability"],
+    ["runtime-supervisor-gateway-connect", "runtime-supervisor-gateway-connect"],
+    ["runtime-supervisor-gateway-admit", "runtime-supervisor-gateway-admit"],
+    ["runtime-supervisor-refused", "runtime-supervisor-refused"],
   ] as const)(
     "settles a manager start refusal %s as %s on the run and its settled line (#4335)",
     async (managerCode, runCode) => {

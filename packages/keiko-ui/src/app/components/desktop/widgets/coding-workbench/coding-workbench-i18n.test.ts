@@ -204,6 +204,12 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.composer.blocked.commandsLoading",
     "codingWorkbench.event.failure.invalid-intent",
     "codingWorkbench.event.failure.workspace-unqualified",
+    "codingWorkbench.event.failure.runtime-supervisor-grants-acl",
+    "codingWorkbench.event.failure.runtime-supervisor-grants-directory",
+    "codingWorkbench.event.failure.runtime-supervisor-grants-capability",
+    "codingWorkbench.event.failure.runtime-supervisor-gateway-connect",
+    "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
+    "codingWorkbench.event.failure.runtime-supervisor-refused",
     "codingWorkbench.repository.folderModeUnsupported",
   ] as const)("localizes %s in both catalogs", (key) => {
     const en = translateCodingWorkbench("en", key, { name: "n", count: 1, position: 1, total: 1 });
@@ -226,6 +232,19 @@ describe("Coding Workbench translations", () => {
     expect(translateCodingWorkbench("de", key)).toContain(
       "Wähle einen Projektordner außerhalb der Keiko-Installation",
     );
+  });
+
+  // #4068: a refused permission grant says whose folder it is and the one way out (a user-owned
+  // installation), and the fallback names the supervisor, never an unspecific internal error.
+  it("names the way out of a refused permission grant and the supervisor in the fallback", () => {
+    const acl = "codingWorkbench.event.failure.runtime-supervisor-grants-acl";
+    expect(translateCodingWorkbench("en", acl)).toContain("installed by another account");
+    expect(translateCodingWorkbench("en", acl)).toContain("your own user folder");
+    expect(translateCodingWorkbench("de", acl)).toContain("deinen eigenen Benutzerordner");
+    const refused = "codingWorkbench.event.failure.runtime-supervisor-refused";
+    expect(translateCodingWorkbench("en", refused)).toContain("Windows runtime supervisor refused");
+    expect(translateCodingWorkbench("de", refused)).toContain("Windows-Runtime-Supervisor");
+    expect(translateCodingWorkbench("en", refused)).not.toContain("internal error");
   });
 
   // #4068: a start the Windows broker cannot confine must name what to change, never "try again".

@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { Readable, Writable } from "node:stream";
@@ -25,6 +26,11 @@ import {
   keikoStackFrames,
   reportServerLogFailure,
 } from "@oscharko-dev/keiko-activity-log";
+import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+} from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   encodeLaunchPacket,
@@ -458,8 +464,90 @@ function validExpectedHelperSha256(value: string | undefined): string | undefine
 
 export interface VerifiedHelperExecutionCopy {
   readonly path: string;
-  cleanup(): void;
+  /**
+   * Removes the private copy. Windows keeps an exited program's file open for a short while (the
+   * image mapping, a virus scanner), so a transient refusal is retried within a bound; the promise
+   * rejects only when the copy is still there after that, a persistent failure.
+   */
+  cleanup(): Promise<void>;
 }
+
+// Refusals that mean "still held for now" on Windows (and a busy filesystem), never "forbidden".
+const TRANSIENT_REMOVAL_CODES: ReadonlySet<string> = new Set([
+  "EPERM",
+  "EBUSY",
+  "EACCES",
+  "ENOTEMPTY",
+]);
+// One bounded, increasing wait per retry: about 1.5 s in all before a refusal counts as persistent.
+const HELPER_COPY_REMOVAL_DELAYS_MS: readonly number[] = [50, 100, 200, 400, 800];
+
+export interface HelperCopyRemovalDeps {
+  readonly remove?: (directory: string) => Promise<void>;
+  readonly sleep?: (milliseconds: number) => Promise<void>;
+}
+
+function transientRemovalFailure(error: unknown): boolean {
+  const code = (error as { readonly code?: unknown } | null)?.code;
+  return typeof code === "string" && TRANSIENT_REMOVAL_CODES.has(code);
+}
+
+function removeDirectory(directory: string): Promise<void> {
+  return rm(directory, { recursive: true, force: true });
+}
+
+function sleepMilliseconds(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
+}
+
+/** Removes a private helper copy, retrying a transient Windows refusal within a fixed bound. */
+export async function removeHelperCopyDirectory(
+  directory: string,
+  deps: HelperCopyRemovalDeps = {},
+): Promise<void> {
+  const remove = deps.remove ?? removeDirectory;
+  const sleep = deps.sleep ?? sleepMilliseconds;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await remove(directory);
+      return;
+    } catch (error) {
+      const delay = HELPER_COPY_REMOVAL_DELAYS_MS[attempt];
+      if (delay === undefined || !transientRemovalFailure(error)) throw error;
+      await sleep(delay);
+    }
+  }
+}
+
+/**
+ * Removes a helper copy and never rejects: a copy that is still there after the bounded retries is
+ * a real failure and leaves the one body-free diagnostic it always left. A recovered refusal leaves
+ * nothing, so a routine Windows file hold no longer prints a diagnostic in front of the CLI's answer.
+ */
+export function discardVerifiedHelperCopy(
+  copy: VerifiedHelperExecutionCopy,
+  failure: { readonly operation: string; readonly source: string },
+): Promise<void> {
+  return copy.cleanup().catch((error: unknown) => {
+    emitServerDiagnostic(
+      undefined,
+      serverDiagnosticFromError({
+        correlationId: randomUUID(),
+        operation: failure.operation,
+        source: failure.source,
+        error,
+        redact: () => DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      }),
+    );
+  });
+}
+
+const NATIVE_HELPER_COPY_CLEANUP_FAILURE = {
+  operation: "coding.runtime.native-helper.cleanup",
+  source: "coding.runtime.native-helper",
+} as const;
 
 function spawnVerifiedHelper(
   helperPath: string,
@@ -470,17 +558,16 @@ function spawnVerifiedHelper(
   if (expectedHelperSha256 === undefined)
     return spawnHelper(helperPath, args, nativeSpawnOptions(helperPath));
   const executionCopy = verifiedHelperExecutionCopy(helperPath, expectedHelperSha256);
+  const discard = (): void => {
+    void discardVerifiedHelperCopy(executionCopy, NATIVE_HELPER_COPY_CLEANUP_FAILURE);
+  };
   try {
     const child = spawnHelper(executionCopy.path, args, nativeSpawnOptions(executionCopy.path));
-    child.onExit((): void => {
-      executionCopy.cleanup();
-    });
-    child.onError((): void => {
-      executionCopy.cleanup();
-    });
+    child.onExit(discard);
+    child.onError(discard);
     return child;
   } catch (error) {
-    executionCopy.cleanup();
+    discard();
     throw error;
   }
 }
@@ -531,6 +618,7 @@ function verifiedHelperContent(helperPath: string, expectedHelperSha256: string)
 export function verifiedHelperExecutionCopy(
   helperPath: string,
   expectedHelperSha256: string,
+  removal: HelperCopyRemovalDeps = {},
 ): VerifiedHelperExecutionCopy {
   const bytes = verifiedHelperContent(helperPath, expectedHelperSha256);
   const directory = mkdtempSync(join(tmpdir(), "keiko-native-runtime-"));
@@ -539,9 +627,7 @@ export function verifiedHelperExecutionCopy(
     writeFileSync(path, bytes, { flag: "wx", mode: 0o700 });
     return {
       path,
-      cleanup: (): void => {
-        rmSync(directory, { recursive: true, force: true });
-      },
+      cleanup: (): Promise<void> => removeHelperCopyDirectory(directory, removal),
     };
   } catch (error) {
     rmSync(directory, { recursive: true, force: true });

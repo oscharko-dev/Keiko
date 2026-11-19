@@ -270,6 +270,12 @@ const CODING_RUNTIME_FAILURE_CODE_FIELD = {
     "model-turn-failed",
     "edits-blocked",
     "edit-retries-exhausted",
+    "runtime-supervisor-grants-acl",
+    "runtime-supervisor-grants-directory",
+    "runtime-supervisor-grants-capability",
+    "runtime-supervisor-gateway-connect",
+    "runtime-supervisor-gateway-admit",
+    "runtime-supervisor-refused",
   ],
 } as const;
 

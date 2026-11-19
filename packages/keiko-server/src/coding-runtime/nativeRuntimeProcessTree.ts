@@ -40,6 +40,22 @@ const SUPERVISOR_REFUSALS: Readonly<Record<number, string>> = {
   12: "supervisor-environment-guard",
 };
 
+// The refusals the supervisor sends before it has created its job object, so before any process of
+// the tree existed (keiko_runtime_supervisor.c: the gateway, grants and environment steps and the
+// job creation itself precede `launch_in_job`). `supervisor-protocol` is excluded because a
+// reconcile helper answers it for a tree that may exist, and every refusal after the job exists
+// (`process-create`, `job-assign`, `job-observe`, `gateway-admit`) leaves a tree that needs its own
+// proof. Only a refusal named here, received before a launch response, proves nothing was left.
+const REFUSED_BEFORE_TREE_EXISTED: ReadonlySet<string> = new Set([
+  "supervisor-job-create",
+  "supervisor-grants-frame",
+  "supervisor-grants-directory",
+  "supervisor-grants-acl",
+  "supervisor-grants-capability",
+  "supervisor-gateway-connect",
+  "supervisor-environment-guard",
+]);
+
 /** What a confined Windows supervisor's launch response states about its stale-grant sweep (#4068). */
 export interface NativeRuntimeLaunchSweep {
   readonly removed: number;
@@ -58,6 +74,8 @@ export class NativeRuntimeTree implements RuntimeProcessTree {
   private readonly proofWaiters = new Set<(proved: boolean) => void>();
   private responseBytes = Buffer.alloc(0);
   private proved = false;
+  // A launch response arrived: the supervisor created the tree, so no refusal can prove it absent.
+  private launched = false;
   private ended = false;
   private refusal: string | undefined;
   // The helper exited but its control pipe has not closed yet: a proof may still arrive.
@@ -154,17 +172,25 @@ export class NativeRuntimeTree implements RuntimeProcessTree {
 
   private acceptResponsePacket(packet: Buffer): void {
     const kind = packet.readUInt16LE(6);
-    if (kind === 1 && this.acceptLaunchPacket(packet)) return;
+    if (kind === 1 && this.acceptLaunchPacket(packet)) {
+      this.launched = true;
+      return;
+    }
     if (kind === 2 && packet.length === RESPONSE_HEADER_BYTES + 8) {
       this.proved = packet.readUInt32LE(RESPONSE_HEADER_BYTES + 4) === 0;
       if (this.proved) this.resolveProofWaiters(true);
       return;
     }
-    if (kind === 3 && packet.length === RESPONSE_HEADER_BYTES + 2) {
-      this.refusal =
-        SUPERVISOR_REFUSALS[packet.readUInt16LE(RESPONSE_HEADER_BYTES)] ?? "supervisor-unknown";
-    }
+    if (kind === 3 && packet.length === RESPONSE_HEADER_BYTES + 2) this.acceptRefusal(packet);
     this.finish(null);
+  }
+
+  private acceptRefusal(packet: Buffer): void {
+    this.refusal =
+      SUPERVISOR_REFUSALS[packet.readUInt16LE(RESPONSE_HEADER_BYTES)] ?? "supervisor-unknown";
+    // The supervisor itself states that it refused before creating the tree: there is nothing to
+    // reap, so the run's start failure names the refusal instead of an unproven reap.
+    if (!this.launched && REFUSED_BEFORE_TREE_EXISTED.has(this.refusal)) this.proved = true;
   }
 
   // A launch response is the bare header or, on a confined Windows launch, the header and the

@@ -1345,6 +1345,18 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko hat die Aufgabe abgelehnt, bevor sie lief, zum Beispiel weil eine mit @ referenzierte Datei fehlt, außerhalb des Arbeitsbereichs liegt oder geschützt ist, oder weil der Slash-Befehl nicht verfügbar ist. Prüfe die referenzierten Dateien und den Befehl und starte die Aufgabe dann erneut.",
   "codingWorkbench.event.failure.workspace-unqualified":
     "Keiko lässt in diesem Ordner keinen Agenten arbeiten, weil er Keikos eigene Installation enthält, die der Agent sonst verändern könnte. Wähle einen Projektordner außerhalb der Keiko-Installation und starte die Aufgabe dann erneut.",
+  "codingWorkbench.event.failure.runtime-supervisor-grants-acl":
+    "Windows hat Keiko nicht erlaubt, die Berechtigungen zu setzen, die dieser Lauf auf Keikos eigenem Ordner oder seinem Datenordner braucht, deshalb konnte der Lauf nicht starten. Das passiert meist, wenn ein anderes Konto Keiko installiert hat, zum Beispiel ein Administrator. Installiere Keiko in deinen eigenen Benutzerordner oder kopiere es dorthin und starte die Aufgabe dann erneut.",
+  "codingWorkbench.event.failure.runtime-supervisor-grants-directory":
+    "Keiko konnte einen Ordner nicht öffnen, den der Lauf braucht, etwa Keikos eigenen Ordner oder seinen Datenordner, deshalb konnte der Lauf nicht starten. Prüfe, ob diese Ordner noch existieren und ob dieses Konto sie öffnen darf, und starte die Aufgabe dann erneut.",
+  "codingWorkbench.event.failure.runtime-supervisor-grants-capability":
+    "Windows hat dem Lauf nicht erlaubt, den Aufgaben-Arbeitsbereich zu lesen, deshalb konnte der Lauf nicht starten. Prüfe, ob der Ordner des Aufgaben-Arbeitsbereichs noch auf einem lokalen Laufwerk existiert und ob dieses Konto ihn lesen darf, und starte die Aufgabe dann erneut.",
+  "codingWorkbench.event.failure.runtime-supervisor-gateway-connect":
+    "Keiko konnte das Windows-Runtime-Gateway nicht erreichen, deshalb konnte der Lauf nicht starten. Prüfe den Gateway-Status oben in der Coding Workbench, wähle Reparieren, falls angeboten, und starte die Aufgabe dann erneut.",
+  "codingWorkbench.event.failure.runtime-supervisor-gateway-admit":
+    "Das Windows-Runtime-Gateway hat den Lauf nicht zugelassen, deshalb konnte er nicht starten. Prüfe den Gateway-Status oben in der Coding Workbench, wähle Reparieren, falls angeboten, und starte die Aufgabe dann erneut.",
+  "codingWorkbench.event.failure.runtime-supervisor-refused":
+    "Der Windows-Runtime-Supervisor hat den Start verweigert, deshalb hat der Lauf nicht begonnen. Starte die Aufgabe erneut; tritt das wieder auf, prüfe den Activity Log.",
   "codingWorkbench.event.failure.generic":
     "Dieser Schritt konnte nicht abgeschlossen werden. Prüfe den Activity Log und versuche es erneut.",
   "codingWorkbench.event.failure.envelope-duration-exhausted":

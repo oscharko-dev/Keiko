@@ -433,6 +433,25 @@ const RUN_FAILURE_MESSAGES: ReadonlyMap<string, CodingWorkbenchMessageKey> = new
   ["edit-retries-exhausted", "codingWorkbench.event.failure.edit-retries-exhausted"],
   ["invalid-intent", "codingWorkbench.event.failure.invalid-intent"],
   ["workspace-unqualified", "codingWorkbench.event.failure.workspace-unqualified"],
+  // #4068: a launch the Windows runtime supervisor refused names the refusing step and the way out.
+  ["runtime-supervisor-grants-acl", "codingWorkbench.event.failure.runtime-supervisor-grants-acl"],
+  [
+    "runtime-supervisor-grants-directory",
+    "codingWorkbench.event.failure.runtime-supervisor-grants-directory",
+  ],
+  [
+    "runtime-supervisor-grants-capability",
+    "codingWorkbench.event.failure.runtime-supervisor-grants-capability",
+  ],
+  [
+    "runtime-supervisor-gateway-connect",
+    "codingWorkbench.event.failure.runtime-supervisor-gateway-connect",
+  ],
+  [
+    "runtime-supervisor-gateway-admit",
+    "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
+  ],
+  ["runtime-supervisor-refused", "codingWorkbench.event.failure.runtime-supervisor-refused"],
 ]);
 
 // F9 (#3873): a run that settles `cancelled` was stopped, which is not a failure, so its terminal

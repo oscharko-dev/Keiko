@@ -316,6 +316,32 @@ describe("keiko gateway-service", () => {
     });
   });
 
+  it("names the lane the helper came from on the start line, not the requested one", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-gateway-service-lane-"));
+    const env = { KEIKO_STATE_DIR: root };
+    const securityLogSinkFactory = (stateDir: string): ReturnType<typeof createActivityLogSink> =>
+      createActivityLogSink(stateDir);
+    try {
+      await runGatewayServiceCli(["status"], makeIo().io, env, {
+        ...deps(12),
+        resolveHelper: (): Promise<WindowsGatewayHelper> =>
+          Promise.resolve({ helperPath: HELPER, helperSha256: PIN, lane: "npm-runtime-package" }),
+        securityLogSinkFactory,
+      });
+      const raw = readPersistedActivityLog(root);
+      const [started] = persistedActivityLogLines(raw, "cli.gateway-service.started");
+      const [completed] = persistedActivityLogLines(raw, "cli.gateway-service.completed");
+      expect(
+        expectActivityLogProof("cli.gateway-service.started.real-sink-line", started ?? ""),
+      ).toMatchObject({ action: "status", lane: "npm-runtime-package" });
+      expect(
+        expectActivityLogProof("cli.gateway-service.completed.real-sink-line", completed ?? ""),
+      ).toMatchObject({ lane: "npm-runtime-package" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("persists body-free lifecycle evidence through the real sink", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-gateway-service-"));
     const env = { KEIKO_STATE_DIR: root };

@@ -14,12 +14,19 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 80;
+export const SCHEMA_VERSION = 81;
 
 interface Migration {
   readonly version: number;
   readonly sql: string;
   readonly apply?: (db: DatabaseSync, activityLog?: ServerLogSink) => void;
+  /**
+   * The migration rebuilds a table that other tables reference by foreign key. Under enforced
+   * foreign keys its `DROP TABLE` would cascade-delete every child row, so the runner follows
+   * SQLite's documented procedure: foreign keys off around the transaction, a `foreign_key_check`
+   * before the commit, foreign keys back on afterwards.
+   */
+  readonly rebuildsReferencedTable?: true;
 }
 
 export class UiStoreSchemaVersionError extends Error {
@@ -1599,6 +1606,25 @@ const V41_SQL = V40_SQL.replaceAll(
   "coding_runtime_snapshots_v40",
   "coding_runtime_snapshots_v41",
 ).replace("'edit-retries-exhausted'))", "'edit-retries-exhausted','verification-not-evidenced'))");
+
+// V81 (#4068, Windows): admits the closed causes a refused Windows launch now settles with instead
+// of the internal `runtime-failed`: `runtime-supervisor-grants-acl`, `-grants-directory`,
+// `-grants-capability`, `-gateway-connect`, `-gateway-admit` and `-refused`. It is V41's rebuild
+// again (SQLite cannot ALTER a table-level CHECK), with the one index later migrations added.
+// Unlike the earlier rebuilds, `coding_runtime_snapshots` now has foreign-key children (every
+// `coding_run_id ... ON DELETE CASCADE` column), so the migration is flagged
+// `rebuildsReferencedTable`: the runner switches foreign keys off around it, and the `DROP TABLE`
+// cascades nothing. No column is added or removed.
+const V81_SQL = `${V41_SQL.replaceAll(
+  "coding_runtime_snapshots_v41",
+  "coding_runtime_snapshots_v81",
+).replace(
+  "'verification-not-evidenced'))",
+  "'verification-not-evidenced','runtime-supervisor-grants-acl','runtime-supervisor-grants-directory','runtime-supervisor-grants-capability','runtime-supervisor-gateway-connect','runtime-supervisor-gateway-admit','runtime-supervisor-refused'))",
+)}
+CREATE INDEX idx_coding_runtime_predecessor
+  ON coding_runtime_snapshots(predecessor_run_id);
+`;
 
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
@@ -3581,6 +3607,7 @@ export const MIGRATIONS: readonly Migration[] = [
     sql: `CREATE INDEX idx_messages_user_chat_ts ON chat_messages(chat_id, timestamp)
       WHERE role = 'user';`,
   },
+  { version: 81, sql: V81_SQL, rebuildsReferencedTable: true },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {
@@ -3620,6 +3647,28 @@ export function runMigrations(db: DatabaseSync, activityLog?: ServerLogSink): vo
             }
           },
         };
+  const rebuilds = pending.some((m) => m.rebuildsReferencedTable === true);
+  // What the store already violates before anything changes: a rebuild must not add to it.
+  const violationsBefore = rebuilds ? foreignKeyViolationCounts(db) : undefined;
+  if (!rebuilds || !foreignKeysEnabled(db)) {
+    applyInTransaction(db, pending, safeLog, violationsBefore);
+    return;
+  }
+  // The pragma is a no-op inside a transaction, so it is switched around the whole transaction.
+  db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    applyInTransaction(db, pending, safeLog, violationsBefore);
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function applyInTransaction(
+  db: DatabaseSync,
+  pending: readonly Migration[],
+  safeLog: ServerLogSink | undefined,
+  violationsBefore: ForeignKeyViolationCounts | undefined,
+): void {
   db.exec("BEGIN");
   try {
     for (const m of pending) {
@@ -3627,9 +3676,50 @@ export function runMigrations(db: DatabaseSync, activityLog?: ServerLogSink): vo
       m.apply?.(db, safeLog);
       setUserVersion(db, m.version);
     }
+    if (violationsBefore !== undefined) assertNoNewForeignKeyViolations(db, violationsBefore);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
+  }
+}
+
+function foreignKeysEnabled(db: DatabaseSync): boolean {
+  const row = db.prepare("PRAGMA foreign_keys").get() as { foreign_keys?: number } | undefined;
+  return row?.foreign_keys === 1;
+}
+
+/** Foreign-key violations by child table, parent table and constraint; rowids are left out. */
+type ForeignKeyViolationCounts = ReadonlyMap<string, number>;
+
+interface ForeignKeyViolationRow {
+  readonly table?: string | null;
+  readonly parent?: string | null;
+  readonly fkid?: number | null;
+}
+
+// Counted per constraint, not per row: a rebuild renumbers the rowids of the rebuilt table, so a
+// row that already violated a constraint would otherwise look like a new violation.
+function foreignKeyViolationCounts(db: DatabaseSync): ForeignKeyViolationCounts {
+  const counts = new Map<string, number>();
+  const rows = db.prepare("PRAGMA foreign_key_check").all() as readonly ForeignKeyViolationRow[];
+  for (const row of rows) {
+    const key = `${String(row.table)}\u0000${String(row.parent)}\u0000${String(row.fkid)}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+// A rebuild must not break a reference. A violation the store carried before (a row written while
+// its constraint was not yet enforced) is not this migration's doing and must not keep Keiko from
+// starting, so only an increase refuses the migration.
+function assertNoNewForeignKeyViolations(
+  db: DatabaseSync,
+  before: ForeignKeyViolationCounts,
+): void {
+  for (const [key, count] of foreignKeyViolationCounts(db)) {
+    if (count > (before.get(key) ?? 0)) {
+      throw new Error("ui-store-migration-foreign-key-violation");
+    }
   }
 }

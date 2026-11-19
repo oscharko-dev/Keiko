@@ -1300,6 +1300,18 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Keiko refused the task before it ran, for example because a file you referenced with @ is missing, outside the workspace or protected, or because the slash command is not available. Check the referenced files and the command, then start the task again.",
   "codingWorkbench.event.failure.workspace-unqualified":
     "Keiko does not let an agent work in this folder because it contains Keiko's own installation, which the agent could otherwise change. Choose a project folder outside the Keiko installation, then start the task again.",
+  "codingWorkbench.event.failure.runtime-supervisor-grants-acl":
+    "Windows did not let Keiko set the permissions this run needs on Keiko's own folder or its data folder, so the run could not start. This usually happens when Keiko was installed by another account, for example an administrator. Install Keiko into your own user folder, or copy it there, and start the task again.",
+  "codingWorkbench.event.failure.runtime-supervisor-grants-directory":
+    "Keiko could not open a folder the run needs, such as Keiko's own folder or its data folder, so the run could not start. Check that these folders still exist and that this account can open them, then start the task again.",
+  "codingWorkbench.event.failure.runtime-supervisor-grants-capability":
+    "Windows would not let the run read the task workspace, so the run could not start. Check that the task workspace folder still exists on a local drive and that this account may read it, then start the task again.",
+  "codingWorkbench.event.failure.runtime-supervisor-gateway-connect":
+    "Keiko could not reach the Windows runtime gateway, so the run could not start. Check the gateway status shown at the top of the Coding Workbench, select Repair if it is offered, and start the task again.",
+  "codingWorkbench.event.failure.runtime-supervisor-gateway-admit":
+    "The Windows runtime gateway did not admit the run, so it could not start. Check the gateway status shown at the top of the Coding Workbench, select Repair if it is offered, and start the task again.",
+  "codingWorkbench.event.failure.runtime-supervisor-refused":
+    "The Windows runtime supervisor refused the launch, so the run did not start. Start the task again; if it recurs, check the Activity Log.",
   "codingWorkbench.event.failure.generic":
     "This step could not be completed. Check the Activity Log and try again.",
   "codingWorkbench.event.failure.envelope-duration-exhausted":

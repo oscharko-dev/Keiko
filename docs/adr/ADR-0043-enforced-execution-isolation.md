@@ -889,7 +889,16 @@ packet and before the broker open (`native/runtime-supervisor/windows/gateway_gr
   `supervisor-grants-directory`, `supervisor-grants-acl`, `supervisor-grants-capability`,
   `supervisor-gateway-connect`, `supervisor-gateway-admit`, `supervisor-environment-guard`), and
   the runtime's exit diagnostic
-  records it.
+  records it. The refusal also reaches the run (2026-11-19): a launch the supervisor refused
+  settles with a closed failure code in place of the internal `runtime-failed`
+  (`runtime-supervisor-grants-acl`, `-grants-directory`, `-grants-capability`, `-gateway-connect`,
+  `-gateway-admit`, and `runtime-supervisor-refused` for every other step), shown on the
+  `coding-runtime.run.settled` line and worded in the Workbench with the one way out. A refusal
+  that precedes the job object (`job-create`, the grants frame, directory, ACL and capability
+  steps, `gateway-connect`, `environment-guard`) and arrives before any launch response proves
+  that no tree existed, so the start reports the refusal and not `runtime-reap-unproven`; every
+  refusal after the job exists, including `gateway-admit`, keeps its tree under the normal reap
+  proof.
 - **Evidence.** `runtime.confinement.spawned` records `backend: windows-wfp`,
   `childExecutablePolicy: appcontainer-inherited`, the number of tree grants and whether a worktree
   capability applied. It never records a path or a capability name.

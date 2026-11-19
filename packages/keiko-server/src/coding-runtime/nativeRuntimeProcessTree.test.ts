@@ -263,6 +263,53 @@ describe("NativeRuntimeTree supervisor refusals", () => {
     expect(tree.failureReason()).toBe(reason);
     expect(exits).toEqual([null]);
   });
+
+  // The start path reported `runtime-reap-unproven` for a launch the supervisor refused before it
+  // had created any process. Only a refusal that precedes the job object proves nothing is left.
+  it.each([
+    [2, "supervisor-job-create"],
+    [6, "supervisor-grants-frame"],
+    [7, "supervisor-grants-directory"],
+    [8, "supervisor-grants-acl"],
+    [9, "supervisor-grants-capability"],
+    [10, "supervisor-gateway-connect"],
+    [12, "supervisor-environment-guard"],
+  ])("proves nothing was left to reap after refusal %i (%s)", async (code) => {
+    const h = harness();
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    h.controlOutput.emit("data", refusalPacket(code));
+    expect(tree.hasReapProof()).toBe(true);
+    await expect(tree.waitForProof(50)).resolves.toBe(true);
+  });
+
+  it.each([
+    [1, "protocol: a reconcile helper answers it for a tree that may exist"],
+    [3, "process-create: the job object exists"],
+    [4, "job-assign: the job object exists"],
+    [5, "job-observe: the tree ran"],
+    [11, "gateway-admit: the suspended tree exists"],
+    [99, "an unknown code"],
+  ])("leaves the reap unproven after refusal %i (%s)", async (code) => {
+    const h = harness();
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    h.controlOutput.emit("data", refusalPacket(code));
+    expect(tree.hasReapProof()).toBe(false);
+    await expect(tree.waitForProof(50)).resolves.toBe(false);
+  });
+
+  it("never lets a refusal prove the absence of a tree the supervisor already launched", async () => {
+    const h = harness();
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    const launched = Buffer.alloc(RESPONSE_HEADER_BYTES);
+    launched.write("KRS1", 0, "ascii");
+    launched.writeUInt16LE(1, 4);
+    launched.writeUInt16LE(1, 6);
+    h.controlOutput.emit("data", launched);
+    h.controlOutput.emit("data", refusalPacket(8));
+    expect(tree.failureReason()).toBe("supervisor-grants-acl");
+    expect(tree.hasReapProof()).toBe(false);
+    await expect(tree.waitForProof(50)).resolves.toBe(false);
+  });
 });
 
 // #4068 B1 crash rule: a confined Windows launch response states what its stale-grant sweep

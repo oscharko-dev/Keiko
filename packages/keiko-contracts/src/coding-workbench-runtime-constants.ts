@@ -128,7 +128,22 @@ export type CodingWorkbenchRuntimeFailureCode =
   // edit that does not apply, a stale base), alone or mixed with those. The settlement line names
   // the latest refusal's closed reason.
   | "edits-blocked"
-  | "edit-retries-exhausted";
+  | "edit-retries-exhausted"
+  // #4068 (Windows): the native runtime supervisor refused the launch and said at which step, so a
+  // run no longer settles as the internal `runtime-failed`. `runtime-supervisor-grants-acl`: Windows
+  // refused to set permissions on a folder the run needs granted (Keiko's own or its data folder,
+  // typically when another account installed Keiko). `runtime-supervisor-grants-directory`: a granted
+  // folder could not be opened. `runtime-supervisor-grants-capability`: the managed worktree's
+  // capability could not be granted. `runtime-supervisor-gateway-connect` and
+  // `runtime-supervisor-gateway-admit`: the runtime gateway service could not be reached, or did not
+  // admit the run. `runtime-supervisor-refused`: the supervisor refused at a step with no sentence of
+  // its own. Each carries no path, identifier or Windows error text.
+  | "runtime-supervisor-grants-acl"
+  | "runtime-supervisor-grants-directory"
+  | "runtime-supervisor-grants-capability"
+  | "runtime-supervisor-gateway-connect"
+  | "runtime-supervisor-gateway-admit"
+  | "runtime-supervisor-refused";
 
 /**
  * #4068: refusals of a start the Windows broker cannot confine. A confined Windows run reads only
@@ -218,4 +233,10 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "model-turn-failed",
     "edits-blocked",
     "edit-retries-exhausted",
+    "runtime-supervisor-grants-acl",
+    "runtime-supervisor-grants-directory",
+    "runtime-supervisor-grants-capability",
+    "runtime-supervisor-gateway-connect",
+    "runtime-supervisor-gateway-admit",
+    "runtime-supervisor-refused",
   ] as const);

@@ -314,6 +314,29 @@ describe("eventDetail auxiliary outcome", () => {
     // #4335: a run refused because its folder contains Keiko's own installation names the folder
     // as the thing to change, never the internal-error sentence.
     ["workspace-unqualified", "codingWorkbench.event.failure.workspace-unqualified"],
+    // #4068: a launch the Windows runtime supervisor refused names its cause, never the
+    // internal-error sentence.
+    [
+      "runtime-supervisor-grants-acl",
+      "codingWorkbench.event.failure.runtime-supervisor-grants-acl",
+    ],
+    [
+      "runtime-supervisor-grants-directory",
+      "codingWorkbench.event.failure.runtime-supervisor-grants-directory",
+    ],
+    [
+      "runtime-supervisor-grants-capability",
+      "codingWorkbench.event.failure.runtime-supervisor-grants-capability",
+    ],
+    [
+      "runtime-supervisor-gateway-connect",
+      "codingWorkbench.event.failure.runtime-supervisor-gateway-connect",
+    ],
+    [
+      "runtime-supervisor-gateway-admit",
+      "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
+    ],
+    ["runtime-supervisor-refused", "codingWorkbench.event.failure.runtime-supervisor-refused"],
   ] as const)("renders a run that failed with %s as %s", (failureCode, key) => {
     const settled = runtimeEvent({ kind: "status", state: "failed", failureCode });
     expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");
