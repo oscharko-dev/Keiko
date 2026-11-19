@@ -120,12 +120,16 @@ const capability = (id) => ({
   preferredUseCases: ["coding"],
   knownLimitations: [],
 });
-const providers = ids.map((modelId) => ({
+// The Counter-checker (the second id) gets the reasoning of its current turn's earlier tool-call
+// steps back, as from development iteration 9 on. Two retries are the Gateway Setup default and
+// what the lab ran from development iteration 7 on.
+const providers = ids.map((modelId, index) => ({
   modelId,
   baseUrl: `http://127.0.0.1:${port}/v1`,
   apiKeyHeaderName: "authorization",
+  ...(index === 1 ? { reasoningHistory: "current-turn" } : {}),
   timeoutMs: 900000,
-  maxRetries: 1,
+  maxRetries: 2,
   retryBaseDelayMs: 1000,
   capability: capability(modelId),
 }));

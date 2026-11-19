@@ -3,6 +3,8 @@
 The offline gate of Epic #4130 (Issue #4138, ADR-0184 D9) for the Keiko for Quality review agent.
 Definitions, labeling rules and the holdout discipline are in
 [review-agent-measurement.md](review-agent-measurement.md).
+Where the epic stood when it was handed over on 2026-11-19, and how to run the next measurement
+with 8-bit models, is in [review-agent-handoff-2026-11-19.md](review-agent-handoff-2026-11-19.md).
 
 ## Pair and environment
 
@@ -586,4 +588,5 @@ The offline gate fails. The holdout fails on coverage, and the seed gate fails o
 incomplete required seeds. Children 9 to 12 of epic #4130 stay closed, and the review
 area stays off by default (`KEIKO_REVIEW_ENABLED`). What to change before a new measurement is an
 owner decision. Settlements show budget exhaustion, unprocessed files and deadlines as the main
-causes. A new measurement needs a new holdout, because ADR-0184 D9 runs a holdout once.
+causes. A new measurement needs a new holdout, because #4138 acceptance criterion AC1 runs the
+holdout exactly once.
