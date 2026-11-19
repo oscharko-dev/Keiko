@@ -226,6 +226,37 @@ describe("validating a seed", () => {
     );
   });
 
+  it("refuses a supersedes cycle among records of equal age, and keeps an equal-age chain valid", () => {
+    // The failure this pins: both records are superseded and equally old, so the status and the age
+    // check each pass in both directions and the planner wrote a cyclic history.
+    const equal = (change) =>
+      withSeed((seed) => {
+        seed.records.push({
+          key: "older",
+          body: "Rosa wanted the report as a Word file.",
+          type: "preference",
+          scope: "project",
+          status: "superseded",
+          ageDays: 90,
+        });
+        change(seed.records);
+      });
+    refused(
+      equal((records) => {
+        records[0].supersedes = "older";
+        records[2].supersedes = "old";
+      }),
+      "forms a cycle",
+    );
+    // An acyclic chain of equal age is valid: older <- old <- new.
+    const chained = scenario(
+      equal((records) => {
+        records[0].supersedes = "older";
+      }),
+    );
+    expect(validateScenario(chained).seed.records).toHaveLength(3);
+  });
+
   it("refuses a link whose body the fact's own terms do not match", () => {
     refused(
       withSeed((seed) => {

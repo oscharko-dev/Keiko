@@ -153,6 +153,20 @@ function validateSupersedes(fail, id, where, record, byKey) {
     fail(id, `${where}.supersedes names a record that is newer than this one`);
 }
 
+// The chain of `supersedes` links must end: records of equal age pass the age check in both
+// directions, so two superseded records could name each other and the planner would write a cyclic
+// history. Each chain is followed from its record and refused when it comes back to a key it saw.
+function validateNoSupersedesCycle(fail, id, records, byKey) {
+  records.forEach((record, index) => {
+    const seen = new Set([record.key]);
+    for (let next = record.supersedes; next !== undefined; next = byKey.get(next)?.supersedes) {
+      if (seen.has(next))
+        fail(id, `seed.records[${String(index)}].supersedes forms a cycle through ${String(next)}`);
+      seen.add(next);
+    }
+  });
+}
+
 // A record that states a truth (or a replaced value) must be matched by that fact's own terms, so the
 // scorer and the author mean the same thing by the link.
 function validateTruthLink(fail, id, where, record, scenario) {
@@ -190,6 +204,7 @@ function validateRecords(fail, id, records, scenario) {
     validateSupersedes(fail, id, where, record, byKey);
     validateLinks(fail, id, where, record, scenario);
   });
+  validateNoSupersedesCycle(fail, id, records, byKey);
 }
 
 function validateFillerOrigin(fail, id, where, group) {
