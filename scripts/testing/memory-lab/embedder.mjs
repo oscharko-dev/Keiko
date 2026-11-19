@@ -6,8 +6,9 @@
 import { EMBEDDER_MODEL_ID } from "./scripted-model.mjs";
 
 export const EMBEDDER_MODES = Object.freeze(["default", "on", "off"]);
-/** What a run measured: no embedding model, the scripted one, or the configuration's own. */
-export const EMBEDDER_KINDS = Object.freeze(["none", "scripted", "configured"]);
+// What a run measured is one of three closed kinds: "none" (no embedding model), "scripted" (the
+// lab's own) or "configured" (the configuration's own); `resolveEmbedder` is the one place that
+// decides it.
 
 function isEmbeddingCapability(capability) {
   return capability?.kind === "embedding";

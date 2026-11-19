@@ -386,7 +386,7 @@ export function answerUnits(answer) {
  * and every `with` group occur in one unit (a sentence or a list item); a fact without it is carried
  * wherever its terms occur in the answer, as before.
  */
-export function answerCarries(answer, item) {
+function answerCarries(answer, item) {
   if (item.with === undefined) return matchesTermGroups(answer, item.terms);
   return answerUnits(answer).some(
     (unit) => matchesTermGroups(unit, item.terms) && matchesTermGroups(unit, item.with),

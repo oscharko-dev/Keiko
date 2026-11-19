@@ -16,12 +16,12 @@ import { listMemories } from "./instance.mjs";
 import { neededVerdict } from "./recall-stage.mjs";
 import { carrierIds, suppliedCarries, wantedOf } from "./score.mjs";
 
-export const TRACE_SOURCE = "memory-context-route";
+const TRACE_SOURCE = "memory-context-route";
 /** Large enough that the token budget cuts nothing: the route accepts any non-negative integer. */
 export const TRACE_BUDGET_TOKENS = 1_000_000;
 
 /** The closed reasons the route reports for an omitted memory (`OmittedReason`). */
-export const OMITTED_REASONS = Object.freeze([
+const OMITTED_REASONS = Object.freeze([
   "suppressed-by-status",
   "below-threshold",
   "budget-exceeded",
@@ -30,13 +30,8 @@ export const OMITTED_REASONS = Object.freeze([
   "type-filtered",
 ]);
 
-/** The closed ways the route call itself can fail. */
-export const TRACE_FAILURES = Object.freeze([
-  "http-error",
-  "malformed-response",
-  "request-failed",
-  "store-unreadable",
-]);
+// The route call itself can fail in four closed ways, each set where it is detected below:
+// "http-error", "malformed-response", "request-failed" and "store-unreadable".
 
 const UNKNOWN_REASON = "unknown";
 
@@ -109,7 +104,7 @@ function suppliedRetrieved(retrievedIds, { positionOf, omittedBy }) {
  * retrieved memories the chat supplied, `limit` the chat's limit on them (null when unreadable).
  * `response` is the route's answer, or undefined when the call failed.
  */
-export function neededEntries({
+function neededEntries({
   wanted,
   carriers,
   suppliedLabels,
