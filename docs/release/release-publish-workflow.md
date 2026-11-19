@@ -39,6 +39,20 @@ A stable release starts from a reviewed, unpublished version already integrated 
    dispatch `release.yml` directly on a tag, and cutting the tag by hand (`git tag -s v<version>` on the
    reviewed commit) remains the fallback while the App is unavailable. Do not publish packages and then
    manually remember the rest of the cleanup.
+5. After the product release is published and npm reports its version, publish the npm folder
+   packages. An allowlisted, non-bot owner runs **Actions → npm folder packages → Run workflow** on
+   `dev` with the version (`.github/workflows/npm-folder-publish.yml`). The workflow refuses a
+   version whose product release or npm package does not exist and a version that already has its
+   prerelease. It qualifies `keiko-macos-arm64.npm.zip`, `keiko-macos-x64.npm.zip` and
+   `keiko-windows-x64.npm.zip` by starting each on its own platform (`macos-15`, `macos-15-intel`,
+   `windows-2025`), and only when all three pass and each ZIP is byte for byte the one its leg
+   tested, attests their build provenance and publishes them with their `.sha256` files as the
+   GitHub prerelease `npm-folder-<version>` (tag on the commit of `v<version>`, never marked latest).
+   The prerelease is a transport for the tested ZIPs and grants no update trust. No product release
+   workflow reads this one, so a failure here never blocks or alters a release; a failed run is
+   repeated by running it again, since nothing is published before every check passed.
+   [npm Folder Package: Download From GitHub](standalone-npm-package.md#download-from-github)
+   has the verification commands.
 
 `scripts/release-publish.mjs` is the source of truth for the final publish. A stable `latest`
 release is created or updated BEFORE npm publishes, so its downloads can be verified while the

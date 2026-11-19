@@ -167,6 +167,12 @@ This shapes the product _and_ how you work on it:
   README.md; every kept file stays the archive's, byte for byte. `keiko start` prints one line when
   the running Node.js is outside the `engines` range of the package's own manifest and records the
   closed `nodeSupport` value on `process.started`; it never refuses the start.
+  It is no product release asset (its lockfile needs the integrity npm reports for the published
+  version), so a release owner runs `npm-folder-publish.yml` after a release: it starts every
+  package on its own platform (`scripts/testing/qualify-npm-folder-package.mjs` on `macos-15`,
+  `macos-15-intel`, `windows-2025`) and only then publishes the exact tested ZIPs as the attested
+  GitHub prerelease `npm-folder-<version>`. That prerelease is a transport, never latest, and grants
+  no update trust; keep the dot before the form in the asset names.
 - Portable updates must not require an Apple Developer subscription (ADR-0121 D7). Verify macOS
   handoff copies against the exact current artifact digests in the validated plan after managed
   registration admission; preserve candidate authenticity, containment and process ownership.

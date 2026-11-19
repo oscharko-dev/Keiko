@@ -1,0 +1,160 @@
+name: npm folder package qualification
+
+# Starts every npm folder package on its own platform the way a person does: it builds the package
+# from the published portable release archive, extracts the ZIP with the platform's tool into a
+# folder whose path holds a space, runs the real start and stop files and checks install, health,
+# the Coding runtime package and the Activity Log (scripts/testing/qualify-npm-folder-package.mjs).
+# Each leg uploads the ZIP it built and tested, its checksum and its evidence.
+#
+# The package cannot be built for a version npm does not hold yet (its lockfile needs the
+# integrity npm reports), so a pull request for an unpublished root version ends green with a
+# notice; a manual run and the publication workflow (npm-folder-publish.yml) require the version.
+#
+# No credentials, no secrets: the portable archive is read from the public release over HTTPS.
+on:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - ".github/workflows/npm-folder-qualify.yml"
+      - "scripts/build-standalone-npm-package.mjs"
+      - "scripts/standalone/**"
+      - "scripts/testing/qualify-npm-folder-package.mjs"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Keiko version to qualify (empty: the root package version); it must be published"
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        description: "Keiko version to qualify; it must be published"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: npm-folder-qualify-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  resolve:
+    name: Resolve the version to qualify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      publishable: ${{ steps.resolve.outputs.publishable }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve the version and whether its release and npm package exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -eu
+          version="${REQUESTED_VERSION:-}"
+          if [ -z "$version" ]; then version="$(node -p 'require("./package.json").version')"; fi
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]* ) ;;
+            * ) echo "version must be x.y.z" >&2; exit 1 ;;
+          esac
+          case "$version" in
+            *[!0-9.]* ) echo "version must be x.y.z" >&2; exit 1 ;;
+          esac
+          published=true
+          if ! npm view "@oscharko-dev/keiko@$version" version --registry=https://registry.npmjs.org/ >/dev/null 2>&1; then
+            published=false
+            reason="npm does not hold @oscharko-dev/keiko@$version"
+          elif ! gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            published=false
+            reason="the product release v$version does not exist"
+          fi
+          if [ "$published" = false ]; then
+            if [ "$EVENT_NAME" != pull_request ]; then
+              echo "::error::$reason; an npm folder package can only be built for a published version"
+              exit 1
+            fi
+            echo "::notice::Skipped: $reason, so the builder cannot resolve this version. The qualification runs once the version is published."
+          fi
+          {
+            echo "version=$version"
+            echo "publishable=$published"
+          } >> "$GITHUB_OUTPUT"
+
+  qualify:
+    name: Qualify ${{ matrix.target }} on ${{ matrix.runner }}
+    needs: resolve
+    if: needs.resolve.outputs.publishable == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: macos-arm64
+            expected-arch: arm64
+          - runner: macos-15-intel
+            target: macos-x64
+            expected-arch: x64
+          - runner: windows-2025
+            target: windows-x64
+            expected-arch: x64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify native hardware and the governed toolchain
+        shell: pwsh
+        env:
+          EXPECTED_ARCH: ${{ matrix.expected-arch }}
+        run: |
+          node scripts/check-runtime-toolchain.mjs --exact
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((node -p process.arch) -ne $env:EXPECTED_ARCH) { throw "Expected a $env:EXPECTED_ARCH Node runtime" }
+          if ($IsMacOS) {
+            $brand = sysctl -n machdep.cpu.brand_string
+            sw_vers
+            $brand
+            if ($env:EXPECTED_ARCH -eq 'x64' -and ((uname -m) -ne 'x86_64' -or $brand -notmatch 'Intel')) { throw 'Expected an Intel Mac' }
+            if ($env:EXPECTED_ARCH -eq 'arm64' -and $brand -notmatch 'Apple') { throw 'Expected an Apple silicon Mac' }
+          } else {
+            Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, OSArchitecture
+          }
+      - name: Install dependencies and build the workspace packages the Activity Log reader loads
+        shell: pwsh
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          npm run build:packages
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build, start, check and stop the npm folder package
+        shell: pwsh
+        env:
+          KEIKO_QUALIFY_VERSION: ${{ needs.resolve.outputs.version }}
+          KEIKO_QUALIFY_TARGET: ${{ matrix.target }}
+        run: |
+          node scripts/testing/qualify-npm-folder-package.mjs --target $env:KEIKO_QUALIFY_TARGET --version $env:KEIKO_QUALIFY_VERSION --out-dir qualification-out
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Upload the tested ZIP, its checksum and its evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-folder-${{ matrix.target }}
+          path: qualification-out
+          if-no-files-found: warn
+          retention-days: 30

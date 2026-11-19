@@ -103,7 +103,16 @@ README.md); every file it keeps is the archive's, byte for byte. Run
 `scripts/__tests__/build-standalone-npm-package.test.mjs`,
 `scripts/__tests__/standalone-npm-runtime.test.mjs` and
 `scripts/__tests__/standalone-npm-install.test.mjs`, which runs the real npm against a loopback
-registry inside an enclosing workspace. The operator guide is
+registry inside an enclosing workspace. The package is no asset of the product release: after a
+release, an owner in `KEIKO_RELEASE_OWNER_GITHUB_LOGINS` runs `.github/workflows/npm-folder-publish.yml`,
+which starts each package on native hardware with
+`scripts/testing/qualify-npm-folder-package.mjs` (`macos-15`, `macos-15-intel`, `windows-2025`) and
+publishes the exact tested ZIPs through `scripts/publish-npm-folder-packages.mjs` as the attested
+GitHub prerelease `npm-folder-<version>`. The prerelease is a transport, never latest, and grants no
+update trust. A change to the builder, `scripts/standalone/**`, the script or the workflow runs the
+same qualification on a pull request when the root version is already on npm; run
+`scripts/__tests__/qualify-npm-folder-package.test.mjs` and
+`scripts/__tests__/publish-npm-folder-packages.test.mjs`. The operator guide is
 [`docs/release/standalone-npm-package.md`](docs/release/standalone-npm-package.md).
 
 ### Activity Log runtime changes

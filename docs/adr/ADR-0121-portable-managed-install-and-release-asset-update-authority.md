@@ -1439,6 +1439,23 @@ integrity the npm registry reports for the released version, and npm learns that
 after the publisher has published the immutable GitHub release; the publisher keeps that order, so
 the npm folder package is built from the published release.
 
+**Companion prerelease for the npm folder package.** Because the package cannot be a release asset,
+a release owner publishes it afterwards with `.github/workflows/npm-folder-publish.yml`. The
+workflow runs `scripts/testing/qualify-npm-folder-package.mjs` on native hardware (`macos-15`,
+`macos-15-intel`, `windows-2025`): it builds the package from the published release with the one
+builder, extracts the ZIP with the platform's tool into a folder whose path holds a space, starts it
+through the real start file and proves the first start installs, health reports exactly the version,
+the installation record matches the lockfile, the folder gains nothing outside `node_modules`, a
+second start installs nothing, the Coding runtime package is present where the release declares one,
+and the stop file leaves no process of the folder. Only when all three legs pass and each ZIP is
+byte for byte the one its leg tested (the evidence digest, the `.sha256` file and the bytes agree)
+does `scripts/publish-npm-folder-packages.mjs` attest the ZIPs and publish them with their
+`.sha256` files as the GitHub prerelease `npm-folder-<version>`, created as a draft, checked asset
+by asset and published last, tagged on the product release's commit and never marked latest. The
+prerelease is a transport for the tested ZIPs and grants no update trust: no updater reads it, it is
+not a release-trust candidate and no product release workflow depends on it. The asset names keep
+the dot before the form.
+
 **What this form does not do.** It does not bypass the operating system's download checks. A
 package that still carries the download mark (the macOS quarantine attribute, the Windows Mark of
 the Web) is blocked exactly as before; an administrator removes the mark before distributing the
@@ -1615,6 +1632,7 @@ Security review for implementation under this ADR must cover:
 | 1.4     | 2026-11-17 | Added D9: the standalone folder package runs the portable payload in place, declares itself managed outside the app and can adopt an administrator-provisioned gateway configuration. |
 | 1.5     | 2026-11-18 | Amended D9 with the npm folder package: the release's Node.js runtime and a pinned, integrity-checked lockfile; Keiko is installed into the folder from the organization's npm registry at the first start. |
 | 1.6     | 2026-11-18 | Amended D1 and D9: stable releases carry the standalone folder packages as release assets, built and attested in the stable-tag run and published in the same draft as the archives. |
+| 1.7     | 2026-11-19 | Amended D9: the npm folder package is published after a release as the qualified, attested companion prerelease `npm-folder-<version>`, a transport that grants no update trust. |
 
 ## Amendment history
 
@@ -1693,6 +1711,11 @@ Security review for implementation under this ADR must cover:
   the folder with `npm ci --ignore-scripts` at the first start and then starts it exactly like the
   folder package. Windows Coding stays unavailable in this form, because npm publishes no Windows
   coding-runtime package. The folder package and D1 to D8 are unchanged.
+- **2026-11-19 — D9, companion prerelease:** The npm folder package stays out of the product release
+  but is no longer built only by hand: after a release, `npm-folder-publish.yml` starts each package
+  on its own platform on native hardware and publishes the exact tested ZIPs and their `.sha256`
+  files as the attested prerelease `npm-folder-<version>`. The prerelease is a transport; the
+  product release, the updaters and D1 to D8 are unchanged.
 - **2026-11-18 — D1 and D9, release assets:** Stable releases carry the generic standalone folder
   package of `macos-arm64`, `macos-x64` and `windows-x64` with its `.sha256` file. The stable-tag
   run builds them from the archives it assembled and attests them; the publisher refuses a bundle
