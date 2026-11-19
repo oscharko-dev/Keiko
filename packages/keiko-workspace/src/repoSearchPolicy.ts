@@ -550,7 +550,72 @@ export function contentTermGroupsForSearch(query: RetrievalQuery): readonly (rea
   return groups.map((group) => group.filter(keepContentTerm)).filter((group) => group.length > 0);
 }
 
-function contentTokenSet(text: string, caseSensitive: boolean): ReadonlySet<string> {
+/** Membership in the token set of one text: every word run and every camel-case part of it. */
+export interface ContentTokenLookup {
+  readonly has: (term: string) => boolean;
+}
+
+const CONTENT_TOKEN_TERM = /^[\p{L}\p{N}_$]+$/u;
+const CONTENT_TOKEN_CHARACTER_BEFORE = /(?<=[\p{L}\p{N}_$])/uy;
+const CONTENT_TOKEN_CHARACTER_AT = /(?=[\p{L}\p{N}_$])/uy;
+// The same split contentTokenSet applies inside a word run, evaluated in place on the text.
+const CONTENT_TOKEN_PART_BOUNDARY = /(?<=[\p{Ll}\p{N}])(?=\p{Lu})/uy;
+// U+0130 is the only code point whose lowercase form has another length, and the final sigma is
+// the only context-dependent lowercase mapping; without both, text and its lowercase align.
+const CONTENT_TOKEN_UNALIGNED_LOWERCASE = /[İΣ]/u;
+
+function stickyMatchesAt(pattern: RegExp, text: string, index: number): boolean {
+  pattern.lastIndex = index;
+  return pattern.test(text);
+}
+
+function isContentTokenOccurrence(text: string, start: number, end: number): boolean {
+  const runStart = !stickyMatchesAt(CONTENT_TOKEN_CHARACTER_BEFORE, text, start);
+  const runEnd = !stickyMatchesAt(CONTENT_TOKEN_CHARACTER_AT, text, end);
+  if (runStart && runEnd) return true;
+  if (!runStart && !stickyMatchesAt(CONTENT_TOKEN_PART_BOUNDARY, text, start)) return false;
+  if (!runEnd && !stickyMatchesAt(CONTENT_TOKEN_PART_BOUNDARY, text, end)) return false;
+  for (let index = start + 1; index < end; index += 1) {
+    // A split never falls inside a surrogate pair; a `u` regex would restart at the pair's start.
+    if (isInsideSurrogatePair(text, index)) continue;
+    if (stickyMatchesAt(CONTENT_TOKEN_PART_BOUNDARY, text, index)) return false;
+  }
+  return true;
+}
+
+function isInsideSurrogatePair(text: string, index: number): boolean {
+  // `codePointAt` joins two code units only when `index - 1` holds a high and `index` a low half.
+  return (text.codePointAt(index - 1) ?? 0) > 0xffff;
+}
+
+function textHasContentToken(text: string, haystack: string, term: string): boolean {
+  if (!CONTENT_TOKEN_TERM.test(term)) return false;
+  for (let start = haystack.indexOf(term); start >= 0; start = haystack.indexOf(term, start + 1)) {
+    if (isContentTokenOccurrence(text, start, start + term.length)) return true;
+  }
+  return false;
+}
+
+/**
+ * #4457: answers contentTokenSet membership for a handful of query terms by checking their
+ * occurrences in place, instead of tokenizing every word of every candidate file per question.
+ * `haystack` is the text the caller already folded for case-insensitive matching.
+ */
+export function contentTokenLookup(
+  text: string,
+  haystack: string,
+  caseSensitive: boolean,
+): ContentTokenLookup {
+  if (
+    !caseSensitive &&
+    (haystack.length !== text.length || CONTENT_TOKEN_UNALIGNED_LOWERCASE.test(text))
+  ) {
+    return contentTokenSet(text, caseSensitive);
+  }
+  return { has: (term: string): boolean => textHasContentToken(text, haystack, term) };
+}
+
+export function contentTokenSet(text: string, caseSensitive: boolean): ReadonlySet<string> {
   const tokens = new Set<string>();
   for (const raw of text.matchAll(/[\p{L}\p{N}_$]+/gu)) {
     const token = caseSensitive ? raw[0] : raw[0].toLowerCase();
@@ -618,7 +683,7 @@ function symbolDefinitionContentBonus(
 function countContentTermHits(
   groups: readonly (readonly string[])[],
   haystack: string,
-  tokens: ReadonlySet<string>,
+  tokens: ContentTokenLookup,
   caseSensitive: boolean,
 ): ContentSearchHitCounts {
   let exactHits = 0;
@@ -722,19 +787,48 @@ export function scoreContentForSearch(
     return 0;
   }
   const haystack = query.caseSensitive ? text : text.toLowerCase();
-  const tokens = contentTokenSet(text, query.caseSensitive);
+  const tokens = contentTokenLookup(text, haystack, query.caseSensitive);
+  const definesSymbol = textMayDefineSymbol(
+    text,
+    haystack,
+    symbolDefinitionQueryTerms(query),
+    query.caseSensitive,
+  );
   const sourceLines =
-    routeQueryTermsForSearch(query) === undefined && symbolDefinitionQueryTerms(query).length === 0
+    routeQueryTermsForSearch(query) === undefined && !definesSymbol
       ? []
-      : (sourceLinesFor?.() ?? repositorySourceLines(text, scopePath));
+      : preparedSourceLines(text, scopePath, sourceLinesFor);
   return scoreContentHitsForSearch(
     policy,
     groups.length,
     countContentTermHits(groups, haystack, tokens, query.caseSensitive),
     exactSymbolContentBonus(query, haystack) > 0,
     routeDeclarationContentBonus(query, sourceLines) > 0,
-    symbolDefinitionContentBonus(query, sourceLines) > 0,
+    symbolDefinitionContentBonus(query, definesSymbol ? sourceLines : []) > 0,
   );
+}
+
+function preparedSourceLines(
+  text: string,
+  scopePath: string | undefined,
+  sourceLinesFor: (() => readonly RepositorySourceLine[]) | undefined,
+): readonly RepositorySourceLine[] {
+  return sourceLinesFor?.() ?? repositorySourceLines(text, scopePath);
+}
+
+// #4457: a definition capture is an identifier of the raw text, so a file whose folded text holds
+// none of the requested symbols cannot earn the definition bonus and is not classified for it.
+// Identifiers may be Unicode; only the final sigma lowercases differently inside a longer text.
+function textMayDefineSymbol(
+  text: string,
+  haystack: string,
+  symbols: readonly string[],
+  caseSensitive: boolean,
+): boolean {
+  if (symbols.length === 0) return false;
+  if (caseSensitive) return symbols.some((symbol) => text.includes(symbol));
+  if (text.includes("Σ")) return true;
+  return symbols.some((symbol) => haystack.includes(symbol.toLocaleLowerCase("en-US")));
 }
 
 // Memoized: bucketing runs for every discovered path on every search, and each call normalizes

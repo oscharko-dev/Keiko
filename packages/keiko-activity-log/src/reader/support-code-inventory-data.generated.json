@@ -3608,6 +3608,7 @@
     "keiko-workspace/version",
     "keiko-workspace/workspaceDirectorySnapshot",
     "keiko-workspace/workspaceIndex",
+    "keiko-workspace/workspaceIndexContent",
     "keiko-workspace/workspaceIndexQueryMatch",
     "keiko-workspace/workspaceIndexStreaming",
     "keiko-workspace/workspacePathDiscovery",

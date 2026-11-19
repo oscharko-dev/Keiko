@@ -49,10 +49,32 @@ excerpt content, so its retention contract is explicit: bounded TTL, bounded siz
 disk persistence, and deterministic cleanup hooks on chat/project lifecycle changes.
 
 Repository search may separately persist its bounded acceleration index. That store is not a
-`ConnectedContextPack`: it contains discovery metadata, fingerprints, and lexical hashes rather than
-queries or excerpts, and its complete snapshot is AES-256-GCM sealed before the atomic owner-only
-write. The key uses an independent `KEIKO_WORKSPACE_INDEX_KEY` → OS keychain → hardened keyfile
-namespace. Missing, legacy-plaintext, tampered, or wrong-key snapshots fail closed to a live rescan.
+`ConnectedContextPack`: it contains discovery metadata, fingerprints, lexical hashes and completed
+query-match metadata (line ranges and scores under a query digest, never query text or excerpts),
+and its complete snapshot is AES-256-GCM sealed before the atomic owner-only write. The key uses an
+independent `KEIKO_WORKSPACE_INDEX_KEY` → OS keychain → hardened keyfile namespace. Missing,
+legacy-plaintext, tampered, or wrong-key snapshots fail closed to a live rescan.
+
+**Stored lane text (owner decision, 2026-11-18, #4457).** A per-query match cache made every
+differently worded question read, redact and match every file again. The uncapped streaming search
+therefore also keeps a query-independent content layer in the same sealed store: separate content
+shards hold, per file, the evidence-lane text the redacting read already produced (deflated, with
+its SHA-256 and byte length), or only that the file is binary. Raw bytes and editor-lane text never
+enter it. A stored text stands in for exactly the text a live read returns, so matching, line
+selection and scoring are unchanged; a file is reused only while its strong stat identity (size,
+nanosecond timestamps, file identity, link count) is current, and the decoded bytes must prove the
+stored digest. The storage key binds `CODE_REDACTION_REVISION`, the content policy and the
+configured secret literals, so a newly configured secret, a policy change or a redaction revision
+leaves every earlier text unreachable. Content snapshots keep the existing 16 MiB per-snapshot,
+entry and snapshot-count bounds (their plaintext stays under two thirds of the byte bound to leave
+room for sealing), stay out of the process-wide parsed-snapshot cache, and live in memory only for
+the request that loaded them, with a 96 MiB request bound. A file that does not fit is counted as
+a dropped record and read live. This persists redacted file content on the user's own device,
+encrypted at rest, under the content threshold above; it is still not a `ConnectedContextPack`
+and never leaves the machine. The existing completion-details Activity Log fields describe it:
+`indexReusedRecords` counts files settled without a read from either layer, a new question over
+an unchanged folder reports `indexSearchMode=persistent-warm`, and
+`workspaceIoContentReadCalls` counts only the reads that still happened.
 
 Why: the pack carries the full excerpt content (with the raw scope-relative paths and
 file bytes). Persisting it to disk would create a second redaction surface co-equal
@@ -962,8 +984,9 @@ pending streaming context, including nested emphasis. Completed public prose lab
 strict check in whole-text inference and publication; YAML anchor/alias grammar remains unchanged.
 Native JSON lexical boundaries retain malformed scalar continuations with structured values, while
 ordinary numbered/quoted prose receives no JSON exemption or refusal solely for naming a field.
-Index snapshot version 16 invalidates previously projected text even when source bytes and stat
-metadata are unchanged. The existing body-free projection revision 8 records this change without
+Index snapshot version 16 invalidated previously projected text even when source bytes and stat
+metadata were unchanged; version 17 (#4457) adds the content shards and again starts every index
+afresh. The existing body-free projection revision 8 records this change without
 logging source content. Earlier versions, including 15, remain ineligible after the privacy repair.
 Malformed YAML block-header classification scans line boundaries and disjoint header prefixes
 once. A comment with a near-miss terminator cannot make earlier candidates rescan the remaining

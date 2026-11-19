@@ -38,6 +38,7 @@ import {
   isWorkspacePathSnapshotCurrent,
   WorkspaceDescriptorReadError,
   type WorkspaceFs,
+  type WorkspaceStat,
 } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
@@ -71,7 +72,11 @@ import {
   repositorySourceLines,
   type RepositorySourceLine,
 } from "./repoSearchSourceClassification.js";
-import type { StreamingWorkspaceIndexSession } from "./workspaceIndexStreaming.js";
+import type {
+  StreamingWorkspaceIndexHit,
+  StreamingWorkspaceIndexObservation,
+  StreamingWorkspaceIndexSession,
+} from "./workspaceIndexStreaming.js";
 import {
   extraIgnoreLinesForSearch,
   legacyDiscoveryPolicy,
@@ -1094,6 +1099,35 @@ async function readScanBytes(
   return { ...read, binary: false };
 }
 
+// #4457: the streaming index keeps what this redacting read observed, so a later question over the
+// unchanged file needs neither the read nor the redaction. The editor lane never reaches it.
+// The observation settles synchronously in the usual case; only a returned promise is awaited, so
+// the read path gains no asynchronous step the scan would not take without the content layer.
+async function observeStreamingRead(
+  runner: SearchTextRunner,
+  state: RunState,
+  relativePath: string,
+  stat: WorkspaceStat,
+  observed: StreamingWorkspaceIndexObservation,
+): Promise<void> {
+  const pending = streamingReadObservation(runner, state, relativePath, stat, observed);
+  if (pending !== undefined) await pending;
+}
+
+function streamingReadObservation(
+  runner: SearchTextRunner,
+  state: RunState,
+  relativePath: string,
+  stat: WorkspaceStat,
+  observed: StreamingWorkspaceIndexObservation,
+): Promise<void> | undefined {
+  const session = runner.streamingWorkspaceIndex;
+  if (session === undefined || !usesWorkspaceIndex(runner)) return undefined;
+  if (runner.eligibleTextObserver?.active === true || abortScanFile(runner, state))
+    return undefined;
+  return session.observeRead(workspaceIndexFileMetadata(relativePath, stat), observed);
+}
+
 async function readBoundedRawText(
   runner: SearchTextRunner,
   relativePath: string,
@@ -1102,6 +1136,7 @@ async function readBoundedRawText(
 ): Promise<string | undefined> {
   const read = await readScanBytes(runner, relativePath);
   if (read.binary) {
+    await observeStreamingRead(runner, state, relativePath, read.stat, { kind: "binary" });
     recordCandidateOmission(candidates, relativePath, "binary");
     return undefined;
   }
@@ -1115,14 +1150,12 @@ async function readBoundedRawText(
     requireSupportedEncoding: true,
   });
   if (decoded === undefined) {
+    await observeStreamingRead(runner, state, relativePath, read.stat, { kind: "binary" });
     recordCandidateOmission(candidates, relativePath, "binary");
     return undefined;
   }
   const text = laneText(runner, decoded.text, relativePath);
-  if (runner.eligibleTextObserver?.active !== true && !abortScanFile(runner, state))
-    runner.streamingWorkspaceIndex?.observeRead(
-      workspaceIndexFileMetadata(relativePath, read.stat),
-    );
+  await observeStreamingRead(runner, state, relativePath, read.stat, { kind: "text", text });
   persistWorkspaceIndexRecord(runner, {
     kind: "text",
     scopePath: relativePath,
@@ -1531,8 +1564,8 @@ async function collectLiveFileMatches(
     return undefined;
   }
   state.filesScanned += 1;
-  const cached = await streamingCachedMatches(runner, file, policyPath, state, order);
-  if (cached !== undefined) return cached.best.length === 0 ? undefined : cached;
+  const cached = await streamingCachedMatches(runner, file, policyPath, state, candidates, order);
+  if (cached !== undefined) return cached.matches;
   if (abortScanFile(runner, state)) return undefined;
   const text = await readForScan(runner, file.relativePath, state, candidates);
   if (text === undefined || abortScanFile(runner, state)) return undefined;
@@ -1560,13 +1593,19 @@ async function completedLiveFileMatches(
   return matches;
 }
 
+/** A file the streaming index settled without reading it; `matches` may be empty. */
+interface StreamingCachedOutcome {
+  readonly matches: FileMatches | undefined;
+}
+
 async function streamingCachedMatches(
   runner: SearchTextRunner,
   file: DiscoveredFile,
   policy: ReadableFilePolicy,
   state: RunState,
+  candidates: CandidateFile[],
   order: number,
-): Promise<FileMatches | undefined> {
+): Promise<StreamingCachedOutcome | undefined> {
   const cache = runner.streamingWorkspaceIndex;
   if (
     cache === undefined ||
@@ -1574,17 +1613,38 @@ async function streamingCachedMatches(
     runner.eligibleTextObserver?.active === true
   )
     return undefined;
-  const cached = await cache.lookup(policy.metadata);
-  if (cached === undefined || abortScanFile(runner, state)) return undefined;
+  const hit = await cache.lookup(policy.metadata);
+  if (hit === undefined || abortScanFile(runner, state)) return undefined;
   const current = filePolicyOmission(runner, file);
   if (
     current.metadata === undefined ||
     !isWorkspaceIndexFileMetadataCurrent(policy.metadata, current.metadata)
   )
     return undefined;
-  await cache.observeReuse(file.relativePath);
+  await cache.observeReuse(policy.metadata, hit.kind);
   if (abortScanFile(runner, state)) return undefined;
-  return { relativePath: file.relativePath, order, ...cached };
+  return streamingHitOutcome(runner, file, state, candidates, order, hit);
+}
+
+// #4457: stored lane text stands in for exactly the text the redacting read would return, so
+// matching, line selection and scoring run unchanged on it.
+async function streamingHitOutcome(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  state: RunState,
+  candidates: CandidateFile[],
+  order: number,
+  hit: StreamingWorkspaceIndexHit,
+): Promise<StreamingCachedOutcome> {
+  if (hit.kind === "binary") {
+    recordCandidateOmission(candidates, file.relativePath, "binary");
+    return { matches: undefined };
+  }
+  if (hit.kind === "text")
+    return { matches: await completedLiveFileMatches(runner, file, state, order, hit.text) };
+  return hit.match.best.length === 0
+    ? { matches: undefined }
+    : { matches: { relativePath: file.relativePath, order, ...hit.match } };
 }
 
 async function readablePolicyPath(
