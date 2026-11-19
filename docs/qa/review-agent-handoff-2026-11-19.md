@@ -51,11 +51,11 @@ Two later runs were stopped early on purpose and are not iteration results:
 ## What is open
 
 1. **The Counter-checker's runaway turns.** Most remaining incomplete reviews come from
-   counter-checks that end without a verdict. A Gemma turn reasons through its whole 4,096-token output budget,
-   the gateway's steered repair does the same, and the check fails `model-failed`. At about
-   13 tokens a second, two such turns also fill most of the 900-second limit. The dev-11 capture
-   showed the cause in the one case it caught: no repetition loop, but a long deliberation over
-   whether a candidate is a defect at all, and then over which refutation reason code to use.
+   counter-checks that end without a verdict. A Gemma turn reasons through its whole 4,096-token
+   output budget, the gateway's steered repair does the same, and the check fails `model-failed`. At
+   about 13 tokens a second, two such turns also fill most of the 900-second limit. The dev-11
+   capture showed the cause in the one case it caught: no repetition loop, but a long deliberation
+   over whether a candidate is a defect at all, and then over which refutation reason code to use.
    #4484 orders the reason codes, puts the non-defect rule first and names the case that caused it.
    Its effect is unmeasured. Its opt-in sentence can turn a confirmation into a refutation, so the
    next development run must report every known hit that moves from confirmed to refuted
