@@ -1001,7 +1001,8 @@ function readMemoryReviewQueue(db: DatabaseSync, opts: ResolvedOptions): readonl
     for (const scope of scopes) gateMemoryScope(scope);
     const options = gateListOptions({
       status: ["proposed", "conflicted", "expired"],
-      includeStaleStatuses: ["accepted", "superseded"],
+      // A superseded record is wanted history, not an item awaiting a decision (#4223).
+      includeStaleStatuses: ["accepted"],
       includeExpired: true,
     });
     const records = listMemoriesAcrossScopeRows(db, scopes, options, opts.now(), opts.cipher);

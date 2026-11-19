@@ -1118,6 +1118,35 @@ describe("list filters", () => {
     }
   });
 
+  it("keeps superseded history out of the review queue, whatever its stale reason (#4223, audit A5)", () => {
+    const vault = openVault(freshDir());
+    try {
+      vault.insertMemory(
+        makeMemory({
+          id: "replaced" as MemoryId,
+          status: "superseded",
+          staleReason: "replaced by a newer statement",
+        }),
+      );
+      vault.insertMemory(makeMemory({ id: "waiting" as MemoryId, status: "proposed" }));
+      vault.insertMemory(
+        makeMemory({
+          id: "changed" as MemoryId,
+          status: "accepted",
+          staleReason: "changed-source",
+        }),
+      );
+      expect(
+        vault
+          .listMemoryReviewQueue()
+          .map(({ id }) => id)
+          .sort(),
+      ).toEqual(["changed", "waiting"]);
+    } finally {
+      vault.close();
+    }
+  });
+
   it("keeps both review status alternatives within the requested scope and sensitivity", () => {
     const vault = openVault(freshDir());
     try {

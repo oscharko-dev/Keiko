@@ -296,12 +296,13 @@ export function findMissingCrossReferences(
 }
 
 // ─── Stale-but-not-archived ───────────────────────────────────────────────────────
-// A `superseded` or `conflicted` record whose status has not changed for longer than the configured
-// window — it should have been archived or resolved through the governed review flow but wasn't.
+// A `conflicted` record whose status has not changed for longer than the configured window — it
+// should have been resolved through the governed review flow but wasn't. A `superseded` record is
+// kept history by design (#4223) and is no finding however old it is.
 // `updatedAt` is the record's general last-touch timestamp; every status transition in this subsystem
 // is written through a governed builder that bumps `updatedAt`, so it is a faithful proxy for "time
 // since this status was set" absent a dedicated per-status-transition timestamp.
-const STALE_STATUSES: ReadonlySet<MemoryStatus> = new Set(["superseded", "conflicted"]);
+const STALE_STATUSES: ReadonlySet<MemoryStatus> = new Set(["conflicted"]);
 
 export function findStaleNotArchived(
   records: readonly MemoryRecord[],

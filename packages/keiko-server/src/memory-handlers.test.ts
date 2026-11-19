@@ -799,7 +799,7 @@ describe("memory handlers", () => {
       "expired-stale",
       "proposed-current",
       "proposed-stale",
-      "superseded-stale",
+      // "superseded-stale" is kept history, no review item (#4223, audit A5).
     ]);
     const decoded = reads.mock.results.flatMap((call) =>
       (call.value as readonly MemoryRecord[]).map((memory) => memory.id),
