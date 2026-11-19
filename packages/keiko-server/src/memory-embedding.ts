@@ -727,11 +727,14 @@ export function memoryEmbeddingCalibrationFor(
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
   const table = parsed as Record<string, unknown>;
-  for (const key of calibrationKeys(identity)) {
+  // Each field resolves on its own, in key-priority order: a more specific entry that names only a
+  // floor must not hide the thresholds a broader entry names for the same model.
+  let merged: MemoryEmbeddingCalibration = {};
+  for (const key of [...calibrationKeys(identity)].reverse()) {
     const entry = parseCalibrationEntry(table[key]);
-    if (entry !== undefined) return entry;
+    if (entry !== undefined) merged = { ...merged, ...entry };
   }
-  return {};
+  return merged;
 }
 
 // Pure: the id of the nearest in-scope memory whose cosine to the candidate is at/above the

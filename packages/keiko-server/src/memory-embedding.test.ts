@@ -523,6 +523,30 @@ describe("memoryEmbeddingCalibrationFor", () => {
     ).toEqual({ semanticDedupThreshold: 0.95 });
   });
 
+  it("keeps a broader entry's thresholds when a more specific entry names only a floor (#4228)", () => {
+    const env = {
+      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+        "openai/text-embedding-3-large": { semanticMinScore: 0.5 },
+        "text-embedding-3-large": { mmrLambda: 0.6, semanticDedupThreshold: 0.95 },
+      }),
+    };
+    expect(
+      memoryEmbeddingCalibrationFor(env, { provider: "openai", modelId: "text-embedding-3-large" }),
+    ).toEqual({ semanticMinScore: 0.5, mmrLambda: 0.6, semanticDedupThreshold: 0.95 });
+  });
+
+  it("lets the more specific entry win a field both entries name", () => {
+    const env = {
+      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+        "openai/text-embedding-3-large": { mmrLambda: 0.5 },
+        "text-embedding-3-large": { mmrLambda: 0.6 },
+      }),
+    };
+    expect(
+      memoryEmbeddingCalibrationFor(env, { provider: "openai", modelId: "text-embedding-3-large" }),
+    ).toEqual({ mmrLambda: 0.5 });
+  });
+
   it("parses semanticMinScore as a unit number and ignores invalid values (#4228)", () => {
     const entry = (value: unknown): Readonly<Record<string, string>> => ({
       KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({

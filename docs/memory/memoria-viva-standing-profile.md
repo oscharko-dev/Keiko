@@ -169,8 +169,9 @@ instead of 0.30; its admission is unchanged.
 An operator sets or overrides the floor per embedding model with `semanticMinScore` (a number from 0
 to 1) in `KEIKO_MEMORY_EMBEDDING_CALIBRATION`, a JSON object keyed by `provider/model@revision`,
 `provider/model`, `model@revision` or `model` of the embedding the response names, next to
-`semanticDedupThreshold`, `relatedLinkThreshold` and `mmrLambda`. The operator's field wins over the
-built-in value, and an invalid value is ignored. To calibrate another model, measure
+`semanticDedupThreshold`, `relatedLinkThreshold` and `mmrLambda`. Each field resolves on its own,
+from the most specific key that names it, so a floor-only entry keeps the thresholds a broader entry
+names. The operator's field wins over the built-in value, and an invalid value is ignored. To calibrate another model, measure
 question-to-memory cosines in the product's format for memories the answer needs and for unrelated
 ones, and put the floor just above the range of the unrelated memories and below the lowest needed
 one; where the two overlap, prefer the lower floor, because a lost needed memory costs more than a
