@@ -284,3 +284,36 @@ describe("assembleContextBlock — caps and pressure", () => {
     expect(estimateTokens(result.contextBlock.text)).toBeLessThanOrEqual(result.budget.tokens);
   });
 });
+
+describe("earlier values in the assembled block (#4223)", () => {
+  const records = [
+    buildRecord({ id: "first", body: "current" }),
+    buildRecord({
+      id: "second",
+      body: "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen",
+    }),
+  ];
+  const ranked = records.map((record) => ({ ...included(record.id), inclusionReason: "match" }));
+  const earlierValuesOf = (record: { readonly id: string }): readonly string[] =>
+    record.id === "first" ? ["one two three four"] : [];
+
+  it("never shortens or drops an excerpt to make room for history, at any budget", () => {
+    let withHistoryCount = 0;
+    for (let budgetTokens = 4; budgetTokens <= 80; budgetTokens += 1) {
+      const plain = assembleContextBlock(ranked, records, { budgetTokens, maxIncluded: 2 });
+      const history = assembleContextBlock(ranked, records, {
+        budgetTokens,
+        maxIncluded: 2,
+        earlierValuesOf,
+      });
+      expect(history.contextBlock.memories.map((entry) => entry.bodyExcerpt)).toEqual(
+        plain.contextBlock.memories.map((entry) => entry.bodyExcerpt),
+      );
+      expect(history.budget.used).toBe(estimateTokens(history.contextBlock.text));
+      expect(history.budget.used).toBeLessThanOrEqual(budgetTokens);
+      if (history.contextBlock.memories[0]?.earlierValues !== undefined) withHistoryCount += 1;
+    }
+    // The sweep reaches budgets where history fits beside both complete excerpts.
+    expect(withHistoryCount).toBeGreaterThan(0);
+  });
+});

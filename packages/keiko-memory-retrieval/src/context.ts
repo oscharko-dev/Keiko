@@ -245,27 +245,45 @@ function fitEntryToBudget(
   return best;
 }
 
-// Adds the earlier values that still fit the entry's own allowance, nearest first. History is added
-// only after the memory's own excerpt is fitted and stays inside that memory's per-entry share, so it
-// never displaces the excerpt; a memory whose excerpt already fills its share carries no history.
+// Adds the earlier values of one fitted entry that still fit, nearest first. It runs only after every
+// memory's own excerpt is fitted, adds only from what the budget has left and stays inside the
+// entry's own per-entry share, so history never shortens or displaces any excerpt.
 function withEarlierValues(
   entries: readonly MemoryContextBlockEntry[],
-  entry: MemoryContextBlockEntry,
+  index: number,
   earlier: readonly string[],
-  limits: { readonly used: number; readonly allowance: number; readonly budgetTokens: number },
-): MemoryContextBlockEntry {
-  let best = entry;
+  limits: { readonly allowance: number; readonly budgetTokens: number },
+): readonly MemoryContextBlockEntry[] {
+  const entry = entries[index];
+  if (entry === undefined) return entries;
+  const others = renderedCost(entries.filter((_, position) => position !== index));
+  let best = entries;
   const kept: string[] = [];
   for (const value of earlier) {
     const excerpt = clipToTokenBudget(value, EARLIER_VALUE_TOKENS);
     if (excerpt === "") break;
-    const candidate: MemoryContextBlockEntry = { ...entry, earlierValues: [...kept, excerpt] };
-    const cost = renderedCost([...entries, candidate]);
-    if (cost > limits.budgetTokens || cost - limits.used > limits.allowance) break;
+    const changed = { ...entry, earlierValues: [...kept, excerpt] };
+    const candidate = entries.map((other, position) => (position === index ? changed : other));
+    const cost = renderedCost(candidate);
+    if (cost > limits.budgetTokens || cost - others > limits.allowance) break;
     kept.push(excerpt);
     best = candidate;
   }
   return best;
+}
+
+// The fitted entries with each one's earlier values added in rank order from the remaining budget.
+function withHistory(
+  entries: readonly MemoryContextBlockEntry[],
+  history: readonly { readonly earlier: readonly string[]; readonly allowance: number }[],
+  budgetTokens: number,
+): readonly MemoryContextBlockEntry[] {
+  let out = entries;
+  history.forEach(({ earlier, allowance }, index) => {
+    if (earlier.length > 0)
+      out = withEarlierValues(out, index, earlier, { allowance, budgetTokens });
+  });
+  return out;
 }
 
 interface AssemblyStep {
@@ -283,6 +301,7 @@ function greedyAssemble(
   const included: IncludedMemory[] = [];
   const entries: MemoryContextBlockEntry[] = [];
   const omitted: OmittedMemory[] = [];
+  const history: { readonly earlier: readonly string[]; readonly allowance: number }[] = [];
   let used = 0;
   // Per-entry token allowance: divide the budget across however many candidates can actually be
   // considered, bounded by the cap — not the configured ceiling alone. A per-entry clip still
@@ -312,20 +331,13 @@ function greedyAssemble(
       omitted.push({ memoryId: rank.memoryId, reason: "budget-exceeded" });
       continue;
     }
-    const earlier = options.earlierValuesOf?.(record) ?? [];
-    const entry =
-      earlier.length === 0
-        ? fitted
-        : withEarlierValues(entries, fitted, earlier, {
-            used,
-            allowance,
-            budgetTokens: options.budgetTokens,
-          });
-    used = renderedCost([...entries, entry]);
+    history.push({ earlier: options.earlierValuesOf?.(record) ?? [], allowance });
+    used = renderedCost([...entries, fitted]);
     included.push(rank);
-    entries.push(entry);
+    entries.push(fitted);
   }
-  return { included, entries, omitted, used };
+  const withValues = withHistory(entries, history, options.budgetTokens);
+  return { included, entries: withValues, omitted, used: renderedCost(withValues) };
 }
 
 /**
