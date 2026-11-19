@@ -468,7 +468,7 @@ const CLOSE_BRACE_CHARACTER: BraceCharacterResult = { ...IGNORED_BRACE_CHARACTER
 // Every UTF-16 code unit `/\s/u` accepts, derived from that pattern once instead of running it
 // per scanned character; `charAt` yields one code unit, and an out-of-range index yields "".
 const WHITESPACE_CODE_UNITS: ReadonlySet<string> = new Set(
-  Array.from({ length: 0x10000 }, (_, code) => String.fromCharCode(code)).filter((unit) =>
+  Array.from({ length: 0x10000 }, (_, code) => String.fromCodePoint(code)).filter((unit) =>
     /\s/u.test(unit),
   ),
 );

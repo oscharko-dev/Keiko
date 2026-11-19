@@ -584,9 +584,8 @@ function isContentTokenOccurrence(text: string, start: number, end: number): boo
 }
 
 function isInsideSurrogatePair(text: string, index: number): boolean {
-  const low = text.charCodeAt(index);
-  const high = text.charCodeAt(index - 1);
-  return low >= 0xdc00 && low <= 0xdfff && high >= 0xd800 && high <= 0xdbff;
+  // `codePointAt` joins two code units only when `index - 1` holds a high and `index` a low half.
+  return (text.codePointAt(index - 1) ?? 0) > 0xffff;
 }
 
 function textHasContentToken(text: string, haystack: string, term: string): boolean {
