@@ -103,11 +103,11 @@ describe("the scripted embedding model fixture", () => {
     await expect(
       withScriptedServer({}, async (server) => {
         started = server;
-        expect(server.listening).toBe(true);
+        expect((await globalThis.fetch(`${server.baseUrl}/models`)).status).toBe(200);
         throw new Error("assertion failed inside the body");
       }),
     ).rejects.toThrow("assertion failed");
-    expect(started.listening).toBe(false);
+    await expect(globalThis.fetch(`${started.baseUrl}/models`)).rejects.toThrow();
   });
 });
 
