@@ -237,7 +237,9 @@ Memory window a forget by id names exactly the entry the person selected and con
 ignores the pin (#4214). In a Chat, and in the pending-forget replay of a learning pass, the id comes
 from a word match or from what "das" refers to; the pin keeps protecting there, the forget is not
 applied and the Chat says so (#4223). The exemption belongs to the call site, never to the selector
-kind.
+kind. The same pick is the acknowledgement an archived entry needs: a forget by id from the Memory
+window forgets the archived entry the person named, while a Chat statement or a sweep by scope or
+type never acknowledges one and is refused (400), not failed (#4223).
 
 A forget tombstone the person wrote refuses every capture path. A tombstone an unattended pass wrote
 (the maintenance pass, an operator's retention policy) never makes a rejection stronger than it was

@@ -1588,6 +1588,13 @@ function selectForgetTargets(
     : candidates;
 }
 
+// The archived entry a person picks in the Memory window is named exactly, so that pick is the
+// acknowledgement the governance layer demands for an archived record; a sweep names none, and a
+// Chat statement never picks a row.
+function acknowledgedArchivedIds(selector: ForgetSelector, caller: ForgetCaller): MemoryId[] {
+  return caller.personPickedEntry && selector.kind === "by-id" ? [selector.memoryId] : [];
+}
+
 function executeForgetSelection(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -1601,7 +1608,11 @@ function executeForgetSelection(
   const operations = buildForgetOperations(
     targets,
     { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
-    { reason, writeTombstone: true },
+    {
+      reason,
+      writeTombstone: true,
+      acknowledgedArchivedMemoryIds: acknowledgedArchivedIds(selector, caller),
+    },
   );
   const [first] = targets;
   // One history record forgotten on its own must not cut the earlier values off from the newer one.
@@ -1629,6 +1640,15 @@ function forgetSelectorScopeKind(
 ): MemoryScopeKind | undefined {
   if (selector.kind === "by-id") return vault.getMemory(selector.memoryId)?.scope.kind;
   return selectorScope(selector)?.kind;
+}
+
+// What a thrown failure of a forget was: a governance refusal or a storage not-found is answered
+// with 400 or 404 by the route, so it is `refused` or `not-found`; only a technical fault is
+// `failed` (#4223).
+function forgetFailureOutcome(error: unknown): "refused" | "not-found" | "failed" {
+  if (error instanceof GovernanceError) return "refused";
+  if (error instanceof MemoryStorageError && error.code === "not-found") return "not-found";
+  return "failed";
 }
 
 function forgetRouteOutcome(result: RouteResult): "not-found" | "refused" {
@@ -1668,7 +1688,7 @@ function forgetFromMemoryWindow(
     }
     return result;
   } catch (error) {
-    logExplicitMemoryForget("failed", correlationId, detail(false));
+    logExplicitMemoryForget(forgetFailureOutcome(error), correlationId, detail(false));
     throw error;
   }
 }
@@ -1760,6 +1780,8 @@ export function forgetMemoryFromStatement(
     );
     return isRouteResult(result) ? "refused" : "forgotten";
   } catch (error) {
+    // A governance refusal (an archived entry no one acknowledged) is a plain "not applied".
+    if (error instanceof GovernanceError) return "refused";
     reportMemoryHandlerFailure(
       deps,
       correlationId,

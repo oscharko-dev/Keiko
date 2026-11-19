@@ -27,6 +27,7 @@ import {
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
 import { runConsolidation } from "@oscharko-dev/keiko-memory-consolidation";
+import { GovernanceError } from "@oscharko-dev/keiko-memory-governance";
 import {
   MEMORY_STATUSES,
   MEMORY_STATUS_TRANSITIONS,
@@ -2473,6 +2474,110 @@ describe("memory handlers", () => {
       expect(vault.listTombstonesByScope({ kind: "global" }).map((t) => t.memoryId)).toEqual([
         memoryId("window-bulk-pinned"),
       ]);
+    });
+
+    // A refusal is answered with 400 and a missing memory with 404: neither is a technical fault, so
+    // neither is `failed` (#4223).
+    function expectOutcome(
+      events: BufferedServerLogSink["events"],
+      outcome: string,
+      scopeKind: string | undefined,
+    ): void {
+      expect(events).toHaveLength(1);
+      const [event] = events;
+      if (event === undefined) throw new TypeError("missing forget line");
+      const persisted = expectActivityLogProof(
+        "memory.explicit.forget.line",
+        formatActivityLogProofLine(event),
+      );
+      expect(persisted).toMatchObject({
+        outcome,
+        surface: "memory-center",
+        tombstoneWritten: false,
+      });
+      expect(persisted.scopeKind).toBe(scopeKind);
+    }
+
+    it("records refused, not failed, for a sweep over an archived memory (400)", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("sweep-archived", "archived body", { status: "archived" }));
+      vault.insertMemory(makeMemory("sweep-live", "live body"));
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      let result: RouteResult;
+      try {
+        result = await handleForgetMemories(
+          makeCtx("/api/memory/forget", {
+            acknowledged: true,
+            selector: { kind: "by-scope", scope: { kind: "global" } },
+          }),
+          makeDeps({ memoryVault: vault }),
+        );
+      } finally {
+        resetServerLogger();
+      }
+      expect(result.status).toBe(400);
+      expect(vault.getMemory(memoryId("sweep-archived"))).toBeDefined();
+      expect(vault.getMemory(memoryId("sweep-live"))).toBeDefined();
+      expectOutcome(forgetEvents(sink.events), "refused", "global");
+    });
+
+    it("records refused when the governance layer throws while deleting (400)", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-governance", "body"));
+      vi.spyOn(vault, "deleteMemories").mockImplementation(() => {
+        throw new GovernanceError("illegal-status-transition", "not forgettable");
+      });
+      const { result, events } = await forgetWithLog(
+        "window-governance",
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(400);
+      expectOutcome(events, "refused", "global");
+    });
+
+    it("records not-found when the memory vanished before it was deleted (404)", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-vanished", "body"));
+      vi.spyOn(vault, "deleteMemories").mockImplementation(() => {
+        throw new MemoryStorageError("not-found", "gone");
+      });
+      const { result, events } = await forgetWithLog(
+        "window-vanished",
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(404);
+      expectOutcome(events, "not-found", "global");
+    });
+
+    // The person picked exactly this entry, so the pick is the acknowledgement an archived entry needs.
+    it("forgets an archived entry the person picked", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-archived", "archived body", { status: "archived" }));
+      const { result, events } = await forgetWithLog(
+        "window-archived",
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(200);
+      expect(vault.getMemory(memoryId("window-archived"))).toBeUndefined();
+      expect(vault.listTombstonesByScope({ kind: "global" })[0]?.originalStatus).toBe("archived");
+      expect(events.map((event) => event.extra)).toEqual([
+        expect.objectContaining({ outcome: "forgotten", tombstoneWritten: true }),
+      ]);
+    });
+
+    it("answers refused, not failed, for an archived entry a Chat statement named", () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("chat-archived", "body", { status: "archived" }));
+      expect(
+        forgetMemoryFromStatement(
+          makeDeps({ memoryVault: vault }),
+          vault,
+          memoryId("chat-archived"),
+          "corr-chat",
+        ),
+      ).toBe("refused");
+      expect(vault.getMemory(memoryId("chat-archived"))).toBeDefined();
     });
 
     it("records failed when getMemory throws inside the guarded block", async () => {
