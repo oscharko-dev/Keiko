@@ -114,7 +114,7 @@ describe("memory lab offline run", () => {
   );
 
   it(
-    "turns the same store red when the learner stores the whole message",
+    "fails recall when the learner returns only inadmissible whole messages",
     async () => {
       const scenarios = scenarioSet(join(root, "broken"), ["multi-turn-de"]);
       await runLab(
@@ -126,9 +126,10 @@ describe("memory lab offline run", () => {
       );
       expect(store).toBeDefined();
       expect(store.passed).toBe(false);
-      // The whole message was stored and it is not the fact: nothing stored is right.
-      expect(metric(store, "live")).toBe(1);
-      expect(metric(store, "precision")).toBe(0);
+      // An empty rule announcement and its ungrounded continuation are both refused.
+      // The required fact is still missing, so the store must fail even with zero false positives.
+      expect(metric(store, "live")).toBe(0);
+      expect(metric(store, "recall")).toBe(0);
       expect(store.evidence).toContain("correct=0");
     },
     RUN_TIMEOUT_MS,

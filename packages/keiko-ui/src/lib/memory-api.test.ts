@@ -24,6 +24,11 @@ import {
   startMemoryConsolidation,
   unpinMemory,
 } from "./memory-api";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
+import {
+  notifyCompletedChatMemoryChanges,
+  subscribeMemoryVaultViewChanges,
+} from "./memory-vault-view-changes";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -154,6 +159,120 @@ describe("memory consolidation API helpers", () => {
 describe("memory governance API helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("issues one removal for duplicate completed actions and leaves pending decisions alone", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeMemoryVaultViewChanges(listener);
+    const context = { enabled: true, text: "", memories: [], budget: { used: 0, tokens: 100 } };
+    const applied = {
+      kind: "forget" as const,
+      memoryId: "done",
+      requiresConfirmation: false,
+      forgotten: true,
+    };
+    try {
+      notifyCompletedChatMemoryChanges(undefined);
+      notifyCompletedChatMemoryChanges({
+        context,
+        actions: [
+          { ...applied, forgotten: false },
+          { ...applied, requiresConfirmation: true },
+        ],
+      });
+      expect(listener).not.toHaveBeenCalled();
+      notifyCompletedChatMemoryChanges({ context, actions: [applied, applied] });
+      expect(listener).toHaveBeenCalledExactlyOnceWith({ kind: "removed", ids: ["done"] });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("refreshes persisted Chat candidates once and ignores a shown update proposal", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeMemoryVaultViewChanges(listener);
+    const context = { enabled: true, text: "", memories: [], budget: { used: 0, tokens: 100 } };
+    const candidate = {
+      kind: "candidate",
+      proposalId: "new",
+      body: "Synthetic fact",
+      scopeLabel: "private",
+      requiresApproval: false,
+      status: "accepted",
+    } as const;
+    try {
+      notifyCompletedChatMemoryChanges({
+        context,
+        actions: [
+          candidate,
+          candidate,
+          { ...candidate, proposalId: "pending", status: "proposed", requiresApproval: true },
+          { kind: "update", memoryId: "review-update" },
+          { kind: "rejected", reason: "unavailable" },
+        ],
+      });
+      expect(listener).toHaveBeenCalledExactlyOnceWith({
+        kind: "updated",
+        ids: ["new", "pending"],
+      });
+      listener.mockClear();
+      notifyCompletedChatMemoryChanges({
+        context,
+        actions: [
+          candidate,
+          {
+            kind: "forget",
+            memoryId: candidate.proposalId,
+            forgotten: true,
+            requiresConfirmation: false,
+          },
+        ],
+      });
+      expect(listener).toHaveBeenCalledExactlyOnceWith({ kind: "removed", ids: ["new"] });
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  it("keeps a confirmed forget successful and reports repeated listener failures once", async () => {
+    const result = { forgotten: true as const, memoryIds: ["m-1"], count: 1 };
+    const listener = vi.fn();
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    diagnostic.mockClear();
+    const unsubscribeBroken = subscribeMemoryVaultViewChanges(() => {
+      throw new Error("Synthetic private detail");
+    });
+    const unsubscribeAlsoBroken = subscribeMemoryVaultViewChanges(() => {
+      throw new Error("Synthetic private detail");
+    });
+    const unsubscribeHealthy = subscribeMemoryVaultViewChanges(listener);
+    const now = vi.spyOn(performance, "now").mockReturnValueOnce(100).mockReturnValueOnce(112);
+    try {
+      const confirmed = await forgetMemory("m-1" as MemoryId, vi.fn().mockResolvedValue(result));
+      expect(confirmed).toEqual(result);
+      expect(listener).toHaveBeenCalledExactlyOnceWith({ kind: "removed", ids: ["m-1"] });
+      expect(diagnostic).toHaveBeenCalledWith(
+        "Memory vault view change settled.",
+        expect.objectContaining({ stageReport: expect.objectContaining({ durationMs: 12 }) }),
+      );
+      expect(diagnostic).toHaveBeenCalledWith(
+        "Memory vault view notification failed.",
+        expect.objectContaining({ failureStage: "memory vault view change", kind: "other" }),
+      );
+      expect(
+        diagnostic.mock.calls.filter(
+          ([message]) => message === "Memory vault view notification failed.",
+        ),
+      ).toHaveLength(1);
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("Synthetic private detail");
+    } finally {
+      now.mockRestore();
+      unsubscribeBroken();
+      unsubscribeAlsoBroken();
+      unsubscribeHealthy();
+      resetClientDiagnosticWriter();
+    }
   });
 
   it("posts selector-based forget requests with explicit acknowledgement", async () => {

@@ -4,9 +4,22 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { sha256, sha256File } from "../lib/digest.mjs";
+import { sha256, sha256File, sha256FileChunked } from "../lib/digest.mjs";
+
+const readRequests = vi.hoisted(() => []);
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    readSync: (fd, buffer, offset, length, position) => {
+      readRequests.push(length);
+      return actual.readSync(fd, buffer, offset, length, position);
+    },
+  };
+});
 
 const roots = [];
 
@@ -41,5 +54,39 @@ describe("digest", () => {
     const crlf = join(root, "crlf.bin");
     writeFileSync(crlf, Buffer.from("line1\r\nline2\n", "utf8"));
     expect(sha256File(crlf)).not.toBe(sha256("line1\nline2\n"));
+  });
+
+  it("hashes a file in chunks to the same digest, across chunk boundaries", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-digest-test-"));
+    roots.push(root);
+    const empty = join(root, "empty.bin");
+    writeFileSync(empty, Buffer.alloc(0));
+    expect(sha256FileChunked(empty)).toBe(SHA256_EMPTY);
+    const abc = join(root, "abc.bin");
+    writeFileSync(abc, Buffer.from("abc", "utf8"));
+    expect(sha256FileChunked(abc)).toBe(SHA256_ABC);
+    // Larger than two 1 MiB chunks and not a multiple of one.
+    const bytes = Buffer.alloc(2 * 1024 * 1024 + 7);
+    for (let index = 0; index < bytes.length; index += 1) bytes[index] = index % 251;
+    const large = join(root, "large.bin");
+    writeFileSync(large, bytes);
+    expect(sha256FileChunked(large)).toBe(createHash("sha256").update(bytes).digest("hex"));
+  });
+
+  it("stops reading one byte past the limit instead of reading to the end", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-digest-test-"));
+    roots.push(root);
+    const path = join(root, "long.bin");
+    const limit = 1024 * 1024 + 5;
+    writeFileSync(path, Buffer.alloc(4 * 1024 * 1024, 7));
+    readRequests.length = 0;
+    expect(sha256FileChunked(path, limit)).toBeUndefined();
+    // Every request is bounded by the remaining allowance plus one byte, so the total requested
+    // never exceeds limit + 1 (a reader that reads to EOF would request 4 MiB).
+    expect(readRequests.reduce((sum, length) => sum + length, 0)).toBeLessThanOrEqual(limit + 1);
+    // The exact limit still succeeds.
+    const exact = join(root, "exact.bin");
+    writeFileSync(exact, Buffer.from("abc", "utf8"));
+    expect(sha256FileChunked(exact, 3)).toBe(SHA256_ABC);
   });
 });

@@ -345,6 +345,48 @@ describe("cleanScopedNodesToScreenIr — inter-screen links", () => {
     ]);
   });
 
+  it("captures the legacy REST transition with an unspecified trigger", () => {
+    const hotspot = {
+      id: "1:2",
+      name: "Hotspot",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(0, 0, 80, 40),
+      transitionNodeID: "2:1",
+    };
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [screenFrame("1:1", "A", [hotspot]), screenFrame("2:1", "B", [])]),
+    );
+
+    expect(result.links).toEqual([
+      { sourceNodeId: "1:2", trigger: "UNKNOWN", targetNodeId: "2:1" },
+    ]);
+    expect(result.screens[0]?.root.children[0]?.interactionHint).toBe("link");
+  });
+
+  it("keeps media controls, scroll targets, and component changes out of screen navigation", () => {
+    const hotspot = {
+      id: "1:2",
+      name: "Hotspot",
+      type: "RECTANGLE",
+      absoluteBoundingBox: bbox(0, 0, 80, 40),
+      transitionNodeID: "2:1",
+      interactions: [
+        {
+          trigger: { type: "ON_CLICK" },
+          actions: [
+            { type: "UPDATE_MEDIA_RUNTIME", destinationId: "1:3" },
+            { type: "NODE", navigation: "SCROLL_TO", destinationId: "1:3" },
+            { type: "NODE", navigation: { type: "CHANGE_TO" }, destinationId: "1:4" },
+          ],
+        },
+      ],
+    };
+    const result = cleanScopedNodesToScreenIr(canvas("0:1", [screenFrame("1:1", "A", [hotspot])]));
+
+    expect(result.links).toEqual([]);
+    expect(result.screens[0]?.root.children[0]?.interactionHint).toBe("button");
+  });
+
   it("extracts a FLOW_START link from canvas flowStartingPoints", () => {
     const result = cleanScopedNodesToScreenIr(
       canvas("0:1", [screenFrame("1:1", "A", [text("1:2", "x")])], {

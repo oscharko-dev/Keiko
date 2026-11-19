@@ -4510,6 +4510,58 @@
         "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4455#6954262338",
         "rationale": "The repository owner authorized stable Keiko 1.5.2 for the standalone folder package, the bundled #4448 Windows QA follow-up, the contributor's one-step Windows gateway setup from #4454 (included at the owner's request) and the fixable Windows user findings in one pull request. The protected dev checks, resolved reviews, and exact-commit release workflow govern publication. Windows Coding package qualification remains tracked in #4068; standalone archives are built locally and are not published with this release."
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-11-18-keiko-1.5.3-folder-release-assets-npm-folder-jira-templates-and-figma-snapshots",
+      "packageVersion": "1.5.3",
+      "releaseTag": "v1.5.3",
+      "supportedFrom": ["0.2.0", "1.5.0", "1.5.1", "1.5.2"],
+      "releaseNoteCategory": "improvements",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Each release carries the standalone Keiko folder for download, administrators can let Keiko load from an npm registry with the npm folder package, Jira templates offer guided choices for the selected project, and Figma snapshot imports and history are more reliable.",
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Every release now carries the standalone Keiko folder for macOS (Apple silicon and Intel) and Windows x64 as keiko-<target>.standalone.zip, so it can be downloaded instead of handed over on a medium. Installed Keiko updates ignore these files. #4455 #4464",
+        "Administrators can build an npm folder package: the release's Node.js and a pinned lockfile, which loads Keiko from the npm registry the folder names at first start and keeps its data in .keiko-standalone. The access step writes the team configuration, limited to the running account. The Coding Workbench is not available in this form on Windows. #4464",
+        "Create Jira templates with guided choices for the selected project's issue types, fields and workflow statuses. YAML stays available for advanced rules. #4466 #4464",
+        "Figma Snapshot imports and history are more reliable, and capture limits stay visible after reopening saved snapshots. #4470 #4464"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-11-18",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4455#6980443480",
+        "rationale": "The repository owner authorized stable Keiko 1.5.3 for the npm folder package, the folder packages as release assets, the guided Jira template editing integrated from #4466 and the Figma snapshot hardening integrated from #4470, in one pull request (#4464). The protected dev checks, resolved reviews, and exact-commit release workflow govern publication. Real Windows x64 hardware qualification remains tracked in #4455; Windows Coding package qualification remains tracked in #4068."
+      }
     }
   ]
 }

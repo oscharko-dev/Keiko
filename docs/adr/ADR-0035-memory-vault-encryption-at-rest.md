@@ -37,6 +37,18 @@ Only the columns that carry remembered TEXT/vector content are sealed. Index, qu
 | ------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `memories.body`, `payload_json`, `tags_json`, `capture_rationale`, `stale_reason`; `memory_edges.provenance_summary`; `memory_tombstones.reason`; `memory_embeddings.vector` (BLOB) | all ids, `schema_version`, `type`, `scope_kind`, `scope_coordinate`, `status`, `sensitivity`, `pinned`, `confidence`, all timestamps, `source_*`, `model_*`, `retention_*`, `vector_dimensions`, `vector_metric` |
 
+A forget tombstone retains its optional semantic vector sealed as memory content. Vault schema v15
+adds the SHA-256 digest of the structural vector-space identity beside new vectors. Before decrypting
+a vector the Vault checks the provider, canonical model, dimensions and metric through that digest.
+An older tombstone with a vector and no recorded identity retains its conservative similarity check.
+Exact-text suppression continues to use the scoped body hash.
+
+Vault schema v16 indexes existing source message IDs alongside their owning memory IDs for exact
+replay lookup. The index contains no message text or memory body. Backfill reads the existing
+provenance array; updates and physical erasure maintain the index in the same transaction. An
+unreadable historical source array keeps the existing scoped read failure and never blocks an
+unrelated vault scope from opening.
+
 Crypto is confined to two wrapper functions in `serialize.ts` (and the per-table seal/open in `edges.ts`, `embeddings.ts`, `tombstones.ts`); the pure row↔record builders operate on plaintext exactly as before. The cipher is threaded as an explicit parameter through the row layer (keeping those modules pure and unit-testable) and resolved once, internally, in `createMemoryVault`.
 
 ### Key resolution tiers (`keiko-memory-vault/cipher.ts`)

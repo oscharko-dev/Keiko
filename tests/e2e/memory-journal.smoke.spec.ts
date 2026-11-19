@@ -157,7 +157,9 @@ async function exerciseDeniedCaptures(context: JournalJourneyContext): Promise<v
   const memoryWindow = await openMemoryWindow(context.page);
   await memoryWindow.getByRole("button", { name: "Journal", exact: true }).click();
   await expect(memoryWindow.getByTestId("memory-journal-empty")).toBeVisible();
-  await expect(memoryWindow.getByRole("status")).toHaveCount(1);
+  const status = memoryWindow.getByRole("status");
+  await expect(status).toHaveCount(1);
+  await expect(status).toHaveText("0 recent captures loaded");
   await memoryWindow.getByRole("button", { name: "Back" }).click();
   await context.page.getByRole("button", { name: "Close MemoriaViva window" }).click();
   await memoryControl.click();
@@ -242,11 +244,12 @@ async function keepCapture(
 }
 
 async function exerciseFailedForget(
-  page: Page,
+  context: JournalJourneyContext,
   memoryWindow: Locator,
   row: Locator,
   memoryId: string,
 ): Promise<Locator> {
+  const { page, since } = context;
   const forgetUrl = `**/api/memory/${encodeURIComponent(memoryId)}/forget`;
   await page.route(forgetUrl, async (route) => {
     await route.fulfill({
@@ -264,6 +267,10 @@ async function exerciseFailedForget(
   await expect(memoryWindow.getByRole("alert")).toContainText("could not be forgotten");
   await expect(row).toBeVisible();
   await expect(forget).toBeFocused();
+  const failedForgetRows = memoryWindow.locator(
+    '[data-testid="memory-journal-row"][data-outcome="forgotten"]',
+  );
+  await expect.poll(async () => rowCountSince(failedForgetRows, since)).toBe(0);
   await page.unroute(forgetUrl);
   return forget;
 }
@@ -275,19 +282,28 @@ async function completeForget(
   memoryId: string,
 ): Promise<void> {
   await forget.click();
-  // The kept capture's row is removed, but the content-free "Refused" row from the earlier
-  // secret-content turn was never persisted (no memoryId), so it is not affected by this Forget
-  // and remains — one row, not the empty state. Focus moves to that remaining row, not the
-  // heading (the heading is only focused when the list becomes fully empty).
+  // The capture row disappears. The Journal then shows the person's record-free decision and
+  // the prior policy refusal. Focus stays on the previous neighboring row through the refresh.
   const rows = memoryWindow.getByTestId("memory-journal-row");
-  await expect.poll(async () => rowCountSince(rows, context.since)).toBe(1);
-  const remaining = rows.first();
-  await expect(remaining.getByText("Refused", { exact: true })).toBeVisible();
-  await expect(remaining).toBeFocused();
-  await expect(memoryWindow.getByRole("status")).toContainText("Memory forgotten");
-  await expect
-    .poll(async () => persistedCaptures(await fetchRecent(context.request, context.since)).length)
-    .toBe(0);
+  const forgotten = rows.and(memoryWindow.locator('[data-outcome="forgotten"]')).first();
+  const refusal = rows.and(memoryWindow.locator('[data-outcome="rejected"]')).first();
+  await expect(forgotten.getByText("Forgotten", { exact: true })).toBeVisible();
+  await expect(
+    forgotten.getByText("You asked Keiko to forget a memory. It was deleted."),
+  ).toBeVisible();
+  await expect(forgotten.getByRole("button")).toHaveCount(0);
+  await expect(refusal.getByText("Refused", { exact: true })).toBeVisible();
+  await expect(refusal).toBeFocused();
+  await expect.poll(async () => rowCountSince(rows, context.since)).toBe(2);
+  await expect(memoryWindow.locator(`[data-memory-id="${memoryId}"]`)).toHaveCount(0);
+  await expect(memoryWindow.getByText(/deterministic release window/i)).toHaveCount(0);
+  await expect(memoryWindow.getByRole("status")).toHaveText("Memory forgotten");
+  const { captures } = await fetchRecent(context.request, context.since);
+  expect(captures.map(({ outcome }) => outcome)).toEqual(["forgotten", "rejected"]);
+  for (const decision of captures) {
+    expect(decision).not.toHaveProperty("memoryId");
+    expect(decision).not.toHaveProperty("bodyExcerpt");
+  }
   await expect
     .poll(async () => retrieveMemoryIds(context.request, context.chat, context.projectPath))
     .not.toContain(memoryId);
@@ -316,6 +332,6 @@ test("disabled capture stays empty; secret input stays absent; a captured fact i
   await exerciseDeniedCaptures(context);
   const { memoryId, memoryWindow, row } = await captureAndOpenJournal(context);
   await keepCapture(context, memoryId, row);
-  const forget = await exerciseFailedForget(page, memoryWindow, row, memoryId);
+  const forget = await exerciseFailedForget(context, memoryWindow, row, memoryId);
   await completeForget(context, memoryWindow, forget, memoryId);
 });

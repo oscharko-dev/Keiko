@@ -1,3 +1,5 @@
+import { dirname, resolve } from "node:path";
+
 interface UsearchRuntimeSourceApproval {
   readonly version: string;
   readonly sourceCommit: string;
@@ -84,4 +86,19 @@ export function usearchRuntimeApproval(
     archivePath: target.archivePath,
     binarySha256: target.binarySha256,
   });
+}
+
+/**
+ * Where a payload keeps the USearch addon beside the Node.js runtime that runs Keiko: `native/`
+ * next to the runtime's folder, two levels above `bin/node` on macOS and one above `node.exe`
+ * elsewhere. The portable payload (runtime/node, runtime/native) and the npm folder package
+ * (system/node, system/native) both use this layout (ADR-0121 D9, ADR-0164).
+ */
+export function portableUsearchBinaryPath(
+  execPath: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  return platform === "darwin"
+    ? resolve(dirname(execPath), "..", "..", "native", "usearch.node")
+    : resolve(dirname(execPath), "..", "native", "usearch.node");
 }

@@ -65,6 +65,7 @@ import type {
   GatewayStreamChunk,
   NormalizedResponse,
   OpenAIEmbeddingOutcome,
+  OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   Gateway,
@@ -90,6 +91,8 @@ import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/cont
 import { selectGatewayPromptAssembly } from "./chat-prompt-budget.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { compactChatContext } from "./chat-context-status.js";
+import { configuredEmbeddingProviders } from "./local-knowledge-handlers.js";
+import { memoryEmbeddingProviderIdentity } from "./memory-embedding.js";
 import {
   CancelledError,
   TimeoutError,
@@ -346,6 +349,39 @@ function deferred<T>(): {
   return { promise, resolve };
 }
 
+function pausedMemoryQuery(): {
+  readonly started: Promise<undefined>;
+  readonly cancel: () => void;
+  readonly request: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>;
+  readonly complete: () => void;
+  readonly releaseAfterDisconnect: () => void;
+} {
+  const response = deferred<OpenAIEmbeddingOutcome>();
+  const started = deferred<undefined>();
+  const cancel = vi.fn(() => {
+    response.resolve({ ok: false, kind: "cancelled" });
+  });
+  return {
+    started: started.promise,
+    cancel,
+    request: (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+      request.signal?.addEventListener("abort", cancel, { once: true });
+      started.resolve(undefined);
+      return response.promise;
+    },
+    complete: (): void => {
+      response.resolve({
+        ok: true,
+        value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+      });
+    },
+    releaseAfterDisconnect: (): void => {
+      // Free the fixture if the regression recurs, without crediting cleanup as an adapter abort.
+      if (cancel.mock.calls.length === 0) response.resolve({ ok: false, kind: "transport" });
+    },
+  };
+}
+
 interface StreamingModel {
   readonly model: ModelPort;
   readonly recorded: { request: GatewayCallRequest | undefined };
@@ -587,6 +623,20 @@ function insertAcceptedMemory(
     tags: [],
     createdAt: now,
     updatedAt: now,
+  });
+}
+
+function insertAcceptedMemoryWithEmbedding(vault: MemoryVaultStore, body: string): void {
+  const provider = configuredEmbeddingProviders(chatAndEmbeddingConfig())[0];
+  if (provider === undefined) {
+    throw new TypeError("Fixture embedding provider missing");
+  }
+  const memory = insertAcceptedMemory(vault, body);
+  vault.upsertEmbedding(memory.id, {
+    provider: memoryEmbeddingProviderIdentity(provider),
+    modelId: provider.modelId,
+    metric: "cosine",
+    vector: Float32Array.from([1, 0]),
   });
 }
 
@@ -2255,22 +2305,14 @@ describe("desktop chat SSE streaming handler", () => {
   });
 
   it("does not start a provider stream after cancellation during memory retrieval", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     const chatId = seedChat();
     const memoryDir = join(tmp, "stream-memory-retrieval-disconnect");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    const remembered = insertAcceptedMemory(
-      memoryVault,
-      "retrieve this candidate before streaming",
-    );
-    memoryVault.upsertEmbedding(remembered.id, {
-      provider: "test-provider",
-      modelId: "text-embedding-3-small",
-      metric: "cosine",
-      vector: Float32Array.from([1, 0]),
-    });
-    const embedding = deferred<OpenAIEmbeddingOutcome>();
-    const embeddingStarted = deferred<undefined>();
+    insertAcceptedMemoryWithEmbedding(memoryVault, "retrieve this candidate before streaming");
+    const embedding = pausedMemoryQuery();
     let streamCalls = 0;
     const model: ModelPort = {
       call: () => Promise.resolve(normalizedResponse("unused")),
@@ -2283,10 +2325,7 @@ describe("desktop chat SSE streaming handler", () => {
     const sharedDeps = deps(model, {
       config: chatAndEmbeddingConfig(),
       memoryVault,
-      localKnowledgeEmbeddingRequest: () => {
-        embeddingStarted.resolve(undefined);
-        return embedding.promise;
-      },
+      localKnowledgeEmbeddingRequest: embedding.request,
     });
     const captured = captureResWithEvents();
     const outcome = handleSendDesktopChatStream(
@@ -2302,32 +2341,33 @@ describe("desktop chat SSE streaming handler", () => {
       ),
       sharedDeps,
     );
-    await embeddingStarted.promise;
+    await expect(Promise.race([embedding.started, outcome])).resolves.toBeUndefined();
 
     captured.emitClose();
-    embedding.resolve({
-      ok: true,
-      value: {
-        vector: Float32Array.from([1, 0]),
-        modelId: "text-embedding-3-small",
-      },
-    });
+    embedding.releaseAfterDisconnect();
 
     await expect(outcome).resolves.toBe(STREAMING);
+    // The disconnect can return before the serialized memory work settles the turn.
+    await vi.waitFor(() => {
+      expect(
+        store.inspectChatTurn(
+          chatId,
+          "stream-memory-retrieval-disconnect",
+          canonicalPlainTurnIdentity(chatId, "retrieve memory before streaming", {
+            memory: { enabled: true, budgetTokens: 900 },
+          }),
+        ).kind,
+      ).toBe("retryable");
+    });
     expect(streamCalls).toBe(0);
     expect(store.listMessages(chatId)).toMatchObject([
       { role: "user", content: "retrieve memory before streaming" },
     ]);
-    expect(
-      store.inspectChatTurn(
-        chatId,
-        "stream-memory-retrieval-disconnect",
-        canonicalPlainTurnIdentity(chatId, "retrieve memory before streaming", {
-          memory: { enabled: true, budgetTokens: 900 },
-        }),
-      ).kind,
-    ).toBe("retryable");
     memoryVault.close();
+    expect(embedding.cancel).toHaveBeenCalledTimes(1);
+    expect(sink.events.filter(({ op }) => op === "embedding.memory.failed")).toMatchObject([
+      { errorKind: "cancelled", extra: { failureKind: "cancelled" } },
+    ]);
   });
 
   it("logs a streamed send rejected by the admission-time readiness observation", async () => {
@@ -2572,13 +2612,7 @@ describe("desktop chat SSE streaming handler", () => {
     const memoryDir = join(tmp, "buffered-readiness-generation-race");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    const remembered = insertAcceptedMemory(memoryVault, "buffered generation race candidate");
-    memoryVault.upsertEmbedding(remembered.id, {
-      provider: "test-provider",
-      modelId: "text-embedding-3-small",
-      metric: "cosine",
-      vector: Float32Array.from([1, 0]),
-    });
+    insertAcceptedMemoryWithEmbedding(memoryVault, "buffered generation race candidate");
     const embedding = deferred<OpenAIEmbeddingOutcome>();
     const embeddingStarted = deferred<undefined>();
     const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
@@ -2620,7 +2654,7 @@ describe("desktop chat SSE streaming handler", () => {
       },
       sharedDeps,
     );
-    await embeddingStarted.promise;
+    await expect(Promise.race([embeddingStarted.promise, outcome])).resolves.toBeUndefined();
     replaceWithReadyRuntimeConfig(holder);
     embedding.resolve({
       ok: true,
@@ -2659,13 +2693,7 @@ describe("desktop chat SSE streaming handler", () => {
     const memoryDir = join(tmp, "streamed-memory-rejection-settles");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    const remembered = insertAcceptedMemory(memoryVault, "memory rejection settle candidate");
-    memoryVault.upsertEmbedding(remembered.id, {
-      provider: "test-provider",
-      modelId: "text-embedding-3-small",
-      metric: "cosine",
-      vector: Float32Array.from([1, 0]),
-    });
+    insertAcceptedMemoryWithEmbedding(memoryVault, "memory rejection settle candidate");
     const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
     let providerCalls = 0;
     const model: ModelPort = {
@@ -2763,13 +2791,7 @@ describe("desktop chat SSE streaming handler", () => {
     const memoryDir = join(tmp, "streamed-readiness-generation-race");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    const remembered = insertAcceptedMemory(memoryVault, "streamed generation race candidate");
-    memoryVault.upsertEmbedding(remembered.id, {
-      provider: "test-provider",
-      modelId: "text-embedding-3-small",
-      metric: "cosine",
-      vector: Float32Array.from([1, 0]),
-    });
+    insertAcceptedMemoryWithEmbedding(memoryVault, "streamed generation race candidate");
     const embedding = deferred<OpenAIEmbeddingOutcome>();
     const embeddingStarted = deferred<undefined>();
     const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
@@ -2814,7 +2836,7 @@ describe("desktop chat SSE streaming handler", () => {
       },
       sharedDeps,
     );
-    await embeddingStarted.promise;
+    await expect(Promise.race([embeddingStarted.promise, outcome])).resolves.toBeUndefined();
     replaceWithReadyRuntimeConfig(holder);
     embedding.resolve({
       ok: true,
@@ -2855,13 +2877,7 @@ describe("desktop chat SSE streaming handler", () => {
     const memoryDir = join(tmp, "legacy-streamed-readiness-generation-race");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    const remembered = insertAcceptedMemory(memoryVault, "legacy streamed race candidate");
-    memoryVault.upsertEmbedding(remembered.id, {
-      provider: "test-provider",
-      modelId: "text-embedding-3-small",
-      metric: "cosine",
-      vector: Float32Array.from([1, 0]),
-    });
+    insertAcceptedMemoryWithEmbedding(memoryVault, "legacy streamed race candidate");
     const embedding = deferred<OpenAIEmbeddingOutcome>();
     const embeddingStarted = deferred<undefined>();
     const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
@@ -2899,7 +2915,7 @@ describe("desktop chat SSE streaming handler", () => {
       ),
       sharedDeps,
     );
-    await embeddingStarted.promise;
+    await expect(Promise.race([embeddingStarted.promise, outcome])).resolves.toBeUndefined();
     replaceWithReadyRuntimeConfig(holder);
     embedding.resolve({
       ok: true,
@@ -2982,13 +2998,7 @@ describe("desktop chat SSE streaming handler", () => {
     const memoryDir = join(tmp, "legacy-buffered-cancel-during-memory");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    const remembered = insertAcceptedMemory(memoryVault, "legacy buffered cancel candidate");
-    memoryVault.upsertEmbedding(remembered.id, {
-      provider: "test-provider",
-      modelId: "text-embedding-3-small",
-      metric: "cosine",
-      vector: Float32Array.from([1, 0]),
-    });
+    insertAcceptedMemoryWithEmbedding(memoryVault, "legacy buffered cancel candidate");
     let providerCalls = 0;
     const model: ModelPort = {
       call: () => {
@@ -3042,6 +3052,122 @@ describe("desktop chat SSE streaming handler", () => {
     memoryVault.close();
   });
 
+  it("cancels the buffered query adapter on disconnect and discards the legacy user row", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const chatId = seedChat();
+    const memoryDir = join(tmp, "legacy-buffered-query-disconnect");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    insertAcceptedMemoryWithEmbedding(memoryVault, "buffered query cancellation candidate");
+    const embedding = pausedMemoryQuery();
+    const call = vi.fn(() => Promise.resolve(normalizedResponse("must not run")));
+    const config = chatAndEmbeddingConfig();
+    const sharedDeps = deps(
+      { call },
+      {
+        config,
+        gatewayConfig: readyRuntimeGatewayConfig(config),
+        memoryVault,
+        localKnowledgeEmbeddingRequest: embedding.request,
+      },
+    );
+    const messagesBefore = store.countMessages(chatId);
+    const captured = captureResWithEvents();
+    const outcome = handleSendDesktopChat(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          content: "retrieve memory before buffered response",
+          memory: { enabled: true, budgetTokens: 900, context: {} },
+        }),
+        captured.res,
+      ),
+      sharedDeps,
+    );
+    await expect(Promise.race([embedding.started, outcome])).resolves.toBeUndefined();
+    captured.emitClose();
+    embedding.releaseAfterDisconnect();
+
+    await expect(outcome).resolves.toMatchObject({
+      status: 499,
+      body: { error: { code: "REQUEST_CANCELLED" } },
+    });
+    await vi.waitFor(() => {
+      expect(store.countMessages(chatId)).toBe(messagesBefore);
+    });
+    expect(call).not.toHaveBeenCalled();
+    memoryVault.close();
+    expect(embedding.cancel).toHaveBeenCalledTimes(1);
+    expect(sink.events.filter(({ op }) => op === "embedding.memory.failed")).toMatchObject([
+      { errorKind: "cancelled", extra: { failureKind: "cancelled" } },
+    ]);
+  });
+
+  it.each([true, false] as const)(
+    "handles regeneration query lifetime with disconnect=%s",
+    async (disconnect) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const chatId = seedChat();
+      seedMessage(chatId, "user", "original regeneration question");
+      seedMessage(chatId, "assistant", "original regeneration answer");
+      const assistant = store.listMessages(chatId).at(-1);
+      if (assistant === undefined) throw new Error("missing assistant fixture");
+      const memoryDir = join(tmp, "regeneration-query-disconnect");
+      mkdirSync(memoryDir);
+      const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+      insertAcceptedMemoryWithEmbedding(memoryVault, "regeneration cancellation candidate");
+      const embedding = pausedMemoryQuery();
+      const call = vi.fn(() => Promise.resolve(normalizedResponse("replacement answer")));
+      const config = chatAndEmbeddingConfig();
+      const captured = captureResWithEvents();
+      const before = store.listMessages(chatId);
+      const outcome = handleRegenerateDesktopChat(
+        routeContext(
+          makeReq({
+            chatId,
+            projectPath: projectDir,
+            assistantMessageId: assistant.id,
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+          captured.res,
+        ),
+        deps(
+          { call },
+          {
+            config,
+            gatewayConfig: readyRuntimeGatewayConfig(config),
+            memoryVault,
+            localKnowledgeEmbeddingRequest: embedding.request,
+          },
+        ),
+      );
+      try {
+        await expect(Promise.race([embedding.started, outcome])).resolves.toBeUndefined();
+        if (disconnect) {
+          captured.emitClose();
+          embedding.releaseAfterDisconnect();
+        } else {
+          embedding.complete();
+        }
+        await expect(outcome).resolves.toMatchObject({ status: disconnect ? 499 : 200 });
+        expect(embedding.cancel).toHaveBeenCalledTimes(disconnect ? 1 : 0);
+        expect(call).toHaveBeenCalledTimes(disconnect ? 0 : 1);
+        if (disconnect) expect(store.listMessages(chatId)).toEqual(before);
+        else expect(store.listMessages(chatId).at(-1)?.content).toBe("replacement answer");
+        expect(sink.events.filter(({ op }) => op === "embedding.memory.failed")).toMatchObject(
+          disconnect ? [{ errorKind: "cancelled", extra: { failureKind: "cancelled" } }] : [],
+        );
+      } finally {
+        embedding.releaseAfterDisconnect();
+        await outcome.catch(() => undefined);
+        memoryVault.close();
+      }
+    },
+  );
+
   it("rejects regeneration when the gateway generation changes during memory retrieval", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));
@@ -3053,13 +3179,7 @@ describe("desktop chat SSE streaming handler", () => {
     const memoryDir = join(tmp, "regenerate-readiness-generation-race");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    const remembered = insertAcceptedMemory(memoryVault, "regeneration generation race candidate");
-    memoryVault.upsertEmbedding(remembered.id, {
-      provider: "test-provider",
-      modelId: "text-embedding-3-small",
-      metric: "cosine",
-      vector: Float32Array.from([1, 0]),
-    });
+    insertAcceptedMemoryWithEmbedding(memoryVault, "regeneration generation race candidate");
     const embedding = deferred<OpenAIEmbeddingOutcome>();
     const embeddingStarted = deferred<undefined>();
     const holder = readyRuntimeGatewayConfig(chatAndEmbeddingConfig());
@@ -3099,7 +3219,7 @@ describe("desktop chat SSE streaming handler", () => {
       },
       sharedDeps,
     );
-    await embeddingStarted.promise;
+    await expect(Promise.race([embeddingStarted.promise, outcome])).resolves.toBeUndefined();
     replaceWithReadyRuntimeConfig(holder);
     embedding.resolve({
       ok: true,
@@ -3137,13 +3257,7 @@ describe("desktop chat SSE streaming handler", () => {
     const memoryDir = join(tmp, "buffered-prompt-snapshot");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    const remembered = insertAcceptedMemory(memoryVault, "snapshot memory candidate");
-    memoryVault.upsertEmbedding(remembered.id, {
-      provider: "test-provider",
-      modelId: "text-embedding-3-small",
-      metric: "cosine",
-      vector: Float32Array.from([1, 0]),
-    });
+    insertAcceptedMemoryWithEmbedding(memoryVault, "snapshot memory candidate");
     const embedding = deferred<OpenAIEmbeddingOutcome>();
     const embeddingStarted = deferred<undefined>();
     let recorded: GatewayRequest | undefined;
@@ -3176,7 +3290,7 @@ describe("desktop chat SSE streaming handler", () => {
       ),
       sharedDeps,
     );
-    await embeddingStarted.promise;
+    await expect(Promise.race([embeddingStarted.promise, outcome])).resolves.toBeUndefined();
     seedMessage(chatId, "user", future);
     embedding.resolve({
       ok: true,
@@ -3199,13 +3313,7 @@ describe("desktop chat SSE streaming handler", () => {
     const memoryDir = join(tmp, "streamed-prompt-snapshot");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    const remembered = insertAcceptedMemory(memoryVault, "streamed snapshot memory candidate");
-    memoryVault.upsertEmbedding(remembered.id, {
-      provider: "test-provider",
-      modelId: "text-embedding-3-small",
-      metric: "cosine",
-      vector: Float32Array.from([1, 0]),
-    });
+    insertAcceptedMemoryWithEmbedding(memoryVault, "streamed snapshot memory candidate");
     const embedding = deferred<OpenAIEmbeddingOutcome>();
     const embeddingStarted = deferred<undefined>();
     let recorded: GatewayRequest | undefined;
@@ -3241,7 +3349,7 @@ describe("desktop chat SSE streaming handler", () => {
       ),
       sharedDeps,
     );
-    await embeddingStarted.promise;
+    await expect(Promise.race([embeddingStarted.promise, outcome])).resolves.toBeUndefined();
     seedMessage(chatId, "user", future);
     embedding.resolve({
       ok: true,
@@ -5245,4 +5353,44 @@ it("publishes a complete code block larger than the real HTTP high-water mark to
   expect(store.listMessages(chatId).find((message) => message.role === "assistant")?.content).toBe(
     source,
   );
+});
+
+it("stops publishing fragments when the client disconnects between HTTP writes", async () => {
+  const chatId = seedChat();
+  const source = "```text\n" + "synthetic content\n".repeat(96) + "```\n";
+  const captured = captureResWithEvents();
+  Object.defineProperty(captured.res, "writableHighWaterMark", { value: 256 });
+  const write = captured.res.write.bind(captured.res);
+  let disconnectScheduled = false;
+  vi.spyOn(captured.res, "write").mockImplementation((chunk: string | Uint8Array) => {
+    const accepted = write(chunk);
+    if (typeof chunk === "string" && chunk.startsWith("event: token\n") && !disconnectScheduled) {
+      disconnectScheduled = true;
+      setImmediate(captured.emitClose);
+    }
+    return accepted;
+  });
+  const model: ModelPort = {
+    call: () => Promise.resolve(normalizedResponse(source)),
+    async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+      yield { type: "delta", token: source };
+      await Promise.resolve();
+      yield { type: "done", response: normalizedResponse(source) };
+    },
+  };
+  const outcome = await handleSendDesktopChatStream(
+    routeContext(
+      makeReq({ chatId, projectPath: projectDir, content: "Show the example" }),
+      captured.res,
+    ),
+    deps(model),
+  );
+  expect(outcome).toBe(STREAMING);
+  await vi.waitFor(() => {
+    expect(captured.ended).toBe(true);
+  });
+  const events = parseSse(captured.writes);
+  expect(events.filter((entry) => entry.event === "token")).toHaveLength(1);
+  expect(events.some((entry) => entry.event === "done")).toBe(false);
+  expect(store.listMessages(chatId).map((message) => message.role)).toEqual(["user"]);
 });

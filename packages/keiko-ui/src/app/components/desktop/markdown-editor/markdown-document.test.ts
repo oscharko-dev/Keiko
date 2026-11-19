@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   joinMarkdownDocument,
   parseMarkdownDocument,
+  replaceMarkdownBody,
+  replaceMarkdownFrontMatter,
   serializeMarkdownDocument,
   splitMarkdownDocument,
   supportsFormattedEditing,
@@ -14,7 +16,71 @@ afterEach(() => {
   diagnostics.report.mockClear();
 });
 
+describe("replaceMarkdownFrontMatter", () => {
+  it("replaces only the front matter and keeps the fences, line endings and body as written", () => {
+    expect(replaceMarkdownFrontMatter("---\na: 1\n---\n# Body\n", "a: 2\nb: 3")).toBe(
+      "---\na: 2\nb: 3\n---\n# Body\n",
+    );
+    expect(replaceMarkdownFrontMatter("---\r\na: 1\r\n---\r\n# Body\r\n", "a: 2")).toBe(
+      "---\r\na: 2\r\n---\r\n# Body\r\n",
+    );
+    expect(replaceMarkdownFrontMatter("---\na: 1\n---", "")).toBe("---\n\n---");
+  });
+
+  it("leaves a document without front matter unchanged", () => {
+    expect(replaceMarkdownFrontMatter("# Body\n---\na: 1\n---\n", "b: 2")).toBe(
+      "# Body\n---\na: 1\n---\n",
+    );
+  });
+});
+
+describe("replaceMarkdownBody", () => {
+  it("keeps the fences with their trailing blanks, the line endings and the front matter (UyK)", () => {
+    expect(replaceMarkdownBody("---  \r\na: 1\r\n---\t\r\n\r\n# Old\r\n", "# New\r\n")).toBe(
+      "---  \r\na: 1\r\n---\t\r\n\r\n# New\r\n",
+    );
+    expect(replaceMarkdownBody("---\na: 1\n---\n# Old", "# New")).toBe("---\na: 1\n---\n# New");
+    expect(replaceMarkdownBody("---\na: 1\n---\n# Old", "")).toBe("---\na: 1\n---\n");
+    expect(replaceMarkdownBody("---\na: 1\n---", "# New")).toBe("---\na: 1\n---\n# New");
+    expect(replaceMarkdownBody("# Old", "# New")).toBe("# New");
+  });
+});
+
+describe("front matter fences match the contracts parser (review P92, P98, P-H)", () => {
+  it("closes an empty block at the first fence and never reaches a later one (P92)", () => {
+    const text = "---  \n---\nDraft\n---\nText";
+    expect(splitMarkdownDocument(text)).toEqual({ frontMatter: "", body: "Draft\n---\nText" });
+    expect(replaceMarkdownFrontMatter(text, "a: 1")).toBe("---  \na: 1\n---\nDraft\n---\nText");
+    expect(replaceMarkdownFrontMatter(text, "")).toBe(text);
+    expect(splitMarkdownDocument("---\na: 1\n--- x\nb\n---\n").frontMatter).toBe("a: 1\n--- x\nb");
+  });
+
+  it("keeps the blank separator when the body is cleared (P98)", () => {
+    expect(replaceMarkdownBody("---\r\na: 1\r\n---\r\n\r\nOld", "")).toBe(
+      "---\r\na: 1\r\n---\r\n\r\n",
+    );
+    expect(replaceMarkdownBody("---\na: 1\n---", "")).toBe("---\na: 1\n---");
+  });
+
+  it("keeps a newly typed leading newline through the next split (P-H)", () => {
+    const next = replaceMarkdownBody("---\na: 1\n---\nOld", "\nOld");
+    expect(next).toBe("---\na: 1\n---\n\n\nOld");
+    expect(splitMarkdownDocument(next).body).toBe("\nOld");
+    const crlf = replaceMarkdownBody("---\r\na: 1\r\n---\r\nOld", "\r\nOld");
+    expect(splitMarkdownDocument(crlf).body).toBe("\r\nOld");
+  });
+});
+
 describe("splitMarkdownDocument / joinMarkdownDocument", () => {
+  it("opens the front matter of a fence with trailing blanks, as the template parser does (UyK)", () => {
+    expect(splitMarkdownDocument("---  \na: 1\n---\nbody")).toEqual({
+      frontMatter: "a: 1",
+      body: "body",
+    });
+    expect(splitMarkdownDocument("---\t\r\na: 1\r\n---\r\nbody").frontMatter).toBe("a: 1");
+    expect(splitMarkdownDocument("--- x\na: 1\n---\nbody").frontMatter).toBeUndefined();
+  });
+
   it("returns the whole text as body when there is no front matter", () => {
     expect(splitMarkdownDocument("# Title\n\ntext")).toEqual({
       frontMatter: undefined,

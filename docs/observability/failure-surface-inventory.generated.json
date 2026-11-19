@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "aaab8226ce64ce40cc6f3882925506f8575e28cf4c3235e5b5bcb815b508a990"
+    "catalogDigest": "a5ebb126466a622a09845947ec1faed0c7ca1ad14a10ff8e2d8bcbe100a99c79"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 713,
-    "proofCount": 736,
-    "resolvedProofCount": 736,
-    "failureClassCount": 406,
+    "operationCount": 720,
+    "proofCount": 743,
+    "resolvedProofCount": 743,
+    "failureClassCount": 411,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -90,6 +90,7 @@
       "operations": [
         "cli.lifecycle.browser-handoff",
         "cli.lifecycle.health",
+        "cli.lifecycle.launch-order",
         "cli.lifecycle.native-owner",
         "cli.lifecycle.stop-escalated",
         "cli.lifecycle.stop-escalation-failed",
@@ -148,6 +149,8 @@
         "chat.tool-turn.ended",
         "chat.tool-turn.result-condensed",
         "chat.turn.started",
+        "figma.snapshot.capture-failed",
+        "figma.snapshot.captured",
         "git-change.chat.apply",
         "git-change.chat.description-target.denied",
         "http.request.body.cancelled",
@@ -630,8 +633,10 @@
         "memory-vault.store.quarantined",
         "memory.capture.decision",
         "memory.capture.novelty-gate",
+        "memory.edit.settled",
         "memory.embedding.invalidated",
         "memory.embedding.invalidation-failed",
+        "memory.embedding.refresh.skipped",
         "memory.embedding.store-rejected",
         "memory.explicit.forget",
         "memory.explicit.remember",
@@ -640,6 +645,8 @@
         "memory.learn.pass.settled",
         "memory.learn.pass.started",
         "memory.learn.relation",
+        "memory.maintenance.candidates.selected",
+        "memory.vault.records.selected",
         "repository.fingerprint-diff.completed",
         "search.answer.assessed",
         "search.citations.reconciled",
@@ -944,6 +951,7 @@
     "cli-audit": ["runtime-packages.dependency-failure"],
     "cli-gateway-service": ["runtime-packages.dependency-failure"],
     "provisioned-config-adoption": ["runtime-packages.dependency-failure"],
+    "launch-order-fence": ["ui.dependency-failure"],
     "windows-gateway-service": ["tools-workflows.dependency-failure"],
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
@@ -1095,6 +1103,7 @@
     "embedding-transport-unavailable": ["memory-knowledge.dependency-failure"],
     "evidence-persistence": ["tools-workflows.dependency-failure"],
     "evidence-retention": ["runtime-packages.dependency-failure"],
+    "figma-snapshot": ["bff.dependency-failure"],
     "gateway-chat-call": ["model-gateway.dependency-failure"],
     "gateway-chat-provider-call": ["model-gateway.dependency-failure"],
     "gateway-circuit-breaker": ["model-gateway.rejection"],
@@ -1196,6 +1205,9 @@
     "lsp-process-spawn": ["editor-delivery.dependency-failure"],
     "lsp-process-termination": ["editor-delivery.crash"],
     "chat-content-policy": ["lifecycle-crash.dependency-failure"],
+    "memory-maintenance-selection": ["memory-knowledge.dependency-failure"],
+    "memory-vault-selection": ["memory-knowledge.dependency-failure"],
+    "memory-edit-conflict": ["memory-knowledge.dependency-failure"],
     "memory-audit-state-cache": ["lifecycle-crash.dependency-failure"],
     "memory-capture-novelty": ["memory-knowledge.dependency-failure"],
     "memory-explicit-statement": ["memory-knowledge.dependency-failure"],
@@ -1556,6 +1568,7 @@
       "packages/keiko-cli/src/lifecycle-health-owner.test.ts",
       "packages/keiko-cli/src/lifecycle-start-window.test.ts"
     ],
+    "cli.lifecycle.launch-order.outcome": ["packages/keiko-cli/src/lifecycle-launch-order.test.ts"],
     "cli.lifecycle.native-owner.outcome": [
       "packages/keiko-cli/src/lifecycle-diagnostics.test.ts",
       "packages/keiko-cli/src/lifecycle-native-activity.test.ts"
@@ -2319,6 +2332,12 @@
       "packages/keiko-model-gateway/src/openai-embedding-adapter.logging.test.ts"
     ],
     "evidence.retention.line": ["packages/keiko-server/src/evidence-retention-log.test.ts"],
+    "figma.snapshot.capture-failed.line": [
+      "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.test.ts"
+    ],
+    "figma.snapshot.captured.line": [
+      "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.test.ts"
+    ],
     "gateway.catalog.automatic.completed.line": [
       "packages/keiko-server/src/gateway-startup-catalog.test.ts"
     ],
@@ -2917,10 +2936,12 @@
       "packages/keiko-server/src/voice-recap.test.ts"
     ],
     "memory.capture.novelty-gate.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
+    "memory.edit.settled.line": ["packages/keiko-server/src/memory-handlers.test.ts"],
     "memory.embedding.invalidated.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
     "memory.embedding.invalidation-failed.line": [
       "packages/keiko-server/src/memory-embedding.test.ts"
     ],
+    "memory.embedding.refresh.skipped.line": ["packages/keiko-server/src/memory-handlers.test.ts"],
     "memory.embedding.store-rejected.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
     "memory.explicit.forget.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
     "memory.explicit.remember.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
@@ -2929,6 +2950,10 @@
     "memory.learn.pass.settled.line": ["packages/keiko-server/src/memory-learning.test.ts"],
     "memory.learn.pass.started.line": ["packages/keiko-server/src/memory-learning.test.ts"],
     "memory.learn.relation.line": ["packages/keiko-server/src/memory-learned-facts.test.ts"],
+    "memory.maintenance.candidates.selected.line": [
+      "packages/keiko-server/src/memory-maintenance-handlers.test.ts"
+    ],
+    "memory.vault.records.selected.line": ["packages/keiko-server/src/memory-handlers.test.ts"],
     "native-file-dialog.selection.projected.counts": [
       "packages/keiko-server/src/native-file-dialog/route.test.ts"
     ],

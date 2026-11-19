@@ -198,7 +198,17 @@ to answer stays a memory. Everything learned from natural
 conversation follows D2 (accepted at once unless an operator restricts it); capture-from-conversation
 follows the same rule.
 Such a statement lands in the private user scope unless it names a project or workspace, and the
-learner does not read its turn, so it cannot store the statement itself.
+learner does not read its turn, so it cannot store the statement itself. A German scoped save can
+introduce its fact with a colon or with a comma followed by “dass”. “Speichere über Nacht die
+Protokolle” remains a file task. A withdrawal such as “Actually, do not forget it” preserves the
+memory. In “Vergiss meine Telefonnummer und sag bitte nicht …”, the negation governs the separate
+request about what to say, and the named memory is forgotten. A directly remembered present-tense
+preference with a stated end remains current through the local end of that day. An already elapsed
+preference is refused. A new turn that restates a yearless preference after its previous interval
+ended can start a new interval. Replaying the same explicit turn preserves its original interval.
+Deferred learning resolves calendar expressions on the source turn's day and checks eligibility on
+the processing day. Independent statements in a sentence keep their own deadlines. Dates in explicitly
+remembered historical events remain part of the event.
 
 Only a clear statement acts this way, because it changes memory with no question. "Merke dir" and
 "Remember" count, "Speichere" and "Notiere" only with "dass" or a colon, and "Lösche" only with "die
@@ -236,6 +246,10 @@ asked a question or said a fact. Both touches name their chat, so another chat o
 touching the memory in the same window never makes it "das", and a touch without a chat never counts.
 After any other sentence the memory an answer happened to use is not "das". Every chat path reads the last turn from the conversation, grounded
 turns included; with no earlier turn nothing was left behind and no older memory is "das".
+For one capture decision, its timestamp, source id and fallback text come from one snapshot of at
+most two latest user rows; a matching latest row of the current turn is skipped. An unmarked user
+statement is still erasable by this explicit request. A later capture decision resolves the history
+again, so an intervening change never reuses an earlier decision's snapshot.
 If that turn left nothing, "das" is the statement before it, not an older memory; a question or a
 pasted document is no such statement, so the person is asked:
 `recordForgottenStatements` writes a tombstone in each scope of the conversation, so a later
@@ -264,7 +278,15 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   person's turns it came from (`sourceMessageIds`). A decision keeps its reason in the key-value
   payload, and a stated end in the future closes validity; both are parsed from the words, never
   taken from the model. A stated end that has passed means the fact is over, so nothing is stored.
+  A named calendar day such as “until March 14, 2027” or “bis zum 14. März 2027” ends on that local
+  day. A day given without a year uses its next calendar occurrence, including February 29.
 - **Admission.** The span appears verbatim in the person's message and ends at a clause boundary.
+  A bare announcement such as "Ich habe eine neue Regel für meine Berichte" or "I have a new rule
+  for my reports" states no rule content and is dropped as `not-entailed`. A concrete rule,
+  restriction or exception in the admitted span is kept under the existing checks. Dropping the
+  announcement does not remove the person's turn: it still supplies pronoun context when the next
+  turn states the actual rule. An announcement-only quote borrows no unquoted content from later
+  in the message; the concrete rule must itself be evidenced.
   A span that leaves out the first words of its clause ("decided as a team to release …" out of "We
   decided as a team to release …") opens at the start of that clause, at most as far back as a span
   may be long, and every check reads that whole clause, never the fragment; the end is not moved, so
@@ -357,7 +379,11 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   another turn changed it while the capture ran, only that replacement is refused; the turn's other
   facts still settle. A clear statement whose learned predecessor changed while its embedding was
   computed is stored beside it and replaces nothing.
-- **Reinforcement.** Only the person strengthens a memory: saying it again records a confirmation.
+- **Reinforcement.** Only the person strengthens a memory: saying it again in a separate message
+  records a confirmation. Paraphrases learned from the same message merge without reinforcement.
+  A delayed learned confirmation attributes conversation references to its source turn's timestamp
+  and preserves a newer confirmation already recorded there. Access recency and audit timestamps
+  retain the processing clock, so a delayed repeat cannot become an unrelated later turn's "that".
   An answer that repeats a memory records a use for "Vergiss das" and never a reinforcement, so a
   false memory cannot entrench itself by being repeated back.
 - **Forgotten while learning.** A capture still running when the person forgot that turn's
@@ -382,11 +408,17 @@ a measured pause without Chat work (default 15 s, `KEIKO_MEMORY_LEARNING_IDLE_MS
 opens another Chat, at startup, on a backoff retry when the model was unavailable, and as a
 continuation when a pass reached its bounds. Every serialized Chat turn is foreground work: a pass
 does not start while one runs, and a starting turn aborts a running pass down to the provider
-request. A turn written with memory off is never learned. A clear statement (D4b) still acts at
-message time; a forget the pass reaches is applied again to facts the same pass learned from the
-Chat's earlier, still pending messages. `memory.learn.pass.started` and `memory.learn.pass.settled`
-record each pass body-free. Triggers, bounds and the measurement:
+request. A turn written with memory off is never learned. Pronoun resolution uses the immediately
+preceding user message only if it was written with memory on. An unmarked message blocks this
+lookup. A clear statement (D4b) still acts at message time. The pass reapplies a forget to facts it
+learned from the Chat's earlier, still pending messages. An audit or storage failure leaves the
+forget pending for a retry. `memory.learn.pass.started` and
+`memory.learn.pass.settled` record each pass body-free. Triggers, bounds and the measurement:
 [MemoriaViva learning passes](../memory/memoria-viva-learning-passes.md).
+Replaying a stored source message does not create or reinforce the same fact again. Its persisted
+source identity is checked within the conversation's scopes independently of the model's bounded
+comparison window, including facts later superseded or expired. A person's rejection or forget
+still takes precedence and records a refusal. Other facts stated by the same source remain learnable.
 A private fact the learner labels `identity` or `constraint` carries the retention hint
 `policyKey: "standing"`, which places it in the standing profile every Chat answer receives (#4228);
 membership, order and caps:

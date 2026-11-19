@@ -24,7 +24,7 @@ import {
   seedBrokenV12MemoryVault,
 } from "../../../tests/support/memory-migration-fixture.js";
 import { insertMemoryRow } from "./memories.js";
-import { makeRecord, memId, TEST_CIPHER } from "./_support.js";
+import { makeRecord, memId, rewindPlaintextFixtureSchema, TEST_CIPHER } from "./_support.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
 import {
   expectActivityLogProof,
@@ -340,26 +340,7 @@ describe("openMemoryDatabase — memory-vault.store.encryption-migrated wiring",
     const db = new DatabaseSync(dbPath);
     insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_CIPHER);
     db.prepare("UPDATE memories SET body = ? WHERE id = ?").run("plaintext body", "m1");
-    db.exec("ALTER TABLE memories DROP COLUMN evidence_span");
-    db.exec("ALTER TABLE memories DROP COLUMN source_message_ids_json");
-    db.exec("DROP TABLE memory_conversation_touches");
-    db.exec("DROP TABLE memory_access");
-    db.exec("DROP TABLE memory_tombstones");
-    db.exec(`
-      CREATE TABLE memory_tombstones (
-        id TEXT NOT NULL PRIMARY KEY,
-        memory_id TEXT NOT NULL,
-        scope_kind TEXT NOT NULL,
-        scope_coordinate TEXT NOT NULL,
-        type TEXT NOT NULL,
-        forgotten_at INTEGER NOT NULL,
-        forgetter_surface TEXT NOT NULL,
-        reason TEXT
-      ) STRICT;
-      CREATE INDEX idx_tombstones_scope ON memory_tombstones(scope_kind, scope_coordinate);
-      CREATE INDEX idx_tombstones_memory_id ON memory_tombstones(memory_id);
-    `);
-    db.exec("PRAGMA user_version = 1");
+    rewindPlaintextFixtureSchema(db);
     db.close();
   }
 

@@ -4,7 +4,7 @@
 // enough that a single barrel is the lowest-friction surface for #207-#214 consumers.
 
 export { KEIKO_MEMORY_VAULT_VERSION } from "./version.js";
-export { createMemoryVault } from "./vault.js";
+export { createMemoryVault, MEMORY_CENTER_PAGE_LIMIT } from "./vault.js";
 export {
   MemoryStorageError,
   MemoryStoragePreconditionError,
@@ -39,6 +39,8 @@ export type {
   MemoryConversationTouch,
   MemoryBatchDelete,
   MemoryBatchUpdate,
+  MemoryCenterPage,
+  MemoryCenterPageOptions,
   MemoryDeleteResult,
   MemoryEmbeddingInput,
   MemoryEmbeddingMetric,

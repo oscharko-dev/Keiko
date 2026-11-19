@@ -1,4 +1,4 @@
-# Public API surface — 1.5.2
+# Public API surface — 1.5.3
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -110,6 +110,20 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 `KEIKO_PRODUCT_VERSION`.
 
 ## Stability notes
+
+- 1.5.3: root exports and CLI entrypoints remain stable. Every stable `latest` release carries the
+  standalone folder package of each desktop target as a release asset: `keiko-macos-arm64.standalone.zip`,
+  `keiko-macos-x64.standalone.zip` and `keiko-windows-x64.standalone.zip`. The npm folder package is
+  not a release asset; an administrator builds it from the published release as described in
+  [the npm folder package guide](release/standalone-npm-package.md#build-a-package). The Jira
+  template API adds `POST /api/skills/jira-templates/options` for guided template editing.
+  `keiko start` and `keiko restart` accept `--launch-order MS`, and `keiko stop` accepts
+  `--unless-launched-after MS`, which leaves Keiko open with exit code 3 when a start with a later
+  order opened it; a start without `--launch-order` is ordered by the time it began. Every start
+  records its order in the state directory (`ui.launch-order`), and a stop clears it. The npm folder
+  package's start files order their starts and Stops this way. Figma
+  Snapshot records without a provenance version stay readable. Existing stores carry forward
+  unchanged.
 
 - 1.5.2: root exports remain stable. `keiko start` accepts `--provisioned-config PATH`, which adopts an
   administrator's gateway configuration for the standalone folder package; `keiko portable launch`

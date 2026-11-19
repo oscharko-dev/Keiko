@@ -19,6 +19,7 @@ import type { ReactNode, RefObject } from "react";
 import Link from "next/link";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import { fetchMemories, type MemoryListFilters, type MemoryListResponse } from "@/lib/memory-api";
+import { subscribeMemoryVaultViewChanges } from "@/lib/memory-vault-view-changes";
 
 import { NATIVE_BLOCK_STYLE } from "../../components/desktop/native-element-styles";
 import { formatError } from "./format-error";
@@ -388,6 +389,24 @@ export function MemoryListContent({
   useEffect(() => {
     void load(filters);
   }, [filters, load]);
+
+  useEffect(
+    () =>
+      subscribeMemoryVaultViewChanges((change) => {
+        if (change.kind === "removed") {
+          setMemories((current) => current.filter((record) => !change.ids.includes(record.id)));
+        } else if (change.kind === "edited") {
+          const contentUnavailable = t("memoria.journal.contentUnavailable");
+          setMemories((current) =>
+            current.map((record) =>
+              change.ids.includes(record.id) ? { ...record, body: contentUnavailable } : record,
+            ),
+          );
+        }
+        void load(filters);
+      }),
+    [filters, load, t],
+  );
 
   const listRef = useRef<HTMLElement | null>(null);
   const reloadShownList = useCallback((): void => {

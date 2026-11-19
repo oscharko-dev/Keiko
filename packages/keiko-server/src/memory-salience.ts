@@ -24,7 +24,9 @@ import { findConfiguredCapability, type ResponseFormat } from "@oscharko-dev/kei
 import {
   extractSalientMemories,
   isExplicitMemoryStatement,
+  mayResolvePreviousTurn,
   memoryTextSecretEgressRejectionReason,
+  SALIENCE_FACT_TYPES,
   type CaptureContext,
   type KnownFact,
   type LearnedFactRelation,
@@ -45,6 +47,7 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import type { MemoryLearningPosition } from "./store/chatMemoryLearning.js";
 import {
   insertSalienceMemoryWithNoveltyGate,
   type NoveltyInsertOptions,
@@ -125,7 +128,7 @@ const SALIENCE_RESPONSE_FORMAT: ResponseFormat = {
             body: { type: "string", minLength: 1 },
             evidence: { type: "string", minLength: 1 },
             about: { type: "string", enum: ["self", "team", "other", "unclear"] },
-            type: { type: "string", enum: ["preference", "fact", "decision", "procedural"] },
+            type: { type: "string", enum: SALIENCE_FACT_TYPES },
             relation: { type: "string", enum: ["new", "same", "update", "contradiction"] },
             related: { type: ["integer", "null"] },
           },
@@ -153,7 +156,12 @@ function gatherKnownFacts(
   const known: KnownFact[] = [];
   const seen = new Map<MemoryId, SeenFact>();
   for (const scope of conversationMemoryScopes(context)) {
-    for (const record of vault.listMemoriesByScope(scope, { status: ["accepted", "proposed"] })) {
+    const records = vault.listMemoriesByScope(scope, {
+      status: ["accepted", "proposed"],
+      sensitivity: ["public"],
+      limit: MAX_KNOWN_FACTS - known.length,
+    });
+    for (const record of records) {
       if (record.provenance.sensitivity !== "public") continue;
       seen.set(record.id, { status: record.status, updatedAt: record.updatedAt });
       known.push({
@@ -469,12 +477,19 @@ function noveltyOptions(
   vault: MemoryVaultStore,
   relation: LearnedFactRelation,
   trace: LearningTrace,
-  onSuperseded: (decision: LearnedRelationDecision) => void,
+  onDecision: (decision: LearnedRelationDecision) => void,
 ): NoveltyInsertOptions {
   const { seen } = trace;
   // The person may forget the turn while its embedding is computed.
   const refusedSinceStart = (record: MemoryRecord): MemoryCaptureSuppressionReason | null =>
     personRefused(vault, record, trace.statement);
+  const confirmDuplicate = (id: MemoryId): void => {
+    const counted =
+      !restsOn(vault.getMemory(id), trace.sourceMessageId) &&
+      recordLearningConfirmation(vault, id, trace);
+    onDecision(counted ? "confirmed" : "merged");
+  };
+  const common = { signal: trace.signal, refusedSinceStart, confirmDuplicate };
   // A paraphrased repeat with another end date replaces the fact it repeats, if the learner may.
   const replaceDuplicate = (
     record: MemoryRecord,
@@ -483,16 +498,16 @@ function noveltyOptions(
     const seenFact = seen.get(duplicateOf);
     if (seenFact === undefined || !isReplaceable(vault.getMemory(duplicateOf))) return undefined;
     const applied = applyLearnedSupersession(vault, record, duplicateOf, seenFact);
-    if (applied.pendingApproval) onSuperseded("supersession-proposed");
-    else if (applied.superseded !== undefined) onSuperseded("superseded");
+    if (applied.pendingApproval) onDecision("supersession-proposed");
+    else if (applied.superseded !== undefined) onDecision("superseded");
     return applied.record;
   };
   if (relation.kind === "same-unconfirmed") {
-    return { onlyConfirm: true, refusedSinceStart, replaceDuplicate };
+    return { ...common, onlyConfirm: true, replaceDuplicate };
   }
-  if (relation.kind === "new") return { refusedSinceStart, replaceDuplicate };
+  if (relation.kind === "new") return { ...common, replaceDuplicate };
   return {
-    refusedSinceStart,
+    ...common,
     replaces: relation.memoryId,
     insert: (record): MemoryRecord => {
       const applied = applyLearnedSupersession(
@@ -501,8 +516,8 @@ function noveltyOptions(
         relation.memoryId,
         seen.get(relation.memoryId),
       );
-      if (applied.pendingApproval) onSuperseded("supersession-proposed");
-      else if (applied.superseded !== undefined) onSuperseded("superseded");
+      if (applied.pendingApproval) onDecision("supersession-proposed");
+      else if (applied.superseded !== undefined) onDecision("superseded");
       return applied.record;
     },
   };
@@ -516,11 +531,27 @@ interface LearningTrace {
   // The person's message the turn rests on. A pass that learns it again, after a stop between the
   // vault write and the Chat's learned position, adds nothing it already learned from it (#4213).
   readonly sourceMessageId?: string | undefined;
+  readonly sourcePosition?: MemoryLearningPosition | undefined;
   readonly conversationId: string;
+  readonly scopes: readonly MemoryScope[];
+  readonly signal: AbortSignal;
   // What the person said in the turn, which they may have forgotten while this capture was running.
   readonly statement: string;
   // How the facts the learner compared with stood before the model call.
   readonly seen: ReadonlyMap<MemoryId, SeenFact>;
+}
+
+function recordLearningConfirmation(
+  vault: MemoryVaultStore,
+  id: MemoryId,
+  trace: LearningTrace,
+): boolean {
+  const nowMs = Date.now();
+  if (trace.sourcePosition !== undefined) {
+    return vault.recordLearnedConfirmation(id, trace.conversationId, trace.sourcePosition, nowMs);
+  }
+  vault.recordAccess([id], nowMs, trace.conversationId);
+  return true;
 }
 
 function recordRelation(
@@ -562,8 +593,8 @@ function confirmKnownFact(
     recordRelation(outcome, "refused", trace);
     return { action: null, disposition: "none" };
   }
-  vault.recordAccess([outcome.memoryId], Date.now(), trace.conversationId);
-  recordRelation(outcome, "confirmed", trace);
+  const counted = recordLearningConfirmation(vault, outcome.memoryId, trace);
+  recordRelation(outcome, counted ? "confirmed" : "merged", trace);
   return { action: null, disposition: "merged" };
 }
 
@@ -572,18 +603,21 @@ function restsOn(record: MemoryRecord | undefined, sourceMessageId: string | und
   return (record.provenance.sourceMessageIds ?? []).includes(sourceMessageId);
 }
 
-// A fact the learner already knew, with the same words, learned from this very message.
+// Durable source identity is independent of the model's comparison window and of a fact's later
+// expiry or supersession. The source filter selects metadata before decrypting matching bodies.
 function learnedFromThisMessage(
   vault: MemoryVaultStore,
   body: string,
   trace: LearningTrace,
 ): boolean {
   if (trace.sourceMessageId === undefined) return false;
-  for (const id of trace.seen.keys()) {
-    const record = vault.getMemory(id);
-    if (record?.body === body && restsOn(record, trace.sourceMessageId)) return true;
-  }
-  return false;
+  return vault
+    .listMemoriesAcrossScopes(trace.scopes, {
+      sourceMessageId: trace.sourceMessageId,
+      sensitivity: ["public"],
+      includeExpired: true,
+    })
+    .some((record) => record.body === body && restsOn(record, trace.sourceMessageId));
 }
 
 function standsAsSeen(vault: MemoryVaultStore, id: MemoryId, seen: SeenFact | undefined): boolean {
@@ -601,12 +635,13 @@ function settleBeforeInsert(
   trace: LearningTrace,
   refuse: (reason: RejectionReason) => PersistedCandidate,
 ): PersistedCandidate | null {
+  const exactSuppression = personRefused(vault, record, trace.statement);
+  if (exactSuppression !== null) return refuse(exactSuppression);
   if (learnedFromThisMessage(vault, record.body, trace)) {
     recordRelation(outcome, "merged", trace);
     return { action: null, disposition: "merged" };
   }
-  const exactSuppression = personRefused(vault, record, trace.statement);
-  return exactSuppression === null ? null : refuse(exactSuppression);
+  return null;
 }
 
 // Persists one learned candidate and returns its wire action plus how it settled. Returns a null
@@ -621,6 +656,7 @@ async function persistCandidate(
   vault: MemoryVaultStore,
   trace: LearningTrace,
 ): Promise<PersistedCandidate> {
+  trace.signal.throwIfAborted();
   if (outcome.kind === "confirmation") return confirmKnownFact(vault, outcome, trace);
   const { mode } = trace;
   const refuse = (reason: RejectionReason): PersistedCandidate => {
@@ -654,14 +690,11 @@ async function persistCandidate(
     recordRelation(outcome, "unconfirmed-dropped", trace);
     return { action: null, disposition: "none" };
   }
+  recordRelation(outcome, decision, trace);
   if (outcomeOfInsert.kind === "merged") {
-    // Near-duplicate of an existing in-scope memory: the canonical was reinforced, nothing new to
-    // surface. Over-capture is bounded at the encode boundary rather than deferred to a decay pass.
-    recordRelation(outcome, "merged", trace);
     return { action: null, disposition: "merged" };
   }
   const inserted = outcomeOfInsert.record;
-  recordRelation(outcome, decision, trace);
   recordPersistedCandidateDecision(deps, trace, inserted);
   return {
     action: candidateWireAction(outcome, inserted),
@@ -734,6 +767,7 @@ type TurnSalienceExtraction =
 // needs (`surface`), rather than widening this shape for a field `extractTurnSalienceOutcomes`
 // never reads.
 interface TurnSalienceInputs {
+  readonly sourcePosition?: MemoryLearningPosition | undefined;
   readonly modelId: string;
   readonly assistantText: string;
   readonly correlationId: string;
@@ -741,25 +775,23 @@ interface TurnSalienceInputs {
   readonly signal: AbortSignal;
 }
 
-// The person's message just before this one, so a pronoun can point back to it. A message the
-// learner may not see stays out, like the current one would.
+// A pronoun can point back only to the person's immediate preceding message when they wrote it
+// with Memory on. The same content policy applies to both messages.
 function previousUserText(
   deps: UiHandlerDeps,
   request: SalienceTurnRequest,
   context: ConversationMemoryRuntimeContext,
   policy: ReturnType<typeof memoryCapturePolicyForDeps>,
 ): string | undefined {
-  if (request.sourceMessageId === undefined) return undefined;
-  const messages = deps.store.listMessages(context.conversationId);
-  const current = messages.findIndex((message) => message.id === request.sourceMessageId);
-  for (let index = current - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role !== "user") continue;
-    return memoryTextSecretEgressRejectionReason(message.content, policy) === null
-      ? message.content
-      : undefined;
-  }
-  return undefined;
+  if (request.sourceMessageId === undefined || !mayResolvePreviousTurn(request.content))
+    return undefined;
+  const previous = deps.store.memoryLearning?.readPreviousUserText(
+    context.conversationId,
+    request.sourceMessageId,
+  );
+  return previous !== undefined && memoryTextSecretEgressRejectionReason(previous, policy) === null
+    ? previous
+    : undefined;
 }
 
 async function extractTurnSalienceOutcomes(
@@ -784,6 +816,7 @@ async function extractTurnSalienceOutcomes(
   const outcomes = await extractSalientMemories(
     {
       userText: request.content,
+      sourceTimestampMs: inputs.sourcePosition?.timestamp ?? captureContext.nowMs,
       ...(previous === undefined ? {} : { previousUserText: previous }),
       assistantText,
       knownFacts: known.facts,
@@ -958,6 +991,7 @@ async function runSalienceCapture(
     captureContext,
     inputs,
   );
+  inputs.signal.throwIfAborted();
   if (extraction.kind === "unavailable") return { kind: "unavailable" };
   if (extraction.kind === "refused") {
     recordTurnCaptureRefusal(deps, decisionTrace, context, captureContext.nowMs, extraction.reason);
@@ -973,7 +1007,10 @@ async function runSalienceCapture(
     correlationId,
     sourceMessageCount: request.sourceMessageId === undefined ? 0 : 1,
     sourceMessageId: request.sourceMessageId,
+    sourcePosition: inputs.sourcePosition,
     conversationId: context.conversationId,
+    scopes: conversationMemoryScopes(context),
+    signal: inputs.signal,
     statement: request.content,
     seen,
   });
@@ -1029,6 +1066,7 @@ export interface StoredLearningTurn {
   readonly correlationId: string;
   /** The pass that learns the turn. */
   readonly parentCorrelationId: string;
+  readonly sourcePosition?: MemoryLearningPosition | undefined;
 }
 
 /**
@@ -1091,6 +1129,7 @@ export async function learnStoredTurn(
       surface: turn.surface,
       correlationId: turn.correlationId,
       parentCorrelationId: turn.parentCorrelationId,
+      sourcePosition: turn.sourcePosition,
       signal,
     });
     // A turn whose facts are stored is learned, even when the pass was cancelled meanwhile.

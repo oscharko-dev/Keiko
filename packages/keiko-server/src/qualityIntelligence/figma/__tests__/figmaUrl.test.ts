@@ -14,6 +14,12 @@ describe("parseFigmaTarget — generic, deterministic", () => {
     expect(target).toEqual({ fileKey: "KEY99", nodeId: "0:1" });
   });
 
+  it("scopes branch links to the branch itself", () => {
+    expect(
+      parseFigmaTarget("https://www.figma.com/design/MAIN123/branch/BRANCH456/Board?node-id=0-1"),
+    ).toEqual({ fileKey: "BRANCH456", nodeId: "0:1" });
+  });
+
   it("keeps an already-colonised node-id intact", () => {
     const target = parseFigmaTarget("https://figma.com/design/K/Name?node-id=7:8");
     expect(target).toEqual({ fileKey: "K", nodeId: "7:8" });
@@ -50,18 +56,27 @@ describe("parseFigmaTarget — generic, deterministic", () => {
     expect(parseFigmaTarget("https://www.figma.com/design/?node-id=1-2")).toBeNull();
   });
 
-  it("rejects empty and non-string input", () => {
+  it("rejects blank input", () => {
     expect(parseFigmaTarget("")).toBeNull();
     expect(parseFigmaTarget("   ")).toBeNull();
   });
 
-  it("normalises EVERY dash in the node-id and preserves instance separators (replace-all)", () => {
-    // The URL form encodes ':' as '-', so a colon-only instance id like 'I12:3;45:6' arrives as
-    // 'I12-3;45-6'. The replace-all must convert all dashes and leave the ';' separator intact.
-    expect(parseFigmaTarget("https://figma.com/design/K/N?node-id=0--1")?.nodeId).toBe("0::1");
+  it("normalises each node id in an instance path", () => {
     expect(parseFigmaTarget("https://figma.com/design/K/N?node-id=I12-3;45-6")?.nodeId).toBe(
       "I12:3;45:6",
     );
+  });
+
+  it.each([
+    "https://figma.com/design/K/N?node-id=0--1",
+    "https://figma.com/design/K/N?node-id=1-2&node-id=3-4",
+    "https://figma.com/design/K/N?node-id=1-2%2C3-4",
+    "https://figma.com/design/K/N?node-id=1-2;3-4",
+    "https://figma.com/design/K%2FK/N?node-id=1-2",
+    "https://user:password@figma.com/design/K/N?node-id=1-2",
+    "https://figma.com:8443/design/K/N?node-id=1-2",
+  ])("rejects a malformed or ambiguous Figma scope (%s)", (link) => {
+    expect(parseFigmaTarget(link)).toBeNull();
   });
 
   it("decodes a percent-encoded node-id before normalising (%3A colon, %2D dash)", () => {

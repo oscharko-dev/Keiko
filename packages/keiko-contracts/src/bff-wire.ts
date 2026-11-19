@@ -75,6 +75,11 @@ export {
   MARKDOWN_SKILL_REFUSAL_REASONS,
 } from "./markdown-skills.js";
 export type {
+  JiraTemplateBound,
+  JiraTemplateFieldOption,
+  JiraTemplateNamedOption,
+  JiraTemplateOptions,
+  JiraTemplateOptionsRequest,
   MarkdownSkillReference,
   MarkdownSkillSelection,
   MarkdownSkillSelectionView,

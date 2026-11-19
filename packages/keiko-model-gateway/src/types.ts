@@ -103,6 +103,13 @@ export interface ModelProviderConfig {
   /** Existing durable reference underneath transient env overrides; credential-tier only. */
   readonly apiKeySecretRef?: string | undefined;
   readonly apiKeyHeaderName?: string | undefined;
+  /**
+   * Set by Gateway Setup only when it proved that this provider (a voice provider today) rides the
+   * verified gateway connection (same endpoint, header and credential); absent on a provider with
+   * its own key, even on the gateway's address. A team export hands the team token only to a
+   * marked provider. Closed vocabulary; credential-tier, never projected to the browser.
+   */
+  readonly credentialOrigin?: "gateway-connection" | undefined;
   readonly endpointStyle?: ProviderEndpointStyle | undefined;
   readonly apiVersion?: string | undefined;
   readonly realtimeAuthMode?: RealtimeAuthMode | undefined;
@@ -153,6 +160,12 @@ export interface RerankerConfig {
   readonly apiKey: string;
   readonly apiKeyHeaderName?: string | undefined;
   readonly timeoutMs: number;
+  /**
+   * Set by Gateway Setup only when it proved that the reranker rides the verified gateway
+   * connection (same endpoint, header and credential); absent on a reranker with its own key, even
+   * on the gateway's address. A team export hands the team token only to a marked reranker.
+   */
+  readonly credentialOrigin?: "gateway-connection" | undefined;
   readonly egress?: OutboundHttpEgressConfig | undefined;
 }
 

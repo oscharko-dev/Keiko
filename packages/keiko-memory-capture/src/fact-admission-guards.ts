@@ -2,6 +2,8 @@
 // foreign-source markup (code, single quotes), first-person task requests and a first-person
 // wrapper around another person's proposition. Each errs towards learning too little.
 
+import { isClausePunctuation } from "./fact-text.js";
+
 const FENCE_RE = /^[ \t]{0,3}(?:`{3,}|~{3,})/u;
 const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/u;
 const SINGLE_QUOTES = new Set(["'", "‘", "’"]);
@@ -102,6 +104,87 @@ const REQUEST_RES: readonly RegExp[] = [
 
 export function isFirstPersonTaskRequest(evidence: string): boolean {
   return REQUEST_RES.some((pattern) => pattern.test(evidence));
+}
+
+interface RuleAnnouncementForm {
+  readonly opening: readonly string[];
+  readonly qualifier: string;
+  readonly noun: string;
+  readonly prepositions: ReadonlySet<string>;
+  readonly possessives: ReadonlySet<string>;
+  readonly modifier: RegExp;
+}
+
+const GERMAN_TOPIC_PREPOSITIONS = new Set(["für", "fuer", "zu"]);
+const RULE_ANNOUNCEMENT_FORMS: readonly RuleAnnouncementForm[] = [
+  {
+    opening: ["ich", "habe", "eine"],
+    qualifier: "neue",
+    modifier: /(?:e|en|er|em|es)$/u,
+    noun: "regel",
+    prepositions: GERMAN_TOPIC_PREPOSITIONS,
+    possessives: new Set(["mein", "meine", "meinem", "meinen", "meiner", "meines"]),
+  },
+  {
+    opening: ["i", "have", "a"],
+    qualifier: "new",
+    modifier: /(?:ly|al|ic|ive|ous|ible|able|ary|ful|less|ular|ing)$/u,
+    noun: "rule",
+    prepositions: new Set(["for", "about"]),
+    possessives: new Set(["my"]),
+  },
+];
+const ANNOUNCEMENT_TOPIC_WORD_RE = /^\p{L}+(?:-\p{L}+)*$/u;
+
+function isOwnedAnnouncementTopic(words: readonly string[], form: RuleAnnouncementForm): boolean {
+  return (
+    words.length >= 3 &&
+    form.prepositions.has(words[0] ?? "") &&
+    form.possessives.has(words[1] ?? "") &&
+    words
+      .slice(2, -1)
+      .every((word) => ANNOUNCEMENT_TOPIC_WORD_RE.test(word) && form.modifier.test(word)) &&
+    ANNOUNCEMENT_TOPIC_WORD_RE.test(words.at(-1) ?? "")
+  );
+}
+
+function matchesRuleAnnouncement(words: readonly string[], form: RuleAnnouncementForm): boolean {
+  if (!form.opening.every((word, index) => words[index] === word)) return false;
+  const rest = words.slice(form.opening.length);
+  const content = rest[0] === form.qualifier ? rest.slice(1) : rest;
+  return (
+    content[0] === form.noun &&
+    (content.length === 1 || isOwnedAnnouncementTopic(content.slice(1), form))
+  );
+}
+
+// Both word orders express possession. Keep every topic word and restriction for the same
+// whole-clause check, including material following the rule.
+function announcementWords(text: string): readonly string[] {
+  const words = text.replace(/^i(?:['’]ve|\s+have)\s+got\s+(?=a\s)/iu, "i have ").split(/\s+/u);
+  if (!GERMAN_TOPIC_PREPOSITIONS.has(words[0]?.toLowerCase() ?? "")) return words;
+  const verb = words.findIndex((word) => word.toLowerCase() === "habe");
+  if (verb < 1 || words[verb + 1]?.toLowerCase() !== "ich") return words;
+  return ["ich", "habe", ...words.slice(verb + 2), ...words.slice(0, verb)];
+}
+
+// Possessing a rule without stating it gives no rule to apply. Match only the whole bare clause,
+// with an optional owned topic; content after a colon, a restriction or an exception stays intact.
+// The original turn remains available as pronoun context for the next statement.
+export function ruleAnnouncementTopic(evidence: string): readonly string[] | undefined {
+  const text = evidence.trim();
+  let end = text.length;
+  while (end > 0 && isClausePunctuation(text.charAt(end - 1))) end -= 1;
+  const words = announcementWords(text.slice(0, end).trimEnd());
+  const lower = words.map((word) => word.toLowerCase());
+  const form = RULE_ANNOUNCEMENT_FORMS.find((item) => matchesRuleAnnouncement(lower, item));
+  if (form === undefined) return undefined;
+  const possessive = lower.findIndex((word) => form.possessives.has(word));
+  return possessive < 0 ? [] : words.slice(possessive);
+}
+
+export function isBareRuleAnnouncement(evidence: string): boolean {
+  return ruleAnnouncementTopic(evidence) !== undefined;
 }
 
 const OWN_SUBJECT = String.raw`(?:ich|i|wir|we|mein\p{L}*|my|unser\p{L}*|our)`;

@@ -10,6 +10,10 @@ import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-me
 import type { CodingWorkbenchMode, NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import type {
+  OpenAIEmbeddingOutcome,
+  OpenAIEmbeddingRequest,
+} from "@oscharko-dev/keiko-model-gateway";
 
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, createNodeUiStore, type UiStore } from "./store/index.js";
@@ -32,6 +36,14 @@ import { resetServerLogger } from "../../../tests/support/activity-log-test-supp
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 
 const USER_SAID = "User said:\n";
+
+function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
 
 // A plain Chat message: no workflow run is attached to it.
 const NO_RUN = {
@@ -354,6 +366,37 @@ describe("memory learning passes", () => {
     expect(bodies(deps, chat)).toEqual(["I drink tea.", "I use Vim."]);
   });
 
+  it("does not read through a memory-off turn when resolving a later pronoun", async () => {
+    const earlier = "Ich habe eine neue Regel für meine Berichte.";
+    const memoryOff = "Meine Berichte sind für das Review der Orion-Migration.";
+    const evidence = "Sie beginnen immer mit einer Zusammenfassung";
+    const body = "Meine Berichte beginnen immer mit einer Zusammenfassung";
+    const prompts: string[] = [];
+    const model: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        const prompt = request.messages.at(-1)?.content;
+        const text = typeof prompt === "string" ? prompt : "";
+        prompts.push(text);
+        const items = text.endsWith(`${evidence}.`)
+          ? [{ body, evidence, about: "self", type: "procedural", relation: "new", related: null }]
+          : [];
+        return Promise.resolve(response(request.modelId, JSON.stringify({ items })));
+      },
+    };
+    const deps = makeDeps({ modelPortFactory: () => model });
+    const chat = makeChat(deps);
+    const runtime = memoryLearningRuntime(deps);
+    writeTurn(deps, chat, earlier);
+    writeTurn(deps, chat, memoryOff, false);
+    expect(await runtime.runPass("inactivity", undefined)).toBe("completed");
+    writeTurn(deps, chat, `${evidence}.`);
+    expect(await runtime.runPass("inactivity", undefined)).toBe("completed");
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts.at(-1)).toBe(`${USER_SAID}${evidence}.`);
+    expect(bodies(deps, chat)).toEqual([]);
+  });
+
   it("cancels a running pass for new Chat work and aborts the provider request", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));
@@ -387,6 +430,57 @@ describe("memory learning passes", () => {
     const settled = sink.events.find((event) => event.op === "memory.learn.pass.settled");
     expect(settled?.extra).toMatchObject({ outcome: "cancelled", pendingChatCount: 1 });
     expect(settled?.extra?.cancelLatencyMs).toEqual(expect.any(Number));
+  });
+
+  it("cancels an in-flight learning embedding and learns the turn on the next pass", async () => {
+    const requested = deferred<OpenAIEmbeddingRequest>();
+    const pending = deferred<OpenAIEmbeddingOutcome>();
+    const modelId = "text-embedding-3-large";
+    const embedding = { ok: true, value: { vector: Float32Array.from([1, 0]), modelId } } as const;
+    let firstRequest = true;
+    const deps = makeDeps({
+      config: {
+        providers: [
+          {
+            modelId,
+            baseUrl: "https://gateway.example.test/v1",
+            apiKey: "fixture",
+            timeoutMs: 1000,
+            maxRetries: 0,
+            retryBaseDelayMs: 100,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+      },
+      localKnowledgeEmbeddingRequest: (request) => {
+        if (!firstRequest) return Promise.resolve(embedding);
+        firstRequest = false;
+        requested.resolve(request);
+        return pending.promise;
+      },
+    });
+    const chat = makeChat(deps);
+    writeTurn(deps, chat, "I use Vim.");
+    const runtime = memoryLearningRuntime(deps);
+    const pass = runtime.runPass("inactivity", undefined);
+    const request = await requested.promise;
+    const foreground = runSerializedChatTurn(
+      deps,
+      chat.chatId,
+      new AbortController().signal,
+      () => "ok",
+    );
+    // Even a provider that returns a late success after cancellation must not write.
+    pending.resolve(embedding);
+    await expect(foreground).resolves.toBe("ok");
+    await expect(pass).resolves.toBe("cancelled");
+    expect(request.signal?.aborted).toBe(true);
+    expect(bodies(deps, chat)).toEqual([]);
+    expect(deps.store.memoryLearning?.listChatsWithPending(8)).toEqual([chat.chatId]);
+
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+    expect(bodies(deps, chat)).toEqual(["I use Vim."]);
+    expect(deps.store.memoryLearning?.listChatsWithPending(8)).toEqual([]);
   });
 
   it("records a pass's start and end under its own id, linked to what triggered it", async () => {
@@ -710,6 +804,94 @@ describe("memory learning passes", () => {
     expect(vaultOf(deps).getAccessStats([record.id]).get(record.id)).toEqual(before);
   });
 
+  it("counts a semantic confirmation only when it comes from a separate message", async () => {
+    const modelId = "text-embedding-3-large";
+    const embedding = { ok: true, value: { vector: Float32Array.from([1, 0]), modelId } } as const;
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const deps = makeDeps({
+      config: {
+        providers: [
+          {
+            modelId,
+            baseUrl: "https://gateway.example.test/v1",
+            apiKey: "fixture",
+            timeoutMs: 1000,
+            maxRetries: 0,
+            retryBaseDelayMs: 100,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+      },
+      localKnowledgeEmbeddingRequest: () => Promise.resolve(embedding),
+    });
+    const chat = makeChat(deps);
+    const runtime = memoryLearningRuntime(deps);
+    const original = writeTurn(
+      deps,
+      chat,
+      "I write Atlas in Rust. I program the Atlas application using the Rust language.",
+    );
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+    const [record] = learned(deps, chat);
+    if (record === undefined) throw new Error("expected the learned fact");
+    expect(record.provenance.sourceMessageIds).toEqual([original.userId]);
+    const vault = vaultOf(deps);
+    const confirmations = (): number =>
+      vault.getAccessStats([record.id]).get(record.id)?.accessCount ?? 0;
+    const afterOriginal = confirmations();
+
+    const repeat = writeTurn(deps, chat, "I develop Atlas using Rust.");
+    expect(repeat.userId).not.toBe(original.userId);
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+
+    expect(learned(deps, chat).map((fact) => fact.id)).toEqual([record.id]);
+    const novelty = sink.events.filter((event) => event.op === "memory.capture.novelty-gate");
+    expect(novelty.map((event) => event.extra?.outcome)).toEqual(["inserted", "merged", "merged"]);
+    expect([afterOriginal, confirmations()]).toEqual([0, 1]);
+    const relations = sink.events.filter((event) => event.op === "memory.learn.relation");
+    expect(relations.map((event) => event.extra?.decision)).toEqual(["new", "merged", "confirmed"]);
+  });
+
+  it("does not count a confirmation again after a cursor failure and restart", async () => {
+    const storePath = join(tempDir("keiko-learning-store-"), "ui.db");
+    const vaultDir = tempDir("keiko-learning-vault-");
+    const store = createNodeUiStore(storePath);
+    const deps = makeDeps({ store, memoryVault: makeVault(vaultDir) });
+    const chat = makeChat(deps);
+    const runtime = memoryLearningRuntime(deps);
+    const statement = "I write Atlas in Rust.";
+    writeTurn(deps, chat, statement);
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+    const [record] = learned(deps, chat);
+    if (record === undefined) throw new Error("expected the learned fact");
+    writeTurn(deps, chat, statement);
+    const learningStore = store.memoryLearning;
+    if (learningStore === undefined) throw new Error("learning store missing");
+    const failAdvance = vi.spyOn(learningStore, "advance").mockImplementationOnce(() => {
+      throw new Error("synthetic cursor write failure");
+    });
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("failed");
+    failAdvance.mockRestore();
+    expect(vaultOf(deps).getAccessStats([record.id]).get(record.id)?.accessCount).toBe(1);
+    expect(learningStore.listChatsWithPending(8)).toEqual([chat.chatId]);
+    disposeMemoryLearningRuntime(deps);
+    store.close();
+
+    const reopened = createNodeUiStore(storePath);
+    const restartedDeps = makeDeps({ store: reopened, memoryVault: makeVault(vaultDir) });
+    const restarted = memoryLearningRuntime(restartedDeps);
+    await expect(restarted.runPass("retry", undefined)).resolves.toBe("completed");
+    expect(reopened.memoryLearning?.listChatsWithPending(8)).toEqual([]);
+    const vault = vaultOf(restartedDeps);
+    expect(vault.getAccessStats([record.id]).get(record.id)?.accessCount).toBe(1);
+    writeTurn(restartedDeps, chat, statement);
+    await expect(restarted.runPass("inactivity", undefined)).resolves.toBe("completed");
+    expect(vault.getAccessStats([record.id]).get(record.id)?.accessCount).toBe(2);
+    disposeMemoryLearningRuntime(restartedDeps);
+    reopened.close();
+  });
+
   it("does not start while an answer runs", async () => {
     const learner = fakeLearner();
     const deps = makeDeps({ modelPortFactory: () => learner.port });
@@ -817,6 +999,145 @@ describe("memory learning passes", () => {
     expect(bodies(deps, chat)).toEqual(["I write Atlas in Rust."]);
   });
 
+  it("continues to a healthy Chat after eight unavailable Chats, then retries them", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const learner = fakeLearner();
+    let recovered = false;
+    const deps = makeDeps({
+      env: { KEIKO_MEMORY_LEARNING_IDLE_MS: "3600000" },
+      modelPortFactory: (id) => (id === "healthy-model" || recovered ? learner.port : undefined),
+    });
+    const projectPath = tempDir("keiko-learning-backlog-");
+    deps.store.createProject(projectPath);
+    for (let index = 0; index < 8; index += 1) {
+      const chat = deps.store.createChat(projectPath, "Unavailable", "unavailable-model");
+      writeTurn(deps, { chatId: chat.id, projectPath }, "I use a workshop computer.");
+    }
+    const { id: chatId } = deps.store.createChat(projectPath, "Healthy", "healthy-model");
+    const healthy = { chatId, projectPath };
+    writeTurn(deps, healthy, "I use Vim.");
+    const runtime = memoryLearningRuntime(deps);
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("unavailable");
+    expect(learner.calls()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(learner.calls()).toBe(1);
+    expect(bodies(deps, healthy)).toContain("I use Vim.");
+    expect(deps.store.memoryLearning?.listChatsWithPending(9)).toHaveLength(8);
+
+    recovered = true;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(learner.calls()).toBe(9);
+    expect(deps.store.memoryLearning?.listChatsWithPending(9)).toEqual([]);
+  });
+
+  it("drains healthy quota continuations before retrying unavailable Chats", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const learner = fakeLearner();
+    let unavailableAttempts = 0;
+    const deps = makeDeps({
+      env: { KEIKO_MEMORY_LEARNING_IDLE_MS: "3600000" },
+      modelPortFactory: (id) => {
+        if (id === "healthy-model") return learner.port;
+        unavailableAttempts += 1;
+        return undefined;
+      },
+    });
+    const projectPath = tempDir("keiko-learning-healthy-quota-");
+    deps.store.createProject(projectPath);
+    for (let index = 0; index < 8; index += 1) {
+      const chat = deps.store.createChat(projectPath, "Unavailable", "unavailable-model");
+      writeTurn(deps, { chatId: chat.id, projectPath }, "I use a workshop computer.");
+    }
+    const { id: chatId } = deps.store.createChat(projectPath, "Healthy", "healthy-model");
+    const healthy = { chatId, projectPath };
+    for (let index = 0; index < 33; index += 1) {
+      writeTurn(deps, healthy, "I use Vim.");
+    }
+    const runtime = memoryLearningRuntime(deps);
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("unavailable");
+    expect(unavailableAttempts).toBe(8);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(learner.calls()).toBe(16);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(learner.calls()).toBe(32);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(learner.calls()).toBe(33);
+    const [record] = learned(deps, healthy);
+    if (record === undefined) throw new Error("expected the learned fact");
+    expect(bodies(deps, healthy)).toEqual(["I use Vim."]);
+    expect(vaultOf(deps).getAccessStats([record.id]).get(record.id)?.accessCount).toBe(32);
+    expect(unavailableAttempts).toBe(8);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(unavailableAttempts).toBe(8);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(unavailableAttempts).toBe(16);
+  });
+
+  it.each([63, 64, 128])(
+    "continues past %i leading system messages to marked user work",
+    async (systemCount) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const learner = fakeLearner();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const deps = makeDeps({
+        env: { KEIKO_MEMORY_LEARNING_IDLE_MS: "3600000" },
+        modelPortFactory: () => learner.port,
+      });
+      const chat = makeChat(deps);
+      for (let index = 0; index < systemCount; index += 1) {
+        clock += 1_000;
+        deps.store.createMessage({
+          ...NO_RUN,
+          chatId: chat.chatId,
+          role: "system",
+          content: "A synthetic context marker.",
+          timestamp: clock,
+        });
+      }
+      writeTurn(deps, chat, "I use Vim.");
+      await expect(memoryLearningRuntime(deps).runPass("inactivity", undefined)).resolves.toBe(
+        "completed",
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(learner.calls()).toBe(1);
+      expect(bodies(deps, chat)).toEqual(["I use Vim."]);
+      expect(deps.store.memoryLearning?.listChatsWithPending(1)).toEqual([]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(learner.calls()).toBe(1);
+      if (systemCount >= 64) {
+        expect(
+          sink.events.find((event) => event.op === "memory.learn.pass.settled")?.extra,
+        ).toMatchObject({ turnCount: 0, pendingChatCount: 1 });
+      }
+    },
+  );
+
+  it("does not continue into unmarked trailing work after the final marked source", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const learner = fakeLearner();
+    const deps = makeDeps({
+      env: { KEIKO_MEMORY_LEARNING_IDLE_MS: "3600000" },
+      modelPortFactory: () => learner.port,
+    });
+    const chat = makeChat(deps);
+    writeTurn(deps, chat, "I use Vim.");
+    for (let index = 0; index < 32; index += 1) {
+      writeTurn(deps, chat, "I work with Rust.", false);
+    }
+    const runtime = memoryLearningRuntime(deps);
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+    const position = deps.store.memoryLearning?.readPosition(chat.chatId);
+    expect(deps.store.memoryLearning?.listChatsWithPending(1)).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(deps.store.memoryLearning?.readPosition(chat.chatId)).toEqual(position);
+    expect(sink.events.filter((event) => event.op === "memory.learn.pass.settled")).toHaveLength(1);
+    expect(learner.calls()).toBe(1);
+  });
+
   it("applies a forget to what was still waiting to be learned", async () => {
     const deps = makeDeps();
     const chat = makeChat(deps);
@@ -826,6 +1147,45 @@ describe("memory learning passes", () => {
     writeTurn(deps, chat, "Forget that I live in Hamburg.");
     await memoryLearningRuntime(deps).runPass("inactivity", undefined);
     expect(bodies(deps, chat)).toEqual(["I write Atlas in Rust."]);
+  });
+
+  it("resumes a pending forget after its audit store becomes writable", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    let auditWritable = false;
+    const deps = makeDeps({
+      env: { KEIKO_MEMORY_LEARNING_IDLE_MS: "3600000" },
+      evidenceStore: {
+        put: (_id, json) => {
+          if (!auditWritable && json === "[]") throw new Error("synthetic audit preflight failure");
+          return "";
+        },
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+    });
+    const chat = makeChat(deps);
+    const runtime = memoryLearningRuntime(deps);
+    writeTurn(deps, chat, "I use Vim.");
+    writeTurn(deps, chat, "Forget that I use Vim.");
+    writeTurn(deps, chat, "I drink tea.");
+
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("unavailable");
+    expect(bodies(deps, chat)).toEqual(["I use Vim."]);
+    expect(deps.store.memoryLearning?.listChatsWithPending(8)).toEqual([chat.chatId]);
+    expect(
+      sink.events.find((event) => event.op === "memory.learn.pass.settled")?.extra,
+    ).toMatchObject({ failedTurnCount: 1, forgottenPendingCount: 0, pendingChatCount: 1 });
+
+    auditWritable = true;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(bodies(deps, chat)).toEqual(["I drink tea."]);
+    expect(deps.store.memoryLearning?.listChatsWithPending(8)).toEqual([]);
+    expect(
+      sink.events.filter((event) => event.op === "memory.learn.pass.settled").at(-1)?.extra,
+    ).toMatchObject({ trigger: "retry", forgottenPendingCount: 1, pendingChatCount: 0 });
   });
 
   it("keeps a statement forgotten by reference from being learned", async () => {

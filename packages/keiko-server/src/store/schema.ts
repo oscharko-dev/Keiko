@@ -14,7 +14,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 79;
+export const SCHEMA_VERSION = 80;
 
 interface Migration {
   readonly version: number;
@@ -3573,6 +3573,13 @@ export const MIGRATIONS: readonly Migration[] = [
       byte_count INTEGER NOT NULL CHECK (byte_count >= 256)
     ) STRICT;
     CREATE INDEX jira_report_exports_owner ON jira_report_exports(chat_id, last_used_at);`,
+  },
+  {
+    version: 80,
+    // Both Memory's pronoun context and a person's explicit forget seek preceding user rows.
+    // Include unmarked users: they are a consent barrier for learning, not rows to skip.
+    sql: `CREATE INDEX idx_messages_user_chat_ts ON chat_messages(chat_id, timestamp)
+      WHERE role = 'user';`,
   },
 ];
 

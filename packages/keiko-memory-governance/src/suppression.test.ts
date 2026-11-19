@@ -5,6 +5,17 @@ import { isMemorySuppressedFromRetrieval } from "./suppression.js";
 import { FIXED_NOW_MS, makeRecord } from "./_support.js";
 
 describe("isMemorySuppressedFromRetrieval — status branch", () => {
+  it.each([
+    [-1, true],
+    [0, false],
+  ] as const)("applies the validity start at offset %i", (offset, hidden) => {
+    const record = makeRecord({ validFrom: FIXED_NOW_MS, status: "accepted" });
+    const decision = isMemorySuppressedFromRetrieval(record, FIXED_NOW_MS + offset);
+    expect(decision).toEqual(
+      hidden ? { suppressed: true, reason: "not-yet-valid" } : { suppressed: false },
+    );
+  });
+
   it("suppresses archived with reason 'archived'", () => {
     const m = makeRecord({ status: "archived" });
     expect(isMemorySuppressedFromRetrieval(m, FIXED_NOW_MS)).toEqual({

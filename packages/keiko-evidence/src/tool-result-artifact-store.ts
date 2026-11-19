@@ -3,11 +3,11 @@
 // observations can be rehydrated without embedding raw output in model context.
 
 import { randomUUID } from "node:crypto";
-import { lstatSync, readFileSync, rmSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { PostRenameFsyncError, replaceViaDurableTempFile } from "./durable-write.js";
+import { replaceDurablyOrThrowEvidenceError } from "./durable-write.js";
 import { EvidenceReadError, EvidenceWriteError } from "./errors.js";
 import {
   existingOwnedDirectory,
@@ -88,23 +88,7 @@ function assertWritableArtifact(target: string, fs: WorkspaceFs): void {
 }
 
 function atomicWriteText(target: string, content: string, randomSuffix: () => string): void {
-  const temp = `${target}.${randomSuffix()}.tmp`;
-  try {
-    replaceViaDurableTempFile(target, temp, content);
-  } catch (error) {
-    // Post-rename fsync failure = content is durable on the target, only the parent-dir metadata
-    // fsync is unconfirmed. Do not clean the (already gone) temp; do not claim the write failed.
-    // See KEIKO-0388 / KEIKO-1034.
-    if (error instanceof PostRenameFsyncError) {
-      throw new EvidenceWriteError(
-        `tool-result artifact parent-directory fsync failed after durable rename: ${error.message}`,
-      );
-    }
-    rmSync(temp, { force: true });
-    throw new EvidenceWriteError(
-      `tool-result artifact write failed: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+  replaceDurablyOrThrowEvidenceError(target, content, randomSuffix, "tool-result artifact");
 }
 
 function readArtifact(target: string, fs: WorkspaceFs): string | undefined {
