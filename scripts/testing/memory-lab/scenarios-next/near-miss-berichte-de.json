@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "near-miss-berichte-de",
+  "language": "de",
+  "class": "near-miss",
+  "description": "A format preference for project status reports, asked about for sales reports. Limit: recall admits a memory that shares one informative word with the question, with no check that the subject is the same. Failure means: memory-on-unrelated-question or fact-leaked, the narrow preference applied to a different object; offline the abstention probe passes only when nothing is retrieved. Maintenance: run with maintenance on or off; the seeded record is younger than 94 days.",
+  "seed": {
+    "records": [
+      {
+        "key": "pref",
+        "body": "Ich bevorzuge Tabellen für meine Berichte zum Projektstatus.",
+        "type": "preference",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 20,
+        "truth": "pref"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "pref",
+      "seed": "Ich bevorzuge Tabellen für meine Berichte zum Projektstatus.",
+      "must": false,
+      "terms": [["Tabelle*"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "sales",
+      "question": "Welche Vorgabe habe ich dir für Berichte an den Vertrieb genannt?",
+      "expect": {
+        "kind": "abstain"
+      }
+    },
+    {
+      "id": "sales-unrelated",
+      "question": "Wie lang darf ein Bericht an den Vertrieb sein?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    }
+  ]
+}

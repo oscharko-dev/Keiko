@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "near-miss-projekt-de",
+  "language": "de",
+  "class": "near-miss",
+  "description": "A database decision of project Atlas, asked about for project Borealis. Limit: recall admits a memory that shares one informative word with the question, with no check which project it belongs to. Failure means: no-abstention or memory-on-unrelated-question; the decision of the other project is supplied. Maintenance: run with maintenance on or off; the seeded record is younger than 94 days.",
+  "seed": {
+    "records": [
+      {
+        "key": "atlas",
+        "body": "Im Projekt Atlas haben wir uns für PostgreSQL entschieden.",
+        "type": "decision",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 25,
+        "truth": "atlas"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "atlas",
+      "seed": "Im Projekt Atlas haben wir uns für PostgreSQL entschieden.",
+      "must": false,
+      "terms": [["PostgreSQL", "Postgres"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "other-project",
+      "question": "Wofür haben wir uns im Projekt Borealis entschieden?",
+      "expect": {
+        "kind": "abstain"
+      }
+    },
+    {
+      "id": "other-project-unrelated",
+      "question": "Wer sitzt im Projekt Borealis im Lenkungskreis?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    }
+  ]
+}

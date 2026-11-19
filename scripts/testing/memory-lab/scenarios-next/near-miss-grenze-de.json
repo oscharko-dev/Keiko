@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "near-miss-grenze-de",
+  "language": "de",
+  "class": "near-miss",
+  "description": "An approval limit for transfers, asked about for loan applications. Limit: recall admits a memory that shares one informative word with the question, with no check that the subject is the same. Failure means: no-abstention or memory-on-unrelated-question; the number for another object is supplied and may be asserted. Maintenance: run with maintenance on or off; the seeded record is younger than 94 days.",
+  "seed": {
+    "records": [
+      {
+        "key": "limit",
+        "body": "Die Genehmigungsgrenze für Überweisungen beträgt 5.000 Euro.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 33,
+        "truth": "limit"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "limit",
+      "seed": "Die Genehmigungsgrenze für Überweisungen beträgt 5.000 Euro.",
+      "must": false,
+      "terms": [["5.000"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "other-object",
+      "question": "Welche Genehmigungsgrenze habe ich dir für Kreditanträge genannt?",
+      "expect": {
+        "kind": "abstain"
+      }
+    },
+    {
+      "id": "other-object-unrelated",
+      "question": "Wer prüft die Genehmigungsgrenze bei Kreditanträgen?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    }
+  ]
+}

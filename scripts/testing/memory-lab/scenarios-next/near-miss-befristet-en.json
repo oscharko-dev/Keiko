@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "near-miss-befristet-en",
+  "language": "en",
+  "class": "near-miss",
+  "description": "A preference that states its own end (until the end of 2024), asked about now. Limit: the product reads no validity out of the sentence and a learned fact is valid until it is replaced. Failure means: fact-leaked; the expired preference is applied as current. Maintenance: run with maintenance on or off; the seeded record is younger than 94 days.",
+  "seed": {
+    "records": [
+      {
+        "key": "expired",
+        "body": "Until the end of 2024 I wanted my reports as PDF.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 40,
+        "truth": "expired"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "expired",
+      "seed": "Until the end of 2024 I wanted my reports as PDF.",
+      "must": false,
+      "terms": [["PDF"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "now",
+      "question": "In which format do I want my reports now?",
+      "expect": {
+        "kind": "abstain"
+      }
+    }
+  ]
+}
