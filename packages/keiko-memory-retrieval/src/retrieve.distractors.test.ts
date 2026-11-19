@@ -22,7 +22,6 @@
 // The vectors below MODEL the situation; see the diagnosis report for what a live run must record.
 
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
@@ -107,21 +106,78 @@ function addRecord(
   store.semantic.set(memoryId(entry.id), cosineSimilarity(vectorAt(1, 0), vector));
 }
 
-interface Scenario {
-  readonly seed: { readonly records: readonly { key: string; body: string; ageDays: number }[] };
+interface SeedRecord {
+  readonly key: string;
+  readonly body: string;
+  readonly ageDays: number;
 }
 
-function loadScenario(name: string): Scenario {
-  return JSON.parse(
-    readFileSync(
-      new URL(`../../../scripts/testing/memory-lab/scenarios-next/${name}.json`, import.meta.url),
-      "utf8",
-    ),
-  ) as Scenario;
-}
+// The seeds are inlined: a package test does not read the lab's scenario files, so an edit of that
+// corpus cannot change a pin silently. They are the bodies and ages of the two lab scenarios
+// (`long-horizon-distractors-en`, `two-memories-compare-en`) at the time of the diagnosis.
+const A_DISTRACTORS: readonly string[] = [
+  "The second quarter audit planning is booked in room Alder for the second quarter audit.",
+  "The second quarter audit kickoff is booked in room Birch for the second quarter audit.",
+  "The second quarter audit briefing is booked in room Cedar for the second quarter audit.",
+  "The second quarter audit workshop is booked in room Elm for the second quarter audit.",
+  "The second quarter audit debrief is booked in room Fir for the second quarter audit.",
+  "The second quarter audit training is booked in room Hazel for the second quarter audit.",
+  "The second quarter audit rehearsal is booked in room Larch for the second quarter audit.",
+  "The second quarter audit handover is booked in room Maple for the second quarter audit.",
+  "The second quarter audit preparation is booked in room Oak for the second quarter audit.",
+  "The second quarter audit followup is booked in room Pine for the second quarter audit.",
+  "The second quarter audit planning is booked in room Rowan for the second quarter booking.",
+  "The second quarter audit kickoff is booked in room Spruce for the second quarter booking.",
+  "The second quarter audit briefing is booked in room Willow for the second quarter booking.",
+  "The second quarter audit workshop is booked in room Yew for the second quarter booking.",
+  "The second quarter audit debrief is booked in room Aspen for the second quarter booking.",
+  "The second quarter audit training is booked in room Beech for the second quarter booking.",
+  "The second quarter audit rehearsal is booked in room Cypress for the second quarter booking.",
+  "The second quarter audit handover is booked in room Dogwood for the second quarter booking.",
+  "The second quarter audit preparation is booked in room Hickory for the second quarter booking.",
+  "The second quarter audit followup is booked in room Juniper for the second quarter booking.",
+];
+const B_ATLAS_DISTRACTORS: readonly string[] = [
+  "Project Atlas has a weekly data review on Wednesdays.",
+  "Project Atlas keeps its data glossary in the wiki.",
+  "Project Atlas shares data quality reports with finance.",
+  "Project Atlas archives its data exports every month.",
+  "Project Atlas tracks data incidents in the shared board.",
+  "Project Atlas documents data lineage for audits.",
+  "Project Atlas trains new data stewards each spring.",
+  "Project Atlas reviews data access every quarter.",
+];
+const B_BOREALIS_DISTRACTORS: readonly string[] = [
+  "Project Borealis has a weekly data standup on Tuesdays.",
+  "Project Borealis keeps its data glossary in a spreadsheet.",
+  "Project Borealis shares data quality reports with legal.",
+  "Project Borealis archives its data exports every week.",
+  "Project Borealis tracks data incidents by email.",
+  "Project Borealis documents data lineage in slides.",
+  "Project Borealis trains new data stewards in autumn.",
+  "Project Borealis reviews data access every month.",
+];
 
-const SCENARIO_A = loadScenario("long-horizon-distractors-en");
-const SCENARIO_B = loadScenario("two-memories-compare-en");
+const SEED_A: readonly SeedRecord[] = [
+  { key: "target", body: "The audit review is in room Sycamore.", ageDays: 30 },
+  ...A_DISTRACTORS.map((body, index) => ({
+    key: `distractor-${String(index + 1)}`,
+    body,
+    ageDays: index + 2,
+  })),
+];
+const SEED_B: readonly SeedRecord[] = [
+  ...B_ATLAS_DISTRACTORS.map((body, index) => ({
+    key: `atlas-${String(index + 1)}`,
+    body,
+    ageDays: 5 + 3 * index,
+  })),
+  ...B_BOREALIS_DISTRACTORS.map((body, index) => ({
+    key: `borealis-${String(index + 1)}`,
+    body,
+    ageDays: 6 + 3 * index,
+  })),
+];
 const QUESTION_A_PLAIN = "Where is the audit review?";
 const QUESTION_B = "Which storage did I choose for the projects Atlas and Borealis?";
 const TARGET_A_BODY = "The audit review is in room Sycamore.";
@@ -134,7 +190,7 @@ function storeA(fillerCosine: number, idSeed?: number): Store {
   const random = generator(7);
   const id = (label: string): string =>
     fixtureId(idSeed === undefined ? label : `perm${String(idSeed)}:${label}`);
-  SCENARIO_A.seed.records.forEach((spec, index) => {
+  SEED_A.forEach((spec, index) => {
     const isTarget = spec.body === TARGET_A_BODY;
     addRecord(store, {
       id: id(`record:${spec.key}`),
@@ -167,7 +223,7 @@ function storeB(idSeed?: number): Store {
   const store = newStore();
   const id = (label: string): string =>
     fixtureId(idSeed === undefined ? label : `perm${String(idSeed)}:${label}`);
-  SCENARIO_B.seed.records.forEach((spec, index) => {
+  SEED_B.forEach((spec, index) => {
     addRecord(store, {
       id: id(`record:${spec.key}`),
       body: spec.body,
@@ -274,27 +330,49 @@ describe("recall among near-topic distractors (diagnosis mv/diag-recall-distract
       expect(fillerAmong(store, recall(store, QUESTION_A_PLAIN))).toEqual([]);
     });
 
-    // Pin for the diversity stage (#4228, next step): two mutually similar records that are both the
-    // nearest to the question (cosine about 0.96 to each other) lose one of them to the MMR penalty.
+    // The two records below are two DIFFERENT values for one question (room Willow, room Birch),
+    // both the nearest to it (cosine about 0.96 to each other). When two accepted values of one kind
+    // exist the model must see both, so it can say they differ, instead of one chosen by the MMR
+    // reorder, which penalises the second for resembling the first. Every other input is the proven
+    // one of the controls: the same store, floor, cap and budget supply both at lambda 1.
+    const TWIN_BODIES = [
+      ["The audit review is in room Willow.", 1.0],
+      ["The audit review is in room Birch.", 1.66],
+    ] as const;
+    function storeWithTwins(): Store {
+      const store = storeA(0.35);
+      for (const [body, angle] of TWIN_BODIES) {
+        addRecord(store, {
+          id: fixtureId(`twin:${body}`),
+          body,
+          ageDays: 5,
+          cosine: 0.9,
+          angle,
+        });
+      }
+      return store;
+    }
+
+    it("fixture: both twin bodies are in the store", () => {
+      const store = storeWithTwins();
+      for (const [body] of TWIN_BODIES) expect(idOfBody(store, body)).toBeTypeOf("string");
+    });
+
+    it("control: both twins are supplied when the diversity reorder is inert (lambda 1)", () => {
+      const store = storeWithTwins();
+      const supplied = recall(store, QUESTION_A_PLAIN, { mmrLambda: 1 });
+      for (const [body] of TWIN_BODIES) expect(supplied).toContain(idOfBody(store, body));
+    });
+
+    // Pin for the diversity stage (#4228, next step): at the default lambda one twin is lost to the
+    // MMR penalty. The fixture and the control above are asserted outside this expected failure, so
+    // it cannot pass for a missing body or a floor or cap change.
     it.fails(
       "supplies both of two mutually similar nearest records at the default MMR lambda",
       () => {
-        const store = storeA(0.35);
-        const twins = [
-          ["The audit review is in room Willow.", 1.0],
-          ["The audit review is in room Birch.", 1.66],
-        ] as const;
-        for (const [body, angle] of twins) {
-          addRecord(store, {
-            id: fixtureId(`twin:${body}`),
-            body,
-            ageDays: 5,
-            cosine: 0.9,
-            angle,
-          });
-        }
+        const store = storeWithTwins();
         const supplied = recall(store, QUESTION_A_PLAIN);
-        for (const [body] of twins) expect(supplied).toContain(idOfBody(store, body));
+        for (const [body] of TWIN_BODIES) expect(supplied).toContain(idOfBody(store, body));
       },
     );
 
