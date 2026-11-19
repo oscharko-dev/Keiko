@@ -18,6 +18,7 @@ import Link from "next/link";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
 import { personMemoryTags } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { fetchMemory, type MemoryDetailResponse } from "@/lib/memory-api";
+import { subscribeMemoryVaultViewChanges } from "@/lib/memory-vault-view-changes";
 
 import { formatError } from "./format-error";
 import { MemoryActions } from "./MemoryActions";
@@ -308,106 +309,17 @@ interface MemoryDetailProps {
   readonly onBack?: (() => void) | undefined;
 }
 
-export function MemoryDetail({
-  id,
-  fetchMemoryImpl = fetchMemory,
+function RecordContent({
+  record,
   onBack,
-}: MemoryDetailProps): ReactNode {
-  const t = useTranslate();
-  const [record, setRecord] = useState<MemoryRecord | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  // True after a destructive action (forget/delete) cleared the record — the
-  // empty state then confirms the removal and offers a way back instead of a
-  // dead-end "Memory not found" (uiux-fix F005).
-  const [removed, setRemoved] = useState(false);
-  const removedBackControlRef = useRef<BackControlElement>(null);
-  const setRemovedBackControlRef = useCallback((node: BackControlElement): void => {
-    removedBackControlRef.current = node;
-  }, []);
-
-  const handleRecordChange = useCallback((updated: MemoryRecord | null): void => {
-    if (updated === null) setRemoved(true);
-    setRecord(updated);
-  }, []);
-
-  // The forget/delete dialog tries to restore focus to its (now unmounted)
-  // trigger button; move focus to the back link so keyboard users keep an
-  // anchor after the destructive action.
-  useEffect(() => {
-    if (removed && record === null) removedBackControlRef.current?.focus();
-  }, [removed, record]);
-
-  const load = useCallback(async (): Promise<void> => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res: MemoryDetailResponse = await fetchMemoryImpl(id as MemoryId);
-      setRecord(res.memory);
-    } catch (err) {
-      setError(formatError(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [id, fetchMemoryImpl]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  if (loading) {
-    return (
-      <p role="status" aria-live="polite" className="lk-loading">
-        {t("memoria.loadingMemory")}
-      </p>
-    );
-  }
-
-  if (error !== null) {
-    return (
-      <>
-        <div role="alert" aria-live="assertive" className="lk-alert">
-          {error}
-          <button
-            type="button"
-            className="lk-alert-retry"
-            onClick={() => {
-              void load();
-            }}
-          >
-            {t("memoria.retry")}
-          </button>
-        </div>
-        <p>
-          <BackToMemoriaControl onBack={onBack} t={t} />
-        </p>
-      </>
-    );
-  }
-
-  if (record === null) {
-    return (
-      <div className="lk-empty">
-        <div>
-          <p className="lk-empty-title">
-            {removed ? t("memoria.removedTitle") : t("memoria.notFoundTitle")}
-          </p>
-          <p role="status" aria-live="polite" className="lk-empty-body">
-            {removed ? t("memoria.removedBody") : t("memoria.notFoundBody")}
-          </p>
-          <p>
-            <BackToMemoriaControl onBack={onBack} controlRef={setRemovedBackControlRef} t={t} />
-          </p>
-        </div>
-      </div>
-    );
-  }
-
+  t,
+}: {
+  readonly record: MemoryRecord;
+  readonly onBack: MemoryDetailProps["onBack"];
+  readonly t: I18nTranslate;
+}): ReactNode {
   return (
-    <article
-      aria-label={t("memoria.articleLabel", { preview: record.body.slice(0, 60) })}
-      className="mc-detail"
-    >
+    <>
       <RecordHeader record={record} onBack={onBack} t={t} />
 
       <section aria-label={t("memoria.memoryBody")} className="mc-section">
@@ -436,10 +348,182 @@ export function MemoryDetail({
         <h2 className="lk-section-head">{t("memoria.tags")}</h2>
         <TagsList tags={personMemoryTags(record.tags)} t={t} />
       </section>
+    </>
+  );
+}
 
+export function MemoryDetail({
+  id,
+  fetchMemoryImpl = fetchMemory,
+  onBack,
+}: MemoryDetailProps): ReactNode {
+  const t = useTranslate();
+  const [record, setRecord] = useState<MemoryRecord | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [contentPending, setContentPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const requestSeqRef = useRef(0);
+  const removedIdRef = useRef<string | undefined>(undefined);
+  // True after a destructive action (forget/delete) cleared the record — the
+  // empty state then confirms the removal and offers a way back instead of a
+  // dead-end "Memory not found" (uiux-fix F005).
+  const [removed, setRemoved] = useState(false);
+  const articleRef = useRef<HTMLElement>(null);
+  const restoreRemovedFocus = useRef(false);
+  const removedBackControlRef = useRef<BackControlElement>(null);
+  const setRemovedBackControlRef = useCallback((node: BackControlElement): void => {
+    removedBackControlRef.current = node;
+  }, []);
+
+  const showRemovedRecord = useCallback((): void => {
+    if (articleRef.current?.contains(document.activeElement)) restoreRemovedFocus.current = true;
+    requestSeqRef.current += 1;
+    removedIdRef.current = id;
+    setRemoved(true);
+    setRecord(null);
+    setError(null);
+    setLoading(false);
+  }, [id]);
+
+  const handleRecordChange = useCallback(
+    (updated: MemoryRecord | null): void => {
+      if (updated === null) showRemovedRecord();
+      else if (removedIdRef.current !== id) setRecord(updated);
+    },
+    [id, showRemovedRecord],
+  );
+
+  // The forget/delete dialog tries to restore focus to its (now unmounted)
+  // trigger button; move focus to the back link so keyboard users keep an
+  // anchor after the destructive action.
+  useEffect(() => {
+    if (removed && record === null && restoreRemovedFocus.current) {
+      restoreRemovedFocus.current = false;
+      if (document.activeElement === document.body) removedBackControlRef.current?.focus();
+    }
+  }, [removed, record]);
+
+  const load = useCallback(
+    async (change?: "updated" | "edited"): Promise<void> => {
+      if (removedIdRef.current === id) {
+        showRemovedRecord();
+        return;
+      }
+      const seq = (requestSeqRef.current += 1);
+      if (change === undefined) setLoading(true);
+      if (change === "edited") setContentPending(true);
+      setError(null);
+      setRemoved(false);
+      try {
+        const res: MemoryDetailResponse = await fetchMemoryImpl(id as MemoryId);
+        if (seq === requestSeqRef.current) {
+          setRecord(res.memory);
+          setContentPending(false);
+        }
+      } catch (err) {
+        if (seq === requestSeqRef.current) setError(formatError(err));
+      } finally {
+        if (seq === requestSeqRef.current) setLoading(false);
+      }
+    },
+    [id, fetchMemoryImpl, showRemovedRecord],
+  );
+
+  useEffect(() => {
+    void load();
+    return (): void => {
+      requestSeqRef.current += 1;
+    };
+  }, [load]);
+
+  useEffect(
+    () =>
+      subscribeMemoryVaultViewChanges((change) => {
+        if (!change.ids.includes(id)) return;
+        if (change.kind === "removed") showRemovedRecord();
+        else void load(change.kind);
+      }),
+    [id, load, showRemovedRecord],
+  );
+
+  function articleLabelFor(current: MemoryRecord): string {
+    return contentPending
+      ? t("memoria.loadingMemory")
+      : t("memoria.articleLabel", { preview: current.body.slice(0, 60) });
+  }
+
+  if (loading) {
+    return (
+      <p role="status" aria-live="polite" className="lk-loading">
+        {t("memoria.loadingMemory")}
+      </p>
+    );
+  }
+
+  function renderLoadError(): ReactNode {
+    if (error === null) return null;
+    return (
+      <div role="alert" aria-live="assertive" className="lk-alert">
+        {error}
+        <button
+          type="button"
+          className="lk-alert-retry"
+          onClick={() => {
+            if (record?.id === id) void load(contentPending ? "edited" : "updated");
+            else void load();
+          }}
+        >
+          {t("memoria.retry")}
+        </button>
+      </div>
+    );
+  }
+  const loadError = renderLoadError();
+  if (loadError !== null && record?.id !== id) {
+    return (
+      <>
+        {loadError}
+        <p>
+          <BackToMemoriaControl onBack={onBack} t={t} />
+        </p>
+      </>
+    );
+  }
+
+  if (record === null) {
+    return (
+      <div className="lk-empty">
+        <div>
+          <p className="lk-empty-title">
+            {removed ? t("memoria.removedTitle") : t("memoria.notFoundTitle")}
+          </p>
+          <p role="status" aria-live="polite" className="lk-empty-body">
+            {removed ? t("memoria.removedBody") : t("memoria.notFoundBody")}
+          </p>
+          <p>
+            <BackToMemoriaControl onBack={onBack} controlRef={setRemovedBackControlRef} t={t} />
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <article ref={articleRef} aria-label={articleLabelFor(record)} className="mc-detail">
+      {loadError}
+      {contentPending ? (
+        <output className="lk-loading">{t("memoria.loadingMemory")}</output>
+      ) : (
+        <RecordContent record={record} onBack={onBack} t={t} />
+      )}
       <section aria-label={t("memoria.actions")} className="mc-section">
         <h2 className="lk-section-head">{t("memoria.actions")}</h2>
-        <MemoryActions record={record} onRecordChange={handleRecordChange} />
+        <MemoryActions
+          key={record.id}
+          record={record}
+          onRecordChange={handleRecordChange}
+          contentPending={contentPending}
+        />
       </section>
     </article>
   );

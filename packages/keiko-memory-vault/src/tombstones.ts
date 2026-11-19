@@ -5,6 +5,8 @@
 // tombstone tells you "this id existed in this scope at this time," not "follow the FK."
 
 import { Buffer } from "node:buffer";
+import { createHash } from "node:crypto";
+import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
 import type { DatabaseSync } from "node:sqlite";
 import type {
   MemoryId,
@@ -16,6 +18,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/memory";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import type {
+  MemoryEmbeddingInput,
   MemoryTombstone,
   MemoryTombstoneCursor,
   MemoryTombstoneLedgerCursor,
@@ -44,16 +47,21 @@ interface TombstoneRow {
 const INSERT_SQL = `
 INSERT INTO memory_tombstones (
   id, memory_id, scope_kind, scope_coordinate, type, forgotten_at,
-  forgetter_surface, body_hash, reviewer_id, original_status, reason, body_embedding
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+  forgetter_surface, body_hash, reviewer_id, original_status, reason, body_embedding, body_embedding_space
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 `;
 
 // Forget-tombstone rows whose body_embedding is present, scoped for the semantic suppression scan
 // (GEN-AI-MEMORY-003, RB-4). Selects only the sealed vector column so the cosine sweep never touches
 // the (irrelevant here) reason/body_hash columns.
+// An unbound legacy vector keeps its conservative comparison. When both spaces are known,
+// skip unrelated coordinates in SQLite before decrypting a vector.
+const MATCH_EMBEDDING_SPACE =
+  "AND (? IS NULL OR body_embedding_space IS NULL OR body_embedding_space = ?)";
 const LIST_FORGET_VECTOR_PAGE_BY_SCOPE_SQL = `
 SELECT id, forgotten_at, body_embedding FROM memory_tombstones
 WHERE scope_kind = ? AND scope_coordinate = ? AND body_embedding IS NOT NULL
+  ${MATCH_EMBEDDING_SPACE}
 ORDER BY forgotten_at DESC, id ASC
 LIMIT ?
 `;
@@ -61,6 +69,7 @@ LIMIT ?
 const LIST_FORGET_VECTOR_PAGE_AFTER_BY_SCOPE_SQL = `
 SELECT id, forgotten_at, body_embedding FROM memory_tombstones
 WHERE scope_kind = ? AND scope_coordinate = ? AND body_embedding IS NOT NULL
+  ${MATCH_EMBEDDING_SPACE}
   AND (forgotten_at < ? OR (forgotten_at = ? AND id > ?))
 ORDER BY forgotten_at DESC, id ASC
 LIMIT ?
@@ -118,11 +127,26 @@ function rowToTombstone(row: TombstoneRow, cipher: MemoryContentCipher): MemoryT
   };
 }
 
+function tombstoneSpaceDigest(embedding: MemoryEmbeddingInput | Float32Array): string | null {
+  if (embedding instanceof Float32Array) return null;
+  const key = embeddingIdentityKey({
+    provider: embedding.provider,
+    modelId: embedding.modelId,
+    vectorDimensions: embedding.vector.length,
+    vectorMetric: embedding.metric,
+  });
+  return createHash("sha256").update(key).digest("hex");
+}
+
+function vectorOf(embedding: MemoryEmbeddingInput | Float32Array): Float32Array {
+  return embedding instanceof Float32Array ? embedding : embedding.vector;
+}
+
 export function insertTombstoneRow(
   db: DatabaseSync,
   tombstone: MemoryTombstone,
   cipher: MemoryContentCipher,
-  bodyEmbedding?: Float32Array,
+  bodyEmbedding?: MemoryEmbeddingInput | Float32Array,
 ): void {
   const safeReason = sanitizeMemoryTombstoneReason(tombstone.reason);
   const reason = safeReason === undefined ? null : cipher.sealString(safeReason);
@@ -130,7 +154,7 @@ export function insertTombstoneRow(
   // vector column before it touches the BLOB — never the raw phrase, only a lossy vector (AUDIT-
   // MEMSEC-001/-002: no plaintext body ever lands in a tombstone row).
   const sealedEmbedding =
-    bodyEmbedding === undefined ? null : cipher.sealBytes(encodeVectorLE(bodyEmbedding));
+    bodyEmbedding === undefined ? null : cipher.sealBytes(encodeVectorLE(vectorOf(bodyEmbedding)));
   cachedPrepare(db, INSERT_SQL).run(
     tombstone.id,
     tombstone.memoryId,
@@ -144,6 +168,7 @@ export function insertTombstoneRow(
     tombstone.originalStatus ?? null,
     reason,
     sealedEmbedding,
+    bodyEmbedding === undefined ? null : tombstoneSpaceDigest(bodyEmbedding),
   );
 }
 
@@ -175,6 +200,7 @@ function vectorPageRows(
   db: DatabaseSync,
   scope: MemoryScope,
   after: MemoryTombstoneCursor | undefined,
+  space: string | null,
 ): readonly TombstoneVectorRow[] {
   const scopeKind = scopeKindOf(scope);
   const coordinate = scopeCoordinateOf(scope);
@@ -182,12 +208,16 @@ function vectorPageRows(
     return cachedPrepare(db, LIST_FORGET_VECTOR_PAGE_BY_SCOPE_SQL).all(
       scopeKind,
       coordinate,
+      space,
+      space,
       SEMANTIC_VECTOR_PAGE_SIZE,
     ) as unknown as readonly TombstoneVectorRow[];
   }
   return cachedPrepare(db, LIST_FORGET_VECTOR_PAGE_AFTER_BY_SCOPE_SQL).all(
     scopeKind,
     coordinate,
+    space,
+    space,
     after.forgottenAt,
     after.forgottenAt,
     after.id,
@@ -215,15 +245,17 @@ export function hasSemanticallySimilarForgetTombstoneRow(
   db: DatabaseSync,
   scope: MemoryScope,
   cipher: MemoryContentCipher,
-  candidate: Float32Array,
+  candidate: MemoryEmbeddingInput | Float32Array,
   threshold: number,
 ): boolean {
+  const space = tombstoneSpaceDigest(candidate);
+  const query = vectorOf(candidate);
   let after: MemoryTombstoneCursor | undefined;
   for (;;) {
-    const rows = vectorPageRows(db, scope, after);
+    const rows = vectorPageRows(db, scope, after, space);
     for (const row of rows) {
       const vector = decodeSealedTombstoneVector(row.body_embedding, cipher);
-      if (cosineAtLeast(candidate, vector, threshold)) return true;
+      if (cosineAtLeast(query, vector, threshold)) return true;
     }
     if (rows.length < SEMANTIC_VECTOR_PAGE_SIZE) return false;
     const last = rows.at(-1);

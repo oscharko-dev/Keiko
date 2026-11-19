@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
-import { getAccessStatsRows, recordAccessRows, recordOutcomeRows } from "./access.js";
+import {
+  getAccessStatsRows,
+  getConversationTouchRows,
+  recordAccessRows,
+  recordLearnedConfirmationRows,
+  recordOutcomeRows,
+  recordUseRows,
+} from "./access.js";
 import { insertMemoryRow } from "./memories.js";
 import { makeRecord, memId, openTestDb, TEST_CIPHER } from "./_support.js";
 
@@ -13,6 +20,50 @@ function seedMemory(db: DatabaseSync, value: string): MemoryId {
 function id(value: string): MemoryId {
   return memId(value);
 }
+
+describe("learned confirmation time", () => {
+  it("attributes the conversational touch to its source while retaining the processing clock", () => {
+    const db = openTestDb();
+    try {
+      const memory = seedMemory(db, "delayed-confirmation");
+      expect(
+        recordLearnedConfirmationRows(db, memory, "chat-a", { timestamp: 100, rowid: 4 }, 300),
+      ).toBe(true);
+      expect(getConversationTouchRows(db, "chat-a").get(memory)).toEqual({ confirmedAt: 100 });
+      expect(getAccessStatsRows(db, [memory]).get(memory)).toMatchObject({
+        lastAccessedAt: 300,
+        accessCount: 1,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps a newer confirmation and answer use when an older source is learned later", () => {
+    const db = openTestDb();
+    try {
+      const memory = seedMemory(db, "newer-confirmation");
+      recordAccessRows(db, [memory], 250, "chat-a");
+      recordUseRows(db, [memory], 275, "chat-a");
+      expect(
+        recordLearnedConfirmationRows(db, memory, "chat-a", { timestamp: 100, rowid: 4 }, 300),
+      ).toBe(true);
+      expect(getConversationTouchRows(db, "chat-a").get(memory)).toEqual({
+        confirmedAt: 250,
+        usedAt: 275,
+      });
+      expect(
+        recordLearnedConfirmationRows(db, memory, "chat-a", { timestamp: 100, rowid: 4 }, 400),
+      ).toBe(false);
+      expect(getAccessStatsRows(db, [memory]).get(memory)).toMatchObject({
+        lastAccessedAt: 300,
+        accessCount: 2,
+      });
+    } finally {
+      db.close();
+    }
+  });
+});
 
 describe("recordAccessRows", () => {
   it("inserts a fresh access row with count 1", () => {
@@ -123,6 +174,34 @@ describe("getAccessStatsRows", () => {
     });
     expect(stats.get(m2)).toBeUndefined();
     db.close();
+  });
+
+  it("reads counters beyond the host parameter limit without returning other memories", () => {
+    const db = openTestDb();
+    try {
+      const requested = seedMemory(db, 'quoted-"identifier');
+      const other = seedMemory(db, "other");
+      recordAccessRows(db, [requested, other], 1000);
+      const ids = Array.from({ length: 260_000 }, (_, index) => id(`absent-${String(index)}`));
+      const stats = getAccessStatsRows(db, [requested, ...ids, requested]);
+      expect([...stats.keys()]).toEqual([requested]);
+      expect(stats.get(requested)?.accessCount).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("matches SQLite text binding for identifiers containing an unpaired surrogate", () => {
+    const db = openTestDb();
+    try {
+      const requested = seedMemory(db, "stored-\ud800");
+      recordAccessRows(db, [requested], 1000);
+      const all = getAccessStatsRows(db);
+      expect(all.size).toBe(1);
+      expect(getAccessStatsRows(db, [requested])).toEqual(all);
+    } finally {
+      db.close();
+    }
   });
 
   it("omits ids that have no access row", () => {

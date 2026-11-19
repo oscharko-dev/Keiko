@@ -3,6 +3,8 @@ import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatDraft, ChatDraftUpdate } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { MemoryDetail } from "@/app/memoriaviva/components/MemoryDetail";
+import { forgetMemory } from "@/lib/memory-session-api";
 import { EN_MESSAGES } from "@/lib/i18n-messages.en";
 import { replaceGroundingScopeList } from "@/lib/chat-grounding-mutation";
 import type { updateChatConnectedScopes } from "@/lib/api";
@@ -4884,6 +4886,40 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
     await waitFor(() => expect(rendered.result.current.loading).toBe(false));
     return rendered;
   }
+
+  it("invalidates a mounted Vault detail when the completed chat turn already forgot a memory", async () => {
+    const { result, rerender } = await setupUngroundedSession();
+    const detailRead = vi.fn(() => new Promise<never>(() => undefined));
+    render(<MemoryDetail id="memory-forgotten" fetchMemoryImpl={detailRead} onBack={vi.fn()} />);
+    await waitFor(() => expect(detailRead).toHaveBeenCalledOnce());
+    const completed = {
+      context: { enabled: true, text: "", memories: [], budget: { tokens: 100, used: 0 } },
+      actions: [
+        {
+          kind: "forget" as const,
+          memoryId: "memory-forgotten",
+          requiresConfirmation: false,
+          forgotten: true,
+        },
+      ],
+    };
+    vi.mocked(sendDesktopChat).mockResolvedValueOnce({
+      chat: chat(),
+      messages: [
+        message({ id: "user-forget", role: "user" }),
+        message({ id: "assistant-forget", role: "assistant" }),
+      ],
+      memory: completed,
+    });
+    await act(async () => {
+      await result.current.sendMessage({ text: "Please forget the old preference." });
+    });
+    expect(result.current.latestMemory).toEqual(completed);
+    expect(forgetMemory).not.toHaveBeenCalled();
+    expect(await screen.findByText("Memory removed")).toBeInTheDocument();
+    rerender();
+    expect(detailRead).toHaveBeenCalledOnce();
+  });
 
   it("sends the explicit text even when the composer draft is empty", async () => {
     const { result } = await setupUngroundedSession();

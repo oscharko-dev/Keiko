@@ -818,9 +818,26 @@ retired surfaces of #4448 change the core and optional English and German catalo
 passed. The three producer-generated records bind the updated source digests and generation time.
 The fourteen committed captures retain the typography of their original renderer.
 
+## MemoriaViva profile disclosure — 2026-11-18 (#4215)
+
+The new Chat disclosure labels update both optional message catalogs. The original nine Chromium
+cases passed in 2.4 minutes in the Linux arm64 gates container with Node 26.13.1, an init process,
+and Liberation fonts. The three records bind the new catalog digests. The committed screenshots
+show the previously qualified updater rendering. The Editor B1–B3 gates also passed against the
+Linux static export with the existing measurement fingerprint.
+
 ## Figma Snapshot status messages — 2026-11-18
 
 All nine updater cases passed in the Linux arm64 gates container with Node 26.13.1, a fresh
 lockfile install and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The three producer records bind the
 English and German optional catalogs after the Figma status changes. The fourteen committed
 captures retain their original renderer's typography. The freshness gate passed.
+
+## MemoriaViva hardening merged with Keiko 1.5.3 — 2026-11-19 (#4205)
+
+Merging `dev` into the Memoria Viva hardening branch combines the profile disclosure labels with
+the Figma status messages in both optional catalogs. All nine updater cases passed in 1.8 minutes
+in the Linux arm64 gates container with an init process and Node 26.13.1, with
+`KEIKO_WRITE_TRACKED_EVIDENCE=1`, and `npm run check:update-ui-evidence` passed. Only the three
+producer records were kept; the fourteen committed captures retain their original renderer's
+typography.

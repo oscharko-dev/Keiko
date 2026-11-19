@@ -32,7 +32,7 @@ import { formatError } from "./format-error";
 import { EditMemoryDialog } from "./EditMemoryDialog";
 import { ForgetConfirmDialog } from "./ForgetConfirmDialog";
 
-type BusyAction = "accept" | "reject" | "pin" | "unpin" | "archive" | null;
+type BusyAction = "accept" | "reject" | "pin" | "unpin" | "archive" | "refresh" | null;
 
 interface ProposedActionButtonsProps {
   readonly isProposed: boolean;
@@ -315,6 +315,7 @@ function ActionDialogs({
 }
 
 interface MemoryActionsProps {
+  readonly contentPending?: boolean;
   readonly record: MemoryRecord;
   readonly onRecordChange: (updated: MemoryRecord | null) => void;
   readonly acceptImpl?: typeof acceptMemoryProposal;
@@ -328,6 +329,7 @@ interface MemoryActionsProps {
 
 export function MemoryActions({
   record,
+  contentPending = false,
   onRecordChange,
   acceptImpl = acceptMemoryProposal,
   rejectImpl = rejectMemoryProposal,
@@ -338,7 +340,9 @@ export function MemoryActions({
   correctImpl = correctMemory,
 }: MemoryActionsProps): ReactNode {
   const t = useTranslate();
-  const [busy, setBusy] = useState<BusyAction>(null);
+  const [actionInFlight, setActionInFlight] = useState<BusyAction>(null);
+  // The dialog's trigger stays mounted and focusable while the canonical record reloads.
+  const busy = contentPending ? "refresh" : actionInFlight;
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showEdit, setShowEdit] = useState(false);
@@ -351,7 +355,7 @@ export function MemoryActions({
   const run = useCallback(
     async (action: BusyAction, fn: () => Promise<void>): Promise<void> => {
       if (busy !== null) return;
-      setBusy(action);
+      setActionInFlight(action);
       setError(null);
       setNotice(null);
       try {
@@ -359,7 +363,7 @@ export function MemoryActions({
       } catch (err) {
         setError(formatError(err));
       } finally {
-        setBusy(null);
+        setActionInFlight(null);
       }
     },
     [busy],
@@ -495,8 +499,8 @@ export function MemoryActions({
         record={record}
         showEdit={showEdit}
         showCorrect={showCorrect}
-        showForget={showForget}
-        showDelete={showDelete}
+        showForget={showForget && !contentPending}
+        showDelete={showDelete && !contentPending}
         correctImpl={correctImpl}
         deleteImpl={deleteImpl}
         onEditSave={(updated) => {

@@ -45,6 +45,11 @@ Live, against a local OpenAI-compatible endpoint named in an existing gateway co
 node scripts/testing/memory-lab/run.mjs --mode live --out /tmp/memory-lab/live --config ~/.keiko-lab/gateway.json --answer-model gemma-4-31b-it --learn-model gemma-4-31b-it --repetitions 3
 ```
 
+A product-arm turn may declare `requireStoredBefore` with the same term groups as a store check.
+The driver reads the accepted vault records before sending that turn. If the target is absent,
+the unit fails. The polite-forget journeys use this checkpoint to establish that a live fact
+existed before its removal. The off arm can still measure ordinary answers with an empty store.
+
 Useful flags: `--arms off,product,oracle`, `--memory-mode` and `--ceiling`, `--keep` to retain every
 instance's state directory (refused for real conversations), `--subject-root <checkout>` to measure a
 separately attested baseline checkout, `--broken-learner whole-message|credential|invented` for the
@@ -844,6 +849,7 @@ One row per measured run; raw results stay outside the repository.
 - **Sampling** (temperature, seeds) is not controlled through the product; see `configDigest` above.
 - **Live cost accounting** arrives with the baseline (#4209); offline cost comes from the scripted
   model's journal.
-- **Forget confirmation.** The product asks a person to confirm a forget; the lab confirms through the
-  forget route and records that it had to (`turns[].forgets`), so the baseline measures the end state
-  with the confirmation given.
+- **Forget confirmation.** The lab confirms only when the Chat action explicitly requests
+  confirmation and includes a memory ID. Older subjects that require confirmation continue to
+  work without a `forgotten` field. A forget already applied in Chat needs no second request.
+  `turns[].forgets` records confirmation attempts and requests missing a memory ID.

@@ -146,6 +146,8 @@ function validateTurns(id, turns) {
       fail(id, `${where}.assistant must be a non-empty string when present`);
     if (turn.memory !== undefined && typeof turn.memory !== "boolean")
       fail(id, `${where}.memory must be a boolean when present`);
+    if (turn.requireStoredBefore !== undefined && !validTermGroups(turn.requireStoredBefore))
+      fail(id, `${where}.requireStoredBefore must be non-empty term groups`);
     validateLearnerItems(id, where, turn.learner);
   });
 }

@@ -35,6 +35,7 @@ interface VersionRollback {
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
+  { version: 80, sql: "DROP INDEX idx_messages_user_chat_ts;" },
   { version: 79, sql: "DROP TABLE jira_report_exports;" },
   {
     version: 62,

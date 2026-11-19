@@ -15,6 +15,7 @@ import type { UiStore } from "./store/index.js";
 import type {
   ChatMemoryLearningStore,
   MemoryLearningPosition,
+  PendingLearningChat,
   PendingLearningMessage,
 } from "./store/chatMemoryLearning.js";
 import { chatForegroundActive, onChatForegroundChange } from "./chat-turn-serializer.js";
@@ -174,6 +175,12 @@ export class MemoryLearningRuntime {
   private missedTrigger = false;
   private running: RunningPass | undefined;
   private retryMs = FIRST_RETRY_MS;
+  // Continue from the last visited Chat before retrying an unavailable one at the front.
+  private pendingPage: { after: PendingLearningChat; hadUnavailable: boolean } | undefined;
+  // A bounded Chat pass made progress but left rows behind. Drain these healthy continuations
+  // fairly after the current Chat page tour, before applying unavailable Chats' retry backoff.
+  private readonly readyChats = new Set<string>();
+  private retryAfterContinuations = false;
   private disposed = false;
   private openedChatId: string | undefined;
   // The last turn noted since a pass claimed the runtime; that pass learns it, so it clears it.
@@ -318,9 +325,15 @@ export class MemoryLearningRuntime {
     const startedAt = performance.now();
     const tally = emptyLearningPassTally();
     let settled: { outcome: MemoryLearningPassOutcome; pendingChatCount: number };
+    let nextPage: PendingLearningChat | undefined;
     try {
-      const chats = store.listChatsWithPending(MAX_CHATS_PER_PASS);
-      if (chats.length === 0) return undefined;
+      const page = this.readPassChats(store);
+      const { chats } = page;
+      if (chats.length === 0) {
+        this.finishEmptyChatPage(store, ids.passId);
+        return undefined;
+      }
+      nextPage = page.nextPage;
       logLearningPassStarted(ids, { trigger, chatCount: chats.length });
       const outcome = await this.learnChats(
         store,
@@ -333,7 +346,9 @@ export class MemoryLearningRuntime {
         outcome: this.passOutcome(outcome, running),
         // Chats left without progress wait for new work instead of a continuation loop.
         pendingChatCount:
-          tally.turnCount === 0 ? 0 : store.listChatsWithPending(MAX_CHATS_PER_PASS).length,
+          tally.turnCount === 0 && this.readyChats.size === 0
+            ? 0
+            : store.listChatsWithPending(MAX_CHATS_PER_PASS).length,
       };
     } catch (error: unknown) {
       reportLearningPassFailure(this.deps, ids.passId, error);
@@ -348,8 +363,35 @@ export class MemoryLearningRuntime {
         ? {}
         : { cancelLatencyMs: performance.now() - running.cancelledAt }),
     });
-    this.afterPass(settled.outcome, settled.pendingChatCount, ids.passId);
+    this.afterPass(settled.outcome, settled.pendingChatCount, ids.passId, nextPage);
     return settled.outcome;
+  }
+
+  private readPassChats(store: ChatMemoryLearningStore): {
+    readonly chats: readonly string[];
+    readonly nextPage?: PendingLearningChat | undefined;
+  } {
+    if (this.pendingPage === undefined && this.readyChats.size > 0) {
+      const chats: string[] = [];
+      for (const chatId of this.readyChats) {
+        chats.push(chatId);
+        if (chats.length === MAX_CHATS_PER_PASS) break;
+      }
+      return { chats };
+    }
+    const waiting = store.listPendingChats(MAX_CHATS_PER_PASS + 1, this.pendingPage?.after);
+    return {
+      chats: waiting.slice(0, MAX_CHATS_PER_PASS).map(({ chatId }) => chatId),
+      nextPage:
+        waiting.length > MAX_CHATS_PER_PASS ? waiting.at(MAX_CHATS_PER_PASS - 1) : undefined,
+    };
+  }
+
+  private finishEmptyChatPage(store: ChatMemoryLearningStore, passId: string): void {
+    // Other work may have cleared the remaining Chats since the prior page.
+    if (this.pendingPage !== undefined) {
+      this.afterPass("completed", store.listChatsWithPending(MAX_CHATS_PER_PASS).length, passId);
+    }
   }
 
   private passOutcome(outcome: ChatPassOutcome, running: RunningPass): MemoryLearningPassOutcome {
@@ -361,13 +403,18 @@ export class MemoryLearningRuntime {
     outcome: MemoryLearningPassOutcome,
     pendingChatCount: number,
     passId: string,
+    nextPage?: PendingLearningChat,
   ): void {
     if (this.disposed) return;
     const missed = this.missedTrigger;
     this.missedTrigger = false;
-    if (outcome === "unavailable" || outcome === "failed") {
+    if (this.finishChatPage(outcome, nextPage)) {
       this.schedule(this.retryMs, "retry", passId);
       this.retryMs = Math.min(this.retryMs * 2, MAX_RETRY_MS);
+      return;
+    }
+    if (outcome !== "cancelled" && (this.pendingPage !== undefined || this.readyChats.size > 0)) {
+      this.schedule(CONTINUATION_DELAY_MS, "continuation", passId);
       return;
     }
     this.retryMs = FIRST_RETRY_MS;
@@ -377,6 +424,26 @@ export class MemoryLearningRuntime {
       // A cancelled pass, or a trigger that came while this one ran, resumes after the next pause.
       this.arm("inactivity", passId);
     }
+  }
+
+  private finishChatPage(
+    outcome: MemoryLearningPassOutcome,
+    nextPage: PendingLearningChat | undefined,
+  ): boolean {
+    if (outcome === "cancelled") return false;
+    if (outcome === "failed") {
+      this.pendingPage = undefined;
+      this.retryAfterContinuations = false;
+      return true;
+    }
+    const hadUnavailable =
+      this.retryAfterContinuations ||
+      this.pendingPage?.hadUnavailable === true ||
+      outcome === "unavailable";
+    this.pendingPage = nextPage === undefined ? undefined : { after: nextPage, hadUnavailable };
+    const hasReadyChats = this.readyChats.size > 0;
+    this.retryAfterContinuations = hadUnavailable && hasReadyChats;
+    return hadUnavailable && nextPage === undefined && !hasReadyChats;
   }
 
   // One Chat after the other: a single-slot local model serves one learning call at a time.
@@ -404,6 +471,7 @@ export class MemoryLearningRuntime {
     tally: LearningPassTally,
     passId: string,
   ): Promise<ChatPassOutcome> {
+    this.readyChats.delete(chatId);
     const chat = this.deps.store.findChatById(chatId);
     // A deleted Chat took its messages and its position with it; nothing of it is learned.
     if (chat === undefined) return "done";
@@ -411,12 +479,23 @@ export class MemoryLearningRuntime {
     const plan = planLearningTurns(rows, rows.length === PENDING_PAGE);
     if (plan.leadingEnd !== undefined) store.advance(chatId, plan.leadingEnd);
     const context = memoryContextOfChat(chat);
-    return this.learnTurns(store, chat, plan.turns.slice(0, MAX_TURNS_PER_CHAT_PASS), {
-      context,
-      signal,
-      tally,
-      passId,
-    });
+    const outcome = await this.learnTurns(
+      store,
+      chat,
+      plan.turns.slice(0, MAX_TURNS_PER_CHAT_PASS),
+      {
+        context,
+        signal,
+        tally,
+        passId,
+      },
+    );
+    const bounded = rows.length === PENDING_PAGE || plan.turns.length > MAX_TURNS_PER_CHAT_PASS;
+    const advanced = plan.leadingEnd !== undefined || plan.turns.length > 0;
+    if (outcome === "done" && bounded && advanced && store.hasPendingMarkedUser(chatId)) {
+      this.readyChats.add(chatId);
+    }
+    return outcome;
   }
 
   // Turns are learned in Chat order, and the position moves past each one only once it is learned.
@@ -447,13 +526,18 @@ export class MemoryLearningRuntime {
       tally.memoryOffTurnCount += 1;
       return "done";
     }
-    const forgotten = replayPendingForget(this.deps, {
+    const forget = replayPendingForget(this.deps, {
       statement: turn.user,
       context,
       correlationId: turn.correlationId,
     });
-    if (forgotten !== undefined) {
-      tally.forgottenPendingCount += forgotten;
+    if (forget !== undefined) {
+      tally.forgottenPendingCount += forget.forgotten;
+      // A failed privacy-critical action must remain pending until the audit and vault can commit it.
+      if (forget.failed) {
+        tally.failedTurnCount += 1;
+        return "unavailable";
+      }
       tally.skippedTurnCount += 1;
       return "done";
     }
@@ -471,6 +555,7 @@ export class MemoryLearningRuntime {
         surface: mark.surface,
         correlationId: turn.correlationId,
         parentCorrelationId: passId,
+        sourcePosition: turn.user.position,
       },
       signal,
     );

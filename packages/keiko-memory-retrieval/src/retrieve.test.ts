@@ -283,6 +283,19 @@ describe("retrieveMemoryContext — AC3 correction outranks older fact", () => {
 });
 
 describe("retrieveMemoryContext — AC4 stale suppression", () => {
+  it.each([
+    [-1, 0],
+    [0, 1],
+  ] as const)("applies the validity start at offset %i", (offset, expected) => {
+    const record = buildRecord({ id: "scheduled", validFrom: now, status: "accepted" });
+    const { port } = portReturning({ "user:u1": [record] });
+    const result = retrieveMemoryContext(
+      baseRequest({ nowMs: now + offset, budgetTokens: 200 }),
+      port,
+    );
+    expect(result.included).toHaveLength(expected);
+  });
+
   it("omits archived/forgotten/expired/low-confidence with reason suppressed-by-status", () => {
     const fresh = buildRecord({ id: "ok", updatedAt: now });
     const archived = buildRecord({ id: "arch", status: "archived" });

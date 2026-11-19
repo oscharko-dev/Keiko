@@ -1,6 +1,6 @@
 # MemoriaViva standing profile and recall
 
-Every Chat answer receives a small standing profile of the person. Other memories reach an answer
+When Memory is enabled, a Chat answer can receive a small standing profile of the person. Other memories reach an answer
 only when they fit the question (#4228, owner decision 2026-11-03). This page records how the
 profile is chosen, how recall decides what fits and what the Activity Log shows.
 
@@ -19,6 +19,8 @@ model (`selectStandingProfile` in `keiko-memory-retrieval`).
 Only private (`user` scope), accepted, unsuppressed facts with sensitivity `public` are members; a
 confidential or restricted fact never rides along with every answer, pinned or not. Project memory
 is not in the profile.
+A future-dated record becomes eligible at its recorded validity start; this also applies to a
+pinned entry and to question-specific retrieval. A record whose validity end has arrived is omitted.
 
 A standing mark is the existing retention hint `policyKey: "standing"`
 (`STANDING_FACT_RETENTION_POLICY_KEY`). The column is not sealed, so the vault lists marked facts
@@ -92,6 +94,11 @@ Known limits of word overlap: short terms such as "Go", "R" or "KI" are below th
 bound, compounds do not split, and German and English match each other only through embedding
 recall where an embedder passes the egress gate.
 
+For a sensitive search, the server checks the selected embedding provider and binds the approved
+query to that provider for dispatch. If the selected destination is ineligible, the turn continues
+with lexical retrieval. The presence of another eligible provider grants no permission to send
+the query to the selected destination.
+
 The Git change description no longer retrieves memory (R10): it never sent what it retrieved.
 
 ## Evidence
@@ -100,9 +107,12 @@ The Git change description no longer retrieves memory (R10): it never sent what 
 counts `profileEntryCount`, `profileTokens`, `profileDroppedCount` (entries dropped by the caps),
 `profileRetrievedCount` (profile facts sent with recall instead), `retrievedMemoryCount` and
 `belowFloorMemoryCount`. The wire memory context carries
-`profile {entries, tokens, droppedCount}`, `profileRetrievedCount` and `belowFloorCount`, so the Chat can show the profile and
-the floor decision; the marker of 2.2 counts retrieved memories only. No fact text enters the
-Activity Log.
+`profile {entries, tokens, droppedCount}`, `profileRetrievedCount` and `belowFloorCount`. The Chat
+disclosure shows the profile entries Keiko selected as background for that answer separately from
+the memories retrieved for the question. Selection can take place even when grounded answering
+finishes without calling the model. The cap counter covers the candidates the selector examined.
+The retrieval count for profile members covers full entries moved out of the profile into recall.
+No fact text enters the Activity Log.
 
 ## Open measurement
 

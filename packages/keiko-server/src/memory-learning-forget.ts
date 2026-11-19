@@ -101,21 +101,24 @@ function pendingForgetTargets(
 
 /**
  * Applies a forget the pass reached to the facts learned from before it while they were pending.
- * Returns undefined for a message that is no forget, else how many facts were forgotten.
+ * Returns undefined for a message that is no forget, otherwise the number of deletions and
+ * whether one could not complete because of an audit or storage failure.
  */
 export function replayPendingForget(
   deps: UiHandlerDeps,
   input: PendingForgetInput,
-): number | undefined {
+): { readonly forgotten: number; readonly failed: boolean } | undefined {
   const vault = deps.memoryVault;
   if (vault === undefined || explicitStatementKind(input.statement.content) !== "forget") {
     return undefined;
   }
   let forgotten = 0;
+  let failed = false;
   for (const id of pendingForgetTargets(deps, vault, input)) {
     const result = forgetMemoryFromStatement(deps, vault, id, input.correlationId);
     logExplicitMemoryForget(result, input.correlationId);
     if (result === "forgotten") forgotten += 1;
+    if (result === "failed") failed = true;
   }
-  return forgotten;
+  return { forgotten, failed };
 }

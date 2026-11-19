@@ -24,6 +24,12 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  MEMORY_SCOPE_KINDS,
+  MEMORY_SENSITIVITIES,
+  MEMORY_STATUSES,
+  MEMORY_TYPES,
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
 import { unwiredSecurityLogSink, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { chmodIfPresent, openMemoryDatabase } from "./db.js";
 import { resolveMemoryDir, resolveMemoryDbPath } from "./paths.js";
@@ -43,10 +49,13 @@ import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import {
   deleteMemoryRow,
   getMemoryRow,
+  getMemoryRowsByIds,
   insertMemoryRow,
   listMemoriesAcrossScopeRows,
   listMemoryScopeRows,
   listMemoryMetadataByScopeRows,
+  prepareStandingProfileReader,
+  listMemoryMetadataAcrossScopeRows,
   listMemoriesByScopeRows,
   updateMemoryRow,
 } from "./memories.js";
@@ -67,6 +76,7 @@ import {
   getAccessStatsRows,
   getConversationTouchRows,
   recordAccessRows,
+  recordLearnedConfirmationRows,
   recordUseRows,
   recordOutcomeRows,
   type MemoryAccessStat,
@@ -102,6 +112,8 @@ import {
 } from "./body-fingerprint.js";
 import { sanitizeMemoryTombstoneReason } from "./tombstone-reason.js";
 import type {
+  MemoryCenterPageOptions,
+  MemoryCenterPage,
   MemoryBatchDelete,
   DeleteMemoryOptions,
   MemoryBatchUpdate,
@@ -122,6 +134,8 @@ import type {
   MemoryVaultFactoryOptions,
   MemoryVaultStore,
 } from "./types.js";
+
+export const MEMORY_CENTER_PAGE_LIMIT = 200;
 
 const MEMORY_VAULT_STORE_OPENED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -635,9 +649,12 @@ type MemoryMutators = Pick<
   | "deleteMemories"
   | "getMemory"
   | "listMemoryScopes"
+  | "listMemoryReviewQueue"
+  | "listMemoryCenterPage"
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
+  | "listStandingProfileCandidates"
   | "listMemoryIdsByStatus"
   | "listAcceptedMemoryIdsMissingEmbedding"
   | "countMemoriesByStatus"
@@ -650,7 +667,7 @@ type MemoryMutators = Pick<
 // that public contract is unchanged (GEN-AI-MEMORY-003, RB-4).
 interface PreparedDelete {
   readonly result: MemoryDeleteResult;
-  readonly bodyEmbedding: Float32Array | undefined;
+  readonly bodyEmbedding: MemoryEmbeddingRow | undefined;
 }
 
 function prepareDelete(
@@ -667,8 +684,7 @@ function prepareDelete(
   if (tombstone !== undefined) {
     assertTombstoneMatchesRecord(existing, tombstone);
   }
-  const bodyEmbedding =
-    tombstone === undefined ? undefined : getEmbeddingRow(db, id, opts.cipher)?.vector;
+  const bodyEmbedding = tombstone === undefined ? undefined : getEmbeddingRow(db, id, opts.cipher);
   return { result: { memoryId: id, scope: existing.scope, tombstone }, bodyEmbedding };
 }
 
@@ -905,9 +921,12 @@ type MemoryReadOps = Pick<
   MemoryMutators,
   | "getMemory"
   | "listMemoryScopes"
+  | "listMemoryReviewQueue"
+  | "listMemoryCenterPage"
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
+  | "listStandingProfileCandidates"
   | "listMemoryIdsByStatus"
   | "listAcceptedMemoryIdsMissingEmbedding"
   | "countMemoriesByStatus"
@@ -975,10 +994,118 @@ function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWri
   };
 }
 
+function readMemoryReviewQueue(db: DatabaseSync, opts: ResolvedOptions): readonly MemoryRecord[] {
+  db.exec("BEGIN");
+  try {
+    const scopes = listMemoryScopeRows(db);
+    for (const scope of scopes) gateMemoryScope(scope);
+    const options = gateListOptions({
+      status: ["proposed", "conflicted", "expired"],
+      includeStaleStatuses: ["accepted", "superseded"],
+      includeExpired: true,
+    });
+    const records = listMemoriesAcrossScopeRows(db, scopes, options, opts.now(), opts.cipher);
+    db.exec("COMMIT");
+    return records;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function isMemoryCenterFilter(value: unknown, allowed: readonly string[]): boolean {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.every((item: unknown) => typeof item === "string" && allowed.includes(item)))
+  );
+}
+
+function validateMemoryCenterPage(options: MemoryCenterPageOptions): void {
+  const filters = [
+    [options.scopeKinds, MEMORY_SCOPE_KINDS],
+    [options.sensitivity, MEMORY_SENSITIVITIES],
+    [options.status, MEMORY_STATUSES],
+    [options.type, MEMORY_TYPES],
+  ] as const;
+  if (
+    !filters.every(([values, allowed]) => isMemoryCenterFilter(values, allowed)) ||
+    !Number.isSafeInteger(options.limit) ||
+    options.limit < 1 ||
+    options.limit > MEMORY_CENTER_PAGE_LIMIT ||
+    !Number.isSafeInteger(options.offset) ||
+    options.offset < 0
+  ) {
+    throw new MemoryStorageValidationError("Invalid Memory Center page.", [
+      {
+        path: ["page"],
+        message: "Page size, offset or filters are outside their supported bounds.",
+      },
+    ]);
+  }
+}
+
+function readMemoryCenterPage(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  options: MemoryCenterPageOptions,
+): MemoryCenterPage {
+  validateMemoryCenterPage(options);
+  db.exec("BEGIN");
+  try {
+    const scopes = listMemoryScopeRows(db).filter(
+      (scope) => !options.scopeKinds?.length || options.scopeKinds.includes(scope.kind),
+    );
+    for (const scope of scopes) gateMemoryScope(scope);
+    const metadata = [
+      ...listMemoryMetadataAcrossScopeRows(
+        db,
+        scopes,
+        {
+          ...(options.type === undefined ? {} : { type: options.type }),
+          ...(options.status === undefined ? {} : { status: options.status }),
+          ...(options.sensitivity === undefined ? {} : { sensitivity: options.sensitivity }),
+          includeExpired: true,
+        },
+        opts.now(),
+      ),
+    ].sort((a, b) => {
+      if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt;
+      if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+      return a.id.localeCompare(b.id);
+    });
+    const page = metadata.slice(options.offset, options.offset + options.limit);
+    const rows = getMemoryRowsByIds(
+      db,
+      page.map(({ id }) => id),
+      opts.cipher,
+    );
+    const byId = new Map(rows.map((record) => [record.id, record]));
+    const memories = page.map(({ id }) => {
+      const record = byId.get(id);
+      if (record === undefined)
+        throw new MemoryStorageError("internal", "Memory page is inconsistent.");
+      return record;
+    });
+    db.exec("COMMIT");
+    return { memories, total: metadata.length };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryReadOps {
+  const readStandingProfile = prepareStandingProfileReader(db);
   return {
+    listStandingProfileCandidates: (userId, options): ReturnType<typeof readStandingProfile> => {
+      gateMemoryScope({ kind: "user", userId });
+      return readStandingProfile(userId, options);
+    },
     getMemory: (id: MemoryId): MemoryRecord | undefined => getMemoryRow(db, id, opts.cipher),
     listMemoryScopes: (): readonly MemoryScope[] => listMemoryScopeRows(db),
+    listMemoryReviewQueue: (): readonly MemoryRecord[] => readMemoryReviewQueue(db, opts),
+    listMemoryCenterPage: (options): MemoryCenterPage => readMemoryCenterPage(db, opts, options),
     listMemoriesAcrossScopes: (
       scopes: readonly MemoryScope[],
       options?: ListMemoriesOptions,
@@ -1074,6 +1201,7 @@ type EdgeAndEmbeddingOps = Pick<
   | "deleteEdge"
   | "upsertEmbedding"
   | "deleteEmbedding"
+  | "replaceEmbeddingForMemoryBody"
   | "replaceAllEmbeddings"
   | "listEmbeddedMemoryIds"
   | "snapshotEmbeddedMemoryIds"
@@ -1090,6 +1218,7 @@ type EmbeddingOps = Pick<
   MemoryVaultStore,
   | "upsertEmbedding"
   | "deleteEmbedding"
+  | "replaceEmbeddingForMemoryBody"
   | "replaceAllEmbeddings"
   | "listEmbeddedMemoryIds"
   | "snapshotEmbeddedMemoryIds"
@@ -1190,6 +1319,10 @@ function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOp
     deleteEmbedding: (memoryId: MemoryId): void => {
       deleteSingleEmbedding(db, opts, memoryId);
     },
+    replaceEmbeddingForMemoryBody: (memoryId, expectedBody, embedding): boolean =>
+      withSidecarHardening(opts, () =>
+        replaceEmbeddingForMemoryBody(db, opts, memoryId, expectedBody, embedding),
+      ),
     replaceAllEmbeddings: (
       pairs: readonly { readonly memoryId: MemoryId; readonly input: MemoryEmbeddingInput }[],
       expectedSnapshot?: ReadonlyMap<MemoryId, number>,
@@ -1241,6 +1374,44 @@ function upsertSingleEmbedding(
       modelId: embedding.modelId,
     });
   });
+}
+
+function replaceEmbeddingForMemoryBody(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  memoryId: MemoryId,
+  expectedBody: string,
+  embedding: MemoryEmbeddingInput | null,
+): boolean {
+  if (typeof expectedBody !== "string")
+    throw new TypeError("Expected memory body must be a string.");
+  let event: MemoryEvent | undefined;
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const current = getMemoryRow(db, memoryId, opts.cipher);
+    if (current?.body !== expectedBody) {
+      db.exec("COMMIT");
+      return false;
+    }
+    if (embedding === null) {
+      if (deleteEmbeddingRow(db, memoryId)) event = { kind: "embedding:deleted", memoryId };
+    } else {
+      gateEmbeddingInput(embedding);
+      upsertEmbeddingRow(db, memoryId, embedding, opts.now(), opts.cipher);
+      event = {
+        kind: "embedding:upserted",
+        memoryId,
+        provider: embedding.provider,
+        modelId: embedding.modelId,
+      };
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  if (event !== undefined) opts.emit(event);
+  return true;
 }
 
 function deleteSingleEmbedding(db: DatabaseSync, opts: ResolvedOptions, memoryId: MemoryId): void {
@@ -1336,6 +1507,10 @@ function buildStore(db: DatabaseSync, opts: ResolvedOptions): MemoryVaultStore {
     ...buildMemoryMutators(db, opts),
     ...buildEdgeAndEmbeddingOps(db, opts),
     ...buildTombstoneAndAccessOps(db, opts),
+    recordLearnedConfirmation: (id, conversationId, position, nowMs): boolean =>
+      withSidecarHardening(opts, () =>
+        recordLearnedConfirmationRows(db, id, conversationId, position, nowMs),
+      ),
     // Idempotent: a composition closes the vault on every dispose, and a process may dispose twice.
     close: (): void => {
       if (db.isOpen) db.close();

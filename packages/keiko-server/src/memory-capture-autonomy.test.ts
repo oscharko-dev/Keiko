@@ -695,6 +695,29 @@ describe("mode-aware memory capture journey", () => {
 
 // #4211: a clear forget statement acts at once, in every mode, and across the scopes of the
 // conversation, because the learner chooses a memory's scope and the person does not name it.
+function withHistory(deps: UiHandlerDeps, messages: readonly ChatMessage[]): UiHandlerDeps {
+  const memoryLearning = deps.store.memoryLearning;
+  return {
+    ...deps,
+    store: {
+      ...deps.store,
+      listMessages: () => messages,
+      ...(memoryLearning === undefined
+        ? {}
+        : {
+            memoryLearning: {
+              ...memoryLearning,
+              readPreviousUserMessage: (_chatId, currentContent): ChatMessage | undefined => {
+                const users = messages.filter((message) => message.role === "user");
+                const newest = users.at(-1);
+                return newest?.content === currentContent ? users.at(-2) : newest;
+              },
+            },
+          }),
+    },
+  };
+}
+
 // The conversation's history as the store reports it: one earlier message of the person.
 function withPreviousStatement(
   deps: UiHandlerDeps,
@@ -702,7 +725,7 @@ function withPreviousStatement(
   timestamp = Date.now(),
 ): UiHandlerDeps {
   const message = { id: "m1", role: "user", content, timestamp } as ChatMessage;
-  return { ...deps, store: { ...deps.store, listMessages: () => [message] } };
+  return withHistory(deps, [message]);
 }
 
 function captureActivityLog(): BufferedServerLogSink {
@@ -1095,9 +1118,138 @@ describe("explicit forget statement in chat", () => {
     expect(readMemories(vault, ctx)).toHaveLength(0);
   });
 
+  it("keeps a stored report after a retracted Forget and removes it after a clear request", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    await collectMemoryActions(
+      deps,
+      turnRequest("Remember that my report is formatted as a table."),
+      ctx,
+    );
+    for (const withdrawal of [
+      "Actually, do not.",
+      "Actually, don't forget it.",
+      "Actually, don't forget the report.",
+      "Actually, please don't forget it.",
+    ]) {
+      await collectMemoryActions(deps, turnRequest("Please forget the report. " + withdrawal), ctx);
+      expect(readMemories(vault, ctx)).toHaveLength(1);
+    }
+    await collectMemoryActions(
+      deps,
+      turnRequest("Please forget the report. Actually, don't publish it."),
+      ctx,
+    );
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it("keeps a German report when the person withdraws Forget after asking for confirmation", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    await collectMemoryActions(
+      deps,
+      turnRequest("Merke dir, dass mein Bericht Tabellen enthält."),
+      ctx,
+    );
+    await collectMemoryActions(
+      deps,
+      turnRequest("Vergiss den Bericht und sag Bescheid – nein, vergiss ihn bitte nicht."),
+      ctx,
+    );
+    expect(readMemories(vault, ctx)).toHaveLength(1);
+    await collectMemoryActions(
+      deps,
+      turnRequest("Vergiss den Bericht und sag bitte nicht, dass ich ihn gespeichert hatte."),
+      ctx,
+    );
+    expect(readMemories(vault, ctx)).toHaveLength(0);
+  });
+
+  it("renews a yearless explicit preference on a new turn and keeps replays idempotent", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 0, 10, 12).getTime());
+    const scope = { kind: "user", userId: ctx.userId } as const;
+    const first = {
+      ...turnRequest("Please remember that I prefer tables until March 14."),
+      clientTurnId: "initial-statement",
+    };
+    const next = { ...first, clientTurnId: "renewed-statement" };
+    try {
+      await collectMemoryActions(deps, first, ctx);
+      const initial = vault.listMemoriesByScope(scope)[0];
+      expect(initial?.validity.validUntil).toBe(new Date(2026, 2, 14, 23, 59, 59, 999).getTime());
+      clock.mockReturnValue(new Date(2027, 0, 10, 12).getTime());
+      await collectMemoryActions(deps, next, ctx);
+      const current = vault.listMemoriesByScope(scope);
+      expect(current).toHaveLength(1);
+      expect(current[0]?.validity.validUntil).toBe(
+        new Date(2027, 2, 14, 23, 59, 59, 999).getTime(),
+      );
+      await collectMemoryActions(deps, first, ctx);
+      await collectMemoryActions(deps, next, ctx);
+      expect(vault.listMemoriesByScope(scope)).toEqual(current);
+      expect(vault.listMemoriesByScope(scope, { includeExpired: true })).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("stops returning an explicitly time-limited preference after the stated local day", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
+    const now = vi.spyOn(Date, "now").mockReturnValue(new Date(2026, 10, 17, 12).getTime());
+    try {
+      await collectMemoryActions(
+        deps,
+        turnRequest("Please remember that I prefer tables until November 18, 2026."),
+        ctx,
+      );
+      const scope = { kind: "user", userId: ctx.userId } as const;
+      expect(
+        vault.listMemoriesByScope(scope, { nowMs: new Date(2026, 10, 18, 23, 59).getTime() }),
+      ).toHaveLength(1);
+      expect(
+        vault.listMemoriesByScope(scope, { nowMs: new Date(2026, 10, 19).getTime() }),
+      ).toHaveLength(0);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it.each([
+    "Speichere zu diesem Projekt, dass wir Vitest nutzen.",
+    "Bitte merke dir für dieses Projekt, dass wir Vitest nutzen.",
+  ])(
+    "keeps %s within its named project and treats a file task as ordinary Chat",
+    async (statement) => {
+      const vault = makeVault();
+      const ctx = context();
+      const deps = makeDeps({ vault, model: "[]", mode: "autonomous-delivery" });
+      await collectMemoryActions(
+        deps,
+        turnRequest("Bitte speichere über Nacht die Protokolle."),
+        ctx,
+      );
+      expect(readMemories(vault, ctx)).toHaveLength(0);
+      await collectMemoryActions(deps, turnRequest(statement), ctx);
+      expect(readMemories(vault, ctx)).toMatchObject([
+        { body: "wir Vitest nutzen.", scope: { kind: "project", projectId: ctx.projectId } },
+      ]);
+      expect(readMemories(vault, context())).toHaveLength(0);
+    },
+  );
+
   // A telephone number stated today is refused (#4206), but one kept before that change is still the
   // person's to forget by its name, with the clause that goes on asking for the answer.
-  it("forgets a telephone number kept before #4206 by its name", async () => {
+  it.each([
+    "Vergiss einfach meine Telefonnummer; sag mir Bescheid, wenn sie weg ist",
+    "Vergiss meine Telefonnummer und sag bitte nicht, dass ich sie gespeichert hatte.",
+  ])("forgets a telephone number kept before #4206 by its name in %s", async (request) => {
     const vault = makeVault();
     const ctx = context();
     const deps = makeDeps({ vault, model: "[]", mode: "governed-assist" });
@@ -1128,11 +1280,9 @@ describe("explicit forget statement in chat", () => {
     );
     expect(readMemories(vault, ctx)).toHaveLength(2);
 
-    const actions = await collectMemoryActions(
-      deps,
-      turnRequest("Vergiss einfach meine Telefonnummer; sag mir Bescheid, wenn sie weg ist"),
-      ctx,
-    );
+    await collectMemoryActions(deps, turnRequest("Vergiss meine Telefonnummer bitte nicht."), ctx);
+    expect(readMemories(vault, ctx)).toHaveLength(2);
+    const actions = await collectMemoryActions(deps, turnRequest(request), ctx);
 
     expect(actions).toEqual([expect.objectContaining({ kind: "forget", forgotten: true })]);
     // Only the telephone number goes; the other fact stays.
@@ -1196,16 +1346,10 @@ describe("explicit forget statement in chat", () => {
     if (record === undefined) throw new Error("expected a memory");
     vault.recordUse([record.id], asked + 1, ctx.conversationId);
     const said = { role: "user", content: "Vergiss das." } as ChatMessage;
-    const deps = {
-      ...learned,
-      store: {
-        ...learned.store,
-        listMessages: (): ChatMessage[] => [
-          { ...said, id: "m1", timestamp: asked },
-          { ...said, id: "m2", timestamp: asked + 2 },
-        ],
-      },
-    };
+    const deps = withHistory(learned, [
+      { ...said, id: "m1", timestamp: asked },
+      { ...said, id: "m2", timestamp: asked + 2 },
+    ]);
 
     const actions = await collectMemoryActions(deps, turnRequest("Vergiss das."), ctx);
 
@@ -1381,10 +1525,7 @@ describe("explicit forget statement in chat", () => {
     const vault = makeVault();
     const ctx = context();
     const learned = await learnedFact(vault, ctx, "autonomous-delivery", "project");
-    const deps = {
-      ...learned,
-      store: { ...learned.store, listMessages: (): readonly ChatMessage[] => [] },
-    };
+    const deps = withHistory(learned, []);
 
     await groundedForget(deps, ctx);
 
@@ -1512,10 +1653,7 @@ describe("explicit forget statement in chat", () => {
       { id: "m1", role: "user", content: "Ich mag Kaffee.", timestamp: now + 60_000 },
       { id: "m2", role: "user", content: "Vergiss das.", timestamp: now + 120_000 },
     ] as ChatMessage[];
-    const deps = {
-      ...learned,
-      store: { ...learned.store, listMessages: (): readonly ChatMessage[] => rows },
-    };
+    const deps = withHistory(learned, rows);
 
     await groundedForget(deps, ctx);
 

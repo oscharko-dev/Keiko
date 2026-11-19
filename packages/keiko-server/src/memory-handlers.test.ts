@@ -1,3 +1,10 @@
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
@@ -5,6 +12,7 @@ import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
+import { DatabaseSync } from "node:sqlite";
 import {
   createAuditRedactor,
   createInMemoryEvidenceStore,
@@ -17,6 +25,7 @@ import {
 } from "@oscharko-dev/keiko-memory-vault";
 import { runConsolidation } from "@oscharko-dev/keiko-memory-consolidation";
 import {
+  MEMORY_STATUSES,
   MEMORY_STATUS_TRANSITIONS,
   PROFILE_EXCLUDED_MEMORY_TAG,
   STANDING_FACT_RETENTION_POLICY_KEY,
@@ -28,9 +37,11 @@ import type {
   MemoryId,
   MemoryRecord,
   MemoryReviewerId,
+  MemoryScope,
   MemoryUserId,
   MemoryWorkspaceId,
 } from "@oscharko-dev/keiko-contracts";
+import type { ProjectId } from "@oscharko-dev/keiko-contracts/memory";
 import type {
   GatewayConfig,
   OpenAIEmbeddingOutcome,
@@ -56,6 +67,8 @@ import {
   handleUnpinMemory,
 } from "./memory-handlers.js";
 import { standingProfileForUser } from "./memory-profile.js";
+import { handleMemoryCaptureFromConversation } from "./memory-conv-handlers.js";
+import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
@@ -130,12 +143,62 @@ afterEach(() => {
   }
 });
 
-function makeVault(): MemoryVaultStore {
+function makeVaultDirectory(): string {
   const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-memory-handlers-"));
   tmpDirs.push(dir);
+  return dir;
+}
+
+function makeVault(dir = makeVaultDirectory()): MemoryVaultStore {
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   activeVaults.push(vault);
   return vault;
+}
+
+function makeReviewVaults(): readonly [MemoryVaultStore, MemoryVaultStore] {
+  const options = {
+    memoryDir: makeVaultDirectory(),
+    vaultKey: Buffer.alloc(32, 67),
+    redactString: (value: string): string => value,
+  };
+  const reader = createMemoryVault(options);
+  const writer = createMemoryVault(options);
+  activeVaults.push(reader, writer);
+  return [reader, writer];
+}
+
+function interleaveAfterScopeRead<T>(read: () => T, write: () => void): T {
+  const prepare = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "prepare")
+    ?.value as DatabaseSync["prepare"];
+  let restoreRead = (): void => undefined;
+  let interleaved = false;
+  const scopePrepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+    this: DatabaseSync,
+    sql: string,
+  ): ReturnType<typeof prepare> {
+    const statement = prepare.call(this, sql);
+    if (sql.includes("SELECT DISTINCT scope_kind, scope_coordinate")) {
+      const all = statement.all.bind(statement);
+      const scopeRead = vi.spyOn(statement, "all").mockImplementationOnce((...params) => {
+        const rows = all(...params);
+        interleaved = true;
+        write();
+        return rows;
+      });
+      restoreRead = (): void => {
+        scopeRead.mockRestore();
+      };
+    }
+    return statement;
+  });
+  try {
+    const result = read();
+    expect(interleaved).toBe(true);
+    return result;
+  } finally {
+    restoreRead();
+    scopePrepare.mockRestore();
+  }
 }
 
 function memoryId(value: string): MemoryId {
@@ -653,6 +716,197 @@ describe("memory handlers", () => {
     }
   });
 
+  it("reads only the requested sensitivity before matching a list search", () => {
+    const vault = makeVault();
+    const base = makeMemory("listed-public", "shared search term");
+    vault.insertMemory(base);
+    vault.insertMemory({
+      ...base,
+      id: memoryId("outside-sensitivity"),
+      provenance: { ...base.provenance, sensitivity: "confidential" },
+    });
+    const reads = vi.spyOn(vault, "listMemoriesAcrossScopes");
+    const result = handleListMemories(
+      makeCtx("/api/memory?sensitivity=public&q=shared", {}),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(result.status).toBe(200);
+    expect(asJson(result).total).toBe(1);
+    expect(reads.mock.results[0]?.value).toEqual([base]);
+  });
+
+  it("records only selection counts for an operator's list and review queue reads", () => {
+    const vault = makeVault();
+    vault.insertMemory(
+      makeMemory("selection-fixture", "selection-fixture-body", { status: "proposed" }),
+    );
+    const deps = makeDeps({ memoryVault: vault });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      expect(
+        handleListMemories(makeCtx("/api/memory?q=missing-fixture-query", {}), deps).status,
+      ).toBe(200);
+      expect(handleMemoryReviewQueue(makeCtx("/api/memory/review-queue", {}), deps).status).toBe(
+        200,
+      );
+    } finally {
+      resetServerLogger();
+    }
+    const lines = sink.events
+      .filter((event) => event.op === "memory.vault.records.selected")
+      .map(formatActivityLogProofLine);
+    const observations = lines.map((line) =>
+      expectActivityLogProof("memory.vault.records.selected.line", line),
+    );
+    expect(observations).toMatchObject([
+      { selection: "list", decodedCount: 1, selectedCount: 0 },
+      { selection: "review-queue", decodedCount: 1, selectedCount: 1 },
+    ]);
+    expect(lines.join(" ")).not.toContain("fixture");
+  });
+
+  it("decrypts each reviewable memory once across every current status", () => {
+    const vault = makeVault();
+    for (const status of MEMORY_STATUSES) {
+      for (const state of ["current", "stale"]) {
+        const id = `${status}-${state}`;
+        vault.insertMemory(
+          makeMemory(id, id, {
+            status,
+            createdAt: 1,
+            updatedAt: 1,
+            ...(state === "stale" ? { staleReason: "superseded-source" } : {}),
+          }),
+        );
+      }
+    }
+    const reads = vi.spyOn(vault, "listMemoryReviewQueue");
+    const result = handleMemoryReviewQueue(
+      makeCtx("/api/memory/review-queue", {}),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(result.status).toBe(200);
+    const queued = (asJson(result).memories as readonly MemoryRecord[]).map((memory) => memory.id);
+    expect(queued).toEqual([
+      "accepted-stale",
+      "conflicted-current",
+      "conflicted-stale",
+      "expired-current",
+      "expired-stale",
+      "proposed-current",
+      "proposed-stale",
+      "superseded-stale",
+    ]);
+    const decoded = reads.mock.results.flatMap((call) =>
+      (call.value as readonly MemoryRecord[]).map((memory) => memory.id),
+    );
+    expect(decoded.sort((left, right) => left.localeCompare(right))).toEqual(queued);
+  });
+
+  it.each([
+    ["proposed", "accepted"],
+    ["accepted", "conflicted"],
+  ] as const)(
+    "reads one queue snapshot when another connection changes %s to %s",
+    (before, after) => {
+      const dir = makeVaultDirectory();
+      const reader = makeVault(dir);
+      const writer = makeVault(dir);
+      const record = makeMemory("moving-review-record", "Synthetic review record", {
+        status: before,
+        staleReason: "changed-source",
+      });
+      reader.insertMemory(record);
+      const read = reader.listMemoryReviewQueue;
+      const selections = vi
+        .spyOn(reader, "listMemoryReviewQueue")
+        .mockImplementationOnce((...args) => {
+          const rows = read(...args);
+          writer.updateMemory(record.id, { status: after }, record.updatedAt + 1);
+          return rows;
+        });
+      const statuses = (): readonly string[] => {
+        const response = handleMemoryReviewQueue(
+          makeCtx("/api/memory/review-queue", {}),
+          makeDeps({ memoryVault: reader }),
+        );
+        expect(response.status).toBe(200);
+        return (asJson(response).memories as readonly MemoryRecord[]).map(
+          (memory) => memory.status,
+        );
+      };
+      expect(statuses()).toEqual([before]);
+      expect(selections).toHaveBeenCalledTimes(1);
+      expect(statuses()).toEqual([after]);
+    },
+  );
+
+  it.each([
+    { kind: "global" },
+    { kind: "user", userId: "shared-coordinate" },
+    { kind: "project", projectId: "shared-coordinate" },
+    { kind: "workspace", workspaceId: "shared-coordinate" },
+    { kind: "workflow", workflowDefinitionId: "shared-coordinate" },
+  ] as readonly MemoryScope[])(
+    "keeps a queue snapshot when a new %j scope is inserted",
+    (scope) => {
+      const [reader, writer] = makeReviewVaults();
+      const previous = makeMemory("existing-scope-record", "Synthetic existing preference", {
+        scope: { kind: "project", projectId: "existing-project" as ProjectId },
+        status: "accepted",
+        createdAt: 20,
+        updatedAt: 20,
+      });
+      const stable = makeMemory("stable-user-review", "Synthetic personal preference", {
+        scope: { kind: "user", userId: userId("stable-user") },
+        status: "proposed",
+        createdAt: 30,
+        updatedAt: 30,
+      });
+      reader.insertMemory(previous);
+      reader.insertMemory(stable);
+      const deps = makeDeps({ memoryVault: reader });
+      const read = (): RouteResult =>
+        handleMemoryReviewQueue(makeCtx("/api/memory/review-queue", {}), deps);
+      const result = interleaveAfterScopeRead(read, () => {
+        writer.insertMemory(
+          makeMemory("new-scope-record", "Synthetic new preference", {
+            scope,
+            status: "proposed",
+            createdAt: 10,
+            updatedAt: 10,
+          }),
+        );
+        writer.updateMemory(previous.id, { status: "conflicted" }, 21);
+      });
+      expect(result.status).toBe(200);
+      expect((asJson(result).memories as readonly MemoryRecord[]).map(({ id }) => id)).toEqual([
+        stable.id,
+      ]);
+      expect((asJson(read()).memories as readonly MemoryRecord[]).map(({ id }) => id)).toEqual([
+        stable.id,
+        previous.id,
+        "new-scope-record",
+      ]);
+    },
+  );
+
+  it("reads a consistent empty queue while the first scope is concurrently inserted", () => {
+    const [reader, writer] = makeReviewVaults();
+    const deps = makeDeps({ memoryVault: reader });
+    const read = (): RouteResult =>
+      handleMemoryReviewQueue(makeCtx("/api/memory/review-queue", {}), deps);
+    const result = interleaveAfterScopeRead(read, () => {
+      writer.insertMemory(
+        makeMemory("first-review-record", "Synthetic preference", { status: "proposed" }),
+      );
+    });
+    expect(result.status).toBe(200);
+    expect(asJson(result).total).toBe(0);
+    expect(asJson(read()).total).toBe(1);
+  });
+
   it("includes non-global conflicts in the review queue", () => {
     const vault = makeVault();
     vault.insertMemory(
@@ -958,6 +1212,504 @@ describe("memory handlers", () => {
     );
   });
 
+  it.each([
+    [{ body: "Updated synthetic preference" }, "confidential", false],
+    [{ tags: ["updated"] }, "confidential", true],
+    [{ body: "Updated synthetic preference", sensitivity: "public" }, "public", false],
+    [{ sensitivity: "restricted" }, "restricted", true],
+  ] as const)(
+    "preserves concurrent edit metadata for %j",
+    async (input, sensitivity, evidenceSpanPresent) => {
+      const dir = makeVaultDirectory();
+      const reader = makeVault(dir);
+      const writer = makeVault(dir);
+      const learned = makeMemory("concurrent-edit", "Original synthetic preference");
+      reader.insertMemory({
+        ...learned,
+        provenance: { ...learned.provenance, evidenceSpan: learned.body },
+      });
+      const originalRead = reader.getMemory;
+      vi.spyOn(reader, "getMemory").mockImplementationOnce((id) => {
+        const snapshot = originalRead(id);
+        writer.updateMemory(
+          learned.id,
+          {
+            status: "conflicted",
+            provenance: {
+              ...learned.provenance,
+              sensitivity: "confidential",
+              confidence: 0.75,
+              sourceMessageIds: ["concurrent-source"],
+              evidenceSpan: learned.body,
+            },
+          },
+          learned.updatedAt + 1,
+        );
+        return snapshot;
+      });
+      const deps = makeDeps({ memoryVault: reader });
+      const ctx = makeCtx("/api/memory/concurrent-edit", input, { id: learned.id });
+      const result = await handleEditMemory(ctx, deps);
+      expect(result.status).toBe(200);
+      const reread = handleGetMemory(makeCtx(ctx.url.pathname, {}, ctx.params), deps);
+      expect(reread.status).toBe(200);
+      for (const response of [result, reread]) {
+        expect(asJson(response).memory).toMatchObject({
+          id: learned.id,
+          body: "body" in input ? input.body : learned.body,
+          status: "conflicted",
+          provenance: { sensitivity, confidence: 0.75, sourceMessageIds: ["concurrent-source"] },
+        });
+      }
+      const stored = writer.getMemory(learned.id);
+      expect(stored?.provenance.evidenceSpan !== undefined).toBe(evidenceSpanPresent);
+      expect(stored?.tags).toEqual("tags" in input ? input.tags : []);
+    },
+  );
+
+  it("preserves a concurrent profile exclusion while editing tags", async () => {
+    const dir = makeVaultDirectory();
+    const reader = makeVault(dir);
+    const writer = makeVault(dir);
+    const record = makeMemory("concurrent-profile-tag", "Synthetic preference");
+    reader.insertMemory(record);
+    const originalRead = reader.getMemory;
+    vi.spyOn(reader, "getMemory").mockImplementationOnce((id) => {
+      const snapshot = originalRead(id);
+      writer.updateMemory(record.id, { tags: [PROFILE_EXCLUDED_MEMORY_TAG] }, record.updatedAt + 1);
+      return snapshot;
+    });
+    const result = await handleEditMemory(
+      makeCtx("/api/memory/concurrent-profile-tag", { tags: ["updated"] }, { id: record.id }),
+      makeDeps({ memoryVault: reader }),
+    );
+    expect(result.status).toBe(200);
+    expect(writer.getMemory(record.id)?.tags).toEqual(["updated", PROFILE_EXCLUDED_MEMORY_TAG]);
+  });
+
+  it.each([0, 1])("records one body-free edit settlement after %i conflicts", async (conflicts) => {
+    const dir = makeVaultDirectory();
+    const reader = makeVault(dir);
+    const writer = makeVault(dir);
+    const record = makeMemory("logged-edit", "Original synthetic preference");
+    reader.insertMemory(record);
+    const conditionalUpdate = reader.updateMemories;
+    let interleaved = 0;
+    vi.spyOn(reader, "updateMemories").mockImplementation((updates) => {
+      if (interleaved < conflicts) {
+        writer.updateMemory(record.id, { status: "conflicted" }, Date.now());
+        interleaved += 1;
+      }
+      return conditionalUpdate(updates);
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const result = await handleEditMemory(
+        makeCtx(
+          "/api/memory/logged-edit",
+          { body: "Updated synthetic preference" },
+          { id: record.id },
+        ),
+        makeDeps({ memoryVault: reader }),
+      );
+      expect(result.status).toBe(200);
+    } finally {
+      resetServerLogger();
+    }
+    const settlements = sink.events.filter((event) => event.op === "memory.edit.settled");
+    expect(settlements).toHaveLength(1);
+    const [settled] = settlements;
+    if (settled === undefined) throw new TypeError("Missing edit settlement");
+    const line = formatActivityLogProofLine(settled);
+    expectActivityLogProof("memory.edit.settled.line", line);
+    expect(line).not.toContain(record.body);
+    expect(line).not.toContain(record.id);
+    expect(settled.extra).toMatchObject({ outcome: "updated", attemptCount: conflicts + 1 });
+  });
+
+  it("refuses a stale editor revision and accepts the current revision", async () => {
+    const vault = makeVault();
+    const initial = makeMemory("review-edit", "Initial body");
+    vault.insertMemory(initial);
+    const other = vault.updateMemory(
+      initial.id,
+      { body: "Edit from another window" },
+      initial.updatedAt,
+    );
+    const deps = makeDeps({ memoryVault: vault });
+    const edit = (expectedUpdatedAt: unknown): ReturnType<typeof handleEditMemory> =>
+      handleEditMemory(
+        makeCtx(
+          "/api/memory/review-edit",
+          { body: "My draft", expectedUpdatedAt },
+          { id: initial.id },
+        ),
+        deps,
+      );
+    expect((await edit(initial.updatedAt)).status).toBe(409);
+    expect(vault.getMemory(initial.id)?.body).toBe(other.body);
+    expect((await edit("unversioned")).status).toBe(400);
+    expect((await edit(other.updatedAt)).status).toBe(200);
+    expect(vault.getMemory(initial.id)?.body).toBe("My draft");
+  });
+
+  it.each([{ value: [17] }, { value: ["valid", 17] }, { value: "wrong" }, { value: null }])(
+    "rejects malformed tag replacements without a revision or content change",
+    async ({ value: tags }) => {
+      const vault = makeVault();
+      const original = { ...makeMemory("invalid-edit-tags", "Existing body"), tags: ["kept"] };
+      vault.insertMemory(original);
+      const deps = makeDeps({ memoryVault: vault });
+      const edit = (replacement: unknown): ReturnType<typeof handleEditMemory> =>
+        handleEditMemory(
+          makeCtx("/api/memory/invalid-edit-tags", { tags: replacement }, { id: original.id }),
+          deps,
+        );
+      expect((await edit(tags)).status).toBe(400);
+      expect(vault.getMemory(original.id)).toEqual(original);
+      expect((await edit([])).status).toBe(200);
+      expect(vault.getMemory(original.id)?.tags).toEqual([]);
+    },
+  );
+
+  it("returns a bounded edit conflict without embedding or overwriting a competing update", async () => {
+    const dir = makeVaultDirectory();
+    const reader = makeVault(dir);
+    const writer = makeVault(dir);
+    const record = makeMemory("repeated-edit-conflict", "Original synthetic preference");
+    reader.insertMemory(record);
+    const conditionalUpdate = reader.updateMemories;
+    const attempts = vi.spyOn(reader, "updateMemories").mockImplementation((updates) => {
+      writer.updateMemory(record.id, { tags: ["concurrent-update"] }, Date.now());
+      return conditionalUpdate(updates);
+    });
+    const embeddingRequest = vi.fn();
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    let result: RouteResult;
+    try {
+      result = await handleEditMemory(
+        makeCtx(
+          "/api/memory/repeated-edit-conflict",
+          { body: "Updated synthetic preference" },
+          {
+            id: record.id,
+          },
+        ),
+        makeDeps({
+          memoryVault: reader,
+          config: embeddingConfig(),
+          localKnowledgeEmbeddingRequest: embeddingRequest,
+        }),
+      );
+    } finally {
+      resetServerLogger();
+    }
+    expect(result.status).toBe(409);
+    expect(asJson(result).error).toMatchObject({ code: "MEMORY_ERROR" });
+    expect(attempts).toHaveBeenCalledTimes(3);
+    expect(embeddingRequest).not.toHaveBeenCalled();
+    expect(writer.getMemory(record.id)).toMatchObject({
+      body: record.body,
+      status: record.status,
+      tags: ["concurrent-update"],
+    });
+    const settlements = sink.events.filter((event) => event.op === "memory.edit.settled");
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0]?.extra).toMatchObject({
+      outcome: "conflict",
+      attemptCount: 3,
+    });
+  });
+
+  it.each(["before-read", "before-write"] as const)(
+    "settles an edit exactly once when concurrently deleted %s",
+    async (timing) => {
+      const dir = makeVaultDirectory();
+      const reader = makeVault(dir);
+      const writer = makeVault(dir);
+      const record = makeMemory("deleted-during-edit", "Synthetic preference");
+      reader.insertMemory(record);
+      const originalRead = reader.getMemory;
+      vi.spyOn(reader, "getMemory").mockImplementationOnce((id) => {
+        const snapshot = timing === "before-read" ? undefined : originalRead(id);
+        writer.deleteMemory(record.id, {
+          tombstone: true,
+          forgetterSurface: "memoria",
+          nowMs: record.updatedAt + 1,
+        });
+        return timing === "before-read" ? originalRead(id) : snapshot;
+      });
+      const deps = makeDeps({ memoryVault: reader });
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      let result: RouteResult;
+      try {
+        result = await handleEditMemory(
+          makeCtx("/api/memory/deleted-during-edit", { tags: ["updated"] }, { id: record.id }),
+          deps,
+        );
+      } finally {
+        resetServerLogger();
+      }
+      expect(result.status).toBe(404);
+      expect(asJson(result).error).toMatchObject({
+        code: timing === "before-read" ? "NOT_FOUND" : "MEMORY_ERROR",
+      });
+      const reread = handleGetMemory(
+        makeCtx("/api/memory/deleted-during-edit", {}, { id: record.id }),
+        deps,
+      );
+      expect(reread.status).toBe(404);
+      expect(writer.getMemory(record.id)).toBeUndefined();
+      const settlements = sink.events.filter((event) => event.op === "memory.edit.settled");
+      expect(settlements).toHaveLength(1);
+      expect(settlements[0]?.extra).toMatchObject({ outcome: "not-found", attemptCount: 1 });
+    },
+  );
+
+  it.each(["unchanged", "unrelated", "metadata"] as const)(
+    "stores the edited version's vector with an %s competing record",
+    async (change) => {
+      const [reader, writer] = makeReviewVaults();
+      const record = reader.insertMemory(makeMemory("embedding-current", "Initial preference"));
+      const unrelated = reader.insertMemory(makeMemory("embedding-unrelated", "Other preference"));
+      const body = "Current synthetic preference";
+      let finish: (result: OpenAIEmbeddingOutcome) => void = () => {
+        throw new TypeError("Embedding request not started");
+      };
+      let reportStarted: () => void = () => undefined;
+      const started = new Promise<void>((resolve) => {
+        reportStarted = resolve;
+      });
+      const deferred = new Promise<OpenAIEmbeddingOutcome>((resolve) => {
+        finish = resolve;
+      });
+      const request = vi.fn(() => {
+        reportStarted();
+        return deferred;
+      });
+      const deps = makeDeps({
+        memoryVault: reader,
+        config: embeddingConfig(),
+        configPresent: true,
+        localKnowledgeEmbeddingRequest: request,
+      });
+      const edit = handleEditMemory(
+        makeCtx(`/api/memory/${record.id}`, { body }, { id: record.id }),
+        deps,
+      );
+      await started;
+      if (change === "unrelated") {
+        writer.updateMemory(unrelated.id, { tags: ["updated"] }, unrelated.updatedAt);
+      } else if (change === "metadata") {
+        writer.updateMemory(record.id, { tags: ["updated"] }, record.updatedAt);
+      }
+      finish({ ok: true, value: { modelId: EMBEDDING_MODEL, vector: vectorForText(body) } });
+      expect((await edit).status).toBe(200);
+      expect(writer.getMemory(record.id)?.body).toBe(body);
+      expect(writer.getMemory(record.id)?.tags).toEqual(change === "metadata" ? ["updated"] : []);
+      expect(Array.from(writer.getEmbedding(record.id)?.vector ?? [])).toEqual(
+        Array.from(vectorForText(body)),
+      );
+      expect(request).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["success", "transport", "rejected-vector"] as const)(
+    "keeps the newer edit's vector after an older refresh finishes with %s",
+    async (outcome) => {
+      const [reader, writer] = makeReviewVaults();
+      const record = reader.insertMemory(makeMemory("embedding-edit-race", "Initial preference"));
+      const olderBody = "Earlier synthetic preference";
+      const newerBody = "Latest synthetic preference";
+      let finishOlder: (result: OpenAIEmbeddingOutcome) => void = () => {
+        throw new TypeError("Older embedding request not started");
+      };
+      let reportStarted: () => void = () => undefined;
+      const started = new Promise<void>((resolve) => {
+        reportStarted = resolve;
+      });
+      const delayed = new Promise<OpenAIEmbeddingOutcome>((resolve) => {
+        finishOlder = resolve;
+      });
+      const embeddingRequest = vi.fn(
+        (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+          if (request.input === olderBody) {
+            reportStarted();
+            return delayed;
+          }
+          return Promise.resolve({
+            ok: true,
+            value: { modelId: request.modelId, vector: vectorForText(request.input) },
+          });
+        },
+      );
+      const deps = makeDeps({
+        memoryVault: reader,
+        config: embeddingConfig(),
+        configPresent: true,
+        localKnowledgeEmbeddingRequest: embeddingRequest,
+      });
+      const edit = (body: string): ReturnType<typeof handleEditMemory> =>
+        handleEditMemory(makeCtx(`/api/memory/${record.id}`, { body }, { id: record.id }), deps);
+      const older = edit(olderBody);
+      await started;
+      expect((await edit(newerBody)).status).toBe(200);
+      const current = writer.getMemory(record.id);
+      const currentVector = writer.getEmbedding(record.id);
+      expect(current?.body).toBe(newerBody);
+      expect(Array.from(currentVector?.vector ?? [])).toEqual(Array.from(vectorForText(newerBody)));
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      try {
+        finishOlder(
+          outcome === "transport"
+            ? { ok: false, kind: "transport" }
+            : {
+                ok: true,
+                value: {
+                  modelId: EMBEDDING_MODEL,
+                  vector:
+                    outcome === "rejected-vector" ? new Float32Array() : vectorForText(olderBody),
+                },
+              },
+        );
+        expect((await older).status).toBe(200);
+      } finally {
+        resetServerLogger();
+      }
+      expect(writer.getMemory(record.id)).toEqual(current);
+      expect(writer.getEmbedding(record.id)).toEqual(currentVector);
+      const skipped = sink.events.filter(
+        (event) => event.op === "memory.embedding.refresh.skipped",
+      );
+      expect(skipped).toHaveLength(1);
+      expect(sink.events.some((event) => event.op === "memory.embedding.invalidated")).toBe(false);
+      expect(sink.events.some((event) => event.op === "memory.embedding.store-rejected")).toBe(
+        false,
+      );
+      const line = formatActivityLogProofLine(skipped[0] ?? {});
+      expectActivityLogProof("memory.embedding.refresh.skipped.line", line);
+      expect(line).not.toContain(olderBody);
+      expect(line).not.toContain(newerBody);
+      expect(line).not.toContain(record.id);
+      expect(embeddingRequest).toHaveBeenCalledTimes(2);
+      const reread = handleGetMemory(
+        makeCtx(`/api/memory/${record.id}`, {}, { id: record.id }),
+        deps,
+      );
+      expect(asJson(reread).memory).toMatchObject({
+        body: newerBody,
+        updatedAt: current?.updatedAt,
+      });
+    },
+  );
+
+  it.each(["body-changed", "deleted"] as const)(
+    "skips provider work when a refresh already has a %s body binding",
+    async (change) => {
+      const [reader, writer] = makeReviewVaults();
+      const record = reader.insertMemory(makeMemory("refresh-already-stale", "Old synthetic body"));
+      if (change === "body-changed") {
+        writer.updateMemory(record.id, { body: "Current synthetic body" }, record.updatedAt);
+        writer.upsertEmbedding(record.id, {
+          provider: "synthetic-provider",
+          modelId: EMBEDDING_MODEL,
+          metric: "cosine",
+          vector: vectorForText("Current synthetic body"),
+        });
+      } else {
+        writer.deleteMemory(record.id, {
+          tombstone: true,
+          forgetterSurface: "memory-center",
+          nowMs: record.updatedAt,
+        });
+      }
+      const current = writer.getEmbedding(record.id);
+      const request = vi.fn();
+      await refreshMemoryEmbeddingAfterBodyEdit(
+        makeDeps({
+          config: embeddingConfig(),
+          configPresent: true,
+          localKnowledgeEmbeddingRequest: request,
+        }),
+        reader,
+        record.id,
+        record.body,
+      );
+      expect(request).not.toHaveBeenCalled();
+      expect(writer.getEmbedding(record.id)).toEqual(current);
+    },
+  );
+
+  it.each([false, true])(
+    "binds a delayed capture vector after a manual edit %s",
+    async (edited) => {
+      const [reader, writer] = makeReviewVaults();
+      let finish: (result: OpenAIEmbeddingOutcome) => void = () => {
+        throw new TypeError("Capture embedding not started");
+      };
+      let reportStarted: () => void = () => undefined;
+      const started = new Promise<void>((resolve) => {
+        reportStarted = resolve;
+      });
+      const deferred = new Promise<OpenAIEmbeddingOutcome>((resolve) => {
+        finish = resolve;
+      });
+      let requestCount = 0;
+      const request = vi.fn((input: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+        requestCount += 1;
+        if (requestCount === 1) {
+          reportStarted();
+          return deferred;
+        }
+        return Promise.resolve({
+          ok: true,
+          value: { modelId: input.modelId, vector: vectorForText(input.input) },
+        });
+      });
+      const deps = makeDeps({
+        memoryVault: reader,
+        config: embeddingConfig(),
+        configPresent: true,
+        localKnowledgeEmbeddingRequest: request,
+      });
+      const projectPath = makeVaultDirectory();
+      deps.store.createProject(projectPath, "synthetic-capture");
+      const chat = deps.store.createChat(projectPath, "synthetic-capture", "synthetic-model");
+      const capture = handleMemoryCaptureFromConversation(
+        makeCtx("/api/memory/capture-from-conversation", {
+          text: "remember that we use pnpm not npm for installs",
+          context: { projectPath, chatId: chat.id },
+        }),
+        deps,
+      );
+      await started;
+      const captured = writer.listMemoriesAcrossScopes(writer.listMemoryScopes())[0];
+      if (captured === undefined) throw new TypeError("Missing captured synthetic memory");
+      const expectedBody = edited ? "Latest synthetic capture preference" : captured.body;
+      if (edited) {
+        const result = await handleEditMemory(
+          makeCtx(`/api/memory/${captured.id}`, { body: expectedBody }, { id: captured.id }),
+          deps,
+        );
+        expect(result.status).toBe(200);
+      }
+      finish({
+        ok: true,
+        value: { modelId: EMBEDDING_MODEL, vector: vectorForText(captured.body) },
+      });
+      expect((await capture).status).toBe(200);
+      expect(writer.getMemory(captured.id)?.body).toBe(expectedBody);
+      expect(Array.from(writer.getEmbedding(captured.id)?.vector ?? [])).toEqual(
+        Array.from(vectorForText(expectedBody)),
+      );
+      expect(request).toHaveBeenCalledTimes(edited ? 2 : 1);
+    },
+  );
+
   it("invalidates a stale embedding when body edit re-embedding fails", async () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("memory-edit-2", "Old body"));
@@ -1068,6 +1820,7 @@ describe("memory handlers", () => {
     );
 
     expect(acceptResult.status).toBe(200);
+    expect(asJson(acceptResult).supersededMemoryIds).toEqual([memoryId("memory-correct-accept")]);
     const superseded = vault.getMemory(memoryId("memory-correct-accept"));
     expect(superseded?.status).toBe("superseded");
     // Bi-temporal-lite (#204, C1): the superseded fact's belief window is CLOSED at acceptance, so
@@ -1983,17 +2736,20 @@ describe("emitServerDiagnostic on memory-handler storage failures (w4b)", () => 
     );
   }
 
-  it("reports a list failure", () => {
+  it.each(["", "?q=Synthetic"])("reports a list failure %s", (query) => {
     const vault = makeVault();
     const { records, diagnostics } = recordingSink();
     const broken: MemoryVaultStore = {
       ...vault,
+      listMemoryCenterPage: () => {
+        throw new MemoryStorageError("internal", "simulated list failure");
+      },
       listMemoryScopes: () => {
         throw new MemoryStorageError("internal", "simulated list failure");
       },
     };
     const result = handleListMemories(
-      withCorrelation(makeCtx("/api/memory", {}), "corr-list-1"),
+      withCorrelation(makeCtx(`/api/memory${query}`, {}), "corr-list-1"),
       makeDeps({ memoryVault: broken, diagnostics }),
     );
     expect(result.status).toBe(500);
@@ -2005,7 +2761,7 @@ describe("emitServerDiagnostic on memory-handler storage failures (w4b)", () => 
     const { records, diagnostics } = recordingSink();
     const broken: MemoryVaultStore = {
       ...vault,
-      listMemoryScopes: () => {
+      listMemoryReviewQueue: () => {
         throw new MemoryStorageError("internal", "simulated review-queue failure");
       },
     };
@@ -2040,7 +2796,7 @@ describe("emitServerDiagnostic on memory-handler storage failures (w4b)", () => 
     const { records, diagnostics } = recordingSink();
     const broken: MemoryVaultStore = {
       ...vault,
-      updateMemory: () => {
+      updateMemories: () => {
         throw new MemoryStorageError("internal", "simulated edit failure");
       },
     };

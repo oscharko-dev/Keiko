@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 408,
-  "completeClassCount": 408,
+  "supportedClassCount": 411,
+  "completeClassCount": 411,
   "completeness": "complete",
   "classes": [
     {
@@ -41616,13 +41616,69 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "memory-edit-conflict",
+      "requirementContract": "memory-edit-conflict",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["memory.edit.settled"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "memory.edit.settled",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["memory.edit.settled"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "memory.edit.settled",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "attemptCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.edit.settled.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "memory-embedding-invalidation",
       "requirementContract": "memory-embedding-invalidation",
       "productSurfaces": ["keiko-server"],
       "lifecycleTransitions": ["failure", "state"],
       "lifecycleOperations": {
         "start": [],
-        "state": ["memory.embedding.invalidated"],
+        "state": ["memory.embedding.invalidated", "memory.embedding.refresh.skipped"],
         "end": [],
         "failure": ["memory.embedding.invalidation-failed"],
         "loss": []
@@ -41635,10 +41691,14 @@
         {
           "op": "memory.embedding.invalidation-failed",
           "mode": "none"
+        },
+        {
+          "op": "memory.embedding.refresh.skipped",
+          "mode": "none"
         }
       ],
       "lossSignals": [],
-      "resourceSignals": ["memory.embedding.invalidated"],
+      "resourceSignals": ["memory.embedding.invalidated", "memory.embedding.refresh.skipped"],
       "replayReferences": [],
       "operations": [
         {
@@ -41686,6 +41746,30 @@
             "causeChain": false
           },
           "proofIds": ["memory.embedding.invalidation-failed.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "memory.embedding.refresh.skipped",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "state",
+          "causal": "none",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.embedding.refresh.skipped.line"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -42325,6 +42409,68 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "memory-maintenance-selection",
+      "requirementContract": "memory-maintenance-selection",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["memory.maintenance.candidates.selected"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "memory.maintenance.candidates.selected",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["memory.maintenance.candidates.selected"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "memory.maintenance.candidates.selected",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "consolidationCandidateCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "promotionCandidateCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "promotionSkippedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.maintenance.candidates.selected.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "memory-pressure",
       "requirementContract": "memory-pressure",
       "productSurfaces": ["keiko-cli"],
@@ -42729,6 +42875,68 @@
             "causeChain": false
           },
           "proofIds": ["memory-vault.store.quarantined.recovery"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "memory-vault-selection",
+      "requirementContract": "memory-vault-selection",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["memory.vault.records.selected"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "memory.vault.records.selected",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["memory.vault.records.selected"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "memory.vault.records.selected",
+          "owner": "keiko-server",
+          "category": "memory",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "decodedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "selectedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "selection",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["memory.vault.records.selected.line"],
           "replayReferences": [],
           "missingObligations": []
         }

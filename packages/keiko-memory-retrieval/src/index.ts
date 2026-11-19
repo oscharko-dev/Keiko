@@ -36,7 +36,7 @@ export {
   type RankingWeights,
 } from "./types.js";
 
-// ─── Suppression (duplicated from governance — see suppression.ts header) ────
+// ─── Retrieval suppression ────
 export {
   isMemorySuppressed,
   type SuppressionReason,
