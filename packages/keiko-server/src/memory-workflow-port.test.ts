@@ -234,11 +234,14 @@ describe("createWorkflowMemoryPort", () => {
     );
 
     expect(context.includedMemoryIds).toEqual(["mem-live"]);
-    const omittedIds = readAuditEvents(evidenceStore, nowMs)
-      .filter((event) => event.kind === "memory:workflow-omitted")
-      .map((event) => event.omittedMemoryId);
-    expect(omittedIds).toContain("mem-rejected");
-    expect(omittedIds).toHaveLength(500);
+    const omitted = readAuditEvents(evidenceStore, nowMs).filter(
+      (event) => event.kind === "memory:workflow-omitted",
+    );
+    expect(omitted.map((event) => event.omittedMemoryId)).toContain("mem-rejected");
+    expect(omitted).toHaveLength(500);
+    expect(new Set(omitted.map((event) => event.reason))).toEqual(
+      new Set(["suppressed-by-status"]),
+    );
     vault.close();
   });
 
