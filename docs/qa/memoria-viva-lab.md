@@ -535,7 +535,9 @@ its stage, `needed-not-stored` … `needed-trace-unavailable`, see "Recall trace
 the candidate and the checks (`scenario:arm:rN:probe:<id>`, `…:store:<fact>`, or `…:store:<class>:<ordinal>` for wrong records,
 which never carry a body) that newly fail in the candidate. The totals are sums over every repetition
 of the run, so a run with three repetitions counts a failing check up to three times. A sealed run reports per-arm totals only, never a scenario or a check; its store verdicts
-are masked, so the store classes that rest on them are not derived there.
+are masked, so each unit is classified from its unmasked result before it is masked, and only the
+class names and whole-number counts travel on (`failureClassCounts`, also through the encrypted
+progress journal and `--resume`); the sealed totals equal what an open run reports.
 
 ### Recall trace
 

@@ -2,6 +2,7 @@
 // in the summary, and compared per class between two runs with the checks that newly fail. A class
 // is proven by a result that fails for exactly that reason and by one that does not.
 import { describe, expect, it } from "vitest";
+import { maskHoldoutResult } from "../testing/memory-lab/corpus/holdout.mjs";
 import { compareFailureClasses, renderFailureClasses } from "../testing/memory-lab/compare.mjs";
 import {
   FAILURE_CLASSES,
@@ -240,6 +241,55 @@ describe("the failure class of a failed check", () => {
     ];
     for (const result of results)
       for (const failure of unitFailures(result)) expect(FAILURE_CLASSES).toContain(failure.class);
+  });
+});
+
+describe("a sealed unit", () => {
+  const verdicts = [
+    { id: "1", status: "proposed", verdict: "correct", key: "secret-truth-key" },
+    { id: "secret-record-id", status: "accepted", verdict: "stale" },
+  ];
+  const open = unit({
+    store: store({ missing: ["secret-truth-key"], verdicts }),
+    probes: [answer({ id: "secret-probe", relevantSupplied: false })],
+  });
+
+  it("is classified from its unmasked result: a parked truth stays parked, a live stale record counts", () => {
+    const masked = maskHoldoutResult(open, "holdout:x");
+    // The mask empties the verdicts; classifying afterwards is the defect this pins.
+    expect(masked.store.verdicts).toEqual([]);
+    const expected = summarizeFailureClasses([open]).byArm.product.total;
+    expect(expected).toEqual({
+      "fact-parked": 1,
+      "stale-fact-live": 1,
+      "relevant-memory-not-supplied": 1,
+    });
+    expect(summarizeFailureClasses([masked], { sealed: true }).byArm.product.total).toEqual(
+      expected,
+    );
+  });
+
+  it("carries class names and counts only, and refuses anything else", () => {
+    const masked = maskHoldoutResult(open, "holdout:x");
+    expect(masked.failureClassCounts).toEqual({
+      "fact-parked": 1,
+      "stale-fact-live": 1,
+      "relevant-memory-not-supplied": 1,
+    });
+    expect(JSON.stringify(masked)).not.toMatch(/secret|truth-key/u);
+    expect(() => unitFailures({ ...masked, failureClassCounts: { "not-a-class": 1 } })).toThrow(
+      /unknown failure class/u,
+    );
+    expect(() => unitFailures({ ...masked, failureClassCounts: { "fact-parked": 1.5 } })).toThrow(
+      /unknown failure class/u,
+    );
+  });
+
+  it("survives the progress journal's JSON round trip", () => {
+    const masked = JSON.parse(JSON.stringify(maskHoldoutResult(open, "holdout:x")));
+    expect(summarizeFailureClasses([masked], { sealed: true }).byArm.product.total).toEqual(
+      summarizeFailureClasses([open]).byArm.product.total,
+    );
   });
 });
 

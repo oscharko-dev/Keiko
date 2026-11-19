@@ -159,11 +159,37 @@ function probeFailures(probes) {
 }
 
 /**
+ * The class counts of a unit, from its UNMASKED result: class names and whole numbers only, no key,
+ * id, body or ordinal. A sealed unit carries them (`failureClassCounts`) because its store verdicts
+ * are emptied by the mask, and a class that rests on a verdict could not be derived afterwards.
+ */
+export function failureClassCounts(result) {
+  const counts = {};
+  for (const failure of unitFailures(result))
+    counts[failure.class] = (counts[failure.class] ?? 0) + 1;
+  return orderedCounts(counts);
+}
+
+// The failures a sealed unit carries as counts, one entry per count. A class outside the closed list
+// or a count that is not a whole number is refused: the carried totals are never trusted blindly.
+function countedFailures(counts) {
+  return Object.entries(counts).flatMap(([name, count]) => {
+    if (!FAILURE_CLASSES.includes(name) || !Number.isSafeInteger(count) || count < 0)
+      throw new TypeError("a sealed unit carries an unknown failure class or count");
+    return Array.from({ length: count }, (_, index) => ({
+      class: name,
+      ref: `sealed:${name}:${String(index + 1)}`,
+    }));
+  });
+}
+
+/**
  * The failed checks of one unit as `{class, ref}` entries: a failed store check per truth that is not
  * live in the store or per live wrong record, a lost seeded record, a failed probe per question. A unit that could not be measured is one entry.
  */
 export function unitFailures(result) {
   if (isFailedUnit(result)) return [{ class: "unit-not-measured", ref: "unit" }];
+  if (result.failureClassCounts !== undefined) return countedFailures(result.failureClassCounts);
   return [
     ...storeFailures(result.store),
     ...seedFailures(result.seed),

@@ -13,6 +13,7 @@
 // not a security boundary against a determined agent with the same user rights. The rule is that an
 // optimizing agent never opens the holdout and never reads the key; the runner masks every scenario
 // name and writes no scenario text. Rotate the holdout whenever the corpus version changes.
+import { failureClassCounts } from "../failure-classes.mjs";
 import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -101,6 +102,9 @@ export function maskHoldoutResult(result, name) {
       memories: [],
     },
     probes: result.probes.map(maskedProbe),
+    // Classified here, from the unmasked result: the mask empties the verdicts the store classes rest
+    // on. Class names and counts only.
+    failureClassCounts: failureClassCounts(result),
     ...oracle,
     // The shape of a hidden store (how many records, in which state) is part of the hidden scenario.
     seed: undefined,
