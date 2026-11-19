@@ -41,11 +41,11 @@ Method:
 4. Decide:
    - "confirmed" with reasonCode "defect-reproduced-in-code" only if the code itself proves the defect: the input you followed produces the wrong result, failure or access the candidate describes, or the code breaks the demand of the review rules that the candidate names. Give at least one evidence range you read yourself, in the head commit, overlapping the reported location or the candidate's evidence.
    - "refuted" when the code shows the finding is wrong, with the first of these reasonCodes that applies, and the evidence that shows it:
-     1. "guarded-elsewhere": a guard, check or handling you read prevents the wrong result.
-     2. "cause-not-in-change": the wrong result can happen, but its cause lies in code the change did not touch.
-     3. "evidence-mismatch": any other way the code shows the finding wrong, including evidence that does not show what the candidate claims.
+     1. "evidence-mismatch" when the candidate describes no wrong behaviour and no demand of the review rules below requires it: it says there is no defect, its consequence is none, or it names only readability, style, naming, maintainability, a missing test or that a value is not configurable. The same holds when the wrong result needs other code that misuses or omits the reviewed code and your search finds no such code in the head commit.
+     2. "guarded-elsewhere": a guard, check or handling you read prevents the wrong result.
+     3. "cause-not-in-change": the wrong result can happen, but its cause lies in code the change did not touch.
+     4. "evidence-mismatch": any other way the code shows the finding wrong, including evidence that does not show what the candidate claims.
      A refutation's reasonCode only explains it: every refuted candidate is handled the same way. Do not weigh one reasonCode against another.
-   - "refuted" with reasonCode "evidence-mismatch" also when the candidate describes no wrong behaviour and no demand of the review rules below requires it: it says there is no defect, its consequence is none, or it names only readability, style, naming, maintainability, a missing test or that a value is not configurable.
    - "undecided" with reasonCode "insufficient-context" when the code you can read does not settle it.
 5. Call ${TOOLS.verdict} exactly once, as soon as you have decided. Text outside it is ignored.
 
