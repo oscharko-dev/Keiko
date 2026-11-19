@@ -27,13 +27,17 @@ function systemName(path: string): string | undefined {
 }
 
 // The system's name of a launch directory, kept per directory: the working directory of a running
-// Keiko does not change. A launch directory that cannot be resolved is refused as it was given.
+// Keiko does not change. A launch directory that cannot be resolved is refused as it was given, and
+// only for this call: a passing failure (a share not yet mounted, a scan holding the folder) must
+// not fix the lexical spelling for the life of the process, or a later link or short-name spelling
+// of the folder would never be compared by its system name again.
 const launchDirectoryNames = new Map<string, string>();
 
 function launchDirectoryName(directory: string): string {
   const known = launchDirectoryNames.get(directory);
   if (known !== undefined) return known;
-  const name = systemName(directory) ?? directory;
+  const name = systemName(directory);
+  if (name === undefined) return directory;
   launchDirectoryNames.set(directory, name);
   return name;
 }

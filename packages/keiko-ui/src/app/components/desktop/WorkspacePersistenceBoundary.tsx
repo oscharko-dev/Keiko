@@ -87,12 +87,15 @@ function useWorkspaceRestoration(): { readonly state: RestoreState; readonly ret
 
 // A ready workspace whose server now serves another data store re-reads the ownership: the restart
 // unmounts every window of the old store (its pollers and pending writes stop with it) and mounts
-// the workspace that belongs to the store that answers. Nothing of the old store is replayed.
+// the workspace that belongs to the store that answers. Nothing of the old store is replayed. Only a
+// refusal of a request that named the store now mounted counts: a late refusal of the old
+// workspace's unmount flush must not remount the new one.
 function useWorkspaceStorageChange(state: RestoreState, retry: () => void): void {
-  const ready = state.kind === "ready";
+  const storageId = state.kind === "ready" ? state.storageId : undefined;
   useEffect(() => {
-    if (!ready) return undefined;
-    const onChanged = (): void => {
+    if (storageId === undefined) return undefined;
+    const onChanged = (event: Event): void => {
+      if (!(event instanceof CustomEvent) || event.detail !== storageId) return;
       window.removeEventListener(WORKSPACE_STORAGE_CHANGED_EVENT, onChanged);
       reportClientDiagnostic("Workspace layout ownership changed.", {
         correlationId: newClientCorrelationId(),
@@ -104,7 +107,7 @@ function useWorkspaceStorageChange(state: RestoreState, retry: () => void): void
     return (): void => {
       window.removeEventListener(WORKSPACE_STORAGE_CHANGED_EVENT, onChanged);
     };
-  }, [ready, retry]);
+  }, [storageId, retry]);
 }
 
 export function WorkspacePersistenceBoundary({

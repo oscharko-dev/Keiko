@@ -4,9 +4,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspacePersistenceBoundary } from "./WorkspacePersistenceBoundary";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { APP_BOOT_RECOVERY_HANDOFF_EVENT } from "./AppBootPlaceholder";
+import {
+  WORKSPACE_STORAGE_CHANGED_EVENT,
+  announceWorkspaceStorageChanged,
+} from "./hooks/workspace-storage";
 import * as clientDiagnostics from "@/lib/client-diagnostics";
 
 const STORAGE_ID = "a".repeat(64);
+
+function storageChangedResponse(): Response {
+  return new Response(
+    JSON.stringify({
+      error: {
+        code: "WORKSPACE_STORAGE_CHANGED",
+        message: "The saved workspace belongs to another data store.",
+      },
+    }),
+    { status: 409 },
+  );
+}
 
 function Workspace(): ReactElement {
   const ref = useRef<HTMLDivElement>(null);
@@ -203,7 +219,7 @@ describe("workspace restoration boot boundary", () => {
         const method = init?.method ?? "GET";
         requests.push({ method, storage, body: typeof init?.body === "string" ? init.body : "" });
         if (storage !== undefined && storage !== current) {
-          return Promise.resolve(new Response("{}", { status: 409 }));
+          return Promise.resolve(storageChangedResponse());
         }
         if (method === "PUT") {
           return Promise.resolve(new Response(JSON.stringify({ workspace: { revision: 1 } })));
@@ -249,6 +265,34 @@ describe("workspace restoration boot boundary", () => {
     );
     expect(changes).toHaveLength(1);
     expect(JSON.stringify(reports.mock.calls)).not.toContain(OTHER_ID);
+  });
+
+  it("ignores a late store-change refusal of a request the previous store's workspace sent", async () => {
+    const reports = vi
+      .spyOn(clientDiagnostics, "reportClientDiagnostic")
+      .mockImplementation(() => {});
+    const read = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ workspace: { storageId: STORAGE_ID } })));
+    vi.stubGlobal("fetch", read);
+    render(
+      <WorkspacePersistenceBoundary>
+        <main>Owned workspace</main>
+      </WorkspacePersistenceBoundary>,
+    );
+    expect(await screen.findByRole("main")).toHaveTextContent("Owned workspace");
+    const readsBefore = read.mock.calls.length;
+    act(() => {
+      announceWorkspaceStorageChanged("c".repeat(64));
+      window.dispatchEvent(new Event(WORKSPACE_STORAGE_CHANGED_EVENT));
+    });
+    expect(screen.getByRole("main")).toHaveTextContent("Owned workspace");
+    expect(read.mock.calls.length).toBe(readsBefore);
+    expect(
+      reports.mock.calls.some(
+        ([, meta]) => meta?.composerActivity === "workspace-ownership-changed",
+      ),
+    ).toBe(false);
   });
 
   it("offers a retry after the local server becomes available", async () => {

@@ -76,9 +76,9 @@ import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wi
 import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
 import { protectWorkspaceLayout, useWorkspaceLayoutLock } from "./useWorkspaceLayoutLock";
 import {
-  WORKSPACE_STORAGE_CHANGED_STATUS,
   WorkspaceStorageScopeContext,
   announceWorkspaceStorageChanged,
+  isWorkspaceStorageChanged,
   workspaceStorageKey,
 } from "./workspace-storage";
 
@@ -1259,8 +1259,8 @@ async function fetchServerWorkspaceSnapshot(
       noteWorkspaceSyncRecovered();
       return "unchanged";
     }
-    if (response.status === WORKSPACE_STORAGE_CHANGED_STATUS) {
-      announceWorkspaceStorageChanged();
+    if (await isWorkspaceStorageChanged(response)) {
+      announceWorkspaceStorageChanged(storageScope);
       return null;
     }
     if (!response.ok) {
@@ -1467,8 +1467,8 @@ async function putServerWorkspaceSnapshot(
         revision: revisionFromWorkspaceEtag(response.headers.get("etag")),
       };
     }
-    if (response.status === WORKSPACE_STORAGE_CHANGED_STATUS) {
-      announceWorkspaceStorageChanged();
+    if (await isWorkspaceStorageChanged(response)) {
+      announceWorkspaceStorageChanged(opts.storageScope);
       return null;
     }
     if (!response.ok) {

@@ -3548,7 +3548,7 @@ async function defaultGatewaySetupTester(
     responseFormatModelIds,
     toolCallingObservations: [
       ...(toolCallingObservations ?? []),
-      ...unverifiedKeptToolCallingObservations(config, chatSmoke.unverifiedKept, correlationId),
+      ...unverifiedKeptToolCallingObservations(chatSmoke.unverifiedKept),
     ],
     ...(chatSmoke.unverifiedKept.length > 0
       ? { unverifiedModelIds: chatSmoke.unverifiedKept }
@@ -3565,20 +3565,10 @@ async function defaultGatewaySetupTester(
 // vocabulary `temporaryChatAdmission` already uses when the whole gateway defers, just per-candidate
 // instead of gateway-wide (#3591).
 function unverifiedKeptToolCallingObservations(
-  config: GatewayConfig,
   unverifiedKept: readonly string[],
-  correlationId: string | undefined,
 ): readonly GatewaySetupToolCallingObservation[] {
   const checkedAt = new Date().toISOString();
-  return unverifiedKept.map((modelId) => {
-    logToolCallingVerification(
-      config,
-      modelId,
-      "unverified",
-      correlationId ?? UNKNOWN_CORRELATION_ID,
-    );
-    return { modelId, status: "unverified", checkedAt };
-  });
+  return unverifiedKept.map((modelId) => ({ modelId, status: "unverified", checkedAt }));
 }
 
 async function setupToolCallingObservations(
@@ -3595,8 +3585,8 @@ async function setupToolCallingObservations(
     SETUP_SMOKE_CONCURRENCY,
     async (modelId, index) => {
       const provider = config.providers.find((candidate) => candidate.modelId === modelId);
-      // A model without a provider stays unverified; that conclusion takes the same log line below
-      // as every probe result instead of being recorded silently.
+      // A model without a provider stays unverified; that conclusion is recorded with every other
+      // observation once the setup binds it to the provider it stores.
       const probeStatus =
         provider === undefined
           ? "unverified"
@@ -3627,7 +3617,6 @@ async function setupToolCallingObservations(
       signal?.throwIfAborted();
       const status = probeStatus === "transient" ? "unverified" : probeStatus;
       observations[index] = { modelId, status, checkedAt };
-      logToolCallingVerification(config, modelId, status, correlationId ?? UNKNOWN_CORRELATION_ID);
     },
     signal,
   );
@@ -7029,22 +7018,10 @@ interface ChatAdmission {
   readonly wildcardRouteCount: number;
 }
 
-function temporaryChatAdmission(
-  input: SetupVerificationInput,
-  candidateModels: SetupCandidateModels,
-  candidateConfig: GatewayConfig,
-): ChatAdmission {
+function temporaryChatAdmission(candidateModels: SetupCandidateModels): ChatAdmission {
   const checkedAt = new Date().toISOString();
-  // The persisted "unverified" proof is a tool-calling conclusion like any probe result, so it
-  // leaves the same activity-log line the probe path writes.
-  for (const modelId of candidateModels.chatModelIds) {
-    logToolCallingVerification(
-      candidateConfig,
-      modelId,
-      "unverified",
-      input.correlationId ?? UNKNOWN_CORRELATION_ID,
-    );
-  }
+  // The persisted "unverified" proof is a tool-calling conclusion like any probe result, so it is
+  // recorded on the same activity-log line once the setup binds it to the provider it stores.
   return {
     testResult: {
       testedModelIds: [],
@@ -7157,14 +7134,7 @@ async function walkChatCandidates(
       // rejection. The model stays configured as unverified and the walk stops, so no other model
       // is loaded on that gateway.
       if (setupFailureWithoutVerdict(error))
-        return withoutVerdictAdmission(
-          input,
-          candidateConfig,
-          id,
-          order.slice(index + 1),
-          dropped,
-          gatewayOrder,
-        );
+        return withoutVerdictAdmission(id, order.slice(index + 1), dropped, gatewayOrder);
       lastError = error;
       // The gateway rejected every model of this step, including the ones the request asserted a
       // capability for: they are reported as dropped, and the walk never tests them again.
@@ -7192,8 +7162,6 @@ function gatewayNotReached(error: unknown): boolean {
 }
 
 function withoutVerdictAdmission(
-  input: SetupVerificationInput,
-  candidateConfig: GatewayConfig,
   modelId: string,
   listedUnverified: readonly string[],
   droppedInWalk: readonly string[],
@@ -7203,11 +7171,7 @@ function withoutVerdictAdmission(
     {
       testedModelIds: [],
       responseFormatModelIds: [],
-      toolCallingObservations: unverifiedKeptToolCallingObservations(
-        candidateConfig,
-        [modelId],
-        input.correlationId,
-      ),
+      toolCallingObservations: unverifiedKeptToolCallingObservations([modelId]),
       unverifiedModelIds: [modelId],
     },
     listedUnverified,
@@ -7304,7 +7268,11 @@ interface ParsedSetupConfig {
 // the test settled on. A proof bound to the probe's view never matched the saved provider: the
 // loader withdrew it the moment the configuration was read, so after every setup against a gateway
 // that reports its deployments the Coding Workbench offered no model until a person ran a check in
-// Settings. The probe ran against exactly this deployment in this setup, so the proof is its.
+// Settings. The probe reached this alias at this base URL with this endpoint style and API version,
+// and the deployment identity is what the same setup observed behind that alias. The reasoning
+// continuation fields come from the retained configuration; they shape only later multi-turn
+// continuation, which the single-turn probe does not exercise. Each verdict is recorded here, once,
+// with the fingerprint of the proof as stored, so the line names the proof the loader will check.
 function parsedSetupConfigWithToolCallingProvenance(
   input: SetupVerificationInput,
   rawConfig: Record<string, unknown>,
@@ -7321,7 +7289,18 @@ function parsedSetupConfigWithToolCallingProvenance(
     parsed(rawConfig),
     observations,
   );
-  return { rawConfig: rawConfigWithProvenance, config: parsed(rawConfigWithProvenance) };
+  const config = parsed(rawConfigWithProvenance);
+  for (const observation of observations) {
+    logToolCallingVerification(
+      config,
+      observation.modelId,
+      observation.status,
+      input.correlationId ?? UNKNOWN_CORRELATION_ID,
+      findConfiguredCapability(config, observation.modelId)?.toolCallingVerification
+        ?.configurationFingerprint,
+    );
+  }
+  return { rawConfig: rawConfigWithProvenance, config };
 }
 
 // One retry (not zero) so a single transient blip — 429 rate-limit, brief timeout, momentary
@@ -7771,9 +7750,8 @@ async function admitChatCandidatesOrDefer(
       verifiedSetupFromChatAdmission(
         input,
         admittedModels,
-        candidateConfig,
         embeddingAdmission,
-        temporaryChatAdmission(input, candidateModels, candidateConfig),
+        temporaryChatAdmission(candidateModels),
       ),
     );
   }
@@ -7825,19 +7803,12 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
     embeddingAdmission,
   );
   reportChatSmokeAdmission(input.diagnostics, input.correlationId, chatAdmission);
-  return verifiedSetupFromChatAdmission(
-    input,
-    admittedModels,
-    candidateConfig,
-    embeddingAdmission,
-    chatAdmission,
-  );
+  return verifiedSetupFromChatAdmission(input, admittedModels, embeddingAdmission, chatAdmission);
 }
 
 function verifiedSetupFromChatAdmission(
   input: SetupVerificationInput,
   admittedModels: SetupCandidateModels,
-  candidateConfig: GatewayConfig,
   embeddingAdmission: EmbeddingAdmission,
   chatAdmission: ChatAdmission,
 ): VerifiedSetup {
@@ -7858,11 +7829,7 @@ function verifiedSetupFromChatAdmission(
       ...(testResult.toolCallingObservations ?? []),
       // Listed models no request reached carry an explicit "unverified" tool-calling record, the
       // same closed state a model kept without an answer carries, so Settings reports them as such.
-      ...unverifiedKeptToolCallingObservations(
-        candidateConfig,
-        chatAdmission.listedUnverifiedModelIds,
-        input.correlationId,
-      ),
+      ...unverifiedKeptToolCallingObservations(chatAdmission.listedUnverifiedModelIds),
     ],
   );
   return verifiedSetupResult(

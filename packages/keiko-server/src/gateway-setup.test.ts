@@ -9624,10 +9624,17 @@ describe("handleGatewaySetup", () => {
         }),
     });
 
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
     const result = await handleGatewaySetup(
-      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      ctx(
+        { baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" },
+        "corr-proof-binding",
+      ),
       deps,
     );
+    resetServerLogger();
 
     expect(result.status).toBe(200);
     const config = requiredGatewayConfig(deps);
@@ -9643,6 +9650,18 @@ describe("handleGatewaySetup", () => {
     // The loader keeps the proof, so the model is usable for coding right after setup.
     expect(capability.toolCalling).toBe(true);
     expect(codingWorkbenchModelEligibility(capability)).toBe("eligible");
+    // The setup records the verdict once, with the fingerprint of the proof it stored.
+    expect(
+      sink.events.filter((event) => event.op === "gateway.tool-calling.verification"),
+    ).toMatchObject([
+      {
+        correlationId: "corr-proof-binding",
+        extra: {
+          verificationStatus: "verified",
+          configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+        },
+      },
+    ]);
     deps.store.close();
   });
 

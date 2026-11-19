@@ -68,6 +68,18 @@ describe("insideProgramFolder", () => {
     }
   });
 
+  // Audit of the program-folder refusal: a launch directory that could not be resolved once (a share
+  // not yet mounted) kept its lexical spelling for the life of the process, so the folder was later
+  // never compared by its system name.
+  it("resolves a launch directory again once it can be resolved", () => {
+    const { program, root } = folders();
+    const link = join(root, "link-made-later");
+    // Not resolvable yet: only the lexical spelling is compared.
+    expect(insideProgramFolder(join(program, "package.json"), DECLARED, link)).toBe(false);
+    symlinkSync(program, link, "junction");
+    expect(insideProgramFolder(join(program, "package.json"), DECLARED, link)).toBe(true);
+  });
+
   it("knows the folder by the name it was launched with and by its resolved name", () => {
     const { program, root } = folders();
     const link = join(root, "launched-through-a-link");
