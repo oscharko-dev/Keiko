@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "two-memories-drei-de",
+  "language": "de",
+  "class": "two-memories",
+  "description": "Three facts that together answer one question (role, team size, location) among eight near-topic facts about another team. Limit: at most six memories are sent per question, ranked by word overlap, so near-topic facts can crowd out facts the answer needs. Failure means: needed-memory-missing names the fact or facts that did not reach the model. Maintenance: no aged records, so on or off changes nothing; seeded distractors are younger than 94 days.",
+  "seed": {
+    "records": [
+      {
+        "key": "revision-1",
+        "body": "Das Team Revision hat zwölf Mitarbeitende am Ort Leipzig im Bereich Innenrevision.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 4
+      },
+      {
+        "key": "revision-2",
+        "body": "Das Team Revision führt vierzehn Mitarbeitende am Ort Leipzig im Bereich Prüfung.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 8
+      },
+      {
+        "key": "revision-3",
+        "body": "Das Team Revision betreut den Bereich Compliance mit neun Mitarbeitenden am Ort Dresden.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 12
+      },
+      {
+        "key": "revision-4",
+        "body": "Das Team Revision arbeitet im Bereich Treasury mit elf Mitarbeitenden am Ort Mainz.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 16
+      },
+      {
+        "key": "revision-5",
+        "body": "Das Team Revision hat im Bereich Kontrolle acht Mitarbeitende am Ort Kassel.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 20
+      },
+      {
+        "key": "revision-6",
+        "body": "Das Team Revision ist im Bereich Meldewesen mit zehn Mitarbeitenden am Ort Bonn tätig.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 24
+      },
+      {
+        "key": "revision-7",
+        "body": "Das Team Revision führt im Bereich Datenschutz sechs Mitarbeitende am Ort Ulm.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 28
+      },
+      {
+        "key": "revision-8",
+        "body": "Das Team Revision arbeitet im Bereich Archiv mit fünf Mitarbeitenden am Ort Trier.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 32
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "role",
+      "seed": "Ich bin Teamleiterin der Kundenbetreuung.",
+      "must": false,
+      "terms": [["Kundenbetreuung"]]
+    },
+    {
+      "key": "size",
+      "seed": "Ich führe sieben Mitarbeitende.",
+      "must": false,
+      "terms": [["sieben", "7"]]
+    },
+    {
+      "key": "place",
+      "seed": "Ich arbeite in Hannover.",
+      "must": false,
+      "terms": [["Hannover"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich bin Teamleiterin der Kundenbetreuung.",
+      "learner": [
+        {
+          "body": "Ich bin Teamleiterin der Kundenbetreuung.",
+          "type": "fact"
+        }
+      ]
+    },
+    {
+      "user": "Ich führe sieben Mitarbeitende.",
+      "learner": [
+        {
+          "body": "Ich führe sieben Mitarbeitende.",
+          "type": "fact"
+        }
+      ]
+    },
+    {
+      "user": "Ich arbeite in Hannover.",
+      "learner": [
+        {
+          "body": "Ich arbeite in Hannover.",
+          "type": "fact"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "three",
+      "question": "Als Teamleiterin: für welchen Bereich bin ich zuständig, wie viele Mitarbeitende führe ich und an welchem Ort arbeite ich?",
+      "expect": {
+        "kind": "answer",
+        "needs": ["role", "size", "place"]
+      }
+    }
+  ]
+}

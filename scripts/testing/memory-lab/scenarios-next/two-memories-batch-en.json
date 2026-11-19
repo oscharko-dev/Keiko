@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "two-memories-batch-en",
+  "language": "en",
+  "class": "two-memories",
+  "description": "A decision and its reason learned as two statements; a direct question that repeats both and an indirect one that shares no word with either. Limit: an answer that needs two memories needs both of them retrieved, and recall matches by word overlap. Failure means: needed-memory-missing names the fact that did not reach the model; offline it shows a retrieval limit, live it also shows whether the model joins the two. Maintenance: no aged records, so on or off changes nothing; seeded distractors are younger than 94 days.",
+  "truth": [
+    {
+      "key": "decision",
+      "seed": "I decided to set the batch window to 02:00.",
+      "must": false,
+      "terms": [["02:00", "2 am", "2am", "2:00"]]
+    },
+    {
+      "key": "reason",
+      "seed": "I keep the batch window because the nightly settlement feed finishes by 01:30.",
+      "must": false,
+      "terms": [["settlement"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "I decided to set the batch window to 02:00.",
+      "learner": [
+        {
+          "body": "I decided to set the batch window to 02:00.",
+          "type": "decision"
+        }
+      ]
+    },
+    {
+      "user": "I keep the batch window because the nightly settlement feed finishes by 01:30.",
+      "learner": [
+        {
+          "body": "I keep the batch window because the nightly settlement feed finishes by 01:30.",
+          "type": "fact"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "direct",
+      "question": "Which batch window did I decide on, and why do I keep the batch window?",
+      "expect": {
+        "kind": "answer",
+        "needs": ["decision", "reason"]
+      }
+    },
+    {
+      "id": "indirect",
+      "question": "At what hour does my overnight job run, and what rationale sits behind that timing?",
+      "expect": {
+        "kind": "answer",
+        "needs": ["decision", "reason"]
+      }
+    }
+  ]
+}

@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "two-memories-compare-en",
+  "language": "en",
+  "class": "two-memories",
+  "description": "Two facts about two different projects among eight near-topic facts about each; the question compares them. Limit: at most six memories are sent per question, ranked by word overlap, so near-topic facts about the same projects can crowd out the two that carry the answer. Failure means: needed-memory-missing names the project whose storage fact did not reach the model. Maintenance: no aged records, so on or off changes nothing; seeded distractors are younger than 94 days.",
+  "seed": {
+    "records": [
+      {
+        "key": "atlas-1",
+        "body": "Project Atlas has a weekly data review on Wednesdays.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 5
+      },
+      {
+        "key": "atlas-2",
+        "body": "Project Atlas keeps its data glossary in the wiki.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 8
+      },
+      {
+        "key": "atlas-3",
+        "body": "Project Atlas shares data quality reports with finance.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 11
+      },
+      {
+        "key": "atlas-4",
+        "body": "Project Atlas archives its data exports every month.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 14
+      },
+      {
+        "key": "atlas-5",
+        "body": "Project Atlas tracks data incidents in the shared board.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 17
+      },
+      {
+        "key": "atlas-6",
+        "body": "Project Atlas documents data lineage for audits.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 20
+      },
+      {
+        "key": "atlas-7",
+        "body": "Project Atlas trains new data stewards each spring.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 23
+      },
+      {
+        "key": "atlas-8",
+        "body": "Project Atlas reviews data access every quarter.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 26
+      },
+      {
+        "key": "borealis-1",
+        "body": "Project Borealis has a weekly data standup on Tuesdays.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 6
+      },
+      {
+        "key": "borealis-2",
+        "body": "Project Borealis keeps its data glossary in a spreadsheet.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 9
+      },
+      {
+        "key": "borealis-3",
+        "body": "Project Borealis shares data quality reports with legal.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 12
+      },
+      {
+        "key": "borealis-4",
+        "body": "Project Borealis archives its data exports every week.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 15
+      },
+      {
+        "key": "borealis-5",
+        "body": "Project Borealis tracks data incidents by email.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 18
+      },
+      {
+        "key": "borealis-6",
+        "body": "Project Borealis documents data lineage in slides.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 21
+      },
+      {
+        "key": "borealis-7",
+        "body": "Project Borealis trains new data stewards in autumn.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 24
+      },
+      {
+        "key": "borealis-8",
+        "body": "Project Borealis reviews data access every month.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 27
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "atlas",
+      "seed": "I chose PostgreSQL for the storage of project Atlas.",
+      "must": false,
+      "terms": [["PostgreSQL", "Postgres"]]
+    },
+    {
+      "key": "borealis",
+      "seed": "I chose MongoDB for the storage of project Borealis.",
+      "must": false,
+      "terms": [["MongoDB"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "I chose PostgreSQL for the storage of project Atlas.",
+      "learner": [
+        {
+          "body": "I chose PostgreSQL for the storage of project Atlas.",
+          "type": "decision"
+        }
+      ]
+    },
+    {
+      "user": "I chose MongoDB for the storage of project Borealis.",
+      "learner": [
+        {
+          "body": "I chose MongoDB for the storage of project Borealis.",
+          "type": "decision"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "compare",
+      "question": "Which storage did I choose for the projects Atlas and Borealis?",
+      "expect": {
+        "kind": "answer",
+        "needs": ["atlas", "borealis"]
+      }
+    }
+  ]
+}

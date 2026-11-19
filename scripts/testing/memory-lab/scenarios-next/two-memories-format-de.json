@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "two-memories-format-de",
+  "language": "de",
+  "class": "two-memories",
+  "description": "A format preference and a narrower exception learned as two statements; a direct question and an indirect one. Limit: an answer that needs both the rule and its exception needs both retrieved; the profile carries the preference to every answer but not the exception. Failure means: needed-memory-missing names the exception (or the rule) that did not reach the model. Maintenance: no aged records, so on or off changes nothing; seeded distractors are younger than 94 days.",
+  "truth": [
+    {
+      "key": "rule",
+      "seed": "Berichte bekomme ich als PDF.",
+      "must": false,
+      "terms": [["PDF"]]
+    },
+    {
+      "key": "exception",
+      "seed": "Berichte zu Mittelstandskunden bekomme ich ausnahmsweise als Excel-Datei.",
+      "must": false,
+      "terms": [["Excel"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Berichte bekomme ich als PDF.",
+      "learner": [
+        {
+          "body": "Berichte bekomme ich als PDF.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "Berichte zu Mittelstandskunden bekomme ich ausnahmsweise als Excel-Datei.",
+      "learner": [
+        {
+          "body": "Berichte zu Mittelstandskunden bekomme ich ausnahmsweise als Excel-Datei.",
+          "type": "fact"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "direct",
+      "question": "In welchen Formaten bekomme ich Berichte?",
+      "expect": {
+        "kind": "answer",
+        "needs": ["rule", "exception"]
+      }
+    },
+    {
+      "id": "indirect",
+      "question": "In welcher Form erreichen mich Zusammenfassungen, selbst wenn es um Unternehmenskunden geht?",
+      "expect": {
+        "kind": "answer",
+        "needs": ["rule", "exception"]
+      }
+    }
+  ]
+}
