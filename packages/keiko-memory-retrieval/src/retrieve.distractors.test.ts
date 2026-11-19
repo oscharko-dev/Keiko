@@ -11,11 +11,12 @@
 // by its random UUID. In the live run the six supplied memories of both probes sat among the 60
 // lowest of 321 ids and the target's id was at rank 151.
 //
-// FIXED by tie-aware rank fusion (ranking.ts, #4228): equal subscores share one rank and a zero
-// subscore contributes nothing, so a signal that does not distinguish records no longer hands out
-// ids-ordered ranks. The reproductions are plain `it` now; the two `it.fails` left are pins for the
-// diversity (MMR) stage, which is outside rank fusion (see their comments). The
-// controls prove the other inputs (semantic scores, floor, cap, budget) are sufficient.
+// FIXED by tie-aware rank fusion (ranking.ts, #4228): equal subscores share one rank, so a signal
+// that does not distinguish records no longer hands out id-ordered ranks. The consequence is
+// intended and not neutral: where one signal separates records and the others tie, that signal now
+// decides. The reproductions are plain `it` now; the two `it.fails` left are pins for the diversity
+// (MMR) stage, which is outside rank fusion (see their comments). The controls prove the other
+// inputs (semantic scores, floor, cap, budget) are sufficient.
 //
 // Not reproducible hermetically: whether the real embedding gave the target the nearest vector.
 // The vectors below MODEL the situation; see the diagnosis report for what a live run must record.
