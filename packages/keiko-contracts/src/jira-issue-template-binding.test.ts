@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   bindJiraIssueTemplateText,
+  editJiraTemplateForm,
+  isJiraNativeId,
   jiraTemplateBindingDigest,
   jiraTemplateBoundFieldId,
   jiraTemplateBoundStatusId,
@@ -9,6 +11,8 @@ import {
   jiraTemplateParentEntryMatches,
   jiraTemplateParentTypeMatches,
   parseJiraIssueTemplate,
+  rebindJiraTemplateAfterEdit,
+  resolveJiraTemplateFieldIds,
   type JiraIssueTemplate,
   type JiraTemplateBinding,
   type JiraTemplateBindingIds,
@@ -239,15 +243,75 @@ describe("the one matchers", () => {
   });
 
   it("name the field id a bound template carries, and nothing for a name that did not resolve", () => {
-    expect(jiraTemplateBoundFieldId(bound, "Fälligkeitsdatum")).toBe("duedate");
-    expect(jiraTemplateBoundFieldId(bound, "priorität")).toBe("priority");
-    expect(jiraTemplateBoundFieldId(bound, "Epic Link")).toBe("customfield_10109");
-    expect(jiraTemplateBoundFieldId(bound, "Unknown")).toBeUndefined();
-    expect(jiraTemplateBoundFieldId(template(PLAIN), "Fälligkeitsdatum")).toBeUndefined();
+    expect(jiraTemplateBoundFieldId(bound, "Fälligkeitsdatum", "required")).toBe("duedate");
+    expect(jiraTemplateBoundFieldId(bound, "priorität", "required")).toBe("priority");
+    expect(jiraTemplateBoundFieldId(bound, "Epic Link", "parent")).toBe("customfield_10109");
+    expect(jiraTemplateBoundFieldId(bound, "Unknown", "required")).toBeUndefined();
+    expect(
+      jiraTemplateBoundFieldId(template(PLAIN), "Fälligkeitsdatum", "required"),
+    ).toBeUndefined();
     const half = bindingFor(PLAIN, INSTANCE, { ...IDS, requiredFieldIds: ["none", "priority"] });
     const partly = template(bindJiraIssueTemplateText(PLAIN, half) ?? "");
-    expect(jiraTemplateBoundFieldId(partly, "Fälligkeitsdatum")).toBeUndefined();
-    expect(jiraTemplateBoundFieldId(partly, "Priorität")).toBe("priority");
+    expect(jiraTemplateBoundFieldId(partly, "Fälligkeitsdatum", "required")).toBeUndefined();
+    expect(jiraTemplateBoundFieldId(partly, "Priorität", "required")).toBe("priority");
+  });
+
+  it("resolve a parent clause and a required clause of one shared name by their own slots (G1)", () => {
+    const shared = PLAIN.replace(
+      "requiredFields: [Fälligkeitsdatum, Priorität]",
+      "requiredFields: [Parent]",
+    ).replace("parentField: Epic Link", "parentField: Parent");
+    const ids = { ...IDS, requiredFieldIds: ["customfield_10200"], parentFieldId: "parent" };
+    const saved = template(
+      bindJiraIssueTemplateText(shared, bindingFor(shared, INSTANCE, ids)) ?? "",
+    );
+    const roundTripped = jiraTemplateForInstance(
+      template(
+        bindJiraIssueTemplateText(shared, saved.binding ?? bindingFor(shared, INSTANCE, ids)) ?? "",
+      ),
+      INSTANCE,
+    );
+    expect(roundTripped.binding).toBeDefined();
+    expect(jiraTemplateBoundFieldId(roundTripped, "Parent", "parent")).toBe("parent");
+    expect(jiraTemplateBoundFieldId(roundTripped, "Parent", "required")).toBe("customfield_10200");
+    const catalog = [
+      { id: "parent", name: "Übergeordnet" },
+      { id: "customfield_10200", name: "Parent" },
+    ];
+    expect(resolveJiraTemplateFieldIds("Parent", catalog, roundTripped, "parent")).toEqual([
+      "parent",
+    ]);
+    expect(resolveJiraTemplateFieldIds("Parent", catalog, roundTripped, "required")).toEqual([
+      "customfield_10200",
+    ]);
+    // A role names only its own slot: the parent field is never a required clause's id.
+    expect(jiraTemplateBoundFieldId(bound, "Epic Link", "required")).toBeUndefined();
+    expect(jiraTemplateBoundFieldId(bound, "Priorität", "parent")).toBeUndefined();
+  });
+
+  it("resolve a field reference by its bound id, else an exact id, else every same-named field", () => {
+    const catalog = [
+      { id: "duedate", name: "Termin" },
+      { id: "priority", name: "Priorität" },
+      { id: "customfield_1", name: "Team" },
+      { id: "customfield_2", name: "team" },
+    ];
+    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog, bound, "required")).toEqual([
+      "duedate",
+    ]);
+    expect(
+      resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog.slice(1), bound, "required"),
+    ).toEqual([]);
+    // A field now carrying the old name never takes over the bound field's place (u5K).
+    const renamed = [...catalog.slice(1), { id: "customfield_9", name: "Fälligkeitsdatum" }];
+    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", renamed, bound, "required")).toEqual([]);
+    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", renamed)).toEqual(["customfield_9"]);
+    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog)).toEqual([]);
+    expect(resolveJiraTemplateFieldIds("customfield_1", catalog)).toEqual(["customfield_1"]);
+    expect(resolveJiraTemplateFieldIds(" TEAM ", catalog)).toEqual([
+      "customfield_1",
+      "customfield_2",
+    ]);
   });
 
   it("name the status id a bound template carries for a transition target, and nothing for a typed id", () => {
@@ -256,5 +320,155 @@ describe("the one matchers", () => {
     expect(jiraTemplateBoundStatusId(bound, byName)).toBe("3");
     expect(jiraTemplateBoundStatusId(bound, byId)).toBeUndefined();
     expect(jiraTemplateBoundStatusId(template(PLAIN), byName)).toBeUndefined();
+  });
+});
+
+describe("the native id contract (UyI)", () => {
+  it("is one lossless int64 rule for offering, saving and binding", () => {
+    expect(isJiraNativeId("9007199254740993")).toBe(true);
+    expect(isJiraNativeId("12345678901234567")).toBe(true);
+    expect(isJiraNativeId("9223372036854775807")).toBe(true);
+    for (const wrong of ["9223372036854775808", "0", "01", "", "1e3", "-1", 12, undefined])
+      expect(isJiraNativeId(wrong), String(wrong)).toBe(false);
+  });
+
+  it("binds and parses an issue type id above the safe integer range", () => {
+    const wide = {
+      ...IDS,
+      issueTypeId: "9223372036854775807",
+      parentIssueTypeIds: ["12345678901234567"],
+    };
+    const written = bindJiraIssueTemplateText(PLAIN, bindingFor(PLAIN, INSTANCE, wide));
+    expect(written).toBeDefined();
+    expect(template(written ?? "").binding?.issueTypeId).toBe("9223372036854775807");
+    expect(
+      bindJiraIssueTemplateText(
+        PLAIN,
+        bindingFor(PLAIN, INSTANCE, { ...IDS, issueTypeId: "9223372036854775808" }),
+      ),
+    ).toBeUndefined();
+  });
+});
+
+const PLAIN_FRONT = PLAIN.split("\n").slice(1, PLAIN.split("\n").indexOf("---", 1)).join("\n");
+
+// Ux7, u5a: a guided edit of the rules keeps every untouched reference on the id it was bound to.
+describe("a guided edit of a bound template's rules", () => {
+  const FIELDS = ["Fälligkeitsdatum", "Priorität"] as const;
+  const ACTIVATE = ["create", "edit", "transition:In Arbeit", "transition:21"];
+  const governing = (): JiraIssueTemplate => jiraTemplateForInstance(template(BOUND), INSTANCE);
+  const rebound = (
+    edit: { requiredFields: readonly string[]; activateOn: readonly string[] },
+    resolved?: Parameters<typeof rebindJiraTemplateAfterEdit>[3],
+  ): JiraTemplateBinding => {
+    const binding = rebindJiraTemplateAfterEdit(governing(), INSTANCE, edit, resolved);
+    if (binding === undefined) throw new TypeError("Expected a binding");
+    return binding;
+  };
+  const written = (requiredFields: readonly string[], binding: JiraTemplateBinding): string => {
+    const front = editJiraTemplateForm(PLAIN_FRONT, { requiredFields }, binding);
+    return ["---", front, "---", "# Aufgabe"].join("\n");
+  };
+
+  it("keeps the ids of untouched rules and leaves a new one unresolved, confirmed for the same Jira", () => {
+    const binding = rebound({ requiredFields: [...FIELDS, "Team"], activateOn: ACTIVATE });
+    expect(binding.requiredFieldIds).toEqual(["duedate", "priority", "none"]);
+    expect(binding.issueTypeId).toBe("10002");
+    expect(binding.parentIssueTypeIds).toEqual(["10000"]);
+    expect(binding.parentFieldId).toBe("customfield_10109");
+    expect(binding.transitionStatusIds).toEqual(["3", "none"]);
+    const edited = jiraTemplateForInstance(
+      template(written([...FIELDS, "Team"], binding)),
+      INSTANCE,
+    );
+    expect(edited.binding).toEqual(binding);
+    expect(jiraTemplateIssueTypeMatches(edited, { id: "10002", name: "Task" })).toBe(true);
+  });
+
+  it("gives a new reference the id this Jira's metadata names, and moves ids with their rules", () => {
+    const resolved = { fieldIds: new Map([["team", "customfield_7"]]) };
+    const binding = rebound(
+      { requiredFields: ["Team", "Priorität"], activateOn: ACTIVATE },
+      resolved,
+    );
+    expect(binding.requiredFieldIds).toEqual(["customfield_7", "priority"]);
+    const status = rebound(
+      {
+        requiredFields: [...FIELDS],
+        activateOn: ["create", "transition:21", "transition:In Arbeit", "transition:Neu"],
+      },
+      { statusIds: new Map([["neu", "7"]]) },
+    );
+    expect(status.transitionStatusIds).toEqual(["none", "3", "7"]);
+  });
+
+  it("never lets an untouched rule follow its old name to another field", () => {
+    const binding = rebound({ requiredFields: [...FIELDS, "Team"], activateOn: ACTIVATE });
+    const edited = jiraTemplateForInstance(
+      template(written([...FIELDS, "Team"], binding)),
+      INSTANCE,
+    );
+    // Jira renamed the bound field; another field now carries the old name.
+    const catalog = [
+      { id: "duedate", name: "Termin" },
+      { id: "customfield_5", name: "Fälligkeitsdatum" },
+      { id: "priority", name: "Priorität" },
+    ];
+    expect(resolveJiraTemplateFieldIds("Fälligkeitsdatum", catalog, edited, "required")).toEqual([
+      "duedate",
+    ]);
+  });
+
+  it("offers no binding where none is in force for this Jira or the edit does not read", () => {
+    const none = { requiredFields: [], activateOn: ACTIVATE };
+    expect(rebindJiraTemplateAfterEdit(template(BOUND), OTHER, none)).toBeUndefined();
+    expect(rebindJiraTemplateAfterEdit(template(PLAIN), INSTANCE, none)).toBeUndefined();
+    expect(
+      rebindJiraTemplateAfterEdit(governing(), INSTANCE, {
+        requiredFields: [],
+        activateOn: ["create", "nonsense"],
+      }),
+    ).toBeUndefined();
+  });
+});
+
+// PR #4464 review: the rebind and the strict reader must sign the same slots, and positional id
+// lists keep equal ids in place instead of dropping the whole binding.
+describe("a guided edit with repeated or equivalent entries", () => {
+  const governing = (): JiraIssueTemplate => jiraTemplateForInstance(template(BOUND), INSTANCE);
+
+  it("signs one slot for a repeated activation token, as the strict reader does", () => {
+    const activateOn = [
+      "create",
+      "edit",
+      "transition:In Arbeit",
+      "transition:In Arbeit",
+      "transition:21",
+    ];
+    const binding = rebindJiraTemplateAfterEdit(governing(), INSTANCE, {
+      requiredFields: ["Fälligkeitsdatum", "Priorität"],
+      activateOn,
+    });
+    expect(binding?.transitionStatusIds).toEqual(["3", "none"]);
+    const front = editJiraTemplateForm(PLAIN_FRONT, { activateOn }, binding);
+    const edited = jiraTemplateForInstance(
+      template(["---", front, "---", "# Aufgabe"].join("\n")),
+      INSTANCE,
+    );
+    expect(edited.binding).toEqual(binding);
+  });
+
+  it("keeps positional ids when distinct labels resolve to the same native id", () => {
+    const markdown = PLAIN.replace(
+      "activateOn: [create, edit, transition:In Arbeit, transition:21]",
+      "activateOn: [create, transition:ready, transition:Ready]",
+    );
+    const ids: JiraTemplateBindingIds = { ...IDS, transitionStatusIds: ["5", "5"] };
+    const written = bindJiraIssueTemplateText(markdown, bindingFor(markdown, INSTANCE, ids));
+    expect(template(written ?? "").binding?.transitionStatusIds).toEqual(["5", "5"]);
+    expect(jiraTemplateForInstance(template(written ?? ""), INSTANCE).binding).toBeDefined();
+    const unresolved = { ...IDS, requiredFieldIds: ["none", "none"] };
+    const second = bindJiraIssueTemplateText(PLAIN, bindingFor(PLAIN, INSTANCE, unresolved));
+    expect(template(second ?? "").binding?.requiredFieldIds).toEqual(["none", "none"]);
   });
 });

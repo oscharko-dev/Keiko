@@ -140,7 +140,24 @@ This shapes the product _and_ how you work on it:
   folder form perform or suggest an installation, and never weaken the operating system's download
   checks to make a package start: an administrator removes the download mark before internal
   distribution. A team's `keiko.config.json` beside the start files is an administrator-owned
-  input; Keiko adopts it and seals its key, and never writes to it (ADR-0046 D5).
+  input; Keiko adopts it and seals its key, and never writes to it (ADR-0046 D5). Every stable
+  `latest` release carries the generic package of each desktop target as `keiko-<target>.standalone.zip`,
+  built and attested in the stable-tag run (`scripts/build-folder-release-assets.mjs`). A folder
+  package's name keeps the dot before its form: shipped updaters read every dot-free `keiko-*.zip`
+  release asset as an update archive and refuse a release with one too many.
+- **npm folder package (owner decision, 2026-11-18):** where an npm registry, often an internal
+  mirror, is the approved way in, the same folder form ships without the program: the release's
+  Node.js runtime, a `package.json` that pins `@oscharko-dev/keiko` exactly and a lockfile with a
+  public-registry sha512 integrity for every package npm downloads
+  (`scripts/build-standalone-npm-package.mjs`, ADR-0121 D9). Its first start runs
+  `npm ci --ignore-scripts` into the folder's own `node_modules` from the registry the folder's
+  `.npmrc` names, then `keiko start` with the same state, management declaration and provisioned
+  configuration as the folder package. Never write outside the folder and the state directory,
+  never run an install script, never ship a lockfile without those integrities. The
+  administrator's access step (`Zugang speichern`) writes `keiko.config.json` from the
+  configuration Gateway Setup saved and gives the team token only to the gateway connection Gateway
+  Setup verified; a provider or reranker with its own connection is refused, never given that token.
+  Windows has no npm coding-runtime package, so this form offers no Coding Workbench on Windows.
 - Portable updates must not require an Apple Developer subscription (ADR-0121 D7). Verify macOS
   handoff copies against the exact current artifact digests in the validated plan after managed
   registration admission; preserve candidate authenticity, containment and process ownership.

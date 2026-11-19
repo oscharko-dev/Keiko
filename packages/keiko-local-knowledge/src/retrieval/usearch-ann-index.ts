@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
@@ -21,6 +21,7 @@ import {
   USEARCH_RUNTIME_MANIFEST,
   type UsearchRuntimeApproval,
   type UsearchRuntimeTargetKey,
+  portableUsearchBinaryPath,
   usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "./usearch-runtime-manifest.js";
@@ -358,10 +359,7 @@ export function __resetTargetRuntimeCacheForTests(): void {
 
 function resolvedRuntimePath(binaryPath: string | undefined, targetKey: string): string {
   const approval = approvedRuntimeFor(targetKey);
-  const portablePath =
-    process.platform === "darwin"
-      ? resolve(dirname(process.execPath), "..", "..", "native", "usearch.node")
-      : resolve(dirname(process.execPath), "..", "native", "usearch.node");
+  const portablePath = portableUsearchBinaryPath(process.execPath);
   const defaultPath = existsSync(portablePath)
     ? portablePath
     : resolve(process.cwd(), ".usearch", approval.version, targetKey, "usearch.node");

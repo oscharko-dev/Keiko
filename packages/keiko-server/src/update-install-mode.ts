@@ -14,6 +14,7 @@ import type {
 import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import {
   detectPortableUpdateInstallMode,
+  externallyManagedInstallMode,
   portableManagementFromEnv,
   portableStateDirFromEnv,
   type PortableManagementMode,
@@ -383,6 +384,10 @@ export function detectUpdateInstallMode(
     volumeCheck,
   );
   if (portableMode !== undefined) return portableMode;
+  // Declared managed outside the app without a portable payload (the npm folder package, ADR-0121
+  // D9): decided before any package-manager reading, so no publisher is asked about an update.
+  const managed = externallyManagedInstallMode(facts.portableManagement, PACKAGE_NAME);
+  if (managed !== undefined) return managed;
   const blocker = installModeBlocker(facts, env, fs);
   if (blocker !== undefined) return unsupportedMode(blocker.reason, blocker.message);
   return (

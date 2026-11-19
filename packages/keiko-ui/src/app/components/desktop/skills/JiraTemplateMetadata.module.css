@@ -1,0 +1,104 @@
+.cmpForm {
+  display: grid;
+  gap: var(--space-2);
+  padding: 12px 14px;
+  color: var(--text-secondary);
+  font-size: var(--text-label);
+}
+
+.cmpForm h4 {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+
+.cmpFieldset {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cmpChoices {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  align-items: start;
+  gap: var(--space-3);
+}
+
+.cmpField {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.cmpField > label {
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+
+.cmpField select {
+  min-width: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-control);
+  background: var(--input-surface);
+  color: var(--input-text);
+  font: inherit;
+}
+
+.cmpHelp {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+}
+
+.cmpRules {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.cmpRules summary {
+  width: fit-content;
+  padding-block: 6px;
+  cursor: pointer;
+}
+
+.cmpRules summary:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.cmpCheckbox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cmpRuleValues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cmpRuleValues li {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 4px;
+  padding-inline-start: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  overflow-wrap: anywhere;
+}
+
+.cmpRuleValues li[data-offered="false"] {
+  border-color: var(--feedback-warning);
+}

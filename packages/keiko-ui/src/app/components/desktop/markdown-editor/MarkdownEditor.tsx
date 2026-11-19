@@ -14,7 +14,8 @@ import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widge
 import { SafeMarkdown } from "../SafeMarkdown";
 import type { ComposerEditorLabels } from "../composer/composer-editor-types";
 import {
-  joinMarkdownDocument,
+  replaceMarkdownBody,
+  replaceMarkdownFrontMatter,
   splitMarkdownDocument,
   supportsFormattedEditing,
 } from "./markdown-document";
@@ -43,6 +44,10 @@ export interface MarkdownEditorProps {
    * title can be typed over at once.
    */
   readonly selectTitleOnOpen?: boolean;
+  readonly renderFrontMatter?: (field: {
+    readonly value: string;
+    readonly onChange: (value: string) => void;
+  }) => ReactNode;
 }
 
 type Translate = ReturnType<typeof useTranslate>;
@@ -121,8 +126,7 @@ function useMarkdownEditorState(props: MarkdownEditorProps): {
   });
   const changeBody = (next: string): void => {
     setNotice("");
-    const frontMatter = splitMarkdownDocument(latest.current.value).frontMatter;
-    latest.current.onChange(joinMarkdownDocument({ frontMatter, body: next }));
+    latest.current.onChange(replaceMarkdownBody(latest.current.value, next));
   };
   const keepPasteAsSource = (next: string): void => {
     reportClientDiagnostic("Keiko Markdown editor kept pasted Markdown in source.", {
@@ -165,15 +169,7 @@ export function MarkdownEditor(props: MarkdownEditorProps): ReactNode {
         )}
         <MarkdownViewSwitch view={view} formattable={formattable} onView={editor.setView} />
       </div>
-      {parts.frontMatter === undefined ? null : (
-        <FrontMatterField
-          key={props.documentKey}
-          value={parts.frontMatter}
-          onChange={(frontMatter) =>
-            props.onChange(joinMarkdownDocument({ ...parts, frontMatter }))
-          }
-        />
-      )}
+      <DocumentFrontMatter key={props.documentKey} editor={props} parts={parts} />
       <div className={styles.cmpMdeBody}>
         {view === "rich" ? (
           <FormattedSurface
@@ -196,6 +192,25 @@ export function MarkdownEditor(props: MarkdownEditorProps): ReactNode {
         notice={editor.notice || (formattable ? "" : t("markdownEditor.sourceOnly"))}
         count={props.value.length}
       />
+    </div>
+  );
+}
+
+function DocumentFrontMatter({
+  editor,
+  parts,
+}: {
+  readonly editor: MarkdownEditorProps;
+  readonly parts: ReturnType<typeof splitMarkdownDocument>;
+}): ReactNode {
+  const value = parts.frontMatter;
+  if (value === undefined) return null;
+  const onChange = (frontMatter: string): void =>
+    editor.onChange(replaceMarkdownFrontMatter(editor.value, frontMatter));
+  return (
+    <div className={styles.cmpMdeMetadata} data-guided={editor.renderFrontMatter !== undefined}>
+      {editor.renderFrontMatter?.({ value, onChange })}
+      <FrontMatterField value={value} onChange={onChange} />
     </div>
   );
 }

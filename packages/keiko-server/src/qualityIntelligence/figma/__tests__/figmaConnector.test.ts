@@ -36,9 +36,13 @@ const staticPort =
   () =>
     Promise.resolve(response);
 
-const okResponse = (
-  document: unknown = { id: "12:34", name: "Release", type: "FRAME" },
-): FigmaHttpResponse => ({ status: 200, json: nodesResponse("12:34", document), headers: {} });
+const okDocument = (): unknown => ({ id: "12:34", name: "Release", type: "FRAME" });
+
+const okResponse = (document: unknown = okDocument()): FigmaHttpResponse => ({
+  status: 200,
+  json: nodesResponse("12:34", document),
+  headers: {},
+});
 
 describe("createFigmaConnector — scoped fetch", () => {
   it("calls GET /v1/files/:key/nodes with ids + depth, NEVER the whole-file endpoint", async () => {
@@ -72,6 +76,36 @@ describe("createFigmaConnector — scoped fetch", () => {
     expect(firstRequest(recorder).url).toContain("version=ver-999");
     expect(result.provenance.version).toBe("ver-999");
     expect(result.readiness).toEqual({ source: "version", ready: true, version: "ver-999" });
+  });
+
+  it("refuses a pinned fetch whose response reports another revision", async () => {
+    const response: FigmaHttpResponse = {
+      status: 200,
+      json: { ...(nodesResponse("12:34", okDocument()) as object), version: "ver-1000" },
+      headers: {},
+    };
+    const connector = createFigmaConnector({
+      http: staticPort(response),
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+
+    await expect(connector.fetchScopedNodes(URL_OK, { version: "ver-999" })).rejects.toMatchObject({
+      code: "FIGMA_SOURCE_CHANGED",
+    });
+  });
+
+  it("accepts a pinned fetch whose response repeats the pin or omits its revision", async () => {
+    for (const reported of ["ver-999", undefined]) {
+      const json = { ...(nodesResponse("12:34", okDocument()) as object), version: reported };
+      const connector = createFigmaConnector({
+        http: staticPort({ status: 200, json, headers: {} }),
+        env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      });
+
+      const result = await connector.fetchScopedNodes(URL_OK, { version: "ver-999" });
+
+      expect(result.provenance.version).toBe("ver-999");
+    }
   });
 
   it("returns the raw scoped node subtree plus provenance (no token)", async () => {
@@ -296,10 +330,24 @@ describe("createFigmaConnector — coded errors", () => {
     ).rejects.toMatchObject({ code: "FIGMA_UPSTREAM_UNAVAILABLE" });
   });
 
-  it("maps an empty / missing node entry to FIGMA_NOT_FOUND", async () => {
+  it.each([{}, { "12:34": null }])(
+    "maps an empty / missing node entry to FIGMA_NOT_FOUND",
+    async (nodes) => {
+      await expect(
+        connectorWith({ status: 200, json: { nodes } }).fetchScopedNodes(URL_OK),
+      ).rejects.toMatchObject({ code: "FIGMA_NOT_FOUND" });
+    },
+  );
+
+  it.each([
+    { id: "99:99", name: "Other", type: "FRAME" },
+    { id: "12:34", name: "Release", type: "FRAME", children: [null] },
+  ])("rejects a provider response with a mismatched root or malformed child", async (document) => {
     await expect(
-      connectorWith({ status: 200, json: { nodes: {} } }).fetchScopedNodes(URL_OK),
-    ).rejects.toMatchObject({ code: "FIGMA_NOT_FOUND" });
+      connectorWith(okResponse(document)).fetchScopedNodes(URL_OK),
+    ).rejects.toMatchObject({
+      code: "FIGMA_INTERNAL",
+    });
   });
 
   it("maps an unparseable 200 body to FIGMA_INTERNAL", async () => {
@@ -453,6 +501,95 @@ describe("createFigmaConnector — deep scoped pagination (#837)", () => {
     });
   });
 
+  it("reuses a complete shallow frame without issuing another node request", async () => {
+    const document = {
+      id: "12:34",
+      name: "Release",
+      type: "FRAME",
+      children: [{ id: "1:2", type: "TEXT", name: "Label", characters: "Visible" }],
+    };
+    const recorder = recordingPort(okResponse(document));
+    const connector = createFigmaConnector({
+      http: recorder.port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+
+    const result = await connector.fetchScopedNodesDeep(URL_OK);
+
+    expect(recorder.requests).toHaveLength(1);
+    expect(result.coverage).toMatchObject({
+      screenCount: 1,
+      screensDeepFetched: 0,
+      screensTruncated: 0,
+      capped: false,
+    });
+    expect(result.nodes).toEqual(document);
+  });
+
+  it("finds nested sections beyond the shallow discovery depth with scoped reads", async () => {
+    const tree: Tree = {
+      id: "12:34",
+      type: "CANVAS",
+      children: [
+        {
+          id: "section-a",
+          type: "SECTION",
+          children: [
+            {
+              id: "section-b",
+              type: "SECTION",
+              children: [{ id: "section-c", type: "SECTION", children: [screen("s1")] }],
+            },
+          ],
+        },
+      ],
+    };
+    const base = treePort(tree);
+    const requests: { id: string | null; depth: string | null }[] = [];
+    const connector = createFigmaConnector({
+      http: (req) => {
+        const { searchParams } = new URL(req.url);
+        requests.push({ id: searchParams.get("ids"), depth: searchParams.get("depth") });
+        return base(req);
+      },
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      config: deepConfig,
+    });
+
+    const result = await connector.fetchScopedNodesDeep(URL_OK);
+
+    expect(requests.slice(0, 3)).toEqual([
+      { id: "12:34", depth: "2" },
+      { id: "section-b", depth: "1" },
+      { id: "section-c", depth: "1" },
+    ]);
+    expect(result.coverage).toMatchObject({ screenCount: 1, capped: false, fetchCount: 4 });
+    expect(countText(result.nodes)).toBe(1);
+  });
+
+  it("aborts on a revision change during deep capture and retires queued work", async () => {
+    const base = treePort(fullTree(["s1", "s2"]));
+    const requests: (string | null)[] = [];
+    const connector = createFigmaConnector({
+      http: async (req) => {
+        const id = new URL(req.url).searchParams.get("ids");
+        requests.push(id);
+        const response = await base(req);
+        return {
+          ...response,
+          json: { ...(response.json as object), version: id === "12:34" ? "v1" : "v2" },
+        };
+      },
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      config: { ...deepConfig, pagination: { ...deepConfig.pagination, fetchConcurrency: 1 } },
+    });
+
+    await expect(connector.fetchScopedNodesDeep(URL_OK)).rejects.toMatchObject({
+      code: "FIGMA_SOURCE_CHANGED",
+    });
+    expect(requests).toEqual(["12:34", "s1"]);
+  });
+
   it("never leaks the token on the deep path (header only)", async () => {
     const requests: FigmaHttpRequest[] = [];
     const base = treePort(fullTree(["s1"]));
@@ -539,6 +676,65 @@ describe("createFigmaConnector — deep scoped pagination (#837)", () => {
       screenCount: 2,
       screensDeepFetched: 1,
       screensTruncated: 1,
+    });
+  });
+
+  describe("deep reads after a 429", () => {
+    const requestedIds = (
+      retryAfter: string | undefined,
+    ): { readonly ids: string[]; readonly port: FigmaHttpPort } => {
+      const ids: string[] = [];
+      const base = treePort(fullTree(["s1", "s2"]));
+      const port: FigmaHttpPort = (req) => {
+        const id = new URL(req.url).searchParams.get("ids") ?? "";
+        ids.push(id);
+        if (id === "s1") {
+          return Promise.resolve({
+            status: 429,
+            json: {},
+            headers: retryAfter === undefined ? {} : { "retry-after": retryAfter },
+          });
+        }
+        return base(req);
+      };
+      return { ids, port };
+    };
+    const serialConfig = {
+      depth: 2,
+      pagination: { pageDepth: 2, fetchConcurrency: 1 },
+    } as const;
+
+    it("issues no further deep read for the capture once Figma names a Retry-After", async () => {
+      const { ids, port } = requestedIds("60");
+      const connector = createFigmaConnector({
+        http: port,
+        env: { FIGMA_ACCESS_TOKEN: TOKEN },
+        config: serialConfig,
+        sleep: () => Promise.resolve(),
+      });
+
+      const deep = await connector.fetchScopedNodesDeep(URL_OK);
+
+      expect(ids).toEqual(["12:34", "s1"]);
+      expect(countText(deep.nodes)).toBe(0);
+      expect(deep.coverage).toMatchObject({ screensDeepFetched: 0, screensTruncated: 2 });
+      expect(deep.rateLimitDeferredCount).toBe(1);
+    });
+
+    it("keeps reading queued screens after a 429 without Retry-After (control)", async () => {
+      const { ids, port } = requestedIds(undefined);
+      const connector = createFigmaConnector({
+        http: port,
+        env: { FIGMA_ACCESS_TOKEN: TOKEN },
+        config: serialConfig,
+        sleep: () => Promise.resolve(),
+      });
+
+      const deep = await connector.fetchScopedNodesDeep(URL_OK);
+
+      expect(ids).toEqual(["12:34", "s1", "s2", "s2-b"]);
+      expect(countText(deep.nodes)).toBe(1);
+      expect(deep.rateLimitDeferredCount).toBeUndefined();
     });
   });
 

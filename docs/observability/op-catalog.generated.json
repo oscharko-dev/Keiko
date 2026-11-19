@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a779ef62db7c18fa16aee8fd85652bf3e13cc7b62d22c5a297d64e2cf80d8c75",
+    "catalogDigest": "faf32347e3e8aaafd8826ed210b730ab3fd2dd9cec59f39dbeb7c86241004203",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -5315,6 +5315,66 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/lifecycle-health-activity.ts:16",
         "emitterSites": ["packages/keiko-cli/src/lifecycle-health-activity.ts:72"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "cli.lifecycle.launch-order",
+        "category": "diagnostic",
+        "owner": "keiko-cli",
+        "emitter": "launch-order.emitLaunchOrder",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "command": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["start", "stop"]
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "recorded",
+              "kept",
+              "record-failed",
+              "proceeded",
+              "superseded",
+              "unreadable",
+              "clear-failed"
+            ]
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 64
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "process-lifecycle",
+        "diagnosticWhen": [
+          {
+            "field": "outcome",
+            "values": ["record-failed", "unreadable", "clear-failed"]
+          }
+        ],
+        "failureClasses": ["launch-order-fence"],
+        "proofIds": ["cli.lifecycle.launch-order.outcome"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-cli/src/launch-order.ts:61",
+        "emitterSites": ["packages/keiko-cli/src/launch-order.ts:114"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -24193,6 +24253,145 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "figma.snapshot.capture-failed",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "figmaSnapshotRoutes.logSnapshotCaptureFailed",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "code": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "FIGMA_MALFORMED_URL",
+              "FIGMA_TOKEN_MISSING",
+              "FIGMA_CONSENT_REQUIRED",
+              "FIGMA_TOKEN_INVALID",
+              "FIGMA_TOKEN_EXPIRED",
+              "FIGMA_TOKEN_REVOKED",
+              "FIGMA_NOT_FOUND",
+              "FIGMA_NOT_READY",
+              "FIGMA_SOURCE_CHANGED",
+              "FIGMA_INSUFFICIENT_SCOPE",
+              "FIGMA_RENDER_FAILED",
+              "FIGMA_PROXY_EGRESS_FAILED",
+              "FIGMA_PROXY_UNREACHABLE",
+              "FIGMA_PROXY_AUTH_REQUIRED",
+              "FIGMA_PROXY_BLOCKED_BY_POLICY",
+              "FIGMA_TLS_CA_FAILURE",
+              "FIGMA_OVERSIZED_SCOPE",
+              "FIGMA_RESPONSE_TOO_LARGE",
+              "FIGMA_RATE_LIMITED",
+              "FIGMA_UPSTREAM_UNAVAILABLE",
+              "FIGMA_NETWORK_UNREACHABLE",
+              "FIGMA_EGRESS_TIMEOUT",
+              "FIGMA_EGRESS_FAILED",
+              "FIGMA_BUILD_TIMEOUT",
+              "FIGMA_INTERNAL"
+            ]
+          },
+          "stage": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["build", "persist", "deadline", "client-closed"]
+          },
+          "resnapshot": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["figma-snapshot"],
+        "proofIds": ["figma.snapshot.capture-failed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:919",
+        "emitterSites": ["packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:962"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "figma.snapshot.captured",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "figmaSnapshotRoutes.logSnapshotCaptured",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "renderedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "skippedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "invalidRenderCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "renderBudgetSkipCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "truncatedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "scopedFetchCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "scopeCapped": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "rateLimitDeferredCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["figma-snapshot"],
+        "proofIds": ["figma.snapshot.captured.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:834",
+        "emitterSites": ["packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:972"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "gateway.catalog.automatic.completed",
         "category": "gateway",
         "owner": "keiko-server",
@@ -26970,8 +27169,8 @@
         "failureClasses": ["gateway-setup-metadata"],
         "proofIds": ["gateway.setup.metadata.resolved.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:262",
-        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:349"]
+        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:263",
+        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:350"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27004,8 +27203,8 @@
         "failureClasses": ["gateway-setup-target"],
         "proofIds": ["gateway.setup.target.accepted.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:7637",
-        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:7664"]
+        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:7716",
+        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:7743"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -27625,7 +27824,7 @@
         "proofIds": ["gateway.tool-calling.verification.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gateway-setup.ts:176",
-        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:9459"]
+        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:9598"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -28090,8 +28289,8 @@
         "failureClasses": ["gateway-voice-configuration"],
         "proofIds": ["gateway.voice.setup.resolved.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:206",
-        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:9481"]
+        "registrationSite": "packages/keiko-server/src/gateway-setup.ts:207",
+        "emitterSites": ["packages/keiko-server/src/gateway-setup.ts:9620"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -44505,8 +44704,8 @@
           "search.native-runtime-resolved.worker"
         ],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:37",
-        "emitterSites": ["packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:418"]
+        "registrationSite": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:38",
+        "emitterSites": ["packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:416"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -46776,7 +46975,8 @@
               "jira-template-list",
               "jira-template-validate",
               "jira-template-propose",
-              "jira-template-bind"
+              "jira-template-bind",
+              "jira-template-options"
             ]
           },
           "phase": {
@@ -46845,6 +47045,16 @@
             "dataClass": "count",
             "required": false
           },
+          "projectCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "statusCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
           "checkedFieldCount": {
             "type": "integer",
             "dataClass": "count",
@@ -46868,7 +47078,7 @@
         "proofIds": ["skills.library.operation.lifecycle"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:10",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:135"]
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:142"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -46935,8 +47145,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["skills.workflow.attached.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:151",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:206"]
+        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:158",
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:213"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -53255,6 +53465,32 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "launch-order-fence",
+        "requiredProductSurfaces": ["keiko-cli"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": ["cli.lifecycle.launch-order"],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["cli.lifecycle.launch-order"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["cli.lifecycle.launch-order"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["cli.lifecycle.launch-order"],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "error-kind",
+          "loss-state"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "windows-gateway-service",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -57711,6 +57947,27 @@
         "requiredProofOperations": ["evidence.retention"],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": ["evidence.retention"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
+        "failureClass": "figma-snapshot",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": ["figma.snapshot.captured"],
+          "failure": ["figma.snapshot.capture-failed"],
+          "loss": []
+        },
+        "requiredCausalOperations": ["figma.snapshot.capture-failed", "figma.snapshot.captured"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["figma.snapshot.capture-failed", "figma.snapshot.captured"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["figma.snapshot.captured"],
         "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
@@ -63812,8 +64069,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 406,
-      "completeClassCount": 406,
+      "supportedClassCount": 408,
+      "completeClassCount": 408,
       "completeness": "complete",
       "classes": [
         {
@@ -91770,6 +92027,138 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "figma-snapshot",
+          "requirementContract": "figma-snapshot",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["end", "failure"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": ["figma.snapshot.captured"],
+            "failure": ["figma.snapshot.capture-failed"],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "figma.snapshot.capture-failed",
+              "mode": "correlation"
+            },
+            {
+              "op": "figma.snapshot.captured",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["figma.snapshot.captured"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "figma.snapshot.capture-failed",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "code",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "resnapshot",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "stage",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["figma.snapshot.capture-failed.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "figma.snapshot.captured",
+              "owner": "keiko-server",
+              "category": "diagnostic",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "invalidRenderCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "rateLimitDeferredCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "renderBudgetSkipCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "renderedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "scopeCapped",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "scopedFetchCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "skippedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "truncatedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["figma.snapshot.captured.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "gateway-alias-intersection",
           "requirementContract": "gateway-alias-intersection",
           "productSurfaces": ["keiko-server"],
@@ -104151,6 +104540,68 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "launch-order-fence",
+          "requirementContract": "launch-order-fence",
+          "productSurfaces": ["keiko-cli"],
+          "lifecycleTransitions": ["end"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": ["cli.lifecycle.launch-order"],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "cli.lifecycle.launch-order",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["cli.lifecycle.launch-order"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "cli.lifecycle.launch-order",
+              "owner": "keiko-cli",
+              "category": "diagnostic",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "process-lifecycle",
+              "safeContextFields": [
+                {
+                  "name": "command",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "failureKind",
+                  "type": "string",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["cli.lifecycle.launch-order.outcome"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "legacy-update-audit-import",
           "requirementContract": "legacy-update-audit-import",
           "productSurfaces": ["keiko-cli"],
@@ -104794,6 +105245,12 @@
                   "required": true
                 },
                 {
+                  "name": "projectCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "proposalCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -104803,6 +105260,12 @@
                   "name": "refusalReason",
                   "type": "string",
                   "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "statusCount",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": false
                 },
                 {
@@ -119527,6 +119990,12 @@
       "package": "keiko-cli"
     },
     {
+      "op": "cli.lifecycle.launch-order",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/launch-order.ts:64",
+      "package": "keiko-cli"
+    },
+    {
       "op": "cli.lifecycle.native-owner",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/lifecycle-native-activity.ts:14",
@@ -120381,7 +120850,7 @@
     {
       "op": "search.native-runtime-resolved",
       "category": "search",
-      "site": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:40",
+      "site": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts:41",
       "package": "keiko-local-knowledge"
     },
     {
@@ -121508,63 +121977,63 @@
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:6128",
+      "site": "packages/keiko-server/src/gateway-setup.ts:6188",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7291",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7353",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7561",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7640",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7586",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7665",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7613",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7692",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7913",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7992",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7938",
+      "site": "packages/keiko-server/src/gateway-setup.ts:8017",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:8226",
+      "site": "packages/keiko-server/src/gateway-setup.ts:8305",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "POST /api/gateway/setup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:8369",
+      "site": "packages/keiko-server/src/gateway-setup.ts:8466",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -123827,16 +124296,42 @@
       "package": "keiko-server"
     },
     {
+      "op": "figma.snapshot.capture-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:922",
+      "package": "keiko-server"
+    },
+    {
+      "op": "figma.snapshot.captured",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:837",
+      "package": "keiko-server"
+    },
+    {
       "op": "figma.snapshotBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:794",
+      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:826",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "figma.snapshotRead",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotAdapter.ts:52",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "figma.snapshotStore",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotStore.ts:16",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.capability",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:9346",
+      "site": "packages/keiko-server/src/gateway-setup.ts:9485",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -123855,7 +124350,7 @@
     {
       "op": "gateway.context-window",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-setup.ts:9403",
+      "site": "packages/keiko-server/src/gateway-setup.ts:9542",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -124066,13 +124561,13 @@
     {
       "op": "gateway.setup.metadata.resolved",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:265",
+      "site": "packages/keiko-server/src/gateway-setup.ts:266",
       "package": "keiko-server"
     },
     {
       "op": "gateway.setup.target.accepted",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:7640",
+      "site": "packages/keiko-server/src/gateway-setup.ts:7719",
       "package": "keiko-server"
     },
     {
@@ -124108,7 +124603,7 @@
     {
       "op": "gateway.voice.setup.resolved",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-setup.ts:209",
+      "site": "packages/keiko-server/src/gateway-setup.ts:210",
       "package": "keiko-server"
     },
     {
@@ -125625,7 +126120,7 @@
     {
       "op": "skills.workflow.attached",
       "category": "gateway",
-      "site": "packages/keiko-server/src/markdown-skill-log.ts:154",
+      "site": "packages/keiko-server/src/markdown-skill-log.ts:161",
       "package": "keiko-server"
     },
     {
@@ -126332,6 +126827,7 @@
     "cli.install-layout.normalized",
     "cli.lifecycle.browser-handoff",
     "cli.lifecycle.health",
+    "cli.lifecycle.launch-order",
     "cli.lifecycle.native-owner",
     "cli.lifecycle.provisioned-config",
     "cli.lifecycle.stop-escalated",
@@ -126623,7 +127119,11 @@
     "embedding.scalar-ladder.item-completed",
     "embedding.scalar-ladder.item-failed",
     "evidence.retention",
+    "figma.snapshot.capture-failed",
+    "figma.snapshot.captured",
     "figma.snapshotBuild",
+    "figma.snapshotRead",
+    "figma.snapshotStore",
     "gateway.capability",
     "gateway.catalog.automatic.completed",
     "gateway.catalog.metadata.wait",

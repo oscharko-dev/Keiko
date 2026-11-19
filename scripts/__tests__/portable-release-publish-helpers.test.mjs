@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { sha256 } from "../lib/digest.mjs";
+import { verifyPublishedPortableEvidence } from "../lib/portable-release-publication.mjs";
+
 import {
   makeDownloadSeams,
   makePublishedPortableSeams,
@@ -47,6 +50,188 @@ describe("makeDownloadSeams", () => {
     });
     seams.runGh(["release", "download", TAG]);
     expect(calls).toStrictEqual([["release", "download", TAG]]);
+  });
+});
+
+describe("makeDownloadSeams bounds (PR #4464)", () => {
+  it("gives the gh download a subprocess deadline", () => {
+    const seen = [];
+    const seams = makeDownloadSeams((_args, options) => {
+      seen.push(options);
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    seams.runGh(["release", "download"]);
+    expect(seen[0]?.timeout).toBeGreaterThan(0);
+    expect(seen[0]?.timeout).toBeLessThan(10 * 60_000);
+  });
+
+  function manifestSeams(runGh) {
+    return makePublishedPortableSeams({
+      runGh,
+      verifyReleaseTrust: () => ({ ok: true }),
+      trustedKeys: [],
+    });
+  }
+  const ASSET = "linux-x64-portable-manifest.json";
+  const writeManifest = (args, size) =>
+    writeFileSync(join(args[args.indexOf("--dir") + 1], ASSET), Buffer.alloc(size, 0x20));
+
+  it("asks the caller to bound the bytes gh writes at the updater's limit", () => {
+    const seen = [];
+    const seams = makeDownloadSeams((_args, options) => {
+      seen.push(options);
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    seams.runGh(["release", "download"]);
+    expect(seen[0]?.maxBytes).toBe(1_048_576);
+  });
+
+  it("refuses a transfer cut at the ceiling despite a small advertised size", () => {
+    const seams = manifestSeams((args) => {
+      writeManifest(args, 1_048_576);
+      return { status: null, signal: "SIGXFSZ", stdout: "", stderr: "" };
+    });
+    expect(
+      seams.downloadReleaseAsset({ published: true, repo: REPO, tag: TAG }, ASSET),
+    ).toBeUndefined();
+  });
+
+  it("accepts a manifest of exactly the ceiling", () => {
+    const seams = manifestSeams((args) => {
+      writeManifest(args, 1_048_576);
+      return { status: 0, stdout: "", stderr: "" };
+    });
+    const info = { published: true, repo: REPO, tag: TAG };
+    expect(seams.downloadReleaseAsset(info, ASSET)?.text).toHaveLength(1_048_576);
+  });
+
+  it("refuses an advertised oversize manifest before requesting it", () => {
+    let downloads = 0;
+    const failures = [];
+    verifyPublishedPortableEvidence(
+      {
+        downloadReleaseAsset: () => {
+          downloads += 1;
+          return undefined;
+        },
+        verifyPublishedManifestBinding: () => undefined,
+        fail: (message) => failures.push(message),
+      },
+      { published: true, repo: REPO, tag: TAG },
+      [{ name: ASSET, digest: `sha256:${"a".repeat(64)}`, size: 1_048_577 }],
+      [{ assetName: ASSET, commitSha: HEAD, releaseTag: TAG }],
+    );
+    expect(downloads).toBe(0);
+    expect(failures.join("\n")).toContain(ASSET);
+    expect(failures.join("\n")).toContain("1048576");
+  });
+
+  it("refuses a manifest file larger than the updater's limit before reading it", () => {
+    const asset = "linux-x64-portable-manifest.json";
+    const runGh = (args) => {
+      const outDir = args[args.indexOf("--dir") + 1];
+      writeFileSync(join(outDir, asset), Buffer.alloc(1_048_576 + 1, 0x20));
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const seams = makePublishedPortableSeams({
+      runGh,
+      verifyReleaseTrust: () => ({ ok: true }),
+      trustedKeys: [],
+    });
+    expect(
+      seams.downloadReleaseAsset({ published: true, repo: REPO, tag: TAG }, asset),
+    ).toBeUndefined();
+  });
+});
+
+describe("published rerun reconciles signed ids (PR #4464)", () => {
+  const manifestName = "linux-x64-portable-manifest.json";
+  const smoked = [];
+  function run(live, { setup = true } = {}) {
+    smoked.length = 0;
+    const manifest = {
+      artifact: { assetId: 11 },
+      provenance: { sourceCommitSha: HEAD },
+      release: { commitSha: HEAD, releaseId: 10, releaseTag: TAG },
+      releaseImpact: {
+        reviewedBinding: { assetId: 11, releaseId: 10, setupAsset: { assetId: 12 } },
+      },
+    };
+    const text = JSON.stringify(manifest);
+    const runGh = (args) => {
+      writeFileSync(join(args[args.indexOf("--dir") + 1], manifestName), text);
+      return { status: 0, stdout: "", stderr: "" };
+    };
+    const seams = makePublishedPortableSeams({
+      runGh,
+      verifyReleaseTrust: () => ({ ok: true }),
+      trustedKeys: [],
+    });
+    const digest = `sha256:${sha256(Buffer.from(text))}`;
+    runVerifyPublishedPortableAssets({
+      publisher: {
+        ...seams,
+        fail: (message) => {
+          throw new Error(message);
+        },
+      },
+      releaseInfo: { published: true, repo: REPO, tag: TAG },
+      assets: [
+        {
+          archiveAssetName: "keiko-linux-x64.zip",
+          platformTarget: "linux-x64",
+          ...(setup ? { setupAssetName: "keiko-linux-x64-setup.zip" } : {}),
+          evidenceFiles: [
+            {
+              assetName: manifestName,
+              relativePath: "manifest/portable-manifest.json",
+              sourcePath: "/x",
+            },
+          ],
+        },
+      ],
+      archiveExpected: ["keiko-linux-x64.zip", ...(setup ? ["keiko-linux-x64-setup.zip"] : [])].map(
+        (assetName) => ({
+          assetName,
+          expectedSha256: "f".repeat(64),
+          expectedSize: 3,
+          firstClassArchive: false,
+        }),
+      ),
+      archiveSnapshot: {
+        id: live.releaseId,
+        assets: [
+          { name: manifestName, digest, size: text.length },
+          { name: "keiko-linux-x64.zip", id: live.archiveId },
+          ...(setup ? [{ name: "keiko-linux-x64-setup.zip", id: live.setupId }] : []),
+        ],
+      },
+      verifyAssets: () => undefined,
+      smokeDownloads: () => smoked.push(true),
+      headOfCheckout: () => HEAD,
+      log: () => undefined,
+    });
+    return smoked;
+  }
+
+  it("fails closed naming the target and the differing ids", () => {
+    expect(() => run({ releaseId: 90, archiveId: 99, setupId: 12 })).toThrow(
+      /linux-x64: signed release id 10 differs from the live GitHub id 90.*signed archive asset id 11 differs from the live GitHub id 99/su,
+    );
+    // The recovery refused before the public smoke step, so nothing proceeds toward npm.
+    expect(smoked).toStrictEqual([]);
+  });
+
+  it("refuses a signed setup asset for a target the live release has none for", () => {
+    // Independent audit of PR #4464: the setup id was compared only when the target expects one.
+    expect(() => run({ releaseId: 10, archiveId: 11 }, { setup: false })).toThrow(
+      /linux-x64: signed setup asset id 12 differs from the live GitHub id undefined/u,
+    );
+    expect(smoked).toStrictEqual([]);
+  });
+
+  it("accepts a rerun whose live ids equal the signed ones", () => {
+    expect(run({ releaseId: 10, archiveId: 11, setupId: 12 })).toStrictEqual([true]);
   });
 });
 
@@ -168,9 +353,11 @@ describe("runVerifyPublishedPortableAssets", () => {
       publisher: fakePublisher(),
       releaseInfo: RELEASE_INFO,
       assets,
+      archiveExpected: [],
       archiveSnapshot,
       verifyAssets: (remoteAssets, expected, info) =>
         verifyCalls.push({ remoteAssets, expected, info }),
+      smokeDownloads: () => undefined,
       headOfCheckout: () => HEAD,
       log: (message) => logs.push(message),
     });
@@ -178,7 +365,85 @@ describe("runVerifyPublishedPortableAssets", () => {
     // Only the non-manifest evidence must reach verifyAssets — the manifest goes through the
     // signature path instead.
     expect(verifyCalls[0].expected).toStrictEqual([]);
-    expect(logs.at(-1)).toContain(`portable assets verified on published ${TAG}`);
+    expect(logs.at(-1)).toContain(`portable assets verified and downloaded on published ${TAG}`);
+  });
+
+  function recoveryRun({ remoteAssets, smokeDownloads = () => undefined }) {
+    const archive = {
+      assetName: "keiko-linux-x64.standalone.zip",
+      expectedSha256: "f".repeat(64),
+      expectedSize: 3,
+      firstClassArchive: false,
+    };
+    runVerifyPublishedPortableAssets({
+      publisher: fakePublisher(),
+      releaseInfo: RELEASE_INFO,
+      assets: makeAssets(["linux-x64"]),
+      archiveExpected: [archive],
+      archiveSnapshot: { assets: remoteAssets },
+      verifyAssets: () => undefined,
+      smokeDownloads,
+      headOfCheckout: () => HEAD,
+      log: () => undefined,
+    });
+    return archive;
+  }
+
+  const manifestAsset = {
+    digest: `sha256:${"e".repeat(64)}`,
+    name: "linux-x64-portable-manifest.json",
+    size: 5,
+  };
+  const packageAsset = { name: "keiko-linux-x64.standalone.zip" };
+
+  it("downloads every published asset again without credentials (PR #4464)", () => {
+    // Review finding on PR #4464 (P2): a run whose public download failed left the release
+    // published, and its rerun returned after the API checks, so npm published over a download
+    // nobody could fetch.
+    const smoked = [];
+    const archive = recoveryRun({
+      remoteAssets: [packageAsset, manifestAsset],
+      smokeDownloads: (remote, expected) => smoked.push({ remote, expected }),
+    });
+
+    expect(smoked).toStrictEqual([
+      {
+        remote: [packageAsset, manifestAsset],
+        expected: [
+          archive,
+          {
+            assetName: "linux-x64-portable-manifest.json",
+            expectedSha256: "e".repeat(64),
+            expectedSize: 5,
+            firstClassArchive: false,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("fails the rerun when a published asset still cannot be downloaded", () => {
+    expect(() =>
+      recoveryRun({
+        remoteAssets: [packageAsset, manifestAsset],
+        smokeDownloads: () => {
+          throw new Error("unauthenticated portable asset download failed");
+        },
+      }),
+    ).toThrow("unauthenticated portable asset download failed");
+  });
+
+  it("refuses a published release carrying an asset this run did not validate", () => {
+    const smoked = [];
+    expect(() =>
+      recoveryRun({
+        remoteAssets: [packageAsset, manifestAsset, { name: "keiko-linux-x64.npm-team.zip" }],
+        smokeDownloads: () => smoked.push(true),
+      }),
+    ).toThrow(
+      `GitHub release ${TAG} is already published and carries assets this run did not validate: keiko-linux-x64.npm-team.zip; an immutable release cannot be repaired`,
+    );
+    expect(smoked).toStrictEqual([]);
   });
 
   it("propagates a manifest binding failure through the publisher.fail seam", () => {
@@ -195,8 +460,10 @@ describe("runVerifyPublishedPortableAssets", () => {
         }),
         releaseInfo: RELEASE_INFO,
         assets,
+        archiveExpected: [],
         archiveSnapshot,
         verifyAssets: () => undefined,
+        smokeDownloads: () => undefined,
         headOfCheckout: () => HEAD,
         log: () => undefined,
       }),
@@ -225,8 +492,10 @@ describe("runVerifyPublishedPortableAssets", () => {
       publisher,
       releaseInfo: RELEASE_INFO,
       assets,
+      archiveExpected: [],
       archiveSnapshot,
       verifyAssets: () => undefined,
+      smokeDownloads: () => undefined,
       headOfCheckout: () => HEAD,
       log: () => undefined,
     });

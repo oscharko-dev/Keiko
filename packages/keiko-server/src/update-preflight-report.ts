@@ -256,6 +256,22 @@ export function portableInstallModeBlockedReport(
   });
 }
 
+/**
+ * An installation managed outside the app that carries no portable payload (the npm folder
+ * package): no registry, no release metadata and no portable asset, because nothing is asked.
+ */
+export function externallyManagedReport(base: ReportBase, message: string): UpdatePreflightReport {
+  return buildReport(base, {
+    updateAvailable: false,
+    status: "degraded",
+    registryStatus: "not-used",
+    releaseMetadataStatus: "not-needed",
+    severity: "normal",
+    blockers: [blocker("portable-install-managed-externally", message, "normal", true)],
+    warnings: [],
+  });
+}
+
 function currentReleaseMetadataWarning(
   github: GitHubReleaseOutcome | undefined,
 ): string | undefined {
