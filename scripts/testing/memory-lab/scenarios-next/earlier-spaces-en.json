@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "earlier-spaces-en",
+  "language": "en",
+  "class": "earlier-value",
+  "description": "A reversal and a reversal back (dark, light, dark theme) learned in conversation, then the current and the earlier value. Limit: the duplicate check can swallow the return to a value stated before, and a replaced value is never supplied for an earlier-value question. Failure means: the current probe failing is an update defect, the earlier probe failing is the known absence of history recall. Maintenance: meaningful both ways; with maintenance on the superseded record is expected to be deleted (the earlier-value probe fails for that reason), with --no-maintenance it shows whether retrieval could answer at all.",
+  "truth": [
+    {
+      "key": "now",
+      "seed": "I use the dark theme in my editor again.",
+      "must": false,
+      "terms": [["dark"]]
+    }
+  ],
+  "superseded": [
+    {
+      "key": "light",
+      "terms": [["light"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "I use the dark theme in my editor.",
+      "learner": [
+        {
+          "body": "I use the dark theme in my editor.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "I switched to the light theme in my editor.",
+      "learner": [
+        {
+          "body": "I switched to the light theme in my editor.",
+          "type": "preference",
+          "relation": "update",
+          "related": 1
+        }
+      ]
+    },
+    {
+      "user": "I use the dark theme in my editor again.",
+      "learner": [
+        {
+          "body": "I use the dark theme in my editor again.",
+          "type": "preference",
+          "relation": "update",
+          "related": 1
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "current",
+      "question": "Which editor theme do I use?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["dark"]],
+        "forbidden": [["light theme", "light mode"]]
+      }
+    },
+    {
+      "id": "previous",
+      "question": "Which editor theme did I use in between, before I came back to this one?",
+      "expect": {
+        "kind": "answer",
+        "earlier": ["light"]
+      }
+    }
+  ]
+}

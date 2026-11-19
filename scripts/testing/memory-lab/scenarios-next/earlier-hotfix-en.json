@@ -1,0 +1,101 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "earlier-hotfix-en",
+  "language": "en",
+  "class": "earlier-value",
+  "description": "A seeded chain of four hotfix review rules (two reviewers, one reviewer, no review, three reviewers) over 90 days; questions for the current, the previous and the first rule. Limit: replaced rules are superseded history that recall never supplies and that maintenance removes once its validity has ended. Failure means: the current probe failing is a chain defect, the earlier probes failing is the known absence of history recall. Maintenance: meaningful both ways; with maintenance on the superseded record is expected to be deleted (the earlier-value probe fails for that reason), with --no-maintenance it shows whether retrieval could answer at all.",
+  "seed": {
+    "records": [
+      {
+        "key": "v1",
+        "body": "Hotfixes go through a pull request with two reviewers.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "superseded",
+        "ageDays": 90,
+        "earlier": "first"
+      },
+      {
+        "key": "v2",
+        "body": "Hotfixes go through a pull request with one reviewer.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "superseded",
+        "ageDays": 60,
+        "supersedes": "v1",
+        "earlier": "second"
+      },
+      {
+        "key": "v3",
+        "body": "Hotfixes are merged by the on-call engineer without review.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "superseded",
+        "ageDays": 30,
+        "supersedes": "v2",
+        "earlier": "third"
+      },
+      {
+        "key": "v4",
+        "body": "Hotfixes go through a pull request with three reviewers including the risk officer.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 5,
+        "supersedes": "v3",
+        "truth": "now"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "now",
+      "seed": "Hotfixes go through a pull request with three reviewers including the risk officer.",
+      "must": false,
+      "terms": [["three reviewers"]]
+    }
+  ],
+  "superseded": [
+    {
+      "key": "first",
+      "terms": [["two reviewers"]]
+    },
+    {
+      "key": "second",
+      "terms": [["one reviewer"]]
+    },
+    {
+      "key": "third",
+      "terms": [["without review"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "current",
+      "question": "How do hotfixes get reviewed?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["three reviewers"]],
+        "forbidden": [["two reviewers", "one reviewer", "without review"]]
+      }
+    },
+    {
+      "id": "previous",
+      "question": "How were hotfixes reviewed before the current rule?",
+      "expect": {
+        "kind": "answer",
+        "earlier": ["third"]
+      }
+    },
+    {
+      "id": "first",
+      "question": "How were hotfixes reviewed at the very beginning?",
+      "expect": {
+        "kind": "answer",
+        "earlier": ["first"]
+      }
+    }
+  ]
+}

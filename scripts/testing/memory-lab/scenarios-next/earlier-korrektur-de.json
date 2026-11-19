@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "earlier-korrektur-de",
+  "language": "de",
+  "class": "earlier-value",
+  "description": "A wrong fact corrected in conversation (Köln, then Düsseldorf), then the current value and what had been stored before. Limit: the correction supersedes the wrong value and recall never supplies a superseded memory. Failure means: the current probe failing is an update defect, the earlier probe failing is the known absence of history recall. Maintenance: meaningful both ways; with maintenance on the superseded record is expected to be deleted (the earlier-value probe fails for that reason), with --no-maintenance it shows whether retrieval could answer at all.",
+  "truth": [
+    {
+      "key": "now",
+      "seed": "Ich arbeite in Düsseldorf.",
+      "must": false,
+      "terms": [["Düsseldorf", "Duesseldorf"]]
+    }
+  ],
+  "superseded": [
+    {
+      "key": "wrong",
+      "terms": [["Köln", "Koeln"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich arbeite in Köln.",
+      "learner": [
+        {
+          "body": "Ich arbeite in Köln.",
+          "type": "fact"
+        }
+      ]
+    },
+    {
+      "user": "Das war falsch. Ich arbeite in Düsseldorf.",
+      "learner": [
+        {
+          "body": "Ich arbeite in Düsseldorf.",
+          "type": "fact",
+          "relation": "update",
+          "related": 1
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "current",
+      "question": "Wo arbeite ich?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Düsseldorf", "Duesseldorf"]],
+        "forbidden": [["Köln", "Koeln"]]
+      }
+    },
+    {
+      "id": "previous",
+      "question": "Was hattest du vorher darüber gespeichert, wo ich arbeite?",
+      "expect": {
+        "kind": "answer",
+        "earlier": ["wrong"]
+      }
+    }
+  ]
+}

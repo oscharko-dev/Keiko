@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "earlier-rueckkehr-de",
+  "language": "de",
+  "class": "earlier-value",
+  "description": "The person returns to an earlier preference in the same words: Tabellen (seeded, superseded 60 days ago), Listen (seeded, accepted 30 days ago), and now Tabellen again in conversation. Limit: the maintenance pass deletes a superseded record with a tombstone once its validity has ended, and the tombstone suppresses a later statement of the same words. Failure means: the final value is not learned (fact-not-stored) or not answered although the person said it last; the earlier-value probe failing is the known absence of history recall. Maintenance: meaningful both ways; with maintenance on the superseded record is expected to be deleted (the earlier-value probe fails for that reason), with --no-maintenance it shows whether retrieval could answer at all.",
+  "seed": {
+    "records": [
+      {
+        "key": "tables-old",
+        "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+        "type": "preference",
+        "scope": "user",
+        "status": "superseded",
+        "ageDays": 60
+      },
+      {
+        "key": "lists",
+        "body": "Ab jetzt bevorzuge ich Listen, wenn du mir Zahlen zeigst.",
+        "type": "preference",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 30,
+        "supersedes": "tables-old"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "now",
+      "seed": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "must": true,
+      "terms": [["Tabelle*"]]
+    }
+  ],
+  "superseded": [
+    {
+      "key": "lists",
+      "terms": [["Liste*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": [
+        {
+          "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+          "type": "preference",
+          "relation": "update",
+          "related": 1
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "current",
+      "question": "Wie sollst du mir Zahlen zeigen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabelle*"]],
+        "forbidden": [["Liste*"]]
+      }
+    },
+    {
+      "id": "previous",
+      "question": "Was habe ich dir vor meiner Rückkehr zu Tabellen für Zahlen genannt?",
+      "expect": {
+        "kind": "answer",
+        "earlier": ["lists"]
+      }
+    }
+  ]
+}
