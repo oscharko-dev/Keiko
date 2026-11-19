@@ -398,7 +398,8 @@ function answerTermsMatched(answer, probe, wanted) {
     ...wanted.map((item) => item.terms),
   ];
   const matched = groups.length > 0 && groups.every((group) => matchesTermGroups(answer, group));
-  return matched || answerHasFormat(answer, probe.expect.format);
+  // A form is evidence of a preference, never of a fact the probe needs or asks for by key.
+  return matched || (wanted.length === 0 && answerHasFormat(answer, probe.expect.format));
 }
 
 // The probe's own terms (when it has any) reached the model, and so did every wanted fact.

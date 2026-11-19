@@ -22,6 +22,14 @@ export const MEMORY_TYPES = Object.freeze([
 ]);
 const DAY_MS = 86_400_000;
 const DEFAULT_FILLER_TYPE = "semantic-fact";
+// How the product writes a fact it learned from conversation (keiko-memory-capture `salience.ts`):
+// source kind `system-default`, a confidence derived from what its checks saw (0.4 + 0.3 for a named
+// subject + 0.15 for evidence coverage, the usual routine fact), public, the person's words as the
+// evidence span, and, for a standing fact about the person, the standing retention hint.
+export const SEED_ORIGINS = Object.freeze(["learned", "stated"]);
+const LEARNED_CONFIDENCE = 0.85;
+const LEARNED_RATIONALE = "Automatically inferred from conversation (salience capture)";
+const STANDING_POLICY_KEY = "standing";
 const SUPERSEDED_REASON = "A newer statement by the person replaced this fact.";
 // Invented syllables: a filler record names things no scenario talks about, so a term of a real
 // scenario cannot occur in it by accident (the scenario validator also checks that it does not).
@@ -71,6 +79,25 @@ function scopeOf(kind, projectId) {
     : { kind: "project", projectId };
 }
 
+// A stated fact is what the person asked Keiko to remember ("Merke dir"): the explicit path's 1.0.
+function provenanceOf(spec, atMs) {
+  if (spec.origin === "stated")
+    return {
+      sourceKind: "explicit-user-instruction",
+      capturedAt: atMs,
+      confidence: 1,
+      sensitivity: "public",
+    };
+  return {
+    sourceKind: "system-default",
+    capturedAt: atMs,
+    confidence: LEARNED_CONFIDENCE,
+    sensitivity: "public",
+    captureRationale: LEARNED_RATIONALE,
+    evidenceSpan: spec.body,
+  };
+}
+
 function recordOf(spec, id, atMs, supersededAtMs, projectId) {
   const superseded = spec.status === "superseded";
   return {
@@ -82,14 +109,8 @@ function recordOf(spec, id, atMs, supersededAtMs, projectId) {
     status: spec.status,
     pinned: spec.pinned === true,
     tags: [],
-    provenance: {
-      sourceKind: "explicit-user-instruction",
-      capturedAt: atMs,
-      confidence: 1,
-      sensitivity: "public",
-      // A learned fact carries the person's words, which is what lets a later statement replace it.
-      ...(spec.learned === true ? { evidenceSpan: spec.body } : {}),
-    },
+    provenance: provenanceOf(spec, atMs),
+    ...(spec.standing === true ? { retentionHint: { policyKey: STANDING_POLICY_KEY } } : {}),
     validity: superseded ? { validFrom: atMs, validUntil: supersededAtMs } : { validFrom: atMs },
     ...(superseded ? { staleReason: SUPERSEDED_REASON } : {}),
     createdAt: atMs,
@@ -158,6 +179,7 @@ function fillerGroup(group, groupIndex, nowMs, projectId) {
       type: group.type ?? DEFAULT_FILLER_TYPE,
       scope: group.scope ?? "user",
       status: group.status,
+      origin: group.origin,
     };
     const id = seedId(`filler:${String(groupIndex)}:${String(index)}`);
     return recordOf(spec, id, atMs, afterOneDay(atMs, nowMs), projectId);
@@ -193,6 +215,7 @@ export function planSeed(seed, { nowMs, projectId }) {
         truth: spec.truth,
         earlier: spec.earlier,
         status: spec.status,
+        pinned: spec.pinned === true,
         filler: false,
       })),
       ...filler.map((record) => ({ id: record.id, status: record.status, filler: true })),
@@ -200,7 +223,8 @@ export function planSeed(seed, { nowMs, projectId }) {
   };
 }
 
-function countBy(values) {
+/** How many times each value occurs, as an object. */
+export function countBy(values) {
   const counts = {};
   for (const value of values) counts[value] = (counts[value] ?? 0) + 1;
   return counts;

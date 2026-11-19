@@ -329,6 +329,15 @@ function failedUnitList(results) {
     }));
 }
 
+// Seeded superseded records the product removed during the run: information, not a failure. A sealed
+// run carries no seed, so it reports none.
+function seedInformation(results, sealed) {
+  const removed = sealed
+    ? 0
+    : sum(results.map((result) => result.seed?.after?.supersededRemoved ?? 0));
+  return { supersededRemoved: removed };
+}
+
 function oracleScopes(results) {
   const totals = {};
   for (const result of results)
@@ -371,6 +380,7 @@ export function summarizeLabRun(results, { sealed = false } = {}) {
     oracleRuns: results.filter((result) => result.oracle !== undefined).length,
     oracleScopes: oracleScopes(results),
     failureClasses: summarizeFailureClasses(results, { sealed }),
+    seedInformation: seedInformation(results, sealed),
     oraclePreconditionFailures: results
       .filter((result) => result.oracle !== undefined && !result.oracle.preconditionMet)
       .map((result) => result.scenario),
@@ -480,15 +490,24 @@ function scenarioClassLines(arm, byScenario) {
   return more > 0 ? [...lines, `- ${arm}: and ${String(more)} more scenarios`] : lines;
 }
 
+function seedInformationLines(information) {
+  if ((information?.supersededRemoved ?? 0) === 0) return [];
+  return [
+    `Information, not a failure: ${String(information.supersededRemoved)} seeded superseded record(s) were removed by the product during the run, so an earlier value could not be recalled from them.`,
+    "",
+  ];
+}
+
 // The failed checks of the run as counts per class (and per scenario in an open run), never a rate.
 function failureClassLines(summary) {
   const { byArm } = summary.failureClasses;
   const header = ["### Failure classes (counts of failed checks)", ""];
-  if (Object.keys(byArm).length === 0) return [...header, "No failed check.", ""];
+  const info = seedInformationLines(summary.seedInformation);
+  if (Object.keys(byArm).length === 0) return [...header, "No failed check.", "", ...info];
   const scenarios = Object.keys(byArm).flatMap((arm) =>
     scenarioClassLines(arm, byArm[arm].byScenario),
   );
-  return [...header, ...failureClassTable(byArm), "", ...scenarios, ""];
+  return [...header, ...failureClassTable(byArm), "", ...scenarios, "", ...info];
 }
 
 function failureLines(summary) {

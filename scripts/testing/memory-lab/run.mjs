@@ -81,6 +81,7 @@ const OPTIONS = {
   "retain-bodies": { type: "boolean", default: true },
   "label-pass": { type: "boolean", default: false },
   embedder: { type: "boolean" },
+  maintenance: { type: "boolean" },
   "quiet-ms": { type: "string", default: "1500" },
   "max-wait-ms": { type: "string", default: "60000" },
   "learner-grace-ms": { type: "string", default: "3000" },
@@ -107,6 +108,7 @@ function usage() {
     "  --label-pass  the labelling run: retain the stored bodies of anchor scenarios in the run files (real text; private directory)",
     "  --no-embedder  measure without an embedding model (live: removed from the configuration the instances get)",
     "  --embedder  offline: add the scripted hashed-word embedding model; live: require the configuration's own",
+    "  --no-maintenance  switch the product's automatic memory maintenance off for every instance (KEIKO_MEMORY_AUTO_MAINTAIN=0)",
     "  --quiet-ms N  --max-wait-ms N  --learner-grace-ms N  --turn-timeout-ms N",
     "  live: --config <gateway.json> --answer-model <id> --learn-model <id>",
     "  --fail-on-hard-counters  exit 4 when a product-arm hard counter is above zero (the pre-PR run)",
@@ -228,6 +230,7 @@ export function normalizeOptions(raw) {
     retainBodies: source.holdout === undefined && values["retain-bodies"] !== false,
     labelPass,
     embedderMode: embedderMode(values.embedder),
+    maintenance: values.maintenance === false ? "off" : "on",
     quietMs: integer(values["quiet-ms"], "--quiet-ms"),
     maxWaitMs: integer(values["max-wait-ms"], "--max-wait-ms"),
     graceMs: integer(values["learner-grace-ms"], "--learner-grace-ms"),
@@ -352,6 +355,7 @@ async function startUnit(label, arm, repetition, options, stateRoot) {
       subjectRoot: options.subjectRoot,
       allowFoldedEnv: options.allowFoldedEnv,
       embedder: options.embedder,
+      maintenance: options.maintenance,
       seed: options.seed,
     });
     return { dir, fixture, instance, instanceStartMs: Date.now() - startedAt };
@@ -533,6 +537,8 @@ function writeEvidence(options, corpus, results, gateway) {
     // With or without an embedding model: the manifest says which, and `compare` refuses to mix them.
     embedder: options.embedder,
     embeddingModelIds: options.embeddingModelIds,
+    // Whether the product's automatic maintenance was on: it ages, archives and removes records.
+    maintenance: options.maintenance,
     holdout: corpus.sealed,
     // `sealed` is what the judge checks before it accepts a run as the holdout part of a pair.
     sealed: corpus.sealed,

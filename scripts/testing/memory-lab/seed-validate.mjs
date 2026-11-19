@@ -6,6 +6,7 @@ import { isRecord, nonEmptyString } from "./set-files.mjs";
 import {
   MAX_FILLER_RECORDS,
   MEMORY_TYPES,
+  SEED_ORIGINS,
   SEED_SCOPES,
   SEED_STATUSES,
   fillerBodies,
@@ -14,7 +15,8 @@ import {
 const MAX_AGE_DAYS = 36_500;
 const MAX_ACCESS_COUNT = 1000;
 const MAX_BODY_CHARS = 4096;
-const KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
+/** The slug every key of a scenario (seed record, replaced value) is written as. */
+export const KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 const SEED_FIELDS = Object.freeze(["records", "filler"]);
 const RECORD_FIELDS = Object.freeze([
   "key",
@@ -24,7 +26,8 @@ const RECORD_FIELDS = Object.freeze([
   "status",
   "ageDays",
   "pinned",
-  "learned",
+  "origin",
+  "standing",
   "supersedes",
   "accessCount",
   "lastAccessDays",
@@ -39,6 +42,7 @@ const FILLER_FIELDS = Object.freeze([
   "seed",
   "scope",
   "type",
+  "origin",
 ]);
 
 function unknownFields(fail, id, where, value, allowed) {
@@ -74,7 +78,14 @@ function validateRecordShape(fail, id, where, record, keys) {
   oneOfIn(fail, id, where, record.scope ?? "project", SEED_SCOPES, "scope");
   ageIn(fail, id, where, record.ageDays, "ageDays");
   optionalBoolean(fail, id, where, record.pinned, "pinned");
-  optionalBoolean(fail, id, where, record.learned, "learned");
+  validateOrigin(fail, id, where, record);
+}
+
+function validateOrigin(fail, id, where, record) {
+  optionalBoolean(fail, id, where, record.standing, "standing");
+  oneOfIn(fail, id, where, record.origin ?? "learned", SEED_ORIGINS, "origin");
+  if (record.standing === true && record.origin === "stated")
+    fail(id, `${where}.standing is a mark of a learned fact; a stated record cannot carry it`);
 }
 
 function validateReinforcement(fail, id, where, record) {
@@ -106,15 +117,19 @@ function validateSupersedes(fail, id, where, record, byKey) {
 
 // A record that states a truth (or a replaced value) must be matched by that fact's own terms, so the
 // scorer and the author mean the same thing by the link.
+function validateTruthLink(fail, id, where, record, scenario) {
+  if (record.status !== "accepted")
+    fail(id, `${where}.truth needs status accepted; link a superseded record with earlier`);
+  const fact = scenario.truth.find((entry) => entry.key === record.truth);
+  if (fact === undefined) fail(id, `${where}.truth names no truth key: ${String(record.truth)}`);
+  if (!matchesTermGroups(record.body, fact.terms))
+    fail(id, `${where}.body does not match the terms of truth ${record.truth}`);
+}
+
 function validateLinks(fail, id, where, record, scenario) {
   if (record.truth !== undefined && record.earlier !== undefined)
     fail(id, `${where} cannot link both truth and earlier`);
-  if (record.truth !== undefined) {
-    const fact = scenario.truth.find((entry) => entry.key === record.truth);
-    if (fact === undefined) fail(id, `${where}.truth names no truth key: ${String(record.truth)}`);
-    if (!matchesTermGroups(record.body, fact.terms))
-      fail(id, `${where}.body does not match the terms of truth ${record.truth}`);
-  }
+  if (record.truth !== undefined) validateTruthLink(fail, id, where, record, scenario);
   if (record.earlier === undefined) return;
   const replaced = (scenario.superseded ?? []).find((entry) => entry.key === record.earlier);
   if (replaced === undefined)
@@ -147,6 +162,7 @@ function validateFillerShape(fail, id, where, group) {
   if (!Number.isSafeInteger(group.seed)) fail(id, `${where}.seed must be an integer`);
   oneOfIn(fail, id, where, group.status, SEED_STATUSES, "status");
   oneOfIn(fail, id, where, group.scope ?? "user", SEED_SCOPES, "scope");
+  oneOfIn(fail, id, where, group.origin ?? "learned", SEED_ORIGINS, "origin");
   oneOfIn(fail, id, where, group.type ?? "semantic-fact", MEMORY_TYPES, "type");
   ageIn(fail, id, where, group.minAgeDays, "minAgeDays");
   ageIn(fail, id, where, group.maxAgeDays, "maxAgeDays");
@@ -190,6 +206,9 @@ export function validateSeed(fail, id, scenario) {
   if (seed === undefined) return;
   if (!isRecord(seed)) fail(id, "seed must be an object");
   unknownFields(fail, id, "seed", seed, SEED_FIELDS);
+  // Real conversations and a sealed holdout keep nothing but counts: a seed is authored text.
+  if (scenario.class.startsWith("anchor-"))
+    fail(id, "a real-conversation scenario (class anchor-*) cannot carry a seed");
   if ((seed.records?.length ?? 0) + (seed.filler?.length ?? 0) === 0)
     fail(id, "seed must hold at least one record or filler group");
   validateRecords(fail, id, seed.records, scenario);

@@ -86,11 +86,15 @@ describe("the seeded demonstration scenarios", () => {
       expect(before.passed).toBe(false);
       expect(before.neededMissing).toEqual(["earlier:format-before"]);
       expect(before.neededNotSupplied).toEqual(["earlier:format-before"]);
-      const classes = summary.failureClasses;
-      expect(classes.byArm.product.total).toEqual({
-        "needed-memory-missing": 1,
-      });
-      expect(classes.byArm.product.keys["needed-memory-missing"]).toEqual([
+      // The cause is visible: the product's maintenance removed the seeded superseded record, which is
+      // information in the summary, and it archived aged seeded records, which is a failure class.
+      expect(earlier.seed.after).toMatchObject({ gone: 1, supersededRemoved: 1 });
+      // One per arm that has memory: product and oracle.
+      expect(summary.seedInformation.supersededRemoved).toBe(2);
+      const classes = summary.failureClasses.byArm.product;
+      expect(classes.total["needed-memory-missing"]).toBe(1);
+      expect(classes.total["seeded-record-lost"]).toBeGreaterThan(0);
+      expect(classes.keys["needed-memory-missing"]).toEqual([
         "seed-earlier-value-en:product:r0:probe:before",
       ]);
 
@@ -173,6 +177,27 @@ describe("the seeded demonstration scenarios", () => {
       } finally {
         await instance.close();
       }
+    },
+    RUN_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps the seeded store whole with the product's maintenance switched off, and records that",
+    async () => {
+      const summary = await runLab(
+        options(root, "no-maintenance", { arms: "product", maintenance: false }),
+        () => undefined,
+      );
+      const manifest = JSON.parse(
+        readFileSync(join(root, "no-maintenance", "manifest.json"), "utf8"),
+      );
+      expect(manifest.metadata.maintenance).toBe("off");
+      const needs = unit(root, "no-maintenance", "seed-needs-two-en", "product");
+      expect(needs.seed.after.lostIndexes).toEqual([]);
+      expect(needs.seed.after.byStatus).toEqual({ accepted: 32, archived: 10 });
+      const earlier = unit(root, "no-maintenance", "seed-earlier-value-en", "product");
+      expect(earlier.seed.after).toMatchObject({ gone: 0, supersededRemoved: 0 });
+      expect(summary.failureClasses.byArm.product.total).toEqual({ "needed-memory-missing": 1 });
     },
     RUN_TIMEOUT_MS,
   );

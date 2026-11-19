@@ -124,6 +124,9 @@ async function labEnvironment(dir, options, source = process.env) {
     [apiKeyEnvName(options.answerModelId)]: source[apiKeyEnvName(options.answerModelId)] ?? "lab",
     [apiKeyEnvName(options.learnModelId)]: source[apiKeyEnvName(options.learnModelId)] ?? "lab",
     ...(options.embedder === "scripted" ? { [apiKeyEnvName(EMBEDDER_MODEL_ID)]: "lab" } : {}),
+    // The product runs one maintenance pass on the first memory-enabled turn of an instance; its own
+    // switch turns that off, so a run can measure a store the maintenance did not touch.
+    ...(options.maintenance === "off" ? { KEIKO_MEMORY_AUTO_MAINTAIN: "0" } : {}),
     [await launcherSecretEnvName()]: randomBytes(32).toString("hex"),
   };
   const folded = buildDevBffEnv({
@@ -274,6 +277,7 @@ export async function startLabInstance(options) {
     ceiling: options.ceiling,
     subjectRoot: options.subjectRoot,
     embedder: options.embedder,
+    maintenance: options.maintenance,
   });
   assertNoFoldedEnvironment(prepared.foldedKeys, options.allowFoldedEnv);
   const seed = await seedFor(options, prepared, configPath);

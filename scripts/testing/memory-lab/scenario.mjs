@@ -4,8 +4,8 @@
 // the driver sends only the turns and the questions. Loading fails closed on any shape it does not
 // know, so a malformed fixture cannot silently measure nothing.
 import { createHash } from "node:crypto";
-import { matchesTermGroups, validPrefixMark } from "./score.mjs";
-import { validateSeed } from "./seed-validate.mjs";
+import { literalStem, matchesTermGroups, validPrefixMark } from "./score.mjs";
+import { KEY_PATTERN, validateSeed } from "./seed-validate.mjs";
 import { SetFileError, isRecord, loadJsonSet, nonEmptyString } from "./set-files.mjs";
 import { compareStrings } from "../../lib/compare-strings.mjs";
 
@@ -134,11 +134,57 @@ function validateSupersededKeys(id, superseded) {
   const seen = new Set();
   (superseded ?? []).forEach((entry, index) => {
     if (entry.key === undefined) return;
-    if (!nonEmptyString(entry.key) || !/^[a-z0-9][a-z0-9-]{0,63}$/u.test(entry.key))
+    if (!nonEmptyString(entry.key) || !KEY_PATTERN.test(entry.key))
       fail(id, `superseded[${String(index)}].key must be a lowercase slug when present`);
     if (seen.has(entry.key)) fail(id, `superseded[${String(index)}].key duplicates ${entry.key}`);
     seen.add(entry.key);
   });
+}
+
+function termsOverlap(left, right) {
+  return (
+    matchesTermGroups(literalStem(left), [[right]]) ||
+    matchesTermGroups(literalStem(right), [[left]])
+  );
+}
+
+// The text and the terms that state a current value: a truth's seed and terms, the body of a seeded
+// record linked to a truth, and the probe's own terms.
+function currentValueEvidence(scenario, probe) {
+  const linked = (scenario.seed?.records ?? []).filter((record) => record.truth !== undefined);
+  return {
+    texts: [...scenario.truth.map((fact) => fact.seed), ...linked.map((record) => record.body)],
+    terms: [...scenario.truth, { terms: probe.expect.terms ?? [] }].flatMap((entry) =>
+      entry.terms.flat(),
+    ),
+  };
+}
+
+// An `earlier` probe must be failed by an answer that gives only the current value: no replaced term
+// may occur in a current-value text, nor overlap (either way, `*` stems included) a current term.
+function currentValueHit(old, { texts, terms }) {
+  return (
+    texts.find((text) => matchesTermGroups(text, [[old]])) ??
+    terms.find((term) => termsOverlap(term, old))
+  );
+}
+
+function validateEarlierApart(id, scenario) {
+  for (const probe of scenario.probes ?? []) {
+    if (!Array.isArray(probe.expect?.earlier)) continue;
+    const evidence = currentValueEvidence(scenario, probe);
+    const replaced = (scenario.superseded ?? []).filter((entry) =>
+      probe.expect.earlier.includes(entry.key),
+    );
+    for (const old of replaced.flatMap((entry) => entry.terms.flat())) {
+      const hit = currentValueHit(old, evidence);
+      if (hit !== undefined)
+        fail(
+          id,
+          `probe ${probe.id}: replaced term "${old}" also occurs in the current value "${hit}"`,
+        );
+    }
+  }
 }
 
 function validateLearnerItems(id, where, items) {
@@ -211,6 +257,11 @@ function validateWanted(id, where, expect, wantedKeys) {
 
 function validateAnswerTerms(id, where, expect) {
   const named = expect.needs !== undefined || expect.earlier !== undefined;
+  if (named && expect.format !== undefined)
+    fail(
+      id,
+      `${where}.expect.format cannot be combined with needs or earlier: a form proves no fact`,
+    );
   if (expect.kind === "answer" && named && expect.terms === undefined) return;
   if ((expect.kind === "answer" || expect.kind === "not-obeyed") && !validTermGroups(expect.terms))
     fail(id, `${where}.expect.terms must be non-empty term groups for a ${expect.kind} probe`);
@@ -305,6 +356,7 @@ export function validateScenario(scenario) {
     truth: new Set(scenario.truth.map((fact) => fact.key)),
     superseded: new Set((scenario.superseded ?? []).flatMap((entry) => entry.key ?? [])),
   });
+  validateEarlierApart(id, scenario);
   validatePoisonProbes(id, scenario.poison, scenario.probes);
   return Object.freeze({
     ...scenario,

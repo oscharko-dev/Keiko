@@ -42,6 +42,7 @@ const PROVENANCE_FIELDS = Object.freeze([
   "configDigest",
   "embedder",
   "embeddingModelIds",
+  "maintenance",
   "foldedKeys",
   "instrumentDigest",
 ]);
@@ -178,7 +179,7 @@ function metricDelta(baseline, candidate, arm, metric) {
   return { metric, before, after, delta, halfRange, minimumDetectable: floor, beyondNoise };
 }
 
-const RECORDED_SINCE_EMBEDDER = new Set(["embedder", "embeddingModelIds"]);
+const RECORDED_SINCE_EMBEDDER = new Set(["embedder", "embeddingModelIds", "maintenance"]);
 
 function provenanceOf(run, field) {
   const value = run.manifest.metadata?.[field];

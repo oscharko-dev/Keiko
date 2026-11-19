@@ -7,6 +7,7 @@ import { mapSequential } from "./corpus/sequence.mjs";
 import { awaitLearning, captureTotal, listMemories, readCaptures } from "./instance.mjs";
 import { retainBodiesFor } from "./isolation.mjs";
 import { matchesTermGroups, scoreProbe, scoreStore } from "./score.mjs";
+import { countBy } from "./seed-plan.mjs";
 
 export const ARMS = Object.freeze(["off", "product", "oracle"]);
 // The explicit path recognizes "Merke dir <fact>"; a colon after "dir" is not an intent today.
@@ -242,12 +243,6 @@ async function seedFact(instance, chatId, fact) {
   };
 }
 
-function countBy(values) {
-  const counts = {};
-  for (const value of values) counts[value] = (counts[value] ?? 0) + 1;
-  return counts;
-}
-
 // The oracle arm asserts its own precondition: every truth fact was stored by its own seeding and
 // reads back accepted and exact exactly once, and nothing else is accepted. The scope each seed
 // landed in is reported (`scopes`, a count per scope kind): the explicit route stores in project
@@ -255,7 +250,12 @@ function countBy(values) {
 async function seedOracle(scenario, instance, labIds) {
   const chatId = await createChat(instance, `oracle ${scenario.id}`);
   // A truth the scenario's own seed already placed in the store is not placed twice.
-  const stated = new Set((instance.seed?.entries ?? []).map((entry) => entry.truth));
+  // Only an accepted seeded record is in the store as a truth: a superseded one is not.
+  const stated = new Set(
+    (instance.seed?.entries ?? [])
+      .filter((entry) => entry.status === "accepted")
+      .map((entry) => entry.truth),
+  );
   const facts = scenario.truth.filter((fact) => !stated.has(fact.key));
   const seeded = [];
   for (const fact of facts) seeded.push(await seedFact(instance, chatId, fact));
@@ -372,12 +372,20 @@ async function settledAfterProbes(instance, context, memories) {
 function seedOutcome(instance, memories) {
   if (instance.seed === undefined) return undefined;
   const byId = new Map(memories.map((memory) => [memory.id, memory]));
-  const present = instance.seed.ids.filter((id) => byId.has(id));
+  const { entries, ids } = instance.seed;
+  const present = ids.filter((id) => byId.has(id));
+  // Lost: live when seeded, gone or no longer live now (a failure). A removed superseded record is
+  // information only: the product's maintenance may drop it, and the answer then cannot use it.
+  const lostIndexes = entries.flatMap((entry, index) =>
+    entry.status === "accepted" && byId.get(entry.id)?.status !== "accepted" ? [index] : [],
+  );
   return {
     ...instance.seed.report,
     after: {
       byStatus: countBy(present.map((id) => byId.get(id).status)),
-      gone: instance.seed.ids.length - present.length,
+      gone: ids.length - present.length,
+      lostIndexes,
+      supersededRemoved: entries.filter((e) => e.status === "superseded" && !byId.has(e.id)).length,
     },
   };
 }

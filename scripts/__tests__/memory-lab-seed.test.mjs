@@ -116,14 +116,6 @@ describe("planning a seed", () => {
     ]);
   });
 
-  it("marks a learned record with the person's words, which is what lets a later statement replace it", () => {
-    const seed = { records: [{ ...chain().records[1], supersedes: undefined, learned: true }] };
-    const [record] = planSeed(seed, { nowMs: NOW, projectId: PROJECT }).records;
-    expect(record.provenance.evidenceSpan).toBe(record.body);
-    const plain = planSeed({ records: [chain().records[0]] }, { nowMs: NOW, projectId: PROJECT });
-    expect(plain.records[0].provenance.evidenceSpan).toBeUndefined();
-  });
-
   it("generates filler that is deterministic, unique, within its age range and prefix-stable", () => {
     const group = { count: 40, status: "archived", minAgeDays: 5, maxAgeDays: 50, seed: 9 };
     const a = planSeed({ filler: [group] }, { nowMs: NOW, projectId: PROJECT });

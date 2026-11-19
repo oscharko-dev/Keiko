@@ -180,6 +180,12 @@ function decrypt(envelope, key) {
  * Encrypts the scenario set of a directory into one file. Creates the key file when it does not
  * exist, refuses paths inside the checkout and refuses to overwrite an existing holdout.
  */
+// A sealed holdout reports counts only; an authored seed would put the shape of its store in them.
+function assertNoSeed(scenarios) {
+  if (scenarios.some((scenario) => scenario.seed !== undefined))
+    throw new HoldoutError("a sealed holdout holds no seeded scenario");
+}
+
 export function sealHoldout({ scenarios, out, keyFile }) {
   // The guard resolves links to judge the destination; the files are then used as spelled, so the
   // key reader still sees, and refuses, a key file that is itself a link.
@@ -190,6 +196,7 @@ export function sealHoldout({ scenarios, out, keyFile }) {
   if (existsSync(target)) throw new HoldoutError("refusing to overwrite an existing holdout");
   const set = loadScenarioDirectory(scenarios);
   if (set.length === 0) throw new HoldoutError("the scenario directory holds no scenario");
+  assertNoSeed(set);
   if (!existsSync(keyPath)) createKeyFile(keyPath);
   const envelope = encrypt(JSON.stringify(set), readKey(keyPath));
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
@@ -227,6 +234,7 @@ export function openSealedHoldout(file, keyFile) {
   if (!Array.isArray(parsed) || parsed.length === 0)
     throw new HoldoutError("the holdout holds no scenario");
   const scenarios = parsed.map((scenario) => validateScenario(scenario));
+  assertNoSeed(scenarios);
   if (new Set(scenarios.map((scenario) => scenario.id)).size !== scenarios.length)
     throw new HoldoutError("the holdout holds two scenarios with one id");
   return {

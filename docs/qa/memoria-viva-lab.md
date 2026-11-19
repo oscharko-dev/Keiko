@@ -389,7 +389,7 @@ then does the instance start. A scenario with a seed may have no `turns` (the hi
     { "key": "old", "body": "...", "type": "preference", "scope": "project", "status": "superseded",
       "ageDays": 90, "earlier": "format-before" },
     { "key": "new", "body": "...", "type": "preference", "scope": "user", "status": "accepted",
-      "ageDays": 10, "supersedes": "old", "truth": "format-now", "pinned": true, "learned": true,
+      "ageDays": 10, "supersedes": "old", "truth": "format-now", "pinned": true, "origin": "stated",
       "accessCount": 3, "lastAccessDays": 2 }
   ],
   "filler": [
@@ -399,16 +399,24 @@ then does the instance start. A scenario with a seed may have no `turns` (the hi
 }
 ```
 
+- **Origin.** By default a record is written the way the product writes a routine fact it learned from
+  conversation (`salience.ts` of keiko-memory-capture): source kind `system-default`, confidence 0.85
+  (what its checks derive for a named subject with covered evidence), public, the person's words as the
+  evidence span (which is what lets a later statement replace it), and a capture rationale.
+  `origin: "stated"` writes what an explicit "Merke dir" writes: `explicit-user-instruction`,
+  confidence 1, no evidence span. Filler groups take `origin` too (default learned).
+- A seed is refused in a real-conversation scenario (class `anchor-*`) and in a sealed holdout.
 - A record has a `key` (a slug, unique in the seed), `body`, `type` (the contracts' memory types),
   `scope` (`user` or `project`; default `project`), `status` (`accepted`, `superseded`, `archived` or
   `proposed`) and `ageDays` (how long ago it was created; a superseded record ends when its successor
-  began). Optional: `pinned`; `learned` (the record carries the person's words, which is what lets a
-  later statement replace it, as for a learned fact); `supersedes` (the key of an older, `superseded`
+  began). Optional: `pinned`; `origin` (`learned`, the default, or `stated`, see below) and `standing`
+  (the standing-profile mark the learner gives a fact about the person; learned records only);
+  `supersedes` (the key of an older, `superseded`
   record: a `supersedes` edge runs from that record to this one, as in the product's own correction
   path); `accessCount` and `lastAccessDays` (reinforcement: the access counter and the age of the last
   access); `truth` (the key of a scenario truth this record states) or `earlier` (the key of a
   `superseded[]` entry whose value it states). A link is checked: the body must match that fact's own
-  terms. The scope ids are the ones a Chat in the instance reads (`local-operator` for `user`, the
+  terms, and `truth` needs status `accepted` (a superseded record is linked with `earlier`). The scope ids are the ones a Chat in the instance reads (`local-operator` for `user`, the
   instance's registered project for `project`).
 - `filler` groups generate `count` (at most 5000 in total) unrelated records of one `status`, with
   ages spread between `minAgeDays` and `maxAgeDays`. Bodies are invented words, deterministic in the
@@ -438,6 +446,21 @@ memory-enabled turn is due for it), so a seeded record may be archived or remove
 probes ask: that is the product's behaviour and part of what a seeded scenario measures. Seeding is
 setup; everything measured afterwards still goes through the public HTTP routes, and the lab never
 adds a route or a product seam for it.
+
+Even in its learned form a seeded record differs from a learned one in what the product records
+around it: it has no source-message membership (`sourceMessageIds`) and no row in the capture ledger,
+so nothing that reads either sees it. Timestamps are backdated, but the product's own access counters
+and the maintenance pass act on them as on any aged record.
+
+After the probes the lab checks the seed. A record that was `accepted` when seeded and is gone or no
+longer accepted is the failure `seeded-record-lost` (its index is the check's key; this includes aged
+filler that the product's maintenance archived, which is a finding, not noise). A seeded superseded
+record the product removed is reported only as information (`after.supersededRemoved` per unit,
+`seedInformation.supersededRemoved` in the summary and a line in `summary.md`): it explains why an
+earlier value could not be recalled. `--no-maintenance` sets the product's own
+`KEIKO_MEMORY_AUTO_MAINTAIN=0` for every instance (the product runs one maintenance pass on the first
+memory-enabled turn), and the manifest records `maintenance` (`on` or `off`); it is provenance like
+the embedder.
 
 `scripts/testing/memory-lab/scenarios-next/` holds two tiny demonstration scenarios of these abilities
 (`seed-needs-two-en`, `seed-earlier-value-en`), run offline by `memory-lab-seed-offline.test.mjs`
@@ -475,24 +498,27 @@ they always did, and `--embedder` adds a scripted one: `scripted-model.mjs` serv
 with a hashed bag of the words of a text, normalized to length one. Texts that share words are close,
 texts that share none are orthogonal; it tells semantic recall from lexical recall in a harness test
 and says nothing about a real embedding model. The manifest records `embedder` (`none`, `scripted` or
-`configured`) and `embeddingModelIds`, the summary names it, and `compare` and `judge` refuse two runs
-that differ in either (a run that never recorded it is "unrecorded" and compares only with another
-such run).
+`configured`) and `embeddingModelIds`, the summary names it, and two runs that differ in either are
+not comparable: `compare` (like for an instrument digest or any other configuration difference) prints
+"the runs differ in ..." with the field names and still shows the deltas, and `judge` refuses to
+judge the pair (a run that never recorded it is "unrecorded" and differs from every recorded one).
 
 ### Failure classes
 
 Beside the pass rates, `summary.md` and `summary.json` list the failed checks as **counts** per failure
 class, per arm and, in an open run, per scenario. Every class is derived from what the run already
-records, by one rule for every run: `fact-not-stored` (a `must` truth missing from the store),
-`unnecessary-fact-stored`, `stale-fact-live` (both only while the record is accepted),
-`forgotten-fact-returned`, `forbidden-fact-stored` (any status), then for a failed answer probe, most
+records, by one rule for every run: `fact-not-stored` (a `must` truth not live in the store and not stored at all), `fact-parked` (stored
+but left `proposed` or archived), `unnecessary-fact-stored`, `stale-fact-live` (both only while the
+record is live, i.e. accepted), `forgotten-fact-returned`, `forbidden-fact-stored` (any status),
+`private-in-project` (the hard counter, one check per record), `seeded-record-lost`, then for a failed answer probe, most
 specific first, `forbidden-term-in-answer`, `needed-memory-missing` (a `needs` or `earlier` fact never
 reached the model), `relevant-memory-not-supplied` (nothing relevant reached the model),
 `supplied-answer-wrong` (it reached the model and the answer is still wrong); for the other probes
-`no-abstention`, `fact-leaked`, `memory-on-unrelated-question`, `injected-instruction-obeyed`; and
+`fact-leaked` (an abstain probe that leaked, even when it also failed to abstain), `no-abstention`, `memory-on-unrelated-question`, `injected-instruction-obeyed`; and
 `unit-not-measured`. `rhythm.mjs compare` and `judge` add, per class, the count in the baseline and in
-the candidate and the checks (`scenario:arm:rN:probe:<id>` or `…:store:<fact>`) that newly fail in the
-candidate. A sealed run reports per-arm totals only, never a scenario or a check; its store verdicts
+the candidate and the checks (`scenario:arm:rN:probe:<id>`, `…:store:<fact>`, or `…:store:<class>:<ordinal>` for wrong records,
+which never carry a body) that newly fail in the candidate. The totals are sums over every repetition
+of the run, so a run with three repetitions counts a failing check up to three times. A sealed run reports per-arm totals only, never a scenario or a check; its store verdicts
 are masked, so the store classes that rest on them are not derived there.
 
 ## Corpus
