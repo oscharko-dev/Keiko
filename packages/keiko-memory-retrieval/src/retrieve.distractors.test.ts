@@ -11,9 +11,11 @@
 // by its random UUID. The lab's own ids reproduce the live outcome: the six supplied memories of
 // both probes sit among the 60 lowest of 321 ids, the target's id is at rank 151.
 //
-// The `it.fails` tests assert the DESIRED behaviour and fail today. When the ranking fix lands, flip
-// each `it.fails` to `it`. The plain `it` tests are controls that pass today and must keep passing:
-// they prove the other inputs (semantic scores, floor, cap, budget) are sufficient.
+// FIXED by tie-aware rank fusion (ranking.ts, #4228): equal subscores share one rank and a zero
+// subscore contributes nothing, so a signal that does not distinguish records no longer hands out
+// ids-ordered ranks. The reproductions are plain `it` now; the one `it.fails` left asserts that no
+// filler is supplied and fails because of the MMR reorder, not rank fusion (see its comment). The
+// controls prove the other inputs (semantic scores, floor, cap, budget) are sufficient.
 //
 // Not reproducible hermetically: whether the real embedding gave the target the nearest vector.
 // The vectors below MODEL the situation; see the diagnosis report for what a live run must record.
@@ -215,18 +217,15 @@ describe("recall among near-topic distractors (diagnosis mv/diag-recall-distract
       buildRecord({ id, body: "unrelated words entirely", sourceKind: "system-default" }),
     );
 
-    it.fails(
-      "gives records identical in every signal an identical rrf score (id breaks ties only)",
-      () => {
-        const ranked = rankMemories(twins, {
-          nowMs: 1_000,
-          weights: DEFAULT_RANKING_WEIGHTS,
-          fusion: "rrf",
-        });
-        const score = (id: string): number => ranked.find((e) => e.memoryId === id)?.score ?? -1;
-        expect(score("0000")).toBeCloseTo(score("ffff"), 12);
-      },
-    );
+    it("gives records identical in every signal an identical rrf score (id breaks ties only)", () => {
+      const ranked = rankMemories(twins, {
+        nowMs: 1_000,
+        weights: DEFAULT_RANKING_WEIGHTS,
+        fusion: "rrf",
+      });
+      const score = (id: string): number => ranked.find((e) => e.memoryId === id)?.score ?? -1;
+      expect(score("0000")).toBeCloseTo(score("ffff"), 12);
+    });
 
     it("control: the same twins tie under weighted-sum fusion", () => {
       const ranked = rankMemories([...twins], {
@@ -239,11 +238,20 @@ describe("recall among near-topic distractors (diagnosis mv/diag-recall-distract
   });
 
   describe("scenario A: long-horizon-distractors-en, probe room-plain", () => {
-    it.fails("supplies the target with the lab's ids and unrelated filler below the floor", () => {
+    it("supplies the target with the lab's ids and unrelated filler below the floor", () => {
       const store = storeA(0.1);
       expect(recall(store, QUESTION_A_PLAIN)).toContain(idOfBody(store, TARGET_A_BODY));
     });
 
+    it("supplies the target with the lab's ids when filler clears the 0.3 semantic floor (target only)", () => {
+      const store = storeA(0.35);
+      expect(recall(store, QUESTION_A_PLAIN)).toContain(idOfBody(store, TARGET_A_BODY));
+    });
+
+    // STILL FAILS, and not because of rank fusion: with the target supplied, the sixth slot goes to a
+    // filler record because the MMR reorder (`diversity.ts`, lambda 0.7) prefers a vector far from the
+    // clustered near-topic distractors. `mmrLambda: 1` (pure relevance) supplies the target and six
+    // near-topic records and no filler. The MMR reorder is outside this change (see #4228).
     it.fails(
       "supplies the target with the lab's ids when filler clears the 0.3 semantic floor",
       () => {
@@ -260,7 +268,7 @@ describe("recall among near-topic distractors (diagnosis mv/diag-recall-distract
       },
     );
 
-    it.fails("is independent of the memory ids: supplied for every one of 50 id draws", () => {
+    it("is independent of the memory ids: supplied for every one of 50 id draws", () => {
       const missed = ID_PERMUTATIONS.filter((seed) => {
         const store = storeA(0.1, seed);
         return !recall(store, QUESTION_A_PLAIN).includes(idOfBody(store, TARGET_A_BODY));
@@ -299,13 +307,13 @@ describe("recall among near-topic distractors (diagnosis mv/diag-recall-distract
   });
 
   describe("scenario B: two-memories-compare-en (both facts needed)", () => {
-    it.fails("supplies the Atlas fact and the Borealis fact with the run's ids", () => {
+    it("supplies the Atlas fact and the Borealis fact with the run's ids", () => {
       const supplied = recall(storeB(), QUESTION_B);
       expect(supplied).toContain(ATLAS_FACT_ID);
       expect(supplied).toContain(BOREALIS_FACT_ID);
     });
 
-    it.fails("supplies both facts for every one of 50 id draws", () => {
+    it("supplies both facts for every one of 50 id draws", () => {
       const missed = ID_PERMUTATIONS.filter((seed) => {
         const store = storeB(seed);
         const supplied = recall(store, QUESTION_B);
