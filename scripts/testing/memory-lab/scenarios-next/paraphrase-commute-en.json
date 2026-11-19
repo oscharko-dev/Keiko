@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "paraphrase-commute-en",
+  "language": "en",
+  "class": "paraphrase",
+  "description": "An English fact asked about with a synonym and no shared content word, with a lexical control question. Limit: recall is word overlap only when no embedding model is configured. Failure means: expected without embeddings (the synonym question cannot be retrieved); with a real embedding model it is expected to pass, and the control probe must pass in both runs. Maintenance: no seed, so maintenance on or off changes nothing; run with both embedding settings.",
+  "truth": [
+    {
+      "key": "commute",
+      "seed": "I take the tram to the office every morning.",
+      "must": false,
+      "terms": [["tram"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "I take the tram to the office every morning.",
+      "learner": [
+        {
+          "body": "I take the tram to the office every morning.",
+          "type": "fact"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "synonym",
+      "question": "How do I commute?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["tram"]]
+      }
+    },
+    {
+      "id": "control-lexical",
+      "question": "How do I get to the office?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["tram"]]
+      }
+    }
+  ]
+}

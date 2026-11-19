@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "paraphrase-pendeln-de",
+  "language": "de",
+  "class": "paraphrase",
+  "description": "A German fact asked about with a synonym and no shared content word, with a lexical control question. Limit: recall is word overlap only when no embedding model is configured. Failure means: expected without embeddings (the synonym question cannot be retrieved); with a real embedding model it is expected to pass, and the control probe must pass in both runs. Maintenance: no seed, so maintenance on or off changes nothing; run with both embedding settings.",
+  "truth": [
+    {
+      "key": "commute",
+      "seed": "Ich fahre mit der Bahn zur Arbeit.",
+      "must": false,
+      "terms": [["Bahn", "Zug"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich fahre mit der Bahn zur Arbeit.",
+      "learner": [
+        {
+          "body": "Ich fahre mit der Bahn zur Arbeit.",
+          "type": "fact"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "synonym",
+      "question": "Wie pendle ich?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Bahn", "Zug"]]
+      }
+    },
+    {
+      "id": "control-lexical",
+      "question": "Womit fahre ich zur Arbeit?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Bahn", "Zug"]]
+      }
+    }
+  ]
+}
