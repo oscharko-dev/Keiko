@@ -9,7 +9,10 @@ Accepted (Issue #1946, 2026-07-05); amended for the Windows setup companion (Iss
 D8 amended by the `dev` release rehearsal of ADR-0177 (2026-09-14). The `linux-x64` archive is a
 community-tier asset without a parity commitment for new operating-system features
 ([ADR-0183](ADR-0183-linux-desktop-community-tier.md), 2026-11-12). D9 adds the standalone folder
-package, an in-place delivery form of the same payload (2026-11-17).
+package, an in-place delivery form of the same payload (2026-11-17), and the npm folder package,
+which carries the payload's Node.js runtime and installs Keiko into the folder from an npm
+registry at the first start (2026-11-18). From 2026-11-18 every stable `latest` release also carries the
+generic standalone folder package of each desktop target as a release asset (D9).
 
 ## Context
 
@@ -69,6 +72,10 @@ Authenticode signature; the
 Windows ZIP remains the manual and troubleshooting fallback. The setup companion embeds the exact
 reviewed `windows-x64` archive and delegates installation and launch to the same portable lifecycle.
 It does not create another platform target, payload authority, or update channel.
+
+Stable `latest` releases also carry the standalone folder packages of D9 (`keiko-<target>.standalone.zip`).
+They are downloads for people, not update inputs, and their names stay outside the archive name
+pattern that updaters read.
 
 The four platform targets are release-blocking as a set, and the Windows setup companion is
 release-blocking for `windows-x64`. A stable release is not portable-complete when a required
@@ -1148,7 +1155,7 @@ there. On macOS it copies Keiko to `/Applications`, which a standard user cannot
 it adds a per-user program folder and a Start Menu entry. D9 adds a delivery form for those
 endpoints. It does not replace D1 to D8, and the npm path stays the primary developer path.
 
-**Form.** A standalone folder package is one folder, shipped as `keiko-<target>-standalone.zip` for
+**Form.** A standalone folder package is one folder, shipped as `keiko-<target>.standalone.zip` for
 `macos-arm64`, `macos-x64` and `windows-x64` (ADR-0183 scopes new delivery forms to macOS and
 Windows):
 
@@ -1183,7 +1190,7 @@ activation of D2: a payload without a platform signature is waived as in every u
 and a platform-signed payload is refused in place, because its runtime monitor must sit in the
 root-owned application location. The folder form is the unsigned lane's.
 
-**Nested form.** `--layout nested` builds the same package as `keiko-<target>-standalone-nested.zip`
+**Nested form.** `--layout nested` builds the same package as `keiko-<target>.standalone-nested.zip`
 for a delivery that shows its runtime and the archive it starts:
 
 ```text
@@ -1239,6 +1246,201 @@ start and says so. An explicit `KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR` wins a
 adopted. Every decision leaves one `cli.lifecycle.provisioned-config` line with the closed outcome
 and an error class, never a path or content. The file may carry a plaintext `apiKey`; ADR-0046
 states its custody.
+
+**npm folder package.** Where an npm registry, often an internal mirror, is the approved way in, a
+second folder form ships without the program: `keiko-<target>.npm.zip`, built by
+`scripts/build-standalone-npm-package.mjs` from the same verified portable archive. It carries that
+archive's Node.js runtime with npm, moved unchanged to `system/node`, a `package.json` that pins
+`@oscharko-dev/keiko` to the archive's version, and a `package-lock.json` resolved against the
+public registry. The builder runs npm with no configuration of the person who builds and refuses a
+lockfile that does not install exactly that version, names a link, or names a downloaded package
+without a public-registry sha512 integrity (packages bundled inside Keiko's own tarball are covered
+by its integrity). It also carries the archive's native USearch addon and its license at
+`system/native` and `system/licenses`, where Keiko's default lookup beside the Node.js runtime finds
+it as in the portable payload, so Knowledge Pods search with their ANN index. The first start runs
+`npm ci --ignore-scripts --prefix <folder> --workspaces=false`, so npm installs exactly those
+packages into the folder even inside another npm project or workspace, checks every integrity and
+runs no install script. The command line also pins `--dry-run=false`, `--package-lock-only=false`,
+`--global=false`, `--install-strategy=hoisted` and `--include` of production, optional and peer
+packages, so no inherited `npm_config_*` variable or npm configuration turns the run into one that
+installs nothing, installs elsewhere or omits this platform's Coding runtime. A successful npm exit
+is accepted only when every lockfile package meant for this computer (not a development or linked
+entry; `os` and `cpu` with npm's `!name` exclusions; a `libc` restriction is left to npm) is
+installed in its locked version; otherwise nothing is recorded as installed and the start names
+the missing package. Before npm runs, the start refuses an `npm-shrinkwrap.json`, which npm would
+install instead of the checked lockfile, and a `node_modules` that is not a real folder of the
+person's account inside the folder, since `npm ci` empties it first and would empty the target of a
+link or junction. The folder's `.npmrc` may name one global `registry`; it then wins over an
+inherited `npm_config_registry`, npm replaces the registry host while keeping every checksum, and a
+scoped `@scope:registry` line or a repeated `registry` is refused before npm runs. The file is read
+as npm reads it: keys keep their case, quotes and comments follow npm's ini rules, and `${NAME}` is
+replaced from the environment. A spelling npm does not read (`REGISTRY=`), a list (`registry[]=`), a
+`registry` inside a `[section]` and an address that is no http or https URL with a host are refused
+too, since npm would ignore each of them and ask the public registry. Each attempt gets its own npm
+cache `npm-cache-<random>` in the state directory, removed when it ends; npm's log lies in
+`npm-logs` there, which must be a real folder of the person's account inside the state directory:
+a link, a file or another account's folder is refused before npm writes, while one that another
+package folder's start sharing the state directory created a moment before (`EEXIST`) is checked
+and used. The start sets both on
+npm's command line (`--cache`, `--logs-dir`), which no
+inherited `npm_config_*` variable and no `.npmrc` overrides, so npm writes nothing else outside the
+folder. The state directory lies in the home folder, created owner-private as Keiko does; a
+`KEIKO_STATE_DIR` outside it is refused before anything is written. The install lock in `system/`
+keeps a second start from installing concurrently. It is a folder that appears in one rename with
+the owner entry of its start already inside, naming when it was written, so no start can find it
+empty. A lock whose start no longer runs is cleared entry by entry and only then removed, so of two
+starts that find it so one takes it. Neither a process number nor a timestamp proves that a start
+still runs: the system reuses the numbers of ended processes (Windows soon after) and a clock can
+jump, so liveness is observed renewal. Every holder rewrites its own entry every 15 seconds: the
+start, whose renewal runs in a worker thread so it continues while the start is blocked in npm, its
+`owner-` entry, and npm's process its `npm-` entry only. npm never renews the start's entry and only
+verifies that it is still there, so a start window that was closed cannot look alive behind npm. A start that finds a lock without any entry whose process number runs
+takes it over at once; otherwise it watches the entries for up to 60 seconds on its own monotonic
+clock, and any entry that changes (or appears) means the lock is held, while none means the number
+was reused or the holder is frozen and the lock is taken over. No wall-clock comparison across
+processes, no boot rule and no age limit decides whether a holder runs. The remaining limit is stated plainly: a frozen
+holder that resumes after a takeover overlaps for at most one renewal interval, because its first
+renewal finds its entry gone and ends npm. A Stop is recorded only when the start's own entry (not
+npm's alone) runs and renews; a closing entry counts only beside the owner entry of the same start.
+A start releases only the generation it acquired: it removes its own
+owner entry first and then the entries it read beside it, and a lock without its owner entry is
+another start's and is never moved, read or removed. Before it lets go, a start adds a `closing`
+entry; a Stop adds its entry and then looks for the closing entry, so a Stop is either read by the
+closing start and carried out while it still holds the lock, or is turned away, waits until that start has
+let go, takes the lock, closes it and stops Keiko under it (a lock held for 90 seconds makes the Stop
+say so and not act). While it waits it retries recording: a start that wins the lock first and began before the Stop was pressed records the Stop in its own lock and carries it out, and the waiting Stop does not act itself. A lock a Stop takes is born closed: its `closing` entry is in the same rename as its owner entry, so no observer sees a Stop's owner entry as a start that is about to open Keiko.
+Starts and Stops are ordered by time, and the lifecycle owner decides. Every lock entry ends in a token `<pid>-<time><random>` whose twelve hex digits are the wall-clock milliseconds at which its start began to take the lock (read before the lock's rename) or at which its Stop was pressed (read first), so a lock carries its start's time in the one rename that makes it appear. A Stop is recorded only in the lock of a start whose time is not later than the press, and a start carries out only Stops pressed at or after its own time, so the provisional entry of a Stop the lock turned away is never carried out. A start passes its time as `keiko start --launch-order <ms>`, and a start without the flag (the standalone folder package, a plain `keiko start`) is ordered by the time its command began; once Keiko answers, the command line records the latest order since the last stop in `<state>/ui.launch-order` under the UI lifecycle guard of the data folder, which every package folder of the account shares. Every stop the launcher runs is `keiko stop --unless-launched-after <press>`: under the same guard the command line leaves Keiko open with exit code 3 when the recorded order is later than the press, stops nothing when the record cannot be read, and otherwise stops Keiko and clears the record; a record it cannot clear is logged (`clear-failed`) and the stop still succeeds. A start never replaces a record it cannot read, because it may hold a later order: Keiko is open, and the start says that its order was not recorded. A record that is not an order is reported and replaced by the start's own. The check and the stop are one step at the lifecycle owner, so no start of any folder that uses the data can open Keiko between them, and the record keeps the latest order whichever start finishes last: a former owner that returns from its command line after a takeover never lowers it. A launch the system refused, one the command line refused before it opened anything and a failed start record nothing. A start whose time equals the press counts as one before it (both happened in the same millisecond). The order is recorded as body-free `cli.lifecycle.launch-order` outcomes, never as a time. The wall clock is the one clock that processes of different folders can compare: a correction that sets it back during a Stop's wait can make a later start look earlier (that Stop then stops its Keiko) or an earlier one later (the Stop leaves Keiko open and asks to be pressed again). A Stop recorded in a start's lock is carried out with the latest press recorded there, and a start that cancelled opening because it saw a Stop carries the press it saw, also when the requester withdrew that entry. A Stop does not act when closing the lock it took reports it is no longer its own. A start that lost its lock while closing it carries out no Stop request, confirmed or provisional; a takeover after that check is a start that began after the press, so the fence leaves its Keiko open. A Stop therefore never stops the Keiko of a start that began after it was pressed. Every stop runs while its dispatcher owns the lock: a start that cancelled opening because it saw a Stop carries the
+stop out under its own closing lock, even when the requester withdrew its provisional entry. A lock that only npm of an
+already ended start holds accepts no Stop, so that Stop acts at once, but without a lock of its own: it first leaves
+`system/keiko-npm-stop-handoff-<token>`, whose token carries the time the Stop was pressed like a lock entry's, withdraws it and acts under the lock like any other Stop when a start holds
+the lock after all, and removes it when its stop has ended. The Stop renews the entry every 15 seconds from a worker thread while it acts. A start
+that holds the lock watches every such entry at once under one wait of up to 90 seconds and opens Keiko as soon as the last one is gone; an entry whose process does
+not run, or that has not changed for 60 seconds on the start's monotonic clock (a reused process number), is removed. A start does not open Keiko when one of those Stops was pressed at or after its own time: such a Stop acts on the Keiko this start would open, so the start says Keiko was stopped while it was being loaded. When one still renews after the wait, the start releases the lock, ends with exit code 1 and
+asks to start again. A start that finds a `closing` entry waits up to the same 90 seconds for that holder to let go; if the
+lock is still closing then, nothing opens Keiko for it, so it ends with exit code 1 and says that Keiko is still being
+closed (never that another window opens it), and a Start pressed while a Stop acts opens Keiko after it. A start that finds the lock held
+but not renewed by a start (only the npm of a closed start window holds it) waits up to 10 minutes for that npm to end and
+then takes the lock and starts normally; after that it ends with exit code 1 and asks to start again in a minute, never
+reporting another window that no longer exists. A lock that starts closing during that wait is waited for like any
+closing lock, also when it closes while the start watches for renewal: the renewing entry must still be in the lock and not
+closed before the start reports another start. A start that finds its lock
+generation replaced ends with a plain message before it writes the installed marker or dispatches
+the CLI. Renames of the lock folder are retried while Windows holds a passing handle in it. npm's
+own process adds an owner entry of its own when it loads (`--import` of the launcher module with
+the lock folder and the start's owner entry as a query, which only holds the lock), so a start that
+ends while npm still installs leaves the lock held until that npm ends. While npm runs, its process
+renews its own entry every 15 seconds on a timer that never keeps npm running,
+so an installation of any length keeps its lock; at exit it removes its own entry, and the lock stays with
+the start until Keiko is open. A renewal
+rewrites the timestamp of an entry still in the lock in place and never empties the file, never
+recreates an entry that went with a release or takeover, and accepts no name outside the lock; a
+failed renewal is said once, keeps the last valid timestamp and never ends npm, but a renewal check that
+finds its own entry or the start's gone ends npm at once (the lock was taken over). Two npm
+processes never install into the same folder: when the start requested the hold, the preload ends
+npm with a non-zero exit before npm does anything if the lock is absent, the start's owner entry is
+not in it, or another start's lock replaced it. Only a hold with no start's entry requested (a
+test-only path) joins an existing lock quietly or does nothing without one. An entry npm cannot
+create ends npm with the error code before it installs.
+The lockfile check leaves to npm an optional package whose `engines` npm evaluates, except the
+platform's Coding runtime, since only npm can tell whether this Node.js meets a version range. It
+counts only the packages the folder's package reaches through packages meant for this computer,
+following npm's resolution, so an optional package of another computer takes the packages only it
+needs (nested or hoisted) out of the check, as npm leaves them out; a lock without the root entry
+falls back to every package meant for this computer. The
+export names the gateway loader's own key variables: any value that is not empty counts, and a model
+id maps to `KEIKO_MODEL_<ID>_API_KEY` UTF-16 code unit by code unit. On Windows the access step
+removes the inherited permissions of the new `keiko.config.json` and grants it to the running
+account's SID alone (`whoami` and `icacls` from System32) before the token is written, and writes no
+token when that fails. Every start holds
+the lock until Keiko is open, also one that installs nothing. `Stop Keiko` meanwhile adds its entry
+to the lock; the start reads it and stops Keiko while it still holds the lock, so no other start
+opens Keiko in between, also one that reported a failure as it opened, or does not open it when the
+Stop came first. The start closes the lock before the final read, and a Stop that arrives after it
+closed is not accepted by that lock. A
+start whose installation failed has no Keiko to stop with and says so instead. A Stop that
+finds no lock stops the open Keiko itself. The start says how it ended (Keiko open, opened by
+another start of the folder, or stopped while it was being loaded), and the start and stop files
+add only a failure line. A marker holding the lockfile's SHA-256 skips the
+installation at later starts; the start installs again when the lockfile changes, the marker or
+Keiko's command line is missing (after `node_modules` was deleted) or an earlier installation did
+not finish. The start then runs `keiko start` with the
+same state directory and provisioned configuration as the folder package and pins the management
+declaration to `organization-managed` whatever the environment declared, so both the CLI and the
+server read the installation as managed outside the app. Install-mode detection reads that
+declaration for an npm installation too and reports `portable-it-managed`; the update preflight
+then makes no registry or release request. An administrator's access step
+(`system/Zugang speichern`) reads the configuration Gateway Setup saved and replaces with one token,
+typed without echo, only the keys sealed for the gateway connection Gateway Setup verified: the
+primary provider, the providers it built on that connection with the same endpoint style, API
+version, base URL and key header (a gateway-managed voice deployment also needs that locality, its
+capability read as the gateway's loader merges it: the top-level `capabilities` entry, else the
+provider's own `capability`) and the reranker on that address and header that Gateway Setup proved
+to share the gateway's credential. Address, header and catalog origin do not show whose key a sealed
+reference names, so Gateway Setup marks every provider it builds with the verified connection's
+credential, the primary excepted, and that reranker `credentialOrigin: "gateway-connection"`: a
+reranker when it wires a discovered one or finds an owned one, named by the stored file itself,
+whose durable credential (the vault reference resolved, transient `KEIKO_RERANKER_*` and per-model
+overrides masked) shares the stored connection's endpoint, header and credential, and it removes
+the mark otherwise, also on a first setup and over a stored file it cannot parse; the gateway's
+loader accepts only that closed value. A provider without the mark is another connection, so a
+configuration an earlier Keiko saved is refused until Gateway Setup has saved it once more.
+A provider or reranker with its own connection and a sealed key is refused before the token is
+read, so one token never reaches another service; a key written into the file as `apiKey` is
+neither replaced nor refused. So is a model without an id or an address, and a provider or
+reranker whose key Keiko takes from an environment variable of the administrator's computer
+(`KEIKO_MODEL_<ID>_API_KEY`, `KEIKO_RERANKER_API_KEY` or `KEIKO_DEFAULT_API_KEY`): Gateway Setup
+keeps such a key out of the file, so the team file would carry none. The step refuses while `KEIKO_CONFIG_FILE` or `KEIKO_UI_DATA_DIR`
+names another configuration, and it writes `keiko.config.json` owner-readable through a temporary
+file that replaces the old one only when every byte is written and synced (a short write is
+continued, one that writes nothing fails); it is a step the administrator runs, never part
+of a start. The folder package's builder applies the same rule to `--api-key-env`. The only
+programs a double-click runs are the system shell and the signed Node.js binary, and npm writes no
+download mark on what it installs; the ZIP itself takes the mark like the folder package, and the
+paragraph below applies to it unchanged. npm publishes no Windows coding-runtime package, so this
+form on Windows reports Coding as unavailable; on macOS npm installs the coding runtime package for
+the computer.
+
+**Release assets.** Every stable `latest` release carries the generic standalone folder package of each
+desktop target beside the four archives, as `keiko-<target>.standalone.zip` with its `.sha256`
+file. The stable-tag workflow builds them in its assemble job from the archives it has just
+assembled (`scripts/build-folder-release-assets.mjs`), checks each archive against its checksum
+evidence and attests the packages' build provenance with the archives. They carry no
+`keiko.config.json`. The publisher refuses a portable asset bundle without them, or with a package
+of another Keiko version, another archive, other bytes or another target set, and verifies each
+package's build provenance from the stable-tag workflow (`gh attestation verify`, the same signer
+workflow, source digest and tag as the setup companion) before anything reaches the draft. It
+uploads them into the same draft as the archives and verifies GitHub's size and digest of each
+before it publishes the release, so the release is published with them or not at all. A draft
+that carries any asset this run did not validate, such as a package an earlier run left behind, is
+not published. The draft is read again right before the publish step and must still carry exactly
+the verified set with the same digests. The public release is read once more after publication and
+must carry exactly that set with the same digests again, so assets that changed between the reads
+stop the run before npm, as a rerun would. After publication it downloads every asset back
+unauthenticated as a smoke check, with `curl -q` so no user configuration applies, only from an
+HTTPS address without credentials and over HTTPS through every redirect; a
+failure there stops the run before npm publication, with the GitHub release already public. A rerun
+over that published release verifies the same metadata, refuses an asset outside the validated set
+and repeats the unauthenticated download of every asset before npm publication. Before it reads
+any of the bundle's files, it compares each file's size: the manifest with its 64 KiB limit, a
+checksum file with the line it must hold, and a package with its declared size and the 2 GiB GitHub
+accepts for an asset, so a file that already has another size at inspection time, or a package
+GitHub would refuse, is rejected without being read. The size check is not a read limit: a checksum
+file that grew after it is still read before the text comparison rejects it. A package of the
+declared size is hashed in chunks by a reader with its own byte limit that stops one byte past that
+size, so a package that grew after the size check fails its digest without being read to its end.
+The rule binds every
+publish that supplies the portable asset bundle, which the stable-tag workflow does for every
+stable `latest` release. A stable publish under another dist-tag without a bundle uploads and
+verifies no portable asset at all, so it neither adds nor checks folder packages, on a new release
+or on one that already exists. A folder package
+is a download for people, not an update candidate: it carries no Ed25519
+release-trust signature, and no updater reads it. Its name keeps a dot before the form on purpose.
+Every shipped updater requires the release assets that match `keiko-[a-z0-9-]+.zip` to be exactly
+the portable archives, so a hyphenated package name would stop every installed Keiko from
+updating to that release. The npm folder package is not a release asset. Its lockfile needs the
+integrity the npm registry reports for the released version, and npm learns that version only
+after the publisher has published the immutable GitHub release; the publisher keeps that order, so
+the npm folder package is built from the published release.
 
 **What this form does not do.** It does not bypass the operating system's download checks. A
 package that still carries the download mark (the macOS quarantine attribute, the Windows Mark of
@@ -1414,7 +1616,9 @@ Security review for implementation under this ADR must cover:
 | 1.2     | 2026-09-14 | Amended D8 for the ADR-0177 `dev` release rehearsal: rehearsal attestations name `refs/heads/dev`, and every documented verifier binds the signer workflow and the stable tag. |
 | 1.3     | 2026-10-24 | The macOS application job declares the `Interactive` process type instead of `Background`, which throttled the app's runtime below its startup grant on a busy machine. |
 | 1.4     | 2026-11-17 | Added D9: the standalone folder package runs the portable payload in place, declares itself managed outside the app and can adopt an administrator-provisioned gateway configuration. |
-| 1.5     | 2026-11-18 | Amended D9 with the nested form: `node/`, the verified archive as `Keiko.zip`, pinning npm manifests and start/stop files that unpack the archive once before the same in-place launch. |
+| 1.5     | 2026-11-18 | Amended D9 with the npm folder package: the release's Node.js runtime and a pinned, integrity-checked lockfile; Keiko is installed into the folder from the organization's npm registry at the first start. |
+| 1.6     | 2026-11-18 | Amended D1 and D9: stable releases carry the standalone folder packages as release assets, built and attested in the stable-tag run and published in the same draft as the archives. |
+| 1.7     | 2026-11-19 | Amended D9 with the nested form: `node/`, the verified archive as `Keiko.zip`, pinning npm manifests and start/stop files that unpack the archive once before the same in-place launch. |
 
 ## Amendment history
 
@@ -1478,7 +1682,24 @@ Security review for implementation under this ADR must cover:
   management declaration also keeps the one-step Windows gateway setup away: no service, no UAC
   prompt, no Repair (`gateway-service-managed-outside`). D1 to D8 are unchanged; the operating
   system's download checks and D7 are not relaxed.
-- **2026-11-18 — D9 nested form:** Added `--layout nested`. The package carries the payload's own
+- **2026-11-18 — D9, npm folder package:** Added the second folder form for workplaces that reach
+  an npm registry but may not install software. It carries the portable archive's Node.js runtime
+  and a lockfile in which every package npm downloads has a public-registry sha512 integrity
+  (packages bundled inside Keiko's own tarball are covered by its integrity), installs Keiko into
+  the folder with `npm ci --ignore-scripts` at the first start and then starts it exactly like the
+  folder package. Windows Coding stays unavailable in this form, because npm publishes no Windows
+  coding-runtime package. The folder package and D1 to D8 are unchanged.
+- **2026-11-18 — D1 and D9, release assets:** Stable releases carry the generic standalone folder
+  package of `macos-arm64`, `macos-x64` and `windows-x64` with its `.sha256` file. The stable-tag
+  run builds them from the archives it assembled and attests them; the publisher refuses a bundle
+  without them and publishes them in the same draft as the archives. The names
+  (`keiko-<target>.standalone.zip`, `keiko-<target>.npm.zip`) keep a dot before the form, because
+  every shipped updater requires the `keiko-*.zip` assets with no dot before `.zip` to be exactly
+  the archives.
+  The npm folder package stays a build from the published release: npm learns the version only
+  after the GitHub release is published.
+- **2026-11-19 — D9 nested form:** Added `--layout nested` (`keiko-<target>.standalone-nested.zip`, a dot before the form like the
+  other folder packages; not a release asset). The package carries the payload's own
   Node.js as `node/`, the verified portable archive unchanged as `Keiko.zip` with its checksum, a
   `package.json`/`package-lock.json`/`.npmrc` that pin the versions and keep npm offline, a README
   and `start`/`stop` files. The start file verifies and unpacks `Keiko.zip` into `system/` once,

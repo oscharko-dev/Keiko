@@ -54,6 +54,8 @@ export type FigmaSkippedScreenReason =
   | "render-fetch-failed"
   | `render-fetch-failed:${string}`
   | "render-empty"
+  | "render-invalid-png"
+  | "render-budget-exceeded"
   | "render-oversized";
 
 export interface FigmaSkippedScreen {

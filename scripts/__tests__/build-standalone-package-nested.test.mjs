@@ -114,7 +114,7 @@ describe("a nested standalone package", () => {
         .filter((name) => !name.startsWith("Keiko/node/"))
         .sort();
 
-      expect(result.outputPath.endsWith(`keiko-${target}-standalone-nested.zip`)).toBe(true);
+      expect(result.outputPath.endsWith(`keiko-${target}.standalone-nested.zip`)).toBe(true);
       expect(names).toEqual(
         [
           "Keiko/.npmrc",
@@ -250,7 +250,7 @@ describe("a nested standalone package", () => {
     const { result } = build("windows-x64", { options: { config } });
     const built = entriesByName(result.outputPath);
 
-    expect(result.outputPath.endsWith("keiko-windows-x64-standalone-nested-team.zip")).toBe(true);
+    expect(result.outputPath.endsWith("keiko-windows-x64.standalone-nested-team.zip")).toBe(true);
     expect(built.has("Keiko/keiko.config.json")).toBe(true);
     expect(JSON.parse(text(built, "Keiko/package.json")).keiko.provisionedConfig).toBe(true);
   });

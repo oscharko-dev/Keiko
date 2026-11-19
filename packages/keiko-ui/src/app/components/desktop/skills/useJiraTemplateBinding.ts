@@ -6,6 +6,7 @@ import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { bffRequestErrorKind } from "@/lib/http";
 import { bindJiraTemplate, type JiraTemplateEntry } from "@/lib/jira-templates-api";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
+import type { SkillWorkspace } from "./useSkillWorkspace";
 
 /** The outcome of one bind request, shown on the template's row until the library reloads. */
 export type BindOutcome =
@@ -24,24 +25,42 @@ function failedOutcome(error: unknown): BindOutcome {
  * Binds a stored template to the issue types of the chosen Jira (#4354): the server writes the ids
  * into the template as a new revision, and the library reloads so the check runs on that revision.
  */
+/**
+ * An outcome belongs to one Jira Pod, one skill and one revision: a result for another selection is
+ * never shown on this one (a late answer of a superseded Pod settles under its own key).
+ */
+export function bindOutcomeKey(
+  podId: string | undefined,
+  entry: Pick<JiraTemplateEntry, "id" | "revision">,
+): string {
+  return `${podId ?? ""}:${entry.id}:${String(entry.revision)}`;
+}
+
 export function useJiraTemplateBinding(
   podId: string | undefined,
   library: MarkdownSkillLibrary,
+  adoptBinding?: SkillWorkspace["adoptBinding"],
 ): {
+  /** Keyed by `bindOutcomeKey`. */
   readonly outcomes: ReadonlyMap<string, BindOutcome>;
-  readonly bind: (entry: JiraTemplateEntry) => Promise<void>;
+  /** `migrate` is the person's explicit choice to replace a binding another Jira owns. */
+  readonly bind: (entry: JiraTemplateEntry, migrate?: boolean) => Promise<void>;
 } {
   const [outcomes, setOutcomes] = useState<ReadonlyMap<string, BindOutcome>>(new Map());
   const bind = useCallback(
-    async (entry: JiraTemplateEntry): Promise<void> => {
+    async (entry: JiraTemplateEntry, migrate?: boolean): Promise<void> => {
       if (podId === undefined) return;
       const correlationId = newClientCorrelationId();
       const settle = (outcome: BindOutcome): void =>
-        setOutcomes((current) => new Map(current).set(entry.id, outcome));
+        setOutcomes((current) => new Map(current).set(bindOutcomeKey(podId, entry), outcome));
       settle("working");
       try {
-        const bound = await bindJiraTemplate(podId, entry.id, entry.revision, correlationId);
+        const bound =
+          migrate === true
+            ? await bindJiraTemplate(podId, entry.id, entry.revision, correlationId, true)
+            : await bindJiraTemplate(podId, entry.id, entry.revision, correlationId);
         settle({ issueType: bound.issueType, parentTypeCount: bound.parentTypeCount ?? 0 });
+        if (bound.skill !== undefined) adoptBinding?.(entry.revision, bound.skill);
         await library.refresh();
       } catch (error) {
         settle(failedOutcome(error));
@@ -52,7 +71,7 @@ export function useJiraTemplateBinding(
         });
       }
     },
-    [podId, library],
+    [podId, library, adoptBinding],
   );
   return { outcomes, bind };
 }

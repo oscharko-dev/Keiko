@@ -8,6 +8,7 @@ import {
   type AtlassianConnectorWriteFailureReason,
   type JiraFieldMetadata,
   type JiraIssueTemplate,
+  type JiraTemplateFieldRole,
   type JiraMutationFailureDetail,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -364,19 +365,23 @@ function metadataCatalog(metadata: readonly JiraFieldMetadata[]): readonly JiraF
 interface TemplateReference {
   readonly template: JiraIssueTemplate;
   readonly reference: string;
+  readonly role: JiraTemplateFieldRole;
 }
 function references(templates: readonly JiraIssueTemplate[]): readonly TemplateReference[] {
   return templates.flatMap((template) =>
     [
-      ...template.requiredFields,
-      ...(template.parent.field === undefined ? [] : [template.parent.field]),
-    ].map((reference) => ({ template, reference })),
+      ...template.requiredFields.map((reference) => ({ reference, role: "required" as const })),
+      ...(template.parent.field === undefined
+        ? []
+        : [{ reference: template.parent.field, role: "parent" as const }]),
+    ].map((entry) => ({ template, ...entry })),
   );
 }
 const idsOf = (
   entry: TemplateReference,
   catalog: readonly JiraFieldCatalogEntry[],
-): readonly string[] => resolveJiraTemplateFieldIds(entry.reference, catalog, entry.template);
+): readonly string[] =>
+  resolveJiraTemplateFieldIds(entry.reference, catalog, entry.template, entry.role);
 
 /**
  * The fields a template reference can name: Jira's system fields and the instance field list
@@ -421,6 +426,7 @@ function fieldCatalogValues(items: readonly unknown[]): readonly JiraFieldCatalo
 interface BulkReferenceRule {
   readonly template: JiraIssueTemplate;
   readonly reference: string;
+  readonly role: JiraTemplateFieldRole;
 }
 type BulkReferenceKind = "component" | "version" | "sprint";
 function bulkReferenceRules(
@@ -436,9 +442,11 @@ function bulkReferenceRules(
     )
     .flatMap((template) =>
       [
-        ...template.requiredFields,
-        ...(template.parent.field === undefined ? [] : [template.parent.field]),
-      ].map((reference) => ({ template, reference })),
+        ...template.requiredFields.map((reference) => ({ reference, role: "required" as const })),
+        ...(template.parent.field === undefined
+          ? []
+          : [{ reference: template.parent.field, role: "parent" as const }]),
+      ].map((entry) => ({ template, ...entry })),
     );
 }
 /** The classified kind of the one matching field; unresolved or malformed metadata is `opaque`. */
@@ -496,7 +504,7 @@ function bulkReferenceViolations(
     values === undefined ? JIRA_TEMPLATE_SYSTEM_FIELDS : systemAndInstanceFields(values);
   const violations: JiraTemplateViolation[] = [];
   for (const rule of rules) {
-    const ids = resolveJiraTemplateFieldIds(rule.reference, catalog, rule.template);
+    const ids = resolveJiraTemplateFieldIds(rule.reference, catalog, rule.template, rule.role);
     if (ids.length === 0 || ids.some((id) => bulkFieldAffected(id, kind, values ?? [])))
       violations.push(bulkReferenceViolation(rule));
   }
@@ -521,8 +529,9 @@ export async function gateJiraBulkReferenceChange(input: {
   const rules = bulkReferenceRules(set.templates, input.projectKey);
   if (rules.length === 0) return OK;
   const unresolved = rules.some(
-    ({ reference, template }) =>
-      resolveJiraTemplateFieldIds(reference, JIRA_TEMPLATE_SYSTEM_FIELDS, template).length === 0,
+    ({ reference, template, role }) =>
+      resolveJiraTemplateFieldIds(reference, JIRA_TEMPLATE_SYSTEM_FIELDS, template, role).length ===
+      0,
   );
   const values = unresolved ? await readFieldCatalogValues(input.request) : [];
   const violations = bulkReferenceViolations(rules, input.kind, values);

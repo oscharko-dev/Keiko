@@ -251,10 +251,24 @@ export const REVIEWED_WINDOWS_2025_VS2026_OCTOBER_TOOLCHAIN = Object.freeze({
   referenceSha256: COMMITTED_VERIFIER_ASSET.referenceSha256,
 });
 
+// actions/runner-images win25-vs2026/20261116.315: VS 18.12.12405.243.
+// Measured in job 135186129481; the references are unchanged, and both isolated regenerations must
+// still equal the committed assembly exactly.
+export const REVIEWED_WINDOWS_2025_VS2026_NOVEMBER_TOOLCHAIN = Object.freeze({
+  compilerSha256: "773480351c9a24c39beafcca6b39a6e574032c2d3a67ca339beddd885c7b755c",
+  compilerDistribution: Object.freeze({
+    fileCount: 111,
+    sha256: "cd789e5937da8303bc7acaf2472105c94a3ff0859f41df21717dc63f5b2b21d6",
+    totalBytes: 35708696,
+  }),
+  referenceSha256: COMMITTED_VERIFIER_ASSET.referenceSha256,
+});
+
 export function selectReviewedVerifierToolchain(observed) {
   const expected = [
     REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
     REVIEWED_WINDOWS_2025_VS2026_OCTOBER_TOOLCHAIN,
+    REVIEWED_WINDOWS_2025_VS2026_NOVEMBER_TOOLCHAIN,
   ].find((toolchain) => observed.compilerSha256 === toolchain.compilerSha256) ?? {
     compilerSha256: COMMITTED_VERIFIER_ASSET.compilerSha256,
     compilerDistribution: COMMITTED_VERIFIER_ASSET.compilerDistribution,

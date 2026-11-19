@@ -1108,6 +1108,7 @@ function truncateToUtf8Bytes(text: string, maxBytes: number): string {
 
 interface CorpusDoc {
   readonly documentId: string;
+  readonly identityDocumentId?: string | undefined;
   readonly text: string;
   readonly fingerprintText?: string | undefined;
 }
@@ -1192,6 +1193,7 @@ function capsuleDocAtom(
   text: string,
   envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
   fingerprintText = text,
+  identityDocumentId = docId,
 ): QualityIntelligenceIngestedAtom {
   const canonicalText = `${docId}\n${text}`;
   const fingerprintCanonicalText = `${docId}\n${fingerprintText}`;
@@ -1200,7 +1202,10 @@ function capsuleDocAtom(
   // screen id) is unique within its envelope, so adding/removing a sibling document never shifts an
   // unchanged document's atom id and never false-orphans its candidates. Content edits are caught by
   // the canonicalHash diff.
-  const digest = sha256Hex(`qi-atom-cap-v2|${String(envelopeId)}|${docId}`).slice(0, 32);
+  const digest = sha256Hex(`qi-atom-cap-v2|${String(envelopeId)}|${identityDocumentId}`).slice(
+    0,
+    32,
+  );
   const atom: QI.QualityIntelligenceEvidenceAtom = {
     kind: "document-excerpt",
     id: QualityIntelligence.asQualityIntelligenceEvidenceAtomId(`qi-atom-${digest}`),
@@ -1657,6 +1662,24 @@ function figmaDocumentId(screenId: string, screenName: string): string {
   return `${screenId} (${truncateToUtf8Bytes(safeName, MAX_LABEL_CHARS)})`;
 }
 
+function figmaIdentityDocumentIds(
+  loader: FigmaSnapshotLoader,
+  pinnedRunId: string,
+  current: FigmaSnapshotRecord,
+): ReadonlyMap<string, string> | undefined {
+  if (current.runId === pinnedRunId || loader.loadPinned === undefined) return undefined;
+  const pinned = loader.loadPinned(pinnedRunId);
+  if (pinned === undefined) return undefined;
+  // Existing manifests keyed each screen by the original document label. Preserve that identity
+  // when the current name changes and still use the current label in the text and the fingerprint.
+  return new Map(
+    parseScreens(pinned).map(({ row, ir }) => [
+      row.screenId,
+      figmaDocumentId(row.screenId, ir.name),
+    ]),
+  );
+}
+
 // Strip Unicode bidi-override / zero-width / C1 spoofing code points from the untrusted Figma-derived
 // atom text BEFORE secret redaction. Two reasons for this order (the #734 strip-before-redact rule):
 // stripping first DE-OBFUSCATES a zero-width-split secret so the redactor can still match it, and it
@@ -1688,6 +1711,7 @@ function corpusDocFromFigmaScreen(
   ir: QualityIntelligenceFigma.ScreenIr,
   augmented: FigmaScreenTexts,
   perDocBudget: number,
+  identityDocumentIds: ReadonlyMap<string, string> | undefined,
 ): { readonly doc: CorpusDoc; readonly bytes: number } | undefined {
   const capped = truncateToUtf8Bytes(redactFigmaAtomText(augmented.text), perDocBudget);
   if (capped.trim().length === 0) return undefined;
@@ -1698,6 +1722,10 @@ function corpusDocFromFigmaScreen(
   return {
     doc: {
       documentId: figmaDocumentId(row.screenId, ir.name),
+      identityDocumentId:
+        identityDocumentIds === undefined
+          ? undefined
+          : (identityDocumentIds.get(row.screenId) ?? row.screenId),
       text: capped,
       fingerprintText,
     },
@@ -1725,7 +1753,8 @@ function figmaScreenDocs(
   record: FigmaSnapshotRecord,
   vision: FigmaVisionHintProvider | undefined,
   byteBudget: number,
-  screenIds?: readonly string[],
+  screenIds: readonly string[] | undefined,
+  identityDocumentIds: ReadonlyMap<string, string> | undefined,
 ): readonly CorpusDoc[] {
   // Mirror processCapsuleDocs (:558-563): the per-run corpus budget is the smaller of the capsule's
   // own ceiling and this source's fair share of the global evidence byte budget (Epic #729 N+1
@@ -1746,7 +1775,7 @@ function figmaScreenDocs(
       : { provider: undefined, remaining: remainingVisionScreens };
     remainingVisionScreens = visionSlot.remaining;
     const augmented = visionAugmentedScreenText(baseline, ir, record, row, visionSlot.provider);
-    const nextDoc = corpusDocFromFigmaScreen(row, ir, augmented, perDocBudget);
+    const nextDoc = corpusDocFromFigmaScreen(row, ir, augmented, perDocBudget, identityDocumentIds);
     if (nextDoc === undefined) continue;
     if (!figmaDocFitsBudget(docs, totalBytes, nextDoc.bytes, perRunBudget)) break;
     docs.push(nextDoc.doc);
@@ -1759,7 +1788,8 @@ async function figmaScreenDocsAsync(
   record: FigmaSnapshotRecord,
   vision: FigmaVisionHintProvider | undefined,
   byteBudget: number,
-  screenIds?: readonly string[],
+  screenIds: readonly string[] | undefined,
+  identityDocumentIds: ReadonlyMap<string, string> | undefined,
 ): Promise<readonly CorpusDoc[]> {
   const perRunBudget = Math.min(CAPSULE_BUDGET_BYTES, byteBudget);
   const perDocBudget = Math.min(CAPSULE_MAX_BYTES_PER_DOCUMENT, perRunBudget);
@@ -1783,7 +1813,7 @@ async function figmaScreenDocsAsync(
       row,
       visionSlot.provider,
     );
-    const nextDoc = corpusDocFromFigmaScreen(row, ir, augmented, perDocBudget);
+    const nextDoc = corpusDocFromFigmaScreen(row, ir, augmented, perDocBudget, identityDocumentIds);
     if (nextDoc === undefined) continue;
     if (!figmaDocFitsBudget(docs, totalBytes, nextDoc.bytes, perRunBudget)) break;
     docs.push(nextDoc.doc);
@@ -1792,15 +1822,13 @@ async function figmaScreenDocsAsync(
   return docs;
 }
 
-function ingestFigmaSnapshot(
-  source: Extract<QualityIntelligenceInlineSource, { kind: "figma-snapshot" }>,
-  index: number,
-  registeredAt: string,
+type FigmaSnapshotSource = Extract<QualityIntelligenceInlineSource, { kind: "figma-snapshot" }>;
+
+function loadFigmaIngestionRecord(
+  source: FigmaSnapshotSource,
   loader: FigmaSnapshotLoader,
-  vision: FigmaVisionHintProvider | undefined,
-  byteBudget: number,
-): OneSource {
-  const label = sanitiseLabel(source.label);
+  label: string,
+): FigmaSnapshotRecord {
   const record = loader(source.snapshotRunId);
   if (record === undefined) {
     throw new QiIngestionError(
@@ -1811,7 +1839,17 @@ function ingestFigmaSnapshot(
   if (record.screens.length === 0 && (record.structuralScreens?.length ?? 0) === 0) {
     throw new QiIngestionError("QI_SOURCE_EMPTY", `Figma snapshot "${label}" has no screens.`);
   }
-  const docs = figmaScreenDocs(record, vision, byteBudget, source.screenIds);
+  return record;
+}
+
+function figmaSourceFromDocs(
+  source: FigmaSnapshotSource,
+  record: FigmaSnapshotRecord,
+  index: number,
+  registeredAt: string,
+  label: string,
+  docs: readonly CorpusDoc[],
+): OneSource {
   if (docs.length === 0) {
     throw figmaSnapshotEmptyError(record, source, label);
   }
@@ -1834,13 +1872,34 @@ function ingestFigmaSnapshot(
     localRef: stableLocalRef("figma-snapshot", sourceRef),
   };
   const atoms = docs.map((d) =>
-    capsuleDocAtom(d.documentId, d.text, envelopeId, d.fingerprintText ?? d.text),
+    capsuleDocAtom(
+      d.documentId,
+      d.text,
+      envelopeId,
+      d.fingerprintText ?? d.text,
+      d.identityDocumentId,
+    ),
   );
   return { envelope, atoms };
 }
 
+function ingestFigmaSnapshot(
+  source: FigmaSnapshotSource,
+  index: number,
+  registeredAt: string,
+  loader: FigmaSnapshotLoader,
+  vision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
+): OneSource {
+  const label = sanitiseLabel(source.label);
+  const record = loadFigmaIngestionRecord(source, loader, label);
+  const identityDocumentIds = figmaIdentityDocumentIds(loader, source.snapshotRunId, record);
+  const docs = figmaScreenDocs(record, vision, byteBudget, source.screenIds, identityDocumentIds);
+  return figmaSourceFromDocs(source, record, index, registeredAt, label, docs);
+}
+
 async function ingestFigmaSnapshotAsync(
-  source: Extract<QualityIntelligenceInlineSource, { kind: "figma-snapshot" }>,
+  source: FigmaSnapshotSource,
   index: number,
   registeredAt: string,
   loader: FigmaSnapshotLoader,
@@ -1848,38 +1907,16 @@ async function ingestFigmaSnapshotAsync(
   byteBudget: number,
 ): Promise<OneSource> {
   const label = sanitiseLabel(source.label);
-  const record = loader(source.snapshotRunId);
-  if (record === undefined) {
-    throw new QiIngestionError(
-      "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
-      `Figma snapshot "${label}" could not be found or read. Build the snapshot first.`,
-    );
-  }
-  if (record.screens.length === 0 && (record.structuralScreens?.length ?? 0) === 0) {
-    throw new QiIngestionError("QI_SOURCE_EMPTY", `Figma snapshot "${label}" has no screens.`);
-  }
-  const docs = await figmaScreenDocsAsync(record, vision, byteBudget, source.screenIds);
-  if (docs.length === 0) {
-    throw figmaSnapshotEmptyError(record, source, label);
-  }
-  const joinedFingerprintText = docs.map((d) => d.fingerprintText ?? d.text).join("\n");
-  const sourceRef = figmaSnapshotSourceRef(source);
-  const envelopeId = envelopeIdFor(index, label, sourceRef);
-  const envelope: QI.QualityIntelligenceSourceEnvelope = {
-    id: envelopeId,
-    kind: "figma-evidence",
-    displayLabel: label,
-    provenance: {
-      origin: `figma-snapshot:${sourceRef}`,
-      registeredAt,
-      integrityHashSha256Hex: sha256Hex(joinedFingerprintText),
-    },
-    localRef: stableLocalRef("figma-snapshot", sourceRef),
-  };
-  const atoms = docs.map((d) =>
-    capsuleDocAtom(d.documentId, d.text, envelopeId, d.fingerprintText ?? d.text),
+  const record = loadFigmaIngestionRecord(source, loader, label);
+  const identityDocumentIds = figmaIdentityDocumentIds(loader, source.snapshotRunId, record);
+  const docs = await figmaScreenDocsAsync(
+    record,
+    vision,
+    byteBudget,
+    source.screenIds,
+    identityDocumentIds,
   );
-  return { envelope, atoms };
+  return figmaSourceFromDocs(source, record, index, registeredAt, label, docs);
 }
 
 function buildImageSourceEnvelope(
@@ -2398,7 +2435,7 @@ export async function ingestInlineSourcesAsync(
   for (let i = 0; i < sources.length; i += 1) {
     const source = sources[i];
     if (source === undefined) continue;
-    await ingestSourceIntoAsync(acc, source, i, input, budgets);
+    await ingestSourceIntoAsync(acc, source, i, input, budgets); // NOSONAR typescript:S9382 -- sources share the remaining atom budget and settle in request order.
   }
   if (acc.ingestedAtoms.length === 0) {
     const emptyDrift = allowEmptyDriftIngestion(input, acc, droppedSourceCount);

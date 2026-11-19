@@ -1,17 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
 import {
-  closeSync,
   copyFileSync,
   chmodSync,
   existsSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
-  openSync,
   readFileSync,
-  readSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -50,6 +45,7 @@ import {
   portableSetupCompanionRecord,
 } from "./lib/portable-setup-companion.mjs";
 import { PORTABLE_EVALUATION_MANIFEST_ASSET_NAME } from "./lib/portable-evaluation-manifest.mjs";
+import { FIRST_CLASS_ARCHIVE_NAME, folderPackageUploads } from "./lib/folder-package-release.mjs";
 import { provenancePublishArgs, releaseImpactChildEnv } from "./lib/npm-publish-preflight.mjs";
 import {
   jsonFromCommand,
@@ -57,7 +53,7 @@ import {
   portableDownloadAssetNames,
   uploadedDownloadSetFailure,
 } from "./lib/portable-release-verification.mjs";
-import { sha256 } from "./lib/digest.mjs";
+import { sha256, sha256FileChunked } from "./lib/digest.mjs";
 import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-command.mjs";
 import { readJsonFile } from "./lib/json.mjs";
 import { resolveGithubRepository } from "./lib/github-repository.mjs";
@@ -84,6 +80,14 @@ import {
   releaseTagAtHeadFailure,
   uploadIntoDraft,
 } from "./lib/portable-release-publication.mjs";
+import {
+  boundedCommand,
+  boundedCurlCommand,
+  portableDownloadCurlArgs,
+  portableDownloadFailure,
+  portableDownloadMaxTimeSeconds,
+  portableDownloadTimeoutMs,
+} from "./lib/portable-download-bounds.mjs";
 import {
   makePublishedPortableSeams,
   runVerifyPublishedPortableAssets,
@@ -142,10 +146,28 @@ function nonNegativeIntegerEnv(name, fallback) {
   return value;
 }
 
+// A refusal is an exception, never `process.exit`: the evidence, package staging and npm
+// configuration scopes own temporary folders (one holds the registry token in its `.npmrc`) and
+// release them in `finally` blocks that an immediate exit would skip. The outermost boundary
+// below turns the failure into the exit status once those scopes have unwound.
+class ReleasePublishFailure extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ReleasePublishFailure";
+  }
+}
+
 function fail(message) {
   console.error(`release-publish: FAIL - ${message}`);
-  process.exit(1);
+  throw new ReleasePublishFailure(message);
 }
+
+// Outermost boundary: a failure sets the exit status (its message is already printed); any other
+// uncaught error keeps Node's default report and a non-zero exit.
+process.on("uncaughtException", (error) => {
+  if (!(error instanceof ReleasePublishFailure)) console.error(error);
+  process.exit(1);
+});
 
 function readJson(relativePath) {
   return JSON.parse(readFileSync(join(repoRoot, relativePath), "utf8"));
@@ -548,21 +570,6 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function sha256FileSync(path) {
-  const fd = openSync(path, "r");
-  const hash = createHash("sha256");
-  const buffer = Buffer.alloc(1024 * 1024);
-  try {
-    for (;;) {
-      const bytesRead = readSync(fd, buffer, 0, buffer.length, null);
-      if (bytesRead === 0) return hash.digest("hex");
-      hash.update(buffer.subarray(0, bytesRead));
-    }
-  } finally {
-    closeSync(fd);
-  }
-}
-
 function containedPath(root, path) {
   const normalizedRoot = root.endsWith("/") ? root : `${root}/`;
   return path === root || path.startsWith(normalizedRoot);
@@ -653,6 +660,28 @@ function loadPortableAssets(rootManifest, options) {
     rootManifest,
     qualification,
   );
+}
+
+// The standalone folder packages ride with the archives they were built from (ADR-0121 D9): a
+// bundle that carries archives carries them too, and they are checked here, before anything is
+// published. A missing or foreign package refuses the publish.
+function loadFolderPackages(rootManifest, options, portableAssets) {
+  if (portableAssets.length === 0) return [];
+  const archives = new Map(
+    portableAssets.map((asset) => [
+      asset.platformTarget,
+      { assetName: asset.archiveAssetName, sha256: asset.manifest.artifact.sha256 },
+    ]),
+  );
+  const { failures, uploads } = folderPackageUploads({
+    bundleRoot: dirname(resolve(options.portableAssetsManifest)),
+    version: rootManifest.version,
+    archives,
+  });
+  if (failures.length > 0) {
+    fail(`folder package validation failed:\n  - ${failures.join("\n  - ")}`);
+  }
+  return uploads;
 }
 
 function requiredPortableQualification(rootManifest) {
@@ -907,7 +936,7 @@ function validatePortableArchiveDigest(target, archivePath, archiveStat, manifes
   if (archiveStat !== undefined && manifest.artifact?.sizeBytes !== archiveStat.size) {
     failures.push(`${target.platformTarget}.artifact.sizeBytes must match the archive size.`);
   }
-  if (archiveStat !== undefined && manifest.artifact?.sha256 !== sha256FileSync(archivePath)) {
+  if (archiveStat !== undefined && manifest.artifact?.sha256 !== sha256FileChunked(archivePath)) {
     failures.push(`${target.platformTarget}.artifact.sha256 must match the archive bytes.`);
   }
   if (archiveStat !== undefined) {
@@ -1083,7 +1112,7 @@ function validateOneSidecarEvidence(target, resourceRoot, evidence, requiresCycl
     const sbom = readEvidenceJson(path, "sidecar SBOM evidence", failures);
     if (sbom.bomFormat !== "CycloneDX") failures.push("sidecar SBOM evidence is invalid.");
   }
-  if (sha256FileSync(path) !== evidence.sha256)
+  if (sha256FileChunked(path) !== evidence.sha256)
     failures.push("sidecar evidence digest must match the manifest.");
 }
 
@@ -1333,24 +1362,28 @@ function portablePublisher() {
     snapshot: githubReleaseSnapshot,
     verifyAssets: verifyRemotePortableAssets,
     ...makePublishedPortableSeams({
-      runGh: (args) => commandResult("gh", args, { env: githubEnvironment() }),
+      runGh: (args, { maxBytes, ...options } = {}) => {
+        const command =
+          maxBytes === undefined ? { cmd: "gh", args } : boundedCommand("gh", args, maxBytes);
+        return commandResult(command.cmd, command.args, { env: githubEnvironment(), ...options });
+      },
       verifyReleaseTrust: verifyPortableReleaseTrust,
       trustedKeys: portableReleaseTrustedKeys(),
     }),
   };
 }
 
-function publishPortableReleaseAssets(options, assets, releaseInfo) {
+function publishPortableReleaseAssets(options, assets, releaseInfo, folderPackages) {
   if (assets.length === 0) return;
   if (!portableUploadEnabled(options)) {
     console.log("release-publish: portable assets validated; upload skipped.");
     return;
   }
-  verifyPortableSetupAttestations(assets, releaseInfo);
+  verifyPortableBuildAttestations(assets, folderPackages, releaseInfo);
   const evidenceUpload = preparePortableEvidenceUploadRoot();
   try {
     const publisher = portablePublisher();
-    const archiveUpload = portableArchiveUploadFiles(assets);
+    const archiveUpload = portableArchiveUploadFiles(assets, folderPackages);
     uploadIntoDraft(publisher, releaseInfo, archiveUpload.paths);
     const archiveSnapshot = githubReleaseSnapshot(releaseInfo);
     refuseIncompletePublishedRelease(
@@ -1365,8 +1398,10 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
         publisher,
         releaseInfo,
         assets,
+        archiveExpected: archiveUpload.expected,
         archiveSnapshot,
         verifyAssets: verifyRemotePortableAssets,
+        smokeDownloads: runPortableDownloadSmoke,
         headOfCheckout: () => commandResult("git", ["rev-parse", "HEAD"]).stdout.trim(),
       });
       return;
@@ -1375,7 +1410,7 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
     const boundEvidence = portableEvidenceUploadFiles(boundAssets, evidenceUpload.root);
     uploadIntoDraft(publisher, releaseInfo, boundEvidence.paths);
     const finalSnapshot = githubReleaseSnapshot(releaseInfo);
-    const expected = [...archiveUpload.expected, ...boundEvidence.expected];
+    const expected = withSignedAssetIds(archiveUpload.expected, archiveSnapshot, boundEvidence);
     const publicAssets = publishVerifiedPortableRelease(
       publisher,
       releaseInfo,
@@ -1389,18 +1424,34 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
   }
 }
 
-function verifyPortableSetupAttestations(assets, releaseInfo) {
+// The signed manifests name the archive and setup asset ids of the first snapshot; the evidence
+// uploaded after signing carries none, and publication pins it to the snapshot it verified.
+function withSignedAssetIds(archiveExpected, archiveSnapshot, boundEvidence) {
+  const signedIds = new Map(archiveSnapshot.assets.map((asset) => [asset.name, asset.id]));
+  return [
+    ...archiveExpected.map((entry) => ({ ...entry, assetId: signedIds.get(entry.assetName) })),
+    ...boundEvidence.expected,
+  ];
+}
+
+// The setup companion and every folder package carry no release-trust signature, so their build
+// provenance from the stable-tag workflow is verified before either reaches the draft: a package
+// replaced together with its manifest entry fails here.
+function verifyPortableBuildAttestations(assets, folderPackages, releaseInfo) {
   const signerWorkflow = `${releaseInfo.repo}/${portableAssetsWorkflowPath}`;
   const sourceDigest = process.env.KEIKO_PORTABLE_ASSETS_SOURCE_SHA;
   if (!/^[a-f0-9]{40}$/u.test(sourceDigest ?? "")) {
     fail("portable setup attestation source SHA must be exact.");
   }
-  for (const asset of assets) {
-    if (asset.setupPath === undefined) continue;
+  const paths = [
+    ...assets.flatMap((asset) => (asset.setupPath === undefined ? [] : [asset.setupPath])),
+    ...folderPackages.filter((upload) => upload.attested).map((upload) => upload.path),
+  ];
+  for (const path of paths) {
     runGh([
       "attestation",
       "verify",
-      asset.setupPath,
+      path,
       "--repo",
       releaseInfo.repo,
       "--signer-workflow",
@@ -1418,7 +1469,7 @@ function preparePortableEvidenceUploadRoot() {
   return { root };
 }
 
-function portableArchiveUploadFiles(assets) {
+function portableArchiveUploadFiles(assets, folderPackages) {
   const paths = [];
   const names = new Set();
   const expected = [];
@@ -1440,6 +1491,16 @@ function portableArchiveUploadFiles(assets) {
       });
     }
   }
+  // The folder packages go into the same draft, so the release is published with them or not at all.
+  for (const upload of folderPackages) {
+    addUploadPath(upload.path, upload.assetName, names, paths);
+    expected.push({
+      assetName: upload.assetName,
+      expectedSha256: upload.sha256,
+      expectedSize: upload.size,
+      firstClassArchive: false,
+    });
+  }
   return { expected, paths };
 }
 
@@ -1453,7 +1514,7 @@ function portableEvidenceUploadFiles(assets, root) {
       addUploadPath(destination, evidence.assetName, names, paths);
       expected.push({
         assetName: evidence.assetName,
-        expectedSha256: sha256FileSync(destination),
+        expectedSha256: sha256FileChunked(destination),
         expectedSize: statSync(destination).size,
         firstClassArchive: false,
       });
@@ -1630,7 +1691,7 @@ function verifyFirstClassArchiveSet(remoteAssets, failures) {
   const expected = new Set(PORTABLE_TARGETS.map((target) => target.assetName));
   const actual = remoteAssets
     .map((asset) => asset.name)
-    .filter((name) => /^keiko-[a-z0-9-]+\.zip$/u.test(name));
+    .filter((name) => FIRST_CLASS_ARCHIVE_NAME.test(name));
   const actualSet = new Set(actual);
   if (
     actual.length !== expected.size ||
@@ -1662,31 +1723,55 @@ function runPortableDownloadSmoke(remoteAssets, expectedAssets) {
   for (const expected of expectedAssets) {
     const url = remoteByName.get(expected.assetName)?.browser_download_url;
     if (typeof url !== "string") fail(`${expected.assetName} has no browser_download_url.`);
+    if (!validBrowserDownloadUrl(url)) {
+      fail(
+        `${expected.assetName} must expose an HTTPS browser_download_url without credentials before it is downloaded.`,
+      );
+    }
     smokePortableDownloadUrl(expected, url);
   }
 }
 
+// The temporary folder is removed whether the download succeeds or not; the failure itself is
+// raised after the folder is gone.
 function smokePortableDownloadUrl(expected, url) {
   const root = mkdtempSync(join(tmpdir(), "keiko-portable-download-"));
-  const destination = join(root, expected.assetName);
+  let failure;
   try {
-    const result = commandResult(
-      "curl",
-      ["--fail", "--silent", "--show-error", "--location", "--output", destination, url],
-      { env: networkEnvironment() },
-    );
-    if (result.error !== undefined || result.status !== 0) {
-      fail(`unauthenticated portable asset download failed for ${expected.assetName}.`);
-    }
-    if (
-      statSync(destination).size !== expected.expectedSize ||
-      sha256FileSync(destination) !== expected.expectedSha256
-    ) {
-      fail(`downloaded portable asset bytes do not match ${expected.assetName}.`);
-    }
+    failure = portableDownloadMismatch(expected, url, join(root, expected.assetName));
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
+  if (failure !== undefined) fail(failure);
+}
+
+// Why the download of one asset did not give its verified bytes, or undefined when it did.
+function portableDownloadMismatch(expected, url, destination) {
+  const maxTimeSeconds = portableDownloadMaxTimeSeconds();
+  const command = boundedCurlCommand(
+    portableDownloadCurlArgs({
+      expectedSize: expected.expectedSize,
+      destination,
+      url,
+      maxTimeSeconds,
+    }),
+    expected.expectedSize,
+  );
+  const result = commandResult(command.cmd, command.args, {
+    env: networkEnvironment(),
+    killSignal: "SIGKILL",
+    timeout: portableDownloadTimeoutMs(maxTimeSeconds),
+  });
+  if (result.error !== undefined || result.status !== 0) {
+    return portableDownloadFailure(result, expected, destination);
+  }
+  if (
+    statSync(destination).size !== expected.expectedSize ||
+    sha256FileChunked(destination) !== expected.expectedSha256
+  ) {
+    return `downloaded portable asset bytes do not match ${expected.assetName}.`;
+  }
+  return undefined;
 }
 
 function npmViewVersionResult(pkg, registry) {
@@ -1963,6 +2048,7 @@ run("npm", ["run", options.planOnly ? "check:release-impact" : "check:release-im
 });
 // Assets first: the notes may only advertise portable downloads this release actually carries.
 const portableAssets = loadPortableAssets(rootManifest, options);
+const folderPackages = loadFolderPackages(rootManifest, options, portableAssets);
 const githubReleaseNotes = releaseNotes(rootManifest, options);
 
 if (options.planOnly) {
@@ -2009,7 +2095,7 @@ try {
       ? ensurePortableRelease(rootPackage, options, githubReleaseNotes)
       : undefined;
   if (releaseInfo !== undefined) {
-    publishPortableReleaseAssets(options, portableAssets, releaseInfo);
+    publishPortableReleaseAssets(options, portableAssets, releaseInfo, folderPackages);
     assertUploadedPortableSetComplete(releaseInfo);
   }
   for (const pkg of workspacePackages) {
@@ -2025,7 +2111,7 @@ try {
   runRegistrySmoke(rootPackage, options, npmEnv);
   if (releaseInfo === undefined) {
     const finalReleaseInfo = ensureGithubRelease(rootPackage, options, githubReleaseNotes);
-    publishPortableReleaseAssets(options, portableAssets, finalReleaseInfo);
+    publishPortableReleaseAssets(options, portableAssets, finalReleaseInfo, folderPackages);
   }
   if (options.tag === "latest" && !options.dryRun) {
     recordAndVerifyReleaseAlignment(rootPackage, options, npmEnv);

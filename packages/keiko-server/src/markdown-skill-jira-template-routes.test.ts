@@ -21,6 +21,7 @@ import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
 import { handleImportMarkdownSkill, handleReplaceMarkdownSkill } from "./markdown-skill-routes.js";
 import {
   handleBindJiraTemplate,
+  handleJiraTemplateOptions,
   handleListJiraTemplates,
   handleProposeJiraTemplates,
   handleValidateJiraTemplate,
@@ -73,11 +74,22 @@ function jiraGet(
 ): ReturnType<AtlassianHttpBodyPort> {
   const url = new URL(request.url);
   const path = url.pathname;
+  if (path.endsWith("/project"))
+    return Promise.resolve(response([{ id: "10000", key: "SYN", name: "Synthetic project" }]));
   if (path.endsWith("/project/SYN"))
     return Promise.resolve(response({ id: "10000", key: "SYN", issueTypes: projectTypes }));
   if (path.endsWith("/project/SYN/statuses"))
     return Promise.resolve(
-      response([{ id: "10001", name: "Story", statuses: [{ name: "To Do" }, { name: "Done" }] }]),
+      response([
+        {
+          id: "10001",
+          name: "Story",
+          statuses: [
+            { id: "1", name: "To Do" },
+            { id: "6", name: "Done" },
+          ],
+        },
+      ]),
     );
   if (path.endsWith("/field"))
     return Promise.resolve(
@@ -141,6 +153,8 @@ function fixture(
   deps: RouteDeps;
   cookie: string;
   http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
+  signOut: () => boolean;
+  pod: { generation: number };
 } {
   const channel = createCodingAppSessionChannel({
     registry: createSessionRegistry(),
@@ -181,10 +195,18 @@ function fixture(
           ? undefined
           : ({
               custody: { list: () => [metadata] },
-              httpBodyPortFactory: () => http,
+              // The real port refuses a dispatch its lifecycle gate does not confirm.
+              httpBodyPortFactory:
+                (_pod: unknown, _id: unknown, gate?: { beforeDispatch?: () => boolean }) =>
+                (request: Parameters<AtlassianHttpBodyPort>[0]) =>
+                  gate?.beforeDispatch?.() === false
+                    ? Promise.reject(new Error("dispatch refused"))
+                    : http(request),
             } as never),
     },
     cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`,
+    signOut: () => channel.signOut(paired.cookieToken),
+    pod: metadata,
   };
 }
 
@@ -206,6 +228,247 @@ function context(cookie: string, body: unknown = {}, id = ""): RouteContext {
 afterEach(() => {
   for (const store of stores.splice(0)) store.close();
   resetServerLogger();
+});
+
+describe("a Jira read that outlives its session or its Pod (PR #4464)", () => {
+  it("sends no further Jira request once the session is revoked", async () => {
+    const f = fixture();
+    let revoked = false;
+    f.http.mockImplementation((request) => {
+      if (!revoked) {
+        revoked = true;
+        f.signOut();
+      }
+      return jiraGet(request);
+    });
+    const result = await handleJiraTemplateOptions(
+      context(f.cookie, { podId: POD, projectKey: "SYN", issueTypeId: "10001" }),
+      f.deps,
+    ).catch((error: unknown) => error);
+    // Only the project lookup went out; the concurrent detail reads were never dispatched.
+    expect(f.http).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ status: 404 });
+  });
+
+  it("does not save a binding read for a Pod that was replaced during the read", async () => {
+    const f = fixture();
+    const markdown = TEMPLATE.replace("project: SYN", "project: SYN\nsummaryMinLength: 4");
+    expect(
+      (await handleImportMarkdownSkill(context(f.cookie, upload(markdown)), f.deps)).status,
+    ).toBe(201);
+    const skill = f.deps.store.markdownSkills.list()[0];
+    if (skill === undefined) throw new TypeError("The uploaded skill must be persisted");
+    let replaced = false;
+    f.http.mockImplementation((request) => {
+      if (!replaced) {
+        replaced = true;
+        f.pod.generation = 2;
+      }
+      return jiraGet(request);
+    });
+    const result = await handleBindJiraTemplate(
+      context(f.cookie, { podId: POD, skillId: skill.id, revision: skill.revision }),
+      f.deps,
+    ).catch((error: unknown) => error);
+    expect(result).toMatchObject({ status: 404 });
+    expect(f.deps.store.markdownSkills.get(skill.id)?.revision).toBe(skill.revision);
+  });
+});
+
+describe("guided Jira template options", () => {
+  it("records option counts under the request correlation", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const { deps, cookie } = fixture();
+
+    expect((await handleJiraTemplateOptions(context(cookie, { podId: POD }), deps)).status).toBe(
+      200,
+    );
+    const events = sink.events.filter(
+      (event) =>
+        event.op === "skills.library.operation" && event.extra?.action === "jira-template-options",
+    );
+    expect(events.map((event) => event.extra?.phase)).toEqual(["started", "completed"]);
+    const completed = events.at(-1);
+    expect(completed).toMatchObject({
+      correlationId: "template-routes",
+      extra: { httpStatus: 200, projectCount: 1 },
+    });
+    const line = formatActivityLogProofLine(completed ?? {});
+    expectActivityLogProof("skills.library.operation.lifecycle", line);
+    expect(line).not.toMatch(/Synthetic project|example\.invalid|\bSYN\b/u);
+  });
+
+  it("returns project, localized types, and scoped field and status choices via read-only requests", async () => {
+    const { deps, cookie, http } = fixture({
+      projectTypes: [
+        { id: "10001", name: "Aufgabe" },
+        { id: "10002", name: "Fachliche Aufgabe" },
+      ],
+    });
+    const read = async (selection: object): Promise<unknown> => {
+      const result = await handleJiraTemplateOptions(
+        context(cookie, { podId: POD, ...selection }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(result.headers).toMatchObject({ "Cache-Control": "no-store" });
+      return result.body;
+    };
+    expect(await read({})).toEqual({
+      kind: "projects",
+      projects: [{ key: "SYN", name: "Synthetic project" }],
+    });
+    expect(await read({ projectKey: "SYN" })).toEqual({
+      kind: "types",
+      instanceId: jiraInstanceIdentity(BASE_URL),
+      issueTypes: [
+        { id: "10001", name: "Aufgabe" },
+        { id: "10002", name: "Fachliche Aufgabe" },
+      ],
+    });
+    expect(await read({ projectKey: "SYN", issueTypeId: "10001" })).toEqual({
+      kind: "details",
+      ambiguousFieldNames: [],
+      fields: [
+        { id: "summary", name: "summary", required: true },
+        { id: "customfield_10016", name: "Story Points", required: true },
+      ],
+      statuses: [
+        { id: "1", name: "To Do" },
+        { id: "6", name: "Done" },
+      ],
+    });
+    expect(http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    expect(deps.store.markdownSkills.list()).toEqual([]);
+  });
+
+  it("refuses an issue type id above the native Jira range before asking Jira anything (UyI)", async () => {
+    const { deps, cookie, http } = fixture();
+    const result = await handleJiraTemplateOptions(
+      context(cookie, { podId: POD, projectKey: "SYN", issueTypeId: "9223372036854775808" }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(http).not.toHaveBeenCalled();
+  });
+
+  describe("when the app session ends while Jira is being read (u5s)", () => {
+    function revokeDuringRead(fx: ReturnType<typeof fixture>): void {
+      const token = fx.cookie.slice(APP_SESSION_COOKIE_NAME.length + 1);
+      const original = fx.http.getMockImplementation();
+      if (original === undefined) throw new TypeError("Expected the Jira mock");
+      fx.http.mockImplementation((request) => {
+        fx.deps.codingAppSessionChannel?.signOut(token);
+        return original(request);
+      });
+    }
+
+    it("discloses no options and counts none", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "debug" }));
+      const fx = fixture();
+      revokeDuringRead(fx);
+      const result = await handleJiraTemplateOptions(context(fx.cookie, { podId: POD }), fx.deps);
+      expect(result.status).toBe(404);
+      expect(JSON.stringify(result.body)).not.toMatch(/Synthetic project/u);
+      const closing = sink.events
+        .filter(
+          (event) =>
+            event.op === "skills.library.operation" &&
+            event.extra?.action === "jira-template-options",
+        )
+        .at(-1);
+      expect(closing).toMatchObject({ extra: { phase: "rejected", httpStatus: 404 } });
+      expect(closing?.extra).not.toHaveProperty("projectCount");
+    });
+
+    it("discloses no proposal and no validation either", async () => {
+      const proposing = fixture();
+      revokeDuringRead(proposing);
+      expect(
+        (
+          await handleProposeJiraTemplates(
+            context(proposing.cookie, { podId: POD, projectKey: "SYN" }),
+            proposing.deps,
+          )
+        ).status,
+      ).toBe(404);
+      const validating = fixture();
+      revokeDuringRead(validating);
+      expect(
+        (
+          await handleValidateJiraTemplate(
+            context(validating.cookie, { podId: POD, markdown: TEMPLATE }),
+            validating.deps,
+          )
+        ).status,
+      ).toBe(404);
+    });
+  });
+
+  it("refuses an unknown Pod and never loads fields for a type outside the project", async () => {
+    const { deps, cookie, http } = fixture();
+    expect((await handleJiraTemplateOptions(context("", { podId: POD }), deps)).status).toBe(404);
+    expect(
+      (await handleJiraTemplateOptions(context(cookie, { podId: "other" }), deps)).status,
+    ).toBe(404);
+    expect(http).not.toHaveBeenCalled();
+    const result = await handleJiraTemplateOptions(
+      context(cookie, { podId: POD, projectKey: "SYN", issueTypeId: "10099" }),
+      deps,
+    );
+    expect(result.status).toBe(404);
+    expect(http).toHaveBeenCalledOnce();
+    expect(http.mock.calls[0]?.[0].url).toMatch(/\/project\/SYN$/u);
+  });
+
+  it("records a project Jira does not know as a rejected read under the request correlation", async () => {
+    // The editor shows such a project as missing without a client failure diagnostic; this line
+    // is the evidence of that read.
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const { deps, cookie } = fixture();
+    const result = await handleJiraTemplateOptions(
+      context(cookie, { podId: POD, projectKey: "GONE" }),
+      deps,
+    );
+    expect(result.status).toBe(404);
+    const closing = sink.events
+      .filter(
+        (event) =>
+          event.op === "skills.library.operation" &&
+          event.extra?.action === "jira-template-options",
+      )
+      .at(-1);
+    expect(closing).toMatchObject({
+      correlationId: "template-routes",
+      extra: { phase: "rejected", httpStatus: 404 },
+    });
+    expect(formatActivityLogProofLine(closing ?? {})).not.toMatch(/\bGONE\b|example\.invalid/u);
+  });
+
+  it.each([
+    ["a path in the project key", { projectKey: "../SYN" }],
+    ["a slash in the project key", { projectKey: "SYN/1" }],
+    ["an empty project key", { projectKey: "" }],
+    ["a key starting with a digit", { projectKey: "1SYN" }],
+    ["an over-long project key", { projectKey: `S${"Y".repeat(128)}` }],
+    ["a project key that is no string", { projectKey: 7 }],
+    ["an issue type without a project", { issueTypeId: "10001" }],
+    ["an issue type id of zero", { projectKey: "SYN", issueTypeId: "0" }],
+    ["an issue type id with letters", { projectKey: "SYN", issueTypeId: "1a" }],
+    ["an over-long issue type id", { projectKey: "SYN", issueTypeId: "1".repeat(20) }],
+    ["an issue type id that is no string", { projectKey: "SYN", issueTypeId: 10001 }],
+  ])("refuses %s before Jira is asked", async (_case, selection) => {
+    const { deps, cookie, http } = fixture();
+    const result = await handleJiraTemplateOptions(
+      context(cookie, { podId: POD, ...selection }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(http).not.toHaveBeenCalled();
+  });
 });
 
 describe("template documents in the skill library", () => {
@@ -411,11 +674,12 @@ describe("validate against the live instance", () => {
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       valid: true,
-      checked: { project: true, fields: true, linkTypes: true, transitions: true },
+      // "Ready" is no listed destination status, so it may be a transition id or action name:
+      // the project's status list cannot disprove it, and the transition is not reported checked.
+      checked: { project: true, fields: true, linkTypes: true, transitions: false },
       findings: [
         { code: "unknown-field", subject: "Unknown Thing" },
         { code: "unknown-link-type", subject: "relates to" },
-        { code: "unknown-transition-target", subject: "Ready" },
       ],
     });
     expect(http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
@@ -515,9 +779,15 @@ describe("binding a template to this Jira", () => {
   const bind = (
     f: ReturnType<typeof fixture>,
     skill: { id: string; revision: number },
+    migrate?: boolean,
   ): ReturnType<typeof handleBindJiraTemplate> =>
     handleBindJiraTemplate(
-      context(f.cookie, { podId: POD, skillId: skill.id, revision: skill.revision }),
+      context(f.cookie, {
+        podId: POD,
+        skillId: skill.id,
+        revision: skill.revision,
+        ...(migrate === true ? { migrate } : {}),
+      }),
       f.deps,
     );
 
@@ -625,13 +895,62 @@ describe("binding a template to this Jira", () => {
     expect(f.deps.store.markdownSkills.get(skill.id)?.revision).toBe(2);
   });
 
-  it("ignores a binding made for another Jira and replaces it with this one's ids", async () => {
+  it("refuses to replace a binding owned by another Jira unless a migration is asked for (PR #4464)", async () => {
     const f = fixture();
     const skill = await stored(
       f,
-      typed("Story", 'issueTypeId: "999"', `jiraBinding: "${FOREIGN}"`),
+      typed(
+        "Story",
+        'issueTypeId: "999"',
+        'parentIssueTypeIds: ["998"]',
+        'parentFieldId: "parent"',
+        `jiraBinding: "${FOREIGN}"`,
+      ),
     );
-    expect((await bind(f, skill)).body).toMatchObject({ changed: true, issueType: "Story" });
+    const before = f.deps.store.markdownSkills.get(skill.id)?.body;
+    const refused = await bind(f, skill);
+    expect(refused.status).toBe(409);
+    expect(f.deps.store.markdownSkills.get(skill.id)?.body).toBe(before);
+    expect(f.deps.store.markdownSkills.get(skill.id)?.revision).toBe(1);
+  });
+
+  it("tells the list which binding this Jira does not confirm, so only that one waits for a choice (PR #4464)", async () => {
+    const f = fixture();
+    const validate = (markdown: string): ReturnType<typeof handleValidateJiraTemplate> =>
+      handleValidateJiraTemplate(context(f.cookie, { podId: POD, markdown }), f.deps);
+    const foreign = typed(
+      "Story",
+      'issueTypeId: "999"',
+      'parentIssueTypeIds: ["998"]',
+      'parentFieldId: "parent"',
+      `jiraBinding: "${FOREIGN}"`,
+    );
+    expect((await validate(foreign)).body).toMatchObject({
+      valid: true,
+      bindingUnconfirmed: true,
+    });
+    // A binding this Jira made and still confirms carries no such mark, nor does an unbound file.
+    const skill = await stored(f, typed("Story"));
+    expect((await bind(f, skill)).body).toMatchObject({ changed: true });
+    const confirmed = f.deps.store.markdownSkills.get(skill.id)?.body ?? "";
+    expect(confirmed).toContain("jiraBinding:");
+    expect((await validate(confirmed)).body).not.toHaveProperty("bindingUnconfirmed");
+    expect((await validate(typed("Story"))).body).not.toHaveProperty("bindingUnconfirmed");
+  });
+
+  it("ignores a binding made for another Jira and replaces it with this one's ids on an explicit migration", async () => {
+    const f = fixture();
+    const skill = await stored(
+      f,
+      typed(
+        "Story",
+        'issueTypeId: "999"',
+        'parentIssueTypeIds: ["998"]',
+        'parentFieldId: "parent"',
+        `jiraBinding: "${FOREIGN}"`,
+      ),
+    );
+    expect((await bind(f, skill, true)).body).toMatchObject({ changed: true, issueType: "Story" });
     const body = f.deps.store.markdownSkills.get(skill.id)?.body ?? "";
     expect(body).toContain('issueTypeId: "10001"');
     expect(body).not.toContain(FOREIGN);
@@ -689,10 +1008,12 @@ describe("binding a template to this Jira", () => {
       f.deps,
     );
     expect(checked.body).toMatchObject({ binding: { state: "bindable", issueType: "Bug" } });
-    expect((await bind(f, { id: skill.id, revision: replaced.revision })).body).toMatchObject({
-      changed: true,
-      issueType: "Bug",
-    });
+    expect((await bind(f, { id: skill.id, revision: replaced.revision }, true)).body).toMatchObject(
+      {
+        changed: true,
+        issueType: "Bug",
+      },
+    );
     const after = f.deps.store.markdownSkills.get(skill.id)?.body ?? "";
     expect(after).toContain('issueTypeId: "10005"');
     expect(after.match(/^issueTypeId:/gmu)).toHaveLength(1);
@@ -959,5 +1280,140 @@ describe("a partial proposal says so, and the list without a proposal stays boun
       nothingToLearnCount: 12,
       beyondLimitCount: 138,
     });
+  });
+});
+
+// PR #4464 owner review: a bound status id the partial workflow list cannot verify is not a checked match.
+describe("validation says transitions were not fully checked for an unverifiable bound status", () => {
+  const INSTANCE = jiraInstanceIdentity(BASE_URL);
+  const lines = (...extra: readonly string[]): string =>
+    [
+      "---",
+      "keiko: jira-issue-template",
+      "version: 1",
+      "project: SYN",
+      "issueType: Story",
+      ...extra,
+      "activateOn: [transition:Ready]",
+      "summaryMinLength: 4",
+      "---",
+      "# Story template",
+    ].join("\n");
+  async function checked(statusId: string): Promise<unknown> {
+    const f = fixture();
+    f.http.mockImplementation((request) =>
+      new URL(request.url).pathname.endsWith("/project/SYN/statuses")
+        ? Promise.resolve(
+            response([
+              {
+                id: "10001",
+                name: "Story",
+                statuses: [{ id: "3", name: "Fini" }, { name: "No id" }],
+              },
+            ]),
+          )
+        : jiraGet(request),
+    );
+    const plain = parseJiraIssueTemplate(lines());
+    if (!plain.ok) throw new TypeError("Expected a parseable template");
+    const digest = jiraTemplateBindingDigest(INSTANCE, plain.template, {
+      issueTypeId: "10001",
+      transitionStatusIds: [statusId],
+    });
+    const markdown = lines(
+      'issueTypeId: "10001"',
+      `transitionStatusIds: ["${statusId}"]`,
+      `jiraBinding: "${digest}"`,
+    );
+    const result = await handleValidateJiraTemplate(
+      context(f.cookie, { podId: POD, markdown }),
+      f.deps,
+    );
+    return result.body;
+  }
+
+  it("does not report transitions as checked or the template as a clean match", async () => {
+    expect(await checked("9")).toMatchObject({ findings: [], checked: { transitions: false } });
+  });
+
+  it("still reports transitions as checked when the partial list shows the bound id", async () => {
+    expect(await checked("3")).toMatchObject({ findings: [], checked: { transitions: true } });
+  });
+});
+
+// PR #4464 owner review: a screen that could not be read leaves its field references unverified, so
+// validation neither judges them by the global catalog nor reports the field check complete.
+describe("validation when the selected screen could not be read", () => {
+  const markdown = [
+    "---",
+    "keiko: jira-issue-template",
+    "version: 1",
+    "project: SYN",
+    "issueType: Story",
+    "activateOn: [create]",
+    "summaryMinLength: 4",
+    "parentField: Anchor",
+    "---",
+    "# Story template",
+  ].join("\n");
+  const storyTypes: readonly { id: string; name: string }[] = [
+    { id: "10001", name: "Story", subtask: false } as { id: string; name: string },
+  ];
+  async function validated(
+    screen: "healthy" | "denied",
+    projectTypes: readonly { id: string; name: string }[] = storyTypes,
+  ): Promise<{ checked?: unknown }> {
+    const f = fixture({ projectTypes });
+    f.http.mockImplementation((request) => {
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/field"))
+        return Promise.resolve(
+          response([
+            { id: "parent", name: "Parent" },
+            {
+              id: "customfield_10014",
+              name: "Epic Link",
+              schema: { type: "any", custom: "com.pyxis.greenhopper.jira:gh-epic-link" },
+            },
+            {
+              id: "customfield_10015",
+              name: "Anchor",
+              schema: { type: "any", custom: "com.atlassian.jpo:jpo-custom-field-parent" },
+            },
+          ]),
+        );
+      if (!path.includes("createmeta")) return jiraGet(request, projectTypes);
+      return Promise.resolve(
+        screen === "denied"
+          ? response({}, 403)
+          : response({
+              values: [{ ...field("customfield_10015", "any", true), name: "Anchor" }],
+              startAt: 0,
+              maxResults: 100,
+              isLast: true,
+              total: 1,
+            }),
+      );
+    });
+    const result = await handleValidateJiraTemplate(
+      context(f.cookie, { podId: POD, markdown }),
+      f.deps,
+    );
+    return result.body as { checked?: unknown };
+  }
+
+  it("reports a healthy screen as checked with no finding", async () => {
+    expect(await validated("healthy")).toMatchObject({ findings: [], checked: { fields: true } });
+  });
+
+  it("judges nothing by the global field's relation type and reports the field check incomplete", async () => {
+    expect(await validated("denied")).toMatchObject({ findings: [], checked: { fields: false } });
+  });
+
+  // Audit of the round above: a screen that was never read, because the project offers no type the
+  // template governs, proves no more than one that failed to read.
+  it("reports the field check incomplete when no governed type leaves a screen to read", async () => {
+    const body = await validated("healthy", [{ id: "10002", name: "Bug" }]);
+    expect(body.checked).toMatchObject({ fields: false });
   });
 });

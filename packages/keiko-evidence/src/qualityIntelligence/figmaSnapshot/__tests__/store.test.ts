@@ -8,10 +8,11 @@ import {
   readdirSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EvidenceReadError, EvidenceWriteError } from "../../../errors.js";
 import {
@@ -268,22 +269,19 @@ describe("createNodeFigmaSnapshotStore", () => {
     const outside = mkdtempSync(join(tmpdir(), "figma-snapshot-substore-"));
     try {
       symlinkSync(outside, join(dir, QI_SUBDIR), "dir");
-      const store = createNodeFigmaSnapshotStore(dir);
+      const reportFailure = vi.fn();
+      const store = createNodeFigmaSnapshotStore(dir, { reportFailure });
 
       expect(() => store.record(baseInput())).toThrow(/symlink/u);
       expect(() => readFileSync(join(outside, `${RUN_ID}.figma-snapshot.json`), "utf8")).toThrow();
+      expect(reportFailure.mock.calls).toEqual([["orphan-sweep"], ["retention"]]);
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
   });
 
-  it("refuses a symlinked side-file root before staging any screen bytes", (ctx) => {
+  it("refuses a symlinked side-file root before writing any screen bytes", (ctx) => {
     if (process.platform === "win32") ctx.skip();
-    // mkdirSync(recursive) silently FOLLOWS a symlink at the figma-snapshots segment while creating
-    // the deeper `.attempt-*` directory under it, and writeSideFile's own lstat/realpath check then
-    // only inspects that deeper, genuinely-real component -- never the symlinked ancestor. Without
-    // validating the side-file base itself, pre-planted evidence input redirects every staged PNG
-    // outside the evidence tree while the JSON record still commits under qi/.
     const outside = mkdtempSync(join(tmpdir(), "figma-snapshot-sidebase-"));
     try {
       mkdirSync(join(dir, QI_SUBDIR), { recursive: true });
@@ -291,7 +289,6 @@ describe("createNodeFigmaSnapshotStore", () => {
       const store = createNodeFigmaSnapshotStore(dir);
 
       expect(() => store.record(baseInput())).toThrow(EvidenceWriteError);
-      // Nothing escaped: no attempt directory, and no PNG bytes, outside the evidence tree.
       expect(readdirSync(outside)).toHaveLength(0);
       expect(existsSync(snapshotFile())).toBe(false);
     } finally {
@@ -472,37 +469,26 @@ describe("createNodeFigmaSnapshotStore", () => {
     });
   });
 
-  // KEIKO-0416: updateUserMetadata must derive its target management path from the AUTHENTICATED
-  // request runId, not from the record's own (possibly tampered) `runId` field. Today the store
-  // routes the write through `containedManagementPath(record.runId, ...)`, so a snapshot whose
-  // on-disk `runId` was flipped to a different valid uuid causes the update to land under the
-  // WRONG filename, silently clobbering an unrelated run's metadata while the caller's own update
-  // becomes unreadable (loadUserMetadata validates the embedded runId matches the requested key).
-  it("writes updateUserMetadata under the requested runId even when record.runId was tampered (KEIKO-0416)", () => {
+  // KEIKO-0416: a metadata update must never land under the run ID a record claims for itself
+  // instead of the authenticated request run ID, or it clobbers an unrelated run's metadata. The
+  // pin used to accept such a tampered record and write under the requested run ID; the store now
+  // refuses the record outright, so the update is refused too. That is stricter, not looser: no
+  // management file is written under either run ID, and the tampered record is never listed.
+  it("refuses a record stored under a different run ID and writes no metadata (KEIKO-0416)", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     store.record(baseInput());
-    // Tamper the persisted record.runId to a different valid uuid — kept schema-valid so the
-    // snapshot still loads (the integrity hash is over screens + version, not record.runId).
     const raw = readSnapshotFile();
     raw.runId = RUN_ID_2;
     writeSnapshotFile(raw);
 
-    const metadata = store.updateUserMetadata(RUN_ID, {
-      displayName: "Rebranded",
-      updatedAt: "2026-06-19T12:00:00.000Z",
-    });
-
-    expect(metadata).toEqual({
-      displayName: "Rebranded",
-      updatedAt: "2026-06-19T12:00:00.000Z",
-    });
-    // File lands under the AUTHENTICATED runId's derived path, not under the tampered runId.
-    expect(lstatSync(snapshotManagementFile(RUN_ID), { throwIfNoEntry: false })?.isFile()).toBe(
-      true,
+    expect(() => store.loadMetadata(RUN_ID)).toThrow(EvidenceReadError);
+    expect(store.listRecent()).toEqual([]);
+    expect(store.listByScope("KEY123", "0:1")).toEqual([]);
+    expect(() => store.updateUserMetadata(RUN_ID, { displayName: "Renamed" })).toThrow(
+      EvidenceReadError,
     );
     expect(lstatSync(snapshotManagementFile(RUN_ID_2), { throwIfNoEntry: false })).toBeUndefined();
-    // And loadUserMetadata(runIdA) finds the update — closes the "unreadable to the caller" leg.
-    expect(store.loadUserMetadata(RUN_ID)).toEqual(metadata);
+    expect(lstatSync(snapshotManagementFile(RUN_ID), { throwIfNoEntry: false })).toBeUndefined();
   });
 
   it("does not overwrite a record that appears between the write-once precheck and final commit", () => {
@@ -525,102 +511,104 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(readFileSync(snapshotFile(), "utf8")).toBe(existing);
   });
 
-  it("keeps a committed record loadable when a losing concurrent record() cleans up", () => {
-    // A double-submit of the same runId races two record() calls. The write-once JSON commit picks
-    // one winner; the loser must not take the winner's image side-files with it on the way out,
-    // and must not have overwritten their bytes on the way in (KEIKO-0110).
-    const winner = createNodeFigmaSnapshotStore(dir);
-    const loserScreens = baseInput().screens.map((screen, index) => ({
-      ...screen,
-      image: { mimeType: "image/png" as const, bytes: png(200 + index) },
-    }));
-    let committed: ReturnType<FigmaSnapshotStore["record"]> | undefined;
-    const loser = createNodeFigmaSnapshotStore(dir, {
+  it("reserves a single image directory for concurrent writers and keeps it through a sweep", () => {
+    const competingWriter = createNodeFigmaSnapshotStore(dir);
+    let competed = false;
+    const store = createNodeFigmaSnapshotStore(dir, {
       randomSuffix: () => {
-        // The winning attempt commits its record (and its side-files) while this attempt is
-        // between its own side-file writes and its write-once commit.
-        committed ??= winner.record(baseInput());
-        return "race";
+        if (!competed) {
+          competed = true;
+          __resetFigmaSnapshotSweepRegistryForTests();
+          expect(() => competingWriter.record(baseInput())).toThrow(EvidenceWriteError);
+        }
+        return "owner";
       },
     });
 
-    expect(() => loser.record({ ...baseInput(), screens: loserScreens })).toThrow(
-      EvidenceWriteError,
-    );
-
-    const loaded = loadOrThrow(winner, RUN_ID);
-    expect(loaded.screens).toHaveLength(2);
-    // load() re-verifies each side-file's sha256, so a deleted or clobbered PNG throws here.
-    const first = firstScreen(loaded);
-    expect(first.image.sha256).toBe(
-      createHash("sha256")
-        .update(Buffer.from(png(10)))
-        .digest("hex"),
-    );
-    expect(readFileSync(join(committed?.sideFileDir ?? "", first.image.relativePath))).toEqual(
-      Buffer.from(png(10)),
-    );
+    store.record(baseInput());
+    expect(loadOrThrow(store, RUN_ID).screens).toHaveLength(2);
   });
 
-  it("rolls back the committed record when installing its side-files throws", async () => {
-    // The record commits before its side-files are moved into place (KEIKO-0110's fix); if that
-    // install step throws, the committed record must not survive pointing at missing images.
-    // Durable writes elsewhere in the same call chain (the staged PNGs, the record's own
-    // write-once commit) ALSO rename through a temp file, so the fault is scoped to exactly the
-    // publish rename: its source is the attempt-private staging directory (basename `.attempt-*`),
-    // which no other renameSync call in this store ever passes.
+  it("publishes the JSON only after both image files are available", async () => {
     vi.resetModules();
     const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
     vi.doMock("node:fs", () => ({
       ...actualFs,
       default: actualFs,
-      renameSync: (source: string, destination: string): void => {
-        if (basename(dirname(source)).startsWith(".attempt-")) {
-          throw new Error("simulated cross-device rename failure");
-        }
-        actualFs.renameSync(source, destination);
+      linkSync: (source: string, destination: string): void => {
+        const runDir = join(dir, "qi", "figma-snapshots", RUN_ID);
+        expect(readdirSync(runDir)).toEqual(["screen-0000.png", "screen-0001.png"]);
+        expect(existsSync(destination)).toBe(false);
+        actualFs.linkSync(source, destination);
       },
     }));
     const { createNodeFigmaSnapshotStore: createStore } = await import("../store.js");
 
     const store = createStore(dir);
-    expect(() => store.record(baseInput())).toThrow("simulated cross-device rename failure");
-    expect(existsSync(snapshotFile())).toBe(false);
+    store.record(baseInput());
+    expect(loadOrThrow(store, RUN_ID).screens).toHaveLength(2);
   });
 
-  it("rolls back the committed record when the staged side-files vanish before publish", () => {
-    // The orphan sweep (a concurrent store instance's OWN lazy first-use sweep) has no way to
-    // distinguish an abandoned attempt from one that is still in flight -- neither has a committed
-    // record yet -- so it can legitimately race and delete an in-flight attempt's staging
-    // directory moments before this attempt tries to publish it. For a non-empty snapshot (screens
-    // WERE staged), a missing staging directory at publish time must fail closed, not silently
-    // leave the just-committed record referencing images that were never installed.
-    //
-    // baseInput() has exactly 2 screens, so randomSuffix is called twice while staging them (once
-    // per writeSideFile) before the 3rd call, for the record's own atomicWriteOnce temp file --
-    // exactly when staging has finished but publish has not yet run. Deleting the REAL staging
-    // directory then (rather than mocking node:fs) reproduces the race without touching any other
-    // lstatSync call in the same code path. The staging directory's own name is a real UUID (not
-    // derived from randomSuffix), so it is located by listing sideFileBase for the sole entry
-    // staging ever creates there: the `.attempt-*` directory.
-    const sideFileBase = join(dir, "qi", "figma-snapshots");
+  it.skipIf(process.platform === "win32")(
+    "keeps images after the published record's directory sync fails",
+    async () => {
+      vi.resetModules();
+      const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+      let published = false;
+      vi.doMock("node:fs", () => ({
+        ...actualFs,
+        default: actualFs,
+        linkSync: (source: string, destination: string): void => {
+          actualFs.linkSync(source, destination);
+          published = true;
+        },
+        fsyncSync: (fd: number): void => {
+          if (published) throw new Error("simulated directory sync failure");
+          actualFs.fsyncSync(fd);
+        },
+      }));
+      const { createNodeFigmaSnapshotStore: createStore } = await import("../store.js");
+
+      const store = createStore(dir);
+      expect(() => store.record(baseInput())).toThrow("Figma snapshot was published");
+      expect(loadOrThrow(store, RUN_ID).screens).toHaveLength(2);
+    },
+  );
+
+  it("fails before publication if a written image disappears", () => {
     let calls = 0;
     const store = createNodeFigmaSnapshotStore(dir, {
       randomSuffix: () => {
         calls += 1;
-        if (calls === 3) {
-          const attemptDir = readdirSync(sideFileBase).find((name) => name.startsWith(".attempt-"));
-          if (attemptDir !== undefined) {
-            rmSync(join(sideFileBase, attemptDir), { recursive: true, force: true });
-          }
-        }
-        return `race-${String(calls)}`;
+        if (calls === 3) rmSync(join(dir, "qi", "figma-snapshots", RUN_ID, "screen-0000.png"));
+        return `write-${String(calls)}`;
       },
     });
 
     expect(() => store.record(baseInput())).toThrow(EvidenceWriteError);
     expect(existsSync(snapshotFile())).toBe(false);
-    expect(existsSync(sideFileBase) ? readdirSync(sideFileBase) : []).not.toContain(RUN_ID);
+  });
+
+  it("redacts and reloads a Figma tree at its maximum normalized depth", () => {
+    const input = baseInput();
+    let root = node("leaf", PLANTED_SECRET);
+    for (let level = 0; level < 512; level += 1) {
+      root = node(`layer-${String(level)}`, "Frame", [root]);
+    }
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...input,
+      screens: [
+        {
+          screenId: "1:1",
+          irJson: { root },
+          integrityHash: STALE_SCREEN_HASH,
+          image: { mimeType: "image/png", bytes: png(10) },
+        },
+      ],
+    });
+    expect(loadOrThrow(store, RUN_ID).redactionSummary.stringsRedacted).toBe(1);
+    expect(readFileSync(snapshotFile(), "utf8")).not.toContain(PLANTED_SECRET);
   });
 
   it("redacts secrets out of the persisted IR content (token never on disk)", () => {
@@ -764,6 +752,27 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(loaded.artifactHashes?.metrics).toMatch(/^[0-9a-f]{64}$/u);
   });
 
+  it("uses only coverage verified by the complete stored-record hash", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const coverage = {
+      screenCount: 3,
+      screensDeepFetched: 2,
+      screensTruncated: 1,
+      nodeCount: 12,
+      fetchCount: 5,
+      capped: true,
+    };
+    store.record({ ...baseInput(), coverage });
+    expect(store.loadMetadata(RUN_ID)?.coverage).toEqual(coverage);
+
+    const { contentHash, ...raw } = readSnapshotFile();
+    writeSnapshotFile({ ...raw, contentHash, coverage: { ...coverage, capped: false } });
+    expect(() => store.loadMetadata(RUN_ID)).toThrow("Figma snapshot stored content hash mismatch");
+
+    writeSnapshotFile(raw);
+    expect(store.loadMetadata(RUN_ID)?.coverage).toBeUndefined();
+  });
+
   it("rejects a record whose links artifact was tampered after persist", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     store.record({
@@ -837,7 +846,7 @@ describe("createNodeFigmaSnapshotStore", () => {
 
     const raw = readSnapshotFile();
     const legacy = Object.fromEntries(
-      Object.entries(raw).filter(([key]) => key !== "artifactHashes"),
+      Object.entries(raw).filter(([key]) => key !== "artifactHashes" && key !== "contentHash"),
     );
     writeSnapshotFile(legacy);
 
@@ -916,6 +925,18 @@ describe("createNodeFigmaSnapshotStore — integrity check on load", () => {
     expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);
   });
 
+  it("verifies saved styling even when the drift hash deliberately excludes it", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+    const raw = readSnapshotFile();
+    const screen = rawScreens(raw)[0];
+    const ir = screen?.irJson as { root: Record<string, unknown> };
+    ir.root.layout = { mode: "horizontal" };
+    writeSnapshotFile(raw);
+
+    expect(() => store.loadMetadata(RUN_ID)).toThrow("Figma snapshot stored content hash mismatch");
+  });
+
   it("rejects a record whose persisted image sha256 was tampered after persist", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     store.record(baseInput());
@@ -969,6 +990,7 @@ describe("createNodeFigmaSnapshotStore — orphan side-dir cleanup", () => {
     const sideBase = join(qiDir, "figma-snapshots");
     const orphanDir = join(sideBase, RUN_ID);
     rmSync(join(qiDir, `${RUN_ID}.figma-snapshot.json`), { force: true });
+    utimesSync(orphanDir, 0, 0);
 
     // GEN-PERF-PERSISTENCE-010: the priming `store` already swept+stamped this dir; clear the
     // module registry so `store2` (a LATER request) sweeps on first use, as before amortisation.
@@ -1008,6 +1030,25 @@ describe("createNodeFigmaSnapshotStore — listByScope", () => {
   it("returns [] when no snapshots exist yet", () => {
     const store = createNodeFigmaSnapshotStore(dir);
     expect(store.listByScope("KEY123", "0:1")).toEqual([]);
+  });
+
+  it("orders scope and recent records by the represented instant", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const base = baseInput();
+    store.record({
+      ...base,
+      provenance: { ...base.provenance, fetchedAt: "2026-06-19T09:45:00Z" },
+    });
+    store.record({
+      ...base,
+      runId: RUN_ID_2,
+      provenance: { ...base.provenance, fetchedAt: "2026-06-19T10:00:00+01:00" },
+    });
+    expect(store.listRecent()).toEqual([RUN_ID, RUN_ID_2]);
+    expect(store.listByScope("KEY123", "0:1").map(({ runId }) => runId)).toEqual([
+      RUN_ID,
+      RUN_ID_2,
+    ]);
   });
 
   it("returns only records matching the requested fileKey+nodeId, newest first", () => {
@@ -1057,17 +1098,17 @@ describe("createNodeFigmaSnapshotStore — listByScope", () => {
     expect(results[0]?.integrityHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("skips an unparseable record silently (does not throw)", () => {
-    const store = createNodeFigmaSnapshotStore(dir);
+  it("skips an unparseable record and reports its failure stage without file details", () => {
+    const reportFailure = vi.fn();
+    const store = createNodeFigmaSnapshotStore(dir, { reportFailure });
     store.record(baseInput());
 
     // Plant a corrupt JSON file.
     const qiDir = join(dir, "qi");
     writeFileSync(join(qiDir, `${RUN_ID_2}.figma-snapshot.json`), "not json", "utf8");
 
-    expect(() => store.listByScope("KEY123", "0:1")).not.toThrow();
-    // Only the valid record is returned.
     expect(store.listByScope("KEY123", "0:1")).toHaveLength(1);
+    expect(reportFailure.mock.calls).toEqual([["read-header"]]);
   });
 
   it("skips symlinked record files when scanning a scope", () => {
@@ -1140,6 +1181,37 @@ describe("createNodeFigmaSnapshotStore — listRecent", () => {
     expect(store.listRecent()).toEqual([RUN_ID_2, RUN_ID_3, RUN_ID]);
     expect(store.listRecent(2)).toEqual([RUN_ID_2, RUN_ID_3]);
     expect(store.listRecent(0)).toEqual([RUN_ID_2, RUN_ID_3, RUN_ID]);
+  });
+
+  it("keeps a record with an empty provenance version readable and listed", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const base = baseInput();
+    store.record({ ...base, provenance: { ...base.provenance, version: "" } });
+
+    expect(loadOrThrow(store, RUN_ID).provenance.version).toBe("");
+    expect(store.listRecent()).toEqual([RUN_ID]);
+    expect(store.listByScope("KEY123", "0:1").map(({ runId }) => runId)).toEqual([RUN_ID]);
+  });
+
+  // Regression (#2723 review finding), relocated from the route with the listing it pins: records
+  // captured at the same instant are ordered by ascending run ID, never by the directory order.
+  it("orders records captured at the same instant by ascending run ID", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    const base = baseInput();
+    for (const [runId, fetchedAt] of [
+      [RUN_ID_3, "2026-06-19T10:00:00.000Z"],
+      [RUN_ID, "2026-06-19T11:00:00+01:00"],
+      [RUN_ID_2, "2026-06-19T10:00:00Z"],
+    ] as const) {
+      store.record({ ...base, runId, provenance: { ...base.provenance, fetchedAt } });
+    }
+
+    expect(store.listRecent()).toEqual([RUN_ID, RUN_ID_2, RUN_ID_3]);
+    expect(store.listByScope("KEY123", "0:1").map(({ runId }) => runId)).toEqual([
+      RUN_ID,
+      RUN_ID_2,
+      RUN_ID_3,
+    ]);
   });
 
   it("skips unparseable snapshot files silently", () => {

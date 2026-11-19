@@ -5,10 +5,9 @@ import type { FigmaScopedResult } from "../figmaConnector.js";
 import type { FigmaHttpPort } from "../figmaHttpPort.js";
 import type { FigmaRenderPort } from "../figmaRenderPort.js";
 import { resnapshotFigma, type ResnapshotFigmaDeps } from "../figmaResnapshot.js";
+import { fixturePng as png } from "./figmaRenderFixture.js";
 
 const URL_OK = "https://www.figma.com/design/KEY123/Board?node-id=12-34&t=abc";
-
-const png = (seed: number): Uint8Array => new Uint8Array([0x89, 0x50, 0x4e, 0x47, seed]);
 
 const scopedResult = (): FigmaScopedResult => ({
   nodes: { id: "12:34", name: "Release", type: "FRAME", children: [] },

@@ -82,6 +82,28 @@ is downloaded at start. The nested form (`--layout nested`) carries the archive 
 `portable-in-place` and `provisioned-config` suites of `keiko-cli`. The operator guide is
 [`docs/release/standalone-folder-package.md`](docs/release/standalone-folder-package.md).
 
+Every stable `latest` release carries the generic package of each desktop target. The assemble job of
+`portable-assets.yml` builds them with `scripts/build-folder-release-assets.mjs`, and the publisher
+uploads them in the same draft as the archives (`scripts/lib/folder-package-release.mjs`). Keep the
+dot before the form in a package name (`keiko-<target>.standalone.zip`): shipped updaters read
+every dot-free `keiko-*.zip` asset as an update archive, so a hyphenated name stops every update.
+Run `scripts/__tests__/folder-package-release.test.mjs`, which checks the names against the
+updater, and `scripts/__tests__/build-folder-release-assets.test.mjs`.
+
+### npm folder package
+
+The npm folder package (ADR-0121 D9) carries a portable archive's Node.js runtime and a pinned
+lockfile; its first start installs Keiko into the folder with `npm ci --ignore-scripts` from the
+registry the folder's `.npmrc` names. `scripts/build-standalone-npm-package.mjs` builds it; the start
+logic and start files live in `scripts/standalone/npm/`. A change here must keep three things true:
+nothing is written outside the folder and the state directory, no install script runs, and every
+package npm downloads carries a public-registry sha512 integrity. Run
+`scripts/__tests__/build-standalone-npm-package.test.mjs`,
+`scripts/__tests__/standalone-npm-runtime.test.mjs` and
+`scripts/__tests__/standalone-npm-install.test.mjs`, which runs the real npm against a loopback
+registry inside an enclosing workspace. The operator guide is
+[`docs/release/standalone-npm-package.md`](docs/release/standalone-npm-package.md).
+
 ### Activity Log runtime changes
 
 What a person reads and what the model receives lose only the credential floor by default (owner
