@@ -90,17 +90,37 @@ function validTermGroups(groups) {
   );
 }
 
+// Walks a list whose entries are objects with a unique, non-empty name: refuses the first entry that
+// is no object, has no name or repeats one, and hands every other entry to `check`.
+function eachUniquelyNamed(id, list, { label, nameField, duplicate }, check) {
+  const seen = new Set();
+  list.forEach((entry, index) => {
+    const where = `${label}[${String(index)}]`;
+    if (!isRecord(entry)) fail(id, `${where} must be an object`);
+    const name = entry[nameField];
+    if (!nonEmptyString(name)) fail(id, `${where}.${nameField} is required`);
+    if (seen.has(name)) fail(id, duplicate(where, name));
+    seen.add(name);
+    check(entry, where);
+  });
+}
+
+// Keys name the facts a probe needs, a link and a verdict point at: two facts with one key would
+// collapse into the first, and an answer carrying only its term would pass `needs`.
+const TRUTH_NAMES = {
+  label: "truth",
+  nameField: "key",
+  duplicate: (where, key) => `${where}.key "${key}" duplicates an earlier truth`,
+};
+const PROBE_NAMES = {
+  label: "probes",
+  nameField: "id",
+  duplicate: (where, probeId) => `${where}.id duplicates ${probeId}`,
+};
+
 function validateTruth(id, truth) {
   if (!Array.isArray(truth)) fail(id, "truth must be an array");
-  const seen = new Set();
-  truth.forEach((fact, index) => {
-    const where = `truth[${String(index)}]`;
-    if (!isRecord(fact)) fail(id, `${where} must be an object`);
-    if (!nonEmptyString(fact.key)) fail(id, `${where}.key is required`);
-    // Keys name the facts a probe needs, a link and a verdict point at: two facts with one key would
-    // collapse into the first, and an answer carrying only its term would pass `needs`.
-    if (seen.has(fact.key)) fail(id, `${where}.key "${fact.key}" duplicates an earlier truth`);
-    seen.add(fact.key);
+  eachUniquelyNamed(id, truth, TRUTH_NAMES, (fact, where) => {
     if (!nonEmptyString(fact.seed))
       fail(id, `${where}.seed (exact body for the oracle) is required`);
     if (typeof fact.must !== "boolean") fail(id, `${where}.must must be a boolean`);
@@ -316,13 +336,7 @@ function validatePoison(id, poison) {
 
 function validateProbes(id, probes, keys) {
   if (!Array.isArray(probes) || probes.length === 0) fail(id, "probes must be a non-empty array");
-  const seen = new Set();
-  probes.forEach((probe, index) => {
-    const where = `probes[${String(index)}]`;
-    if (!isRecord(probe)) fail(id, `${where} must be an object`);
-    if (!nonEmptyString(probe.id)) fail(id, `${where}.id is required`);
-    if (seen.has(probe.id)) fail(id, `${where}.id duplicates ${probe.id}`);
-    seen.add(probe.id);
+  eachUniquelyNamed(id, probes, PROBE_NAMES, (probe, where) => {
     if (!nonEmptyString(probe.question)) fail(id, `${where}.question is required`);
     if (probe.language !== undefined && !PROBE_LANGUAGES.includes(probe.language))
       fail(id, `${where}.language must be one of ${PROBE_LANGUAGES.join("|")} when present`);
