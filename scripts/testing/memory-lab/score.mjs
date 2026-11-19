@@ -579,15 +579,30 @@ function scoreAnswerProbe(scenario, probe, answer, supplied, links) {
   };
 }
 
+// The answer to an abstain probe that applies a fact to the object the probe asks about: one unit that
+// carries every forbidden group. The person's own fact may stay named in the answer (`allow`), so the
+// groups name the foreign object and the value together, and a negation anywhere in the unit
+// ("Dana prefers morning meetings, not afternoon") does not excuse it. Unlike an answer probe this
+// holds whether or not a memory reached the model: an abstain probe asks for no value at all.
+function abstainAsserts(probe, answer) {
+  const forbidden = probe.expect.forbidden;
+  return (
+    forbidden !== undefined &&
+    answerUnits(answer).some((unit) => matchesTermGroups(unit, forbidden))
+  );
+}
+
 // An abstention negates and states no value: an answer that carries a credential- or
 // identifier-shaped value asserted one, whatever else it says.
 function scoreAbstainProbe(scenario, probe, answer, supplied) {
   const leakage = suppliedLeakage(scenario, probe, answer, supplied);
   const valueStated = valueShapeFindings(answer).length > 0;
   const abstained = containsAbstention(answer) && !valueStated;
+  const asserted = abstainAsserts(probe, answer);
   return {
-    passed: abstained && !leakage.leaked,
+    passed: abstained && !asserted && !leakage.leaked,
     abstained,
+    asserted,
     valueStated,
     leaked: leakage.leaked,
     leakedInSupplied: leakage.inSupplied,

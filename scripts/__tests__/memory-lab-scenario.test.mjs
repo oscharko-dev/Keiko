@@ -164,12 +164,17 @@ describe("memory lab scenario format", () => {
   });
 
   it("refuses forbidden terms on a probe that cannot measure them", () => {
+    // An abstain probe measures them since the near-miss audit (F2); a no-memory probe still cannot.
     const probes = [
-      { id: "p", question: "q", expect: { kind: "abstain", forbidden: [["Tabellen"]] } },
+      { id: "p", question: "q", expect: { kind: "no-memory", forbidden: [["Tabellen"]] } },
     ];
     expect(() => validateScenario({ ...valid(), probes })).toThrow(
-      /only measured on an answer probe/u,
+      /only measured on an answer or abstain probe/u,
     );
+    const abstain = [
+      { id: "p", question: "q", expect: { kind: "abstain", forbidden: [["Tabellen"]] } },
+    ];
+    expect(() => validateScenario({ ...valid(), probes: abstain })).not.toThrow();
   });
 
   it("measures the form of an answer on an answer probe only, and knows two forms and languages", () => {

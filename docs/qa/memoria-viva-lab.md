@@ -188,7 +188,11 @@ An `answer` probe passes when its terms are present and no forbidden term counts
 `expect.forbidden`, and the scenario's forgotten and forbidden facts, under the rules above). An
 `abstain` probe passes when the answer abstains and no true, superseded, forgotten or forbidden fact
 of the scenario leaks; a probe may `allow` true facts by key, so the person's own preference, supplied
-when a colleague's is asked for, is no leak. A `no-memory` probe passes when nothing was retrieved
+when a colleague's is asked for, is no leak. An `abstain` probe may also name `forbidden` groups, the
+foreign assignment it exists to catch: it fails when one sentence or list item of the answer carries
+every group ("Dana prefers morning meetings, not afternoon"), with or without a memory supplied and
+whatever negation the sentence also holds. The near-miss probes use it, because `allow` alone would
+leave them measuring phrasing. A `no-memory` probe passes when nothing was retrieved
 for it and nothing leaked.
 
 What reached the model is the standing profile together with the retrieved memories; the lab reads
@@ -389,7 +393,8 @@ fail-closed by `scenario.mjs`):
   optional `memory: false` for a turn written with memory off.
 - `probes[]`: questions asked in new chats with an `expect` of kind `answer`, `abstain` or
   `no-memory`; an `answer` probe names its `terms` and optional `forbidden` groups, an `abstain` or
-  `no-memory` probe may `allow` true facts by key (the person's own fact, asked for a colleague's). An
+  `no-memory` probe may `allow` true facts by key (the person's own fact, asked for a colleague's), and
+  an `abstain` probe may name `forbidden` groups for the foreign assignment. An
   `answer` probe may instead (or also) name `needs` and `earlier`, see below.
 - `seed`: a store placed in the vault before the first turn, see "Seeding a store".
 

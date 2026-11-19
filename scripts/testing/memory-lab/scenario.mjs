@@ -311,8 +311,8 @@ function validateExpectation(id, where, expect, keys) {
     fail(id, `${where}.expect.kind must be one of ${PROBE_KINDS.join("|")}`);
   validateAnswerTerms(id, where, expect);
   validateWanted(id, where, expect, { needs: keys.truth, earlier: keys.superseded });
-  if (expect.forbidden !== undefined && expect.kind !== "answer")
-    fail(id, `${where}.expect.forbidden is only measured on an answer probe`);
+  if (expect.forbidden !== undefined && expect.kind !== "answer" && expect.kind !== "abstain")
+    fail(id, `${where}.expect.forbidden is only measured on an answer or abstain probe`);
   if (expect.forbidden !== undefined && !validTermGroups(expect.forbidden))
     fail(id, `${where}.expect.forbidden must be term groups when present`);
   validateFormats(id, where, expect);

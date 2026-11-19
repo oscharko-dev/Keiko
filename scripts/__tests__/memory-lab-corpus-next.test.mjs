@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { REPO_ROOT } from "../testing/coding-workbench-lab/lab-common.mjs";
 import { SCENARIO_CLASSES, loadScenarioDirectory } from "../testing/memory-lab/scenario.mjs";
+import { scoreProbe } from "../testing/memory-lab/score.mjs";
 
 const NEXT = join(REPO_ROOT, "scripts", "testing", "memory-lab", "scenarios-next");
 // One scenario class per family; the two seeded demonstrations belong to the existing classes.
@@ -128,5 +129,87 @@ describe("the next corpus", () => {
     }
     const archived = scenarios.find((entry) => entry.id === "scale-archiviert-de").seed.filler;
     expect(archived.reduce((sum, group) => sum + group.count, 0)).toBeGreaterThan(500);
+  });
+});
+
+describe("the near-miss abstain probes", () => {
+  // The answers the audit executed through the scorer (F2): each applies the stored fact to the
+  // foreign object while carrying a negation, which is all an abstain probe used to ask for.
+  const CASES = [
+    {
+      id: "near-miss-kollege-en",
+      probe: "colleague",
+      wrong: [
+        "Dana prefers morning meetings, not afternoon.",
+        "Your colleague prefers morning meetings.",
+      ],
+      right: [
+        "I don't know what Dana prefers.",
+        "I have nothing about your colleague. You told me you prefer morning meetings.",
+      ],
+    },
+    {
+      id: "near-miss-berichte-de",
+      probe: "sales",
+      wrong: [
+        "Für Berichte an den Vertrieb nutzt du Tabellen, nicht Fließtext.",
+        "Berichte an den Vertrieb bekommst du als Tabelle, nicht anders.",
+      ],
+      right: [
+        "Dazu habe ich keine Vorgabe für den Vertrieb.",
+        "Für den Vertrieb weiss ich nichts. Für Projektstatus bevorzugst du Tabellen.",
+      ],
+    },
+    {
+      id: "near-miss-grenze-de",
+      probe: "other-object",
+      wrong: [
+        "Für Kreditanträge gilt eine Grenze von 5.000 Euro, nicht mehr.",
+        "Die Genehmigungsgrenze für Kreditanträge beträgt 5000 Euro, nicht weniger.",
+      ],
+      right: [
+        "Für Kreditanträge ist mir keine Grenze genannt worden.",
+        "Zu Kreditanträgen weiss ich nichts. Für Überweisungen nanntest du 5.000 Euro.",
+      ],
+    },
+    {
+      id: "near-miss-projekt-de",
+      probe: "other-project",
+      wrong: [
+        "Im Projekt Borealis habt ihr euch für PostgreSQL entschieden, nicht für MySQL.",
+        "Borealis nutzt Postgres, nicht etwas anderes.",
+      ],
+      right: [
+        "Zu Borealis habe ich keine Entscheidung gespeichert.",
+        "Über Borealis weiss ich nichts. Für Atlas habt ihr PostgreSQL gewählt.",
+      ],
+    },
+  ];
+
+  it.each(CASES)(
+    "$id: fails the answer it exists to catch, passes a correct abstention",
+    (spec) => {
+      const scenario = scenarios.find((entry) => entry.id === spec.id);
+      const probe = scenario.probes.find((entry) => entry.id === spec.probe);
+      // The seeded memory reached the model, as it does when recall admits it on a shared word.
+      const supplied = scenario.seed.records.map((record, index) => ({
+        memoryId: `m${String(index)}`,
+        bodyExcerpt: record.body,
+      }));
+      for (const answer of spec.wrong)
+        expect(scoreProbe(scenario, probe, answer, supplied).passed, answer).toBe(false);
+      // The probe asks for no value, so the assertion fails it with no memory supplied as well.
+      expect(scoreProbe(scenario, probe, spec.wrong[0], []).passed).toBe(false);
+      for (const answer of spec.right)
+        expect(scoreProbe(scenario, probe, answer, supplied).passed, answer).toBe(true);
+    },
+  );
+
+  it("says in its description what the two probes measure", () => {
+    for (const { id } of CASES) {
+      const description = scenarios.find((entry) => entry.id === id).description;
+      expect(description, id).not.toMatch(/usually fail together/u);
+      expect(description, id).toMatch(/measure different things and can fail apart/u);
+    }
   });
 });

@@ -4,7 +4,7 @@
   "id": "near-miss-kollege-en",
   "language": "en",
   "class": "near-miss",
-  "description": "The person's own meeting-time preference, asked about for a colleague. Limit: recall admits a memory that shares one informative word with the question, with no check whose preference it is. Failure means: no-abstention or memory-on-unrelated-question; the person's own preference is supplied for a colleague's question. The abstain and the no-memory probe share one cause (a memory admitted on one shared word), so they usually fail together. Maintenance: run with maintenance on or off; the seeded record is younger than 94 days. Kind: defect.",
+  "description": "The person's own meeting-time preference, asked about for a colleague. Limit: recall admits a memory that shares one informative word with the question, with no check whose preference it is. Failure means: no-abstention or memory-on-unrelated-question; the person's own preference is supplied for a colleague's question. The abstain probe fails on an answer that applies the stored fact to the other object, whatever else it says; the no-memory probe fails only when a memory is retrieved at all, so the two measure different things and can fail apart. Maintenance: run with maintenance on or off; the seeded record is younger than 94 days. Kind: defect.",
   "seed": {
     "records": [
       {
@@ -33,7 +33,8 @@
       "question": "What meeting time did I tell you my colleague Dana prefers?",
       "expect": {
         "kind": "abstain",
-        "allow": ["pref"]
+        "allow": ["pref"],
+        "forbidden": [["Dana", "colleague"], ["morning"]]
       }
     },
     {
