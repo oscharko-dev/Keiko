@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 418,
-  "completeClassCount": 418,
+  "supportedClassCount": 420,
+  "completeClassCount": 420,
   "completeness": "complete",
   "classes": [
     {
@@ -27709,6 +27709,138 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "figma-snapshot",
+      "requirementContract": "figma-snapshot",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["end", "failure"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": ["figma.snapshot.captured"],
+        "failure": ["figma.snapshot.capture-failed"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "figma.snapshot.capture-failed",
+          "mode": "correlation"
+        },
+        {
+          "op": "figma.snapshot.captured",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["figma.snapshot.captured"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "figma.snapshot.capture-failed",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "code",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "resnapshot",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "stage",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["figma.snapshot.capture-failed.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "figma.snapshot.captured",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "invalidRenderCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "rateLimitDeferredCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "renderBudgetSkipCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "renderedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "scopeCapped",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "scopedFetchCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "skippedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "truncatedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["figma.snapshot.captured.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "gateway-alias-intersection",
       "requirementContract": "gateway-alias-intersection",
       "productSurfaces": ["keiko-server"],
@@ -40014,6 +40146,68 @@
       "completeness": "complete"
     },
     {
+      "failureClass": "launch-order-fence",
+      "requirementContract": "launch-order-fence",
+      "productSurfaces": ["keiko-cli"],
+      "lifecycleTransitions": ["end"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": ["cli.lifecycle.launch-order"],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "cli.lifecycle.launch-order",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["cli.lifecycle.launch-order"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "cli.lifecycle.launch-order",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "process-lifecycle",
+          "safeContextFields": [
+            {
+              "name": "command",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "failureKind",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["cli.lifecycle.launch-order.outcome"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
       "failureClass": "legacy-update-audit-import",
       "requirementContract": "legacy-update-audit-import",
       "productSurfaces": ["keiko-cli"],
@@ -40657,6 +40851,12 @@
               "required": true
             },
             {
+              "name": "projectCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "proposalCount",
               "type": "integer",
               "dataClass": "count",
@@ -40666,6 +40866,12 @@
               "name": "refusalReason",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "statusCount",
+              "type": "integer",
+              "dataClass": "count",
               "required": false
             },
             {

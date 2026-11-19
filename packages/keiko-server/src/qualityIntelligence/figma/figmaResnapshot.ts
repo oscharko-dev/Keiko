@@ -55,6 +55,7 @@ export const resnapshotFigma = async (
     token: deps.token,
     imagesPort: deps.imagesPort,
     renderPort: deps.renderPort,
+    ...(scoped.verifyRevision === undefined ? {} : { verifyRevision: scoped.verifyRevision }),
     ...(deps.batchSize !== undefined ? { batchSize: deps.batchSize } : {}),
     ...(deps.maxImageBytes !== undefined ? { maxImageBytes: deps.maxImageBytes } : {}),
     ...(deps.downloadConcurrency !== undefined

@@ -2687,7 +2687,56 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.starter.title": "Jira starter templates",
   "chat.skills.jira.starter.connect": "Activate a Jira Pod to use the starter templates.",
   "chat.skills.jira.starter.edit":
-    "Open a starter template and complete the project key and issue type under Metadata (YAML).",
+    "Open a starter template and select its project and issue type in the editor.",
+  "chat.skills.jira.form.title": "Jira metadata",
+  "chat.skills.jira.form.project": "Jira project",
+  "chat.skills.jira.form.issueType": "Issue type",
+  "chat.skills.jira.form.chooseProject": "Select a project",
+  "chat.skills.jira.form.chooseType": "Select an issue type",
+  "chat.skills.jira.form.projectHelp": "Choose where this template applies.",
+  "chat.skills.jira.form.typeHelp": "The list uses Jira’s names for the selected project.",
+  "chat.skills.jira.form.unmatchedType":
+    "Jira did not match “{subject}”. Select the intended type from the list.",
+  "chat.skills.jira.form.connect": "Connect a Jira Pod to load projects and issue types.",
+  "chat.skills.jira.form.loading": "Loading from Jira…",
+  "chat.skills.jira.form.empty": "Jira returned no options.",
+  "chat.skills.jira.form.projectMissing":
+    "This Jira Pod could not find or open the selected project.",
+  "chat.skills.jira.form.readFailed": "Could not load options from Jira.",
+  "chat.skills.jira.form.detailsUnavailable":
+    "Some fields or statuses could not be read from Jira.",
+  "chat.skills.jira.form.retry": "Try again",
+  "chat.skills.jira.form.rules": "Template rules",
+  "chat.skills.jira.form.onWrite": "Apply when creating and editing issues",
+  "chat.skills.jira.form.activationRequired": "Choose when this template applies.",
+  "chat.skills.jira.form.addStatus": "Apply on entering a status",
+  "chat.skills.jira.form.anyStatus": "Any status change",
+  "chat.skills.jira.form.statusHelp": "Select a target status to check when an issue enters it.",
+  "chat.skills.jira.form.addField": "Add required field",
+  "chat.skills.jira.form.selectForFields": "Select an issue type to load its fields.",
+  "chat.skills.jira.form.fieldsHelp": "Choose fields this template requires.",
+  "chat.skills.jira.form.requiredByJira": "{subject} (required by Jira)",
+  "chat.skills.jira.form.choose": "Select an option",
+  "chat.skills.jira.form.remove": "Remove {subject}",
+  "chat.skills.jira.form.notOffered": "{subject} (not offered for this issue type)",
+  "chat.skills.jira.form.sharedName":
+    "{subject} (several fields share this name; write its id in the metadata to use it)",
+  "chat.skills.jira.form.statusNotChoosable":
+    "{subject} (a numeric status name cannot be chosen here)",
+  "chat.skills.jira.form.statusShared":
+    "{subject} (several statuses share this name; write it in the metadata to use it)",
+  "chat.skills.jira.form.typeNotPortable":
+    "{subject} (no unique name for this type; write it in the metadata to use it)",
+  "chat.skills.jira.form.instanceLocalName":
+    "{subject} (an instance-local id, not a portable name; write it in the metadata to use it)",
+  "chat.skills.jira.form.rulesInvalid":
+    "The metadata text does not read as a template right now, so the rules cannot be changed here; fix the metadata text first.",
+  "chat.skills.jira.form.rulesLocked":
+    "The rules are bound to a Jira that is not readable right now; change them in the metadata text or reconnect.",
+  "chat.skills.jira.form.fieldCatalogUnknown":
+    "{subject} (Jira's full field list could not be read, so this name cannot be checked; write it in the metadata to use it)",
+  "chat.skills.jira.form.invalid":
+    "Correct the rules in the text below; the choices follow again once they read correctly.",
   "chat.skills.jira.starter.epic":
     "## Objective\n\nDescribe the goal of the epic.\n\n## Scope\n\nList the work included.\n\n## Acceptance criteria\n\nDescribe how to verify the goal is met.",
   "chat.skills.jira.starter.issue":
@@ -2706,7 +2755,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.check.transitions": "workflow statuses",
   "chat.skills.jira.finding.unknown-project": "Project {subject} does not exist or is not visible.",
   "chat.skills.jira.finding.unknown-issue-type":
-    "Issue type {subject} does not exist in the project.",
+    "Jira could not match “{subject}” to an issue type in this project. Select the issue type in Jira metadata.",
   "chat.skills.jira.finding.unknown-field":
     "Field {subject} does not exist. Writes it governs will be refused.",
   "chat.skills.jira.finding.ambiguous-field":
@@ -3842,6 +3891,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "figmaSnapshotWindow.error.generic.unknownDetail": "An unexpected error occurred.",
   "figmaSnapshotWindow.error.openTokenSettings": "Open Figma access token settings",
   "figmaSnapshotWindow.error.runIdClearedSuffix": "The stored run ID has been cleared.",
+  "figmaSnapshotWindow.error.sourceChanged":
+    "The Figma file changed during capture. Retry the snapshot or use a link to a specific version.",
   "figmaSnapshotWindow.error.tokenAttention.remediation":
     "Open the Figma access token settings to add or rotate the read-only token, then retry. No snapshot was stored.",
   "figmaSnapshotWindow.error.tokenAttention.title": "Figma access token needs attention",
@@ -6084,6 +6135,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "figmaJson.ui.figmaJson": "Figma JSON",
   "figmaJson.ui.copyJson": "Copy JSON",
   "figmaJson.ui.loadingJson": "Loading JSON…",
+  "figmaJson.ui.loadFailed": "Failed to load the selected Figma JSON.",
+  "figmaJson.ui.missingReference": "Missing Figma JSON source reference.",
   "figmaImage.ui.imagePreviewIsUnavailable": "Image preview is unavailable.",
   "resourceLimits.ui.resourceLimitDecisions": "Resource-limit decisions",
   "relationshipPanel.ui.referenceId": "Reference id: {id}",

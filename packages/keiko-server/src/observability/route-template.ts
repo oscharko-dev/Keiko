@@ -79,7 +79,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set(
     "jira-drafts jira-reports jira-templates jobs journey json language local local-branch " +
     "local-history local-knowledge local-session lsp maintenance manual-citation manual-pods mark-ready mcp " +
     "servers chat-write-approval memory merge messages model-policy models " +
-    "native-file-dialog navigate open open-browser operations order orphans packs pair " +
+    "native-file-dialog navigate open open-browser operations options order orphans packs pair " +
     "patch-apply pause pin policy pr pr-description preflight preview producer profile " +
     "profiles projects prompt-enhancement proposals propose prove pull push " +
     "quality-intelligence questions re-check read readiness recap reconciliation " +

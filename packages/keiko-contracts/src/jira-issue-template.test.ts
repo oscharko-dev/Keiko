@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   compileJiraTemplatePattern,
   describeJiraTemplateParseErrors,
+  editJiraTemplateForm,
   isJiraIssueTemplateDocument,
+  isPortableJiraIssueTypeName,
+  isPortableJiraTemplateText,
   jiraIssueTemplateLabel,
   jiraTemplatePatternIssue,
   mentionsJiraIssueTemplateMarker,
   normalizeJiraSectionHeading,
   parseJiraIssueTemplate,
+  readJiraTemplateForm,
 } from "./jira-issue-template.js";
 
 function template(frontMatter: readonly string[], body = "# Story\n\n## Context\nWhy.\n"): string {
@@ -15,6 +19,156 @@ function template(frontMatter: readonly string[], body = "# Story\n\n## Context\
 }
 const MINIMAL = ["keiko: jira-issue-template", "version: 1", "project: abc", "issueType: Story"];
 const VALID = [...MINIMAL, "activateOn: [create]"];
+
+describe("guided Jira template metadata", () => {
+  it("reads blank draft selections and preserves unrelated block rules and comments during edits", () => {
+    const frontMatter = [
+      ...VALID.slice(0, 2),
+      'project: ""',
+      'issueType: ""',
+      "activateOn: [create]",
+      "requiredFields:",
+      "  - description",
+      "  # Preserve this comment.",
+      "  - summary",
+      "requiredLabels: [approved]",
+      "parentField: parent",
+    ].join("\n");
+    expect(readJiraTemplateForm(frontMatter)).toEqual({
+      project: "",
+      issueType: "",
+      activateOn: ["create"],
+      requiredFields: ["description", "summary"],
+    });
+    const edited = editJiraTemplateForm(frontMatter, {
+      project: "ABC",
+      issueType: 'Aufgabe "Fachlich"',
+      requiredFields: ["customfield_10000"],
+    });
+    expect(edited).toContain("  # Preserve this comment.");
+    expect(parseJiraIssueTemplate(template(edited.split("\n")))).toMatchObject({
+      ok: true,
+      template: {
+        project: "ABC",
+        issueType: 'Aufgabe "Fachlich"',
+        requiredFields: ["customfield_10000"],
+        labels: { required: ["approved"] },
+        parent: { field: "parent" },
+      },
+    });
+  });
+
+  it("drops every binding line with a project or issue type edit, and keeps it for a rule edit", () => {
+    const bound = [
+      ...VALID,
+      "requiredFields: [Team]",
+      'issueTypeId: "10002"',
+      'parentIssueTypeIds: ["10000"]',
+      'requiredFieldIds: ["customfield_1"]',
+      'parentFieldId: "customfield_2"',
+      "transitionStatusIds:",
+      '  - "3"',
+      `jiraBinding: "${"a".repeat(32)}"`,
+      "# Keep this comment.",
+    ].join("\n");
+    const bindingLine =
+      /issueTypeId|parentIssueTypeIds|requiredFieldIds|parentFieldId|transitionStatusIds|jiraBinding/u;
+    for (const patch of [{ project: "OTHER" }, { issueType: "Bug" }]) {
+      const edited = editJiraTemplateForm(bound, patch);
+      expect(edited).not.toMatch(bindingLine);
+      expect(edited).not.toContain('  - "3"');
+      expect(edited).toContain("requiredFields: [Team]");
+      expect(edited).toContain("# Keep this comment.");
+    }
+    const rules = editJiraTemplateForm(bound, { requiredFields: ["Team", "Owner"] });
+    expect(rules).toContain('issueTypeId: "10002"');
+    expect(rules).toContain(`jiraBinding: "${"a".repeat(32)}"`);
+  });
+
+  it("realigns the bound ids with an edited rule list, so an untouched rule keeps its own id (u5a)", () => {
+    const bound = [
+      ...VALID,
+      "requiredFields: [Team, Owner]",
+      'issueTypeId: "10002"',
+      'requiredFieldIds: ["customfield_1","customfield_2"]',
+      "transitionStatusIds:",
+      '  - "3"',
+      `jiraBinding: "${"a".repeat(32)}"`,
+    ].join("\n");
+    const added = editJiraTemplateForm(bound, { requiredFields: ["Team", "Owner", "Risk"] });
+    expect(added).toContain('requiredFieldIds: ["customfield_1","customfield_2","none"]');
+    const removed = editJiraTemplateForm(bound, { requiredFields: ["Owner"] });
+    expect(removed).toContain('requiredFieldIds: ["customfield_2"]');
+    const reordered = editJiraTemplateForm(bound, { requiredFields: ["Owner", "Team"] });
+    expect(reordered).toContain('requiredFieldIds: ["customfield_2","customfield_1"]');
+    const emptied = editJiraTemplateForm(bound, { requiredFields: [] });
+    expect(emptied).not.toContain("requiredFieldIds");
+    expect(emptied).toContain('issueTypeId: "10002"');
+  });
+
+  it("keeps the binding when a patch sets the project or type to the value it already has", () => {
+    const bound = [...VALID, 'issueTypeId: "10002"', `jiraBinding: "${"a".repeat(32)}"`].join("\n");
+    const same = editJiraTemplateForm(bound, { project: "abc", issueType: "Story" });
+    expect(same).toContain('issueTypeId: "10002"');
+    expect(same).toContain(`jiraBinding: "${"a".repeat(32)}"`);
+  });
+
+  it("removes every repeated binding line when the project changes, not only the first (u5j)", () => {
+    const doubled = [
+      ...VALID,
+      'issueTypeId: "10002"',
+      'issueTypeId: "10003"',
+      "requiredFieldIds:",
+      '  - "a"',
+      "requiredFieldIds:",
+      '  - "b"',
+    ].join("\n");
+    const edited = editJiraTemplateForm(doubled, { project: "OTHER" });
+    expect(edited).not.toContain("issueTypeId");
+    expect(edited).not.toContain("requiredFieldIds");
+    expect(edited).not.toMatch(/- "[ab]"/u);
+    expect(edited.match(/^project:/gmu)).toHaveLength(1);
+  });
+
+  it("splits lines like the strict parser: a bare carriage return ends a line (u5T)", () => {
+    const bare = VALID.join("\r");
+    expect(readJiraTemplateForm(bare)).toMatchObject({ project: "abc", issueType: "Story" });
+    const edited = editJiraTemplateForm(bare, { project: "XYZ" });
+    expect(edited.match(/project:/gu)).toHaveLength(1);
+    expect(readJiraTemplateForm(edited)?.project).toBe("XYZ");
+    expect(edited).not.toContain("\n");
+  });
+
+  it("keeps the CRLF line endings of every metadata line, edited or not (u56)", () => {
+    const crlf = [...VALID, "requiredFields: [Team]", "# Keep me.", "requiredLabels: [a]"].join(
+      "\r\n",
+    );
+    const edited = editJiraTemplateForm(crlf, { requiredFields: ["Team", "Owner"] });
+    expect(edited).not.toMatch(/(?<!\r)\n/u);
+    expect(edited).toContain(
+      'requiredFields: ["Team","Owner"]\r\n# Keep me.\r\nrequiredLabels: [a]',
+    );
+    const appended = editJiraTemplateForm(crlf, { activateOn: ["create", "edit"] });
+    expect(appended).not.toMatch(/(?<!\r)\n/u);
+  });
+
+  it("appends new lines directly after a front matter that ends with a line ending", () => {
+    for (const ending of ["\n", "\r\n"]) {
+      const text = VALID.join(ending) + ending;
+      const edited = editJiraTemplateForm(text, { requiredFields: ["Team"] });
+      expect(edited).not.toContain(`${ending}${ending}`);
+      expect(edited.startsWith(text)).toBe(true);
+      expect(edited.endsWith(ending)).toBe(true);
+      expect(edited).toContain(`requiredFields: ["Team"]`);
+    }
+  });
+
+  it("leaves malformed or unrelated metadata to the source editor", () => {
+    expect(readJiraTemplateForm("name: Example")).toBeUndefined();
+    expect(readJiraTemplateForm([...VALID, 'project: ""'].join("\n"))).toBeUndefined();
+    expect(readJiraTemplateForm([...VALID, "malformed"].join("\n"))).toBeUndefined();
+  });
+});
 
 function failure(markdown: string): readonly { code: string; key?: string; line?: number }[] {
   const result = parseJiraIssueTemplate(markdown);
@@ -304,5 +458,34 @@ describe("the template pattern grammar", () => {
   it("matches the way the lead wrote it", () => {
     expect(compileJiraTemplatePattern("^[A-Z][a-z ]+$").test("Add login")).toBe(true);
     expect(compileJiraTemplatePattern("^[A-Z][a-z ]+$").test("add login")).toBe(false);
+  });
+});
+
+// PRRT_kwDOSqilAM65BHdB / PRRT_kwDOSqilAM65BHeJ: what a pick writes must survive the strict reader and
+// must not be taken for a native id on another Jira.
+describe("portable template text", () => {
+  it("refuses an issue type name another Jira would read as a native id", () => {
+    expect(isPortableJiraIssueTypeName("Bug")).toBe(true);
+    expect(isPortableJiraIssueTypeName("31")).toBe(false);
+    expect(isPortableJiraIssueTypeName(" 31 ")).toBe(false);
+    // Not a native id (leading zero, beyond int64): the matcher keeps it as a name.
+    expect(isPortableJiraIssueTypeName("031")).toBe(true);
+    expect(isPortableJiraIssueTypeName("9223372036854775808")).toBe(true);
+  });
+
+  it("admits only text the writer round-trips through the strict reader", () => {
+    const tabbed = "Bug\tfix";
+    expect(isPortableJiraIssueTypeName(tabbed)).toBe(false);
+    expect(
+      parseJiraIssueTemplate(
+        template([...VALID.slice(0, 3), `issueType: ${tabbed}`, VALID[4] ?? ""]),
+      ),
+    ).toMatchObject({
+      ok: false,
+    });
+    expect(isPortableJiraTemplateText("   ")).toBe(false);
+    expect(isPortableJiraTemplateText("")).toBe(false);
+    expect(isPortableJiraTemplateText("x".repeat(121))).toBe(false);
+    expect(isPortableJiraTemplateText("Done")).toBe(true);
   });
 });

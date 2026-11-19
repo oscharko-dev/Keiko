@@ -36,6 +36,7 @@ import {
   type FigmaSourceNode,
 } from "./sourceNode.js";
 import { firstSolidPaintHex, isVisiblePaint } from "./color.js";
+import { readLegacyTransitionTarget, readNavigationTarget } from "./links.js";
 import type {
   AlignItems,
   BoundingBox,
@@ -81,9 +82,7 @@ const readImageFills = (node: FigmaSourceNode): readonly ImageFillRef[] => {
 const actionHasNavigationTarget = (action: unknown): boolean => {
   const record = asNode(action);
   if (record === undefined) return false;
-  if (readString(record.destinationId) !== undefined) return true;
-  const nav = asNode(record.navigation);
-  if (nav !== undefined && readString(nav.destinationId) !== undefined) return true;
+  if (readNavigationTarget(record) !== undefined) return true;
   return readString(record.type) === "URL" && readString(record.url) !== undefined;
 };
 
@@ -110,7 +109,8 @@ const navigates = (node: FigmaSourceNode): boolean => {
   const reactions = readArray(node.reactions);
   return (
     interactions.some(interactionHasNavigationTarget) ||
-    reactions.some(interactionHasNavigationTarget)
+    reactions.some(interactionHasNavigationTarget) ||
+    readLegacyTransitionTarget(node) !== undefined
   );
 };
 

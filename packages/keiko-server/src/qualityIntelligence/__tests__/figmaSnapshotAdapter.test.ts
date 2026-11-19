@@ -291,7 +291,11 @@ describe("makeFigmaSnapshotLoader — resolveLatestByScope", () => {
     }
   });
 
-  it("keeps the pinned record when the newest same-scope record has the same hash (no false drift)", () => {
+  // The former pin kept the pinned record on equal hashes to avoid false drift. The legacy hash
+  // omits prototype links and accessibility metadata QI reads (ADR-0037 D6), so equal hashes can
+  // hide a real change. "No false drift" is now pinned where drift is decided: an unchanged
+  // re-snapshot yields identical atom ids and fingerprints (runIngestionFigmaSnapshot.test.ts).
+  it("loads the newest same-scope record even when the legacy integrity hashes match", () => {
     const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-same-"));
     try {
       record(dir, "fs-old", "2026-01-01T00:00:00.000Z", "gleich");
@@ -299,7 +303,7 @@ describe("makeFigmaSnapshotLoader — resolveLatestByScope", () => {
       const loader = makeFigmaSnapshotLoader(depsWith({ evidenceDir: dir }), {
         resolveLatestByScope: true,
       });
-      expect(loader?.("fs-old")?.runId).toBe("fs-old");
+      expect(loader?.("fs-old")?.runId).toBe("fs-new");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -318,17 +322,11 @@ describe("makeFigmaSnapshotLoader — resolveLatestByScope", () => {
     }
   });
 
-  it("falls back to the pinned record when the newest record fails to load (TOCTOU ?? pinned)", () => {
-    // Arrange: write two snapshots with different content so drift is detected (newest ≠ pinned).
-    // Then tamper the newest record file so store.load("fs-new") returns undefined (schema-invalid)
-    // while listByScope still lists it as newest (parseScopeEntry is header-only, no schema check).
-    // This exercises the `?? pinned` fallback on adapter line 68.
-    //
-    // Tamper mechanism: inject an unknown top-level key into the on-disk JSON — this trips the
-    // ALLOWED_TOP_LEVEL_KEYS guard in validateFigmaSnapshotRecord(), which returns {ok:false},
-    // so loadOp returns undefined WITHOUT throwing (the outer catch is NOT involved).
-    // parseScopeEntry reads only provenance.{fileKey,nodeId,fetchedAt}, runId, and integrityHash —
-    // all of which remain intact — so listByScope still returns "fs-new" as the most-recent entry.
+  // The former pin fell back to the pinned record here, which reported "fresh" against a record
+  // that failed validation: a false fresh verdict. Re-check must still never crash; it now fails
+  // closed, the loader returns undefined and the caller answers QI_FIGMA_SNAPSHOT_UNAVAILABLE
+  // (ADR-0037 D6).
+  it("reports the latest record unavailable when the indexed record fails validation", () => {
     const dir = mkdtempSync(join(tmpdir(), "qi-figma-adapter-toctou-"));
     try {
       record(dir, "fs-old", "2026-01-01T00:00:00.000Z", "alt");
@@ -337,24 +335,17 @@ describe("makeFigmaSnapshotLoader — resolveLatestByScope", () => {
       // Tamper fs-new on disk by injecting an unknown top-level key.
       const recordFile = join(dir, "qi", "fs-new.figma-snapshot.json");
       const raw = JSON.parse(readFileSync(recordFile, "utf8")) as Record<string, unknown>;
-      raw.__tampered__ = true; // unknown key → validateFigmaSnapshotRecord fails → load() = undefined
+      raw.__tampered__ = true;
       writeFileSync(recordFile, JSON.stringify(raw), "utf8");
 
-      // Pre-condition verification: store.load("fs-new") must return undefined (not throw),
-      // and listByScope must still return "fs-new" as the first (newest) entry.
       const store = createNodeFigmaSnapshotStore(dir);
-      expect(store.load("fs-new")).toBeUndefined();
+      expect(() => store.load("fs-new")).toThrow();
       expect(store.listByScope("KEY", "0:1")[0]?.runId).toBe("fs-new");
 
-      // Act: loader with resolveLatestByScope detects drift (fs-new's hash ≠ fs-old's hash via
-      // listByScope header) and tries store.load("fs-new") → undefined → falls back via ?? pinned.
       const loader = makeFigmaSnapshotLoader(depsWith({ evidenceDir: dir }), {
         resolveLatestByScope: true,
       });
-
-      // Assert: fallback to the pinned record (fs-old), not undefined, not fs-new.
-      // The invariant: drift detection MUST degrade to "fresh", never crash the re-check.
-      expect(loader?.("fs-old")?.runId).toBe("fs-old");
+      expect(loader?.("fs-old")).toBeUndefined();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -404,6 +395,8 @@ describe("makeFigmaVisionHintProvider", () => {
         },
       };
       const deps = depsWith({
+        contentRedaction: "preserve",
+        redactor: (value: unknown): unknown => value,
         config: configWith([
           capability("vision-low", {
             supportsImageInput: true,
@@ -422,11 +415,12 @@ describe("makeFigmaVisionHintProvider", () => {
           screenId: screen.screenId,
           image: screen.image,
           imageRelativePath: screen.image.relativePath,
-          baselineText: "Screen: Login [s1]",
+          baselineText: "Screen: Login [s1]\nIBAN DE89 3704 0044 0532 0130 00",
         }),
       ).resolves.toEqual(["Primary CTA is visually disabled"]);
 
       expectStructuredVisionRequest(seenRequests);
+      expect(seenRequests[0]?.messages[1]?.content).not.toContain("DE89 3704");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

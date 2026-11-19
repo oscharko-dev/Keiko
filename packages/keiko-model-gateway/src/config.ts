@@ -1903,7 +1903,7 @@ function parseProviderConfig(
     ...tokenCounterConfig(raw.tokenCounter, path),
     ...providerReasoningConfig(raw, path),
     ...deploymentIdentityConfig(raw.deploymentIdentitySha256, path),
-    ...catalogOriginConfig(raw.catalogOrigin, path),
+    ...providerOriginMarks(raw, path),
     timeoutMs: requireTimerDelayMs(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
     ...timeoutNamedMarker(raw),
     maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
@@ -2084,9 +2084,41 @@ function parseRerankerConfig(
     apiKey,
     apiKeyHeaderName: rerankerHeaderName(block, env),
     timeoutMs: rerankerTimeoutMs(block, env),
+    ...rerankerCredentialOrigin(block.credentialOrigin),
     ...(egress !== undefined ? { egress } : {}),
   };
   return config;
+}
+
+function providerOriginMarks(
+  raw: Record<string, unknown>,
+  path: string,
+): Pick<ModelProviderConfig, "catalogOrigin" | "credentialOrigin"> {
+  return {
+    ...catalogOriginConfig(raw.catalogOrigin, path),
+    ...providerCredentialOrigin(raw.credentialOrigin, path),
+  };
+}
+
+function providerCredentialOrigin(
+  value: unknown,
+  path: string,
+): Pick<ModelProviderConfig, "credentialOrigin"> {
+  if (value === undefined) return {};
+  return {
+    credentialOrigin: requireEnum<"gateway-connection">(value, `${path}.credentialOrigin`, [
+      "gateway-connection",
+    ]),
+  };
+}
+
+function rerankerCredentialOrigin(value: unknown): Pick<RerankerConfig, "credentialOrigin"> {
+  if (value === undefined) return {};
+  return {
+    credentialOrigin: requireEnum<"gateway-connection">(value, "reranker.credentialOrigin", [
+      "gateway-connection",
+    ]),
+  };
 }
 
 function parseFigmaConnectorConfig(raw: unknown): FigmaConnectorConfig | undefined {

@@ -206,7 +206,10 @@ describe("connected-chat explicit transport deadline", () => {
       session.request("GET", "/api/oversized", undefined, {
         timeoutMs: 5000,
       }),
-    ).rejects.toThrow("gateway response exceeded the size limit");
+    ).rejects.toMatchObject({
+      name: "GatewayResponseBodyValidationError",
+      validation: "size-exceeded",
+    });
     await (
       await receipt
     ).closed;

@@ -24,8 +24,16 @@ function cleanString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
-function isSafeFigmaImageSrc(value: string): boolean {
-  return /^\/api\/figma\/snapshots\/[^/?#]+\/screens\/\d+\/image$/u.test(value);
+export function isSafeFigmaImageSrc(value: string, snapshotRunId?: string): boolean {
+  const match =
+    /^\/api\/figma\/snapshots\/([A-Za-z0-9_-][A-Za-z0-9._-]{0,255})\/screens\/(0|[1-9]\d*)\/image$/u.exec(
+      value,
+    );
+  return (
+    match?.[0] === value &&
+    Number.isSafeInteger(Number(match[2])) &&
+    (snapshotRunId === undefined || match[1] === snapshotRunId)
+  );
 }
 
 export function serializeFigmaImageDrag(payload: FigmaImageDragPayload): string {
@@ -49,7 +57,7 @@ export function parseFigmaImageDrag(
       screenId === null ||
       name === null ||
       imageSrc === null ||
-      !isSafeFigmaImageSrc(imageSrc)
+      !isSafeFigmaImageSrc(imageSrc, snapshotRunId)
     ) {
       return null;
     }
