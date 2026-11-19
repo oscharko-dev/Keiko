@@ -4,7 +4,7 @@
   "id": "scale-archiviert-de",
   "language": "de",
   "class": "scale-window",
-  "description": "A valid, recently used project fact that is older than 550 archived rows of the same scope, next to a recent control fact. Limit: the read window per scope is 500 rows applied before eligibility, so retired rows crowd out an old valid one. Failure means: the target never reaches the model although it is accepted and reinforced; the control probe passing shows the window, not retrieval, is the cause. Maintenance: run with maintenance on or off; the seeded accepted records are reinforced or younger than 94 days, so maintenance does not archive them.",
+  "description": "A valid, recently used project fact that is older than 550 archived rows of the same scope, next to a recent control fact. Limit: the read window per scope is 500 rows applied before eligibility, so retired rows crowd out an old valid one. Failure means: the target never reaches the model although it is accepted and reinforced; the control probe passing shows the window, not retrieval, is the cause. Maintenance: run with maintenance on or off; the seeded accepted records are reinforced or younger than 94 days, so maintenance does not archive them. Kind: defect.",
   "seed": {
     "records": [
       {
@@ -45,7 +45,7 @@
       "key": "window",
       "seed": "Das Release-Fenster der Kreditplattform ist freitags ab 18 Uhr.",
       "must": false,
-      "terms": [["Freitag*"]]
+      "terms": [["Freitag*"], ["18"]]
     },
     {
       "key": "retro",
@@ -61,7 +61,7 @@
       "question": "Wann ist das Release-Fenster der Kreditplattform?",
       "expect": {
         "kind": "answer",
-        "terms": [["Freitag*"]]
+        "terms": [["Freitag*"], ["18"]]
       }
     },
     {
