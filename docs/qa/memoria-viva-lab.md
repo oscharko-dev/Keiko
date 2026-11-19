@@ -549,7 +549,7 @@ and `chatRetrievedCount` (the chat's limit on retrieved memories, and how many i
 `{key, id, suppliedByChat, position, scoreRank, omittedReason, carrierCount, stage}`.
 
 The wanted facts are the truths a probe `needs`, the values it asks for `earlier`, and, for a probe
-that expects answer `terms`, the truth whose terms are exactly those terms (the last kind is followed
+that expects answer `terms`, the truth whose terms the probe's terms cover (the last kind is followed
 by the trace only; the score never sees it). `id` is the stored memory that carries the fact, found by
 the rule the scorer uses (`score.mjs`: the seeded link, or the terms of the fact); `null` means **no
 stored body matches the fact's terms**, which is what `not-stored` says, not that the product never

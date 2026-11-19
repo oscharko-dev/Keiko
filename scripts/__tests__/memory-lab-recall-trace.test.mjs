@@ -565,6 +565,11 @@ describe("a probe that expects answer terms", () => {
     expect(result.probes[0]).not.toHaveProperty("neededNotSupplied");
   });
 
+  it("follows the truth whose terms the probe's terms cover, even when the probe accepts more", () => {
+    const wider = { ...termProbe, expect: { kind: "answer", terms: [["Birch", "birches"]] } };
+    expect(traceWanted(scenario([wider]), wider).map((item) => item.label)).toEqual(["room"]);
+  });
+
   it("follows nothing when no truth has those terms", () => {
     const other = { ...termProbe, expect: { kind: "answer", terms: [["Nothing"]] } };
     expect(traceWanted(scenario([other]), other)).toEqual([]);

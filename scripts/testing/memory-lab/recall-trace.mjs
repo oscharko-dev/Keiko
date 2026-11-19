@@ -12,7 +12,6 @@
 // is a diagnostic approximation of the chat path, not the chat path.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { listMemories } from "./instance.mjs";
 import { neededStage } from "./recall-stage.mjs";
 import { carrierIds, suppliedCarries, wantedOf } from "./score.mjs";
@@ -241,9 +240,17 @@ export function readChatRetrievalLimit(subjectRoot) {
   }
 }
 
+// Every term group of the truth is contained in a group of the probe's terms: the probe accepts at
+// least the truth's own words (and may accept more, such as an inflected form).
+function termsCovered(truthTerms, probeTerms) {
+  return truthTerms.every((group) =>
+    probeTerms.some((accepted) => group.every((term) => accepted.includes(term))),
+  );
+}
+
 /**
  * The facts a probe's trace follows: the ones it needs (`wantedOf`) and, for a probe that expects
- * answer terms, the truth whose terms are exactly those terms. The second kind exists for the trace
+ * answer terms, the truth whose terms the probe's terms cover (each of its groups is contained in one of them). The second kind exists for the trace
  * only; the score never sees it.
  */
 export function traceWanted(scenario, probe) {
@@ -251,7 +258,7 @@ export function traceWanted(scenario, probe) {
   const terms = probe.expect.terms;
   if (terms === undefined) return wanted;
   const own = scenario.truth
-    .filter((fact) => isDeepStrictEqual(fact.terms, terms))
+    .filter((fact) => termsCovered(fact.terms, terms))
     .filter((fact) => !wanted.some((item) => item.label === fact.key))
     .map((fact) => ({ label: fact.key, link: { truth: fact.key }, terms: fact.terms }));
   return [...wanted, ...own];
