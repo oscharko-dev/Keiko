@@ -410,7 +410,9 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   chain is kept whole around it. The vault keeps it whole on every delete, in the delete's own
   transaction: each surviving predecessor of a deleted record is linked to each surviving successor,
   through every other record the same transaction deletes, so a sweep, retention or maintenance that
-  removes a middle value cannot split one fact into two either. A pin that protects the live record in a Chat protects its history
+  removes a middle value cannot split one fact into two either. The bridge walks and links only records
+  of the deleted record's own scope, so a record behind a foreign-scope link is never pulled into reach
+  of a later forget. A pin that protects the live record in a Chat protects its history
   too (#4223). A maintenance pass still forgets a record whose AUTHOR-STATED validity ended, but only
   one in a status `shouldForget` forgets: `proposed`, `rejected`, `conflicted` or `expired`. An
   `accepted` or `archived` record with an ended validity is kept (recall hides it), as is a

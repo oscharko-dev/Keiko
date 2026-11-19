@@ -482,6 +482,36 @@ describe("deleting a record inside a supersession lineage (#4223)", () => {
     v.close();
   });
 
+  it("never bridges across a record of another scope", () => {
+    // A(user) -> B(project) -> C(user): C's earlier values stop at B, so deleting B must not link A
+    // to C, which would hand A to a later forget of C (ADR-0146).
+    const w = openVault(freshDir());
+    w.insertMemory(makeMemory({ id: "a" as MemoryId }));
+    w.insertMemory(
+      makeMemory({
+        id: "b" as MemoryId,
+        scope: { kind: "project", projectId: "p-1" as ProjectId },
+      }),
+    );
+    w.insertMemory(makeMemory({ id: "c" as MemoryId }));
+    for (const [from, to] of [
+      ["a", "b"],
+      ["b", "c"],
+    ] as const) {
+      w.insertEdge({
+        id: `e-${from}-${to}` as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: from as MemoryId,
+        toMemoryId: to as MemoryId,
+        kind: "supersedes",
+        createdAt: 1_700_000_000_500,
+      });
+    }
+    w.deleteMemory("b" as MemoryId, options);
+    expect(later(w, "a")).toEqual([]);
+    w.close();
+  });
+
   it("adds no edge twice and no self edge in a cycle", () => {
     const v = openVault(freshDir());
     chain(v, ["a", "b", "c"]);

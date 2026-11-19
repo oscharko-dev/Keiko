@@ -4,13 +4,20 @@
 // forget of the newest value could no longer reach them. Every delete therefore links each surviving
 // predecessor to each surviving successor first, inside the same transaction, walking through every
 // other record that transaction deletes. A forget by id, a sweep, retention and maintenance all
-// delete through here, so none of them can split one fact into two.
+// delete through here, so none of them can split one fact into two. A lineage never crosses a
+// scope: the walk only steps through and links records of the deleted record's own scope, so a
+// record behind a foreign-scope link stays out of reach of a later forget (ADR-0146).
 
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { MemoryEdgeId, MemoryId } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  scopeCoordinateKey,
+  type MemoryEdgeId,
+  type MemoryId,
+} from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
 import { insertEdgeRow, listIncomingEdgeRows, listOutgoingEdgeRows } from "./edges.js";
+import { getMemoryRow } from "./memories.js";
 
 const BRIDGE_PROVENANCE = "history kept after a delete";
 
@@ -32,22 +39,35 @@ function neighbours(
     .map((edge) => edge.toMemoryId);
 }
 
-// The records that stay, reached from `start` in one direction through records being deleted.
-function survivors(
-  db: DatabaseSync,
-  start: MemoryId,
-  direction: Direction,
-  deleting: ReadonlySet<MemoryId>,
-  cipher: MemoryContentCipher,
-): ReadonlySet<MemoryId> {
+interface Walk {
+  readonly db: DatabaseSync;
+  readonly deleting: ReadonlySet<MemoryId>;
+  readonly cipher: MemoryContentCipher;
+  /** Scope coordinate of each record read, so a lineage is checked once per record. */
+  readonly scopes: Map<MemoryId, string | undefined>;
+}
+
+function scopeOf(walk: Walk, id: MemoryId): string | undefined {
+  if (!walk.scopes.has(id)) {
+    const record = getMemoryRow(walk.db, id, walk.cipher);
+    walk.scopes.set(id, record === undefined ? undefined : scopeCoordinateKey(record.scope));
+  }
+  return walk.scopes.get(id);
+}
+
+// The records that stay, reached from `start` in one direction through records being deleted, all
+// in the scope of `start`: a record of another scope ends the walk on that path.
+function survivors(walk: Walk, start: MemoryId, direction: Direction): ReadonlySet<MemoryId> {
+  const home = scopeOf(walk, start);
   const found = new Set<MemoryId>();
   const seen = new Set<MemoryId>([start]);
   const queue: MemoryId[] = [start];
   for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
-    for (const id of neighbours(db, next, direction, cipher)) {
+    for (const id of neighbours(walk.db, next, direction, walk.cipher)) {
       if (seen.has(id)) continue;
       seen.add(id);
-      if (deleting.has(id)) queue.push(id);
+      if (home === undefined || scopeOf(walk, id) !== home) continue;
+      if (walk.deleting.has(id)) queue.push(id);
       else found.add(id);
     }
   }
@@ -63,10 +83,11 @@ export function bridgeSupersessionAcrossDeletes(
 ): number {
   let inserted = 0;
   const linked = new Set<string>();
+  const walk: Walk = { db, deleting, cipher, scopes: new Map() };
   for (const id of deleting) {
-    const later = survivors(db, id, "later", deleting, cipher);
+    const later = survivors(walk, id, "later");
     if (later.size === 0) continue;
-    for (const fromMemoryId of survivors(db, id, "earlier", deleting, cipher)) {
+    for (const fromMemoryId of survivors(walk, id, "earlier")) {
       const existing = new Set(neighbours(db, fromMemoryId, "later", cipher));
       for (const toMemoryId of later) {
         const key = `${fromMemoryId}\u0000${toMemoryId}`;
