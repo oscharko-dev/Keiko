@@ -330,18 +330,21 @@ Reading of the runs so far:
     whose second session completed is not a cause.
   - A Reviewer session that used its whole output budget after it had filed candidates: 1 review,
     the only cause there. A Reviewer session that reached the run's time limit without a candidate
-    is the second cause of one of the reviews above.
+    is the second cause of one of the reviews above; it ran in the sleep described below.
 - The failed counter-checks have one mechanism. In the session traced, the fifth turn streamed
   4,095 events, 4,093 of them reasoning, and reached its 4,096-token output budget after 311
   seconds. The gateway's steered repair ended the same way, and the session failed. The
   Counter-checker decodes about 13 tokens a second, so a turn that reasons through its budget
   costs five minutes, and two of them nearly fill the 900-second limit. 5 of the 8 checks that
   reached that limit had used 5,600 to 8,200 output tokens.
-- The other 3 checks that reached the limit waited for the model instead. One waited 694 seconds
-  for the response headers of its first call. The two others are both checks of the only blocking
-  candidate of one review: the first never received a response, the second received 719 output
-  tokens. The three settled 35 to 858 seconds after the 900-second limit, so the limit did not end
-  the model call in flight.
+- The other 3 checks that reached the limit ran while the lab machine slept with its lid closed
+  (`pmset -g log`: clamshell sleep, then sleep between short maintenance wakes on 2026-11-18). One
+  started at a maintenance wake and received its first response headers 694 seconds later, at the
+  next wake. The two others are both checks of the only blocking candidate of one review; the
+  second of them ended when the lid was opened. The run measures durations in wall time, while the
+  limit's timer does not advance during sleep, so the three settled 35 to 858 seconds past 900
+  wall-clock seconds. They measure the machine, not the Counter-checker. The review whose only
+  blocker is the candidate checked twice in that sleep is incomplete because of sleep.
 - Counter-checks: 192 sessions, counting the sessions of the reviews the pauses cut. 46 confirmed,
   124 refuted, 1 ended undecided by its own verdict, 13 failed on the model and 8 reached the time
   limit.
