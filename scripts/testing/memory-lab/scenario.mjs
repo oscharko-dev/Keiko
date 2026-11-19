@@ -105,11 +105,17 @@ function validateTruth(id, truth) {
       fail(id, `${where}.seed (exact body for the oracle) is required`);
     if (typeof fact.must !== "boolean") fail(id, `${where}.must must be a boolean`);
     if (!validTermGroups(fact.terms)) fail(id, `${where}.terms must be non-empty term groups`);
-    if (fact.private !== undefined && typeof fact.private !== "boolean")
-      fail(id, `${where}.private must be a boolean when present`);
-    if (fact.with !== undefined && !validTermGroups(fact.with))
-      fail(id, `${where}.with must be non-empty term groups when present`);
+    validateTruthOptions(id, where, fact);
   });
+}
+
+// The optional fields of a truth: `private`, and `with` (term groups that must occur in the same
+// sentence or list item as the terms, for a probe that needs the truth).
+function validateTruthOptions(id, where, fact) {
+  if (fact.private !== undefined && typeof fact.private !== "boolean")
+    fail(id, `${where}.private must be a boolean when present`);
+  if (fact.with !== undefined && !validTermGroups(fact.with))
+    fail(id, `${where}.with must be non-empty term groups when present`);
 }
 
 // A true term that occurs inside a replaced value cannot tell the old body from the new one: every
