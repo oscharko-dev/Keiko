@@ -526,6 +526,15 @@ export interface FactRelationInput {
   // The known fact the model named, when it named one.
   readonly related?: KnownFact;
   readonly known: readonly KnownFact[];
+  // The person's sentence just before the evidence. A bare remark there ("Das war falsch.") states
+  // the change the fact itself does not mention.
+  readonly remark?: string | undefined;
+}
+
+// A remark that states a change and no fact of its own: "Das war falsch.", "Korrektur:".
+function changeEvidence(evidence: string, remark: string | undefined): string {
+  if (remark === undefined || !STATED_CHANGE_RE.test(remark)) return evidence;
+  return factWords(remark).length <= MAX_SLOT_WORDS ? `${remark} ${evidence}` : evidence;
 }
 
 function keepingFixedFacts(
@@ -542,12 +551,12 @@ export function decideFactRelation(input: FactRelationInput): FactRelationDecisi
 }
 
 function relationOf(input: FactRelationInput): FactRelationDecision {
-  const { body, evidence, label, related, known } = input;
+  const { body, evidence, label, related, known, remark } = input;
   const certain = deterministicRelation(body, evidence, known);
   if (certain !== null) return certain;
   if (related === undefined) return { kind: "new" };
   if (label === "update" || label === "contradiction") {
-    return labelledChange(body, evidence, related) ?? { kind: "new" };
+    return labelledChange(body, changeEvidence(evidence, remark), related) ?? { kind: "new" };
   }
   if (label === "same" && sharesContentWord(body, related.body)) {
     return { kind: "same-unconfirmed" };

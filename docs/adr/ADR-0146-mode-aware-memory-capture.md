@@ -383,7 +383,7 @@ doubt Keiko learns too little rather than too much, because nobody approves what
 - **Relation.** The model labels `new`, `same`, `update` or `contradiction`; checks confirm it. A
   reversal, a changed number or a changed polarity replaces the older fact on its own. A new value
   in the same slot, or a stated change ("ab jetzt", "from now on"), replaces it only with the
-  model's label. A clear correction ("Das war falsch", "I meant") is a stated change; a return to
+  model's label. A clear correction ("Das war falsch", "I meant") is a stated change, also as a bare remark in the sentence just before the fact; a return to
   an earlier value ("wieder", "again") is one only for a labelled fact whose frame it repeats, never
   for a statement without a label (#4223). A shared preference verb alone is no slot, so
   "Tabellen" and "Tee" both stand.

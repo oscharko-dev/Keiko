@@ -350,6 +350,24 @@ describe("mostSimilarFacts", () => {
   });
 
   it.each([
+    ["Das war falsch.", "supersede"],
+    ["Correction:", "supersede"],
+    ["Hallo zusammen.", "new"],
+    ["Das war falsch mit dem Termin am Montag in Bonn.", "new"],
+  ])("reads the remark %s before a corrected fact (#4223)", (remark, kind) => {
+    const known = { id: "old", body: "Ich arbeite in Köln." };
+    const decision = decideFactRelation({
+      body: "Ich arbeite in Düsseldorf.",
+      evidence: "Ich arbeite in Düsseldorf.",
+      label: "contradiction",
+      related: known,
+      known: [known],
+      remark,
+    });
+    expect(decision.kind).toBe(kind);
+  });
+
+  it.each([
     ["Plays guitar", "I play guitar again", "Plays piano"],
     ["Isst Pizza", "Ich esse wieder Pizza", "Isst Pasta"],
     ["Mag Pizza", "Ich mag eigentlich Pizza", "Mag Pasta"],
