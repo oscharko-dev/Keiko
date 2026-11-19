@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -298,7 +299,7 @@ describe("download", () => {
           };
         },
       };
-      return Promise.resolve({ ok: true, body: stalledBody, headers: new Headers() });
+      return Promise.resolve({ ok: true, body: stalledBody, headers: new globalThis.Headers() });
     };
     await expect(
       download("https://example.test/a.zip", target(), { timeoutMs: 20, fetchImpl }),
@@ -310,7 +311,7 @@ describe("download", () => {
     const fetchImpl = () =>
       Promise.resolve({
         ok: true,
-        headers: new Headers(),
+        headers: new globalThis.Headers(),
         body: (async function* () {
           yield Buffer.from("abc");
         })(),

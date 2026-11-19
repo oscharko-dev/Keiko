@@ -236,16 +236,21 @@ export async function download(
   const signal = globalThis.AbortSignal.timeout(timeoutMs);
   try {
     const response = await fetchImpl(url, { redirect: "follow", credentials: "omit", signal });
-    if (!response.ok || response.body === null) refuse(`${url} answered ${response.status}`);
-    const length = Number(response.headers.get("content-length") ?? 0);
-    if (length > MAX_DOWNLOAD_BYTES) refuse(`${url} is larger than ${MAX_DOWNLOAD_BYTES} bytes`);
-    await writeBounded(response.body, destination, url);
+    await writeBounded(downloadBody(response, url), destination, url);
   } catch (error) {
     if (error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)) {
       refuse(`${url} did not finish within ${Math.round(timeoutMs / 1000)} s`);
     }
     throw error;
   }
+}
+
+// The body of an answer that may be downloaded: a success whose declared size is within the bound.
+function downloadBody(response, url) {
+  if (!response.ok || response.body === null) refuse(`${url} answered ${response.status}`);
+  const length = Number(response.headers.get("content-length") ?? 0);
+  if (length > MAX_DOWNLOAD_BYTES) refuse(`${url} is larger than ${MAX_DOWNLOAD_BYTES} bytes`);
+  return response.body;
 }
 
 async function writeBounded(body, destination, url) {

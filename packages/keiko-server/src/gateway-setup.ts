@@ -7298,25 +7298,30 @@ interface ParsedSetupConfig {
   readonly config: GatewayConfig;
 }
 
+// The proof is bound to the provider as it is stored, not to the probe's view of it. The stored
+// provider also carries what the same setup's discovery observed of the deployment behind the alias
+// (`deploymentIdentitySha256`, part of the proof's binding since #3905), and it carries the base URL
+// the test settled on. A proof bound to the probe's view never matched the saved provider: the
+// loader withdrew it the moment the configuration was read, so after every setup against a gateway
+// that reports its deployments the Coding Workbench offered no model until a person ran a check in
+// Settings. The probe ran against exactly this deployment in this setup, so the proof is its.
 function parsedSetupConfigWithToolCallingProvenance(
   input: SetupVerificationInput,
   rawConfig: Record<string, unknown>,
-  candidateConfig: GatewayConfig,
   observations: readonly GatewaySetupToolCallingObservation[],
 ): ParsedSetupConfig {
-  const rawConfigWithProvenance = withToolCallingProbeProvenance(
-    rawConfig,
-    candidateConfig,
-    observations,
-  );
-  return {
-    rawConfig: rawConfigWithProvenance,
-    config: parseGatewayConfig(
-      withInheritedEgress(rawConfigWithProvenance, input.egress),
+  const parsed = (raw: Record<string, unknown>): GatewayConfig =>
+    parseGatewayConfig(
+      withInheritedEgress(raw, input.egress),
       input.env,
       linkLocalGatewayOverrideOptions(input.env),
-    ),
-  };
+    );
+  const rawConfigWithProvenance = withToolCallingProbeProvenance(
+    rawConfig,
+    parsed(rawConfig),
+    observations,
+  );
+  return { rawConfig: rawConfigWithProvenance, config: parsed(rawConfigWithProvenance) };
 }
 
 // One retry (not zero) so a single transient blip — 429 rate-limit, brief timeout, momentary
@@ -7849,7 +7854,6 @@ function verifiedSetupFromChatAdmission(
   const parsedConfig = parsedSetupConfigWithToolCallingProvenance(
     input,
     rawConfigWithOptionalBlocks,
-    candidateConfig,
     [
       ...(testResult.toolCallingObservations ?? []),
       // Listed models no request reached carry an explicit "unverified" tool-calling record, the

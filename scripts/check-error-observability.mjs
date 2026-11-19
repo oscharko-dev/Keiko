@@ -165,6 +165,12 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "The catch bounds a hostile error classifier to the closed unknown kind before durable logging.",
     "packages/keiko-cli/src/ui.ts:runShutdownHook":
       "The caught hook failure returns as its closed kind, which the process.exiting line records.",
+    "packages/keiko-cli/src/gateway-service.ts:resolveRunHelper":
+      "The caught resolution failure is carried unchanged in HelperResolution; runAction rethrows it inside its own catch, which persists the registered helper-unavailable failure line with the error's closed kind.",
+    "packages/keiko-cli/src/node-support.ts:declaredNodeRange":
+      "An absent, unreadable or invalid own manifest declares no Node.js range; the verdict becomes the closed unknown value that process.started records as nodeSupport. Start is never refused on it.",
+    "packages/keiko-server/src/launch-directory.ts:systemName":
+      "A path the operating system cannot resolve (absent or unreadable) keeps its lexical spelling, which insideProgramFolder still compares. The predicate only adds refusals to the read surface and grants nothing.",
     "packages/keiko-activity-log/src/activity-log-readiness.ts:activityLogCatalogCoherent":
       "A formatter rejection becomes the closed catalog-mismatch reason the readiness line persists.",
     "packages/keiko-activity-log/src/server-logger.ts:isMandatoryActivityLogEvent":

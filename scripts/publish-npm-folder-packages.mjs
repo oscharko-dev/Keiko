@@ -14,6 +14,7 @@
 // A release is immutable once published, so it is created as a draft, uploaded and verified there,
 // and published last (the same order scripts/release-publish.mjs follows).
 
+import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";

@@ -145,30 +145,40 @@ const TAG = "npm-folder-1.5.3";
 // A stateful stand-in for `gh`. The release is a draft until the PATCH succeeds. `draftState` answers
 // the read after a failed publishing edit (a JSON text, or `null` for a read that fails);
 // `finalRead` shapes the read after publication ("ok", "fail" or "wrong").
-function fakeGh({
-  listed = [],
-  gitRef = { status: 1, stderr: "gh: Not Found (HTTP 404)" },
-  productDraft = false,
-  uploaded,
-  createStatus = 0,
-  createBody,
-  draftState = JSON.stringify({ draft: true }),
-  editStatus = 0,
-  uploadStatus = 0,
-  uploadMisses = 0,
-  deleteStatus = 0,
-  finalRead = "ok",
-} = {}) {
+const FAKE_GH_DEFAULTS = Object.freeze({
+  listed: [],
+  gitRef: { status: 1, stderr: "gh: Not Found (HTTP 404)" },
+  productDraft: false,
+  uploaded: undefined,
+  createStatus: 0,
+  createBody: undefined,
+  draftState: JSON.stringify({ draft: true }),
+  editStatus: 0,
+  uploadStatus: 0,
+  uploadMisses: 0,
+  deleteStatus: 0,
+  finalRead: "ok",
+});
+
+function fakeGh(options = {}) {
+  const { listed, gitRef, productDraft, uploaded, createStatus, createBody } = {
+    ...FAKE_GH_DEFAULTS,
+    ...options,
+  };
+  const { draftState, editStatus, uploadStatus, uploadMisses, deleteStatus, finalRead } = {
+    ...FAKE_GH_DEFAULTS,
+    ...options,
+  };
   const calls = [];
   const state = { published: false, editFailed: false, uploadAttempts: 0 };
+  const ok = (stdout = "") => ({ status: 0, stdout, stderr: "" });
+  const failed = { status: 1, stdout: "", stderr: "HTTP 502" };
+  const has = (args, word) => args.includes(word);
   // `uploadMisses` attempts fail first (the listing has not caught up), then `uploadStatus` decides.
   const upload = () => {
     state.uploadAttempts += 1;
     return state.uploadAttempts > uploadMisses && uploadStatus === 0 ? ok() : failed;
   };
-  const ok = (stdout = "") => ({ status: 0, stdout, stderr: "" });
-  const failed = { status: 1, stdout: "", stderr: "HTTP 502" };
-  const has = (args, word) => args.includes(word);
   const created = () =>
     createStatus === 0
       ? ok(createBody ?? JSON.stringify({ id: RELEASE_ID, tag_name: TAG, draft: true }))
