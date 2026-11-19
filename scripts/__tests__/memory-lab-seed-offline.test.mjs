@@ -63,11 +63,20 @@ describe("the seeded demonstration scenarios", () => {
 
       const needs = unit(root, "lexical", "seed-needs-two-en", "product");
       // 42 records were seeded and none of them is something the product stored.
-      expect(needs.seed).toMatchObject({ total: 42, explicit: 2, filler: 40, embedded: 0 });
+      expect(needs.seed).toMatchObject({
+        total: 42,
+        explicit: 2,
+        filler: 40,
+        embedded: 0,
+      });
       expect(needs.store.stored).toBe(0);
       expect(needs.store.verdicts).toEqual([]);
       const both = needs.probes.find((probe) => probe.id === "both");
-      expect(both).toMatchObject({ passed: true, neededMissing: [], neededNotSupplied: [] });
+      expect(both).toMatchObject({
+        passed: true,
+        neededMissing: [],
+        neededNotSupplied: [],
+      });
       expect(needs.probes.find((probe) => probe.id === "unrelated").passed).toBe(true);
 
       // The earlier value cannot be recalled: the failure says it never reached the model.
@@ -77,14 +86,28 @@ describe("the seeded demonstration scenarios", () => {
       expect(before.passed).toBe(false);
       expect(before.neededMissing).toEqual(["earlier:format-before"]);
       expect(before.neededNotSupplied).toEqual(["earlier:format-before"]);
+      const classes = summary.failureClasses;
+      expect(classes.byArm.product.total).toEqual({
+        "needed-memory-missing": 1,
+      });
+      expect(classes.byArm.product.keys["needed-memory-missing"]).toEqual([
+        "seed-earlier-value-en:product:r0:probe:before",
+      ]);
 
       // The oracle arm adds no truth the seed already placed, and its precondition still holds.
       const oracle = unit(root, "lexical", "seed-needs-two-en", "oracle");
-      expect(oracle.oracle).toMatchObject({ preconditionMet: true, extras: 0, mismatches: [] });
+      expect(oracle.oracle).toMatchObject({
+        preconditionMet: true,
+        extras: 0,
+        mismatches: [],
+      });
       expect(oracle.oracle.seeded).toEqual([]);
 
       const manifest = JSON.parse(readFileSync(join(root, "lexical", "manifest.json"), "utf8"));
-      expect(manifest.metadata).toMatchObject({ embedder: "none", embeddingModelIds: [] });
+      expect(manifest.metadata).toMatchObject({
+        embedder: "none",
+        embeddingModelIds: [],
+      });
       expect(readFileSync(join(root, "lexical", "summary.md"), "utf8")).toContain(
         "Embedding model: none.",
       );

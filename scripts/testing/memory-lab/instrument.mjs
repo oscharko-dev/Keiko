@@ -23,6 +23,7 @@ export const INSTRUMENT_FILES = Object.freeze([
   "driver.mjs",
   "embedder.mjs",
   "evidence-scan.mjs",
+  "failure-classes.mjs",
   "gateway-calls.mjs",
   "instance.mjs",
   "isolation.mjs",

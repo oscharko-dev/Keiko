@@ -286,7 +286,8 @@ repetition has none), a timing table, plus the list of what the run did not meas
 gives per arm the mean turn latency (the answer, not the learning that follows it) and the mean time
 learning took to settle (`learnMs`), and, when the `off` and the `product` arm both ran, the delay
 memory adds to a turn: product mean turn minus off mean turn. Units that could not be measured are
-named at the top and left out of every figure.
+named at the top and left out of every figure. A "Failure classes" section lists the failed checks as
+counts per class and scenario (see "Failure classes").
 
 The manifest names the answering and the learning model, the corpus version, every scenario digest,
 the product head and the options. Its `metadata` records `sealed` (true for a `--holdout` run, which
@@ -295,7 +296,7 @@ the judge requires of the holdout part), `allowFoldedEnv`, `foldedKeys`, `budget
 "With and without an embedding model") and `configDigest`: the SHA-256 of the gateway configuration file in live mode,
 `offline` otherwise. It also records the **instrument**: `instrumentDigest`, a SHA-256 over the lab
 sources that decide what a run measures (`INSTRUMENT_FILES` in `instrument.mjs`: `../jira-chat-lab/requirements/work-project-lock.mjs`, `corpus/holdout.mjs`, `corpus/sequence.mjs`,
-`corpus/values.mjs`, `driver.mjs`, `embedder.mjs`, `evidence-scan.mjs`,
+`corpus/values.mjs`, `driver.mjs`, `embedder.mjs`, `evidence-scan.mjs`, `failure-classes.mjs`,
 `gateway-calls.mjs`, `instance.mjs`, `isolation.mjs`, `log-text.mjs`, `progress.mjs`, `report.mjs`,
 `run.mjs`, `scenario.mjs`, `score.mjs`, `scripted-model.mjs`, `seed-plan.mjs`, `seed-store.mjs`,
 `seed-validate.mjs`, `set-files.mjs`, `unit-failure.mjs`), beside
@@ -467,6 +468,22 @@ and says nothing about a real embedding model. The manifest records `embedder` (
 `configured`) and `embeddingModelIds`, the summary names it, and `compare` and `judge` refuse two runs
 that differ in either (a run that never recorded it is "unrecorded" and compares only with another
 such run).
+
+### Failure classes
+
+Beside the pass rates, `summary.md` and `summary.json` list the failed checks as **counts** per failure
+class, per arm and, in an open run, per scenario. Every class is derived from what the run already
+records, by one rule for every run: `fact-not-stored` (a `must` truth missing from the store),
+`unnecessary-fact-stored`, `stale-fact-live` (both only while the record is accepted),
+`forgotten-fact-returned`, `forbidden-fact-stored` (any status), then for a failed answer probe, most
+specific first, `forbidden-term-in-answer`, `needed-memory-missing` (a `needs` or `earlier` fact never
+reached the model), `relevant-memory-not-supplied` (nothing relevant reached the model),
+`supplied-answer-wrong` (it reached the model and the answer is still wrong); for the other probes
+`no-abstention`, `fact-leaked`, `memory-on-unrelated-question`, `injected-instruction-obeyed`; and
+`unit-not-measured`. `rhythm.mjs compare` and `judge` add, per class, the count in the baseline and in
+the candidate and the checks (`scenario:arm:rN:probe:<id>` or `…:store:<fact>`) that newly fail in the
+candidate. A sealed run reports per-arm totals only, never a scenario or a check; its store verdicts
+are masked, so the store classes that rest on them are not derived there.
 
 ## Corpus
 

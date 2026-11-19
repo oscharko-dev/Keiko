@@ -3,6 +3,7 @@
 // person reads. Timing never enters the scorecard, so two offline runs serialize identically.
 import { createScorecard, serializeScorecard } from "../../../tests/memory-eval/scorecard.ts";
 import { compareStrings } from "../../lib/compare-strings.mjs";
+import { FAILURE_CLASSES, summarizeFailureClasses } from "./failure-classes.mjs";
 import { HARD_COUNTERS, aggregate, hardCountersViolated } from "./score.mjs";
 import { isFailedUnit } from "./unit-failure.mjs";
 
@@ -369,6 +370,7 @@ export function summarizeLabRun(results, { sealed = false } = {}) {
     oracleArmRan: results.some((result) => result.arm === "oracle"),
     oracleRuns: results.filter((result) => result.oracle !== undefined).length,
     oracleScopes: oracleScopes(results),
+    failureClasses: summarizeFailureClasses(results, { sealed }),
     oraclePreconditionFailures: results
       .filter((result) => result.oracle !== undefined && !result.oracle.preconditionMet)
       .map((result) => result.scenario),
@@ -446,6 +448,49 @@ function oracleLines(summary) {
   return ["Oracle precondition: met for every scenario that ran.", scopeLine];
 }
 
+const MAX_LISTED_SCENARIOS = 40;
+
+function classCell(counts, name) {
+  return String(counts[name] ?? 0);
+}
+
+function failureClassTable(byArm) {
+  const arms = Object.keys(byArm);
+  const present = FAILURE_CLASSES.filter((name) =>
+    arms.some((arm) => byArm[arm].total[name] !== undefined),
+  );
+  return [
+    `| Class | ${arms.join(" | ")} |`,
+    `| --- | ${arms.map(() => "---").join(" | ")} |`,
+    ...present.map(
+      (name) => `| ${name} | ${arms.map((arm) => classCell(byArm[arm].total, name)).join(" | ")} |`,
+    ),
+  ];
+}
+
+function scenarioClassLines(arm, byScenario) {
+  const scenarios = Object.keys(byScenario);
+  const lines = scenarios.slice(0, MAX_LISTED_SCENARIOS).map((scenario) => {
+    const counts = Object.entries(byScenario[scenario])
+      .map(([name, count]) => `${name}=${String(count)}`)
+      .join(" ");
+    return `- ${arm} ${scenario}: ${counts}`;
+  });
+  const more = scenarios.length - lines.length;
+  return more > 0 ? [...lines, `- ${arm}: and ${String(more)} more scenarios`] : lines;
+}
+
+// The failed checks of the run as counts per class (and per scenario in an open run), never a rate.
+function failureClassLines(summary) {
+  const { byArm } = summary.failureClasses;
+  const header = ["### Failure classes (counts of failed checks)", ""];
+  if (Object.keys(byArm).length === 0) return [...header, "No failed check.", ""];
+  const scenarios = Object.keys(byArm).flatMap((arm) =>
+    scenarioClassLines(arm, byArm[arm].byScenario),
+  );
+  return [...header, ...failureClassTable(byArm), "", ...scenarios, ""];
+}
+
 function failureLines(summary) {
   if (summary.failedUnits === 0) return [];
   const listed = summary.failedUnitList
@@ -488,6 +533,7 @@ export function renderLabSummary(summary, manifest, metadata) {
     "",
     timingTable(summary.timing),
     "",
+    ...failureClassLines(summary),
     "### Not measured in this run",
     "",
     ...summary.unmeasured.map((line) => `- ${line}`),

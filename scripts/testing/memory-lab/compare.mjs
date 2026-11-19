@@ -10,6 +10,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { compareStrings } from "../../lib/compare-strings.mjs";
+import { FAILURE_CLASSES } from "./failure-classes.mjs";
 import { HARD_COUNTERS } from "./score.mjs";
 
 const COMPARED_METRICS = Object.freeze([
@@ -215,7 +216,41 @@ export function compareRuns(baseline, candidate, arm = "product") {
     noiseUnknown: deltas
       .filter((row) => row.beyondNoise === null && row.delta !== null && row.delta !== 0)
       .map((row) => row.metric),
+    failureClasses: compareFailureClasses(baseline, candidate, arm),
   };
+}
+
+const NO_FAILURES = Object.freeze({ total: {}, keys: {} });
+
+function failureArm(run, arm) {
+  return run.summary.failureClasses?.byArm?.[arm];
+}
+
+/**
+ * The failed checks of one arm per failure class: the count in each run and the checks (unit and
+ * probe or fact) that fail in the candidate and did not fail in the baseline. Counts only. `null`
+ * when neither run recorded failure classes (a run older than the classes), so an old pair keeps its
+ * old rendering. A class that neither run has is left out.
+ */
+export function compareFailureClasses(baseline, candidate, arm = "product") {
+  const before = failureArm(baseline, arm) ?? NO_FAILURES;
+  const after = failureArm(candidate, arm) ?? NO_FAILURES;
+  if (
+    baseline.summary.failureClasses === undefined &&
+    candidate.summary.failureClasses === undefined
+  )
+    return null;
+  return FAILURE_CLASSES.flatMap((name) => failureRow(name, before, after));
+}
+
+// One class's row, or none when neither run has a failed check of it.
+function failureRow(name, before, after) {
+  const baselineCount = before.total[name] ?? 0;
+  const candidateCount = after.total[name] ?? 0;
+  if (baselineCount === 0 && candidateCount === 0) return [];
+  const known = new Set(before.keys[name] ?? []);
+  const newlyFailing = (after.keys[name] ?? []).filter((key) => !known.has(key));
+  return [{ class: name, baseline: baselineCount, candidate: candidateCount, newlyFailing }];
 }
 
 function meetsTargets(candidate, targets, arm) {
@@ -334,10 +369,39 @@ export function renderComparison(comparison, label) {
   return `${label}: ${comparison.deltas.map(deltaText).join(", ")}; hard counters ${hard}${differs}`;
 }
 
+const MAX_LISTED_KEYS = 10;
+
+function keyList(keys) {
+  const listed = keys.slice(0, MAX_LISTED_KEYS).join(", ");
+  const more = keys.length - MAX_LISTED_KEYS;
+  return more > 0 ? `${listed}, and ${String(more)} more` : listed;
+}
+
+/**
+ * The failure-class section of a comparison, one line per class that fails in either run:
+ * `class: baseline -> candidate` and, when the candidate fails checks the baseline did not, which
+ * ones. Empty when the runs recorded no failure classes. Counts only, never a rate.
+ */
+export function renderFailureClasses(comparison, label) {
+  const rows = comparison.failureClasses;
+  if (rows === null || rows === undefined) return [];
+  if (rows.length === 0) return [`${label} failure classes: no failed check in either run`];
+  return [
+    `${label} failure classes (${comparison.arm} arm, failed checks):`,
+    ...rows.map((row) => {
+      const added =
+        row.newlyFailing.length === 0 ? "" : `; newly failing: ${keyList(row.newlyFailing)}`;
+      return `  ${row.class}: ${String(row.baseline)} -> ${String(row.candidate)}${added}`;
+    }),
+  ];
+}
+
 /** Deterministic lines a person reads; the first word is the verdict. */
 export function renderJudgement(judgement) {
   const lines = [judgement.progress ? "PROGRESS" : `NO PROGRESS: ${judgement.reasons.join("; ")}`];
-  for (const row of judgement.comparisons)
+  for (const row of judgement.comparisons) {
     lines.push(renderComparison(row, `${row.model} ${row.part}`));
+    lines.push(...renderFailureClasses(row, `${row.model} ${row.part}`));
+  }
   return lines.join("\n");
 }

@@ -19,6 +19,7 @@ import {
   judgeProgress,
   readRun,
   renderComparison,
+  renderFailureClasses,
   renderJudgement,
 } from "./compare.mjs";
 import { appendLedgerFile, ledgerRow } from "./trend.mjs";
@@ -48,7 +49,11 @@ function required(values, name) {
 function compareCommand(values) {
   const baseline = readRun(resolve(required(values, "baseline")));
   const candidate = readRun(resolve(required(values, "candidate")));
-  console.log(renderComparison(compareRuns(baseline, candidate), values.model ?? "unnamed"));
+  const comparison = compareRuns(baseline, candidate);
+  const label = values.model ?? "unnamed";
+  console.log(
+    [renderComparison(comparison, label), ...renderFailureClasses(comparison, label)].join("\n"),
+  );
   return 0;
 }
 
