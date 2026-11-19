@@ -229,6 +229,9 @@ function gatherCandidateMetadata(
     throwIfAborted(signal);
     for (const record of vault.listMemoryMetadataByScope(scope, {
       includeExpired: true,
+      // Only an accepted record is a candidate (see below); asking for it at the query keeps
+      // history from taking a place in the bounded read window.
+      status: ["accepted"],
       limit: DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
     })) {
       throwIfAborted(signal);

@@ -40,12 +40,14 @@ import type {
   ConversationMemoryCaptureOutcomeWire,
 } from "@oscharko-dev/keiko-contracts";
 import { MEMORY_TYPES } from "@oscharko-dev/keiko-contracts/runtime/memory";
+import { MEMORY_STATUSES } from "@oscharko-dev/keiko-contracts/memory";
 import type {
   MemoryAuditEvent,
   MemoryId,
   MemoryProposalId,
   MemoryRecord,
   MemoryScope,
+  MemoryStatus,
   MemoryType,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
@@ -135,6 +137,10 @@ function parseTypes(raw: unknown): readonly MemoryType[] | null {
   return out;
 }
 
+const RECALL_LIST_STATUSES: readonly MemoryStatus[] = MEMORY_STATUSES.filter(
+  (status) => status !== "superseded",
+);
+
 export function vaultAsQueryPort(vault: MemoryVaultStore): MemoryQueryPort {
   // Retrieval must see expired rows so it can omit them with a concrete suppression reason
   // instead of having storage silently drop them. Archived/forgotten rows already come back
@@ -144,9 +150,13 @@ export function vaultAsQueryPort(vault: MemoryVaultStore): MemoryQueryPort {
       const limit = options?.maxResults;
       return vault.listMemoriesByScope(scope, {
         includeExpired: true,
+        // History is excluded at the query: replaced records must not take a place in the bounded
+        // read window ahead of the live record that replaced them.
+        ...(options?.includeSuperseded === true ? {} : { status: RECALL_LIST_STATUSES }),
         ...(limit === undefined ? {} : { limit }),
       });
     },
+    getMemory: (memoryId) => vault.getMemory(memoryId),
     listOutgoingEdges: (memoryId) => vault.listOutgoingEdges(memoryId),
     listIncomingEdges: (memoryId) => vault.listIncomingEdges(memoryId),
     listEdgesForMemories: (memoryIds) => vault.listEdgesForMemories(memoryIds),

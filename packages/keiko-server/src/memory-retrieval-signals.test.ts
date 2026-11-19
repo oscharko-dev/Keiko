@@ -424,6 +424,55 @@ describe("semantic candidate validity before the bounded sweep", () => {
   });
 });
 
+describe("semantic candidate read window and history (#4223, audit A3)", () => {
+  it("is not filled by superseded records that are newer than the live one", async () => {
+    const memoryDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-history-window-"));
+    const vault = createMemoryVault({
+      memoryDir,
+      vaultKey: Buffer.alloc(32, 3),
+      now: () => NOW_MS,
+    });
+    const put = (id: string, status: MemoryRecord["status"], createdAt: number): void => {
+      const record: MemoryRecord = {
+        id: memoryId(id),
+        schemaVersion: "1",
+        scope: SCOPE,
+        type: "procedural",
+        status,
+        body: "Use the published release checklist.",
+        provenance: {
+          sourceKind: "explicit-user-instruction",
+          sensitivity: "public",
+          confidence: 1,
+          capturedAt: 1,
+        },
+        validity: { validFrom: 1 },
+        createdAt,
+        updatedAt: createdAt,
+        pinned: false,
+        tags: [],
+      };
+      vault.insertMemory(record);
+      vault.upsertEmbedding(record.id, {
+        provider: IDENTITY.provider,
+        modelId: IDENTITY.modelId,
+        metric: "cosine",
+        vector: new Float32Array([1, 0]),
+      });
+    };
+    try {
+      put("live", "accepted", 1);
+      for (let index = 0; index < 501; index += 1)
+        put(`history-${String(index)}`, "superseded", 10 + index);
+      const signals = await collectSignals(vault);
+      expect([...(signals.semanticById?.keys() ?? [])]).toEqual([memoryId("live")]);
+    } finally {
+      vault.close();
+      rmSync(memoryDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("semantic floor of the embedding model (#4228)", () => {
   // `configured` is the provider model id that selects the query instruction; `response` is the
   // model the gateway reports for the query vector and the stored rows.

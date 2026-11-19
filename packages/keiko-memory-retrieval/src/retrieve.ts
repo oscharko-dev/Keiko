@@ -172,6 +172,7 @@ function validateAndResolve(request: MemoryRetrievalRequest): ResolvedRequest {
 function fetchScoped(
   port: MemoryQueryPort,
   scopes: readonly MemoryScope[],
+  includeSuperseded: boolean,
 ): readonly MemoryRecord[] {
   const all: MemoryRecord[] = [];
   for (const scope of scopes) {
@@ -180,6 +181,7 @@ function fetchScoped(
         includeForgotten: true,
         includeArchived: true,
         includeExpired: true,
+        includeSuperseded,
         maxResults: DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
       });
       for (const r of batch) all.push(r);
@@ -373,11 +375,11 @@ interface Lineage {
 function supersededPredecessors(
   lineage: Lineage,
   edges: ReadonlyMap<MemoryId, readonly MemoryEdge[]>,
-  byId: ReadonlyMap<MemoryId, MemoryRecord>,
+  resolve: (id: MemoryId) => MemoryRecord | undefined,
 ): readonly Lineage[] {
   return (edges.get(lineage.record.id) ?? [])
     .filter((edge) => edge.kind === "supersedes" && edge.toMemoryId === lineage.record.id)
-    .map((edge) => byId.get(edge.fromMemoryId))
+    .map((edge) => resolve(edge.fromMemoryId))
     .filter((record): record is MemoryRecord => record?.status === "superseded")
     .map((record) => ({ origin: lineage.origin, record }));
 }
@@ -401,6 +403,9 @@ function supersededBodies(
   candidateEdges: ReadonlyMap<MemoryId, readonly MemoryEdge[]> | undefined,
 ): ReadonlyMap<MemoryId, readonly string[]> {
   const byId = new Map(fetched.map((record) => [record.id, record]));
+  // The list read leaves history out, so a predecessor is fetched by edge, one record per edge of
+  // the bounded lineage walk.
+  const resolve = (id: MemoryId): MemoryRecord | undefined => byId.get(id) ?? port.getMemory?.(id);
   const bodies = new Map<MemoryId, string[]>();
   // Per lineage, so a fact two corrections superseded lends its words to both; it also ends cycles.
   const seen = new Set(candidates.map((record) => lineageKey(record.id, record.id)));
@@ -415,7 +420,7 @@ function supersededBodies(
           );
     if (edges === undefined) break;
     const next = frontier
-      .flatMap((lineage) => supersededPredecessors(lineage, edges, byId))
+      .flatMap((lineage) => supersededPredecessors(lineage, edges, resolve))
       .filter((lineage) => !seen.has(lineageKey(lineage.origin, lineage.record.id)));
     for (const { origin, record } of next) {
       seen.add(lineageKey(origin, record.id));
@@ -543,7 +548,7 @@ export function retrieveMemoryContext(
   if (resolved.maxIncluded === 0 || resolved.budgetTokens === 0) {
     return emptyResult(request, resolved.budgetTokens);
   }
-  const fetched = fetchScoped(port, request.scopes);
+  const fetched = fetchScoped(port, request.scopes, request.includeSuperseded === true);
   const deduped = dedupeById(fetched);
   const filtered = applyFilters(deduped, request, resolved);
   const edgesByMemory = buildEdgesIndex(port, filtered.candidates);

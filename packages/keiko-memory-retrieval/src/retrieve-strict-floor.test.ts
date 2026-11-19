@@ -279,3 +279,52 @@ describe("the strict floor and corrections (#4228, lab 2026-11-11)", () => {
     expect(included(numbers, [preference])).toEqual(["pref"]);
   });
 });
+
+describe("the lineage walk over a list read that leaves history out (#4223, audit A3)", () => {
+  const tables = record("tables", "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.", {
+    status: "superseded",
+  });
+  const lists = record("lists", "Ab jetzt bevorzuge ich Listen.", { status: "superseded" });
+  const prose = record("prose", "Jetzt doch lieber Fließtext.");
+  const edges = [
+    buildEdge({ from: "tables", to: "lists", kind: "supersedes" }),
+    buildEdge({ from: "lists", to: "prose", kind: "supersedes" }),
+  ];
+  const lineage = [tables, lists, prose];
+
+  // A vault-shaped port: the list read honors includeSuperseded, a predecessor is fetched by id.
+  function vaultShaped(asked: { value: boolean | undefined }): MemoryQueryPort {
+    const incident = (id: string): readonly MemoryEdge[] =>
+      edges.filter((edge) => edge.fromMemoryId === id || edge.toMemoryId === id);
+    return {
+      listByScope: (_scope, options): readonly MemoryRecord[] => {
+        asked.value = options?.includeSuperseded;
+        return options?.includeSuperseded === true
+          ? lineage
+          : lineage.filter((entry) => entry.status !== "superseded");
+      },
+      getMemory: (id) => lineage.find((entry) => entry.id === id),
+      listEdgesForMemories: (ids) => new Map(ids.map((id) => [id, incident(id)])),
+    };
+  }
+
+  function request(overrides: Partial<MemoryRetrievalRequest> = {}): MemoryRetrievalRequest {
+    return strict("Wie sollst du mir Zahlen zeigen?", {
+      standingProfileIds: new Set([memoryId("prose")]),
+      ...overrides,
+    });
+  }
+
+  it("still lends a replaced fact's words to the profile fact that replaced it", () => {
+    const asked = { value: undefined as boolean | undefined };
+    const result = retrieveMemoryContext(request(), vaultShaped(asked));
+    expect(result.included.map((entry) => entry.memoryId)).toEqual(["prose"]);
+    expect(asked.value).toBe(false);
+  });
+
+  it("asks for history only when the caller does", () => {
+    const asked = { value: undefined as boolean | undefined };
+    retrieveMemoryContext(request({ includeSuperseded: true }), vaultShaped(asked));
+    expect(asked.value).toBe(true);
+  });
+});

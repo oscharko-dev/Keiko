@@ -452,6 +452,35 @@ describe("handleMemoryRetrieveContext", () => {
     expect(port.listEdgesForMemories?.([source.id, target.id]).get(target.id)).toEqual([edge]);
   });
 
+  it("keeps history out of the bounded recall read window (#4223, audit A3)", () => {
+    const vault = makeVault();
+    const scope: MemoryRecord["scope"] = {
+      kind: "user",
+      userId: brandedMemoryUserId("local-operator"),
+    };
+    const base = insertAcceptedMemory(vault, { body: "The one live fact.", scope });
+    const live = brandedMemoryId("live-old");
+    // Older than every replaced record, so a createdAt-ordered window reads the history first.
+    vault.insertMemory({ ...base, id: live, createdAt: 1_000, updatedAt: 1_000 });
+    for (let index = 0; index < 501; index += 1) {
+      vault.insertMemory({
+        ...base,
+        id: brandedMemoryId(`history-${String(index)}`),
+        body: `Replaced value ${String(index)}.`,
+        status: "superseded",
+        createdAt: 10_000 + index,
+        updatedAt: 10_000 + index,
+      });
+    }
+    const port = vaultAsQueryPort(vault);
+
+    const window = port.listByScope(scope, { maxResults: 500 }).map((record) => record.id);
+    expect(window).toContain(live);
+    expect(window).toHaveLength(2);
+    expect(port.listByScope(scope, { maxResults: 500, includeSuperseded: true })).toHaveLength(500);
+    expect(port.getMemory?.(brandedMemoryId("history-0"))?.status).toBe("superseded");
+  });
+
   it("rejects oversize bodies with 413", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });

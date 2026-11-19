@@ -39,6 +39,11 @@ export interface MemoryQueryPort {
   listOutgoingEdges?(memoryId: MemoryId): readonly MemoryEdge[];
   /** Fetch incoming edges. */
   listIncomingEdges?(memoryId: MemoryId): readonly MemoryEdge[];
+  /**
+   * Fetch one record by id, whatever its status. Lets the standing-profile lineage walk reach a
+   * superseded predecessor by edge although the list read leaves history out.
+   */
+  getMemory?(memoryId: MemoryId): MemoryRecord | undefined;
   /** Fetch all incident edges for the candidate set in one bounded pass. */
   listEdgesForMemories?(
     memoryIds: readonly MemoryId[],
@@ -49,6 +54,11 @@ export interface ListByScopeOptions {
   readonly includeForgotten?: boolean;
   readonly includeArchived?: boolean;
   readonly includeExpired?: boolean;
+  /**
+   * History (status `superseded`) stays out of the read window unless a caller asks for it, so a
+   * live record is never pushed out of a bounded read by replaced ones.
+   */
+  readonly includeSuperseded?: boolean;
   readonly maxResults?: number;
 }
 
