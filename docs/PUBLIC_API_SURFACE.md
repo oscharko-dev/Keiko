@@ -1,4 +1,4 @@
-# Public API surface — 1.5.3
+# Public API surface — 1.5.4
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -110,6 +110,13 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 `KEIKO_PRODUCT_VERSION`.
 
 ## Stability notes
+
+- 1.5.4: CLI entrypoints remain stable, and no root export is removed. The root barrel adds the
+  constant `ISOLATION_UNAVAILABLE_DENIAL_PREFIX`, the closed opening of a verification step denied
+  because no enforcing isolation backend is qualified on the computer. Windows coding runs are confined without an
+  installed service (ADR-0043 D21), so `POST /api/coding-workbench/runtime/gateway-service/repair`
+  and its five service-state unavailable reasons are removed; `keiko gateway-service` stays so an
+  existing service can be uninstalled. UI schema 80 and 81 carry existing stores forward.
 
 - 1.5.3: root exports and CLI entrypoints remain stable. Every stable `latest` release carries the
   standalone folder package of each desktop target as a release asset: `keiko-macos-arm64.standalone.zip`,

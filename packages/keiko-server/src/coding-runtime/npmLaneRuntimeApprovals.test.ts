@@ -63,9 +63,9 @@ describe("npm-lane runtime approvals", () => {
       runtimeSupervisor: {
         // #4068: the pipe-relay supervisor (no installed service), built by MSVC 14.51 on
         // windows-latest exactly as the release builds it.
-        sha256: "3c753692989914303ec5ec15c72bbef1e777978bb9d7413cb3339e24f0c35b26",
-        sizeBytes: 253_440,
-        sourceTreeSha256: "2e077a294b83d26db0546789a832e3e59c888a91fbda9ad82d7667e143d5e134",
+        sha256: "8966ba374943d8b0f7dce4bdee296084802783cda0e4a191666a0c4cd16616fb",
+        sizeBytes: 252_416,
+        sourceTreeSha256: "718efc73bdf3327c5db2eb9e294d10cfdc91a2afedeadab3db9560b535419f86",
       },
     });
     const npm = NPM_LANE_RUNTIME_APPROVALS["windows-x64"];

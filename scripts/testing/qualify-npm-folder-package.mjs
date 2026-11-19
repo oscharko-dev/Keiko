@@ -419,7 +419,7 @@ class Checks {
   }
 }
 
-function expect(condition, message) {
+function ensure(condition, message) {
   if (!condition) throw new Error(message);
 }
 
@@ -435,23 +435,23 @@ async function qualify(options, session) {
     await download(urls.checksums, sums);
     await download(urls.archive, archive);
     session.archiveSha256 = sha256FileChunked(archive);
-    expect(
+    ensure(
       session.archiveSha256 === expectedArchiveSha256({ sha256sums: sums }, archive),
       "digest",
     );
   });
   await checks.run("package-build", () => {
     const built = buildNpmPackage({ target, archive, sha256sums: sums, outDir });
-    expect(built.packageVersion === version, `built Keiko ${built.packageVersion}`);
+    ensure(built.packageVersion === version, `built Keiko ${built.packageVersion}`);
     session.zip = built.outputPath;
     session.zipSha256 = built.outputSha256;
-    expect(sha256FileChunked(session.zip) === session.zipSha256, "zip digest differs");
+    ensure(sha256FileChunked(session.zip) === session.zipSha256, "zip digest differs");
   });
   await checks.run("extract-with-platform-tool", () => {
     extractZip(session.zip, session.parent, os);
     session.folder = join(session.parent, "Keiko");
     const start = startFile(session.folder, os);
-    expect(
+    ensure(
       existsSync(start) && statSync(start).isFile(),
       `no start file; extracted: ${folderEntries(session.parent)}; package: ${folderEntries(session.folder)}`,
     );
@@ -474,33 +474,33 @@ async function startStopChecks(session, options, os) {
   await checks.run("first-start-installs", async () => {
     const first = await wrapper(startFile(folder, os), "start-1.log", START_TIMEOUT_MS);
     session.firstOutput = first.output;
-    expect(first.status === 0, `exit ${String(first.status)}`);
+    ensure(first.status === 0, `exit ${String(first.status)}`);
   });
   await checks.run("health-reports-version", async () => {
     const health = await waitFor(async () => {
       const seen = await healthVersion(session.port);
       return seen.reachable ? seen : false;
     }, HEALTH_TIMEOUT_MS);
-    expect(health !== false, "health did not answer");
-    expect(health.status === "ok", `status ${String(health.status)}`);
-    expect(health.version === version, `version ${String(health.version)}`);
+    ensure(health !== false, "health did not answer");
+    ensure(health.status === "ok", `status ${String(health.status)}`);
+    ensure(health.version === version, `version ${String(health.version)}`);
   });
   await checks.run("installation-record-matches-lockfile", () => {
     const record = readFileSync(join(folder, "node_modules", INSTALLED_MARKER), "utf8").trim();
     const shipped = sha256File(join(folder, "package-lock.json"));
     const declared = readJsonFile(join(folder, "system", "npm-package.json")).lockfileSha256;
-    expect(record === shipped && shipped === declared, "record, lockfile and manifest differ");
+    ensure(record === shipped && shipped === declared, "record, lockfile and manifest differ");
   });
   await checks.run("coding-runtime-package", () => codingRuntimeCheck(session, target));
   await checks.run("second-start-reports-running", async () => {
     const second = await wrapper(startFile(folder, os), "start-2.log", START_TIMEOUT_MS);
-    expect(second.status === 0, `exit ${String(second.status)}`);
-    expect(/already running/iu.test(second.output), "no 'already running' report");
-    expect(!/loaded from the npm registry/iu.test(second.output), "it installed again");
+    ensure(second.status === 0, `exit ${String(second.status)}`);
+    ensure(/already running/iu.test(second.output), "no 'already running' report");
+    ensure(!/loaded from the npm registry/iu.test(second.output), "it installed again");
   });
   await checks.run("folder-unchanged-outside-node-modules", () => {
     const drift = folderDrift(session.before, snapshotOutsideNodeModules(folder));
-    expect(drift.length === 0, `${drift.length} entries drifted: ${drift.slice(0, 3).join("; ")}`);
+    ensure(drift.length === 0, `${drift.length} entries drifted: ${drift.slice(0, 3).join("; ")}`);
   });
   await stopChecks(session, wrapper, os);
 }
@@ -512,7 +512,7 @@ function codingRuntimeCheck(session, target) {
   if (expected === undefined) return "none declared for this target";
   const installed = join(session.folder, "node_modules", ...expected.name.split("/"));
   const manifest = readJsonFile(join(installed, "package.json"));
-  expect(typeof manifest.version === "string", `${expected.name} is not installed`);
+  ensure(typeof manifest.version === "string", `${expected.name} is not installed`);
   return `${expected.name} installed`;
 }
 
@@ -520,13 +520,13 @@ async function stopChecks(session, wrapper, os) {
   const { checks, folder } = session;
   await checks.run("stop-exits-clean", async () => {
     const stop = await wrapper(stopFile(folder, os), "stop.log", STOP_TIMEOUT_MS);
-    expect(stop.status === 0, `exit ${String(stop.status)}`);
+    ensure(stop.status === 0, `exit ${String(stop.status)}`);
   });
   await checks.run("no-process-left", async () => {
     const gone = await waitFor(async () => !(await healthVersion(session.port)).reachable, 30_000);
-    expect(gone, "health still answers after stop");
+    ensure(gone, "health still answers after stop");
     const clear = await waitFor(() => processesOf(folder, os).length === 0, 30_000);
-    expect(clear, `${processesOf(folder, os).length} process(es) of the folder remain`);
+    ensure(clear, `${processesOf(folder, os).length} process(es) of the folder remain`);
   });
   await checks.run("activity-log-lifecycle", () => activityLogCheck(session));
 }
@@ -544,16 +544,16 @@ async function activityLogCheck(session) {
   const { activityLogDirectory, readActivityLogText } =
     await import("../lib/activity-log-files.mjs");
   const text = readActivityLogText(activityLogDirectory(session.state));
-  expect(text.length > 0, "the Activity Log is empty");
+  ensure(text.length > 0, "the Activity Log is empty");
   const absent = LIFECYCLE_OPERATIONS.filter((op) => !logHasLine(text, op));
-  expect(absent.length === 0, `no lifecycle line for ${absent.join(", ")}`);
+  ensure(absent.length === 0, `no lifecycle line for ${absent.join(", ")}`);
   const unqualified = RUNTIME_PACKAGE_MISSING_REASONS.some((reason) =>
     logHasLine(text, "coding-runtime.install.unqualified", { reason }),
   );
   if (session.expectedRuntime === undefined) {
-    expect(unqualified, "no runtime-package-missing line for a target without a runtime");
+    ensure(unqualified, "no runtime-package-missing line for a target without a runtime");
   } else {
-    expect(!unqualified, "the installed Coding runtime package was reported missing");
+    ensure(!unqualified, "the installed Coding runtime package was reported missing");
   }
 }
 

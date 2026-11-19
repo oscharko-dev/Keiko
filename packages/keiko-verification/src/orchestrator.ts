@@ -857,7 +857,7 @@ async function runPlanSteps(
       );
       continue;
     }
-    const run = await runStep(step, deps, baseSpawn, monitor, resolution.network);
+    const run = await runStep(step, deps, baseSpawn, monitor, resolution.network); // NOSONAR typescript:S9382 -- verification steps run one after another by contract.
     const result = toResult(step, run, deps.workspace.root, processTreeMemoryEnforced);
     reportStepOutput(deps, step, run, result);
     results.push(result);

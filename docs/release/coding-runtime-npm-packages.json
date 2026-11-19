@@ -42,9 +42,9 @@
         "name": "@oscharko-dev/keiko-coding-runtime-win32-x64",
         "opencodeVersion": "2.2.5",
         "tarball": "oscharko-dev-keiko-coding-runtime-win32-x64-1.1.6.tgz",
-        "sizeBytes": 123465824,
-        "sha256": "fac874c90c6dc3e1b5ecf85ad9e0c2990e7fcaa4cd3776961775e19030ac7acc",
-        "integrity": "sha512-lGsb/+z0bUxbbJDWWq460i8bmvG0HIQ+/Rh/0iLPpgV8/o4xiiOxg9D+lDNCAhrmKgnRhdeUoMNdjEj8heR/CQ=="
+        "sizeBytes": 123466417,
+        "sha256": "462691b51d0d95fc1d5ce64a27db679e5ca6ed6f4bdc4c1773d14cd8ea68df76",
+        "integrity": "sha512-45TriL8BWjPGuLMN9nnN5A0HoD6hZnXfYJXvtr5YxwzQolcWb8YifCugcarWa/lvA6vy+9rlMqmwJgl3Umyl1A=="
       }
     }
   }

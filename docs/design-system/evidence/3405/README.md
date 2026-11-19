@@ -841,3 +841,12 @@ in the Linux arm64 gates container with an init process and Node 26.13.1, with
 `KEIKO_WRITE_TRACKED_EVIDENCE=1`, and `npm run check:update-ui-evidence` passed. Only the three
 producer records were kept; the fourteen committed captures retain their original renderer's
 typography.
+
+## Chat notice without an activated model — 2026-11-19 (#4482)
+
+The Chat notice for an installation without an activated model added one string to both optional
+catalogs. On 2026-11-19 (UTC) all nine updater cases passed in 1.9 minutes in the Linux arm64 gates
+container with an init process and Node 26.13.1, with `KEIKO_WRITE_TRACKED_EVIDENCE=1`, and
+`npm run check:update-ui-evidence` and `npm run check:editor-release-evidence` passed. Only the
+three producer records were kept; the fourteen committed captures, updater assertions and harness
+inputs retain their existing values.

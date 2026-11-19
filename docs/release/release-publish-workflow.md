@@ -336,7 +336,7 @@ published, a Windows npm installation reports `npm-runtime-package-missing`.
 **One set of Windows native bytes (owner decision 2026-11-17, "Ja, umstellen").** The npm package
 carries exactly the Windows helper and supervisor of the portable release. The secure-read helper
 `65cc98c3…` (129,024 bytes) was built by the release workflow at `1906b6a5f28a…`. The pipe-relay
-supervisor `3c753692…` (253,440 bytes, source tree `2e077a29…`) was built by the
+supervisor `8966ba37…` (252,416 bytes, source tree `718efc73…`) was built by the
 `relay-confinement` job of `windows-gateway-confinement.yml` (#4068), on the same `windows-latest`
 image, with MSVC 14.51 and `/Brepro` as the release builds it; the first portable release that
 carries it is 1.5.4. `npmLaneRuntimeApprovals.ts` pins the npm lane to those bytes, and
@@ -366,8 +366,8 @@ the published form in the change that selects the package (step 4 below).
 
 _Reproducing the pinned bytes._ The reviewed 1.1.6 candidate has 10 files, every file mode 0644
 (`--pack` fixes the modes of a `windows-x64` package by target, so a POSIX host cannot change the
-tarball), and the tarball SHA-256 `fac874c90c6dc3e1b5ecf85ad9e0c2990e7fcaa4cd3776961775e19030ac7acc`
-(123,465,824 bytes). The two MSVC-built executables are not rebuilt on a host without MSVC 14.51;
+tarball), and the tarball SHA-256 `462691b51d0d95fc1d5ce64a27db679e5ca6ed6f4bdc4c1773d14cd8ea68df76`
+(123,466,417 bytes). The two MSVC-built executables are not rebuilt on a host without MSVC 14.51;
 `--prebuilt-native-dir` names a directory holding `keiko-secure-workspace-read.exe` and
 `keiko-runtime-supervisor.exe` from the release archive. The builder checks each against the digest
 and size pinned in `npmLaneRuntimeApprovals.ts` before anything is staged and stops on any
@@ -381,9 +381,9 @@ node scripts/build-coding-runtime-npm-package.mjs --verify windows-x64 1.1.6 /ab
 ```
 
 Checked on 2026-11-19 on a macOS host: with the two executables of the candidate
-tarball as `native/`, these commands produced a tarball with SHA-256 `fac874c9…` and a
+tarball as `native/`, these commands produced a tarball with SHA-256 `462691b5…` and a
 `receipt.json` byte-identical to the candidate's. The candidate tarball and its receipt are kept,
-owner-held, in the owner's lab folder `keiko-standalone-lab/win-153/runtime-1.1.6-relay2/artifacts/` until
+owner-held, in the owner's lab folder `keiko-standalone-lab/win-153/runtime-1.1.6-relay3/artifacts/` until
 they are uploaded; if they are lost, the commands above regenerate them from the release's
 executables.
 

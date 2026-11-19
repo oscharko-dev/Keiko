@@ -377,18 +377,14 @@ export type SpawnFn = (
 
 async function collectHtmlFiles(dir: string): Promise<readonly string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
-  const files: string[] = [];
-  for (const entry of entries) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...(await collectHtmlFiles(full)));
-      continue;
-    }
-    if (entry.name.endsWith(".html")) {
-      files.push(full);
-    }
-  }
-  return files;
+  const parts = await Promise.all(
+    entries.map(async (entry): Promise<readonly string[]> => {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) return collectHtmlFiles(full);
+      return entry.name.endsWith(".html") ? [full] : [];
+    }),
+  );
+  return parts.flat();
 }
 
 function parseHashList(raw: string): readonly string[] {

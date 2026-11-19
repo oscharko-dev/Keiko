@@ -26,6 +26,7 @@ import {
   folderChecksumText,
   folderPackageArchiveName,
 } from "./lib/folder-package-release.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { CHECK_NAMES, DEFAULT_REPOSITORY, EVIDENCE_KIND } from "./lib/npm-folder-qualification.mjs";
 import { createdDraftId, remoteDigestFailures } from "./lib/portable-release-publication.mjs";
@@ -34,6 +35,12 @@ export class NpmFolderPublishRefusal extends Error {}
 
 function refuse(message) {
   throw new NpmFolderPublishRefusal(message);
+}
+
+// Code-unit order: the same on every host, unlike a locale-dependent collation.
+function byCodeUnit(left, right) {
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
 }
 
 const VERSION_PATTERN = /^\d+\.\d+\.\d+$/u;
@@ -56,12 +63,14 @@ function assetNames(target) {
 
 /** Every file name the downloaded qualification artifacts must hold, and no other. */
 export function expectedFileNames() {
-  return FOLDER_RELEASE_TARGETS.flatMap((target) => Object.values(assetNames(target))).sort();
+  return FOLDER_RELEASE_TARGETS.flatMap((target) => Object.values(assetNames(target))).sort(
+    byCodeUnit,
+  );
 }
 
 function regularFile(path, label) {
   const stat = lstatSync(path, { throwIfNoEntry: false });
-  if (stat === undefined || !stat.isFile()) refuse(`${label} is not a regular file`);
+  if (!stat?.isFile()) refuse(`${label} is not a regular file`);
   return stat;
 }
 
@@ -110,7 +119,7 @@ function verifyTarget(dir, target, version) {
 /** Checks the three tested packages in `dir` and returns what the release will carry. */
 export function verifyNpmFolderAssets({ dir, version }) {
   companionTag(version);
-  const present = readdirSync(dir).sort();
+  const present = readdirSync(dir).sort(byCodeUnit);
   const expected = expectedFileNames();
   if (JSON.stringify(present) !== JSON.stringify(expected)) {
     refuse(`the artifacts hold [${present.join(", ")}], expected [${expected.join(", ")}]`);
@@ -165,7 +174,13 @@ export function releaseNotes({ version, packages, repository = DEFAULT_REPOSITOR
 }
 
 function runGh(args, env = process.env) {
-  const result = spawnSync("gh", args, { encoding: "utf8", env, maxBuffer: 64 * 1024 * 1024 });
+  // Resolved through the trusted-root helper rather than PATH (javascript:S4036): a writeable
+  // PATH entry would otherwise decide which binary publishes the release.
+  const result = spawnSync(resolveHostExecutable("gh", { env }), args, {
+    encoding: "utf8",
+    env,
+    maxBuffer: 64 * 1024 * 1024,
+  });
   return { status: result.status, stdout: String(result.stdout), stderr: String(result.stderr) };
 }
 
@@ -180,8 +195,14 @@ function gh(runner, args, label = args.slice(0, 2).join(" ")) {
 function releaseTagState(runner, repository, tag) {
   const listed = JSON.parse(
     gh(runner, [
-      ...["release", "list", "--repo", repository, "--limit", "1000"],
-      ...["--json", "tagName,isDraft"],
+      "release",
+      "list",
+      "--repo",
+      repository,
+      "--limit",
+      "1000",
+      "--json",
+      "tagName,isDraft",
     ]),
   );
   const entry = listed.find((candidate) => candidate.tagName === tag);
@@ -245,8 +266,8 @@ function checkUploaded(listed, packages) {
       [p.sha, { size: p.shaSizeBytes, digest: p.shaSha256 }],
     ]),
   );
-  const names = listed.assets.map((asset) => asset.name).sort();
-  if (JSON.stringify(names) !== JSON.stringify([...wanted.keys()].sort())) {
+  const names = listed.assets.map((asset) => asset.name).sort(byCodeUnit);
+  if (JSON.stringify(names) !== JSON.stringify([...wanted.keys()].sort(byCodeUnit))) {
     refuse(`the draft holds [${names.join(", ")}], not the verified assets`);
   }
   const failures = remoteDigestFailures(
@@ -290,10 +311,24 @@ function removeDraft(runner, repository, id) {
 // (portable release v1.0.1, "found 0").
 function createDraft(runner, { tag, commit, version, notesPath, repository }) {
   const created = runner([
-    ...["api", "--method", "POST", `repos/${repository}/releases`],
-    ...["-f", `tag_name=${tag}`, "-f", `target_commitish=${commit}`],
-    ...["-f", `name=Keiko ${version} npm folder packages`, "-F", `body=@${notesPath}`],
-    ...["-F", "draft=true", "-F", "prerelease=true", "-f", "make_latest=false"],
+    "api",
+    "--method",
+    "POST",
+    `repos/${repository}/releases`,
+    "-f",
+    `tag_name=${tag}`,
+    "-f",
+    `target_commitish=${commit}`,
+    "-f",
+    `name=Keiko ${version} npm folder packages`,
+    "-F",
+    `body=@${notesPath}`,
+    "-F",
+    "draft=true",
+    "-F",
+    "prerelease=true",
+    "-f",
+    "make_latest=false",
   ]);
   if (created.status !== 0) {
     refuse(

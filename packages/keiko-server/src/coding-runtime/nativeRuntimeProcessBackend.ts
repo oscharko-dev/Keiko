@@ -523,7 +523,7 @@ export async function removeHelperCopyDirectory(
     } catch (error) {
       const delay = HELPER_COPY_REMOVAL_DELAYS_MS[attempt];
       if (delay === undefined || !transientRemovalFailure(error)) throw error;
-      await sleep(delay);
+      await sleep(delay); // NOSONAR typescript:S9382 -- each retry waits for the previous removal attempt to fail.
     }
   }
 }

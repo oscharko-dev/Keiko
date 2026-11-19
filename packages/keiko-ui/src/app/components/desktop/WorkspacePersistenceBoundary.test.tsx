@@ -287,7 +287,7 @@ describe("workspace restoration boot boundary", () => {
       window.dispatchEvent(new Event(WORKSPACE_STORAGE_CHANGED_EVENT));
     });
     expect(screen.getByRole("main")).toHaveTextContent("Owned workspace");
-    expect(read.mock.calls.length).toBe(readsBefore);
+    expect(read.mock.calls).toHaveLength(readsBefore);
     expect(
       reports.mock.calls.some(
         ([, meta]) => meta?.composerActivity === "workspace-ownership-changed",
