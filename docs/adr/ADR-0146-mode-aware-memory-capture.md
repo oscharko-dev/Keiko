@@ -383,9 +383,14 @@ doubt Keiko learns too little rather than too much, because nobody approves what
 - **Relation.** The model labels `new`, `same`, `update` or `contradiction`; checks confirm it. A
   reversal, a changed number or a changed polarity replaces the older fact on its own. A new value
   in the same slot, or a stated change ("ab jetzt", "from now on"), replaces it only with the
-  model's label. A shared preference verb alone is no slot, so "Tabellen" and "Tee" both stand.
+  model's label. A clear correction ("Das war falsch", "I meant") is a stated change; a return to
+  an earlier value ("wieder", "again") is one only for a labelled fact whose frame it repeats, never
+  for a statement without a label (#4223). A shared preference verb alone is no slot, so
+  "Tabellen" and "Tee" both stand.
   The model's label alone replaces only a one-at-a-time value: an employer ("arbeitet bei"), a home
-  ("wohnt in"), a name, or a chosen preference for the same purpose. Another tool or liking needs a
+  ("wohnt in"), a name, or a chosen preference for the same purpose, whose value is one word or two
+  joined by "mit" or "with" at the same place ("Tabellen mit Summenzeile", not "Tee morgens").
+  Another tool or liking needs a
   stated change, and a statement that only adds ("auch", "also") never replaces. A claim of sameness that neither the lexical
   nor the semantic duplicate gate confirms stores nothing. A changed value is never a duplicate.
 - **Supersession** reuses the `supersedes` edge, the `superseded` status and the closed validity of
