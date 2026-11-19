@@ -29,8 +29,12 @@ export function isPersonForgetterSurface(surface: string | undefined): boolean {
   return surface !== undefined && MEMORY_PERSON_FORGETTER_SURFACES.includes(surface);
 }
 
-// SQL predicate (no bind parameters) that keeps only tombstones allowed to refuse a statement. It is
-// shared by exact and semantic suppression. A tombstone refuses unless its surface is explicitly
+export function isUnattendedForgetterSurface(surface: string | undefined): boolean {
+  return surface !== undefined && MEMORY_UNATTENDED_FORGETTER_SURFACES.includes(surface);
+}
+
+// SQL predicate (no bind parameters) that keeps only tombstones allowed to refuse a LEARNED capture.
+// It is shared by exact and semantic suppression. A tombstone refuses unless its surface is explicitly
 // unattended AND it records that the removed record was not rejected (`original_status`, written by
 // deleteMemory(ies) for every writer since vault schema v4). So an unattended tombstone refuses in
 // two cases: it removed a record the person REJECTED, because removal by retention or maintenance
@@ -43,3 +47,12 @@ export function isPersonForgetterSurface(surface: string | undefined): boolean {
 export const REFUSING_TOMBSTONE_SQL = `(COALESCE(forgetter_surface, '') NOT IN (${MEMORY_UNATTENDED_FORGETTER_SURFACES.map(
   (surface) => `'${surface}'`,
 ).join(", ")}) OR original_status IS NULL OR original_status = 'rejected')`;
+
+// The person's own statement ("Merke dir …") outranks an unattended removal altogether (#4223): a
+// rejection never refused it while the rejected record existed, so the tombstone an unattended pass
+// left behind must not make it stronger than that. Only a tombstone that is not explicitly
+// unattended refuses; an unknown or unclassified writer still does, so a forgotten fact cannot come
+// back through it.
+export const PERSON_REFUSING_TOMBSTONE_SQL = `(COALESCE(forgetter_surface, '') NOT IN (${MEMORY_UNATTENDED_FORGETTER_SURFACES.map(
+  (surface) => `'${surface}'`,
+).join(", ")}))`;

@@ -855,6 +855,45 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expect(kept.kind).toBe("inserted");
   });
 
+  // #4223: an unattended pass (retention) removed a REJECTED record. Its tombstone keeps refusing
+  // learned paraphrases, but the person's own statement outranks it, as the rejection did while the
+  // record existed; a tombstone the person wrote refuses both.
+  it.each([
+    ["retention", "learned capture", false, "suppressed-by-forget"],
+    ["retention", "the person's statement", true, undefined],
+    ["memory-center", "the person's statement", true, "suppressed-by-forget"],
+  ] as const)(
+    "after a %s tombstone, a paraphrase through %s settles as the person's refusal allows",
+    async (surface, _path, explicitStatement, reason) => {
+      const vDark = Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]);
+      const keyed = vi.fn((_request: OpenAIEmbeddingRequest) =>
+        Promise.resolve({
+          ok: true as const,
+          value: { vector: vDark, modelId: EMBEDDING_MODEL },
+        }),
+      );
+      const deps = makeDeps({ embeddingRequest: keyed });
+      const vault = makeVault();
+      const original = makeRecord("the user prefers dark mode", "id-original");
+      await insertSalienceMemoryWithNoveltyGate(deps, vault, original);
+      vault.updateMemory(original.id, { status: "rejected", staleReason: "no" }, Date.now());
+      vault.deleteMemory(original.id, {
+        tombstone: true,
+        forgetterSurface: surface,
+        reason: "user-request",
+        nowMs: Date.now(),
+      });
+
+      const paraphrase = makeRecord("a dark interface is what the user likes", "id-paraphrase");
+      const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, paraphrase, {
+        explicitStatement,
+      });
+
+      if (reason === undefined) expect(outcome.kind).toBe("inserted");
+      else expect(outcome).toEqual({ kind: "suppressed", reason });
+    },
+  );
+
   it("merges into a live PROPOSED near-duplicate instead of queueing a second review item", async () => {
     // The dedup corpus is live records, not accepted-only: a proposal already occupies the review
     // queue, so a re-capture of the same fact reinforces it rather than asking the operator twice.

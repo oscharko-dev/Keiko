@@ -49,6 +49,7 @@ export type {
   MemoryCenterPage,
   MemoryCenterPageOptions,
   MemoryDeleteResult,
+  ForgetTombstoneRefusalOptions,
   MemoryEmbeddingInput,
   MemoryEmbeddingMetric,
   MemoryEmbeddingRow,

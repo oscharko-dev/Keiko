@@ -239,6 +239,12 @@ from a word match or from what "das" refers to; the pin keeps protecting there, 
 applied and the Chat says so (#4223). The exemption belongs to the call site, never to the selector
 kind.
 
+A forget tombstone the person wrote refuses every capture path. A tombstone an unattended pass wrote
+(the maintenance pass, an operator's retention policy) never makes a rejection stronger than it was
+while the rejected record existed: it refuses learned capture only where it removed a rejected
+record or records no status, and the person's own "Merke dir …" ignores it altogether (#4223). An
+unclassified writer still refuses every path.
+
 Saying a statement again confirms the existing memory through `recordAccess`, naming the chat,
 instead of storing a second record: in the same words without an embedder, and as a paraphrase through the existing
 novelty gate with one. A paraphrase of a forgotten fact is suppressed the same way.

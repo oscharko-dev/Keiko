@@ -1765,7 +1765,7 @@ async function candidateActionFromOutcome(
   }
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
-  if (isSuppressedByForgetTombstone(deps.memoryVault, record)) {
+  if (isSuppressedByForgetTombstone(deps.memoryVault, record, { explicitStatement: explicit })) {
     return refusedCandidateAction(FORGOTTEN_MEMORY_SUPPRESSION_REASON, explicit, correlationId);
   }
   const candidate = acceptedCaptureCandidate(record, deps, mode, outcome);
@@ -1913,7 +1913,9 @@ function keepsRememberedStatement(outcome: CaptureOutcome, vault: MemoryVaultSto
   if (outcome.proposal.provenance.sourceKind !== "explicit-user-instruction") return false;
   if (!isPersistableMemoryCandidate(outcome)) return false;
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
-  return !isSuppressedByForgetTombstone(vault, buildMemoryRecordFromProposal(proposalId, outcome));
+  return !isSuppressedByForgetTombstone(vault, buildMemoryRecordFromProposal(proposalId, outcome), {
+    explicitStatement: true,
+  });
 }
 
 function asksToRemember(outcome: CaptureOutcome): boolean {

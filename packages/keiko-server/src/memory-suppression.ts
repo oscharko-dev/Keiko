@@ -17,7 +17,10 @@
 // DELIBERATE ASYMMETRY: rejection suppresses the INFERRED capture paths (model salience, voice
 // recap) — "stop deducing this about me" — while an explicit "remember that X" instruction is a
 // fresh human decision that outranks a past rejection and stays on forget-only suppression. A
-// forget tombstone is deletion-grade and suppresses every path, as it always has (RB-4).
+// forget tombstone a PERSON wrote is deletion-grade and suppresses every path (RB-4). A tombstone an
+// unattended pass wrote (maintenance, retention) suppresses only the inferred paths, and only where
+// it removed a rejected record or records no status (#4223): it must never make a rejection stronger
+// than it was while the record existed, so the person's own statement ignores it altogether.
 
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 import { memoryBodySuppressionHash, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
@@ -31,11 +34,19 @@ import {
 // MAX_EXISTING_BODIES / MAX_DEDUP_NEIGHBORS bounds on the two dedup corpora.
 const MAX_REJECTED_SUPPRESSION_RECORDS = 200;
 
+export interface ForgetTombstoneCheck {
+  /** The person's own statement: a tombstone an unattended pass left does not refuse it. */
+  readonly explicitStatement?: boolean;
+}
+
 export function isSuppressedByForgetTombstone(
   vault: MemoryVaultStore,
   record: MemoryRecord,
+  check: ForgetTombstoneCheck = {},
 ): boolean {
-  return vault.hasForgetTombstoneForBody(record.scope, record.body);
+  return vault.hasForgetTombstoneForBody(record.scope, record.body, {
+    personOnly: check.explicitStatement === true,
+  });
 }
 
 export function isSuppressedByRejection(vault: MemoryVaultStore, record: MemoryRecord): boolean {

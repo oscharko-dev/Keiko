@@ -1761,3 +1761,77 @@ describe("what a forget covers (#4223)", () => {
     expect(recordsWith(vault, ctx, "superseded")).toHaveLength(2);
   });
 });
+
+// An unattended removal (maintenance, retention) must not make a rejection stronger than it was while
+// the rejected record existed: the person's own "Merke dir" outranks it, learned capture does not.
+describe("a statement after an unattended removal (#4223)", () => {
+  const first = "Ich bevorzuge Tabs über Spaces";
+
+  function remember(
+    vault: MemoryVaultStore,
+    ctx: ConversationMemoryRuntimeContext,
+  ): ReturnType<typeof collectMemoryActions> {
+    return collectMemoryActions(
+      makeDeps(vault, []),
+      { content: `Merke dir: ${first}`, memory: { enabled: true } } as SendDesktopChatRequest,
+      ctx,
+    );
+  }
+
+  async function rejectAndRetain(
+    vault: MemoryVaultStore,
+    ctx: ConversationMemoryRuntimeContext,
+  ): Promise<void> {
+    await say(vault, ctx, first, [stated(first)]);
+    const [live] = recordsWith(vault, ctx, "accepted");
+    if (live === undefined) throw new Error("expected the learned fact");
+    vault.updateMemory(live.id, { status: "rejected" }, Date.now());
+    applyMemoryRetention({
+      vault,
+      scopes: conversationMemoryScopes(ctx),
+      policy: { maxAgeMs: 30 * DAY_MS },
+      nowMs: Date.now() + 400 * DAY_MS,
+    });
+    expect(vault.getMemory(live.id)).toBeUndefined();
+  }
+
+  it("admits the person's statement after retention removed a rejected record, and still refuses learning it", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await rejectAndRetain(vault, ctx);
+
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([]);
+
+    await remember(vault, ctx);
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+  });
+
+  it("admits the person's statement after an unattended tombstone that records no status, and still refuses learning it", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    seedTombstone(vault, ctx, first, "memory-maintenance", "validity-expired");
+
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([]);
+
+    await remember(vault, ctx);
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+  });
+
+  it.each(["memory-center", "chat-statement", "a-surface-nobody-classified"])(
+    "still refuses the person's statement after a tombstone %s wrote",
+    async (surface) => {
+      const vault = makeVault();
+      const ctx = context();
+      seedTombstone(vault, ctx, first, surface, "user-request");
+
+      const actions = await remember(vault, ctx);
+
+      expect(actions).toEqual([
+        { kind: "rejected", reason: "suppressed-by-forget", explicitStatement: true },
+      ]);
+      expect(liveBodies(vault, ctx)).toEqual([]);
+    },
+  );
+});

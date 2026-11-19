@@ -117,6 +117,7 @@ import type {
   MemoryBatchDelete,
   DeleteMemoryOptions,
   MemoryBatchUpdate,
+  ForgetTombstoneRefusalOptions,
   ListMemoriesOptions,
   MemoryDeleteResult,
   MemoryEmbeddingInput,
@@ -1438,6 +1439,7 @@ function hasForgetTombstoneForBodyRow(
   opts: ResolvedOptions,
   scope: MemoryScope,
   body: string,
+  options: ForgetTombstoneRefusalOptions,
 ): boolean {
   gateMemoryScope(scope);
   const currentHash = opts.bodySuppressionHash(body);
@@ -1445,13 +1447,43 @@ function hasForgetTombstoneForBodyRow(
   // GEN-PERF-PERSISTENCE-014 — presence-only check keyed on body_hash; never decrypts the sealed
   // reason column. Same suppression decision as scanning + decrypting every tombstone, but O(1)
   // rows and zero reason decrypts (strengthens confidentiality on this hot path).
-  const presence = selectForgetSuppressionBodyHashPresence(db, scope, currentHash, legacyHash);
+  const presence = selectForgetSuppressionBodyHashPresence(
+    db,
+    scope,
+    currentHash,
+    legacyHash,
+    options,
+  );
   if (presence.current) return true;
   if (!presence.legacy) return false;
   withSidecarHardening(opts, () => {
     updateTombstoneBodyHashByScopeRows(db, scope, legacyHash, currentHash);
   });
   return true;
+}
+
+interface SimilarForgetTombstoneQuery {
+  readonly scope: MemoryScope;
+  readonly candidate: MemoryEmbeddingInput | Float32Array;
+  readonly threshold: number;
+  readonly options: ForgetTombstoneRefusalOptions;
+}
+
+function hasSimilarForgetTombstone(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  query: SimilarForgetTombstoneQuery,
+): boolean {
+  gateMemoryScope(query.scope);
+  const { scope, candidate, threshold, options } = query;
+  return hasSemanticallySimilarForgetTombstoneRow(
+    db,
+    scope,
+    opts.cipher,
+    candidate,
+    threshold,
+    options,
+  );
 }
 
 function buildTombstoneAndAccessOps(
@@ -1467,12 +1499,10 @@ function buildTombstoneAndAccessOps(
       validatedTombstonePage(db, opts, scopes, limit, after),
     recordForgottenStatements: (statements): readonly MemoryTombstone[] =>
       withSidecarHardening(opts, () => recordForgottenStatementRows(db, statements, opts)),
-    hasForgetTombstoneForBody: (scope: MemoryScope, body: string): boolean =>
-      hasForgetTombstoneForBodyRow(db, opts, scope, body),
-    hasSemanticallySimilarForgetTombstone: (scope, candidate, threshold): boolean => {
-      gateMemoryScope(scope);
-      return hasSemanticallySimilarForgetTombstoneRow(db, scope, opts.cipher, candidate, threshold);
-    },
+    hasForgetTombstoneForBody: (scope: MemoryScope, body: string, options = {}): boolean =>
+      hasForgetTombstoneForBodyRow(db, opts, scope, body, options),
+    hasSemanticallySimilarForgetTombstone: (scope, candidate, threshold, options = {}): boolean =>
+      hasSimilarForgetTombstone(db, opts, { scope, candidate, threshold, options }),
     purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number): number => {
       return withSidecarHardening(opts, () => {
         gateMemoryScope(scope);

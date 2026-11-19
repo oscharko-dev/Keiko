@@ -887,6 +887,8 @@ export type NoveltyInsertOutcome =
 
 export interface NoveltyInsertOptions {
   readonly signal?: AbortSignal;
+  // The person's own statement: a forget tombstone an unattended pass left does not refuse it.
+  readonly explicitStatement?: boolean;
   // Store nothing unless a semantic duplicate confirms the candidate.
   readonly onlyConfirm?: boolean;
   // The fact this candidate replaces: it is no duplicate of what it replaces.
@@ -965,9 +967,12 @@ function refusalMatchesCandidate(
   candidate: MemoryEmbeddingInput,
   threshold: number,
   reason: MemoryCaptureSuppressionReason,
+  explicitStatement: boolean,
 ): boolean {
   if (reason === FORGOTTEN_MEMORY_SUPPRESSION_REASON) {
-    return vault.hasSemanticallySimilarForgetTombstone(scope, candidate, threshold);
+    return vault.hasSemanticallySimilarForgetTombstone(scope, candidate, threshold, {
+      personOnly: explicitStatement,
+    });
   }
   return rejectedScopeEmbeddings(vault, scope).some(
     (row) =>
@@ -984,10 +989,11 @@ function semanticSuppressionReason(
   scope: MemoryRecord["scope"],
   candidate: MemoryEmbeddingInput | null,
   threshold: number,
+  explicitStatement: boolean,
 ): MemoryCaptureSuppressionReason | null {
   if (candidate === null) return null;
   for (const reason of SEMANTIC_SUPPRESSION_REASONS) {
-    if (refusalMatchesCandidate(vault, scope, candidate, threshold, reason)) {
+    if (refusalMatchesCandidate(vault, scope, candidate, threshold, reason, explicitStatement)) {
       return reason;
     }
   }
@@ -1046,7 +1052,13 @@ function noveltySuppression(
 ): MemoryCaptureSuppressionReason | null {
   return (
     options.refusedSinceStart?.(record) ??
-    semanticSuppressionReason(vault, record.scope, embedding, dedupThreshold)
+    semanticSuppressionReason(
+      vault,
+      record.scope,
+      embedding,
+      dedupThreshold,
+      options.explicitStatement === true,
+    )
   );
 }
 

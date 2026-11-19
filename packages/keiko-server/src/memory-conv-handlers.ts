@@ -511,7 +511,8 @@ function persistCandidateOutcome(
   }
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
-  if (isSuppressedByForgetTombstone(vault, record)) {
+  const explicitStatement = outcome.proposal.provenance.sourceKind === "explicit-user-instruction";
+  if (isSuppressedByForgetTombstone(vault, record, { explicitStatement })) {
     return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
   }
   const candidate = memoryCaptureAutoAcceptEligible(deps, mode, outcome)

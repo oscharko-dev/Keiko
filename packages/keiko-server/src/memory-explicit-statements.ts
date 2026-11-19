@@ -213,12 +213,10 @@ async function storeUnlessKnownParaphrase(
   vault: MemoryVaultStore,
   candidate: MemoryRecord,
 ): Promise<ExplicitStatementPersistence> {
-  const outcome = await insertSalienceMemoryWithNoveltyGate(
-    deps,
-    vault,
-    candidate,
-    replacementOptions(vault, candidate),
-  );
+  const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, candidate, {
+    ...replacementOptions(vault, candidate),
+    explicitStatement: true,
+  });
   if (outcome.kind === "suppressed") return outcome;
   if (outcome.kind === "inserted") {
     return {
