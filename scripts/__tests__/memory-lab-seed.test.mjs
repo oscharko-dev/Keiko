@@ -257,6 +257,88 @@ describe("validating a seed", () => {
     expect(validateScenario(chained).seed.records).toHaveLength(3);
   });
 
+  describe("what the vault would refuse, and what measures something else", () => {
+    const extra = (record) =>
+      withSeed((seed) => {
+        seed.records.push({
+          key: "extra",
+          type: "preference",
+          scope: "user",
+          status: "accepted",
+          ageDays: 5,
+          body: "Rosa likes tea.",
+          ...record,
+        });
+      });
+
+    it("refuses at load, naming the scenario, a record the memory contract refuses", () => {
+      // The failure this pins: each of these passed here and stopped the unit at instance start with
+      // a storage error that names no scenario, leaving earlier records inserted.
+      refused(
+        extra({ body: "w ".repeat(750) }),
+        /seed-fixture-en: seed record \d+ .* refused by the memory contract/u,
+      );
+      refused(extra({ body: "Rosa likes\u0001tea." }), /refused by the memory contract/u);
+      refused(extra({ ageDays: 36_500 }), /refused by the memory contract/u);
+      expect(validateScenario(scenario(extra({}))).seed.records).toHaveLength(3);
+    });
+
+    it("refuses two filler groups with one seed: they write identical bodies", () => {
+      const group = { count: 3, status: "accepted", minAgeDays: 1, maxAgeDays: 9 };
+      refused(
+        withSeed((seed) => {
+          seed.filler = [
+            { ...group, seed: 4 },
+            { ...group, seed: 4 },
+          ];
+        }),
+        "repeats the seed of an earlier group",
+      );
+      expect(
+        validateScenario(
+          scenario(
+            withSeed((seed) => {
+              seed.filler = [
+                { ...group, seed: 4 },
+                { ...group, seed: 5 },
+              ];
+            }),
+          ),
+        ).seed.filler,
+      ).toHaveLength(2);
+    });
+
+    it("refuses two records that supersede the same predecessor", () => {
+      refused(
+        extra({ status: "superseded", ageDays: 50, supersedes: "old" }),
+        "which another record already supersedes",
+      );
+    });
+
+    it("refuses a filler body that a probe's own terms or forbidden terms match", () => {
+      const probe = (expect) => ({ id: "q", question: "Which?", expect });
+      for (const expectation of [
+        { kind: "answer", terms: [["Ablage"]] },
+        { kind: "answer", terms: [["Markdown"]], forbidden: [["Ablage"]] },
+      ])
+        refused({ probes: [probe(expectation)] }, "a seed filler body matches a term list");
+    });
+
+    it("gives filler the default scope of a stated record: project, a learned fact in user scope", () => {
+      // A stated "Merke dir" is stored in project scope today (the oracle arm reports it), so a
+      // stated filler group lands there too; learned filler stays in user scope.
+      const group = { count: 1, status: "accepted", minAgeDays: 1, maxAgeDays: 2, seed: 1 };
+      const scopeOf = (filler) =>
+        planSeed({ filler: [filler] }, { nowMs: NOW, projectId: PROJECT }).records[0].scope.kind;
+      expect(scopeOf({ ...group, origin: "stated", type: "preference" })).toBe("project");
+      expect(scopeOf(group)).toBe("user");
+      expect(scopeOf({ ...group, origin: "stated", type: "preference", scope: "user" })).toBe(
+        "user",
+      );
+      expect(scopeOf({ ...group, scope: "project" })).toBe("project");
+    });
+  });
+
   it("refuses a link whose body the fact's own terms do not match", () => {
     refused(
       withSeed((seed) => {

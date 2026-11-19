@@ -1,6 +1,9 @@
 // Validation of a scenario's `seed` section (#4207), strict like the rest of the schema: a typo in a
 // field name or a record that contradicts the truth would otherwise measure something other than
 // the author meant. `fail` is the scenario loader's own, so every defect names its scenario.
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { REPO_ROOT } from "../coding-workbench-lab/lab-common.mjs";
 import { matchesTermGroups } from "./score.mjs";
 import { isRecord, nonEmptyString } from "./set-files.mjs";
 import {
@@ -12,7 +15,17 @@ import {
   SEED_SCOPES,
   SEED_STATUSES,
   fillerBodies,
+  planSeed,
 } from "./seed-plan.mjs";
+
+// The memory contract's own record validator, from the built contracts package: the vault refuses a
+// record it does not accept, at instance start, with an error that names no scenario. Absent (not
+// built) it is undefined and a scenario with a seed is refused: a seed is never accepted unchecked.
+const { validateMemoryRecord } = await import(
+  pathToFileURL(
+    join(REPO_ROOT, "packages", "keiko-contracts", "dist", "memory-record-validation.js"),
+  ).href
+).catch(() => ({}));
 
 const MAX_AGE_DAYS = 36_500;
 const MAX_ACCESS_COUNT = 1000;
@@ -205,6 +218,22 @@ function validateRecords(fail, id, records, scenario) {
     validateLinks(fail, id, where, record, scenario);
   });
   validateNoSupersedesCycle(fail, id, records, byKey);
+  validateOneSuccessor(fail, id, records);
+}
+
+// A record is superseded by at most one successor: its validity ends once, and the product writes one
+// edge per replacement. Two successors would end it at the later one's time and write two edges.
+function validateOneSuccessor(fail, id, records) {
+  const taken = new Set();
+  records.forEach((record, index) => {
+    if (record.supersedes === undefined) return;
+    if (taken.has(record.supersedes))
+      fail(
+        id,
+        `seed.records[${String(index)}].supersedes names ${String(record.supersedes)}, which another record already supersedes`,
+      );
+    taken.add(record.supersedes);
+  });
 }
 
 function validateFillerOrigin(fail, id, where, group) {
@@ -236,7 +265,19 @@ function termEntries(scenario) {
     ...(scenario.forgotten ?? []),
     ...(scenario.forbidden ?? []),
     ...(scenario.poison ?? []),
+    ...probeTermEntries(scenario.probes),
   ];
+}
+
+// A probe's own `expect.terms` and `expect.forbidden` are matched against stored records and answers
+// too: a filler body that carries them would be a record the scorer judges, not filler.
+function probeTermEntries(probes) {
+  if (!Array.isArray(probes)) return [];
+  return probes.flatMap((probe) =>
+    [probe?.expect?.terms, probe?.expect?.forbidden]
+      .filter((terms) => Array.isArray(terms))
+      .map((terms) => ({ terms })),
+  );
 }
 
 function validateFillerApart(fail, id, filler, scenario) {
@@ -256,6 +297,18 @@ function validateFiller(fail, id, filler, scenario) {
   if (total > MAX_FILLER_RECORDS)
     fail(id, `seed.filler totals ${String(total)} records; at most ${String(MAX_FILLER_RECORDS)}`);
   validateFillerApart(fail, id, filler, scenario);
+  validateDistinctFillerSeeds(fail, id, filler);
+}
+
+// Two groups with one seed write identical bodies, which the product's duplicate handling may merge,
+// and the lab would then report the merge as faded filler.
+function validateDistinctFillerSeeds(fail, id, filler) {
+  const seen = new Set();
+  filler.forEach((group, index) => {
+    if (seen.has(group.seed))
+      fail(id, `seed.filler[${String(index)}].seed repeats the seed of an earlier group`);
+    seen.add(group.seed);
+  });
 }
 
 /** Validates a scenario's `seed` section when it has one; truth, superseded and the lists are checked already. */
@@ -271,4 +324,22 @@ export function validateSeed(fail, id, scenario) {
     fail(id, "seed must hold at least one record or filler group");
   validateRecords(fail, id, seed.records, scenario);
   validateFiller(fail, id, seed.filler, scenario);
+  validateAgainstContract(fail, id, seed);
+}
+
+// Every planned record goes through the memory contract's validator, as the vault will at placement:
+// a body the learned form copies into a bounded evidence span, a control character or an age that
+// makes a timestamp negative fails here, naming the scenario, not at instance start.
+function validateAgainstContract(fail, id, seed) {
+  if (validateMemoryRecord === undefined)
+    fail(id, "a seed cannot be checked against the memory contract: run npm run build:packages");
+  const plan = planSeed(seed, { nowMs: Date.now(), projectId: "/lab/project" });
+  plan.records.forEach((record, index) => {
+    const result = validateMemoryRecord(record);
+    if (!result.ok)
+      fail(
+        id,
+        `seed record ${String(index)} (${record.status}, ${String(record.body.length)} characters) is refused by the memory contract: ${result.errors.join("; ")}`,
+      );
+  });
 }

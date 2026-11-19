@@ -191,7 +191,9 @@ function fillerGroup(group, groupIndex, nowMs, projectId) {
     const spec = {
       body: fillerBody(group.seed, index),
       type: group.type ?? DEFAULT_FILLER_TYPE,
-      scope: group.scope ?? "user",
+      // The scope follows the same default as a stated record: an explicit "Merke dir" is stored in
+      // project scope today, a learned fact in user scope.
+      scope: defaultScope(group),
       status: group.status,
       origin: group.origin,
     };

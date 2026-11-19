@@ -444,7 +444,8 @@ then does the instance start. A scenario with a seed may have no `turns` (the hi
   evidence span (which is what lets a later statement replace it), and a capture rationale.
   `origin: "stated"` writes what an explicit "Merke dir" writes: `explicit-user-instruction`,
   confidence 1, no evidence span, project scope by default (the explicit route stores there today);
-  it may be pinned. Filler groups take `origin` too (default learned).
+  it may be pinned. Filler groups take `origin` too (default learned) and follow the same scope default:
+  a `stated` group is in project scope unless it names one, a learned group in user scope.
 - **A learned record must be one the learner could write**, and loading refuses the rest: its type is
   `semantic-fact`, `preference`, `decision` or `procedural`; it is never `pinned`; `standing` only on
   a `semantic-fact` in user scope (the learner sets the mark on a self fact labelled identity or
@@ -469,8 +470,15 @@ then does the instance start. A scenario with a seed may have no `turns` (the hi
   instance's registered project for `project`).
 - `filler` groups generate `count` (at most 5000 in total) unrelated records of one `status`, with
   ages spread between `minAgeDays` and `maxAgeDays`. Bodies are invented words, deterministic in the
-  group's `seed` and index, and unique; loading refuses a scenario in which any term list (truth,
-  superseded, forgotten, forbidden, poison) would match a filler body.
+  group's `seed` and index, and unique within a group; loading refuses a scenario in which any term
+  list (truth, superseded, forgotten, forbidden, poison, and the `expect.terms` and `expect.forbidden`
+  of a probe) would match a filler body, and two groups with one `seed` (identical bodies).
+- Every planned record is also run through the memory contract's own validator
+  (`validateMemoryRecord`, from the built contracts package) when the scenario loads, so a body the
+  learned form cannot store (its evidence span is bounded at 1,024 characters), a control character, or
+  an age that makes a timestamp negative fails with the scenario's name instead of as a storage error
+  at instance start. A seed cannot be loaded without the built packages. A record is superseded by at
+  most one successor, and a `supersedes` chain may not return to a record it passed.
 - The whole section is strict: an unknown field, a bad status, a `supersedes` that names a record that
   is not `superseded` or is newer, a link whose body does not match, or an access age older than the
   record is a load error.
