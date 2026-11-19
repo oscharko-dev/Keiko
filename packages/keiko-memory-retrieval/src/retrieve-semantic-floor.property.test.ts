@@ -2,6 +2,7 @@ import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import { describe, expect, it } from "vitest";
 
 import {
+  assertFrequencyFloor,
   checkProperty,
   propertySettings,
   shrinkArray,
@@ -19,6 +20,8 @@ const SHARED_BODIES = ["alpha note", "beta note", "alpha beta note"] as const;
 const OTHER_BODIES = ["omega note", "sigma note", "kappa note"] as const;
 const MEMORIES_MAX = 10;
 const NAME = "semantic floor monotonicity";
+// The run count this suite asks for and at which its vacuity floors were validated.
+const RUNS = 200;
 
 interface Candidate {
   readonly shared: boolean;
@@ -85,6 +88,7 @@ describe("semantic floor monotonicity (property)", () => {
     const reached = { dropped: 0, multi: 0, lexical: 0 };
     await checkProperty<Case>({
       name: NAME,
+      runs: RUNS,
       generate,
       shrink: (value) =>
         [...shrinkArray(value.candidates)]
@@ -105,11 +109,16 @@ describe("semantic floor monotonicity (property)", () => {
         if (value.candidates.some((candidate) => candidate.shared)) reached.lexical += 1;
       },
     });
-    const { runs } = propertySettings({ name: NAME });
-    // Vacuity guards: the floor actually removed memories, several survived to be ordered, and
-    // lexically admitted memories took part.
-    expect(reached.dropped).toBeGreaterThan(runs / 20);
-    expect(reached.multi).toBeGreaterThan(runs / 20);
-    expect(reached.lexical).toBeGreaterThan(runs / 20);
+    const { runs } = propertySettings({ name: NAME, runs: RUNS });
+    // Vacuity guards, validated at RUNS: the floor actually removed memories, several survived to
+    // be ordered, and lexically admitted memories took part.
+    const floor = { runs, share: 1 / 20, validatedRuns: RUNS };
+    assertFrequencyFloor({
+      ...floor,
+      what: "a memory the higher floor drops",
+      count: reached.dropped,
+    });
+    assertFrequencyFloor({ ...floor, what: "several survivors to order", count: reached.multi });
+    assertFrequencyFloor({ ...floor, what: "a lexically admitted memory", count: reached.lexical });
   });
 });

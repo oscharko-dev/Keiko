@@ -2,6 +2,7 @@ import type { MemoryEdge, MemoryId, MemorySourceKind } from "@oscharko-dev/keiko
 import { describe, expect, it } from "vitest";
 
 import {
+  assertFrequencyFloor,
   checkProperty,
   propertySettings,
   shrinkArray,
@@ -56,16 +57,9 @@ const MAX_LEVEL: Readonly<Record<SignalName, number>> = {
 const SIGNALS = Object.keys(MAX_LEVEL) as readonly SignalName[];
 const RUNS = 300;
 
-// A frequency floor says that the generator reaches a situation often enough for the property to
-// mean something. The exact share is checked from the suite's own run count upwards, where it was
-// validated. A shorter but still substantial run (KEIKO_PROPERTY_RUNS set lower on purpose) must at
-// least have reached the situation once, so it cannot pass vacuously. A handful of runs is a replay
-// of one seed (KEIKO_PROPERTY_RUNS=1 with KEIKO_PROPERTY_SEED): there the correctness assertions
-// alone decide, and a sampling quota must not replace the counterexample.
-const MIN_RUNS_FOR_ANY_FLOOR = 50;
-function expectFloor(count: number, runs: number, share: number): void {
-  if (runs >= RUNS) expect(count).toBeGreaterThan(runs * share);
-  else if (runs >= MIN_RUNS_FOR_ANY_FLOOR) expect(count).toBeGreaterThan(0);
+// Vacuity floors of this suite, validated at RUNS (see `assertFrequencyFloor` in the harness).
+function expectFloor(what: string, count: number, runs: number, share: number): void {
+  assertFrequencyFloor({ what, count, runs, share, validatedRuns: RUNS });
 }
 
 function randomSpec(random: Random, constant: ReadonlyMap<SignalName, number>): Spec {
@@ -231,24 +225,6 @@ function* shrinkSpecs<T extends { readonly specs: readonly Spec[] }>(
 }
 
 describe("rrf fusion — tie-aware properties (#4228)", () => {
-  it("enforces a frequency floor wherever a run is long enough to mean something", () => {
-    expect(() => {
-      expectFloor(RUNS * 0.2, RUNS, 0.2);
-    }).toThrow();
-    expect(() => {
-      expectFloor(RUNS * 0.2 + 1, RUNS, 0.2);
-    }).not.toThrow();
-    expect(() => {
-      expectFloor(0, MIN_RUNS_FOR_ANY_FLOOR, 0.2);
-    }).toThrow();
-    expect(() => {
-      expectFloor(1, MIN_RUNS_FOR_ANY_FLOOR, 0.2);
-    }).not.toThrow();
-    expect(() => {
-      expectFloor(0, 1, 0.2);
-    }).not.toThrow();
-  });
-
   it("permutation invariance: other ids change the order only between exactly equal fused scores", async () => {
     const name = "rrf: permuting memory ids never reorders records with different fused scores";
     let tiedCases = 0;
@@ -299,12 +275,12 @@ describe("rrf fusion — tie-aware properties (#4228)", () => {
     const { runs } = propertySettings({ name, runs: RUNS });
     // Vacuity: most cases held exactly equal AND different fused scores, and the other ids did
     // reorder the records inside an equal run (the id tie-break was exercised, not skipped).
-    expectFloor(tiedCases, runs, 0.5);
-    expectFloor(distinctCases, runs, 0.9);
-    expectFloor(idOrderedTies, runs, 0.2);
+    expectFloor("a tied fused score", tiedCases, runs, 0.5);
+    expectFloor("distinct fused scores", distinctCases, runs, 0.9);
+    expectFloor("a tie reordered by other ids", idOrderedTies, runs, 0.2);
     // Vacuity for the graph signal: a tied group straddled the cut, and an edge pointed into it.
-    expectFloor(straddled, runs, 0.2);
-    expectFloor(edgeIntoGroup, runs, 0.1);
+    expectFloor("a tied group straddling the graph cut", straddled, runs, 0.2);
+    expectFloor("an edge into the straddling group", edgeIntoGroup, runs, 0.1);
   });
 
   it("a signal that is constant across all candidates never changes the order", async () => {
@@ -344,8 +320,8 @@ describe("rrf fusion — tie-aware properties (#4228)", () => {
     });
     const { runs } = propertySettings({ name, runs: RUNS });
     // Vacuity: a zero constant is trivial, so most cases used a positive one; pairs were compared.
-    expectFloor(positiveConstant, runs, 0.3);
-    expectFloor(comparedPairs, runs, 10);
+    expectFloor("a positive constant signal", positiveConstant, runs, 0.3);
+    expectFloor("a compared pair", comparedPairs, runs, 10);
   });
 
   it("raising one record's subscore on one signal never lowers its position", async () => {
@@ -385,7 +361,7 @@ describe("rrf fusion — tie-aware properties (#4228)", () => {
     });
     const { runs } = propertySettings({ name, runs: RUNS });
     // Vacuity: nearly every case raised a signal, and the record actually climbed in a share of them.
-    expectFloor(raised, runs, 0.9);
-    expectFloor(climbed, runs, 0.1);
+    expectFloor("a raised subscore", raised, runs, 0.9);
+    expectFloor("a record that climbed", climbed, runs, 0.1);
   });
 });
