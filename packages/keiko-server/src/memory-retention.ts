@@ -28,7 +28,10 @@ import type {
   MemoryScope,
   MemoryStatus,
 } from "@oscharko-dev/keiko-contracts";
-import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  MEMORY_RETENTION_FORGETTER_SURFACE,
+  type MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
 import { memoryScopeKey } from "./memory-scope-sanitizer.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -200,7 +203,7 @@ export function applyMemoryRetention(options: ApplyMemoryRetentionOptions): Memo
   for (const decision of forgotten) {
     vault.deleteMemory(decision.memoryId, {
       tombstone: true,
-      forgetterSurface: "retention",
+      forgetterSurface: MEMORY_RETENTION_FORGETTER_SURFACE,
       reason: decision.reason,
       nowMs,
     });

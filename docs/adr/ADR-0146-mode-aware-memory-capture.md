@@ -455,9 +455,17 @@ bodies or user text.
   until project memory (step 3) decides otherwise.
 - The Journal shows a forget only when a person asked for it (Memory Center, a clear statement in a
   Chat). The `memory:forgotten` audit event carries the tombstone's `forgetterSurface`, so retention
-  and maintenance tombstones never read as the person's decision. For the same reason a tombstone
-  whose surface is `memory-maintenance` stays in the ledger but never refuses a statement, exact or
-  semantic (#4223): only a forget a person or the Memory window asked for suppresses relearning.
+  and maintenance tombstones never read as the person's decision. Who refuses is defined once, in the
+  vault package (`forgetter-surfaces.ts`), and used by capture suppression and by this Journal
+  projection alike (#4223). A tombstone refuses a later statement, exact and semantic, when its
+  surface is the person's forget in a Chat (`chat-statement`) or in the Memory window
+  (`memory-center`), and also when the surface is unknown: a new or mistyped writer fails closed, so
+  a forgotten fact never comes back. Only the explicitly unattended surfaces do not refuse:
+  `memory-maintenance` and operator `retention`, a storage policy that records that Keiko removed a
+  record, not that a person refused the fact. Their tombstones stay in the ledger. A test enumerates
+  every production writer and fails for one that is not classified. Superseded records are kept as
+  history until the person deletes them or an operator's opt-in retention removes them, and history
+  is never sent to the model: default recall and the standing profile hide closed validity windows.
 - Every capture decision the Journal shows is also one registered `memory.capture.decision`
   Activity Log line under the deciding turn's or request's correlation, written by the same
   writer: closed outcome, reason, effective mode, surface, scope kind and source kind, never a

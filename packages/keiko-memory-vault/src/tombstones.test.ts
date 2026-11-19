@@ -17,9 +17,14 @@ import {
   insertTombstoneRow,
   listTombstonesByScopeRows,
   listTombstonesPageRows,
-  MEMORY_MAINTENANCE_FORGETTER_SURFACE,
   selectForgetSuppressionBodyHashPresence,
 } from "./tombstones.js";
+import {
+  MEMORY_CENTER_FORGETTER_SURFACE,
+  MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE,
+  MEMORY_MAINTENANCE_FORGETTER_SURFACE,
+  MEMORY_RETENTION_FORGETTER_SURFACE,
+} from "./forgetter-surfaces.js";
 import { memoryBodySuppressionHash } from "./body-fingerprint.js";
 import { createMemoryVault } from "./index.js";
 import { MemoryStorageValidationError } from "./errors.js";
@@ -136,9 +141,16 @@ describe("tombstones", () => {
     }
   });
 
-  // #4223: a tombstone that unattended maintenance wrote records that Keiko removed a record, not
-  // that the person asked to forget the fact. It stays in the ledger and never refuses a statement.
-  it("never lets a maintenance tombstone refuse a statement, exact or semantic", () => {
+  // #4223: a tombstone written by an unattended surface (maintenance, operator retention) records
+  // that Keiko removed a record, not that the person refused the fact. It stays in the ledger and
+  // never refuses a statement. Every other surface, including an unknown one, still refuses.
+  it.each([
+    [MEMORY_MAINTENANCE_FORGETTER_SURFACE, false],
+    [MEMORY_RETENTION_FORGETTER_SURFACE, false],
+    [MEMORY_CENTER_FORGETTER_SURFACE, true],
+    [MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE, true],
+    ["a-surface-nobody-classified", true],
+  ])("a tombstone from %s refuses a statement: %s (exact and semantic)", (surface, refuses) => {
     const db = openTestDb();
     try {
       const hash = memoryBodySuppressionHash("Ich bevorzuge Tabellen");
@@ -146,39 +158,21 @@ describe("tombstones", () => {
       insertTombstoneRow(
         db,
         makeTombstone({
-          id: "by-maintenance",
+          id: "t-1",
           memoryId: "m-1" as MemoryId,
           bodyHash: hash,
-          forgetterSurface: MEMORY_MAINTENANCE_FORGETTER_SURFACE,
+          forgetterSurface: surface,
         }),
         TEST_CIPHER,
         vector,
       );
       expect(selectForgetSuppressionBodyHashPresence(db, userScope, hash, hash).current).toBe(
-        false,
+        refuses,
       );
       expect(
         hasSemanticallySimilarForgetTombstoneRow(db, userScope, TEST_CIPHER, vector, 0.95),
-      ).toBe(false);
-      expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER).map((row) => row.id)).toEqual([
-        "by-maintenance",
-      ]);
-
-      insertTombstoneRow(
-        db,
-        makeTombstone({
-          id: "by-person",
-          memoryId: "m-2" as MemoryId,
-          bodyHash: hash,
-          forgetterSurface: "memory-center",
-        }),
-        TEST_CIPHER,
-        vector,
-      );
-      expect(selectForgetSuppressionBodyHashPresence(db, userScope, hash, hash).current).toBe(true);
-      expect(
-        hasSemanticallySimilarForgetTombstoneRow(db, userScope, TEST_CIPHER, vector, 0.95),
-      ).toBe(true);
+      ).toBe(refuses);
+      expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER)).toHaveLength(1);
     } finally {
       db.close();
     }

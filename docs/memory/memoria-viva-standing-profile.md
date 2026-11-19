@@ -37,7 +37,7 @@ recomputed per answer.
 **History.** The superseded fact stays in the vault with its closed validity window and its
 `supersedes` edge. The maintenance pass never forgets it, and returning to the earlier value in the
 same words is learned like any new statement. Neither the profile nor ordinary recall sends it; only
-the person's own forget, or an operator's opt-in retention policy, removes it.
+the person's own forget, or an operator's opt-in retention policy, removes it. A tombstone from unattended maintenance or retention never refuses the person's later statement.
 
 **Order.** Pinned first, then the number of times the person confirmed the fact, then the newest
 statement, then the id. The profile does not decay by recency; it changes only through supersession,

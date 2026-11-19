@@ -19,6 +19,8 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   createMemoryVault,
   MEMORY_CENTER_PAGE_LIMIT,
+  MEMORY_CENTER_FORGETTER_SURFACE,
+  MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE,
   MemoryStorageError,
   MemoryStoragePreconditionError,
   MemoryStorageValidationError,
@@ -1506,7 +1508,7 @@ function executeForgetSelection(
   vault: MemoryVaultStore,
   selector: ForgetSelector,
   reason: MemoryForgetReason,
-  forgetterSurface = "memory-center",
+  forgetterSurface = MEMORY_CENTER_FORGETTER_SURFACE,
 ): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
   const nowMs = Date.now();
   const authorizedScopes = authorizedMemoryScopes(deps, vault);
@@ -1678,7 +1680,7 @@ export function forgetMemoryFromStatement(
       vault,
       { kind: "by-id", memoryId },
       MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
-      "chat-statement",
+      MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE,
     );
     return isRouteResult(result) ? "refused" : "forgotten";
   } catch (error) {
@@ -1721,7 +1723,7 @@ export async function forgetStatementNotLearned(
       allowed.map((scope) => ({
         scope,
         body,
-        forgetterSurface: "chat-statement",
+        forgetterSurface: MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE,
         reviewerId: reviewerIdForMemoryMutation(deps),
         reason: MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
         nowMs,

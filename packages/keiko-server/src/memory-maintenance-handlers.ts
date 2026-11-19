@@ -39,8 +39,10 @@ import type {
   MemoryId,
   MemoryRecord,
   MemoryScope,
+  MemoryStatus,
   MemoryType,
 } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_STATUSES } from "@oscharko-dev/keiko-contracts/memory";
 import {
   MEMORY_MAINTENANCE_FORGETTER_SURFACE,
   MemoryStorageError,
@@ -469,6 +471,10 @@ export interface RunMaintenanceOptions {
   readonly correlationId?: string;
 }
 
+const PLANNABLE_STATUSES: readonly MemoryStatus[] = MEMORY_STATUSES.filter(
+  (status) => status !== "superseded",
+);
+
 const MILLIS_PER_DAY = 24 * 60 * 60 * 1000;
 const RETENTION_ENV_FIELDS = {
   maxAgeMs: ["KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS", MILLIS_PER_DAY],
@@ -594,8 +600,15 @@ export function runMemoryMaintenance(
   runConsolidationPass(vault, nowMs, reviewable, counts, correlationId);
   // Phase 3 — archive / forget on the post-consolidation snapshot. The access stats feed the
   // strength model; confidence itself is never mutated (O-V2).
-  const all = vault.listMemoriesAcrossScopes(scopes, { includeExpired: true });
-  const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
+  // A superseded record is history (#4223) and can produce no effect here, so it is excluded at the
+  // query: its body is not decoded and its access counters are not read.
+  const all = vault.listMemoriesAcrossScopes(scopes, {
+    includeExpired: true,
+    status: PLANNABLE_STATUSES,
+  });
+  const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats(
+    all.map(({ id }) => id),
+  );
   const plan = planMemoryMaintenance(all, accessStats, { nowMs, policy: planPolicy });
   applyFadeEffects(vault, auditSink, nowMs, plan, recordsById(all), counts);
   // Phase 4 — explicit retention and tombstone purge. It shares this bounded pass, scope snapshot,

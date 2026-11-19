@@ -14,6 +14,7 @@ import type {
   ConversationId,
   MemoryId,
   MemoryRecord,
+  MemoryReviewerId,
   ProjectId,
   UserId,
   WorkspaceId,
@@ -28,7 +29,11 @@ import {
   planMemoryMaintenance,
   type MemoryMaintenancePlan,
 } from "@oscharko-dev/keiko-memory-governance";
-import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  createMemoryVault,
+  type MemoryForgottenStatement,
+  type MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -49,6 +54,7 @@ import {
 } from "./memory-conversation-context.js";
 import { handleAcceptMemoryProposal } from "./memory-handlers.js";
 import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
+import { applyMemoryRetention } from "./memory-retention.js";
 import {
   MEMORY_LEARN_CHANGE_BASES,
   MEMORY_LEARN_DROP_REASONS,
@@ -1382,17 +1388,17 @@ function seedTombstone(
   ctx: ConversationMemoryRuntimeContext,
   body: string,
   forgetterSurface: string,
+  reason: string,
 ): void {
-  vault.recordForgottenStatements(
-    conversationMemoryScopes(ctx).map((scope) => ({
-      scope,
-      body,
-      forgetterSurface,
-      reviewerId: "local-operator",
-      reason: "validity-expired",
-      nowMs: Date.now(),
-    })) as never,
-  );
+  const statements: MemoryForgottenStatement[] = conversationMemoryScopes(ctx).map((scope) => ({
+    scope,
+    body,
+    forgetterSurface,
+    reviewerId: "local-operator" as MemoryReviewerId,
+    reason,
+    nowMs: Date.now(),
+  }));
+  vault.recordForgottenStatements(statements);
 }
 
 describe("a corrected fact stays as history (#4223)", () => {
@@ -1435,7 +1441,7 @@ describe("a corrected fact stays as history (#4223)", () => {
   it("is not refused by a maintenance tombstone left by an earlier version", async () => {
     const vault = makeVault();
     const ctx = context();
-    seedTombstone(vault, ctx, first, "memory-maintenance");
+    seedTombstone(vault, ctx, first, "memory-maintenance", "validity-expired");
     await say(vault, ctx, first, [stated(first)]);
     expect(liveBodies(vault, ctx)).toEqual([first]);
   });
@@ -1443,9 +1449,83 @@ describe("a corrected fact stays as history (#4223)", () => {
   it("is still refused by a tombstone the person's own forget wrote", async () => {
     const vault = makeVault();
     const ctx = context();
-    seedTombstone(vault, ctx, first, "memory-center");
+    seedTombstone(vault, ctx, first, "memory-center", "user-request");
     await say(vault, ctx, first, [stated(first)]);
     expect(liveBodies(vault, ctx)).toEqual([]);
+  });
+
+  it("is not refused after operator retention removed the record, and is still refused for an unknown surface", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    applyMemoryRetention({
+      vault,
+      scopes: conversationMemoryScopes(ctx),
+      policy: { maxAgeMs: 30 * DAY_MS },
+      nowMs: Date.now() + 400 * DAY_MS,
+    });
+    expect(liveBodies(vault, ctx)).toEqual([]);
+    const surfaces = conversationMemoryScopes(ctx).flatMap((scope) =>
+      vault.listTombstonesByScope(scope).map((tombstone) => tombstone.forgetterSurface),
+    );
+    expect(surfaces).toContain("retention");
+
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+
+    const other = makeVault();
+    const otherCtx = context();
+    seedTombstone(other, otherCtx, first, "a-surface-nobody-classified", "user-request");
+    await say(other, otherCtx, first, [stated(first)]);
+    expect(liveBodies(other, otherCtx)).toEqual([]);
+  });
+
+  it("chains old-A, B and new-A after a return, with recall supplying A once", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    await say(vault, ctx, second, [stated(second)]);
+    maintain(vault);
+    await say(vault, ctx, first, [stated(first)]);
+
+    const live = recordsWith(vault, ctx, "accepted");
+    expect(live.map((record) => record.body)).toEqual([first]);
+    const superseded = recordsWith(vault, ctx, "superseded");
+    const oldA = superseded.find((record) => record.body === first);
+    const b = superseded.find((record) => record.body === second);
+    const newA = live[0];
+    if (oldA === undefined || b === undefined || newA === undefined) {
+      throw new Error("expected old-A, B and new-A");
+    }
+    expect(newA.id).not.toBe(oldA.id);
+    const edgeTargets = (id: MemoryId): readonly MemoryId[] =>
+      vault
+        .listOutgoingEdges(id)
+        .filter((edge) => edge.kind === "supersedes")
+        .map((edge) => edge.toMemoryId);
+    expect(edgeTargets(oldA.id)).toEqual([b.id]);
+    expect(edgeTargets(b.id)).toEqual([newA.id]);
+
+    const request = {
+      content: "Was bevorzuge ich bei Tabs und Spaces?",
+      memory: { enabled: true, budgetTokens: 900, context: {} },
+    } as unknown as SendDesktopChatRequest;
+    const text = suppliedMemoryText(await buildMemoryResult(request, makeDeps(vault, []), ctx));
+    expect(text.split(first)).toHaveLength(2);
+    expect(text).not.toContain(second);
+  });
+
+  it("leaves one live record and no duplicate live body after flip-flopping twice", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    for (const body of [first, second, first, second]) {
+      await say(vault, ctx, body, [stated(body)]);
+      maintain(vault);
+    }
+    expect(liveBodies(vault, ctx)).toEqual([second]);
+    expect(recordsWith(vault, ctx, "superseded").map((record) => record.body)).toEqual(
+      expect.arrayContaining([first, first, second]),
+    );
   });
 
   it("never sends the earlier value to an answer once the fact changed", async () => {

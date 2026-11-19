@@ -84,10 +84,13 @@ by a stable keyset and returns an opaque continuation cursor, so every older rec
 inspectable without materializing or decrypting the complete ledger.
 
 Semantic forget suppression is deletion-grade across the complete retained tombstone ledger, except
-tombstones the maintenance pass itself wrote (`forgetterSurface` `memory-maintenance`): those record
-that Keiko removed a record, not that a person refused the fact, so neither exact nor semantic
-suppression reads them (#4223). A superseded record is history and is never forgotten by maintenance.
-Sealed vectors are traversed in fixed-size pages through the scope/time/id index and compared exactly,
+tombstones written by an explicitly unattended surface, `memory-maintenance` and operator
+`retention`: those record that Keiko removed a record under a storage policy, not that a person
+refused the fact, so neither exact nor semantic suppression reads them (#4223). Tombstones from the
+person's forget (`chat-statement`, `memory-center`) and from any unknown surface still refuse
+(fail closed). The classification lives once in the vault package (ADR-0146). The maintenance pass
+never forgets a superseded record and does not read it; superseded records stay as history until the
+person deletes them or the opt-in retention policy removes them, and are not sent to the model. Sealed vectors are traversed in fixed-size pages through the scope/time/id index and compared exactly,
 short-circuiting on a match. The implementation deliberately does not persist a plaintext ANN
 sidecar for forgotten content and never drops older refusals merely to cap an in-memory array. A
 no-match scan is therefore linear in retained vector-bearing tombstones; operators with high-volume
