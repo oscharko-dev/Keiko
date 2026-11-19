@@ -1471,6 +1471,11 @@ relative scoring floors, and read/byte/time grants remain unchanged; peers share
 below-floor fallback and remain low confidence. A higher-confidence ordinary selection does not
 admit them. The existing selected-file count records actual retained size, while
 `keepOneFallbackApplied` is true only for a single retained fallback source.
+A path admitted only from the previous answer's citations (#4458) stays admitted and prioritized,
+but it is not the current question's evidence: when nothing else clears the floor, the question's
+strongest below-floor candidate is still retained beside it, within the same grants, and the
+selection reports low confidence. A previous-answer path the question names or lexically matches
+is the question's own evidence.
 The existing selection-details event records the closed fallback ranking source. Ordinary fallback
 records low selection confidence and the
 `low-confidence-selection` prompt caveat; high/low is the same closed vocabulary on pack, wire,

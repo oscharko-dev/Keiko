@@ -9269,6 +9269,23 @@ function primaryCandidateFilter(rings: RingRunSummary): typeof DEFAULT_FILTER_OP
   };
 }
 
+// #4458: previous-answer paths the current question does not itself name or evidence. They stay
+// admitted and prioritized, but they never replace the question's own keep-one evidence.
+function continuityOnlyPaths(rings: RingRunSummary): ReadonlySet<string> {
+  const selections = rings.explicitAdmission?.selections ?? [];
+  const owned = new Set([
+    ...selections
+      .filter((selection) => selection.origin !== "assistant")
+      .map((selection) => selection.path),
+    ...primaryContentPaths(rings),
+  ]);
+  return new Set(
+    selections
+      .filter((selection) => selection.origin === "assistant" && !owned.has(selection.path))
+      .map((selection) => selection.path),
+  );
+}
+
 function explicitSelectionPaths(rings: RingRunSummary): ReadonlySet<string> {
   return new Set(
     rings.atoms
@@ -9361,6 +9378,7 @@ function finalCandidateFilter(
       args.input.scope.kind === "files"
         ? 0
         : absoluteRelevanceFloor(weightsForIntent(effectiveRetrievalIntent(args.plan))),
+    continuityOnlyPaths: continuityOnlyPaths(rings),
     nowMs: args.nowMs,
     fallbackOrder: reranker.reranked
       ? []
@@ -9411,6 +9429,7 @@ function selectRankedEvidencePool(
       selected: ordered.kept,
       absoluteFloor: options.minScore,
       fallbackOrder: options.fallbackOrder,
+      continuityOnlyPaths: options.continuityOnlyPaths,
       minScoreExemptPaths: options.minScoreExemptPaths ?? new Set(),
       scopeKind: input.scope.kind,
       relative: ordinaryRelativeFloor(selectionInput),
