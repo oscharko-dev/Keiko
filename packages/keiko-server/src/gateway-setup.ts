@@ -203,6 +203,7 @@ const GATEWAY_TOOL_CALLING_VERIFICATION_OPERATION = defineActivityLogOperation({
   proofIds: ["gateway.tool-calling.verification.line"],
   releaseImpact: "patch",
 });
+const REQUIRED_COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
 const GATEWAY_VOICE_SETUP_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -211,11 +212,11 @@ const GATEWAY_VOICE_SETUP_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "gateway-setup.logVoiceSetupResolution",
   fields: {
-    speechInputModels: { type: "integer", dataClass: "count", required: true },
-    usableSpeechOutputModels: { type: "integer", dataClass: "count", required: true },
-    incompleteSpeechOutputModels: { type: "integer", dataClass: "count", required: true },
-    usableRealtimeModels: { type: "integer", dataClass: "count", required: true },
-    incompleteRealtimeModels: { type: "integer", dataClass: "count", required: true },
+    speechInputModels: REQUIRED_COUNT_FIELD,
+    usableSpeechOutputModels: REQUIRED_COUNT_FIELD,
+    incompleteSpeechOutputModels: REQUIRED_COUNT_FIELD,
+    usableRealtimeModels: REQUIRED_COUNT_FIELD,
+    incompleteRealtimeModels: REQUIRED_COUNT_FIELD,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1028,6 +1029,8 @@ interface VoiceProviderRawOptions {
   readonly capabilities: SetupVoiceCapabilities;
   readonly rawCapability?: ModelCapability | undefined;
   readonly voiceProfiles?: readonly VoicePersonaVoice[] | undefined;
+  /** Only ever "gateway-connection", and only when setup proved the connection is shared. */
+  readonly credentialOrigin?: "gateway-connection" | undefined;
   // KEIKO-0167 (PR-review follow-up, Codex thread 3769711637): pass a per-provider
   // circuitBreaker override through voice reserialization so applyVoiceProviders /
   // validateVoiceProviderConnection can round-trip it without dropping.
@@ -1066,6 +1069,9 @@ function voiceProviderRaw(
     baseUrl,
     apiKey,
     apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+    ...(options.credentialOrigin === undefined
+      ? {}
+      : { credentialOrigin: options.credentialOrigin }),
     ...voiceProviderEndpointRaw(options),
     capability: configuredOrDefaultVoiceCapability(modelId, options),
     ...(options.voiceProfiles === undefined ? {} : { voiceProfiles: options.voiceProfiles }),
@@ -1249,8 +1255,16 @@ function buildRawConfig(
   modelIds: readonly string[],
   options: ProviderRawOptions = {},
 ): Record<string, unknown> {
+  const providers = modelIds.map((modelId) => providerRaw(modelId, baseUrl, apiKey, options));
+  const mainIndex = providers.findIndex(
+    (provider) => (provider.capability as ModelCapability).kind === "chat",
+  );
   return {
-    providers: modelIds.map((modelId) => providerRaw(modelId, baseUrl, apiKey, options)),
+    // Every provider built here carries the one verified connection's credential, so each one but
+    // the main connection itself records that; the export replaces only keys carrying the record.
+    providers: providers.map((provider, index) =>
+      index === mainIndex ? provider : { ...provider, credentialOrigin: "gateway-connection" },
+    ),
     circuitBreaker: DEFAULT_CIRCUIT_BREAKER_CONFIG,
   };
 }
@@ -1358,6 +1372,19 @@ function storedCatalogOrigin(
   return provider.catalogOrigin === undefined ? {} : { catalogOrigin: provider.catalogOrigin };
 }
 
+// The mark says "this provider's connection IS the verified gateway connection". A rewrite from the
+// stored configuration keeps it only while that is still true of the stored data: the provider
+// still shares the primary's address, header and credential. Any provider whose connection moved
+// loses it, and Setup recomputes it from the verified connection (review finding on #4464).
+function storedCredentialOrigin(
+  provider: ModelProviderConfig,
+  primary: ModelProviderConfig | undefined,
+): Pick<ModelProviderConfig, "credentialOrigin"> {
+  return provider.credentialOrigin !== undefined && sharesStoredGatewayConnection(provider, primary)
+    ? { credentialOrigin: provider.credentialOrigin }
+    : {};
+}
+
 function storedDeploymentIdentity(
   provider: ModelProviderConfig,
 ): Pick<ModelProviderConfig, "deploymentIdentitySha256"> {
@@ -1393,6 +1420,7 @@ function rawProviderFromCurrent(
   provider: ModelProviderConfig,
   capability: ModelCapability | undefined,
   timeoutMs: number | undefined,
+  primary: ModelProviderConfig | undefined,
 ): Record<string, unknown> {
   return {
     modelId: provider.modelId,
@@ -1400,6 +1428,7 @@ function rawProviderFromCurrent(
     ...rawProviderCredential(provider),
     apiKeyHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
     ...storedCatalogOrigin(provider),
+    ...storedCredentialOrigin(provider, primary),
     ...storedDeploymentIdentity(provider),
     ...(provider.endpointStyle === undefined ? {} : { endpointStyle: provider.endpointStyle }),
     ...(provider.apiVersion === undefined ? {} : { apiVersion: provider.apiVersion }),
@@ -1455,12 +1484,14 @@ export function rawConfigFromCurrent(
   figmaAccessToken: string | undefined,
   timeoutMs?: number,
 ): Record<string, unknown> {
+  const primary = storedPrimaryGatewayProvider(config);
   return {
     providers: config.providers.map((provider) =>
       rawProviderFromCurrent(
         provider,
         config.capabilities?.find((item) => item.id === provider.modelId),
         timeoutMs,
+        primary,
       ),
     ),
     circuitBreaker: config.circuitBreaker,
@@ -1561,9 +1592,27 @@ function setupVoiceProvidersFromCurrent(
   );
 }
 
+type VerifiedGatewayConnection = Pick<
+  ModelProviderConfig,
+  "baseUrl" | "apiKey" | "apiKeyHeaderName"
+>;
+
+// Only a voice provider whose address, header and credential are the verified gateway connection's
+// is marked; one with its own key (a voice-only rotation, a separately entered endpoint) never is,
+// so a team export cannot replace its credential with the gateway token (review finding on #4464).
+function voiceCredentialOrigin(
+  provider: SetupVoiceProvider,
+  connection: VerifiedGatewayConnection | undefined,
+): Pick<VoiceProviderRawOptions, "credentialOrigin"> {
+  return connection !== undefined && sharesStoredGatewayConnection(provider, connection)
+    ? { credentialOrigin: "gateway-connection" }
+    : {};
+}
+
 function applyVoiceProviders(
   rawConfig: Record<string, unknown>,
   voiceProviders: readonly SetupVoiceProvider[],
+  connection?: VerifiedGatewayConnection,
 ): Record<string, unknown> {
   if (voiceProviders.length === 0) {
     return rawConfig;
@@ -1590,6 +1639,7 @@ function applyVoiceProviders(
           providerLocality: provider.providerLocality,
           capabilities: provider.capabilities,
           rawCapability: provider.rawCapability,
+          ...voiceCredentialOrigin(provider, connection),
           ...(provider.voiceProfiles === undefined
             ? {}
             : { voiceProfiles: provider.voiceProfiles }),
@@ -3875,9 +3925,15 @@ interface SetupRequest {
   readonly submittedEmbeddingModelIds: readonly string[];
   /**
    * The DURABLE stored view for restore classification — the persisted file with per-model env
-   * overrides masked (see {@link durableStoredGatewayConfig}); undefined on a fresh setup.
+   * overrides masked (see {@link durableStoredGatewayView}); undefined on a fresh setup.
    */
   readonly stored: GatewayConfig | undefined;
+  /**
+   * The reranker the parsed stored FILE names; undefined when nothing is stored yet or the file
+   * cannot be parsed, even though `stored` then falls back to the running configuration. Only this
+   * one can prove that a reranker rides the gateway connection (audit of #4464).
+   */
+  readonly storedReranker: RerankerConfig | undefined;
   /**
    * Model ids whose stored capability kind is `ocr-vision` — the rebuild neither chat-probes
    * nor re-derives them; the stored providers are restored verbatim, exactly like voice
@@ -5980,8 +6036,8 @@ interface SetupRequestAssembly {
   readonly correlationId: string | undefined;
   readonly credentials: SetupGatewayCredentials;
   readonly current: GatewayConfig | undefined;
-  /** The durable stored view for restore classification — see {@link durableStoredGatewayConfig}. */
-  readonly stored: GatewayConfig | undefined;
+  /** The durable stored view for restore classification — see {@link durableStoredGatewayView}. */
+  readonly storedView: DurableStoredGatewayView;
   readonly figmaAccessToken: string | undefined;
   readonly modelLists: SetupModelLists;
   readonly preserveExisting: boolean;
@@ -6013,12 +6069,14 @@ function storedRestoreListsForSetup(
     // into a chat deployment (review finding on #3037). All four lists read the DURABLE stored
     // view: the dedicated-embedding list compares connection identities, which a transient
     // per-model env override must not skew (review finding on #3037).
-    storedEmbeddingModelIds: inheritedDeployments ? currentEmbeddingModelIds(input.stored) : [],
-    storedOcrModelIds: inheritedDeployments ? currentOcrModelIds(input.stored) : [],
-    storedDedicatedEmbeddingModelIds: inheritedDeployments
-      ? currentDedicatedEmbeddingModelIds(input.stored)
+    storedEmbeddingModelIds: inheritedDeployments
+      ? currentEmbeddingModelIds(input.storedView.config)
       : [],
-    storedVoiceModelIds: inheritedDeployments ? currentVoiceModelIds(input.stored) : [],
+    storedOcrModelIds: inheritedDeployments ? currentOcrModelIds(input.storedView.config) : [],
+    storedDedicatedEmbeddingModelIds: inheritedDeployments
+      ? currentDedicatedEmbeddingModelIds(input.storedView.config)
+      : [],
+    storedVoiceModelIds: inheritedDeployments ? currentVoiceModelIds(input.storedView.config) : [],
   };
 }
 
@@ -6041,7 +6099,8 @@ function assembleSetupRequest(input: SetupRequestAssembly): SetupRequest | Route
     imageInputModelIds: resolved.imageInputModelIds,
     imageInputModelIdsProvided: hasListField(input.raw, "imageInputModelIds"),
     submittedEmbeddingModelIds: input.modelLists.embeddingModelIds ?? [],
-    stored: input.stored,
+    stored: input.storedView.config,
+    storedReranker: input.storedView.reranker,
     ...storedRestoreListsForSetup(input),
     workflowEligibleModelIds: resolved.workflowEligibleModelIds,
     workflowEligibleModelIdsConfigured: hasListField(input.raw, "workflowEligibleModelIds"),
@@ -6061,12 +6120,13 @@ function readSetupRequest(
   raw: unknown,
   env: EnvSource,
   current: GatewayConfig | undefined,
-  stored: GatewayConfig | undefined,
+  storedView: DurableStoredGatewayView,
   correlationId: string | undefined,
 ): SetupRequest | RouteResult {
   if (!isRecord(raw)) {
     return setupObjectBodyRequiredResult(correlationId);
   }
+  const stored = storedView.config;
   const preserveExisting = shouldPreserveExisting(raw, current);
   const credentials = readSetupGatewayCredentials(raw, env, current, stored, preserveExisting);
   if (isRouteResult(credentials)) {
@@ -6096,7 +6156,7 @@ function readSetupRequest(
   return assembleSetupRequest({
     raw,
     current,
-    stored,
+    storedView,
     correlationId,
     preserveExisting,
     credentials,
@@ -6187,6 +6247,8 @@ interface SetupVerificationInput {
   readonly submittedEmbeddingModelIds: readonly string[];
   /** The durable stored view for restore classification — see {@link SetupRequest}. */
   readonly stored: GatewayConfig | undefined;
+  /** The reranker the parsed stored file names — see {@link SetupRequest}. */
+  readonly storedReranker: RerankerConfig | undefined;
   /** Stored `ocr-vision` ids restored verbatim instead of probed — see {@link SetupRequest}. */
   readonly storedOcrModelIds: readonly string[];
   /** Dedicated-connection embedding ids restored verbatim — see {@link SetupRequest}. */
@@ -6699,7 +6761,7 @@ function finalRawConfigForSetup(
   // baked into the rebuilt persisted config (review finding on #3037).
   const voiceProviders = discoveredVoiceProvidersForSetup(input, admittedModels);
   return applyStoredDedicatedProviders(
-    applyVoiceProviders(rawConfigWithOptionalBlocks, voiceProviders),
+    applyVoiceProviders(rawConfigWithOptionalBlocks, voiceProviders, input),
     input.stored,
     [...input.storedOcrModelIds, ...input.storedDedicatedEmbeddingModelIds],
     {
@@ -6811,7 +6873,7 @@ interface SetupGatewayConnection {
 // rule as the endpoint-change token guard).
 function sharesStoredGatewayConnection(
   provider: Pick<ModelProviderConfig, "baseUrl" | "apiKey" | "apiKeyHeaderName">,
-  storedPrimary: ModelProviderConfig | undefined,
+  storedPrimary: Pick<ModelProviderConfig, "baseUrl" | "apiKey" | "apiKeyHeaderName"> | undefined,
 ): boolean {
   return (
     storedPrimary !== undefined &&
@@ -7435,16 +7497,29 @@ function ownedReranker(input: SetupVerificationInput): RerankerConfig | undefine
 // discovered one does) follows a credential rotation or endpoint move like every other provider
 // that shared it: left behind, it would keep sending a dead token and silently degrade retrieval.
 // One with its own endpoint or credential keeps both — the freshly verified connection details
-// never travel to a connection they were not tested against.
+// never travel to a connection they were not tested against. Only the one proved to ride the
+// connection carries `credentialOrigin`, so a team export never hands the gateway token to a
+// reranker with its own key on the gateway's address (review finding on #4464).
 function rebasedReranker(input: SetupVerificationInput, reranker: RerankerConfig): RerankerConfig {
-  if (!sharesStoredGatewayConnection(reranker, storedPrimaryGatewayProvider(input.stored))) {
-    return reranker;
+  // Sharing is judged on the DURABLE reranker (vault reference resolved, transient overrides
+  // masked), not the effective one: an override that equals the gateway key for a session proves
+  // nothing about the credential that persists. A reranker the stored FILE does not name proves
+  // nothing either — on a first setup, or over a file that cannot be parsed, the durable view is
+  // the running configuration itself — so it keeps its own connection and carries no mark.
+  const durable = input.storedReranker;
+  if (
+    durable === undefined ||
+    !sharesStoredGatewayConnection(durable, storedPrimaryGatewayProvider(input.stored))
+  ) {
+    const { credentialOrigin: _unproved, ...own } = reranker;
+    return own;
   }
   return {
     ...reranker,
     baseUrl: input.baseUrl,
     apiKey: input.apiKey,
     apiKeyHeaderName: input.apiKeyHeaderName,
+    credentialOrigin: "gateway-connection",
   };
 }
 
@@ -7459,6 +7534,7 @@ function discoveredRerankerBlockFor(
     apiKey: input.apiKey,
     apiKeyHeaderName: input.apiKeyHeaderName,
     timeoutMs: input.timeoutMs ?? DEFAULT_RERANKER_TIMEOUT_MS,
+    credentialOrigin: "gateway-connection",
   };
 }
 
@@ -7487,7 +7563,10 @@ async function admitRerankerCandidates(
   if (owned === undefined) return admitDiscoveredRerankers(input, validationConfig, candidates, 0);
   const carried = rebasedReranker(input, owned);
   const candidateCount = candidates.length;
-  if (sameBaseUrlIdentity(owned.baseUrl, carried.baseUrl)) {
+  // Exact strings, not the base-URL identity: the rerank request appends `/rerank` to the stored
+  // string, so `.../v1` and `.../v1/chat/completions` compare equal as identities yet reach
+  // different endpoints (review finding on #4464).
+  if (owned.baseUrl === carried.baseUrl) {
     // Its own connection, or the gateway's endpoint unchanged (a credential rotation): nothing new
     // to verify — the model is hosted where it always was.
     return {
@@ -8297,6 +8376,28 @@ interface SetupSeams {
   readonly rerankerProbe: GatewayRerankerProbe;
 }
 
+// The durable stored state a rebuild restores from, carried over from the request unchanged.
+function storedRestoreState(
+  request: SetupRequest,
+): Pick<
+  SetupRequest,
+  | "stored"
+  | "storedReranker"
+  | "storedEmbeddingModelIds"
+  | "storedOcrModelIds"
+  | "storedDedicatedEmbeddingModelIds"
+  | "storedVoiceModelIds"
+> {
+  return {
+    stored: request.stored,
+    storedReranker: request.storedReranker,
+    storedEmbeddingModelIds: request.storedEmbeddingModelIds,
+    storedOcrModelIds: request.storedOcrModelIds,
+    storedDedicatedEmbeddingModelIds: request.storedDedicatedEmbeddingModelIds,
+    storedVoiceModelIds: request.storedVoiceModelIds,
+  };
+}
+
 async function trySetupCandidate(
   baseUrl: string,
   request: SetupRequest,
@@ -8321,12 +8422,8 @@ async function trySetupCandidate(
     explicitDeploymentNames: request.explicitDeploymentNames,
     imageInputModelIds: request.imageInputModelIds,
     imageInputModelIdsProvided: request.imageInputModelIdsProvided,
-    storedEmbeddingModelIds: request.storedEmbeddingModelIds,
     submittedEmbeddingModelIds: request.submittedEmbeddingModelIds,
-    storedOcrModelIds: request.storedOcrModelIds,
-    storedDedicatedEmbeddingModelIds: request.storedDedicatedEmbeddingModelIds,
-    storedVoiceModelIds: request.storedVoiceModelIds,
-    stored: request.stored,
+    ...storedRestoreState(request),
     workflowEligibleModelIds: request.workflowEligibleModelIdsConfigured
       ? request.workflowEligibleModelIds
       : undefined,
@@ -8400,9 +8497,22 @@ function withDiskGatewayEgress(
 const PER_MODEL_CONNECTION_OVERRIDE_RE =
   /^KEIKO_MODEL_.+_(?:BASE_URL|API_KEY|API_KEY_HEADER_NAME)$/u;
 
+// The reranker's own connection overrides are the same transient state: a KEIKO_RERANKER_API_KEY
+// that equals the gateway key for one session made a separately vaulted reranker look like it
+// shared the gateway credential (review finding on #4464).
+const RERANKER_CONNECTION_OVERRIDES: ReadonlySet<string> = new Set([
+  "KEIKO_RERANKER_BASE_URL",
+  "KEIKO_RERANKER_API_KEY",
+  "KEIKO_RERANKER_API_KEY_HEADER_NAME",
+]);
+
+function isTransientConnectionOverride(name: string): boolean {
+  return PER_MODEL_CONNECTION_OVERRIDE_RE.test(name) || RERANKER_CONNECTION_OVERRIDES.has(name);
+}
+
 function withoutPerModelEnvOverrides(env: EnvSource): EnvSource {
   return Object.fromEntries(
-    Object.entries(env).filter(([name]) => !PER_MODEL_CONNECTION_OVERRIDE_RE.test(name)),
+    Object.entries(env).filter(([name]) => !isTransientConnectionOverride(name)),
   );
 }
 
@@ -8413,14 +8523,36 @@ function withoutPerModelEnvOverrides(env: EnvSource): EnvSource {
 // credential rotation then restored the other provider as "dedicated" with its already-dead
 // token (review finding on #3037; the same disk-vs-runtime distinction withDiskGatewayEgress
 // draws for egress). Falls back to the runtime view when nothing is stored yet or the stored
-// file cannot be parsed — exactly the pre-existing behavior for those states.
-function durableStoredGatewayConfig(
+// file cannot be parsed — exactly the pre-existing behavior for those states. Only the reranker
+// is kept apart: `reranker` is the one the parsed file names, never one the fall-back holds, so a
+// reranker only the running configuration names is never judged on itself (audit of #4464).
+interface DurableStoredGatewayView {
+  readonly config: GatewayConfig | undefined;
+  readonly reranker: RerankerConfig | undefined;
+}
+
+function durableStoredGatewayView(
   current: GatewayConfig | undefined,
   storagePath: string,
   deps: UiHandlerDeps,
   correlationId: string | undefined,
+): DurableStoredGatewayView {
+  const parsed =
+    current === undefined
+      ? undefined
+      : durableStoredGatewayConfig(storagePath, deps, correlationId);
+  return parsed === undefined
+    ? { config: current, reranker: undefined }
+    : { config: parsed, reranker: parsed.reranker };
+}
+
+// The persisted file, parsed; undefined when nothing is stored or the file cannot be parsed.
+function durableStoredGatewayConfig(
+  storagePath: string,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
 ): GatewayConfig | undefined {
-  if (current === undefined || !existsSync(storagePath)) return current;
+  if (!existsSync(storagePath)) return undefined;
   try {
     const parsed = loadConfigFromFile(storagePath, withoutPerModelEnvOverrides(deps.env), {
       ...linkLocalGatewayOverrideOptions(deps.env),
@@ -8438,7 +8570,7 @@ function durableStoredGatewayConfig(
     // configuration to a valid view (review finding on #3046).
     return withFileDeclaredProtocol(parsed, storagePath);
   } catch (error) {
-    if (error instanceof GatewayError) return current;
+    if (error instanceof GatewayError) return undefined;
     throw error;
   }
 }
@@ -8521,7 +8653,7 @@ function fileDeclaredProviderRecords(
     );
   } catch {
     // An unreadable or malformed file leaves the durable view exactly as parsed — the same
-    // fall-back durableStoredGatewayConfig makes for that state.
+    // fall-back durableStoredGatewayView makes for that state.
     return undefined;
   }
 }
@@ -8622,6 +8754,7 @@ function saveExistingConfigUpdate(
   const rawConfig = applyVoiceProviders(
     rawConfigFromCurrent(updatedCurrent, request.figmaAccessToken, request.timeoutMs),
     request.voiceProviders,
+    storedPrimaryGatewayProvider(updatedCurrent),
   );
   const persistedRawConfig = withPersistedGatewayEgress(rawConfig, gatewayConfig.storagePath, deps);
   const config = parseGatewayConfig(
@@ -8826,7 +8959,7 @@ export async function handleGatewaySetup(
   }
   const { gatewayConfig } = deps;
   const current = gatewayConfig.configured?.() ?? currentGatewayConfig(deps);
-  const stored = durableStoredGatewayConfig(
+  const storedView = durableStoredGatewayView(
     current,
     gatewayConfig.storagePath,
     deps,
@@ -8836,7 +8969,13 @@ export async function handleGatewaySetup(
   if ("status" in bodyResult) {
     return bodyResult;
   }
-  const request = readSetupRequest(bodyResult.parsed, deps.env, current, stored, ctx.correlationId);
+  const request = readSetupRequest(
+    bodyResult.parsed,
+    deps.env,
+    current,
+    storedView,
+    ctx.correlationId,
+  );
   if ("status" in request) {
     return request;
   }

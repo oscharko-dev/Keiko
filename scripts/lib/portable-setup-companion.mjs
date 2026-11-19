@@ -1,8 +1,7 @@
-import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
-import { closeSync, lstatSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, realpathSync, statSync } from "node:fs";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 
+import { sha256FileChunked } from "./digest.mjs";
 import { isPortableExecutableFile } from "./portable-executable.mjs";
 import { WINDOWS_PORTABLE_SETUP_ASSET_NAME } from "../portable-runtime.mjs";
 
@@ -80,23 +79,7 @@ export function portableSetupCompanionRecord(record, setupPath) {
 export function portableSetupCompanionUpload(setupPath) {
   return {
     assetName: WINDOWS_PORTABLE_SETUP_ASSET_NAME,
-    expectedSha256: sha256FileSync(setupPath),
+    expectedSha256: sha256FileChunked(setupPath),
     expectedSize: statSync(setupPath).size,
   };
-}
-
-// Release upload planning is synchronous, so it cannot reuse portable-runtime's async digest.
-function sha256FileSync(path) {
-  const descriptor = openSync(path, "r");
-  const hash = createHash("sha256");
-  const buffer = Buffer.alloc(1024 * 1024);
-  try {
-    for (;;) {
-      const bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
-      if (bytesRead === 0) return hash.digest("hex");
-      hash.update(buffer.subarray(0, bytesRead));
-    }
-  } finally {
-    closeSync(descriptor);
-  }
 }

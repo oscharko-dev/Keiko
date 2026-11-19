@@ -10,10 +10,16 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
-import { parseJiraIssueTemplate } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  bindJiraIssueTemplateText,
+  jiraTemplateBindingDigest,
+  jiraTemplateForInstance,
+  parseJiraIssueTemplate,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
   MarkdownSkillDocument,
   MarkdownSkillSelectionView,
+  JiraTemplateOptions,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import * as api from "@/lib/markdown-skills-api";
 import * as atlassian from "@/lib/atlassian-connectors-api";
@@ -38,6 +44,7 @@ vi.mock("@/lib/markdown-skills-api", () => ({
 vi.mock("@/lib/client-diagnostics", () => ({ reportClientDiagnostic: vi.fn() }));
 vi.mock("@/lib/jira-templates-api", () => ({
   fetchJiraTemplates: vi.fn(),
+  fetchJiraTemplateOptions: vi.fn(),
   proposeJiraTemplates: vi.fn(),
   validateJiraTemplate: vi.fn(),
 }));
@@ -135,6 +142,10 @@ beforeEach(() => {
   vi.resetAllMocks();
   onClose.mockReset();
   vi.mocked(jiraTemplates.fetchJiraTemplates).mockResolvedValue([]);
+  vi.mocked(jiraTemplates.fetchJiraTemplateOptions).mockResolvedValue({
+    kind: "projects",
+    projects: [],
+  });
   vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([]);
   vi.mocked(api.fetchMarkdownSkillSelection).mockResolvedValue(EMPTY);
 });
@@ -265,6 +276,345 @@ describe("Jira starter templates", () => {
     );
   });
 
+  it("authors a template with the localized types and fields of the selected Jira project", async () => {
+    const store = seedStore([]);
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+    vi.mocked(jiraTemplates.fetchJiraTemplateOptions).mockImplementation((selection) => {
+      if (selection.issueTypeId !== undefined)
+        return Promise.resolve({
+          kind: "details",
+          ambiguousFieldNames: [],
+          fields: [
+            { id: "customfield_10016", name: "Fachlicher Ansprechpartner", required: false },
+          ],
+          statuses: [{ id: "6", name: "Erledigt" }],
+        });
+      if (selection.projectKey !== undefined)
+        return Promise.resolve({
+          kind: "types",
+          instanceId: "synthetic-instance",
+          issueTypes: [
+            { id: "1", name: "Aufgabe" },
+            { id: "2", name: "Fachliche Aufgabe" },
+          ],
+        });
+      return Promise.resolve({ kind: "projects", projects: [{ key: "LAB", name: "Lab project" }] });
+    });
+    const dialogElement = await openDialog();
+    const dialog = within(dialogElement);
+    fireEvent.click(dialog.getByRole("button", { name: "Jira Issue" }));
+    expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+    const project = await dialog.findByRole("combobox", { name: "Jira project" });
+    await dialog.findByRole("option", { name: "Lab project (LAB)" });
+    fireEvent.change(project, { target: { value: "LAB" } });
+    await dialog.findByRole("option", { name: "Aufgabe" });
+    expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+    fireEvent.change(dialog.getByRole("combobox", { name: "Issue type" }), {
+      target: { value: "1" },
+    });
+    fireEvent.click(dialog.getByText("Template rules"));
+    await dialog.findByRole("option", { name: "Fachlicher Ansprechpartner" });
+    fireEvent.change(dialog.getByRole("combobox", { name: "Add required field" }), {
+      target: { value: "Fachlicher Ansprechpartner" },
+    });
+    fireEvent.change(dialog.getByRole("combobox", { name: "Apply on entering a status" }), {
+      target: { value: "transition:Erledigt" },
+    });
+
+    const source = dialog.getByLabelText<HTMLTextAreaElement>("Metadata (YAML)");
+    expect(source.value).toContain('issueType: "Aufgabe"');
+    // A pick writes the field's portable name, never its instance-local id (UyB).
+    expect(source.value).toContain('requiredFields: ["Fachlicher Ansprechpartner"]');
+    expect(source.value).not.toContain("customfield_10016");
+    fireEvent.click(dialog.getByRole("button", { name: "Save" }));
+    await waitForVersion(dialogElement, "v1");
+    expect(parseJiraIssueTemplate(store.all[0]?.body ?? "")).toMatchObject({
+      ok: true,
+      template: {
+        project: "LAB",
+        issueType: "Aufgabe",
+        requiredFields: ["Fachlicher Ansprechpartner"],
+        activations: [{ kind: "create" }, { kind: "transition", target: "Erledigt" }],
+        requiredSections: ["Description", "Acceptance criteria"],
+      },
+    });
+  });
+
+  it("never offers a late issue-type list for a project the author has left", async () => {
+    seedStore([]);
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+    const old = deferred<JiraTemplateOptions>();
+    vi.mocked(jiraTemplates.fetchJiraTemplateOptions).mockImplementation((selection) => {
+      if (selection.projectKey === "OLD") return old.promise;
+      if (selection.projectKey === "NEW")
+        return Promise.resolve({
+          kind: "types",
+          instanceId: "synthetic-instance",
+          issueTypes: [{ id: "3", name: "Epic" }],
+        });
+      return Promise.resolve({
+        kind: "projects",
+        projects: [
+          { key: "OLD", name: "Old project" },
+          { key: "NEW", name: "New project" },
+        ],
+      });
+    });
+    const dialog = within(await openDialog());
+    fireEvent.click(dialog.getByRole("button", { name: "Jira Issue" }));
+    const project = await dialog.findByRole("combobox", { name: "Jira project" });
+    await dialog.findByRole("option", { name: "Old project (OLD)" });
+    fireEvent.change(project, { target: { value: "OLD" } });
+    await waitFor(() => expect(jiraTemplates.fetchJiraTemplateOptions).toHaveBeenCalledTimes(2));
+    fireEvent.change(project, { target: { value: "NEW" } });
+    expect(await dialog.findByRole("option", { name: "Epic" })).toBeVisible();
+    await act(async () =>
+      old.resolve({
+        kind: "types",
+        instanceId: "synthetic-instance",
+        issueTypes: [{ id: "1", name: "Aufgabe" }],
+      }),
+    );
+    expect(dialog.getByRole("option", { name: "Epic" })).toBeVisible();
+    expect(dialog.queryByRole("option", { name: "Aufgabe" })).toBeNull();
+  });
+
+  it("keeps the YAML editor open and focused while the author is typing incomplete metadata", async () => {
+    seedStore([]);
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+    const dialogElement = await openDialog();
+    await waitFor(() => expect(dialogElement).toHaveFocus());
+    const dialog = within(dialogElement);
+    fireEvent.click(dialog.getByRole("button", { name: "Jira Issue" }));
+    const yaml = dialog.getByLabelText<HTMLTextAreaElement>("Metadata (YAML)");
+    const source = yaml.closest("details");
+    if (source === null) throw new TypeError("The metadata source must be expandable");
+    source.open = true;
+    yaml.focus();
+    const original = yaml.value;
+    await waitFor(() => expect(jiraTemplates.fetchJiraTemplateOptions).toHaveBeenCalledOnce());
+    const guided = (): HTMLElement | null =>
+      dialog.getByRole("combobox", { name: "Jira project" }).closest("fieldset");
+
+    // A half-typed list holds the last form that read, disabled, instead of removing it.
+    fireEvent.change(yaml, { target: { value: original + '\nrequiredFields: ["' } });
+    expect(yaml).toHaveFocus();
+    expect(source.open).toBe(true);
+    expect(guided()).toBeDisabled();
+    expect(dialog.getByText(/^Correct the rules in the text below/u)).toBeVisible();
+
+    fireEvent.change(yaml, { target: { value: original + '\nrequiredFields: ["description"]' } });
+    await waitFor(() => expect(guided()).toBeEnabled());
+    expect(dialog.queryByText(/^Correct the rules in the text below/u)).toBeNull();
+    expect(yaml).toHaveFocus();
+    expect(source.open).toBe(true);
+    // The held form kept its reads: nothing asked Jira again for the same project list.
+    expect(jiraTemplates.fetchJiraTemplateOptions).toHaveBeenCalledOnce();
+  });
+
+  it("marks a required field the selected issue type does not offer and never offers a written field twice", async () => {
+    seedStore([]);
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+    vi.mocked(jiraTemplates.fetchJiraTemplateOptions).mockImplementation((selection) => {
+      if (selection.issueTypeId !== undefined)
+        return Promise.resolve({
+          kind: "details",
+          ambiguousFieldNames: [],
+          fields: [
+            { id: "customfield_10016", name: "Fachlicher Ansprechpartner", required: false },
+            { id: "duedate", name: "Fälligkeitsdatum", required: true },
+          ],
+          statuses: [],
+        });
+      if (selection.projectKey !== undefined)
+        return Promise.resolve({
+          kind: "types",
+          instanceId: "synthetic-instance",
+          issueTypes: [{ id: "1", name: "Aufgabe" }],
+        });
+      return Promise.resolve({ kind: "projects", projects: [{ key: "LAB", name: "Lab project" }] });
+    });
+    const dialog = within(await openDialog());
+    fireEvent.click(dialog.getByRole("button", { name: "Jira Issue" }));
+    const yaml = dialog.getByLabelText<HTMLTextAreaElement>("Metadata (YAML)");
+    fireEvent.change(yaml, {
+      target: {
+        value: yaml.value
+          .replace('project: ""', "project: LAB")
+          .replace("issueType: Task", "issueType: Aufgabe")
+          .concat('\nrequiredFields: ["Gone field", "fachlicher ansprechpartner"]'),
+      },
+    });
+    fireEvent.click(dialog.getByText("Template rules"));
+
+    const gone = await dialog.findByText(
+      "Gone field (not offered for this issue type)",
+      {},
+      { timeout: 3000 },
+    );
+    expect(gone.closest("li")).toHaveAttribute("data-offered", "false");
+    // A reference written by name shows Jira's own name and counts as that field.
+    const known = dialog.getByText("Fachlicher Ansprechpartner");
+    expect(known.closest("li")).toHaveAttribute("data-offered", "true");
+    const add = within(dialog.getByRole("combobox", { name: "Add required field" }));
+    expect(add.queryByRole("option", { name: "Fachlicher Ansprechpartner" })).toBeNull();
+    expect(add.getByRole("option", { name: "Fälligkeitsdatum (required by Jira)" })).toBeVisible();
+  });
+
+  it("tells same-named Jira fields apart by their id and never writes a bare id for a pick (UyB)", async () => {
+    // Review finding on PR #4464 (P2): two Team fields rendered as two identical choices with two
+    // different ids, so an operator could not tell which field would govern writes. Review finding
+    // UyB (P1): a pick wrote that instance-local id, which names another field on another Jira. The
+    // choices stay tellable apart; the field is written by the author, explicitly, as its id.
+    const store = seedStore([]);
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+    vi.mocked(jiraTemplates.fetchJiraTemplateOptions).mockImplementation((selection) => {
+      if (selection.issueTypeId !== undefined)
+        return Promise.resolve({
+          kind: "details",
+          ambiguousFieldNames: [],
+          fields: [
+            { id: "customfield_10010", name: "Team", required: false },
+            { id: "customfield_10011", name: "Team", required: true },
+            { id: "duedate", name: "Fälligkeitsdatum", required: false },
+          ],
+          statuses: [],
+        });
+      if (selection.projectKey !== undefined)
+        return Promise.resolve({
+          kind: "types",
+          instanceId: "synthetic-instance",
+          issueTypes: [{ id: "1", name: "Aufgabe" }],
+        });
+      return Promise.resolve({ kind: "projects", projects: [{ key: "LAB", name: "Lab project" }] });
+    });
+    const dialog = within(await openDialog());
+    fireEvent.click(dialog.getByRole("button", { name: "Jira Issue" }));
+    const yaml = dialog.getByLabelText<HTMLTextAreaElement>("Metadata (YAML)");
+    fireEvent.change(yaml, {
+      target: {
+        value: yaml.value
+          .replace('project: ""', "project: LAB")
+          .replace("issueType: Task", "issueType: Aufgabe"),
+      },
+    });
+    fireEvent.click(dialog.getByText("Template rules"));
+
+    const picker = await dialog.findByRole(
+      "combobox",
+      { name: "Add required field" },
+      { timeout: 3000 },
+    );
+    const add = within(picker);
+    await waitFor(() =>
+      expect(
+        add.getByRole("option", { name: /Team \(customfield_10010\) .*several fields share/u }),
+      ).toBeDisabled(),
+    );
+    expect(
+      add.getByRole("option", { name: /Team \(customfield_10011\) .*several fields share/u }),
+    ).toBeDisabled();
+    // A name only one field carries is portable and stays selectable.
+    expect(add.getByRole("option", { name: "Fälligkeitsdatum" })).toHaveValue("Fälligkeitsdatum");
+    expect(add.getByRole("option", { name: "Fälligkeitsdatum" })).toBeEnabled();
+
+    // The author writes the id they mean; the form shows which field that is.
+    fireEvent.change(yaml, {
+      target: { value: `${yaml.value}\nrequiredFields: ["customfield_10011"]` },
+    });
+    await dialog.findByText("Team (customfield_10011)");
+    expect(dialog.getByText("Team (customfield_10011)").closest("li")).toHaveAttribute(
+      "data-offered",
+      "true",
+    );
+    expect(add.queryByRole("option", { name: /customfield_10011/u })).toBeNull();
+    expect(add.getByRole("option", { name: /Team \(customfield_10010\)/u })).toBeVisible();
+
+    // Saving stores the field the author chose, never the other same-named one.
+    fireEvent.click(dialog.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.saveMarkdownSkill).toHaveBeenCalledOnce());
+    const [stored] = store.all;
+    expect(stored?.body).toContain("customfield_10011");
+    expect(stored?.body).not.toContain("customfield_10010");
+  });
+
+  it("keeps every final field label unique when a Jira name already looks like a disambiguated one", async () => {
+    // Review finding on PR #4464: a third field named `Team (customfield_10010)` kept the very label
+    // the first two same-named fields were given, so two choices read alike again.
+    seedStore([]);
+    vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+    vi.mocked(jiraTemplates.fetchJiraTemplateOptions).mockImplementation((selection) => {
+      if (selection.issueTypeId !== undefined)
+        return Promise.resolve({
+          kind: "details",
+          ambiguousFieldNames: [],
+          fields: [
+            { id: "customfield_10010", name: "Team", required: false },
+            { id: "customfield_10011", name: "Team", required: false },
+            { id: "customfield_10012", name: "Team (customfield_10010)", required: false },
+          ],
+          statuses: [],
+        });
+      if (selection.projectKey !== undefined)
+        return Promise.resolve({
+          kind: "types",
+          instanceId: "synthetic-instance",
+          issueTypes: [{ id: "1", name: "Aufgabe" }],
+        });
+      return Promise.resolve({ kind: "projects", projects: [{ key: "LAB", name: "Lab project" }] });
+    });
+    const dialog = within(await openDialog());
+    fireEvent.click(dialog.getByRole("button", { name: "Jira Issue" }));
+    const yaml = dialog.getByLabelText<HTMLTextAreaElement>("Metadata (YAML)");
+    fireEvent.change(yaml, {
+      target: {
+        value: yaml.value
+          .replace('project: ""', "project: LAB")
+          .replace("issueType: Task", "issueType: Aufgabe"),
+      },
+    });
+    fireEvent.click(dialog.getByText("Template rules"));
+    const picker = await dialog.findByRole(
+      "combobox",
+      { name: "Add required field" },
+      { timeout: 3000 },
+    );
+    await waitFor(() => expect(within(picker).getAllByRole("option").length).toBeGreaterThan(3));
+    const labels = within(picker)
+      .getAllByRole("option")
+      .map((option) => option.textContent)
+      .filter((text) => text?.includes("Team") === true);
+    expect(labels).toHaveLength(3);
+    expect(new Set(labels).size).toBe(3);
+    for (const id of ["customfield_10010", "customfield_10011", "customfield_10012"])
+      expect(labels.some((text) => text?.includes(`(${id})`))).toBe(true);
+  });
+
+  it("shows distinct labels on the selected rows of fields whose final labels would collide (Seh)", async () => {
+    mockGuidedJira({
+      fields: [
+        { id: "customfield_10010", name: "Team", required: false },
+        { id: "customfield_10011", name: "Team", required: false },
+        { id: "customfield_10012", name: "Team (customfield_10010)", required: false },
+      ],
+    });
+    const { dialog } = await openGuidedTemplate(
+      GUIDED_FRONT.replace(
+        "requiredFields: [Fachlicher Ansprechpartner]",
+        "requiredFields: [customfield_10010, customfield_10011, customfield_10012]",
+      ),
+    );
+    const rows = await waitFor((): string[] => {
+      const found: string[] = dialog
+        .getAllByRole("listitem")
+        .map((row: HTMLElement) => row.textContent ?? "")
+        .filter((text: string) => text.includes("Team"));
+      expect(found).toHaveLength(3);
+      return found;
+    });
+    expect(new Set(rows.map((text: string) => text.replace(/×$/u, ""))).size).toBe(3);
+  });
+
   it("keeps the user's draft if the Pod is removed while confirming a switch", async () => {
     seedStore([]);
     vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
@@ -311,6 +661,362 @@ describe("Jira starter templates", () => {
     expect(documentTitle(dialog)).toBe(REVIEW.name);
     expect(openFileMeta(dialog).getByText("v1")).toBeVisible();
     expect(api.saveMarkdownSkill).not.toHaveBeenCalled();
+  });
+});
+
+const JIRA_INSTANCE = "synthetic-instance";
+const GUIDED_FRONT = [
+  "keiko: jira-issue-template",
+  "version: 1",
+  "project: LAB",
+  "issueType: Aufgabe",
+  "activateOn: [create]",
+  "requiredFields: [Fachlicher Ansprechpartner]",
+].join("\n");
+
+/** The front matter of a template bound for the synthetic Jira, written by the production binder. */
+function boundFront(
+  front: string,
+  ids: { issueTypeId: string; requiredFieldIds: string[]; transitionStatusIds?: string[] },
+): string {
+  const document = `---\n${front}\n---\n# Aufgabe\n`;
+  const parsed = parseJiraIssueTemplate(document);
+  if (!parsed.ok) throw new TypeError("Expected a parseable template");
+  const binding = {
+    digest: jiraTemplateBindingDigest(JIRA_INSTANCE, parsed.template, ids),
+    ...ids,
+  };
+  const bound = bindJiraIssueTemplateText(document, binding);
+  if (bound === undefined) throw new TypeError("Expected a bound template");
+  return bound.split("\n").slice(1, bound.split("\n").indexOf("---", 1)).join("\n");
+}
+
+function mockGuidedJira(options: {
+  readonly fields?: readonly { id: string; name: string; required: boolean }[];
+  readonly statuses?: readonly { id: string; name: string }[];
+  readonly typeName?: string;
+  readonly issueTypes?: readonly { id: string; name: string }[];
+  /** The issue-type lookup fails: there is no Jira instance context. */
+  readonly typesFail?: boolean;
+  /** Field names the full instance catalog cannot resolve to one field. */
+  readonly ambiguous?: readonly string[];
+  /** The full field catalog could not be read: the answer carries no ambiguous-name list. */
+  readonly catalogUnreadable?: boolean;
+}): void {
+  vi.mocked(atlassian.listAtlassianConnectors).mockResolvedValue([POD]);
+  vi.mocked(jiraTemplates.fetchJiraTemplateOptions).mockImplementation((selection) => {
+    if (selection.issueTypeId !== undefined)
+      return Promise.resolve({
+        kind: "details",
+        ...(options.catalogUnreadable === true
+          ? {}
+          : { ambiguousFieldNames: options.ambiguous ?? [] }),
+        fields: options.fields ?? [],
+        statuses: options.statuses ?? [],
+      });
+    if (selection.projectKey !== undefined) {
+      if (options.typesFail === true) return Promise.reject(new Error("synthetic read failure"));
+      return Promise.resolve({
+        kind: "types",
+        instanceId: JIRA_INSTANCE,
+        issueTypes: options.issueTypes ?? [{ id: "1", name: options.typeName ?? "Aufgabe" }],
+      });
+    }
+    return Promise.resolve({ kind: "projects", projects: [{ key: "LAB", name: "Lab project" }] });
+  });
+}
+
+async function openGuidedTemplate(front: string): Promise<{
+  readonly dialog: ReturnType<typeof within>;
+  readonly yaml: HTMLTextAreaElement;
+}> {
+  seedStore([]);
+  const dialog = within(await openDialog());
+  fireEvent.click(dialog.getByRole("button", { name: "Jira Issue" }));
+  const yaml = dialog.getByLabelText<HTMLTextAreaElement>("Metadata (YAML)");
+  fireEvent.change(yaml, { target: { value: front } });
+  fireEvent.click(dialog.getByText("Template rules"));
+  await dialog.findByRole("combobox", { name: "Add required field" }, { timeout: 3000 });
+  return { dialog, yaml };
+}
+
+describe("guided edits of a bound template (Ux7, UyB, Uy9)", () => {
+  const FIELDS = [
+    { id: "customfield_10016", name: "Fachlicher Ansprechpartner", required: false },
+    { id: "duedate", name: "Fälligkeitsdatum", required: false },
+  ];
+
+  it("keeps the binding and every untouched id when a required field is added in another profile language (Ux7)", async () => {
+    // The template types "Aufgabe"; this profile shows the same type, id 1, as "Task".
+    mockGuidedJira({ fields: FIELDS, typeName: "Task" });
+    const bound = boundFront(GUIDED_FRONT, {
+      issueTypeId: "1",
+      requiredFieldIds: ["customfield_10016"],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(bound);
+    await waitFor(() =>
+      expect(dialog.getByRole("combobox", { name: "Issue type" })).toHaveValue("1"),
+    );
+    await waitFor(() =>
+      expect(
+        within(dialog.getByRole("combobox", { name: "Add required field" })).getByRole("option", {
+          name: "Fälligkeitsdatum",
+        }),
+      ).toBeEnabled(),
+    );
+    fireEvent.change(dialog.getByRole("combobox", { name: "Add required field" }), {
+      target: { value: "Fälligkeitsdatum" },
+    });
+    await waitFor(() => expect(yaml.value).toContain("Fälligkeitsdatum"));
+    expect(yaml.value).toContain("issueType: Aufgabe");
+    expect(yaml.value).not.toContain("Task");
+    expect(yaml.value).toContain('requiredFieldIds: ["customfield_10016","duedate"]');
+    const parsed = parseJiraIssueTemplate(`---\n${yaml.value}\n---\n# Aufgabe\n`);
+    if (!parsed.ok) throw new TypeError("Expected a template");
+    // Confirmed for the same Jira: the type is still governed by id and no id moved.
+    expect(jiraTemplateForInstance(parsed.template, JIRA_INSTANCE).binding).toMatchObject({
+      issueTypeId: "1",
+      requiredFieldIds: ["customfield_10016", "duedate"],
+    });
+  });
+
+  it("keeps a bound status id when an unrelated status is added", async () => {
+    mockGuidedJira({
+      fields: FIELDS,
+      statuses: [
+        { id: "3", name: "Erledigt" },
+        { id: "4", name: "Neu" },
+      ],
+    });
+    const bound = boundFront(
+      GUIDED_FRONT.replace("activateOn: [create]", "activateOn: [create, transition:Erledigt]"),
+      { issueTypeId: "1", requiredFieldIds: ["customfield_10016"], transitionStatusIds: ["3"] },
+    );
+    const { dialog, yaml } = await openGuidedTemplate(bound);
+    expect(bound).toContain("transitionStatusIds");
+    await waitFor(() =>
+      expect(
+        within(dialog.getByRole("combobox", { name: "Apply on entering a status" })).getByRole(
+          "option",
+          { name: "Neu" },
+        ),
+      ).toBeEnabled(),
+    );
+    fireEvent.change(dialog.getByRole("combobox", { name: "Apply on entering a status" }), {
+      target: { value: "transition:Neu" },
+    });
+    await waitFor(() => expect(yaml.value).toContain("transition:Neu"));
+    expect(yaml.value).toContain('transitionStatusIds: ["3","4"]');
+  });
+
+  it("offers no numeric status name, which a transition id could be taken for (Uy9)", async () => {
+    mockGuidedJira({
+      statuses: [
+        { id: "3", name: "31" },
+        { id: "6", name: "Erledigt" },
+      ],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(GUIDED_FRONT);
+    const status = dialog.getByRole("combobox", { name: "Apply on entering a status" });
+    await waitFor(() =>
+      expect(within(status).getByRole("option", { name: "Erledigt" })).toBeEnabled(),
+    );
+    expect(
+      within(status).getByRole("option", { name: /^31 \(a numeric status name/u }),
+    ).toBeDisabled();
+    fireEvent.change(status, { target: { value: "transition:31" } });
+    expect(yaml.value).not.toContain("transition:31");
+  });
+
+  it("cannot add the write activation to a full activation list, and can again after one is removed (u6B)", async () => {
+    mockGuidedJira({});
+    const targets = Array.from({ length: 20 }, (_, index) => `transition:S${String(index + 1)}`);
+    const front = GUIDED_FRONT.replace(
+      "activateOn: [create]",
+      `activateOn: [${targets.join(", ")}]`,
+    );
+    const { dialog, yaml } = await openGuidedTemplate(front);
+    const write = dialog.getByRole("checkbox", { name: "Apply when creating and editing issues" });
+    expect(write).toBeDisabled();
+    expect(yaml.value.match(/transition:S/gu)).toHaveLength(20);
+    fireEvent.click(dialog.getByRole("button", { name: "Remove S20" }));
+    await waitFor(() => expect(write).toBeEnabled());
+    fireEvent.click(write);
+    await waitFor(() => expect(yaml.value).toContain("create"));
+  });
+
+  it("keeps the last bound issue type selected while the YAML is half typed (UyO)", async () => {
+    mockGuidedJira({ fields: FIELDS, typeName: "Task" });
+    const bound = boundFront(GUIDED_FRONT, {
+      issueTypeId: "1",
+      requiredFieldIds: ["customfield_10016"],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(bound);
+    const type = dialog.getByRole("combobox", { name: "Issue type" });
+    await waitFor(() => expect(type).toHaveValue("1"));
+    fireEvent.change(yaml, { target: { value: `${yaml.value}\nlabelPattern: ["` } });
+    expect(dialog.getByText(/^Correct the rules in the text below/u)).toBeVisible();
+    expect(type).toHaveValue("1");
+  });
+
+  it("keeps Save off while the Jira metadata does not read (u6E)", async () => {
+    mockGuidedJira({});
+    const { dialog, yaml } = await openGuidedTemplate(GUIDED_FRONT);
+    const save = dialog.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeEnabled());
+    fireEvent.change(yaml, { target: { value: `${yaml.value}\nrequiredLabels: [Team` } });
+    expect(dialog.getByText(/^Correct the rules in the text below/u)).toBeVisible();
+    expect(save).toBeDisabled();
+    fireEvent.change(yaml, { target: { value: GUIDED_FRONT } });
+    await waitFor(() => expect(save).toBeEnabled());
+  });
+});
+
+describe("guided choices that cannot be written safely (review of #4464)", () => {
+  const statusPicker = (dialog: ReturnType<typeof within>): HTMLElement =>
+    dialog.getByRole("combobox", { name: "Apply on entering a status" });
+
+  it("disables a status name that several statuses share, by its normalized name (P-T)", async () => {
+    mockGuidedJira({
+      statuses: [
+        { id: "3", name: "Ready" },
+        { id: "4", name: " ready " },
+        { id: "6", name: "Erledigt" },
+      ],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(GUIDED_FRONT);
+    const status = statusPicker(dialog);
+    await waitFor(() =>
+      expect(within(status).getByRole("option", { name: "Erledigt" })).toBeEnabled(),
+    );
+    const shared = within(status).getAllByRole("option", { name: /several statuses share/u });
+    expect(shared).toHaveLength(2);
+    for (const option of shared) expect(option).toBeDisabled();
+    fireEvent.change(status, { target: { value: "transition:Ready" } });
+    expect(yaml.value).not.toContain("transition:Ready");
+  });
+
+  it("rejects a numeric status name after the same trim the template parser applies (6p-)", async () => {
+    mockGuidedJira({
+      statuses: [
+        { id: "3", name: " 31 " },
+        { id: "6", name: "Erledigt" },
+      ],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(GUIDED_FRONT);
+    const status = statusPicker(dialog);
+    await waitFor(() =>
+      expect(within(status).getByRole("option", { name: "Erledigt" })).toBeEnabled(),
+    );
+    expect(
+      within(status).getByRole("option", { name: /a numeric status name cannot be chosen/u }),
+    ).toBeDisabled();
+    fireEvent.change(status, { target: { value: "transition: 31 " } });
+    expect(yaml.value).not.toContain("31");
+  });
+
+  it("never offers an instance-local field id as a portable name (SeU)", async () => {
+    mockGuidedJira({
+      fields: [
+        { id: "customfield_10016", name: "customfield_10016", required: false },
+        { id: "duedate", name: "Fälligkeitsdatum", required: false },
+      ],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(GUIDED_FRONT);
+    const picker = dialog.getByRole("combobox", { name: "Add required field" });
+    await waitFor(() =>
+      expect(within(picker).getByRole("option", { name: "Fälligkeitsdatum" })).toBeEnabled(),
+    );
+    const local = within(picker).getByRole("option", { name: /an instance-local id/u });
+    expect(local).toBeDisabled();
+    fireEvent.change(picker, { target: { value: "customfield_10016" } });
+    expect(yaml.value).not.toMatch(/requiredFields:.*customfield_10016/u);
+  });
+
+  it("refuses a field name the full catalog cannot resolve to one field, and keeps a unique name selectable (P-N)", async () => {
+    mockGuidedJira({
+      fields: [
+        { id: "customfield_10010", name: "Team", required: false },
+        { id: "duedate", name: "Fälligkeitsdatum", required: false },
+      ],
+      ambiguous: ["Team"],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(GUIDED_FRONT);
+    const picker = dialog.getByRole("combobox", { name: "Add required field" });
+    await waitFor(() =>
+      expect(within(picker).getByRole("option", { name: "Fälligkeitsdatum" })).toBeEnabled(),
+    );
+    expect(within(picker).getByRole("option", { name: /^Team \(several fields/u })).toBeDisabled();
+    fireEvent.change(picker, { target: { value: "customfield_10010" } });
+    expect(yaml.value).not.toContain("Team");
+    fireEvent.change(picker, { target: { value: "Fälligkeitsdatum" } });
+    await waitFor(() => expect(yaml.value).toContain("Fälligkeitsdatum"));
+  });
+
+  it("offers no unbound field pick while the full field catalog could not be read (P-N)", async () => {
+    mockGuidedJira({
+      fields: [{ id: "duedate", name: "Fälligkeitsdatum", required: false }],
+      catalogUnreadable: true,
+    });
+    const { dialog } = await openGuidedTemplate(GUIDED_FRONT);
+    const picker = dialog.getByRole("combobox", { name: "Add required field" });
+    const option = await within(picker).findByRole("option", { name: /could not be read/u });
+    expect(option).toBeDisabled();
+  });
+
+  it("makes an issue type without an unambiguous portable name unavailable, never writing its id (6pE)", async () => {
+    mockGuidedJira({
+      issueTypes: [
+        { id: "1", name: "Aufgabe" },
+        { id: "2", name: "Aufgabe" },
+        { id: "3", name: "Fehler" },
+      ],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(GUIDED_FRONT);
+    const type = dialog.getByRole("combobox", { name: "Issue type" });
+    await waitFor(() => expect(within(type).getByRole("option", { name: "Fehler" })).toBeEnabled());
+    const shared = within(type).getAllByRole("option", { name: /no unique name for this type/u });
+    expect(shared).toHaveLength(2);
+    for (const option of shared) expect(option).toBeDisabled();
+    fireEvent.change(type, { target: { value: "2" } });
+    expect(yaml.value).toContain("issueType: Aufgabe");
+    expect(yaml.value).not.toMatch(/issueType: 2/u);
+    fireEvent.change(type, { target: { value: "3" } });
+    await waitFor(() => expect(yaml.value).toContain('issueType: "Fehler"'));
+  });
+
+  it("disables guided rule edits of a bound template while no Jira context is readable (6pL)", async () => {
+    mockGuidedJira({ typesFail: true });
+    const bound = boundFront(GUIDED_FRONT, {
+      issueTypeId: "1",
+      requiredFieldIds: ["customfield_10016"],
+    });
+    const { dialog, yaml } = await openGuidedTemplate(bound);
+    await waitFor(() =>
+      expect(dialog.getByText(/bound to a Jira that is not readable/u)).toBeVisible(),
+    );
+    expect(dialog.getByRole("combobox", { name: "Add required field" })).toBeDisabled();
+    expect(
+      dialog.getByRole("checkbox", { name: "Apply when creating and editing issues" }),
+    ).toBeDisabled();
+    expect(yaml.value).toContain("jiraBinding");
+  });
+
+  it("does not offer a status equivalent to one already written, by name or native id (6pW)", async () => {
+    mockGuidedJira({
+      statuses: [
+        { id: "3", name: "Ready" },
+        { id: "6", name: "Erledigt" },
+      ],
+    });
+    const { dialog } = await openGuidedTemplate(
+      GUIDED_FRONT.replace("activateOn: [create]", "activateOn: [create, transition:ready]"),
+    );
+    const status = statusPicker(dialog);
+    await waitFor(() =>
+      expect(within(status).getByRole("option", { name: "Erledigt" })).toBeEnabled(),
+    );
+    expect(within(status).queryByRole("option", { name: "Ready" })).toBeNull();
   });
 });
 
@@ -852,5 +1558,99 @@ describe("a saved text the server normalized", () => {
     expect(view.document.text).toBe("# Crlf\r\nmore");
     expect(view.document.saved).toBe("# Crlf\n");
     expect(result.current.dirty).toBe(true);
+  });
+
+  it("advances the open revision after a background binding while keeping newer typing", () => {
+    const { result, rerender } = renderHook(
+      ({ preview }: { preview: MarkdownSkillDocument | undefined }) =>
+        useSkillWorkspace(fakeLibrary(preview)),
+      { initialProps: { preview: undefined as MarkdownSkillDocument | undefined } },
+    );
+    act(() => result.current.open(REVIEW));
+    rerender({ preview: REVIEW });
+    act(() => result.current.edit("New typing"));
+    const bound = { ...REVIEW, revision: 2, body: "Stored binding" };
+    act(() => result.current.adoptBinding(1, bound));
+    expect(result.current.view).toMatchObject({
+      kind: "document",
+      document: { stored: bound, text: "New typing", saved: bound.body },
+    });
+    act(() => result.current.adoptBinding(1, { ...bound, body: "Late reply" }));
+    expect(result.current.view).toMatchObject({ document: { saved: bound.body } });
+    expect(result.current.canSave).toBe(true);
+  });
+
+  it("adopts a binding into a clean file under the same key and ignores one for another skill", () => {
+    const { result, rerender } = renderHook(
+      ({ preview }: { preview: MarkdownSkillDocument | undefined }) =>
+        useSkillWorkspace(fakeLibrary(preview)),
+      { initialProps: { preview: undefined as MarkdownSkillDocument | undefined } },
+    );
+    act(() => result.current.open(REVIEW));
+    rerender({ preview: REVIEW });
+    const opened = result.current.view;
+    if (opened.kind !== "document") throw new TypeError("expected a document");
+    act(() => result.current.adoptBinding(1, { ...PLAN, revision: 2, body: "Foreign" }));
+    expect(result.current.view).toMatchObject({ document: { text: REVIEW.body } });
+
+    const bound = { ...REVIEW, revision: 2, body: "Stored binding" };
+    act(() => result.current.adoptBinding(1, bound));
+    expect(result.current.view).toMatchObject({
+      kind: "document",
+      document: { key: opened.document.key, stored: bound, text: bound.body, saved: bound.body },
+    });
+    expect(result.current.dirty).toBe(false);
+  });
+
+  describe("a binding adopted into text the person changed meanwhile (UyE, u6R)", () => {
+    const BASE = "---\nkeiko: jira-issue-template\nproject: LAB\n---\n\n# Template\n\nOld body.\n";
+    const BOUND_BODY =
+      '---\nkeiko: jira-issue-template\nproject: LAB\nissueTypeId: "10002"\n---\n\n# Template\n\nOld body.\n';
+    const stored = { ...REVIEW, id: "tpl", body: BASE };
+    const bound = { ...stored, revision: 2, body: BOUND_BODY };
+
+    function opened(): {
+      readonly result: { readonly current: ReturnType<typeof useSkillWorkspace> };
+      readonly upload: ReturnType<typeof vi.fn>;
+    } {
+      const upload = vi.fn(() => Promise.resolve());
+      const library = (preview: MarkdownSkillDocument | undefined): MarkdownSkillLibrary => ({
+        ...fakeLibrary(preview),
+        upload,
+      });
+      const { result, rerender } = renderHook(
+        ({ preview }: { preview: MarkdownSkillDocument | undefined }) =>
+          useSkillWorkspace(library(preview)),
+        { initialProps: { preview: undefined as MarkdownSkillDocument | undefined } },
+      );
+      act(() => result.current.open(stored));
+      rerender({ preview: stored });
+      return { result, upload };
+    }
+
+    it("writes the binding into the edited body, so the next Save keeps it", () => {
+      const { result, upload } = opened();
+      act(() => result.current.edit(BASE.replace("Old body.", "New body.")));
+      act(() => result.current.adoptBinding(1, bound));
+      const view = result.current.view;
+      if (view.kind !== "document") throw new TypeError("expected a document");
+      expect(view.document.text).toBe(BOUND_BODY.replace("Old body.", "New body."));
+      expect(view.document.stored?.revision).toBe(2);
+      act(() => result.current.save());
+      const sent = upload.mock.calls.at(-1) as unknown as [File, MarkdownSkillDocument];
+      expect(sent[1]).toMatchObject({ revision: 2 });
+      return expect(sent[0].text()).resolves.toContain('issueTypeId: "10002"');
+    });
+
+    it("never advances the revision under front matter the person edited: the save stays stale", () => {
+      const { result } = opened();
+      const edited = BASE.replace("project: LAB", "project: OTHER");
+      act(() => result.current.edit(edited));
+      act(() => result.current.adoptBinding(1, bound));
+      const view = result.current.view;
+      if (view.kind !== "document") throw new TypeError("expected a document");
+      expect(view.document.stored?.revision).toBe(1);
+      expect(view.document.text).toBe(edited);
+    });
   });
 });

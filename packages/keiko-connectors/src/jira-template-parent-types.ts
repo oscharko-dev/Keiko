@@ -71,7 +71,7 @@ export async function bindJiraTemplateParentTypes(
     templates.flatMap((template) => {
       const { field, issueTypes } = template.parent;
       if (field === undefined || issueTypes === undefined) return [];
-      const ids = resolveJiraTemplateFieldIds(field, catalog, template);
+      const ids = resolveJiraTemplateFieldIds(field, catalog, template, "parent");
       return ids.length === 1 ? ids : [];
     }),
   );

@@ -39,8 +39,11 @@ import {
   type SetStateAction,
 } from "react";
 import Image from "next/image";
+import { parseFigmaSnapshotLink } from "@oscharko-dev/keiko-contracts/runtime/figma-url";
 import { Icons } from "../../Icons";
 import { ApiError } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { correlationIdOf } from "@/lib/client-error-summary";
 import { formatBytes, formatDate } from "@/lib/format";
 import {
   useOptionalWidgetTranslate,
@@ -114,57 +117,12 @@ const JSON_DRAG_BUTTON_STYLE = {
   textAlign: "left",
 } satisfies CSSProperties;
 
-/**
- * Client-side Figma URL validator. Accepts:
- *   https://www.figma.com/design/{key}/{name}?node-id={id}
- *   https://www.figma.com/file/{key}/{name}?node-id={id}
- *
- * The node-id param is REQUIRED — a whole-file link would pull too many nodes
- * and the server's parseFigmaTarget would reject it anyway.
- */
-function isValidFigmaLink(raw: string): boolean {
-  try {
-    const url = new URL(raw.trim());
-    const host = url.hostname.toLowerCase();
-    if (url.protocol !== "https:") return false;
-    if (host !== "figma.com" && host !== "www.figma.com") return false;
-    if (!/^\/(design|file)\//u.test(url.pathname)) return false;
-    const nodeId = url.searchParams.get("node-id");
-    return nodeId !== null && nodeId.length > 0;
-  } catch {
-    return false;
-  }
-}
-
-interface FigmaSnapshotScope {
-  readonly fileKey: string;
-  readonly nodeId: string;
-}
-
-function parseFigmaScope(raw: string): FigmaSnapshotScope | null {
-  try {
-    const url = new URL(raw.trim());
-    const host = url.hostname.toLowerCase();
-    if (url.protocol !== "https:") return null;
-    if (host !== "figma.com" && host !== "www.figma.com") return null;
-    const [, kind, fileKey] = url.pathname.split("/");
-    if ((kind !== "design" && kind !== "file") || fileKey === undefined || fileKey.length === 0) {
-      return null;
-    }
-    const nodeId = url.searchParams.get("node-id");
-    if (nodeId === null || nodeId.length === 0) return null;
-    return { fileKey, nodeId };
-  } catch {
-    return null;
-  }
-}
-
 function boardLinkFromSnapshot(snapshot: {
   readonly fileKey: string;
   readonly nodeId: string;
   readonly version?: string | undefined;
 }): string {
-  const url = new URL(`https://www.figma.com/design/${snapshot.fileKey}/board`);
+  const url = new URL(`https://www.figma.com/design/${encodeURIComponent(snapshot.fileKey)}/board`);
   url.searchParams.set("node-id", snapshot.nodeId);
   if (snapshot.version !== undefined && snapshot.version.length > 0) {
     url.searchParams.set("version", snapshot.version);
@@ -241,6 +199,22 @@ interface DetachedBuild {
 
 type SnapshotDashboardTab = "board" | "recent";
 
+function reportSnapshotFailure(
+  stage:
+    | "rename"
+    | "deletion"
+    | "history load"
+    | "stored snapshot load"
+    | "code generation"
+    | "screen JSON load"
+    | "stored token removal",
+  error: unknown,
+): void {
+  reportClientDiagnostic(`[keiko] Figma snapshot ${stage} failed.`, {
+    correlationId: correlationIdOf(error),
+  });
+}
+
 // ── Fix #8: full external-dependency error taxonomy (including new codes from the
 // parallel agent landing FIGMA_NETWORK_UNREACHABLE / FIGMA_EGRESS_TIMEOUT /
 // FIGMA_EGRESS_FAILED / FIGMA_PROXY_AUTH_REQUIRED / FIGMA_PROXY_BLOCKED_BY_POLICY).
@@ -274,6 +248,12 @@ const FIGMA_PAT_ERRORS: ReadonlySet<string> = new Set([
 
 function formatSnapshotError(err: unknown, t: OptionalWidgetTranslate): SnapshotErrorNotice {
   if (err instanceof ApiError) {
+    if (err.code === "FIGMA_SOURCE_CHANGED") {
+      return {
+        title: t("figmaSnapshotWindow.error.generic.title"),
+        detail: t("figmaSnapshotWindow.error.sourceChanged"),
+      };
+    }
     // Issue #1399: surface PAT/credential problems as an actionable alert that links straight to
     // the Figma access-token settings, so the operator does not have to hunt for the setting.
     if (FIGMA_PAT_ERRORS.has(err.code)) {
@@ -399,29 +379,6 @@ function galleryAriaLabel({
   return totalCount === 1
     ? t("figmaSnapshotWindow.gallery.capturedScreenSingular", { count: totalCount })
     : t("figmaSnapshotWindow.gallery.capturedScreenPlural", { count: totalCount });
-}
-
-/**
- * Differentiated validation microcopy (WCAG 3.3.1 Error Identification) for a
- * non-empty, invalid board link. Returns null when the link is empty or valid.
- */
-function figmaLinkValidationMessage(raw: string, t: OptionalWidgetTranslate): string | null {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0 || isValidFigmaLink(trimmed)) return null;
-  try {
-    const url = new URL(trimmed);
-    const host = url.hostname.toLowerCase();
-    if (
-      url.protocol === "https:" &&
-      (host === "figma.com" || host === "www.figma.com") &&
-      /^\/(design|file)\//u.test(url.pathname)
-    ) {
-      return t("figmaSnapshotWindow.validation.missingNodeId");
-    }
-  } catch {
-    // not parseable as a URL — fall through to the generic message
-  }
-  return t("figmaSnapshotWindow.validation.invalidLink");
 }
 
 // ─── Sub-components ────────────────────────────────────────────────────────────
@@ -920,6 +877,8 @@ export interface FigmaSnapshotWindowProps {
   readonly selectedScreenIds?: readonly string[] | undefined;
   /** Human-readable selected screen name persisted in the workspace cfg for source labels. */
   readonly selectedScreenName?: string | undefined;
+  /** Keeps a restored Figma View scoped even when its persisted reference is unavailable. */
+  readonly viewSource?: boolean;
   /** Opens a new Figma View card scoped to one screen from the loaded snapshot. */
   readonly openScreenSource?:
     | ((input: {
@@ -975,8 +934,7 @@ interface RenameFigmaSnapshotParams {
   readonly updateMetadataImpl: typeof updateFigmaSnapshotMetadata;
   readonly snapshotManagementAbortRef: CurrentRef<AbortController | null>;
   readonly setSummary: Dispatch<SetStateAction<FigmaSnapshotSummary | null>>;
-  readonly setBoardSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
-  readonly setRecentSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly setDashboardSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
   readonly setRenamingSnapshotRunId: Dispatch<SetStateAction<string | null>>;
   readonly setRenameValue: Dispatch<SetStateAction<string>>;
   readonly setSnapshotManagementError: Dispatch<SetStateAction<string | null>>;
@@ -996,8 +954,7 @@ function renameFigmaSnapshot(params: RenameFigmaSnapshotParams): void {
     updateMetadataImpl,
     snapshotManagementAbortRef,
     setSummary,
-    setBoardSnapshots,
-    setRecentSnapshots,
+    setDashboardSnapshots,
     setRenamingSnapshotRunId,
     setRenameValue,
     setSnapshotManagementError,
@@ -1012,13 +969,9 @@ function renameFigmaSnapshot(params: RenameFigmaSnapshotParams): void {
     controller.signal,
   )
     .then((result) => {
+      if (controller.signal.aborted) return;
       if (summaryRunId === runId) setSummary(result);
-      setBoardSnapshots((snapshots) =>
-        snapshots.map((snapshot) =>
-          snapshot.runId === runId ? listEntryWithSummaryManagement(snapshot, result) : snapshot,
-        ),
-      );
-      setRecentSnapshots((snapshots) =>
+      setDashboardSnapshots((snapshots) =>
         snapshots.map((snapshot) =>
           snapshot.runId === runId ? listEntryWithSummaryManagement(snapshot, result) : snapshot,
         ),
@@ -1027,14 +980,15 @@ function renameFigmaSnapshot(params: RenameFigmaSnapshotParams): void {
       setRenameValue("");
     })
     .catch((err: unknown) => {
-      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (controller.signal.aborted) return;
+      reportSnapshotFailure("rename", err);
       setSnapshotManagementError(formatError(err, t));
     })
     .finally(() => {
       if (snapshotManagementAbortRef.current === controller) {
         snapshotManagementAbortRef.current = null;
+        setSnapshotManagementBusyRunId(null);
       }
-      setSnapshotManagementBusyRunId(null);
     });
 }
 
@@ -1049,12 +1003,8 @@ interface DeleteFigmaSnapshotByRunIdParams {
   readonly snapshotManagementAbortRef: CurrentRef<AbortController | null>;
   readonly setSummary: Dispatch<SetStateAction<FigmaSnapshotSummary | null>>;
   readonly setBuildState: Dispatch<SetStateAction<BuildState>>;
-  readonly setCodeState: Dispatch<SetStateAction<"idle" | "generating" | "done" | "error">>;
-  readonly setCode: Dispatch<SetStateAction<FigmaCodegenResponse | null>>;
-  readonly setScreenJsonState: Dispatch<SetStateAction<"idle" | "loading" | "done" | "error">>;
-  readonly setScreenJson: Dispatch<SetStateAction<FigmaSnapshotScreenJsonResponse | null>>;
-  readonly setBoardSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
-  readonly setRecentSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
+  readonly resetSnapshotArtifacts: () => void;
+  readonly setDashboardSnapshots: Dispatch<SetStateAction<readonly FigmaSnapshotListEntry[]>>;
   readonly setDeleteConfirmRunId: Dispatch<SetStateAction<string | null>>;
   readonly setRenamingSnapshotRunId: Dispatch<SetStateAction<string | null>>;
   readonly setDetailsSnapshotRunId: Dispatch<SetStateAction<string | null>>;
@@ -1069,28 +1019,20 @@ function applyFigmaSnapshotDeletion(runId: string, params: DeleteFigmaSnapshotBy
     updateCfg,
     setSummary,
     setBuildState,
-    setCodeState,
-    setCode,
-    setScreenJsonState,
-    setScreenJson,
-    setBoardSnapshots,
-    setRecentSnapshots,
+    resetSnapshotArtifacts,
+    setDashboardSnapshots,
     setDeleteConfirmRunId,
     setRenamingSnapshotRunId,
     setDetailsSnapshotRunId,
   } = params;
-  setBoardSnapshots((snapshots) => snapshots.filter((snapshot) => snapshot.runId !== runId));
-  setRecentSnapshots((snapshots) => snapshots.filter((snapshot) => snapshot.runId !== runId));
+  setDashboardSnapshots((snapshots) => snapshots.filter((snapshot) => snapshot.runId !== runId));
   setDeleteConfirmRunId(null);
   setRenamingSnapshotRunId(null);
   setDetailsSnapshotRunId(null);
   if (summaryRunId === runId) {
     setSummary(null);
     setBuildState("idle");
-    setCodeState("idle");
-    setCode(null);
-    setScreenJsonState("idle");
-    setScreenJson(null);
+    resetSnapshotArtifacts();
   }
   if (summaryRunId === runId || currentSnapshotRunId === runId) {
     updateCfg({ snapshotRunId: undefined });
@@ -1114,17 +1056,19 @@ function deleteFigmaSnapshotByRunId(params: DeleteFigmaSnapshotByRunIdParams): v
   setSnapshotManagementError(null);
   deleteImpl(runId, controller.signal)
     .then((_result: DeleteFigmaSnapshotResult) => {
+      if (controller.signal.aborted) return;
       applyFigmaSnapshotDeletion(runId, params);
     })
     .catch((err: unknown) => {
-      if (err instanceof DOMException && err.name === "AbortError") return;
+      if (controller.signal.aborted) return;
+      reportSnapshotFailure("deletion", err);
       setSnapshotManagementError(formatError(err, t));
     })
     .finally(() => {
       if (snapshotManagementAbortRef.current === controller) {
         snapshotManagementAbortRef.current = null;
+        setSnapshotManagementBusyRunId(null);
       }
-      setSnapshotManagementBusyRunId(null);
     });
 }
 
@@ -1133,6 +1077,7 @@ export function FigmaSnapshotWindow({
   snapshotRunId,
   selectedScreenIds = EMPTY_SELECTED_SCREEN_IDS,
   selectedScreenName,
+  viewSource = false,
   openScreenSource,
   openTokenSettings,
   updateCfg,
@@ -1150,6 +1095,8 @@ export function FigmaSnapshotWindow({
   const statusId = useId();
   const validationId = useId();
   const dashboardId = useId();
+  const boardTabRef = useRef<HTMLButtonElement>(null);
+  const recentTabRef = useRef<HTMLButtonElement>(null);
 
   const [boardLink, setBoardLink] = useState("");
   const [buildState, setBuildState] = useState<BuildState>("idle");
@@ -1159,12 +1106,11 @@ export function FigmaSnapshotWindow({
   const [buildStartedAt, setBuildStartedAt] = useState<number | null>(null);
   const [buildElapsedMs, setBuildElapsedMs] = useState(0);
   const [dashboardTab, setDashboardTab] = useState<SnapshotDashboardTab>("recent");
-  const [boardSnapshots, setBoardSnapshots] = useState<readonly FigmaSnapshotListEntry[]>([]);
-  const [recentSnapshots, setRecentSnapshots] = useState<readonly FigmaSnapshotListEntry[]>([]);
-  const [boardSnapshotsLoading, setBoardSnapshotsLoading] = useState(false);
-  const [recentSnapshotsLoading, setRecentSnapshotsLoading] = useState(false);
-  const [boardSnapshotsError, setBoardSnapshotsError] = useState<string | null>(null);
-  const [recentSnapshotsError, setRecentSnapshotsError] = useState<string | null>(null);
+  const [dashboardSnapshots, setDashboardSnapshots] = useState<readonly FigmaSnapshotListEntry[]>(
+    [],
+  );
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [dashboardError, setDashboardError] = useState<string | null>(null);
   const [renamingSnapshotRunId, setRenamingSnapshotRunId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [detailsSnapshotRunId, setDetailsSnapshotRunId] = useState<string | null>(null);
@@ -1187,6 +1133,7 @@ export function FigmaSnapshotWindow({
   const screenJsonAbortRef = useRef<AbortController | null>(null);
   const dashboardAbortRef = useRef<AbortController | null>(null);
   const snapshotManagementAbortRef = useRef<AbortController | null>(null);
+  const revokeAbortRef = useRef<AbortController | null>(null);
   const activeBuildRef = useRef<DetachedBuild | null>(null);
   const jsonPointerDragRef = useRef<{
     readonly pointerId: number;
@@ -1213,6 +1160,7 @@ export function FigmaSnapshotWindow({
 
   // Fix #3: PAT revoke state — two-step inline confirm.
   const [revokeConfirming, setRevokeConfirming] = useState(false);
+  const [revokePending, setRevokePending] = useState(false);
   const [revokeStatus, setRevokeStatus] = useState<string | null>(null);
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const revokeConfirmRef = useRef<HTMLButtonElement | null>(null);
@@ -1220,26 +1168,27 @@ export function FigmaSnapshotWindow({
   const [visibleScreenCount, setVisibleScreenCount] = useState(INITIAL_GALLERY_LIMIT);
   const selectedScreenIdKey = selectedScreenIds.join("\u0000");
 
-  const linkValid = isValidFigmaLink(boardLink);
-  const linkError = figmaLinkValidationMessage(boardLink, t);
-  const currentScope = useMemo(
-    () =>
-      summary !== null
-        ? { fileKey: summary.fileKey, nodeId: summary.nodeId }
-        : parseFigmaScope(boardLink),
-    [boardLink, summary],
-  );
-  const currentScopeFileKey = currentScope?.fileKey;
-  const currentScopeNodeId = currentScope?.nodeId;
+  const parsedLink = useMemo(() => parseFigmaSnapshotLink(boardLink), [boardLink]);
+  const linkValid = parsedLink.kind === "valid";
+  const linkErrorKey =
+    parsedLink.kind === "missing-node-id"
+      ? "figmaSnapshotWindow.validation.missingNodeId"
+      : "figmaSnapshotWindow.validation.invalidLink";
+  const linkError = linkValid || boardLink.trim().length === 0 ? null : t(linkErrorKey);
+  const currentScope = linkValid ? parsedLink.target : null;
+  const dashboardScope = dashboardTab === "board" ? currentScope : null;
+  const dashboardFileKey = dashboardScope?.fileKey;
+  const dashboardNodeId = dashboardScope?.nodeId;
   const isBuilding = buildState === "building";
   const isLoading = buildState === "loading";
-  const busy = isBuilding || isLoading;
+  const managementBusy = snapshotManagementBusyRunId !== null;
+  const busy = isBuilding || isLoading || managementBusy;
   const buildElapsedLabel =
     isBuilding && buildStartedAt !== null ? formatElapsed(buildElapsedMs) : null;
   const selectedScreenIdSet = useMemo(() => new Set(selectedScreenIds), [selectedScreenIds]);
   const isScreenScopedSource = selectedScreenIds.length > 0;
   const isViewSourceMode =
-    isScreenScopedSource && snapshotRunId !== undefined && snapshotRunId.length > 0;
+    viewSource || (isScreenScopedSource && snapshotRunId !== undefined && snapshotRunId.length > 0);
   const displayedScreens = useMemo(() => {
     if (summary === null) return [];
     const renderedIds = new Set(summary.screens.map((screen) => screen.screenId));
@@ -1296,8 +1245,9 @@ export function FigmaSnapshotWindow({
       abortRef.current?.abort();
       codeAbortRef.current?.abort();
       screenJsonAbortRef.current?.abort();
-      dashboardAbortRef.current?.abort();
       snapshotManagementAbortRef.current?.abort();
+      revokeAbortRef.current?.abort();
+      abortRef.current = null;
       jsonMouseDragCleanupRef.current?.();
       jsonMouseDragCleanupRef.current = null;
     };
@@ -1308,117 +1258,135 @@ export function FigmaSnapshotWindow({
   }, [currentScope, dashboardTab]);
 
   const refreshDashboard = useCallback((): void => {
+    if (isViewSourceMode || snapshotManagementAbortRef.current !== null) return;
     dashboardAbortRef.current?.abort();
     const controller = new AbortController();
     dashboardAbortRef.current = controller;
 
-    setRecentSnapshotsLoading(true);
-    setRecentSnapshotsError(null);
-    void listImpl({ limit: 12, signal: controller.signal })
-      .then((snapshots) => {
-        setRecentSnapshots(snapshots);
-      })
-      .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setRecentSnapshots([]);
-        setRecentSnapshotsError(formatError(err, t));
-      })
-      .finally(() => {
-        if (dashboardAbortRef.current === controller) setRecentSnapshotsLoading(false);
-      });
-
-    if (currentScopeFileKey === undefined || currentScopeNodeId === undefined) {
-      setBoardSnapshots([]);
-      setBoardSnapshotsError(null);
-      setBoardSnapshotsLoading(false);
-      return;
-    }
-
-    setBoardSnapshotsLoading(true);
-    setBoardSnapshotsError(null);
+    setDashboardLoading(true);
+    setDashboardError(null);
     void listImpl({
-      fileKey: currentScopeFileKey,
-      nodeId: currentScopeNodeId,
+      ...(dashboardFileKey !== undefined && dashboardNodeId !== undefined
+        ? { fileKey: dashboardFileKey, nodeId: dashboardNodeId }
+        : {}),
       limit: 12,
       signal: controller.signal,
     })
       .then((snapshots) => {
-        setBoardSnapshots(snapshots);
+        if (!controller.signal.aborted) setDashboardSnapshots(snapshots);
       })
       .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setBoardSnapshots([]);
-        setBoardSnapshotsError(formatError(err, t));
+        if (controller.signal.aborted) return;
+        reportSnapshotFailure("history load", err);
+        setDashboardSnapshots([]);
+        setDashboardError(formatError(err, t));
       })
       .finally(() => {
-        if (dashboardAbortRef.current === controller) setBoardSnapshotsLoading(false);
+        if (dashboardAbortRef.current === controller) {
+          dashboardAbortRef.current = null;
+          setDashboardLoading(false);
+        }
       });
-  }, [currentScopeFileKey, currentScopeNodeId, listImpl, t]);
+  }, [dashboardFileKey, dashboardNodeId, isViewSourceMode, listImpl, t]);
 
   useEffect(() => {
-    refreshDashboard();
-  }, [refreshDashboard, summary?.runId]);
+    // Coalesce partial node IDs while a board link is being entered.
+    let timer: number | undefined;
+    if (dashboardFileKey === undefined) {
+      refreshDashboard();
+    } else {
+      setDashboardLoading(true);
+      timer = window.setTimeout(refreshDashboard, 200);
+    }
+    return (): void => {
+      window.clearTimeout(timer);
+      dashboardAbortRef.current?.abort();
+      dashboardAbortRef.current = null;
+    };
+  }, [dashboardFileKey, refreshDashboard, summary?.runId]);
+
+  const resetSnapshotArtifacts = useCallback((): void => {
+    codeAbortRef.current?.abort();
+    screenJsonAbortRef.current?.abort();
+    codeAbortRef.current = null;
+    screenJsonAbortRef.current = null;
+    setCodeState("idle");
+    setCode(null);
+    setCodeError(null);
+    setScreenJsonState("idle");
+    setScreenJson(null);
+    setScreenJsonError(null);
+    setScreenJsonCopyStatus(null);
+  }, []);
 
   const loadSnapshotByRunId = useCallback(
     (runId: string): void => {
-      if (runId.length === 0 || busy) return;
-      abortRef.current?.abort();
+      if (
+        runId.length === 0 ||
+        abortRef.current !== null ||
+        snapshotManagementAbortRef.current !== null
+      ) {
+        return;
+      }
       const controller = new AbortController();
       abortRef.current = controller;
 
       setBuildState("loading");
       setErrorNotice(null);
       setDetachedBuild(null);
-      setCodeState("idle");
-      setCode(null);
-      setCodeError(null);
-      setScreenJsonState("idle");
-      setScreenJson(null);
-      setScreenJsonError(null);
-      setScreenJsonCopyStatus(null);
+      resetSnapshotArtifacts();
 
       loadImpl(runId, controller.signal)
         .then((result) => {
+          if (controller.signal.aborted) return;
           setSummary(result);
-          setBoardLink(boardLinkFromSnapshot(result));
-          updateCfg({ snapshotRunId: result.runId });
+          if (result.runId !== snapshotRunId) updateCfg({ snapshotRunId: result.runId });
+          if (!isViewSourceMode) setBoardLink(boardLinkFromSnapshot(result));
           setBuildState("done");
         })
         .catch((err: unknown) => {
-          if (err instanceof DOMException && err.name === "AbortError") return;
-          if (err instanceof ApiError && err.code === "FIGMA_SNAPSHOT_NOT_FOUND") {
-            if (snapshotRunId === runId) updateCfg({ snapshotRunId: undefined });
+          if (controller.signal.aborted) return;
+          reportSnapshotFailure("stored snapshot load", err);
+          if (
+            !isViewSourceMode &&
+            snapshotRunId === runId &&
+            err instanceof ApiError &&
+            err.code === "FIGMA_SNAPSHOT_NOT_FOUND"
+          ) {
+            updateCfg({ snapshotRunId: undefined });
             setErrorNotice({
               ...formatSnapshotError(err, t),
-              detail:
-                snapshotRunId === runId
-                  ? `${err.message} ${t("figmaSnapshotWindow.error.runIdClearedSuffix")}`
-                  : err.message,
+              detail: `${err.message} ${t("figmaSnapshotWindow.error.runIdClearedSuffix")}`,
             });
           } else {
             setErrorNotice(formatSnapshotError(err, t));
           }
           setBuildState("error");
+        })
+        .finally(() => {
+          if (abortRef.current === controller) abortRef.current = null;
         });
     },
-    [busy, loadImpl, snapshotRunId, t, updateCfg],
+    [isViewSourceMode, loadImpl, resetSnapshotArtifacts, snapshotRunId, t, updateCfg],
   );
 
   useEffect(() => {
-    if (!isViewSourceMode) return;
+    if (!isViewSourceMode || !isScreenScopedSource) return;
     if (snapshotRunId === undefined || snapshotRunId.length === 0) return;
     if (summary !== null || buildState !== "idle") return;
     loadSnapshotByRunId(snapshotRunId);
-  }, [buildState, isViewSourceMode, loadSnapshotByRunId, snapshotRunId, summary]);
+  }, [
+    buildState,
+    isScreenScopedSource,
+    isViewSourceMode,
+    loadSnapshotByRunId,
+    snapshotRunId,
+    summary,
+  ]);
 
   const runBuild = useCallback(
     async (link: string, isResnapshot: boolean): Promise<void> => {
-      // Abort any previous in-flight request before starting a new one.
-      abortRef.current?.abort();
-      codeAbortRef.current?.abort();
-      screenJsonAbortRef.current?.abort();
-      codeAbortRef.current = null;
-      screenJsonAbortRef.current = null;
+      if (abortRef.current !== null || snapshotManagementAbortRef.current !== null) return;
       const controller = new AbortController();
       abortRef.current = controller;
       activeBuildRef.current = { link, isResnapshot };
@@ -1428,18 +1396,14 @@ export function FigmaSnapshotWindow({
       setDetachedBuild(null);
       setBuildStartedAt(Date.now());
       setBuildElapsedMs(0);
-      setCodeState("idle");
-      setCode(null);
-      setScreenJsonState("idle");
-      setScreenJson(null);
-      setScreenJsonError(null);
-      setScreenJsonCopyStatus(null);
+      resetSnapshotArtifacts();
       try {
         const result = await triggerImpl(link, {
           acknowledgeReadOnly: consentChecked,
           isResnapshot,
           signal: controller.signal,
         });
+        if (controller.signal.aborted) return;
         setSummary(result);
         setBoardLink(boardLinkFromSnapshot(result));
         updateCfg({ snapshotRunId: result.runId });
@@ -1448,7 +1412,10 @@ export function FigmaSnapshotWindow({
         setBuildElapsedMs(0);
         activeBuildRef.current = null;
       } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") {
+        if (
+          controller.signal.aborted ||
+          (err instanceof DOMException && err.name === "AbortError")
+        ) {
           return;
         }
         setBuildStartedAt(null);
@@ -1475,9 +1442,11 @@ export function FigmaSnapshotWindow({
         }
         setBuildState("error");
         activeBuildRef.current = null;
+      } finally {
+        if (abortRef.current === controller) abortRef.current = null;
       }
     },
-    [triggerImpl, updateCfg, consentChecked, flagConsentRequired, t],
+    [triggerImpl, updateCfg, consentChecked, flagConsentRequired, resetSnapshotArtifacts, t],
   );
 
   const handleSubmit = useCallback(
@@ -1529,34 +1498,34 @@ export function FigmaSnapshotWindow({
 
   const handleGenerateCode = useCallback((): void => {
     const runId = summary?.runId ?? snapshotRunId;
-    if (runId === undefined || runId.length === 0 || codeState === "generating") return;
+    if (runId === undefined || runId.length === 0 || codeAbortRef.current !== null || busy) {
+      return;
+    }
     const controller = new AbortController();
     codeAbortRef.current = controller;
     setCodeState("generating");
     setCodeError(null);
     codegenImpl(runId, controller.signal)
       .then((result) => {
+        if (controller.signal.aborted) return;
         setCode(result);
         setCodeState("done");
       })
       .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === "AbortError") {
-          setCodeState("idle");
-          return;
-        }
+        if (controller.signal.aborted) return;
+        reportSnapshotFailure("code generation", err);
         setCodeError(formatError(err, t));
         setCodeState("error");
       })
       .finally(() => {
         if (codeAbortRef.current === controller) codeAbortRef.current = null;
       });
-  }, [codegenImpl, codeState, snapshotRunId, summary, t]);
+  }, [busy, codegenImpl, snapshotRunId, summary, t]);
 
   const handleInspectJson = useCallback((): void => {
     const runId = summary?.runId ?? snapshotRunId;
     if (runId === undefined || runId.length === 0 || inspectableScreenId === undefined) return;
-    if (screenJsonState === "loading") return;
-    screenJsonAbortRef.current?.abort();
+    if (screenJsonAbortRef.current !== null) return;
     const controller = new AbortController();
     screenJsonAbortRef.current = controller;
     setScreenJsonState("loading");
@@ -1564,14 +1533,13 @@ export function FigmaSnapshotWindow({
     setScreenJsonCopyStatus(null);
     loadScreenJsonImpl(runId, inspectableScreenId, controller.signal)
       .then((result) => {
+        if (controller.signal.aborted) return;
         setScreenJson(result);
         setScreenJsonState("done");
       })
       .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === "AbortError") {
-          setScreenJsonState("idle");
-          return;
-        }
+        if (controller.signal.aborted) return;
+        reportSnapshotFailure("screen JSON load", err);
         setScreenJson(null);
         setScreenJsonError(formatError(err, t));
         setScreenJsonState("error");
@@ -1579,7 +1547,7 @@ export function FigmaSnapshotWindow({
       .finally(() => {
         if (screenJsonAbortRef.current === controller) screenJsonAbortRef.current = null;
       });
-  }, [inspectableScreenId, loadScreenJsonImpl, screenJsonState, snapshotRunId, summary?.runId, t]);
+  }, [inspectableScreenId, loadScreenJsonImpl, snapshotRunId, summary?.runId, t]);
 
   const handleCopyJson = useCallback((): void => {
     if (screenJsonText.length === 0) return;
@@ -1776,16 +1744,27 @@ export function FigmaSnapshotWindow({
   }, [selectedScreenIdKey, snapshotRunId]);
 
   const handleRevokeConfirmed = useCallback((): void => {
+    if (revokeAbortRef.current !== null) return;
+    const controller = new AbortController();
+    revokeAbortRef.current = controller;
     setRevokeConfirming(false);
+    setRevokePending(true);
     setRevokeError(null);
     setRevokeStatus(null);
-    revokeImpl()
+    revokeImpl(controller.signal)
       .then((result: FigmaRevokeTokenResult) => {
+        if (controller.signal.aborted) return;
         setRevokeStatus(result.message);
-        requestAnimationFrame(() => revokeTriggerRef.current?.focus());
       })
       .catch((err: unknown) => {
+        if (controller.signal.aborted) return;
+        reportSnapshotFailure("stored token removal", err);
         setRevokeError(formatError(err, t));
+      })
+      .finally(() => {
+        if (controller.signal.aborted) return;
+        revokeAbortRef.current = null;
+        setRevokePending(false);
         requestAnimationFrame(() => revokeTriggerRef.current?.focus());
       });
   }, [revokeImpl, t]);
@@ -1810,8 +1789,7 @@ export function FigmaSnapshotWindow({
 
   const handleRenameSnapshot = useCallback(
     (runId: string): void => {
-      if (snapshotManagementBusyRunId !== null) return;
-      snapshotManagementAbortRef.current?.abort();
+      if (snapshotManagementAbortRef.current !== null || abortRef.current !== null) return;
       const controller = new AbortController();
       snapshotManagementAbortRef.current = controller;
       renameFigmaSnapshot({
@@ -1823,15 +1801,14 @@ export function FigmaSnapshotWindow({
         updateMetadataImpl,
         snapshotManagementAbortRef,
         setSummary,
-        setBoardSnapshots,
-        setRecentSnapshots,
+        setDashboardSnapshots,
         setRenamingSnapshotRunId,
         setRenameValue,
         setSnapshotManagementError,
         setSnapshotManagementBusyRunId,
       });
     },
-    [renameValue, snapshotManagementBusyRunId, summary?.runId, t, updateMetadataImpl],
+    [renameValue, summary?.runId, t, updateMetadataImpl],
   );
 
   const handleToggleDetails = useCallback((runId: string): void => {
@@ -1850,8 +1827,7 @@ export function FigmaSnapshotWindow({
 
   const handleDeleteSnapshot = useCallback(
     (runId: string): void => {
-      if (snapshotManagementBusyRunId !== null) return;
-      snapshotManagementAbortRef.current?.abort();
+      if (snapshotManagementAbortRef.current !== null || abortRef.current !== null) return;
       const controller = new AbortController();
       snapshotManagementAbortRef.current = controller;
       deleteFigmaSnapshotByRunId({
@@ -1865,12 +1841,8 @@ export function FigmaSnapshotWindow({
         snapshotManagementAbortRef,
         setSummary,
         setBuildState,
-        setCodeState,
-        setCode,
-        setScreenJsonState,
-        setScreenJson,
-        setBoardSnapshots,
-        setRecentSnapshots,
+        resetSnapshotArtifacts,
+        setDashboardSnapshots,
         setDeleteConfirmRunId,
         setRenamingSnapshotRunId,
         setDetailsSnapshotRunId,
@@ -1878,7 +1850,7 @@ export function FigmaSnapshotWindow({
         setSnapshotManagementBusyRunId,
       });
     },
-    [deleteImpl, snapshotManagementBusyRunId, snapshotRunId, summary?.runId, t, updateCfg],
+    [deleteImpl, resetSnapshotArtifacts, snapshotRunId, summary?.runId, t, updateCfg],
   );
 
   // Fix #1: keep the Load button mounted when buildState==="error" && summary===null so
@@ -1971,7 +1943,7 @@ export function FigmaSnapshotWindow({
                     type="button"
                     className="figma-snapshot-dashboard-icon-btn"
                     onClick={() => handleStartRename(snapshot)}
-                    disabled={itemBusy}
+                    disabled={busy}
                     aria-label={t("figmaSnapshotWindow.dashboard.renameSnapshotAria", { title })}
                     title={t("figmaSnapshotWindow.dashboard.renameTitle")}
                   >
@@ -1995,7 +1967,7 @@ export function FigmaSnapshotWindow({
                     type="button"
                     className="figma-snapshot-dashboard-icon-btn figma-snapshot-dashboard-icon-btn-danger"
                     onClick={() => handleRequestDelete(snapshot.runId)}
-                    disabled={itemBusy}
+                    disabled={busy}
                     aria-label={t("figmaSnapshotWindow.dashboard.deleteSnapshotAria", { title })}
                     title={t("figmaSnapshotWindow.common.delete")}
                   >
@@ -2033,14 +2005,14 @@ export function FigmaSnapshotWindow({
                     value={renameValue}
                     onChange={(event) => setRenameValue(event.target.value)}
                     maxLength={120}
-                    disabled={itemBusy}
+                    disabled={busy}
                     aria-label={t("figmaSnapshotWindow.dashboard.renameInputAria", { title })}
                     placeholder={t("figmaSnapshotWindow.dashboard.renameInputPlaceholder")}
                   />
                   <button
                     type="submit"
                     className="figma-snapshot-dashboard-rename-save"
-                    disabled={itemBusy}
+                    disabled={busy}
                     aria-busy={itemBusy}
                   >
                     {t("figmaSnapshotWindow.common.save")}
@@ -2049,7 +2021,7 @@ export function FigmaSnapshotWindow({
                     type="button"
                     className="figma-snapshot-dashboard-rename-cancel"
                     onClick={handleCancelRename}
-                    disabled={itemBusy}
+                    disabled={busy}
                   >
                     {t("figmaSnapshotWindow.common.cancel")}
                   </button>
@@ -2062,7 +2034,7 @@ export function FigmaSnapshotWindow({
                     type="button"
                     className="figma-snapshot-dashboard-delete-confirm-btn"
                     onClick={() => handleDeleteSnapshot(snapshot.runId)}
-                    disabled={itemBusy}
+                    disabled={busy}
                     aria-busy={itemBusy}
                   >
                     {t("figmaSnapshotWindow.common.delete")}
@@ -2071,7 +2043,7 @@ export function FigmaSnapshotWindow({
                     type="button"
                     className="figma-snapshot-dashboard-delete-cancel-btn"
                     onClick={() => setDeleteConfirmRunId(null)}
-                    disabled={itemBusy}
+                    disabled={busy}
                   >
                     {t("figmaSnapshotWindow.common.cancel")}
                   </button>
@@ -2113,6 +2085,13 @@ export function FigmaSnapshotWindow({
   };
 
   const renderViewSourceScreens = (): ReactNode => {
+    if (!isScreenScopedSource) {
+      return (
+        <p className="figma-view-source-empty-title">
+          {t("figmaSnapshotWindow.viewSourceMode.screenNotPresent")}
+        </p>
+      );
+    }
     if (summary === null) {
       return (
         <div className="figma-view-source-empty">
@@ -2121,7 +2100,7 @@ export function FigmaSnapshotWindow({
               ? t("figmaSnapshotWindow.viewSourceMode.loadingSelectedView")
               : t("figmaSnapshotWindow.viewSourceMode.notLoaded")}
           </p>
-          {!isLoading && (
+          {!isLoading && snapshotRunId !== undefined && snapshotRunId.length > 0 && (
             <button type="button" className="figma-snapshot-load-btn" onClick={handleLoadStored}>
               {t("figmaSnapshotWindow.viewSourceMode.loadViewButton")}
             </button>
@@ -2180,10 +2159,15 @@ export function FigmaSnapshotWindow({
   };
 
   const renderViewSourceMode = (): ReactNode => {
-    const sourceName = selectedScreenName ?? selectedScreenIds.join(", ");
+    const sourceName =
+      selectedScreenName ??
+      (isScreenScopedSource
+        ? selectedScreenIds.join(", ")
+        : t("figmaSnapshotWindow.viewSourceMode.eyebrow"));
     const canInspectJson =
       inspectableScreenId !== undefined &&
-      (summary?.runId ?? snapshotRunId) !== undefined &&
+      snapshotRunId !== undefined &&
+      snapshotRunId.length > 0 &&
       screenJsonState !== "loading";
     return (
       <section
@@ -2517,6 +2501,28 @@ export function FigmaSnapshotWindow({
     </form>
   );
 
+  const handleDashboardNavigation = (event: KeyboardEvent<HTMLButtonElement>): void => {
+    if (currentScope === null || managementBusy) return;
+    let nextTab: SnapshotDashboardTab;
+    switch (event.key) {
+      case "Home":
+        nextTab = "board";
+        break;
+      case "End":
+        nextTab = "recent";
+        break;
+      case "ArrowLeft":
+      case "ArrowRight":
+        nextTab = dashboardTab === "board" ? "recent" : "board";
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    setDashboardTab(nextTab);
+    (nextTab === "board" ? boardTabRef : recentTabRef).current?.focus();
+  };
+
   const renderSnapshotDashboard = (): ReactNode => (
     <section
       className="figma-snapshot-dashboard"
@@ -2535,6 +2541,7 @@ export function FigmaSnapshotWindow({
           type="button"
           className="figma-snapshot-dashboard-refresh"
           onClick={refreshDashboard}
+          disabled={managementBusy || dashboardLoading}
         >
           {t("figmaSnapshotWindow.dashboard.refresh")}
         </button>
@@ -2545,26 +2552,33 @@ export function FigmaSnapshotWindow({
         aria-label={t("figmaSnapshotWindow.dashboard.tabsAriaLabel")}
       >
         <button
+          ref={boardTabRef}
           type="button"
           className="figma-snapshot-dashboard-tab"
           role="tab"
           aria-selected={dashboardTab === "board"}
-          aria-controls={`${dashboardId}-board-panel`}
+          aria-controls={`${dashboardId}-panel`}
           id={`${dashboardId}-board-tab`}
+          tabIndex={dashboardTab === "board" ? 0 : -1}
+          onKeyDown={handleDashboardNavigation}
           onClick={() => {
             if (currentScope !== null) setDashboardTab("board");
           }}
-          disabled={currentScope === null}
+          disabled={currentScope === null || managementBusy}
         >
           {t("figmaSnapshotWindow.dashboard.tabBoard")}
         </button>
         <button
+          ref={recentTabRef}
           type="button"
           className="figma-snapshot-dashboard-tab"
           role="tab"
           aria-selected={dashboardTab === "recent"}
-          aria-controls={`${dashboardId}-recent-panel`}
+          aria-controls={`${dashboardId}-panel`}
           id={`${dashboardId}-recent-tab`}
+          tabIndex={dashboardTab === "recent" ? 0 : -1}
+          onKeyDown={handleDashboardNavigation}
+          disabled={managementBusy}
           onClick={() => {
             setDashboardTab("recent");
           }}
@@ -2582,7 +2596,7 @@ export function FigmaSnapshotWindow({
       ) : null}
       {dashboardTab === "board" ? (
         <div
-          id={`${dashboardId}-board-panel`}
+          id={`${dashboardId}-panel`}
           className="figma-snapshot-dashboard-panel"
           role="tabpanel"
           aria-labelledby={`${dashboardId}-board-tab`}
@@ -2597,9 +2611,9 @@ export function FigmaSnapshotWindow({
                 false,
               )
             : renderDashboardList(
-                boardSnapshots,
-                boardSnapshotsLoading,
-                boardSnapshotsError,
+                dashboardSnapshots,
+                dashboardLoading,
+                dashboardError,
                 t("figmaSnapshotWindow.dashboard.noBoardSnapshotsTitle"),
                 t("figmaSnapshotWindow.dashboard.noBoardSnapshotsDetail"),
                 false,
@@ -2607,15 +2621,15 @@ export function FigmaSnapshotWindow({
         </div>
       ) : (
         <div
-          id={`${dashboardId}-recent-panel`}
+          id={`${dashboardId}-panel`}
           className="figma-snapshot-dashboard-panel"
           role="tabpanel"
           aria-labelledby={`${dashboardId}-recent-tab`}
         >
           {renderDashboardList(
-            recentSnapshots,
-            recentSnapshotsLoading,
-            recentSnapshotsError,
+            dashboardSnapshots,
+            dashboardLoading,
+            dashboardError,
             t("figmaSnapshotWindow.dashboard.noRecentSnapshotsTitle"),
             t("figmaSnapshotWindow.dashboard.noRecentSnapshotsDetail"),
             true,
@@ -2722,7 +2736,7 @@ export function FigmaSnapshotWindow({
                 type="button"
                 className="figma-snapshot-codegen-btn"
                 onClick={handleGenerateCode}
-                aria-disabled={codeState === "generating" ? "true" : undefined}
+                aria-disabled={codeState === "generating" || busy ? "true" : undefined}
                 aria-busy={codeState === "generating"}
               >
                 {codeState === "generating"
@@ -2822,6 +2836,8 @@ export function FigmaSnapshotWindow({
                   ref={revokeTriggerRef}
                   type="button"
                   className="figma-snapshot-revoke-btn"
+                  disabled={revokePending}
+                  aria-busy={revokePending}
                   onClick={() => {
                     setRevokeConfirming(true);
                     setRevokeStatus(null);

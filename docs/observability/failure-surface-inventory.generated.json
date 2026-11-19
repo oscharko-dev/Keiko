@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "bd006a160e5248c11c12f2dab401b27dea36558be6e9c0f647e0aaace8a94c7c"
+    "catalogDigest": "e9694e48a9ca0f70c8be8b90a8762f6b634232c46479de58df0ef2ca1c8d6e7c"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 741,
-    "proofCount": 764,
-    "resolvedProofCount": 764,
-    "failureClassCount": 418,
+    "operationCount": 716,
+    "proofCount": 739,
+    "resolvedProofCount": 739,
+    "failureClassCount": 408,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -90,6 +90,7 @@
       "operations": [
         "cli.lifecycle.browser-handoff",
         "cli.lifecycle.health",
+        "cli.lifecycle.launch-order",
         "cli.lifecycle.native-owner",
         "cli.lifecycle.stop-escalated",
         "cli.lifecycle.stop-escalation-failed",
@@ -148,6 +149,8 @@
         "chat.tool-turn.ended",
         "chat.tool-turn.result-condensed",
         "chat.turn.started",
+        "figma.snapshot.capture-failed",
+        "figma.snapshot.captured",
         "git-change.chat.apply",
         "git-change.chat.description-target.denied",
         "http.request.body.cancelled",
@@ -771,35 +774,7 @@
         "pr-description.model.completed",
         "pr-description.model.failed",
         "pr-description.model.started",
-        "pr-description.repository.mismatch",
-        "review.counter-check.completed",
-        "review.counter-check.failed",
-        "review.finding.reported",
-        "review.model-policy.refused",
-        "review.model-policy.resolved",
-        "review.model-policy.updated",
-        "review.pair-qualification.case-scored",
-        "review.pair-qualification.completed",
-        "review.pair-qualification.failed",
-        "review.pair-qualification.started",
-        "review.run.action-refused",
-        "review.run.part",
-        "review.run.phase",
-        "review.run.profile-refused",
-        "review.run.refused",
-        "review.run.rules-file",
-        "review.run.runtime-started",
-        "review.run.runtime-stopped",
-        "review.run.settled",
-        "review.run.started",
-        "review.target.listed",
-        "review.target.refused",
-        "review.target.resolved",
-        "review.worktree.created",
-        "review.worktree.orphan-swept",
-        "review.worktree.refs-swept",
-        "review.worktree.refused",
-        "review.worktree.removed"
+        "pr-description.repository.mismatch"
       ],
       "scenarios": [
         "editor-delivery.crash",
@@ -972,6 +947,7 @@
     "cli-audit": ["runtime-packages.dependency-failure"],
     "cli-gateway-service": ["runtime-packages.dependency-failure"],
     "provisioned-config-adoption": ["runtime-packages.dependency-failure"],
+    "launch-order-fence": ["ui.dependency-failure"],
     "windows-gateway-service": ["tools-workflows.dependency-failure"],
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
@@ -1123,6 +1099,7 @@
     "embedding-transport-unavailable": ["memory-knowledge.dependency-failure"],
     "evidence-persistence": ["tools-workflows.dependency-failure"],
     "evidence-retention": ["runtime-packages.dependency-failure"],
+    "figma-snapshot": ["bff.dependency-failure"],
     "gateway-chat-call": ["model-gateway.dependency-failure"],
     "gateway-chat-provider-call": ["model-gateway.dependency-failure"],
     "gateway-circuit-breaker": ["model-gateway.rejection"],
@@ -1344,19 +1321,7 @@
       "bff.rejection",
       "client-diagnostics.rejection",
       "runtime-packages.rejection"
-    ],
-    "review-target-read": ["editor-delivery.dependency-failure"],
-    "review-target-resolution": ["editor-delivery.rejection"],
-    "review-worktree-lifecycle": ["editor-delivery.rejection"],
-    "review-private-ref-retention": ["editor-delivery.dependency-failure"],
-    "review-runtime-lifecycle": ["editor-delivery.dependency-failure"],
-    "review-runtime-profile": ["editor-delivery.rejection"],
-    "review-rules-file": ["editor-delivery.dependency-failure"],
-    "review-finding-intake": ["editor-delivery.dependency-failure"],
-    "review-run": ["editor-delivery.rejection"],
-    "review-counter-check": ["editor-delivery.dependency-failure"],
-    "review-model-policy": ["editor-delivery.rejection"],
-    "review-pair-qualification": ["editor-delivery.dependency-failure"]
+    ]
   },
   "proofs": {
     "activity-log.loss.heartbeat-summary": [
@@ -1596,6 +1561,7 @@
       "packages/keiko-cli/src/lifecycle-health-owner.test.ts",
       "packages/keiko-cli/src/lifecycle-start-window.test.ts"
     ],
+    "cli.lifecycle.launch-order.outcome": ["packages/keiko-cli/src/lifecycle-launch-order.test.ts"],
     "cli.lifecycle.native-owner.outcome": [
       "packages/keiko-cli/src/lifecycle-diagnostics.test.ts",
       "packages/keiko-cli/src/lifecycle-native-activity.test.ts"
@@ -2105,8 +2071,7 @@
       "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.test.ts"
     ],
     "coding-runtime.tool-authority.denied.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.test.ts",
-      "packages/keiko-server/src/review/runtime/readOnlyLayers.test.ts"
+      "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.test.ts"
     ],
     "coding-runtime.tool-availability.failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.omitted-evidence.test.ts",
@@ -2360,6 +2325,12 @@
       "packages/keiko-model-gateway/src/openai-embedding-adapter.logging.test.ts"
     ],
     "evidence.retention.line": ["packages/keiko-server/src/evidence-retention-log.test.ts"],
+    "figma.snapshot.capture-failed.line": [
+      "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.test.ts"
+    ],
+    "figma.snapshot.captured.line": [
+      "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.test.ts"
+    ],
     "gateway.catalog.automatic.completed.line": [
       "packages/keiko-server/src/gateway-startup-catalog.test.ts"
     ],
@@ -3062,63 +3033,6 @@
       "packages/keiko-local-knowledge/src/repository-pod.test.ts"
     ],
     "request.close-line": ["packages/keiko-server/src/server.activity-log-proof.test.ts"],
-    "review.counter-check.completed.line": [
-      "packages/keiko-server/src/review/counter-check/activity-log.test.ts"
-    ],
-    "review.counter-check.failed.line": [
-      "packages/keiko-server/src/review/counter-check/activity-log.test.ts"
-    ],
-    "review.finding.reported.line": [
-      "packages/keiko-server/src/review/runtime/activity-log.test.ts"
-    ],
-    "review.model-policy.refused.line": [
-      "packages/keiko-server/src/review/policy/activity-log.test.ts"
-    ],
-    "review.model-policy.resolved.line": [
-      "packages/keiko-server/src/review/policy/activity-log.test.ts"
-    ],
-    "review.model-policy.updated.line": [
-      "packages/keiko-server/src/review/policy/activity-log.test.ts"
-    ],
-    "review.pair-qualification.case-scored.line": [
-      "packages/keiko-server/src/review/qualification/activity-log.test.ts"
-    ],
-    "review.pair-qualification.completed.line": [
-      "packages/keiko-server/src/review/qualification/activity-log.test.ts"
-    ],
-    "review.pair-qualification.failed.line": [
-      "packages/keiko-server/src/review/qualification/activity-log.test.ts"
-    ],
-    "review.pair-qualification.started.line": [
-      "packages/keiko-server/src/review/qualification/activity-log.test.ts"
-    ],
-    "review.run.action-refused.line": [
-      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
-      "packages/keiko-server/src/review/runtime/activity-log.test.ts"
-    ],
-    "review.run.part.line": ["packages/keiko-server/src/review/service/activity-log.test.ts"],
-    "review.run.phase.line": ["packages/keiko-server/src/review/service/activity-log.test.ts"],
-    "review.run.profile-refused.line": [
-      "packages/keiko-server/src/review/runtime/activity-log.test.ts"
-    ],
-    "review.run.refused.line": ["packages/keiko-server/src/review/service/activity-log.test.ts"],
-    "review.run.rules-file.line": ["packages/keiko-server/src/review/runtime/activity-log.test.ts"],
-    "review.run.runtime-started.line": [
-      "packages/keiko-server/src/review/runtime/activity-log.test.ts"
-    ],
-    "review.run.runtime-stopped.line": [
-      "packages/keiko-server/src/review/runtime/activity-log.test.ts"
-    ],
-    "review.run.settled.line": ["packages/keiko-server/src/review/service/activity-log.test.ts"],
-    "review.run.started.line": ["packages/keiko-server/src/review/service/activity-log.test.ts"],
-    "review.target.listed.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
-    "review.target.refused.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
-    "review.target.resolved.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
-    "review.worktree.created.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
-    "review.worktree.orphan-swept.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
-    "review.worktree.refs-swept.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
-    "review.worktree.refused.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
-    "review.worktree.removed.line": ["packages/keiko-server/src/review/activity-log.test.ts"],
     "runs.apply.settled.line": ["packages/keiko-server/src/run-handlers.test.ts"],
     "runs.patch.refused.line": ["packages/keiko-server/src/sink.test.ts"],
     "runtime.confinement.failed.emitted-line": [

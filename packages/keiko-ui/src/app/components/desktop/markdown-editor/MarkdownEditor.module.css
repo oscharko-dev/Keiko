@@ -125,6 +125,14 @@
 }
 
 /* Front matter: machine metadata above the document, folded by default. */
+.cmpMdeMetadata[data-guided="true"] {
+  flex: none;
+  max-height: 48%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--surface-inset);
+}
+
 .cmpMdeMeta {
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-inset);

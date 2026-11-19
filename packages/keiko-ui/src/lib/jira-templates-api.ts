@@ -1,6 +1,11 @@
 "use client";
 
 import type { JiraTemplateParseError } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  JiraTemplateBound,
+  JiraTemplateOptions,
+  JiraTemplateOptionsRequest,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import { codingAppSessionPairingSettled } from "./coding-app-session-client";
 import { bffFetchJson } from "./http";
 
@@ -47,6 +52,8 @@ export type JiraTemplateValidation =
   | {
       readonly valid: true;
       readonly binding?: JiraTemplateBindingState;
+      /** The file's binding is not confirmed for this Jira: replacing it needs an explicit choice. */
+      readonly bindingUnconfirmed?: true;
       readonly findings: readonly JiraTemplateFinding[];
       readonly checked: {
         readonly project: boolean;
@@ -116,6 +123,13 @@ export function validateJiraTemplate(
   return request("/api/skills/jira-templates/validate", { podId, markdown }, correlationId);
 }
 
+export function fetchJiraTemplateOptions(
+  selection: JiraTemplateOptionsRequest,
+  correlationId?: string,
+): Promise<JiraTemplateOptions> {
+  return request("/api/skills/jira-templates/options", selection, correlationId);
+}
+
 export async function proposeJiraTemplates(
   podId: string,
   projectKey: string,
@@ -128,12 +142,7 @@ export async function proposeJiraTemplates(
   );
 }
 
-/** What binding a template to this Jira did: the issue type it now names by id. */
-export interface JiraTemplateBound {
-  readonly changed: boolean;
-  readonly issueType: string;
-  readonly parentTypeCount?: number;
-}
+export type { JiraTemplateBound };
 
 /** Writes the ids of this Jira's issue types into the template as a new revision (#4354). */
 export function bindJiraTemplate(
@@ -141,6 +150,11 @@ export function bindJiraTemplate(
   skillId: string,
   revision: number,
   correlationId?: string,
+  migrate?: boolean,
 ): Promise<JiraTemplateBound> {
-  return request("/api/skills/jira-templates/bind", { podId, skillId, revision }, correlationId);
+  return request(
+    "/api/skills/jira-templates/bind",
+    { podId, skillId, revision, ...(migrate === true ? { migrate } : {}) },
+    correlationId,
+  );
 }

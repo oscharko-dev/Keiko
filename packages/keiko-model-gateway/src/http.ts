@@ -555,7 +555,7 @@ function nodeResponseBody(
         total += chunk.length;
         if (total > maxBytes) {
           done = true;
-          controller.error(new Error("gateway response exceeded the size limit"));
+          controller.error(new GatewayResponseBodyValidationError("size-exceeded"));
           onCancel();
           return;
         }
@@ -2068,21 +2068,14 @@ export async function readJsonCapped(
   if (response.body === null) {
     return response.json().catch(rethrowJsonBodyFailure);
   }
-  const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const parts: string[] = [];
   let total = 0;
-  // The stream's own `done` flag terminates the loop directly, so no single defect in the body
-  // can detach the loop from the source and spin it hot on an already-settled reader.
-  let done = false;
-  while (!done) {
-    const result = await reader.read();
-    done = result.done;
-    const value = result.value;
-    if (value === undefined) continue;
+  // The stream iterator cancels the underlying body when the byte limit stops consumption early.
+  for await (const value of response.body as ReadableStream<Uint8Array> &
+    AsyncIterable<Uint8Array>) {
     total += value.byteLength;
     if (total > maxBytes) {
-      await reader.cancel();
       throw new GatewayResponseBodyValidationError("size-exceeded");
     }
     parts.push(decoder.decode(value, { stream: true }));
@@ -2105,24 +2098,17 @@ export async function readBytesCapped(
   if (response.body === null) {
     const buffer = await response.arrayBuffer();
     if (buffer.byteLength > maxBytes) {
-      throw new Error("response body exceeded the size limit");
+      throw new GatewayResponseBodyValidationError("size-exceeded");
     }
     return new Uint8Array(buffer);
   }
-  const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  // Same loop shape as readJsonCapped: `done` drives the loop condition itself.
-  let done = false;
-  while (!done) {
-    const result = await reader.read();
-    done = result.done;
-    const value = result.value;
-    if (value === undefined) continue;
+  for await (const value of response.body as ReadableStream<Uint8Array> &
+    AsyncIterable<Uint8Array>) {
     total += value.byteLength;
     if (total > maxBytes) {
-      await reader.cancel();
-      throw new Error("response body exceeded the size limit");
+      throw new GatewayResponseBodyValidationError("size-exceeded");
     }
     chunks.push(value);
   }

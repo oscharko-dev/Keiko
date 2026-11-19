@@ -300,14 +300,17 @@ function seedFigmaSnapshot(stateDir) {
       },
     ],
     skippedScreens: [],
-    links: [{ sourceScreenId: "screen-1", targetNodeId: "0:2", trigger: "click" }],
+    links: [{ sourceNodeId: "screen-1", targetNodeId: "0:2", trigger: "ON_CLICK" }],
     tokens: { colors: { primary: "#123456" } },
     metrics: {
+      reductionRatio: 1,
+      screenCount: 1,
+      renderCount: 1,
+      designTokenCount: 1,
       augmentation: {
-        attempted: false,
-        modelGatewayCallCount: 0,
-        successfulScreenCount: 0,
-        failedScreenCount: 0,
+        deterministic: 0,
+        modelAugmented: 0,
+        modelAugmentedShare: 0,
       },
     },
   });

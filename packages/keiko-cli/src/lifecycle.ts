@@ -43,6 +43,13 @@ import { LauncherError } from "./launcher-platforms.js";
 import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";
 import { emitBrowserHandoff } from "./lifecycle-browser-activity.js";
 import { adoptProvisionedConfig, provisionedConfigMessage } from "./provisioned-config.js";
+import {
+  STOP_SUPERSEDED_EXIT_CODE,
+  checkStopFence,
+  clearLaunchOrder,
+  parseLaunchOrder,
+  recordLaunchOrder,
+} from "./launch-order.js";
 import { emitLifecycleHealth } from "./lifecycle-health-activity.js";
 import { emitNativeUiOwnership } from "./lifecycle-native-activity.js";
 import {
@@ -69,6 +76,7 @@ import {
 import {
   KEIKO_UI_LAUNCH_ID_ENV,
   UI_LAUNCH_ID_FLAG,
+  UI_LAUNCH_ORDER_FILE,
   readPidRecord,
   readUiLifecycleTracking,
   writePendingUiLaunch,
@@ -112,7 +120,9 @@ type LifecycleFlag =
   | "--state-dir"
   | "--start-timeout"
   | "--stop-timeout"
-  | "--provisioned-config";
+  | "--provisioned-config"
+  | "--launch-order"
+  | "--unless-launched-after";
 type LifecycleFlagSetter = (raw: RawLifecycleOptions, value: string) => void;
 
 const KEIKO_PROCESS_TITLE = "Keiko";
@@ -135,6 +145,12 @@ const LIFECYCLE_FLAG_SETTERS: Readonly<Record<LifecycleFlag, LifecycleFlagSetter
   },
   "--provisioned-config": (raw, value) => {
     raw.provisionedConfigRaw = value;
+  },
+  "--launch-order": (raw, value) => {
+    raw.launchOrderRaw = value;
+  },
+  "--unless-launched-after": (raw, value) => {
+    raw.unlessLaunchedAfterRaw = value;
   },
 };
 
@@ -172,16 +188,19 @@ function launchIdForStart(env: EnvSource, io: CliIo): string | undefined {
 
 const USAGE = `Usage:
   keiko start [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH] [--open|--no-open]
-              [--provisioned-config PATH]
-  keiko stop [--state-dir PATH]
+              [--provisioned-config PATH] [--launch-order MS]
+  keiko stop [--state-dir PATH] [--unless-launched-after MS]
   keiko restart [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH] [--open|--no-open]
-              [--provisioned-config PATH]
+              [--provisioned-config PATH] [--launch-order MS]
   keiko status [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH]
 
 Manages the local Keiko UI process. Runtime state is written to .keiko/ by default.
 Start and restart open an authenticated browser session by default; --no-open opts out.
 --provisioned-config adopts an administrator's keiko.config.json as the gateway configuration
 whenever that file is new or changed; it replaces the current configuration as a whole.
+--launch-order records when a folder launcher's start began (whole milliseconds; any other start is
+ordered by the time it began); stop --unless-launched-after leaves Keiko open, with exit code 3,
+when a start recorded a later order.
 `;
 
 interface LifecycleOptions {
@@ -193,6 +212,10 @@ interface LifecycleOptions {
   readonly openBrowser: boolean;
   /** Absolute path of an administrator-provisioned gateway configuration to adopt at start. */
   readonly provisionedConfig?: string | undefined;
+  /** When the folder launcher's start began to take its lock (launch-order.ts). */
+  readonly launchOrder?: number | undefined;
+  /** A stop leaves Keiko open when a start with a later order opened it (launch-order.ts). */
+  readonly unlessLaunchedAfter?: number | undefined;
 }
 
 interface RawLifecycleOptions {
@@ -203,6 +226,8 @@ interface RawLifecycleOptions {
   stopTimeoutRaw?: string | undefined;
   openBrowser?: boolean | undefined;
   provisionedConfigRaw?: string | undefined;
+  launchOrderRaw?: string | undefined;
+  unlessLaunchedAfterRaw?: string | undefined;
 }
 
 export interface LifecycleCliDeps {
@@ -332,6 +357,23 @@ function collectLifecycleOptions(args: readonly string[]): RawLifecycleOptions |
   return raw;
 }
 
+// An order flag that is given must be whole milliseconds; an absent one stays absent.
+function orderOption(raw: string | undefined): number | undefined | null {
+  return raw === undefined ? undefined : parseLaunchOrder(raw);
+}
+
+function orderOptions(
+  raw: RawLifecycleOptions,
+): Pick<LifecycleOptions, "launchOrder" | "unlessLaunchedAfter"> | null {
+  const launchOrder = orderOption(raw.launchOrderRaw);
+  const unlessLaunchedAfter = orderOption(raw.unlessLaunchedAfterRaw);
+  if (launchOrder === null || unlessLaunchedAfter === null) return null;
+  return {
+    ...(launchOrder === undefined ? {} : { launchOrder }),
+    ...(unlessLaunchedAfter === undefined ? {} : { unlessLaunchedAfter }),
+  };
+}
+
 function buildLifecycleOptions(
   raw: RawLifecycleOptions,
   cwd: string,
@@ -345,7 +387,8 @@ function buildLifecycleOptions(
   const stopTimeoutMs = parsePositiveSeconds(
     optionOrEnv(raw.stopTimeoutRaw, env.KEIKO_STOP_TIMEOUT_SECS, "10"),
   );
-  if (endpoint === null || startTimeoutMs === null || stopTimeoutMs === null) {
+  const orders = orderOptions(raw);
+  if (endpoint === null || startTimeoutMs === null || stopTimeoutMs === null || orders === null) {
     return null;
   }
   // #KEIKO-0330: route KEIKO_STATE_DIR / --state-dir through the same home-containment
@@ -361,6 +404,7 @@ function buildLifecycleOptions(
     ...(raw.provisionedConfigRaw === undefined
       ? {}
       : { provisionedConfig: resolve(cwd, raw.provisionedConfigRaw) }),
+    ...orders,
   };
 }
 
@@ -1304,7 +1348,30 @@ async function applyProvisionedConfig(
   if (message !== undefined) io.out(`${message}\n`);
 }
 
+// A start records its order once Keiko answers, still under the lifecycle guard, so a fenced stop
+// that runs after this start sees it: the folder launcher's order, else the time this command
+// began under the guard (the standalone folder package and a person's own `keiko start` use the
+// same data). A record that cannot be written changes nothing about the start; the person is told
+// what it means.
 async function cmdStart(
+  options: LifecycleOptions,
+  io: CliIo,
+  env: EnvSource,
+  deps: LifecycleRuntimeDeps,
+  cwd: string,
+): Promise<number> {
+  const order = options.launchOrder ?? Date.now();
+  const code = await startOrReuseUi(options, io, env, deps, cwd);
+  if (code !== 0) return code;
+  if (recordLaunchOrder(options.stateDir, order, deps.securityLogSink) === "record-failed") {
+    io.err(
+      "keiko start: the order of this start could not be recorded, so a Stop pressed before it may still stop Keiko, or may not stop it.\n",
+    );
+  }
+  return code;
+}
+
+async function startOrReuseUi(
   options: LifecycleOptions,
   io: CliIo,
   env: EnvSource,
@@ -1615,6 +1682,28 @@ async function terminateAndConfirm(
   });
 }
 
+// A fenced stop (`--unless-launched-after`) decides under the lifecycle guard, after it found Keiko
+// running: a start with a later order leaves Keiko open, and an unreadable order stops nothing.
+function fenceRefusal(
+  options: LifecycleOptions,
+  io: CliIo,
+  deps: Pick<LifecycleRuntimeDeps, "securityLogSink">,
+): number | undefined {
+  if (options.unlessLaunchedAfter === undefined) return undefined;
+  const fence = checkStopFence(options.stateDir, options.unlessLaunchedAfter, deps.securityLogSink);
+  if (fence === "superseded") {
+    io.out("Keiko UI was started again after this stop was requested; it stays open.\n");
+    return STOP_SUPERSEDED_EXIT_CODE;
+  }
+  if (fence === "unreadable") {
+    io.err(
+      `keiko stop: the order of the last start cannot be read, so Keiko UI was not stopped. Check that ${UI_LAUNCH_ORDER_FILE} in the state directory is a file this account can read, or remove it, then stop again.\n`,
+    );
+    return 1;
+  }
+  return undefined;
+}
+
 async function cmdStop(
   options: LifecycleOptions,
   io: CliIo,
@@ -1622,9 +1711,12 @@ async function cmdStop(
 ): Promise<number> {
   const record = runningPidRecord(options, deps.isProcessAlive, deps.securityLogSink);
   if (record === undefined) {
+    clearLaunchOrder(options.stateDir, deps.securityLogSink);
     io.out("Keiko UI is not running.\n");
     return 0;
   }
+  const refused = fenceRefusal(options, io, deps);
+  if (refused !== undefined) return refused;
   io.out(`Stopping Keiko UI (pid ${String(record.pid)}) ...\n`);
   const outcome = await terminateAndConfirm(
     record.pid,
@@ -1644,6 +1736,7 @@ async function cmdStop(
     return 1;
   }
   removePidFileIfMatches(pidFile(options), record.pid, record.launchId);
+  clearLaunchOrder(options.stateDir, deps.securityLogSink);
   io.out(outcome.escalated ? "Keiko UI stopped (forced).\n" : "Keiko UI stopped.\n");
   return 0;
 }
@@ -1817,6 +1910,10 @@ export async function runLifecycleCli(
   }
 
   const options = outcome.value;
+  if (misplacedOrderFlag(command, options)) {
+    io.err(USAGE);
+    return 2;
+  }
   const correlationId = lifecycleInvocationCorrelationId(env);
   writeInstallLayoutOverrideEvidence(deps.securityLogSinkFactory?.(options.stateDir), env);
   const securityLogSink =
@@ -1838,6 +1935,15 @@ export async function runLifecycleCli(
     handlers[command],
     home,
     deps.recordFailure,
+  );
+}
+
+// `--launch-order` belongs to a start (and restart), `--unless-launched-after` to a stop.
+function misplacedOrderFlag(command: LifecycleCommand, options: LifecycleOptions): boolean {
+  const starts = command === "start" || command === "restart";
+  return (
+    (options.launchOrder !== undefined && !starts) ||
+    (options.unlessLaunchedAfter !== undefined && command !== "stop")
   );
 }
 
