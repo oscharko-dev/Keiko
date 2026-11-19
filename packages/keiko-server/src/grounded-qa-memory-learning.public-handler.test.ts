@@ -154,7 +154,12 @@ function fixture(calls: GatewayCallRequest[]): {
   return { root, chatId: chat.id, deps };
 }
 
-function groundedRoute(root: string, chatId: string, content: string): RouteContext {
+function groundedRoute(
+  root: string,
+  chatId: string,
+  content: string,
+  memory: { readonly enabled?: boolean; readonly surface?: "voice" } = {},
+): RouteContext {
   return {
     correlationId: "grounded-memory-learning",
     req: mockRequest({
@@ -163,6 +168,7 @@ function groundedRoute(root: string, chatId: string, content: string): RouteCont
         content,
         memory: {
           enabled: true,
+          ...memory,
           budgetTokens: 1200,
           mode: "governed-assist",
           context: {
@@ -224,3 +230,49 @@ it("recalls memory for the person's own words when a long grounded prompt was co
     "memory-numbers",
   );
 });
+
+it.each([true, false])(
+  "keeps the grounded Voice predecessor available only with consent (%s)",
+  async (enabled) => {
+    const calls: GatewayCallRequest[] = [];
+    const { deps, root, chatId } = fixture(calls);
+    const vault = deps.memoryVault;
+    if (vault === undefined) throw new Error("memory vault missing");
+    const predecessor = "Ich habe eine neue Regel für meine Berichte.";
+    const followup = "Sie beginnen immer mit einer Zusammenfassung.";
+    const unavailable = vi.spyOn(vault, "listMemoriesByScope").mockImplementationOnce(() => {
+      throw new Error("synthetic retrieval failure");
+    });
+    const first = await handleGroundedAsk(
+      groundedRoute(root, chatId, predecessor, { enabled, surface: "voice" }),
+      deps,
+    );
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+    if (enabled) {
+      expect(unavailable).toHaveBeenCalled();
+      expect(first.body).not.toHaveProperty("memory");
+    }
+    unavailable.mockRestore();
+
+    const second = await handleGroundedAsk(
+      groundedRoute(root, chatId, followup, { surface: "voice" }),
+      deps,
+    );
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+    const pending = deps.store.memoryLearning?.listPending(chatId, 64);
+    const stored = pending?.find((message) => message.role === "user");
+    expect(stored?.mark).toEqual(
+      enabled ? { surface: "voice", mode: "governed-assist" } : undefined,
+    );
+
+    await expect(memoryLearningRuntime(deps).runPass("inactivity", undefined)).resolves.toBe(
+      "completed",
+    );
+    const followupCall = calls
+      .filter((call) => isSalienceCall(call))
+      .find((call) => texts([call], "user").includes(followup));
+    expect(followupCall).toBeDefined();
+    if (followupCall === undefined) return;
+    expect(texts([followupCall], "user").includes(predecessor)).toBe(enabled);
+  },
+);

@@ -3383,6 +3383,7 @@
     "keiko-ui/lib/memory-api",
     "keiko-ui/lib/memory-session-api",
     "keiko-ui/lib/memory-source-label",
+    "keiko-ui/lib/memory-vault-view-changes",
     "keiko-ui/lib/native-file-dialog",
     "keiko-ui/lib/optional-widget-i18n",
     "keiko-ui/lib/quality-intelligence-api",

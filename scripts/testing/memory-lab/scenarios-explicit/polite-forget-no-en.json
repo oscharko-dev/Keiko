@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "id": "polite-forget-no-en",
+  "language": "en",
+  "class": "forget-not",
+  "difficulty": "plain",
+  "description": "A negated polite request preserves the preference.",
+  "truth": [
+    {
+      "key": "format-preference",
+      "seed": "I prefer tables when you show me numbers.",
+      "must": true,
+      "private": true,
+      "terms": [["table*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "I prefer tables when you show me numbers.",
+      "learner": [
+        {
+          "body": "I prefer tables when you show me numbers.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "Please don't forget that.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "How should you show me numbers?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["table*"]]
+      }
+    }
+  ]
+}

@@ -128,6 +128,8 @@ export type CaptureOutcome =
 // own claims as user facts. `sourceMessageIds` name the person's turns the facts come from.
 export interface SalienceInput {
   readonly userText: string;
+  // A deferred turn interprets calendar expressions on the day the person spoke.
+  readonly sourceTimestampMs?: number;
   // The person's previous message in this conversation: context for a pronoun, never a source.
   readonly previousUserText?: string;
   readonly assistantText?: string;

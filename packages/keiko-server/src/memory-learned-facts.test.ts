@@ -8,10 +8,11 @@ import type { IncomingMessage } from "node:http";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchMode, NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type {
   ConversationId,
+  MemoryId,
   MemoryRecord,
   ProjectId,
   UserId,
@@ -52,7 +53,7 @@ import {
   MEMORY_LEARN_DROP_REASONS,
   MEMORY_LEARN_RELATION_LABELS,
 } from "./memory-learned-facts-log.js";
-import { captureSalientFromTurn } from "./memory-salience.js";
+import { captureSalientFromTurn, learnStoredTurn } from "./memory-salience.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
 import { createInMemoryUiStore } from "./store/index.js";
@@ -192,6 +193,145 @@ function liveBodies(
 ): readonly string[] {
   return recordsWith(vault, ctx, "accepted").map((record) => record.body);
 }
+
+function sourceLearner(
+  vault: MemoryVaultStore,
+  ctx: ConversationMemoryRuntimeContext,
+  content: string,
+  sourceMessageId: string,
+): (items: readonly ScriptedItem[]) => ReturnType<typeof learnStoredTurn> {
+  const sourcePosition = { timestamp: Date.now(), rowid: 1 };
+  return (items) =>
+    learnStoredTurn(
+      makeDeps(vault, items),
+      {
+        request: { content, sourceMessageId, memory: { enabled: true } },
+        context: ctx,
+        modelId: "gpt-test",
+        assistantText: "ok",
+        surface: "desktop",
+        correlationId: sourceMessageId,
+        parentCorrelationId: "source-replay-pass",
+        sourcePosition,
+      },
+      new AbortController().signal,
+    );
+}
+
+function fillComparisonWindow(vault: MemoryVaultStore, older: MemoryRecord): void {
+  for (let i = 0; i < 200; i += 1) {
+    const body = `I use unrelated tool Item${String(i)}.`;
+    vault.insertMemory({
+      ...older,
+      id: `source-window-${String(i)}` as MemoryId,
+      body,
+      payload: { kind: "string-list", items: [body] },
+      tags: [],
+      provenance: {
+        ...older.provenance,
+        evidenceSpan: body,
+        sourceMessageIds: [`source-window-message-${String(i)}`],
+      },
+      createdAt: older.createdAt + i + 1,
+      updatedAt: older.updatedAt + i + 1,
+    });
+  }
+}
+
+describe("durable source replay identity", () => {
+  it("keeps a replay unique after its fact leaves the comparison window", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const fact = "I use Vim.";
+    const learn = sourceLearner(vault, ctx, fact, "source-window-replay");
+    const item = { body: fact, type: "fact" };
+    await learn([item]);
+    const [original] = recordsWith(vault, ctx, "accepted");
+    if (original === undefined) throw new Error("expected the first source fact");
+    await learn([item]);
+    expect(liveBodies(vault, ctx).filter((body) => body === fact)).toHaveLength(1);
+    fillComparisonWindow(vault, original);
+    await learn([item]);
+    expect(recordsWith(vault, ctx, "accepted").filter((record) => record.body === fact)).toEqual([
+      original,
+    ]);
+    expect(vault.getAccessStats([original.id]).get(original.id)?.accessCount ?? 0).toBe(0);
+  });
+
+  it("checks only source records for repeated candidates and keeps additional source facts", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const first = "I use Vim.";
+    const second = "I work with Rust.";
+    const learn = sourceLearner(vault, ctx, `${first} ${second}`, "source-window-work");
+    await learn([{ body: first, type: "fact" }]);
+    const [original] = recordsWith(vault, ctx, "accepted");
+    if (original === undefined) throw new Error("expected the first source fact");
+    fillComparisonWindow(vault, original);
+    const reads = vi.spyOn(vault, "getMemory");
+    try {
+      await learn([
+        { body: first, type: "fact" },
+        { body: second, type: "fact" },
+      ]);
+      expect(reads).not.toHaveBeenCalled();
+      expect(liveBodies(vault, ctx).filter((body) => body === first || body === second)).toEqual(
+        expect.arrayContaining([first, second]),
+      );
+      expect(liveBodies(vault, ctx).filter((body) => body === first)).toHaveLength(1);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
+  it.each(["superseded", "expired", "rejected"] as const)(
+    "does not recreate a source that was already %s",
+    async (state) => {
+      const vault = makeVault();
+      const ctx = context();
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const fact = "I use Vim.";
+      const learn = sourceLearner(vault, ctx, fact, `source-history-${state}`);
+      const item = { body: fact, type: "fact" };
+      await learn([item]);
+      const [original] = recordsWith(vault, ctx, "accepted");
+      if (original === undefined) throw new Error("expected the original source fact");
+      const nowMs = original.validity.validFrom + 100;
+      const clock = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+      try {
+        vault.updateMemory(
+          original.id,
+          state === "expired"
+            ? { validity: { ...original.validity, validUntil: nowMs - 50 } }
+            : { status: state },
+          nowMs,
+        );
+        await learn([item]);
+        expect(
+          vault
+            .listMemoriesAcrossScopes(conversationMemoryScopes(ctx), { includeExpired: true })
+            .filter((record) => record.body === fact)
+            .map((record) => record.id),
+        ).toEqual([original.id]);
+        if (state === "rejected") {
+          const relation = sink.events
+            .filter((event) => event.op === "memory.learn.relation")
+            .at(-1);
+          if (relation === undefined) throw new Error("expected rejection evidence");
+          expect(
+            expectActivityLogProof(
+              "memory.learn.relation.line",
+              formatActivityLogProofLine(relation),
+            ),
+          ).toMatchObject({ decision: "refused" });
+        }
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+});
 
 function acceptRoute(id: string): RouteContext {
   return {
@@ -755,6 +895,206 @@ describe("what a pronoun and a team's decision become", () => {
     });
   }
 
+  it.each([false, true])(
+    "binds delayed confirmation to its source before Forget (unrelated later turn: %s)",
+    async (unrelatedLaterTurn) => {
+      const start = Date.UTC(2026, 0, 1);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(start);
+      try {
+        const vault = makeVault();
+        const base = context();
+        const fact = "Ich nutze Vim.";
+        let items: readonly ScriptedItem[] = [{ body: fact, type: "fact" }];
+        const deps = {
+          ...makeDeps(vault, []),
+          modelPortFactory: (): ModelPort => scriptedModel(items),
+        };
+        deps.store.createProject(base.projectId, "Fixture");
+        const chatId = deps.store.createChat(base.projectId, "Fixture", "gpt-test").id;
+        const ctx = { ...base, conversationId: chatId as ConversationId };
+        const first = userMessage(deps, chatId, fact, start);
+        await captureSalientFromTurn(
+          deps,
+          { content: fact, sourceMessageId: first.id, memory: { enabled: true } },
+          ctx,
+          "gpt-test",
+          "ok",
+        );
+        const repeat = userMessage(deps, chatId, fact, start + 100);
+        deps.store.memoryLearning?.markMessage(repeat.id, { surface: "desktop" });
+        if (unrelatedLaterTurn) {
+          userMessage(deps, chatId, "Was ist zwei plus zwei?", start + 200);
+        }
+        const position = deps.store.memoryLearning
+          ?.listPending(chatId, 10)
+          .find((message) => message.id === repeat.id)?.position;
+        if (position === undefined) throw new Error("expected the repeated source position");
+        items = [{ body: fact, type: "fact", relation: "same", related: 1 }];
+        clock.mockReturnValue(start + 300);
+        await expect(
+          learnStoredTurn(
+            deps,
+            {
+              request: { content: fact, sourceMessageId: repeat.id, memory: { enabled: true } },
+              context: ctx,
+              modelId: "gpt-test",
+              assistantText: "ok",
+              surface: "desktop",
+              correlationId: "delayed-confirmation",
+              parentCorrelationId: "delayed-pass",
+              sourcePosition: position,
+            },
+            new AbortController().signal,
+          ),
+        ).resolves.toMatchObject({ outcome: "learned" });
+        clock.mockReturnValue(start + 400);
+        const forget = "Please forget that.";
+        userMessage(deps, chatId, forget, start + 400);
+        await collectMemoryActions(
+          deps,
+          { chatId, content: forget, memory: { enabled: true } } as SendDesktopChatRequest,
+          ctx,
+        );
+        expect(liveBodies(vault, ctx)).toEqual(unrelatedLaterTurn ? [fact] : []);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    [
+      "German",
+      "Ich habe eine neue Regel fuer meine Berichte.",
+      "Sie beginnen immer mit einer Zusammenfassung in drei Saetzen.",
+      "Meine Berichte beginnen immer mit einer Zusammenfassung in drei Saetzen.",
+    ],
+    [
+      "English",
+      "I have a new rule for my reports.",
+      "They always begin with a summary in three sentences.",
+      "My reports always begin with a summary in three sentences.",
+    ],
+    [
+      "German topic first",
+      "Für meine Übergaben habe ich eine neue Regel.",
+      "Sie enden immer mit einer Inventarliste.",
+      "Meine Übergaben enden immer mit einer Inventarliste.",
+    ],
+    [
+      "English contracted possession",
+      "I’ve got a new rule for my packing lists.",
+      "They always start with the crate number.",
+      "My packing lists always start with the crate number.",
+    ],
+  ])(
+    "drops a bare %s rule announcement while keeping it as pronoun context",
+    async (_language, announcement, evidence, body) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const vault = makeVault();
+      const base = context();
+      let items: readonly ScriptedItem[] = [
+        { body: announcement, evidence: announcement, type: "procedural" },
+      ];
+      const deps = {
+        ...makeDeps(vault, []),
+        modelPortFactory: (): ModelPort => scriptedModel(items),
+      };
+      deps.store.createProject(base.projectId, "Fixture");
+      const chatId = deps.store.createChat(base.projectId, "Fixture", "gpt-test").id;
+      const ctx = { ...base, conversationId: chatId as ConversationId };
+      const previous = userMessage(deps, chatId, announcement, 1);
+      expect(deps.store.memoryLearning?.markMessage(previous.id, { surface: "desktop" })).toBe(
+        true,
+      );
+      await captureSalientFromTurn(
+        deps,
+        { content: announcement, sourceMessageId: previous.id, memory: { enabled: true } },
+        ctx,
+        "gpt-test",
+        "ok",
+      );
+
+      expect(liveBodies(vault, ctx)).toEqual([]);
+      const dropped = sink.events.find((event) => event.op === "memory.learn.dropped");
+      if (dropped === undefined) throw new Error("expected announcement drop evidence");
+      expect(
+        expectActivityLogProof(
+          "memory.learn.dropped.line",
+          formatActivityLogProofLine(dropped as unknown as Record<string, unknown>),
+        ),
+      ).toMatchObject({ reason: "not-entailed", count: 1 });
+      expect(JSON.stringify(sink.events)).not.toContain(announcement);
+
+      items = [{ body, evidence, type: "procedural" }];
+      const current = userMessage(deps, chatId, evidence, 2);
+      await captureSalientFromTurn(
+        deps,
+        { content: evidence, sourceMessageId: current.id, memory: { enabled: true } },
+        ctx,
+        "gpt-test",
+        "ok",
+      );
+      expect(liveBodies(vault, ctx)).toEqual([body]);
+    },
+  );
+
+  const pronounClause = "Sie beginnen immer mit einer Zusammenfassung";
+  it.each([
+    { body: "I use Vim.", evidence: "I use Vim.", content: "I use Vim.", type: "fact", reads: 0 },
+    {
+      body: "Meine Berichte beginnen immer mit einer Zusammenfassung",
+      evidence: pronounClause,
+      content: `Vielen Dank. ${pronounClause}.`,
+      type: "procedural",
+      reads: 1,
+    },
+  ])(
+    "reads the previous turn only for a resolvable clause ($content)",
+    async ({ body, evidence, content, type, reads }) => {
+      const vault = makeVault();
+      const base = context();
+      const model = scriptedModel([{ body, evidence, type }]);
+      const call = vi.spyOn(model, "call");
+      const deps = { ...makeDeps(vault, []), modelPortFactory: (): ModelPort => model };
+      const learning = deps.store.memoryLearning;
+      if (learning === undefined) throw new Error("missing memory-learning fixture");
+      const read = vi.spyOn(learning, "readPreviousUserText");
+      deps.store.createProject(base.projectId, "Fixture");
+      const chatId = deps.store.createChat(base.projectId, "Fixture", "gpt-test").id;
+      const ctx = { ...base, conversationId: chatId as ConversationId };
+      const earlier = userMessage(
+        deps,
+        chatId,
+        `${"A ".repeat(4000)}eine Regel fuer meine Berichte.`,
+        1,
+      );
+      expect(learning.markMessage(earlier.id, { surface: "desktop" })).toBe(true);
+      const current = userMessage(deps, chatId, content, 2);
+      await captureSalientFromTurn(
+        deps,
+        { content, sourceMessageId: current.id, memory: { enabled: true } },
+        ctx,
+        "gpt-test",
+        "ok",
+      );
+      const prompt = call.mock.calls[0]?.[0].messages.find(({ role }) => role === "user")?.content;
+      expect(liveBodies(vault, ctx)).toEqual([body]);
+      expect([
+        read.mock.calls.length,
+        typeof prompt === "string" ? Buffer.byteLength(prompt) : 0,
+      ]).toEqual([
+        reads,
+        Buffer.byteLength(
+          reads === 1
+            ? `The person said before (context for pronouns, not a source):\n${earlier.content}\n\nUser said:\n${content}`
+            : `User said:\n${content}`,
+        ),
+      ]);
+    },
+  );
+
   it("resolves a pronoun from the person's previous message in the same chat", async () => {
     const vault = makeVault();
     const base = context();
@@ -764,7 +1104,8 @@ describe("what a pronoun and a team's decision become", () => {
     deps.store.createProject(base.projectId, "Fixture");
     const chatId = deps.store.createChat(base.projectId, "Fixture", "gpt-test").id;
     const ctx = { ...base, conversationId: chatId as ConversationId };
-    userMessage(deps, chatId, "Ich habe eine neue Regel fuer meine Berichte.", 1);
+    const previous = userMessage(deps, chatId, "Ich habe eine neue Regel fuer meine Berichte.", 1);
+    expect(deps.store.memoryLearning?.markMessage(previous.id, { surface: "desktop" })).toBe(true);
     const current = userMessage(deps, chatId, `${evidence}.`, 2);
     const request = {
       content: current.content,

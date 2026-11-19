@@ -1,7 +1,7 @@
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   ConversationId,
@@ -16,9 +16,11 @@ import {
   PROFILE_EXCLUDED_MEMORY_TAG,
   STANDING_FACT_RETENTION_POLICY_KEY,
 } from "@oscharko-dev/keiko-contracts/runtime/memory";
+import { DEFAULT_STALE_CONFIDENCE_THRESHOLD } from "@oscharko-dev/keiko-memory-retrieval";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 import { buildMemoryResult, type SendDesktopChatRequest } from "./chat-handlers.js";
+import { memorySelectionLogFields } from "./chat-activity.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import { applyLearnedSupersession } from "./memory-learned-facts.js";
@@ -47,6 +49,8 @@ interface Seed {
   readonly body: string;
   readonly type?: MemoryType;
   readonly createdAt?: number;
+  readonly validFrom?: number;
+  readonly provenance?: Pick<MemoryRecord["provenance"], "sensitivity" | "confidence">;
   readonly pinned?: boolean;
   readonly tags?: readonly string[];
   readonly project?: boolean;
@@ -69,8 +73,9 @@ function seed(store: MemoryVaultStore, entry: Seed): void {
       capturedAt: createdAt,
       confidence: 1,
       sensitivity: "public",
+      ...entry.provenance,
     },
-    validity: { validFrom: createdAt },
+    validity: { validFrom: entry.validFrom ?? createdAt },
     status: entry.status ?? "accepted",
     pinned: entry.pinned ?? false,
     tags: [...(entry.tags ?? [])],
@@ -175,6 +180,57 @@ describe("standingProfileForUser (#4228)", () => {
     expect(profileIds(store)).toEqual(["lead"]);
   });
 
+  it("joins overlapping profile sources and confirmations before taking the bounded window", () => {
+    const store = vault();
+    for (let index = 0; index < 96; index += 1) {
+      seed(store, {
+        id: `overlap-${String(index).padStart(3, "0")}`,
+        body: "Use tables.",
+        pinned: true,
+        standing: true,
+      });
+    }
+    // UTF-8 orders the private-use character ahead of the supplementary character; JavaScript
+    // code-unit order puts the supplementary character first. Both fall on the eight-entry cutoff.
+    for (const id of ["a-😀", "a-\uE000"])
+      seed(store, { id, body: "Use tables.", pinned: true, standing: true });
+    const confirmed = [
+      "overlap-091",
+      "overlap-092",
+      "overlap-093",
+      "overlap-094",
+      "overlap-095",
+      "overlap-083",
+      "overlap-084",
+    ].sort();
+    store.recordAccess(confirmed as MemoryId[], NOW);
+    const ranked = vi.spyOn(store, "listStandingProfileCandidates");
+    const metadata = vi.spyOn(store, "listMemoryMetadataByScope");
+    const counters = vi.spyOn(store, "getAccessStats");
+    const records = vi.spyOn(store, "getMemory");
+    expect(profileIds(store)).toEqual([...confirmed, "a-😀"]);
+    expect(records.mock.calls.length).toBeLessThanOrEqual(16);
+    expect(ranked).toHaveBeenCalledTimes(1);
+    expect(ranked.mock.results[0]?.value).toHaveLength(64);
+    expect(metadata).not.toHaveBeenCalled();
+    expect(counters).not.toHaveBeenCalled();
+  });
+
+  it("keeps invalid SQL window sizes from reading an unbounded profile", () => {
+    const store = vault();
+    seed(store, { id: "pref", body: "Use tables." });
+    for (const limit of [-1, 0, Number.NaN, 0.5]) {
+      expect(
+        store.listStandingProfileCandidates(USER, {
+          types: ["preference"],
+          minConfidenceExclusive: 0,
+          nowMs: NOW,
+          limit,
+        }),
+      ).toEqual([]);
+    }
+  });
+
   it("reads only as many bodies as the profile needs", () => {
     const store = vault();
     for (let index = 0; index < 200; index += 1) {
@@ -188,6 +244,85 @@ describe("standingProfileForUser (#4228)", () => {
     expect(reads.mock.calls.length).toBeLessThanOrEqual(16);
   });
 
+  it.each([
+    { label: "future", validFrom: NOW + 1, sensitivity: "public", confidence: 1 },
+    { label: "confidential", validFrom: NOW - 100, sensitivity: "confidential", confidence: 1 },
+    {
+      label: "threshold-confidence",
+      validFrom: NOW - 100,
+      sensitivity: "public",
+      confidence: DEFAULT_STALE_CONFIDENCE_THRESHOLD,
+    },
+    {
+      label: "below-threshold-confidence",
+      validFrom: NOW - 100,
+      sensitivity: "public",
+      confidence: DEFAULT_STALE_CONFIDENCE_THRESHOLD / 2,
+    },
+  ] as const)(
+    "does not spend the profile read bound on $label records",
+    ({ validFrom, sensitivity, confidence }) => {
+      const store = vault();
+      seed(store, {
+        id: "eligible",
+        body: "Use tables.",
+        createdAt: NOW - 10_000,
+        validFrom: NOW,
+        provenance: {
+          confidence: DEFAULT_STALE_CONFIDENCE_THRESHOLD + Number.EPSILON,
+          sensitivity: "public",
+        },
+      });
+      for (let index = 0; index < 64; index += 1) {
+        seed(store, {
+          id: `skipped-${String(index)}`,
+          body: `Synthetic fixture ${String(index)}.`,
+          createdAt: NOW - 100 + index,
+          pinned: true,
+          validFrom,
+          provenance: { sensitivity, confidence },
+        });
+      }
+
+      const reads = vi.spyOn(store, "getMemory");
+      const profile = standingProfileForUser(store, USER, NOW);
+      expect([profile.entries.length, reads.mock.calls.length]).toEqual([1, 1]);
+      expect(reads.mock.calls).toEqual([["eligible"]]);
+      expect(standingProfileWire(profile).entries.map(({ memoryId }) => memoryId)).toEqual([
+        "eligible",
+      ]);
+      expect(standingProfileWire(profile).droppedCount).toBe(0);
+    },
+  );
+
+  it("keeps the body-read bound when the exclusion can only be seen in sealed tags", () => {
+    const store = vault();
+    seed(store, { id: "eligible", body: "Use tables.", createdAt: NOW - 10_000 });
+    for (let index = 0; index < 63; index += 1) {
+      seed(store, {
+        id: `excluded-${String(index)}`,
+        body: `Synthetic fixture ${String(index)}.`,
+        createdAt: NOW - 100 + index,
+        tags: [PROFILE_EXCLUDED_MEMORY_TAG],
+      });
+    }
+
+    const reads = vi.spyOn(store, "getMemory");
+    expect(profileIds(store)).toEqual(["eligible"]);
+    expect(reads.mock.calls).toHaveLength(64);
+
+    seed(store, {
+      id: "excluded-last",
+      body: "Another exclusion.",
+      tags: [PROFILE_EXCLUDED_MEMORY_TAG],
+    });
+    reads.mockClear();
+    const profile = standingProfileForUser(store, USER, NOW);
+    expect(profile.entries).toEqual([]);
+    expect(reads.mock.calls).toHaveLength(64);
+    expect(standingProfileWire(profile).droppedCount).toBe(0);
+  });
+
   it("is empty for a person without standing facts", () => {
     const profile = standingProfileForUser(vault(), USER, NOW);
     expect(profile.entries).toEqual([]);
@@ -196,6 +331,13 @@ describe("standingProfileForUser (#4228)", () => {
 });
 
 describe("Chat memory with the standing profile (#4228)", () => {
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   const ctx: ConversationMemoryRuntimeContext = {
     userId: USER,
     workspaceId: "w1" as WorkspaceId,
@@ -267,6 +409,33 @@ describe("Chat memory with the standing profile (#4228)", () => {
     expect(tables.context.profileRetrievedCount).toBe(1);
   });
 
+  it("preserves the profile cap count when recall includes every selected profile line", async () => {
+    const store = vault();
+    const topics = ["Tabellen", "Balken", "Diagramme", "Listen", "Anlagen", "Stichpunkte"];
+    const detail = " mit Legenden, Fußnoten, Einheiten und geeigneten Überschriften".repeat(4);
+    for (const [index, topic] of topics.entries()) {
+      seed(store, {
+        id: topic,
+        body: `Bevorzugt ${topic}${detail}.`,
+        createdAt: NOW - 1_000 - index,
+      });
+    }
+    const selected = standingProfileForUser(store, USER, Date.now());
+    const before = standingProfileWire(selected);
+    expect(before.entries.map((entry) => entry.memoryId)).toEqual(topics.slice(0, 5));
+    expect(before.droppedCount).toBe(1);
+
+    const result = await buildMemoryResult(ask(topics.slice(0, 5).join(" ")), deps(store), ctx);
+
+    expect(result.context.profileRetrievedCount).toBe(5);
+    expect(result.context.profile).toEqual({ entries: [], tokens: 0, droppedCount: 1 });
+    expect(memorySelectionLogFields(result)).toMatchObject({
+      profileEntryCount: 0,
+      profileDroppedCount: 1,
+      profileRetrievedCount: 5,
+    });
+  });
+
   it("answers a question about a corrected preference with the correction, never the old value", async () => {
     // Lab 2026-11-11 (Gemma, update-lists-de) end to end: the correction shares no word with the
     // question; the fact it superseded does.
@@ -310,17 +479,29 @@ describe("Chat memory with the standing profile (#4228)", () => {
     const long =
       "Bevorzugt Tabellen mit Spaltenköpfen, Einheiten und Summenzeile, wenn du mir Zahlen zeigst.";
     seed(store, { id: "tables", body: long });
-    const request = {
-      content: "Wie zeigst du mir Zahlen?",
-      memory: { enabled: true, budgetTokens: 30, context: {} },
-    } as unknown as SendDesktopChatRequest;
-    const result = await buildMemoryResult(request, deps(store), ctx);
+    const askWithBudget = (budgetTokens: number): ReturnType<typeof buildMemoryResult> =>
+      buildMemoryResult(
+        {
+          content: "Wie zeigst du mir Zahlen?",
+          memory: { enabled: true, budgetTokens, context: {} },
+        } as unknown as SendDesktopChatRequest,
+        deps(store),
+        ctx,
+      );
+    // The profile line costs 16 tokens. Recall renders its reason beside the excerpt, and the
+    // truthful "lexical relevance" reason is longer than the "pinned memory" label an unpinned
+    // fact used to carry, so a partial excerpt needs 20 tokens of recall budget.
+    const result = await askWithBudget(36);
     const excerpt = result.context.memories[0]?.bodyExcerpt ?? "";
     const line = result.context.profile?.entries[0]?.text ?? "";
     // Recall had room only for part of the fact, so its full profile line stays.
     expect(excerpt.length).toBeGreaterThan(0);
     expect(excerpt.length).toBeLessThan(long.length);
     expect(line).toBe(long);
+    // With no room for any excerpt the fact still reaches the answer whole, through the profile.
+    const tight = await askWithBudget(30);
+    expect(tight.context.memories).toEqual([]);
+    expect(tight.context.profile?.entries[0]?.text).toBe(long);
   });
 
   it("supplies nothing when memory is off for the Chat", async () => {

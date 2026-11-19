@@ -340,6 +340,65 @@ describe("captureSalientFromTurn", () => {
     expect(new Date(live[0]?.validity.validUntil ?? 0).getUTCFullYear()).toBe(2027);
   });
 
+  it.each([
+    [17, 2026],
+    [19, undefined],
+  ] as const)(
+    "anchors a stored yearless deadline to its source day when processed on November %s",
+    async (day, expectedYear) => {
+      const sourceAt = new Date(2026, 10, 17, 9).getTime();
+      const processedAt = new Date(2026, 10, day, 12).getTime();
+      const vault = makeVault();
+      const ctx = context();
+      const deps = makeDeps({
+        memoryVault: vault,
+        configPresent: true,
+        config: salienceConfig("gpt-test", false),
+        codingRuntimeDeploymentCeiling: "autonomous-delivery",
+        modelPortFactory: () => fakeModel("[]"),
+      });
+      const clock = vi.spyOn(Date, "now").mockReturnValue(processedAt);
+      try {
+        const outcome = await learnStoredTurn(
+          deps,
+          {
+            request: {
+              content: "I prefer tables until November 18.",
+              sourceMessageId: "deadline-turn",
+              memory: { enabled: true, mode: "autonomous-delivery" },
+            },
+            context: ctx,
+            modelId: "gpt-test",
+            assistantText: "OK.",
+            surface: "desktop",
+            correlationId: "deadline-pass",
+            parentCorrelationId: "deadline-parent",
+            sourcePosition: { timestamp: sourceAt, rowid: 1 },
+          },
+          new AbortController().signal,
+        );
+        const records = vault.listMemoriesAcrossScopes(conversationMemoryScopes(ctx), {
+          includeExpired: true,
+        });
+        expect(outcome).toEqual({
+          outcome: "learned",
+          actionCount: expectedYear === undefined ? 0 : 1,
+        });
+        if (expectedYear === undefined) expect(records).toHaveLength(0);
+        else {
+          expect(records).toHaveLength(1);
+          expect(records[0]?.validity).toEqual({
+            validFrom: processedAt,
+            validUntil: new Date(expectedYear, 10, 18, 23, 59, 59, 999).getTime(),
+          });
+          expect(records[0]?.createdAt).toBe(processedAt);
+        }
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   // #4213: a learning pass owns the signal of its model call; a new message aborts the pass, and the
   // abort reaches the provider request instead of a signal nobody can abort.
   it("hands a stored turn's model call the pass's signal and reports the cancellation", async () => {
@@ -685,6 +744,44 @@ describe("captureSalientFromTurn", () => {
     expect(format.schema.type).toBe("object");
   });
 
+  it.each([
+    ["identity", "Ich bin Backend-Entwicklerin."],
+    ["constraint", "Ich darf keine Kundendaten in Tickets schreiben."],
+  ])("admits %s in the structured schema and stores it as standing", async (type, content) => {
+    const vault = makeVault();
+    const seen: GatewayRequest[] = [];
+    const item = {
+      type,
+      about: "self",
+      body: content,
+      evidence: content,
+      relation: "new",
+      related: null,
+    };
+    const deps = makeDeps({
+      memoryVault: vault,
+      config: salienceConfig("gpt-json", true),
+      configPresent: true,
+      modelPortFactory: () =>
+        capturingModel(seen, (request) =>
+          wrapUnderSchemaRequiredKey(request.responseFormat, JSON.stringify([item])),
+        ),
+    });
+    const ctx = context();
+    await captureSalientFromTurn(
+      deps,
+      { content, memory: { enabled: true } },
+      ctx,
+      "gpt-json",
+      "ok",
+    );
+    expect(seen[0]?.responseFormat).toHaveProperty(
+      "schema.properties.items.items.properties.type.enum",
+      expect.arrayContaining([type]),
+    );
+    expect(readMemories(vault, ctx)).toMatchObject([{ retentionHint: { policyKey: "standing" } }]);
+  });
+
   it("persists candidates from the schema-mandated wrapped payload (structured-output round trip)", async () => {
     // The reply is wrapped under whatever key the PRODUCTION schema requires, so this fails if
     // the schema and the extractor's unwrapping ever drift apart.
@@ -960,6 +1057,60 @@ describe("captureSalientFromTurn", () => {
     expect(entry?.diagnosticOutcome).toBe("routine");
     expect(JSON.stringify(entry)).not.toContain("gpt-4o");
     expect(entry?.code).not.toMatch(/ /);
+  });
+
+  it("reads only the 200 eligible known facts across scopes before choosing the prompt", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    for (let index = 0; index < 275; index++) {
+      const sensitive = index >= 250;
+      vault.insertMemory({
+        id: `bounded-fact-${String(index)}` as MemoryRecord["id"],
+        schemaVersion: "1",
+        scope:
+          index < 30
+            ? { kind: "workspace", workspaceId: ctx.workspaceId }
+            : { kind: "user", userId: ctx.userId },
+        type: "semantic-fact",
+        body: sensitive ? "private fixture marker" : `reference document ${String(index)}`,
+        tags: [],
+        provenance: {
+          sourceKind: "system-default",
+          capturedAt: index,
+          confidence: 1,
+          sensitivity: sensitive ? "confidential" : "public",
+        },
+        validity: { validFrom: index },
+        status: "accepted",
+        pinned: false,
+        createdAt: index,
+        updatedAt: index,
+      });
+    }
+    const records: MemoryRecord[] = [];
+    const read: MemoryVaultStore["listMemoriesByScope"] = (scope, options) => {
+      const page = vault.listMemoriesByScope(scope, options);
+      records.push(...page);
+      return page;
+    };
+    const seen: GatewayRequest[] = [];
+    const deps = makeDeps({
+      memoryVault: { ...vault, listMemoriesByScope: read },
+      modelPortFactory: () => capturingModel(seen, () => "[]"),
+    });
+    await captureSalientFromTurn(
+      deps,
+      { content: "I use reference document 249.", memory: { enabled: true } },
+      ctx,
+      "gpt-test",
+      "",
+    );
+    expect(seen).toHaveLength(1);
+    expect(JSON.stringify(seen[0]?.messages)).toContain(". reference document 249");
+    expect(JSON.stringify(seen[0]?.messages)).not.toContain("private fixture marker");
+    expect(records).toHaveLength(200);
+    expect(records.filter((record) => record.provenance.sensitivity !== "public")).toHaveLength(0);
+    expect(records.at(-1)?.body).toBe("reference document 80");
   });
 
   it("dedups a salient candidate against an already-stored body", async () => {

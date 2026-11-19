@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "id": "rule-announcement-transfer-de",
+  "language": "de",
+  "class": "multi-turn",
+  "difficulty": "split",
+  "description": "Only the concrete instruction belongs in memory. The preceding announcement contains no actionable content. A separate announcement is an unnecessary entry. One positive, one near negative and one missing attribute in new Chats.",
+  "truth": [
+    {
+      "key": "concrete-rule",
+      "seed": "Meine Übergaben enden immer mit einer Inventarliste.",
+      "must": true,
+      "private": true,
+      "terms": [
+        [
+          "Inventarliste*",
+          "Bestandsliste*",
+          "Inventurcheckliste*"
+        ]
+      ]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Für meine Übergaben habe ich eine neue Regel.",
+      "learner": []
+    },
+    {
+      "user": "Sie enden immer mit einer Inventarliste.",
+      "learner": [
+        {
+          "body": "Sie enden immer mit einer Inventarliste.",
+          "type": "procedural"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "positive",
+      "question": "Womit schließe ich meine Übergaben ab?",
+      "expect": {
+        "kind": "answer",
+        "terms": [
+          [
+            "Inventarliste*",
+            "Bestandsliste*",
+            "Inventurcheckliste*"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "unrelated-near",
+      "question": "Womit schließen die Moderatoren die Quizsendung ab?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    },
+    {
+      "id": "unknown-attribute",
+      "question": "Welche Farbe haben die Mappen, die ich für meine Übergaben benutze?",
+      "expect": {
+        "kind": "abstain"
+      }
+    }
+  ]
+}

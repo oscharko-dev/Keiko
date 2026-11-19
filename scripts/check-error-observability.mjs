@@ -1061,8 +1061,8 @@ function makeMemoryReviewQueueProbe() {
     { handlerName: "handleMemoryReviewQueue", label: "memory.review-queue" },
     "memory-handlers.handleMemoryReviewQueue",
     (vaultMod) => ({
-      listMemoryScopes() {
-        throw new vaultMod.MemoryStorageError("internal", "gate-vault-scopes-failure");
+      listMemoryReviewQueue() {
+        throw new vaultMod.MemoryStorageError("internal", "gate-vault-queue-failure");
       },
     }),
   );
@@ -1466,9 +1466,8 @@ export async function main(findStaticViolations = failurePathRegisterViolations)
   }
   const exercised = [];
   await runServerTopLevelSite(exercised);
-  for (const probe of SITE_PROBES) {
-    await runProbe(probe, exercised);
-  }
+  // Exercise the runtime sites in registration order so the receipt is deterministic.
+  await Array.fromAsync(SITE_PROBES, (probe) => runProbe(probe, exercised));
   if (exercised.length < MIN_STRATIFIED_SITES) {
     fail(`only ${exercised.length} distinct sites were exercised, need >= ${MIN_STRATIFIED_SITES}`);
   }

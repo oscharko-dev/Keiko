@@ -24,6 +24,7 @@ export type RejectionReason =
   | "denied-category"
   // A memory that tells the assistant to drop its rules would reach every later answer as a fact.
   | "instruction-override"
+  | "expired-preference"
   | "empty-content"
   | "exceeds-length-limit"
   | "ambiguous-forget"

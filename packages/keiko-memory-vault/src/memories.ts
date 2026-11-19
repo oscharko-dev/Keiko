@@ -4,6 +4,7 @@
 // inputs are already shape-valid and only owes the SQL.
 
 import type { DatabaseSync } from "node:sqlite";
+import { toUSVString } from "node:util";
 import type {
   MemoryId,
   MemoryRecord,
@@ -14,9 +15,10 @@ import type {
   WorkflowDefinitionId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
+import { STANDING_FACT_RETENTION_POLICY_KEY } from "@oscharko-dev/keiko-contracts/memory";
 import { memoryRecordToRow, rowToMemoryRecord, type MemoryRow } from "./serialize.js";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
-import type { ListMemoriesOptions, MemoryMetadata } from "./types.js";
+import type { ListMemoriesOptions, MemoryMetadata, MemoryVaultStore } from "./types.js";
 import type { MemoryContentCipher } from "./cipher.js";
 import { MemoryStorageError } from "./errors.js";
 import { cachedPrepare } from "./statements.js";
@@ -161,6 +163,19 @@ export function getMemoryRow(
   return row === undefined ? undefined : decodeMemoryRow(row, cipher);
 }
 
+export function getMemoryRowsByIds(
+  db: DatabaseSync,
+  ids: readonly MemoryId[],
+  cipher: MemoryContentCipher,
+): readonly MemoryRecord[] {
+  if (ids.length === 0) return [];
+  const rows = cachedPrepare(
+    db,
+    "SELECT * FROM memories WHERE id IN (SELECT value FROM json_each(?))",
+  ).all(JSON.stringify(ids)) as unknown as readonly MemoryRow[];
+  return rows.map((row) => decodeMemoryRow(row, cipher));
+}
+
 export function updateMemoryRow(
   db: DatabaseSync,
   record: MemoryRecord,
@@ -211,13 +226,27 @@ interface ListClauseBuild {
   readonly params: readonly (string | number)[];
 }
 
+function enumPredicate(column: string, values: readonly string[]): string {
+  return `${column} IN (${values.map(() => "?").join(",")})`;
+}
+
 function buildEnumClause(
   column: string,
   values: readonly string[] | undefined,
 ): ListClauseBuild | undefined {
   if (values === undefined || values.length === 0) return undefined;
-  const placeholders = values.map(() => "?").join(",");
-  return { clauses: [`${column} IN (${placeholders})`], params: values };
+  return { clauses: [enumPredicate(column, values)], params: values };
+}
+
+function buildStatusClause(options: ListMemoriesOptions): ListClauseBuild | undefined {
+  const { status, includeStaleStatuses } = options;
+  if (!includeStaleStatuses?.length) return buildEnumClause("status", status);
+  const stale = `(stale_reason IS NOT NULL AND ${enumPredicate("status", includeStaleStatuses)})`;
+  if (!status?.length) return { clauses: [stale], params: includeStaleStatuses };
+  return {
+    clauses: [`(${enumPredicate("status", status)} OR ${stale})`],
+    params: [...status, ...includeStaleStatuses],
+  };
 }
 
 function buildExpiryClause(
@@ -233,6 +262,20 @@ function buildRetentionPolicyClause(policyKey: string | undefined): ListClauseBu
   return { clauses: ["retention_policy_key = ?"], params: [policyKey] };
 }
 
+function buildSourceMessageClause(
+  sourceMessageId: string | undefined,
+): ListClauseBuild | undefined {
+  if (sourceMessageId === undefined) return undefined;
+  return {
+    clauses: [
+      `((membership.unreadable = 0 AND membership.source_message_id = ?) OR (membership.unreadable = 1 AND
+        EXISTS (SELECT 1 FROM json_each(source_message_ids_json) source_message
+          WHERE source_message.type = 'text' AND source_message.value = ?)))`,
+    ],
+    params: [sourceMessageId, sourceMessageId],
+  };
+}
+
 // The filters every list query shares, then its paging parameters.
 function appendListFilters(
   where: string[],
@@ -242,9 +285,11 @@ function appendListFilters(
 ): void {
   for (const built of [
     buildEnumClause("type", options.type),
-    buildEnumClause("status", options.status),
+    buildStatusClause(options),
+    buildEnumClause("sensitivity", options.sensitivity),
     buildPinnedClause(options.pinned),
     buildRetentionPolicyClause(options.retentionPolicyKey),
+    buildSourceMessageClause(options.sourceMessageId),
     buildExpiryClause(options.includeExpired, nowMs),
   ]) {
     if (built === undefined) continue;
@@ -277,7 +322,14 @@ function buildListSql(
   select = "*",
 ): string {
   const { column, dir } = resolveOrderBy(options);
-  let sql = `SELECT ${select} FROM memories`;
+  // Seek the source first, then the memory PK, even when a scope index could satisfy ORDER BY.
+  const from =
+    options.sourceMessageId === undefined
+      ? "memories"
+      : "memory_message_sources membership CROSS JOIN memories ON memories.id = membership.memory_id";
+  const projection =
+    options.sourceMessageId !== undefined && select === "*" ? "memories.*" : select;
+  let sql = `SELECT ${projection} FROM ${from}`;
   if (where.length > 0) {
     sql += ` WHERE ${where.join(" AND ")}`;
   }
@@ -367,14 +419,29 @@ function dedupeScopes(scopes: readonly MemoryScope[]): readonly MemoryScope[] {
 
 function buildScopesClause(scopes: readonly MemoryScope[]): ListClauseBuild | undefined {
   const uniqueScopes = dedupeScopes(scopes);
-  if (uniqueScopes.length === 0) return undefined;
-  const clauses: string[] = [];
-  const params: (string | number)[] = [];
-  for (const scope of uniqueScopes) {
-    clauses.push("(scope_kind = ? AND scope_coordinate = ?)");
-    params.push(scopeKindOf(scope), scopeCoordinateOf(scope));
+  const [first] = uniqueScopes;
+  if (first === undefined) return undefined;
+  if (uniqueScopes.length === 1) {
+    return {
+      clauses: ["scope_kind = ?", "scope_coordinate = ?"],
+      params: [scopeKindOf(first), scopeCoordinateOf(first)],
+    };
   }
-  return { clauses: [`(${clauses.join(" OR ")})`], params };
+  // A JSON parameter keeps the SQL expression and placeholder count independent of vault size.
+  // Tuple membership preserves exact scope pairs and lets SQLite use the composite scope index.
+  // Match SQLite text bindings when a coordinate contains a lone UTF-16 surrogate.
+  return {
+    clauses: [
+      `(scope_kind, scope_coordinate) IN (
+        SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]') FROM json_each(?)
+      )`,
+    ],
+    params: [
+      JSON.stringify(
+        uniqueScopes.map((scope) => [scopeKindOf(scope), toUSVString(scopeCoordinateOf(scope))]),
+      ),
+    ],
+  };
 }
 
 function appendPagingParams(params: (string | number)[], options: ListMemoriesOptions): void {
@@ -436,6 +503,58 @@ export function listMemoryMetadataByScopeRows(
   const coordinate = scopeCoordinateOf(scope);
   const params: (string | number)[] = [kind, coordinate];
   const where: string[] = ["scope_kind = ?", "scope_coordinate = ?"];
+  appendListFilters(where, params, options, nowMs);
+  const rows = cachedPrepare(db, buildListSql(where, options, METADATA_COLUMNS)).all(
+    ...params,
+  ) as unknown as readonly MemoryMetadataRow[];
+  return rows.map(metadataRowToMemoryMetadata);
+}
+
+// Only profile IDs and counters leave this query. The body and its sealed exclusion tags are
+// inspected later under the same read bound as the selector. SQLite's UTF-8 BINARY collation
+// disagrees with the selector's JavaScript ordering for supplementary vs. high BMP characters.
+export function prepareStandingProfileReader(
+  db: DatabaseSync,
+): MemoryVaultStore["listStandingProfileCandidates"] {
+  db.function("keiko_profile_id_key", { deterministic: true, directOnly: true }, (id) => {
+    if (typeof id !== "string") throw new TypeError("Expected a stored profile ID.");
+    return Buffer.from(id, "utf16le").swap16();
+  });
+  const sql = `
+    SELECT m.id, coalesce(a.access_count, 0) AS confirmations
+    FROM memories m LEFT JOIN memory_access a ON a.memory_id = m.id
+    WHERE m.scope_kind = 'user' AND m.scope_coordinate = ?
+      AND m.status = 'accepted' AND m.sensitivity = 'public'
+      AND m.valid_from <= ? AND (m.valid_until IS NULL OR m.valid_until > ?)
+      AND m.confidence > ?
+      AND (m.pinned = 1 OR m.retention_policy_key = ? OR m.type IN (SELECT value FROM json_each(?)))
+    ORDER BY m.pinned DESC, confirmations DESC, m.created_at DESC, keiko_profile_id_key(m.id) ASC
+    LIMIT ?`;
+  return (userId, { types, minConfidenceExclusive, nowMs, limit }) => {
+    // A negative SQLite LIMIT means "unbounded".
+    if (!Number.isSafeInteger(limit) || limit <= 0) return [];
+    return cachedPrepare(db, sql).all(
+      userId,
+      nowMs,
+      nowMs,
+      minConfidenceExclusive,
+      STANDING_FACT_RETENTION_POLICY_KEY,
+      JSON.stringify(types),
+      limit,
+    ) as unknown as ReturnType<MemoryVaultStore["listStandingProfileCandidates"]>;
+  };
+}
+
+export function listMemoryMetadataAcrossScopeRows(
+  db: DatabaseSync,
+  scopes: readonly MemoryScope[],
+  options: ListMemoriesOptions,
+  nowMs: number,
+): readonly MemoryMetadata[] {
+  const scopeClause = buildScopesClause(scopes);
+  if (scopeClause === undefined) return [];
+  const params: (string | number)[] = [...scopeClause.params];
+  const where: string[] = [...scopeClause.clauses];
   appendListFilters(where, params, options, nowMs);
   const rows = cachedPrepare(db, buildListSql(where, options, METADATA_COLUMNS)).all(
     ...params,

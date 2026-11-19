@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MemoryId, MemoryRecord, UserId } from "@oscharko-dev/keiko-contracts/memory";
 import { createMemoryVault, MEMORY_VAULT_SCHEMA_VERSION, MemoryStorageError } from "./index.js";
+import { rewindPlaintextFixtureSchema } from "./_support.js";
 import type { MemoryVaultStore } from "./types.js";
 
 const KEY_A = Buffer.alloc(32, 7);
@@ -193,28 +194,7 @@ function downgradeToLegacyPlaintext(dir: string): void {
   );
   // A genuine v1 (pre-encryption) DB predates the v3 access table; drop it so the reopen applies
   // the later DDL cleanly instead of colliding with already-present tables/columns.
-  db.exec("ALTER TABLE memories DROP COLUMN evidence_span");
-  db.exec("ALTER TABLE memories DROP COLUMN source_message_ids_json");
-  db.exec("DROP TABLE IF EXISTS memory_conversation_touches");
-  db.exec("DROP TABLE IF EXISTS memory_access");
-  db.exec("DROP INDEX IF EXISTS idx_tombstones_scope");
-  db.exec("DROP INDEX IF EXISTS idx_tombstones_memory_id");
-  db.exec("DROP TABLE memory_tombstones");
-  db.exec(`
-    CREATE TABLE memory_tombstones (
-      id TEXT NOT NULL PRIMARY KEY,
-      memory_id TEXT NOT NULL,
-      scope_kind TEXT NOT NULL,
-      scope_coordinate TEXT NOT NULL,
-      type TEXT NOT NULL,
-      forgotten_at INTEGER NOT NULL,
-      forgetter_surface TEXT NOT NULL,
-      reason TEXT
-    ) STRICT;
-    CREATE INDEX idx_tombstones_scope ON memory_tombstones(scope_kind, scope_coordinate);
-    CREATE INDEX idx_tombstones_memory_id ON memory_tombstones(memory_id);
-  `);
-  db.exec("PRAGMA user_version = 1");
+  rewindPlaintextFixtureSchema(db);
   db.close();
 }
 

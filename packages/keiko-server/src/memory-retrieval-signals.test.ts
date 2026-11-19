@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createMemoryVault } from "@oscharko-dev/keiko-memory-vault";
 
-import type { MemoryId, MemoryScope } from "@oscharko-dev/keiko-contracts";
+import type { MemoryId, MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts";
 import type {
   UsearchAnnSearchRequest,
   UsearchAnnSearchResult,
@@ -31,14 +35,10 @@ vi.mock("@oscharko-dev/keiko-local-knowledge", async (importOriginal) => {
   return { ...actual, searchUsearchAnnIndex: searchMock };
 });
 
-vi.mock("./memory-embedding.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./memory-embedding.js")>();
-  return { ...actual, embedMemoryText: embedMock };
-});
-
 const { buildConversationRetrievalSignals } = await import("./memory-retrieval-signals.js");
 
 const NOW_MS = 10_000;
+const QUERY_TEXT = "memory query";
 const SCOPE: MemoryScope = { kind: "global" };
 const IDENTITY = {
   provider: "test-provider",
@@ -106,11 +106,16 @@ function vaultFor(
 function collectSignals(
   vault: MemoryVaultStore,
 ): ReturnType<typeof buildConversationRetrievalSignals> {
-  return buildConversationRetrievalSignals(DEPS, vault, "memory query", [SCOPE], NOW_MS, {
-    allowed: true,
-    reason: "allowed",
-  });
+  return buildConversationRetrievalSignals(DEPS, vault, QUERY_TEXT, [SCOPE], NOW_MS, ALLOWED_GATE);
 }
+
+const ALLOWED_GATE = {
+  allowed: true,
+  reason: "allowed",
+  matchesQuery: (query: string | undefined) => query === QUERY_TEXT,
+  providerIdentity: IDENTITY.provider,
+  embedQuery: embedMock,
+} as const;
 
 // A recording diagnostics sink, so a test can assert on the redaction-safe record a degraded
 // semantic-retrieval path emits instead of on a console.warn call (#2902 O-F4).
@@ -152,6 +157,33 @@ beforeEach(() => {
 });
 
 describe("buildConversationRetrievalSignals", () => {
+  it("loads reinforcement only for eligible memories in the requested scopes", async () => {
+    const alpha = memoryId("alpha");
+    const archived = memoryId("archived");
+    const outside = memoryId("outside");
+    const stat = { lastAccessedAt: NOW_MS, accessCount: 2, outcomeCount: 0, utilitySum: 0 };
+    const getAccessStats = vi.fn((ids?: readonly MemoryId[]) => {
+      const stats = new Map([
+        [alpha, stat],
+        [archived, stat],
+        [outside, stat],
+      ]);
+      return ids === undefined ? stats : new Map([...stats].filter(([id]) => ids.includes(id)));
+    });
+    const vault = {
+      ...vaultFor(
+        () => [metadata(alpha, 100), { ...metadata(archived, 200), status: "archived" }],
+        new Map(),
+      ),
+      getAccessStats,
+    };
+
+    const signals = await collectSignals(vault);
+
+    expect(getAccessStats).toHaveBeenCalledExactlyOnceWith([alpha]);
+    expect([...signals.strengthById.keys()]).toEqual([alpha]);
+  });
+
   it("reuses one canonical memory partition for candidate permutations", async () => {
     const alpha = memoryId("alpha");
     const beta = memoryId("beta");
@@ -235,10 +267,10 @@ describe("buildConversationRetrievalSignals", () => {
     const signals = await buildConversationRetrievalSignals(
       deps,
       vault,
-      "memory query",
+      QUERY_TEXT,
       [SCOPE],
       NOW_MS,
-      { allowed: true, reason: "allowed" },
+      ALLOWED_GATE,
     );
 
     expect(observations[0]?.ids).toEqual(["valid"]);
@@ -263,10 +295,14 @@ describe("buildConversationRetrievalSignals", () => {
       const alpha = memoryId("alpha");
       const vault = vaultFor(() => [metadata(alpha, 100)], new Map());
       const { deps, calls } = depsWithDiagnostics();
-      await buildConversationRetrievalSignals(deps, vault, "memory query", [SCOPE], NOW_MS, {
-        allowed: reason === "no-embeddings",
-        reason,
-      });
+      await buildConversationRetrievalSignals(
+        deps,
+        vault,
+        QUERY_TEXT,
+        [SCOPE],
+        NOW_MS,
+        reason === "no-embeddings" ? ALLOWED_GATE : { allowed: false, reason },
+      );
       expect(calls).toContainEqual(
         expect.objectContaining({
           operation: "memory.retrieval.semantic-disabled",
@@ -289,10 +325,10 @@ describe("buildConversationRetrievalSignals", () => {
     const signals = await buildConversationRetrievalSignals(
       deps,
       vault,
-      "memory query",
+      QUERY_TEXT,
       [SCOPE],
       NOW_MS,
-      { allowed: true, reason: "allowed" },
+      ALLOWED_GATE,
     );
 
     expect(signals.semanticById).toBeUndefined();
@@ -318,15 +354,71 @@ describe("buildConversationRetrievalSignals", () => {
     searchMock.mockResolvedValueOnce({ ok: false, reason: "runtime-integrity-failed" });
     const { deps, calls } = depsWithDiagnostics();
 
-    await buildConversationRetrievalSignals(deps, vault, "memory query", [SCOPE], NOW_MS, {
-      allowed: true,
-      reason: "allowed",
-    });
+    await buildConversationRetrievalSignals(deps, vault, QUERY_TEXT, [SCOPE], NOW_MS, ALLOWED_GATE);
 
     const disabled = calls.find(
       (record) => record.operation === "memory.retrieval.semantic-disabled",
     );
     expect(disabled?.source).toBe("memory-retrieval-signals");
     expect(disabled?.source).not.toMatch(/local-knowledge/iu);
+  });
+});
+
+describe("semantic candidate validity before the bounded sweep", () => {
+  it.each([
+    { name: "future-only", futureCount: 1, current: false },
+    { name: "future records ahead of a current record", futureCount: 160, current: true },
+    { name: "inclusive valid-from boundary", futureCount: 0, current: true },
+  ])("$name uses only facts valid at the pinned instant", async ({ futureCount, current }) => {
+    const memoryDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-valid-query-"));
+    const vault = createMemoryVault({
+      memoryDir,
+      vaultKey: Buffer.alloc(32, 3),
+      now: () => NOW_MS,
+    });
+    const put = (id: string, validFrom: number, updatedAt: number): void => {
+      const record: MemoryRecord = {
+        id: memoryId(id),
+        schemaVersion: "1",
+        scope: SCOPE,
+        type: "procedural",
+        status: "accepted",
+        body: "Use the published release checklist.",
+        provenance: {
+          sourceKind: "explicit-user-instruction",
+          sensitivity: "public",
+          confidence: 1,
+          capturedAt: 1,
+        },
+        validity: { validFrom },
+        createdAt: 1,
+        updatedAt,
+        pinned: false,
+        tags: [],
+      };
+      vault.insertMemory(record);
+      vault.upsertEmbedding(record.id, {
+        provider: IDENTITY.provider,
+        modelId: IDENTITY.modelId,
+        metric: "cosine",
+        vector: new Float32Array([1, 0]),
+      });
+    };
+    try {
+      if (current) put("current", NOW_MS, 1);
+      for (let index = 0; index < futureCount; index += 1)
+        put(`future-${String(index)}`, NOW_MS + 1, NOW_MS);
+      const getAccessStats = vi.spyOn(vault, "getAccessStats");
+      const signals = await collectSignals(vault);
+      expect([...(signals.semanticById?.keys() ?? [])]).toEqual(
+        current ? [memoryId("current")] : [],
+      );
+      expect(embedMock).toHaveBeenCalledTimes(current ? 1 : 0);
+      expect(getAccessStats).toHaveBeenCalledExactlyOnceWith(current ? [memoryId("current")] : []);
+      expect(observations.flatMap((entry) => entry.ids)).toEqual(current ? ["current"] : []);
+    } finally {
+      vault.close();
+      rmSync(memoryDir, { recursive: true, force: true });
+    }
   });
 });

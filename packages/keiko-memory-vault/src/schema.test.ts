@@ -6,7 +6,17 @@ import {
   flushPlaintextResidueWithRetry,
   runMigrations,
 } from "./schema.js";
-import { TEST_CIPHER } from "./_support.js";
+import { makeRecord, memId, TEST_CIPHER } from "./_support.js";
+import {
+  getAccessStatsRows,
+  getConversationTouchRows,
+  recordAccessRows,
+  recordLearnedConfirmationRows,
+  recordUseRows,
+} from "./access.js";
+import { insertMemoryRow } from "./memories.js";
+import { encodeVectorLE } from "./embeddings.js";
+import { hasSemanticallySimilarForgetTombstoneRow } from "./tombstones.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
 import {
   expectActivityLogProof,
@@ -75,31 +85,8 @@ describe("runMigrations", () => {
 
   it("upgrades a v2 DB forward to the current schema head by applying only later DDL", () => {
     const db = openMemDb();
-    runMigrations(db, TEST_CIPHER);
-    // Simulate a genuine pre-v3 (encryption-era) database: the access table did not exist and the
-    // version sat at the encryption head. Dropping the table + regressing the version reproduces
-    // the on-disk shape a v2 DB actually has before this migration runs.
-    db.exec("ALTER TABLE memories DROP COLUMN evidence_span");
-    db.exec("ALTER TABLE memories DROP COLUMN source_message_ids_json");
-    db.exec("DROP TABLE memory_conversation_touches");
-    db.exec("DROP TABLE memory_access");
-    db.exec("DROP INDEX idx_tombstones_scope");
-    db.exec("DROP INDEX idx_tombstones_memory_id");
-    db.exec("DROP TABLE memory_tombstones");
-    db.exec(`
-      CREATE TABLE memory_tombstones (
-        id TEXT NOT NULL PRIMARY KEY,
-        memory_id TEXT NOT NULL,
-        scope_kind TEXT NOT NULL,
-        scope_coordinate TEXT NOT NULL,
-        type TEXT NOT NULL,
-        forgotten_at INTEGER NOT NULL,
-        forgetter_surface TEXT NOT NULL,
-        reason TEXT
-      ) STRICT;
-      CREATE INDEX idx_tombstones_scope ON memory_tombstones(scope_kind, scope_coordinate);
-      CREATE INDEX idx_tombstones_memory_id ON memory_tombstones(memory_id);
-    `);
+    for (const migration of MIGRATIONS.filter(({ version }) => version <= 2))
+      db.exec(migration.sql);
     db.exec("PRAGMA user_version = 2");
     runMigrations(db, TEST_CIPHER);
     expect(userVersion(db)).toBe(MEMORY_VAULT_SCHEMA_VERSION);
@@ -127,11 +114,10 @@ describe("runMigrations", () => {
   // A vault created at v12 kept one shared latest touch; v13 carries it into the touching chat's row.
   it("carries a v12 vault's latest touches into each chat's own row (#4212)", () => {
     const db = openMemDb();
-    runMigrations(db, TEST_CIPHER);
+    for (const migration of MIGRATIONS.filter(({ version }) => version <= 12)) {
+      db.exec(migration.sql);
+    }
     db.exec("PRAGMA foreign_keys = OFF");
-    db.exec("DROP TABLE memory_conversation_touches");
-    db.exec("ALTER TABLE memory_access ADD COLUMN last_used_conversation_id TEXT");
-    db.exec("ALTER TABLE memory_access ADD COLUMN last_accessed_conversation_id TEXT");
     db.exec(`INSERT INTO memory_access
       (memory_id, last_accessed_at, access_count, last_used_at, last_used_conversation_id,
        last_accessed_conversation_id)
@@ -159,6 +145,84 @@ describe("runMigrations", () => {
     db.close();
   });
 
+  it("retains a v14 forgotten vector and its conservative comparison across a store upgrade", () => {
+    const db = openMemDb();
+    try {
+      for (const migration of MIGRATIONS.filter(({ version }) => version <= 14))
+        db.exec(migration.sql);
+      db.exec("PRAGMA user_version = 14");
+      const vector = Float32Array.from([1, 0]);
+      const scope = { kind: "global" } as const;
+      db.prepare(
+        "INSERT INTO memory_tombstones (id,memory_id,scope_kind,scope_coordinate,type,forgotten_at,forgetter_surface,body_embedding) VALUES (?,?,?,?,?,?,?,?)",
+      ).run(
+        "legacy-row",
+        "original-v14",
+        scope.kind,
+        "",
+        "preference",
+        100,
+        "test",
+        TEST_CIPHER.sealBytes(encodeVectorLE(vector)),
+      );
+      runMigrations(db, TEST_CIPHER);
+      expect(userVersion(db)).toBe(MEMORY_VAULT_SCHEMA_VERSION);
+      expect(
+        db
+          .prepare("SELECT body_embedding_space AS space FROM memory_tombstones WHERE id = ?")
+          .get("legacy-row")?.space,
+      ).toBeNull();
+      expect(
+        hasSemanticallySimilarForgetTombstoneRow(
+          db,
+          scope,
+          TEST_CIPHER,
+          { provider: "local", modelId: "current", metric: "cosine", vector },
+          0.95,
+        ),
+      ).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserves v13 touches and counts new learning positions once", () => {
+    const db = openMemDb();
+    try {
+      for (const migration of MIGRATIONS.filter(({ version }) => version <= 13)) {
+        db.exec(migration.sql);
+      }
+      db.exec("PRAGMA user_version = 13");
+      const record = makeRecord({ id: memId("migration-confirmation") });
+      insertMemoryRow(db, record, TEST_CIPHER);
+      recordAccessRows(db, [record.id], 1_000, "chat-a");
+      recordUseRows(db, [record.id], 1_100, "chat-a");
+
+      runMigrations(db, TEST_CIPHER);
+      expect(userVersion(db)).toBe(MEMORY_VAULT_SCHEMA_VERSION);
+      expect(getConversationTouchRows(db, "chat-a").get(record.id)).toEqual({
+        confirmedAt: 1_000,
+        usedAt: 1_100,
+      });
+      const first = { timestamp: 1_500, rowid: 4 };
+      const second = { ...first, rowid: 6 };
+      expect(recordLearnedConfirmationRows(db, record.id, "chat-a", first, 2_000)).toBe(true);
+      expect(recordLearnedConfirmationRows(db, record.id, "chat-a", first, 2_100)).toBe(false);
+      expect(recordLearnedConfirmationRows(db, record.id, "chat-a", second, 2_200)).toBe(true);
+      expect(recordLearnedConfirmationRows(db, record.id, "chat-a", first, 2_300)).toBe(false);
+      expect(getAccessStatsRows(db, [record.id]).get(record.id)).toMatchObject({
+        accessCount: 3,
+        lastAccessedAt: 2_200,
+      });
+      expect(getConversationTouchRows(db, "chat-a").get(record.id)).toEqual({
+        confirmedAt: 1_500,
+        usedAt: 1_100,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
   it("refuses to open a schema newer than this binary supports", () => {
     const db = openMemDb();
     db.exec(`PRAGMA user_version = ${String(MEMORY_VAULT_SCHEMA_VERSION + 1)}`);
@@ -180,6 +244,7 @@ describe("runMigrations", () => {
       "memory_conversation_touches",
       "memory_edges",
       "memory_embeddings",
+      "memory_message_sources",
       "memory_tombstones",
       "memory_vault_secrets",
     ]);
@@ -208,6 +273,7 @@ describe("runMigrations", () => {
       "idx_memories_updated_at",
       "idx_memories_valid_until",
       "idx_memory_access_last",
+      "idx_memory_message_source_lookup",
       "idx_tombstones_memory_id",
       "idx_tombstones_scope",
       "idx_tombstones_scope_body_hash",

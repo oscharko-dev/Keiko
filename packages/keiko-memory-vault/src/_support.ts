@@ -30,3 +30,33 @@ export function makeRecord(
 export function memId(value: string): MemoryId {
   return value as MemoryId;
 }
+
+// The two on-disk migration probes seed current encrypted rows before replacing their fields
+// with the historical plaintext fixture. Reopen must then apply every later DDL migration.
+export function rewindPlaintextFixtureSchema(db: DatabaseSync): void {
+  db.exec(`DROP TRIGGER memory_sources_insert;
+    DROP TRIGGER memory_sources_update;
+    DROP TABLE memory_message_sources;`);
+  db.exec("ALTER TABLE memories DROP COLUMN evidence_span");
+  db.exec("ALTER TABLE memories DROP COLUMN source_message_ids_json");
+  db.exec("DROP TABLE IF EXISTS memory_conversation_touches");
+  db.exec("DROP TABLE IF EXISTS memory_access");
+  db.exec("DROP INDEX IF EXISTS idx_tombstones_scope");
+  db.exec("DROP INDEX IF EXISTS idx_tombstones_memory_id");
+  db.exec("DROP TABLE memory_tombstones");
+  db.exec(`
+    CREATE TABLE memory_tombstones (
+      id TEXT NOT NULL PRIMARY KEY,
+      memory_id TEXT NOT NULL,
+      scope_kind TEXT NOT NULL,
+      scope_coordinate TEXT NOT NULL,
+      type TEXT NOT NULL,
+      forgotten_at INTEGER NOT NULL,
+      forgetter_surface TEXT NOT NULL,
+      reason TEXT
+    ) STRICT;
+    CREATE INDEX idx_tombstones_scope ON memory_tombstones(scope_kind, scope_coordinate);
+    CREATE INDEX idx_tombstones_memory_id ON memory_tombstones(memory_id);
+  `);
+  db.exec("PRAGMA user_version = 1");
+}

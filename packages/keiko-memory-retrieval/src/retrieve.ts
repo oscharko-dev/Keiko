@@ -520,7 +520,8 @@ function buildRankQuery(
     nowMs: request.nowMs,
     weights: resolved.weights,
     ...(request.queryText === undefined ? {} : { queryText: request.queryText }),
-    ...(semanticById === undefined ? {} : { semanticById }),
+    // An empty set after the relevance floor offers no evidence for rank fusion.
+    ...(semanticById?.size ? { semanticById } : {}),
     ...(request.strengthById === undefined ? {} : { strengthById: request.strengthById }),
     ...(request.fusion === undefined ? {} : { fusion: request.fusion }),
   };

@@ -10,7 +10,7 @@ import type {
   UserId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
-import type { MemoryTombstone } from "./types.js";
+import type { MemoryEmbeddingInput, MemoryTombstone } from "./types.js";
 import {
   deleteTombstonesByScopeBeforeRows,
   hasSemanticallySimilarForgetTombstoneRow,
@@ -50,6 +50,44 @@ function requiredFirstTombstone(page: ReturnType<typeof listTombstonesPageRows>)
 }
 
 describe("tombstones", () => {
+  it("binds new tombstones to their space and preserves suppression for a pre-identity vector", () => {
+    const db = openTestDb();
+    try {
+      const vector = Float32Array.from([1, 0, 0, 0]);
+      const oldSpace: MemoryEmbeddingInput = {
+        provider: "local-one",
+        modelId: "first",
+        metric: "cosine",
+        vector,
+      };
+      const newSpace = { ...oldSpace, provider: "local-two" };
+      const first = makeTombstone({ id: "new-format", memoryId: "original" as MemoryId });
+      insertTombstoneRow(db, first, TEST_CIPHER, oldSpace);
+      expect(
+        hasSemanticallySimilarForgetTombstoneRow(db, userScope, TEST_CIPHER, oldSpace, 0.95),
+      ).toBe(true);
+      expect(
+        hasSemanticallySimilarForgetTombstoneRow(db, userScope, TEST_CIPHER, newSpace, 0.95),
+      ).toBe(false);
+      expect(
+        db
+          .prepare("SELECT body_embedding_space AS digest FROM memory_tombstones WHERE id = ?")
+          .get(first.id)?.digest,
+      ).toMatch(/^[a-f0-9]{64}$/u);
+      insertTombstoneRow(
+        db,
+        makeTombstone({ id: "legacy", memoryId: "legacy" as MemoryId }),
+        TEST_CIPHER,
+        vector,
+      );
+      expect(
+        hasSemanticallySimilarForgetTombstoneRow(db, userScope, TEST_CIPHER, newSpace, 0.95),
+      ).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
   it("rejects unbounded public tombstone page limits before SQL", () => {
     const dir = freshFactoryDir();
     const vault = createMemoryVault({
