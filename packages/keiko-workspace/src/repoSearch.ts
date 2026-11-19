@@ -125,6 +125,7 @@ import {
   type StructuralExecutionControl,
 } from "./structuralExecution.js";
 import { workspaceDirectoryFingerprint } from "./workspaceDirectorySnapshot.js";
+import { normalizeSourceLineEndings } from "./sourceLines.js";
 import {
   buildWorkspaceIndexScopeKey,
   buildWorkspaceIndexSnapshot,
@@ -4004,9 +4005,12 @@ function excerptTextLines(
       "binary",
     );
   }
-  if (lane === "editor") return raw.split("\n");
+  // CRLF folds into LF before redaction, so a Windows-style copy redacts and windows exactly like
+  // its LF copy (#4439); the file-size cap above still counted the original bytes.
+  const source = normalizeSourceLineEndings(raw);
+  if (lane === "editor") return source.split("\n");
   return redactWorkspaceSource(
-    raw,
+    source,
     scopePath,
     true,
     workspaceContentPolicy(workspace),

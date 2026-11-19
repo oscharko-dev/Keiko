@@ -39,6 +39,7 @@ import {
 import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpath.js";
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 import { workspaceDirectoryFingerprint } from "./workspaceDirectorySnapshot.js";
+import { splitSourceLines } from "./sourceLines.js";
 import {
   normalizeWorkspaceIndexContent,
   type WorkspaceIndexRecordContent,
@@ -2467,7 +2468,7 @@ export function buildWorkspaceIndexLexicalRecord(
   content: string,
   scopePath?: string,
 ): WorkspaceIndexLexicalRecord {
-  const lines = content.split("\n");
+  const lines = splitSourceLines(content);
   const sourceLines = repositorySourceLines(content, scopePath);
   const lexicalLines: WorkspaceIndexLexicalLine[] = [];
   const preparedLines: { readonly index: number; readonly value: PreparedLexicalLine }[] = [];

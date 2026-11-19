@@ -3591,6 +3591,7 @@
     "keiko-workspace/repoSearchSourceInspection",
     "keiko-workspace/repoSearchStream",
     "keiko-workspace/retrieval",
+    "keiko-workspace/sourceLines",
     "keiko-workspace/sourceRedaction",
     "keiko-workspace/stableId",
     "keiko-workspace/structuralAdapterRequestContext",

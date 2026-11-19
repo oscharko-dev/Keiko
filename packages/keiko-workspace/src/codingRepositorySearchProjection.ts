@@ -2,6 +2,7 @@ import { redact } from "@oscharko-dev/keiko-security";
 import type { CodingRepositoryHit } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { RepoSearchInvalidRangeError } from "./errors.js";
 import { clampToBytes } from "./repoSearch.js";
+import { normalizeSourceLineEndings } from "./sourceLines.js";
 
 interface SourceWindow {
   readonly start: number;
@@ -65,16 +66,19 @@ export function codingRepositoryExcerpt(
   endLine: number,
   maxBytes: number,
 ): CodingRepositoryHit {
-  const window = sourceWindow(raw, startLine, endLine);
-  const safe = redact(raw);
-  const projected = safeSourceWindow(raw, safe, window);
+  // Windows line endings fold into LF first (#4439): the window arithmetic below counts one
+  // terminator character per line, and a CRLF copy must project exactly like its LF copy.
+  const source = normalizeSourceLineEndings(raw);
+  const window = sourceWindow(source, startLine, endLine);
+  const safe = redact(source);
+  const projected = safeSourceWindow(source, safe, window);
   const { excerpt: snippet, truncated: snippetTruncated } = clampToBytes(projected, maxBytes);
   return {
     path,
     startLine,
     endLine: window.endLine,
     snippet,
-    redacted: projected !== raw.slice(window.start, window.end),
+    redacted: projected !== source.slice(window.start, window.end),
     snippetTruncated,
   };
 }
