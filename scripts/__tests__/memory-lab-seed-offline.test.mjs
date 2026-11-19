@@ -91,11 +91,11 @@ describe("the seeded demonstration scenarios", () => {
       expect(before.passed).toBe(false);
       expect(before.neededMissing).toEqual(["earlier:format-before"]);
       expect(before.neededNotSupplied).toEqual(["earlier:format-before"]);
-      // The cause is visible: the product's maintenance removed the seeded superseded record, which is
-      // information in the summary, and it archived aged seeded records, which is a failure class.
-      expect(earlier.seed.after).toMatchObject({ gone: 1, supersededRemoved: 1 });
-      // One per arm that has memory: product and oracle.
-      expect(summary.seedInformation.supersededRemoved).toBe(2);
+      // The earlier value is still in the store: maintenance keeps a superseded record as history
+      // (#4223). Recall does not supply history yet, which is the reason the probe fails.
+      expect(earlier.seed.after).toMatchObject({ gone: 0, supersededRemoved: 0 });
+      expect(earlier.seed.after.byStatus.superseded).toBe(1);
+      expect(summary.seedInformation.supersededRemoved).toBe(0);
       const classes = summary.failureClasses.byArm.product;
       expect(classes.total["needed-memory-missing"]).toBe(1);
       // Faded filler is information, never a failure class.
