@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { listMemories } from "./instance.mjs";
 import { neededVerdict } from "./recall-stage.mjs";
-import { carrierIds, suppliedCarries, wantedOf } from "./score.mjs";
+import { carrierIds, matchesTermGroups, suppliedCarries, wantedOf } from "./score.mjs";
 
 const TRACE_SOURCE = "memory-context-route";
 /** Large enough that the token budget cuts nothing: the route accepts any non-negative integer. */
@@ -261,14 +261,6 @@ function limitFor(chatLimit, retrievedCount) {
   return chatLimit;
 }
 
-// Every term group of the truth is contained in a group of the probe's terms: the probe accepts at
-// least the truth's own words (and may accept more, such as an inflected form).
-function termsCovered(truthTerms, probeTerms) {
-  return truthTerms.every((group) =>
-    probeTerms.some((accepted) => group.every((term) => accepted.includes(term))),
-  );
-}
-
 /**
  * The facts a probe's trace follows: the ones it needs (`wantedOf`) and, for a probe that expects
  * answer terms, every truth whose own body the probe's terms match, by the scorer's own matcher
@@ -280,7 +272,7 @@ export function traceWanted(scenario, probe) {
   const terms = probe.expect.terms;
   if (terms === undefined) return wanted;
   const own = scenario.truth
-    .filter((fact) => termsCovered(fact.terms, terms))
+    .filter((fact) => matchesTermGroups(fact.seed, terms))
     .filter((fact) => !wanted.some((item) => item.label === fact.key))
     .map((fact) => ({ label: fact.key, link: { truth: fact.key }, terms: fact.terms }));
   return [...wanted, ...own];
@@ -330,16 +322,36 @@ export async function traceRecall({
   return { ...trace, durationMs: Date.now() - startedAt };
 }
 
+// An answer probe of an arm with memory.
+const eligibleProbes = (results) =>
+  results
+    .filter((result) => result.arm !== "off")
+    .flatMap((result) => (result.probes ?? []).map((probe) => ({ result, probe })))
+    .filter(({ probe }) => probe.kind === "answer");
+
+// A probe whose trace has no fact to follow records nothing a stage could be counted for.
+const hasFact = (probe) => (probe.recallTrace?.needed?.length ?? 0) > 0;
+
 /**
  * What a run recorded, for its manifest: `on` when every answer probe of an arm with memory carries a
- * trace, `off` when none does, `partial` otherwise. Counted from the results, never from the request.
+ * trace with at least one fact to follow, `off` when none carries a trace, `partial` otherwise (a probe
+ * untraced, or traced with no fact). Counted from the results, never from the request.
  */
 export function recallTraceCoverage(results) {
-  const eligible = results
-    .filter((result) => result.arm !== "off")
-    .flatMap((result) => result.probes ?? [])
-    .filter((probe) => probe.kind === "answer");
-  const traced = eligible.filter((probe) => probe.recallTrace !== undefined).length;
-  if (traced === 0) return "off";
-  return traced === eligible.length ? "on" : "partial";
+  const eligible = eligibleProbes(results);
+  if (!eligible.some(({ probe }) => probe.recallTrace !== undefined)) return "off";
+  return eligible.every(({ probe }) => hasFact(probe)) ? "on" : "partial";
+}
+
+/**
+ * The answer probes that carry a trace with no fact to follow, as `scenario:arm:rN:probe`, for the
+ * summary: such a probe has no stage class, whatever the manifest says about the trace.
+ */
+export function factlessProbes(results) {
+  return eligibleProbes(results)
+    .filter(({ probe }) => probe.recallTrace !== undefined && !hasFact(probe))
+    .map(
+      ({ result, probe }) =>
+        `${result.scenario}:${result.arm}:r${String(result.repetition)}:${probe.id}`,
+    );
 }

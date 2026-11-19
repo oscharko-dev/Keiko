@@ -686,7 +686,9 @@ and `chatRetrievedCount` (the chat's limit on retrieved memories, and how many i
 `{key, id, suppliedByChat, position, scoreRank, omittedReason, carrierCount, stage}`.
 
 The wanted facts are the truths a probe `needs`, the values it asks for `earlier`, and, for a probe
-that expects answer `terms`, the truth whose terms the probe's terms cover (the last kind is followed
+that expects answer `terms`, every truth whose own body the probe's terms match, by the scorer's own
+matcher (normalisation, whole words, the `*` prefix; the rule `analyze-recall.mjs` uses for a probe's
+target), so `dark` finds "I use the dark theme" and `abend*` finds "abends" (the last kind is followed
 by the trace only; the score never sees it). `id` is the stored memory that carries the fact, found by
 the rule the scorer uses (`score.mjs`: the seeded link, or the terms of the fact); `null` means **no
 stored body matches the fact's terms**, which is what `not-stored` says, not that the product never
@@ -761,8 +763,11 @@ limit and its actual block, not with the route's cut. The route also costs **one
 call per answer probe** when an embedder is configured, and records its usual `memory:retrieved` audit
 event; it bumps no access counter. That time is measured apart as `traceMs` (`timing`) and
 `recallTrace.durationMs`, and is not part of `probeMs`. The manifest's `recallTrace` says what the run
-actually recorded: `on` (every answer probe of an arm with memory), `partial` (some) or `off`; it is a
-provenance field of a comparison, and a run that never recorded it reads as unrecorded.
+actually recorded: `on` (every answer probe of an arm with memory carries a trace with at least one
+fact to follow), `partial` (some probe has no trace, or a trace with no fact, which no stage class can
+be counted for) or `off`; the summary names the probes that were traced with no fact
+(`recallTraceFactless`), and a test over the shipped corpora fails for an answer probe without one. It
+is a provenance field of a comparison, and a run that never recorded it reads as unrecorded.
 
 ## Corpus
 

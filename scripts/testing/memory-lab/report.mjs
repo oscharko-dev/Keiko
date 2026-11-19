@@ -496,6 +496,15 @@ function scenarioClassLines(arm, byScenario) {
   return more > 0 ? [...lines, `- ${arm}: and ${String(more)} more scenarios`] : lines;
 }
 
+// Answer probes traced with no fact to follow: they have no stage class, and the line says so.
+function factlessLines(factless) {
+  if ((factless ?? []).length === 0) return [];
+  return [
+    `Recall trace: ${String(factless.length)} answer probe(s) were traced with no fact to follow, so no stage class counts for them: ${factless.join(", ")}.`,
+    "",
+  ];
+}
+
 function seedInformationLines(information) {
   const { fillerArchived = 0, fillerRemoved = 0 } = information ?? {};
   const lines = [];
@@ -510,7 +519,10 @@ function seedInformationLines(information) {
 function failureClassLines(summary) {
   const { byArm } = summary.failureClasses;
   const header = ["### Failure classes (counts of failed checks)", ""];
-  const info = seedInformationLines(summary.seedInformation);
+  const info = [
+    ...seedInformationLines(summary.seedInformation),
+    ...factlessLines(summary.recallTraceFactless),
+  ];
   const ran = `Arms that ran: ${Object.keys(byArm)
     .map((arm) => `${arm} (${String(byArm[arm].units)} unit${byArm[arm].units === 1 ? "" : "s"})`)
     .join(", ")}.`;

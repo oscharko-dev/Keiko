@@ -38,7 +38,7 @@ import { CEILINGS, pendingGatewayCalls, startLabInstance } from "./instance.mjs"
 import { readActivityEvents } from "../coding-workbench-lab/activity-log-events.mjs";
 import { digestFiles, instrumentDigest, productDistDigest } from "./instrument.mjs";
 import { conversationTextInLog } from "./log-text.mjs";
-import { readChatRetrievalLimit, recallTraceCoverage } from "./recall-trace.mjs";
+import { factlessProbes, readChatRetrievalLimit, recallTraceCoverage } from "./recall-trace.mjs";
 import {
   LabConfigurationError,
   assertGatewayConfigUnchanged,
@@ -532,7 +532,10 @@ function writeEvidence(options, corpus, results, gateway) {
         ),
         result,
       );
-  const summary = summarizeLabRun(results, { sealed: corpus.sealed });
+  const summary = {
+    ...summarizeLabRun(results, { sealed: corpus.sealed }),
+    recallTraceFactless: corpus.sealed ? [] : factlessProbes(results),
+  };
   const metadata = {
     mode: options.mode,
     productHead: productHead(options.subjectRoot),

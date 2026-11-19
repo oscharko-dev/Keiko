@@ -409,6 +409,29 @@ describe("the summary of failure classes", () => {
     expect(markdown).toContain("Embedding model: none.");
   });
 
+  it("names the answer probes traced with no fact to follow in the summary", () => {
+    const render = (factless) =>
+      renderLabSummary(
+        { ...summarizeLabRun(results), recallTraceFactless: factless },
+        { count: 2, setDigest: "d" },
+        {
+          mode: "offline",
+          productHead: "h",
+          arms: ["product", "off"],
+          repetitions: 2,
+          memoryMode: "m",
+          ceiling: "c",
+          embedder: "none",
+          embeddingModelIds: [],
+        },
+      );
+    expect(render(["s:product:r0:probe-a"])).toContain(
+      "Recall trace: 1 answer probe(s) were traced with no fact to follow, so no stage class counts for them: s:product:r0:probe-a.",
+    );
+    expect(render([])).not.toContain("Recall trace:");
+    expect(render(undefined)).not.toContain("Recall trace:");
+  });
+
   it("says so when nothing failed", () => {
     const clean = summarizeLabRun([unit({ probes: [answer({ passed: true })] })]);
     expect(

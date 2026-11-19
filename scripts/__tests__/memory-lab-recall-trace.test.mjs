@@ -5,7 +5,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { URL } from "node:url";
+import { URL, fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { runScenario } from "../testing/memory-lab/driver.mjs";
 import {
@@ -18,14 +18,16 @@ import {
   LIMIT_UNREADABLE,
   TRACE_BUDGET_TOKENS,
   buildRecallTrace,
+  factlessProbes,
   limitFromSource,
   readChatRetrievalLimit,
   recallTraceCoverage,
   traceWanted,
 } from "../testing/memory-lab/recall-trace.mjs";
 import { REPO_ROOT } from "../testing/coding-workbench-lab/lab-common.mjs";
-import { validateScenario } from "../testing/memory-lab/scenario.mjs";
+import { loadScenarioDirectory, validateScenario } from "../testing/memory-lab/scenario.mjs";
 
+const labRoot = () => fileURLToPath(new URL("../testing/memory-lab/", import.meta.url));
 const LIMIT = 6;
 const base = {
   traceAvailable: true,
@@ -797,12 +799,17 @@ describe("a probe that expects answer terms", () => {
 });
 
 describe("what the manifest says the run recorded", () => {
-  const traced = { kind: "answer", recallTrace: {} };
+  const traced = { kind: "answer", recallTrace: { needed: [{ key: "k" }] } };
+  const factless = { kind: "answer", recallTrace: { needed: [] } };
   const untraced = { kind: "answer" };
   it.each([
     ["on", [{ arm: "product", probes: [traced, { kind: "abstain" }] }]],
     ["off", [{ arm: "product", probes: [untraced] }]],
     ["partial", [{ arm: "product", probes: [traced, untraced] }]],
+    // The failure this pins: a probe traced with no fact to follow counted as traced, so the manifest
+    // said `on` while no stage class could be counted for it.
+    ["partial", [{ arm: "product", probes: [traced, factless] }]],
+    ["partial", [{ arm: "product", probes: [factless] }]],
     [
       "off",
       [
@@ -813,5 +820,68 @@ describe("what the manifest says the run recorded", () => {
     ["off", [{ arm: "product", error: {} }]],
   ])("is %s", (value, results) => {
     expect(recallTraceCoverage(results)).toBe(value);
+  });
+
+  it("names the answer probes that were traced with no fact, and only those", () => {
+    const results = [
+      {
+        scenario: "s",
+        arm: "product",
+        repetition: 1,
+        probes: [
+          { id: "a", ...factless },
+          { id: "b", ...traced },
+          { id: "c", ...untraced },
+        ],
+      },
+      { scenario: "s", arm: "off", repetition: 0, probes: [{ id: "d", ...factless }] },
+    ];
+    expect(factlessProbes(results)).toEqual(["s:product:r1:a"]);
+  });
+});
+
+describe("the fact a probe's trace follows", () => {
+  const fact = (key, seed, terms) => ({ key, seed, must: false, terms });
+  const twoFacts = validateScenario({
+    schemaVersion: 1,
+    id: "follow-fixture-en",
+    language: "en",
+    class: "preference",
+    difficulty: "plain",
+    description: "Follow fixture.",
+    truth: [
+      fact("spaces", "I prefer spaces over tabs.", [["spaces over tabs"]]),
+      fact("theme", "I use the dark theme.", [["dark theme"]]),
+      fact("evening", "I read reports abends.", [["abends"]]),
+    ],
+    turns: [{ user: "Hello." }],
+    probes: [
+      { id: "p1", question: "?", expect: { kind: "answer", terms: [["spaces"]] } },
+      { id: "p2", question: "?", expect: { kind: "answer", terms: [["dark"]] } },
+      { id: "p3", question: "?", expect: { kind: "answer", terms: [["abend*"]] } },
+      { id: "p4", question: "?", expect: { kind: "answer", terms: [["spaces", "Leerzeichen"]] } },
+      { id: "p5", question: "?", expect: { kind: "answer", terms: [["nothing here"]] } },
+    ],
+  });
+  const keysOf = (probe) => traceWanted(twoFacts, probe).map((item) => item.label);
+
+  it("links a term probe to a truth by the scorer's own matcher: its wording, its prefix mark", () => {
+    // The failure this pins: raw `includes` linked none of these, so each got `needed: []`.
+    expect(keysOf(twoFacts.probes[0])).toEqual(["spaces"]);
+    expect(keysOf(twoFacts.probes[1])).toEqual(["theme"]);
+    expect(keysOf(twoFacts.probes[2])).toEqual(["evening"]);
+    expect(keysOf(twoFacts.probes[3])).toEqual(["spaces"]);
+    expect(keysOf(twoFacts.probes[4])).toEqual([]);
+  });
+
+  it("finds a fact for every answer probe of the shipped corpora", () => {
+    const root = labRoot();
+    const without = [];
+    for (const name of ["scenarios", "scenarios-next", "scenarios-explicit"])
+      for (const scenario of loadScenarioDirectory(join(root, name)))
+        for (const probe of scenario.probes)
+          if (probe.expect.kind === "answer" && traceWanted(scenario, probe).length === 0)
+            without.push(`${name}/${scenario.id}:${probe.id}`);
+    expect(without).toEqual([]);
   });
 });
