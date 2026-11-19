@@ -4,7 +4,7 @@
   "id": "earlier-korrektur-de",
   "language": "de",
   "class": "earlier-value",
-  "description": "A wrong fact corrected in conversation (Köln, then Düsseldorf), then the current value and what had been stored before. Limit: the correction supersedes the wrong value and recall never supplies a superseded memory. Failure means: the current probe failing is an update defect, the earlier probe failing is the known absence of history recall. Maintenance: meaningful both ways; with maintenance on the superseded record is expected to be deleted (the earlier-value probe fails for that reason), with --no-maintenance it shows whether retrieval could answer at all.",
+  "description": "A wrong fact corrected in conversation (Köln, then Düsseldorf), then the current value and what had been stored before. Limit: the correction is stored but the wrong value stays live next to it, and recall never supplies a replaced value. Failure means: the current probe failing is an update defect (stale value live); the earlier probe failing is the absent capability to recall an earlier value. Maintenance: on or off changes nothing; the supersession happens in a later turn of the same run and the maintenance pass runs only on the first memory turn. Kind: defect.",
   "truth": [
     {
       "key": "now",
