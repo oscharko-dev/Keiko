@@ -81,10 +81,10 @@ memory budget let recall send only part of it, its full profile line stays.
 
 **Ranking among admitted memories never follows the id.** Chat recall fuses its signals (semantic
 similarity, relevance, pin, correction, recency, confidence, importance, reinforcement, graph) with
-Reciprocal Rank Fusion (`KEIKO_MEMORY_FUSION=weighted-sum` restores the weighted sum). Two rules keep
+Reciprocal Rank Fusion (`KEIKO_MEMORY_FUSION=weighted-sum` restores the weighted sum). A rule keeps
 a signal from deciding what it does not know (#4228): memories with an equal subscore share one rank
-(the mean of the positions the tied group occupies), and a zero subscore is no evidence and adds
-nothing. Before, a signal that is identical for every candidate (pin, correction, graph, often
+(the mean of the positions the tied group occupies), so a signal that does not tell two memories
+apart gives both exactly the same. Before, a signal that is identical for every candidate (pin, correction, graph, often
 confidence) handed out ranks in memory-id order, and in a store of a few hundred memories that noise
 outweighed the advantage of the semantically nearest one. Only memories whose fused scores are exactly
 equal fall back to the newer update and then the id, which keeps the order reproducible. The graph

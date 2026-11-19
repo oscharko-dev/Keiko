@@ -12,8 +12,7 @@ import { rankMemories } from "./ranking.js";
 import { DEFAULT_RANKING_WEIGHTS, type RankingWeights } from "./types.js";
 
 // Seeded properties of tie-aware rank fusion (#4228). Under `fusion: "rrf"` a signal that does not
-// distinguish records must not decide their order: equal subscores share one rank, a zero subscore
-// contributes nothing, and only fused scores that are exactly equal fall back to (updatedAt, id).
+// distinguish records must not decide their order: equal subscores share one rank, and only fused scores that are exactly equal fall back to (updatedAt, id).
 
 const DAY = 86_400_000;
 const NOW = 100 * DAY;
@@ -279,7 +278,7 @@ describe("rrf fusion — tie-aware properties (#4228)", () => {
   });
 
   it("a signal that is constant across all candidates never changes the order", async () => {
-    const name = "rrf: a constant signal is equivalent to weight 0 for that signal";
+    const name = "rrf: a constant signal leaves the order of weight 0 for that signal unchanged";
     let positiveConstant = 0;
     let comparedPairs = 0;
     interface Case {

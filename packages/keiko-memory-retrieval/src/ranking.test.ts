@@ -510,13 +510,12 @@ describe("rankMemories — RRF fusion keeps the intended signals decisive (#4228
     expect(ranked[0]?.memoryId).toBe(crowd[39]?.id);
   });
 
-  it("names no signal for a memory that has none (zero is no evidence)", () => {
+  it("names no signal in the inclusion reason when every subscore is zero", () => {
     const ranked = rankMemories([buildRecord({ id: "q", body: "plain note", confidence: 0 })], {
       ...query,
       weights: { ...DEFAULT_RANKING_WEIGHTS, recency: 0, importance: 0 },
     });
     expect(ranked[0]?.inclusionReason).toBe("included by default ranking");
-    expect(ranked[0]?.score).toBe(0);
   });
 });
 

@@ -293,17 +293,14 @@ function computeFinalSubscores(
 
 // Reciprocal Rank Fusion (#204, O-F2): for each positive-weight signal, rank the memories by that
 // subscore and fuse score = Σ w/(RRF_K + rank). Rank-based, so heterogeneous score scales (Jaccard
-// ~[0,0.3] vs cosine [0,1]) need no normalization, and agreement across signals compounds. Two rules
-// keep a signal from inventing a preference the data does not hold (#4228):
-//   1. Tie-aware ranks. Memories with an equal subscore share ONE rank, the mean of the positions
-//      the tied group occupies (fractional ranking), so a signal that does not distinguish two
-//      memories contributes exactly the same to both, whatever their ids. Ranking a tied group by id
-//      handed a signal that is identical for every candidate (pinned, correction, graph, often
-//      confidence and importance) a 1..N spread, and on a large store that id noise outweighed the
-//      whole advantage of the semantically nearest memory.
-//   2. A zero subscore is no evidence and contributes nothing (see `signalEvidence`). Rank 1 stays
-//      the best a signal can say, so the best possible fused value is still Σ w/(RRF_K + 1) and the
-//      fused value is normalized by it to honour the documented [0,1] range.
+// ~[0,0.3] vs cosine [0,1]) need no normalization, and agreement across signals compounds.
+// Tie-aware ranks (#4228): memories with an equal subscore share ONE rank, the mean of the positions
+// the tied group occupies (fractional ranking), so a signal that does not distinguish two memories
+// contributes exactly the same to both, whatever their ids. Ranking a tied group by id handed a
+// signal that is identical for every candidate (pinned, correction, graph, often confidence and
+// importance) a 1..N spread, and on a large store that id noise outweighed the whole advantage of
+// the semantically nearest memory. Rank 1 stays the best a signal can say, so the best possible fused
+// value is still Σ w/(RRF_K + 1) and the fused value is normalized by it to honour the [0,1] range.
 // The final order uses the shared (score desc, updatedAt desc, id asc) sort: that tie-break applies
 // only between memories whose fused scores are exactly equal, and keeps the output reproducible.
 export function buildRankBySignal(
@@ -321,7 +318,7 @@ export function buildRankBySignal(
 }
 
 // A subscore that is not a finite number (NaN, ±Infinity) says nothing: it counts as 0, so it can
-// neither poison the sort order of the other records nor earn a rank.
+// neither poison the sort order of the other records nor earn a better rank than a real zero.
 function signalValue(value: number): number {
   return Number.isFinite(value) ? value : 0;
 }
@@ -347,19 +344,6 @@ function fractionalRanks(
   return ranks;
 }
 
-// Every subscore is a magnitude where zero is the ABSENCE of the signal, not its worst value:
-// relevance 0 = no shared query term, semantic 0 = not among the nearest vectors (or no similarity),
-// pinned 0 = not pinned, correction 0 = not a correction, graph 0 = no edge to a top memory,
-// strength 0 = never reinforced, recency 0 = decayed to nothing, importance (never 0 for a real
-// source kind) = no authority. Confidence 0 is a STATED zero ("no confidence"), not a missing
-// value; such records are normally filtered before ranking by the stale-confidence threshold (0.3),
-// so treating it as no evidence only matters for a caller that ranks them anyway. A non-finite
-// value is no evidence either. Rank-based fusion would otherwise pay such a memory the rank-N
-// reward of a signal it does not have.
-function signalEvidence(value: number): boolean {
-  return signalValue(value) > 0;
-}
-
 function rrfRank(
   memories: readonly MemoryRecord[],
   subscoresById: ReadonlyMap<MemoryId, IncludedSubscores>,
@@ -382,11 +366,11 @@ function rrfRank(
     let bestContrib = 0;
     const subscores = requireEntry(subscoresById, m.id);
     for (const sig of signals) {
-      if (!signalEvidence(subscores[sig])) continue;
       const rank = requireEntry(requireEntry(rankBySignal, sig), m.id);
       const contrib = weights[sig] / (RRF_K + rank);
       fused += contrib;
-      if (contrib > bestContrib) {
+      // A tied zero still gets a rank, but it supplies no evidence for an inclusion reason.
+      if (signalValue(subscores[sig]) > 0 && contrib > bestContrib) {
         bestContrib = contrib;
         bestSig = sig;
       }
