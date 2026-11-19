@@ -800,18 +800,37 @@ export function scoreContentForSearch(
     symbolDefinitionQueryTerms(query),
     query.caseSensitive,
   );
+  const declaresRoute = textMayDeclareRoute(
+    text,
+    haystack,
+    routeQueryTermsForSearch(query),
+    query.caseSensitive,
+  );
   const sourceLines =
-    routeQueryTermsForSearch(query) === undefined && !definesSymbol
-      ? []
-      : preparedSourceLines(text, scopePath, sourceLinesFor);
+    !declaresRoute && !definesSymbol ? [] : preparedSourceLines(text, scopePath, sourceLinesFor);
   return scoreContentHitsForSearch(
     policy,
     groups.length,
     countContentTermHits(groups, haystack, tokens, query.caseSensitive),
     exactSymbolContentBonus(query, haystack) > 0,
-    routeDeclarationContentBonus(query, sourceLines) > 0,
+    routeDeclarationContentBonus(query, declaresRoute ? sourceLines : []) > 0,
     symbolDefinitionContentBonus(query, definesSymbol ? sourceLines : []) > 0,
   );
+}
+
+// #4457: a route declaration marker carries the lowercase of a path the text spells contiguously
+// in one line: every marker form takes its path from a run of ASCII route-path characters (or their
+// case-insensitive Unicode equivalents, which lowercase to ASCII), so the lowercase text of a file
+// that declares the asked route holds the asked path. A file without it is not classified for the
+// route bonus. Lowercasing is per character for those characters, whatever surrounds them.
+function textMayDeclareRoute(
+  text: string,
+  haystack: string,
+  route: RouteQueryTerms | undefined,
+  caseSensitive: boolean,
+): boolean {
+  if (route === undefined) return false;
+  return (caseSensitive ? text.toLowerCase() : haystack).includes(route.path);
 }
 
 function preparedSourceLines(

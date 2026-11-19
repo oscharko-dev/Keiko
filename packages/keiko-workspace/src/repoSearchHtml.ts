@@ -119,6 +119,8 @@ export function htmlEntityLineMatcher(matcher: LineMatcher, documentText?: strin
     descriptorHtmlFileSafe(documentText);
   return {
     ...matcher,
+    // The base matcher also sees projected lines, which the file text need not spell.
+    readsSourceLinesOf: undefined,
     matchesSourceDescriptor: descriptorAllowed
       ? (content: string): boolean => htmlDescriptorWitness(matcher, content)
       : undefined,
