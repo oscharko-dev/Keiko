@@ -386,12 +386,14 @@ interface DiscoveryChurnCounts {
   readonly unavailableEntriesByDiscovery: number;
   readonly vanishedEntriesByDiscovery: number;
   readonly membershipRetriesByDiscovery: number;
+  readonly systemNoisePrunedByDiscovery: number;
 }
 
 const EMPTY_DISCOVERY_CHURN: DiscoveryChurnCounts = {
   unavailableEntriesByDiscovery: 0,
   vanishedEntriesByDiscovery: 0,
   membershipRetriesByDiscovery: 0,
+  systemNoisePrunedByDiscovery: 0,
 };
 
 function discoveryChurnCounts(stats: StreamingDiscoveryStats): DiscoveryChurnCounts {
@@ -399,6 +401,7 @@ function discoveryChurnCounts(stats: StreamingDiscoveryStats): DiscoveryChurnCou
     unavailableEntriesByDiscovery: stats.unavailableEntries ?? 0,
     vanishedEntriesByDiscovery: stats.vanishedEntries ?? 0,
     membershipRetriesByDiscovery: stats.membershipRetries ?? 0,
+    systemNoisePrunedByDiscovery: stats.systemNoisePruned ?? 0,
   };
 }
 
@@ -412,6 +415,9 @@ function reportedDiscoveryChurn(churn: DiscoveryChurnCounts): Partial<DiscoveryC
       : {}),
     ...(churn.membershipRetriesByDiscovery > 0
       ? { membershipRetriesByDiscovery: churn.membershipRetriesByDiscovery }
+      : {}),
+    ...(churn.systemNoisePrunedByDiscovery > 0
+      ? { systemNoisePrunedByDiscovery: churn.systemNoisePrunedByDiscovery }
       : {}),
   };
 }

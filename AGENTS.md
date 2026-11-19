@@ -961,7 +961,10 @@ system that exists, never beside it:
   marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
   `client.scope.notice` records scope narrowing, widening and adding missing
   evidence under the notice's client correlation. Its closed `reason` is `narrowed-to-file`,
-  `narrowed-to-directory`, `widened`, `pinned-folder` or `missing-evidence-added`. `scopeKind` is
+  `narrowed-to-directory`, `widened`, `pinned-folder`, `missing-evidence-added`, or, for the
+  plain-language AppData sensitive-data notice that informs without blocking (#4437),
+  `app-data-contained` (the folder holds an `AppData` folder) and `app-data-selected` (the folder
+  is part of one). `scopeKind` is
   `workspace-root`, `directory` or `files`; `pathCount` counts selected scope-relative entries.
   `pinned-folder` is retained only for historical evidence; current Files navigation never pins a
   folder or asks for confirmation. The existing timeline carries these dispositions and counts

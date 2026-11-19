@@ -101,6 +101,8 @@ export interface SearchDiagnostics {
   readonly vanishedEntriesByDiscovery?: number | undefined;
   // Directories re-read once after benign membership churn (#4435).
   readonly membershipRetriesByDiscovery?: number | undefined;
+  // Windows system entries pruned while descending; never evidence (#4437).
+  readonly systemNoisePrunedByDiscovery?: number | undefined;
   readonly policyMode: SearchPolicyMode;
   readonly intent: SearchIntent;
   readonly filesDiscovered: number;
@@ -143,6 +145,7 @@ export interface OrderCandidatesForSearchOptions {
   readonly deniedByDiscovery: number;
   readonly depthPrunedByDiscovery?: number | undefined;
   readonly maxFilesPrunedByDiscovery?: number | undefined;
+  readonly systemNoisePrunedByDiscovery?: number | undefined;
   readonly contentScores?: ReadonlyMap<string, number> | undefined;
 }
 
@@ -1238,6 +1241,7 @@ export function orderCandidatesForSearch(
     unrepresentablePathsByDiscovery = 0,
     depthPrunedByDiscovery = 0,
     maxFilesPrunedByDiscovery = 0,
+    systemNoisePrunedByDiscovery = 0,
     contentScores,
   } = options;
   const ranked = rankCandidates(files, query, policy, contentScores);
@@ -1260,6 +1264,7 @@ export function orderCandidatesForSearch(
       ignoredByDiscovery,
       deniedByDiscovery,
       ...(unrepresentablePathsByDiscovery > 0 ? { unrepresentablePathsByDiscovery } : {}),
+      ...(systemNoisePrunedByDiscovery > 0 ? { systemNoisePrunedByDiscovery } : {}),
       depthPrunedByDiscovery,
       maxFilesPrunedByDiscovery,
       candidateBuckets: bucketCounts(ranked),

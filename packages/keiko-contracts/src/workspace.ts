@@ -110,6 +110,8 @@ export interface DiscoveryStats {
   readonly discovered: number;
   readonly denied: number;
   readonly ignored: number;
+  /** Windows system entries (`$Recycle.Bin`, `desktop.ini`, ...) pruned while descending (#4437). */
+  readonly systemNoisePruned?: number | undefined;
   readonly depthPruned: number;
   readonly maxFilesPruned: number;
 }

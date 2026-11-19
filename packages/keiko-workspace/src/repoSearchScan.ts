@@ -191,25 +191,18 @@ export function buildCandidate(
   return { scopePath, score: 0, signals: [], omitted };
 }
 
+interface DirectoryCandidates extends CollectedCandidates {
+  readonly ignored: number;
+  readonly denied: number;
+}
+
 function collectFromDirectory(
   scope: ScopeShape,
   limits: LimitsShape,
   fs: WorkspaceFs,
   policy: SearchPolicy,
   executionControl?: StructuralExecutionControl,
-): {
-  readonly files: readonly DiscoveredFile[];
-  readonly directories: readonly string[];
-  readonly directorySnapshots?: readonly WorkspaceDirectorySnapshot[] | undefined;
-  readonly skippedSymbolicLinks: readonly string[];
-  readonly filesDiscovered: number;
-  readonly truncated: boolean;
-  readonly ignored: number;
-  readonly denied: number;
-  readonly unrepresentablePaths?: number | undefined;
-  readonly depthPruned: number;
-  readonly maxFilesPruned: number;
-} {
+): DirectoryCandidates {
   const extraIgnoreLines = extraIgnoreLinesForSearch(policy);
   const workspace =
     extraIgnoreLines.length === 0
@@ -237,6 +230,7 @@ function collectFromDirectory(
     ignored: result.stats.ignored,
     denied: result.stats.denied,
     unrepresentablePaths: result.stats.unrepresentablePaths,
+    systemNoisePruned: result.stats.systemNoisePruned,
     depthPruned: result.stats.depthPruned,
     maxFilesPruned: result.stats.maxFilesPruned,
   };
@@ -345,6 +339,7 @@ export function deriveCandidateSetFromInventory(
       filesDiscovered: inventory.diagnostics.filesDiscovered,
       truncated: inventory.truncated,
       unrepresentablePaths: inventory.diagnostics.unrepresentablePathsByDiscovery,
+      systemNoisePruned: inventory.diagnostics.systemNoisePrunedByDiscovery,
       depthPruned: inventory.diagnostics.depthPrunedByDiscovery,
       maxFilesPruned: inventory.diagnostics.maxFilesPrunedByDiscovery,
     },
@@ -538,6 +533,7 @@ function resolveGatherInputs(
 
 interface CollectedCandidates {
   readonly unrepresentablePaths?: number | undefined;
+  readonly systemNoisePruned?: number | undefined;
   readonly files: readonly DiscoveredFile[];
   readonly directories: readonly string[];
   readonly directorySnapshots?: readonly WorkspaceDirectorySnapshot[] | undefined;
@@ -682,6 +678,7 @@ function orderCollectedCandidates(
     ignoredByDiscovery,
     deniedByDiscovery,
     unrepresentablePathsByDiscovery: result.unrepresentablePaths,
+    systemNoisePrunedByDiscovery: result.systemNoisePruned,
     depthPrunedByDiscovery: result.depthPruned,
     maxFilesPrunedByDiscovery: result.maxFilesPruned,
     contentScores,

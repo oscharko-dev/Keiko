@@ -52,9 +52,13 @@ describe("scope notice and evidence inspection ingestion", () => {
     resetServerLogger();
   });
 
-  it("persists a body-free scope notice through the registered writer", async () => {
+  it.each([
+    { reason: "narrowed-to-file", scopeKind: "files", pathCount: 1 },
+    // The AppData sensitive-data notice (#4437): closed disposition and counts, never a path.
+    { reason: "app-data-contained", scopeKind: "workspace-root", pathCount: 0 },
+    { reason: "app-data-selected", scopeKind: "directory", pathCount: 1 },
+  ])("persists a body-free scope notice %j through the registered writer", async (scopeNotice) => {
     const sink = captureServerLog();
-    const scopeNotice = { reason: "narrowed-to-file", scopeKind: "files", pathCount: 1 };
     const result = await handleClientDiagnosticIngest(
       context(
         JSON.stringify({

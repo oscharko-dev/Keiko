@@ -2770,6 +2770,8 @@ export interface FilesSearchResponse {
   readonly unavailableEntryCount?: number;
   // Listed entries that no longer existed when inspected (#4435); absent when none.
   readonly vanishedEntryCount?: number;
+  // Windows system entries ($Recycle.Bin, desktop.ini, ...) never searched (#4437); absent when none.
+  readonly systemEntryPrunedCount?: number;
 }
 
 export interface FilesPreviewBase {

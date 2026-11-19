@@ -67,6 +67,7 @@ import { WORKSPACE_FILE_MUTATED_EVENT, workspaceFileMutationDetail } from "./wor
 import selectableTextStyles from "./shared/selectableText.module.css";
 import presentationStyles from "./FilesPresentation.module.css";
 import { ProjectTreeRoot } from "./ProjectTreeRoot";
+import { FilesAppDataNotice } from "../../AppDataNotice";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const FolderIcon = Icons.folder;
@@ -2265,6 +2266,7 @@ export function FilesWidget({
             {t("filesWidget.directory.truncated", { count: state.entries.length })}
           </output>
         ) : null}
+        <FilesAppDataNotice root={effectiveRoot} path={path} entries={state?.entries} />
         {pendingEntry !== null &&
         pendingEntry.kind !== "rename" &&
         (pendingEntry.parentPath ?? "") === path

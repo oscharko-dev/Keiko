@@ -478,6 +478,9 @@ export interface ContextCoverageDiagnostics {
   readonly vanishedEntriesByDiscovery?: number | undefined;
   // Directories re-read once after benign membership churn (#4435).
   readonly membershipRetriesByDiscovery?: number | undefined;
+  // Windows system entries ($Recycle.Bin, desktop.ini, ...) pruned while descending; never evidence,
+  // so coverage stays complete, but the count is disclosed (#4437).
+  readonly systemNoisePrunedByDiscovery?: number | undefined;
   readonly incomplete: boolean;
   readonly reasons: readonly ContextCoverageTruncationReason[];
   readonly filesDiscovered: number;
@@ -1673,6 +1676,7 @@ const REQUIRED_COVERAGE_FIELDS = [
 
 const OPTIONAL_COVERAGE_FIELDS = [
   "unrepresentablePathsByDiscovery",
+  "systemNoisePrunedByDiscovery",
   "oversizedFilesScanned",
   "lowValueRescueFilesDiscovered",
   "lowValueRescueFilesScanned",

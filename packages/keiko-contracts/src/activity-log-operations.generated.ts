@@ -7855,6 +7855,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "widened",
           "pinned-folder",
           "missing-evidence-added",
+          "app-data-contained",
+          "app-data-selected",
         ],
       },
       scopeKind: {
@@ -23418,6 +23420,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       vanishedEntryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      systemEntryPrunedCount: {
         type: "integer",
         dataClass: "count",
         required: true,
@@ -41977,6 +41984,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       discoveryMembershipRetryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      discoverySystemNoisePrunedCount: {
         type: "integer",
         dataClass: "count",
         required: false,

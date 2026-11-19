@@ -7,7 +7,8 @@ type OptionalDiscoveryCount =
   | "unrepresentablePathsByDiscovery"
   | "unavailableEntriesByDiscovery"
   | "vanishedEntriesByDiscovery"
-  | "membershipRetriesByDiscovery";
+  | "membershipRetriesByDiscovery"
+  | "systemNoisePrunedByDiscovery";
 
 type UnsupportedPaths = Pick<ContextCoverageDiagnostics, OptionalDiscoveryCount>;
 
@@ -16,6 +17,7 @@ const OPTIONAL_DISCOVERY_COUNTS: readonly OptionalDiscoveryCount[] = [
   "unavailableEntriesByDiscovery",
   "vanishedEntriesByDiscovery",
   "membershipRetriesByDiscovery",
+  "systemNoisePrunedByDiscovery",
 ];
 
 // Optional discovery counts are summed and stay absent when neither side observed any.

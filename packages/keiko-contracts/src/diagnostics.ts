@@ -3363,6 +3363,9 @@ export const CLIENT_SCOPE_NOTICE_REASONS = Object.freeze([
   "widened",
   "pinned-folder",
   "missing-evidence-added",
+  // The connected folder contains, or is part of, a Windows AppData folder (#4437).
+  "app-data-contained",
+  "app-data-selected",
 ] as const);
 
 /** The acknowledged scope change or human repair, without a path or source identity. */

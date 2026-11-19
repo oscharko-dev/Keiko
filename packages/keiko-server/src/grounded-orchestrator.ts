@@ -771,11 +771,13 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
   releaseImpact: "patch",
 });
 
-// Discovery churn of the actual walk (#4434, #4435); absent when no coverage was reported.
+// Discovery churn of the actual walk (#4434, #4435) and the Windows system entries it pruned
+// (#4437); absent when no coverage was reported.
 const DISCOVERY_CHURN_ACTIVITY_FIELDS = {
   discoveryUnavailableEntryCount: { type: "integer", dataClass: "count", required: false },
   discoveryVanishedEntryCount: { type: "integer", dataClass: "count", required: false },
   discoveryMembershipRetryCount: { type: "integer", dataClass: "count", required: false },
+  discoverySystemNoisePrunedCount: { type: "integer", dataClass: "count", required: false },
 } as const;
 
 const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOperation({
@@ -1820,6 +1822,12 @@ function lockedOrProtectedCoverageDetail(coverage: ContextCoverageDiagnostics): 
   return count > 0 ? [`locked or protected entries ${String(count)}`] : [];
 }
 
+// Windows system entries ($Recycle.Bin, desktop.ini, ...) are pruned by policy, never read (#4437).
+function systemNoiseCoverageDetail(coverage: ContextCoverageDiagnostics): readonly string[] {
+  const count = coverage.systemNoisePrunedByDiscovery ?? 0;
+  return count > 0 ? [`system entries pruned ${String(count)}`] : [];
+}
+
 function coverageUncertainty(
   result: Awaited<ReturnType<typeof searchText>>,
   nowMs: number,
@@ -1844,6 +1852,7 @@ function coverageUncertainty(
           `denied ${String(coverage.deniedByDiscovery)}`,
           `unrepresentable entries ${String(coverage.unrepresentablePathsByDiscovery ?? 0)}`,
           ...lockedOrProtectedCoverageDetail(coverage),
+          ...systemNoiseCoverageDetail(coverage),
           `depth-pruned ${String(coverage.depthPrunedByDiscovery)}`,
           `max-files-pruned ${String(coverage.maxFilesPrunedByDiscovery)}`,
         ].join(", ");
@@ -11153,12 +11162,14 @@ function discoveryChurnActivityExtra(coverage: ContextCoverageDiagnostics | unde
   readonly discoveryUnavailableEntryCount?: number;
   readonly discoveryVanishedEntryCount?: number;
   readonly discoveryMembershipRetryCount?: number;
+  readonly discoverySystemNoisePrunedCount?: number;
 } {
   if (coverage === undefined) return {};
   return {
     discoveryUnavailableEntryCount: coverage.unavailableEntriesByDiscovery ?? 0,
     discoveryVanishedEntryCount: coverage.vanishedEntriesByDiscovery ?? 0,
     discoveryMembershipRetryCount: coverage.membershipRetriesByDiscovery ?? 0,
+    discoverySystemNoisePrunedCount: coverage.systemNoisePrunedByDiscovery ?? 0,
   };
 }
 
