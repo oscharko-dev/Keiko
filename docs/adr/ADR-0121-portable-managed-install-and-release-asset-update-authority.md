@@ -1204,6 +1204,29 @@ It says instead that Coding runs on Windows need that system service, which this
 up (`gateway-service-managed-outside`). Windows Coding therefore still never runs without the broker;
 an administrator who installs it separately enables it. A new version arrives as a new folder.
 
+**No default project.** An in-place launch, a managed portable launch and the npm folder package run
+Keiko inside its own program folder, and they declare it with `KEIKO_LAUNCH_FROM_PROGRAM_FOLDER=1`.
+That folder holds the program files and, in an administrator's package, the plaintext gateway token
+of `keiko.config.json`, so it is never a person's working folder. The server seeds no default
+project from it (`workspace.root.denied` with the closed reason `program-folder-launch`, no path),
+and the read surface refuses it and everything in it as a root, exactly as it refuses Keiko's state
+folders: Files, Git, the folder dialog, project registration and a Chat's connected folder all ask
+one gate (`pathIsDenied`), which knows the folder as it was launched and as it resolves. A project
+at that path is therefore listed `readable: false`: it is never a window's starting folder (#4371),
+and the Coding Workbench does not offer it for a run. This also covers an installation that
+registered its program folder as a project before this rule existed. A Chat needs no folder: a
+person who has chosen none still gets one, kept under the launch directory, which only holds it;
+refusing that Chat would leave New chat dead on every fresh installation. The Coding Workbench,
+Files and Git start empty until the person chooses a folder. This is the refused-launch-directory
+behaviour of #4371 applied to the program folder. A person's own explicit start of a coding run in
+that folder through the API is not a boundary this rule draws: the folder a run works in is chosen
+by the local human, never by a model. A direct `keiko ui` or a developer checkout declares nothing
+and is unaffected. Independently, the always-on
+sensitive-path denial names `keiko.config.json` and the sealed `*.vault` stores as credentials
+(kernel-enforced for native commands like the other credential names) and the folder forms' data
+folder `.keiko-standalone` beside `.keiko` (ADR-0005 D3), so a folder a person does choose, even
+their home folder, never gives a model these files.
+
 **Provisioned configuration.** An administrator may place one `keiko.config.json` beside the start
 files. `keiko start --provisioned-config PATH` adopts it as the gateway configuration whenever its
 bytes differ from the file last adopted (a SHA-256 marker in `ui/provisioned-config.sha256`), after
@@ -1220,7 +1243,11 @@ states its custody.
 **npm folder package.** Where an npm registry, often an internal mirror, is the approved way in, a
 second folder form ships without the program: `keiko-<target>.npm.zip`, built by
 `scripts/build-standalone-npm-package.mjs` from the same verified portable archive. It carries that
-archive's Node.js runtime with npm, moved unchanged to `system/node`, a `package.json` that pins
+archive's Node.js runtime with npm, moved to `system/node` without its C headers (`include/`), its
+`share/` manuals and documentation and its CHANGELOG.md and README.md, which neither Node.js nor npm
+runs (`npm ci --ignore-scripts` compiles nothing; about 11.6 MB of 61 MB packed per macOS package);
+every file that stays is the archive's, byte for byte, and the standalone folder package, which
+ships the payload unchanged, is not affected. A `package.json` that pins
 `@oscharko-dev/keiko` to the archive's version, and a `package-lock.json` resolved against the
 public registry. The builder runs npm with no configuration of the person who builds and refuses a
 lockfile that does not install exactly that version, names a link, or names a downloaded package
@@ -1590,6 +1617,14 @@ Security review for implementation under this ADR must cover:
 | 1.6     | 2026-11-18 | Amended D1 and D9: stable releases carry the standalone folder packages as release assets, built and attested in the stable-tag run and published in the same draft as the archives. |
 
 ## Amendment history
+
+- **2026-11-19 — D9, program folder, trimmed Node.js runtime, Node.js support:** A Keiko that runs
+  inside its own program folder starts without a default project, its read surface refuses that
+  folder as a root while a Chat without a folder keeps working, and the sensitive-path denial names
+  Keiko's credential stores (see D9). The npm folder package leaves the Node.js headers,
+  manuals and release notes out. `keiko start` prints one line when the running Node.js is outside
+  the range the package's own manifest declares and records the closed `nodeSupport` value on
+  `process.started`; it never refuses the start.
 
 - **2026-09-10 — Epic #3403:** Replaced mandatory Apple/Microsoft production signing with the
   protected, platform-neutral Ed25519 release-trust contract in D1, D2, D7, and D8. Native signing

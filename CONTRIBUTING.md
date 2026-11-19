@@ -74,7 +74,11 @@ The standalone folder package (ADR-0121 D9) is the portable payload, every file 
 start and stop files around it. `scripts/build-standalone-package.mjs` repacks a verified portable archive;
 the start files live in `scripts/standalone/`. A change here must keep three things true: the
 payload is never modified, the folder form never performs or suggests an installation, and nothing
-is downloaded at start. Run `scripts/__tests__/build-standalone-package.test.mjs` and the
+is downloaded at start. Both folder forms run Keiko inside their own program folder, which is never
+a working folder: they declare `KEIKO_LAUNCH_FROM_PROGRAM_FOLDER=1`, so the server seeds no default
+project from it and the read surface refuses it as a root (`pathIsDenied` in `files-deny.ts`); a
+Chat started without a folder is still kept there. `keiko.config.json` and `*.vault` are credential
+names of the sensitive-path denial. Run `scripts/__tests__/build-standalone-package.test.mjs` and the
 `portable-in-place` and `provisioned-config` suites of `keiko-cli`. The operator guide is
 [`docs/release/standalone-folder-package.md`](docs/release/standalone-folder-package.md).
 
@@ -93,7 +97,9 @@ lockfile; its first start installs Keiko into the folder with `npm ci --ignore-s
 registry the folder's `.npmrc` names. `scripts/build-standalone-npm-package.mjs` builds it; the start
 logic and start files live in `scripts/standalone/npm/`. A change here must keep three things true:
 nothing is written outside the folder and the state directory, no install script runs, and every
-package npm downloads carries a public-registry sha512 integrity. Run
+package npm downloads carries a public-registry sha512 integrity. The folder carries the release's
+Node.js runtime without its headers, manuals and release notes (`include/`, `share/`, CHANGELOG.md,
+README.md); every file it keeps is the archive's, byte for byte. Run
 `scripts/__tests__/build-standalone-npm-package.test.mjs`,
 `scripts/__tests__/standalone-npm-runtime.test.mjs` and
 `scripts/__tests__/standalone-npm-install.test.mjs`, which runs the real npm against a loopback

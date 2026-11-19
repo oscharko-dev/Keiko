@@ -60,6 +60,7 @@ import {
 // the measured ~410ms per-command module-loading tax (`keiko --version` included).
 // Only type imports may reference the package at module scope here.
 import { loadSecurity, loadServer as loadServerModule } from "./lazy-modules.js";
+import { currentNodeSupport } from "./node-support.js";
 import { beginUiStartupProgress, type UiStartupProgress } from "./ui-startup-progress.js";
 import {
   processExitingActivityLogEvent,
@@ -162,6 +163,14 @@ const PROCESS_STARTED_OPERATION = defineActivityLogOperation({
         "s390x",
         "x64",
       ],
+    },
+    // Whether this Node.js is inside the range the package's own manifest declares (`engines`).
+    // npm only warns, so a plain installation could run unsupported unnoticed; never a refusal.
+    nodeSupport: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["supported", "unsupported", "unknown"],
     },
     host: { type: "string", dataClass: "closed-enum", required: true, values: ["127.0.0.1"] },
     port: { type: "integer", dataClass: "count", required: true },
@@ -1413,6 +1422,7 @@ async function reportProcessStarted(
       { level: "info" },
       {
         nodeVersion: process.version,
+        nodeSupport: currentNodeSupport(process.env),
         platform: process.platform,
         arch: process.arch,
         host: UI_HOST,

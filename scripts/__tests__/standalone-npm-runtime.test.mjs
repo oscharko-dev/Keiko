@@ -459,6 +459,9 @@ describe("the npm package start", () => {
       const env = declared === undefined ? {} : { KEIKO_PORTABLE_MANAGEMENT: declared };
       const started = keikoEnv(env);
       expect(started.KEIKO_PORTABLE_MANAGEMENT).toBe("organization-managed");
+      // Keiko runs inside its program folder, which holds a team's gateway token: no default
+      // project (the name is read by keiko-server, whose tests pin the same literal).
+      expect(started.KEIKO_LAUNCH_FROM_PROGRAM_FOLDER).toBe("1");
       // What Keiko itself reads from the environment the launcher starts it with.
       expect(managedOutsideApp(started)).toBe(true);
       expect(

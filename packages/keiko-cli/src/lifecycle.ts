@@ -39,6 +39,7 @@ import {
   installLayoutOverrideEvidence,
   writeInstallLayoutOverrideEvidence,
 } from "./install-layout.js";
+import { unsupportedNodeNotice } from "./node-support.js";
 import { LauncherError } from "./launcher-platforms.js";
 import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";
 import { emitBrowserHandoff } from "./lifecycle-browser-activity.js";
@@ -231,6 +232,8 @@ interface RawLifecycleOptions {
 }
 
 export interface LifecycleCliDeps {
+  /** The running Node.js version; injected only by tests. */
+  readonly nodeVersion?: string | undefined;
   readonly nativeUiRuntime?: NativeUiRuntime | undefined;
   readonly cwd?: string | undefined;
   readonly homedir?: (() => string) | undefined;
@@ -258,6 +261,7 @@ export interface LifecycleCliDeps {
 }
 
 interface LifecycleRuntimeDeps {
+  readonly nodeVersion?: string | undefined;
   readonly setUpGatewayService: GatewayServiceSetupFn;
   readonly nativeUiRuntime?: NativeUiRuntime | undefined;
   readonly home: string;
@@ -1361,6 +1365,10 @@ async function cmdStart(
   cwd: string,
 ): Promise<number> {
   const order = options.launchOrder ?? Date.now();
+  // npm only warns about `engines`; say it once here and record it on `process.started`. Never a
+  // refusal: an installation that runs on another Node.js keeps starting.
+  const unsupportedNode = unsupportedNodeNotice(env, deps.nodeVersion);
+  if (unsupportedNode !== undefined) io.err(unsupportedNode);
   const code = await startOrReuseUi(options, io, env, deps, cwd);
   if (code !== 0) return code;
   if (recordLaunchOrder(options.stateDir, order, deps.securityLogSink) === "record-failed") {
@@ -1815,6 +1823,7 @@ function runtimeDeps(
   const platform = deps.platform?.() ?? process.platform;
   return {
     nativeUiRuntime: deps.nativeUiRuntime,
+    nodeVersion: deps.nodeVersion,
     home: lifecycleHome(deps),
     correlationId,
     spawnFn: deps.spawnFn ?? spawn,

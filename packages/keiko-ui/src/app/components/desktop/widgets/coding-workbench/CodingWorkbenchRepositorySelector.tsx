@@ -20,6 +20,7 @@ import {
   type RepositoryBranchState,
 } from "../../hooks/useRepositoryBranchState";
 import { selectableRepositories } from "./codingWorkbenchRepositories";
+import { locallyAvailable } from "./codingWorkbenchRepositoryAvailability";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -104,10 +105,6 @@ interface RepositoryOption {
   readonly badge?: string;
 }
 
-function projectAvailable(project: ProjectWithAvailability): boolean {
-  return project.available && project.workspaceAvailable === true;
-}
-
 function repositoryOptions(
   catalog: CatalogState,
   root: string | null,
@@ -117,8 +114,8 @@ function repositoryOptions(
     value: project.path,
     label: project.name || repositoryName(project.path),
     description: project.path,
-    disabled: !projectAvailable(project),
-    ...(!projectAvailable(project) ? { badge: t("codingWorkbench.repository.unavailable") } : {}),
+    disabled: !locallyAvailable(project),
+    ...(!locallyAvailable(project) ? { badge: t("codingWorkbench.repository.unavailable") } : {}),
   }));
   if (root === null || registered.some((project) => project.value === root)) return registered;
   return [
@@ -317,7 +314,7 @@ function LocationChip({
 function repositoryUnavailable(root: string | null, catalog: CatalogState): boolean {
   if (root === null || catalog.loading || catalog.error) return false;
   const selected = catalog.repositories.find((project) => project.path === root);
-  return selected === undefined || !projectAvailable(selected);
+  return selected === undefined || !locallyAvailable(selected);
 }
 
 // #B review: a registered, workspace-available root that is not (or no longer) a Git repository —

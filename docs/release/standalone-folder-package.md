@@ -67,6 +67,13 @@ The start file runs the Node.js runtime inside `system` and opens Keiko in the b
 its data in `.keiko-standalone` in the person's user folder, not in this folder. Replacing the
 folder with a newer package therefore keeps chats, settings and credentials.
 
+The package folder is not a working folder. It holds Keiko's program files and, in a team package,
+the gateway token, so Keiko starts without a default project: the Coding Workbench, Files and Git
+wait until the person chooses a folder, and Keiko refuses the package folder itself for them. Chat
+works at once and needs no folder. `keiko.config.json`, `.npmrc`, the sealed `*.vault` stores and the
+data folder `.keiko-standalone` stay unreadable for the model even inside a folder the person
+chooses (ADR-0121 D9, ADR-0005 D3).
+
 Keiko does not write into the package folder. The qualification started the macOS package from a
 read-only folder and compared the Windows folder after a session; neither changed.
 

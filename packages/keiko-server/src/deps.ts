@@ -234,6 +234,7 @@ import {
   recordWorkspaceRootDenied,
 } from "./workspace-root-denial-log.js";
 import { pathIsDenied } from "./files-deny.js";
+import { launchedFromProgramFolder } from "./launch-directory.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
@@ -3472,12 +3473,26 @@ export function reconcileTaskWorkspacesAtStartup(
 function seedInitialProject(
   store: UiStore,
   uiDbPath: string,
-  initialProjectPath: string | undefined,
+  options: Pick<
+    BuildHandlerDepsOptions,
+    "initialProjectPath" | "initialProjectTrustSource" | "env"
+  >,
   workspaceScriptTrust: WorkspaceScriptTrustService,
   correlationId: string,
-  trustSource: BuildHandlerDepsOptions["initialProjectTrustSource"],
 ): string | undefined {
+  const { initialProjectPath, initialProjectTrustSource: trustSource, env } = options;
   if (initialProjectPath === undefined || initialProjectPath.trim().length === 0) {
+    return undefined;
+  }
+  // A Keiko that runs inside its own program folder (the folder packages, the managed portable
+  // launch) holds that folder's program files and, in a team package, the gateway token: it is no
+  // project, so Keiko starts without a default one (ADR-0121 D9). Recorded body-free, like a
+  // refused launch directory.
+  if (launchedFromProgramFolder(env)) {
+    recordWorkspaceRootDenied(
+      { reason: "program-folder-launch", failureKind: "DENIED", errorKind: "authority-denied" },
+      { correlationId },
+    );
     return undefined;
   }
   const normalizedPath = validateProjectPath(initialProjectPath, { mustExist: true });
@@ -4564,10 +4579,9 @@ function buildPersistenceBundle(
       preferredProjectPath: seedInitialProject(
         persistence.store,
         resolvedUiDbPath,
-        options.initialProjectPath,
+        options,
         workspaceScriptTrust,
         bootstrapCorrelationId,
-        options.initialProjectTrustSource,
       ),
     };
   } catch (error) {

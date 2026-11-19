@@ -208,8 +208,11 @@ Filtering has two independent tiers:
 
 1. **`isDenied(relPath)` — always-on, security.** A frozen `DEFAULT_DENY_PATTERNS` list covers
    secrets (`.env`, `.env.*` except `.env.example`, `*.pem`, `*.key`, `id_rsa`, `*.p12`, `*.pfx`,
-   `.npmrc`), dependencies (`node_modules`), build output (`dist`, `build`, `out`, `coverage`),
-   caches (`.cache`, `.next`, `.turbo`), VCS (`.git`), logs (`*.log`), and OS cruft (`.DS_Store`).
+   `.npmrc`, and Keiko's own credential stores `keiko.config.json` and `*.vault`, which are also in
+   the kernel-enforced credential subset; Keiko's state folders `.keiko` and the folder packages'
+   `.keiko-standalone` are denied as tool state, 2026-11-19), dependencies (`node_modules`), build
+   output (`dist`, `build`, `out`, `coverage`), caches (`.cache`, `.next`, `.turbo`), VCS (`.git`),
+   logs (`*.log`), and OS cruft (`.DS_Store`).
    A denied path is never discovered and never read, regardless of `.gitignore`. The single
    documented exception is `.env.example`. The check matches any path segment, so a denied
    directory denies everything beneath it. The secure workspace text read applies the same tier

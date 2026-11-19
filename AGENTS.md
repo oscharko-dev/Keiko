@@ -137,7 +137,12 @@ This shapes the product _and_ how you work on it:
   `~/.keiko-standalone`, nothing downloaded at start. It declares itself managed outside the app
   (`KEIKO_PORTABLE_MANAGEMENT`), so the app reports the existing `portable-it-managed` disposition
   and never offers the portable setup. Never modify the payload inside a package, never let the
-  folder form perform or suggest an installation, and never weaken the operating system's download
+  folder form perform or suggest an installation, never let the program folder become a working
+  folder (every folder launch declares `KEIKO_LAUNCH_FROM_PROGRAM_FOLDER=1`; the server seeds no
+  default project from it and the read surface refuses it as a root, so it is listed unreadable and
+  is never a window's starting folder or a coding repository, while a Chat started without a folder
+  is still kept there; `keiko.config.json` and `*.vault` are credential names of the sensitive-path
+  denial, kernel-enforced for native commands), and never weaken the operating system's download
   checks to make a package start: an administrator removes the download mark before internal
   distribution. A team's `keiko.config.json` beside the start files is an administrator-owned
   input; Keiko adopts it and seals its key, and never writes to it (ADR-0046 D5). Every stable
@@ -158,6 +163,10 @@ This shapes the product _and_ how you work on it:
   configuration Gateway Setup saved and gives the team token only to the gateway connection Gateway
   Setup verified; a provider or reranker with its own connection is refused, never given that token.
   Windows has no npm coding-runtime package, so this form offers no Coding Workbench on Windows.
+  The folder carries the release's Node.js runtime without `include/`, `share/`, CHANGELOG.md and
+  README.md; every kept file stays the archive's, byte for byte. `keiko start` prints one line when
+  the running Node.js is outside the `engines` range of the package's own manifest and records the
+  closed `nodeSupport` value on `process.started`; it never refuses the start.
 - Portable updates must not require an Apple Developer subscription (ADR-0121 D7). Verify macOS
   handoff copies against the exact current artifact digests in the validated plan after managed
   registration admission; preserve candidate authenticity, containment and process ownership.

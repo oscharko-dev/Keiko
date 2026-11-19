@@ -2141,6 +2141,36 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   });
 
+  // ADR-0121 D9: a Keiko that runs inside its own program folder (folder packages, managed portable
+  // launch) holds program files and, in a team package, the gateway token; it starts with no
+  // default project, and the skip is recorded body-free.
+  it("does not seed the launch directory of a Keiko running in its own program folder", async () => {
+    const programFolder = tmp("launch-program-folder-");
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-launch-program-"),
+      env: { KEIKO_LAUNCH_FROM_PROGRAM_FOLDER: "1" },
+      uiDbPath: join(tmp("db-launch-program-"), "keiko-ui.db"),
+      initialProjectPath: programFolder,
+    });
+
+    try {
+      expect(deps.preferredProjectPath).toBeUndefined();
+      expect(deps.store.listProjects()).toEqual([]);
+      const lines = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({
+        extra: { decision: "denied", reason: "program-folder-launch" },
+      });
+      expect(JSON.stringify(lines[0])).not.toContain("launch-program-folder-");
+    } finally {
+      await deps.dispose?.();
+      resetServerLogger();
+    }
+  });
+
   it("grants package-script trust for an explicitly launcher-selected initial project", async () => {
     const projectDir = tmp("launcher-selected-project-");
     const deps = buildUiHandlerDeps({

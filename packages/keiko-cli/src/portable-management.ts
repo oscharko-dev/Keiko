@@ -5,6 +5,22 @@
 export const PORTABLE_MANAGEMENT_ENV = "KEIKO_PORTABLE_MANAGEMENT";
 
 /**
+ * Declared by every launcher that starts Keiko inside its own program folder (the managed and
+ * in-place portable launches and the npm folder package): the launch directory then holds Keiko's
+ * program files and, in a team package, the gateway configuration with its token, so it is never a
+ * person's project. The server reads the same name (keiko-server `launch-directory.ts`); each
+ * side's tests pin the literal.
+ */
+export const PROGRAM_FOLDER_LAUNCH_ENV = "KEIKO_LAUNCH_FROM_PROGRAM_FOLDER";
+
+/** Whether the launcher declared that the launch directory is Keiko's own program folder. */
+export function launchedFromProgramFolder(
+  env: Readonly<Record<string, string | undefined>>,
+): boolean {
+  return env[PROGRAM_FOLDER_LAUNCH_ENV] === "1";
+}
+
+/**
  * Whether this installation is managed outside the app: a standalone folder package declares
  * `organization-managed`, an IT-managed deployment `organization-managed` or `machine-managed`.
  * Keiko then performs no installation of its own. A declaration Keiko cannot read counts as managed

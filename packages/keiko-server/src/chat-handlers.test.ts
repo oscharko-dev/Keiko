@@ -388,6 +388,39 @@ describe("desktop chat production gateway reuse", () => {
     },
   );
 
+  // ADR-0121 D9: a folder package and a desktop installation run inside their program folder. A
+  // person who has chosen no folder still gets a Chat there (refusing it left New chat dead on
+  // every fresh installation), and the folder that keeps it is listed unreadable, so it is never a
+  // window's starting folder. Without the launcher's declaration the same folder stays readable.
+  it.each([
+    { declared: "1", readable: false },
+    { declared: undefined, readable: true },
+  ])(
+    "keeps a first Chat under the launch folder, readable=$readable when the program folder is declared as $declared",
+    async ({ declared, readable }) => {
+      const fixture = await createGatewayBreakerFixture();
+      const launchFolder = join(fixture.root, "program");
+      mkdirSync(launchFolder);
+      if (declared !== undefined) vi.stubEnv("KEIKO_LAUNCH_FROM_PROGRAM_FOLDER", declared);
+      const cwd = vi.spyOn(process, "cwd").mockReturnValue(launchFolder);
+      try {
+        fixture.deps.store.deleteProject(fixture.projectPath);
+        const result = await handleCreateDesktopChat(requestContext({}), fixture.deps);
+        expect(result).toMatchObject({
+          status: 201,
+          body: { project: { path: launchFolder, available: true, readable } },
+        });
+        expect(fixture.deps.store.listProjects().map((project) => project.path)).toEqual([
+          launchFolder,
+        ]);
+      } finally {
+        cwd.mockRestore();
+        vi.unstubAllEnvs();
+        await disposeGatewayBreakerFixture(fixture);
+      }
+    },
+  );
+
   it("still requires a configured chat model to open a Chat", async () => {
     const fixture = await createGatewayBreakerFixture();
     try {

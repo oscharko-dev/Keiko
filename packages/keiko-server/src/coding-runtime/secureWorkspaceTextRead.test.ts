@@ -175,6 +175,35 @@ describe("SecureWorkspaceTextReadPort", () => {
     expect(unavailable.create).not.toHaveBeenCalled();
   });
 
+  // ADR-0121 D9: a team's folder package keeps `keiko.config.json`, with the gateway token in plain
+  // text, beside its start files. The token has no known token shape, so redaction would not remove
+  // it: the read refuses the file by name, before any helper is verified or spawned, wherever it sits.
+  it("refuses Keiko's credential stores before any read reaches the helper", async () => {
+    const run = vi.fn(() =>
+      Promise.resolve(response(0, Buffer.from('{"apiKey":"team-gateway-token-value"}'))),
+    );
+    const { port, verify, create } = createPort(run);
+
+    for (const relativePath of [
+      "keiko.config.json",
+      "Keiko/KEIKO.CONFIG.JSON",
+      "sub/dir/keiko.config.json",
+      ".keiko-standalone/ui/credentials/provider-credentials.vault",
+      "credentials/provider-credentials.vault",
+      ".keiko/ui/keiko.config.json",
+      ".npmrc",
+      "project/.npmrc",
+    ]) {
+      await expect(port.readText({ relativePath })).resolves.toEqual({
+        ok: false,
+        reason: "denied",
+      });
+    }
+    expect(verify).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("denies UTF-8 path and workspace-root byte overflows before verification or spawn", async () => {
     const run = vi.fn(() => Promise.resolve(response(0, Buffer.from("text"))));
     const pathOverflow = createPort(run);

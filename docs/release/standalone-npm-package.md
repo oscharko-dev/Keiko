@@ -36,8 +36,14 @@ Keiko/
 ```
 
 The Node.js runtime and the native search index of Knowledge Pods are taken from the verified
-portable release archive of the same Keiko version, so they are byte for byte the files the folder
-package ships; the Node.js runtime is the signed nodejs.org build. Keiko finds the search index next
+portable release archive of the same Keiko version; every file the folder keeps is byte for byte
+the archive's, and the Node.js runtime is the signed nodejs.org build. The folder leaves out what
+neither Node.js nor npm runs, because `npm ci --ignore-scripts` compiles nothing: the C headers
+(`system/node/include`), the manuals and documentation (`system/node/share`) and the release's
+CHANGELOG.md and README.md. It keeps `bin`, `lib` with npm and corepack (on Windows `node.exe`,
+`npm*`, `npx*` and `node_modules`), LICENSE, NOTICE and NODE_RUNTIME_SOURCE.json. That is about
+11.6 MB of the 61 MB Node.js runtime of a macOS package, packed. The standalone folder package ships
+the payload unchanged and keeps all of it. Keiko finds the search index next
 to that runtime, as it does in the portable payload, so Knowledge Pods search with their index. The
 only programs that run at a double-click are the system shell and that Node.js binary, and npm writes
 no download mark on what it installs.
@@ -173,6 +179,11 @@ Unblock-File .\keiko-windows-x64.npm.zip
   Coding as unavailable, even where an administrator installed the gateway service. Chat,
   Knowledge Pods, Jira and the Editor work. On macOS npm installs the coding runtime package for
   the computer, the same one a global npm installation uses.
+- **No default project.** The package folder holds Keiko's program files and, in a team package, the
+  gateway token, so Keiko never offers it as the folder of the Coding Workbench, Files or Git and
+  refuses it for them; the person chooses a folder. Chat works at once and needs no folder.
+  `keiko.config.json`, `.npmrc`, the sealed `*.vault` stores and the data folder `.keiko-standalone`
+  stay unreadable for the model even inside a chosen folder.
 - **No in-app update.** A new version arrives as a new folder.
 - **One Keiko per computer account,** on loopback port 1983, as for the folder package.
 - **No release asset.** A release carries the
