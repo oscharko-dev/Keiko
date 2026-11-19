@@ -57,6 +57,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Resolve the version and whether its release and npm package exist
+        id: resolve
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_VERSION: ${{ inputs.version }}
