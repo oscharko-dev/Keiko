@@ -11,13 +11,14 @@ are in [ADR-0184](../adr/ADR-0184-keiko-for-quality-governed-pull-request-review
 - Branch `feat/epic-4130-keiko-for-quality` holds every change. It carries `dev` up to Keiko 1.5.3
   and nothing is open against it.
 - Children #4131 to #4137 are closed. #4138, the offline gate, is open: the one holdout run failed.
-  Work on children #4139 to #4143 does not start until a holdout passes, and the review area stays
-  off by default (`KEIKO_REVIEW_ENABLED`).
+  Work on children #4139 to #4142 does not start until a holdout passes, and the review area stays
+  off by default (`KEIKO_REVIEW_ENABLED`). #4143, publishing to GitHub, waits for the live gate
+  as well (ADR-0184 D9).
 - The one holdout run (2026-11-02 to 2026-11-06, 229 pull requests from #3066) failed on coverage:
   185 of 229 reviews did not settle `complete` (limit 20 %), with an actionable rate of 53.1 %
-  (17 of 32). The seed gate failed on one missed and two incomplete required seeds. ADR-0184 D9
-  runs a holdout once, so the next holdout needs a new held-out set; choosing it is an owner
-  decision.
+  (17 of 32). The seed gate failed on one missed and two incomplete required seeds. #4138
+  acceptance criterion AC1 runs the holdout exactly once, so the next holdout needs a new held-out
+  set; choosing it is an owner decision.
 - Since the holdout, 15 changes to the review code have landed (#4320 to #4484). They are listed in
   the iteration log of the gate record with what each development iteration measured.
 
@@ -45,8 +46,9 @@ Two later runs were stopped early on purpose and are not iteration results:
   for dev-12. It captured the Counter-checker's runaway answers described below.
 - dev-12 (review code `0ef9935d6`, with #4484) settled its first review `complete` before it was
   stopped for this handoff. It had 11 candidates, and every counter-check decided: 2 confirmed,
-  4 refuted `guarded-elsewhere`, 5 refuted `evidence-mismatch`. None of its 72 Counter-checker
-  answers used up the output budget. One review measures nothing about #4484; a full run does.
+  4 refuted `guarded-elsewhere`, 5 refuted `evidence-mismatch`. None of the 64 answers of its 11
+  counter-checks used up the output budget. One review measures nothing about #4484; a full run
+  does.
 
 ## What is open
 

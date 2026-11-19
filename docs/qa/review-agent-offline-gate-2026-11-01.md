@@ -588,4 +588,5 @@ The offline gate fails. The holdout fails on coverage, and the seed gate fails o
 incomplete required seeds. Children 9 to 12 of epic #4130 stay closed, and the review
 area stays off by default (`KEIKO_REVIEW_ENABLED`). What to change before a new measurement is an
 owner decision. Settlements show budget exhaustion, unprocessed files and deadlines as the main
-causes. A new measurement needs a new holdout, because ADR-0184 D9 runs a holdout once.
+causes. A new measurement needs a new holdout, because #4138 acceptance criterion AC1 runs the
+holdout exactly once.

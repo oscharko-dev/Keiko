@@ -33,8 +33,8 @@ Neither set touches the holdout. The holdout was measured once on 2026-11-06 and
 - `python3` (the holdout used 3.14), `node` and `npm` in the versions the root `package.json` `engines`
   require, `git`, `curl`, `openssl` and `lsof`.
 - A Keiko checkout of the epic branch `feat/epic-4130-keiko-for-quality`, with `npm ci` and
-  `npm run build:packages` done. From the merge of dev 1.5.0 on, that means Node 26; under Node 24
-  even `cleanup-proof.sh` aborts. The checkout must have no uncommitted changes, because the gate
+  `npm run build:packages` done. From the merge of dev 1.5.0 on, the root `package.json` requires
+  Node 26.13.1 or later (#4398). The checkout must have no uncommitted changes, because the gate
   refuses to run on uncommitted review code.
 - The machine on power with its lid open for the whole run. A sleeping Mac stops the models but not
   the wall clock: in development iteration 10 three counter-checks reached their 900-second limit
