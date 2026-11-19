@@ -250,13 +250,17 @@ async function seedFact(instance, chatId, fact) {
 // scope today, which the report states instead of leaving to be rediscovered.
 async function seedOracle(scenario, instance, labIds) {
   const chatId = await createChat(instance, `oracle ${scenario.id}`);
-  // A truth the scenario's own seed already placed in the store is not placed twice.
-  // Only an accepted seeded record is in the store as a truth: a superseded one is not.
-  const stated = new Set(
-    (instance.seed?.entries ?? [])
-      .filter((entry) => entry.status === "accepted")
-      .map((entry) => entry.truth),
+  // A truth the scenario's own seed already placed in the store is not placed twice, provided its
+  // record is accepted NOW: maintenance may have archived it since it was planned, and a truth with
+  // no accepted copy is not met, and is not seeded again either.
+  const current = new Map((await listMemories(instance)).map((memory) => [memory.id, memory]));
+  const planned = (instance.seed?.entries ?? []).filter(
+    (entry) => entry.status === "accepted" && entry.truth !== undefined,
   );
+  const stated = new Set(planned.map((entry) => entry.truth));
+  const lostStated = planned
+    .filter((entry) => current.get(entry.id)?.status !== "accepted")
+    .map((entry) => entry.truth);
   const facts = scenario.truth.filter((fact) => !stated.has(fact.key));
   const seeded = [];
   for (const fact of facts) seeded.push(await seedFact(instance, chatId, fact));
@@ -264,9 +268,12 @@ async function seedOracle(scenario, instance, labIds) {
     (memory) => memory.status === "accepted" && !labIds.has(memory.id),
   );
   const seedIds = new Set(seeded.map((seed) => seed.memoryId).filter((id) => id !== undefined));
-  const mismatches = facts
-    .filter((fact) => accepted.filter((memory) => sameBody(memory, fact)).length !== 1)
-    .map((fact) => fact.key);
+  const mismatches = [
+    ...lostStated,
+    ...facts
+      .filter((fact) => accepted.filter((memory) => sameBody(memory, fact)).length !== 1)
+      .map((fact) => fact.key),
+  ];
   const extras = accepted.filter((memory) => !seedIds.has(memory.id)).length;
   return {
     seeded,

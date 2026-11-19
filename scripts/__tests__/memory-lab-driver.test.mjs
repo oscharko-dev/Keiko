@@ -282,6 +282,47 @@ describe("the oracle arm's seeding", () => {
     );
   });
 
+  describe("a truth the scenario's own seed already placed", () => {
+    const stated = (status) => {
+      const product = fakeProduct({ stored: [{ id: "s1", body: TABLES, status }] });
+      product.instance.seed = {
+        entries: [{ id: "s1", status: "accepted", truth: "format", filler: false }],
+        ids: ["s1"],
+        report: {},
+      };
+      return product;
+    };
+
+    it("is not seeded again and meets the precondition while its record is accepted now", async () => {
+      const product = stated("accepted");
+      const result = await runScenario(scenario(), product.instance, context());
+      expect(result.oracle.seeded.map((seed) => seed.key)).toEqual(["indent"]);
+      expect(result.oracle.mismatches).toEqual([]);
+      expect(result.oracle.preconditionMet).toBe(true);
+    });
+
+    it("is unmet, and not seeded again, once maintenance has archived its record", async () => {
+      // The failure this pins: the planned status `accepted` alone put the key in the stated set,
+      // so an archived record was neither seeded again nor compared and the precondition held.
+      const product = stated("archived");
+      const result = await runScenario(scenario(), product.instance, context());
+      expect(result.oracle.seeded.map((seed) => seed.key)).toEqual(["indent"]);
+      expect(result.oracle.mismatches).toEqual(["format"]);
+      expect(result.oracle.preconditionMet).toBe(false);
+      expect(
+        product.calls.filter((call) => call === "POST /api/memory/capture-from-conversation"),
+      ).toHaveLength(1);
+    });
+
+    it("is unmet when its record is gone altogether", async () => {
+      const product = stated("accepted");
+      product.memories.length = 0;
+      const result = await runScenario(scenario(), product.instance, context());
+      expect(result.oracle.mismatches).toEqual(["format"]);
+      expect(result.oracle.preconditionMet).toBe(false);
+    });
+  });
+
   it("accepts a parked seed by its id and makes its body exact", async () => {
     const product = fakeProduct({
       status: "proposed",
