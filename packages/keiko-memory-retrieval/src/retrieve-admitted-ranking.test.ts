@@ -2,8 +2,8 @@ import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memor
 import { describe, expect, it } from "vitest";
 
 import { retrieveMemoryContext } from "./retrieve.js";
-import type { MemoryRetrievalRequest, RankingFusionMode } from "./types.js";
-import { buildRecord, userScope } from "./_support.js";
+import type { MemoryQueryPort, MemoryRetrievalRequest, RankingFusionMode } from "./types.js";
+import { buildEdge, buildRecord, memoryId, userScope } from "./_support.js";
 
 // The order of the memories a question admits depends on those memories alone (#4228): records the
 // floor removes must not decide it. Ranked over the whole read window, the hundreds of unrelated
@@ -83,6 +83,32 @@ describe("rank fusion over the admitted memories (#4228)", () => {
     expect(crowded).toEqual(["a0", "a1", "a2", "a3", "a4", "a5"]);
   });
 
+  // A wrong repair that ordered the admitted memories by similarity alone would pass the tests
+  // above; the signals that do not depend on the question still order the memories the question
+  // admitted, now among themselves.
+  it("rrf: of two almost equally close memories the pinned and newer one comes first", () => {
+    const close = [
+      buildRecord({ id: "plain", body: "Note on planning.", updatedAt: NOW - DAY }),
+      buildRecord({ id: "kept", body: "Note on budgets.", updatedAt: NOW, pinned: true }),
+    ];
+    const ids = retrieveMemoryContext(
+      {
+        scopes: [userScope()],
+        nowMs: NOW,
+        queryText: QUESTION,
+        strictRelevanceFloor: true,
+        semanticById: new Map([
+          [memoryId("plain"), 0.81],
+          [memoryId("kept"), 0.8],
+        ]),
+        semanticMinScore: 0.4,
+        fusion: "rrf",
+      },
+      { listByScope: () => [...close, ...unrelatedRecords(50, 0, 10)] },
+    ).included.map((entry) => entry.memoryId);
+    expect(ids).toEqual(["kept", "plain"]);
+  });
+
   it("control: the unrelated records are removed by the floor, not supplied", () => {
     const crowded = supplied([...ADMITTED, ...unrelatedRecords(400, 0, 310)], "rrf", {
       maxIncluded: 50,
@@ -95,5 +121,37 @@ describe("rank fusion over the admitted memories (#4228)", () => {
     const ids = supplied(ADMITTED, "rrf", { maxIncluded: 10 });
     expect([...ids].sort()).toEqual(ADMITTED.map((record) => record.id).sort());
     expect(new Set(ids).size).toBe(ADMITTED.length);
+  });
+
+  // The lenient floor also admits by graph proximity, which refers to the window's top memories:
+  // there the order stays the window ranking, so a memory admitted by its graph score keeps it.
+  it("lenient floor: a memory admitted by graph proximity alone keeps its graph score", () => {
+    const anchor = buildRecord({ id: "anchor", body: "Fresh note on gardening.", updatedAt: NOW });
+    const linked = buildRecord({
+      id: "linked",
+      body: "Old note on weather.",
+      updatedAt: NOW - 300 * DAY,
+    });
+    const match = buildRecord({
+      id: "match",
+      body: "The audit review is in room Willow.",
+      updatedAt: NOW - 200 * DAY,
+    });
+    const newer = unrelatedRecords(10, 1, 100);
+    const port: MemoryQueryPort = {
+      listByScope: () => [anchor, linked, match, ...newer],
+      listIncomingEdges: (id) =>
+        id === memoryId("linked") ? [buildEdge({ from: "anchor", to: "linked" })] : [],
+    };
+    const result = retrieveMemoryContext(
+      { scopes: [userScope()], nowMs: NOW, queryText: QUESTION, maxIncluded: 6, budgetTokens: 500 },
+      port,
+    );
+    const ids = result.included.map((entry) => entry.memoryId);
+    // Not vacuous: the anchor the graph score refers to is refused, the match is admitted.
+    expect(ids).not.toContain("anchor");
+    expect(ids).toContain("match");
+    const entry = result.included.find((included) => included.memoryId === memoryId("linked"));
+    expect(entry?.subscores.graph).toBeGreaterThan(0);
   });
 });

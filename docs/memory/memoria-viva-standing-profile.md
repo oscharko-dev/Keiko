@@ -97,15 +97,20 @@ which of equal memories the id happened to put inside the cut (this applies to b
 
 **The admitted memories are ranked among themselves.** A fused rank is relative to the set it is
 computed over. Recall therefore decides admission on a ranking of the whole read window (up to 500
-records), and then ranks again over the memories the floor admitted, and orders the selection by that
-second ranking (#4228). Ranked over the window, the hundreds of records the floor then removes sat
-between two admitted memories in every signal that does not depend on the question (recency,
-strength, pin, importance); reciprocal ranks turned that distance into a lead the semantic order could
-not outweigh, and in the lab the needed memory fell to position seven or later behind newer, less
-similar ones. Now a record the question does not touch never decides the order of those it does:
-removing every refused record from the store changes neither the selection nor its order (a property
-test pins this). Under the weighted sum the scores do not depend on the set, so only the graph
-signal's top set can differ.
+records), and then ranks again over the memories the floor admitted, and orders the selection by
+that second ranking (#4228). Ranked over the window, the hundreds of records the floor then removes
+sat between two admitted memories in every signal that does not depend on the question (recency,
+strength, pin, importance); reciprocal ranks turned that distance into a lead the semantic order
+could not outweigh, and in the lab the needed memory fell to position seven or later behind newer,
+less similar ones. Now a record the question does not touch never decides the order of those it
+does: removing every refused record from the store changes neither the selection nor its order (a
+property test pins this). This applies under the strict floor Chat recall uses, whose admission
+reads no rank-relative signal. The lenient floor also admits a memory by its graph proximity to the
+window's top memories, so there one ranking of the window still decides both, and a memory admitted
+that way keeps the graph score that admitted it. Under the weighted sum the scores do not depend on
+the set, so only the graph signal's top set can differ. A score reported for an included memory
+comes from the ranking that ordered it, so under Reciprocal Rank Fusion it is relative to that set
+and not comparable across questions.
 
 **Corrections keep their topic.** Under the strict floor a standing profile fact also shares the
 informative words of the facts it superseded (`supersedes` edges, up to four steps back on each

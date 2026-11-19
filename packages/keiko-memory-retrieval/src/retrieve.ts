@@ -539,12 +539,18 @@ function buildRankQuery(
 // difference the semantic order of the admitted memories cannot outweigh. Ranked over the admitted
 // set, a memory the question does not touch no longer decides the order of those it does.
 // Admission itself is unchanged: the floor decides it on the first ranking, this only orders.
+// Only under the strict floor, whose admission reads no rank-relative signal: the lenient floor
+// also admits by graph proximity, which refers to the WINDOW's top memories, and a memory admitted
+// that way would lose the very score that admitted it if graph were recomputed over the admitted set.
 function rankAdmitted(
-  admitted: readonly IncludedMemory[],
+  thresholded: ThresholdStep,
   candidates: readonly MemoryRecord[],
   rankQuery: RankMemoriesQuery,
-  edgesByMemory: ReturnType<typeof buildEdgesIndex>,
+  context: { readonly strict: boolean; readonly edgesByMemory: ReturnType<typeof buildEdgesIndex> },
 ): readonly IncludedMemory[] {
+  const admitted = thresholded.ranked;
+  if (!context.strict) return admitted;
+  const { edgesByMemory } = context;
   const admittedIds = new Set<string>(admitted.map((entry) => entry.memoryId));
   const records = candidates.filter((record) => admittedIds.has(record.id));
   return rankMemories(records, rankQuery, edgesByMemory === undefined ? {} : { edgesByMemory });
@@ -592,12 +598,10 @@ export function retrieveMemoryContext(
   );
   // MMR diversity (#204, O-F3): re-order the ranked candidates so near-duplicates do not all consume
   // the token budget. Inert (byte-identical greedy-by-rank) when the caller supplies no embeddings.
-  const admittedOrder = rankAdmitted(
-    thresholded.ranked,
-    filtered.candidates,
-    rankQuery,
+  const admittedOrder = rankAdmitted(thresholded, filtered.candidates, rankQuery, {
+    strict: request.strictRelevanceFloor === true,
     edgesByMemory,
-  );
+  });
   const selectionOrder = reorderSelection(admittedOrder, request);
   const assembled = assembleContextBlock(selectionOrder, filtered.candidates, {
     budgetTokens: resolved.budgetTokens,

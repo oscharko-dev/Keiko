@@ -28,6 +28,7 @@ interface Candidate {
   readonly body: number;
   readonly score: number;
   readonly confidence: number;
+  readonly ageHours: number;
 }
 interface Case {
   readonly candidates: readonly Candidate[];
@@ -46,6 +47,7 @@ function generate(random: Random): Case {
     body: random.integer(0, 2),
     score: hundredth(random),
     confidence: random.pick([0.4, 0.7, 0.95]),
+    ageHours: random.integer(0, 160),
   }));
   const a = hundredth(random);
   const b = hundredth(random);
@@ -64,6 +66,7 @@ function admitted(value: Case, floor: number): string[] {
       body: (candidate.shared ? SHARED_BODIES : OTHER_BODIES)[candidate.body] ?? "x",
       status: "accepted",
       confidence: candidate.confidence,
+      updatedAt: NOW - candidate.ageHours * 3_600_000,
     }),
   );
   const semanticById = new Map<MemoryId, number>(
@@ -83,8 +86,19 @@ function admitted(value: Case, floor: number): string[] {
   ).included.map((entry) => entry.memoryId);
 }
 
+// The same case with every memory outside the given ids refused (score 0, ids kept).
+function onlyIds(value: Case, ids: readonly string[]): Case {
+  const keep = new Set(ids);
+  return {
+    ...value,
+    candidates: value.candidates.map((candidate, index) =>
+      keep.has(`m${String(index)}`) ? candidate : { ...candidate, score: 0 },
+    ),
+  };
+}
+
 describe("semantic floor monotonicity (property)", () => {
-  it("a higher floor admits a subset of a lower floor's memories, in the same order", async () => {
+  it("a higher floor admits a subset of a lower floor's memories, ordered as when every other one is refused", async () => {
     const reached = { dropped: 0, multi: 0, lexical: 0 };
     await checkProperty<Case>({
       name: NAME,
@@ -98,11 +112,12 @@ describe("semantic floor monotonicity (property)", () => {
         const low = admitted(value, value.lowFloor);
         const high = admitted(value, value.highFloor);
         expect(low).toEqual(expect.arrayContaining(high));
-        // A word-sharing memory also scores on its semantic signal, which a higher floor zeroes
-        // when it falls between the floors, so the order claim holds for the memories the
-        // semantic path alone admits.
+        // The admitted memories are ranked among themselves (#4228), so dropping one may reorder
+        // the rest; what a floor admits is ordered exactly as when every other memory is refused. A word-sharing
+        // memory also scores on its semantic signal, which a higher floor zeroes when it falls
+        // between the floors, so the claim holds for the memories the semantic path alone admits.
         if (!value.candidates.some((candidate) => candidate.shared)) {
-          expect(high).toEqual(low.filter((id) => high.includes(id)));
+          expect(high).toEqual(admitted(onlyIds(value, high), value.highFloor));
           if (high.length > 1) reached.multi += 1;
         }
         if (high.length < low.length) reached.dropped += 1;
