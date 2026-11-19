@@ -29,10 +29,6 @@ export function isPersonForgetterSurface(surface: string | undefined): boolean {
   return surface !== undefined && MEMORY_PERSON_FORGETTER_SURFACES.includes(surface);
 }
 
-export function isUnattendedForgetterSurface(surface: string | undefined): boolean {
-  return surface !== undefined && MEMORY_UNATTENDED_FORGETTER_SURFACES.includes(surface);
-}
-
 // SQL predicate (no bind parameters) that keeps only tombstones allowed to refuse a statement. It is
 // shared by exact and semantic suppression. A tombstone refuses unless its surface is explicitly
 // unattended AND it records that the removed record was not rejected (`original_status`, written by

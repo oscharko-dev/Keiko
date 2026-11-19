@@ -26,11 +26,8 @@ export {
   MEMORY_CENTER_FORGETTER_SURFACE,
   MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE,
   MEMORY_MAINTENANCE_FORGETTER_SURFACE,
-  MEMORY_PERSON_FORGETTER_SURFACES,
   MEMORY_RETENTION_FORGETTER_SURFACE,
-  MEMORY_UNATTENDED_FORGETTER_SURFACES,
   isPersonForgetterSurface,
-  isUnattendedForgetterSurface,
 } from "./forgetter-surfaces.js";
 // `resolveVaultKey` (mutating: can mint and persist `vault.key`) and `openMemoryDatabase`
 // (mutating: can migrate, re-encrypt, or quarantine-and-reopen a store) are deliberately NOT

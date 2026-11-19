@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -59,13 +59,30 @@ const CONSTANTS: ReadonlyMap<string, string> = new Map(
 
 function isClassified(surface: string): boolean {
   return (
-    surfaces.isPersonForgetterSurface(surface) || surfaces.isUnattendedForgetterSurface(surface)
+    surfaces.isPersonForgetterSurface(surface) ||
+    surfaces.MEMORY_UNATTENDED_FORGETTER_SURFACES.includes(surface)
   );
 }
 
-// What a `forgetterSurface` assignment may carry: a classified literal, a named classification
-// constant, a pass-through of a value that was itself written under one of those rules, or a type.
-function expressionIsAccountedFor(expression: string): string | undefined {
+// An import or re-export names a constant without writing a tombstone under it.
+function withoutModuleBindings(source: string): string {
+  return source.replace(/\b(?:import|export)\s+(?:type\s+)?\{[^}]*\}\s*from\s*"[^"]*";?/gu, "");
+}
+
+const CONSTANT_REFERENCE = /\b[A-Z][A-Z_]*_FORGETTER_SURFACE\b/gu;
+
+interface Writers {
+  // A classification constant, wherever it stands: a property, a default parameter, a positional
+  // argument. Keyed by constant name, each with the files that carry it.
+  readonly constants: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly literals: number;
+  readonly problems: readonly string[];
+}
+
+// What a `forgetterSurface` property may carry: a classified literal, a named classification
+// constant, or a pass-through of a value that was itself written under one of those rules (a
+// shorthand property, a member access, a type). Only a literal or a constant is a writer.
+function propertyProblem(expression: string): string | undefined {
   const text = expression.trim();
   const literal = /^"([^"]*)"$/u.exec(text);
   if (literal !== null) {
@@ -76,6 +93,44 @@ function expressionIsAccountedFor(expression: string): string | undefined {
   if (/^(?:[A-Za-z_]\w*\.)*forgetter(?:S|_s)urface$/u.test(text)) return undefined;
   return `unaccounted expression ${text}`;
 }
+
+function scanWriters(files: ReadonlyMap<string, string>): Writers {
+  const constants = new Map<string, Set<string>>();
+  const problems: string[] = [];
+  let literals = 0;
+  for (const [file, text] of files) {
+    const source = withoutModuleBindings(text);
+    for (const match of source.matchAll(CONSTANT_REFERENCE)) {
+      const files = constants.get(match[0]) ?? new Set<string>();
+      files.add(file);
+      constants.set(match[0], files);
+    }
+    for (const match of source.matchAll(/\bforgetterSurface\??\s*[:=]\s*([^,;\n)}]+)/gu)) {
+      const expression = match[1] ?? "";
+      if (/^\s*"/u.test(expression)) literals += 1;
+      const problem = propertyProblem(expression);
+      if (problem !== undefined) problems.push(`${file}: ${problem}`);
+    }
+  }
+  return { constants, literals, problems };
+}
+
+function productionFiles(): ReadonlyMap<string, string> {
+  const own = fileURLToPath(new URL("./forgetter-surfaces.ts", import.meta.url));
+  return new Map(
+    allProductionSources()
+      .filter((file) => file !== own)
+      .map((file) => [file, readFileSync(file, "utf8")] as const),
+  );
+}
+
+// The four production writers of a forget tombstone, by constant and by the file that carries it.
+const KNOWN_WRITERS: readonly (readonly [string, string])[] = [
+  ["MEMORY_CENTER_FORGETTER_SURFACE", "memory-handlers.ts"],
+  ["MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE", "memory-handlers.ts"],
+  ["MEMORY_MAINTENANCE_FORGETTER_SURFACE", "memory-maintenance-handlers.ts"],
+  ["MEMORY_RETENTION_FORGETTER_SURFACE", "memory-retention.ts"],
+];
 
 describe("forgetter surface classification (#4223)", () => {
   it("fails the inventory when a source tree cannot be scanned, naming the directory", () => {
@@ -95,32 +150,62 @@ describe("forgetter surface classification (#4223)", () => {
     for (const [, value] of CONSTANTS) {
       const classes = [
         surfaces.isPersonForgetterSurface(value),
-        surfaces.isUnattendedForgetterSurface(value),
+        surfaces.MEMORY_UNATTENDED_FORGETTER_SURFACES.includes(value),
       ].filter(Boolean);
       expect(classes, value).toHaveLength(1);
     }
     expect(surfaces.isPersonForgetterSurface("never-seen")).toBe(false);
-    expect(surfaces.isUnattendedForgetterSurface("never-seen")).toBe(false);
+    expect(isClassified("never-seen")).toBe(false);
   });
 
   it("leaves no production writer of a tombstone unclassified", () => {
-    const problems: string[] = [];
-    let writers = 0;
-    for (const file of allProductionSources()) {
-      const source = readFileSync(file, "utf8");
-      for (const match of source.matchAll(/\bforgetterSurface\??\s*[:=]\s*([^,;\n)]+)/gu)) {
-        writers += 1;
-        const problem = expressionIsAccountedFor(match[1] ?? "");
-        if (problem !== undefined) problems.push(`${file}: ${problem}`);
-      }
-    }
-    expect(writers).toBeGreaterThan(3);
+    const { problems } = scanWriters(productionFiles());
     expect(problems).toEqual([]);
   });
 
+  it("reaches the four known production writers by name", () => {
+    const { constants } = scanWriters(productionFiles());
+    for (const [constant, file] of KNOWN_WRITERS) {
+      const carriers = [...(constants.get(constant) ?? [])].map((path) => basename(path));
+      expect(carriers, constant).toContain(file);
+    }
+  });
+
+  it("uses every exported surface constant in a production file", () => {
+    const { constants } = scanWriters(productionFiles());
+    for (const name of CONSTANTS.keys()) {
+      expect(constants.has(name), `${name} has no production use`).toBe(true);
+    }
+    expect([...CONSTANTS.keys()].sort()).toEqual(KNOWN_WRITERS.map(([name]) => name).sort());
+  });
+
+  it("sees a positional argument, a default parameter, a property and a shorthand", () => {
+    const sample = new Map([
+      [
+        "sample.ts",
+        [
+          "run(db, MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE);",
+          "function f(forgetterSurface = MEMORY_CENTER_FORGETTER_SURFACE) {}",
+          "g({ forgetterSurface: MEMORY_RETENTION_FORGETTER_SURFACE });",
+          "h({ forgetterSurface });",
+          'k({ forgetterSurface: "brand-new-writer" });',
+          'import { MEMORY_MAINTENANCE_FORGETTER_SURFACE } from "./x.js";',
+        ].join("\n"),
+      ],
+    ]);
+    const { constants, literals, problems } = scanWriters(sample);
+    expect([...constants.keys()].sort()).toEqual([
+      "MEMORY_CENTER_FORGETTER_SURFACE",
+      "MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE",
+      "MEMORY_RETENTION_FORGETTER_SURFACE",
+    ]);
+    expect(literals).toBe(1);
+    expect(problems).toEqual(['sample.ts: unclassified literal "brand-new-writer"']);
+  });
+
   it("rejects an unclassified literal writer (the scan is not vacuous)", () => {
-    expect(expressionIsAccountedFor('"brand-new-writer"')).toBeDefined();
-    expect(expressionIsAccountedFor("someHelper()")).toBeDefined();
-    expect(expressionIsAccountedFor('"retention"')).toBeUndefined();
+    expect(propertyProblem('"brand-new-writer"')).toBeDefined();
+    expect(propertyProblem("someHelper()")).toBeDefined();
+    expect(propertyProblem('"retention"')).toBeUndefined();
   });
 });
