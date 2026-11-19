@@ -640,9 +640,12 @@ Beside the pass rates, `summary.md` and `summary.json` list the failed checks as
 class, per arm and, in an open run, per scenario. Every class is derived from what the run already
 records, by one rule for every run: `fact-not-stored` (a `must` truth not live in the store and not stored at all), `fact-parked` (stored
 but left `proposed` or archived), `unnecessary-fact-stored`, `stale-fact-live` (both only while the
-record is live, i.e. accepted), `forgotten-fact-returned`, `forbidden-fact-stored` (any status),
-`private-in-project` (the hard counter, one check per record; a forbidden entry of that class is
-counted once, as this class), `seeded-record-lost`, then for a failed answer probe, most
+record is live, i.e. accepted), `forgotten-fact-returned`, the hard counters `credential-stored`, `identifier-stored` and
+`third-party-stored` (a record of that class, whatever its status: a parked credential still counts;
+a hard counter never shares a row with a soft class), `forbidden-fact-stored` (any other forbidden
+class, only while the record is live, like `stale` and `unnecessary`: a parked one passes the unit's
+store check), `private-in-project` (the hard counter, one check per counted record),
+`seeded-record-lost`, then for a failed answer probe, most
 specific first, `forbidden-term-in-answer`, `needed-memory-missing` (a `needs` or `earlier` fact never
 reached the model; with the recall trace on, each missing fact is also counted once in the class of
 its stage, `needed-not-stored` … `needed-trace-unavailable`, see "Recall trace"), `relevant-memory-not-supplied` (nothing relevant reached the model),
@@ -652,7 +655,8 @@ its stage, `needed-not-stored` … `needed-trace-unavailable`, see "Recall trace
 the candidate and the checks (`scenario:arm:rN:probe:<id>`, `…:store:<fact>`, or `…:store:<class>:<ordinal>` for wrong records,
 which never carry a body) that newly fail in the candidate. A side that recorded no failure classes (a run older than the classes) shows `n/a`, never zero, and no
 check is called newly failing or gone against it. The totals are sums over every repetition
-of the run, so a run with three repetitions counts a failing check up to three times. A sealed run reports per-arm totals only, never a scenario or a check; its store verdicts
+of the run, so a run with three repetitions counts a failing check up to three times. Every arm that ran has an entry in `byArm` with its `units` count, so an arm that ran clean (an empty
+`total`) differs from one that did not run (no entry). A sealed run reports per-arm totals only, never a scenario or a check; its store verdicts
 are masked, so each unit is classified from its unmasked result before it is masked, and only the
 class names and whole-number counts travel on (`failureClassCounts`, also through the encrypted
 progress journal and `--resume`); the sealed totals equal what an open run without the recall trace

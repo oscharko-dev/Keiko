@@ -282,40 +282,15 @@ describe("exactly one failure class per failed check, through the real scorer", 
     const classes = found.map((failure) => failure.class).toSorted();
     expect(classes).toEqual(
       [
+        "credential-stored",
         "fact-parked",
-        "forbidden-fact-stored",
-        "forbidden-fact-stored",
         "forgotten-fact-returned",
         "private-in-project",
         "stale-fact-live",
+        "third-party-stored",
         "unnecessary-fact-stored",
       ].toSorted(),
     );
     expect(new Set(found.map((failure) => failure.ref)).size).toBe(found.length);
-  });
-
-  it("counts a forbidden entry of the hard counter's own class once", () => {
-    const verdicts = [
-      { id: "1", status: "accepted", verdict: "forbidden", class: "private-in-project" },
-    ];
-    const once = unitFailures({
-      scenario: "s",
-      arm: "product",
-      repetition: 0,
-      store: store({ verdicts, counters: { "private-in-project": 1 } }),
-      probes: [],
-    });
-    expect(once.map((failure) => failure.class)).toEqual(["private-in-project"]);
-    const more = unitFailures({
-      scenario: "s",
-      arm: "product",
-      repetition: 0,
-      store: store({ verdicts, counters: { "private-in-project": 2 } }),
-      probes: [],
-    });
-    expect(more.map((failure) => failure.class)).toEqual([
-      "private-in-project",
-      "private-in-project",
-    ]);
   });
 });

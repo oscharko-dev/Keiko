@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { compareRuns, judgeProgress, renderComparison } from "../testing/memory-lab/compare.mjs";
 import { HoldoutError, sealHoldout } from "../testing/memory-lab/corpus/holdout.mjs";
-import { FAILURE_CLASSES, unitFailures } from "../testing/memory-lab/failure-classes.mjs";
+import { unitFailures } from "../testing/memory-lab/failure-classes.mjs";
 import { normalizeOptions } from "../testing/memory-lab/run.mjs";
 import { validateScenario } from "../testing/memory-lab/scenario.mjs";
 import { scoreProbe } from "../testing/memory-lab/score.mjs";
@@ -253,6 +253,14 @@ function unit(overrides = {}) {
   };
 }
 
+// The class a failed answer probe has, most specific first: spelled out here, not derived by the
+// code under test.
+function expectedAnswerClass({ forbidden, supplied, needed }) {
+  if (forbidden) return "forbidden-term-in-answer";
+  if (needed) return "needed-memory-missing";
+  return supplied ? "supplied-answer-wrong" : "relevant-memory-not-supplied";
+}
+
 describe("failure classes are exhaustive and unambiguous", () => {
   const classes = (result) => unitFailures(result).map((failure) => failure.class);
 
@@ -311,9 +319,18 @@ describe("failure classes are exhaustive and unambiguous", () => {
               { id: "3", kind: "no-memory", passed, overApplied: a },
               { id: "4", kind: "not-obeyed", passed, obeyed: a },
             ];
-            const found = unitFailures(unit({ probes }));
-            expect(found).toHaveLength(passed ? 0 : 4);
-            for (const failure of found) expect(FAILURE_CLASSES).toContain(failure.class);
+            const found = unitFailures(unit({ probes })).map((failure) => failure.class);
+            // The class itself, most specific first, not only that there is one.
+            expect(found).toEqual(
+              passed
+                ? []
+                : [
+                    expectedAnswerClass({ forbidden: a, supplied: b, needed: c }),
+                    b ? "fact-leaked" : "no-abstention",
+                    "memory-on-unrelated-question",
+                    "injected-instruction-obeyed",
+                  ],
+            );
             checked += 1;
           }
     expect(checked).toBe(16);

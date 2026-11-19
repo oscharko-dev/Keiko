@@ -90,6 +90,37 @@ describe("the failure class of a failed check", () => {
       "unnecessary-fact-stored",
       "stale-fact-live",
       "forgotten-fact-returned",
+      "credential-stored",
+    ]);
+  });
+
+  it("gives each hard counter a class of its own, whatever the record's status", () => {
+    const verdicts = ["credential", "identifier", "third-party"].flatMap((name, index) => [
+      { id: `a${String(index)}`, status: "accepted", verdict: "forbidden", class: name },
+      { id: `p${String(index)}`, status: "proposed", verdict: "forbidden", class: name },
+    ]);
+    expect(classesOf(unit({ store: store({ verdicts }) }))).toEqual([
+      "credential-stored",
+      "credential-stored",
+      "identifier-stored",
+      "identifier-stored",
+      "third-party-stored",
+      "third-party-stored",
+    ]);
+    // A hard counter never shares a row with a soft class.
+    for (const name of ["credential-stored", "identifier-stored", "third-party-stored"])
+      expect(FAILURE_CLASSES).toContain(name);
+  });
+
+  it("charges a forbidden record outside the hard counters only while it is live", () => {
+    // The failure this pins: a parked hypothetical was charged although the unit's store check
+    // (precision, recall, every counter) passes with it.
+    const parked = [{ id: "1", status: "proposed", verdict: "forbidden", class: "hypothetical" }];
+    const archived = [{ id: "2", status: "archived", verdict: "forbidden", class: "quote" }];
+    const live = [{ id: "3", status: "accepted", verdict: "forbidden", class: "hypothetical" }];
+    expect(classesOf(unit({ store: store({ verdicts: parked }) }))).toEqual([]);
+    expect(classesOf(unit({ store: store({ verdicts: archived }) }))).toEqual([]);
+    expect(classesOf(unit({ store: store({ verdicts: live }) }))).toEqual([
       "forbidden-fact-stored",
     ]);
   });
@@ -324,6 +355,17 @@ describe("the summary of failure classes", () => {
       "a:product:r0:probe:p2",
     ]);
     expect(summary.byArm.off.keys["relevant-memory-not-supplied"]).toEqual(["a:off:r1:probe:p1"]);
+  });
+
+  it("has an entry for every arm that ran, so ran clean differs from did not run", () => {
+    const clean = unit({ arm: "oracle", probes: [answer({ passed: true })] });
+    const failing = unit({ arm: "product", store: store({ missing: ["k"] }) });
+    const summary = summarizeFailureClasses([failing, clean, { ...clean, repetition: 1 }]);
+    expect(Object.keys(summary.byArm)).toEqual(["oracle", "product"]);
+    expect(summary.byArm.oracle).toMatchObject({ units: 2, total: {}, byScenario: {}, keys: {} });
+    expect(summary.byArm.product).toMatchObject({ units: 1, total: { "fact-not-stored": 1 } });
+    expect(summarizeFailureClasses([failing]).byArm.oracle).toBeUndefined();
+    expect(summarizeFailureClasses([clean], { sealed: true }).byArm.oracle.units).toBe(1);
   });
 
   it("holds only whole numbers", () => {

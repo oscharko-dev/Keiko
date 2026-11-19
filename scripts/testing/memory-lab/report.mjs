@@ -511,11 +511,15 @@ function failureClassLines(summary) {
   const { byArm } = summary.failureClasses;
   const header = ["### Failure classes (counts of failed checks)", ""];
   const info = seedInformationLines(summary.seedInformation);
-  if (Object.keys(byArm).length === 0) return [...header, "No failed check.", "", ...info];
+  const ran = `Arms that ran: ${Object.keys(byArm)
+    .map((arm) => `${arm} (${String(byArm[arm].units)} unit${byArm[arm].units === 1 ? "" : "s"})`)
+    .join(", ")}.`;
+  if (Object.values(byArm).every((arm) => Object.keys(arm.total).length === 0))
+    return [...header, "No failed check.", "", ran, "", ...info];
   const scenarios = Object.keys(byArm).flatMap((arm) =>
     scenarioClassLines(arm, byArm[arm].byScenario),
   );
-  return [...header, ...failureClassTable(byArm), "", ...scenarios, "", ...info];
+  return [...header, ran, "", ...failureClassTable(byArm), "", ...scenarios, "", ...info];
 }
 
 function failureLines(summary) {

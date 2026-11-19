@@ -24,6 +24,9 @@ export const FAILURE_CLASSES = Object.freeze([
   "unnecessary-fact-stored",
   "stale-fact-live",
   "forgotten-fact-returned",
+  "credential-stored",
+  "identifier-stored",
+  "third-party-stored",
   "forbidden-fact-stored",
   "private-in-project",
   "seeded-record-lost",
@@ -41,15 +44,29 @@ export const FAILURE_CLASSES = Object.freeze([
 
 const LIVE = "accepted";
 
+// The hard counters that name a forbidden record by its class. A hard counter never shares a class
+// with a soft one, and it counts the record whatever its status (a parked credential still counts).
+const HARD_FORBIDDEN = Object.freeze({
+  credential: "credential-stored",
+  identifier: "identifier-stored",
+  "third-party": "third-party-stored",
+});
+
+// A forbidden record outside the hard counters (a hypothetical, an irony, ...) fails only while it is
+// live, like a stale or unnecessary one: a parked or archived record cannot be recalled, and the
+// unit's store check (precision, recall, the counters) passes with it.
+function forbiddenClass(verdict) {
+  const hard = HARD_FORBIDDEN[verdict.class];
+  if (hard !== undefined) return hard;
+  return verdict.status === LIVE ? "forbidden-fact-stored" : undefined;
+}
+
 // One store verdict's class, or none. A stale or unnecessary fact fails only while it is live: a
 // parked or archived one cannot be recalled, so it is not what an answer is wrong because of.
 function verdictClass(verdict) {
   switch (verdict.verdict) {
     case "forbidden":
-      // A forbidden entry that names the hard counter's own class is that class, and is counted once.
-      return verdict.class === "private-in-project"
-        ? "private-in-project"
-        : "forbidden-fact-stored";
+      return forbiddenClass(verdict);
     case "forgotten-returned":
       return "forgotten-fact-returned";
     case "stale":
@@ -82,14 +99,12 @@ function judgedFailures(verdicts) {
   });
 }
 
-// The counter also counts a private fact stored in project scope, which has no verdict of its own;
-// a verdict already classed private-in-project is one of the counted records, not another.
+// The counter counts a private fact stored in project scope, which has no verdict of its own: one
+// failed check per counted record.
 function privateInProject(store) {
-  const named = store.verdicts.filter((verdict) => verdictClass(verdict) === "private-in-project");
-  const rest = Math.max(0, (store.counters?.["private-in-project"] ?? 0) - named.length);
-  return Array.from({ length: rest }, (_, index) => ({
+  return Array.from({ length: store.counters?.["private-in-project"] ?? 0 }, (_, index) => ({
     class: "private-in-project",
-    ref: `store:private-in-project:${String(named.length + index + 1)}`,
+    ref: `store:private-in-project:${String(index + 1)}`,
   }));
 }
 
@@ -206,7 +221,7 @@ function bump(counts, name) {
 }
 
 function emptyArm() {
-  return { total: {}, byScenario: {}, keys: {} };
+  return { units: 0, total: {}, byScenario: {}, keys: {} };
 }
 
 function addFailure(arm, result, failure, sealed) {
@@ -232,6 +247,7 @@ function orderedCounts(counts) {
 function orderedArm(arm) {
   const scenarios = Object.keys(arm.byScenario).toSorted(compareStrings);
   return {
+    units: arm.units,
     total: orderedCounts(arm.total),
     byScenario: Object.fromEntries(
       scenarios.map((scenario) => [scenario, orderedCounts(arm.byScenario[scenario])]),
@@ -246,16 +262,20 @@ function orderedArm(arm) {
 }
 
 /**
- * Failure counts per arm: `total` per class, `byScenario` (class counts per scenario) and `keys` (the
+ * Failure counts per arm: `units` (how many units of the arm ran), `total` per class, `byScenario` (class counts per scenario) and `keys` (the
  * unit and check that failed, per class, so a comparison can name what newly fails). A sealed run
  * reports the per-arm totals only: a per-scenario list would let a reader follow single hidden
  * scenarios from run to run.
  */
 export function summarizeFailureClasses(results, { sealed = false } = {}) {
   const byArm = {};
-  for (const result of results)
-    for (const failure of unitFailures(result))
-      addFailure((byArm[result.arm] ??= emptyArm()), result, failure, sealed);
+  for (const result of results) {
+    // Every arm that ran has an entry, clean or not: an empty `total` with `units` above zero is
+    // "ran clean", an absent arm is "did not run".
+    const arm = (byArm[result.arm] ??= emptyArm());
+    arm.units += 1;
+    for (const failure of unitFailures(result)) addFailure(arm, result, failure, sealed);
+  }
   const arms = Object.keys(byArm).toSorted(compareStrings);
   return {
     classes: FAILURE_CLASSES,
