@@ -32,12 +32,29 @@ function routePosition({ position, omittedReason }) {
   return omittedReason === LIMIT_REASON ? BEYOND_LISTED : null;
 }
 
-// The chat kept fewer retrieved memories than its limit, or kept one the route ranks behind the
-// needed memory: it refused the needed memory although it ranked high enough (strict floor or
-// token budget, which this trace cannot tell apart).
-function chatRefused({ supplied, limit }, needed) {
-  const below = supplied.positions.some((position) => position !== null && position > needed);
-  return below || supplied.count < limit;
+/** The closed reasons a stage is `trace-unavailable`. */
+export const UNAVAILABLE_REASONS = Object.freeze([
+  "store-unreadable",
+  "route-failed",
+  "chat-limit-unreadable",
+  "chat-block-unplaceable",
+]);
+
+// What the chat's block says about the needed memory (`needed` is its route position):
+// - "refused": the chat kept a retrieved memory the route ranks behind it, or fewer than its limit;
+// - "beyond": the chat's block is full and at least one of its memories is ranked against the needed
+//   one (above it), so the needed memory ranked beyond the chat's limit;
+// - "unplaceable": the block is full and none of its retrieved memories can be placed against the
+//   needed one (the route did not rank them, or both were omitted by its limit), so the comparison has
+//   no basis.
+function chatBlock({ supplied, limit }, needed) {
+  if (supplied.positions.some((position) => position !== null && position > needed))
+    return "refused";
+  if (supplied.count < limit) return "refused";
+  const placed = supplied.positions.some(
+    (position) => Number.isFinite(position) && position <= needed,
+  );
+  return placed ? "beyond" : "unplaceable";
 }
 
 // The needed memory ranked beyond the chat's limit; `moved-down` when its score rank was inside the
@@ -48,17 +65,13 @@ function beyondLimit({ position, scoreRank, limit }) {
   return "beyond-limit";
 }
 
+const verdict = (stage, reason) => (reason === undefined ? { stage } : { stage, reason });
+
 /**
- * The one derivation of a needed fact's stage. `storeKnown` is false when the store could not be read;
- * `traceAvailable` is false when the route call failed; `limit` is the chat's limit on retrieved
- * memories (null when it could not be read from the subject's build). `id` is null when no stored
- * body matches the fact. `position` and `scoreRank` are the 1-based places in the route's final order
- * and in the same entries sorted by score (null when not listed); `omittedReason` is the route's reason
- * (null when not omitted). `supplied` is what the chat supplied as retrieved memories (never the
- * standing profile): `count`, and `positions`, each one's route position (`Infinity` when the route
- * omitted it by its limit, null when the route did not rank it).
+ * The one derivation of a needed fact's stage, with the closed reason when it is `trace-unavailable`.
+ * Inputs as `neededStage`.
  */
-export function neededStage({
+export function neededVerdict({
   storeKnown = true,
   traceAvailable,
   limit,
@@ -69,13 +82,29 @@ export function neededStage({
   omittedReason,
   supplied,
 }) {
-  if (suppliedByChat) return "supplied";
-  if (!storeKnown) return "trace-unavailable";
-  if (id === null) return "not-stored";
-  if (!traceAvailable) return "trace-unavailable";
+  if (suppliedByChat) return verdict("supplied");
+  if (!storeKnown) return verdict("trace-unavailable", "store-unreadable");
+  if (id === null) return verdict("not-stored");
+  if (!traceAvailable) return verdict("trace-unavailable", "route-failed");
   const ranked = routePosition({ position, omittedReason });
-  if (ranked === null) return omittedReason === null ? "not-a-candidate" : "not-admitted";
-  if (limit === null) return "trace-unavailable";
-  if (chatRefused({ supplied, limit }, ranked)) return "refused-by-chat";
-  return beyondLimit({ position, scoreRank, limit });
+  if (ranked === null) return verdict(omittedReason === null ? "not-a-candidate" : "not-admitted");
+  if (limit === null) return verdict("trace-unavailable", "chat-limit-unreadable");
+  const block = chatBlock({ supplied, limit }, ranked);
+  if (block === "refused") return verdict("refused-by-chat");
+  if (block === "unplaceable") return verdict("trace-unavailable", "chat-block-unplaceable");
+  return verdict(beyondLimit({ position, scoreRank, limit }));
+}
+
+/**
+ * The stage of a needed fact. `storeKnown` is false when the store could not be read;
+ * `traceAvailable` is false when the route call failed; `limit` is the chat's limit on retrieved
+ * memories (null when it could not be read from the subject's build). `id` is null when no stored
+ * body matches the fact. `position` and `scoreRank` are the 1-based places in the route's final order
+ * and in the same entries sorted by score (null when not listed); `omittedReason` is the route's reason
+ * (null when not omitted). `supplied` is what the chat supplied as retrieved memories (never the
+ * standing profile): `count`, and `positions`, each one's route position (`Infinity` when the route
+ * omitted it by its limit, null when the route did not rank it).
+ */
+export function neededStage(input) {
+  return neededVerdict(input).stage;
 }

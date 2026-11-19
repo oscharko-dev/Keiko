@@ -568,12 +568,19 @@ budget; the route keeps 12 behind a relaxed floor. A stage therefore names only 
 derived in one pure function (`recall-stage.mjs`) from three facts: the route's order, what the chat
 actually supplied (retrieved memories only, never the standing profile) and the chat's limit. The
 limit is read from the subject's own build (`<subject root>/packages/keiko-server/dist/chat-handlers.js`,
-`CHAT_MAX_RETRIEVED_MEMORIES`), never assumed; when it cannot be read the trace says `limitFailure:
-chat-limit-unreadable` and every stage that needs it is `trace-unavailable`. In order:
+`CHAT_MAX_RETRIEVED_MEMORIES`), never assumed, so a changed number is followed. The reader takes
+exactly one declaration at a line start (a commented-out line is none) whose value is a plain
+integer literal; no declaration, several, or a computed value fail closed, and so does a probe whose
+chat supplied more retrieved memories than the limit read (the build contradicts the observation).
+Then the trace says `limitFailure: chat-limit-unreadable` and every stage that needs the limit is
+`trace-unavailable`. In order:
 
 - `supplied`: the chat supplied it.
-- `trace-unavailable`: the store could not be read (this comes before `not-stored`), the route call
-  failed, or the chat's limit could not be read (only for the stages below that need it).
+- `trace-unavailable`, always with a closed `unavailableReason`: `store-unreadable` (this comes before
+  `not-stored`), `route-failed`, `chat-limit-unreadable` (only for the stages below that need it) or
+  `chat-block-unplaceable` (the chat's block is full and none of its retrieved memories can be
+  placed against the needed one, because the route did not rank them or omitted both by its limit:
+  the comparison has no basis).
 - `not-stored`: no stored body matches the fact's terms.
 - `not-a-candidate`: the memory is in neither of the route's lists.
 - `not-admitted`: the route omitted it for a reason other than its limit (for example

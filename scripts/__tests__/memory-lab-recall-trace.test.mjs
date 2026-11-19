@@ -8,11 +8,17 @@ import { join } from "node:path";
 import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { runScenario } from "../testing/memory-lab/driver.mjs";
-import { RECALL_STAGES, neededStage } from "../testing/memory-lab/recall-stage.mjs";
+import {
+  RECALL_STAGES,
+  UNAVAILABLE_REASONS,
+  neededStage,
+  neededVerdict,
+} from "../testing/memory-lab/recall-stage.mjs";
 import {
   LIMIT_UNREADABLE,
   TRACE_BUDGET_TOKENS,
   buildRecallTrace,
+  limitFromSource,
   readChatRetrievalLimit,
   recallTraceCoverage,
   traceWanted,
@@ -97,6 +103,63 @@ describe("the stage of a needed memory", () => {
   ])("is %s for a memory the route admitted", (stage, fields) => {
     expect(neededStage({ ...base, ...fields })).toBe(stage);
     expect(RECALL_STAGES).toContain(stage);
+  });
+
+  it("has no basis to compare when a full chat block holds nothing the route ranked against the memory", () => {
+    // The chat's block is full of memories the route did not rank; the needed memory is listed
+    // inside the limit. Beyond-limit would be a wrong cause: the stage says it cannot tell.
+    const unrankedBlock = { count: LIMIT, positions: Array(LIMIT).fill(null) };
+    const inside = { position: 3, scoreRank: 3, supplied: unrankedBlock };
+    expect(neededVerdict({ ...base, ...inside })).toEqual({
+      stage: "trace-unavailable",
+      reason: "chat-block-unplaceable",
+    });
+    // Both omitted by the route's limit: no known order between them.
+    expect(
+      neededVerdict({
+        ...base,
+        omittedReason: "max-included-exceeded",
+        supplied: { count: LIMIT, positions: Array(LIMIT).fill(Infinity) },
+      }),
+    ).toEqual({ stage: "trace-unavailable", reason: "chat-block-unplaceable" });
+    // A fewer-than-limit block, or one holding a memory ranked behind it, is still a refusal.
+    expect(
+      neededStage({ ...base, ...inside, supplied: { count: 2, positions: [null, null] } }),
+    ).toBe("refused-by-chat");
+    expect(
+      neededStage({
+        ...base,
+        ...inside,
+        supplied: { count: LIMIT, positions: [null, 9, null, null, null, null] },
+      }),
+    ).toBe("refused-by-chat");
+    // One placed memory above it gives the comparison its basis.
+    expect(
+      neededStage({
+        ...base,
+        position: 9,
+        scoreRank: 9,
+        supplied: { count: LIMIT, positions: [1, null, null, null, null, null] },
+      }),
+    ).toBe("beyond-limit");
+  });
+
+  it("gives every unavailable stage a closed reason", () => {
+    const reasons = [
+      neededVerdict({ ...base, storeKnown: false }).reason,
+      neededVerdict({ ...base, traceAvailable: false }).reason,
+      neededVerdict({ ...base, position: 8, scoreRank: 8, limit: null }).reason,
+      neededVerdict({
+        ...base,
+        position: 3,
+        scoreRank: 3,
+        supplied: { count: LIMIT, positions: [] },
+      }).reason,
+    ];
+    expect(reasons.toSorted()).toEqual([...UNAVAILABLE_REASONS].toSorted());
+    expect(neededVerdict({ ...base, position: 9, scoreRank: 9 })).toEqual({
+      stage: "beyond-limit",
+    });
   });
 
   it("names no stage that suggests a near miss or a budget cut", () => {
@@ -295,6 +358,75 @@ describe("the chat's limit", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    ["a plain declaration", "export const CHAT_MAX_RETRIEVED_MEMORIES = 6;\n", { limit: 6 }],
+    ["a changed number", "export const CHAT_MAX_RETRIEVED_MEMORIES = 24;\n", { limit: 24 }],
+    [
+      "a trailing comment",
+      "export const CHAT_MAX_RETRIEVED_MEMORIES = 8; // budget cap\n",
+      { limit: 8 },
+    ],
+    [
+      "a commented-out declaration before a literal one",
+      "// export const CHAT_MAX_RETRIEVED_MEMORIES = 6;\nexport const CHAT_MAX_RETRIEVED_MEMORIES = 9;\n",
+      { limit: 9 },
+    ],
+    [
+      "a commented-out declaration before a computed one",
+      "// export const CHAT_MAX_RETRIEVED_MEMORIES = 6;\nexport const CHAT_MAX_RETRIEVED_MEMORIES = readEnv(9);\n",
+      { failure: "chat-limit-unreadable" },
+    ],
+    [
+      "two declarations",
+      "export const CHAT_MAX_RETRIEVED_MEMORIES = 6;\nexport const CHAT_MAX_RETRIEVED_MEMORIES = 9;\n",
+      { failure: "chat-limit-unreadable" },
+    ],
+    [
+      "a non-literal value",
+      "export const CHAT_MAX_RETRIEVED_MEMORIES = Math.max(6, 9);\n",
+      { failure: "chat-limit-unreadable" },
+    ],
+    [
+      "an indented line inside a block",
+      "function f() {\n  export const CHAT_MAX_RETRIEVED_MEMORIES = 6;\n}\n",
+      { failure: "chat-limit-unreadable" },
+    ],
+    [
+      "a zero",
+      "export const CHAT_MAX_RETRIEVED_MEMORIES = 0;\n",
+      { failure: "chat-limit-unreadable" },
+    ],
+    ["a constant that has gone", "export const OTHER = 6;\n", { failure: "chat-limit-unreadable" }],
+  ])("reads %s from the source of the build", (_name, source, expected) => {
+    expect(limitFromSource(source)).toEqual(expected);
+  });
+
+  it("is unreadable for a probe whose chat supplied more retrieved memories than the limit read", async () => {
+    const product = fakeProduct({
+      memories: [
+        ROOM,
+        { id: "x1", body: "One.", status: "accepted" },
+        { id: "x2", body: "Two.", status: "accepted" },
+      ],
+      supply: () => true,
+      route: answered([{ memoryId: "m-room", score: 0.4, subscores: {} }], []),
+    });
+    const result = await runScenario(
+      scenario([NEEDS]),
+      product.instance,
+      context({ chatLimit: { limit: 2 } }),
+    );
+    const trace = result.probes[0].recallTrace;
+    expect(trace).toMatchObject({
+      chatLimit: null,
+      chatRetrievedCount: 3,
+      limitFailure: "chat-limit-unreadable",
+    });
+    expect(trace.needed.find((entry) => entry.key === "day").stage).toBe("not-stored");
+    const unplaced = scenario([NEEDS]);
+    expect(unplaced.probes).toHaveLength(1);
   });
 
   it("equals the product's own export in this checkout", () => {

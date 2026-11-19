@@ -13,7 +13,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { listMemories } from "./instance.mjs";
-import { neededStage } from "./recall-stage.mjs";
+import { neededVerdict } from "./recall-stage.mjs";
 import { carrierIds, suppliedCarries, wantedOf } from "./score.mjs";
 
 export const TRACE_SOURCE = "memory-context-route";
@@ -140,16 +140,18 @@ export function neededEntries({
     const scoreRank = position === null ? null : (included?.rank.get(id) ?? null);
     const omittedReason = id === null ? null : (omittedBy.get(id) ?? null);
     const entry = { key: item.label, id, suppliedByChat, position, scoreRank, omittedReason };
+    const { stage, reason } = neededVerdict({
+      storeKnown,
+      traceAvailable: response !== undefined,
+      limit,
+      supplied,
+      ...entry,
+    });
     return {
       ...entry,
       carrierCount: ids.length,
-      stage: neededStage({
-        storeKnown,
-        traceAvailable: response !== undefined,
-        limit,
-        supplied,
-        ...entry,
-      }),
+      stage,
+      ...(reason === undefined ? {} : { unavailableReason: reason }),
     };
   });
 }
@@ -232,12 +234,31 @@ export function readChatRetrievalLimit(subjectRoot) {
       join(subjectRoot, "packages", "keiko-server", "dist", "chat-handlers.js"),
       "utf8",
     );
-    const match = /export const CHAT_MAX_RETRIEVED_MEMORIES\s*=\s*(\d+)\s*;/u.exec(source);
-    const limit = match === null ? Number.NaN : Number(match[1]);
-    return Number.isSafeInteger(limit) && limit > 0 ? { limit } : { failure: LIMIT_UNREADABLE };
+    return limitFromSource(source);
   } catch {
     return { failure: LIMIT_UNREADABLE };
   }
+}
+
+// Exactly one declaration at a line start (a commented-out line is no declaration) whose value is a
+// plain positive integer literal; anything else, including a constant that has gone, fails closed.
+// The number itself is never assumed: it is read, so it may change.
+export function limitFromSource(source) {
+  const declarations = [...source.matchAll(/^export const CHAT_MAX_RETRIEVED_MEMORIES\b.*$/gmu)];
+  if (declarations.length !== 1) return { failure: LIMIT_UNREADABLE };
+  const literal = /^export const CHAT_MAX_RETRIEVED_MEMORIES\s*=\s*(\d+)\s*;\s*(?:\/\/.*)?$/u.exec(
+    declarations[0][0],
+  );
+  const limit = literal === null ? Number.NaN : Number(literal[1]);
+  return Number.isSafeInteger(limit) && limit > 0 ? { limit } : { failure: LIMIT_UNREADABLE };
+}
+
+// The limit read from the build, unless the chat supplied more retrieved memories than it: then the
+// build contradicts the observation and the limit is unreadable.
+function limitFor(chatLimit, retrievedCount) {
+  if (chatLimit.limit !== undefined && retrievedCount > chatLimit.limit)
+    return { failure: LIMIT_UNREADABLE };
+  return chatLimit;
 }
 
 // Every term group of the truth is contained in a group of the probe's terms: the probe accepts at
@@ -282,6 +303,7 @@ export async function traceRecall({
   links,
 }) {
   const startedAt = Date.now();
+  const readLimit = limitFor(chatLimit, retrievedIds.length);
   const wanted = traceWanted(scenario, probe);
   const stored = await storedMemories(instance);
   const memories = stored.memories ?? [];
@@ -293,8 +315,8 @@ export async function traceRecall({
     carriers,
     memories,
     storeKnown: stored.failure === undefined,
-    limit: chatLimit.limit ?? null,
-    ...(chatLimit.failure === undefined ? {} : { limitFailure: chatLimit.failure }),
+    limit: readLimit.limit ?? null,
+    ...(readLimit.failure === undefined ? {} : { limitFailure: readLimit.failure }),
     suppliedLabels: new Set(
       wanted.filter((item) => suppliedCarries(supplied, item, links)).map((item) => item.label),
     ),
