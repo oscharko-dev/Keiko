@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "polite-forget-yes-de",
+  "language": "de",
+  "class": "forget",
+  "difficulty": "plain",
+  "description": "A polite forget request removes the preference.",
+  "truth": [],
+  "turns": [
+    {
+      "user": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": [
+        {
+          "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "Bitte vergiss das.",
+      "requireStoredBefore": [["Tabelle*"]],
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie sollst du mir Zahlen zeigen?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    }
+  ],
+  "forgotten": [
+    {
+      "terms": [["Tabelle*"]]
+    }
+  ]
+}

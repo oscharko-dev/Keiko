@@ -1133,6 +1133,8 @@ export const CLIENT_STAGE_IDS = [
   "command palette",
   "window palette",
   "chat history deletion",
+  "chat memory profile disclosure",
+  "memory vault view change",
   "files directory load",
   "files source preview",
   "files source reveal",

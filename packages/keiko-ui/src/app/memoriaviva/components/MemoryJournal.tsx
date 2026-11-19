@@ -19,6 +19,7 @@ import {
 import { MemoryListState, MemoryRowScaffold, StatusBadge } from "./MemoryList";
 import { formatError } from "./format-error";
 import { sourceKindLabel } from "@/lib/memory-source-label";
+import { subscribeMemoryVaultViewChanges } from "@/lib/memory-vault-view-changes";
 import styles from "./MemoryJournal.module.css";
 
 // A refusal and a forget name no record: nothing was kept, or it is gone.
@@ -165,9 +166,13 @@ function JournalMetadata({
         <span className={styles.mvJournalMetaBadge}>{modeLabel(capture, t)}</span>
       ) : null}
       <span>{t("memoria.journal.surface", { surface: surfaceLabel(capture, t) })}</span>
-      <span>
-        {t("memoria.journal.source", { source: sourceKindLabel(capture.provenance.sourceKind, t) })}
-      </span>
+      {capture.outcome === "forgotten" ? null : (
+        <span>
+          {t("memoria.journal.source", {
+            source: sourceKindLabel(capture.provenance.sourceKind, t),
+          })}
+        </span>
+      )}
       <span data-reason={capture.reason}>
         {t("memoria.journal.reason", { reason: reasonLabel(capture, t) })}
       </span>
@@ -397,10 +402,43 @@ function JournalRows({
   );
 }
 
+function useJournalVaultChanges(
+  load: () => void,
+  setState: Dispatch<SetStateAction<JournalLoadState>>,
+  contentUnavailable: string,
+): void {
+  useEffect(
+    () =>
+      subscribeMemoryVaultViewChanges((change) => {
+        if (change.kind === "removed") {
+          setState((current) => ({
+            ...current,
+            rows: current.rows.filter(
+              ({ capture }) =>
+                capture.memoryId === undefined || !change.ids.includes(capture.memoryId),
+            ),
+          }));
+        } else if (change.kind === "edited") {
+          setState((current) => ({
+            ...current,
+            rows: current.rows.map((row) =>
+              row.capture.memoryId !== undefined && change.ids.includes(row.capture.memoryId)
+                ? { ...row, capture: { ...row.capture, bodyExcerpt: contentUnavailable } }
+                : row,
+            ),
+          }));
+        }
+        load();
+      }),
+    [contentUnavailable, load, setState],
+  );
+}
+
 function useJournalRows(
   fetchImpl: typeof fetchRecentCaptures,
   forgottenIds: RefObject<Set<string>>,
   keptIds: RefObject<Set<string>>,
+  actionAnnouncements: RefObject<number>,
   setAnnouncement: Dispatch<SetStateAction<string>>,
   t: I18nTranslate,
 ): readonly [JournalLoadState, () => void, Dispatch<SetStateAction<readonly JournalRowState[]>>] {
@@ -409,6 +447,7 @@ function useJournalRows(
   const sinceRef = useRef(Date.now() - JOURNAL_HISTORY_WINDOW_MS);
   const load = useCallback((): void => {
     const seq = (requestSeqRef.current += 1);
+    const actionsAtStart = actionAnnouncements.current;
     setState((current) => ({ ...current, loading: true, error: null }));
     void fetchImpl({ since: sinceRef.current })
       .then((response) => {
@@ -420,14 +459,18 @@ function useJournalRows(
             acknowledged: capture.memoryId !== undefined && keptIds.current.has(capture.memoryId),
           }));
         setState({ rows, loading: false, error: null });
-        setAnnouncement(t("memoria.journal.loaded", { count: rows.length }));
+        // A vault change can start this load before the action announces its success.
+        if (actionsAtStart === actionAnnouncements.current) {
+          setAnnouncement(t("memoria.journal.loaded", { count: rows.length }));
+        }
       })
       .catch((error: unknown) => {
         if (seq !== requestSeqRef.current) return;
         setState((current) => ({ ...current, loading: false, error: formatError(error) }));
       });
-  }, [fetchImpl, forgottenIds, keptIds, setAnnouncement, t]);
+  }, [actionAnnouncements, fetchImpl, forgottenIds, keptIds, setAnnouncement, t]);
   useEffect(load, [load]);
+  useJournalVaultChanges(load, setState, t("memoria.journal.contentUnavailable"));
   const setRows = useCallback((next: SetStateAction<readonly JournalRowState[]>): void => {
     setState((current) => ({
       ...current,
@@ -464,7 +507,7 @@ interface ActionHookOptions {
   readonly rows: readonly JournalRowState[];
   readonly setRows: Dispatch<SetStateAction<readonly JournalRowState[]>>;
   readonly setActionError: Dispatch<SetStateAction<string | null>>;
-  readonly setAnnouncement: Dispatch<SetStateAction<string>>;
+  readonly announceAction: (message: string) => void;
   readonly t: I18nTranslate;
 }
 
@@ -510,7 +553,7 @@ function useKeepAction(
         .then(() => {
           keptIds.current.add(capture.memoryId);
           options.setRows((rows) => acknowledgeRows(rows, capture.memoryId));
-          options.setAnnouncement(options.t("memoria.journal.kept"));
+          options.announceAction(options.t("memoria.journal.kept"));
         })
         .catch(() => options.setActionError(options.t("memoria.journal.keepError")))
         .finally(() => setBusyId(null));
@@ -553,7 +596,7 @@ function useForgetAction(
           forgottenIds.current.add(capture.memoryId);
           requestFocus(target);
           options.setRows((rows) => removeRow(rows, capture.memoryId));
-          options.setAnnouncement(options.t("memoria.journal.forgotten"));
+          options.announceAction(options.t("memoria.journal.forgotten"));
         })
         .catch(() => options.setActionError(options.t("memoria.journal.forgetError")))
         .finally(() => setBusyId(null));
@@ -573,17 +616,23 @@ export function MemoryJournal({
   const headingRef = useRef<HTMLHeadingElement>(null);
   const forgottenIds = useRef(new Set<string>());
   const keptIds = useRef(new Set<string>());
+  const actionAnnouncements = useRef(0);
   const [announcement, setAnnouncement] = useState(t("memoria.journal.loading"));
   const [actionError, setActionError] = useState<string | null>(null);
   const [state, retry, setRows] = useJournalRows(
     fetchRecentCapturesImpl,
     forgottenIds,
     keptIds,
+    actionAnnouncements,
     setAnnouncement,
     t,
   );
   const [registerRow, requestFocus] = useJournalFocus(state.rows, headingRef);
-  const actionOptions = { rows: state.rows, setRows, setActionError, setAnnouncement, t };
+  const announceAction = (message: string): void => {
+    actionAnnouncements.current += 1;
+    setAnnouncement(message);
+  };
+  const actionOptions = { rows: state.rows, setRows, setActionError, announceAction, t };
   const [keepBusyId, onKeep] = useKeepAction(actionOptions, keptIds, acceptMemoryProposalImpl);
   const [forgetBusyId, onForget] = useForgetAction(
     actionOptions,

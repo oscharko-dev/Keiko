@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "faf32347e3e8aaafd8826ed210b730ab3fd2dd9cec59f39dbeb7c86241004203"
+    "catalogDigest": "434ef011936cb1c27aabfe2dc3ebfe73033e403a6288ba03b69866a7fdb959f3"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 716,
-    "proofCount": 739,
-    "resolvedProofCount": 739,
-    "failureClassCount": 408,
+    "operationCount": 720,
+    "proofCount": 743,
+    "resolvedProofCount": 743,
+    "failureClassCount": 411,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -633,8 +633,10 @@
         "memory-vault.store.quarantined",
         "memory.capture.decision",
         "memory.capture.novelty-gate",
+        "memory.edit.settled",
         "memory.embedding.invalidated",
         "memory.embedding.invalidation-failed",
+        "memory.embedding.refresh.skipped",
         "memory.embedding.store-rejected",
         "memory.explicit.forget",
         "memory.explicit.remember",
@@ -643,6 +645,8 @@
         "memory.learn.pass.settled",
         "memory.learn.pass.started",
         "memory.learn.relation",
+        "memory.maintenance.candidates.selected",
+        "memory.vault.records.selected",
         "repository.fingerprint-diff.completed",
         "search.answer.assessed",
         "search.citations.reconciled",
@@ -1201,6 +1205,9 @@
     "lsp-process-spawn": ["editor-delivery.dependency-failure"],
     "lsp-process-termination": ["editor-delivery.crash"],
     "chat-content-policy": ["lifecycle-crash.dependency-failure"],
+    "memory-maintenance-selection": ["memory-knowledge.dependency-failure"],
+    "memory-vault-selection": ["memory-knowledge.dependency-failure"],
+    "memory-edit-conflict": ["memory-knowledge.dependency-failure"],
     "memory-audit-state-cache": ["lifecycle-crash.dependency-failure"],
     "memory-capture-novelty": ["memory-knowledge.dependency-failure"],
     "memory-explicit-statement": ["memory-knowledge.dependency-failure"],
@@ -2929,10 +2936,12 @@
       "packages/keiko-server/src/voice-recap.test.ts"
     ],
     "memory.capture.novelty-gate.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
+    "memory.edit.settled.line": ["packages/keiko-server/src/memory-handlers.test.ts"],
     "memory.embedding.invalidated.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
     "memory.embedding.invalidation-failed.line": [
       "packages/keiko-server/src/memory-embedding.test.ts"
     ],
+    "memory.embedding.refresh.skipped.line": ["packages/keiko-server/src/memory-handlers.test.ts"],
     "memory.embedding.store-rejected.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
     "memory.explicit.forget.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
     "memory.explicit.remember.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
@@ -2941,6 +2950,10 @@
     "memory.learn.pass.settled.line": ["packages/keiko-server/src/memory-learning.test.ts"],
     "memory.learn.pass.started.line": ["packages/keiko-server/src/memory-learning.test.ts"],
     "memory.learn.relation.line": ["packages/keiko-server/src/memory-learned-facts.test.ts"],
+    "memory.maintenance.candidates.selected.line": [
+      "packages/keiko-server/src/memory-maintenance-handlers.test.ts"
+    ],
+    "memory.vault.records.selected.line": ["packages/keiko-server/src/memory-handlers.test.ts"],
     "native-file-dialog.selection.projected.counts": [
       "packages/keiko-server/src/native-file-dialog/route.test.ts"
     ],

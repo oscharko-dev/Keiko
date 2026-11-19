@@ -7,6 +7,7 @@
 // concatenation with caller data, so SQL injection is structurally impossible at this layer.
 
 import type { DatabaseSync } from "node:sqlite";
+import { toUSVString } from "node:util";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import { cachedPrepare } from "./statements.js";
 
@@ -28,6 +29,12 @@ export interface MemoryAccessStat {
 export interface MemoryConversationTouch {
   readonly confirmedAt?: number;
   readonly usedAt?: number;
+}
+
+/** The durable order of the user turn that confirmed a fact. */
+export interface MemoryConfirmationPosition {
+  readonly timestamp: number;
+  readonly rowid: number;
 }
 
 // Insert-or-increment. The ON CONFLICT clause turns a repeat access into a counter bump plus a
@@ -52,6 +59,21 @@ const CONFIRM_IN_CONVERSATION_SQL = `
 INSERT INTO memory_conversation_touches (memory_id, conversation_id, confirmed_at)
 SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM memories WHERE id = ?1)
 ON CONFLICT(memory_id, conversation_id) DO UPDATE SET confirmed_at = excluded.confirmed_at
+`;
+
+// Conversational references follow the source turn. A later foreground confirmation stays later
+// even when an older learning pass finishes after it; access recency keeps the processing clock.
+const CONFIRM_LEARNED_TURN_SQL = `
+INSERT INTO memory_conversation_touches
+  (memory_id, conversation_id, confirmed_at, learned_confirmation_timestamp, learned_confirmation_rowid)
+SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM memories WHERE id = ?1)
+ON CONFLICT(memory_id, conversation_id) DO UPDATE SET
+  confirmed_at = MAX(COALESCE(confirmed_at, excluded.confirmed_at), excluded.confirmed_at),
+  learned_confirmation_timestamp = excluded.learned_confirmation_timestamp,
+  learned_confirmation_rowid = excluded.learned_confirmation_rowid
+WHERE learned_confirmation_timestamp IS NULL
+  OR (learned_confirmation_timestamp, learned_confirmation_rowid)
+    < (excluded.learned_confirmation_timestamp, excluded.learned_confirmation_rowid)
 `;
 
 const USE_IN_CONVERSATION_SQL = `
@@ -87,6 +109,10 @@ ON CONFLICT(memory_id) DO UPDATE SET last_used_at = excluded.last_used_at
 const SELECT_ALL_SQL =
   "SELECT memory_id, last_accessed_at, access_count, outcome_count, utility_sum, last_used_at FROM memory_access";
 
+// A standing profile can contain more IDs than SQLite permits host parameters. A bound JSON
+// array keeps the indexed lookup and reuses one prepared statement at every profile size.
+const SELECT_SCOPED_SQL = `${SELECT_ALL_SQL} WHERE memory_id IN (SELECT value FROM json_each(?))`;
+
 interface AccessRow {
   readonly memory_id: string;
   readonly last_accessed_at: number;
@@ -109,6 +135,32 @@ export function recordAccessRows(
   for (const id of ids) {
     stmt.run(id, nowMs);
     touch?.run(id, conversationId ?? null, nowMs);
+  }
+}
+
+export function recordLearnedConfirmationRows(
+  db: DatabaseSync,
+  memoryId: MemoryId,
+  conversationId: string,
+  position: MemoryConfirmationPosition,
+  nowMs: number,
+): boolean {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const result = cachedPrepare(db, CONFIRM_LEARNED_TURN_SQL).run(
+      memoryId,
+      conversationId,
+      position.timestamp,
+      position.timestamp,
+      position.rowid,
+    );
+    const confirmed = Number(result.changes) > 0;
+    if (confirmed) recordAccessRows(db, [memoryId], nowMs);
+    db.exec("COMMIT");
+    return confirmed;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
   }
 }
 
@@ -170,9 +222,9 @@ export function getAccessStatsRows(
     return rowsToMap(rows);
   }
   if (ids.length === 0) return new Map();
-  const placeholders = ids.map(() => "?").join(",");
-  const sql = `${SELECT_ALL_SQL} WHERE memory_id IN (${placeholders})`;
-  const rows = cachedPrepare(db, sql).all(...ids) as unknown as readonly AccessRow[];
+  const rows = cachedPrepare(db, SELECT_SCOPED_SQL).all(
+    JSON.stringify(ids.map(toUSVString)),
+  ) as unknown as readonly AccessRow[];
   return rowsToMap(rows);
 }
 

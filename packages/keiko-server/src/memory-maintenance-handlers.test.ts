@@ -1,18 +1,28 @@
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { validateActivityLogOperationRecord } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   CodingWorkbenchMode,
+  MemoryAuditEvent,
   MemoryId,
   MemoryRecord,
+  MemoryScope,
   MemoryStatus,
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
+import type { ProjectId } from "@oscharko-dev/keiko-contracts/memory";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import {
   handleRunMaintenance,
@@ -99,12 +109,27 @@ function makeVault(): MemoryVaultStore {
   return vault;
 }
 
+function makeConcurrentVaults(): readonly [MemoryVaultStore, MemoryVaultStore] {
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-maintenance-concurrent-"));
+  tmpDirs.push(dir);
+  const options = {
+    memoryDir: dir,
+    vaultKey: Buffer.alloc(32, 67),
+    redactString: (s: string): string => s,
+  };
+  const reader = createMemoryVault(options);
+  const writer = createMemoryVault(options);
+  activeVaults.push(reader, writer);
+  return [reader, writer];
+}
+
 function mid(value: string): MemoryId {
   return value as unknown as MemoryId;
 }
 
 interface RecordOptions {
   readonly id: string;
+  readonly scope?: MemoryScope;
   readonly body?: string;
   readonly type?: MemoryRecord["type"];
   readonly status?: MemoryStatus;
@@ -120,7 +145,7 @@ function insert(vault: MemoryVaultStore, options: RecordOptions): MemoryRecord {
   const record: MemoryRecord = {
     id: mid(options.id),
     schemaVersion: "1",
-    scope: { kind: "user", userId: "u-1" as unknown as MemoryUserId },
+    scope: options.scope ?? { kind: "user", userId: "u-1" as unknown as MemoryUserId },
     type: options.type ?? "preference",
     body: options.body ?? "prefers dark mode",
     provenance: {
@@ -170,6 +195,212 @@ describe("handleRunMaintenance", () => {
     expect(result.status).toBe(200);
     expect(counts(result).promoted).toBe(1);
     expect(vault.getMemory(mid("m"))?.status).toBe("accepted");
+  });
+
+  it.each(["unchanged", "unrelated", "confidential", "accepted", "body", "deleted"] as const)(
+    "checks promotion eligibility at commit after a same-millisecond %s update",
+    (change) => {
+      const [reader, writer] = makeConcurrentVaults();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(RETENTION_NOW);
+      const record = insert(reader, {
+        id: "promotion-race",
+        status: "proposed",
+        sensitivity: "public",
+        confidence: 0.9,
+      });
+      const other = insert(reader, { id: "unrelated", status: "archived" });
+      const select = reader.listMemoriesAcrossScopes;
+      vi.spyOn(reader, "listMemoriesAcrossScopes").mockImplementationOnce((...args) => {
+        const snapshot = select(...args);
+        if (change === "confidential") {
+          writer.updateMemory(
+            record.id,
+            {
+              provenance: { ...record.provenance, sensitivity: "confidential" },
+            },
+            RETENTION_NOW,
+          );
+        } else if (change === "accepted") {
+          writer.updateMemory(record.id, { status: "accepted" }, RETENTION_NOW);
+        } else if (change === "body") {
+          writer.updateMemory(record.id, { body: "Changed synthetic preference" }, RETENTION_NOW);
+        } else if (change === "deleted") {
+          writer.deleteMemory(record.id, {
+            tombstone: true,
+            forgetterSurface: "memoria",
+            nowMs: RETENTION_NOW,
+          });
+        } else if (change === "unrelated") {
+          writer.updateMemory(other.id, { tags: ["changed"] }, RETENTION_NOW);
+        }
+        return snapshot;
+      });
+      const evidenceStore = createInMemoryEvidenceStore();
+      let result: RouteResult;
+      try {
+        result = handleRunMaintenance(makeCtx(), { ...makeUnattendedDeps(reader), evidenceStore });
+      } finally {
+        clock.mockRestore();
+      }
+      const promoted = change === "unchanged" || change === "unrelated" ? 1 : 0;
+      expect(result.status).toBe(200);
+      expect(counts(result).promoted).toBe(promoted);
+      const acceptanceEvents = evidenceStore.list().flatMap((id) => {
+        const events = JSON.parse(evidenceStore.get(id) ?? "[]") as readonly MemoryAuditEvent[];
+        return events.filter((event) => event.kind === "memory:accepted");
+      });
+      expect(acceptanceEvents).toHaveLength(promoted);
+      const stored = writer.getMemory(record.id);
+      if (change === "deleted") {
+        expect(stored).toBeUndefined();
+      } else {
+        expect(stored?.updatedAt).toBe(record.updatedAt + 1);
+        expect(stored).toMatchObject({
+          status: promoted === 1 || change === "accepted" ? "accepted" : "proposed",
+          provenance: { sensitivity: change === "confidential" ? "confidential" : "public" },
+        });
+        if (change === "body") expect(stored?.body).toBe("Changed synthetic preference");
+      }
+    },
+  );
+
+  it.each([false, true])("logs only promotion outcome counts with stale selection %s", (stale) => {
+    const [reader, writer] = makeConcurrentVaults();
+    const record = insert(reader, {
+      id: "counted-promotion",
+      status: "proposed",
+      sensitivity: "public",
+    });
+    const select = reader.listMemoriesAcrossScopes;
+    vi.spyOn(reader, "listMemoriesAcrossScopes").mockImplementationOnce((...args) => {
+      const snapshot = select(...args);
+      if (stale) {
+        writer.updateMemory(record.id, { status: "accepted" }, record.updatedAt);
+      }
+      return snapshot;
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      expect(handleRunMaintenance(makeCtx(), makeUnattendedDeps(reader)).status).toBe(200);
+    } finally {
+      resetServerLogger();
+    }
+    const selection = sink.events.find(
+      (event) => event.op === "memory.maintenance.candidates.selected",
+    );
+    expect(selection?.extra).toMatchObject({
+      promotionCandidateCount: 1,
+      promotionSkippedCount: stale ? 1 : 0,
+    });
+    if (selection === undefined) throw new TypeError("Missing maintenance selection");
+    const line = formatActivityLogProofLine(selection);
+    expectActivityLogProof("memory.maintenance.candidates.selected.line", line);
+    expect(line).not.toContain(record.body);
+    expect(line).not.toContain(record.id);
+    const legacyExtra: Record<string, unknown> = { ...selection.extra };
+    delete legacyExtra.promotionSkippedCount;
+    expect(() =>
+      validateActivityLogOperationRecord(
+        "memory.maintenance.candidates.selected",
+        "memory",
+        { correlationId: "promotion-legacy-check" },
+        legacyExtra,
+      ),
+    ).not.toThrow();
+  });
+
+  it("reads only applicable promotion and review records while fading across all scopes", () => {
+    const vault = makeVault();
+    const nowMs = RETENTION_NOW;
+    const sharedProject: MemoryScope = {
+      kind: "project",
+      projectId: "maintenance-second-project" as ProjectId,
+    };
+    const proposal = insert(vault, {
+      id: "promotion-candidate",
+      body: "Prefer plain text exports",
+      status: "proposed",
+      createdAt: nowMs,
+      sensitivity: "public",
+      confidence: 0.4,
+    });
+    vault.recordAccess([proposal.id, proposal.id], nowMs);
+    const expired = insert(vault, {
+      id: "expired-candidate",
+      body: "Deliver the temporary calendar report",
+      status: "proposed",
+      createdAt: nowMs - DAY,
+      validUntil: nowMs - 1,
+      sensitivity: "public",
+    });
+    const confidential = insert(vault, {
+      id: "confidential-candidate",
+      body: "Confidential payroll preference",
+      status: "proposed",
+      createdAt: nowMs,
+    });
+    const faded = insert(vault, {
+      id: "expired-strength",
+      scope: sharedProject,
+      body: "Inventory widgets in a spreadsheet",
+      confidence: 0.1,
+      createdAt: nowMs - 60 * DAY,
+    });
+    insert(vault, {
+      id: "already-archived",
+      scope: sharedProject,
+      body: "Departed from the former desk",
+      status: "archived",
+      createdAt: nowMs,
+    });
+    const list = vi.fn(vault.listMemoriesAcrossScopes);
+    const stats = vi.fn(vault.getAccessStats);
+    const sink = createBufferedServerLogSink();
+    const correlationId = "maintenance-fixture-selection";
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const result = runMemoryMaintenance(
+        { ...vault, listMemoriesAcrossScopes: list, getAccessStats: stats },
+        undefined,
+        { nowMs, correlationId, autonomyMode: "autonomous-delivery" },
+      );
+      expect(result).toMatchObject({ promoted: 1, archived: 1, forgotten: 1 });
+    } finally {
+      resetServerLogger();
+    }
+    expect(vault.getMemory(proposal.id)?.status).toBe("accepted");
+    expect(vault.getMemory(confidential.id)?.status).toBe("proposed");
+    expect(vault.getMemory(faded.id)?.status).toBe("archived");
+    expect(list.mock.calls.map(([, options]) => options)).toEqual([
+      { includeExpired: true, status: ["proposed"], sensitivity: ["public"] },
+      { includeExpired: true, status: ["accepted", "proposed", "conflicted"] },
+      { includeExpired: true },
+    ]);
+    expect(stats.mock.calls).toEqual([[[proposal.id, expired.id]], []]);
+    expect(list.mock.calls[2]?.[0]).toContainEqual(sharedProject);
+
+    const op = "memory.maintenance.candidates.selected";
+    const event = sink.events.find((entry) => entry.op === op);
+    const line = formatActivityLogProofLine(event ?? {});
+    const persisted = expectActivityLogProof("memory.maintenance.candidates.selected.line", line);
+    expect(persisted).toMatchObject({
+      op,
+      correlationId,
+      level: "debug",
+      promotionCandidateCount: 2,
+      consolidationCandidateCount: 4,
+    });
+    expect(line).not.toContain(confidential.body);
+    expect(line).not.toContain(confidential.id);
+    const timeline = analyzeLogText(line).timelines.find(
+      (entry) => entry.correlationId === correlationId,
+    );
+    const candidateSelection = timeline?.lines.find((entry) => entry.op === op);
+    expect(candidateSelection?.extra).toMatchObject({
+      promotionCandidateCount: 2,
+      consolidationCandidateCount: 4,
+    });
   });
 
   it("does NOT mutate confidence when a memory is frequently recalled (O-V2 immutability)", () => {

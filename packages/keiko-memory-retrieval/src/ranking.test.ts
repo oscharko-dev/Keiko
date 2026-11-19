@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { buildRankBySignal, rankMemories, sourceImportance } from "./ranking.js";
 import { DEFAULT_RANKING_WEIGHTS, type IncludedSubscores } from "./types.js";
@@ -420,6 +420,17 @@ describe("buildRankBySignal — per-signal tie-break comparator", () => {
       importance: 0,
     };
   }
+
+  it("loads each candidate's subscores once across all active signals", () => {
+    const records = Array.from({ length: 16 }, (_, i) =>
+      buildRecord({ id: String(i), updatedAt: now }),
+    );
+    const subscores = new Map(records.map((record, i) => [record.id, tiedSubscores(i % 3)]));
+    const get = vi.spyOn(subscores, "get");
+    const ranks = buildRankBySignal(records, subscores, ["relevance", "recency", "importance"]);
+    expect(ranks.get("relevance")?.size).toBe(records.length);
+    expect(get).toHaveBeenCalledTimes(records.length);
+  });
 
   it("breaks a tie between distinct ids by ascending id, in both directions", () => {
     // Deliberately scrambled input order so the underlying sort must compare pairs where the

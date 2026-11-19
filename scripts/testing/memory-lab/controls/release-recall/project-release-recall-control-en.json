@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 1,
+  "id": "project-release-recall-control-en",
+  "language": "en",
+  "class": "project-decision",
+  "difficulty": "plain",
+  "description": "An additional synthetic diagnosis, fixed before inference: a known project decision, two positive recall questions and two irrelevant questions over the same nonempty store.",
+  "truth": [
+    {
+      "key": "release-day",
+      "seed": "We decided as a team to release only on Tuesdays, because support is fully staffed then.",
+      "must": true,
+      "private": false,
+      "terms": [
+        [
+          "Tuesday*"
+        ]
+      ]
+    }
+  ],
+  "turns": [
+    {
+      "user": "We decided as a team to release only on Tuesdays, because support is fully staffed then.",
+      "learner": [
+        {
+          "body": "We decided as a team to release only on Tuesdays, because support is fully staffed then.",
+          "type": "decision",
+          "about": "team"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "positive-lexical",
+      "question": "On which weekdays do we release?",
+      "expect": {
+        "kind": "answer",
+        "terms": [
+          [
+            "Tuesday*"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "positive-paraphrase",
+      "question": "On which weekday do we ship new versions?",
+      "expect": {
+        "kind": "answer",
+        "terms": [
+          [
+            "Tuesday*"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "negative-far",
+      "question": "What is Apache Kafka?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    },
+    {
+      "id": "negative-near",
+      "question": "On which weekday does the city library close?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    }
+  ]
+}

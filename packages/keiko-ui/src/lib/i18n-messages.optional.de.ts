@@ -4761,9 +4761,25 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.memory.disableForChat": "MemoriaViva für diesen Chat deaktivieren",
   "chat.memory.included": "{count} Erinnerungen einbezogen",
   "chat.memory.noneIncluded": "Keine Erinnerungen einbezogen",
+  "chat.memory.profileIncluded": "Profilfakten im Kontext ({count})",
+  "chat.memory.retrievedAndProfile":
+    "Zur Frage abgerufene Erinnerungen ({retrieved}) · Profilfakten im Kontext ({profile})",
   "chat.memory.disclosurePending": "MemoriaViva-Hinweis erscheint nach der nächsten Antwort.",
   "chat.memory.usedTokens": "{used} von {tokens} MemoriaViva-Token verwendet.",
+  "chat.memory.retrievalTokens":
+    "Für den Abruf zur Frage wurden {used} von {tokens} Token verwendet.",
   "chat.memory.disabledLast": "MemoriaViva war für die letzte Anfrage deaktiviert.",
+  "chat.memory.retrievedHeading": "Für diese Frage abgerufene Erinnerungen",
+  "chat.memory.noneRetrieved": "Für diese Frage wurden keine Erinnerungen abgerufen.",
+  "chat.memory.profileHeading": "Persönliches Profil",
+  "chat.memory.profileDescription":
+    "Keiko hat diese Profilfakten als Hintergrund für die Antwort ausgewählt.",
+  "chat.memory.profileTokens": "Verwendete Profil-Token ({tokens})",
+  "chat.memory.profileDropped":
+    "Geprüfte Profilfakten, die wegen der Begrenzung entfallen ({count})",
+  "chat.memory.profileRetrieved":
+    "Vollständig in den Abrufkontext übernommene Profilfakten ({count})",
+  "chat.memory.belowRelevance": "Erinnerungen unter der Relevanzschwelle ({count})",
   "chat.memory.provenance": "Herkunft für {id}",
   "chat.memory.source": "Quelle",
   "chat.memory.sensitivity": "Sensitivität",
@@ -5003,6 +5019,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "memoria.dialog.tags": "Schlagwörter",
   "memoria.dialog.commaSeparated": "(kommagetrennt)",
   "memoria.dialog.save": "Speichern",
+  "memoria.dialog.editConflict":
+    "Diese Erinnerung wurde während der Bearbeitung geändert. Dein Entwurf ist noch da. Kopiere ihn, bevor du die aktuelle Erinnerung erneut öffnest.",
   "memoria.dialog.saving": "Speichere…",
   "memoria.dialog.submitCorrection": "Korrektur einreichen",
   "memoria.dialog.submitting": "Reiche ein…",

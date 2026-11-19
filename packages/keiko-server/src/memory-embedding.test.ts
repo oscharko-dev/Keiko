@@ -27,6 +27,7 @@ import type {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { MemoryId, MemoryRecord, MemoryUserId } from "@oscharko-dev/keiko-contracts";
 import {
+  bindMemoryQueryEmbedding,
   cosineSimilarity,
   embedAndStoreMemory,
   embedMemoryText,
@@ -247,6 +248,47 @@ describe("embedMemoryText (#204)", () => {
     expect(input?.modelId).toBe(EMBEDDING_MODEL);
     expect(input?.vector.length).toBe(3072);
   });
+
+  it.each(["azure-openai-deployment", "openai-compatible"] as const)(
+    "honors %s routing in the gateway transport for both a captured body and a bound query",
+    async (endpointStyle) => {
+      const config = gatewayConfig(EMBEDDING_MODEL);
+      const first = config.providers.at(0);
+      if (first === undefined) throw new TypeError("Missing test provider");
+      const provider = {
+        ...first,
+        endpointStyle,
+        apiVersion: "2024-02-01",
+        baseUrl: "https://routing.example.test",
+      };
+      const expected =
+        endpointStyle === "azure-openai-deployment"
+          ? `/openai/deployments/${EMBEDDING_MODEL}/embeddings?api-version=2024-02-01`
+          : "/embeddings";
+      const paths: string[] = [];
+      const fetchImpl: typeof fetch = (input) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        const path = url.pathname + url.search;
+        paths.push(path);
+        return Promise.resolve(
+          path === expected
+            ? Response.json({
+                data: [{ index: 0, embedding: [...fakeVector(3072)] }],
+                model: EMBEDDING_MODEL,
+              })
+            : new Response(null, { status: 404 }),
+        );
+      };
+      const deps = makeDeps({
+        config: { ...config, providers: [provider] },
+        embeddingRequest: (request) => requestOpenAIEmbedding({ ...request, fetchImpl }),
+      });
+      const document = await embedMemoryText(deps, "Synthetic document");
+      const query = await bindMemoryQueryEmbedding(deps, provider, "Synthetic question")();
+      expect(paths).toEqual([expected, expected]);
+      expect([document?.modelId, query?.modelId]).toEqual([EMBEDDING_MODEL, EMBEDDING_MODEL]);
+    },
+  );
 
   it("hands the deps activity-log sink to the embedding transport", async () => {
     const adapter = okAdapter();
@@ -570,6 +612,8 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     const canonical = makeRecord("the user prefers postgres", "id-canonical");
     await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
     const before = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
+    const readBodies = vi.spyOn(vault, "listMemoriesByScope");
+    const readMetadata = vi.spyOn(vault, "listMemoryMetadataByScope");
 
     const dup = makeRecord("postgres is the database the user works with", "id-dup");
     const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, dup);
@@ -577,6 +621,15 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expect(vault.getMemory(dup.id)).toBeUndefined();
     const after = vault.getAccessStats([canonical.id]).get(canonical.id)?.accessCount ?? 0;
     expect(after).toBe(before + 1);
+    expect(readBodies).not.toHaveBeenCalled();
+    expect(readMetadata.mock.calls.map(([, options]) => options?.status)).toEqual([
+      ["rejected"],
+      ["accepted", "proposed"],
+    ]);
+    for (const [scope, options] of readMetadata.mock.calls) {
+      expect(scope).toEqual(canonical.scope);
+      expect(options?.limit).toBeGreaterThan(0);
+    }
   });
 
   it("keeps a changed value in the same slot apart from a semantic near-duplicate (#4212)", async () => {
@@ -642,6 +695,42 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expect(outcome).toEqual({ kind: "unconfirmed" });
     expect(vault.getMemory(claim.id)).toBeUndefined();
   });
+
+  it.each(["forget", "reject"] as const)(
+    "keeps a different model space independent of a prior %s",
+    async (refusal) => {
+      const originalDeps = makeDeps();
+      const otherModel = "text-embedding-3-small";
+      const newDeps = makeDeps({
+        modelId: otherModel,
+        embeddingRequest: () =>
+          Promise.resolve({ ok: true, value: { vector: fakeVector(3072), modelId: otherModel } }),
+      });
+      const vault = makeVault();
+      const first = makeRecord("My preference is coffee", "space-before");
+      await insertSalienceMemoryWithNoveltyGate(originalDeps, vault, first);
+      if (refusal === "forget") {
+        vault.deleteMemory(first.id, {
+          tombstone: true,
+          forgetterSurface: "test",
+          nowMs: Date.now(),
+        });
+        expect(vault.hasForgetTombstoneForBody(first.scope, first.body)).toBe(true);
+      } else {
+        vault.updateMemory(first.id, { status: "rejected" }, Date.now());
+      }
+      const different = makeRecord("I cycle on weekends", "space-after");
+      expect((await insertSalienceMemoryWithNoveltyGate(newDeps, vault, different)).kind).toBe(
+        "inserted",
+      );
+      expect(vault.getMemory(different.id)?.body).toBe(different.body);
+      const paraphrase = makeRecord("I like coffee", "space-paraphrase");
+      expect(await insertSalienceMemoryWithNoveltyGate(originalDeps, vault, paraphrase)).toEqual({
+        kind: "suppressed",
+        reason: refusal === "forget" ? "suppressed-by-forget" : "suppressed-by-rejection",
+      });
+    },
+  );
 
   it("RB-4 (GEN-AI-MEMORY-003): suppresses a PARAPHRASED re-capture of a forgotten memory (semantic, not exact-hash)", async () => {
     // Keyed embedding: any "dark" text → V_DARK; anything else → an orthogonal V_OTHER. The original
@@ -756,13 +845,27 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expectInserted(result, bob.id);
   });
 
-  it("inserts plainly when no embedding model is configured (graceful)", async () => {
+  it("inserts without reading the neighborhood when no embedding model is configured", async () => {
     const deps = makeDeps({ modelId: CHAT_MODEL });
     const vault = makeVault();
+    const neighbor = makeRecord("accepted fixture", "neighbor-with-vector");
+    vault.insertMemory(neighbor);
+    vault.upsertEmbedding(neighbor.id, {
+      provider: "test-provider",
+      modelId: EMBEDDING_MODEL,
+      metric: "cosine",
+      vector: fakeVector(8),
+    });
+    const readBodies = vi.spyOn(vault, "listMemoriesByScope");
+    const readVectors = vi.spyOn(vault, "getEmbeddings");
     const rec = makeRecord("anything at all");
     const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, rec);
     expectInserted(outcome, rec.id);
     expect(vault.getEmbedding(rec.id)).toBeUndefined();
+    expect({
+      bodies: readBodies.mock.calls.length,
+      vectors: readVectors.mock.calls.length,
+    }).toEqual({ bodies: 0, vectors: 0 });
   });
 });
 
@@ -1066,7 +1169,7 @@ describe("memory embedding activity log", () => {
     const deps = makeDeps();
     const vault = makeVault();
     const rejection = Object.assign(new Error("dimension mismatch"), { code: "EDIMENSION" });
-    vi.spyOn(vault, "upsertEmbedding").mockImplementation(() => {
+    vi.spyOn(vault, "replaceEmbeddingForMemoryBody").mockImplementation(() => {
       throw rejection;
     });
     const sink = capture("info");
@@ -1107,6 +1210,7 @@ describe("memory embedding activity log", () => {
       metric: "cosine",
       vector: Float32Array.from([1, 0, 0, 0]),
     });
+    vault.updateMemory(stored.id, { body: "the user prefers spaces" }, stored.updatedAt);
     const sink = capture("info");
 
     await refreshMemoryEmbeddingAfterBodyEdit(deps, vault, stored.id, "the user prefers spaces");
@@ -1137,19 +1241,17 @@ describe("memory embedding activity log", () => {
       metric: "cosine",
       vector: Float32Array.from([1, 0, 0, 0]),
     });
+    vault.updateMemory(stored.id, { body: "the user prefers spaces" }, stored.updatedAt);
     const deletionFailure = Object.assign(new Error("row locked"), { code: "EBUSY" });
-    vi.spyOn(vault, "deleteEmbedding").mockImplementation(() => {
+    vi.spyOn(vault, "replaceEmbeddingForMemoryBody").mockImplementation(() => {
       throw deletionFailure;
     });
     const sink = capture("info");
 
     await refreshMemoryEmbeddingAfterBodyEdit(deps, vault, stored.id, "the user prefers spaces");
 
-    expect(opsIn(sink)).toEqual([
-      "memory.embedding.invalidated",
-      "memory.embedding.invalidation-failed",
-    ]);
-    const [, failure] = sink.events;
+    expect(opsIn(sink)).toEqual(["memory.embedding.invalidation-failed"]);
+    const [failure] = sink.events;
     expect(failure?.level).toBe("warn");
     expect(failure?.category).toBe("memory");
     expect(failure?.extra).toMatchObject({ failureKind: "EBUSY" });

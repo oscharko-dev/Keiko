@@ -12,6 +12,7 @@ import { setImmediate as yieldHttpWrites } from "node:timers/promises";
 import { createStreamingRedactor } from "@oscharko-dev/keiko-security/redaction";
 import { currentRedactionSecrets } from "./deps.js";
 import { raceAbort } from "./abort-race.js";
+import { iterateSequentialResults } from "./bounded-concurrency.js";
 import { withMarkdownSkillRequestAuthority } from "./markdown-skill-authority.js";
 import { protectMarkdownSkillRequest } from "./markdown-skill-admission.js";
 import { gatewayAssemblyOutputAllocation } from "./chat-prompt-budget.js";
@@ -197,23 +198,34 @@ function tokenPublisher(
   controller: AbortController,
   termination: StreamTermination,
 ): (text: string) => Promise<void> {
+  const writeChunk = (text: string, from: number): number => {
+    const end = tokenChunkEnd(text, from, tokenChunkCapacity(ctx.res, text.length - from));
+    termination.tokenFrames += 1;
+    writeSseFrame(
+      ctx.res,
+      sseMessage({ event: "token", data: { text: text.slice(from, end) } }),
+      controller,
+      () => {
+        termination.backpressure = true;
+      },
+      ctx.correlationId,
+    );
+    return end;
+  };
   return async (text): Promise<void> => {
-    if (isDetachedRequestResponse(ctx.res)) return;
-    let from = 0;
-    while (from < text.length && !controller.signal.aborted) {
-      const end = tokenChunkEnd(text, from, tokenChunkCapacity(ctx.res, text.length - from));
-      termination.tokenFrames += 1;
-      writeSseFrame(
-        ctx.res,
-        sseMessage({ event: "token", data: { text: text.slice(from, end) } }),
-        controller,
-        () => {
-          termination.backpressure = true;
-        },
-        ctx.correlationId,
-      );
-      from = end;
-      if (from < text.length && !requestIsAborted(controller.signal)) await yieldHttpWrites();
+    if (isDetachedRequestResponse(ctx.res) || text.length === 0 || controller.signal.aborted)
+      return;
+    let from = writeChunk(text, 0);
+    if (from >= text.length || requestIsAborted(controller.signal)) return;
+    // Each turn waits for the HTTP queue to move before measuring the next chunk's capacity.
+    function* remainingOffsets(): Generator<number> {
+      while (from < text.length && !controller.signal.aborted) yield from;
+    }
+    for await (const offset of iterateSequentialResults(remainingOffsets(), (offset) =>
+      yieldHttpWrites(offset),
+    )) {
+      if (requestIsAborted(controller.signal)) return;
+      from = writeChunk(text, offset);
     }
   };
 }
@@ -330,10 +342,11 @@ function resolveMemory(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   memoryContext: ConversationMemoryRuntimeContext | undefined,
+  signal: AbortSignal,
 ): Promise<ConversationMemoryResultWire> {
   return memoryContext === undefined
     ? Promise.resolve(emptyMemoryResult(false))
-    : buildMemoryResult(request, deps, memoryContext);
+    : buildMemoryResult(request, deps, memoryContext, signal);
 }
 
 // Maps a thrown gateway error to a REDACTED { code, message, correlationId } SSE error payload,
@@ -421,7 +434,8 @@ async function streamAndPersist(
   const { prepared, userMessage } = admitted;
   const { request, memoryContext } = prepared;
   const startedAt = Date.now();
-  const memory = admitted.memory ?? (await resolveMemory(deps, request, memoryContext));
+  const memory =
+    admitted.memory ?? (await resolveMemory(deps, request, memoryContext, controller.signal));
   if (requestIsAborted(controller.signal)) {
     failCancelledStreamTurn(ctx, deps, request, true, controller.signal);
     return;
@@ -1036,7 +1050,7 @@ async function prepareDesktopChatProviderStream(
     memory =
       deps.gatewayConfig === undefined
         ? undefined
-        : await resolveMemory(deps, prepared.request, prepared.memoryContext);
+        : await resolveMemory(deps, prepared.request, prepared.memoryContext, controller.signal);
   } catch (error) {
     return rejectPreparedStream(deps, prepared, admitted, controller.signal, error, correlationId);
   }

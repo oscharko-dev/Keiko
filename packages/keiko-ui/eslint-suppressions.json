@@ -36,7 +36,7 @@
       "count": 5
     },
     "max-lines-per-function": {
-      "count": 23
+      "count": 22
     }
   },
   "src/app/components/desktop/ConnectedScopePill.tsx": {

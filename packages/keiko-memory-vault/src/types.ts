@@ -15,9 +15,14 @@ import type {
   MemoryType,
   MemoryUpdatePreImage,
   MemoryValidityInterval,
+  UserId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
-import type { MemoryAccessStat, MemoryConversationTouch } from "./access.js";
+import type {
+  MemoryAccessStat,
+  MemoryConfirmationPosition,
+  MemoryConversationTouch,
+} from "./access.js";
 
 export type { MemoryAccessStat, MemoryConversationTouch } from "./access.js";
 export type { MemoryUpdatePreImage } from "@oscharko-dev/keiko-contracts/memory";
@@ -158,8 +163,13 @@ export interface MemoryDeleteResult {
 }
 
 export interface ListMemoriesOptions {
+  /** Records whose persisted source message IDs contain this exact message. */
+  readonly sourceMessageId?: string;
+  readonly sensitivity?: readonly MemorySensitivity[];
   readonly type?: readonly MemoryType[];
   readonly status?: readonly MemoryStatus[];
+  /** Match these additional statuses only when the record has a stale reason. */
+  readonly includeStaleStatuses?: readonly MemoryStatus[];
   readonly pinned?: boolean;
   // Only records whose retention hint carries this policy key (the column is not sealed).
   readonly retentionPolicyKey?: string;
@@ -175,6 +185,20 @@ export interface ListMemoriesOptions {
   // For includeExpired === false the vault uses the deterministic `now()` from the factory; this
   // override only exists so a caller can pin "expired relative to T" without mutating the clock.
   readonly nowMs?: number;
+}
+
+export interface MemoryCenterPageOptions extends Pick<
+  ListMemoriesOptions,
+  "type" | "status" | "sensitivity"
+> {
+  readonly scopeKinds?: readonly MemoryScopeKind[];
+  readonly limit: number;
+  readonly offset: number;
+}
+
+export interface MemoryCenterPage {
+  readonly memories: readonly MemoryRecord[];
+  readonly total: number;
 }
 
 export interface DeleteMemoryOptions {
@@ -195,7 +219,7 @@ export interface MemoryForgottenStatement {
   readonly reviewerId?: MemoryReviewerId;
   readonly reason?: string;
   readonly nowMs: number;
-  readonly bodyEmbedding?: Float32Array;
+  readonly bodyEmbedding?: MemoryEmbeddingInput | Float32Array;
 }
 
 export interface MemoryVaultStore {
@@ -207,6 +231,10 @@ export interface MemoryVaultStore {
   readonly deleteMemory: (id: MemoryId, options: DeleteMemoryOptions) => void;
   readonly deleteMemories: (deletes: readonly MemoryBatchDelete[]) => readonly MemoryDeleteResult[];
   readonly listMemoryScopes: () => readonly MemoryScope[];
+  // The local operator's review queue, with scope discovery and record selection sharing one snapshot.
+  readonly listMemoryReviewQueue: () => readonly MemoryRecord[];
+  // Local operator list without a content query. Sorting and page bodies share one snapshot.
+  readonly listMemoryCenterPage: (options: MemoryCenterPageOptions) => MemoryCenterPage;
   readonly listMemoriesAcrossScopes: (
     scopes: readonly MemoryScope[],
     options?: ListMemoriesOptions,
@@ -219,6 +247,16 @@ export interface MemoryVaultStore {
     scope: MemoryScope,
     options?: ListMemoriesOptions,
   ) => readonly MemoryMetadata[];
+  /** Eligible personal profile rows in pin, confirmation, recency and UTF-16 ID order. */
+  readonly listStandingProfileCandidates: (
+    userId: UserId,
+    options: {
+      readonly types: readonly MemoryType[];
+      readonly minConfidenceExclusive: number;
+      readonly nowMs: number;
+      readonly limit: number;
+    },
+  ) => readonly { readonly id: MemoryId; readonly confirmations: number }[];
   readonly insertEdge: (edge: MemoryEdge) => MemoryEdge;
   readonly listOutgoingEdges: (memoryId: MemoryId) => readonly MemoryEdge[];
   readonly listIncomingEdges: (memoryId: MemoryId) => readonly MemoryEdge[];
@@ -228,6 +266,13 @@ export interface MemoryVaultStore {
   readonly deleteEdge: (edgeId: MemoryEdgeId) => void;
   readonly upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput) => void;
   readonly deleteEmbedding: (memoryId: MemoryId) => void;
+  // A delayed body refresh may replace/invalidate only the body it actually embedded. The body
+  // check and embedding mutation share a write transaction; false means no matching live record.
+  readonly replaceEmbeddingForMemoryBody: (
+    memoryId: MemoryId,
+    expectedBody: string,
+    embedding: MemoryEmbeddingInput | null,
+  ) => boolean;
   // KEIKO-0440 (PR-review follow-up): reserved for `keiko memory reembed --force`. Atomic
   // vault-wide replace: delete every existing embedding row and insert the supplied set in
   // ONE transaction. Any failure inside the swap rolls the whole transaction back so the
@@ -305,7 +350,7 @@ export interface MemoryVaultStore {
   // body_hash — without ever exposing the forgotten body text itself.
   readonly hasSemanticallySimilarForgetTombstone: (
     scope: MemoryScope,
-    candidate: Float32Array,
+    candidate: MemoryEmbeddingInput | Float32Array,
     threshold: number,
   ) => boolean;
   readonly purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number) => number;
@@ -313,6 +358,13 @@ export interface MemoryVaultStore {
   // (a recall reflex from the retrieval surface); `getAccessStats` reads the counters back for the
   // maintenance planner. Both operate on the cleartext `memory_access` table — no content.
   readonly recordAccess: (ids: readonly MemoryId[], nowMs: number, conversationId?: string) => void;
+  /** Reinforces a fact once for an ordered learning turn. Returns true when counted. */
+  readonly recordLearnedConfirmation: (
+    id: MemoryId,
+    conversationId: string,
+    position: MemoryConfirmationPosition,
+    nowMs: number,
+  ) => boolean;
   // An answer drew on these memories. Remembered for "Vergiss das"; it does not strengthen them.
   readonly recordUse: (ids: readonly MemoryId[], nowMs: number, conversationId: string) => void;
   // Outcome tracking (#204, O-V1). `recordOutcome` appends a governed retention judgement (utility

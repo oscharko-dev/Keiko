@@ -30,6 +30,20 @@ function ids(candidates: readonly StandingProfileCandidate[]): readonly string[]
 }
 
 describe("selectStandingProfile", () => {
+  it.each([
+    [-1, 0],
+    [0, 1],
+  ] as const)(
+    "applies the validity start at offset %i even for pinned facts",
+    (offset, expected) => {
+      const profile = selectStandingProfile(
+        [candidate({ id: "scheduled", pinned: true, validFrom: NOW })],
+        NOW + offset,
+      );
+      expect(profile.entries).toHaveLength(expected);
+    },
+  );
+
   it("orders by pin, then confirmations, then the newest statement, then the id", () => {
     const candidates = [
       candidate({ id: "b-old", createdAt: 100 }, 2),

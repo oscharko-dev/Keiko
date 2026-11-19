@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes } from "node:crypto";
 import {
@@ -31,6 +31,7 @@ import {
   MemoryStoragePreconditionError,
   MemoryStorageValidationError,
   type MemoryContentCipher,
+  type MemoryEmbeddingInput,
   type MemoryEvent,
   type MemoryVaultStore,
 } from "./index.js";
@@ -930,7 +931,232 @@ describe("namespace isolation regression", () => {
   });
 });
 
+describe("embedding replacement bound to the current body", () => {
+  const input: MemoryEmbeddingInput = {
+    provider: "synthetic-provider",
+    modelId: "synthetic-embedding",
+    metric: "cosine",
+    vector: Float32Array.from([1, 0, 0]),
+  };
+
+  it("allows metadata-only changes and emits the committed vector after its transaction", () => {
+    const dir = freshDir();
+    const observer = openVault(dir);
+    const observed: MemoryEvent[] = [];
+    const writer = createMemoryVault({
+      memoryDir: dir,
+      vaultKey: TEST_VAULT_KEY,
+      onMemoryEvent: (event) => {
+        if (event.kind === "embedding:upserted") {
+          expect(observer.getEmbedding(event.memoryId)?.vector).toEqual(input.vector);
+          observed.push(event);
+        }
+      },
+    });
+    try {
+      const record = writer.insertMemory(makeMemory({ id: "bound-embedding" as MemoryId }));
+      observer.updateMemory(record.id, { tags: ["metadata-change"] }, record.updatedAt);
+      expect(writer.replaceEmbeddingForMemoryBody(record.id, record.body, input)).toBe(true);
+      expect(observer.getMemory(record.id)?.tags).toEqual(["metadata-change"]);
+      expect(observed).toHaveLength(1);
+      expect(writer.replaceEmbeddingForMemoryBody(record.id, record.body, null)).toBe(true);
+      expect(observer.getEmbedding(record.id)).toBeUndefined();
+    } finally {
+      writer.close();
+      observer.close();
+    }
+  });
+
+  it.each(["body-changed", "deleted"] as const)(
+    "leaves a newer vector untouched when its expected body is %s",
+    (change) => {
+      const dir = freshDir();
+      const events: MemoryEvent[] = [];
+      const reader = openVault(dir, events);
+      const writer = openVault(dir);
+      try {
+        const record = reader.insertMemory(makeMemory({ id: "stale-embedding" as MemoryId }));
+        if (change === "body-changed") {
+          writer.updateMemory(record.id, { body: "New synthetic body" }, record.updatedAt);
+          writer.upsertEmbedding(record.id, input);
+        } else {
+          writer.deleteMemory(record.id, {
+            tombstone: false,
+            forgetterSurface: "memory-center",
+            nowMs: record.updatedAt,
+          });
+        }
+        const current = writer.getEmbedding(record.id);
+        events.length = 0;
+        expect(reader.replaceEmbeddingForMemoryBody(record.id, record.body, input)).toBe(false);
+        expect(reader.replaceEmbeddingForMemoryBody(record.id, record.body, null)).toBe(false);
+        expect(writer.getEmbedding(record.id)).toEqual(current);
+        expect(events).toEqual([]);
+      } finally {
+        reader.close();
+        writer.close();
+      }
+    },
+  );
+
+  it("rolls back a rejected vector and releases its write transaction for recovery", () => {
+    const events: MemoryEvent[] = [];
+    const vault = openVault(freshDir(), events);
+    try {
+      const record = vault.insertMemory(makeMemory({ id: "rejected-embedding" as MemoryId }));
+      vault.upsertEmbedding(record.id, input);
+      const before = vault.getEmbedding(record.id);
+      events.length = 0;
+      expect(() =>
+        vault.replaceEmbeddingForMemoryBody(record.id, record.body, {
+          ...input,
+          vector: new Float32Array(),
+        }),
+      ).toThrow(MemoryStorageValidationError);
+      expect(vault.getEmbedding(record.id)).toEqual(before);
+      expect(events).toEqual([]);
+      expect(vault.replaceEmbeddingForMemoryBody(record.id, record.body, null)).toBe(true);
+      expect(vault.getEmbedding(record.id)).toBeUndefined();
+      expect(events.map((event) => event.kind)).toEqual(["embedding:deleted"]);
+    } finally {
+      vault.close();
+    }
+  });
+
+  it("holds the write lock between the body check and the vector replacement", () => {
+    const dir = freshDir();
+    const reader = openVault(dir);
+    const writer = openVault(dir);
+    const record = reader.insertMemory(makeMemory({ id: "atomic-body-embedding" as MemoryId }));
+    const prepare = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "prepare")
+      ?.value as DatabaseSync["prepare"];
+    const writerConnections = new Set<DatabaseSync>();
+    const capture = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql: string,
+    ): ReturnType<typeof prepare> {
+      writerConnections.add(this);
+      return prepare.call(this, sql);
+    });
+    try {
+      writer.getMemory(record.id);
+    } finally {
+      capture.mockRestore();
+    }
+    const writerDb = writerConnections.values().next().value;
+    if (writerDb === undefined) throw new TypeError("Missing synthetic writer connection");
+    writerDb.exec("PRAGMA busy_timeout = 0");
+    let raced = false;
+    let restoreRead = (): void => undefined;
+    const race = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      sql: string,
+    ): ReturnType<typeof prepare> {
+      const statement = prepare.call(this, sql);
+      if (!raced && this !== writerDb && sql === "SELECT * FROM memories WHERE id = ?") {
+        const get = statement.get.bind(statement);
+        const read = vi.spyOn(statement, "get").mockImplementationOnce((...params) => {
+          const row = get(...params);
+          raced = true;
+          let blocked: unknown;
+          try {
+            writer.updateMemory(record.id, { body: "Competing synthetic body" }, record.updatedAt);
+          } catch (error) {
+            blocked = error;
+          }
+          expect(blocked).toMatchObject({ errcode: 5 });
+          return row;
+        });
+        restoreRead = (): void => {
+          read.mockRestore();
+        };
+      }
+      return statement;
+    });
+    try {
+      expect(reader.replaceEmbeddingForMemoryBody(record.id, record.body, input)).toBe(true);
+      expect(raced).toBe(true);
+      expect(writer.getMemory(record.id)?.body).toBe(record.body);
+      expect(writer.getEmbedding(record.id)?.vector).toEqual(input.vector);
+    } finally {
+      restoreRead();
+      race.mockRestore();
+      writer.close();
+      reader.close();
+    }
+  });
+});
+
 describe("list filters", () => {
+  it("releases a review snapshot after a storage failure", () => {
+    const vault = openVault(freshDir());
+    const record = makeMemory({ id: "snapshot-recovery" as MemoryId, status: "proposed" });
+    const prepare = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "prepare")
+      ?.value as DatabaseSync["prepare"];
+    try {
+      vault.insertMemory(record);
+      const fault = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql: string,
+      ): ReturnType<typeof prepare> {
+        if (sql.startsWith("SELECT * FROM memories WHERE")) {
+          throw new MemoryStorageError("internal", "Synthetic read failure");
+        }
+        return prepare.call(this, sql);
+      });
+      try {
+        expect(() => vault.listMemoryReviewQueue()).toThrow(MemoryStorageError);
+      } finally {
+        fault.mockRestore();
+      }
+      expect(
+        vault.updateMemory(record.id, { tags: ["after-failure"] }, record.updatedAt + 1).tags,
+      ).toEqual(["after-failure"]);
+      expect(vault.listMemoryReviewQueue().map(({ id }) => id)).toEqual([record.id]);
+    } finally {
+      vault.close();
+    }
+  });
+
+  it("keeps both review status alternatives within the requested scope and sensitivity", () => {
+    const vault = openVault(freshDir());
+    try {
+      const sample = makeMemory({
+        id: "stale" as MemoryId,
+        status: "accepted",
+        staleReason: "changed-source",
+      });
+      const provenance = { ...sample.provenance, sensitivity: "public" as const };
+      const stale = { ...sample, provenance };
+      vault.insertMemory(stale);
+      vault.insertMemory({
+        ...stale,
+        id: "confidential" as MemoryId,
+        provenance: { ...stale.provenance, sensitivity: "confidential" },
+      });
+      vault.insertMemory({ ...stale, id: "foreign" as MemoryId, scope: { kind: "global" } });
+      vault.insertMemory(
+        makeMemory({ id: "ordinary" as MemoryId, status: "proposed", provenance }),
+      );
+      vault.insertMemory(
+        makeMemory({ id: "accepted-current" as MemoryId, status: "accepted", provenance }),
+      );
+      const matches = vault.listMemoriesAcrossScopes([stale.scope], {
+        status: ["proposed"],
+        includeStaleStatuses: ["accepted"],
+        sensitivity: ["public"],
+      });
+      expect(matches.map((record) => record.id).sort()).toEqual(["ordinary", "stale"]);
+      const staleOnly = vault.listMemoriesAcrossScopes([stale.scope], {
+        includeStaleStatuses: ["accepted"],
+        sensitivity: ["public"],
+      });
+      expect(staleOnly.map((record) => record.id)).toEqual(["stale"]);
+    } finally {
+      vault.close();
+    }
+  });
+
   it("filters by type, status, pinned, and excludes expired by default", () => {
     const dir = freshDir();
     const v = openVault(dir);
@@ -1080,6 +1306,115 @@ describe("list filters", () => {
     ).toEqual(["m-user"]);
     expect(v.listMemoriesAcrossScopes([], { includeExpired: true })).toEqual([]);
     v.close();
+  });
+
+  it("lists more than 1,000 stored scopes with exact pairs and database pagination", () => {
+    const vault = openVault(freshDir());
+    const projectScopes = Array.from({ length: 1_250 }, (_, index) => ({
+      kind: "project" as const,
+      projectId: `scope-${String(index)}` as ProjectId,
+    }));
+    const user = { kind: "user" as const, userId: "scope-0" as UserId };
+    const workspace = { kind: "workspace" as const, workspaceId: "workspace-only" as WorkspaceId };
+    const global = { kind: "global" as const };
+    const crossKindWorkspace = {
+      kind: "workspace" as const,
+      workspaceId: "scope-0" as WorkspaceId,
+    };
+    const crossKindUser = { kind: "user" as const, userId: "workspace-only" as UserId };
+    try {
+      for (const [index, scope] of projectScopes.entries()) {
+        vault.insertMemory(
+          makeMemory({ id: `project-${String(index)}` as MemoryId, scope, createdAt: index }),
+        );
+      }
+      for (const [id, scope, createdAt] of [
+        ["global", global, 2_000],
+        ["workspace", workspace, 2_001],
+        ["user", user, 2_002],
+        ["other-workspace", crossKindWorkspace, 2_003],
+        ["other-user", crossKindUser, 2_004],
+      ] as const) {
+        vault.insertMemory(makeMemory({ id: id as MemoryId, scope, createdAt }));
+      }
+      expect(vault.listMemoryScopes()).toHaveLength(1_255);
+      const requested = [
+        ...projectScopes,
+        user,
+        workspace,
+        global,
+        user,
+        ...projectScopes.slice(0, 1),
+      ];
+      const listed = vault.listMemoriesAcrossScopes(requested, { includeExpired: true });
+      expect(listed).toHaveLength(1_253);
+      expect(new Set(listed.map(({ id }) => id)).size).toBe(1_253);
+      expect(listed.slice(0, 4).map(({ id }) => id)).toEqual([
+        "user",
+        "workspace",
+        "global",
+        "project-1249",
+      ]);
+      expect(listed.map(({ id }) => id)).not.toContain("other-workspace");
+      expect(listed.map(({ id }) => id)).not.toContain("other-user");
+      expect(
+        vault
+          .listMemoriesAcrossScopes(requested, {
+            includeExpired: true,
+            limit: 4,
+            offset: 1_249,
+            orderDir: "asc",
+          })
+          .map(({ id }) => id),
+      ).toEqual(["project-1249", "global", "workspace", "user"]);
+    } finally {
+      vault.close();
+    }
+  });
+
+  it("uses the existing ordered index when only one distinct scope is requested", () => {
+    const dir = freshDir();
+    const vault = openVault(dir);
+    const db = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    const scope = { kind: "user" as const, userId: "u-1" as UserId };
+    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
+    try {
+      vault.insertMemory(makeMemory({ id: "m1" as MemoryId, scope }));
+      expect(
+        vault
+          .listMemoriesAcrossScopes([scope, scope], { includeExpired: true, limit: 1 })
+          .map(({ id }) => id),
+      ).toEqual(["m1"]);
+      const sql = prepare.mock.calls.find(([text]) =>
+        text.startsWith("SELECT * FROM memories WHERE"),
+      )?.[0];
+      expect(sql).toBeDefined();
+      const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql ?? ""}`).all("user", "u-1", 1);
+      expect(plan.map((step) => step.detail)).toEqual([
+        expect.stringMatching(
+          /SEARCH memories USING INDEX idx_memories_scope_created .*scope_kind=\? AND scope_coordinate=\?/u,
+        ),
+      ]);
+    } finally {
+      prepare.mockRestore();
+      db.close();
+      vault.close();
+    }
+  });
+
+  it("matches existing SQLite text bindings for unusual scope coordinates", () => {
+    const vault = openVault(freshDir());
+    const scope = { kind: "user" as const, userId: 'quoted"\u0000🧭\ud800' as UserId };
+    try {
+      vault.insertMemory(makeMemory({ id: "encoded-coordinate" as MemoryId, scope }));
+      expect(
+        vault
+          .listMemoriesAcrossScopes([scope, { kind: "global" }], { includeExpired: true })
+          .map(({ id }) => id),
+      ).toEqual(["encoded-coordinate"]);
+    } finally {
+      vault.close();
+    }
   });
 
   it("supports root listing order, limit, and offset options", () => {

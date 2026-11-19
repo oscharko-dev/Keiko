@@ -79,6 +79,7 @@ import { isSuppressedByForgetTombstone } from "./memory-suppression.js";
 import {
   buildConversationRetrievalSignals,
   conversationFusionMode,
+  retrieveMemoryWithZeroBudget,
   semanticRetrievalGateForText,
   type ConversationRetrievalSignals,
 } from "./memory-retrieval-signals.js";
@@ -271,6 +272,7 @@ async function retrieveConversationMemory(
 ): Promise<ReturnType<typeof retrieveMemoryContext>> {
   const port = vaultAsQueryPort(vault);
   const nowMs = Date.now();
+  if (input.budgetTokens === 0) return retrieveMemoryWithZeroBudget(deps, port, scopes, nowMs);
   const semanticGate = semanticRetrievalGateForText(
     deps,
     input.queryText,
@@ -285,7 +287,7 @@ async function retrieveConversationMemory(
     semanticGate,
   );
   const result = retrieveMemoryContext(
-    buildRetrievalRequest(scopes, input, nowMs, signals, conversationFusionMode(deps)),
+    buildRetrievalRequest(scopes, input, Date.now(), signals, conversationFusionMode(deps)),
     port,
   );
   return result;
