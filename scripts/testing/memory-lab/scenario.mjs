@@ -62,6 +62,17 @@ const FORBIDDEN_CLASSES = Object.freeze([
   "other",
 ]);
 const PROBE_KINDS = Object.freeze(["answer", "abstain", "no-memory", "not-obeyed"]);
+// Every key an `expect` may carry. Any other is a typo that would silently drop a requirement.
+const EXPECT_KEYS = Object.freeze([
+  "kind",
+  "terms",
+  "forbidden",
+  "needs",
+  "earlier",
+  "allow",
+  "format",
+  "forbiddenFormat",
+]);
 const ANSWER_FORMATS = Object.freeze(["table", "list"]);
 const PROBE_LANGUAGES = Object.freeze(["de", "en"]);
 
@@ -136,6 +147,8 @@ function validateTruthOptions(id, where, fact) {
     fail(id, `${where}.private must be a boolean when present`);
   if (fact.with !== undefined && !validTermGroups(fact.with))
     fail(id, `${where}.with must be non-empty term groups when present`);
+  if (fact.with !== undefined && impliesGroups(fact.terms, fact.with))
+    fail(id, `${where}.with is carried by its own terms, so it binds nothing`);
 }
 
 // A true term that occurs inside a replaced value cannot tell the old body from the new one: every
@@ -242,16 +255,74 @@ function wantedTermLists(scenario, probe) {
   ];
 }
 
-// A required term that the probe's own question already contains is passed by an answer that repeats
-// the question. The scorer folds diacritics, so "Fähre" is "fahre" and occurs in "Womit fahre ich".
-function validateWantedApartFromQuestions(id, scenario) {
+// True when an answer that carries the `wanted` groups carries every `listed` group as well: each
+// listed group has an alternative inside every term of some wanted group (a term "Liste*" contains
+// "Liste", so the wanted group implies the listed one). Over-reports when a prefix term stands for
+// more than its stem, which only refuses a scenario, never passes a contradictory one.
+function impliesGroups(wanted, listed) {
+  const implies = (term, alternative) => matchesTermGroups(literalStem(term), [[alternative]]);
+  return listed.every((group) =>
+    wanted.some((cut) =>
+      cut.every((term) => group.some((alternative) => implies(term, alternative))),
+    ),
+  );
+}
+
+// The term groups a probe may not both want and forbid: its own `forbidden`, and the scenario's
+// forgotten and forbidden facts, which no answer may carry whatever the question asked for.
+function listedTermLists(scenario, probe) {
+  return [
+    ...(probe.expect.forbidden === undefined
+      ? []
+      : [{ label: "the probe's own forbidden terms", groups: probe.expect.forbidden }]),
+    ...(scenario.forgotten ?? []).map((entry, index) => ({
+      label: `forgotten[${String(index)}]`,
+      groups: entry.terms,
+    })),
+    ...(scenario.forbidden ?? []).map((entry, index) => ({
+      label: `forbidden[${String(index)}]`,
+      groups: entry.terms,
+    })),
+  ];
+}
+
+// A wanted term the probe's own question already contains is passed by an answer that repeats the
+// question (the scorer folds diacritics, so "Fähre" is "fahre" and occurs in "Womit fahre ich"); one
+// that a forbidden or forgotten term contains can only fail once a memory is supplied, which reverses
+// the signal: memory off passes, memory on fails.
+function validateWantedTerms(id, scenario) {
   for (const probe of scenario.probes) {
     if (probe.expect.kind !== "answer") continue;
+    const listed = listedTermLists(scenario, probe);
     for (const { label, groups } of wantedTermLists(scenario, probe)) {
       const asked = groups.flat().find((term) => matchesTermGroups(probe.question, [[term]]));
       if (asked !== undefined)
         fail(id, `probe ${probe.id}: ${label} term "${asked}" occurs in the probe's own question`);
+      const contradicted = listed.find((entry) => impliesGroups(groups, entry.groups));
+      if (contradicted !== undefined)
+        fail(id, `probe ${probe.id}: ${label} is also ${contradicted.label}`);
     }
+  }
+}
+
+// A truth's `with` binds the terms to a subject that tells it from the other facts of the probe. One
+// that names another needed truth's subject or value binds nothing: the other fact's sentence would
+// carry this one as well.
+function validateBindingsApart(id, scenario) {
+  for (const probe of scenario.probes) {
+    const needed = (probe.expect.needs ?? []).map((key) =>
+      scenario.truth.find((entry) => entry.key === key),
+    );
+    for (const fact of needed.filter((entry) => entry.with !== undefined))
+      for (const other of needed.filter((entry) => entry !== fact)) {
+        const theirs = [...(other.with ?? []), ...other.terms].flat();
+        const named = fact.with.flat().find((mine) => theirs.some((it) => termsOverlap(mine, it)));
+        if (named !== undefined)
+          fail(
+            id,
+            `probe ${probe.id}: truth "${fact.key}" with "${named}" names the subject or value of truth "${other.key}"`,
+          );
+      }
   }
 }
 
@@ -338,6 +409,9 @@ function validateAnswerTerms(id, where, expect) {
 function validateExpectation(id, where, expect, keys) {
   if (!isRecord(expect) || !PROBE_KINDS.includes(expect.kind))
     fail(id, `${where}.expect.kind must be one of ${PROBE_KINDS.join("|")}`);
+  for (const key of Object.keys(expect))
+    if (!EXPECT_KEYS.includes(key))
+      fail(id, `${where}.expect.${key} is not a key of expect (${EXPECT_KEYS.join("|")})`);
   validateAnswerTerms(id, where, expect);
   validateWanted(id, where, expect, { needs: keys.truth, earlier: keys.superseded });
   if (expect.forbidden !== undefined && expect.kind !== "answer" && expect.kind !== "abstain")
@@ -419,7 +493,8 @@ export function validateScenario(scenario) {
     superseded: new Set((scenario.superseded ?? []).flatMap((entry) => entry.key ?? [])),
   });
   validateEarlierApart(id, scenario);
-  validateWantedApartFromQuestions(id, scenario);
+  validateWantedTerms(id, scenario);
+  validateBindingsApart(id, scenario);
   validatePoisonProbes(id, scenario.poison, scenario.probes);
   return Object.freeze({
     ...scenario,

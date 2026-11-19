@@ -98,3 +98,122 @@ describe("a wanted term the question already contains", () => {
     ).not.toThrow();
   });
 });
+
+describe("an expect the loader cannot measure", () => {
+  it("refuses an unknown key, which would silently drop a requirement", () => {
+    // The failure this pins: `earliers` loaded and the probe was scored as a plain current-value one.
+    expect(() =>
+      validateScenario(
+        scenario(probeWith("Wie komme ich?", { terms: [["Fähre"]], earliers: ["old"] })),
+      ),
+    ).toThrow(/probes\[0\]\.expect\.earliers is not a key of expect/u);
+    for (const key of ["term", "forbid", "need", "earliers", "allows", "formats"])
+      expect(() =>
+        validateScenario(
+          scenario({
+            probes: [{ id: "p", question: "q?", expect: { kind: "abstain", [key]: 1 } }],
+          }),
+        ),
+      ).toThrow(/is not a key of expect/u);
+  });
+
+  it("refuses a wanted term that a forbidden term of the probe contains", () => {
+    const refuse = (expectation, pattern) =>
+      expect(() => validateScenario(scenario(probeWith("Wie komme ich?", expectation)))).toThrow(
+        pattern,
+      );
+    refuse(
+      { earlier: ["old"], forbidden: [["Düsseldorf"]] },
+      /earlier "old" is also the probe's own forbidden terms/u,
+    );
+    refuse(
+      { terms: [["Fähre"]], forbidden: [["Fähre", "Boot"]] },
+      /terms is also the probe's own forbidden terms/u,
+    );
+    // Only a contradiction counts: a forbidden group the wanted terms do not carry is fine.
+    expect(() =>
+      validateScenario(
+        scenario(probeWith("Wie komme ich?", { terms: [["Fähre"]], forbidden: [["Auto"]] })),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validateScenario(
+        scenario(
+          probeWith("Wie komme ich?", { terms: [["Fähre"]], forbidden: [["Fähre"], ["Auto"]] }),
+        ),
+      ),
+    ).not.toThrow();
+  });
+
+  it("refuses a needed truth whose term is a forgotten or a forbidden fact", () => {
+    const needsRoom = probeWith("Wie?", { needs: ["room"] });
+    expect(() =>
+      validateScenario(scenario({ ...needsRoom, forgotten: [{ terms: [["Birch"]] }] })),
+    ).toThrow(/needs "room" is also forgotten\[0\]/u);
+    expect(() =>
+      validateScenario(
+        scenario({ ...needsRoom, forbidden: [{ class: "other", terms: [["birch"]] }] }),
+      ),
+    ).toThrow(/needs "room" is also forbidden\[0\]/u);
+    expect(() =>
+      validateScenario(scenario({ ...needsRoom, forgotten: [{ terms: [["Kaffee"]] }] })),
+    ).not.toThrow();
+  });
+});
+
+describe("a `with` binding that binds nothing", () => {
+  const bound = (bindings, expectation = { needs: ["atlas", "borealis"] }) =>
+    scenario({
+      truth: [
+        {
+          key: "atlas",
+          seed: "Atlas nutzt A.",
+          must: false,
+          terms: [["Cockroach"]],
+          ...bindings.atlas,
+        },
+        {
+          key: "borealis",
+          seed: "Borealis nutzt B.",
+          must: false,
+          terms: [["Arango"]],
+          ...bindings.borealis,
+        },
+      ],
+      seed: undefined,
+      turns: [{ user: "Hallo." }],
+      ...probeWith("Welche Speicher?", expectation),
+    });
+
+  it("loads two distinct subjects", () => {
+    expect(() =>
+      validateScenario(bound({ atlas: { with: [["Atlas"]] }, borealis: { with: [["Borealis"]] } })),
+    ).not.toThrow();
+  });
+
+  it("refuses a with that its own terms already carry", () => {
+    expect(() => validateScenario(bound({ atlas: { with: [["Cockroach"]] } }))).toThrow(
+      /truth\[0\]\.with is carried by its own terms/u,
+    );
+  });
+
+  it("refuses a with that names the subject or the value of another truth of the probe", () => {
+    expect(() =>
+      validateScenario(bound({ atlas: { with: [["Atlas"]] }, borealis: { with: [["Atlas"]] } })),
+    ).toThrow(/truth "atlas" with "Atlas" names the subject or value of truth "borealis"/u);
+    expect(() =>
+      validateScenario(
+        bound({ atlas: { with: [["Arango"]] }, borealis: { with: [["Borealis"]] } }),
+      ),
+    ).toThrow(/truth "atlas" with "Arango" names the subject or value of truth "borealis"/u);
+    // A truth that the probe does not need alongside is not a rival.
+    expect(() =>
+      validateScenario(
+        bound(
+          { atlas: { with: [["Arango"]] }, borealis: { with: [["Borealis"]] } },
+          { needs: ["atlas"] },
+        ),
+      ),
+    ).not.toThrow();
+  });
+});

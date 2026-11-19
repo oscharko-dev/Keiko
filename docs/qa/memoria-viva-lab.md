@@ -398,6 +398,19 @@ fail-closed by `scenario.mjs`):
   `answer` probe may instead (or also) name `needs` and `earlier`, see below.
 - `seed`: a store placed in the vault before the first turn, see "Seeding a store".
 
+A probe that wants something it cannot measure is refused when the scenario loads, never scored
+quietly. The loader refuses an `expect` with a key it does not know (a typo such as `earliers` would
+drop the requirement and the probe would pass); a wanted term (`terms`, a needed truth's terms, a
+replaced value asked for with `earlier`) that occurs in the probe's own question, folded the way the
+scorer folds it (`Fähre` is `fahre`), because an answer that repeats the question passes; a wanted term
+that a `forbidden` term of the probe, a `forgotten` fact or a scenario `forbidden` fact contains, which
+passes with memory off and fails with memory on and so reverses the signal; and a `with` that the
+truth's own terms already carry, or that names the subject or the value of another truth the same probe
+needs. A probe must also not pass without the memory: write the values a model would not choose
+unprompted (a common format, theme, cadence or hour is not one), or require a second detail only the
+memory holds. The corpus test of `scenarios-next` keeps the answer a model gives unprompted for every
+answer probe and fails when one passes.
+
 ### Seeding a store
 
 Long histories, scale limits and correction chains cannot be learned in a lab run: replaying weeks of
