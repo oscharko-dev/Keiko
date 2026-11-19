@@ -48,6 +48,10 @@ const WINDOWS_REFUSALS: RefusalWords = {
   11: "supervisor-gateway-admit",
   // #4068 W1: the user environment key could not be closed to the tree.
   12: "supervisor-environment-guard",
+  // #4068 (ADR-0043 D20): the relayed launch's own steps, all before the job exists.
+  13: "supervisor-relay-frame",
+  14: "supervisor-relay-profile",
+  15: "supervisor-relay-start",
 };
 
 const MACOS_REFUSALS: RefusalWords = {
@@ -102,6 +106,9 @@ const REFUSED_BEFORE_TREE_EXISTED: ReadonlySet<string> = new Set([
   "supervisor-grants-capability",
   "supervisor-gateway-connect",
   "supervisor-environment-guard",
+  "supervisor-relay-frame",
+  "supervisor-relay-profile",
+  "supervisor-relay-start",
 ]);
 
 /** What a confined Windows supervisor's launch response states about its stale-grant sweep (#4068). */

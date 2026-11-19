@@ -566,7 +566,7 @@ describe("production OpenCode backend composition", () => {
           } as RuntimeSupervisorLaunchRequest),
         ).toThrow(GATEWAY_UNSUPPORTED_ON_HOST_REASON);
         expect(
-          windowsGatewayServiceFacts({}, portable).windowsGatewayService?.unavailableReason(),
+          windowsGatewayServiceFacts(portable).windowsGatewayService?.unavailableReason(),
         ).toBe("gateway-service-unqualified");
       } finally {
         rmSync(root, { force: true, recursive: true });
@@ -574,12 +574,10 @@ describe("production OpenCode backend composition", () => {
     },
   );
 
-  // #4068 (ADR-0043 D19): a Windows dev checkout installs the same broker, pinned to the runtime
-  // supervisor it built, so its runs take the release path's confinement rather than a refusal.
-  // The npm runtime package does the same with the supervisor digest compiled into this server
-  // (owner decision 2026-11-09).
+  // #4068 (ADR-0043 D20): every pinned Windows lane runs through its verified supervisor, which
+  // confines the tree itself as the signed-in user; readiness asks no installed service.
   it.each(["dev-checkout", "npm-runtime-package", "portable-evaluation"] as const)(
-    "runs a Windows %s through the broker it pinned, and readiness asks that broker",
+    "runs a Windows %s through the supervisor it pinned, and readiness asks no service",
     (lane) => {
       const root = mkdtempSync(join(tmpdir(), "keiko-windows-dev-checkout-"));
       try {
@@ -590,7 +588,7 @@ describe("production OpenCode backend composition", () => {
         expect(portable.nativeHelperSha256).toMatch(/^[a-f0-9]{64}$/u);
         expect(factory).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
-            useInstalledWindowsGateway: true,
+            useWindowsRelayConfinement: true,
             expectedHelperSha256: portable.nativeHelperSha256,
             // A user's own checkout: the tree gets its runtime and private state, and no worktree.
             windowsFilesystemGrants: [
@@ -600,12 +598,16 @@ describe("production OpenCode backend composition", () => {
                 principal: "tree",
               },
               expect.objectContaining({ access: "modify", principal: "tree" }),
+              // ADR-0043 D20: the relayed tree's root is the verified supervisor itself.
+              {
+                path: dirname(portable.nativeHelperPath ?? ""),
+                access: "read",
+                principal: "tree",
+              },
             ],
           }),
         );
-        const facts = windowsGatewayServiceFacts({ activityLog: { write: vi.fn() } }, portable);
-        // The fixture supervisor answers no known broker state, on Windows and on a POSIX host alike.
-        expect(facts.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
+        expect(windowsGatewayServiceFacts(portable)).toEqual({});
       } finally {
         rmSync(root, { force: true, recursive: true });
       }
@@ -636,7 +638,8 @@ describe("production OpenCode backend composition", () => {
         capability,
       });
       expect(grants.filter((grant) => grant.access === "modify")).toHaveLength(1);
-      expect(windowsFilesystemGrants(portable, input, run)).toHaveLength(2);
+      // The runtime, the private state and the supervisor's directory; no worktree.
+      expect(windowsFilesystemGrants(portable, input, run)).toHaveLength(3);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -737,7 +740,7 @@ describe("production OpenCode backend composition", () => {
           { ...backendInput(root, portable), ripgrep: verifiedRipgrep(join(runtimeRoot, "rg")) },
           run,
         ),
-      ).toHaveLength(2);
+      ).toHaveLength(3);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -759,23 +762,54 @@ describe("production OpenCode backend composition", () => {
         runInput(root),
       );
       expect(grants.map((grant) => grant.path)).not.toContain(join(root, "users-bin"));
-      expect(grants).toHaveLength(2);
+      expect(grants).toHaveLength(3);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
   });
 
-  it("asks the installed broker for a release-qualified Windows runtime", () => {
+  // #4068 (ADR-0043 D20): a relayed tree starts the verified supervisor inside its AppContainer,
+  // so that image's directory is readable to the tree, once, and never beyond the runtime root
+  // when the supervisor already lies inside it.
+  it("grants the tree read access to the verified supervisor's directory exactly once", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-windows-supervisor-grant-"));
+    try {
+      const portable = windowsDevLaneRuntime(root);
+      const run = runInput(root);
+      const supervisorDirectory = dirname(portable.nativeHelperPath ?? "");
+      const input = { ...backendInput(root, portable), ripgrep: UNVERIFIED_RIPGREP };
+      const grants = windowsFilesystemGrants(portable, input, run);
+      expect(grants).toContainEqual({ path: supervisorDirectory, access: "read", principal: "tree" });
+
+      // The same directory as the verified ripgrep is granted once.
+      const shared = windowsFilesystemGrants(
+        portable,
+        { ...backendInput(root, portable), ripgrep: verifiedRipgrep(supervisorDirectory) },
+        run,
+      );
+      expect(shared.filter((grant) => grant.path === supervisorDirectory)).toHaveLength(1);
+
+      // A supervisor inside the runtime root is covered by that root's grant.
+      const runtimeRoot = join(portable.installRoot, portable.sidecar.payloadRootPath);
+      const inside = {
+        ...portable,
+        nativeHelperPath: join(runtimeRoot, "keiko-runtime-supervisor.exe"),
+      };
+      expect(windowsFilesystemGrants(inside, input, run)).toHaveLength(2);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("asks no installed service for a release-qualified Windows runtime", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-windows-released-lane-"));
     try {
       const portable: ResolvedPortableOpenCodeRuntime = {
         ...releaseQualifiedNativeRuntime(root),
         nativeHelperSha256: "a".repeat(64),
       };
-      const facts = windowsGatewayServiceFacts({ activityLog: { write: vi.fn() } }, portable);
-
-      // The fixture supervisor answers no known broker state, on Windows and on a POSIX host alike.
-      expect(facts.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
+      // ADR-0043 D20: the verified supervisor confines the run; no service gates readiness.
+      expect(windowsGatewayServiceFacts(portable)).toEqual({});
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -784,7 +818,7 @@ describe("production OpenCode backend composition", () => {
   it("has no Windows gateway fact for another platform's runtime", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-linux-released-lane-"));
     try {
-      expect(windowsGatewayServiceFacts({}, releaseQualifiedLinuxRuntime(root))).toEqual({});
+      expect(windowsGatewayServiceFacts(releaseQualifiedLinuxRuntime(root))).toEqual({});
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

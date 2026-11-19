@@ -1417,18 +1417,18 @@ function runtimeSupervisor(
   if (input.portable.target === "linux-x64") {
     return linuxNamespaceGatewaySupervisor(input.portable, input, run, toolProfile);
   }
-  const installedPin = windowsGatewayHelperPin(input.portable);
+  const supervisorPin = windowsGatewayHelperPin(input.portable);
   if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
     return appSandboxSupervisor(input.portable, input, run, toolProfile);
   }
   return createRuntimeProcessSupervisor({
-    ...(installedPin ? { planSandbox: planWindowsGatewayRuntimeSandbox } : {}),
+    ...(supervisorPin ? { planSandbox: planWindowsGatewayRuntimeSandbox } : {}),
     backend: createNativeRuntimeProcessBackend({
       helperPath: input.portable.nativeHelperPath,
-      ...(installedPin
+      ...(supervisorPin
         ? {
-            useInstalledWindowsGateway: true,
-            expectedHelperSha256: installedPin,
+            useWindowsRelayConfinement: true,
+            expectedHelperSha256: supervisorPin,
             windowsFilesystemGrants: windowsFilesystemGrants(input.portable, input, run),
           }
         : {}),
@@ -1442,8 +1442,8 @@ function runtimeSupervisor(
 }
 
 /**
- * The digest the installed D18 broker must carry for this runtime, or `undefined` when no broker may
- * enforce its gateway policy, which refuses every Windows start (ADR-0043 D14/D19). A
+ * The digest the verified runtime supervisor must carry for this runtime, or `undefined` when no
+ * supervisor may confine its gateway policy, which refuses every Windows start (ADR-0043 D14/D20). A
  * release-qualified package, an independently pinned Windows evaluation artifact, a Windows dev
  * checkout and the Windows npm runtime package yield one; other evaluation artifacts and the
  * functional test runtime do not. A compiled artifact pin never claims platform qualification.
@@ -1484,16 +1484,17 @@ function devLaneSupervisor(
   if (portable.target !== "windows-x64")
     return appSandboxSupervisor(portable, input, run, toolProfile);
   if (portable.nativeHelperPath === undefined) throw new Error("dev-lane-supervisor-missing");
-  // A checkout's runs go through the broker it installed with its own supervisor's pin, exactly as
-  // a release's do; without that pin the native backend refuses the gateway launch (ADR-0043 D19).
-  const installedPin = localLaneWindowsGatewayHelperPin(portable);
+  // A checkout's runs go through the supervisor it built and pinned, which confines the tree itself
+  // exactly as a release's does; without that pin the native backend refuses the gateway launch
+  // (ADR-0043 D20).
+  const supervisorPin = localLaneWindowsGatewayHelperPin(portable);
   return createRuntimeProcessSupervisor({
-    ...(installedPin ? { planSandbox: planWindowsGatewayRuntimeSandbox } : {}),
+    ...(supervisorPin ? { planSandbox: planWindowsGatewayRuntimeSandbox } : {}),
     backend: createNativeRuntimeProcessBackend({
       helperPath: portable.nativeHelperPath,
-      ...(installedPin
+      ...(supervisorPin
         ? {
-            useInstalledWindowsGateway: true,
+            useWindowsRelayConfinement: true,
             windowsFilesystemGrants: windowsFilesystemGrants(portable, input, run),
           }
         : {}),
@@ -1650,6 +1651,16 @@ export function windowsFilesystemGrants(
     !pathIsContained(runtimeRoot, input.ripgrep.directory)
   )
     grants.push({ path: input.ripgrep.directory, access: "read", principal: "tree" });
+  // The relayed tree's root is the verified supervisor itself (ADR-0043 D20): the AppContainer
+  // must be able to run that image. Its directory holds only Keiko's own verified natives.
+  const supervisorDirectory =
+    portable.nativeHelperPath === undefined ? undefined : dirname(portable.nativeHelperPath);
+  if (
+    supervisorDirectory !== undefined &&
+    !pathIsContained(runtimeRoot, supervisorDirectory) &&
+    !grants.some((grant) => grant.path === supervisorDirectory)
+  )
+    grants.push({ path: supervisorDirectory, access: "read", principal: "tree" });
   if (run.resolveWorkspaceRootAccess()?.kind === "managed-task") {
     grants.push({
       path: run.context.workspaceRoot,

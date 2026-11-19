@@ -493,55 +493,28 @@ describe("production OpenCode activation", () => {
     });
   });
 
-  // #4068 (ADR-0043 D19): a staged Windows dev lane carries its own supervisor's broker pin, so
-  // readiness reports that broker's state before anyone presses Start, instead of refusing outright.
-  it("reads the broker state for a staged Windows dev lane", () => {
-    const staged = devLaneFixture("windows-x64");
-    const result = resolveProductionOpenCodeActivation(
-      activationInput(
-        { ...staged.env, KEIKO_UI_PORT: "1983" },
-        { platform: "win32", arch: "x64", stateDir: join(staged.root, "runtime-state") },
-      ),
-    );
-
-    // The fixture supervisor answers no known broker state, on Windows and on a POSIX host alike.
-    expect(result.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
-    expect(result.windowsGatewayService?.repair).toBeTypeOf("function");
-  });
-
-  // ADR-0121 D9: the standalone folder package declares itself managed outside the app, and such an
-  // installation sets up no system service, so the Workbench offers no Repair there. An unreadable
-  // declaration fails closed the same way; `user-local` keeps Keiko's own Repair.
-  it.each(["organization-managed", "machine-managed", "not-a-known-mode"])(
-    "offers no Windows gateway Repair for a launch managed outside the app (%s)",
+  // #4068 (ADR-0043 D20): the verified supervisor confines a Windows run itself, as the signed-in
+  // user, so readiness asks no installed service and offers Coding without elevation, whoever
+  // manages the installation. The standalone folder package (managed outside the app, ADR-0121 D9)
+  // used to read `gateway-service-managed-outside` here and could never start a run.
+  it.each([undefined, "user-local", "organization-managed", "machine-managed", "not-a-known-mode"])(
+    "needs no installed service for a staged Windows dev lane (management %s)",
     (management) => {
       const staged = devLaneFixture("windows-x64");
       const result = resolveProductionOpenCodeActivation(
         activationInput(
-          { ...staged.env, KEIKO_UI_PORT: "1983", KEIKO_PORTABLE_MANAGEMENT: management },
+          {
+            ...staged.env,
+            KEIKO_UI_PORT: "1983",
+            ...(management === undefined ? {} : { KEIKO_PORTABLE_MANAGEMENT: management }),
+          },
           { platform: "win32", arch: "x64", stateDir: join(staged.root, "runtime-state") },
         ),
       );
 
-      expect(result.windowsGatewayService?.unavailableReason()).toBe(
-        "gateway-service-managed-outside",
-      );
-      expect(result.windowsGatewayService?.repair).toBeUndefined();
+      expect(result.windowsGatewayService).toBeUndefined();
     },
   );
-
-  it("keeps the Windows gateway Repair for a user-local launch", () => {
-    const staged = devLaneFixture("windows-x64");
-    const result = resolveProductionOpenCodeActivation(
-      activationInput(
-        { ...staged.env, KEIKO_UI_PORT: "1983", KEIKO_PORTABLE_MANAGEMENT: "user-local" },
-        { platform: "win32", arch: "x64", stateDir: join(staged.root, "runtime-state") },
-      ),
-    );
-
-    expect(result.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
-    expect(result.windowsGatewayService?.repair).toBeTypeOf("function");
-  });
 
   it("has no Windows gateway fact for a macOS dev lane", () => {
     const staged = devLaneFixture();

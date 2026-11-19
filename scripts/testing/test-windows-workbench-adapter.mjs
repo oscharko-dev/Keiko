@@ -41,7 +41,7 @@ function launch(source, contents, port, args) {
   const backend = createNativeRuntimeProcessBackend({
     helperPath: source,
     expectedHelperSha256: pin,
-    useInstalledWindowsGateway: true,
+    useWindowsRelayConfinement: true,
     workspaceRoot: root,
     runtimeRoots: [root],
     gatewayConfinement: policy,

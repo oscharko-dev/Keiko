@@ -84,7 +84,7 @@ export type NativeRuntimeHelperSpawn = (
 ) => NativeRuntimeHelperProcess;
 
 export interface NativeRuntimeProcessBackendOptions {
-  readonly useInstalledWindowsGateway?: boolean;
+  readonly useWindowsRelayConfinement?: boolean;
   readonly helperPath: string;
   readonly expectedHelperSha256?: string | undefined;
   readonly runtimeRoots: readonly string[];
@@ -93,7 +93,7 @@ export interface NativeRuntimeProcessBackendOptions {
   readonly spawnHelper?: NativeRuntimeHelperSpawn | undefined;
   /**
    * macOS derives the exact Seatbelt wrapper from this server-owned policy for both prepared and
-   * direct launches. Windows requires the pinned SCM helper and the mapped gateway policy.
+   * direct launches. Windows requires the pinned supervisor, which relays the mapped gateway policy (ADR-0043 D20).
    */
   readonly gatewayConfinement?: RuntimeGatewayConfinement | undefined;
   /** The directories the confined Windows tree may reach (#4068); sent only with the gateway. */
@@ -105,7 +105,7 @@ export interface NativeRuntimeProcessBackendOptions {
 }
 
 interface ValidatedBackendOptions {
-  readonly useInstalledWindowsGateway: boolean;
+  readonly useWindowsRelayConfinement: boolean;
   readonly helperPath: string;
   readonly expectedHelperSha256?: string | undefined;
   readonly runtimeRoots: readonly string[];
@@ -230,11 +230,14 @@ function spawnWindowsGateway(
     encodeWindowsGatewayGrants(resolvedWindowsFilesystemGrants(options.windowsFilesystemGrants)),
     encodeWindowsGatewayOpen(policy, request.recoveryHandle),
   ]);
+  // #4068 (ADR-0043 D20): the verified supervisor confines the tree itself, as the signed-in user,
+  // in an AppContainer without any network capability; its only way out is the supervisor's
+  // per-run pipe to the gateway port the open names. No installed broker and no elevation.
   const child = spawnVerifiedHelper(
     options.helperPath,
     pin,
     options.spawnHelper,
-    ["--gateway-installed", pin],
+    ["--relay-supervised"],
     request.runId,
   );
   const tree = new NativeRuntimeTree(request.recoveryHandle, child, "win32", (sweep) => {
@@ -276,7 +279,7 @@ function validateBackendOptions(
   const gatewayConfinement = validGatewayConfinement(options.gatewayConfinement);
   return {
     helperPath,
-    useInstalledWindowsGateway: options.useInstalledWindowsGateway === true,
+    useWindowsRelayConfinement: options.useWindowsRelayConfinement === true,
     ...(expectedHelperSha256 === undefined ? {} : { expectedHelperSha256 }),
     workspaceRoot,
     runtimeRoots,
@@ -407,7 +410,7 @@ function assertNativeGatewaySupported(
   }
   if (options.identity.platform === "darwin") return;
   if (
-    !supportsInstalledWindowsGateway(options) ||
+    !supportsWindowsRelayConfinement(options) ||
     policy.profile !== "keiko-gateway" ||
     policy.filesystem ||
     request.egressPolicy.kind !== "loopback-only" ||
@@ -416,9 +419,9 @@ function assertNativeGatewaySupported(
     throw new Error(GATEWAY_UNSUPPORTED_ON_HOST_REASON);
 }
 
-function supportsInstalledWindowsGateway(options: ValidatedBackendOptions): boolean {
+function supportsWindowsRelayConfinement(options: ValidatedBackendOptions): boolean {
   return (
-    options.useInstalledWindowsGateway &&
+    options.useWindowsRelayConfinement &&
     options.identity.platform === "win32" &&
     options.identity.backend === "windows-job-object" &&
     options.identity.arch === "x64" &&

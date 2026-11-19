@@ -40655,7 +40655,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["bubblewrap", "unshare", "seatbelt", "windows-wfp"],
+        values: ["bubblewrap", "unshare", "seatbelt", "windows-wfp", "windows-appcontainer"],
       },
       policyDigest: {
         type: "string",
@@ -40787,7 +40787,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["windows-wfp"],
+        values: ["windows-wfp", "windows-appcontainer"],
       },
       removedEntryCount: {
         type: "integer",

@@ -76,14 +76,9 @@ import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorks
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
 import {
   discoverPortableOpenCode,
-  installWindowsGatewayService,
   portableInstallLayoutPresent,
-  readWindowsGatewayServiceStatus,
 } from "./productionPortableCodingRuntime.js";
-import {
-  createWindowsGatewayServiceProbe,
-  type WindowsGatewayServiceProbe,
-} from "./windowsGatewayServiceProbe.js";
+import type { WindowsGatewayServiceProbe } from "./windowsGatewayServiceProbe.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 
 type ProductionOpenCodePorts = Pick<
@@ -483,15 +478,15 @@ export function resolveProductionOpenCodeActivation(
   return {
     evidenceClass: runtimeEvidenceClass(runtime.portable),
     runtimeVersion: runtimeVersionFacts(runtime.portable),
-    ...windowsGatewayServiceFacts(input, runtime.portable),
+    ...windowsGatewayServiceFacts(runtime.portable),
     ports: activatedPorts(input, runtime.portable, endpoints, secureWorkspaceTextRead),
   };
 }
 
 /**
- * Every Windows launch carries the gateway policy, and only the installed broker can enforce it. A
- * Windows runtime that yields no broker pin therefore refuses every start (ADR-0043), so readiness
- * must not offer one. No host state changes this, hence a constant rather than a probe.
+ * Every Windows launch carries the gateway policy, and only the verified supervisor can enforce it.
+ * A Windows runtime that yields no supervisor pin therefore refuses every start (ADR-0043), so
+ * readiness must not offer one. No host state changes this, hence a constant rather than a probe.
  */
 const UNQUALIFIED_WINDOWS_RUNTIME: {
   readonly windowsGatewayService: WindowsGatewayServiceProbe;
@@ -500,45 +495,17 @@ const UNQUALIFIED_WINDOWS_RUNTIME: {
 };
 
 /**
- * Whether the launcher declared an installation managed outside the app (ADR-0121 D9): the
- * standalone folder package and IT-managed deployments. An unreadable declaration counts as managed
- * outside, the same fail-closed reading the update detection applies.
+ * #4068 (ADR-0043 D20): the verified supervisor confines every Windows run itself, as the signed-in
+ * user, in an AppContainer without network capabilities. No installed service gates readiness and
+ * nothing asks for elevation; only a runtime without a supervisor pin stays unavailable.
  */
-function managedOutsideApp(env: NodeJS.ProcessEnv | undefined): boolean {
-  const management = env === undefined ? undefined : portableManagementFromEnv(env);
-  // The same shape as the CLI's rule (keiko-cli portable-management.ts): only an absent or
-  // `user-local` declaration leaves Keiko in charge, so a mode added later is managed outside.
-  return management !== undefined && management !== "user-local";
-}
-
 export function windowsGatewayServiceFacts(
-  input: Pick<ProductionOpenCodeActivationInput, "activityLog"> &
-    Partial<Pick<ProductionOpenCodeActivationInput, "env">>,
   portable: ResolvedPortableOpenCodeRuntime,
 ): { readonly windowsGatewayService?: WindowsGatewayServiceProbe } {
   if (portable.target !== "windows-x64") return {};
-  // A release-qualified or independently pinned evaluation package, a Windows dev checkout and the
-  // Windows npm runtime package carry a broker pin (ADR-0043 D19); all
-  // then report the installed broker's state, so a checkout without one is told to install it.
-  const helperSha256 = windowsGatewayHelperPin(portable);
-  const helperPath = portable.nativeHelperPath;
-  return helperSha256 === undefined || helperPath === undefined
+  return windowsGatewayHelperPin(portable) === undefined || portable.nativeHelperPath === undefined
     ? UNQUALIFIED_WINDOWS_RUNTIME
-    : {
-        windowsGatewayService: createWindowsGatewayServiceProbe({
-          helperPath,
-          helperSha256,
-          evidenceClass: runtimeEvidenceClass(portable),
-          origin: runtimeVersionFacts(portable).origin,
-          activityLog: input.activityLog ?? processServerLogSink(),
-          runStatus: readWindowsGatewayServiceStatus,
-          // The Workbench's Repair is the person's explicit choice for every origin, the dev lane
-          // included; Windows still asks through UAC. An installation managed outside the app (the
-          // standalone folder package, ADR-0121 D9) sets up no system service and offers no Repair.
-          runInstall: installWindowsGatewayService,
-          managedOutsideApp: managedOutsideApp(input.env),
-        }),
-      };
+    : {};
 }
 
 /**

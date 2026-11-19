@@ -16,6 +16,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -306,25 +307,33 @@ export function runWrapper(file, { env, cwd, logPath, timeoutMs, os = platform()
   });
 }
 
+// Windows extracts with the tar.exe the operating system ships in System32 (bsdtar reads ZIP).
+// Windows PowerShell's Expand-Archive is not used: started from a pwsh step it inherits pwsh's
+// module path and left the hosted runner's folder without its start file (#4068).
+function windowsTar() {
+  return join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+}
+
 function extractZip(zipPath, destination, os) {
   mkdirSync(destination, { recursive: true });
   const result =
     os === "win32"
-      ? spawnSync(
-          "powershell.exe",
-          [
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Expand-Archive -LiteralPath $env:KEIKO_QUALIFY_ZIP -DestinationPath $env:KEIKO_QUALIFY_DEST",
-          ],
-          {
-            env: { ...process.env, KEIKO_QUALIFY_ZIP: zipPath, KEIKO_QUALIFY_DEST: destination },
-            encoding: "utf8",
-          },
-        )
+      ? spawnSync(windowsTar(), ["-x", "-f", zipPath, "-C", destination], { encoding: "utf8" })
       : spawnSync("ditto", ["-x", "-k", zipPath, destination], { encoding: "utf8" });
-  if (result.status !== 0) refuse(`the platform extraction tool failed (${String(result.status)})`);
+  if (result.status !== 0) {
+    const detail = String(result.stderr ?? result.error?.message ?? "")
+      .trim()
+      .slice(-400);
+    refuse(`the platform extraction tool failed (${String(result.status)}): ${detail}`);
+  }
+}
+
+function folderEntries(folder) {
+  try {
+    return readdirSync(folder).sort().join(", ");
+  } catch {
+    return "missing";
+  }
 }
 
 /**
@@ -441,7 +450,11 @@ async function qualify(options, session) {
   await checks.run("extract-with-platform-tool", () => {
     extractZip(session.zip, session.parent, os);
     session.folder = join(session.parent, "Keiko");
-    expect(statSync(startFile(session.folder, os)).isFile(), "no start file");
+    const start = startFile(session.folder, os);
+    expect(
+      existsSync(start) && statSync(start).isFile(),
+      `no start file; extracted: ${folderEntries(session.parent)}; package: ${folderEntries(session.folder)}`,
+    );
     session.before = snapshotOutsideNodeModules(session.folder);
   });
   if (!checks.failed) await startStopChecks(session, options, os);
