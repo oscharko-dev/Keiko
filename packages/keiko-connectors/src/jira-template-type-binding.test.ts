@@ -215,6 +215,50 @@ describe("resolving the field and status ids of a template", () => {
     });
   });
 
+  it("fills an unresolved status slot once the workflow is known and keeps confirmed slots (PR #4464)", () => {
+    const first = resolveJiraTemplateBinding(typed, view([], []), INSTANCE);
+    if (first.state !== "bindable") throw new TypeError("Expected a bindable template");
+    expect(first.binding.transitionStatusIds).toEqual(["none", "none"]);
+    const boundFirst: JiraIssueTemplate = { ...typed, binding: first.binding };
+    const later = resolveJiraTemplateBinding(
+      boundFirst,
+      view([], [{ id: "5", name: "Fertig" }]),
+      INSTANCE,
+    );
+    if (later.state !== "bindable") throw new TypeError("Expected a completed binding");
+    expect(later.binding.transitionStatusIds).toEqual(["5", "none"]);
+    const { digest, ...ids } = later.binding;
+    expect(digest).toBe(jiraTemplateBindingDigest(INSTANCE, typed, ids));
+    // A confirmed slot is never overwritten by a translated or duplicated name.
+    const settled: JiraIssueTemplate = { ...typed, binding: later.binding };
+    expect(
+      resolveJiraTemplateBinding(
+        settled,
+        view(
+          [],
+          [
+            { id: "5", name: "Terminé" },
+            { id: "7", name: "Fertig" },
+          ],
+        ),
+        INSTANCE,
+      ),
+    ).toMatchObject({ state: "bound" });
+  });
+
+  it("keeps a bound template bound when the author's view resolves none of its slots (PR #4464)", () => {
+    // A binding that carries only the issue type: an empty catalog and workflow learn nothing, so
+    // writing `none` placeholders must not offer a new binding with a new digest.
+    const onlyType = bound(typed, "10002");
+    expect(resolveJiraTemplateBinding(onlyType, view([], []), INSTANCE)).toMatchObject({
+      state: "bound",
+    });
+    // A slot the view does resolve is still learned.
+    expect(
+      resolveJiraTemplateBinding(onlyType, view([], [{ id: "5", name: "Fertig" }]), INSTANCE),
+    ).toMatchObject({ state: "bindable", binding: { transitionStatusIds: ["5", "none"] } });
+  });
+
   it("binds again when a bound field id is gone from the author's view (stale ids)", () => {
     const stale = template("Aufgabe", "requiredFields: [Story Punkte]");
     const resolvedBefore = resolveJiraTemplateBinding(

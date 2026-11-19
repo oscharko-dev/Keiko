@@ -6,6 +6,7 @@ import type { FigmaRenderPort, FigmaRenderRequest } from "../figmaRenderPort.js"
 import { FigmaConnectorError } from "../figmaConnectorErrors.js";
 import type { FigmaRetrySleep } from "../figmaRetry.js";
 import { buildFigmaSnapshot, type BuildFigmaSnapshotInput } from "../figmaSnapshotBuilder.js";
+import { fixturePng as png, fixturePngOfSize } from "./figmaRenderFixture.js";
 
 const TOKEN = "figd_unit-test-secret-pat-value-1234567890";
 
@@ -43,9 +44,6 @@ const provenance: FigmaProvenance = {
   version: "v-pinned-1",
   fetchedAt: "2026-06-09T00:00:00.000Z",
 };
-
-const png = (seed: number): Uint8Array =>
-  new Uint8Array([0x89, 0x50, 0x4e, 0x47, seed, seed + 1, seed + 2]);
 
 interface ImagesPortStub {
   readonly port: FigmaHttpPort;
@@ -197,6 +195,265 @@ describe("buildFigmaSnapshot", () => {
     });
 
     expect(snapshot.skippedScreens).toEqual([{ screenId: "1:1", reason: "render-oversized" }]);
+  });
+
+  it.each([
+    new TextEncoder().encode("upstream response"),
+    png(4).subarray(0, -1),
+    Buffer.concat([png(4), Uint8Array.of(0)]),
+  ])("keeps the IR when a render body is not a complete PNG", async (bytes) => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    const renders = renderPort({
+      "https://s3-alpha-sig.figma.com/1:1.png": bytes,
+    });
+
+    const snapshot = await buildFigmaSnapshot(baseInput(screens, images.port, renders.port));
+
+    expect(snapshot.screens).toHaveLength(0);
+    expect(snapshot.structuralScreens).toMatchObject([
+      { screenId: "1:1", reason: "render-invalid-png" },
+    ]);
+  });
+
+  it("bounds aggregate render bytes in screen order and stops later downloads", async () => {
+    const screens = [screen("1:1", "Home"), screen("1:2", "Detail"), screen("1:3", "Settings")];
+    const images = imagesPort();
+    const firstImage = png(10);
+    const renders = renderPort({
+      "https://s3-alpha-sig.figma.com/1:1.png": firstImage,
+      "https://s3-alpha-sig.figma.com/1:2.png": png(20),
+    });
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images.port, renders.port),
+      downloadConcurrency: 2,
+      maxSnapshotImageBytes: firstImage.length,
+    });
+
+    expect(snapshot.screens.map(({ screenId }) => screenId)).toEqual(["1:1"]);
+    expect(snapshot.skippedScreens).toEqual([
+      { screenId: "1:2", reason: "render-budget-exceeded" },
+      { screenId: "1:3", reason: "render-budget-exceeded" },
+    ]);
+    expect(renders.requests).toHaveLength(1);
+  });
+
+  describe("aggregate download allowance (#4464)", () => {
+    // A port that honours the per-request byte cap like the real one: a body larger than the cap
+    // is cut at the cap (the transfer volume) and surfaces FIGMA_RESPONSE_TOO_LARGE.
+    const cappedRenderPort = (
+      sizeByUrl: Record<string, number>,
+    ): { readonly port: FigmaRenderPort; readonly bytesRead: () => number } => {
+      let total = 0;
+      const port: FigmaRenderPort = (request) => {
+        const body = fixturePngOfSize(sizeByUrl[request.url] ?? 0);
+        const cap = request.maxBytes ?? Number.POSITIVE_INFINITY;
+        if (body.length > cap) {
+          total += cap;
+          return Promise.reject(new FigmaConnectorError("FIGMA_RESPONSE_TOO_LARGE"));
+        }
+        total += body.length;
+        return Promise.resolve({ status: 200, bytes: body, headers: {} });
+      };
+      return { port, bytesRead: () => total };
+    };
+    const urlOf = (id: string): string => `https://s3-alpha-sig.figma.com/${id}.png`;
+
+    it.each([1, 2, 4])(
+      "never reads more than the aggregate limit across kept and rejected downloads (concurrency %i)",
+      async (downloadConcurrency) => {
+        const ids = ["1:1", "1:2", "1:3", "1:4", "1:5", "1:6"];
+        const screens = ids.map((id) => screen(id, id));
+        const imageSize = fixturePngOfSize(1000).length;
+        const limit = imageSize * 2 + 500;
+        const renders = cappedRenderPort(Object.fromEntries(ids.map((id) => [urlOf(id), 1000])));
+
+        const snapshot = await buildFigmaSnapshot({
+          ...baseInput(screens, imagesPort().port, renders.port),
+          downloadConcurrency,
+          maxSnapshotImageBytes: limit,
+        });
+
+        expect(renders.bytesRead()).toBeLessThanOrEqual(limit);
+        expect(snapshot.screens.map(({ screenId }) => screenId)).toEqual(["1:1", "1:2"]);
+        expect(snapshot.skippedScreens).toEqual(
+          ids.slice(2).map((screenId) => ({ screenId, reason: "render-budget-exceeded" })),
+        );
+      },
+    );
+
+    it("starts no download once nothing remains", async () => {
+      const ids = ["1:1", "1:2", "1:3"];
+      const screens = ids.map((id) => screen(id, id));
+      const imageSize = fixturePngOfSize(500).length;
+      const renders = cappedRenderPort(Object.fromEntries(ids.map((id) => [urlOf(id), 500])));
+      const requests: FigmaRenderRequest[] = [];
+      const port: FigmaRenderPort = (request) => {
+        requests.push(request);
+        return renders.port(request);
+      };
+
+      await buildFigmaSnapshot({
+        ...baseInput(screens, imagesPort().port, port),
+        downloadConcurrency: 1,
+        maxSnapshotImageBytes: imageSize,
+      });
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.maxBytes).toBe(imageSize);
+    });
+
+    it("charges a failed download its whole reservation, never zero", async () => {
+      const ids = ["1:1", "1:2"];
+      const screens = ids.map((id) => screen(id, id));
+      const imageSize = fixturePngOfSize(1000).length;
+      const requests: string[] = [];
+      const port: FigmaRenderPort = (request) => {
+        requests.push(request.url);
+        if (request.url === urlOf("1:1")) return Promise.reject(new Error("connection reset"));
+        return Promise.resolve({ status: 200, bytes: fixturePngOfSize(1000), headers: {} });
+      };
+
+      const snapshot = await buildFigmaSnapshot({
+        ...baseInput(screens, imagesPort().port, port),
+        downloadConcurrency: 1,
+        retryPolicy: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 },
+        maxSnapshotImageBytes: imageSize + 500,
+      });
+
+      expect(requests).toEqual([urlOf("1:1")]);
+      expect(snapshot.skippedScreens).toEqual([
+        { screenId: "1:1", reason: "render-fetch-failed" },
+        { screenId: "1:2", reason: "render-budget-exceeded" },
+      ]);
+    });
+
+    it("charges a rate-limited download only the bodies it read", async () => {
+      const ids = ["1:1", "1:2"];
+      const screens = ids.map((id) => screen(id, id));
+      const imageSize = fixturePngOfSize(1000).length;
+      const port: FigmaRenderPort = (request) =>
+        Promise.resolve(
+          request.url === urlOf("1:1")
+            ? { status: 429, bytes: new Uint8Array(10), headers: {} }
+            : { status: 200, bytes: fixturePngOfSize(1000), headers: {} },
+        );
+
+      const snapshot = await buildFigmaSnapshot({
+        ...baseInput(screens, imagesPort().port, port),
+        downloadConcurrency: 1,
+        retryPolicy: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 },
+        maxSnapshotImageBytes: imageSize + 500,
+      });
+
+      expect(snapshot.screens.map(({ screenId }) => screenId)).toEqual(["1:2"]);
+      expect(snapshot.skippedScreens).toEqual([
+        { screenId: "1:1", reason: "render-fetch-failed:FIGMA_RATE_LIMITED" },
+      ]);
+    });
+
+    const rateLimitedFirst = (
+      retryAfter: string | undefined,
+    ): { readonly port: FigmaRenderPort; readonly urls: string[] } => {
+      const urls: string[] = [];
+      const port: FigmaRenderPort = (request) => {
+        urls.push(request.url);
+        if (request.url !== urlOf("1:1")) {
+          return Promise.resolve({ status: 200, bytes: png(1), headers: {} });
+        }
+        const headers: Record<string, string> =
+          retryAfter === undefined ? {} : { "retry-after": retryAfter };
+        return Promise.resolve({ status: 429, bytes: new Uint8Array(0), headers });
+      };
+      return { port, urls };
+    };
+
+    it("starts no further download once Figma names a Retry-After", async () => {
+      const ids = ["1:1", "1:2", "1:3"];
+      const renders = rateLimitedFirst("60");
+
+      const snapshot = await buildFigmaSnapshot({
+        ...baseInput(
+          ids.map((id) => screen(id, id)),
+          imagesPort().port,
+          renders.port,
+        ),
+        downloadConcurrency: 1,
+        retryPolicy: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 },
+      });
+
+      expect(renders.urls).toEqual([urlOf("1:1")]);
+      expect(snapshot.skippedScreens).toEqual(
+        ids.map((screenId) => ({ screenId, reason: "render-fetch-failed:FIGMA_RATE_LIMITED" })),
+      );
+    });
+
+    it("keeps downloading after a 429 that names no delay (control)", async () => {
+      const ids = ["1:1", "1:2", "1:3"];
+      const renders = rateLimitedFirst(undefined);
+
+      const snapshot = await buildFigmaSnapshot({
+        ...baseInput(
+          ids.map((id) => screen(id, id)),
+          imagesPort().port,
+          renders.port,
+        ),
+        downloadConcurrency: 1,
+        retryPolicy: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1 },
+      });
+
+      expect(renders.urls).toEqual(ids.map(urlOf));
+      expect(snapshot.screens.map(({ screenId }) => screenId)).toEqual(["1:2", "1:3"]);
+    });
+
+    it("counts the body of a rate-limited attempt against the same reservation", async () => {
+      const ids = ["1:1", "1:2"];
+      const screens = ids.map((id) => screen(id, id));
+      const imageSize = fixturePngOfSize(1000).length;
+      const limit = imageSize * 2 + 100;
+      const caps: (number | undefined)[] = [];
+      let firstScreenCalls = 0;
+      const port: FigmaRenderPort = (request) => {
+        caps.push(request.maxBytes);
+        const body = fixturePngOfSize(1000);
+        if (request.url === urlOf("1:1") && firstScreenCalls++ === 0) {
+          return Promise.resolve({ status: 429, bytes: body, headers: {} });
+        }
+        return Promise.resolve({ status: 200, bytes: body, headers: {} });
+      };
+      const { sleep } = recordingSleep();
+
+      const snapshot = await buildFigmaSnapshot({
+        ...baseInput(screens, imagesPort().port, port),
+        downloadConcurrency: 1,
+        retryPolicy: { maxRetries: 1, baseDelayMs: 1, maxDelayMs: 10 },
+        sleep,
+        maxSnapshotImageBytes: limit,
+      });
+
+      // The retry may read only what the 429 body left; the next screen gets just the remainder.
+      expect(caps).toEqual([limit, limit - imageSize, limit - imageSize * 2]);
+      expect(snapshot.screens.map(({ screenId }) => screenId)).toEqual(["1:1"]);
+      expect(snapshot.skippedScreens).toEqual([
+        { screenId: "1:2", reason: "render-budget-exceeded" },
+      ]);
+    });
+  });
+
+  it("checks the revision after requesting renders and before downloading any bytes", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    const renders = renderPort({});
+    const verifyRevision = (): Promise<void> => {
+      expect(images.requests).toHaveLength(1);
+      expect(renders.requests).toHaveLength(0);
+      return Promise.reject(new FigmaConnectorError("FIGMA_SOURCE_CHANGED"));
+    };
+    await expect(
+      buildFigmaSnapshot({ ...baseInput(screens, images.port, renders.port), verifyRevision }),
+    ).rejects.toMatchObject({ code: "FIGMA_SOURCE_CHANGED" });
+    expect(renders.requests).toHaveLength(0);
   });
 
   it("produces a valid empty snapshot when there are no screens (no Figma call)", async () => {

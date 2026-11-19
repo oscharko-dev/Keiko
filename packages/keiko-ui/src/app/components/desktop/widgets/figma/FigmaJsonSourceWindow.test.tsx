@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { FigmaSnapshotScreenJsonResponse } from "@/lib/figma-snapshot-api";
@@ -51,6 +51,43 @@ const MOCK_SCREEN_JSON: FigmaSnapshotScreenJsonResponse = {
 };
 
 describe("FigmaJsonSourceWindow", () => {
+  it("discards an earlier source response after the window switches screen", async () => {
+    let resolvePrevious!: (result: FigmaSnapshotScreenJsonResponse) => void;
+    const previous = new Promise<FigmaSnapshotScreenJsonResponse>((resolve) => {
+      resolvePrevious = resolve;
+    });
+    const current = {
+      ...MOCK_SCREEN_JSON,
+      screen: { ...MOCK_SCREEN_JSON.screen, screenId: "screen-2", irJson: { id: "current" } },
+    };
+    const loadScreenJsonImpl = vi
+      .fn<LoadScreenJsonFn>()
+      .mockReturnValueOnce(previous)
+      .mockResolvedValueOnce(current);
+    const { rerender } = render(
+      <FigmaJsonSourceWindow
+        snapshotRunId="fs-test"
+        screenId="screen-1"
+        loadScreenJsonImpl={loadScreenJsonImpl}
+      />,
+    );
+    rerender(
+      <FigmaJsonSourceWindow
+        snapshotRunId="fs-test"
+        screenId="screen-2"
+        loadScreenJsonImpl={loadScreenJsonImpl}
+      />,
+    );
+
+    const code = await screen.findByRole("region", { name: "Figma export JSON" });
+    expect(code).toHaveTextContent('"id": "current"');
+    expect(loadScreenJsonImpl.mock.calls[0]?.[2]?.aborted).toBe(true);
+    await act(async () => {
+      resolvePrevious(MOCK_SCREEN_JSON);
+    });
+    expect(code).toHaveTextContent('"id": "current"');
+  });
+
   it("loads and renders scoped JSON with syntax highlighting", async () => {
     const loadSpy = vi.fn(async () => MOCK_SCREEN_JSON);
     render(

@@ -24,12 +24,12 @@
 // future slice wires the SemanticNamingProvider to a gateway model call, that injected port is where
 // an AbortSignal threads through — no structural change to this route is required.
 
+import { openFigmaSnapshotStore } from "./figmaSnapshotStore.js";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { FigmaCodegenResponse } from "@oscharko-dev/keiko-contracts";
 import {
   createNodeContainedJsonArtifactStore,
-  createNodeFigmaSnapshotStore,
   type FigmaSnapshotRecord,
 } from "@oscharko-dev/keiko-evidence";
 import { QualityIntelligenceFigma } from "@oscharko-dev/keiko-quality-intelligence";
@@ -168,7 +168,7 @@ function loadSnapshotForCodegen(
   }
   let record: FigmaSnapshotRecord | undefined;
   try {
-    record = createNodeFigmaSnapshotStore(evidenceDir).load(runId);
+    record = openFigmaSnapshotStore(evidenceDir, deps, ctx.correlationId).load(runId);
   } catch {
     return {
       status: 500,

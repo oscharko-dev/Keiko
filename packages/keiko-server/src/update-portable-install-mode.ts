@@ -754,6 +754,28 @@ function modeForPortableSummary(
   return portableSupportedMode(packageName, summary);
 }
 
+/**
+ * An installation without a portable payload whose launcher declares it managed outside the app:
+ * the npm folder package, whose Keiko npm installed into the folder (ADR-0121 D9), or an IT-managed
+ * npm installation. Keiko updates nothing there and asks no publisher; a new version arrives the
+ * way the organization delivers it. Undefined when nothing declares outside management.
+ */
+export function externallyManagedInstallMode(
+  management: PortableManagementMode | undefined,
+  packageName: string,
+): UpdateInstallMode | undefined {
+  if (management !== "organization-managed" && management !== "machine-managed") return undefined;
+  return {
+    schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
+    status: "unsupported",
+    packageName,
+    installKind: "portable-it-managed",
+    recommendedAction: "manual-download",
+    reason: "portable-it-managed",
+    manualInstructions: manualInstructions("portable-it-managed"),
+  };
+}
+
 export function portableStateDirFromEnv(env: NodeJS.ProcessEnv): string | undefined {
   const stateDir = env.KEIKO_STATE_DIR;
   return stateDir === undefined || stateDir.length === 0 ? undefined : stateDir;

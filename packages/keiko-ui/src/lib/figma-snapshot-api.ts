@@ -307,9 +307,10 @@ export interface FigmaRevokeTokenResult {
  * Revokes the stored Figma PAT from the server vault (audited key removal, #758).
  * The token itself is never returned; the response is a success envelope only.
  */
-export async function revokeFigmaToken(): Promise<FigmaRevokeTokenResult> {
+export async function revokeFigmaToken(signal?: AbortSignal): Promise<FigmaRevokeTokenResult> {
   return fetchJson<FigmaRevokeTokenResult>("/api/figma/token", {
     method: "DELETE",
+    ...(signal !== undefined ? { signal } : {}),
     body: JSON.stringify({}),
   });
 }

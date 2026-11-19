@@ -21,6 +21,7 @@ import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import { WIN_META } from "../windows/descriptor-meta";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { AppWindow, Connection } from "../windows/types";
+import { isSafeFigmaImageSrc } from "../figma-image-drag";
 import { isConnectedScopeFingerprint } from "./workspaceScopeIdentity";
 import {
   EDITOR_SIDEBAR_DEFAULT_WIDTH,
@@ -423,10 +424,6 @@ function sanitizeFigmaSelectedScreenIdsJson(value: string): string | undefined {
     screenIds.push(screenId);
   }
   return JSON.stringify(screenIds);
-}
-
-function isSafeFigmaImageSrc(value: string): boolean {
-  return /^\/api\/figma\/snapshots\/[^/?#]+\/screens\/\d+\/image$/u.test(value);
 }
 
 function sanitizeFigmaConfigValue(key: string, value: unknown): JsonScalar | undefined {

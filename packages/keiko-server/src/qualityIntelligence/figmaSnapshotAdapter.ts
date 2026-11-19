@@ -3,7 +3,7 @@
 // Two server-tier seams the pure-domain ingestion cannot own:
 //
 //   1. The snapshot LOADER — reads the immutable Figma Snapshot evidence record for a runId through
-//      the existing keiko-evidence store (`createNodeFigmaSnapshotStore(evidenceDir).load`). It
+//      the existing keiko-evidence store (`openFigmaSnapshotStore(evidenceDir, deps).load`). It
 //      reads ONLY the stored snapshot and never contacts Figma. Returns `undefined` when no
 //      evidence dir is configured, so the ingestion layer rejects the source with a coded error.
 //
@@ -16,19 +16,22 @@
 //      The call goes through deps.modelPortFactory / Model Gateway only — no provider SDK and no
 //      Figma egress after snapshot build.
 
+import { openFigmaSnapshotStore } from "./figmaSnapshotStore.js";
 import { Buffer } from "node:buffer";
 import { stripJsonCodeFence } from "../json-code-fence.js";
-import {
-  createNodeFigmaSnapshotStore,
-  type FigmaSnapshotImageRef,
-  type FigmaSnapshotRecord,
-} from "@oscharko-dev/keiko-evidence";
+import { type FigmaSnapshotImageRef, type FigmaSnapshotRecord } from "@oscharko-dev/keiko-evidence";
 import type { GatewayCallRequest } from "@oscharko-dev/keiko-model-gateway";
-import type { UiHandlerDeps } from "../deps.js";
+import type { Redactor, UiHandlerDeps } from "../deps.js";
+import { strictRedactor } from "../content-redactor.js";
+import { emitServerDiagnostic } from "../diagnostics-log.js";
 import { resolveQiMultimodalSelection } from "./modelSelection.js";
 
 /** Loads an immutable Figma Snapshot evidence record by runId. Returns `undefined` when not found. */
-export type FigmaSnapshotLoader = (snapshotRunId: string) => FigmaSnapshotRecord | undefined;
+export interface FigmaSnapshotLoader {
+  (snapshotRunId: string): FigmaSnapshotRecord | undefined;
+  /** Original record used to retain existing evidence atom identities during drift checks. */
+  readonly loadPinned?: (snapshotRunId: string) => FigmaSnapshotRecord | undefined;
+}
 
 export interface FigmaSnapshotLoaderOptions {
   /**
@@ -36,11 +39,21 @@ export interface FigmaSnapshotLoaderOptions {
    * content can never change under its identity — re-checking the pinned record would always
    * report "fresh" even after the board changed and was re-snapshotted. When this flag is set the
    * loader resolves the LATEST snapshot recorded for the same board scope (fileKey + nodeId) and
-   * returns it instead of the pinned record whenever its integrity hash differs. Screen atom ids
-   * are board-stable (screenId-derived), so compareStaleness sees changed atoms, not orphans.
+   * returns it for comparison. V1 hashes omit fields used by QI, including links and colours.
    * Used by re-check and regenerate-stale ONLY — the generate path keeps exact pinning.
    */
   readonly resolveLatestByScope?: boolean;
+}
+
+function logSnapshotReadFailure(deps: UiHandlerDeps, runId: string, error: unknown): void {
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "figma.snapshotRead",
+    source: "figmaSnapshotAdapter.logSnapshotReadFailure",
+    errorClass: error instanceof Error ? error.constructor.name : typeof error,
+    message: "figma-internal-error",
+  });
 }
 
 /**
@@ -53,29 +66,36 @@ export function makeFigmaSnapshotLoader(
 ): FigmaSnapshotLoader | undefined {
   const evidenceDir = deps.evidenceDir;
   if (evidenceDir === undefined || evidenceDir.length === 0) return undefined;
-  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  const store = openFigmaSnapshotStore(evidenceDir, deps);
   const resolveLatest = options?.resolveLatestByScope === true;
-  return (snapshotRunId: string): FigmaSnapshotRecord | undefined => {
+  const loadPinned = (snapshotRunId: string): FigmaSnapshotRecord | undefined => {
     try {
-      const pinned = store.load(snapshotRunId);
-      if (pinned === undefined || !resolveLatest) return pinned;
-      const entries = store.listByScope(pinned.provenance.fileKey, pinned.provenance.nodeId);
-      const newest = entries[0];
-      if (
-        newest === undefined ||
-        newest.runId === pinned.runId ||
-        newest.integrityHash === pinned.integrityHash
-      ) {
-        return pinned;
-      }
-      // Fall back to the pinned record when the newest record fails to load — drift detection
-      // must degrade to "fresh", never crash the re-check.
-      return store.load(newest.runId) ?? pinned;
-    } catch {
-      // A malformed / unreadable record is treated as "not found"; the caller emits a coded error.
+      return store.load(snapshotRunId);
+    } catch (error) {
+      logSnapshotReadFailure(deps, snapshotRunId, error);
       return undefined;
     }
   };
+  if (!resolveLatest) return loadPinned;
+
+  const loadLatest = (snapshotRunId: string): FigmaSnapshotRecord | undefined => {
+    const pinned = loadPinned(snapshotRunId);
+    if (pinned === undefined) return undefined;
+    try {
+      const entries = store.listByScope(pinned.provenance.fileKey, pinned.provenance.nodeId);
+      const newest = entries[0];
+      if (newest === undefined || newest.runId === pinned.runId) return pinned;
+      const record = store.load(newest.runId);
+      return record?.provenance.fileKey === pinned.provenance.fileKey &&
+        record.provenance.nodeId === pinned.provenance.nodeId
+        ? record
+        : undefined;
+    } catch (error) {
+      logSnapshotReadFailure(deps, snapshotRunId, error);
+      return undefined;
+    }
+  };
+  return Object.assign(loadLatest, { loadPinned });
 }
 
 /** The image-derived semantics a multimodal model recovered for one screen, as additive hints. */
@@ -136,8 +156,8 @@ function truncateUtf8(value: string, maxBytes: number): string {
   return out;
 }
 
-function redactedString(deps: UiHandlerDeps, value: string): string {
-  const redacted = deps.redactor(value);
+function redactedString(redact: Redactor, value: string): string {
+  const redacted = redact(value);
   return typeof redacted === "string" ? redacted : "";
 }
 
@@ -256,7 +276,8 @@ function makeGatewayFigmaVisionCall(
 ): FigmaVisionCall | undefined {
   const evidenceDir = deps.evidenceDir;
   if (evidenceDir === undefined || evidenceDir.length === 0) return undefined;
-  const store = createNodeFigmaSnapshotStore(evidenceDir);
+  const store = openFigmaSnapshotStore(evidenceDir, deps);
+  const redact = strictRedactor(deps);
   // Capture the structured-output flag once at closure-creation, not per screen. The multimodal
   // selection is stable for the lifetime of the provider (deps is immutable after server init),
   // so re-calling resolveQiMultimodalSelection on every vision call is redundant work.
@@ -270,7 +291,7 @@ function makeGatewayFigmaVisionCall(
     if (image.byteLength > MAX_VISION_IMAGE_BYTES) return [];
     const dataUrl = `data:${image.mimeType};base64,${Buffer.from(image.bytes).toString("base64")}`;
     const baselineText = truncateUtf8(
-      redactedString(deps, request.baselineText),
+      redactedString(redact, request.baselineText),
       MAX_VISION_BASELINE_BYTES,
     );
     const structuredOutput =
@@ -288,7 +309,7 @@ function makeGatewayFigmaVisionCall(
     try {
       options.onGatewayCallAttempt?.();
       const response = await model.call(gatewayRequest, abort.signal);
-      return parseHintResponse(redactedString(deps, response.content));
+      return parseHintResponse(redactedString(redact, response.content));
     } finally {
       abort.cleanup();
     }

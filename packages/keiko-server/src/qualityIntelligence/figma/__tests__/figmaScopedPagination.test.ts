@@ -266,6 +266,64 @@ describe("paginateScopedDocument — bounds + coverage", () => {
     expect(coverage.capped).toBe(true);
   });
 
+  describe("deep-fetch slots with discovery depth", () => {
+    const loadedScreen = node("s1", "FRAME", [node("s1-t", "TEXT", [], "loaded")]);
+    const pendingScreen = (id: string): BuildNode =>
+      node(id, "FRAME", [node(`${id}-a`, "FRAME", [node(`${id}-t`, "TEXT", [], "pending")])]);
+
+    it("spends the only slot on the screen that still needs a fetch, not on a loaded one", async () => {
+      const full = toRaw(node("canvas", "CANVAS", [loadedScreen, pendingScreen("s2")]));
+      const f = fetcherFor(full, 2);
+      const { document, coverage } = await paginateScopedDocument(
+        truncate(full, 2),
+        f.fetch,
+        limits({ maxScreensDeep: 1 }),
+        2,
+      );
+      expect(f.calls()).toEqual(["s2"]);
+      expect(countText(document)).toBe(2);
+      expect(coverage).toMatchObject({
+        screenCount: 2,
+        screensDeepFetched: 1,
+        screensTruncated: 0,
+        capped: false,
+      });
+    });
+
+    it("keeps ordinary truncation when more screens need a fetch than there are slots", async () => {
+      const full = toRaw(node("canvas", "CANVAS", [pendingScreen("s1"), pendingScreen("s2")]));
+      const f = fetcherFor(full, 2);
+      const { document, coverage } = await paginateScopedDocument(
+        truncate(full, 2),
+        f.fetch,
+        limits({ maxScreensDeep: 1 }),
+        2,
+      );
+      expect(f.calls()).toEqual(["s1"]);
+      expect(countText(document)).toBe(1);
+      expect(coverage).toMatchObject({ screensDeepFetched: 1, capped: true });
+    });
+
+    it("still bounds a loaded screen by the per-screen node budget when slots are exhausted", async () => {
+      const wide = node(
+        "s1",
+        "FRAME",
+        Array.from({ length: 6 }, (_, i) => node(`s1-t${String(i)}`, "TEXT", [], "t")),
+      );
+      const full = toRaw(node("canvas", "CANVAS", [wide, pendingScreen("s2")]));
+      const f = fetcherFor(full, 2);
+      const { document, coverage } = await paginateScopedDocument(
+        truncate(full, 2),
+        f.fetch,
+        limits({ maxScreensDeep: 1, maxNodesPerScreen: 4 }),
+        2,
+      );
+      expect(f.calls()).toEqual(["s2"]);
+      expect(coverage.screensTruncated).toBe(1);
+      expect(countText(firstChild(document))).toBeLessThanOrEqual(3);
+    });
+  });
+
   it("truncates a screen when the per-screen fetch budget is exhausted", async () => {
     const full = canvasOf(["s1"]);
     // maxFetchesPerScreen=1 → only the base fetch, no frontier expansion → truncated.

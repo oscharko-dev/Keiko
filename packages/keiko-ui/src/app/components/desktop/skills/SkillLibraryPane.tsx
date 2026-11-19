@@ -102,6 +102,7 @@ function TemplateGroup({
         openId={openId}
         onOpen={(item) => workspace.guard(() => workspace.open(item))}
         chat={{ skill, disabled }}
+        adoptBinding={workspace.adoptBinding}
       />
       <button
         type="button"

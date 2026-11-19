@@ -173,6 +173,46 @@ describe("MarkdownEditor", () => {
     expect(onChange).toHaveBeenLastCalledWith("---\nname: a\n---\n\nnew body");
   });
 
+  it("emits the current front matter after the text changed under the same key (u6J)", () => {
+    // A binding written in the background replaces a clean file's text without a new key: the next
+    // edit must carry the new front matter, never the one the editor opened with.
+    const onChange = vi.fn();
+    const props = {
+      documentKey: "doc-1",
+      ariaLabel: "Prompt",
+      placeholder: "Write here",
+      maxLength: 50_000,
+      onChange,
+    };
+    const { rerender } = render(<MarkdownEditor {...props} value={"---\nname: a\n---\n\nbody"} />);
+    rerender(
+      <MarkdownEditor {...props} value={'---\nname: a\nissueTypeId: "10002"\n---\n\nbody'} />,
+    );
+    expect(
+      screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Metadata (YAML)" }).value,
+    ).toBe('name: a\nissueTypeId: "10002"');
+    fireEvent.click(viewButton("Markdown"));
+    fireEvent.change(screen.getByRole("textbox", { name: /Markdown/u }), {
+      target: { value: "new body" },
+    });
+    expect(onChange).toHaveBeenLastCalledWith(
+      '---\nname: a\nissueTypeId: "10002"\n---\n\nnew body',
+    );
+  });
+
+  it("opens and keeps the bytes of a front matter fence with trailing blanks (UyK)", () => {
+    const onChange = vi.fn();
+    render(<Harness initial={"---  \r\nname: a\r\n---\r\n\r\nbody"} onChange={onChange} />);
+    expect(
+      screen.getByRole<HTMLTextAreaElement>("textbox", { name: "Metadata (YAML)" }).value,
+    ).toBe("name: a");
+    fireEvent.click(viewButton("Markdown"));
+    fireEvent.change(screen.getByRole("textbox", { name: /Markdown/u }), {
+      target: { value: "new body" },
+    });
+    expect(onChange).toHaveBeenLastCalledWith("---  \r\nname: a\r\n---\r\n\r\nnew body");
+  });
+
   it("preserves the body when the front matter is edited", () => {
     const onChange = vi.fn();
     render(<Harness initial={"---\nname: a\n---\n\nbody"} onChange={onChange} />);

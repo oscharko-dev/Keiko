@@ -106,6 +106,43 @@ export function issueTypeItems(value: unknown): readonly CatalogJsonObject[] | u
   const values = asArray(value);
   return values === undefined ? undefined : projectJiraCollection(values, 100, issueType, "id");
 }
+
+interface JiraProjectDirectoryEntry extends CatalogJsonObject {
+  readonly id: string;
+  readonly key: string;
+  readonly name: string;
+}
+
+function projectText(value: unknown, max: number): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= max;
+}
+
+function projectDirectoryEntry(value: unknown): JiraProjectDirectoryEntry | undefined {
+  const raw = asRecord(value);
+  if (
+    raw === undefined ||
+    !projectText(raw.id, 64) ||
+    !projectText(raw.key, 64) ||
+    !projectText(raw.name, 255)
+  )
+    return undefined;
+  return { id: raw.id, key: raw.key, name: raw.name };
+}
+
+/** Jira Data Center's native project directory is unpaginated. */
+export function jiraProjectDirectory(
+  items: readonly unknown[] | undefined,
+):
+  | { readonly ok: true; readonly projects: readonly JiraProjectDirectoryEntry[] }
+  | { readonly ok: false; readonly reason: "malformed-payload" | "bounds-exceeded" } {
+  if (items === undefined) return { ok: false, reason: "malformed-payload" };
+  if (items.length > 1000) return { ok: false, reason: "bounds-exceeded" };
+  const projects = projectJiraCollection(items, 1000, projectDirectoryEntry, "id");
+  if (projects === undefined) return { ok: false, reason: "malformed-payload" };
+  projects.sort((left, right) => left.key.localeCompare(right.key, "en"));
+  return { ok: true, projects };
+}
+
 export function localJiraPage(
   items: readonly CatalogJsonObject[],
   startAt: number,
@@ -170,12 +207,12 @@ export function remoteJiraPage(
 }
 
 /** One bounded, identity-unique projection for Jira collection endpoints. */
-export function projectJiraCollection(
+export function projectJiraCollection<T extends CatalogJsonObject>(
   values: readonly unknown[],
   max: number,
-  project: (value: unknown) => CatalogJsonObject | undefined,
+  project: (value: unknown) => T | undefined,
   identity: "id" | "name" | "key" | "directoryId",
-): readonly CatalogJsonObject[] | undefined {
+): T[] | undefined {
   if (values.length > max) return undefined;
   const projected = values.map(project);
   if (projected.includes(undefined)) return undefined;

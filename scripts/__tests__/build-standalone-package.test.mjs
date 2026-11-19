@@ -10,26 +10,22 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   STANDALONE_TARGETS,
   StandaloneBuildError,
   buildStandalonePackage,
   parseStandaloneArgs,
+  runFolderPackageCli,
 } from "../build-standalone-package.mjs";
 import { sha256File } from "../lib/digest.mjs";
-import {
-  extractZipArchiveEntries,
-  readZipArchiveEntries,
-  writeZipArchiveEntries,
-} from "../lib/zip-archive.mjs";
+import { extractZipArchiveEntries, readZipArchiveEntries } from "../lib/zip-archive.mjs";
+import { payloadRecords, portableArchive } from "./support/portable-payload-fixture.mjs";
 
 // A standalone package is the portable payload, byte for byte, plus start/stop files and a README
 // (ADR-0121 D9). These tests build real packages from small real archives and read the result back.
 
-const EXECUTABLE = 0o100755;
-const REGULAR = 0o100644;
 const tempRoots = [];
 
 afterEach(() => {
@@ -40,47 +36,6 @@ function tempRoot() {
   const root = mkdtempSync(join(tmpdir(), "keiko-standalone-package-"));
   tempRoots.push(root);
   return root;
-}
-
-function setupManifest(target, overrides = {}) {
-  return `${JSON.stringify({
-    schemaVersion: 1,
-    platformTarget: target,
-    packageName: "@oscharko-dev/keiko",
-    packageVersion: "1.2.3",
-    stable: true,
-    ...overrides,
-  })}\n`;
-}
-
-function payloadRecords(target, manifestOverrides = {}) {
-  if (target === "windows-x64") {
-    return [
-      { name: "Keiko/Keiko.exe", data: "launcher", mode: REGULAR },
-      {
-        name: "Keiko/.portable/setup-manifest.json",
-        data: setupManifest(target, manifestOverrides),
-      },
-      { name: "Keiko/app/dist/cli/index.js", data: "cli" },
-      { name: "Keiko/runtime/node/node.exe", data: "node" },
-    ];
-  }
-  const resources = "Keiko/Keiko.app/Contents/Resources";
-  return [
-    { name: "Keiko/Keiko.app/Contents/MacOS/Keiko", data: "launcher", mode: EXECUTABLE },
-    {
-      name: `${resources}/.portable/setup-manifest.json`,
-      data: setupManifest(target, manifestOverrides),
-    },
-    { name: `${resources}/app/dist/cli/index.js`, data: "cli" },
-    { name: `${resources}/runtime/node/bin/node`, data: "node", mode: EXECUTABLE },
-  ];
-}
-
-function portableArchive(root, target, records = payloadRecords(target)) {
-  const archive = join(root, `keiko-${target}.zip`);
-  writeZipArchiveEntries(archive, records);
-  return archive;
 }
 
 function build(target, overrides = {}) {
@@ -175,11 +130,11 @@ describe("a standalone package", () => {
     const { outDir, result } = build("windows-x64");
 
     expect(readFileSync(`${result.outputPath}.sha256`, "utf8")).toBe(
-      `${sha256File(result.outputPath)}  keiko-windows-x64-standalone.zip\n`,
+      `${sha256File(result.outputPath)}  keiko-windows-x64.standalone.zip\n`,
     );
     expect(readdirSync(outDir).sort()).toEqual([
-      "keiko-windows-x64-standalone.zip",
-      "keiko-windows-x64-standalone.zip.sha256",
+      "keiko-windows-x64.standalone.zip",
+      "keiko-windows-x64.standalone.zip.sha256",
     ]);
   });
 
@@ -212,7 +167,7 @@ describe("an administrator's package", () => {
     const { result } = build("macos-arm64", { options: { config: configFile(root, content) } });
     const built = entriesByName(result.outputPath);
 
-    expect(result.outputPath.endsWith("keiko-macos-arm64-standalone-team.zip")).toBe(true);
+    expect(result.outputPath.endsWith("keiko-macos-arm64.standalone-team.zip")).toBe(true);
     expect(result.provisioned).toBe(true);
     expect(built.get("Keiko/keiko.config.json")).toBe(content);
     expect(JSON.parse(built.get("Keiko/system/standalone.json")).provisionedConfig).toBe(true);
@@ -228,6 +183,8 @@ describe("an administrator's package", () => {
           modelId: "embed",
           baseUrl: "https://gateway.example.test",
           apiKeySecretRef: "cred:embed",
+          catalogOrigin: "discovered",
+          credentialOrigin: "gateway-connection",
         },
         { modelId: "own-key", baseUrl: "https://other.example.test", apiKey: "sk-kept" },
       ],
@@ -244,10 +201,140 @@ describe("an administrator's package", () => {
       schemaVersion: 2,
       providers: [
         { modelId: "chat", baseUrl: "https://gateway.example.test", apiKey: "sk-team" },
-        { modelId: "embed", baseUrl: "https://gateway.example.test", apiKey: "sk-team" },
+        {
+          modelId: "embed",
+          baseUrl: "https://gateway.example.test",
+          catalogOrigin: "discovered",
+          credentialOrigin: "gateway-connection",
+          apiKey: "sk-team",
+        },
         { modelId: "own-key", baseUrl: "https://other.example.test", apiKey: "sk-kept" },
       ],
     });
+  });
+
+  it("turns the reranker's sealed reference into the team's key too", () => {
+    const root = tempRoot();
+    const sealed = JSON.stringify({
+      providers: [{ modelId: "chat", baseUrl: "https://g.example.test", apiKey: "sk-kept" }],
+      reranker: {
+        modelId: "rerank",
+        baseUrl: "https://g.example.test",
+        apiKeySecretRef: "cred:r",
+        credentialOrigin: "gateway-connection",
+      },
+    });
+    const options = { config: configFile(root, sealed) };
+
+    expect(() => build("macos-arm64", { options })).toThrow("pass --api-key-env NAME");
+    const { result } = build("macos-arm64", {
+      options: { ...options, apiKeyEnv: "KEIKO_TEAM_KEY", env: { KEIKO_TEAM_KEY: "sk-team" } },
+    });
+    expect(
+      JSON.parse(entriesByName(result.outputPath).get("Keiko/keiko.config.json")).reranker,
+    ).toEqual({
+      modelId: "rerank",
+      baseUrl: "https://g.example.test",
+      credentialOrigin: "gateway-connection",
+      apiKey: "sk-team",
+    });
+  });
+
+  it.each([
+    [
+      "a reranker on another endpoint",
+      {
+        providers: [{ modelId: "chat", baseUrl: "https://g.example.test", apiKeySecretRef: "c:1" }],
+        reranker: {
+          modelId: "rerank",
+          baseUrl: "https://rerank.example.test",
+          apiKeySecretRef: "r",
+        },
+      },
+      "rerank",
+    ],
+    [
+      "a reranker with its own sealed key on the gateway's endpoint",
+      {
+        providers: [{ modelId: "chat", baseUrl: "https://g.example.test", apiKeySecretRef: "c:1" }],
+        reranker: {
+          modelId: "own-rerank",
+          baseUrl: "https://g.example.test",
+          apiKeySecretRef: "r",
+        },
+      },
+      "own-rerank",
+    ],
+    [
+      "a same-endpoint embedding with its own credential",
+      {
+        providers: [
+          { modelId: "chat", baseUrl: "https://g.example.test", apiKeySecretRef: "c:1" },
+          {
+            modelId: "own-key-embedding",
+            baseUrl: "https://g.example.test",
+            apiKeySecretRef: "c:2",
+          },
+        ],
+        capabilities: [{ id: "own-key-embedding", kind: "embedding" }],
+      },
+      "own-key-embedding",
+    ],
+    ...["discovered", "explicit"].map((catalogOrigin) => [
+      `a same-endpoint embedding with its own credential and catalog origin ${catalogOrigin}`,
+      {
+        providers: [
+          { modelId: "chat", baseUrl: "https://g.example.test", apiKeySecretRef: "c:1" },
+          {
+            modelId: "own-key-embedding",
+            baseUrl: "https://g.example.test",
+            apiKeySecretRef: "c:2",
+            catalogOrigin,
+          },
+        ],
+        capabilities: [{ id: "own-key-embedding", kind: "embedding" }],
+      },
+      "own-key-embedding",
+    ]),
+  ])("never gives the team's key to %s", (_case, config, name) => {
+    // Review finding on PR #4464 (P1): the team key replaced every sealed reference, so an
+    // independent reranker or a model with its own credential received the gateway's key.
+    const root = tempRoot();
+    const options = {
+      config: configFile(root, JSON.stringify(config)),
+      apiKeyEnv: "KEIKO_TEAM_KEY",
+      env: { KEIKO_TEAM_KEY: "sk-team" },
+    };
+
+    expect(() => build("macos-arm64", { options })).toThrow(
+      new RegExp(`for another connection \\(${name}\\)`, "u"),
+    );
+  });
+
+  it("refuses another connection's key before it looks up the team's key", () => {
+    const root = tempRoot();
+    const config = {
+      providers: [
+        { modelId: "chat", baseUrl: "https://g.example.test", apiKeySecretRef: "c:1" },
+        {
+          modelId: "own-key-embedding",
+          baseUrl: "https://g.example.test",
+          apiKeySecretRef: "c:2",
+          catalogOrigin: "discovered",
+        },
+      ],
+      capabilities: [{ id: "own-key-embedding", kind: "embedding" }],
+    };
+
+    expect(() =>
+      build("macos-arm64", {
+        options: {
+          config: configFile(root, JSON.stringify(config)),
+          apiKeyEnv: "KEIKO_TEAM_KEY",
+          env: {},
+        },
+      }),
+    ).toThrow("for another connection (own-key-embedding)");
   });
 
   it("refuses a config that still refers to a key sealed on the administrator's computer", () => {
@@ -482,5 +569,87 @@ describe("the command line", () => {
 
   it.each([[["--unknown"]], [["--target"]], [["--target", "--archive"]]])("refuses %j", (argv) => {
     expect(() => parseStandaloneArgs(argv)).toThrow(StandaloneBuildError);
+  });
+});
+
+describe("the command line every folder form shares", () => {
+  const ARGS = [
+    "--target",
+    "macos-arm64",
+    "--archive",
+    "a.zip",
+    "--sha256",
+    "abc",
+    "--out-dir",
+    "o",
+  ];
+
+  function captured() {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    return {
+      out: () => log.mock.calls.map((call) => call.join(" ")),
+      err: () => error.mock.calls.map((call) => call.join(" ")),
+    };
+  }
+
+  function cli(build) {
+    return { form: "npm", command: "build-standalone-npm-package", usage: "usage text", build };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("prints the form's usage on --help and builds nothing", () => {
+    const output = captured();
+    const build = vi.fn();
+
+    expect(runFolderPackageCli(["-h"], cli(build))).toBe(0);
+    expect(output.out()).toEqual(["usage text"]);
+    expect(build).not.toHaveBeenCalled();
+  });
+
+  it("reports what it wrote, and warns about a package that holds credentials", () => {
+    const output = captured();
+    const result = {
+      target: "macos-arm64",
+      packageVersion: "1.2.3",
+      outputPath: "o/keiko-macos-arm64.npm-team.zip",
+      outputSha256: "f".repeat(64),
+      folder: "o/Keiko",
+      provisioned: true,
+    };
+    const build = vi.fn(() => result);
+
+    expect(runFolderPackageCli(ARGS, cli(build))).toBe(0);
+    expect(build).toHaveBeenCalledWith(parseStandaloneArgs(ARGS));
+    expect(output.out()).toEqual([
+      "PASS npm package macos-arm64 (Keiko 1.2.3)",
+      "  archive: o/keiko-macos-arm64.npm-team.zip",
+      `  sha256:  ${"f".repeat(64)}`,
+      "  folder:  o/Keiko",
+      "  This package holds credentials. Distribute it internally only; never publish it.",
+    ]);
+  });
+
+  it("refuses a build on one FAIL line under its command and exits 1", () => {
+    const output = captured();
+    const build = vi.fn(() => {
+      throw new StandaloneBuildError("the archive is empty");
+    });
+
+    expect(runFolderPackageCli(ARGS, cli(build))).toBe(1);
+    expect(output.err()).toEqual(["FAIL build-standalone-npm-package: the archive is empty"]);
+    expect(output.out()).toEqual([]);
+  });
+
+  it("lets an error that is not a refusal through", () => {
+    captured();
+    const build = vi.fn(() => {
+      throw new RangeError("unexpected");
+    });
+
+    expect(() => runFolderPackageCli(ARGS, cli(build))).toThrow(RangeError);
   });
 });

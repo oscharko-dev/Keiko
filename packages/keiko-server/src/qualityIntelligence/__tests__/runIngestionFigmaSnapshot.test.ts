@@ -137,6 +137,56 @@ const visualOnlyScreen = (): unknown =>
 // ─── Structural baseline → atoms ─────────────────────────────────────────────────
 
 describe("figma-snapshot ingestion — deterministic structural baseline", () => {
+  it("keeps existing atom ids while fingerprinting a renamed screen in the latest snapshot", async () => {
+    const original = record([screenRow("s1", screenIr("s1", "Login", irNode("r", "container")))]);
+    const current = {
+      ...record([screenRow("s1", screenIr("s1", "Sign in", irNode("r", "container")))]),
+      runId: "snap-2",
+    };
+    const before = ingestInlineSources(
+      input([figmaSource()], { figmaSnapshotLoader: loaderFor(original) }),
+    );
+    const after = await ingestInlineSourcesAsync(
+      input([figmaSource()], {
+        figmaSnapshotLoader: Object.assign(loaderFor(current), { loadPinned: loaderFor(original) }),
+      }),
+    );
+
+    expect(after.ingestedAtoms[0]?.atom.id).toBe(before.ingestedAtoms[0]?.atom.id);
+    expect(after.ingestedAtoms[0]?.atom.canonicalHashSha256Hex).not.toBe(
+      before.ingestedAtoms[0]?.atom.canonicalHashSha256Hex,
+    );
+    expect(after.ingestedAtoms[0]?.canonicalText).toContain("Sign in");
+  });
+
+  // No false drift: re-check now loads the latest same-scope record even when its legacy hash
+  // matches (ADR-0037 D6), so an unchanged re-snapshot must yield the same atom id AND fingerprint.
+  // This carries the invariant of the adapter pin it replaced to the layer that now decides drift.
+  it("reports an unchanged re-snapshot with the same atom ids and fingerprints", async () => {
+    const original = record([screenRow("s1", loginScreen())]);
+    const current = {
+      ...record([screenRow("s1", loginScreen())]),
+      runId: "snap-2",
+      provenance: { ...original.provenance, fetchedAt: "2026-07-01T00:00:00.000Z" },
+    };
+    const before = ingestInlineSources(
+      input([figmaSource()], { figmaSnapshotLoader: loaderFor(original) }),
+    );
+    const after = await ingestInlineSourcesAsync(
+      input([figmaSource()], {
+        figmaSnapshotLoader: Object.assign(loaderFor(current), { loadPinned: loaderFor(original) }),
+      }),
+    );
+
+    expect(after.ingestedAtoms).toHaveLength(before.ingestedAtoms.length);
+    expect(after.ingestedAtoms.map(({ atom }) => atom.id)).toEqual(
+      before.ingestedAtoms.map(({ atom }) => atom.id),
+    );
+    expect(after.ingestedAtoms.map(({ atom }) => atom.canonicalHashSha256Hex)).toEqual(
+      before.ingestedAtoms.map(({ atom }) => atom.canonicalHashSha256Hex),
+    );
+  });
+
   it("ingests one citation-ready atom per screen with the structural baseline text", () => {
     const result: QiIngestionResult = ingestInlineSources(
       input([figmaSource()], {

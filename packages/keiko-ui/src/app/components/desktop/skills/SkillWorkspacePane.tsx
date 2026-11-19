@@ -1,16 +1,22 @@
 "use client";
 
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import {
   MARKDOWN_SKILL_LIMITS,
   type MarkdownSkillMetadata,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  isJiraIssueTemplateDocument,
+  readJiraTemplateForm,
+  type JiraTemplateForm,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { Icons } from "../Icons";
-import { MarkdownEditor } from "../markdown-editor/MarkdownEditor";
+import { MarkdownEditor, type MarkdownEditorProps } from "../markdown-editor/MarkdownEditor";
 import { splitMarkdownDocument } from "../markdown-editor/markdown-document";
 import { JiraTemplateProposal, TemplateStatus, type JiraTemplates } from "./JiraTemplateTools";
+import { JiraTemplateMetadata } from "./JiraTemplateMetadata";
 import { MarkdownSkillAuthor } from "./MarkdownSkillAuthor";
 import { templateKey } from "./useAutomaticTemplateChecks";
 import { skillTextFits } from "./useMarkdownSkillAuthor";
@@ -107,20 +113,90 @@ function isTemplate(document: SkillDocument, jira: JiraTemplates): boolean {
   return splitMarkdownDocument(document.text).frontMatter !== undefined;
 }
 
+/**
+ * Whether the open file may be saved as far as its Jira metadata goes. A Jira template whose metadata
+ * does not read right now (an open list, a stray quote) is never complete, so Save waits for a text
+ * the guided form can read; a file that is no Jira template has no form to complete.
+ */
+function formComplete(form: JiraTemplateForm | undefined, jiraTemplate: boolean): boolean {
+  if (form === undefined) return !jiraTemplate;
+  return form.project.trim() !== "" && form.issueType.trim() !== "" && form.activateOn.length > 0;
+}
+
+interface GuidedForm {
+  readonly form: JiraTemplateForm;
+  /** The front matter does not read right now; `form` is the last one of this document that did. */
+  readonly stale: boolean;
+  /** The text `form` was read from: the binding context a held form keeps while the text is half typed. */
+  readonly markdown: string;
+}
+
+interface ReadForm {
+  readonly key: string;
+  readonly markdown: string;
+  readonly form: JiraTemplateForm;
+}
+
+/**
+ * The guided form of the open template. While its text is half typed (an open list, a stray quote)
+ * the last form that read stays in view, disabled, so the choices neither vanish nor ask Jira again.
+ */
+function useGuidedForm(
+  document: SkillDocument,
+  frontMatter: string | undefined,
+): { readonly current: JiraTemplateForm | undefined; readonly guided: GuidedForm | undefined } {
+  const current = useMemo(
+    () => (frontMatter === undefined ? undefined : readJiraTemplateForm(frontMatter)),
+    [frontMatter],
+  );
+  const [last, setLast] = useState<ReadForm>();
+  if (current !== undefined && (last?.key !== document.key || last.markdown !== document.text))
+    setLast({ key: document.key, markdown: document.text, form: current });
+  if (current !== undefined)
+    return { current, guided: { form: current, stale: false, markdown: document.text } };
+  const held =
+    last?.key === document.key && isJiraIssueTemplateDocument(document.text)
+      ? { form: last.form, stale: true, markdown: last.markdown }
+      : undefined;
+  return { current, guided: held };
+}
+
+function metadataEditor(
+  guided: GuidedForm | undefined,
+  jira: JiraTemplates,
+): Pick<MarkdownEditorProps, "renderFrontMatter"> {
+  if (guided === undefined) return {};
+  return {
+    renderFrontMatter: (field) => (
+      <JiraTemplateMetadata
+        {...field}
+        form={guided.form}
+        stale={guided.stale}
+        markdown={guided.markdown}
+        podId={jira.podReady ? jira.podId : undefined}
+      />
+    ),
+  };
+}
+
 function DocumentEditor(props: PaneProps & { readonly document: SkillDocument }): ReactNode {
   const t = useTranslate();
   const { document, workspace } = props;
   const template = isTemplate(document, props.jira);
+  const frontMatter = splitMarkdownDocument(document.text).frontMatter;
+  const { current, guided } = useGuidedForm(document, frontMatter);
+  const canSave =
+    workspace.canSave && formComplete(current, isJiraIssueTemplateDocument(document.text));
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
       event.preventDefault();
-      if (workspace.canSave) workspace.save();
+      if (canSave) workspace.save();
     }
   };
   return (
     // eslint-disable-next-line jsx-a11y/no-static-element-interactions -- ⌘S saves from anywhere in the open file
     <div className={styles.cmpDocument} onKeyDown={onKeyDown}>
-      <DocumentHeader {...props} template={template} />
+      <DocumentHeader {...props} template={template} canSave={canSave} />
       {template && document.stored !== undefined ? (
         <OpenTemplateStatus jira={props.jira} id={document.stored.id} />
       ) : null}
@@ -133,6 +209,7 @@ function DocumentEditor(props: PaneProps & { readonly document: SkillDocument })
           placeholder={t("chat.skills.editorPlaceholder")}
           maxLength={MARKDOWN_SKILL_LIMITS.importBytes}
           selectTitleOnOpen={document.stored === undefined}
+          {...metadataEditor(guided, props.jira)}
         />
       </div>
       {skillTextFits(document.text) ? null : (
@@ -190,7 +267,11 @@ function DocumentMeta({
 }
 
 function DocumentHeader(
-  props: PaneProps & { readonly document: SkillDocument; readonly template: boolean },
+  props: PaneProps & {
+    readonly document: SkillDocument;
+    readonly template: boolean;
+    readonly canSave: boolean;
+  },
 ): ReactNode {
   const t = useTranslate();
   const { document, workspace } = props;
@@ -208,7 +289,7 @@ function DocumentHeader(
         <button
           type="button"
           className={styles.cmpPrimary}
-          disabled={!workspace.canSave}
+          disabled={!props.canSave}
           title="⌘S"
           onClick={workspace.save}
         >

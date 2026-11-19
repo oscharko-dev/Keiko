@@ -1,6 +1,7 @@
 import { closeSync, fsyncSync, openSync, renameSync, rmSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
+import { EvidenceWriteError } from "./errors.js";
 
 function writeAll(fd: number, data: Buffer): void {
   let offset = 0;
@@ -91,5 +92,35 @@ export function replaceViaDurableTempFile(
     fsyncDirectoryContaining(target);
   } catch (error) {
     throw new PostRenameFsyncError(error);
+  }
+}
+
+/**
+ * Durably replaces `target` and classifies the outcome for evidence stores: a post-rename fsync
+ * failure keeps the already-durable content and a pre-rename failure removes the temp file. Both
+ * surface as {@link EvidenceWriteError} prefixed by `label`.
+ */
+export function replaceDurablyOrThrowEvidenceError(
+  target: string,
+  content: string,
+  randomSuffix: () => string,
+  label: string,
+): void {
+  const temp = `${target}.${randomSuffix()}.tmp`;
+  try {
+    replaceViaDurableTempFile(target, temp, content);
+  } catch (error) {
+    // Post-rename fsync failure = content is durable on the target, only the parent-dir metadata
+    // fsync is unconfirmed. Do not clean the (already gone) temp; do not claim the write failed.
+    // See KEIKO-0388 / KEIKO-1034.
+    if (error instanceof PostRenameFsyncError) {
+      throw new EvidenceWriteError(
+        `${label} parent-directory fsync failed after durable rename: ${error.message}`,
+      );
+    }
+    rmSync(temp, { force: true });
+    throw new EvidenceWriteError(
+      `${label} write failed: ${error instanceof Error ? error.message : "unknown"}`,
+    );
   }
 }
