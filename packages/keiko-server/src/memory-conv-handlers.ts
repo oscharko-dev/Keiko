@@ -145,41 +145,18 @@ const RECALL_HISTORY_STATUSES: readonly MemoryStatus[] =
 const RECALL_LIST_STATUSES: readonly MemoryStatus[] = RECALL_HISTORY_STATUSES.filter(
   (status) => status !== "superseded",
 );
-// A caller that records every withheld memory as evidence (the workflow port's
-// memory:workflow-omitted audit) still reads every status except history.
-const AUDITED_LIST_STATUSES: readonly MemoryStatus[] = MEMORY_STATUSES.filter(
-  (status) => status !== "superseded",
-);
-
-export interface VaultQueryPortOptions {
-  /** Read retired rows too, so each one can be reported as omitted with its status. */
-  readonly readRetired?: boolean;
-}
-
-function listStatuses(
-  options: VaultQueryPortOptions,
-  includeSuperseded: boolean,
-): readonly MemoryStatus[] {
-  if (options.readRetired === true) {
-    return includeSuperseded ? MEMORY_STATUSES : AUDITED_LIST_STATUSES;
-  }
-  return includeSuperseded ? RECALL_HISTORY_STATUSES : RECALL_LIST_STATUSES;
-}
-
-export function vaultAsQueryPort(
-  vault: MemoryVaultStore,
-  portOptions: VaultQueryPortOptions = {},
-): MemoryQueryPort {
+export function vaultAsQueryPort(vault: MemoryVaultStore): MemoryQueryPort {
   // Retrieval must see accepted rows whose validity ended so it can omit them with a concrete
-  // suppression reason instead of having storage silently drop them. Unless a caller asks for
-  // retired rows, rows whose status alone keeps them out of recall are not read at all, so they
-  // cannot fill the bounded window and are not reported as omitted either.
+  // suppression reason instead of having storage silently drop them. Rows whose status alone keeps
+  // them out of recall are not read at all, so they cannot fill the bounded window and are not
+  // reported as omitted either.
   return {
     listByScope: (scope, options): readonly MemoryRecord[] => {
       const limit = options?.maxResults;
       return vault.listMemoriesByScope(scope, {
         includeExpired: true,
-        status: listStatuses(portOptions, options?.includeSuperseded === true),
+        status:
+          options?.includeSuperseded === true ? RECALL_HISTORY_STATUSES : RECALL_LIST_STATUSES,
         ...(limit === undefined ? {} : { limit }),
       });
     },

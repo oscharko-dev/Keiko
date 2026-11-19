@@ -4,7 +4,7 @@
   "id": "scale-vorschlaege-en",
   "language": "en",
   "class": "scale-window",
-  "description": "A project fact older than 560 unreviewed proposals of the same scope, next to a recent control. Limit: the read window counts every row of the scope, including parked proposals, before eligibility. Failure means: the target never reaches the model although accepted; the control passing shows the window, not retrieval, is the cause. Maintenance: run with maintenance on or off; the seeded accepted records are reinforced or younger than 94 days, so maintenance does not archive them. Kind: defect.",
+  "description": "A project fact older than 560 unreviewed proposals of the same scope, next to a recent control. Limit: the read window per scope is 500 rows applied before eligibility, and since #4223 recall reads only statuses it can supply, so parked proposals take no place in it. Failure means: the target never reaches the model although accepted, so proposals crowd the read window again; the control passing shows the window, not retrieval, is the cause. Maintenance: run with maintenance on or off; the seeded accepted records are reinforced or younger than 94 days, so maintenance does not archive them. Kind: control.",
   "seed": {
     "records": [
       {

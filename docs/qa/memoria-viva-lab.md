@@ -578,8 +578,14 @@ in code, and a scenario written against a changed value is wrong, not the produc
 
 - **500 rows per scope** are read before eligibility: `DEFAULT_LIST_BY_SCOPE_MAX_RESULTS` in
   `packages/keiko-memory-retrieval/src/types.ts`, passed as `maxResults` by `fetchScoped` in
-  `packages/keiko-memory-retrieval/src/retrieve.ts`, which also asks for forgotten, archived and
-  expired rows. That is why 550 retired or parked rows can push a valid one out of the window.
+  `packages/keiko-memory-retrieval/src/retrieve.ts`. Since #4223 the server's read port
+  (`vaultAsQueryPort` in `packages/keiko-server/src/memory-conv-handlers.ts`) reads only statuses
+  recall can supply (`isMemoryStatusRecallable` in `packages/keiko-contracts/src/memory-records.ts`):
+  accepted rows, including those whose validity ended, and superseded ones only when history is asked
+  for. Archived, forgotten, proposed, rejected, conflicted and expired rows no longer take a place in
+  the window, so the 550 retired or parked rows of `scale-archiviert-de` and `scale-vorschlaege-en`
+  cannot push a valid one out of it; a red result there is a regression. The window still counts
+  accepted rows, which is what `scale-abgelaufen-de` and the fillers of other scenarios lean on.
 - **6 retrieved memories** reach one chat question: `CHAT_MAX_RETRIEVED_MEMORIES` in
   `packages/keiko-server/src/chat-handlers.ts` (the retrieval default is 12,
   `DEFAULT_MAX_INCLUDED` in the retrieval `types.ts`).
@@ -716,7 +722,8 @@ and what the chat actually supplied (retrieved memories only, never the standing
 - `not-stored`: no stored body matches the fact's terms.
 - `not-a-candidate`: the memory is in neither of the route's lists.
 - `not-admitted`: the route omitted it for a reason other than its limit (for example
-  `suppressed-by-status` for a parked memory).
+  `suppressed-by-status` for an accepted memory whose validity ended). A parked or archived memory
+  is not read at all since #4223, so it is `not-a-candidate`.
 - `admitted-not-supplied`: the route admitted it (listed, or omitted as `max-included-exceeded`) and the
   chat did not supply it. **Always** this one stage; no cause is claimed.
 
