@@ -10,16 +10,20 @@
 
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import {
-  scopeCoordinateKey,
-  type MemoryEdgeId,
-  type MemoryId,
-} from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryEdgeId, MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
 import { insertEdgeRow, listIncomingEdgeRows, listOutgoingEdgeRows } from "./edges.js";
-import { getMemoryRow } from "./memories.js";
+import { cachedPrepare } from "./statements.js";
 
 const BRIDGE_PROVENANCE = "history kept after a delete";
+// The scope columns are stored in clear, so the walk reads them without opening a sealed body: a
+// damaged neighbour row can never block the person's forget.
+const SCOPE_BY_ID_SQL = "SELECT scope_kind, scope_coordinate FROM memories WHERE id = ?";
+
+interface ScopeRow {
+  readonly scope_kind: string;
+  readonly scope_coordinate: string;
+}
 
 type Direction = "earlier" | "later";
 
@@ -49,8 +53,11 @@ interface Walk {
 
 function scopeOf(walk: Walk, id: MemoryId): string | undefined {
   if (!walk.scopes.has(id)) {
-    const record = getMemoryRow(walk.db, id, walk.cipher);
-    walk.scopes.set(id, record === undefined ? undefined : scopeCoordinateKey(record.scope));
+    const row = cachedPrepare(walk.db, SCOPE_BY_ID_SQL).get(id) as unknown as ScopeRow | undefined;
+    walk.scopes.set(
+      id,
+      row === undefined ? undefined : `${row.scope_kind}\u0000${row.scope_coordinate}`,
+    );
   }
   return walk.scopes.get(id);
 }
