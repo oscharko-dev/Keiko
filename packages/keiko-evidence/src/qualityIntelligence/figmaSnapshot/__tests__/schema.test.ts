@@ -34,12 +34,42 @@ const validMetrics = (): Record<string, unknown> => ({
   a11y: { findings: 0 },
 });
 
+const validCoverage = (): Record<string, unknown> => ({
+  screenCount: 2,
+  screensDeepFetched: 1,
+  screensTruncated: 1,
+  nodeCount: 12,
+  fetchCount: 5,
+  capped: true,
+});
+
 describe("validateFigmaSnapshotRecord", () => {
   it("accepts a minimal valid record", () => {
     expect(validateFigmaSnapshotRecord(validRecord())).toEqual({ ok: true, reason: undefined });
   });
 
+  it("accepts bounded coverage containing only counts and the cap flag", () => {
+    expect(validateFigmaSnapshotRecord({ ...validRecord(), coverage: validCoverage() }).ok).toBe(
+      true,
+    );
+  });
+
   it.each([
+    [
+      "invalid coverage count",
+      { ...validRecord(), coverage: { ...validCoverage(), fetchCount: -1 } },
+      "invalid snapshot coverage",
+    ],
+    [
+      "invalid scope cap flag",
+      { ...validRecord(), coverage: { ...validCoverage(), capped: "true" } },
+      "invalid snapshot coverage",
+    ],
+    [
+      "unrecognized coverage field",
+      { ...validRecord(), coverage: { ...validCoverage(), note: "extra" } },
+      "invalid snapshot coverage",
+    ],
     ["non-object record", null, "record is not an object"],
     [
       "wrong schema version",

@@ -620,6 +620,10 @@ The script:
 - requires production stable `latest` publishes to attach exactly four first-class portable GitHub
   Release Assets: `keiko-linux-x64.zip`, `keiko-windows-x64.zip`, `keiko-macos-arm64.zip`, and
   `keiko-macos-x64.zip`,
+- uploads the standalone folder packages the stable-tag run built into the bundle's
+  `folder-packages/` (`keiko-<target>.standalone.zip` and its `.sha256` file for `macos-arm64`,
+  `macos-x64` and `windows-x64`) into the same draft as the archives, and refuses a bundle without
+  them or with a package not built from this release's archives,
 - rejects portable artifacts with sidecar payload metadata that is unverified, wrong-platform,
   checksum-mismatched, missing executable/license/SBOM evidence, or not contained under
   `runtime/sidecars/<runtime-name>`,

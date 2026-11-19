@@ -4,7 +4,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
-import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { ServerResponse, type IncomingMessage } from "node:http";
 import { tmpdir } from "node:os";
@@ -409,6 +409,15 @@ async function setupFixture(
   return { deps };
 }
 
+// Store a configuration the way an earlier setup leaves it: the durable file AND the running view.
+// Only the file can prove that a reranker rides the gateway connection (audit of #4464).
+function storeGatewayConfig(deps: UiHandlerDeps, raw: Record<string, unknown>): void {
+  const storagePath = deps.gatewayConfig?.storagePath;
+  if (storagePath === undefined) throw new Error("expected a gateway config store");
+  writeFileSync(storagePath, JSON.stringify(raw));
+  deps.gatewayConfig?.set(parseGatewayConfig(raw), true);
+}
+
 const CHAT_AND_RERANKER: readonly Record<string, unknown>[] = [
   { model_name: "qwen-chat", model_info: { mode: "chat" } },
   { model_name: "house-reranker", model_info: { mode: "rerank" } },
@@ -463,6 +472,8 @@ describe("reranker wiring from discovery", () => {
     expect(block).toMatchObject({ modelId: "house-reranker" });
     expect(block).toHaveProperty("apiKeySecretRef");
     expect(block).not.toHaveProperty("apiKey");
+    // The proof that it rides the verified connection survives the save, for a team export.
+    expect(block).toMatchObject({ credentialOrigin: "gateway-connection" });
   });
 
   it("does not wire a reranker that answers but ranks the wrong document first", async () => {
@@ -553,31 +564,101 @@ describe("reranker wiring from discovery", () => {
     expect(currentGatewayConfig(deps)?.reranker).toMatchObject({
       modelId: "house-reranker",
       apiKey: "rotated-token",
+      credentialOrigin: "gateway-connection",
     });
     // Already wired: the second run neither probes nor replaces it.
     expect(port.requests).toHaveLength(1);
   });
 
+  it("probes a shared reranker whose stored address differs from the submitted base, though both normalize alike", async () => {
+    // Review finding on PR #4464: `.../v1` and `.../v1/chat/completions` compare equal as a base
+    // identity, but the rerank request appends `/rerank` to the stored string, so they reach
+    // different endpoints. Only a byte-identical base may skip the probe.
+    const port = answeringRerankPort();
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, port);
+    const stored = "https://llm-gateway.example.com/v1/chat/completions";
+    storeGatewayConfig(deps, {
+      providers: [{ modelId: "qwen-chat", baseUrl: stored, apiKey: "token" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      reranker: { modelId: "house-reranker", baseUrl: stored, apiKey: "token" },
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(port.requests.length).toBeGreaterThan(0);
+  });
+
+  it("marks a reranker that shares the gateway credential, also one saved before the mark", async () => {
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
+    storeGatewayConfig(deps, {
+      providers: [
+        { modelId: "qwen-chat", baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      reranker: {
+        modelId: "house-reranker",
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "token",
+      },
+    });
+    await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" }),
+      deps,
+    );
+    expect(currentGatewayConfig(deps)?.reranker).toMatchObject({
+      modelId: "house-reranker",
+      credentialOrigin: "gateway-connection",
+    });
+  });
+
+  it("never marks a reranker with its own key on the gateway's address and header", async () => {
+    // Review finding on PR #4464: a team export handed the gateway token to every reranker on the
+    // gateway's address and header, also one the operator gave its own key.
+    const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
+    storeGatewayConfig(deps, {
+      providers: [
+        { modelId: "qwen-chat", baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      reranker: {
+        modelId: "operator-reranker",
+        baseUrl: "https://llm-gateway.example.com/v1",
+        apiKey: "operator-rerank-token",
+        // A mark written by hand proves nothing: setup compares the credential itself.
+        credentialOrigin: "gateway-connection",
+      },
+    });
+    await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "token" }),
+      deps,
+    );
+    const reranker = currentGatewayConfig(deps)?.reranker;
+    expect(reranker).toMatchObject({
+      modelId: "operator-reranker",
+      apiKey: "operator-rerank-token",
+    });
+    expect(reranker).not.toHaveProperty("credentialOrigin");
+  });
+
   it("never moves a reranker with its own connection onto the gateway's new credential", async () => {
     const { deps } = await setupFixture(CHAT_AND_RERANKER, answeringRerankPort());
-    deps.gatewayConfig?.set(
-      parseGatewayConfig({
-        providers: [
-          {
-            modelId: "qwen-chat",
-            baseUrl: "https://llm-gateway.example.com/v1",
-            apiKey: "old-token",
-          },
-        ],
-        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-        reranker: {
-          modelId: "operator-reranker",
-          baseUrl: "https://rerank.example.com",
-          apiKey: "operator-rerank-token",
+    storeGatewayConfig(deps, {
+      providers: [
+        {
+          modelId: "qwen-chat",
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "old-token",
         },
-      }),
-      true,
-    );
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      reranker: {
+        modelId: "operator-reranker",
+        baseUrl: "https://rerank.example.com",
+        apiKey: "operator-rerank-token",
+      },
+    });
     await handleGatewaySetup(
       ctx({ baseUrl: "https://llm-gateway.example.com/v1", apiKey: "rotated-token" }),
       deps,
@@ -1179,5 +1260,136 @@ describe("the default embedding model", () => {
     }
     expect(chosen[0]).toEqual(["bge-m3", "text-embedding-ada-002"]);
     expect(chosen[1]).toEqual(chosen[0]);
+  });
+});
+
+describe("a reranker's credential provenance comes from its durable key", () => {
+  const GATEWAY = "https://llm-gateway.example.com/v1";
+
+  function depsFor(
+    uiDir: string,
+    evidenceDir: string,
+    env: Readonly<Record<string, string>>,
+  ): UiHandlerDeps {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...env },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve(normalizeDiscoveryPayloadForSetup({ data: CHAT_AND_RERANKER })),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    handlerDeps.push(deps);
+    Object.assign(deps, { rerankRequest: answeringRerankPort().rerankRequest });
+    return deps;
+  }
+
+  it("never marks a separately vaulted reranker because a transient override equalled the gateway key", async () => {
+    // Review finding on PR #4464: KEIKO_RERANKER_API_KEY supplied the primary key for one session, so
+    // the effective credentials compared equal and the reranker was marked as sharing the gateway
+    // credential, while the vault kept its own, different durable key. A team export then replaced it.
+    const uiDir = await tempDir("keiko-rerank-origin-ui-");
+    const evidenceDir = await tempDir("keiko-rerank-origin-ev-");
+    // Two keys, each sealed into the vault by the startup migration, and no origin mark anywhere.
+    const storagePath = join(uiDir, "keiko.config.json");
+    writeFileSync(
+      storagePath,
+      JSON.stringify({
+        providers: [{ modelId: "qwen-chat", baseUrl: GATEWAY, apiKey: "gateway-token" }],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        reranker: { modelId: "house-reranker", baseUrl: GATEWAY, apiKey: "own-rerank-token" },
+      }),
+    );
+    depsFor(uiDir, evidenceDir, VAULT_ENV).store.close();
+    expect(readFileSync(storagePath, "utf8")).not.toContain("own-rerank-token");
+
+    const overridden = depsFor(uiDir, evidenceDir, {
+      ...VAULT_ENV,
+      KEIKO_RERANKER_API_KEY: "gateway-token",
+    });
+    expect(currentGatewayConfig(overridden)?.reranker?.apiKey).toBe("gateway-token");
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: GATEWAY, apiKey: "gateway-token" }),
+      overridden,
+    );
+    expect(result.status).toBe(200);
+    overridden.store.close();
+
+    const persisted = JSON.parse(readFileSync(storagePath, "utf8")) as {
+      reranker?: Record<string, unknown>;
+    };
+    expect(persisted.reranker).toHaveProperty("apiKeySecretRef", "model-gateway:reranker");
+    expect(persisted.reranker).not.toHaveProperty("credentialOrigin");
+    // With the override gone, the two vault references still resolve to different keys.
+    const plain = depsFor(uiDir, evidenceDir, VAULT_ENV);
+    expect(currentGatewayConfig(plain)?.reranker?.apiKey).toBe("own-rerank-token");
+    expect(currentGatewayConfig(plain)?.providers[0]?.apiKey).toBe("gateway-token");
+    plain.store.close();
+  });
+
+  it("never marks a reranker that only the running configuration names", async () => {
+    // Audit of the round above: with no reranker in the durable file, the runtime one fell back to
+    // judging itself, so its session credential decided the mark the durable view never proved.
+    const uiDir = await tempDir("keiko-rerank-runtime-ui-");
+    const evidenceDir = await tempDir("keiko-rerank-runtime-ev-");
+    const storagePath = join(uiDir, "keiko.config.json");
+    const durable = {
+      providers: [{ modelId: "qwen-chat", baseUrl: GATEWAY, apiKey: "gateway-token" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    };
+    writeFileSync(storagePath, JSON.stringify(durable));
+    const deps = depsFor(uiDir, evidenceDir, VAULT_ENV);
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        ...durable,
+        reranker: { modelId: "house-reranker", baseUrl: GATEWAY, apiKey: "gateway-token" },
+      }),
+      true,
+    );
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: GATEWAY, apiKey: "gateway-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.reranker).toMatchObject({ modelId: "house-reranker" });
+    expect(currentGatewayConfig(deps)?.reranker).not.toHaveProperty("credentialOrigin");
+    deps.store.close();
+  });
+
+  it.each([
+    { state: "on a first setup, before anything is stored", storedFile: undefined },
+    {
+      // Valid JSON on purpose: corrupt bytes are refused earlier by the egress-preservation guard.
+      state: "over a stored file the gateway parser refuses",
+      storedFile: JSON.stringify({ providers: [{ modelId: "half-a-provider" }] }),
+    },
+  ])("never marks a reranker $state", async ({ storedFile }) => {
+    // Independent audit of the round above: with no stored file, or one the parser refuses, the
+    // durable view fell back to the running configuration, so a reranker only that configuration
+    // named was judged on itself.
+    const uiDir = await tempDir("keiko-rerank-first-ui-");
+    const evidenceDir = await tempDir("keiko-rerank-first-ev-");
+    const deps = depsFor(uiDir, evidenceDir, VAULT_ENV);
+    const storagePath = deps.gatewayConfig?.storagePath ?? "";
+    if (storedFile !== undefined) writeFileSync(storagePath, storedFile, "utf8");
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        providers: [{ modelId: "qwen-chat", baseUrl: GATEWAY, apiKey: "gateway-token" }],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        reranker: { modelId: "house-reranker", baseUrl: GATEWAY, apiKey: "gateway-token" },
+      }),
+      true,
+    );
+    expect(existsSync(storagePath)).toBe(storedFile !== undefined);
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: GATEWAY, apiKey: "gateway-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.reranker).toMatchObject({ modelId: "house-reranker" });
+    expect(currentGatewayConfig(deps)?.reranker).not.toHaveProperty("credentialOrigin");
+    deps.store.close();
   });
 });

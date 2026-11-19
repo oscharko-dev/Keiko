@@ -558,22 +558,30 @@ async function ingestSourcesForDrift(
   signal: AbortSignal | undefined,
 ): Promise<IngestionOutcome> {
   try {
-    return {
-      ok: true,
-      ingestion: await ingestInlineSourcesAsync({
-        request: { sources },
-        runId: ingestRunId,
-        registeredAt: new Date().toISOString(),
-        allowEmpty: true,
-        capsuleResolver: makeCapsuleResolver(deps),
-        // Drift must see the board's LATEST snapshot, not the pinned immutable record — a pinned
-        // write-once runId can never drift under its own identity (#735). Generate keeps pinning.
-        figmaSnapshotLoader: makeFigmaSnapshotLoader(deps, { resolveLatestByScope: true }),
-        figmaVision: makeFigmaVisionHintProvider(deps),
-        documentTextExtractor: extractQiDocumentText,
-        ...(signal === undefined ? {} : { signal }),
-      }),
-    };
+    const ingestion = await ingestInlineSourcesAsync({
+      request: { sources },
+      runId: ingestRunId,
+      registeredAt: new Date().toISOString(),
+      allowEmpty: true,
+      capsuleResolver: makeCapsuleResolver(deps),
+      // Drift must see the board's LATEST snapshot, not the pinned immutable record — a pinned
+      // write-once runId can never drift under its own identity (#735). Generate keeps pinning.
+      figmaSnapshotLoader: makeFigmaSnapshotLoader(deps, { resolveLatestByScope: true }),
+      figmaVision: makeFigmaVisionHintProvider(deps),
+      documentTextExtractor: extractQiDocumentText,
+      ...(signal === undefined ? {} : { signal }),
+    });
+    const unreadableFigma = ingestion.skippedSources.find(
+      (source) =>
+        source.code === "QI_FIGMA_SNAPSHOT_UNAVAILABLE" || source.code === "QI_IMAGE_UNAVAILABLE",
+    );
+    if (unreadableFigma !== undefined) {
+      return {
+        ok: false,
+        result: errorResult(400, unreadableFigma.code, unreadableFigma.message),
+      };
+    }
+    return { ok: true, ingestion };
   } catch (error) {
     const code = error instanceof QiIngestionError ? error.code : "QI_INGESTION_FAILED";
     const message = error instanceof QiIngestionError ? error.message : "Source ingestion failed.";

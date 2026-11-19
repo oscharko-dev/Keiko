@@ -21,7 +21,15 @@
 // Security invariant under test: triggerImpl is only called with the board link,
 // never with a token. The component cannot construct or forward a PAT.
 
-import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
@@ -129,7 +137,7 @@ const MOCK_LIST_ENTRY = {
   nodeId: MOCK_SUMMARY.nodeId,
   version: MOCK_SUMMARY.version,
   fetchedAt: MOCK_SUMMARY.fetchedAt,
-  management: MOCK_SUMMARY.management,
+  management: {},
   screenCount: MOCK_SUMMARY.screenCount,
   skippedCount: MOCK_SUMMARY.skippedCount,
   reductionHint: MOCK_SUMMARY.reductionHint,
@@ -346,12 +354,14 @@ describe("FigmaSnapshotWindow", () => {
       expect(screen.getByRole("button", { name: /snapshot/iu })).not.toBeDisabled();
     });
 
-    it("requests board-specific history once a valid board link is present", async () => {
+    it("uses the canonical node ID to request history for a pasted Figma link", async () => {
       const listImpl = resolvingList();
       renderWindow({ listImpl });
       const user = userEvent.setup();
 
-      await user.type(screen.getByLabelText(/board link/iu), VALID_LINK);
+      fireEvent.change(screen.getByLabelText(/board link/iu), {
+        target: { value: VALID_LINK.replace("1%3A2", "1-2") },
+      });
       await user.click(screen.getByRole("tab", { name: /this board/iu }));
 
       await waitFor(() =>
@@ -365,9 +375,57 @@ describe("FigmaSnapshotWindow", () => {
         ),
       );
     });
+
+    it("keeps the form disabled when the URL names more than one node", () => {
+      renderWindow();
+      fireEvent.change(screen.getByLabelText(/board link/iu), {
+        target: { value: `${VALID_LINK}&node-id=3-4` },
+      });
+      expect(screen.getByRole("button", { name: /snapshot/iu })).toBeDisabled();
+    });
   });
 
   describe("dashboard", () => {
+    it("moves focus and selection between the history tabs with the keyboard", async () => {
+      renderWindow({ listImpl: resolvingList() });
+      fireEvent.change(screen.getByLabelText(/board link/iu), { target: { value: VALID_LINK } });
+      const board = screen.getByRole("tab", { name: /this board/iu });
+      const recent = screen.getByRole("tab", { name: /recent/iu });
+      recent.focus();
+      await userEvent.keyboard("{ArrowLeft}");
+      expect(board).toHaveFocus();
+      expect(board).toHaveAttribute("aria-selected", "true");
+      expect(screen.getByRole("tabpanel")).toHaveAttribute(
+        "id",
+        board.getAttribute("aria-controls"),
+      );
+      await userEvent.keyboard("{End}");
+      expect(recent).toHaveFocus();
+      expect(recent).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("ignores an obsolete recent-list response after switching to the board tab", async () => {
+      let resolveRecent!: (items: Awaited<ReturnType<ListFn>>) => void;
+      const recent = new Promise<Awaited<ReturnType<ListFn>>>((resolve) => {
+        resolveRecent = resolve;
+      });
+      const listImpl = vi
+        .fn<ListFn>()
+        .mockReturnValueOnce(recent)
+        .mockResolvedValue([{ ...MOCK_LIST_ENTRY, displayName: "Selected board history" }]);
+      renderWindow({ listImpl });
+      fireEvent.change(screen.getByLabelText(/board link/iu), { target: { value: VALID_LINK } });
+      await userEvent.click(screen.getByRole("tab", { name: /this board/iu }));
+
+      expect(await screen.findByText("Selected board history")).toBeInTheDocument();
+      expect(listImpl.mock.calls[0]?.[0]?.signal?.aborted).toBe(true);
+      await act(async () => {
+        resolveRecent([{ ...MOCK_LIST_ENTRY, displayName: "Stale recent history" }]);
+      });
+      expect(screen.getByText("Selected board history")).toBeInTheDocument();
+      expect(screen.queryByText("Stale recent history")).not.toBeInTheDocument();
+    });
+
     it("loads a selected snapshot from the dashboard list", async () => {
       const listImpl = resolvingList([MOCK_LIST_ENTRY]);
       const loadImpl = vi.fn(async () => MOCK_SUMMARY) as unknown as LoadFn;
@@ -960,11 +1018,13 @@ describe("FigmaSnapshotWindow", () => {
 
     it("auto-loads a stored single-screen source as a compact Figma view card", async () => {
       const loadSpy = vi.fn(async (_runId: string) => MOCK_SUMMARY);
+      const listImpl = resolvingList();
       renderWindow({
         snapshotRunId: MOCK_SUMMARY.runId,
         selectedScreenIds: ["screen-2"],
         selectedScreenName: "Screen 2",
         loadImpl: loadSpy as unknown as LoadFn,
+        listImpl,
       });
 
       await waitFor(() =>
@@ -977,9 +1037,34 @@ describe("FigmaSnapshotWindow", () => {
         imageSourceTarget(screen.getByRole("img", { name: /captured preview for screen 2/iu })),
       ).toBe("/api/figma/snapshots/fs-test-run-id-1234/screens/1/image");
       expect(screen.queryByLabelText(/board link/iu)).not.toBeInTheDocument();
+      expect(listImpl).not.toHaveBeenCalled();
       expect(
         screen.queryByRole("img", { name: /captured preview for screen 1/iu }),
       ).not.toBeInTheDocument();
+    });
+
+    it("keeps an unavailable Figma View scoped and preserves its reference for retry", async () => {
+      const loadImpl = vi
+        .fn<LoadFn>()
+        .mockRejectedValue(new ApiError("FIGMA_SNAPSHOT_NOT_FOUND", "Snapshot unavailable.", 404));
+      const { updateCfg } = renderWindow({
+        viewSource: true,
+        snapshotRunId: "fs-missing",
+        selectedScreenIds: ["screen-2"],
+        loadImpl,
+      });
+      expect(await screen.findByText("Snapshot unavailable.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /load view/iu })).toBeInTheDocument();
+      expect(screen.queryByLabelText(/board link/iu)).not.toBeInTheDocument();
+      expect(updateCfg).not.toHaveBeenCalled();
+    });
+
+    it("never loads a Figma View whose screen selection is missing", () => {
+      const loadImpl = vi.fn<LoadFn>().mockResolvedValue(MOCK_SUMMARY);
+      renderWindow({ viewSource: true, snapshotRunId: MOCK_SUMMARY.runId, loadImpl });
+      expect(screen.queryByLabelText(/board link/iu)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /load view/iu })).not.toBeInTheDocument();
+      expect(loadImpl).not.toHaveBeenCalled();
     });
 
     it("opens the scoped JSON inspector from a single-screen view source", async () => {
@@ -1488,6 +1573,25 @@ describe("FigmaSnapshotWindow", () => {
   });
 
   describe("cancel / abort (fix #7)", () => {
+    it("ignores a successful response that arrives after the wait was cancelled", async () => {
+      let resolveBuild!: (result: FigmaSnapshotSummary) => void;
+      const build = new Promise<FigmaSnapshotSummary>((resolve) => {
+        resolveBuild = resolve;
+      });
+      const triggerImpl = vi.fn<TriggerFn>().mockReturnValue(build);
+      const { updateCfg } = renderWindow({ triggerImpl });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await user.click(screen.getByRole("button", { name: /cancel/iu }));
+
+      await act(async () => {
+        resolveBuild(MOCK_SUMMARY);
+      });
+      expect(updateCfg).not.toHaveBeenCalled();
+      expect(screen.queryByRole("article", { name: /screen 1/iu })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /reconnect build/iu })).toBeInTheDocument();
+    });
+
     it("renders a Cancel button while building", async () => {
       let hold!: () => void;
       const trigger = makeTrigger(

@@ -120,10 +120,13 @@ the LK `StoreContentCipher` pattern from ADR-0047 D1.
 
 ### D4 — Integrity hashes and redaction survive hardening (AC3)
 
-No change to the integrity hash or redaction paths. Permission hardening (D2) applies
+Permission hardening (D2) applies
 after content is written; it does not touch the JSON payload. The hash is computed over
 the redacted manifest object before `JSON.stringify` in `recordQualityIntelligenceRun`
 (`store.ts:609–616`) and `buildIntegrityHashes` — chmod does not affect it.
+
+Figma snapshots retain their compatible drift hash. Newly written records also carry a hash of the
+complete redacted record, verified with the snapshot and image checks described in ADR-0037 D4.
 
 ### D5 — Deterministic retention purge (AC4)
 
@@ -158,7 +161,8 @@ have no production call site. We wire them deterministically:
   `DEFAULT_FIGMA_SNAPSHOT_MAX_RECORDS = 500` (matching the `qi:standard-90d` profile's
   `maxRunArtifacts`) — a bounded value chosen so a normal local fixture set is never silently
   purged; it is configurable via `FigmaSnapshotStoreOptions.retention.maxRecords`, and a
-  non-positive cap disables eviction.
+  non-positive cap disables eviction. Orphan and temporary file cleanup requires a five-minute grace
+  interval and validates that directories and entries belong to the configured evidence root.
 
 Retention policy IDs on existing manifests are not migrated; unknown IDs are retained
 (forward-compat, already guaranteed by `retention.ts:106–108`).

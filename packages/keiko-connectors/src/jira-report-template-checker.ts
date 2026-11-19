@@ -1,12 +1,15 @@
 import {
+  JIRA_TEMPLATE_VIOLATIONS_MAX,
   jiraTemplateGovernsWrites,
   type JiraIssueTemplate,
-  type JiraTemplateViolation,
+  type JiraTemplateFieldRole,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
-  checkJiraIssueTemplates,
+  collectJiraTemplateViolations,
+  dedupeJiraTemplateViolations,
   matchingJiraIssueTemplates,
   resolveJiraTemplateFieldIds,
+  type JiraAttributedTemplateViolation,
   type JiraFieldCatalogEntry,
   type JiraTemplateSubject,
 } from "./jira-issue-template-check.js";
@@ -56,14 +59,18 @@ function catalogOf(
   return [...known.values()];
 }
 
-function references(
-  templates: readonly JiraIssueTemplate[],
-): readonly { readonly template: JiraIssueTemplate; readonly reference: string }[] {
+function references(templates: readonly JiraIssueTemplate[]): readonly {
+  readonly template: JiraIssueTemplate;
+  readonly reference: string;
+  readonly role: JiraTemplateFieldRole;
+}[] {
   return templates.flatMap((template) =>
     [
-      ...template.requiredFields,
-      ...(template.parent.field === undefined ? [] : [template.parent.field]),
-    ].map((reference) => ({ template, reference })),
+      ...template.requiredFields.map((reference) => ({ reference, role: "required" as const })),
+      ...(template.parent.field === undefined
+        ? []
+        : [{ reference: template.parent.field, role: "parent" as const }]),
+    ].map((entry) => ({ template, ...entry })),
   );
 }
 
@@ -72,8 +79,8 @@ function unresolved(
   catalog: readonly JiraFieldCatalogEntry[],
 ): boolean {
   return references(templates).some(
-    ({ reference, template }) =>
-      resolveJiraTemplateFieldIds(reference, catalog, template).length === 0,
+    ({ reference, template, role }) =>
+      resolveJiraTemplateFieldIds(reference, catalog, template, role).length === 0,
   );
 }
 
@@ -82,8 +89,8 @@ function fieldIdsOf(
   catalog: readonly JiraFieldCatalogEntry[],
 ): readonly string[] {
   const ids = new Set<string>(CHECKED_FIELDS);
-  for (const { reference, template } of references(templates))
-    for (const id of resolveJiraTemplateFieldIds(reference, catalog, template)) ids.add(id);
+  for (const { reference, template, role } of references(templates))
+    for (const id of resolveJiraTemplateFieldIds(reference, catalog, template, role)) ids.add(id);
   return [...ids];
 }
 
@@ -111,16 +118,26 @@ const RULE_FIELD: Readonly<Record<string, string>> = {
   "label-count": "labels",
 };
 
-/** The one field a violation concerns, when that is determinable without reading a value. */
+/**
+ * The one field a violation concerns, when that is determinable without reading a value. A clause's
+ * own template and role decide which native field its written name is bound to: the parent clause
+ * and a required clause can write the same name for different fields.
+ */
 function fieldOf(
-  violation: JiraTemplateViolation,
+  entry: JiraAttributedTemplateViolation,
   catalog: readonly JiraFieldCatalogEntry[],
 ): string | undefined {
+  const { violation, role, template } = entry;
   const fixed = RULE_FIELD[violation.ruleId];
   if (fixed !== undefined) return fixed;
+  // A link clause names a link type: its source is the link list, never a field of that name.
+  if (entry.link) return "issuelinks";
   if (!["field-missing", "field-unavailable", "parent-missing"].includes(violation.ruleId))
     return undefined;
-  const ids = resolveJiraTemplateFieldIds(violation.subject, catalog);
+  const ids =
+    role === undefined
+      ? resolveJiraTemplateFieldIds(violation.subject, catalog)
+      : resolveJiraTemplateFieldIds(violation.subject, catalog, template, role);
   return ids.length === 1 ? ids[0] : undefined;
 }
 
@@ -135,23 +152,26 @@ const FIELD_SUBJECT_RULES: ReadonlySet<string> = new Set([
  * template refers to by id, otherwise the template's own element (a section, a label).
  */
 function deviationSubject(
-  violation: JiraTemplateViolation,
+  entry: JiraAttributedTemplateViolation,
   fieldId: string | undefined,
   catalog: readonly JiraFieldCatalogEntry[],
 ): string {
-  if (fieldId === undefined || !FIELD_SUBJECT_RULES.has(violation.ruleId)) return violation.subject;
+  const { violation } = entry;
+  if (entry.link || fieldId === undefined || !FIELD_SUBJECT_RULES.has(violation.ruleId))
+    return violation.subject;
   return catalog.find((entry) => entry.id === fieldId)?.name ?? violation.subject;
 }
 
 function deviation(
-  violation: JiraTemplateViolation,
+  entry: JiraAttributedTemplateViolation,
   catalog: readonly JiraFieldCatalogEntry[],
 ): JiraReportDeviation {
-  const fieldId = fieldOf(violation, catalog);
+  const { violation } = entry;
+  const fieldId = fieldOf(entry, catalog);
   return {
     ruleId: violation.ruleId,
     ...(fieldId === undefined ? {} : { fieldId }),
-    subject: deviationSubject(violation, fieldId, catalog),
+    subject: deviationSubject(entry, fieldId, catalog),
   };
 }
 
@@ -207,9 +227,12 @@ async function checkSubject(
     needsParent && request !== undefined
       ? await bindJiraTemplateParentTypes(request, subject, matching, catalog)
       : subject;
-  const violations = checkJiraIssueTemplates(matching, bound, catalog);
-  if (violations.some(({ ruleId }) => ruleId === "template-unreadable")) return "unavailable";
-  return violations.map((violation) => deviation(violation, catalog));
+  const entries = dedupeJiraTemplateViolations(
+    collectJiraTemplateViolations(matching, bound, catalog),
+  ).slice(0, JIRA_TEMPLATE_VIOLATIONS_MAX);
+  if (entries.some(({ violation }) => violation.ruleId === "template-unreadable"))
+    return "unavailable";
+  return entries.map((entry) => deviation(entry, catalog));
 }
 
 /** A withheld requested field is unknown; an observed null still proves an absent parent. */
@@ -221,7 +244,7 @@ function parentFieldsObserved(
   return templates.every((template) => {
     const { parent } = template;
     if (parent.field === undefined) return true;
-    const ids = resolveJiraTemplateFieldIds(parent.field, catalog, template);
+    const ids = resolveJiraTemplateFieldIds(parent.field, catalog, template, "parent");
     return ids.length === 1 && ids.every((id) => Object.hasOwn(subject.fields, id));
   });
 }
