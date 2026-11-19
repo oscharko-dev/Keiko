@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e73585397c54fd35e9e88b3007f662f8b27429b1e65489e731f6dad7cc3e3263",
+    "catalogDigest": "c7e3ec0482af7ae93bfd3f20f1db5a255f4b7d56425b90f689780d69079609bd",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -39480,7 +39480,7 @@
         "failureClasses": ["memory-capture-novelty"],
         "proofIds": ["memory.capture.novelty-gate.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:199",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:1042"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:1036"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -126261,7 +126261,7 @@
     {
       "op": "memory.maintenance.autonomy-mode",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:750",
+      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:753",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126274,21 +126274,21 @@
     {
       "op": "memory.maintenance.retention-policy",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:769",
+      "site": "packages/keiko-server/src/memory-maintenance-handlers.ts:772",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "memory.retrieval.semantic-disabled",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:501",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:504",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "memory.retrieval.semantic-skipped",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:298",
+      "site": "packages/keiko-server/src/memory-retrieval-signals.ts:301",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126713,7 +126713,7 @@
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:1168",
+      "site": "packages/keiko-server/src/memory-embedding.ts:1162",
       "package": "keiko-server"
     },
     {

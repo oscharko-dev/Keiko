@@ -393,19 +393,22 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   record is history (#4223): the maintenance pass never forgets it, even though its closed window has
   ended, and only the person's own forget, or an operator's opt-in retention policy, deletes it. A
   fact and the earlier values it replaced are one fact to the person: forgetting a live record, by a
-  statement in a Chat or by picking it in the Memory window, forgets every predecessor still stored
-  in its scope that is reachable over its `supersedes` edges, whatever its status now (replaced,
-  archived, expired, rejected), with it; an edge into another scope is not followed and is counted
-  as `lineageSkippedCount`, and the walk does not pass through such a record, so an earlier value reachable only behind it stays and that count is the signal (a trust boundary, pinned by a test), each with its own tombstone, so no earlier value is
-  learned again unattended. A named forget counts a live record and its own predecessors as one
-  match (the lineage collapses to the newest matching record); two different facts that both match are still asked about. A record counts as a history row only when a stored successor that is not rejected exists (an
-  archived or expired successor still counts: both can return to accepted). Picking a history row
-  in the Memory window, or naming only the old value, forgets exactly that record and the newer
-  value stays; the chain is kept whole around it. A pin that protects the live record in a Chat
-  protects its history too (#4223). A
-  maintenance pass still forgets a record whose AUTHOR-STATED validity ended, but only one in a
-  status `shouldForget` forgets: `proposed`, `rejected`, `conflicted` or `expired`. An `accepted` or
-  `archived` record with an ended validity is kept (recall hides it), as is a `superseded` one. In every mode
+  statement in a Chat or by picking it in the Memory window, forgets with it every predecessor still
+  stored in its scope that is reachable over its `supersedes` edges, whatever its status now
+  (replaced, archived, expired, rejected), each with its own tombstone, so no earlier value is
+  learned again unattended. An edge into another scope is not followed and is counted as
+  `lineageSkippedCount`; the walk does not pass through such a record, so an earlier value reachable
+  only behind it stays, and that count is the signal (a trust boundary, pinned by a test). A named
+  forget counts a live record and its own predecessors as one match (the lineage collapses to the
+  newest matching record); two different facts that both match are still asked about. A record
+  counts as a history row only when a stored successor that is not rejected exists (an archived or
+  expired successor still counts: both can return to accepted). Picking a history row in the Memory
+  window, or naming only the old value, forgets exactly that record and the newer value stays; the
+  chain is kept whole around it. A pin that protects the live record in a Chat protects its history
+  too (#4223). A maintenance pass still forgets a record whose AUTHOR-STATED validity ended, but only
+  one in a status `shouldForget` forgets: `proposed`, `rejected`, `conflicted` or `expired`. An
+  `accepted` or `archived` record with an ended validity is kept (recall hides it), as is a
+  `superseded` one. In every mode
   the correction replaces the old fact in that transaction; only under an operator restriction (D2)
   does the new fact wait as a `correction` with its `corrects` edge, written in the same single
   transaction. A learned fact replaces only what Keiko learned in the person's own scope:
