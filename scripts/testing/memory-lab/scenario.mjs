@@ -92,10 +92,15 @@ function validTermGroups(groups) {
 
 function validateTruth(id, truth) {
   if (!Array.isArray(truth)) fail(id, "truth must be an array");
+  const seen = new Set();
   truth.forEach((fact, index) => {
     const where = `truth[${String(index)}]`;
     if (!isRecord(fact)) fail(id, `${where} must be an object`);
     if (!nonEmptyString(fact.key)) fail(id, `${where}.key is required`);
+    // Keys name the facts a probe needs, a link and a verdict point at: two facts with one key would
+    // collapse into the first, and an answer carrying only its term would pass `needs`.
+    if (seen.has(fact.key)) fail(id, `${where}.key "${fact.key}" duplicates an earlier truth`);
+    seen.add(fact.key);
     if (!nonEmptyString(fact.seed))
       fail(id, `${where}.seed (exact body for the oracle) is required`);
     if (typeof fact.must !== "boolean") fail(id, `${where}.must must be a boolean`);

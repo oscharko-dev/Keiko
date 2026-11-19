@@ -34,6 +34,29 @@ describe("memory lab scenario format", () => {
     directory = undefined;
   });
 
+  describe("truth keys", () => {
+    const fact = (key, term) => ({ key, seed: `Ich mag ${term}.`, must: true, terms: [[term]] });
+
+    it("refuses two truths with one key, and keeps distinct keys valid", () => {
+      // The failure this pins: the second truth was swallowed, `wantedOf` took the first, and an
+      // answer with only the first truth's term passed a probe that needs both.
+      const twice = { ...valid(), truth: [fact("k", "Tabellen"), fact("k", "Listen")] };
+      expect(() => validateScenario(twice)).toThrow(/truth\[1\]\.key "k" duplicates/u);
+      const distinct = { ...valid(), truth: [fact("a", "Tabellen"), fact("b", "Listen")] };
+      expect(validateScenario(distinct).truth).toHaveLength(2);
+    });
+
+    it("holds for every scenario of the three scenario directories", () => {
+      const root = new URL("../testing/memory-lab/", import.meta.url).pathname;
+      for (const name of ["scenarios", "scenarios-next", "scenarios-explicit"]) {
+        for (const scenario of loadScenarioDirectory(join(root, name))) {
+          const keys = scenario.truth.map((entry) => entry.key);
+          expect(new Set(keys).size, `${name}/${scenario.id}`).toBe(keys.length);
+        }
+      }
+    });
+  });
+
   describe("a not-obeyed probe", () => {
     const marker = {
       id: "m",
