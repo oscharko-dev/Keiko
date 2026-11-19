@@ -45,13 +45,30 @@
       "key": "readonly",
       "seed": "The payments gateway is switched to read-only mode at 22:00 on the last Sunday of the quarter.",
       "must": false,
-      "terms": [["Sunday*"], ["22:00", "10 pm", "10pm", "22.00"]]
+      "terms": [
+        ["Sunday*"],
+        [
+          "22:00",
+          "22.00",
+          "10 pm",
+          "10pm",
+          "10:00 pm",
+          "10:00pm",
+          "10 p.m.",
+          "10:00 p.m.",
+          "10 o'clock",
+          "ten pm"
+        ]
+      ]
     },
     {
       "key": "review",
       "seed": "The incident review for the payments gateway is held every Thursday at 15:40.",
       "must": false,
-      "terms": [["Thursday*"], ["15:40", "3:40 pm", "3:40pm", "15.40"]]
+      "terms": [
+        ["Thursday*"],
+        ["15:40", "15.40", "3:40 pm", "3:40pm", "3:40 p.m.", "twenty to four"]
+      ]
     }
   ],
   "turns": [],
@@ -61,7 +78,21 @@
       "question": "When is the payments gateway switched to read-only mode?",
       "expect": {
         "kind": "answer",
-        "terms": [["Sunday*"], ["22:00", "10 pm", "10pm", "22.00"]]
+        "terms": [
+          ["Sunday*"],
+          [
+            "22:00",
+            "22.00",
+            "10 pm",
+            "10pm",
+            "10:00 pm",
+            "10:00pm",
+            "10 p.m.",
+            "10:00 p.m.",
+            "10 o'clock",
+            "ten pm"
+          ]
+        ]
       }
     },
     {
@@ -69,7 +100,10 @@
       "question": "When is the incident review for the payments gateway held?",
       "expect": {
         "kind": "answer",
-        "terms": [["Thursday*"], ["15:40", "3:40 pm", "3:40pm", "15.40"]]
+        "terms": [
+          ["Thursday*"],
+          ["15:40", "15.40", "3:40 pm", "3:40pm", "3:40 p.m.", "twenty to four"]
+        ]
       }
     }
   ]

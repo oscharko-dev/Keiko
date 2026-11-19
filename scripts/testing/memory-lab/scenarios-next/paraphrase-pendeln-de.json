@@ -4,7 +4,7 @@
   "id": "paraphrase-pendeln-de",
   "language": "de",
   "class": "paraphrase",
-  "description": "A German fact with an unguessable value (seeded as a plain, non-standing fact, so the standing profile cannot carry it) asked about with a synonym and no shared content word, with a lexical control question. Limit: recall is word overlap only when no embedding model is configured. Failure means: expected without embeddings (the synonym question cannot be retrieved); with a real embedding model it is expected to pass, and the control probe must pass in both runs. Maintenance: no seed, so maintenance on or off changes nothing; run with both embedding settings. Kind: capability.",
+  "description": "A German fact with an unguessable value (seeded as a plain, non-standing fact, so the standing profile cannot carry it) asked about with a synonym and no shared content word, with a lexical control question. Limit: recall is word overlap only when no embedding model is configured. Failure means: expected without embeddings (the synonym question cannot be retrieved); with a real embedding model it is expected to pass, and the control probe must pass in both runs. Maintenance: the seeded fact is one recent record, so maintenance on or off changes nothing; run with both embedding settings. Kind: capability.",
   "seed": {
     "records": [
       {

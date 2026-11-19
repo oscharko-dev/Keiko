@@ -67,7 +67,19 @@
     },
     {
       "key": "third",
-      "terms": [["without review", "without any review", "no review", "not reviewed"]]
+      "terms": [
+        [
+          "without review*",
+          "without a review",
+          "without any review*",
+          "no review*",
+          "not reviewed",
+          "unreviewed",
+          "skipped the review",
+          "skipped review",
+          "bypassed review"
+        ]
+      ]
     }
   ],
   "turns": [],

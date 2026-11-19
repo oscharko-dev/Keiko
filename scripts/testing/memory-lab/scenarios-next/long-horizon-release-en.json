@@ -70,7 +70,17 @@
       "key": "cadence",
       "seed": "We ship a release every five weeks.",
       "must": false,
-      "terms": [["every five weeks", "every 5 weeks"]]
+      "terms": [
+        [
+          "every five weeks",
+          "every 5 weeks",
+          "five weeks",
+          "5 weeks",
+          "five-week",
+          "5-week",
+          "every fifth week"
+        ]
+      ]
     },
     {
       "key": "team",
@@ -82,7 +92,18 @@
   "superseded": [
     {
       "key": "cadence-before",
-      "terms": [["every ten days", "every 10 days"]]
+      "terms": [
+        [
+          "every ten days",
+          "every 10 days",
+          "ten days",
+          "10 days",
+          "ten-day",
+          "10-day",
+          "every tenth day",
+          "every 10th day"
+        ]
+      ]
     }
   ],
   "turns": [],
@@ -100,8 +121,20 @@
       "question": "How often do we ship a release?",
       "expect": {
         "kind": "answer",
-        "terms": [["every five weeks", "every 5 weeks"]],
-        "forbidden": [["every ten days", "every 10 days"]]
+        "terms": [
+          [
+            "every five weeks",
+            "every 5 weeks",
+            "five weeks",
+            "5 weeks",
+            "five-week",
+            "5-week",
+            "every fifth week"
+          ]
+        ],
+        "forbidden": [
+          ["every ten days", "every 10 days", "ten days", "10 days", "ten-day", "10-day"]
+        ]
       }
     },
     {

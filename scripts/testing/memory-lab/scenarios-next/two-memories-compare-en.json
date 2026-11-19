@@ -4,7 +4,7 @@
   "id": "two-memories-compare-en",
   "language": "en",
   "class": "two-memories",
-  "description": "Two facts about two different projects among eight near-topic facts about each; the question compares them. Limit: at most six memories are sent per question, ranked by word overlap, so near-topic facts about the same projects can crowd out the two that carry the answer. Failure means: needed-memory-missing names the project whose storage fact did not reach the model. Maintenance: no aged records, so on or off changes nothing; seeded distractors are younger than 94 days.",
+  "description": "Two facts about two different projects among eight near-topic facts about each; the question compares them and each storage is bound to its own project. Limit: at most six memories are sent per question, ranked by word overlap; with the product's tokenizer the two storage facts share more words with the question than any near-topic fact does and are the newest records, so offline both reach the model (a run of the product arm names no unsupplied fact) and this scenario does not probe crowding out, which long-horizon-distractors-en does. Failure means: needed-memory-missing with both facts supplied is the answer joining them wrongly (one project's storage under the other's name); with a fact not supplied it is a retrieval regression, and needed-memory-missing then names the project whose storage fact did not reach the model. Maintenance: no aged records, so on or off changes nothing; seeded distractors are younger than 94 days. Kind: control.",
   "seed": {
     "records": [
       {

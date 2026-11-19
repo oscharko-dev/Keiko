@@ -4,7 +4,7 @@
   "id": "two-memories-format-de",
   "language": "de",
   "class": "two-memories",
-  "description": "A format preference and a narrower exception learned as two statements; a direct question and an indirect one. Limit: an answer that needs both the rule and its exception needs both retrieved; the profile carries the preference to every answer but not the exception. Failure means: needed-memory-missing names the exception (or the rule) that did not reach the model. Maintenance: no aged records, so on or off changes nothing; seeded distractors are younger than 94 days. Kind: capability.",
+  "description": "A format preference and a narrower exception learned as two statements; a direct question and an indirect one. Limit: an answer that needs both the rule and its exception needs both retrieved; the profile carries the preference to every answer but not the exception. Failure means: needed-memory-missing names the exception (or the rule) that did not reach the model. Maintenance: no seed and no aged records, so on or off changes nothing. Kind: capability.",
   "truth": [
     {
       "key": "rule",

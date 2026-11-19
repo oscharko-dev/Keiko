@@ -4,7 +4,7 @@
   "id": "paraphrase-lisbon-en-de",
   "language": "mixed",
   "class": "paraphrase",
-  "description": "An English fact (seeded as a plain, non-standing fact, so the standing profile cannot carry it) asked about in German without a shared content word, with a lexical control question. Limit: recall is word overlap only when no embedding model is configured, and nothing here can cross a language. Failure means: expected without embeddings (the paraphrase probe cannot be retrieved); with a real embedding model it is expected to pass, and the control probe must pass in both runs. Maintenance: no seed, so maintenance on or off changes nothing; run with both embedding settings. Kind: capability.",
+  "description": "An English fact (seeded as a plain, non-standing fact, so the standing profile cannot carry it) asked about in German without a shared content word, with a lexical control question. Limit: recall is word overlap only when no embedding model is configured, and nothing here can cross a language. Failure means: expected without embeddings (the paraphrase probe cannot be retrieved); with a real embedding model it is expected to pass, and the control probe must pass in both runs. Maintenance: the seeded fact is one recent record, so maintenance on or off changes nothing; run with both embedding settings. Kind: capability.",
   "seed": {
     "records": [
       {

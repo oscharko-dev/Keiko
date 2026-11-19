@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { REPO_ROOT } from "../testing/coding-workbench-lab/lab-common.mjs";
 import { SCENARIO_CLASSES, loadScenarioDirectory } from "../testing/memory-lab/scenario.mjs";
-import { scoreProbe } from "../testing/memory-lab/score.mjs";
+import { literalStem, scoreProbe } from "../testing/memory-lab/score.mjs";
 
 const NEXT = join(REPO_ROOT, "scripts", "testing", "memory-lab", "scenarios-next");
 // One scenario class per family; the two seeded demonstrations belong to the existing classes.
@@ -20,15 +20,12 @@ const FAMILY_CLASSES = Object.freeze({
 });
 // The closed classification of what a failing scenario means (a baseline is reported per kind):
 // `defect` the product does something wrong today, `capability` one that does not exist yet,
-// `design` a design question, `control` expected to pass today. Five scenarios are being measured
+// `design` a design question, `control` expected to pass today. Two scenarios are being measured
 // live and keep their text unchanged, so their kind is recorded here instead of in the description.
 const KINDS = Object.freeze(["defect", "capability", "design", "control"]);
 const KIND_OF_UNCHANGED = Object.freeze({
   "long-horizon-distractors-en": "defect",
   "scale-duplikat-en": "defect",
-  "two-memories-batch-en": "capability",
-  "two-memories-compare-en": "defect",
-  "earlier-rueckkehr-de": "defect",
 });
 function kindOf(scenario) {
   const tagged = /Kind: (\w+)\./u.exec(scenario.description)?.[1];
@@ -129,6 +126,159 @@ describe("the next corpus", () => {
     }
     const archived = scenarios.find((entry) => entry.id === "scale-archiviert-de").seed.filler;
     expect(archived.reduce((sum, group) => sum + group.count, 0)).toBeGreaterThan(500);
+  });
+});
+
+// The words of term groups: the first alternative of each group, prefix marks removed.
+const wordsOf = (groups) => groups.map((group) => literalStem(group[0])).join(" ");
+
+// What a correct answer to an answer probe says: its own terms, and for each needed truth its
+// subject and terms in one sentence, for each asked-for earlier value its terms.
+function answerBuiltFrom(scenario, probe) {
+  const { expect: wanted } = probe;
+  const sentences = [];
+  if (wanted.terms !== undefined) sentences.push(wordsOf(wanted.terms));
+  for (const key of wanted.needs ?? []) {
+    const truth = scenario.truth.find((entry) => entry.key === key);
+    sentences.push(
+      [truth.with === undefined ? "" : wordsOf(truth.with), wordsOf(truth.terms)].join(" "),
+    );
+  }
+  for (const key of wanted.earlier ?? [])
+    sentences.push(wordsOf(scenario.superseded.find((entry) => entry.key === key).terms));
+  return `${sentences.join(". ")}.`;
+}
+
+describe("every probe of the next corpus can be passed and can be failed", () => {
+  const answerProbes = scenarios.flatMap((scenario) =>
+    scenario.probes
+      .filter((probe) => probe.expect.kind === "answer")
+      .map((probe) => [`${scenario.id}:${probe.id}`, scenario, probe]),
+  );
+  const abstainProbes = scenarios.flatMap((scenario) =>
+    scenario.probes
+      .filter((probe) => probe.expect.kind === "abstain")
+      .map((probe) => [`${scenario.id}:${probe.id}`, scenario, probe]),
+  );
+
+  it.each(answerProbes)(
+    "%s passes on an answer built from its own terms, fails on none",
+    (_, scenario, probe) => {
+      expect(scoreProbe(scenario, probe, answerBuiltFrom(scenario, probe), []).passed).toBe(true);
+      expect(scoreProbe(scenario, probe, "", []).passed).toBe(false);
+    },
+  );
+
+  it.each(abstainProbes)(
+    "%s fails on a wrong answer, passes on an abstention",
+    (_, scenario, probe) => {
+      // The failure this pins (F2): an abstain probe with no forbidden terms passed any negation.
+      expect(
+        probe.expect.forbidden,
+        "an abstain probe names the assignment it must catch",
+      ).toBeDefined();
+      const wrong = `${wordsOf(probe.expect.forbidden)}, not otherwise.`;
+      expect(scoreProbe(scenario, probe, wrong, []).passed).toBe(false);
+      expect(scoreProbe(scenario, probe, "", []).passed).toBe(false);
+      expect(
+        scoreProbe(scenario, probe, "I do not know that. Das ist mir nicht bekannt.", []).passed,
+      ).toBe(true);
+    },
+  );
+
+  // Correct answers in other words than the first spelling of each term, which the audit executed
+  // and which failed (F4), restated for the values the corpus holds now.
+  it.each([
+    ["earlier-hotfix-en", "previous", "They were merged without a review."],
+    ["earlier-hotfix-en", "previous", "The on-call engineer merged them, no review at all."],
+    ["long-horizon-release-en", "cadence-before", "We shipped every 10 days."],
+    ["long-horizon-release-en", "cadence-before", "On a ten-day cycle."],
+    ["long-horizon-release-en", "cadence-now", "We ship on a five-week cycle."],
+    ["long-horizon-release-en", "cadence-now", "Every 5 weeks."],
+    ["scale-vorschlaege-en", "target", "At 10:00 pm on the last Sunday of the quarter."],
+    ["scale-vorschlaege-en", "target", "On the last Sunday of the quarter, at 10 p.m."],
+    [
+      "two-memories-batch-en",
+      "direct",
+      "The window is 2:20 a.m., because the settlement feed ends by 1:30 a.m.",
+    ],
+    [
+      "two-memories-batch-en",
+      "indirect",
+      "At 2:20 am; the settlement feed finishes by half past one.",
+    ],
+  ])("%s %s accepts: %s", (id, probeId, answer) => {
+    const scenario = scenarios.find((entry) => entry.id === id);
+    const probe = scenario.probes.find((entry) => entry.id === probeId);
+    expect(scoreProbe(scenario, probe, answer, []).passed, answer).toBe(true);
+  });
+});
+
+describe("the description of every scenario matches its scenario", () => {
+  const seedsSuperseded = (scenario) =>
+    (scenario.seed?.records ?? []).some((record) => record.status === "superseded");
+
+  it("says the Limit, the Failure means, the Maintenance and the Kind in that order", () => {
+    for (const scenario of corpus) {
+      const at = ["Limit: ", "Failure means: ", "Maintenance: "].map((label) =>
+        scenario.description.indexOf(label),
+      );
+      expect(
+        at.every((index) => index >= 0),
+        scenario.id,
+      ).toBe(true);
+      expect(at, scenario.id).toEqual(at.toSorted((left, right) => left - right));
+      expect(kindOf(scenario), scenario.id).toBeDefined();
+    }
+  });
+
+  it("speaks of a seed only where there is one, and of no seed only where there is none", () => {
+    for (const scenario of corpus) {
+      if (/\bseeded\b/u.test(scenario.description))
+        expect(scenario.seed, `${scenario.id} speaks of seeded records`).toBeDefined();
+      if (/\bno seed\b/u.test(scenario.description))
+        expect(scenario.seed, `${scenario.id} says there is no seed`).toBeUndefined();
+    }
+  });
+
+  it("speaks of a superseded record that stays only where one is seeded", () => {
+    for (const scenario of corpus)
+      if (/superseded record (?:stays|is expected to stay)/u.test(scenario.description))
+        expect(seedsSuperseded(scenario), scenario.id).toBe(true);
+  });
+
+  it("never says that maintenance removes superseded or ended rows", () => {
+    // Since #4223 the product keeps a superseded record as history; its window end is not an expiry.
+    for (const scenario of scenarios)
+      expect(scenario.description, scenario.id).not.toMatch(
+        /maintenance removes (?!none)[^.;]*(?:ended|superseded)/u,
+      );
+  });
+
+  it("holds every seeded accepted record younger than 94 days or reinforced, where it says so", () => {
+    const young = (record) =>
+      record.ageDays < 94 || record.accessCount > 0 || record.pinned === true;
+    for (const scenario of corpus) {
+      if (!/younger than 94 days/u.test(scenario.description)) continue;
+      expect(scenario.seed, scenario.id).toBeDefined();
+      for (const record of scenario.seed.records.filter((entry) => entry.status === "accepted"))
+        expect(young(record), `${scenario.id}:${record.key}`).toBe(true);
+      for (const group of (scenario.seed.filler ?? []).filter(
+        (entry) => entry.status === "accepted",
+      ))
+        expect(group.maxAgeDays, scenario.id).toBeLessThan(94);
+    }
+  });
+
+  it("asks for both facts of a scenario that claims to control their combination", () => {
+    for (const scenario of corpus) {
+      if (!/control for the combination/u.test(scenario.description)) continue;
+      const keys = (probe) => probe.expect.needs ?? [];
+      expect(
+        scenario.probes.some((probe) => keys(probe).length >= 2),
+        scenario.id,
+      ).toBe(true);
+    }
   });
 });
 
