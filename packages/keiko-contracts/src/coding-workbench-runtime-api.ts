@@ -559,6 +559,10 @@ export type CodingWorkbenchRuntimeUnavailableReason =
   // An npm installation without the coding-runtime package for this computer: the person installs
   // the desktop package for this computer instead (#4068).
   | "npm-runtime-package-missing"
+  // The same, for an npm folder package that declares itself managed outside the app: it exists for
+  // workplaces where nothing may be installed, so the person's administrator provides a package that
+  // includes the runtime instead of the person installing the desktop package.
+  | "managed-runtime-package-missing"
   // A desktop (portable) installation whose bundled runtime did not verify: the person updates or
   // reinstalls Keiko from its release page.
   | "portable-runtime-unverified"
@@ -589,6 +593,7 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
     "runtime-disabled",
     "platform-unqualified",
     "npm-runtime-package-missing",
+    "managed-runtime-package-missing",
     "portable-runtime-unverified",
     "dev-lane-refused",
     "payload-missing",

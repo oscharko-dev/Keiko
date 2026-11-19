@@ -1295,7 +1295,12 @@ records the closed readiness observation without starting a check. A window open
 selection reads the Workbench profile with `check=use`, which may join a check that already runs and
 report the state but never dispatches one; a pick or Start sends `check=1`, and a Start belongs to the
 model it was pressed for (a model adopted or picked meanwhile ends its wait with a plain message and
-starts no run). `gateway.readiness.scope` records how many models were listed and checked and why,
+starts no run). When no activated model can start a run only because its tool calling was never
+confirmed (the state after Gateway Setup) or its proof aged out, the Workbench lists those activated,
+not refuted models and offers one explicit "Check tool calling" action that sends `check=1` for the
+selected model (`client.coding-workbench.interaction` `tool-check-requested`); with an eligible model
+present the picker lists eligible models only, and nothing starts a check by opening a window
+(ADR-0171). `gateway.readiness.scope` records how many models were listed and checked and why,
 only for a check that actually sent a request; `gateway.readiness.selection` remains the record of
 the server's selection route, which the Chat picker no longer calls; and
 `gateway.readiness.automatic.started` carries the closed `checkReason` (`startup`, `fallback`,

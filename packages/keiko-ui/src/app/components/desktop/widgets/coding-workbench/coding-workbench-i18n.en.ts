@@ -615,6 +615,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Keiko could not find a supported coding runtime for this installation. Install the Keiko package for this computer with its matching runtime, then restart Keiko.",
   "codingWorkbench.runtime.npmRuntimePackageMissing":
     "This Keiko was installed with npm, and the coding runtime package for this computer is not installed. Install the Keiko desktop package for this computer instead (on Windows: keiko-windows-x64-setup.exe from the Keiko release page); it brings the coding runtime with it.",
+  "codingWorkbench.runtime.managedRuntimePackageMissing":
+    "This Keiko folder brings no coding runtime for this computer, so the Coding Workbench cannot run here. Chat and the other windows work as usual. Your administrator can provide a Keiko package that includes the coding runtime.",
   "codingWorkbench.runtime.portableRuntimeUnverified":
     "This Keiko desktop installation could not verify its bundled coding runtime. Update Keiko with Review updates, or download keiko-windows-x64-setup.exe again from the Keiko release page.",
   "codingWorkbench.runtime.developmentRefused":
@@ -816,7 +818,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.conversation-not-ready":
     "This model is not activated or did not pass its readiness check. Activate it in Settings > Models, or choose another activated model.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
-    "The gateway has not confirmed yet that this model can call tools. Open the Workbench or the model list again in a minute to check it once more, or choose another ready model.",
+    "The gateway has not confirmed yet that this model can call tools. Choose Check tool calling to check it now, or choose another ready model.",
+  "codingWorkbench.toolCheck.action": "Check tool calling",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI through Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex subscription",

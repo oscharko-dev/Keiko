@@ -196,6 +196,7 @@ const CODING_RUNTIME_UNQUALIFIED_INSTALL_OPERATION = defineActivityLogOperation(
       values: [
         "platform-unqualified",
         "npm-runtime-package-missing",
+        "managed-runtime-package-missing",
         "portable-runtime-unverified",
       ],
     },
@@ -208,9 +209,15 @@ const CODING_RUNTIME_UNQUALIFIED_INSTALL_OPERATION = defineActivityLogOperation(
   releaseImpact: "minor",
 });
 
+type UnqualifiedInstallReason =
+  | "platform-unqualified"
+  | "npm-runtime-package-missing"
+  | "managed-runtime-package-missing"
+  | "portable-runtime-unverified";
+
 function recordUnqualifiedInstall(
   activityLog: ServerLogSink,
-  reason: "platform-unqualified" | "npm-runtime-package-missing" | "portable-runtime-unverified",
+  reason: UnqualifiedInstallReason,
 ): void {
   activityLog.write(
     activityLogEvent(
@@ -610,14 +617,25 @@ function resolveRuntime(
 /**
  * No lane offered a runtime. The Workbench names the one step for the installation kind it found
  * (#4068): a desktop package whose bundled runtime did not verify, an npm installation without the
- * runtime package for this computer, or neither (a checkout or an unsupported platform).
+ * runtime package for this computer, or neither (a checkout or an unsupported platform). An npm
+ * installation that declares itself managed outside the app (the npm folder package) is told apart:
+ * it exists for workplaces where nothing may be installed, so it must not be sent to an installer.
  */
 function unqualifiedInstallReason(
   host: Pick<ProductionOpenCodeActivationInput, "env" | "platform" | "arch">,
-): "platform-unqualified" | "npm-runtime-package-missing" | "portable-runtime-unverified" {
+): UnqualifiedInstallReason {
   if (portableInstallLayoutPresent(host)) return "portable-runtime-unverified";
-  if (npmLaneRuntimePackageExpected(host)) return "npm-runtime-package-missing";
-  return "platform-unqualified";
+  if (!npmLaneRuntimePackageExpected(host)) return "platform-unqualified";
+  return managedOutsideTheApp(host.env)
+    ? "managed-runtime-package-missing"
+    : "npm-runtime-package-missing";
+}
+
+// A folder package declares who manages it; only a person's own `user-local` setup is the app's to
+// install into.
+function managedOutsideTheApp(env: NodeJS.ProcessEnv): boolean {
+  const management = portableManagementFromEnv(env);
+  return management !== undefined && management !== "user-local";
 }
 
 function recordDevLaneDiscovery(

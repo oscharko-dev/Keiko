@@ -98,6 +98,8 @@ export type WorkbenchExecutionLocation = "local" | "worktree";
 interface RepositoryOption {
   readonly value: string;
   readonly label: string;
+  /** The full path under the name, like the Git window's picker: two folders can share a name. */
+  readonly description?: string;
   readonly disabled?: boolean;
   readonly badge?: string;
 }
@@ -114,6 +116,7 @@ function repositoryOptions(
   const registered = catalog.repositories.map((project) => ({
     value: project.path,
     label: project.name || repositoryName(project.path),
+    description: project.path,
     disabled: !projectAvailable(project),
     ...(!projectAvailable(project) ? { badge: t("codingWorkbench.repository.unavailable") } : {}),
   }));
@@ -122,6 +125,7 @@ function repositoryOptions(
     {
       value: root,
       label: repositoryName(root),
+      description: root,
       disabled: true,
       badge: t("codingWorkbench.repository.unavailable"),
     },
@@ -179,6 +183,7 @@ function RepositoryChip({
       leadingVisual={<FolderIcon size={15} aria-hidden="true" />}
       {...chipTrigger(placement, 22)}
       showMenuHeader={false}
+      showTriggerDescription={false}
       menuPopoverMinWidth={280}
       menuPlacement="up"
       searchPlaceholder={t("codingWorkbench.repository.search")}

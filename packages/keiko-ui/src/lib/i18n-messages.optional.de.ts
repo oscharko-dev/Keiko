@@ -4699,6 +4699,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "{model} ist nicht bereit. Wähle ein anderes Modell oder prüfe es unter Einstellungen > Modelle.",
   "chat.noModelAlert":
     "Derzeit ist kein dialogfähiges Modell verfügbar. Prüfe den Gateway- und Modellstatus in den Einstellungen.",
+  "chat.noModelActivated":
+    "Es ist noch kein Modell aktiviert. Öffne Einstellungen > Modelle und aktiviere ein Modell, dann kannst du chatten.",
   "chat.loadingGateway": "Verbindung zum Gateway wird hergestellt…",
   "chat.send.hint": "Gib eine Nachricht ein, um sie zu senden",
   "chat.send.label": "Nachricht senden",

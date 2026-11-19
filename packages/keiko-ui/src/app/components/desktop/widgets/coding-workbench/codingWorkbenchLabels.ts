@@ -777,6 +777,7 @@ const RUNTIME_ACTIVATION_MESSAGE_KEYS: ReadonlyMap<string, CodingWorkbenchMessag
   ["runtime-disabled", "codingWorkbench.runtime.disabled"],
   ["platform-unqualified", "codingWorkbench.runtime.platformUnqualified"],
   ["npm-runtime-package-missing", "codingWorkbench.runtime.npmRuntimePackageMissing"],
+  ["managed-runtime-package-missing", "codingWorkbench.runtime.managedRuntimePackageMissing"],
   ["portable-runtime-unverified", "codingWorkbench.runtime.portableRuntimeUnverified"],
   ["dev-lane-refused", "codingWorkbench.runtime.developmentRefused"],
   ["payload-missing", "codingWorkbench.runtime.payloadMissing"],

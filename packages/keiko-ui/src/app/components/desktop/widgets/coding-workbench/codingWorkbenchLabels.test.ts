@@ -1283,6 +1283,11 @@ describe("runtimeUnavailableMessageKey", () => {
     expect(runtimeUnavailableMessageKey("npm-runtime-package-missing")).not.toBe(
       "codingWorkbench.runtime.platformUnqualified",
     );
+    // Walk of 1.5.3: an npm folder package declares itself managed outside the app, exists for
+    // workplaces where nothing may be installed, and has its own sentence (no installer).
+    expect(runtimeUnavailableMessageKey("managed-runtime-package-missing")).toBe(
+      "codingWorkbench.runtime.managedRuntimePackageMissing",
+    );
     expect(runtimeUnavailableMessageKey("runtime-unqualified")).toBeUndefined();
     expect(runtimeUnavailableMessageKey("constructor")).toBeUndefined();
     expect(runtimeUnavailableMessageKey(undefined)).toBeUndefined();

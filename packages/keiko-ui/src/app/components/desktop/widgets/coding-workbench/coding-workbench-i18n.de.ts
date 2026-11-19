@@ -643,6 +643,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Keiko hat für diese Installation keine unterstützte Coding-Runtime gefunden. Installiere das Keiko-Paket für diesen Computer mit der zugehörigen Runtime und starte Keiko neu.",
   "codingWorkbench.runtime.npmRuntimePackageMissing":
     "Dieses Keiko wurde mit npm installiert, und das Coding-Runtime-Paket für diesen Computer fehlt. Installiere stattdessen das Keiko-Desktop-Paket für diesen Computer (unter Windows: keiko-windows-x64-setup.exe von der Keiko-Release-Seite); es bringt die Coding-Runtime mit.",
+  "codingWorkbench.runtime.managedRuntimePackageMissing":
+    "Dieser Keiko-Ordner bringt keine Coding-Runtime für diesen Computer mit, deshalb läuft die Coding Workbench hier nicht. Chat und die anderen Fenster funktionieren wie gewohnt. Deine Administratorin oder dein Administrator kann ein Keiko-Paket bereitstellen, das die Coding-Runtime enthält.",
   "codingWorkbench.runtime.portableRuntimeUnverified":
     "Diese Keiko-Desktop-Installation konnte ihre mitgelieferte Coding-Runtime nicht prüfen. Aktualisiere Keiko über „Updates prüfen“ oder lade keiko-windows-x64-setup.exe erneut von der Keiko-Release-Seite.",
   "codingWorkbench.runtime.developmentRefused":
@@ -848,7 +850,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.conversation-not-ready":
     "Dieses Modell ist nicht aktiviert oder hat seine Bereitschaftsprüfung nicht bestanden. Aktiviere es in Einstellungen > Modelle oder wähle ein anderes aktiviertes Modell.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
-    "Das Gateway hat noch nicht bestätigt, dass dieses Modell Tools aufrufen kann. Öffne die Workbench oder die Modellauswahl in einer Minute erneut, um es noch einmal zu prüfen, oder wähle ein anderes bereites Modell.",
+    "Das Gateway hat noch nicht bestätigt, dass dieses Modell Tools aufrufen kann. Wähle Tool-Aufrufe prüfen, um es jetzt zu prüfen, oder wähle ein anderes bereites Modell.",
+  "codingWorkbench.toolCheck.action": "Tool-Aufrufe prüfen",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI über Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex-Abonnement",

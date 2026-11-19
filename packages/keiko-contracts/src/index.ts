@@ -2212,6 +2212,7 @@ export type {
   isCodingWorkbenchReadinessCandidate,
   isCodingWorkbenchModel,
   isCodingWorkbenchProofRenewing,
+  isCodingWorkbenchToolCheckCandidate,
   listCodingWorkbenchReadinessCandidates,
   selectCodingWorkbenchReadinessCandidate,
   isVoiceCapability,

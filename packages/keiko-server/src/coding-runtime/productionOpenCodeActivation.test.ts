@@ -283,6 +283,50 @@ describe("production OpenCode activation", () => {
     });
   });
 
+  // Walk of 1.5.3: the npm folder package exists for workplaces where nothing may be installed, and
+  // declares itself managed outside the app. Telling it to install the desktop package is advice it
+  // cannot follow, so the reason is a distinct closed one; an ordinary npm installation keeps its own.
+  it.each([
+    ["organization-managed", "managed-runtime-package-missing"],
+    ["machine-managed", "managed-runtime-package-missing"],
+    ["user-local", "npm-runtime-package-missing"],
+  ] as const)(
+    "names a folder installation managed as %s without a runtime package as %s",
+    (management, expected) => {
+      const prefix = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-npm-folder-")));
+      roots.push(prefix);
+      const keikoRoot = join(prefix, "node_modules", "@oscharko-dev", "keiko");
+      mkdirSync(join(keikoRoot, "dist", "cli"), { recursive: true });
+      writeFileSync(join(keikoRoot, "package.json"), '{"name":"@oscharko-dev/keiko"}');
+      writeFileSync(join(keikoRoot, "dist", "cli", "index.js"), "");
+      const activity: ServerLogEvent[] = [];
+
+      const result = resolveProductionOpenCodeActivation(
+        activationInput(
+          {
+            KEIKO_CLI_BIN_PATH: join(keikoRoot, "dist", "cli", "index.js"),
+            KEIKO_UI_PORT: "1983",
+            KEIKO_PORTABLE_MANAGEMENT: management,
+          },
+          { activity, platform: "win32", arch: "x64" },
+        ),
+      );
+
+      expect(result.unavailableReason).toBe(expected);
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.install.unqualified.emitted-line",
+          formatActivityLogProofLine(activity.at(-1) ?? {}),
+        ),
+      ).toMatchObject({
+        correlationId: UNKNOWN_CORRELATION_ID,
+        level: "warn",
+        errorKind: "unavailable",
+        reason: expected,
+      });
+    },
+  );
+
   it("names a desktop installation whose bundled runtime did not verify", () => {
     const resourceRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-portable-")));
     roots.push(resourceRoot);
