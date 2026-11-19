@@ -39,11 +39,13 @@ export interface ReviewRuntimeObservations {
   starts: unknown[];
   shutdowns: number;
   closes: number;
+  /** Stops the review asked of the orchestrator for a live run (a cancellation, #4130 repeats). */
+  stops: number;
   boundRoots: string[];
 }
 
 export function newReviewRuntimeObservations(): ReviewRuntimeObservations {
-  return { starts: [], shutdowns: 0, closes: 0, boundRoots: [] };
+  return { starts: [], shutdowns: 0, closes: 0, stops: 0, boundRoots: [] };
 }
 
 /** The four read-only layers of a correctly composed review instance. */
@@ -112,7 +114,10 @@ function scriptedOrchestrator(
       state === "recovery-required" ? script.turnFailureCode : undefined,
     // A recovery-required run never reaches a terminal state: the orchestrator keeps it live.
     hasLiveRun: (): boolean => state === "recovery-required",
-    stop: (): Promise<unknown> => Promise.resolve({ ok: true }),
+    stop: (): Promise<unknown> => {
+      observed.stops += 1;
+      return Promise.resolve({ ok: true });
+    },
     shutdown: (): Promise<unknown> => {
       observed.shutdowns += 1;
       return script.shutdownFails === true

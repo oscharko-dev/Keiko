@@ -811,6 +811,85 @@ describe("review run service: reads, dry run and evaluation switches", () => {
     });
   });
 
+  // R4130-079: dev 1.5.2 activates a chat model only through Settings > Models. A review whose role
+  // model nobody activated must not probe it or prepare anything; the refusal names the cause.
+  it("refuses a dry run whose role model nobody activated, before any readiness check", async () => {
+    const asked: string[] = [];
+    const h = setUp({
+      activated: (modelId) => modelId !== "checker-model",
+      ensureReady: (modelId) => {
+        asked.push(modelId);
+        return Promise.resolve();
+      },
+    });
+    const refused = await start(h, startBody({ dryRun: true }));
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({ error: { code: "REVIEW_MODEL_NOT_ACTIVATED" } });
+    expect(asked).toEqual([]);
+    expect(h.log.events.find((event) => event.op === "review.run.refused")).toMatchObject({
+      extra: { reason: "model-not-activated", dryRun: true },
+    });
+  });
+
+  // R4130-082: the refusal reached only the Activity Log, and a person got a 503 that read like an
+  // outage. A start now answers before a run record exists, with a step the person can take.
+  it("refuses a start whose role model nobody activated, naming Settings > Models", async () => {
+    const asked: string[] = [];
+    const h = setUp({
+      activated: (modelId) => modelId !== "reviewer-model",
+      ensureReady: (modelId) => {
+        asked.push(modelId);
+        return Promise.resolve();
+      },
+    });
+    const refused = await start(h);
+    expect(refused.status).toBe(409);
+    expect(refused.body).toMatchObject({ error: { code: "REVIEW_MODEL_NOT_ACTIVATED" } });
+    expect(JSON.stringify(refused.body)).toContain("Settings > Models");
+    expect(asked).toEqual([]);
+    expect(h.runtimeRequests).toEqual([]);
+    expect(h.store.unsettled()).toEqual([]);
+    expect(h.log.events.find((event) => event.op === "review.run.refused")).toMatchObject({
+      extra: { reason: "model-not-activated", dryRun: false },
+    });
+  });
+
+  // R4130-083: the replay of an accepted start must answer by its record, also when the models were
+  // deactivated in between (a restart leaves every model inactive since dev 1.5.2).
+  it("replays an accepted start although its models were deactivated since", async () => {
+    let activated = true;
+    const h = setUp({ activated: () => activated });
+    const first = await start(h);
+    expect(first.status).toBe(202);
+    await settled(h, first);
+    activated = false;
+
+    const repeat = await start(h);
+
+    // A replay answers 200 with the recorded run; a new start would be 202.
+    expect(repeat.status).toBe(200);
+    expect(runOf(repeat).runId).toBe(runOf(first).runId);
+  });
+
+  it("settles a run whose role model was deactivated after its start, naming the cause", async () => {
+    let checks = 0;
+    const h = setUp({
+      // Activated when the start is checked, no longer when the run prepares.
+      activated: () => {
+        checks += 1;
+        return checks <= 2;
+      },
+    });
+    const view = await settled(h, await start(h));
+    expect(view.settlement).toEqual({ kind: "skipped", reason: "model-unavailable" });
+    expect(h.runtimeRequests).toEqual([]);
+    expect(h.log.events.find((event) => event.op === "review.run.settled")?.extra).toMatchObject({
+      settlement: "skipped",
+      reason: "model-unavailable",
+      modelCause: "not-activated",
+    });
+  });
+
   // R4130-058: a dry run judged the stored tool-call proof while the start it stands for renews a
   // lapsed one first, so the two disagreed on a server older than a day. The dry run now checks
   // readiness between admission and eligibility, like the start.

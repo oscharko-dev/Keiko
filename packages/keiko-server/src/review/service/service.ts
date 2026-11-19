@@ -41,7 +41,7 @@ import { estimateDryRun } from "./dryRun.js";
 import { reviewRunDiff, type ReviewRunDiffResult } from "./diff.js";
 import { ReviewRunEventHub, type ReviewRunEventListener } from "./events.js";
 import type { ReviewModelPort } from "./models.js";
-import { validateReviewRoleModels } from "./models.js";
+import { inactiveReviewRoleModels, validateReviewRoleModels } from "./models.js";
 import {
   counterCheckCandidates,
   enterReviewRunPhase,
@@ -198,6 +198,12 @@ class ReviewRunServiceImpl implements ReviewRunService {
       input.request.clientRequestId,
     );
     if (replayed !== undefined) return this.replay(replayed, input.correlationId);
+    // R4130-082: a role model nobody activated is refused before a run record exists, so the person
+    // learns the step from the answer. It reads only this process's activation, never the model.
+    // A repeated start whose record exists answers by its record instead (R4130-083).
+    if (inactiveReviewRoleModels(this.deps.models, input.request).length > 0) {
+      return this.refuse("model-not-activated", input);
+    }
     return this.insertAndLaunch(input, repositoryId);
   }
 

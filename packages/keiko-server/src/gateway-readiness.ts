@@ -3264,13 +3264,17 @@ export async function ensureCodingWorkbenchContextWindows(
  * Only the named model is probed, and only when it needs a probe: a current proof costs nothing. A
  * probe the gateway never answered runs again, because the review is asking. A renewed proof
  * changes the configuration generation, which drops the chat observation, so the chat check runs
- * after it.
+ * after it. A model nobody activated in Settings > Models in this process is never probed
+ * (R4130-079); the review refuses it before it gets here.
  */
 export async function ensureReviewModelReady(
   deps: UiHandlerDeps,
   modelId: string,
   correlationId?: string,
 ): Promise<void> {
+  // R4130-079: a model nobody activated in Settings > Models in this process receives no request
+  // from a review, as from the Workbench (ADR-0171 D2, amended 2026-11-16).
+  if (!currentConversationReady(deps, modelId)) return;
   const config = deps.gatewayConfig?.current();
   const target =
     config === undefined

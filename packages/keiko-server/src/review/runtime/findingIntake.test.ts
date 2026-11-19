@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
 import {
+  REVIEW_REPORT_GUIDANCE,
+  REVIEW_REPORT_MAX_ISSUE_PATH_LENGTH,
+  REVIEW_REPORT_MAX_ISSUES,
+  REVIEW_REPORT_REPEAT_LIMIT,
   REVIEW_RUN_MAX_CANDIDATE_REPORTS,
   type ReviewFindingReport,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
@@ -66,7 +70,11 @@ function report(overrides: Partial<ReviewFindingReport> = {}): ReviewFindingRepo
   };
 }
 
-function intakeFor(log: BufferedServerLogSink, maxCandidates?: number): ReviewFindingIntake {
+function intakeFor(
+  log: BufferedServerLogSink,
+  maxCandidates?: number,
+  onRepeatLimit?: () => void,
+): ReviewFindingIntake {
   const { repo, head } = headCommit();
   return createReviewFindingIntake({
     runId: "review-run-intake-1",
@@ -75,6 +83,7 @@ function intakeFor(log: BufferedServerLogSink, maxCandidates?: number): ReviewFi
     runner: createGitReviewProcessRunner(),
     activityLog: log,
     ...(maxCandidates === undefined ? {} : { maxCandidates }),
+    ...(onRepeatLimit === undefined ? {} : { onRepeatLimit }),
   });
 }
 
@@ -98,18 +107,25 @@ describe("createReviewFindingIntake", () => {
   it("rejects schema violations the tool boundary cannot express (AC6 schema-invalid)", async () => {
     const intake = intakeFor(createBufferedServerLogSink());
 
-    const cases: unknown[] = [
-      "not an object",
-      { ...report(), extra: true },
-      report({ title: "line\u0007bell" }),
-      report({ startLine: 3, endLine: 2 }),
-      report({ evidence: [{ file: "src/first.ts", startLine: 2, endLine: 2, role: "context" }] }),
-      report({ file: "../outside.ts" }),
+    // #4130: each answer names the contract issue, so the model can correct the report.
+    const cases: readonly (readonly [unknown, string, string])[] = [
+      ["not an object", "not-an-object", "$"],
+      [{ ...report(), extra: true }, "unknown-field", "extra"],
+      [report({ title: "line\u0007bell" }), "control-character", "title"],
+      [report({ startLine: 3, endLine: 2 }), "invalid-line-range", "endLine"],
+      [
+        report({ evidence: [{ file: "src/first.ts", startLine: 2, endLine: 2, role: "context" }] }),
+        "inconsistent-fields",
+        "evidence",
+      ],
+      [report({ file: "../outside.ts" }), "invalid-path", "file"],
     ];
-    for (const value of cases) {
+    for (const [value, code, path] of cases) {
       await expect(intake.submit(value)).resolves.toEqual({
         status: "rejected",
         reason: "schema-invalid",
+        issues: [{ code, path }],
+        guidance: REVIEW_REPORT_GUIDANCE.rejected,
       });
     }
     expect(intake.rejections()["schema-invalid"]).toBe(cases.length);
@@ -124,7 +140,11 @@ describe("createReviewFindingIntake", () => {
         intake.submit(
           report({ file, evidence: [{ file, startLine: 1, endLine: 1, role: "defect" }] }),
         ),
-      ).resolves.toEqual({ status: "rejected", reason: "path-outside-worktree" });
+      ).resolves.toEqual({
+        status: "rejected",
+        reason: "path-outside-worktree",
+        guidance: REVIEW_REPORT_GUIDANCE.rejected,
+      });
     }
     await expect(
       intake.submit(
@@ -135,7 +155,11 @@ describe("createReviewFindingIntake", () => {
           ],
         }),
       ),
-    ).resolves.toEqual({ status: "rejected", reason: "path-outside-worktree" });
+    ).resolves.toEqual({
+      status: "rejected",
+      reason: "path-outside-worktree",
+      guidance: REVIEW_REPORT_GUIDANCE.rejected,
+    });
   });
 
   it("rejects ranges outside the head blob and blobs too large to verify (range-invalid)", async () => {
@@ -144,6 +168,7 @@ describe("createReviewFindingIntake", () => {
     await expect(intake.submit(report({ startLine: 5, endLine: 9 }))).resolves.toEqual({
       status: "rejected",
       reason: "range-invalid",
+      guidance: REVIEW_REPORT_GUIDANCE.rejected,
     });
     await expect(
       intake.submit(
@@ -151,7 +176,11 @@ describe("createReviewFindingIntake", () => {
           evidence: [{ file: "src/first.ts", startLine: 2, endLine: 99, role: "defect" }],
         }),
       ),
-    ).resolves.toEqual({ status: "rejected", reason: "range-invalid" });
+    ).resolves.toEqual({
+      status: "rejected",
+      reason: "range-invalid",
+      guidance: REVIEW_REPORT_GUIDANCE.rejected,
+    });
     await expect(
       intake.submit(
         report({
@@ -159,7 +188,11 @@ describe("createReviewFindingIntake", () => {
           evidence: [{ file: "big.bin", startLine: 1, endLine: 1, role: "defect" }],
         }),
       ),
-    ).resolves.toEqual({ status: "rejected", reason: "range-invalid" });
+    ).resolves.toEqual({
+      status: "rejected",
+      reason: "range-invalid",
+      guidance: REVIEW_REPORT_GUIDANCE.rejected,
+    });
   });
 
   it("rejects evidence that does not back the reported location (evidence-mismatch)", async () => {
@@ -169,7 +202,11 @@ describe("createReviewFindingIntake", () => {
       intake.submit(
         report({ evidence: [{ file: "src/first.ts", startLine: 5, endLine: 5, role: "defect" }] }),
       ),
-    ).resolves.toEqual({ status: "rejected", reason: "evidence-mismatch" });
+    ).resolves.toEqual({
+      status: "rejected",
+      reason: "evidence-mismatch",
+      guidance: REVIEW_REPORT_GUIDANCE.rejected,
+    });
     await expect(
       intake.submit(
         report({
@@ -178,7 +215,11 @@ describe("createReviewFindingIntake", () => {
           evidence: [{ file: "src/first.ts", startLine: 4, endLine: 4, role: "defect" }],
         }),
       ),
-    ).resolves.toEqual({ status: "rejected", reason: "evidence-mismatch" });
+    ).resolves.toEqual({
+      status: "rejected",
+      reason: "evidence-mismatch",
+      guidance: REVIEW_REPORT_GUIDANCE.rejected,
+    });
   });
 
   it("accepts at most eight candidates and answers limit-reached after (AC6)", async () => {
@@ -263,12 +304,154 @@ describe("createReviewFindingIntake", () => {
       status: "duplicate",
       accepted: 1,
       remaining: REVIEW_RUN_MAX_CANDIDATE_REPORTS - 1,
+      guidance: REVIEW_REPORT_GUIDANCE.duplicate,
     });
     expect(intake.candidates()).toHaveLength(1);
     const lines = log.events.filter((event) => event.op === "review.finding.reported");
     expect(lines.map((event) => event.extra?.outcome)).toEqual(["accepted", "duplicate"]);
     expect(lines[1]?.extra).toMatchObject({ acceptedCount: 1, duplicateCount: 1 });
     expect(lines[1]?.extra?.fingerprintDigest).toBe(intake.candidates()[0]?.fingerprint);
+  });
+
+  // #4130: development iteration 9 had a Reviewer session that sent one accepted finding 25 more
+  // times and one that sent 29 reports refused for the same schema issue, each until the run's 20
+  // minutes ran out. The repeat is answered with a sentence that says to stop, and the
+  // REVIEW_REPORT_REPEAT_LIMIT-th identical report in a row asks once for the session's end.
+  it("ends the session once the same duplicate arrives the repeat limit in a row", async () => {
+    const log = createBufferedServerLogSink();
+    let ends = 0;
+    const intake = intakeFor(log, undefined, () => {
+      ends += 1;
+    });
+    await intake.submit(report());
+
+    const guidance: unknown[] = [];
+    for (let sent = 0; sent < REVIEW_REPORT_REPEAT_LIMIT + 1; sent += 1) {
+      const answer = await intake.submit(report()); // NOSONAR typescript:S9382 -- the order of the reports is the point
+      guidance.push(answer.status === "duplicate" ? answer.guidance : answer.status);
+    }
+
+    expect(guidance).toEqual([
+      REVIEW_REPORT_GUIDANCE.duplicate,
+      REVIEW_REPORT_GUIDANCE.repeated,
+      REVIEW_REPORT_GUIDANCE.stopped,
+      REVIEW_REPORT_GUIDANCE.stopped,
+    ]);
+    expect(ends).toBe(1);
+    expect(intake.repeatLimitReached()).toBe(true);
+    expect(intake.candidates()).toHaveLength(1);
+    const lines = log.events.filter((event) => event.op === "review.finding.reported");
+    expect(lines.map((event) => event.extra?.repeatCount)).toEqual([undefined, 1, 2, 3, 4]);
+    expect(lines.map((event) => event.extra?.sessionEnded)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      true,
+      true,
+    ]);
+  });
+
+  it("ends the session once the same refused report arrives the repeat limit in a row", async () => {
+    const log = createBufferedServerLogSink();
+    let ends = 0;
+    const intake = intakeFor(log, undefined, () => {
+      ends += 1;
+    });
+    const invalid = { ...report(), extra: true };
+
+    for (let sent = 0; sent < REVIEW_REPORT_REPEAT_LIMIT; sent += 1) {
+      await intake.submit(invalid); // NOSONAR typescript:S9382 -- the order of the reports is the point
+    }
+
+    expect(ends).toBe(1);
+    expect(intake.repeatLimitReached()).toBe(true);
+    const lines = log.events.filter((event) => event.op === "review.finding.reported");
+    expect(lines.at(-1)?.extra).toMatchObject({
+      outcome: "schema-invalid",
+      issueCode: "unknown-field",
+      issueCount: 1,
+      repeatCount: REVIEW_REPORT_REPEAT_LIMIT,
+      sessionEnded: true,
+    });
+  });
+
+  // R4130-080: a refusal because Git did not answer (an aborted or timed-out head read) is not a fact
+  // about the report, so the same report may be sent again (R4130-013). It must not count as a
+  // repeat: three of them told the model not to resend a valid report and ended the session.
+  it("never counts a refusal for a head read that did not answer as a repeat", async () => {
+    let ends = 0;
+    const intake = intakeFor(createBufferedServerLogSink(), undefined, () => {
+      ends += 1;
+    });
+    const aborted = new AbortController();
+    aborted.abort();
+
+    const answers = [];
+    for (let sent = 0; sent < REVIEW_REPORT_REPEAT_LIMIT; sent += 1) {
+      answers.push(await intake.submit(report(), aborted.signal)); // NOSONAR typescript:S9382 -- the order of the reports is the point
+    }
+
+    expect(answers.map((answer) => answer.status)).toEqual(["rejected", "rejected", "rejected"]);
+    expect(
+      answers.map((answer) => (answer.status === "rejected" ? answer.guidance : undefined)),
+    ).toEqual([
+      REVIEW_REPORT_GUIDANCE.rejected,
+      REVIEW_REPORT_GUIDANCE.rejected,
+      REVIEW_REPORT_GUIDANCE.rejected,
+    ]);
+    expect(ends).toBe(0);
+    expect(intake.repeatLimitReached()).toBe(false);
+    await expect(intake.submit(report())).resolves.toMatchObject({ status: "accepted" });
+  });
+
+  it("counts again after an accepted report or a different report", async () => {
+    let ends = 0;
+    const intake = intakeFor(createBufferedServerLogSink(), undefined, () => {
+      ends += 1;
+    });
+    const invalid = { ...report(), extra: true };
+    const other = { ...report(), other: true };
+    await intake.submit(invalid);
+    await intake.submit(invalid);
+    await intake.submit(other);
+    await intake.submit(other);
+    await intake.submit(report());
+    await intake.submit(invalid);
+    await intake.submit(invalid);
+    await intake.submit(report());
+    await intake.submit(report());
+
+    expect(ends).toBe(0);
+    expect(intake.repeatLimitReached()).toBe(false);
+  });
+
+  it("ends the session when reports keep arriving past the candidate cap", async () => {
+    let ends = 0;
+    const intake = intakeFor(createBufferedServerLogSink(), 1, () => {
+      ends += 1;
+    });
+    await intake.submit(report());
+    for (let sent = 0; sent < REVIEW_REPORT_REPEAT_LIMIT; sent += 1) {
+      await intake.submit(report({ category: "security" })); // NOSONAR typescript:S9382 -- the order of the reports is the point
+    }
+
+    expect(ends).toBe(1);
+    expect(intake.candidates()).toHaveLength(1);
+  });
+
+  it("names at most the first issues, each path cut to its bound", async () => {
+    const intake = intakeFor(createBufferedServerLogSink());
+    const long = "x".repeat(REVIEW_REPORT_MAX_ISSUE_PATH_LENGTH * 2);
+
+    const empty = await intake.submit({});
+    const unknown = await intake.submit({ ...report(), [long]: true });
+
+    expect(empty.status === "rejected" ? empty.issues : undefined).toHaveLength(
+      REVIEW_REPORT_MAX_ISSUES,
+    );
+    expect(unknown.status === "rejected" ? unknown.issues : undefined).toEqual([
+      { code: "unknown-field", path: long.slice(0, REVIEW_REPORT_MAX_ISSUE_PATH_LENGTH) },
+    ]);
   });
 
   it("accepts two separate defects with the same file, category and excerpt", async () => {
@@ -315,13 +498,16 @@ describe("createReviewFindingIntake", () => {
     await expect(intake.submit(missing)).resolves.toEqual({
       status: "rejected",
       reason: "path-outside-worktree",
+      guidance: REVIEW_REPORT_GUIDANCE.rejected,
     });
     const aborted = new AbortController();
     aborted.abort();
-    // The cached refusal answers without a Git read, so the aborted signal changes nothing.
+    // The cached refusal answers without a Git read, so the aborted signal changes nothing. The same
+    // report a second time is a repeat (#4130).
     await expect(intake.submit(missing, aborted.signal)).resolves.toEqual({
       status: "rejected",
       reason: "path-outside-worktree",
+      guidance: REVIEW_REPORT_GUIDANCE.repeated,
     });
   });
 

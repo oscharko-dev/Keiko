@@ -41,6 +41,11 @@ export interface GateReviewRecord {
    */
   readonly readLimitedParts: number | null;
   readonly readLimitedPartsWithoutReport: number | null;
+  /**
+   * Parts whose last Reviewer session Keiko ended at the report repeat limit (#4130). Absent on a
+   * record of an earlier gate build, `null` when the Reviewer never ran.
+   */
+  readonly repeatLimitedParts?: number | null;
   readonly reviewer: RoleCost;
   readonly counterChecker: RoleCost;
   readonly wallTimeMs: number;
@@ -95,6 +100,7 @@ function recordOf(caseKey: string, view: ReviewRunView, wallTimeMs: number): Gat
     runtimeCleanup: view.runtimeCleanup ?? null,
     readLimitedParts: view.coverage?.readLimitedParts ?? null,
     readLimitedPartsWithoutReport: view.coverage?.readLimitedPartsWithoutReport ?? null,
+    repeatLimitedParts: view.coverage?.repeatLimitedParts ?? null,
     reviewer: view.totals.reviewer,
     counterChecker: view.totals.counterChecker,
     wallTimeMs,
@@ -113,6 +119,7 @@ function refusedRecord(caseKey: string, refusal: string, wallTimeMs: number): Ga
     runtimeCleanup: null,
     readLimitedParts: null,
     readLimitedPartsWithoutReport: null,
+    repeatLimitedParts: null,
     reviewer: NO_COST,
     counterChecker: NO_COST,
     wallTimeMs,

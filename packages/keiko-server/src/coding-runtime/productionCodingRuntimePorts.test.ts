@@ -20,6 +20,7 @@ import type { PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkbenchDescriptionScope } from "./codingRuntimeDescriptionJobStore.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
 import {
+  abortAtEnvelopeDeadline,
   createCodexRuntimeTurnPort,
   createOpenCodeRuntimeTurnPort,
   createProductionRuntimeManager,
@@ -1736,6 +1737,76 @@ describe("turn port terminal semantics", () => {
         expect.objectContaining({ correlationId: "run-open", errorClass, code }),
       ]);
       expect(records[0]?.diagnosticOutcome).toBe(outcome);
+    },
+  );
+
+  // #4130: a Reviewer run reached its 20-minute envelope with a model call in flight. The deadline
+  // aborted the run's controller, the turn port reported the aborted wait `cancelled`, and the run
+  // settled recovery-required without a cause, so the review called it a model failure. A person's
+  // Stop aborts the same controller without a reason and must stay `cancelled`.
+  it.each([
+    ["the envelope deadline", "failed", true, ["stage=dispatch:reason=turn-expired"]],
+    ["a person's stop", "cancelled", false, []],
+  ] as const)("settles a turn aborted by %s as %s", async (_cause, expected, deadline, codes) => {
+    const records: ServerDiagnosticRecord[] = [];
+    const holder: { run?: ProductionRuntimeRunRecord } = {};
+    const runPort: OpenCodeRunPort = {
+      submitTask: () => Promise.resolve(true),
+      abortTask: () => Promise.resolve(true),
+      // The wait ends as OpenCode's does when the run's controller aborts it.
+      waitForTerminal: () => {
+        const run = holder.run;
+        if (run === undefined) throw new Error("expected the run record");
+        if (deadline) abortAtEnvelopeDeadline(run.controller);
+        else run.controller.abort();
+        return Promise.resolve(false);
+      },
+      listQuestions: () => Promise.resolve([]),
+      answerQuestion: () => Promise.resolve(false),
+      rejectQuestion: () => Promise.resolve(false),
+      replyPermission: () => Promise.resolve(false),
+    };
+    const run = record("run-open", createOpenCodeRuntimeTurnPort(runPort));
+    holder.run = run;
+    const dispatcher = createProductionRuntimeTaskDispatcher(new Map([["run-open", run]]), {
+      record: (diagnostic): void => void records.push(diagnostic),
+    });
+
+    const dispatched = await dispatcher.dispatch(operation("run-open", "req-1", 1, "task"));
+    if (!dispatched.ok) throw new Error("expected accepted task");
+    await expect(dispatched.completion).resolves.toBe(expected);
+    expect(records.map((diagnostic) => diagnostic.code)).toEqual(codes);
+    expect(records.every((diagnostic) => diagnostic.diagnosticOutcome === "routine")).toBe(true);
+  });
+
+  // R4130-081: the deadline can also abort the wait for pending mutations of a turn that answered
+  // `succeeded`; it then ends the turn at the run's bound like the terminal wait does.
+  it.each([
+    ["the envelope deadline", "failed", true, ["stage=dispatch:reason=turn-expired"]],
+    ["a person's stop", "cancelled", false, []],
+  ] as const)(
+    "settles a turn whose pending-mutation wait %s aborted as %s",
+    async (_cause, expected, deadline, codes) => {
+      const records: ServerDiagnosticRecord[] = [];
+      const run = record("run-open", {
+        submitTurn: () => Promise.resolve(true),
+        abortTurn: () => Promise.resolve(true),
+        waitForTerminal: () => Promise.resolve("succeeded" as const),
+      });
+      const waitForPendingMutations = vi.fn(() => {
+        if (deadline) abortAtEnvelopeDeadline(run.controller);
+        else run.controller.abort();
+        return Promise.resolve("not-idle" as const);
+      });
+      const dispatcher = createProductionRuntimeTaskDispatcher(
+        new Map([["run-open", { ...run, waitForPendingMutations }]]),
+        { record: (diagnostic): void => void records.push(diagnostic) },
+      );
+
+      const dispatched = await dispatcher.dispatch(operation("run-open", "req-1", 1, "task"));
+      if (!dispatched.ok) throw new Error("expected accepted task");
+      await expect(dispatched.completion).resolves.toBe(expected);
+      expect(records.map((diagnostic) => diagnostic.code)).toEqual(codes);
     },
   );
 

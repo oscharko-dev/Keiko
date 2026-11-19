@@ -46,6 +46,7 @@ import {
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import { createMaterializedPatchRegistry } from "./materializedPatchRegistry.js";
+import { RunEnvelopeDeadlineReached } from "./productionCodingRuntimePorts.js";
 import {
   createProductionCodingRuntimeHost,
   type ProductionCodingRuntimeHost,
@@ -1436,6 +1437,25 @@ describe("production coding runtime resolver", () => {
         await run.manager.stop(run.request.runId);
         await f.ports.finish();
       }
+    });
+
+    // #4130: the turn settlement tells the envelope deadline from a person's Stop by this reason.
+    it("aborts the run at its envelope deadline with the deadline reason", async () => {
+      const run = await idleRun();
+      try {
+        run.fixture.advanceNow(run.remainingMs);
+        await vi.advanceTimersByTimeAsync(run.remainingMs);
+        expect(run.signal.reason).toBeInstanceOf(RunEnvelopeDeadlineReached);
+      } finally {
+        await run.manager.stop(run.request.runId);
+      }
+    });
+
+    it("aborts a stopped run without the deadline reason", async () => {
+      const run = await idleRun();
+      await run.manager.stop(run.request.runId);
+      expect(run.signal.aborted).toBe(true);
+      expect(run.signal.reason).not.toBeInstanceOf(RunEnvelopeDeadlineReached);
     });
 
     it.each(["stop", "revoke"])(

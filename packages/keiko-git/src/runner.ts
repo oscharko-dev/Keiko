@@ -823,29 +823,42 @@ function credentialDiscoveryFailure(listing: GitProcessResult): GitProcessResult
 // owned by the repository. Read only that narrow configuration, then append it after the existing
 // empty helper reset. No includes, ambient GIT_CONFIG_* overrides or other system settings cross
 // the boundary. Discovery and the remote operation share one environment snapshot and deadline.
-export const defaultGitNetworkProcessRunner: GitProcessRunner = async (args, options) => {
-  const preflight = gitSpawnPreflight(args, options);
-  if (preflight !== undefined) return preflight;
-  const env = networkGitEnv();
-  const run = createGitProcessRunnerWithFixedArgs(() => env, NETWORK_CONFIG_ARGS);
-  if (!NETWORK_CREDENTIAL_SUBCOMMANDS.has(gitSubcommand(args) ?? ""))
-    return await run(args, options);
-  const startedAt = performance.now();
-  const listing = await createGitProcessRunnerWithFixedArgs(
-    () => ({ ...env, GIT_CONFIG_NOSYSTEM: "0" }),
-    NETWORK_CONFIG_ARGS,
-  )(HOST_CREDENTIAL_CONFIG_QUERY, { ...options, maxBytes: 32 * 1024 });
-  const failure = credentialDiscoveryFailure(listing);
-  if (failure !== undefined) return failure;
-  const helpers = hostCredentialConfigArgs(listing.stdout);
-  if (helpers === undefined) return credentialDiscoveryUnavailable();
-  const remainingMs = options.timeoutMs - (performance.now() - startedAt);
-  if (signalIsAborted(options.abortSignal))
-    return { ...abortedProcessResult(), credentialHelperSource: "unavailable" };
-  if (remainingMs <= 0) return credentialDiscoveryUnavailable({ ...listing, timedOut: true });
-  const result = await createGitProcessRunnerWithFixedArgs(
-    () => env,
-    [...NETWORK_CONFIG_ARGS, ...helpers],
-  )(args, { ...options, timeoutMs: remainingMs });
-  return { ...result, credentialHelperSource: helpers.length === 0 ? "none" : "host-config" };
-};
+// `fixedArgs` must start with `NETWORK_CONFIG_ARGS`, whose empty `credential.helper=` the admitted
+// helpers follow; a runner with more hardening (the review's pull request fetch, R4130-077) passes
+// its own fixed arguments after them, so both get the same helpers by the same rule.
+export function createHostCredentialNetworkProcessRunner(
+  env: () => NodeJS.ProcessEnv,
+  fixedArgs: readonly string[],
+): GitProcessRunner {
+  if (!NETWORK_CONFIG_ARGS.every((arg, index) => fixedArgs[index] === arg)) {
+    throw new RangeError("network runner fixed arguments must start with NETWORK_CONFIG_ARGS");
+  }
+  return async (args, options) => {
+    const preflight = gitSpawnPreflight(args, options);
+    if (preflight !== undefined) return preflight;
+    const snapshot = env();
+    if (!NETWORK_CREDENTIAL_SUBCOMMANDS.has(gitSubcommand(args) ?? ""))
+      return await createGitProcessRunnerWithFixedArgs(() => snapshot, fixedArgs)(args, options);
+    const startedAt = performance.now();
+    const listing = await createGitProcessRunnerWithFixedArgs(
+      () => ({ ...snapshot, GIT_CONFIG_NOSYSTEM: "0" }),
+      NETWORK_CONFIG_ARGS,
+    )(HOST_CREDENTIAL_CONFIG_QUERY, { ...options, maxBytes: 32 * 1024 });
+    const failure = credentialDiscoveryFailure(listing);
+    if (failure !== undefined) return failure;
+    const helpers = hostCredentialConfigArgs(listing.stdout);
+    if (helpers === undefined) return credentialDiscoveryUnavailable();
+    const remainingMs = options.timeoutMs - (performance.now() - startedAt);
+    if (signalIsAborted(options.abortSignal))
+      return { ...abortedProcessResult(), credentialHelperSource: "unavailable" };
+    if (remainingMs <= 0) return credentialDiscoveryUnavailable({ ...listing, timedOut: true });
+    const result = await createGitProcessRunnerWithFixedArgs(
+      () => snapshot,
+      [...fixedArgs, ...helpers],
+    )(args, { ...options, timeoutMs: remainingMs });
+    return { ...result, credentialHelperSource: helpers.length === 0 ? "none" : "host-config" };
+  };
+}
+
+export const defaultGitNetworkProcessRunner: GitProcessRunner =
+  createHostCredentialNetworkProcessRunner(() => networkGitEnv(), NETWORK_CONFIG_ARGS);

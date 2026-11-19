@@ -5558,6 +5558,8 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
       // Issue #4138: a lapsed readiness observation is checked again, as for a conversation.
       // Issue #4130: so is a lapsed tool-call proof, which the session's launch needs as well.
       ensureReady: (modelId, correlationId) => ensureReviewModelReady(deps, modelId, correlationId),
+      // R4130-079: dev 1.5.2 activates a chat model only through Settings > Models.
+      activated: (modelId) => currentConversationReady(deps, modelId),
     },
     activityLog,
   });

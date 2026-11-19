@@ -5,7 +5,10 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
-import { REVIEW_RUN_DEFAULT_MAX_READ_CALLS } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import {
+  REVIEW_REPORT_REPEAT_LIMIT,
+  REVIEW_RUN_DEFAULT_MAX_READ_CALLS,
+} from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
 import { createBufferedServerLogSink } from "../../../../../tests/support/buffered-server-log.js";
 import type { GovernedCodingToolPort } from "../../coding-runtime/codingToolGovernedDelegate.js";
@@ -218,6 +221,51 @@ describe("createReviewRuntimeService", () => {
       outcome: "completed",
       runtimeCleanup: "proven",
     });
+  });
+
+  // #4130: a Reviewer session that repeats one report is ended by Keiko and settles on what it
+  // filed. In development iteration 9 such sessions ran until their 20 minutes were gone and
+  // counted as failed models.
+  it("ends a session that repeats one report and settles it on the reports it filed", async () => {
+    const { repo, base, head } = headRepository();
+    const repeats = Array.from({ length: REVIEW_REPORT_REPEAT_LIMIT + 1 }, () => VALID_REPORT);
+    const reported = service({ reports: repeats, terminal: "recovery-required" });
+
+    const result = await reported.subject.run(request(repo, base, head));
+
+    expect(reported.observed.stops).toBe(1);
+    expect(result).toMatchObject({
+      ok: true,
+      outcome: "completed",
+      repeatLimitReached: true,
+      runtimeCleanup: "unproven",
+    });
+    if (!result.ok) throw new Error("expected a run");
+    expect(result.failureCode).toBeUndefined();
+    expect(result.candidates).toHaveLength(1);
+
+    const invalid = Array.from({ length: REVIEW_REPORT_REPEAT_LIMIT }, () => ({ nonsense: true }));
+    const silent = service({ reports: invalid, terminal: "recovery-required" });
+    await expect(silent.subject.run(request(repo, base, head))).resolves.toMatchObject({
+      ok: true,
+      outcome: "failed",
+      failureCode: "report-repeat-limit",
+      repeatLimitReached: true,
+      candidates: [],
+    });
+  });
+
+  it("keeps a session's own outcome when it never reached the repeat limit", async () => {
+    const { repo, base, head } = headRepository();
+    const repeats = Array.from({ length: REVIEW_REPORT_REPEAT_LIMIT }, () => VALID_REPORT);
+    const { subject, observed } = service({ reports: repeats });
+
+    const result = await subject.run(request(repo, base, head));
+
+    expect(observed.stops).toBe(0);
+    expect(result).toMatchObject({ ok: true, outcome: "completed" });
+    if (!result.ok) throw new Error("expected a run");
+    expect(result.repeatLimitReached).toBeUndefined();
   });
 
   // #4136: after a Reviewer run left recovery-required, its instance's orchestrator refuses the

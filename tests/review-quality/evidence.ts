@@ -286,6 +286,8 @@ export interface ReadLimitCounts {
   readonly complete: number;
   readonly completeWithLimitedPart: number;
   readonly completeWithSilentPart: number;
+  /** Complete reviews with a part whose session Keiko ended at the report repeat limit (#4130). */
+  readonly completeWithRepeatLimitedPart: number;
 }
 
 export function readLimitCounts(records: readonly GateReviewRecord[]): ReadLimitCounts {
@@ -296,6 +298,8 @@ export function readLimitCounts(records: readonly GateReviewRecord[]): ReadLimit
     completeWithSilentPart: complete.filter(
       (record) => (record.readLimitedPartsWithoutReport ?? 0) > 0,
     ).length,
+    completeWithRepeatLimitedPart: complete.filter((record) => (record.repeatLimitedParts ?? 0) > 0)
+      .length,
   };
 }
 
@@ -304,6 +308,7 @@ function readLimitLines(counts: ReadLimitCounts | undefined): string[] {
   return [
     `Complete reviews with a part whose Reviewer reached its read allowance: ${String(counts.completeWithLimitedPart)} of ${String(counts.complete)}.`,
     `Of them, with such a part that then reported nothing: ${String(counts.completeWithSilentPart)}. These reviews are complete and not clean: their Reviewer wanted to read more.`,
+    `Complete reviews with a part whose Reviewer session Keiko ended because it repeated one report: ${String(counts.completeWithRepeatLimitedPart)} of ${String(counts.complete)}.`,
     "",
   ];
 }

@@ -13,7 +13,11 @@ import {
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultGitNetworkProcessRunner } from "./runner.js";
+import {
+  createHostCredentialNetworkProcessRunner,
+  defaultGitNetworkProcessRunner,
+} from "./runner.js";
+import { createGitReviewNetworkProcessRunner } from "./review-runner.js";
 import { classifyGitRemoteFailure } from "./classify.js";
 import { gitEnv } from "./env.js";
 
@@ -203,5 +207,71 @@ describe("host credentials at the network Git boundary (#4411)", () => {
     expect(result.refusal).toBe("config-override");
     expect(existsSync(join(fixture, "caller-used"))).toBe(false);
     expect(authenticated).toBe(0);
+  });
+});
+
+// R4130-077: dev 1.5.1 admitted host helpers in the sync runner only. The review's pull request
+// fetch built its own runner from NETWORK_CONFIG_ARGS and never discovered them, so on this 401
+// fixture it failed `auth-failed` while the sync runner fetched. Both now share one factory.
+describe("host credentials at the review's pull request fetch (R4130-077)", () => {
+  function reviewFetch(
+    args: readonly string[] = ["fetch", remote],
+  ): ReturnType<typeof defaultGitNetworkProcessRunner> {
+    return createGitReviewNetworkProcessRunner()(args, {
+      cwd: repository,
+      timeoutMs: 5_000,
+      maxBytes: 8_192,
+    });
+  }
+
+  it("fetches with the account helper while refusing repository helpers", async () => {
+    config("credential.helper", helper("host-used"));
+    config("credential.helper", helper("repo-used"), "local");
+    config(`credential.${remote}.helper`, helper("repo-url-used"), "local");
+    const result = await reviewFetch();
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(authenticated).toBeGreaterThan(0);
+    expect(result.credentialHelperSource).toBe("host-config");
+    expect(existsSync(join(fixture, "host-used"))).toBe(true);
+    expect(existsSync(join(fixture, "repo-used"))).toBe(false);
+    expect(existsSync(join(fixture, "repo-url-used"))).toBe(false);
+  });
+
+  it("keeps an empty host helper reset and never promotes an include", async () => {
+    const included = join(repository, "helper.gitconfig");
+    writeFileSync(
+      included,
+      `[credential]\n\thelper = ${JSON.stringify(helper("included-helper-used"))}\n`,
+    );
+    config("include.path", included);
+    config("credential.helper", helper("reset-helper-used"));
+    config("credential.helper", "");
+    const result = await reviewFetch();
+    expect(classifyGitRemoteFailure(result)).toBe("auth-failed");
+    expect(authenticated).toBe(0);
+    expect(existsSync(join(fixture, "reset-helper-used"))).toBe(false);
+    expect(existsSync(join(fixture, "included-helper-used"))).toBe(false);
+  });
+
+  it("still refuses a caller's configuration before any discovery", async () => {
+    config("credential.helper", helper("host-used"));
+    const result = await reviewFetch([
+      "-c",
+      `credential.${remote}.helper=${helper("caller-used")}`,
+      "fetch",
+      remote,
+    ]);
+    expect(result.refusal).toBe("config-override");
+    expect(authenticated).toBe(0);
+    expect(existsSync(join(fixture, "caller-used"))).toBe(false);
+    expect(existsSync(join(fixture, "host-used"))).toBe(false);
+  });
+});
+
+describe("createHostCredentialNetworkProcessRunner", () => {
+  it("refuses fixed arguments that do not start with the network neutralization", () => {
+    expect(() => createHostCredentialNetworkProcessRunner(() => ({}), ["-c", "x=y"])).toThrow(
+      RangeError,
+    );
   });
 });

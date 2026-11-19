@@ -66,8 +66,18 @@ export const REVIEW_RUN_LOG_REFUSAL_REASONS = [
   "active-review-exists",
   "policy-invalid",
   "model-unavailable",
+  "model-not-activated",
   "request-invalid",
 ] as const;
+
+// R4130-079: a `skipped/model-unavailable` run whose role model was deactivated in Settings >
+// Models after its start, which refuses a model that is not activated. Present only then.
+const MODEL_CAUSE = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: false,
+  values: ["not-activated"],
+} as const;
 
 const RUN_OPERATION_BASE = {
   contractKind: "activity-log-operation",
@@ -184,6 +194,9 @@ const REVIEW_RUN_PART = defineActivityLogOperation({
     // #4130: present (2) only on the line of a part's second session, which is started once when
     // the first ended on a model failure before any report was accepted.
     attempt: OPTIONAL_COUNT,
+    // #4130: present (true) only when Keiko ended the session because it sent the same report
+    // that added nothing `REVIEW_REPORT_REPEAT_LIMIT` times in a row.
+    repeatLimitReached: { type: "boolean", dataClass: "closed-enum", required: false },
     promptTokens: COUNT,
     completionTokens: COUNT,
     durationMs: DURATION,
@@ -225,11 +238,14 @@ const REVIEW_RUN_SETTLED = defineActivityLogOperation({
     // findings as it may. They carry no verdict and do not make the run incomplete. Present only
     // when there are any.
     surplusCandidateCount: OPTIONAL_COUNT,
+    modelCause: MODEL_CAUSE,
     // #4130: parts whose last Reviewer session was refused a read, and those of them whose completed
     // session reported nothing. A completed one counts as reviewed, a failed one keeps its failure;
     // a run with a silent one settles as a warning. Present once the Reviewer has run.
     readLimitedPartCount: OPTIONAL_COUNT,
     readLimitedSilentPartCount: OPTIONAL_COUNT,
+    // #4130: parts whose last Reviewer session Keiko ended at the report repeat limit.
+    repeatLimitedPartCount: OPTIONAL_COUNT,
     reviewerPromptTokens: COUNT,
     reviewerCompletionTokens: COUNT,
     reviewerDurationMs: DURATION,
@@ -366,10 +382,15 @@ export interface ReviewRunPartLine {
   readonly readCalls?: { readonly admitted: number; readonly refused: number } | undefined;
   /** Only on a part's second session (#4130). */
   readonly attempt?: number | undefined;
+  /** Keiko ended the session at the report repeat limit (#4130). */
+  readonly repeatLimitReached?: true | undefined;
   readonly totals: ReviewRoleTotals;
 }
 
-/** A completed part is info; a failed, cancelled or refused one is a warning. */
+/**
+ * A completed part is info; a failed, cancelled or refused one, and one whose session Keiko ended at
+ * the report repeat limit (#4130), are warnings.
+ */
 export function logReviewRunPart(
   log: ServerLogSink,
   correlationId: string,
@@ -378,7 +399,10 @@ export function logReviewRunPart(
   log.write(
     activityLogEvent(
       REVIEW_RUN_PART,
-      { correlationId, level: line.outcome === "completed" ? "info" : "warn" },
+      {
+        correlationId,
+        level: line.outcome === "completed" && line.repeatLimitReached !== true ? "info" : "warn",
+      },
       {
         runDigest: reviewEvidenceDigest("run", line.runId),
         partNumber: line.partNumber,
@@ -396,6 +420,7 @@ export function logReviewRunPart(
               refusedReadCallCount: line.readCalls.refused,
             }),
         ...(line.attempt === undefined ? {} : { attempt: line.attempt }),
+        ...(line.repeatLimitReached === true ? { repeatLimitReached: true } : {}),
         promptTokens: line.totals.promptTokens,
         completionTokens: line.totals.completionTokens,
         durationMs: Math.max(0, Math.round(line.totals.durationMs)),
@@ -429,28 +454,36 @@ export interface ReviewRunSettledLine {
   readonly durationMs: number;
   readonly stale: boolean;
   readonly runtimeCleanup?: ReviewRuntimeCleanup | undefined;
+  /** Why the role models were unavailable, when a person had not activated one (R4130-079). */
+  readonly modelCause?: "not-activated" | undefined;
 }
 
 /**
- * A clean settlement is info. An unclean one, an unproven runtime cleanup, and a part whose Reviewer
- * reached its read allowance and then reported nothing (#4130) are warnings: such a run settles
- * `complete`, and it must not look like a clean one.
+ * A clean settlement is info. An unclean one, an unproven runtime cleanup, a part whose Reviewer
+ * reached its read allowance and then reported nothing, and a part whose session Keiko ended at the
+ * report repeat limit (#4130) are warnings: such a run settles `complete`, and it must not look like
+ * a clean one.
  */
 function settledLevel(line: ReviewRunSettledLine): "info" | "warn" {
   const silentParts = line.coverage?.readLimitedPartsWithoutReport ?? 0;
+  const repeatParts = line.coverage?.repeatLimitedParts ?? 0;
   const clean = line.settlement.kind === "complete" && line.runtimeCleanup !== "unproven";
-  return clean && silentParts === 0 ? "info" : "warn";
+  return clean && silentParts === 0 && repeatParts === 0 ? "info" : "warn";
 }
 
 /** The read-limit counts as fields, once the Reviewer has run. */
 function readLimitCounts(coverage: ReviewDiffCoverageSummary | null): {
   readonly readLimitedPartCount?: number;
   readonly readLimitedSilentPartCount?: number;
+  readonly repeatLimitedPartCount?: number;
 } {
   if (coverage?.readLimitedParts === undefined) return {};
   return {
     readLimitedPartCount: coverage.readLimitedParts,
     readLimitedSilentPartCount: coverage.readLimitedPartsWithoutReport ?? 0,
+    ...(coverage.repeatLimitedParts === undefined
+      ? {}
+      : { repeatLimitedPartCount: coverage.repeatLimitedParts }),
   };
 }
 
@@ -499,6 +532,7 @@ export function logReviewRunSettled(
         durationMs: Math.max(0, Math.round(line.durationMs)),
         stale: line.stale,
         ...(line.runtimeCleanup === undefined ? {} : { runtimeCleanup: line.runtimeCleanup }),
+        ...(line.modelCause === undefined ? {} : { modelCause: line.modelCause }),
       },
     ),
   );

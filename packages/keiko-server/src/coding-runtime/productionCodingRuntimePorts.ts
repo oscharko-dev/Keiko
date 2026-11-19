@@ -1166,30 +1166,83 @@ function rejectedReplacement(
   return { ok: false };
 }
 
+/**
+ * The reason a run's controller is aborted with when its Authority Envelope's time runs out
+ * (`armRunExpiry`, #4130). A person's Stop aborts the controller without a reason.
+ */
+export class RunEnvelopeDeadlineReached extends Error {
+  public constructor() {
+    super("run-envelope-deadline-reached");
+    this.name = "RunEnvelopeDeadlineReached";
+  }
+}
+
+/** Aborts a run's controller because its envelope's time ran out. */
+export function abortAtEnvelopeDeadline(controller: AbortController): void {
+  controller.abort(new RunEnvelopeDeadlineReached());
+}
+
+function abortedAtEnvelopeDeadline(record: ProductionRuntimeRunRecord): boolean {
+  return (
+    record.controller.signal.aborted &&
+    record.controller.signal.reason instanceof RunEnvelopeDeadlineReached
+  );
+}
+
+/**
+ * A turn the envelope deadline aborted ended at the run's own bound, not at a person's Stop (#4130):
+ * the turn port reports any aborted wait as `cancelled`, which would settle the run without a cause,
+ * or as `cancelled` although nobody stopped it. Reported as `failed`, the settlement reads the
+ * exhausted envelope (`envelope-duration-exhausted`), as for a turn wait that ran out (W9, #4068).
+ */
+/**
+ * A succeeded turn's outcome once its pending mutations settled. The envelope deadline can abort
+ * that wait too; it then ends the turn at the run's bound (`failed`, routine `turn-expired`), and
+ * only an abort without that reason, a person's Stop, is `cancelled` (R4130-081).
+ */
+async function pendingMutationsOutcome(
+  record: ProductionRuntimeRunRecord,
+  waitForPendingMutations: NonNullable<ProductionRuntimeRunRecord["waitForPendingMutations"]>,
+  runId: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<CodingRuntimeTaskOutcome> {
+  const idle = await waitForPendingMutations(record.controller.signal);
+  if (idle === "idle-succeeded") return "succeeded";
+  if (abortedAtEnvelopeDeadline(record)) {
+    recordFailedTerminal(record, runId, diagnostics);
+    return "failed";
+  }
+  if (record.controller.signal.aborted) return "cancelled";
+  // "idle-failed" (every lease settled, but a CLAIMED mutation did not succeed) and "not-idle"
+  // (a lease was still outstanding when the wait was abandoned) are reported under distinct
+  // reasons: a REFUSED edit that never reached the commit boundary (NO_ACTIVE_SESSION,
+  // WORKSPACE_ACCESS_LOST -- codingToolReadEditPorts.ts) resolves "idle-succeeded" and never
+  // reaches here at all, so "pending-mutations-unsettled" is reserved for a coordinator that
+  // genuinely never went idle (epic #3384 cascade).
+  recordRuntimeDispatchFailure(
+    diagnostics,
+    runId,
+    idle === "idle-failed" ? "mutation-failed" : "pending-mutations-unsettled",
+  );
+  return "failed";
+}
+
 async function terminalCompletion(
   record: ProductionRuntimeRunRecord,
   runId: string,
   diagnostics: ServerDiagnosticSink | undefined,
 ): Promise<CodingRuntimeTaskOutcome> {
   try {
-    const outcome = await record.turnPort.waitForTerminal(runId, record.controller.signal);
+    const waited = await record.turnPort.waitForTerminal(runId, record.controller.signal);
+    const outcome = waited === "cancelled" && abortedAtEnvelopeDeadline(record) ? "failed" : waited;
     if (outcome === "failed") recordFailedTerminal(record, runId, diagnostics);
     if (outcome !== "succeeded" || record.waitForPendingMutations === undefined) return outcome;
-    const idle = await record.waitForPendingMutations(record.controller.signal);
-    if (idle === "idle-succeeded") return "succeeded";
-    if (record.controller.signal.aborted) return "cancelled";
-    // "idle-failed" (every lease settled, but a CLAIMED mutation did not succeed) and "not-idle"
-    // (a lease was still outstanding when the wait was abandoned) are reported under distinct
-    // reasons: a REFUSED edit that never reached the commit boundary (NO_ACTIVE_SESSION,
-    // WORKSPACE_ACCESS_LOST -- codingToolReadEditPorts.ts) resolves "idle-succeeded" and never
-    // reaches here at all, so "pending-mutations-unsettled" is reserved for a coordinator that
-    // genuinely never went idle (epic #3384 cascade).
-    recordRuntimeDispatchFailure(
-      diagnostics,
+    return await pendingMutationsOutcome(
+      record,
+      record.waitForPendingMutations,
       runId,
-      idle === "idle-failed" ? "mutation-failed" : "pending-mutations-unsettled",
+      diagnostics,
     );
-    return "failed";
   } catch (error) {
     recordRuntimeDispatchFailure(diagnostics, runId, "terminal-exception", error);
     // Consumers treat an unprovable terminal outcome as a failed turn; never leave it unhandled.
@@ -1241,16 +1294,18 @@ function recordRuntimeDispatchFailure(
 }
 
 /**
- * A turn whose wait ran out of the run's envelope duration ended at the run's own bound, which the
- * settlement records as `envelope-duration-exhausted` with its `timeout` error kind; it stays on
- * the timeline as a routine observation instead of an `internal` failure (W9, #4068).
+ * A turn whose wait ran out of the run's envelope duration, or that the envelope deadline aborted
+ * (#4130), ended at the run's own bound, which the settlement records as
+ * `envelope-duration-exhausted` with its `timeout` error kind; it stays on the timeline as a routine
+ * observation instead of an `internal` failure (W9, #4068).
  */
 function recordFailedTerminal(
   record: ProductionRuntimeRunRecord,
   runId: string,
   diagnostics: ServerDiagnosticSink | undefined,
 ): void {
-  if (record.turnPort.turnWaitExpired?.(runId) !== true) {
+  const expired = record.turnPort.turnWaitExpired?.(runId) === true;
+  if (!expired && !abortedAtEnvelopeDeadline(record)) {
     recordRuntimeDispatchFailure(diagnostics, runId, "terminal-failed");
     return;
   }

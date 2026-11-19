@@ -222,5 +222,6 @@ function logSettled(
     durationMs: deps.now() - ctx.startedAt,
     stale,
     runtimeCleanup: state.runtimeCleanup,
+    modelCause: state.modelCause,
   });
 }

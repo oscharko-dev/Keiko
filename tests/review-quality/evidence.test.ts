@@ -82,7 +82,11 @@ function args(variant: string): ReturnType<typeof parseGateArguments> {
 function record(
   wallTimeMs: number,
   settlement: GateReviewRecord["settlement"],
-  readLimits: { readonly limited: number | null; readonly silent: number | null } = {
+  readLimits: {
+    readonly limited: number | null;
+    readonly silent: number | null;
+    readonly repeated?: number | null;
+  } = {
     limited: 0,
     silent: 0,
   },
@@ -97,6 +101,7 @@ function record(
     runtimeCleanup: "unproven",
     readLimitedParts: readLimits.limited,
     readLimitedPartsWithoutReport: readLimits.silent,
+    ...(readLimits.repeated === undefined ? {} : { repeatLimitedParts: readLimits.repeated }),
     reviewer: { promptTokens: 1_000, completionTokens: 100, durationMs: wallTimeMs / 2 },
     counterChecker: { promptTokens: 500, completionTokens: 50, durationMs: wallTimeMs / 4 },
     wallTimeMs,
@@ -282,7 +287,7 @@ describe("renderGateCost", () => {
   it("names the complete reviews with a read-limited part, and those with a silent one", () => {
     const records = [
       record(1_000, { kind: "complete" }),
-      record(2_000, { kind: "complete" }, { limited: 2, silent: 0 }),
+      record(2_000, { kind: "complete" }, { limited: 2, silent: 0, repeated: 1 }),
       record(3_000, { kind: "complete" }, { limited: 1, silent: 1 }),
       record(4_000, { kind: "complete" }, { limited: null, silent: null }),
       record(5_000, { kind: "incomplete", reason: "model-failed" }, { limited: 3, silent: 2 }),
@@ -291,6 +296,7 @@ describe("renderGateCost", () => {
       complete: 4,
       completeWithLimitedPart: 2,
       completeWithSilentPart: 1,
+      completeWithRepeatLimitedPart: 1,
     });
     const text = renderGateCost(
       summarizeGateCost(records),
@@ -302,6 +308,9 @@ describe("renderGateCost", () => {
     );
     expect(text).toContain("Of them, with such a part that then reported nothing: 1.");
     expect(text).toContain("complete and not clean");
+    expect(text).toContain(
+      "Complete reviews with a part whose Reviewer session Keiko ended because it repeated one report: 1 of 4.",
+    );
   });
 
   it("leaves the read-limit lines out when no counts are given", () => {

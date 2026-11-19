@@ -226,7 +226,12 @@ and the data is otherwise kept as it was.
 
 A review target is an exact pair of commits. A pull request target resolves to an immutable base SHA
 and head SHA; Keiko fetches `refs/pull/<n>/head` with the hardened Git runner and refuses the run
-(`skipped/target-changed`) when the fetched head differs from the head the provider reported. A
+(`skipped/target-changed`) when the fetched head differs from the head the provider reported. The
+fetch admits the account's direct system and global credential helpers by the rule of the Git
+window's Fetch (`createHostCredentialNetworkProcessRunner`, dev #4411; R4130-077): without them
+every review of a private HTTPS repository failed as `skipped/worktree-failed`. A helper set by
+the repository, an include or an ambient `GIT_CONFIG_*` override never applies, and the review
+hardening arguments still precede the admitted helpers. A
 local-range target reviews a local branch against its base without a hosting provider.
 
 The diff starts at the merge base of the two commits, the commit the head branched from, as
@@ -285,7 +290,24 @@ each report reserves its slot before it is judged, so concurrent reports never e
 answers the model a closed acknowledgement so it can correct a report once, and logs
 `review.finding.reported` body-free. A report whose fingerprint an accepted candidate already holds
 is answered `duplicate` with the accepted and remaining counts, adds no candidate, and is counted
-in the line's `duplicateCount` (R4130-025). The rules reader (`rulesFile.ts`) resolves
+in the line's `duplicateCount` (R4130-025). An acknowledgement that added nothing carries one fixed
+server-owned sentence (`REVIEW_REPORT_GUIDANCE`, #4130), and a `schema-invalid` one names what the
+contract refused: at most `REVIEW_REPORT_MAX_ISSUES` (4) issues, each a closed code and the field
+path cut to 128 characters. The path goes to the model only; the line records the first issue's
+code and the number named (`issueCode`, `issueCount`). The same report that added nothing again is
+a repeat: the same duplicate fingerprint, the same rejection reason with the same arguments, or a
+report past the cap. A repeat is answered with a sentence that says not to send it again, and the
+`REVIEW_REPORT_REPEAT_LIMIT`-th (3) in a row asks once for the session's end; an accepted or
+different report counts again from one. The line records `repeatCount` and `sessionEnded`. In
+development iteration 9 two Reviewer sessions repeated one call until their 20 minutes were gone:
+one sent 25 duplicates of an accepted finding, the other 29 reports refused for the same schema
+issue. The instance stops such a session through the run driver's abort, and the session settles on
+what it filed: `completed` with at least one accepted candidate, otherwise `failed` with the failure
+code `report-repeat-limit` (`model-failed`, so the part gets its second session). Its
+`review.run.part` line carries `repeatLimitReached` and is written at `warn`; the coverage summary
+counts such parts (`repeatLimitedParts`), `review.run.settled` records them as
+`repeatLimitedPartCount` and is written at `warn` when there is one, and the offline gate's summary
+counts the complete reviews with such a part. The rules reader (`rulesFile.ts`) resolves
 `<baseSha>:<path>` through the hardened review runner (`readGitReviewPathObject`): a missing file is
 `absent`, more than 16 KiB `too-large`, undecodable or NUL-bearing content `not-utf8`, and a configured
 path that cannot name a file in the tree `path-invalid` (each logged as `review.run.rules-file`; all
@@ -476,9 +498,15 @@ settlement stop revoked every authority but could not prove the process tree's e
 (`CodingRuntimeManager.succeededStopReapUnproven`). That is every macOS gateway-profile run, whose end
 ADR-0140 D3 leaves unproven because the profile has no sandbox member. That Reviewer's work
 finished, so the run settles on its coverage, verdicts and findings like any completed Reviewer
-(`complete`, or the incomplete reason they name). A crash, a lost stream, a cancellation, an
-exhausted budget or deadline, a missing verification, an incomplete revocation, a disposal or
-release failure after a proven reap and every other recovery keep `incomplete/model-failed`. The
+(`complete`, or the incomplete reason they name). A failed turn whose settlement stop was not
+proven keeps its own cause (`unprovenTurnFailureCode`, #4138): an exhausted envelope duration is
+`incomplete/deadline-exceeded`, an exhausted or drifted budget `incomplete/budget-exhausted`. A turn
+that the envelope deadline aborted with a model call in flight is such a failed turn (#4130): the
+run's controller is aborted with `RunEnvelopeDeadlineReached`, and the dispatcher reports the
+aborted wait as `failed` with the routine `turn-expired` diagnostic, where it reported `cancelled`
+and the run lost its cause. A person's Stop aborts without that reason and stays `cancelled`. A
+crash, a lost stream, a cancellation, a missing verification, an incomplete revocation, a disposal
+or release failure after a proven reap and every other recovery keep `incomplete/model-failed`. The
 runtime stays recovery-required and quarantined exactly as before. The cleanup is a warning beside
 the settlement, never a settlement reason: the closed `runtimeCleanup` (`proven`, `unproven`; absent
 when no Reviewer run started) on `review.run.settled`, which is written at `warn` whenever it is
@@ -649,6 +677,20 @@ offers (`ReviewModelPolicy`). One pure rule, `evaluateReviewRoleEligibility`, de
 for both roles from the existing gateway capability data: a model must be configured, have verified
 and current tool calling, a known context window that fits the review budget, and be coding-safe.
 Conversation readiness `false` makes it temporarily unavailable; a busy model stays eligible.
+Since dev 1.5.2 a chat model is inactive in each server process until a person activates it in
+Settings > Models (ADR-0171 D2, amended 2026-11-16), and Keiko sends an inactive model no request.
+A review follows that rule as a Coding Workbench start does (R4130-079). A run start refuses a role
+model that is not activated (`ReviewModelPort.activated`, the production port's
+`currentConversationReady`) before a run record exists, and a dry run refuses it right after the
+policy admits the pair: both answer the closed refusal `model-not-activated`, which the route
+returns as 409 `REVIEW_MODEL_NOT_ACTIVATED` with a message that names Settings > Models, because a
+retry does not help (R4130-082). Neither sends the model a request. A model deactivated between
+the start and the run's preparation still settles the run `skipped/model-unavailable` before the
+target is resolved or a worktree is prepared, and `modelCause: not-activated` on
+`review.run.settled` names the cause. `ensureReviewModelReady` itself returns without a request
+for a model that is not activated. The offline gate activates both role models
+through the readiness route at its start, as a person's Settings check does.
+
 A run verifies both role models' readiness again at its start (Issue #4138). Each Reviewer launch
 verifies the Reviewer model's again right before its self-check reads the model's authority
 (Issue #4130): that authority is minted only for a readiness observation younger than five minutes,
