@@ -7,33 +7,183 @@
   "description": "A fact that was stated once and never used again, among seven facts on the same topic, eight often-used facts on neighbouring topics and 150 unrelated facts. Limit: at most six memories are sent per question, and how often a memory was used counts beside how well it fits the question. Failure means: memories the person uses often take the six places although they do not answer the question, and needed-memory-missing names the fact that was only stated once. Maintenance: run with maintenance on; no record is old enough to fade, so on or off changes nothing. Kind: defect.",
   "seed": {
     "records": [
-      { "key": "caterer", "body": "The caterer for the team offsite is Greenleaf Kitchen.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 40, "truth": "caterer" },
-      { "key": "offsite-1", "body": "The team offsite takes place on the twelfth of June.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 38 },
-      { "key": "offsite-2", "body": "The venue for the team offsite is the Lakeside Lodge.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 36 },
-      { "key": "offsite-3", "body": "The budget for the team offsite is four thousand euros.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 34 },
-      { "key": "offsite-4", "body": "A bus brings the team to the offsite at eight in the morning.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 32 },
-      { "key": "offsite-5", "body": "Priya moderates the first session of the team offsite.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 30 },
-      { "key": "offsite-6", "body": "The team offsite ends with a hike on the second day.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 28 },
-      { "key": "offsite-7", "body": "The rooms for the team offsite are booked until Friday noon.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 26 },
-      { "key": "routine-1", "body": "The weekly team meeting is on Tuesday at ten.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 60, "accessCount": 9, "lastAccessDays": 1 },
-      { "key": "routine-2", "body": "Dana approves the travel expenses of the team.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 55, "accessCount": 7, "lastAccessDays": 2 },
-      { "key": "routine-3", "body": "The sprint review of the team is every second Thursday.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 50, "accessCount": 8, "lastAccessDays": 1 },
-      { "key": "routine-4", "body": "The team lunch on Fridays is at the canteen.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 45, "accessCount": 6, "lastAccessDays": 3 },
-      { "key": "routine-5", "body": "The on-call handover of the team is on Monday morning.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 42, "accessCount": 7, "lastAccessDays": 2 },
-      { "key": "routine-6", "body": "Jonas moderates the retrospective of the team.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 35, "accessCount": 6, "lastAccessDays": 4 },
-      { "key": "routine-7", "body": "All team events are entered in the shared team calendar.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 30, "accessCount": 9, "lastAccessDays": 1 },
-      { "key": "routine-8", "body": "Team announcements go to the general channel first.", "type": "semantic-fact", "scope": "project", "status": "accepted", "ageDays": 25, "accessCount": 8, "lastAccessDays": 2 }
+      {
+        "key": "caterer",
+        "body": "The caterer for the team offsite is Greenleaf Kitchen.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 40,
+        "truth": "caterer"
+      },
+      {
+        "key": "offsite-1",
+        "body": "The team offsite takes place on the twelfth of June.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 38
+      },
+      {
+        "key": "offsite-2",
+        "body": "The venue for the team offsite is the Lakeside Lodge.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 36
+      },
+      {
+        "key": "offsite-3",
+        "body": "The budget for the team offsite is four thousand euros.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 34
+      },
+      {
+        "key": "offsite-4",
+        "body": "A bus brings the team to the offsite at eight in the morning.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 32
+      },
+      {
+        "key": "offsite-5",
+        "body": "Priya moderates the first session of the team offsite.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 30
+      },
+      {
+        "key": "offsite-6",
+        "body": "The team offsite ends with a hike on the second day.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 28
+      },
+      {
+        "key": "offsite-7",
+        "body": "The rooms for the team offsite are booked until Friday noon.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 26
+      },
+      {
+        "key": "routine-1",
+        "body": "The weekly team meeting is on Tuesday at ten.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 60,
+        "accessCount": 9,
+        "lastAccessDays": 1
+      },
+      {
+        "key": "routine-2",
+        "body": "Dana approves the travel expenses of the team.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 55,
+        "accessCount": 7,
+        "lastAccessDays": 2
+      },
+      {
+        "key": "routine-3",
+        "body": "The sprint review of the team is every second Thursday.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 50,
+        "accessCount": 8,
+        "lastAccessDays": 1
+      },
+      {
+        "key": "routine-4",
+        "body": "The team lunch on Fridays is at the canteen.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 45,
+        "accessCount": 6,
+        "lastAccessDays": 3
+      },
+      {
+        "key": "routine-5",
+        "body": "The on-call handover of the team is on Monday morning.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 42,
+        "accessCount": 7,
+        "lastAccessDays": 2
+      },
+      {
+        "key": "routine-6",
+        "body": "Jonas moderates the retrospective of the team.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 35,
+        "accessCount": 6,
+        "lastAccessDays": 4
+      },
+      {
+        "key": "routine-7",
+        "body": "All team events are entered in the shared team calendar.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 30,
+        "accessCount": 9,
+        "lastAccessDays": 1
+      },
+      {
+        "key": "routine-8",
+        "body": "Team announcements go to the general channel first.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 25,
+        "accessCount": 8,
+        "lastAccessDays": 2
+      }
     ],
     "filler": [
-      { "count": 150, "status": "accepted", "minAgeDays": 1, "maxAgeDays": 80, "seed": 131, "scope": "project", "type": "semantic-fact" }
+      {
+        "count": 150,
+        "status": "accepted",
+        "minAgeDays": 1,
+        "maxAgeDays": 80,
+        "seed": 131,
+        "scope": "project",
+        "type": "semantic-fact"
+      }
     ]
   },
   "truth": [
-    { "key": "caterer", "seed": "The caterer for the team offsite is Greenleaf Kitchen.", "must": false, "terms": [["Greenleaf"]] }
+    {
+      "key": "caterer",
+      "seed": "The caterer for the team offsite is Greenleaf Kitchen.",
+      "must": false,
+      "terms": [["Greenleaf"]]
+    }
   ],
   "turns": [],
   "probes": [
-    { "id": "caterer", "question": "Who is the caterer for the team offsite?", "expect": { "kind": "answer", "needs": ["caterer"] } },
-    { "id": "caterer-plain", "question": "Which company provides the food at the offsite?", "expect": { "kind": "answer", "needs": ["caterer"] } }
+    {
+      "id": "caterer",
+      "question": "Who is the caterer for the team offsite?",
+      "expect": { "kind": "answer", "needs": ["caterer"] }
+    },
+    {
+      "id": "caterer-plain",
+      "question": "Which company provides the food at the offsite?",
+      "expect": { "kind": "answer", "needs": ["caterer"] }
+    }
   ]
 }
