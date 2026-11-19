@@ -707,19 +707,13 @@ export function memorySemanticFloorFor(
   identity: EmbeddingCalibrationIdentity,
 ): number | undefined {
   return (
-    operatorCalibrationFor(env, identity).semanticMinScore ??
+    memoryEmbeddingCalibrationFor(env, identity).semanticMinScore ??
     (isQwen3Embedding8bModel(configuredModelId) ? QWEN3_EMBEDDING_8B_SEMANTIC_MIN_SCORE : undefined)
   );
 }
 
+// The operator's calibration entry for an embedding identity, or {} when none applies.
 export function memoryEmbeddingCalibrationFor(
-  env: Readonly<Record<string, string | undefined>>,
-  identity: EmbeddingCalibrationIdentity,
-): MemoryEmbeddingCalibration {
-  return operatorCalibrationFor(env, identity);
-}
-
-function operatorCalibrationFor(
   env: Readonly<Record<string, string | undefined>>,
   identity: EmbeddingCalibrationIdentity,
 ): MemoryEmbeddingCalibration {
