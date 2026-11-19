@@ -629,7 +629,23 @@ export interface MemoryEmbeddingCalibration {
   readonly semanticDedupThreshold?: number;
   readonly relatedLinkThreshold?: number;
   readonly mmrLambda?: number;
+  // The lowest question-to-memory cosine at which recall admits a memory that shares no
+  // informative word with the question (retrieval's default is 0.3).
+  readonly semanticMinScore?: number;
 }
+
+// Built-in semantic floor of the Qwen3 embedding family, the one family this product embeds with a
+// dedicated query instruction. The retrieval default of 0.3 lies inside the range of UNRELATED
+// memories for it, so unrelated memories were supplied to the model. Measured 2026-11-19 with
+// qwen3-embedding-8b in the product's own format (question with the instruction, memory raw) over
+// 45 probes of the lab's seeded scenarios: memories an answer needs (n=43) score 0.461 at the
+// lowest, 0.569 at the tenth percentile, 0.712 at the median; the highest unrelated memory per
+// probe (21 probes of 120 to 300 unrelated memories each) has a median of 0.312 and a maximum of
+// 0.410; real sentences about another topic of the same person score 0.311 to 0.391 (n=7) and
+// loosely related ones of the same domain 0.400 to 0.480 (n=4). Replaying production retrieval:
+// floor 0.30 supplied fourteen unrelated memories, 0.40 four, 0.42 none, while the probes whose
+// needed memory is supplied stayed at 26 of 28 from 0.30 up to 0.42 (none lost up to 0.50).
+export const QWEN3_EMBEDDING_SEMANTIC_MIN_SCORE = 0.42;
 
 interface EmbeddingCalibrationIdentity {
   readonly provider: string;
@@ -648,10 +664,12 @@ function parseCalibrationEntry(value: unknown): MemoryEmbeddingCalibration | und
     semanticDedupThreshold?: number;
     relatedLinkThreshold?: number;
     mmrLambda?: number;
+    semanticMinScore?: number;
   } = {};
   if (isUnit(raw.semanticDedupThreshold)) out.semanticDedupThreshold = raw.semanticDedupThreshold;
   if (isUnit(raw.relatedLinkThreshold)) out.relatedLinkThreshold = raw.relatedLinkThreshold;
   if (isUnit(raw.mmrLambda)) out.mmrLambda = raw.mmrLambda;
+  if (isUnit(raw.semanticMinScore)) out.semanticMinScore = raw.semanticMinScore;
   return Object.keys(out).length === 0 ? undefined : out;
 }
 
@@ -665,7 +683,24 @@ function calibrationKeys(identity: EmbeddingCalibrationIdentity): readonly strin
   ];
 }
 
+function builtInCalibrationFor(modelId: string): MemoryEmbeddingCalibration {
+  return isQwen3EmbeddingModel(modelId)
+    ? { semanticMinScore: QWEN3_EMBEDDING_SEMANTIC_MIN_SCORE }
+    : {};
+}
+
+// The built-in calibration of the model family, overridden field by field by the operator's entry.
 export function memoryEmbeddingCalibrationFor(
+  env: Readonly<Record<string, string | undefined>>,
+  identity: EmbeddingCalibrationIdentity,
+): MemoryEmbeddingCalibration {
+  return {
+    ...builtInCalibrationFor(identity.modelId),
+    ...operatorCalibrationFor(env, identity),
+  };
+}
+
+function operatorCalibrationFor(
   env: Readonly<Record<string, string | undefined>>,
   identity: EmbeddingCalibrationIdentity,
 ): MemoryEmbeddingCalibration {

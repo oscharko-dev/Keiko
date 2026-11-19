@@ -41,6 +41,7 @@ import { assertCompatibleEmbeddingIdentity } from "@oscharko-dev/keiko-model-gat
 import {
   buildStrengthById,
   DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
+  DEFAULT_SEMANTIC_MIN_SCORE,
   DEFAULT_STALE_CONFIDENCE_THRESHOLD,
   retrieveMemoryContext,
   type MemoryQueryPort,
@@ -408,13 +409,19 @@ function createMemoryVectorIndexPort(
   };
 }
 
+interface SemanticScores {
+  readonly byId: ReadonlyMap<MemoryId, number>;
+  // The floor of the model that produced the scores: its calibration, else retrieval's default.
+  readonly minScore: number;
+}
+
 async function semanticScoresFrom(
   deps: UiHandlerDeps,
   gate: Extract<SemanticRetrievalGate, { readonly allowed: true }>,
   candidateIds: readonly MemoryId[],
   embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
   signal?: AbortSignal,
-): Promise<ReadonlyMap<MemoryId, number> | undefined> {
+): Promise<SemanticScores | undefined> {
   throwIfAborted(signal);
   // The bound provider cannot produce a comparable query vector for an old provider's rows.
   // The configured model name can be a same-endpoint alias. The gateway supplies the canonical
@@ -456,7 +463,20 @@ async function semanticScoresFrom(
     );
     return undefined;
   }
-  return new Map(result.candidates.map((candidate) => [candidate.id as MemoryId, candidate.score]));
+  return semanticScoresOf(deps, queryIdentity, result.candidates);
+}
+
+function semanticScoresOf(
+  deps: UiHandlerDeps,
+  identity: EmbeddingModelIdentity,
+  candidates: readonly { readonly id: string; readonly score: number }[],
+): SemanticScores {
+  return {
+    byId: new Map(candidates.map((candidate) => [candidate.id as MemoryId, candidate.score])),
+    minScore:
+      memoryEmbeddingCalibrationFor(deps.env, identity).semanticMinScore ??
+      DEFAULT_SEMANTIC_MIN_SCORE,
+  };
 }
 
 // Content-free operator diagnostic (O-F4 / #2902): see warnSkippedIncompatible above for why this
@@ -523,6 +543,9 @@ export function conversationFusionMode(deps: UiHandlerDeps): RankingFusionMode {
 
 export interface ConversationRetrievalSignals {
   readonly semanticById?: ReadonlyMap<MemoryId, number> | undefined;
+  // The semantic floor of the embedding model that produced semanticById; present exactly when
+  // semanticById is. Callers hand it to retrieval as semanticMinScore.
+  readonly semanticMinScore?: number | undefined;
   readonly strengthById: ReadonlyMap<MemoryId, number>;
   // Raw candidate vectors for MMR diversity (#204, O-F3). Built from the SAME getEmbeddings call as
   // semanticById (no extra IO, no egress — local vectors), so MMR works even when the query itself is
@@ -605,7 +628,7 @@ export async function buildConversationRetrievalSignals(
       ? { allowed: false, reason: "query-mismatch" }
       : semanticGate;
   warnSemanticGate(deps, gate, embeddings, candidateIds.length);
-  const semanticById =
+  const semantic =
     gate.allowed && embeddings.size > 0
       ? await semanticScoresFrom(deps, gate, candidateIds, embeddings, signal)
       : undefined;
@@ -613,7 +636,9 @@ export async function buildConversationRetrievalSignals(
     strengthById,
     embeddingById: embeddingSignals.embeddingById,
     ...(embeddingSignals.mmrLambda !== undefined ? { mmrLambda: embeddingSignals.mmrLambda } : {}),
-    ...(semanticById !== undefined ? { semanticById } : {}),
+    ...(semantic !== undefined
+      ? { semanticById: semantic.byId, semanticMinScore: semantic.minScore }
+      : {}),
   };
 }
 

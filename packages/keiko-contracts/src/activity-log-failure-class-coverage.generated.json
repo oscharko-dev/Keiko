@@ -5854,6 +5854,12 @@
               "required": false
             },
             {
+              "name": "semanticFloor",
+              "type": "number",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "skillDigest",
               "type": "string",
               "dataClass": "digest",
@@ -6061,6 +6067,12 @@
             {
               "name": "retrievedMemoryCount",
               "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "semanticFloor",
+              "type": "number",
               "dataClass": "count",
               "required": false
             },

@@ -31,6 +31,7 @@ interface MemorySelectionLogFields {
   readonly profileRetrievedCount?: number;
   readonly retrievedMemoryCount?: number;
   readonly belowFloorMemoryCount?: number;
+  readonly semanticFloor?: number;
 }
 
 const MEMORY_SELECTION_LOG_FIELDS = {
@@ -40,6 +41,7 @@ const MEMORY_SELECTION_LOG_FIELDS = {
   profileRetrievedCount: { type: "integer", dataClass: "count", required: false },
   retrievedMemoryCount: { type: "integer", dataClass: "count", required: false },
   belowFloorMemoryCount: { type: "integer", dataClass: "count", required: false },
+  semanticFloor: { type: "number", dataClass: "count", required: false },
 } as const;
 
 export interface ChatResponseMemoryActivity extends MemorySelectionLogFields {
@@ -504,6 +506,9 @@ export function memorySelectionLogFields(
     profileRetrievedCount: memory.context.profileRetrievedCount ?? 0,
     retrievedMemoryCount: memory.context.memories.length,
     belowFloorMemoryCount: memory.context.belowFloorCount ?? 0,
+    ...(memory.context.semanticFloor === undefined
+      ? {}
+      : { semanticFloor: memory.context.semanticFloor }),
   };
 }
 

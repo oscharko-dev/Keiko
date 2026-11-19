@@ -239,6 +239,7 @@ function buildRetrievalRequest(
     types?: readonly MemoryType[];
     budgetTokens?: number;
     semanticById?: ReadonlyMap<MemoryId, number>;
+    semanticMinScore?: number;
     strengthById?: ReadonlyMap<MemoryId, number>;
     embeddingById?: ReadonlyMap<MemoryId, Float32Array>;
     mmrLambda?: number;
@@ -255,6 +256,7 @@ function buildRetrievalRequest(
   // the chat path. Passed only when present so a vault with no embeddings / no access history ranks
   // byte-identically.
   if (signals.semanticById !== undefined) req.semanticById = signals.semanticById;
+  if (signals.semanticMinScore !== undefined) req.semanticMinScore = signals.semanticMinScore;
   if (signals.strengthById.size > 0) req.strengthById = signals.strengthById;
   if (signals.embeddingById.size > 0) req.embeddingById = signals.embeddingById;
   if (signals.mmrLambda !== undefined) req.mmrLambda = signals.mmrLambda;

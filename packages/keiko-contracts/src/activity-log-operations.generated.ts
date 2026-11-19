@@ -2509,6 +2509,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      semanticFloor: {
+        type: "number",
+        dataClass: "count",
+        required: false,
+      },
       tokensBefore: {
         type: "integer",
         dataClass: "count",
@@ -3379,6 +3384,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       },
       belowFloorMemoryCount: {
         type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      semanticFloor: {
+        type: "number",
         dataClass: "count",
         required: false,
       },

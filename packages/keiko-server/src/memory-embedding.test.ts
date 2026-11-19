@@ -513,6 +513,8 @@ describe("memoryEmbeddingCalibrationFor", () => {
       semanticDedupThreshold: 0.91,
       relatedLinkThreshold: 0.76,
       mmrLambda: 0.62,
+      // The operator's entry names no floor, so the family's built-in one stays (#4228).
+      semanticMinScore: 0.42,
     });
     expect(
       memoryEmbeddingCalibrationFor(env, {
@@ -520,6 +522,40 @@ describe("memoryEmbeddingCalibrationFor", () => {
         modelId: "text-embedding-3-large",
       }),
     ).toEqual({ semanticDedupThreshold: 0.95 });
+  });
+
+  it("parses semanticMinScore as a unit number and ignores invalid values (#4228)", () => {
+    const entry = (value: unknown): Readonly<Record<string, string>> => ({
+      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+        "openai/text-embedding-3-large": { semanticMinScore: value },
+      }),
+    });
+    const identity = { provider: "openai", modelId: "text-embedding-3-large" };
+    expect(memoryEmbeddingCalibrationFor(entry(0.37), identity)).toEqual({
+      semanticMinScore: 0.37,
+    });
+    expect(memoryEmbeddingCalibrationFor(entry(0), identity)).toEqual({ semanticMinScore: 0 });
+    expect(memoryEmbeddingCalibrationFor(entry(1.2), identity)).toEqual({});
+    expect(memoryEmbeddingCalibrationFor(entry(-0.1), identity)).toEqual({});
+    expect(memoryEmbeddingCalibrationFor(entry("0.4"), identity)).toEqual({});
+  });
+
+  it("gives the Qwen3 family its built-in floor and lets the operator win field by field", () => {
+    const identity = { provider: "p", modelId: "Qwen3-Embedding-8B" };
+    expect(memoryEmbeddingCalibrationFor({}, identity)).toEqual({ semanticMinScore: 0.42 });
+    const operator = (entry: unknown): Readonly<Record<string, string>> => ({
+      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({ "Qwen3-Embedding-8B": entry }),
+    });
+    expect(
+      memoryEmbeddingCalibrationFor(operator({ semanticMinScore: 0.5, mmrLambda: 0.6 }), identity),
+    ).toEqual({ semanticMinScore: 0.5, mmrLambda: 0.6 });
+    expect(memoryEmbeddingCalibrationFor(operator({ mmrLambda: 0.6 }), identity)).toEqual({
+      semanticMinScore: 0.42,
+      mmrLambda: 0.6,
+    });
+    expect(
+      memoryEmbeddingCalibrationFor({}, { provider: "p", modelId: "text-embedding-3-large" }),
+    ).toEqual({});
   });
 
   it("ignores malformed calibration config and out-of-range values", () => {

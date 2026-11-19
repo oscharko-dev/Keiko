@@ -422,3 +422,89 @@ describe("semantic candidate validity before the bounded sweep", () => {
     }
   });
 });
+
+describe("semantic floor of the embedding model (#4228)", () => {
+  async function floorFor(
+    modelId: string | undefined,
+    env: Readonly<Record<string, string | undefined>> = {},
+  ): ReturnType<typeof buildConversationRetrievalSignals> {
+    const alpha = memoryId("alpha");
+    const model = modelId ?? IDENTITY.modelId;
+    const vault = vaultFor(
+      () => [metadata(alpha, 100)],
+      new Map([[alpha, { ...embedding(alpha, new Float32Array([1, 0])), modelId: model }]]),
+    );
+    embedMock.mockResolvedValue({ ...QUERY_EMBEDDING, modelId: model });
+    return buildConversationRetrievalSignals(
+      { env } as unknown as UiHandlerDeps,
+      vault,
+      QUERY_TEXT,
+      [SCOPE],
+      NOW_MS,
+      ALLOWED_GATE,
+    );
+  }
+
+  it.each(["qwen3-embedding-8b", "Qwen3-Embedding-0.6B", "QWEN3_EMBEDDING", "org/qwen3/embedding"])(
+    "carries the built-in floor 0.42 for %s",
+    async (modelId) => {
+      expect((await floorFor(modelId)).semanticMinScore).toBe(0.42);
+    },
+  );
+
+  it("lets an operator's semanticMinScore win over the built-in floor", async () => {
+    const env = {
+      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+        "qwen3-embedding-8b": { semanticMinScore: 0.5 },
+      }),
+    };
+    expect((await floorFor("qwen3-embedding-8b", env)).semanticMinScore).toBe(0.5);
+  });
+
+  it("keeps the built-in floor when the operator's entry has no semanticMinScore", async () => {
+    const env = {
+      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+        "qwen3-embedding-8b": { mmrLambda: 0.6 },
+      }),
+    };
+    expect((await floorFor("qwen3-embedding-8b", env)).semanticMinScore).toBe(0.42);
+  });
+
+  it("carries retrieval's default 0.3 explicitly for another model", async () => {
+    expect((await floorFor(undefined)).semanticMinScore).toBe(0.3);
+  });
+
+  it("applies an operator floor to another model", async () => {
+    const env = {
+      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+        "test-embedding": { semanticMinScore: 0.37 },
+      }),
+    };
+    expect((await floorFor(undefined, env)).semanticMinScore).toBe(0.37);
+  });
+
+  it("carries no floor without semantic scores", async () => {
+    const vault = vaultFor(() => [metadata(memoryId("alpha"), 100)], new Map());
+    const signals = await collectSignals(vault);
+    expect(signals.semanticById).toBeUndefined();
+    expect("semanticMinScore" in signals).toBe(false);
+  });
+
+  it("carries no floor when no embedder is available", async () => {
+    const alpha = memoryId("alpha");
+    const vault = vaultFor(
+      () => [metadata(alpha, 100)],
+      new Map([[alpha, embedding(alpha, new Float32Array([1, 0]))]]),
+    );
+    const signals = await buildConversationRetrievalSignals(
+      DEPS,
+      vault,
+      QUERY_TEXT,
+      [SCOPE],
+      NOW_MS,
+      { allowed: false, reason: "no-embedder", eligibleForAnyProvider: false } as never,
+    );
+    expect(signals.semanticById).toBeUndefined();
+    expect("semanticMinScore" in signals).toBe(false);
+  });
+});

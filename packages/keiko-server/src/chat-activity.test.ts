@@ -121,6 +121,33 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
     expect(line).not.toContain("m-tables");
   });
 
+  it("records the semantic floor only when semantic scores were used (#4228)", () => {
+    const assembly = selectGatewayPromptAssembly({
+      historyPrefix: [],
+      historyTurnCount: 0,
+      request: { content: "Wie heißt mein Team?", discussionMode: undefined },
+      profile: DEFAULT_CONTEXT_PROFILE,
+      memoryEntries: [],
+      documentContext: [],
+      redactionSecrets: [],
+    });
+    if (assembly === undefined) throw new Error("Missing fixture assembly");
+    const context = { enabled: true, text: "", memories: [], budget: { tokens: 1_200, used: 0 } };
+    const lines = [{ semanticFloor: 0.42 }, {}].map((extra) => {
+      const sink = captureServerLog();
+      logChatContextSelection("floor-proof", assembly, 0, undefined, {
+        context: { ...context, ...extra },
+        actions: [],
+      });
+      return expectActivityLogProof(
+        "chat.context.selected.budget",
+        formatActivityLogProofLine(sink.events[0] ?? {}),
+      );
+    });
+    expect(lines[0]).toMatchObject({ semanticFloor: 0.42 });
+    expect("semanticFloor" in (lines[1] ?? {})).toBe(false);
+  });
+
   it("records no memory counts when memory was off for the turn", () => {
     const sink = captureServerLog();
     const assembly = selectGatewayPromptAssembly({

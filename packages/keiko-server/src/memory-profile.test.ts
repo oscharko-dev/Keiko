@@ -388,6 +388,8 @@ describe("Chat memory with the standing profile (#4228)", () => {
     expect(result.context.memories).toEqual([]);
     expect(result.context.profile?.entries.map((entry) => entry.memoryId)).toEqual(["tables"]);
     expect(result.context.belowFloorCount).toBe(1);
+    // No embedder: lexical recall only, and no semantic floor is reported.
+    expect("semanticFloor" in result.context).toBe(false);
   });
 
   it("gives a related question only the memory it is about, never a profile fact twice", async () => {

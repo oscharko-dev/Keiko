@@ -70,8 +70,8 @@ precedes the memory block of the answer content.
 ## Recall: only what fits the question
 
 Chat recall runs `retrieveMemoryContext` with the strict relevance floor and at most 6 memories. A
-memory is retrieved only when it has a semantic match above zero or shares at least one informative
-word with the question. Function words, modal verbs, politeness words and words of fewer than three
+memory is retrieved only when its semantic score reaches the semantic floor of the embedding model
+or it shares at least one informative word with the question. Function words, modal verbs, politeness words and words of fewer than three
 letters are not informative; inflections match through the shared German normalization; the word
 check reads the fact text only, while ranking among admitted memories still counts the person's own
 tags. Without a query signal nothing is retrieved, and pinned facts and corrections have no
@@ -122,13 +122,37 @@ the query to the selected destination.
 
 The Git change description no longer retrieves memory (R10): it never sent what it retrieved.
 
+**The semantic floor belongs to the embedding model.** The retrieval default is a cosine of 0.30
+(`DEFAULT_SEMANTIC_MIN_SCORE`). For the Qwen3 embedding family, the one family embedded with a
+dedicated query instruction, 0.30 lies inside the range of unrelated memories, so its built-in floor
+is 0.42 (`semanticMinScore` in the embedding calibration). Measured 2026-11-19 with
+qwen3-embedding-8b in the product's own format (the question with the instruction, the memory raw)
+over 45 probes of the lab's seeded scenarios: memories an answer needs (n=43) score 0.461 at the
+lowest, 0.569 at the tenth percentile and 0.712 at the median; the highest unrelated memory per
+probe (21 probes, 120 to 300 unrelated memories each) has a median of 0.312 and a maximum of 0.410;
+real sentences about another topic of the same person score 0.311 to 0.391 (n=7) and loosely related
+ones of the same domain 0.400 to 0.480 (n=4). Replaying production retrieval on those stores, floor
+0.30 supplied fourteen unrelated memories, 0.40 four and 0.42 none, while the probes whose needed
+memory is supplied stayed at 26 of 28 from 0.30 up to 0.42 (none lost up to 0.50).
+
+An operator sets or overrides the floor per embedding model with `semanticMinScore` (a number from 0
+to 1) in `KEIKO_MEMORY_EMBEDDING_CALIBRATION`, a JSON object keyed by `provider/model@revision`,
+`provider/model`, `model@revision` or `model`, next to `semanticDedupThreshold`,
+`relatedLinkThreshold` and `mmrLambda`. An operator field wins over the built-in value field by
+field, and an invalid value is ignored. To calibrate another model, measure question-to-memory
+cosines in the product's format for memories the answer needs and for unrelated ones, and put the
+floor just above the range of the unrelated memories and below the lowest needed one. Every other
+model keeps 0.30.
+
 ## Evidence
 
 `chat.context.selected` (Chat) and `chat.response.message` (grounded answer) carry the optional
 counts `profileEntryCount`, `profileTokens`, `profileDroppedCount` (entries dropped by the caps),
 `profileRetrievedCount` (profile facts sent with recall instead), `retrievedMemoryCount` and
-`belowFloorMemoryCount`. The wire memory context carries
-`profile {entries, tokens, droppedCount}`, `profileRetrievedCount` and `belowFloorCount`. The Chat
+`belowFloorMemoryCount`, plus `semanticFloor` (the floor in force, a cosine) only when semantic
+scores were used. The wire memory context carries
+`profile {entries, tokens, droppedCount}`, `profileRetrievedCount`, `belowFloorCount` and
+`semanticFloor`. The Chat
 disclosure shows the profile entries Keiko selected as background for that answer separately from
 the memories retrieved for the question. Selection can take place even when grounded answering
 finishes without calling the model. The cap counter covers the candidates the selector examined.

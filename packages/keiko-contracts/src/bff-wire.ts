@@ -1290,6 +1290,8 @@ export interface ConversationMemoryContextWire {
   readonly profile?: ConversationStandingProfileWire;
   /** How many candidate memories the relevance floor held back for this question. */
   readonly belowFloorCount?: number;
+  /** The semantic floor this question's recall was judged against; absent without semantic scores. */
+  readonly semanticFloor?: number;
   /** Standing profile facts this question is about: sent once, with the retrieved memories. */
   readonly profileRetrievedCount?: number;
 }
