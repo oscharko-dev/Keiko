@@ -1519,7 +1519,12 @@ function executeForgetSelection(
   if (records.some((record) => !scopeAuthorized(record.scope, authorizedScopes))) {
     return forbiddenMemoryScopeResult();
   }
-  const candidates = selectMemoriesForForget(records, selector, { nowMs });
+  // Pinning protects a fact from a sweep by scope or type. An entry the person names is their own
+  // decision: it is forgotten whether or not it is pinned.
+  const candidates = selectMemoriesForForget(records, selector, {
+    nowMs,
+    protectPinned: selector.kind !== "by-id",
+  });
   if (candidates.length === 0) {
     return {
       status: 409,
@@ -1568,13 +1573,15 @@ function forgetFromMemoryWindow(
   reason: MemoryForgetReason,
   correlationId: string,
 ): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
-  const scopeKind = forgetSelectorScopeKind(vault, selector);
+  // Read inside the guarded block: a vault that cannot answer still leaves the `failed` line.
+  let scopeKind: MemoryScopeKind | undefined;
   const detail = (tombstoneWritten: boolean): MemoryForgetSurfaceDetail => ({
     surface: "memory-center",
     scopeKind,
     tombstoneWritten,
   });
   try {
+    scopeKind = forgetSelectorScopeKind(vault, selector);
     const result = executeForgetSelection(deps, vault, selector, reason);
     if (isRouteResult(result)) {
       logExplicitMemoryForget(forgetRouteOutcome(result), correlationId, detail(false));

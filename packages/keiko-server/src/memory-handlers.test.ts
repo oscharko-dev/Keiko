@@ -2458,6 +2458,27 @@ describe("memory handlers", () => {
     ]);
   });
 
+  // Pinning protects a fact from a sweep, not from the person who names it: seeing, correcting and
+  // deleting one entry must always work (#4214).
+  it.each([
+    ["the forget route", handleForgetMemory],
+    ["the delete route", handleDeleteMemory],
+  ])("forgets a pinned memory the person names through %s", async (_route, handler) => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("pinned-named", "pinned and unwanted", { pinned: true }));
+
+    const result = await handler(
+      makeCtx("/api/memory/pinned-named/forget", { acknowledged: true }, { id: "pinned-named" }),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(vault.getMemory(memoryId("pinned-named"))).toBeUndefined();
+    expect(vault.listTombstonesByScope({ kind: "global" }).map((t) => t.memoryId)).toEqual([
+      memoryId("pinned-named"),
+    ]);
+  });
+
   it("selectively forgets matching records through one batch delete", async () => {
     const vault = makeVault();
     vault.insertMemory(
