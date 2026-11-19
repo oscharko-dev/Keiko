@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "scale-vorschlaege-en",
+  "language": "en",
+  "class": "scale-window",
+  "description": "A project fact older than 560 unreviewed proposals of the same scope, next to a recent control. Limit: the read window counts every row of the scope, including parked proposals, before eligibility. Failure means: the target never reaches the model although accepted; the control passing shows the window, not retrieval, is the cause. Maintenance: run with maintenance on or off; the seeded accepted records are reinforced or younger than 94 days, so maintenance does not archive them.",
+  "seed": {
+    "records": [
+      {
+        "key": "target",
+        "body": "The payments gateway is switched to read-only mode on the last Sunday of the quarter.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 90,
+        "accessCount": 3,
+        "lastAccessDays": 2,
+        "truth": "readonly"
+      },
+      {
+        "key": "control",
+        "body": "The incident review for the payments gateway is held every Thursday afternoon.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 3,
+        "truth": "review"
+      }
+    ],
+    "filler": [
+      {
+        "count": 560,
+        "status": "proposed",
+        "minAgeDays": 1,
+        "maxAgeDays": 80,
+        "seed": 204,
+        "scope": "project",
+        "type": "semantic-fact"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "readonly",
+      "seed": "The payments gateway is switched to read-only mode on the last Sunday of the quarter.",
+      "must": false,
+      "terms": [["Sunday"]]
+    },
+    {
+      "key": "review",
+      "seed": "The incident review for the payments gateway is held every Thursday afternoon.",
+      "must": false,
+      "terms": [["Thursday"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "target",
+      "question": "When is the payments gateway switched to read-only mode?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Sunday"]]
+      }
+    },
+    {
+      "id": "control-recent",
+      "question": "When is the incident review for the payments gateway held?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Thursday"]]
+      }
+    }
+  ]
+}
