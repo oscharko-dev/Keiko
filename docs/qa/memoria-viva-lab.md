@@ -452,8 +452,10 @@ poisoned record), keeps its ids to link supplied memories to the truth, and repo
 `seed` in the unit's result: records seeded per status and scope, how many were embedded, and the
 status counts after the run (`after.byStatus`, and `after.gone` for seeded records the list route no
 longer returns). The product's own maintenance runs on the aged records during the run (the first
-memory-enabled turn is due for it), so a seeded record may be archived or removed by the time the
-probes ask: that is the product's behaviour and part of what a seeded scenario measures. Seeding is
+memory-enabled turn is due for it), so an aged accepted record may be archived or removed by the time
+the probes ask: that is the product's behaviour and part of what a seeded scenario measures. A
+superseded record is not faded away: since #4223 it stays as history, and its removal is a loss
+(below). Seeding is
 setup; everything measured afterwards still goes through the public HTTP routes, and the lab never
 adds a route or a product seam for it.
 
