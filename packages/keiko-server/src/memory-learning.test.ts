@@ -18,6 +18,7 @@ import type {
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, createNodeUiStore, type UiStore } from "./store/index.js";
 import { runSerializedChatTurn } from "./chat-turn-serializer.js";
+import { buildMemoryResult, type SendDesktopChatRequest } from "./chat-handlers.js";
 import { conversationMemoryScopes } from "./memory-conversation-context.js";
 import {
   disposeMemoryLearningRuntime,
@@ -1208,5 +1209,70 @@ describe("memory learning passes", () => {
     writeTurn(deps, chat, "Vergiss das.");
     await memoryLearningRuntime(deps).runPass("inactivity", undefined);
     expect(bodies(deps, chat)).toEqual([]);
+  });
+
+  // #4213 AC 7. Chat messages are not edited in place: `PATCH /api/chats/messages` cannot change a
+  // user message's content and no UI path rewrites one, so a person who changes what they said sends
+  // a new message. The edit is therefore learned as the person's later words, and the ordinary
+  // supersession rule decides: the corrected fact replaces the old one (docs/memory/
+  // memoria-viva-learning-passes.md).
+  it("learns a changed statement as a later turn that supersedes the old fact", async () => {
+    const earlier = "I prefer tables for numbers.";
+    const edited = "From now on I prefer lists for numbers.";
+    const answers = [
+      { body: earlier, evidence: earlier, relation: "new", related: null },
+      { body: edited, evidence: edited, relation: "update", related: 1 },
+    ];
+    let calls = 0;
+    const port: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        const item = answers[calls];
+        calls += 1;
+        const items = [{ about: "self", type: "preference", ...item }];
+        return Promise.resolve(response(request.modelId, JSON.stringify({ items })));
+      },
+    };
+    const deps = makeDeps({ modelPortFactory: () => port });
+    const chat = makeChat(deps);
+    const runtime = memoryLearningRuntime(deps);
+    writeTurn(deps, chat, earlier);
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+    expect(bodies(deps, chat)).toEqual([earlier]);
+
+    const replacement = writeTurn(deps, chat, edited);
+    await expect(runtime.runPass("inactivity", undefined)).resolves.toBe("completed");
+
+    expect(bodies(deps, chat)).toEqual([edited]);
+    const vault = vaultOf(deps);
+    const superseded = learned(deps, chat, ["superseded"]);
+    expect(superseded.map((record) => record.body)).toEqual([earlier]);
+    expect(superseded[0] === undefined ? [] : vault.listOutgoingEdges(superseded[0].id)).toEqual([
+      expect.objectContaining({ kind: "supersedes" }),
+    ]);
+    const [live] = learned(deps, chat);
+    expect(live?.provenance.sourceMessageIds).toEqual([replacement.userId]);
+
+    // The earlier message is not read again, and nothing relearns the old value.
+    await runtime.runPass("inactivity", undefined);
+    expect(calls).toBe(2);
+    expect(bodies(deps, chat)).toEqual([edited]);
+
+    const request = {
+      content: edited,
+      memory: { enabled: true, budgetTokens: 900, context: {} },
+    } as unknown as SendDesktopChatRequest;
+    const context = {
+      userId: "local-operator" as never,
+      workspaceId: chat.projectPath as never,
+      projectId: chat.projectPath as never,
+      conversationId: chat.chatId as never,
+    };
+    const retrieved = await buildMemoryResult(request, deps, context);
+    const supplied = [
+      retrieved.context.text,
+      ...(retrieved.context.profile?.entries.map((entry) => entry.text) ?? []),
+    ].join("\n");
+    expect(supplied).toContain(edited);
+    expect(supplied).not.toContain(earlier);
   });
 });
