@@ -32,6 +32,7 @@ import { performance } from "node:perf_hooks";
 import { clearTimeout, setTimeout } from "node:timers";
 
 import { StandaloneBuildError, expectedArchiveSha256 } from "../build-standalone-package.mjs";
+import { readFlagPairs } from "../lib/flag-pairs.mjs";
 import { buildNpmPackage } from "../build-standalone-npm-package.mjs";
 import { sha256, sha256File, sha256FileChunked } from "../lib/digest.mjs";
 import { isMainModule } from "../lib/is-main-module.mjs";
@@ -110,13 +111,7 @@ export function parseQualifyArgs(argv, rootVersion) {
     "--repository": "repository",
   };
   const options = { version: rootVersion, repository: DEFAULT_REPOSITORY };
-  for (let index = 0; index < argv.length; index += 2) {
-    const name = flags[argv[index]];
-    const value = argv[index + 1];
-    if (name === undefined) refuse(`unknown argument ${String(argv[index])}`);
-    if (value === undefined || value.startsWith("--")) refuse(`${argv[index]} needs a value`);
-    options[name] = value;
-  }
+  readFlagPairs(argv, flags, options, refuse);
   if (options.target === undefined) refuse("--target is required");
   if (options.outDir === undefined) refuse("--out-dir is required");
   if (!VERSION_PATTERN.test(String(options.version))) refuse("--version must be x.y.z");

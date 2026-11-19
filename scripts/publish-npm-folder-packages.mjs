@@ -27,6 +27,7 @@ import {
   folderPackageArchiveName,
 } from "./lib/folder-package-release.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { readFlagPairs } from "./lib/flag-pairs.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { CHECK_NAMES, DEFAULT_REPOSITORY, EVIDENCE_KIND } from "./lib/npm-folder-qualification.mjs";
 import { createdDraftId, remoteDigestFailures } from "./lib/portable-release-publication.mjs";
@@ -439,13 +440,7 @@ export function parsePublishArgs(argv) {
     refuse("the first argument must be verify, preflight or publish");
   }
   const options = { mode, repository: DEFAULT_REPOSITORY };
-  for (let index = 0; index < rest.length; index += 2) {
-    const name = FLAGS[rest[index]];
-    const value = rest[index + 1];
-    if (name === undefined) refuse(`unknown argument ${String(rest[index])}`);
-    if (value === undefined || value.startsWith("--")) refuse(`${rest[index]} needs a value`);
-    options[name] = value;
-  }
+  readFlagPairs(rest, FLAGS, options, refuse);
   if (options.version === undefined) refuse("--version is required");
   if (!REPOSITORY_PATTERN.test(options.repository)) refuse("--repository must be owner/name");
   return options;

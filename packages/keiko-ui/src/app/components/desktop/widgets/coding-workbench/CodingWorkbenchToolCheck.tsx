@@ -13,7 +13,7 @@ import windowStyles from "./CodingWorkbenchWindow.module.css";
 // only this person's own action does. The alert above names this button.
 
 /** Whether the selected model waits for its explicit tool-calling check. */
-export function toolCheckOffered(state: CodingWorkbenchRuntimeState): boolean {
+function toolCheckOffered(state: CodingWorkbenchRuntimeState): boolean {
   return (
     state.runtimePreference === "managed-gateway" &&
     state.selectedModelId !== null &&

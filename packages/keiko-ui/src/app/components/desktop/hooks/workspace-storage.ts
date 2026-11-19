@@ -13,8 +13,8 @@ export function workspaceStorageKey(key: string, scope: string | undefined): str
 // with different state while the page stayed open. The page's windows belong to the old store, so
 // polling on would only be refused again; the persistence boundary re-reads the ownership and mounts
 // the workspace afresh for the store that now answers (ADR-0027).
-export const WORKSPACE_STORAGE_CHANGED_STATUS = 409;
-export const WORKSPACE_STORAGE_CHANGED_CODE = "WORKSPACE_STORAGE_CHANGED";
+const WORKSPACE_STORAGE_CHANGED_STATUS = 409;
+const WORKSPACE_STORAGE_CHANGED_CODE = "WORKSPACE_STORAGE_CHANGED";
 export const WORKSPACE_STORAGE_CHANGED_EVENT = "keiko:workspace-storage-changed";
 
 /**
