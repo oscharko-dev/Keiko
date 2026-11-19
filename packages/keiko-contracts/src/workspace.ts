@@ -33,6 +33,14 @@ export type WorkspaceLanguage = (typeof WORKSPACE_LANGUAGES)[number];
 
 export type TestFramework = "vitest" | "jest" | "mocha" | "node-test" | "unknown";
 
+/**
+ * How workspace path matchers (`.gitignore` rules and path globs) compare letter case (#4436).
+ * Windows file systems are case-insensitive and Git for Windows defaults to
+ * `core.ignorecase=true`, so the platform default there is `case-insensitive`; a repository's
+ * explicit `core.ignorecase` setting wins on every platform, as it does in Git.
+ */
+export type WorkspacePathCase = "case-sensitive" | "case-insensitive";
+
 // A detected workspace carries TWO identities for one directory, and they are not interchangeable.
 // `root` is the realpath-admitted canonical root: every filesystem effect (discovery, reads, patch
 // application, containment) binds to it, so a mutable alias can never present one target to policy
@@ -52,6 +60,11 @@ export interface WorkspaceInfo {
   readonly testDirs: readonly string[];
   readonly languages: readonly WorkspaceLanguage[];
   readonly ignoreLines: readonly string[];
+  /**
+   * The repository's explicit path-case rule, read from its `core.ignorecase` (#4436). Absent
+   * means the platform default; never set it from anything but the repository's own Git config.
+   */
+  readonly pathCase?: WorkspacePathCase | undefined;
   /**
    * How evidence-lane reads project this workspace's content (#4098). Absent means `redact`. Only
    * Chat sets `preserve`, and only under the deployment opt-out; every other consumer keeps the

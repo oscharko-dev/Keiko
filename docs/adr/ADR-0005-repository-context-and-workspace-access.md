@@ -250,6 +250,20 @@ Unicode simple case folding without a new pattern-count or corpus-size cutoff. B
 extglobs remain unsupported. Deny and ignore policy are separate from filename query matching;
 their documented grammar alone does not establish a performance guarantee.
 
+One letter-case rule governs workspace path matching (#4436): `.gitignore` rules, Coding search
+include/exclude globs and literal exclusions, path-discovery globs and exact basenames, and
+Knowledge Pod scope globs. It is case-insensitive on Windows, where NTFS and Git for Windows'
+default `core.ignorecase=true` treat `SCAN.PDF` and `scan.pdf` as one path, and case-sensitive
+elsewhere. A repository's own explicit `core.ignorecase` wins on every platform, as it does in
+Git; detection reads it from the repository's bounded Git config through the guarded Git metadata
+reader, never follows `include` directives, and never retains or logs the config text. An oversized
+or unreadable config leaves the platform default in force. The rule changes letter case only: it
+adds no wildcard, cannot re-include a denied path, and the deny tier stays case-insensitive on
+every platform. Filename queries keep their explicit `caseSensitive` request. The persistent
+workspace-index ignore identity includes a case-insensitive rule, so snapshots built under another
+rule are rebuilt; case-sensitive identities are unchanged. The `coding-repository-handler.settled`
+Activity Log line records the applied rule as the closed `pathCase` value.
+
 ### D4 — Deterministic, explainable context-pack selection with byte-budgeting and redaction
 
 `buildContextPack` follows a single documented resolution order:

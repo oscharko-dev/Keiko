@@ -3567,6 +3567,7 @@
     "keiko-workspace/ownedRootLookup",
     "keiko-workspace/ownedRootMint",
     "keiko-workspace/ownedRootPreserve",
+    "keiko-workspace/pathCase",
     "keiko-workspace/paths",
     "keiko-workspace/realpath",
     "keiko-workspace/realpathPolicy",

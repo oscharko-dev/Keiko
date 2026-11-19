@@ -37,7 +37,8 @@ import {
   type SearchPolicyMode,
 } from "./repoSearchPolicy.js";
 import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpath.js";
-import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
+import type { DiscoveredFile, WorkspaceInfo, WorkspacePathCase } from "./types.js";
+import { isCaseInsensitivePathCase, workspacePathCase } from "./pathCase.js";
 import { workspaceDirectoryFingerprint } from "./workspaceDirectorySnapshot.js";
 import { splitSourceLines } from "./sourceLines.js";
 import {
@@ -241,7 +242,7 @@ interface ScopeShape {
 
 interface ScopeKeyShape {
   readonly relativePaths: readonly string[];
-  readonly workspace?: Pick<WorkspaceInfo, "ignoreLines"> | undefined;
+  readonly workspace?: Pick<WorkspaceInfo, "ignoreLines" | "pathCase"> | undefined;
   readonly candidatePathGlobs?: WorkspaceIndexCandidatePathPolicy | undefined;
 }
 
@@ -296,9 +297,16 @@ function sha256Hex(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function workspaceIgnorePolicyFingerprint(ignoreLines: readonly string[]): string {
+// The letter-case rule (#4436) decides what both `.gitignore` rules and candidate path globs
+// match, so it belongs to this identity. A case-sensitive rule keeps the existing fingerprint;
+// snapshots that were built case-sensitively for a case-insensitive workspace are rebuilt.
+export function workspaceIgnorePolicyFingerprint(
+  ignoreLines: readonly string[],
+  pathCase: WorkspacePathCase = "case-sensitive",
+): string {
   const hash = createHash("sha256");
   hash.update("keiko-workspace-index:ignore-policy:v1\0");
+  if (isCaseInsensitivePathCase(pathCase)) hash.update("path-case:case-insensitive\0");
   for (const line of ignoreLines) {
     const encoded = Buffer.from(line, "utf8");
     hash.update(`${String(encoded.byteLength)}:`);
@@ -836,7 +844,10 @@ export function buildWorkspaceIndexScopeKey(
   return {
     workspaceRoot: scope.workspace.root,
     relativePaths: normalizeRelativePaths(scope.relativePaths),
-    ignorePolicySha256: workspaceIgnorePolicyFingerprint(scope.workspace.ignoreLines),
+    ignorePolicySha256: workspaceIgnorePolicyFingerprint(
+      scope.workspace.ignoreLines,
+      workspacePathCase(scope.workspace),
+    ),
     candidatePathPolicySha256: workspaceCandidatePathPolicyFingerprint(candidatePathGlobs),
     policyMode: policy.policyMode,
     applyGitignore: policy.applyGitignore,
@@ -3316,7 +3327,10 @@ export function buildWorkspaceIndexSnapshot(
     version: WORKSPACE_INDEX_SNAPSHOT_VERSION,
     ...snapshotShardFields(input),
     relativePaths: normalizeRelativePaths(input.scope.relativePaths),
-    ignorePolicySha256: workspaceIgnorePolicyFingerprint(input.scope.workspace?.ignoreLines ?? []),
+    ignorePolicySha256: workspaceIgnorePolicyFingerprint(
+      input.scope.workspace?.ignoreLines ?? [],
+      workspacePathCase(input.scope.workspace),
+    ),
     candidatePathPolicySha256: workspaceCandidatePathPolicyFingerprint(
       input.scope.candidatePathGlobs,
     ),

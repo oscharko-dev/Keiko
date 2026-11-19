@@ -100,7 +100,8 @@ import {
   type SearchHints,
   type SearchPolicy,
 } from "./repoSearchPolicy.js";
-import type { WorkspaceInfo } from "./types.js";
+import type { WorkspaceInfo, WorkspacePathCase } from "./types.js";
+import { pathCaseKey, pathGlobCaseSensitive, workspacePathCase } from "./pathCase.js";
 import {
   requestedSourceInspectionExtensions,
   sourceInspectionPathMatches,
@@ -636,6 +637,7 @@ type SearchTextRunnerDeps = Required<Pick<FacadeDeps, "fs" | "nowMs">> &
   >;
 
 function sourceInspectionCandidateSelection(
+  scope: SearchScope,
   query: RetrievalQuery,
   deps: SearchTextRunnerDeps,
 ): Pick<SearchTextRunner, "candidatePathPredicate" | "sourceInspection"> {
@@ -645,7 +647,11 @@ function sourceInspectionCandidateSelection(
     deps.queryInterpretation === undefined
       ? requestedSourceInspectionExtensions(query.text)
       : [];
-  const predicate = buildCandidatePathPredicate(deps.candidatePathGlobs, extensions);
+  const predicate = buildCandidatePathPredicate(
+    deps.candidatePathGlobs,
+    workspacePathCase(scope.workspace),
+    extensions,
+  );
   return {
     ...(extensions.length === 0 ? {} : { sourceInspection: true }),
     ...(predicate === undefined ? {} : { candidatePathPredicate: predicate }),
@@ -685,7 +691,7 @@ function buildSearchTextRunner(
     }),
     policy,
     query,
-    ...sourceInspectionCandidateSelection(query, deps),
+    ...sourceInspectionCandidateSelection(scope, query, deps),
     contentLane: deps.contentLane ?? "evidence",
     ...(deps.onEligibleTextFile === undefined
       ? {}
@@ -715,21 +721,27 @@ function hasCandidatePathFilters(globs: FacadeDeps["candidatePathGlobs"]): boole
   );
 }
 
+// Include/exclude globs and literal exclusions follow the workspace's letter-case rule
+// (pathCase.ts, #4436): on Windows `**/*.pdf` includes `SCAN.PDF`.
 function buildCandidatePathPredicate(
   globs: FacadeDeps["candidatePathGlobs"],
+  pathCase: WorkspacePathCase,
   sourceExtensions: readonly string[] = [],
 ): ((scopePath: string) => boolean) | undefined {
   if (sourceExtensions.length === 0 && !hasCandidatePathFilters(globs)) {
     return undefined;
   }
-  const includes = (globs?.include ?? []).map((glob) => compileGlob(glob, true));
-  const excludes = (globs?.exclude ?? []).map((glob) => compileGlob(glob, true));
-  const literalExcludes = new Set(globs?.excludeLiteralPaths ?? []);
+  const caseSensitive = pathGlobCaseSensitive(pathCase);
+  const includes = (globs?.include ?? []).map((glob) => compileGlob(glob, caseSensitive));
+  const excludes = (globs?.exclude ?? []).map((glob) => compileGlob(glob, caseSensitive));
+  const literalExcludes = new Set(
+    (globs?.excludeLiteralPaths ?? []).map((path) => pathCaseKey(path, pathCase)),
+  );
   return (scopePath: string): boolean => {
     const included = includes.length === 0 || includes.some((pattern) => pattern.test(scopePath));
     return (
       included &&
-      !literalExcludes.has(scopePath) &&
+      !literalExcludes.has(pathCaseKey(scopePath, pathCase)) &&
       !excludes.some((pattern) => pattern.test(scopePath)) &&
       (sourceExtensions.length === 0 || sourceInspectionPathMatches(scopePath, sourceExtensions))
     );
@@ -3696,7 +3708,10 @@ export async function findFiles(
       nowMs,
       hints: deps.searchHints,
       candidateSetFor: deps.candidateSetFor,
-      candidatePathPredicate: buildCandidatePathPredicate(deps.candidatePathGlobs),
+      candidatePathPredicate: buildCandidatePathPredicate(
+        deps.candidatePathGlobs,
+        workspacePathCase(scope.workspace),
+      ),
       deadlineAtMs: deps.deadlineAtMs,
       signal: deps.signal,
     }),
