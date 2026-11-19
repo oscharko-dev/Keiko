@@ -33,7 +33,10 @@ function predecessorIds(vault: MemoryVaultStore, id: MemoryRecord["id"]): readon
 
 /**
  * Whether a stored record replaced this one, so that it is a history row and not the fact's newest
- * value. A record among its own earlier values (a cycle of edges) is no successor.
+ * value. The successor must itself belong to the live lineage: a rejected record is a value the
+ * person refused, so an edge to it makes nothing a history row. An archived or expired successor
+ * still counts, because both can return to accepted and remain the fact's value. A record among its
+ * own earlier values (a cycle of edges) is no successor.
  */
 export function hasStoredSuccessor(
   vault: MemoryVaultStore,
@@ -41,14 +44,11 @@ export function hasStoredSuccessor(
   earlier: readonly MemoryRecord[],
 ): boolean {
   const own = new Set(earlier.map((value) => String(value.id)));
-  return vault
-    .listOutgoingEdges(record.id)
-    .some(
-      (edge) =>
-        edge.kind === "supersedes" &&
-        !own.has(String(edge.toMemoryId)) &&
-        vault.getMemory(edge.toMemoryId) !== undefined,
-    );
+  return vault.listOutgoingEdges(record.id).some((edge) => {
+    if (edge.kind !== "supersedes" || own.has(String(edge.toMemoryId))) return false;
+    const successor = vault.getMemory(edge.toMemoryId);
+    return successor !== undefined && successor.status !== "rejected";
+  });
 }
 
 /**
@@ -68,6 +68,8 @@ export function earlierValues(vault: MemoryVaultStore, record: MemoryRecord): Ea
       if (seen.has(fromId)) continue;
       seen.add(fromId);
       const predecessor = vault.getMemory(fromId as MemoryRecord["id"]);
+      // Edges are removed with the record they touch, so a stored predecessor is a live row; a
+      // record already marked forgotten is the only one that is not a value to forget.
       if (predecessor === undefined || predecessor.status === "forgotten") continue;
       if (scopeCoordinateKey(predecessor.scope) !== home) {
         crossScopeSkipped += 1;

@@ -1667,8 +1667,9 @@ function executeForgetSelection(
   }
   const [first] = targets;
   // One history record forgotten on its own must not cut the earlier values off from the newer one.
-  if (selector.kind === "by-id" && first !== undefined)
+  if (selector.kind === "by-id" && first !== undefined) {
     bridgeSupersessionAround(vault, first, nowMs);
+  }
   vault.deleteMemories(
     operations.map((operation) => ({
       id: operation.memoryId,

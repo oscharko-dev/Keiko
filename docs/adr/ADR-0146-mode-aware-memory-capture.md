@@ -396,9 +396,10 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   statement in a Chat or by picking it in the Memory window, forgets every predecessor still stored
   in its scope that is reachable over its `supersedes` edges, whatever its status now (replaced,
   archived, expired, rejected), with it; an edge into another scope is not followed and is counted
-  as `lineageSkippedCount`, each with its own tombstone, so no earlier value is
+  as `lineageSkippedCount`, and the walk does not pass through such a record, so an earlier value reachable only behind it stays and that count is the signal (a trust boundary, pinned by a test), each with its own tombstone, so no earlier value is
   learned again unattended. A named forget counts a live record and its own predecessors as one
-  match (the lineage collapses to the newest matching record); two different facts that both match are still asked about. Picking a history row
+  match (the lineage collapses to the newest matching record); two different facts that both match are still asked about. A record counts as a history row only when a stored successor that is not rejected exists (an
+  archived or expired successor still counts: both can return to accepted). Picking a history row
   in the Memory window, or naming only the old value, forgets exactly that record and the newer
   value stays; the chain is kept whole around it. A pin that protects the live record in a Chat
   protects its history too (#4223). A

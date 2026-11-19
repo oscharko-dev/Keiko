@@ -72,8 +72,11 @@ MemoriaViva exposes separate lifecycle controls:
   values it replaced are one fact: forgetting the current entry, in the Memory window or with a
   "Vergiss …" in a Chat, forgets every earlier value of the fact that is still stored in the same
   scope, whatever its status now (replaced, archived, expired or rejected), each with its own
-  tombstone, so none of them is learned again by itself. An earlier value in another scope is not
-  followed; the activity log counts it. Picking a history row in the Memory window forgets only that
+  tombstone, so none of them is learned again by itself. The walk stays in the fact's own scope and
+  does not pass through another scope: an earlier value that is only reachable through a record in
+  another scope is kept, and the activity log counts the edge it did not follow
+  (`lineageSkippedCount`), so the person can see it and forget that value on its own. A record is a
+  history row only when a later value of the fact exists that the person did not reject. Picking a history row in the Memory window forgets only that
   value and leaves the newer one. Without an operator retention policy, history stays until the
   person forgets it.
 - **Tombstone retention** purges expired tombstones through the local vault port

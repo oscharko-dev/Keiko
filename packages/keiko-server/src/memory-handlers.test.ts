@@ -3095,6 +3095,123 @@ describe("memory handlers", () => {
       expect(asJson(result).count).toBe(3);
     });
 
+    // An edge to a rejected record makes nothing a history row: the newest value is still the
+    // fact, and its earlier values go with it.
+    it("forgets the earlier values although the newest value has an edge to a rejected record", async () => {
+      const vault = makeVault();
+      const { first, second, third } = await threeValues(vault);
+      vault.insertMemory(
+        makeMemory("lineage-rejected", "Ich wohne in Trier", { status: "rejected" }),
+      );
+      vault.insertEdge({
+        id: "lineage-to-rejected" as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: third,
+        toMemoryId: memoryId("lineage-rejected"),
+        kind: "supersedes",
+        createdAt: Date.now(),
+      });
+
+      const result = await forgetById(vault, String(third));
+
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(3);
+      for (const id of [first, second, third]) expect(vault.getMemory(id)).toBeUndefined();
+      expect(vault.getMemory(memoryId("lineage-rejected"))).toBeDefined();
+    });
+
+    // An archived or expired successor can return to accepted, so it keeps its predecessor a history row.
+    it.each(["archived", "expired"] as const)(
+      "keeps a record with a %s successor a history row",
+      async (status) => {
+        const vault = makeVault();
+        vault.insertMemory(makeMemory("hist-old", "Ich wohne in Köln", { status: "superseded" }));
+        vault.insertMemory(makeMemory("hist-new", "Ich wohne in Bonn", { status }));
+        vault.insertEdge({
+          id: "hist-edge" as MemoryEdgeId,
+          schemaVersion: "1",
+          fromMemoryId: memoryId("hist-old"),
+          toMemoryId: memoryId("hist-new"),
+          kind: "supersedes",
+          createdAt: Date.now(),
+        });
+        const result = await forgetById(vault, "hist-old");
+        expect(result.status).toBe(200);
+        expect(asJson(result).count).toBe(1);
+        expect(vault.getMemory(memoryId("hist-new"))).toBeDefined();
+      },
+    );
+
+    // A conflict loser stays `conflicted` with an edge to the winner (and may be rehabilitated).
+    it("forgets a conflict loser with the winner, and a rehabilitated loser alone", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("cf-winner", "formatter is biome"));
+      vault.insertMemory(makeMemory("cf-loser", "formatter is prettier"));
+      const resolved = await handleResolveMemoryConflict(
+        makeCtx("/api/memory/conflicts/resolve", {
+          winner: "cf-winner",
+          losers: ["cf-loser"],
+          reason: "conflict-resolved",
+        }),
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(resolved.status).toBe(200);
+      vault.updateMemory(memoryId("cf-loser"), { status: "accepted" }, Date.now());
+
+      const alone = await forgetById(vault, "cf-loser");
+      expect(asJson(alone).count).toBe(1);
+      expect(vault.getMemory(memoryId("cf-winner"))).toBeDefined();
+
+      const other = makeVault();
+      other.insertMemory(makeMemory("cf2-winner", "formatter is biome"));
+      other.insertMemory(makeMemory("cf2-loser", "formatter is prettier"));
+      await handleResolveMemoryConflict(
+        makeCtx("/api/memory/conflicts/resolve", {
+          winner: "cf2-winner",
+          losers: ["cf2-loser"],
+          reason: "conflict-resolved",
+        }),
+        makeDeps({ memoryVault: other }),
+      );
+      const together = await forgetById(other, "cf2-winner");
+      expect(asJson(together).count).toBe(2);
+      expect(other.getMemory(memoryId("cf2-loser"))).toBeUndefined();
+    });
+
+    // The walk does not pass through another scope: the earlier same-scope value behind a foreign
+    // record is not reached, and lineageSkippedCount is the signal (ADR-0146).
+    it("does not reach a same-scope value behind a foreign-scope middle record", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("fm-a", "Ich wohne in Köln", { status: "superseded" }));
+      vault.insertMemory(
+        makeMemory("fm-f", "Ich wohne in Ulm", {
+          status: "superseded",
+          scope: { kind: "workspace", workspaceId: workspaceId("ws-other") },
+        }),
+      );
+      vault.insertMemory(makeMemory("fm-c", "Ich wohne in Bonn"));
+      for (const [id, from, to] of [
+        ["fm-e1", "fm-a", "fm-f"],
+        ["fm-e2", "fm-f", "fm-c"],
+      ] as const) {
+        vault.insertEdge({
+          id: id as MemoryEdgeId,
+          schemaVersion: "1",
+          fromMemoryId: memoryId(from),
+          toMemoryId: memoryId(to),
+          kind: "supersedes",
+          createdAt: Date.now(),
+        });
+      }
+
+      const result = await forgetById(vault, "fm-c");
+
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(1);
+      expect(vault.getMemory(memoryId("fm-a"))).toBeDefined();
+      expect(vault.getMemory(memoryId("fm-f"))).toBeDefined();
+    });
+
     it("picking an archived history row forgets only that row", async () => {
       const vault = makeVault();
       const { first, second, third } = await threeValues(vault);
