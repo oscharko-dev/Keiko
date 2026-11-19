@@ -35,8 +35,11 @@ on:
 
 permissions: {}
 
+# In a called workflow github.event_name and github.ref are the caller's, so the publication run's
+# call would share a group with a manual run on dev and a pending run could be replaced. Only pull
+# requests share a group per ref (a newer push supersedes an older one); every other run is its own.
 concurrency:
-  group: npm-folder-qualify-${{ github.event_name }}-${{ github.ref }}
+  group: npm-folder-qualify-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -156,5 +159,6 @@ jobs:
         with:
           name: npm-folder-${{ matrix.target }}
           path: qualification-out
+          overwrite: true
           if-no-files-found: warn
           retention-days: 30

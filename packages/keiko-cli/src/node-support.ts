@@ -11,13 +11,24 @@ export type NodeSupport = "supported" | "unsupported" | "unknown";
 type Triple = readonly [number, number, number];
 type Comparator = (actual: Triple, bound: Triple) => boolean;
 
-const VERSION = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+].*)?$/u;
+interface ParsedVersion {
+  readonly triple: Triple;
+  /** True only for a complete `x.y.z`; a shorter spelling is zero-filled. */
+  readonly full: boolean;
+  readonly prerelease: boolean;
+}
+
+const VERSION = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(-[^+]*)?(?:\+.*)?$/u;
 const COMPARATOR = /^(>=|<=|>|<|=)?(.+)$/u;
 
-function parseVersion(text: string): Triple | undefined {
+function parseVersion(text: string): ParsedVersion | undefined {
   const match = VERSION.exec(text);
   if (match === null) return undefined;
-  return [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)];
+  return {
+    triple: [Number(match[1]), Number(match[2] ?? 0), Number(match[3] ?? 0)],
+    full: match[2] !== undefined && match[3] !== undefined,
+    prerelease: match[4] !== undefined,
+  };
 }
 
 function compareTriples(left: Triple, right: Triple): number {
@@ -36,11 +47,18 @@ const COMPARATORS: Readonly<Record<string, Comparator>> = {
   "=": (actual, bound) => compareTriples(actual, bound) === 0,
 };
 
+// Zero-filling a partial bound is exact only for `>=` and `<` (`>=26` is `>=26.0.0`, `<27` is
+// `<27.0.0`); `>26`, `<=26` and `=26` mean a whole line, which this mirror does not model.
+const PARTIAL_BOUND_OPERATORS: ReadonlySet<string> = new Set([">=", "<"]);
+
 function satisfiesToken(actual: Triple, token: string): boolean | undefined {
   const match = COMPARATOR.exec(token);
+  const operator = match?.[1] ?? "=";
   const bound = parseVersion(match?.[2] ?? "");
-  const compare = COMPARATORS[match?.[1] ?? "="];
-  return bound === undefined || compare === undefined ? undefined : compare(actual, bound);
+  const compare = COMPARATORS[operator];
+  if (bound === undefined || compare === undefined || bound.prerelease) return undefined;
+  if (!bound.full && !PARTIAL_BOUND_OPERATORS.has(operator)) return undefined;
+  return compare(actual, bound.triple);
 }
 
 function satisfiesClause(actual: Triple, clause: string): boolean | undefined {
@@ -58,18 +76,21 @@ function satisfiesClause(actual: Triple, clause: string): boolean | undefined {
   return satisfied;
 }
 
-/** The support verdict of `version` against a declared range such as `>=26.13.1 <27`. */
+/**
+ * The support verdict of `version` against a declared range such as `>=26.13.1 <27`. Every clause
+ * must be readable. npm's semver lets no prerelease of the running Node.js satisfy such a range, so
+ * a prerelease is `unsupported` whenever the range itself is readable.
+ */
 export function nodeSupportOf(version: string, range: string | undefined): NodeSupport {
   const actual = parseVersion(version);
   if (actual === undefined || range === undefined) return "unknown";
-  let unsupported = false;
+  let satisfied = false;
   for (const clause of range.split("||")) {
-    const verdict = satisfiesClause(actual, clause);
+    const verdict = satisfiesClause(actual.triple, clause);
     if (verdict === undefined) return "unknown";
-    if (verdict) return "supported";
-    unsupported = true;
+    satisfied = satisfied || verdict;
   }
-  return unsupported ? "unsupported" : "unknown";
+  return satisfied && !actual.prerelease ? "supported" : "unsupported";
 }
 
 /**

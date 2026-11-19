@@ -2146,12 +2146,14 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
   // default project, and the skip is recorded body-free.
   it("does not seed the launch directory of a Keiko running in its own program folder", async () => {
     const programFolder = tmp("launch-program-folder-");
+    vi.stubEnv("KEIKO_LAUNCH_FROM_PROGRAM_FOLDER", "1");
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(programFolder);
     const activityLog = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("ev-launch-program-"),
-      env: { KEIKO_LAUNCH_FROM_PROGRAM_FOLDER: "1" },
+      env: {},
       uiDbPath: join(tmp("db-launch-program-"), "keiko-ui.db"),
       initialProjectPath: programFolder,
     });
@@ -2166,8 +2168,34 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       });
       expect(JSON.stringify(lines[0])).not.toContain("launch-program-folder-");
     } finally {
+      cwd.mockRestore();
       await deps.dispose?.();
       resetServerLogger();
+    }
+  });
+
+  // The rule refuses the program folder, not the launch: a folder outside it that the launcher
+  // names explicitly is the person's own choice and is seeded as before.
+  it("still seeds a folder outside the program folder on a program-folder launch", async () => {
+    const programFolder = tmp("launch-program-folder-");
+    const chosen = tmp("launch-chosen-project-");
+    vi.stubEnv("KEIKO_LAUNCH_FROM_PROGRAM_FOLDER", "1");
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(programFolder);
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-launch-chosen-"),
+      env: {},
+      uiDbPath: join(tmp("db-launch-chosen-"), "keiko-ui.db"),
+      initialProjectPath: chosen,
+      initialProjectTrustSource: "explicit-launcher-selection",
+    });
+
+    try {
+      expect(deps.preferredProjectPath).toBe(chosen);
+      expect(deps.store.listProjects().map((project) => project.path)).toEqual([chosen]);
+    } finally {
+      cwd.mockRestore();
+      await deps.dispose?.();
     }
   });
 

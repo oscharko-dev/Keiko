@@ -51,7 +51,8 @@ describe("Coding Workbench translations", () => {
     const en = translateCodingWorkbench("en", key);
     const de = translateCodingWorkbench("de", key);
     expect(en).toContain("Your administrator");
-    expect(de).toContain("Administrator");
+    // The German catalogs say "deine Administration" throughout.
+    expect(de).toContain("Deine Administration");
     for (const sentence of [en, de]) {
       expect(sentence).not.toMatch(/setup\.exe|npm install|Review updates|Updates prüfen/u);
     }
@@ -250,17 +251,30 @@ describe("Coding Workbench translations", () => {
     );
   });
 
-  // #4068: a refused permission grant says whose folder it is and the one way out (a user-owned
-  // installation), and the fallback names the supervisor, never an unspecific internal error.
-  it("names the way out of a refused permission grant and the supervisor in the fallback", () => {
+  // #4068: the six Windows start refusals are plain words for a non-technical reader: no "install"
+  // (a folder package installs nothing) and no internal jargon.
+  it.each([
+    "codingWorkbench.event.failure.runtime-supervisor-grants-acl",
+    "codingWorkbench.event.failure.runtime-supervisor-grants-directory",
+    "codingWorkbench.event.failure.runtime-supervisor-grants-capability",
+    "codingWorkbench.event.failure.runtime-supervisor-gateway-connect",
+    "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
+    "codingWorkbench.event.failure.runtime-supervisor-refused",
+  ] as const)("words %s in plain language without install or jargon", (key) => {
+    for (const locale of ["en", "de"] as const) {
+      const text = translateCodingWorkbench(locale, key);
+      expect(text).not.toMatch(/install/iu);
+      expect(text).not.toMatch(/\b(?:ACL|AppContainer|supervisor|capability)\b/iu);
+      expect(text).not.toMatch(/[A-Za-z]:\\|0x[0-9a-f]+/iu);
+    }
+    expect(translateCodingWorkbench("en", key)).toContain("on this Windows computer");
+    expect(translateCodingWorkbench("de", key)).toContain("auf diesem Windows-Computer");
+  });
+
+  it("points a refused folder grant at a folder that belongs to the person", () => {
     const acl = "codingWorkbench.event.failure.runtime-supervisor-grants-acl";
-    expect(translateCodingWorkbench("en", acl)).toContain("installed by another account");
     expect(translateCodingWorkbench("en", acl)).toContain("your own user folder");
     expect(translateCodingWorkbench("de", acl)).toContain("deinen eigenen Benutzerordner");
-    const refused = "codingWorkbench.event.failure.runtime-supervisor-refused";
-    expect(translateCodingWorkbench("en", refused)).toContain("Windows runtime supervisor refused");
-    expect(translateCodingWorkbench("de", refused)).toContain("Windows-Runtime-Supervisor");
-    expect(translateCodingWorkbench("en", refused)).not.toContain("internal error");
   });
 
   // #4068: a start the Windows broker cannot confine must name what to change, never "try again".

@@ -2822,9 +2822,10 @@ function ChatSourceTransitionStatus({
   );
 }
 
-// Models are configured but nobody activated one in this process (the state after every start): the
-// way out is Settings > Models, not a gateway check. A model whose check failed keeps the general
-// sentence.
+// Models are configured but none has a verdict in this process: `conversationReady` is undefined
+// after every start (nobody activated one) and also when an activation's check timed out or met a
+// busy gateway. The sentence is true for both and names the way out, Settings > Models, not a
+// gateway check. A model whose check failed keeps the general sentence.
 function modelsAwaitActivation(capabilities: readonly ModelCapability[] | undefined): boolean {
   return (
     capabilities?.some(

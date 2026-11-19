@@ -1842,9 +1842,10 @@ function observeVerificationExecution(
     executed?.(target);
   } else {
     input.verificationBlocked?.("VERIFICATION_NOT_RUN", target);
-    // A host that cannot isolate a step cannot verify any target: the blocker is the run's, not the
-    // target's, so a target nobody selected yet cannot hide it from the continuation decision.
-    if (report.results.some(isIsolationUnavailableDenial)) {
+    // A host that cannot isolate a step cannot verify any target for a run without a shell: the
+    // blocker is the run's, not the target's, so a target nobody selected yet cannot hide it from
+    // the continuation decision. It is decided by the predicate that words the model's reason.
+    if (isolationBlocksRun(input, report)) {
       input.verificationBlocked?.("VERIFICATION_ISOLATION_UNAVAILABLE");
     }
   }
@@ -2121,7 +2122,7 @@ function failedVerificationOutcome(
 ): VerificationPortResult {
   const { report } = attempt;
   const status = modelFacingStatus(report);
-  const reasonCode = isolationUnavailable(report, status)
+  const reasonCode = isolationBlocksRun(input, report)
     ? "VERIFICATION_ISOLATION_UNAVAILABLE"
     : VERIFICATION_OUTCOME_REASON_CODES[status];
   const verificationFailure = modelVerificationFailure(report, attempt.failureOutput);
@@ -2200,6 +2201,24 @@ function isolationUnavailable(
   status: Exclude<VerificationStatus, "passed">,
 ): boolean {
   return status === "denied" && report.results.some(isIsolationUnavailableDenial);
+}
+
+// Only the native profile brings the model a shell of its own, and that shell runs inside the
+// runtime's own confinement.
+function runHasShell(input: Pick<ProductionManagedWorktreeToolInput, "toolProfile">): boolean {
+  return input.toolProfile === "native";
+}
+
+// The host cannot isolate the governed verifier. A run whose model has no shell has no way left to
+// verify, so the run itself is blocked and the model is told to stop looking for one. A run with a
+// shell keeps the way it always had: the repository's own check in that shell counts as the
+// verification (SHELL_VERIFICATION_STATUS_RULE), exactly as for a step the verifier cannot install
+// for. One predicate for the model's reason and for the run's blocker, so they cannot disagree.
+function isolationBlocksRun(
+  input: Pick<ProductionManagedWorktreeToolInput, "toolProfile">,
+  report: VerificationReport,
+): boolean {
+  return !runHasShell(input) && isolationUnavailable(report, modelFacingStatus(report));
 }
 
 function notRunReason(

@@ -2,6 +2,10 @@
 // closed run failure codes a refused launch settles with (#4068). Before this mapping the reason fed
 // only the exit diagnostic, and a launch the supervisor refused read as the internal `runtime-failed`.
 // The codes carry no path, identifier or Windows error text; the Workbench words each one.
+//
+// Only the Windows supervisor's words start with `supervisor-`. The macOS and Linux supervisors
+// number their refusals differently and their words carry their own prefix
+// (nativeRuntimeProcessTree.ts), so none of them can settle a run with a Windows cause.
 import type { CodingWorkbenchRuntimeFailureCode } from "@oscharko-dev/keiko-contracts";
 
 export type SupervisorRefusalFailureCode = Extract<

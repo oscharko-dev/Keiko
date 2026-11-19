@@ -38,7 +38,11 @@ import {
 import { errorBody } from "./route-error.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { isCapTerminatedTruncation, observedGitRunner } from "./gitProcessActivity.js";
+import {
+  isCapTerminatedTruncation,
+  observedGitRunner,
+  stderrHoldsOnlyGitWarnings,
+} from "./gitProcessActivity.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import {
@@ -1113,13 +1117,15 @@ function normalizeNoIndexDiff(
  * The runner kills git once its output reaches the byte cap, so a large tracked diff ends with a
  * signal. That cut is the bounded, truncated view the routes report, not a failed diff (#4113).
  * Only a run the cap itself ended counts (`isCapTerminatedTruncation`): a timeout, an abort, a
- * refusal, git error output or an exit status git chose on its own stays a failure.
+ * refusal, git error output or an exit status git chose on its own stays a failure. Git's own
+ * `warning:` notices are not error output: on Windows nearly every diff of a file with LF line
+ * endings carries one, and it must not turn a large diff into a failed one.
  */
 function byteCapCutAsBoundedDiff(result: GitProcessResult): GitProcessResult {
   const cutAtByteCap =
     isCapTerminatedTruncation(result) &&
     result.refusal === undefined &&
-    result.stderr.length === 0 &&
+    stderrHoldsOnlyGitWarnings(result.stderr) &&
     result.stdout.startsWith("diff --git ");
   return cutAtByteCap ? { ...result, exitCode: 0 } : result;
 }

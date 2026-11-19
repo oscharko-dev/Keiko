@@ -1037,8 +1037,22 @@ function verificationNotRunDetail(
   }
   const steps = Array.isArray(notRun) ? notRun.filter(isNotRunStep).slice(0, 5) : [];
   if (steps.length === 0) return {};
-  const named = steps.map((step) => `${step.kind} (${NOT_RUN_WORDS[step.reason]})`);
+  const shell = reasonCode === "VERIFICATION_NOT_RUN";
+  const named = steps.map((step) => `${step.kind} (${notRunWords(step.reason, shell)})`);
   return { detail: `These verification steps did not run: ${named.join(", ")}.` };
+}
+
+// The isolated verifier has no container runtime on this host. A run that reaches the model as
+// VERIFICATION_NOT_RUN has a shell of its own (the port names a shell-less run
+// VERIFICATION_ISOLATION_UNAVAILABLE instead), and there the same check still counts: the model is
+// told to run it in that shell, as for a step the verifier cannot install for.
+const ISOLATION_UNAVAILABLE_WITH_SHELL =
+  "the isolated verifier has no container runtime (Docker or Podman) on this computer; run this check in your own shell";
+
+function notRunWords(reason: VerificationNotRunReason, shell: boolean): string {
+  return shell && reason === "isolation-unavailable"
+    ? ISOLATION_UNAVAILABLE_WITH_SHELL
+    : NOT_RUN_WORDS[reason];
 }
 
 // A workspace with several packages: the runner names the workspace-relative folders so the model can

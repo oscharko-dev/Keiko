@@ -644,11 +644,11 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runtime.npmRuntimePackageMissing":
     "Dieses Keiko wurde mit npm installiert, und das Coding-Runtime-Paket für diesen Computer fehlt. Installiere stattdessen das Keiko-Desktop-Paket für diesen Computer (unter Windows: keiko-windows-x64-setup.exe von der Keiko-Release-Seite); es bringt die Coding-Runtime mit.",
   "codingWorkbench.runtime.managedRuntimePackageMissing":
-    "Dieser Keiko-Ordner bringt keine Coding-Runtime für diesen Computer mit, deshalb läuft die Coding Workbench hier nicht. Chat und die anderen Fenster funktionieren wie gewohnt. Deine Administratorin oder dein Administrator kann ein Keiko-Paket bereitstellen, das die Coding-Runtime enthält.",
+    "Dieser Keiko-Ordner bringt keine Coding-Runtime für diesen Computer mit, deshalb läuft die Coding Workbench hier nicht. Chat und die anderen Fenster funktionieren wie gewohnt. Deine Administration kann ein Keiko-Paket bereitstellen, das die Coding-Runtime enthält.",
   "codingWorkbench.runtime.portableRuntimeUnverified":
     "Diese Keiko-Desktop-Installation konnte ihre mitgelieferte Coding-Runtime nicht prüfen. Aktualisiere Keiko über „Updates prüfen“ oder lade keiko-windows-x64-setup.exe erneut von der Keiko-Release-Seite.",
   "codingWorkbench.runtime.managedRuntimeUnverified":
-    "Dieses Keiko konnte seine mitgelieferte Coding-Runtime nicht prüfen, deshalb läuft die Coding Workbench hier nicht. Möglicherweise fehlt eine Datei oder wurde verändert, zum Beispiel durch Sicherheitssoftware. Chat und die anderen Fenster funktionieren wie gewohnt. Deine Administratorin oder dein Administrator kann ein frisches Keiko-Paket bereitstellen.",
+    "Dieses Keiko konnte seine mitgelieferte Coding-Runtime nicht prüfen, deshalb läuft die Coding Workbench hier nicht. Möglicherweise fehlt eine Datei oder wurde verändert, zum Beispiel durch Sicherheitssoftware. Chat und die anderen Fenster funktionieren wie gewohnt. Deine Administration kann ein frisches Keiko-Paket bereitstellen.",
   "codingWorkbench.runtime.developmentRefused":
     "Die Entwicklungs-Runtime konnte für diesen Checkout nicht aktiviert werden. Prüfe das Dev-Setup und den Ablehnungsgrund im Aktivitätsprotokoll und starte Keiko danach neu.",
   "codingWorkbench.runtime.payloadMissing":
@@ -1351,17 +1351,17 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure.workspace-unqualified":
     "Keiko lässt in diesem Ordner keinen Agenten arbeiten, weil er Keikos eigene Installation enthält, die der Agent sonst verändern könnte. Wähle einen Projektordner außerhalb der Keiko-Installation und starte die Aufgabe dann erneut.",
   "codingWorkbench.event.failure.runtime-supervisor-grants-acl":
-    "Windows hat Keiko nicht erlaubt, die Berechtigungen zu setzen, die dieser Lauf auf Keikos eigenem Ordner oder seinem Datenordner braucht, deshalb konnte der Lauf nicht starten. Das passiert meist, wenn ein anderes Konto Keiko installiert hat, zum Beispiel ein Administrator. Installiere Keiko in deinen eigenen Benutzerordner oder kopiere es dorthin und starte die Aufgabe dann erneut.",
+    "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil Windows Keiko nicht erlaubt hat, seinen eigenen Ordner zu nutzen. Verschiebe oder kopiere den Keiko-Ordner in einen Ordner, der dir gehört, zum Beispiel in deinen eigenen Benutzerordner, und starte die Aufgabe dann erneut. Geht das nicht, bitte deine Administration um Hilfe.",
   "codingWorkbench.event.failure.runtime-supervisor-grants-directory":
-    "Keiko konnte einen Ordner nicht öffnen, den der Lauf braucht, etwa Keikos eigenen Ordner oder seinen Datenordner, deshalb konnte der Lauf nicht starten. Prüfe, ob diese Ordner noch existieren und ob dieses Konto sie öffnen darf, und starte die Aufgabe dann erneut.",
+    "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil es einen Ordner nicht öffnen konnte, den es braucht. Prüfe, ob der Keiko-Ordner noch existiert und in einem Ordner liegt, der dir gehört, zum Beispiel in deinem eigenen Benutzerordner, und starte die Aufgabe dann erneut. Hilft das nicht, bitte deine Administration um Hilfe.",
   "codingWorkbench.event.failure.runtime-supervisor-grants-capability":
-    "Windows hat dem Lauf nicht erlaubt, den Aufgaben-Arbeitsbereich zu lesen, deshalb konnte der Lauf nicht starten. Prüfe, ob der Ordner des Aufgaben-Arbeitsbereichs noch auf einem lokalen Laufwerk existiert und ob dieses Konto ihn lesen darf, und starte die Aufgabe dann erneut.",
+    "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil Windows dem Lauf nicht erlaubt hat, den Aufgabenordner zu lesen. Prüfe, ob der Ordner noch auf einem Laufwerk dieses Computers existiert und du ihn öffnen darfst, und starte die Aufgabe dann erneut. Hilft das nicht, bitte deine Administration um Hilfe.",
   "codingWorkbench.event.failure.runtime-supervisor-gateway-connect":
-    "Keiko konnte das Windows-Runtime-Gateway nicht erreichen, deshalb konnte der Lauf nicht starten. Prüfe den Gateway-Status oben in der Coding Workbench, wähle Reparieren, falls angeboten, und starte die Aufgabe dann erneut.",
+    "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil der Windows-Dienst, den Keiko für Coding-Läufe braucht, nicht geantwortet hat. Wähle oben in der Coding Workbench Reparieren, falls angeboten, und starte die Aufgabe dann erneut. Hilft das nicht, bitte deine Administration um Hilfe.",
   "codingWorkbench.event.failure.runtime-supervisor-gateway-admit":
-    "Das Windows-Runtime-Gateway hat den Lauf nicht zugelassen, deshalb konnte er nicht starten. Prüfe den Gateway-Status oben in der Coding Workbench, wähle Reparieren, falls angeboten, und starte die Aufgabe dann erneut.",
+    "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil der Windows-Dienst, den Keiko für Coding-Läufe braucht, ihn nicht angenommen hat. Wähle oben in der Coding Workbench Reparieren, falls angeboten, und starte die Aufgabe dann erneut. Hilft das nicht, bitte deine Administration um Hilfe.",
   "codingWorkbench.event.failure.runtime-supervisor-refused":
-    "Der Windows-Runtime-Supervisor hat den Start verweigert, deshalb hat der Lauf nicht begonnen. Starte die Aufgabe erneut; tritt das wieder auf, prüfe den Activity Log.",
+    "Keiko konnte den Coding-Lauf auf diesem Windows-Computer nicht starten, weil Windows den Start verweigert hat. Starte die Aufgabe erneut. Tritt es wieder auf, bitte deine Administration um Hilfe.",
   "codingWorkbench.event.failure.generic":
     "Dieser Schritt konnte nicht abgeschlossen werden. Prüfe den Activity Log und versuche es erneut.",
   "codingWorkbench.event.failure.envelope-duration-exhausted":

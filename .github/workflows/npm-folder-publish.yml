@@ -76,6 +76,10 @@ jobs:
     needs: [prepare, qualify]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # A deployment environment of its own, as release.yml and coding-runtime-publish.yml have one. It
+    # holds no secrets (the job uses only github.token), and no existing environment is named, so no
+    # secret's reach grows. The owner may add protection rules to it.
+    environment: npm-folder-publish
     permissions:
       attestations: write
       contents: write

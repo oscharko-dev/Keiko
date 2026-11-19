@@ -36,6 +36,7 @@ import { sha256, sha256File, sha256FileChunked } from "../lib/digest.mjs";
 import { isMainModule } from "../lib/is-main-module.mjs";
 import { readJsonFile } from "../lib/json.mjs";
 import {
+  CHECK_NAMES,
   DEFAULT_REPOSITORY,
   EVIDENCE_KIND,
   EVIDENCE_SCHEMA_VERSION,
@@ -48,6 +49,7 @@ import {
 const PACKAGE_NAME = "@oscharko-dev/keiko";
 const INSTALLED_MARKER = ".keiko-npm-installed";
 const MAX_DOWNLOAD_BYTES = 600 * 1024 * 1024;
+const DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const START_TIMEOUT_MS = 15 * 60 * 1000;
 const STOP_TIMEOUT_MS = 2 * 60 * 1000;
 const HEALTH_TIMEOUT_MS = 90 * 1000;
@@ -196,7 +198,10 @@ export function buildEvidence(input) {
     archiveSha256: archiveSha256 ?? null,
     zipSha256: zipSha256 ?? null,
     runner,
-    passed: results.length > 0 && results.every((result) => result.ok),
+    // Every named check must have run and passed: a run that stopped at a failed check never passes.
+    passed:
+      results.every((result) => result.ok) &&
+      CHECK_NAMES.every((name) => results.some((result) => result.name === name && result.ok)),
     checks: results.map(({ name, ok, durationMs, detail }) => ({
       name,
       result: ok ? "pass" : "fail",
@@ -222,15 +227,32 @@ async function freePort() {
   return address.port;
 }
 
-async function download(url, destination) {
-  const response = await globalThis.fetch(url, { redirect: "follow", credentials: "omit" });
-  if (!response.ok || response.body === null) refuse(`${url} answered ${response.status}`);
-  const length = Number(response.headers.get("content-length") ?? 0);
-  if (length > MAX_DOWNLOAD_BYTES) refuse(`${url} is larger than ${MAX_DOWNLOAD_BYTES} bytes`);
+/** Downloads a URL into a file, bounded in bytes and in time; a stalled server is refused. */
+export async function download(
+  url,
+  destination,
+  { timeoutMs = DOWNLOAD_TIMEOUT_MS, fetchImpl = globalThis.fetch } = {},
+) {
+  const signal = globalThis.AbortSignal.timeout(timeoutMs);
+  try {
+    const response = await fetchImpl(url, { redirect: "follow", credentials: "omit", signal });
+    if (!response.ok || response.body === null) refuse(`${url} answered ${response.status}`);
+    const length = Number(response.headers.get("content-length") ?? 0);
+    if (length > MAX_DOWNLOAD_BYTES) refuse(`${url} is larger than ${MAX_DOWNLOAD_BYTES} bytes`);
+    await writeBounded(response.body, destination, url);
+  } catch (error) {
+    if (error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)) {
+      refuse(`${url} did not finish within ${Math.round(timeoutMs / 1000)} s`);
+    }
+    throw error;
+  }
+}
+
+async function writeBounded(body, destination, url) {
   const fd = openSync(destination, "w", 0o600);
   let written = 0;
   try {
-    for await (const chunk of response.body) {
+    for await (const chunk of body) {
       written += chunk.length;
       if (written > MAX_DOWNLOAD_BYTES) refuse(`${url} exceeds ${MAX_DOWNLOAD_BYTES} bytes`);
       writeFileSync(fd, chunk);
@@ -300,18 +322,27 @@ function extractZip(zipPath, destination, os) {
   if (result.status !== 0) refuse(`the platform extraction tool failed (${String(result.status)})`);
 }
 
+/**
+ * The PowerShell command that lists the process ids naming the folder in `$env:KEIKO_QUALIFY_FOLDER`.
+ * `-like` reads `[` and `]` as wildcards, so the path is escaped first: a folder named `a[1]` must
+ * match itself and nothing else.
+ */
+export function windowsProcessListCommand() {
+  return [
+    "$folder = [WildcardPattern]::Escape($env:KEIKO_QUALIFY_FOLDER);",
+    "Get-CimInstance Win32_Process | Where-Object {",
+    "$_.CommandLine -like ('*' + $folder + '*') -or $_.ExecutablePath -like ($folder + '*')",
+    "} | ForEach-Object { $_.ProcessId }",
+  ].join(" ");
+}
+
 /** Process ids whose command line names the folder; macOS reads ps, Windows reads CIM. */
 export function processesOf(folder, os = platform()) {
   const result =
     os === "win32"
       ? spawnSync(
           "powershell.exe",
-          [
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like ('*' + $env:KEIKO_QUALIFY_FOLDER + '*') -or $_.ExecutablePath -like ($env:KEIKO_QUALIFY_FOLDER + '*') } | ForEach-Object { $_.ProcessId }",
-          ],
+          ["-NoProfile", "-NonInteractive", "-Command", windowsProcessListCommand()],
           { env: { ...process.env, KEIKO_QUALIFY_FOLDER: folder }, encoding: "utf8" },
         )
       : spawnSync("ps", ["-axo", "pid=,command="], { encoding: "utf8", maxBuffer: 32 << 20 });
@@ -537,11 +568,30 @@ function emergencyStop(session, os) {
   }
 }
 
-function cleanup(session, os) {
+/**
+ * Removes what the run created. A path that cannot be removed (Windows holds a file a little after
+ * its process ends) never hides the evidence or stops the others: it is counted and named by its
+ * closed word, never by its path. Returns the words of the paths that remain.
+ */
+export function cleanup(session, os, { remove = rmSync, warn = console.warn } = {}) {
   emergencyStop(session, os);
-  for (const path of [session.root, session.work, session.state]) {
-    if (path !== undefined) rmSync(path, { recursive: true, force: true, maxRetries: 3 });
+  const remaining = [];
+  for (const [word, path] of [
+    ["root", session.root],
+    ["work", session.work],
+    ["state", session.state],
+  ]) {
+    if (path === undefined) continue;
+    try {
+      remove(path, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+    } catch {
+      remaining.push(word);
+    }
   }
+  if (remaining.length > 0) {
+    warn(`WARN cleanup left ${remaining.length} path(s) behind: ${remaining.join(", ")}`);
+  }
+  return remaining;
 }
 
 /** Runs the qualification and returns the evidence; creates and removes its own folders. */

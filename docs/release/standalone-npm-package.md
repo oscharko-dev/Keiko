@@ -228,6 +228,12 @@ gh attestation verify .\keiko-windows-x64.npm.zip --repo oscharko-dev/Keiko
 Unblock-File .\keiko-windows-x64.npm.zip
 ```
 
+The build provenance attestation is made before the release exists, so a publication that fails
+afterwards can leave an attestation for ZIPs that were never released. That is harmless: nothing
+points a person at them, and the next run attests and publishes the ZIPs it tested. If the final
+check after publication cannot read or confirm the release, the prerelease is already public and
+nothing was removed, because a published release is immutable.
+
 The companion prerelease is a transport for the tested ZIPs. It is not the product release and
 grants no update trust: an installed Keiko reads only the product release for updates, and an npm
 folder package never offers an in-app update. The qualification
@@ -243,7 +249,8 @@ uses no model, no gateway and no browser.
 
 A release is immutable once published, so a version that already has its prerelease is refused. The
 same qualification runs on a pull request that changes the builder, `scripts/standalone/**`, the
-script or the workflow, but only when the root package version is already published on npm.
+script or the workflow, but only when the root package version is already published on npm and
+its product release `v<version>` exists; otherwise the run ends green with a notice.
 
 ## Build A Package
 

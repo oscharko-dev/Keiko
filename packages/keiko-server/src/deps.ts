@@ -234,7 +234,7 @@ import {
   recordWorkspaceRootDenied,
 } from "./workspace-root-denial-log.js";
 import { pathIsDenied } from "./files-deny.js";
-import { launchedFromProgramFolder } from "./launch-directory.js";
+import { insideProgramFolder } from "./launch-directory.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
@@ -3473,29 +3473,28 @@ export function reconcileTaskWorkspacesAtStartup(
 function seedInitialProject(
   store: UiStore,
   uiDbPath: string,
-  options: Pick<
-    BuildHandlerDepsOptions,
-    "initialProjectPath" | "initialProjectTrustSource" | "env"
-  >,
+  options: Pick<BuildHandlerDepsOptions, "initialProjectPath" | "initialProjectTrustSource">,
   workspaceScriptTrust: WorkspaceScriptTrustService,
   correlationId: string,
 ): string | undefined {
-  const { initialProjectPath, initialProjectTrustSource: trustSource, env } = options;
+  const { initialProjectPath, initialProjectTrustSource: trustSource } = options;
   if (initialProjectPath === undefined || initialProjectPath.trim().length === 0) {
     return undefined;
   }
+  const normalizedPath = validateProjectPath(initialProjectPath, { mustExist: true });
   // A Keiko that runs inside its own program folder (the folder packages, the managed portable
   // launch) holds that folder's program files and, in a team package, the gateway token: it is no
-  // project, so Keiko starts without a default one (ADR-0121 D9). Recorded body-free, like a
+  // project, so Keiko starts without a default one (ADR-0121 D9). The read surface's own predicate
+  // decides it, so the seed and every later root check cannot disagree, and a folder outside the
+  // program folder that the launcher names explicitly is still seeded. Recorded body-free, like a
   // refused launch directory.
-  if (launchedFromProgramFolder(env)) {
+  if (insideProgramFolder(normalizedPath)) {
     recordWorkspaceRootDenied(
       { reason: "program-folder-launch", failureKind: "DENIED", errorKind: "authority-denied" },
       { correlationId },
     );
     return undefined;
   }
-  const normalizedPath = validateProjectPath(initialProjectPath, { mustExist: true });
   assertUiDbOutsideProject(uiDbPath, normalizedPath);
   // A launch directory the read surface refuses (Keiko's own tool-state area) is no project: every
   // Git and Files read of it is denied, so offering it only starts the person on a refused folder.

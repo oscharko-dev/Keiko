@@ -77,6 +77,23 @@ describe("insideProgramFolder", () => {
     expect(insideProgramFolder(join(program, "package.json"), DECLARED, link)).toBe(true);
   });
 
+  // The same folder spelled another way: a link into it here, a Windows short name (LONGNA~1) on
+  // Windows. Neither spelling contains the launch directory's text, so the operating system's own
+  // name of the path decides.
+  it("refuses a path that reaches the program folder under another spelling", () => {
+    const { program, sibling, root } = folders();
+    const alias = join(root, "another-spelling");
+    symlinkSync(program, alias, "junction");
+    expect(insideProgramFolder(alias, DECLARED, program)).toBe(true);
+    expect(insideProgramFolder(join(alias, "node_modules"), DECLARED, program)).toBe(true);
+    // A link to a neighbour is the neighbour.
+    const elsewhere = join(root, "link-to-a-neighbour");
+    symlinkSync(sibling, elsewhere, "junction");
+    expect(insideProgramFolder(elsewhere, DECLARED, program)).toBe(false);
+    // A path that does not exist has no other spelling to resolve.
+    expect(insideProgramFolder(join(root, "no-such-folder"), DECLARED, program)).toBe(false);
+  });
+
   it("still refuses a launch directory that can no longer be resolved, as it was given", () => {
     const { root } = folders();
     const gone = join(root, "removed-while-running");

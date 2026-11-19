@@ -76,9 +76,11 @@ the start files live in `scripts/standalone/`. A change here must keep three thi
 payload is never modified, the folder form never performs or suggests an installation, and nothing
 is downloaded at start. Both folder forms run Keiko inside their own program folder, which is never
 a working folder: they declare `KEIKO_LAUNCH_FROM_PROGRAM_FOLDER=1`, so the server seeds no default
-project from it and the read surface refuses it as a root (`pathIsDenied` in `files-deny.ts`); a
-Chat started without a folder is still kept there. `keiko.config.json` and `*.vault` are credential
-names of the sensitive-path denial. Run `scripts/__tests__/build-standalone-package.test.mjs` and the
+project from the launch directory (the payload's `app` folder, or the package folder itself in the
+npm form) and the read surface refuses it as a root (`pathIsDenied` in `files-deny.ts`); a Chat
+started without a folder is still kept there. `keiko.config.json` and `*.vault` are credential names
+of the sensitive-path denial wherever they lie, so the standalone package's configuration beside its
+start files is protected by name. Run `scripts/__tests__/build-standalone-package.test.mjs` and the
 `portable-in-place` and `provisioned-config` suites of `keiko-cli`. The operator guide is
 [`docs/release/standalone-folder-package.md`](docs/release/standalone-folder-package.md).
 
@@ -110,7 +112,8 @@ which starts each package on native hardware with
 publishes the exact tested ZIPs through `scripts/publish-npm-folder-packages.mjs` as the attested
 GitHub prerelease `npm-folder-<version>`. The prerelease is a transport, never latest, and grants no
 update trust. A change to the builder, `scripts/standalone/**`, the script or the workflow runs the
-same qualification on a pull request when the root version is already on npm; run
+same qualification on a pull request when the root version is already published on npm and its
+product release `v<version>` exists; otherwise that run ends green with a notice. Run
 `scripts/__tests__/qualify-npm-folder-package.test.mjs` and
 `scripts/__tests__/publish-npm-folder-packages.test.mjs`. The operator guide is
 [`docs/release/standalone-npm-package.md`](docs/release/standalone-npm-package.md).

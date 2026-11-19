@@ -138,11 +138,13 @@ This shapes the product _and_ how you work on it:
   (`KEIKO_PORTABLE_MANAGEMENT`), so the app reports the existing `portable-it-managed` disposition
   and never offers the portable setup. Never modify the payload inside a package, never let the
   folder form perform or suggest an installation, never let the program folder become a working
-  folder (every folder launch declares `KEIKO_LAUNCH_FROM_PROGRAM_FOLDER=1`; the server seeds no
-  default project from it and the read surface refuses it as a root, so it is listed unreadable and
-  is never a window's starting folder or a coding repository, while a Chat started without a folder
-  is still kept there; `keiko.config.json` and `*.vault` are credential names of the sensitive-path
-  denial, kernel-enforced for native commands), and never weaken the operating system's download
+  folder (every folder launch declares `KEIKO_LAUNCH_FROM_PROGRAM_FOLDER=1`; the program folder is
+  the launch directory, the payload's `app` folder or, in the npm form, the package folder itself;
+  the server seeds no default project from it and the read surface refuses it as a root, so it is
+  listed unreadable and is never a window's starting folder or a coding repository, while a Chat
+  started without a folder is still kept there; `keiko.config.json` and `*.vault` are credential
+  names of the sensitive-path denial, kernel-enforced for native commands, wherever they lie), and
+  never weaken the operating system's download
   checks to make a package start: an administrator removes the download mark before internal
   distribution. A team's `keiko.config.json` beside the start files is an administrator-owned
   input; Keiko adopts it and seals its key, and never writes to it (ADR-0046 D5). Every stable

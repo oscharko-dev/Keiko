@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { startingProjectPaths, startingProjectRoot } from "./startingProjectRoot";
+import { startingProjectPaths, startingProjectRoot, startingProjects } from "./startingProjectRoot";
 
 function project(overrides: Partial<ProjectWithAvailability>): ProjectWithAvailability {
   return {
@@ -43,5 +43,18 @@ describe("startingProjectPaths", () => {
         project({ path: "/second", readable: true }),
       ]),
     ).toEqual(["/first", "/second"]);
+  });
+});
+
+describe("startingProjects", () => {
+  it("keeps whole projects, in order, without an unavailable or refused one", () => {
+    const first = project({ path: "/first", name: "first" });
+    expect(
+      startingProjects([
+        project({ path: "/refused", readable: false }),
+        first,
+        project({ path: "/offline", available: false }),
+      ]),
+    ).toEqual([first]);
   });
 });

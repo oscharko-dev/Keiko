@@ -10,11 +10,15 @@ export function startingProjectRoot(project: ProjectWithAvailability | null): st
 }
 
 /** The listed projects a window may start in, in list order; a refused one stays out of the defaults. */
+export function startingProjects(
+  projects: readonly ProjectWithAvailability[],
+): readonly ProjectWithAvailability[] {
+  return projects.filter((project) => startingProjectRoot(project) !== null);
+}
+
+/** The paths of {@link startingProjects}, in list order. */
 export function startingProjectPaths(
   projects: readonly ProjectWithAvailability[],
 ): readonly string[] {
-  return projects.flatMap((project) => {
-    const root = startingProjectRoot(project);
-    return root === null ? [] : [root];
-  });
+  return startingProjects(projects).map((project) => project.path);
 }

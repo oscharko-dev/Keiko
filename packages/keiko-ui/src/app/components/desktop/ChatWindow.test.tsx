@@ -3361,12 +3361,12 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
     {
       locale: "en",
       notice:
-        "No model is activated yet. Open Settings > Models and activate a model, then you can chat.",
+        "No model is ready yet. Open Settings > Models and activate a model, then you can chat.",
     },
     {
       locale: "de",
       notice:
-        "Es ist noch kein Modell aktiviert. Öffne Einstellungen > Modelle und aktiviere ein Modell, dann kannst du chatten.",
+        "Es ist noch kein Modell bereit. Öffne Einstellungen > Modelle und aktiviere ein Modell, dann kannst du chatten.",
     },
   ])(
     "tells a person with configured, inactive models to activate one in $locale",

@@ -18,7 +18,7 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, lstatSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { sha256FileChunked } from "./lib/digest.mjs";
+import { sha256, sha256FileChunked } from "./lib/digest.mjs";
 import {
   FOLDER_PACKAGE_MAX_BYTES,
   FOLDER_RELEASE_TARGETS,
@@ -27,6 +27,7 @@ import {
 } from "./lib/folder-package-release.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { CHECK_NAMES, DEFAULT_REPOSITORY, EVIDENCE_KIND } from "./lib/npm-folder-qualification.mjs";
+import { createdDraftId, remoteDigestFailures } from "./lib/portable-release-publication.mjs";
 
 export class NpmFolderPublishRefusal extends Error {}
 
@@ -100,7 +101,9 @@ function verifyTarget(dir, target, version) {
   regularFile(join(dir, names.evidenceName), names.evidenceName);
   const evidence = JSON.parse(readFileSync(join(dir, names.evidenceName), "utf8"));
   checkEvidence(evidence, { target, version, zipSha256 });
-  return { target, evidence, zipSha256, sizeBytes: stat.size, ...names };
+  const shaSha256 = sha256(declared);
+  const shaSizeBytes = Buffer.byteLength(declared);
+  return { target, evidence, zipSha256, sizeBytes: stat.size, shaSha256, shaSizeBytes, ...names };
 }
 
 /** Checks the three tested packages in `dir` and returns what the release will carry. */
@@ -165,20 +168,42 @@ function runGh(args, env = process.env) {
   return { status: result.status, stdout: String(result.stdout), stderr: String(result.stderr) };
 }
 
-function gh(runner, args) {
+function gh(runner, args, label = args.slice(0, 2).join(" ")) {
   const result = runner(args);
-  if (result.status !== 0) {
-    refuse(`gh ${args.slice(0, 2).join(" ")} failed: ${result.stderr.trim().slice(-300)}`);
-  }
+  if (result.status !== 0) refuse(`gh ${label} failed: ${result.stderr.trim().slice(-300)}`);
   return result.stdout;
 }
 
-function releaseTagExists(runner, repository, tag) {
+// "absent" only on a clear 404: any other failure to read is no proof that the tag is free. A draft
+// is told apart because it is the leftover of a failed run, which the owner can delete.
+function releaseTagState(runner, repository, tag) {
   const listed = JSON.parse(
-    gh(runner, ["release", "list", "--repo", repository, "--limit", "1000", "--json", "tagName"]),
+    gh(runner, [
+      ...["release", "list", "--repo", repository, "--limit", "1000"],
+      ...["--json", "tagName,isDraft"],
+    ]),
   );
-  if (listed.some((entry) => entry.tagName === tag)) return true;
-  return runner(["api", `repos/${repository}/git/ref/tags/${tag}`]).status === 0;
+  const entry = listed.find((candidate) => candidate.tagName === tag);
+  if (entry !== undefined) return entry.isDraft === true ? "draft" : "published";
+  const ref = runner(["api", `repos/${repository}/git/ref/tags/${tag}`]);
+  if (ref.status === 0) return "published";
+  if (/\bHTTP 404\b/u.test(ref.stderr)) return "absent";
+  return refuse(
+    `${tag} could not be checked (${ref.stderr.trim().slice(-200)}); nothing was changed`,
+  );
+}
+
+function refuseExisting(runner, repository, tag) {
+  const state = releaseTagState(runner, repository, tag);
+  if (state === "draft") {
+    refuse(
+      `${tag} exists as an unpublished DRAFT left by an earlier failed run; delete that draft ` +
+        `(gh release delete ${tag} --repo ${repository} --yes, or on the Releases page) and run again`,
+    );
+  }
+  if (state === "published") {
+    refuse(`${tag} already exists; a release is immutable, so it is never replaced`);
+  }
 }
 
 /**
@@ -187,9 +212,7 @@ function releaseTagExists(runner, repository, tag) {
  */
 export function preflight({ version, repository, runner = runGh }) {
   const tag = companionTag(version);
-  if (releaseTagExists(runner, repository, tag)) {
-    refuse(`${tag} already exists; a release is immutable, so it is never replaced`);
-  }
+  refuseExisting(runner, repository, tag);
   const product = JSON.parse(
     gh(runner, [
       "release",
@@ -212,78 +235,156 @@ export function preflight({ version, repository, runner = runGh }) {
   return { tag, commit };
 }
 
+// GitHub records a SHA-256 digest for every asset; a missing or different one is a refusal, for the
+// ZIPs and for their checksum files alike.
 function checkUploaded(listed, packages) {
   const wanted = new Map(
     packages.flatMap((p) => [
       [p.zip, { size: p.sizeBytes, digest: p.zipSha256 }],
-      [p.sha, undefined],
+      [p.sha, { size: p.shaSizeBytes, digest: p.shaSha256 }],
     ]),
   );
   const names = listed.assets.map((asset) => asset.name).sort();
   if (JSON.stringify(names) !== JSON.stringify([...wanted.keys()].sort())) {
     refuse(`the draft holds [${names.join(", ")}], not the verified assets`);
   }
+  const failures = remoteDigestFailures(
+    listed.assets,
+    [...wanted].map(([assetName, { digest }]) => ({ assetName, expectedSha256: digest })),
+  );
   for (const asset of listed.assets) {
-    const expected = wanted.get(asset.name);
-    if (expected === undefined) continue;
-    if (asset.size !== expected.size) refuse(`${asset.name} has another size on GitHub`);
-    if (typeof asset.digest === "string" && asset.digest !== `sha256:${expected.digest}`) {
-      refuse(`${asset.name} has another digest on GitHub`);
-    }
+    if (asset.size !== wanted.get(asset.name).size)
+      failures.push(`${asset.name} has another size.`);
   }
+  if (failures.length > 0) refuse(`the draft assets are refused: ${failures.join(" ")}`);
 }
+
+const releasePath = (repository, id) => `repos/${repository}/releases/${String(id)}`;
 
 // Whether GitHub still holds the release as a draft. Any answer but a plain "draft" is a no: an
 // unreadable state must never lead to deleting a release that may already be published.
-function isStillDraft(runner, tag, base) {
-  const view = runner(["release", "view", tag, ...base, "--json", "isDraft"]);
+function isStillDraft(runner, path) {
+  const view = runner(["api", path]);
   if (view.status !== 0) return false;
   try {
-    return JSON.parse(view.stdout).isDraft === true;
+    return JSON.parse(view.stdout).draft === true;
   } catch {
     return false;
   }
 }
 
+// Says what became of the draft, so a failed run never leaves the owner guessing.
+function removeDraft(runner, repository, id) {
+  const path = releasePath(repository, id);
+  if (!isStillDraft(runner, path)) {
+    return "the release was kept because GitHub does not report it as a draft";
+  }
+  const removed = runner(["api", "--method", "DELETE", path]);
+  return removed.status === 0
+    ? "the draft was removed"
+    : `the draft could not be removed (${removed.stderr.trim().slice(-200)}); delete it by hand`;
+}
+
+// The identity of the draft comes from the create answer: a listing lagged behind the create once
+// (portable release v1.0.1, "found 0").
+function createDraft(runner, { tag, commit, version, notesPath, repository }) {
+  const created = runner([
+    ...["api", "--method", "POST", `repos/${repository}/releases`],
+    ...["-f", `tag_name=${tag}`, "-f", `target_commitish=${commit}`],
+    ...["-f", `name=Keiko ${version} npm folder packages`, "-F", `body=@${notesPath}`],
+    ...["-F", "draft=true", "-F", "prerelease=true", "-f", "make_latest=false"],
+  ]);
+  if (created.status !== 0) {
+    refuse(
+      `gh release create failed: ${created.stderr.trim().slice(-300)}; a draft ${tag} may exist, ` +
+        "check the Releases page and delete it before running again",
+    );
+  }
+  let release;
+  try {
+    release = JSON.parse(created.stdout);
+  } catch {
+    release = undefined;
+  }
+  const draft = createdDraftId(release, tag);
+  if (draft.failure === undefined) return draft.id;
+  const note = Number.isSafeInteger(release?.id)
+    ? removeDraft(runner, repository, release.id)
+    : `no release id is known, so check the Releases page for a draft ${tag}`;
+  return refuse(`${draft.failure} ${note}`);
+}
+
+// The waits between upload attempts. gh finds a draft through the release listing, and the listing
+// lagged behind a create once (portable release v1.0.1), so a first miss is not yet a failure.
+const UPLOAD_RETRY_DELAYS_MS = Object.freeze([5_000, 15_000]);
+
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+// Uploaded with gh's own command, exactly as the product release uploads into its draft
+// (`uploadIntoDraft` in lib/portable-release-publication.mjs). `--clobber` makes a repeated attempt
+// exact: an asset a failed attempt left behind is replaced, never duplicated. What GitHub then
+// holds is read back by the draft's id and compared before anything is published.
+function uploadAssets(runner, { repository, tag, dir, packages }, sleep) {
+  const files = packages.flatMap((p) => [join(dir, p.zip), join(dir, p.sha)]);
+  const args = ["release", "upload", tag, "--repo", repository, "--clobber", ...files];
+  for (const delay of UPLOAD_RETRY_DELAYS_MS) {
+    if (runner(args).status === 0) return;
+    sleep(delay);
+  }
+  gh(runner, args, "release upload");
+}
+
+function uploadVerifyPublish(runner, { repository, tag, id, dir, packages }, sleep) {
+  uploadAssets(runner, { repository, tag, dir, packages }, sleep);
+  const path = releasePath(repository, id);
+  checkUploaded(JSON.parse(gh(runner, ["api", path])), packages);
+  const edit = ["api", "--method", "PATCH", path, "-F", "draft=false", "-F", "prerelease=true"];
+  gh(runner, [...edit, "-f", "make_latest=false"], "release edit");
+}
+
+// A published release is immutable, so after publication nothing is removed whatever this check finds.
+function confirmPublished(runner, repository, id, tag) {
+  const unconfirmed = (reason) =>
+    refuse(
+      `${tag} IS PUBLISHED as a prerelease, but the final check ${reason}; nothing was removed ` +
+        "because a published release is immutable: inspect it on the Releases page",
+    );
+  const view = runner(["api", releasePath(repository, id)]);
+  if (view.status !== 0) unconfirmed("could not read it");
+  let final;
+  try {
+    final = JSON.parse(view.stdout);
+  } catch {
+    unconfirmed("could not read it");
+  }
+  if (final.draft !== false || final.prerelease !== true || final.tag_name !== tag) {
+    unconfirmed("disagrees with a published prerelease");
+  }
+}
+
 /** Creates the draft, uploads and checks it, then publishes it as a prerelease, never latest. */
-export function publish({ version, commit, dir, notesPath, repository, runner = runGh }) {
+export function publish(options) {
+  const { version, commit, dir, notesPath, repository } = options;
+  const { runner = runGh, sleep = sleepSync } = options;
   const tag = companionTag(version);
   if (!COMMIT_PATTERN.test(String(commit))) refuse("--commit must be a full commit sha");
   const packages = verifyNpmFolderAssets({ dir, version });
-  if (releaseTagExists(runner, repository, tag)) refuse(`${tag} already exists`);
-  const base = ["--repo", repository];
-  gh(runner, [
-    ...["release", "create", tag, "--draft", "--prerelease", "--latest=false"],
-    ...["--target", commit, "--title", `Keiko ${version} npm folder packages`],
-    ...["--notes-file", notesPath, ...base],
-  ]);
+  refuseExisting(runner, repository, tag);
+  const id = createDraft(runner, { tag, commit, version, notesPath, repository });
   try {
-    const files = packages.flatMap((p) => [join(dir, p.zip), join(dir, p.sha)]);
-    gh(runner, ["release", "upload", tag, ...files, ...base]);
-    const listed = JSON.parse(gh(runner, ["release", "view", tag, ...base, "--json", "assets"]));
-    checkUploaded(listed, packages);
-    gh(runner, [
-      "release",
-      "edit",
-      tag,
-      "--draft=false",
-      "--prerelease",
-      "--latest=false",
-      ...base,
-    ]);
+    uploadVerifyPublish(runner, { repository, tag, id, dir, packages }, sleep);
   } catch (error) {
     // Only a draft is removed, so a corrected run can create it again: nothing is immutable yet. A
     // release GitHub published although the last call reported a failure stays untouched, and so
     // does one whose state cannot be read.
-    if (isStillDraft(runner, tag, base)) runner(["release", "delete", tag, "--yes", ...base]);
-    throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new NpmFolderPublishRefusal(`${reason}; ${removeDraft(runner, repository, id)}`, {
+      cause: error,
+    });
   }
-  const final = JSON.parse(
-    gh(runner, ["release", "view", tag, ...base, "--json", "isDraft,isPrerelease,tagName"]),
-  );
-  if (final.isDraft !== false || final.isPrerelease !== true || final.tagName !== tag) {
-    refuse(`${tag} is not a published prerelease`);
-  }
+  confirmPublished(runner, repository, id, tag);
   return { tag, packages };
 }
 

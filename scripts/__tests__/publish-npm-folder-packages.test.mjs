@@ -139,44 +139,67 @@ describe("parsePublishArgs", () => {
   });
 });
 
-// `draftState` answers the one question asked after a failure, whether the release is still a
-// draft: a JSON text, or `null` for a view that fails. `editStatus` is the exit of the publishing
-// edit.
+const RELEASE_ID = 4242;
+const TAG = "npm-folder-1.5.3";
+
+// A stateful stand-in for `gh`. The release is a draft until the PATCH succeeds. `draftState` answers
+// the read after a failed publishing edit (a JSON text, or `null` for a read that fails);
+// `finalRead` shapes the read after publication ("ok", "fail" or "wrong").
 function fakeGh({
   listed = [],
-  gitRef = 1,
+  gitRef = { status: 1, stderr: "gh: Not Found (HTTP 404)" },
   productDraft = false,
   uploaded,
-  draftState = JSON.stringify({ isDraft: true }),
+  createStatus = 0,
+  createBody,
+  draftState = JSON.stringify({ draft: true }),
   editStatus = 0,
+  uploadStatus = 0,
+  uploadMisses = 0,
+  deleteStatus = 0,
+  finalRead = "ok",
 } = {}) {
   const calls = [];
+  const state = { published: false, editFailed: false, uploadAttempts: 0 };
+  // `uploadMisses` attempts fail first (the listing has not caught up), then `uploadStatus` decides.
+  const upload = () => {
+    state.uploadAttempts += 1;
+    return state.uploadAttempts > uploadMisses && uploadStatus === 0 ? ok() : failed;
+  };
   const ok = (stdout = "") => ({ status: 0, stdout, stderr: "" });
   const failed = { status: 1, stdout: "", stderr: "HTTP 502" };
+  const has = (args, word) => args.includes(word);
+  const created = () =>
+    createStatus === 0
+      ? ok(createBody ?? JSON.stringify({ id: RELEASE_ID, tag_name: TAG, draft: true }))
+      : failed;
+  const read = () => {
+    if (state.published) {
+      if (finalRead === "fail") return failed;
+      const wrong = finalRead === "wrong";
+      return ok(JSON.stringify({ draft: false, prerelease: !wrong, tag_name: TAG }));
+    }
+    if (state.editFailed) return draftState === null ? failed : ok(draftState);
+    return ok(JSON.stringify({ draft: true, assets: uploaded?.() ?? [] }));
+  };
+  const patch = () => {
+    state.editFailed = editStatus !== 0;
+    state.published = editStatus === 0;
+    return editStatus === 0 ? ok() : failed;
+  };
   const routes = [
     [(a) => a[1] === "list", () => ok(JSON.stringify(listed))],
-    [(a) => a[1] === "edit", () => (editStatus === 0 ? ok() : failed)],
     [
-      (a) => a[1] === "view" && a.at(-1) === "isDraft",
-      () => (draftState === null ? failed : ok(draftState)),
+      (a) => a[0] === "release" && a[1] === "view",
+      () => ok(JSON.stringify({ isDraft: productDraft })),
     ],
-    [
-      (a) => a[0] === "api" && a[1].includes("/git/ref/tags/"),
-      () => ({ status: gitRef, stdout: "", stderr: "" }),
-    ],
-    [(a) => a[0] === "api", () => ok(`${COMMIT}\n`)],
-    [
-      (a) => a[1] === "view" && a.includes("assets"),
-      () => ok(JSON.stringify({ assets: uploaded?.() ?? [] })),
-    ],
-    [
-      (a) => a[1] === "view" && a.includes("isDraft,tagName"),
-      () => ok(JSON.stringify({ isDraft: productDraft, tagName: "v1.5.3" })),
-    ],
-    [
-      (a) => a[1] === "view",
-      () => ok(JSON.stringify({ isDraft: false, isPrerelease: true, tagName: "npm-folder-1.5.3" })),
-    ],
+    [(a) => a[0] === "api" && a[1].includes("/commits/"), () => ok(`${COMMIT}\n`)],
+    [(a) => a[0] === "api" && a[1].includes("/git/ref/tags/"), () => ({ stdout: "", ...gitRef })],
+    [(a) => a[0] === "release" && a[1] === "upload", upload],
+    [(a) => has(a, "POST"), created],
+    [(a) => has(a, "PATCH"), patch],
+    [(a) => has(a, "DELETE"), () => (deleteStatus === 0 ? ok() : failed)],
+    [(a) => a[0] === "api", read],
   ];
   const runner = (args) => {
     calls.push(args);
@@ -185,6 +208,9 @@ function fakeGh({
   };
   return { runner, calls };
 }
+
+const isCall = (word) => (call) => call.includes(word);
+const isUpload = (call) => call[0] === "release" && call[1] === "upload";
 
 describe("preflight", () => {
   it("returns the product release's commit when the companion is free", () => {
@@ -201,7 +227,11 @@ describe("preflight", () => {
       preflight({ version: VERSION, repository: "o/r", runner: fakeGh({ listed }).runner }),
     ).toThrow(/already exists/u);
     expect(() =>
-      preflight({ version: VERSION, repository: "o/r", runner: fakeGh({ gitRef: 0 }).runner }),
+      preflight({
+        version: VERSION,
+        repository: "o/r",
+        runner: fakeGh({ gitRef: { status: 0, stderr: "" } }).runner,
+      }),
     ).toThrow(/already exists/u);
     expect(() =>
       preflight({
@@ -211,6 +241,22 @@ describe("preflight", () => {
       }),
     ).toThrow(/not published/u);
   });
+
+  it("reads an API error as unknown, never as an absent tag", () => {
+    const gitRef = { status: 1, stderr: "gh: Bad Gateway (HTTP 502)" };
+    expect(() =>
+      preflight({ version: VERSION, repository: "o/r", runner: fakeGh({ gitRef }).runner }),
+    ).toThrow(/could not be checked/u);
+  });
+
+  it("tells a leftover draft of an earlier failed run from a published release", () => {
+    const listed = [{ tagName: TAG, isDraft: true }];
+    const attempt = () =>
+      preflight({ version: VERSION, repository: "o/r", runner: fakeGh({ listed }).runner });
+    expect(attempt).toThrow(/unpublished DRAFT/u);
+    expect(attempt).toThrow(/gh release delete npm-folder-1\.5\.3 --repo o\/r --yes/u);
+    expect(attempt).not.toThrow(/immutable/u);
+  });
 });
 
 describe("publish", () => {
@@ -219,104 +265,188 @@ describe("publish", () => {
     const packages = verifyNpmFolderAssets({ dir, version: VERSION });
     const assets = packages.flatMap((p) => [
       { name: p.zip, size: p.sizeBytes, digest: `sha256:${p.zipSha256}` },
-      { name: p.sha, size: 99 },
+      { name: p.sha, size: p.shaSizeBytes, digest: `sha256:${p.shaSha256}` },
     ]);
     return { dir, assets, ...extra };
   }
 
-  it("creates a draft prerelease on the commit, uploads, checks and publishes it, never latest", () => {
-    const { dir, assets } = inputs();
-    const { runner, calls } = fakeGh({ uploaded: () => assets });
-    const result = publish({
+  const run = (dir, runner, sleep = () => undefined) =>
+    publish({
       version: VERSION,
       commit: COMMIT,
       dir,
-      notesPath: "notes.md",
+      notesPath: "n.md",
       repository: "o/r",
       runner,
+      sleep,
     });
-    expect(result.tag).toBe("npm-folder-1.5.3");
-    const create = calls.find((c) => c[1] === "create");
+
+  it("creates a draft prerelease on the commit, uploads, checks and publishes it, never latest", () => {
+    const { dir, assets } = inputs();
+    const { runner, calls } = fakeGh({ uploaded: () => assets });
+    expect(run(dir, runner).tag).toBe(TAG);
+    const create = calls.find((c) => isCall("tag_name=npm-folder-1.5.3")(c));
     expect(create).toEqual(
-      expect.arrayContaining(["--draft", "--prerelease", "--latest=false", "--target", COMMIT]),
+      expect.arrayContaining(["draft=true", "prerelease=true", "make_latest=false"]),
     );
-    const edit = calls.find((c) => c[1] === "edit");
+    expect(create).toEqual(expect.arrayContaining([`target_commitish=${COMMIT}`]));
+    const edit = calls.find(isCall("PATCH"));
     expect(edit).toEqual(
-      expect.arrayContaining(["--draft=false", "--prerelease", "--latest=false"]),
+      expect.arrayContaining([
+        `repos/o/r/releases/${RELEASE_ID}`,
+        "draft=false",
+        "prerelease=true",
+        "make_latest=false",
+      ]),
     );
-    expect(calls.findIndex((c) => c[1] === "upload")).toBeLessThan(
-      calls.findIndex((c) => c[1] === "edit"),
+    // One upload with gh's own command, as the product release uploads into its draft: the tag, the
+    // six files, and --clobber so that a repeated attempt replaces instead of duplicating.
+    const uploads = calls.filter(isUpload);
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0].slice(0, 6)).toEqual([
+      "release",
+      "upload",
+      TAG,
+      "--repo",
+      "o/r",
+      "--clobber",
+    ]);
+    expect(uploads[0].slice(6).map((file) => file.slice(dir.length + 1))).toEqual(
+      assets.map((asset) => asset.name),
     );
+    expect(calls.findLastIndex(isUpload)).toBeLessThan(calls.findIndex(isCall("PATCH")));
+  });
+
+  // gh finds a draft through the release listing, which lagged behind a create once. A first miss
+  // is retried within a fixed bound instead of failing a publication that would have worked.
+  it("retries an upload that missed the new draft, within a fixed bound", () => {
+    const { dir, assets } = inputs();
+    const waits = [];
+    const { runner, calls } = fakeGh({ uploaded: () => assets, uploadMisses: 2 });
+    expect(run(dir, runner, (milliseconds) => waits.push(milliseconds)).tag).toBe(TAG);
+    expect(calls.filter(isUpload)).toHaveLength(3);
+    expect(waits).toEqual([5_000, 15_000]);
+    expect(calls.some(isCall("DELETE"))).toBe(false);
+  });
+
+  it("verifies and publishes by the id from the create answer, with no second listing", () => {
+    const { dir, assets } = inputs();
+    const { runner, calls } = fakeGh({ uploaded: () => assets, listed: [] });
+    run(dir, runner);
+    const listings = calls.filter((c) => c[1] === "list");
+    expect(listings).toHaveLength(1);
+    expect(calls.some((c) => c[1] === `repos/o/r/releases/${RELEASE_ID}`)).toBe(true);
   });
 
   it("removes the draft and never publishes when GitHub holds other bytes", () => {
     const { dir, assets } = inputs();
-    const wrong = assets.map((a) =>
-      a.digest === undefined ? a : { ...a, digest: `sha256:${"0".repeat(64)}` },
-    );
+    const wrong = assets.map((a) => ({ ...a, digest: `sha256:${"0".repeat(64)}` }));
     const { runner, calls } = fakeGh({ uploaded: () => wrong });
-    expect(() =>
-      publish({
-        version: VERSION,
-        commit: COMMIT,
-        dir,
-        notesPath: "n.md",
-        repository: "o/r",
-        runner,
-      }),
-    ).toThrow(/another digest/u);
-    expect(calls.some((c) => c[1] === "edit")).toBe(false);
-    expect(calls.some((c) => c[1] === "delete")).toBe(true);
+    expect(() => run(dir, runner)).toThrow(/does not carry the bytes/u);
+    expect(calls.some(isCall("PATCH"))).toBe(false);
+    expect(calls.some(isCall("DELETE"))).toBe(true);
+  });
+
+  it("refuses a ZIP whose digest GitHub does not report", () => {
+    const { dir, assets } = inputs();
+    const bare = assets.map((a, i) => (i === 0 ? { name: a.name, size: a.size } : a));
+    const { runner, calls } = fakeGh({ uploaded: () => bare });
+    expect(() => run(dir, runner)).toThrow(/has no SHA-256 digest on GitHub/u);
+    expect(calls.some(isCall("PATCH"))).toBe(false);
+  });
+
+  it.each([
+    ["has no digest", (a) => ({ name: a.name, size: a.size }), /has no SHA-256 digest/u],
+    [
+      "has another digest",
+      (a) => ({ ...a, digest: `sha256:${"1".repeat(64)}` }),
+      /does not carry/u,
+    ],
+    ["has another size", (a) => ({ ...a, size: a.size + 1 }), /another size/u],
+  ])("compares every .sha256 asset by size and digest: %s", (_title, change, message) => {
+    const { dir, assets } = inputs();
+    const changed = assets.map((a) => (a.name.endsWith(".sha256") ? change(a) : a));
+    const { runner, calls } = fakeGh({ uploaded: () => changed });
+    expect(() => run(dir, runner)).toThrow(message);
+    expect(calls.some(isCall("PATCH"))).toBe(false);
   });
 
   // A failed call does not prove the release is still a draft: GitHub may have published it before
   // the answer was lost. Only a release GitHub itself reports as a draft is removed.
   it.each([
-    [
-      "GitHub published it although the edit reported a failure",
-      JSON.stringify({ isDraft: false }),
-    ],
+    ["GitHub published it although the edit reported a failure", JSON.stringify({ draft: false })],
     ["its state cannot be read", null],
     ["its state is not JSON", "not json"],
   ])("never deletes a release when %s", (_title, draftState) => {
     const { dir, assets } = inputs();
     const { runner, calls } = fakeGh({ uploaded: () => assets, editStatus: 1, draftState });
+    expect(() => run(dir, runner)).toThrow(/gh release edit failed/u);
+    expect(calls.some(isCall("DELETE"))).toBe(false);
     expect(() =>
-      publish({
-        version: VERSION,
-        commit: COMMIT,
-        dir,
-        notesPath: "n.md",
-        repository: "o/r",
-        runner,
-      }),
-    ).toThrow(/gh release edit failed/u);
-    expect(calls.some((c) => c[1] === "delete")).toBe(false);
+      run(dir, fakeGh({ uploaded: () => assets, editStatus: 1, draftState }).runner),
+    ).toThrow(/kept because GitHub does not report it as a draft/u);
   });
 
   it("removes the draft when the publishing edit failed and GitHub still reports a draft", () => {
     const { dir, assets } = inputs();
     const { runner, calls } = fakeGh({ uploaded: () => assets, editStatus: 1 });
-    expect(() =>
-      publish({
-        version: VERSION,
-        commit: COMMIT,
-        dir,
-        notesPath: "n.md",
-        repository: "o/r",
-        runner,
-      }),
-    ).toThrow(/gh release edit failed/u);
-    expect(calls.some((c) => c[1] === "delete")).toBe(true);
+    expect(() => run(dir, runner)).toThrow(/gh release edit failed.*the draft was removed/u);
+    expect(calls.some(isCall("DELETE"))).toBe(true);
   });
 
-  it("refuses an existing release and a commit that is not a full sha", () => {
+  it("removes the draft when the upload fails every attempt, and says so", () => {
     const { dir } = inputs();
-    const listed = [{ tagName: "npm-folder-1.5.3" }];
+    const { runner, calls } = fakeGh({ uploadStatus: 1 });
+    expect(() => run(dir, runner)).toThrow(/release upload failed.*the draft was removed/u);
+    expect(calls.filter(isUpload)).toHaveLength(3);
+    expect(calls.some(isCall("PATCH"))).toBe(false);
+    expect(calls.some(isCall("DELETE"))).toBe(true);
+  });
+
+  it("reports a delete that failed", () => {
+    const { dir } = inputs();
+    const { runner } = fakeGh({ uploadStatus: 1, deleteStatus: 1 });
+    expect(() => run(dir, runner)).toThrow(/could not be removed.*delete it by hand/u);
+  });
+
+  it("names a failed create call and does not guess an id", () => {
+    const { dir } = inputs();
+    const { runner, calls } = fakeGh({ createStatus: 1 });
+    expect(() => run(dir, runner)).toThrow(/gh release create failed.*may exist/u);
+    expect(calls.some(isCall("DELETE"))).toBe(false);
+    expect(calls.some(isUpload)).toBe(false);
+  });
+
+  it("refuses a create answer that is not this tag's draft, removing it only while a draft", () => {
+    const { dir } = inputs();
+    const createBody = JSON.stringify({ id: RELEASE_ID, tag_name: "other", draft: true });
+    const { runner, calls } = fakeGh({ createBody });
+    expect(() => run(dir, runner)).toThrow(/did not answer the draft release create/u);
+    expect(calls.some(isUpload)).toBe(false);
+    expect(calls.some(isCall("DELETE"))).toBe(true);
+  });
+
+  it.each([
+    ["cannot be read", "fail"],
+    ["disagrees", "wrong"],
+  ])("says a published prerelease stays when the final check %s", (_title, finalRead) => {
+    const { dir, assets } = inputs();
+    const { runner, calls } = fakeGh({ uploaded: () => assets, finalRead });
+    expect(() => run(dir, runner)).toThrow(/IS PUBLISHED.*nothing was removed.*immutable/u);
+    expect(calls.some(isCall("DELETE"))).toBe(false);
+  });
+
+  it("refuses an existing release, a leftover draft and a commit that is not a full sha", () => {
+    const { dir } = inputs();
     const base = { version: VERSION, dir, notesPath: "n.md", repository: "o/r" };
+    const listed = [{ tagName: TAG }];
     expect(() => publish({ ...base, commit: COMMIT, runner: fakeGh({ listed }).runner })).toThrow(
       /already exists/u,
     );
+    const draft = [{ tagName: TAG, isDraft: true }];
+    expect(() =>
+      publish({ ...base, commit: COMMIT, runner: fakeGh({ listed: draft }).runner }),
+    ).toThrow(/unpublished DRAFT/u);
     expect(() => publish({ ...base, commit: "abc", runner: fakeGh().runner })).toThrow(
       /full commit/u,
     );

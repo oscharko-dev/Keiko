@@ -178,8 +178,9 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
       this.options.expectedHelperSha256,
       this.options.spawnHelper,
       [],
+      request.runId,
     );
-    const tree = new NativeRuntimeTree(recoveryHandle, child);
+    const tree = new NativeRuntimeTree(recoveryHandle, child, this.identity.platform);
     child.controlInput.write(packet);
     if (gateway !== undefined)
       recordRuntimeGatewayConfinementSpawned(
@@ -229,11 +230,14 @@ function spawnWindowsGateway(
     encodeWindowsGatewayGrants(resolvedWindowsFilesystemGrants(options.windowsFilesystemGrants)),
     encodeWindowsGatewayOpen(policy, request.recoveryHandle),
   ]);
-  const child = spawnVerifiedHelper(options.helperPath, pin, options.spawnHelper, [
-    "--gateway-installed",
+  const child = spawnVerifiedHelper(
+    options.helperPath,
     pin,
-  ]);
-  const tree = new NativeRuntimeTree(request.recoveryHandle, child, (sweep) => {
+    options.spawnHelper,
+    ["--gateway-installed", pin],
+    request.runId,
+  );
+  const tree = new NativeRuntimeTree(request.recoveryHandle, child, "win32", (sweep) => {
     recordWindowsStaleGrantsSwept(options.activityLog, request.runId, sweep);
   });
   child.controlInput.write(packet);
@@ -528,13 +532,18 @@ export async function removeHelperCopyDirectory(
  */
 export function discardVerifiedHelperCopy(
   copy: VerifiedHelperExecutionCopy,
-  failure: { readonly operation: string; readonly source: string },
+  failure: {
+    readonly operation: string;
+    readonly source: string;
+    /** The run that owns the helper; a status read outside a run has none and gets its own id. */
+    readonly correlationId?: string | undefined;
+  },
 ): Promise<void> {
   return copy.cleanup().catch((error: unknown) => {
     emitServerDiagnostic(
       undefined,
       serverDiagnosticFromError({
-        correlationId: randomUUID(),
+        correlationId: failure.correlationId ?? randomUUID(),
         operation: failure.operation,
         source: failure.source,
         error,
@@ -549,18 +558,37 @@ const NATIVE_HELPER_COPY_CLEANUP_FAILURE = {
   source: "coding.runtime.native-helper",
 } as const;
 
+/**
+ * Runs an action on its first call only. A helper reports its end through its exit, its error or
+ * both; whatever follows that end must happen once.
+ */
+export function onFirstCall(action: () => void): () => void {
+  let called = false;
+  return (): void => {
+    if (called) return;
+    called = true;
+    action();
+  };
+}
+
 function spawnVerifiedHelper(
   helperPath: string,
   expectedHelperSha256: string | undefined,
   spawnHelper: NativeRuntimeHelperSpawn,
   args: readonly string[],
+  runId: string,
 ): NativeRuntimeHelperProcess {
   if (expectedHelperSha256 === undefined)
     return spawnHelper(helperPath, args, nativeSpawnOptions(helperPath));
   const executionCopy = verifiedHelperExecutionCopy(helperPath, expectedHelperSha256);
-  const discard = (): void => {
-    void discardVerifiedHelperCopy(executionCopy, NATIVE_HELPER_COPY_CLEANUP_FAILURE);
-  };
+  // One removal, also when exit and error both fire: two would race on the same folder, and a
+  // copy that stays would be recorded twice. A copy that stays is recorded under the run's id.
+  const discard = onFirstCall((): void => {
+    void discardVerifiedHelperCopy(executionCopy, {
+      ...NATIVE_HELPER_COPY_CLEANUP_FAILURE,
+      correlationId: runId,
+    });
+  });
   try {
     const child = spawnHelper(executionCopy.path, args, nativeSpawnOptions(executionCopy.path));
     child.onExit(discard);

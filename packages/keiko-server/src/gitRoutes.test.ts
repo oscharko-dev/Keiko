@@ -782,12 +782,33 @@ describe("GET /api/git/status — byte-cap cut (large untracked tree)", () => {
     expect(persisted).toMatchObject({ surface: "status", partialRecordDropped: true });
   });
 
+  // A status with one of git's own notices is as valid as one without: an untracked folder git
+  // could not open must not make a large repository unusable again.
+  it("keeps a cut status a bounded read when git only printed warnings", async () => {
+    const result = await statusFor(
+      capCut("## main\0 M a.ts\0?? node_", {
+        stderr: "warning: could not open directory 'locked/': Permission denied\n",
+      }),
+    );
+
+    expect(result.body).toMatchObject({
+      available: true,
+      truncated: true,
+      changes: [{ path: "a.ts" }],
+    });
+  });
+
   it.each([
     { name: "a cut header", run: capCut("## ma") },
     { name: "an empty cut", run: capCut("") },
     { name: "a timeout", run: capCut("## main\0 M a.ts\0", { timedOut: true }) },
     { name: "an abort", run: capCut("## main\0 M a.ts\0", { aborted: true }) },
     { name: "git error output", run: capCut("## main\0 M a.ts\0", { stderr: "fatal: oops" }) },
+    {
+      name: "git error output after a warning",
+      run: capCut("## main\0 M a.ts\0", { stderr: "warning: x\nerror: unable to stat\n" }),
+    },
+    { name: "a hint without a warning", run: capCut("## main\0", { stderr: "hint: try this\n" }) },
     { name: "an exit status git chose itself", run: capCut("## main\0", { exitCode: 128 }) },
     {
       name: "a refusal",
@@ -1216,11 +1237,37 @@ describe("GET /api/git/diff", () => {
     ...overrides,
   });
 
+  // Git's own notices are not error output. On Windows nearly every diff of a file with LF line
+  // endings carries the line-ending warning, and a large one was read as a failed diff.
+  it("keeps a cut diff a bounded view when git only printed warnings", async () => {
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(
+        cutRun({
+          stderr:
+            "warning: in the working copy of 'a.ts', LF will be replaced by CRLF the next time Git touches it\n",
+        }),
+      );
+
+    const response = await handleGitDiff(
+      ctx(`/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree`),
+      deps(runner),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ available: true, truncated: true });
+  });
+
   it.each([
     { name: "a timeout", result: cutRun({ timedOut: true }) },
     { name: "an abort", result: cutRun({ aborted: true }) },
     { name: "a refusal", result: cutRun({ refusal: "diff-enabling-flag" }) },
     { name: "git error output", result: cutRun({ stderr: "fatal: unable to read blob" }) },
+    {
+      name: "git error output after a warning",
+      result: cutRun({ stderr: "warning: LF will be replaced\nfatal: unable to read blob\n" }),
+    },
     { name: "a genuine non-zero git exit", result: cutRun({ exitCode: 128, signal: null }) },
   ])(
     "keeps a truncated diff that ended with $name a failure (#4113)",

@@ -1,12 +1,14 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   QualificationRefusal,
   assertTargetIsHost,
   buildEvidence,
+  cleanup,
+  download,
   expectedRuntimePackage,
   folderDrift,
   hostTarget,
@@ -14,6 +16,7 @@ import {
   parseQualifyArgs,
   releaseAssetUrls,
   snapshotOutsideNodeModules,
+  windowsProcessListCommand,
 } from "../testing/qualify-npm-folder-package.mjs";
 import {
   CHECK_NAMES,
@@ -217,10 +220,111 @@ describe("buildEvidence", () => {
     });
   });
 
-  it("passes only when every check passed, and never for an empty run", () => {
-    const pass = { name: "a", ok: true, durationMs: 1 };
-    expect(buildEvidence({ ...base, results: [pass] }).passed).toBe(true);
+  const all = CHECK_NAMES.map((name) => ({ name, ok: true, durationMs: 1 }));
+
+  it("passes only when every named check ran and passed, and never for an empty run", () => {
+    expect(buildEvidence({ ...base, results: all }).passed).toBe(true);
     expect(buildEvidence({ ...base, results: [] }).passed).toBe(false);
     expect(buildEvidence({ ...base, results: [] }).zipSha256).toBeNull();
+    expect(buildEvidence({ ...base, results: all.slice(1) }).passed).toBe(false);
+  });
+
+  it("keeps passed false for a run that stopped at a failed check", () => {
+    const stopped = [...all.slice(0, 3), { name: CHECK_NAMES[3], ok: false, durationMs: 1 }];
+    expect(buildEvidence({ ...base, results: stopped }).passed).toBe(false);
+    const executedOnlyPassed = all.slice(0, 5);
+    expect(executedOnlyPassed.every((result) => result.ok)).toBe(true);
+    expect(buildEvidence({ ...base, results: executedOnlyPassed }).passed).toBe(false);
+  });
+});
+
+describe("cleanup", () => {
+  it("removes every path even when one fails and names only closed words", () => {
+    const removed = [];
+    const remove = (path) => {
+      if (path === "work-path") throw new Error("EBUSY: /secret/path");
+      removed.push(path);
+    };
+    const warn = vi.fn();
+    const session = { root: "root-path", work: "work-path", state: "state-path" };
+    expect(cleanup(session, "darwin", { remove, warn })).toEqual(["work"]);
+    expect(removed).toEqual(["root-path", "state-path"]);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toBe("WARN cleanup left 1 path(s) behind: work");
+    expect(warn.mock.calls[0][0]).not.toContain("path/");
+  });
+
+  it("is silent when everything was removed and skips paths that were never made", () => {
+    const warn = vi.fn();
+    expect(
+      cleanup({ root: undefined, work: undefined, state: undefined }, "darwin", { warn }),
+    ).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("retries a held path for longer than a short grace", () => {
+    const remove = vi.fn();
+    cleanup({ root: "r" }, "darwin", { remove, warn: vi.fn() });
+    expect(remove.mock.calls[0][1].retryDelay).toBeGreaterThanOrEqual(500);
+  });
+});
+
+describe("download", () => {
+  function target() {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-qualify-download-"));
+    temporary.push(dir);
+    return join(dir, "file");
+  }
+
+  it("refuses a download that does not finish in time", async () => {
+    const stalled = (_url, { signal }) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason));
+      });
+    await expect(
+      download("https://example.test/a.zip", target(), { timeoutMs: 20, fetchImpl: stalled }),
+    ).rejects.toThrow(/did not finish within/u);
+  });
+
+  it("refuses a body that stalls after the headers", async () => {
+    const fetchImpl = (_url, { signal }) => {
+      const stalledBody = {
+        [Symbol.asyncIterator]() {
+          return {
+            next: () =>
+              new Promise((_resolve, reject) => {
+                signal.addEventListener("abort", () => reject(signal.reason));
+              }),
+          };
+        },
+      };
+      return Promise.resolve({ ok: true, body: stalledBody, headers: new Headers() });
+    };
+    await expect(
+      download("https://example.test/a.zip", target(), { timeoutMs: 20, fetchImpl }),
+    ).rejects.toThrow(/did not finish within/u);
+  });
+
+  it("writes a body that arrives in time", async () => {
+    const path = target();
+    const fetchImpl = () =>
+      Promise.resolve({
+        ok: true,
+        headers: new Headers(),
+        body: (async function* () {
+          yield Buffer.from("abc");
+        })(),
+      });
+    await download("https://example.test/a.zip", path, { fetchImpl });
+    expect(existsSync(path)).toBe(true);
+  });
+});
+
+describe("windowsProcessListCommand", () => {
+  it("escapes the folder before -like reads it, so [ and ] are not wildcards", () => {
+    const command = windowsProcessListCommand();
+    expect(command).toContain("[WildcardPattern]::Escape($env:KEIKO_QUALIFY_FOLDER)");
+    expect(command).not.toMatch(/-like[^|]*\$env:KEIKO_QUALIFY_FOLDER/u);
+    expect(command.match(/-like \(/gu)).toHaveLength(2);
   });
 });

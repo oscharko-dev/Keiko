@@ -500,12 +500,25 @@ describe("GET /api/git/summary — byte-cap cut (large untracked tree)", () => {
     });
   });
 
+  // Each row is a whole, bounded status but for the one thing its name says.
+  const wholeCut = porcelain(["# branch.head main", "? a.ts"]);
+
   it.each([
     { name: "a cut header", run: capCut("# branch.oi") },
-    { name: "a timeout", run: capCut(porcelain(["# branch.head main"]), { timedOut: true }) },
-    { name: "an abort", run: capCut(porcelain(["# branch.head main"]), { aborted: true }) },
-    { name: "git error output", run: capCut(porcelain(["# branch.head main"]), { stderr: "x" }) },
-    { name: "exit 128", run: capCut(porcelain(["# branch.head main"]), { exitCode: 128 }) },
+    // The v2 header is a block: a cut inside it would read as a branch without an upstream, so
+    // the block counts only when something of an entry follows it.
+    {
+      name: "a cut inside the header block",
+      run: capCut(porcelain(["# branch.oid abc", "# branch.head main"]) + "# branch.ab +1"),
+    },
+    {
+      name: "a cut right after a header record",
+      run: capCut(porcelain(["# branch.oid abc", "# branch.head main"])),
+    },
+    { name: "a timeout", run: capCut(wholeCut, { timedOut: true }) },
+    { name: "an abort", run: capCut(wholeCut, { aborted: true }) },
+    { name: "git error output", run: capCut(wholeCut, { stderr: "x" }) },
+    { name: "exit 128", run: capCut(wholeCut, { exitCode: 128 }) },
   ])("keeps $name an unavailable summary", async ({ run }) => {
     const { body } = await summaryFor(run);
 

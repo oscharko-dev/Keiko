@@ -54,6 +54,30 @@ describe("nodeSupportOf", () => {
     expect(nodeSupportOf("v24.13.0", "")).toBe("unknown");
   });
 
+  it.each([
+    ["v26.0.1", ">26", "unknown"],
+    ["v26.5.0", "<=26", "unknown"],
+    ["v26.5.0", "=26", "unknown"],
+    ["v27.0.0", ">26.13", "unknown"],
+    ["v26.5.0", ">=26", "supported"],
+    ["v26.5.0", ">=26.5", "supported"],
+    ["v27.0.0", ">=26 <27", "unsupported"],
+    ["v26.5.0", ">=26 <27", "supported"],
+    ["v26.5.0", ">=26.0.0-rc.1", "unknown"],
+  ])("reads the partial or prerelease bound in %s against %s as %s", (version, rng, expected) => {
+    expect(nodeSupportOf(version, rng)).toBe(expected);
+  });
+
+  it.each([
+    ["v26.14.0-rc.1", ">=26.13.1 <27", "unsupported"],
+    ["v26.14.0-nightly2026", ">=26.13.1 <27", "unsupported"],
+    ["v26.14.0-rc.1", ">=26.13.1 <27 || >=22 <23", "unsupported"],
+    ["v26.14.0-rc.1", "^26", "unknown"],
+    ["not-a-version-rc.1", ">=26.13.1 <27", "unknown"],
+  ])("never lets the prerelease %s satisfy %s", (version, rng, expected) => {
+    expect(nodeSupportOf(version, rng)).toBe(expected);
+  });
+
   it("reads alternatives: one satisfied clause is enough", () => {
     expect(nodeSupportOf("v22.1.0", ">=26.13.1 <27 || >=22 <23")).toBe("supported");
     expect(nodeSupportOf("v24.1.0", ">=26.13.1 <27 || >=22 <23")).toBe("unsupported");

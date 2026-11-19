@@ -144,10 +144,20 @@ describe("sync status read — byte-cap cut (large untracked tree)", () => {
     });
   });
 
-  it("keeps a status cut inside the branch header a failed preview", async () => {
+  // The header is a block of records. A cut inside it would preview a branch without an upstream
+  // and with nothing ahead or behind, so the block counts only when something of an entry follows.
+  it.each([
+    { name: "inside the head record", stdout: "# branch.head ma" },
+    { name: "before the upstream record", stdout: "# branch.head main\0" },
+    {
+      name: "inside the ahead/behind record",
+      stdout: "# branch.head main\0# branch.upstream origin/main\0# branch.ab +1",
+    },
+    { name: "right after the whole block", stdout: header },
+  ])("keeps a status cut $name a failed preview", async ({ stdout }) => {
     await expect(
       buildSyncPreview("fetch", "/repo", undefined, {
-        runner: runnerWith(capCut("# branch.head ma")),
+        runner: runnerWith(capCut(stdout)),
       }),
     ).rejects.toThrow("git status failed for the sync preview");
   });
@@ -160,7 +170,8 @@ describe("sync status read — byte-cap cut (large untracked tree)", () => {
   ])("keeps $name a failed preview", async ({ overrides }) => {
     await expect(
       buildSyncPreview("fetch", "/repo", undefined, {
-        runner: runnerWith(capCut(header, overrides)),
+        // A whole, bounded status but for the one thing the row names.
+        runner: runnerWith(capCut(`${header}? a.ts\0`, overrides)),
       }),
     ).rejects.toThrow("git status failed for the sync preview");
   });

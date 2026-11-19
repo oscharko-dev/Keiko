@@ -16,21 +16,26 @@ export function launchedFromProgramFolder(
   return env[PROGRAM_FOLDER_LAUNCH_ENV] === "1";
 }
 
-// The resolved form of a launch directory, kept per directory: a root is checked both as given and
-// as resolved, and the working directory of a running Keiko does not change.
-const resolvedLaunchDirectories = new Map<string, string>();
-
-function resolvedForm(directory: string): string {
-  const known = resolvedLaunchDirectories.get(directory);
-  if (known !== undefined) return known;
-  let resolved = directory;
+// How the operating system itself names a path that exists: links followed and, on Windows, a
+// short 8.3 name written out, which the JavaScript resolution leaves as it is.
+function systemName(path: string): string | undefined {
   try {
-    resolved = realpathSync(directory);
+    return realpathSync.native(path);
   } catch {
-    // A launch directory that cannot be resolved is still refused as it was given.
+    return undefined;
   }
-  resolvedLaunchDirectories.set(directory, resolved);
-  return resolved;
+}
+
+// The system's name of a launch directory, kept per directory: the working directory of a running
+// Keiko does not change. A launch directory that cannot be resolved is refused as it was given.
+const launchDirectoryNames = new Map<string, string>();
+
+function launchDirectoryName(directory: string): string {
+  const known = launchDirectoryNames.get(directory);
+  if (known !== undefined) return known;
+  const name = systemName(directory) ?? directory;
+  launchDirectoryNames.set(directory, name);
+  return name;
 }
 
 /**
@@ -40,6 +45,9 @@ function resolvedForm(directory: string): string {
  * gateway configuration with its token: the read surface refuses it as a root exactly as it refuses
  * Keiko's state folders, so it is never a window's starting folder (ADR-0121 D9). A relative path is
  * not judged: it belongs to a root that was admitted on its own.
+ *
+ * A path can spell the same folder another way (through a link, or as a Windows short name), so a
+ * path that exists is also compared by the name the operating system gives it.
  */
 export function insideProgramFolder(
   path: string,
@@ -47,5 +55,8 @@ export function insideProgramFolder(
   launchDirectory: string = process.cwd(),
 ): boolean {
   if (!launchedFromProgramFolder(env) || !isAbsolute(path)) return false;
-  return containsPath(launchDirectory, path) || containsPath(resolvedForm(launchDirectory), path);
+  const folder = launchDirectoryName(launchDirectory);
+  if (containsPath(launchDirectory, path) || containsPath(folder, path)) return true;
+  const named = systemName(path);
+  return named !== undefined && containsPath(folder, named);
 }

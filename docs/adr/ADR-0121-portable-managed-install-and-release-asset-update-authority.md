@@ -1206,22 +1206,29 @@ an administrator who installs it separately enables it. A new version arrives as
 
 **No default project.** An in-place launch, a managed portable launch and the npm folder package run
 Keiko inside its own program folder, and they declare it with `KEIKO_LAUNCH_FROM_PROGRAM_FOLDER=1`.
-That folder holds the program files and, in an administrator's package, the plaintext gateway token
-of `keiko.config.json`, so it is never a person's working folder. The server seeds no default
-project from it (`workspace.root.denied` with the closed reason `program-folder-launch`, no path),
-and the read surface refuses it and everything in it as a root, exactly as it refuses Keiko's state
-folders: Files, Git, the folder dialog, project registration and a Chat's connected folder all ask
-one gate (`pathIsDenied`), which knows the folder as it was launched and as it resolves. A project
-at that path is therefore listed `readable: false`: it is never a window's starting folder (#4371),
-and the Coding Workbench does not offer it for a run. This also covers an installation that
-registered its program folder as a project before this rule existed. A Chat needs no folder: a
-person who has chosen none still gets one, kept under the launch directory, which only holds it;
-refusing that Chat would leave New chat dead on every fresh installation. The Coding Workbench,
-Files and Git start empty until the person chooses a folder. This is the refused-launch-directory
-behaviour of #4371 applied to the program folder. A person's own explicit start of a coding run in
-that folder through the API is not a boundary this rule draws: the folder a run works in is chosen
-by the local human, never by a model. A direct `keiko ui` or a developer checkout declares nothing
-and is unaffected. Independently, the always-on
+The program folder is the launch directory: the payload's `app` folder for the portable payload
+(the desktop installation and the standalone folder package) and the package folder itself for the
+npm folder package. It holds the program files and, in the npm form, the administrator's
+`keiko.config.json` with the plaintext gateway token; in the standalone form that file lies beside
+the start files, one level above the payload, and is protected by its name. The launch directory is
+never a person's working folder. The server seeds no default project from it
+(`workspace.root.denied` with the closed reason `program-folder-launch`, no path), and the read
+surface refuses it and everything in it as a root, exactly as it refuses Keiko's state folders:
+Files, Git, the folder dialog, project registration and a Chat's connected folder all ask one gate
+(`pathIsDenied`), which knows the folder as it was launched, as it resolves and under another
+spelling of the same folder (a link, a Windows short name). A project at that path is therefore
+listed `readable: false`: no window starts in it (#4371), Files does not offer it as a root, and the
+Coding Workbench does not offer it for a run. This also covers an installation that registered its
+program folder as a project before this rule existed, and a folder outside the program folder that
+the launcher names explicitly is seeded as before. A Chat needs no folder: a person who has chosen
+none still gets one, kept under the launch directory, which only holds it; refusing that Chat would
+leave New chat dead on every fresh installation. The Coding Workbench, Files and Git start empty
+until the person chooses a folder. This is the refused-launch-directory behaviour of #4371 applied
+to the program folder. A coding run is refused in a folder that contains Keiko's own coding runtime
+(`workspace-unqualified`, #4335), which covers the npm folder package's folder; beyond that, the
+folder a run works in is chosen by the local human, never by a model, so the rule draws no further
+boundary against a person's own explicit choice. A direct `keiko ui` or a developer checkout
+declares nothing and is unaffected. Independently, the always-on
 sensitive-path denial names `keiko.config.json` and the sealed `*.vault` stores as credentials
 (kernel-enforced for native commands like the other credential names) and the folder forms' data
 folder `.keiko-standalone` beside `.keiko` (ADR-0005 D3), so a folder a person does choose, even
