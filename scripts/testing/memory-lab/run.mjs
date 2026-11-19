@@ -798,9 +798,23 @@ async function runLabExclusive(options, log, assertOwned, gateway, corpus) {
   return scanned;
 }
 
+// A switch given both ways (`--embedder --no-embedder`) is a contradiction, not a request: the parser
+// would let the last one win and the run would measure something the caller did not mean.
+function assertNoContradictoryFlags(tokens) {
+  const given = new Map();
+  for (const token of tokens) {
+    if (token.kind !== "option") continue;
+    const negated = token.rawName.startsWith("--no-");
+    if (given.has(token.name) && given.get(token.name) !== negated)
+      throw new RangeError(`--${token.name} and --no-${token.name} contradict each other`);
+    given.set(token.name, negated);
+  }
+}
+
 async function main() {
   installInterruptHandlers();
-  const { values } = parseArgs({ options: OPTIONS, allowNegative: true });
+  const { values, tokens } = parseArgs({ options: OPTIONS, allowNegative: true, tokens: true });
+  assertNoContradictoryFlags(tokens);
   if (values.help) {
     console.log(usage());
     return;

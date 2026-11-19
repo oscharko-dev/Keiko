@@ -3,7 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { compareRuns, judgeProgress, renderComparison } from "../testing/memory-lab/compare.mjs";
+import {
+  compareRuns,
+  judgeProgress,
+  renderComparison,
+  renderFailureClasses,
+} from "../testing/memory-lab/compare.mjs";
 import { HoldoutError, sealHoldout } from "../testing/memory-lab/corpus/holdout.mjs";
 import { unitFailures } from "../testing/memory-lab/failure-classes.mjs";
 import { normalizeOptions } from "../testing/memory-lab/run.mjs";
@@ -365,6 +370,49 @@ describe("the maintenance switch", () => {
         { model: "m", part: "development", baseline: run("on"), candidate: run("off") },
       ]),
     ).toThrow(/maintenance/u);
+  });
+});
+
+describe("repetitions in a comparison", () => {
+  const run = (metadata) => ({
+    manifest: { setDigest: "d", metadata },
+    summary: { byArm: [{ key: "product", counters: {} }] },
+    scorecard: { scenarios: [] },
+  });
+
+  it("are provenance: counts are sums over repetitions, so 3 against 5 is not a change", () => {
+    expect(
+      compareRuns(run({ repetitions: 3 }), run({ repetitions: 5 })).provenanceDifferences,
+    ).toContain("repetitions");
+    expect(
+      compareRuns(run({ repetitions: 3 }), run({ repetitions: 3 })).provenanceDifferences,
+    ).not.toContain("repetitions");
+    // A run that never recorded it is unrecorded, equal only to another such run.
+    expect(compareRuns(run({}), run({ repetitions: 3 })).provenanceDifferences).toContain(
+      "repetitions",
+    );
+    expect(compareRuns(run({}), run({})).provenanceDifferences).not.toContain("repetitions");
+  });
+
+  it("are named beside the failure-class table when they differ, and judge refuses the pair", () => {
+    const withClasses = (repetitions) => ({
+      manifest: { setDigest: "d", metadata: { repetitions } },
+      summary: { byArm: [{ key: "product", counters: {} }], failureClasses: { byArm: {} } },
+      scorecard: { scenarios: [] },
+    });
+    const comparison = compareRuns(withClasses(3), withClasses(5));
+    expect(comparison.repetitions).toEqual({ baseline: 3, candidate: 5 });
+    const lines = renderFailureClasses({ ...comparison, failureClasses: [] }, "m");
+    expect(lines.join("\n")).toContain("3 in the baseline, 5 in the candidate");
+    const same = compareRuns(withClasses(3), withClasses(3));
+    expect(renderFailureClasses({ ...same, failureClasses: [] }, "m")).toEqual([
+      "m failure classes: no failed check in either run",
+    ]);
+    expect(() =>
+      judgeProgress([
+        { model: "m", part: "development", baseline: withClasses(3), candidate: withClasses(5) },
+      ]),
+    ).toThrow(/repetitions/u);
   });
 });
 

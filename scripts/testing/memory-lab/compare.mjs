@@ -44,6 +44,7 @@ const PROVENANCE_FIELDS = Object.freeze([
   "embeddingModelIds",
   "maintenance",
   "recallTrace",
+  "repetitions",
   "foldedKeys",
   "instrumentDigest",
 ]);
@@ -225,6 +226,10 @@ export function compareRuns(baseline, candidate, arm = "product") {
       .map((row) => row.metric),
     failureClasses: compareFailureClasses(baseline, candidate, arm),
     failureClassesUnavailable: missingFailureEvidence(baseline, candidate),
+    repetitions: {
+      baseline: baseline.manifest.metadata?.repetitions,
+      candidate: candidate.manifest.metadata?.repetitions,
+    },
   };
 }
 
@@ -416,11 +421,13 @@ export function renderFailureClasses(comparison, label) {
   const rows = comparison.failureClasses;
   if (rows === null || rows === undefined) return [];
   const missing = comparison.failureClassesUnavailable;
-  const note =
-    missing === undefined
+  const note = [
+    ...(missing === undefined
       ? []
-      : [`  (the ${missing} run recorded no failure classes: n/a, not zero)`];
-  if (rows.length === 0 && missing === undefined)
+      : [`  (the ${missing} run recorded no failure classes: n/a, not zero)`]),
+    ...repetitionNote(comparison.repetitions),
+  ];
+  if (rows.length === 0 && note.length === 0)
     return [`${label} failure classes: no failed check in either run`];
   return [
     `${label} failure classes (${comparison.arm} arm, failed checks):`,
@@ -430,6 +437,16 @@ export function renderFailureClasses(comparison, label) {
         row.newlyFailing.length === 0 ? "" : `; newly failing: ${keyList(row.newlyFailing)}`;
       return `  ${row.class}: ${countText(row.baseline)} -> ${countText(row.candidate)}${added}`;
     }),
+  ];
+}
+
+// Counts are sums over every repetition, so a pair with different repetition counts is not comparable
+// by its raw totals: the table says so beside the numbers.
+function repetitionNote(repetitions) {
+  if (repetitions === undefined || repetitions.baseline === repetitions.candidate) return [];
+  const text = (value) => (value === undefined ? "unrecorded" : String(value));
+  return [
+    `  (counts are sums over repetitions: ${text(repetitions.baseline)} in the baseline, ${text(repetitions.candidate)} in the candidate; they are not comparable as they stand)`,
   ];
 }
 

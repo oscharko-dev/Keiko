@@ -55,7 +55,8 @@ instance's state directory (refused for real conversations), `--subject-root <ch
 separately attested baseline checkout, `--broken-learner whole-message|credential|invented` for the
 failure-first proofs, `--allow-folded-env` (see "Isolation"). `--out` must lie outside the checkout and
 outside every other git work tree, and a directory that already holds a scorecard is never
-overwritten.
+overwritten. A switch given both ways (`--embedder --no-embedder`, `--maintenance --no-maintenance`,
+`--recall-trace --no-recall-trace`) is refused as a contradiction instead of the last one winning.
 
 `--memory-mode` and `--ceiling` both default to `autonomous-delivery` (Full access). Since #4206 a
 routine private fact (user scope) a person states is accepted at once in every mode, and only a fact
@@ -654,7 +655,8 @@ its stage, `needed-not-stored` … `needed-trace-unavailable`, see "Recall trace
 `unit-not-measured`. `rhythm.mjs compare` and `judge` add, per class, the count in the baseline and in
 the candidate and the checks (`scenario:arm:rN:probe:<id>`, `…:store:<fact>`, or `…:store:<class>:<ordinal>` for wrong records,
 which never carry a body) that newly fail in the candidate. A side that recorded no failure classes (a run older than the classes) shows `n/a`, never zero, and no
-check is called newly failing or gone against it. The totals are sums over every repetition
+check is called newly failing or gone against it. `repetitions` is a provenance field of a comparison (a run that never recorded it reads as
+unrecorded), and the table names the two counts beside the numbers when they differ. The totals are sums over every repetition
 of the run, so a run with three repetitions counts a failing check up to three times. Every arm that ran has an entry in `byArm` with its `units` count, so an arm that ran clean (an empty
 `total`) differs from one that did not run (no entry). A sealed run reports per-arm totals only, never a scenario or a check; its store verdicts
 are masked, so each unit is classified from its unmasked result before it is masked, and only the
