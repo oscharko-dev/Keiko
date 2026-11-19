@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   CODING_RUNTIME_RELEASES_FILE,
+  main,
   provideApprovedSourceCommits,
   publishCodingRuntimePackages,
   publishRuntime,
@@ -366,5 +367,46 @@ describe("coding-runtime package publisher", () => {
     });
     expect(diff()).toBe("");
     expect(git(checkout, "rev-list", "--count", "HEAD")).toBe("1");
+  });
+});
+
+describe("coding-runtime publisher command line", () => {
+  it("prints a usage line for missing or surplus arguments and starts nothing", async () => {
+    const errors = [];
+    const write = { log: vi.fn(), error: (line) => errors.push(line) };
+    for (const argv of [[], ["1.1.4"], ["--verify-only", "1.1.4"], ["1.1.4", "dir", "more"]]) {
+      await expect(main(argv, { write, env: {} })).resolves.toBe(2);
+    }
+    expect(errors).toHaveLength(4);
+    expect(errors[0]).toContain("--verify-only");
+  });
+
+  it("--verify-only reports each verified target and never needs OIDC or npm", async () => {
+    const assetDir = scratch();
+    const entry = pinned(assetDir, "macos-arm64", Buffer.from("arm64"));
+    const root = reviewedRoot({ "macos-arm64": entry });
+    const lines = [];
+    const code = await main(["--verify-only", VERSION, assetDir], {
+      root,
+      env: {},
+      write: { log: (line) => lines.push(line), error: vi.fn() },
+      deps: { ...APPROVED, run: vi.fn(), verifyCandidate: vi.fn(() => Promise.resolve()) },
+    });
+    expect(code).toBe(0);
+    expect(lines).toEqual([
+      `coding-runtime-verify-only: OK ${entry.name}@${VERSION} ${entry.sha256} ${join(assetDir, entry.tarball)}`,
+    ]);
+  });
+
+  it("--verify-only fails on a swapped tarball, and publishing still needs OIDC", async () => {
+    const assetDir = scratch();
+    const entry = pinned(assetDir, "macos-arm64", Buffer.from("arm64"));
+    const root = reviewedRoot({ "macos-arm64": entry });
+    writeFileSync(join(assetDir, entry.tarball), "swapped");
+    const write = { log: vi.fn(), error: vi.fn() };
+    await expect(
+      main(["--verify-only", VERSION, assetDir], { root, env: {}, write, deps: APPROVED }),
+    ).rejects.toThrow("is not pinned");
+    await expect(main([VERSION, assetDir], { root, env: {}, write })).rejects.toThrow("OIDC");
   });
 });

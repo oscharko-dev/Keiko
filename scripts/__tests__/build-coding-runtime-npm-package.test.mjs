@@ -26,6 +26,7 @@ import {
   codingRuntimePackageName,
   main,
   NPM_RUNTIME_PACKAGE_TARGETS,
+  normalizeWindowsPackageModes,
   packCodingRuntimeNpmCandidate,
   packRuntimeCandidate,
   verifyCodingRuntimeNpmCandidate,
@@ -36,6 +37,10 @@ import { portableTargetByName } from "../portable-runtime.mjs";
 import { stageRipgrepTool } from "../stage-portable-runtime.mjs";
 import { hashHelperSourceTree } from "../stage-dev-coding-runtime.mjs";
 import { resolveHostExecutable } from "../lib/host-executable.mjs";
+import {
+  receiptAssetName,
+  verifyCodingRuntimePackages,
+} from "../publish-coding-runtime-npm-packages.mjs";
 
 // #3577. The runtime packages are what lets an npm-installed Keiko run the Coding Workbench. The
 // server verifies their content against digests compiled into it, so the builder's two promises are
@@ -197,7 +202,7 @@ async function releaseFixture(target = "macos-arm64") {
     verifySourceCommit: (commit) => calls.push(commit),
     verifyPackedContents: () => calls.push("packed-content-verification"),
     pack: (packageDir, output) => {
-      const filename = "fixture-runtime-1.2.3.tgz";
+      const filename = `${built.name.slice(1).replace("/", "-")}-1.2.3.tgz`;
       write(join(output, filename), "immutable packed candidate");
       const files = readdirSync(packageDir, { recursive: true, withFileTypes: true })
         .filter((entry) => entry.isFile())
@@ -386,7 +391,9 @@ describe("coding runtime npm package", () => {
         ...fixture.deps,
         pack: (...args) => {
           const packed = fixture.deps.pack(...args);
-          writeFileSync(join(fixture.packageDir, "LICENSE.md"), "changed after packing");
+          // Every file's bytes are pinned now (LICENSE.md included, so a byte edit is refused by the
+          // pin itself); a change of attributes after packing is what only the recheck catches.
+          chmodSync(join(fixture.packageDir, "LICENSE.md"), 0o600);
           return packed;
         },
       }),
@@ -840,6 +847,236 @@ describe("coding runtime npm package", () => {
     await expect(main(["macos-arm64", "1.2.3", outDir], { build, write })).resolves.toBe(0);
     expect(built).toStrictEqual([{ target: "macos-arm64", version: "1.2.3", outDir }]);
     expect(JSON.parse(lines.log[0])).toMatchObject({ target: "macos-arm64" });
+  });
+});
+
+// #4068 review of #4482: a Windows package must come out the same on every host.
+describe("windows-x64 package reproducibility", () => {
+  const WINDOWS_FILES = [
+    "runtime/native/rg.exe",
+    "runtime/opencode-compatible/payload/bin/opencode.exe",
+    "runtime/native/keiko-secure-workspace-read.exe",
+  ];
+
+  it.skipIf(process.platform === "win32")(
+    "records every file of a windows-x64 package as 0644 whatever mode the host staged",
+    async () => {
+      const fixture = await releaseFixture("windows-x64");
+      for (const path of WINDOWS_FILES) chmodSync(join(fixture.packageDir, path), 0o755);
+      const { receipt } = await packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps);
+      expect(receipt.files.map(({ mode }) => mode)).toStrictEqual(receipt.files.map(() => 0o644));
+      for (const path of WINDOWS_FILES) {
+        expect(statSync(join(fixture.packageDir, path)).mode & 0o777).toBe(0o644);
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "leaves a macOS package's executable bits alone",
+    async () => {
+      const fixture = await releaseFixture("macos-arm64");
+      const { receipt } = await packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps);
+      const mode = receipt.files.find(({ path }) => path === "runtime/native/rg")?.mode ?? 0;
+      expect(mode & 0o111).not.toBe(0);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("normalizes by walking the package directory", () => {
+    const dir = scratch();
+    write(join(dir, "a/b.exe"), "x");
+    chmodSync(join(dir, "a/b.exe"), 0o755);
+    normalizeWindowsPackageModes(dir);
+    expect(statSync(join(dir, "a/b.exe")).mode & 0o777).toBe(0o644);
+  });
+
+  it("refuses edited LICENSE.md text against the digest of the builder's own notice", async () => {
+    const fixture = await releaseFixture("windows-x64");
+    write(join(fixture.packageDir, "LICENSE.md"), "# edited license text\n");
+    await expect(
+      packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps),
+    ).rejects.toThrow("runtime candidate digest mismatch");
+    expect(existsSync(fixture.artifactDir)).toBe(false);
+  });
+
+  describe("prebuilt native executables", () => {
+    const PREBUILT_HELPER = "prebuilt-helper-bytes";
+    const PREBUILT_SUPERVISOR = "prebuilt-supervisor-bytes";
+    const approval = {
+      helperSha256: sha256Of(PREBUILT_HELPER),
+      helperSizeBytes: PREBUILT_HELPER.length,
+      runtimeSupervisor: {
+        sha256: sha256Of(PREBUILT_SUPERVISOR),
+        sizeBytes: PREBUILT_SUPERVISOR.length,
+      },
+    };
+
+    function nativeDir(helper = PREBUILT_HELPER, supervisor = PREBUILT_SUPERVISOR) {
+      const dir = scratch();
+      if (helper !== null) write(join(dir, "keiko-secure-workspace-read.exe"), helper);
+      if (supervisor !== null) write(join(dir, "keiko-runtime-supervisor.exe"), supervisor);
+      return dir;
+    }
+
+    function failingBuilds() {
+      const refuse = async () => {
+        throw new Error("the compiler must not run");
+      };
+      return { runBuild: refuse, runSupervisorBuild: refuse };
+    }
+
+    it("stages verified prebuilt executables without compiling anything", async () => {
+      const outDir = join(scratch(), "package");
+      const result = await buildCodingRuntimeNpmPackage({
+        target: "windows-x64",
+        version: "1.2.3",
+        outDir,
+        prebuiltNativeDir: nativeDir(),
+        deps: { ...windowsDeps(), ...failingBuilds(), loadApproval: async () => approval },
+      });
+      const native = join(outDir, "runtime", "native");
+      expect(readFileSync(join(native, "keiko-secure-workspace-read.exe"), "utf8")).toBe(
+        PREBUILT_HELPER,
+      );
+      expect(readFileSync(join(native, "keiko-runtime-supervisor.exe"), "utf8")).toBe(
+        PREBUILT_SUPERVISOR,
+      );
+      expect(result.helperSha256).toBe(approval.helperSha256);
+      expect(result.runtimeSupervisor.sha256).toBe(approval.runtimeSupervisor.sha256);
+    });
+
+    it.each([
+      ["helper", ["tampered-helper-bytes!", PREBUILT_SUPERVISOR], "does not match the pinned"],
+      ["supervisor", [PREBUILT_HELPER, "tampered-supervisor-bytes!!"], "does not match the pinned"],
+      ["missing supervisor", [PREBUILT_HELPER, null], "missing or not an ordinary"],
+    ])(
+      "refuses a %s that is not the pinned file before staging anything",
+      async (_l, files, why) => {
+        const dir = nativeDir(files[0], files[1]);
+        const outDir = join(scratch(), "package");
+        let prepared = false;
+        await expect(
+          buildCodingRuntimeNpmPackage({
+            target: "windows-x64",
+            version: "1.2.3",
+            outDir,
+            prebuiltNativeDir: dir,
+            deps: {
+              ...windowsDeps(),
+              ...failingBuilds(),
+              loadApproval: async () => approval,
+              prepareSidecars: async () => {
+                prepared = true;
+              },
+            },
+          }),
+        ).rejects.toThrow(why);
+        expect(prepared).toBe(false);
+        expect(existsSync(outDir)).toBe(false);
+      },
+    );
+
+    it("refuses a relative directory and passes the option through the CLI", async () => {
+      await expect(
+        buildCodingRuntimeNpmPackage({
+          target: "windows-x64",
+          version: "1.2.3",
+          outDir: join(scratch(), "package"),
+          prebuiltNativeDir: "relative/native",
+          deps: { loadApproval: async () => approval },
+        }),
+      ).rejects.toThrow("prebuiltNativeDir must be an absolute path");
+      const built = [];
+      const code = await main(
+        ["windows-x64", "1.2.3", "/abs/out", "--prebuilt-native-dir", "/abs/native"],
+        {
+          build: async (input) => {
+            built.push(input);
+            return {};
+          },
+          write: { log: () => undefined, error: () => undefined },
+        },
+      );
+      expect(code).toBe(0);
+      expect(built[0].prebuiltNativeDir).toBe(resolve("/abs/native"));
+    });
+  });
+
+  // The publisher's --verify-only runs its own pre-publish checks on local assets.
+  describe("publisher --verify-only on local assets", () => {
+    async function assets() {
+      const fixture = await releaseFixture("windows-x64");
+      const prepared = await packCodingRuntimeNpmCandidate(releaseInput(fixture), fixture.deps);
+      const name = "@oscharko-dev/keiko-coding-runtime-win32-x64";
+      const tarball = "oscharko-dev-keiko-coding-runtime-win32-x64-1.2.3.tgz";
+      const assetDir = scratch();
+      const bytes = readFileSync(prepared.tarballPath);
+      write(join(assetDir, tarball), bytes);
+      write(join(assetDir, receiptAssetName(tarball)), readFileSync(prepared.receiptPath));
+      const root = scratch();
+      write(
+        join(root, "docs/release/coding-runtime-npm-packages.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          releases: {
+            "1.2.3": {
+              "windows-x64": {
+                name,
+                opencodeVersion: catalogUpstreamVersion(),
+                tarball,
+                sizeBytes: bytes.length,
+                sha256: sha256Of(bytes),
+                integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
+              },
+            },
+          },
+        }),
+      );
+      const deps = {
+        git: () => 0,
+        loadApproval: async () => fixture.approval,
+        run: () => undefined,
+        verifyCandidate: (input) =>
+          verifyCodingRuntimeNpmCandidate(
+            { ...input, packageDir: fixture.packageDir },
+            fixture.deps,
+          ),
+      };
+      return { assetDir, root, tarball, deps };
+    }
+
+    it("passes on a good pair without any OIDC environment", async () => {
+      const { assetDir, root, deps } = await assets();
+      const result = await verifyCodingRuntimePackages({
+        root,
+        version: "1.2.3",
+        assetDir,
+        deps,
+      });
+      expect(result.entries).toHaveLength(1);
+      expect(result.tarballs).toHaveLength(1);
+    });
+
+    it("rejects a flipped byte of the tarball", async () => {
+      const { assetDir, root, tarball, deps } = await assets();
+      const bytes = readFileSync(join(assetDir, tarball));
+      bytes[0] ^= 0xff;
+      writeFileSync(join(assetDir, tarball), bytes);
+      await expect(
+        verifyCodingRuntimePackages({ root, version: "1.2.3", assetDir, deps }),
+      ).rejects.toThrow("is not pinned");
+    });
+
+    it("rejects an edited receipt", async () => {
+      const { assetDir, root, tarball, deps } = await assets();
+      const path = join(assetDir, receiptAssetName(tarball));
+      const receipt = JSON.parse(readFileSync(path, "utf8"));
+      receipt.helper.sourceCommit = "b".repeat(40);
+      rmSync(path);
+      writeFileSync(path, JSON.stringify(receipt));
+      await expect(
+        verifyCodingRuntimePackages({ root, version: "1.2.3", assetDir, deps }),
+      ).rejects.toThrow("receipt mismatch");
+    });
   });
 });
 
