@@ -149,6 +149,22 @@ describe("applyMemoryRetention — maxAgeMs", () => {
 // ── maxRecordsPerScope ────────────────────────────────────────────────────────
 
 describe("applyMemoryRetention — maxRecordsPerScope", () => {
+  // A record the age rule already deletes counts toward the cap: the cap must not delete retained
+  // history on top of it (#4223).
+  it("counts an age deletion toward the cap before it evicts history", () => {
+    const vault = makeVault();
+    insertRecord(vault, { id: "aged", updatedAt: NOW - 40 * ONE_DAY_MS });
+    insertRecord(vault, { id: "history", updatedAt: NOW - 2 * ONE_DAY_MS, status: "superseded" });
+    insertRecord(vault, { id: "live", updatedAt: NOW - ONE_DAY_MS });
+    const policy: MemoryRetentionPolicy = { maxAgeMs: 30 * ONE_DAY_MS, maxRecordsPerScope: 2 };
+    const result = applyMemoryRetention({ vault, scopes: [SCOPE], policy, nowMs: NOW });
+    expect(result.forgotten).toHaveLength(1);
+    expect(result.byReason["expire-age"]).toBe(1);
+    expect(vault.getMemory(brandedMemoryId("aged"))).toBeUndefined();
+    expect(vault.getMemory(brandedMemoryId("history"))).toBeDefined();
+    expect(vault.getMemory(brandedMemoryId("live"))).toBeDefined();
+  });
+
   it("evicts the oldest non-pinned records once the cap is exceeded", () => {
     const vault = makeVault();
     insertRecord(vault, { id: "r-1", updatedAt: NOW - 4 * ONE_DAY_MS });

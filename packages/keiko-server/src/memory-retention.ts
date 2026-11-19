@@ -102,14 +102,17 @@ function historyRank(record: MemoryRecord): number {
 
 // Returns the records that should be evicted by `maxRecordsPerScope`. Pinned records are
 // excluded from the count entirely so the cap applies to the non-pinned working set.
+// Records another rule already deletes count toward the cap, so the cap selects only among the
+// records that would remain.
 function selectOverflowEvictions(
   records: readonly MemoryRecord[],
   policy: MemoryRetentionPolicy,
+  alreadyDeleted: ReadonlySet<MemoryId>,
 ): readonly MemoryRecord[] {
   if (policy.maxRecordsPerScope === undefined) {
     return [];
   }
-  const nonPinned = records.filter((r) => !r.pinned);
+  const nonPinned = records.filter((r) => !r.pinned && !alreadyDeleted.has(r.id));
   if (nonPinned.length <= policy.maxRecordsPerScope) {
     return [];
   }
@@ -170,7 +173,7 @@ function classifyScope(
       status: record.status,
     });
   }
-  for (const record of selectOverflowEvictions(records, policy)) {
+  for (const record of selectOverflowEvictions(records, policy, new Set(decisions.keys()))) {
     if (decisions.has(record.id)) {
       continue;
     }
