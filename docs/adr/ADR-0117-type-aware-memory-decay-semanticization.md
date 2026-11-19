@@ -49,6 +49,11 @@ fall back to the recommended preset (never a silent `1`). Retrieval-side ranking
 milestone (the reinforcement subscore is keyed by access stats without record type); semanticization
 is scoped to the archive/forget decision where "Vergessen" actually lives.
 
+A record that a newer fact replaced (status `superseded`, #4223) is history, not a fading belief.
+The planning phases of the pass (strength, archive, expire, forget) never read it, never forget it
+and never send it to the model: it stays until the person deletes it or the opt-in retention policy
+of D4 removes it. Recall leaves it out of its read windows the same way.
+
 ### D3 — Env-gated rollout (default OFF), mirroring `KEIKO_MEMORY_FUSION`
 
 Type-aware decay is a behavioural change to forgetting with a broad blast radius on which memories
@@ -75,6 +80,12 @@ positive safe-integer environment values:
 - `KEIKO_MEMORY_RETENTION_EXPIRE_PROPOSALS_AFTER_DAYS`
 - `KEIKO_MEMORY_RETENTION_PURGE_FORGOTTEN_AFTER_DAYS`
 
+The retention phase is the exception to the planning phases' view of history: it lists every
+record of every scope, superseded ones included, because `KEIKO_MEMORY_RETENTION_MAX_RECORDS_PER_SCOPE`
+bounds storage and so counts them. Overflow eviction removes superseded records first, oldest
+first, and live ones only once no history remains, so the cap never deletes a fact the person
+relies on while replaced values survive.
+
 Absent values leave that dimension disabled; an invalid value disables the retention phase and
 emits a content-free operator diagnostic. Pinned records remain ineligible. Scope enumeration
 includes tombstone-only scopes so later passes can actually purge forgotten ledgers after their last
@@ -88,10 +99,12 @@ tombstones written by an explicitly unattended surface, `memory-maintenance` and
 `retention`: those record that Keiko removed a record under a storage policy, not that a person
 refused the fact, so neither exact nor semantic suppression reads them (#4223). Tombstones from the
 person's forget (`chat-statement`, `memory-center`) and from any unknown surface still refuse
-(fail closed). The classification lives once in the vault package (ADR-0146). Retention and maintenance never revive a fact the person rejected: an unattended tombstone of a `rejected` record still refuses. The maintenance pass
-never forgets a superseded record and does not read it; superseded records stay as history until the
-person deletes them or the opt-in retention policy removes them, and are not sent to the model. Sealed vectors are traversed in fixed-size pages through the scope/time/id index and compared exactly,
-short-circuiting on a match. The implementation deliberately does not persist a plaintext ANN
+(fail closed). The classification lives once in the vault package (ADR-0146). Retention and
+maintenance never revive a fact the person rejected: an unattended tombstone of a `rejected` record
+still refuses.
+
+Sealed vectors are traversed in fixed-size pages through the scope/time/id index and compared
+exactly, short-circuiting on a match. The implementation deliberately does not persist a plaintext ANN
 sidecar for forgotten content and never drops older refusals merely to cap an in-memory array. A
 no-match scan is therefore linear in retained vector-bearing tombstones; operators with high-volume
 forget activity should configure `KEIKO_MEMORY_RETENTION_PURGE_FORGOTTEN_AFTER_DAYS` to bound that

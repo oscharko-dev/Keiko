@@ -4,7 +4,7 @@
   "id": "scale-abgelaufen-de",
   "language": "de",
   "class": "scale-window",
-  "description": "A target fact of the person's own scope older than 550 superseded rows (validity ended) of that scope, next to a recent control. Limit: the 500-row read window counts retired rows before eligibility, and maintenance removes only a bounded number of ended rows per pass. Failure means: the target never reaches the model although accepted and reinforced; the control passing shows the window, not retrieval, is the cause. Maintenance: run with maintenance on or off; the seeded accepted records are reinforced or younger than 94 days, so maintenance does not archive them. Kind: defect.",
+  "description": "A target fact of the person's own scope older than 550 superseded rows (validity ended) of that scope, next to a recent control. Limit: recall excludes superseded rows at the query, so they take no place in the 500-row read window, and maintenance never removes them because they are kept as history. Failure means: the target never reaches the model although accepted and reinforced; the control passing shows the window, not retrieval, is the cause. Maintenance: run with maintenance on or off; the seeded accepted records are reinforced or younger than 94 days, so maintenance does not archive them. Kind: defect.",
   "seed": {
     "records": [
       {
