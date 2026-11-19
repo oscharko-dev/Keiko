@@ -9,11 +9,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { detectWorkspaceAt } from "./detect.js";
 import { nodeWorkspaceFs, WorkspaceDescriptorReadError, type WorkspaceFs } from "./fs.js";
 import { DEFAULT_SEARCH_LIMITS, searchText, type SearchScope } from "./repoSearch.js";
+import { DIRECTORY_LINK_TYPE } from "./_memfs.js";
 
 let root: string;
 
@@ -156,7 +157,7 @@ describe("recursive search under concurrent directory membership changes", () =>
     const fs: WorkspaceFs = {
       ...nodeWorkspaceFs,
       stat: (path) => {
-        if (!removed && path.endsWith("/changing/63.txt")) {
+        if (!removed && path.endsWith(join(sep, "changing", "63.txt"))) {
           removed = true;
           unlinkSync(path);
         }
@@ -237,7 +238,7 @@ describe("recursive search under concurrent directory membership changes", () =>
           replaced = true;
           renameSync(directory, join(root, "original"));
           if (replacement === "directory") mkdirSync(directory);
-          else symlinkSync(join(root, "stable"), directory);
+          else symlinkSync(join(root, "stable"), directory, DIRECTORY_LINK_TYPE);
         }
       };
       await expect(consume()).rejects.toBeInstanceOf(WorkspaceDescriptorReadError);

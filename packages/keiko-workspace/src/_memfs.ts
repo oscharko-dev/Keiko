@@ -351,6 +351,49 @@ async function* memoryDirectoryEntries(
   yield* entries;
 }
 
+// Fixture roots are often POSIX paths such as `/ws`. On Windows the product resolves their
+// descendants natively, so a port receives `D:\ws\src\a.ts` for the fixture path `/ws/src/a.ts`.
+// This reads both spellings as the same fixture path (#4432).
+export function memoryFixturePath(absolutePath: string): string {
+  if (process.platform !== "win32") return absolutePath;
+  return absolutePath.replace(/^[A-Za-z]:(?=[\\/])/u, "").replaceAll("\\", "/");
+}
+
+// A directory junction is the reparse point any Windows user can create without the symbolic-link
+// privilege, so directory-alias fixtures exercise it there; POSIX keeps a directory symlink (#4432).
+export const DIRECTORY_LINK_TYPE = process.platform === "win32" ? "junction" : "dir";
+
+// A POSIX fixture root answers in its own form, so root and descendants share one prefix.
+function memoryRealPath(root: string): (absolutePath: string) => string {
+  return process.platform === "win32" && root.startsWith("/")
+    ? memoryFixturePath
+    : (absolutePath: string): string => absolutePath;
+}
+
+type FixtureMethod = (this: unknown, ...args: unknown[]) => unknown;
+
+function fixturePathMethod(method: FixtureMethod): FixtureMethod {
+  return function portableMethod(this: unknown, ...args: unknown[]): unknown {
+    const fixtureArgs = args.map((arg) => (typeof arg === "string" ? memoryFixturePath(arg) : arg));
+    return method.apply(this, fixtureArgs);
+  };
+}
+
+/**
+ * Lets a hand-written in-memory port keep comparing POSIX fixture paths on Windows: every string
+ * it receives is read as a fixture path, so its canonical answers stay in the root's own form.
+ * Only for ports over POSIX-keyed fixtures; a port over the real disk must not be wrapped (#4432).
+ */
+export function portableFixtureFs(fs: WorkspaceFs): WorkspaceFs {
+  if (process.platform !== "win32") return fs;
+  const wrapped: Record<string, unknown> = {};
+  const entries: readonly (readonly [string, unknown])[] = Object.entries(fs);
+  for (const [name, value] of entries) {
+    wrapped[name] = typeof value === "function" ? fixturePathMethod(value as FixtureMethod) : value;
+  }
+  return wrapped as unknown as WorkspaceFs;
+}
+
 export function memFs(root: string, files: Readonly<Record<string, string>>): WorkspaceFs {
   const keyByAbsolutePath = new Map<string, string>();
   for (const key of Object.keys(files)) {
@@ -382,7 +425,7 @@ export function memFs(root: string, files: Readonly<Record<string, string>>): Wo
       return maxEntries === undefined ? entries : entries.slice(0, maxEntries);
     },
     iterateDirectory: memoryDirectoryEntries,
-    realPath: (absolutePath: string): string => absolutePath,
+    realPath: memoryRealPath(root),
     exists: (absolutePath: string): boolean =>
       findKey(absolutePath) !== undefined || canonicalPath(absolutePath) === canonicalRoot,
     readFileBytes: (absolutePath: string, maxBytes: number): Promise<Uint8Array> => {

@@ -899,6 +899,35 @@ describe("dev quality workflows", () => {
     expect(regressionIndex).toBeGreaterThan(steps.findIndex((step) => step.name === "Build"));
   });
 
+  it("runs the recursive search suites on the required Windows host (#4432)", () => {
+    const steps = ciWorkflow.jobs["cross-platform-smoke"].steps;
+    const laneIndex = steps.findIndex(
+      (step) => step.name === "Verify recursive search suites on Windows",
+    );
+    const lane = steps[laneIndex];
+    expect(lane, "Windows recursive search lane must exist").toBeDefined();
+    expect(lane.if).toBe("runner.os == 'Windows'");
+    expect(lane["continue-on-error"]).toBeUndefined();
+    expect(laneIndex).toBeGreaterThan(steps.findIndex((step) => step.name === "Build"));
+    const [command, ...filters] = lane.run.trim().split(/\s+/u);
+    expect(command).toBe("node");
+    expect(filters.slice(0, 2)).toEqual(["node_modules/vitest/vitest.mjs", "run"]);
+    // A narrowing flag would let the lane pass while skipping the suites it names.
+    expect(filters.some((argument) => argument.startsWith("-"))).toBe(false);
+    expect(filters.slice(2)).toEqual([
+      "packages/keiko-workspace/src/discovery",
+      "packages/keiko-workspace/src/repoSearch.",
+      "packages/keiko-workspace/src/workspaceIndex",
+      "packages/keiko-workspace/src/workspacePathDiscovery",
+      "packages/keiko-workspace/src/realpath.",
+      "packages/keiko-workspace/src/fs.",
+      "packages/keiko-workspace/src/ignore.",
+      "packages/keiko-local-knowledge/src/discovery/walk.test.ts",
+      "packages/keiko-server/src/files",
+      "packages/keiko-server/src/grounded-metadata-intake.test.ts",
+    ]);
+  });
+
   it("contains no privileged pull-request trigger", () => {
     expect(mutation).not.toContain("pull_request_target");
     expect(mutation).not.toContain("workflow_run");
