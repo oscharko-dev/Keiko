@@ -88,10 +88,11 @@ export interface StreamingWorkspaceIndexSession {
     metadata: WorkspaceIndexDiscoveredFile,
     kind: StreamingWorkspaceIndexHit["kind"],
   ) => Promise<void>;
+  /** Settles synchronously (`undefined`) when lookup already loaded the file's content shard. */
   readonly observeRead: (
     metadata: WorkspaceIndexDiscoveredFile,
     observed: StreamingWorkspaceIndexObservation,
-  ) => Promise<void>;
+  ) => Promise<void> | undefined;
   readonly observeMatch: (
     path: string,
     matches: FileMatches | undefined,
@@ -114,6 +115,7 @@ function recordBytes(record: WorkspaceIndexRecord): number {
 
 class ShardFamily {
   private readonly shards = new Map<number, Promise<IndexShard>>();
+  private readonly loaded = new Map<number, IndexShard>();
   private bytes = 0;
 
   public constructor(
@@ -127,10 +129,27 @@ class ShardFamily {
     const number = shardFor(path);
     let pending = this.shards.get(number);
     if (pending === undefined) {
-      pending = this.load(number);
+      pending = this.load(number).then((shard) => {
+        this.loaded.set(number, shard);
+        return shard;
+      });
       this.shards.set(number, pending);
     }
     return pending;
+  }
+
+  /** The shard holding `path` when it has finished loading, without waiting for it. */
+  public loadedShard(path: string): IndexShard | undefined {
+    return this.loaded.get(shardFor(path));
+  }
+
+  /**
+   * The shard holding `path` only when a lookup already requested it. Observations never load a
+   * shard themselves: a file read without a lookup (another phase of the request) settles nothing,
+   * so the shards a request loads, and which files it indexes, stay those its lookups chose.
+   */
+  public requestedShard(path: string): Promise<IndexShard> | undefined {
+    return this.shards.get(shardFor(path));
   }
 
   private async load(number: number): Promise<IndexShard> {
@@ -335,10 +354,10 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
     kind: StreamingWorkspaceIndexHit["kind"],
   ): Promise<void> {
     const path = metadata.scopePath;
-    const [matchShard, contentShard] = await Promise.all([
-      this.matches.shard(path),
-      this.contents.shard(path),
-    ]);
+    const matchPending = this.matches.requestedShard(path);
+    const contentPending = this.contents.requestedShard(path);
+    if (matchPending === undefined || contentPending === undefined) return;
+    const [matchShard, contentShard] = await Promise.all([matchPending, contentPending]);
     if (!this.usable()) return;
     if (contentShard.records.has(path)) this.contents.markSeen(contentShard, path);
     if (kind === "match" && this.matches.markSeen(matchShard, path)) this.retainedEntries += 1;
@@ -346,20 +365,34 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
     this.reusedRecords += 1;
   }
 
-  public async observeRead(
+  // Lookup loads the content shard before the read, so keeping the observation normally adds no
+  // asynchronous step between a live read and its match.
+  public observeRead(
     metadata: WorkspaceIndexDiscoveredFile,
     observed: StreamingWorkspaceIndexObservation,
-  ): Promise<void> {
-    if (!this.usable()) return;
+  ): Promise<void> | undefined {
+    if (!this.usable()) return undefined;
     const path = metadata.scopePath;
     if (observed.kind === "text") this.pendingReads.set(path, { metadata, reused: false });
+    const pending = this.contents.requestedShard(path);
+    if (pending === undefined) return undefined;
     const record = contentRecord(metadata, observed);
     if (record === undefined) {
       this.dropRecord();
-      return;
+      return undefined;
     }
-    const shard = await this.contents.shard(path);
-    if (!this.usable() || !this.contents.retain(shard, record)) return;
+    const shard = this.contents.loadedShard(path);
+    if (shard !== undefined) {
+      this.keepContent(shard, path, record);
+      return undefined;
+    }
+    return pending.then((loaded) => {
+      if (this.usable()) this.keepContent(loaded, path, record);
+    });
+  }
+
+  private keepContent(shard: IndexShard, path: string, record: WorkspaceIndexRecord): void {
+    if (!this.contents.retain(shard, record)) return;
     this.contents.markSeen(shard, path);
     shard.dirty = true;
   }
@@ -381,7 +414,9 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
       this.dropRecord();
       return;
     }
-    const shard = await this.matches.shard(path);
+    const requested = this.matches.requestedShard(path);
+    if (requested === undefined) return;
+    const shard = await requested;
     if (!this.usable()) return;
     if (!this.matches.retain(shard, { ...pending.metadata, kind: "text", queryMatch })) return;
     if (this.matches.markSeen(shard, path)) this.retainedEntries += 1;

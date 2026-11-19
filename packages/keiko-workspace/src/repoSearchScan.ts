@@ -1101,6 +1101,8 @@ async function readScanBytes(
 
 // #4457: the streaming index keeps what this redacting read observed, so a later question over the
 // unchanged file needs neither the read nor the redaction. The editor lane never reaches it.
+// The observation settles synchronously in the usual case; only a returned promise is awaited, so
+// the read path gains no asynchronous step the scan would not take without the content layer.
 async function observeStreamingRead(
   runner: SearchTextRunner,
   state: RunState,
@@ -1108,10 +1110,22 @@ async function observeStreamingRead(
   stat: WorkspaceStat,
   observed: StreamingWorkspaceIndexObservation,
 ): Promise<void> {
+  const pending = streamingReadObservation(runner, state, relativePath, stat, observed);
+  if (pending !== undefined) await pending;
+}
+
+function streamingReadObservation(
+  runner: SearchTextRunner,
+  state: RunState,
+  relativePath: string,
+  stat: WorkspaceStat,
+  observed: StreamingWorkspaceIndexObservation,
+): Promise<void> | undefined {
   const session = runner.streamingWorkspaceIndex;
-  if (session === undefined || !usesWorkspaceIndex(runner)) return;
-  if (runner.eligibleTextObserver?.active === true || abortScanFile(runner, state)) return;
-  await session.observeRead(workspaceIndexFileMetadata(relativePath, stat), observed);
+  if (session === undefined || !usesWorkspaceIndex(runner)) return undefined;
+  if (runner.eligibleTextObserver?.active === true || abortScanFile(runner, state))
+    return undefined;
+  return session.observeRead(workspaceIndexFileMetadata(relativePath, stat), observed);
 }
 
 async function readBoundedRawText(
