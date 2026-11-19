@@ -417,3 +417,11 @@ and `packages/keiko-ui/package.json`), and only in their version fields. The
 as for release 1.5.1. The other 26 digests match the 1.5.2 input inventory. The proofs retain
 their Linux captures, rendered CSS digest, measurements, tolerances and accessibility records; no
 producer was rerun for this metadata change.
+
+## Connected-retrieval scale gate input metadata — 2026-11-19
+
+PR #4461 adds the `check:retrieval-scale` script to the root `package.json`, one of the 29 declared
+shared inputs. The `designEvidenceSourceHashes` producer recalculates the ordered list for each of
+the four proofs; only the `package.json` digest changes, and the other 28 digests match the 1.5.3
+input inventory. The proofs retain their captures, rendered CSS digest, measurements, tolerances and
+accessibility records, because no rendered input changed.

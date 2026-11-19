@@ -239,6 +239,32 @@ describe("emitIndexingActivity — Activity Log proofs", () => {
     expect(persisted).toMatchObject({ discoveredCount: 10, failedCount: 1, walkCompleted: true });
   });
 
+  it("records benign walk churn counts on indexing.source.completed (#4435)", () => {
+    const events = emitAndCapture({
+      op: "indexing.source.completed",
+      context: JOB_CONTEXT,
+      durationMs: 300,
+      sourceIdDigest: DIGEST,
+      discoveredCount: 10,
+      failedCount: 0,
+      walkCompleted: true,
+      cancelled: false,
+      sawScopeError: false,
+      vanishedEntryCount: 2,
+      directoryRetryCount: 1,
+    });
+    const persisted = expectActivityLogProof(
+      "indexing.source.completed.counts",
+      persistedLineFor("indexing.source.completed", events),
+    );
+    expect(persisted).toMatchObject({
+      walkCompleted: true,
+      sawScopeError: false,
+      vanishedEntryCount: 2,
+      directoryRetryCount: 1,
+    });
+  });
+
   it("resolves indexing.discovery.limit-reached.bounds", () => {
     const events = emitAndCapture({
       op: "indexing.discovery.limit-reached",

@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { CODE_REDACTION_REVISION } from "@oscharko-dev/keiko-security/redaction";
+import { workspaceContentPolicy, workspaceContentSecrets } from "./discovery.js";
 import type { FileMatches, SearchTextRunner } from "./repoSearchScan.js";
 import {
   raceStructuralExecution,
@@ -11,25 +13,48 @@ import {
   DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_BYTES,
   DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_ENTRIES,
   isWorkspaceIndexRecordCurrent,
+  WORKSPACE_INDEX_SHARD_COUNT,
   type WorkspaceIndex,
   type WorkspaceIndexDiscoveredFile,
   type WorkspaceIndexPreparationReport,
   type WorkspaceIndexRecord,
   type WorkspaceIndexScopeKey,
+  type WorkspaceIndexSnapshot,
 } from "./workspaceIndex.js";
+import {
+  decodeWorkspaceIndexContent,
+  encodeWorkspaceIndexContent,
+  workspaceIndexContentPolicyFingerprint,
+} from "./workspaceIndexContent.js";
 import {
   normalizeWorkspaceIndexQueryMatch,
   type WorkspaceIndexQueryMatch,
 } from "./workspaceIndexQueryMatch.js";
 
-const SHARDS = 16;
 // Lazy query shards share the existing store's per-shard bounds; request memory has a smaller cap.
-const MAX_REQUEST_RECORD_BYTES = 64 * 1024 * 1024;
-const MAX_RECORD_BYTES = 8 * 1024;
+const MATCH_LIMITS: ShardFamilyLimits = {
+  recordBytes: 8 * 1024,
+  shardBytes: DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_BYTES / 4,
+  requestBytes: 64 * 1024 * 1024,
+};
+// #4457: sealing encodes a snapshot as base64url (4/3), so a content shard keeps its plaintext
+// under two thirds of the existing per-snapshot byte bound. One record may use a quarter of it.
+const CONTENT_SHARD_BYTES = Math.floor((DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_BYTES * 2) / 3);
+const CONTENT_LIMITS: ShardFamilyLimits = {
+  recordBytes: Math.floor(CONTENT_SHARD_BYTES / 4),
+  shardBytes: CONTENT_SHARD_BYTES,
+  requestBytes: 96 * 1024 * 1024,
+};
 // Each retained record also appears in discovery.files; the existing cap counts both rows.
 const MAX_SHARD_RECORDS = Math.floor(DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_ENTRIES / 2);
 
-interface QueryShard {
+interface ShardFamilyLimits {
+  readonly recordBytes: number;
+  readonly shardBytes: number;
+  readonly requestBytes: number;
+}
+
+interface IndexShard {
   readonly key: WorkspaceIndexScopeKey;
   readonly records: Map<string, WorkspaceIndexRecord>;
   readonly seen: Set<string>;
@@ -37,12 +62,37 @@ interface QueryShard {
   dirty: boolean;
 }
 
+interface ShardFamilyHost {
+  readonly active: () => boolean;
+  readonly usable: () => boolean;
+  readonly load: (key: WorkspaceIndexScopeKey) => Promise<WorkspaceIndexSnapshot | undefined>;
+  readonly save: (key: WorkspaceIndexScopeKey, records: WorkspaceIndexRecord[]) => Promise<void>;
+  readonly dropRecord: () => false;
+}
+
+/** What one stored record proves for the current question without reading the file again. */
+export type StreamingWorkspaceIndexHit =
+  | { readonly kind: "match"; readonly match: WorkspaceIndexQueryMatch }
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "binary" };
+
+/** What one redacting read observed, offered to the query-independent content layer. */
+export type StreamingWorkspaceIndexObservation =
+  { readonly kind: "text"; readonly text: string } | { readonly kind: "binary" };
+
 export interface StreamingWorkspaceIndexSession {
   readonly lookup: (
     metadata: WorkspaceIndexDiscoveredFile,
-  ) => Promise<WorkspaceIndexQueryMatch | undefined>;
-  readonly observeReuse: (path: string) => Promise<void>;
-  readonly observeRead: (metadata: WorkspaceIndexDiscoveredFile) => void;
+  ) => Promise<StreamingWorkspaceIndexHit | undefined>;
+  readonly observeReuse: (
+    metadata: WorkspaceIndexDiscoveredFile,
+    kind: StreamingWorkspaceIndexHit["kind"],
+  ) => Promise<void>;
+  /** Settles synchronously (`undefined`) when lookup already loaded the file's content shard. */
+  readonly observeRead: (
+    metadata: WorkspaceIndexDiscoveredFile,
+    observed: StreamingWorkspaceIndexObservation,
+  ) => Promise<void> | undefined;
   readonly observeMatch: (
     path: string,
     matches: FileMatches | undefined,
@@ -53,13 +103,124 @@ export interface StreamingWorkspaceIndexSession {
 }
 
 function shardFor(path: string): number {
-  return (createHash("sha256").update(path).digest().at(0) ?? 0) % SHARDS;
+  return (createHash("sha256").update(path).digest().at(0) ?? 0) % WORKSPACE_INDEX_SHARD_COUNT;
+}
+
+function recordBytes(record: WorkspaceIndexRecord): number {
+  if (record.content === undefined) return Buffer.byteLength(JSON.stringify(record), "utf8");
+  // The base64 payload is ASCII; measuring the remainder avoids copying the payload once more.
+  const rest = { ...record, content: { ...record.content, deflated: "" } };
+  return Buffer.byteLength(JSON.stringify(rest), "utf8") + record.content.deflated.length;
+}
+
+class ShardFamily {
+  private readonly shards = new Map<number, Promise<IndexShard>>();
+  private readonly loaded = new Map<number, IndexShard>();
+  private bytes = 0;
+
+  public constructor(
+    private readonly host: ShardFamilyHost,
+    private readonly limits: ShardFamilyLimits,
+    private readonly keyFor: (shard: number) => WorkspaceIndexScopeKey,
+    private readonly loadable: (record: WorkspaceIndexRecord) => boolean,
+  ) {}
+
+  public async shard(path: string): Promise<IndexShard> {
+    const number = shardFor(path);
+    let pending = this.shards.get(number);
+    if (pending === undefined) {
+      pending = this.load(number).then((shard) => {
+        this.loaded.set(number, shard);
+        return shard;
+      });
+      this.shards.set(number, pending);
+    }
+    return pending;
+  }
+
+  /** The shard holding `path` when it has finished loading, without waiting for it. */
+  public loadedShard(path: string): IndexShard | undefined {
+    return this.loaded.get(shardFor(path));
+  }
+
+  /**
+   * The shard holding `path` only when a lookup already requested it. Observations never load a
+   * shard themselves: a file read without a lookup (another phase of the request) settles nothing,
+   * so the shards a request loads, and which files it indexes, stay those its lookups chose.
+   */
+  public requestedShard(path: string): Promise<IndexShard> | undefined {
+    return this.shards.get(shardFor(path));
+  }
+
+  private async load(number: number): Promise<IndexShard> {
+    const key = this.keyFor(number);
+    const result: IndexShard = { key, records: new Map(), seen: new Set(), bytes: 0, dirty: false };
+    if (!this.host.active()) return result;
+    const snapshot = await this.host.load(key);
+    if (!this.host.usable() || snapshot === undefined) return result;
+    for (const record of snapshot.records) {
+      if (!this.host.active()) break;
+      if (this.loadable(record)) this.retain(result, record);
+    }
+    return result;
+  }
+
+  public retain(shard: IndexShard, record: WorkspaceIndexRecord): boolean {
+    const size = recordBytes(record);
+    const previous = shard.records.get(record.scopePath);
+    const oldSize = previous === undefined ? 0 : recordBytes(previous);
+    if (size > this.limits.recordBytes || this.bytes - oldSize + size > this.limits.requestBytes)
+      return this.host.dropRecord();
+    if (shard.bytes - oldSize + size > this.limits.shardBytes) return this.host.dropRecord();
+    if (
+      previous === undefined &&
+      shard.records.size >= MAX_SHARD_RECORDS - shard.key.relativePaths.length
+    )
+      return this.host.dropRecord();
+    shard.records.set(record.scopePath, record);
+    shard.bytes += size - oldSize;
+    this.bytes += size - oldSize;
+    return true;
+  }
+
+  /** Returns whether the path was not seen before in this request. */
+  public markSeen(shard: IndexShard, path: string): boolean {
+    if (shard.seen.has(path)) return false;
+    shard.seen.add(path);
+    return true;
+  }
+
+  public async finalize(): Promise<void> {
+    const shards = await Promise.all(this.shards.values());
+    // Unseen advisory records may release capacity even when every new record was refused.
+    // Eviction never asserts file deletion or changes fresh traversal's coverage authority.
+    const changed = shards.filter((shard) => shard.dirty || shard.seen.size !== shard.records.size);
+    // Shards are saved one after another so only one serialized snapshot is held at a time; the
+    // first failure ends the chain, and a stopped or unusable request publishes nothing further.
+    await changed.reduce<Promise<void>>(
+      (previous, shard) => previous.then(() => this.saveShard(shard)),
+      Promise.resolve(),
+    );
+  }
+
+  private async saveShard(shard: IndexShard): Promise<void> {
+    if (!this.host.usable()) return;
+    const records = [...shard.records.values()].filter((record) =>
+      shard.seen.has(record.scopePath),
+    );
+    await this.host.save(shard.key, records);
+  }
+}
+
+interface PendingRead {
+  readonly metadata: WorkspaceIndexDiscoveredFile;
+  readonly reused: boolean;
 }
 
 export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
-  private readonly shards = new Map<number, Promise<QueryShard>>();
-  private readonly pendingReads = new Map<string, WorkspaceIndexDiscoveredFile>();
-  private bytes = 0;
+  private readonly pendingReads = new Map<string, PendingRead>();
+  private readonly matches: ShardFamily;
+  private readonly contents: ShardFamily;
   private reusedRecords = 0;
   private staleRecords = 0;
   private indexedRecords = 0;
@@ -74,7 +235,36 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
     private readonly runner: SearchTextRunner,
     private readonly queryIdentitySha256: string,
     private readonly control: StructuralExecutionControl,
-  ) {}
+  ) {
+    const host = this.host();
+    const contentPolicySha256 = workspaceIndexContentPolicyFingerprint(
+      CODE_REDACTION_REVISION,
+      workspaceContentPolicy(runner.scope.workspace),
+      workspaceContentSecrets(runner.scope.workspace),
+    );
+    this.matches = new ShardFamily(
+      host,
+      MATCH_LIMITS,
+      (shard) => ({ ...this.scopeKey(), queryMatchShard: shard }),
+      (record) => record.queryMatch !== undefined,
+    );
+    this.contents = new ShardFamily(
+      host,
+      CONTENT_LIMITS,
+      (shard) => ({ ...this.scopeKey(), contentShard: shard, contentPolicySha256 }),
+      (record) => record.kind === "binary" || record.content !== undefined,
+    );
+  }
+
+  private host(): ShardFamilyHost {
+    return {
+      active: (): boolean => this.active(),
+      usable: (): boolean => this.usable(),
+      load: (key) => this.loadSnapshot(key),
+      save: (key, records) => this.saveSnapshot(key, records),
+      dropRecord: (): false => this.dropRecord(),
+    };
+  }
 
   private active(): boolean {
     return !structuralExecutionStopped(this.control);
@@ -84,36 +274,19 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
     return this.active() && this.available;
   }
 
-  private scopeKey(shard: number): WorkspaceIndexScopeKey {
-    return {
-      ...buildWorkspaceIndexScopeKey(
-        this.runner.scope,
-        { ...this.runner.policy, policyMode: this.runner.policy.mode },
-        this.runner.limits.maxBytesPerFileScanned,
-        DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_ENTRIES,
-        this.runner.candidatePathGlobs,
-      ),
-      queryMatchShard: shard,
-    };
-  }
-
-  private async load(shard: number): Promise<QueryShard> {
-    const key = this.scopeKey(shard);
-    const result: QueryShard = { key, records: new Map(), seen: new Set(), bytes: 0, dirty: false };
-    if (!this.active()) return result;
-    const snapshot = await this.loadSnapshot(key);
-    if (!this.usable() || snapshot === undefined) return result;
-    for (const record of snapshot.records) {
-      if (!this.active()) break;
-      if (record.queryMatch === undefined) continue;
-      this.retain(result, record);
-    }
-    return result;
+  private scopeKey(): WorkspaceIndexScopeKey {
+    return buildWorkspaceIndexScopeKey(
+      this.runner.scope,
+      { ...this.runner.policy, policyMode: this.runner.policy.mode },
+      this.runner.limits.maxBytesPerFileScanned,
+      DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_ENTRIES,
+      this.runner.candidatePathGlobs,
+    );
   }
 
   private async loadSnapshot(
     key: WorkspaceIndexScopeKey,
-  ): Promise<Awaited<ReturnType<WorkspaceIndex["loadSnapshot"]>>> {
+  ): Promise<WorkspaceIndexSnapshot | undefined> {
     try {
       return await raceStructuralExecution(
         this.index.loadSnapshot(key, () => this.active()),
@@ -126,34 +299,17 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
     }
   }
 
-  private async shard(path: string): Promise<QueryShard> {
-    const number = shardFor(path);
-    let pending = this.shards.get(number);
-    if (pending === undefined) {
-      pending = this.load(number);
-      this.shards.set(number, pending);
-    }
-    return pending;
-  }
-
-  private retain(shard: QueryShard, record: WorkspaceIndexRecord): boolean {
-    const size = Buffer.byteLength(JSON.stringify(record), "utf8");
-    const previous = shard.records.get(record.scopePath);
-    const oldSize =
-      previous === undefined ? 0 : Buffer.byteLength(JSON.stringify(previous), "utf8");
-    if (size > MAX_RECORD_BYTES || this.bytes - oldSize + size > MAX_REQUEST_RECORD_BYTES)
-      return this.dropRecord();
-    if (shard.bytes - oldSize + size > DEFAULT_FILE_WORKSPACE_INDEX_MAX_SNAPSHOT_BYTES / 4)
-      return this.dropRecord();
-    if (
-      previous === undefined &&
-      shard.records.size >= MAX_SHARD_RECORDS - shard.key.relativePaths.length
-    )
-      return this.dropRecord();
-    shard.records.set(record.scopePath, record);
-    shard.bytes += size - oldSize;
-    this.bytes += size - oldSize;
-    return true;
+  /** Rejects when the store fails; `finalize` owns that failure for both shard families. */
+  private async saveSnapshot(
+    key: WorkspaceIndexScopeKey,
+    records: WorkspaceIndexRecord[],
+  ): Promise<void> {
+    const snapshot = this.snapshot(key, records);
+    if (!this.active()) return;
+    await raceStructuralExecution(
+      this.index.saveSnapshot(key, snapshot, () => this.active()),
+      this.control,
+    );
   }
 
   private dropRecord(): false {
@@ -161,38 +317,84 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
     return false;
   }
 
-  private markSeen(shard: QueryShard, path: string): void {
-    if (!shard.seen.has(path)) this.retainedEntries += 1;
-    shard.seen.add(path);
-  }
-
   public async lookup(
     metadata: WorkspaceIndexDiscoveredFile,
-  ): Promise<WorkspaceIndexQueryMatch | undefined> {
+  ): Promise<StreamingWorkspaceIndexHit | undefined> {
     if (!this.usable()) return undefined;
     this.discoveredEntries += 1;
-    const shard = await this.shard(metadata.scopePath);
+    const [matchShard, contentShard] = await Promise.all([
+      this.matches.shard(metadata.scopePath),
+      this.contents.shard(metadata.scopePath),
+    ]);
     if (!this.usable()) return undefined;
-    const record = shard.records.get(metadata.scopePath);
-    if (!isWorkspaceIndexRecordCurrent(record, metadata)) {
-      if (record !== undefined) this.staleRecords += 1;
-      return undefined;
-    }
-    if (record?.queryMatch?.queryIdentitySha256 !== this.queryIdentitySha256) return undefined;
-    return record.queryMatch;
+    const match = currentRecord(matchShard, metadata);
+    const content = currentRecord(contentShard, metadata);
+    // One changed file counts once, whichever layers still held its earlier state.
+    if (match === "stale" || content === "stale") this.staleRecords += 1;
+    const queryMatch = match === "stale" ? undefined : match?.queryMatch;
+    if (queryMatch?.queryIdentitySha256 === this.queryIdentitySha256)
+      return { kind: "match", match: queryMatch };
+    return content === "stale" ? undefined : this.contentHit(content);
   }
 
-  public async observeReuse(path: string): Promise<void> {
-    const pending = this.shards.get(shardFor(path));
-    if (pending === undefined) return;
-    const shard = await pending;
+  private contentHit(
+    record: WorkspaceIndexRecord | undefined,
+  ): StreamingWorkspaceIndexHit | undefined {
+    if (record?.kind === "binary") return { kind: "binary" };
+    if (record?.content === undefined) return undefined;
+    const text = decodeWorkspaceIndexContent(record.content);
+    if (text !== undefined) return { kind: "text", text };
+    // A payload that no longer proves its digest is a miss; the live read replaces it.
+    this.dropRecord();
+    return undefined;
+  }
+
+  public async observeReuse(
+    metadata: WorkspaceIndexDiscoveredFile,
+    kind: StreamingWorkspaceIndexHit["kind"],
+  ): Promise<void> {
+    const path = metadata.scopePath;
+    const matchPending = this.matches.requestedShard(path);
+    const contentPending = this.contents.requestedShard(path);
+    if (matchPending === undefined || contentPending === undefined) return;
+    const [matchShard, contentShard] = await Promise.all([matchPending, contentPending]);
     if (!this.usable()) return;
-    this.markSeen(shard, path);
+    if (contentShard.records.has(path)) this.contents.markSeen(contentShard, path);
+    if (kind === "match" && this.matches.markSeen(matchShard, path)) this.retainedEntries += 1;
+    if (kind === "text") this.pendingReads.set(path, { metadata, reused: true });
     this.reusedRecords += 1;
   }
 
-  public observeRead(metadata: WorkspaceIndexDiscoveredFile): void {
-    if (this.usable()) this.pendingReads.set(metadata.scopePath, metadata);
+  // Lookup loads the content shard before the read, so keeping the observation normally adds no
+  // asynchronous step between a live read and its match.
+  public observeRead(
+    metadata: WorkspaceIndexDiscoveredFile,
+    observed: StreamingWorkspaceIndexObservation,
+  ): Promise<void> | undefined {
+    if (!this.usable()) return undefined;
+    const path = metadata.scopePath;
+    if (observed.kind === "text") this.pendingReads.set(path, { metadata, reused: false });
+    const pending = this.contents.requestedShard(path);
+    if (pending === undefined) return undefined;
+    const record = contentRecord(metadata, observed);
+    if (record === undefined) {
+      this.dropRecord();
+      return undefined;
+    }
+    const shard = this.contents.loadedShard(path);
+    if (shard !== undefined) {
+      this.keepContent(shard, path, record);
+      return undefined;
+    }
+    return pending.then((loaded) => {
+      if (this.usable()) this.keepContent(loaded, path, record);
+    });
+  }
+
+  private keepContent(shard: IndexShard, path: string, record: WorkspaceIndexRecord): void {
+    if (!this.contents.retain(shard, record)) return;
+    this.contents.markSeen(shard, path);
+    shard.dirty = true;
   }
 
   public async observeMatch(
@@ -200,9 +402,9 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
     matches: FileMatches | undefined,
     complete: boolean,
   ): Promise<void> {
-    const metadata = this.pendingReads.get(path);
+    const pending = this.pendingReads.get(path);
     this.pendingReads.delete(path);
-    if (!this.usable() || metadata === undefined) return;
+    if (!this.usable() || pending === undefined) return;
     if (!complete) {
       this.skippedEntries += 1;
       return;
@@ -212,22 +414,24 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
       this.dropRecord();
       return;
     }
-    const pending = this.shards.get(shardFor(path));
-    if (pending === undefined) return;
-    const shard = await pending;
+    const requested = this.matches.requestedShard(path);
+    if (requested === undefined) return;
+    const shard = await requested;
     if (!this.usable()) return;
-    if (!this.retain(shard, { ...metadata, kind: "text", queryMatch })) return;
-    this.markSeen(shard, path);
+    if (!this.matches.retain(shard, { ...pending.metadata, kind: "text", queryMatch })) return;
+    if (this.matches.markSeen(shard, path)) this.retainedEntries += 1;
     shard.dirty = true;
-    this.indexedRecords += 1;
+    // A match computed from stored lane text reused that file; only a live read indexes it anew.
+    if (!pending.reused) this.indexedRecords += 1;
   }
 
-  private snapshot(shard: QueryShard): ReturnType<typeof buildWorkspaceIndexSnapshot> {
-    const records = [...shard.records.values()].filter((record) =>
-      shard.seen.has(record.scopePath),
-    );
+  private snapshot(
+    key: WorkspaceIndexScopeKey,
+    records: readonly WorkspaceIndexRecord[],
+  ): WorkspaceIndexSnapshot {
     return buildWorkspaceIndexSnapshot({
-      queryMatchShard: shard.key.queryMatchShard,
+      queryMatchShard: key.queryMatchShard,
+      contentShard: key.contentShard,
       scope: { ...this.runner.scope, candidatePathGlobs: this.runner.candidatePathGlobs },
       policy: { ...this.runner.policy, policyMode: this.runner.policy.mode },
       maxBytesPerFileScanned: this.runner.limits.maxBytesPerFileScanned,
@@ -247,24 +451,13 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
 
   public async finalize(): Promise<void> {
     this.pendingReads.clear();
-    for (const pending of this.shards.values()) {
-      if (!this.usable()) return;
-      const shard = await pending;
-      if (!this.active()) return;
-      // Unseen advisory records may release capacity even when every new record was refused.
-      // Eviction never asserts file deletion or changes fresh traversal's coverage authority.
-      if (!shard.dirty && shard.seen.size === shard.records.size) continue;
-      const snapshot = this.snapshot(shard);
-      if (!this.active()) return;
-      try {
-        await raceStructuralExecution(
-          this.index.saveSnapshot(shard.key, snapshot, () => this.active()),
-          this.control,
-        );
-      } catch {
-        this.available = false;
-        return;
-      }
+    if (!this.usable()) return;
+    try {
+      await this.matches.finalize();
+      await this.contents.finalize();
+    } catch {
+      // The observed owning adapter records the failure; the answer keeps its live evidence.
+      this.available = false;
     }
   }
 
@@ -280,6 +473,25 @@ export class StreamingWorkspaceIndex implements StreamingWorkspaceIndexSession {
       droppedRecords: this.droppedRecords,
     };
   }
+}
+
+/** The shard's record for this file, "stale" when the file changed since it was stored. */
+function currentRecord(
+  shard: IndexShard,
+  metadata: WorkspaceIndexDiscoveredFile,
+): WorkspaceIndexRecord | "stale" | undefined {
+  const record = shard.records.get(metadata.scopePath);
+  if (record === undefined) return undefined;
+  return isWorkspaceIndexRecordCurrent(record, metadata) ? record : "stale";
+}
+
+function contentRecord(
+  metadata: WorkspaceIndexDiscoveredFile,
+  observed: StreamingWorkspaceIndexObservation,
+): WorkspaceIndexRecord | undefined {
+  if (observed.kind === "binary") return { ...metadata, kind: "binary" };
+  const content = encodeWorkspaceIndexContent(observed.text);
+  return content === undefined ? undefined : { ...metadata, kind: "text", content };
 }
 
 function matchingRecord(

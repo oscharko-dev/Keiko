@@ -111,7 +111,8 @@ describe("workspace-owned coding repository handler", () => {
           path: "src/example.ts",
           startLine: 2,
           endLine: 2,
-          snippet: `export const parseConfig = true;${newline === "\r\n" ? "\r" : ""}`,
+          // Both terminators project the same snippet: CRLF is not line content (#4439).
+          snippet: "export const parseConfig = true;",
           redacted: false,
           snippetTruncated: false,
         },

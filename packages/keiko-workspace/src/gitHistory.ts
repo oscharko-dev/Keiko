@@ -28,6 +28,7 @@ import {
 import { buildAtom } from "./repoSearchScan.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import type { StructuralAdapter, StructuralAdapterDeps } from "./structuralAdapters.js";
+import { parseGitCoreIgnoreCase } from "./pathCase.js";
 
 function queryFingerprint(query: RetrievalQuery): string {
   const canonical = JSON.stringify({ kind: query.kind, text: query.text });
@@ -39,6 +40,9 @@ const HEAD_MAX_BYTES = 256;
 const GIT_POINTER_MAX_BYTES = 4096;
 const REFLOG_MAX_BYTES = 1_048_576;
 const REFLOG_MAX_LINES = 10_000;
+// A repository's own Git config is small; a larger file is not read, so an oversized or hostile
+// config can only leave the platform default in force.
+const GIT_CONFIG_MAX_BYTES = 65_536;
 
 interface AuthorizedGitMetadataBase {
   readonly path: string;
@@ -442,16 +446,43 @@ function pointedGitdir(
 // Strategy: check whether HEAD lives directly at `.git/HEAD` first (covers the normal case AND
 // the memFs directory simulation where only child keys are recorded); fall back to treating
 // `.git` as a worktree-pointer file only when that leaf check fails.
+function resolveGitdirSync(fs: WorkspaceFs, root: string): AuthorizedGitMetadataBase | undefined {
+  const location = canonicalWorkspaceDotGit(fs, root);
+  return location === undefined
+    ? undefined
+    : (standardGitdir(fs, location.dotGit) ?? pointedGitdir(fs, root, location));
+}
+
 export function resolveGitdir(
   fs: WorkspaceFs,
   root: string,
 ): Promise<AuthorizedGitMetadataBase | undefined> {
-  const location = canonicalWorkspaceDotGit(fs, root);
-  return Promise.resolve(
-    location === undefined
-      ? undefined
-      : (standardGitdir(fs, location.dotGit) ?? pointedGitdir(fs, root, location)),
+  return Promise.resolve(resolveGitdirSync(fs, root));
+}
+
+// A linked worktree's gitdir (`<repo>/.git/worktrees/<name>`) shares the repository's config in
+// its common directory, which authorizeWorktreeGitdir already proved is `<repo>/.git`.
+function gitConfigBase(gitdir: AuthorizedGitMetadataBase): string {
+  return isCanonicalWorktreeGitdir(gitdir.path) ? dirname(dirname(gitdir.path)) : gitdir.path;
+}
+
+/**
+ * The repository's explicit `core.ignorecase` (#4436), or `undefined` when the workspace is no
+ * Git repository, its config is unreadable or oversized, or it states no value. The config text
+ * is parsed in memory and never retained, returned or logged: it can carry remote credentials.
+ */
+// Every step below already settles an unreadable or unauthorized location as `undefined`.
+export function readGitCoreIgnoreCase(fs: WorkspaceFs, root: string): boolean | undefined {
+  const gitdir = resolveGitdirSync(fs, root);
+  if (gitdir === undefined) return undefined;
+  const raw = readGuardedContainedRaw(
+    fs,
+    gitConfigBase(gitdir),
+    "config",
+    GIT_CONFIG_MAX_BYTES,
+    "complete",
   );
+  return raw === undefined ? undefined : parseGitCoreIgnoreCase(raw);
 }
 
 async function isAvailableForScope(scope: SearchScope, fs: WorkspaceFs): Promise<boolean> {

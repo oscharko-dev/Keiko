@@ -121,6 +121,35 @@ describe("createChat", () => {
 // route, the Chat History route, and the create/send envelope). The limited page therefore
 // decides which conversations a user can see and which one the session resumes: it must be the
 // most RECENTLY updated page, never the oldest one.
+// Issue #4459 — a Windows API or CLI caller may name a registered project with either separator.
+describe("project path separators", () => {
+  it.runIf(process.platform === "win32")(
+    "creates and lists a chat with a forward-slash Windows project path",
+    () => {
+      const forward = proj.replaceAll("\\", "/");
+      expect(forward).not.toBe(proj);
+      const chat = store.createChat(forward, "Forward", "example-chat-model");
+      expect(chat.projectPath).toBe(proj);
+      expect(store.listChats(forward).map((c) => c.id)).toEqual([chat.id]);
+      expect(store.listChats(proj).map((c) => c.id)).toEqual([chat.id]);
+      expect(store.listChats(forward, 10).map((c) => c.id)).toEqual([chat.id]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps a literal backslash in a POSIX project directory name",
+    () => {
+      const literal = join(tmp, "a\\b");
+      mkdirSync(literal);
+      store.createProject(literal);
+      const chat = store.createChat(literal, "Literal", "example-chat-model");
+      expect(chat.projectPath).toBe(literal);
+      expect(store.listChats(literal).map((c) => c.id)).toEqual([chat.id]);
+      expect(store.listChats(join(tmp, "a/b"))).toEqual([]);
+    },
+  );
+});
+
 describe("listChats — limited page window", () => {
   it("returns the most recently updated chats, not the oldest", () => {
     const oldest = store.createChat(proj, "oldest", "m1");

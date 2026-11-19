@@ -6,6 +6,7 @@ import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/run
 import type { IncomingMessage } from "node:http";
 import { createWorkspaceMutexRegistry, fileWriteKeys } from "./task-workspace/mutex.js";
 import { recordManagedRootRequestDenial } from "./workspace-root-denial-log.js";
+import { recordFilesSearchCompleted } from "./files-search-activity.js";
 
 // One registry per server process: same-process turn order for the verify→write region below
 // (KEIKO-0495). It composes with, never replaces, the persisted advisory WorkspaceLock.
@@ -66,7 +67,10 @@ import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionR
 import type { Project, UiStore } from "./store/index.js";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import { decodeTextFileBytes } from "@oscharko-dev/keiko-workspace";
-import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  WorkspaceDescriptorReadError,
+  workspaceEntryAvailabilityFailure,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   createOrdinaryWorkspaceRootAccess,
   requiresConfiguredManagedWorkspaceAuthority,
@@ -119,6 +123,10 @@ export interface FilesSearchResponse {
   readonly results: readonly FilesSearchResult[];
   readonly truncated: boolean;
   readonly scannedFileCount: number;
+  // Locked or protected entries the filename search skipped (#4434); absent when none.
+  readonly unavailableEntryCount?: number;
+  // Listed entries that no longer existed when inspected (#4435); absent when none.
+  readonly vanishedEntryCount?: number;
 }
 
 export type FilesSearchFileRole =
@@ -1150,6 +1158,17 @@ interface FileSearchState {
   gitRootCache: Map<string, string | null>;
   scannedFileCount: number;
   scanTruncated: boolean;
+  unavailableEntryCount: number;
+  vanishedEntryCount: number;
+}
+
+// A locked, protected or vanished entry is skipped and counted (#4434, #4435). Every other failure
+// (descriptor exhaustion, link loops, an unreadable selected root) still fails the search.
+function skipUnavailableFileSearchEntry(state: FileSearchState, error: unknown): void {
+  const availability = workspaceEntryAvailabilityFailure(error);
+  if (availability === undefined) throw error;
+  if (availability === "vanished") state.vanishedEntryCount += 1;
+  else state.unavailableEntryCount += 1;
 }
 
 interface FileSearchResolvedPath {
@@ -1266,7 +1285,8 @@ async function addFileSearchCandidate(args: {
   let info: Stats;
   try {
     info = await lstat(args.nativePath);
-  } catch {
+  } catch (error) {
+    skipUnavailableFileSearchEntry(args.state, error);
     return;
   }
   const resolvedPath = await resolveFileSearchResultPath({
@@ -1352,20 +1372,49 @@ async function collectFileSearchDirectory(args: {
   let dir;
   try {
     dir = await opendir(args.current.path);
-  } catch {
+  } catch (error) {
+    // The selected root itself must be readable; only a descendant directory may be skipped.
+    if (args.current.relativePath === "") throw error;
+    skipUnavailableFileSearchEntry(args.state, error);
     return;
   }
   const candidates: PendingFileSearchCandidate[] = [];
+  try {
+    await collectOpenedFileSearchDirectory(args, dir, candidates);
+  } finally {
+    await closeFileSearchDirectory(dir);
+  }
+  await mapInBatches(candidates, FILE_SEARCH_CANDIDATE_CONCURRENCY, addFileSearchCandidate);
+}
+
+// An entry that turns unreadable or vanishes while its directory is enumerated ends that
+// directory's listing only; entries collected before it remain candidates.
+async function collectOpenedFileSearchDirectory(
+  args: Parameters<typeof collectFileSearchDirectory>[0],
+  dir: Awaited<ReturnType<typeof opendir>>,
+  candidates: PendingFileSearchCandidate[],
+): Promise<void> {
   try {
     for await (const entry of dir) {
       const candidate = collectFileSearchEntry({ ...args, entry });
       if (candidate !== undefined) candidates.push(candidate);
       if (args.state.scanTruncated) break;
     }
-  } finally {
-    await dir.close().catch(() => undefined);
+  } catch (error) {
+    if (args.current.relativePath === "") throw error;
+    skipUnavailableFileSearchEntry(args.state, error);
   }
-  await mapInBatches(candidates, FILE_SEARCH_CANDIDATE_CONCURRENCY, addFileSearchCandidate);
+}
+
+async function closeFileSearchDirectory(dir: Awaited<ReturnType<typeof opendir>>): Promise<void> {
+  try {
+    await dir.close();
+  } catch (error) {
+    // `for await` already closes a directory it finished; a second close reports
+    // ERR_DIR_CLOSED. Any other close failure surfaces.
+    if (!(error instanceof Error && "code" in error && error.code === "ERR_DIR_CLOSED"))
+      throw error;
+  }
 }
 
 async function collectFileSearchResults(args: {
@@ -1385,6 +1434,8 @@ async function collectFileSearchResults(args: {
     gitRootCache: new Map(),
     scannedFileCount: 0,
     scanTruncated: false,
+    unavailableEntryCount: 0,
+    vanishedEntryCount: 0,
   };
 
   while (state.stack.length > 0) {
@@ -1399,6 +1450,10 @@ async function collectFileSearchResults(args: {
     results: state.candidates.slice(0, args.limit).map((candidate) => candidate.result),
     truncated: state.scanTruncated || state.candidates.length > args.limit,
     scannedFileCount: Math.min(state.scannedFileCount, MAX_FILE_SEARCH_SCAN),
+    ...(state.unavailableEntryCount > 0
+      ? { unavailableEntryCount: state.unavailableEntryCount }
+      : {}),
+    ...(state.vanishedEntryCount > 0 ? { vanishedEntryCount: state.vanishedEntryCount } : {}),
   };
 }
 
@@ -2827,17 +2882,16 @@ export async function handleFilesSearch(
   return runFilesHandler(async () => {
     const rootInput = ctx.url.searchParams.get("root");
     const resolvedRoot = await resolveRequestRoot(ctx, deps, rootInput);
-    return {
-      status: 200,
-      body: await searchFiles(
-        deps.store,
-        rootInput,
-        ctx.url.searchParams.get("q") ?? ctx.url.searchParams.get("query"),
-        parseSearchLimit(ctx.url.searchParams.get("limit")),
-        deps.redactor,
-        resolvedRoot,
-      ),
-    };
+    const body = await searchFiles(
+      deps.store,
+      rootInput,
+      ctx.url.searchParams.get("q") ?? ctx.url.searchParams.get("query"),
+      parseSearchLimit(ctx.url.searchParams.get("limit")),
+      deps.redactor,
+      resolvedRoot,
+    );
+    recordFilesSearchCompleted(deps, ctx.correlationId, body);
+    return { status: 200, body };
   });
 }
 

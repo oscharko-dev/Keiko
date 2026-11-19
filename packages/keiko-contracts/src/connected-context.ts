@@ -472,6 +472,12 @@ export interface ContextCoverageLimits {
 export interface ContextCoverageDiagnostics {
   // Rejected directory entries, not the unknown number of files in their subtrees.
   readonly unrepresentablePathsByDiscovery?: number | undefined;
+  // Locked or protected entries the walk skipped; disclosed and reported as io-error (#4434).
+  readonly unavailableEntriesByDiscovery?: number | undefined;
+  // Listed entries that no longer existed when inspected; coverage stays complete (#4435).
+  readonly vanishedEntriesByDiscovery?: number | undefined;
+  // Directories re-read once after benign membership churn (#4435).
+  readonly membershipRetriesByDiscovery?: number | undefined;
   readonly incomplete: boolean;
   readonly reasons: readonly ContextCoverageTruncationReason[];
   readonly filesDiscovered: number;

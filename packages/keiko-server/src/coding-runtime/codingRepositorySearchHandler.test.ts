@@ -30,6 +30,7 @@ afterEach(() => {
 function fixture(
   isCurrent: () => boolean = () => true,
   options: Partial<Omit<CodingRepositorySearchHandlerOptions, "workspace" | "isCurrent">> = {},
+  workspaceOverrides: Partial<WorkspaceInfo> = {},
 ): {
   readonly root: string;
   readonly events: ServerLogEvent[];
@@ -52,6 +53,7 @@ function fixture(
     testDirs: [],
     languages: ["typescript"],
     ignoreLines: [],
+    ...workspaceOverrides,
   };
   const events: ServerLogEvent[] = [];
   return {
@@ -108,6 +110,31 @@ const request = {
 };
 
 describe("production coding repository handler composition", () => {
+  // #4436: the letter-case rule decides which paths `.gitignore` and the globs admit, so the
+  // settled line records the rule actually applied, including the platform default.
+  it.each(["case-sensitive", "case-insensitive"] as const)(
+    "records the applied %s path rule and matches globs by it",
+    async (pathCase) => {
+      const { handler, events } = fixture(() => true, {}, { pathCase });
+      const result = await handler.invoke({ ...request, includeGlobs: ["SRC/**/*.TS"] }, context());
+      const hits = result.ok && result.kind === "search" ? result.hits.length : -1;
+      expect(hits).toBe(pathCase === "case-insensitive" ? 1 : 0);
+      expect(settledProof(events)).toMatchObject({
+        correlationId: context().correlationId,
+        state: "completed",
+        pathCase,
+      });
+    },
+  );
+
+  it("records the platform default when the repository states no rule", async () => {
+    const { handler, events } = fixture();
+    await handler.invoke(request, context());
+    expect(settledProof(events)).toMatchObject({
+      pathCase: process.platform === "win32" ? "case-insensitive" : "case-sensitive",
+    });
+  });
+
   it("preserves portable entry loss in the shared search consumer", async () => {
     const { root, handler, events } = fixture();
     mkdirSync(join(root, "~archive"));
@@ -413,7 +440,8 @@ describe("production coding repository handler composition", () => {
         path: "src/example.ts",
         startLine: 2,
         endLine: 2,
-        snippet: "export const parseConfig = true;\r",
+        // The CRLF terminator is not line content (#4439).
+        snippet: "export const parseConfig = true;",
       },
     ]);
     const expected = {

@@ -99,6 +99,66 @@ describe("filterCandidates", () => {
     ]);
   });
 
+  // #4458: a path carried from the previous answer is kept, but it is not the current question's
+  // evidence; the question's strongest below-floor candidate is still retained beside it.
+  describe("previous-answer continuity paths", () => {
+    const entries = [
+      annotated("IT/router.md", 0.34),
+      annotated("Finanzen/budget.txt", 0.08),
+      annotated("Einkauf/dok.json", 0.07),
+    ];
+
+    it("keeps the question's own fallback beside a continuity-only path", () => {
+      const result = filterCandidates(
+        entries,
+        options({
+          minScore: 0.09,
+          minScoreExemptPaths: new Set(["IT/router.md"]),
+          continuityOnlyPaths: new Set(["IT/router.md"]),
+        }),
+      );
+      expect(result.kept).toEqual([
+        candidate("IT/router.md", 0.34),
+        candidate("Finanzen/budget.txt", 0.08),
+      ]);
+      expect(result.omitted).toEqual([
+        { scopePath: "Einkauf/dok.json", reason: "low-relevance", omittedAtMs: FIXED_NOW },
+      ]);
+    });
+
+    it("treats the same exempt path as the question's own evidence without the continuity mark", () => {
+      const result = filterCandidates(
+        entries,
+        options({ minScore: 0.09, minScoreExemptPaths: new Set(["IT/router.md"]) }),
+      );
+      expect(result.kept).toEqual([candidate("IT/router.md", 0.34)]);
+    });
+
+    it("adds no fallback when the question has evidence of its own above the floor", () => {
+      const result = filterCandidates(
+        [...entries, annotated("Finanzen/plan.md", 0.5)],
+        options({ minScore: 0.09, continuityOnlyPaths: new Set(["IT/router.md"]) }),
+      );
+      expect(result.kept.map((kept) => kept.scopePath)).toEqual([
+        "Finanzen/plan.md",
+        "IT/router.md",
+      ]);
+    });
+
+    it("never exceeds the grant when continuity paths already fill it", () => {
+      const result = filterCandidates(
+        entries,
+        options({
+          minScore: 0.09,
+          maxKept: 1,
+          minScoreExemptPaths: new Set(["IT/router.md"]),
+          continuityOnlyPaths: new Set(["IT/router.md"]),
+        }),
+      );
+      expect(result.kept).toEqual([candidate("IT/router.md", 0.34)]);
+    });
+  });
+
   it("never lets fallback ordering bypass exclusions, the floor, or a zero grant", () => {
     const entries = [
       annotated("dist/first.js", 0.13, true),

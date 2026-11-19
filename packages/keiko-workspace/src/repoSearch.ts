@@ -100,7 +100,8 @@ import {
   type SearchHints,
   type SearchPolicy,
 } from "./repoSearchPolicy.js";
-import type { WorkspaceInfo } from "./types.js";
+import type { WorkspaceInfo, WorkspacePathCase } from "./types.js";
+import { pathCaseKey, pathGlobCaseSensitive, workspacePathCase } from "./pathCase.js";
 import {
   requestedSourceInspectionExtensions,
   sourceInspectionPathMatches,
@@ -125,6 +126,7 @@ import {
   type StructuralExecutionControl,
 } from "./structuralExecution.js";
 import { workspaceDirectoryFingerprint } from "./workspaceDirectorySnapshot.js";
+import { normalizeSourceLineEndings } from "./sourceLines.js";
 import {
   buildWorkspaceIndexScopeKey,
   buildWorkspaceIndexSnapshot,
@@ -357,6 +359,9 @@ interface CoverageInputs {
 
 interface CoverageStats {
   readonly unrepresentablePathsByDiscovery: number;
+  readonly unavailableEntriesByDiscovery: number;
+  readonly vanishedEntriesByDiscovery: number;
+  readonly membershipRetriesByDiscovery: number;
   readonly filesDiscovered: number;
   readonly filesAfterPolicy: number;
   readonly ignoredByDiscovery: number;
@@ -369,6 +374,9 @@ interface CoverageStats {
 
 const EMPTY_COVERAGE_STATS: CoverageStats = {
   unrepresentablePathsByDiscovery: 0,
+  unavailableEntriesByDiscovery: 0,
+  vanishedEntriesByDiscovery: 0,
+  membershipRetriesByDiscovery: 0,
   filesDiscovered: 0,
   filesAfterPolicy: 0,
   ignoredByDiscovery: 0,
@@ -389,6 +397,9 @@ function coverageStats(diagnostics: SearchDiagnostics | undefined): CoverageStat
     ignoredByDiscovery: diagnostics.ignoredByDiscovery,
     deniedByDiscovery: diagnostics.deniedByDiscovery,
     unrepresentablePathsByDiscovery: diagnostics.unrepresentablePathsByDiscovery ?? 0,
+    unavailableEntriesByDiscovery: diagnostics.unavailableEntriesByDiscovery ?? 0,
+    vanishedEntriesByDiscovery: diagnostics.vanishedEntriesByDiscovery ?? 0,
+    membershipRetriesByDiscovery: diagnostics.membershipRetriesByDiscovery ?? 0,
     depthPrunedByDiscovery: diagnostics.depthPrunedByDiscovery,
     maxFilesPrunedByDiscovery: diagnostics.maxFilesPrunedByDiscovery,
     lowValueRescueFilesDiscovered: diagnostics.lowValueRescueFilesDiscovered ?? 0,
@@ -437,8 +448,28 @@ function skippedFileCount(inputs: CoverageInputs, stats: CoverageStats): number 
     unvisitedCandidateCount(inputs, stats, omittedCount) +
     stats.ignoredByDiscovery +
     stats.deniedByDiscovery +
-    stats.depthPrunedByDiscovery
+    stats.depthPrunedByDiscovery +
+    stats.unavailableEntriesByDiscovery
   );
+}
+
+function discoveryChurnCoverage(
+  stats: CoverageStats,
+): Pick<
+  ContextCoverageDiagnostics,
+  "unavailableEntriesByDiscovery" | "vanishedEntriesByDiscovery" | "membershipRetriesByDiscovery"
+> {
+  return {
+    ...(stats.unavailableEntriesByDiscovery > 0
+      ? { unavailableEntriesByDiscovery: stats.unavailableEntriesByDiscovery }
+      : {}),
+    ...(stats.vanishedEntriesByDiscovery > 0
+      ? { vanishedEntriesByDiscovery: stats.vanishedEntriesByDiscovery }
+      : {}),
+    ...(stats.membershipRetriesByDiscovery > 0
+      ? { membershipRetriesByDiscovery: stats.membershipRetriesByDiscovery }
+      : {}),
+  };
 }
 
 function buildCoverageDiagnostics(inputs: CoverageInputs): ContextCoverageDiagnostics {
@@ -460,6 +491,7 @@ function buildCoverageDiagnostics(inputs: CoverageInputs): ContextCoverageDiagno
     ...(stats.unrepresentablePathsByDiscovery > 0
       ? { unrepresentablePathsByDiscovery: stats.unrepresentablePathsByDiscovery }
       : {}),
+    ...discoveryChurnCoverage(stats),
     depthPrunedByDiscovery: stats.depthPrunedByDiscovery,
     maxFilesPrunedByDiscovery: stats.maxFilesPrunedByDiscovery,
     matchesReturned: inputs.matchesReturned,
@@ -605,6 +637,7 @@ type SearchTextRunnerDeps = Required<Pick<FacadeDeps, "fs" | "nowMs">> &
   >;
 
 function sourceInspectionCandidateSelection(
+  scope: SearchScope,
   query: RetrievalQuery,
   deps: SearchTextRunnerDeps,
 ): Pick<SearchTextRunner, "candidatePathPredicate" | "sourceInspection"> {
@@ -614,7 +647,11 @@ function sourceInspectionCandidateSelection(
     deps.queryInterpretation === undefined
       ? requestedSourceInspectionExtensions(query.text)
       : [];
-  const predicate = buildCandidatePathPredicate(deps.candidatePathGlobs, extensions);
+  const predicate = buildCandidatePathPredicate(
+    deps.candidatePathGlobs,
+    workspacePathCase(scope.workspace),
+    extensions,
+  );
   return {
     ...(extensions.length === 0 ? {} : { sourceInspection: true }),
     ...(predicate === undefined ? {} : { candidatePathPredicate: predicate }),
@@ -654,7 +691,7 @@ function buildSearchTextRunner(
     }),
     policy,
     query,
-    ...sourceInspectionCandidateSelection(query, deps),
+    ...sourceInspectionCandidateSelection(scope, query, deps),
     contentLane: deps.contentLane ?? "evidence",
     ...(deps.onEligibleTextFile === undefined
       ? {}
@@ -684,21 +721,27 @@ function hasCandidatePathFilters(globs: FacadeDeps["candidatePathGlobs"]): boole
   );
 }
 
+// Include/exclude globs and literal exclusions follow the workspace's letter-case rule
+// (pathCase.ts, #4436): on Windows `**/*.pdf` includes `SCAN.PDF`.
 function buildCandidatePathPredicate(
   globs: FacadeDeps["candidatePathGlobs"],
+  pathCase: WorkspacePathCase,
   sourceExtensions: readonly string[] = [],
 ): ((scopePath: string) => boolean) | undefined {
   if (sourceExtensions.length === 0 && !hasCandidatePathFilters(globs)) {
     return undefined;
   }
-  const includes = (globs?.include ?? []).map((glob) => compileGlob(glob, true));
-  const excludes = (globs?.exclude ?? []).map((glob) => compileGlob(glob, true));
-  const literalExcludes = new Set(globs?.excludeLiteralPaths ?? []);
+  const caseSensitive = pathGlobCaseSensitive(pathCase);
+  const includes = (globs?.include ?? []).map((glob) => compileGlob(glob, caseSensitive));
+  const excludes = (globs?.exclude ?? []).map((glob) => compileGlob(glob, caseSensitive));
+  const literalExcludes = new Set(
+    (globs?.excludeLiteralPaths ?? []).map((path) => pathCaseKey(path, pathCase)),
+  );
   return (scopePath: string): boolean => {
     const included = includes.length === 0 || includes.some((pattern) => pattern.test(scopePath));
     return (
       included &&
-      !literalExcludes.has(scopePath) &&
+      !literalExcludes.has(pathCaseKey(scopePath, pathCase)) &&
       !excludes.some((pattern) => pattern.test(scopePath)) &&
       (sourceExtensions.length === 0 || sourceInspectionPathMatches(scopePath, sourceExtensions))
     );
@@ -2642,7 +2685,11 @@ function streamedCoverage(
     filesDiscovered: collected.filesDiscovered,
     filesAfterPolicy: collected.filesAfterPolicy,
     filesScanned: collected.state.filesScanned,
-    filesSkipped: collected.filesSkipped + collected.ignored + collected.denied,
+    filesSkipped:
+      collected.filesSkipped +
+      collected.ignored +
+      collected.denied +
+      (collected.diagnostics.unavailableEntriesByDiscovery ?? 0),
     oversizedFilesScanned: 0,
     lowValueRescueFilesDiscovered: collected.diagnostics.lowValueRescueFilesDiscovered ?? 0,
     lowValueRescueFilesScanned: collected.diagnostics.lowValueRescueFilesScanned ?? 0,
@@ -2652,6 +2699,7 @@ function streamedCoverage(
     ...(collected.diagnostics.unrepresentablePathsByDiscovery === undefined
       ? {}
       : { unrepresentablePathsByDiscovery: collected.diagnostics.unrepresentablePathsByDiscovery }),
+    ...discoveryChurnCoverage(coverageStats(collected.diagnostics)),
     depthPrunedByDiscovery: 0,
     maxFilesPrunedByDiscovery: 0,
     matchesReturned: matchesReturned,
@@ -3660,7 +3708,10 @@ export async function findFiles(
       nowMs,
       hints: deps.searchHints,
       candidateSetFor: deps.candidateSetFor,
-      candidatePathPredicate: buildCandidatePathPredicate(deps.candidatePathGlobs),
+      candidatePathPredicate: buildCandidatePathPredicate(
+        deps.candidatePathGlobs,
+        workspacePathCase(scope.workspace),
+      ),
       deadlineAtMs: deps.deadlineAtMs,
       signal: deps.signal,
     }),
@@ -4004,9 +4055,12 @@ function excerptTextLines(
       "binary",
     );
   }
-  if (lane === "editor") return raw.split("\n");
+  // CRLF folds into LF before redaction, so a Windows-style copy redacts and windows exactly like
+  // its LF copy (#4439); the file-size cap above still counted the original bytes.
+  const source = normalizeSourceLineEndings(raw);
+  if (lane === "editor") return source.split("\n");
   return redactWorkspaceSource(
-    raw,
+    source,
     scopePath,
     true,
     workspaceContentPolicy(workspace),

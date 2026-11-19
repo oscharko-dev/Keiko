@@ -140,8 +140,14 @@ describe("recursive search under concurrent directory membership changes", () =>
     expect(changed).toBe(true);
     expect(result.atoms.some((atom) => atom.scopePath.startsWith("changing/"))).toBe(true);
     expect(result.atoms.some((atom) => atom.scopePath === "stable/sibling.txt")).toBe(true);
-    expect(result.coverage.incomplete).toBe(true);
-    expect(result.coverage.reasons).toContain("io-error");
+    // #4435: the gained entry is benign membership churn. The directory is re-read once, so the
+    // added file is found and every observed entry is visited exactly once; churn that persists
+    // through that retry stays an io-error (pinned in repoSearch.entry-availability.test.ts).
+    expect(result.atoms.some((atom) => atom.scopePath === "changing/added.txt")).toBe(true);
+    const paths = result.atoms.map((atom) => atom.scopePath);
+    expect(new Set(paths).size).toBe(paths.length);
+    expect(result.coverage.membershipRetriesByDiscovery).toBe(1);
+    expect(result.coverage.incomplete).toBe(false);
   });
 
   it("keeps other observed sources when a listed entry disappears before admission", async () => {
@@ -162,6 +168,9 @@ describe("recursive search under concurrent directory membership changes", () =>
     expect(result.atoms.some((atom) => atom.scopePath === "stable/sibling.txt")).toBe(true);
     expect(result.coverage.incomplete).toBe(true);
     expect(result.coverage.reasons).toContain("io-error");
+    // #4435: the removed entry is counted and never reported as a hit.
+    expect(result.atoms.some((atom) => atom.scopePath === "changing/63.txt")).toBe(false);
+    expect(result.coverage.vanishedEntriesByDiscovery).toBe(1);
   });
 
   it("keeps root failures hard even when first observed while recovering a child", async () => {
