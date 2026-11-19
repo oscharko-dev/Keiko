@@ -626,6 +626,14 @@ not comparable: `compare` (like for an instrument digest or any other configurat
 "the runs differ in ..." with the field names and still shows the deltas, and `judge` refuses to
 judge the pair (a run that never recorded it is "unrecorded" and differs from every recorded one).
 
+What is an embedding provider is decided by the SUBJECT's own resolver, never by the lab: the built
+model-gateway package of the subject root (`parseGatewayConfig`, then `listConfiguredCapabilities`,
+the functions the product uses), because the product also knows an embedder by the shape of its model
+id, so a provider entry with only `modelId` and `baseUrl` can be one. After `--no-embedder` has removed
+them, the same resolver must find none in the private configuration, or the unit fails instead of
+measuring semantic recall under a `none` label. A configuration the product would not accept is
+refused, not classified.
+
 ### Failure classes
 
 Beside the pass rates, `summary.md` and `summary.json` list the failed checks as **counts** per failure

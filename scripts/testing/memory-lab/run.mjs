@@ -27,7 +27,12 @@ import {
 import { withExclusiveProcessLock } from "../jira-chat-lab/requirements/work-project-lock.mjs";
 import { openProgress } from "./progress.mjs";
 import { ARMS, runScenario } from "./driver.mjs";
-import { EMBEDDER_MODES, embeddingModelIds, resolveEmbedder } from "./embedder.mjs";
+import {
+  EMBEDDER_MODES,
+  embeddingModelIds,
+  loadSubjectGateway,
+  resolveEmbedder,
+} from "./embedder.mjs";
 import { SCAN_FILE, scanEvidence, secretsOfConfig } from "./evidence-scan.mjs";
 import { CEILINGS, pendingGatewayCalls, startLabInstance } from "./instance.mjs";
 import { readActivityEvents } from "../coding-workbench-lab/activity-log-events.mjs";
@@ -600,7 +605,7 @@ function loadCorpus(options) {
 // A live run points the product at the gateway configuration the operator named, which must keep
 // every conversation on this machine and name no chat model the run does not measure; its digest goes
 // into the manifest. An offline run has none.
-function gatewayEvidence(options) {
+async function gatewayEvidence(options) {
   if (options.mode !== "live") {
     const embedder = resolveEmbedder({ mode: options.mode, embedder: options.embedderMode });
     return {
@@ -611,7 +616,10 @@ function gatewayEvidence(options) {
   }
   const evidence = assertLoopbackGatewayConfig(options.configPath);
   assertOnlyMeasuredChatModels(options.configPath, [options.answerModelId, options.learnModelId]);
-  const configured = embeddingModelIds(JSON.parse(readFileSync(options.configPath, "utf8")));
+  const configured = embeddingModelIds(
+    JSON.parse(readFileSync(options.configPath, "utf8")),
+    await loadSubjectGateway(options.subjectRoot),
+  );
   const embedder = resolveEmbedder({
     mode: options.mode,
     embedder: options.embedderMode,
@@ -742,7 +750,7 @@ function runProgress(options, corpus, gateway, assertOwned) {
 /** Runs the lab with validated options and returns the summary; writes evidence under `out`. */
 export async function runLab(requested, log = console.log) {
   assertOutputAvailable(requested);
-  const gateway = gatewayEvidence(requested);
+  const gateway = await gatewayEvidence(requested);
   // From here on the run knows which embedding model, if any, it measures.
   const options = {
     ...requested,

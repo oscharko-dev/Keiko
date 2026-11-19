@@ -12,7 +12,12 @@ import { readActivityEvents } from "../coding-workbench-lab/activity-log-events.
 import { buildDevBffEnv } from "../../lib/dev-bff-env.mjs";
 import { openCallKeys } from "./gateway-calls.mjs";
 import { LabConfigurationError } from "./isolation.mjs";
-import { embeddingModelIds, scriptedEmbedderProvider, withoutEmbedders } from "./embedder.mjs";
+import {
+  embeddingModelIds,
+  loadSubjectGateway,
+  scriptedEmbedderProvider,
+  withoutEmbedders,
+} from "./embedder.mjs";
 import { placeSeed } from "./seed-store.mjs";
 import { ANSWERER_MODEL_ID, EMBEDDER_MODEL_ID, LEARNER_MODEL_ID } from "./scripted-model.mjs";
 
@@ -225,18 +230,24 @@ function assertNoFoldedEnvironment(foldedKeys, allowed) {
 
 // The bytes of the private configuration: the scripted one offline; live, the operator's file as it
 // is, unless the run measures without an embedding model and the file names one.
-function privateGatewayConfig(options, offline) {
+// Whether a run without an embedding model got one is decided by the subject's own resolver, before
+// and after: a configuration it still resolves an embedder from fails the unit. The lab's own offline
+// configuration names no embedder unless the scripted one is asked for.
+async function privateGatewayConfig(options, offline) {
   if (offline)
     return JSON.stringify(offlineGatewayConfig(options.fixture.baseUrl, options.embedder));
   const original = readFileSync(options.configPath);
+  if (options.embedder !== "none") return original;
+  const gateway = options.gateway ?? (await loadSubjectGateway(options.subjectRoot));
   const parsed = JSON.parse(original.toString("utf8"));
-  const strip = options.embedder === "none" && embeddingModelIds(parsed).length > 0;
-  return strip ? JSON.stringify(withoutEmbedders(parsed)) : original;
+  return embeddingModelIds(parsed, gateway).length > 0
+    ? JSON.stringify(withoutEmbedders(parsed, gateway))
+    : original;
 }
 
-function writePrivateGatewayConfig(options, offline) {
+async function writePrivateGatewayConfig(options, offline) {
   const configPath = join(options.dir, "gateway.json");
-  writeFileSync(configPath, privateGatewayConfig(options, offline), { mode: 0o600 });
+  writeFileSync(configPath, await privateGatewayConfig(options, offline), { mode: 0o600 });
   return configPath;
 }
 
@@ -267,7 +278,7 @@ export async function startLabInstance(options) {
   // The product writes its configuration file back (credentials it persists at start, a context
   // window it adopts), so every instance gets a private copy and the operator's file is never
   // written; the runner checks that file's digest before each unit. Paths inside it must be absolute.
-  const configPath = writePrivateGatewayConfig(options, offline);
+  const configPath = await writePrivateGatewayConfig(options, offline);
   const answerModelId = offline ? ANSWERER_MODEL_ID : options.answerModelId;
   const learnModelId = offline ? LEARNER_MODEL_ID : options.learnModelId;
   const prepared = await labEnvironment(options.dir, {

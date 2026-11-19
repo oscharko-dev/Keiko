@@ -3,10 +3,11 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { provenanceDifferences } from "../testing/memory-lab/compare.mjs";
 import {
   embeddingModelIds,
+  loadSubjectGateway,
   resolveEmbedder,
   scriptedEmbedderProvider,
   withoutEmbedders,
@@ -32,6 +33,8 @@ function capability(kind) {
     workflowEligible: false,
     costClass: "low",
     latencyClass: "fast",
+    throughputHint: "fixture",
+    preferredUseCases: [],
     knownLimitations: [],
   };
 }
@@ -50,17 +53,57 @@ const LIVE_CONFIG = {
   capabilities: [{ id: "embed-b", ...capability("embedding") }],
 };
 
+let gateway;
+beforeAll(async () => {
+  gateway = await loadSubjectGateway(undefined);
+});
+
+const BASE = "http://127.0.0.1:9/v1";
+// A provider entry with only `modelId` and `baseUrl`: the product still knows an embedder by the shape
+// of its id, which a reader of the raw file does not.
+const BARE_CONFIG = {
+  providers: [
+    { modelId: "gemma-chat", baseUrl: BASE, apiKey: "k" },
+    { modelId: "qwen3-embedding-8b", baseUrl: BASE, apiKey: "k" },
+  ],
+};
+
 describe("the configuration with and without an embedding model", () => {
   it("finds the embedding providers declared inline or in the capability list, sorted", () => {
-    expect(embeddingModelIds(LIVE_CONFIG)).toEqual(["embed-a", "embed-b"]);
-    expect(embeddingModelIds({ providers: [{ modelId: "chat-a" }] })).toEqual([]);
+    expect(embeddingModelIds(LIVE_CONFIG, gateway)).toEqual(["embed-a", "embed-b"]);
+    expect(
+      embeddingModelIds({ providers: [{ modelId: "chat-a", baseUrl: BASE }] }, gateway),
+    ).toEqual([]);
   });
 
   it("removes every embedding provider and capability record and nothing else", () => {
-    const stripped = withoutEmbedders(LIVE_CONFIG);
+    const stripped = withoutEmbedders(LIVE_CONFIG, gateway);
     expect(stripped.providers.map((provider) => provider.modelId)).toEqual(["chat-a"]);
     expect(stripped.capabilities).toEqual([]);
-    expect(embeddingModelIds(stripped)).toEqual([]);
+    expect(embeddingModelIds(stripped, gateway)).toEqual([]);
+  });
+
+  it("finds an embedder the product knows by its model id, and removes it", () => {
+    // The failure this pins: the lab saw only a declared capability, so `--no-embedder` left this
+    // provider in while the manifest said `none`.
+    expect(embeddingModelIds(BARE_CONFIG, gateway)).toEqual(["qwen3-embedding-8b"]);
+    const stripped = withoutEmbedders(BARE_CONFIG, gateway);
+    expect(stripped.providers.map((provider) => provider.modelId)).toEqual(["gemma-chat"]);
+    expect(embeddingModelIds(stripped, gateway)).toEqual([]);
+  });
+
+  it("fails closed when the product still resolves an embedder after the removal", () => {
+    // A gateway whose resolver finds an embedder in whatever it is given: the removal cannot be
+    // verified, so it throws instead of returning a configuration labelled without one.
+    const stubborn = {
+      parseGatewayConfig: (config) => config,
+      listConfiguredCapabilities: () => [{ id: "sticky", kind: "embedding" }],
+    };
+    expect(() => withoutEmbedders(BARE_CONFIG, stubborn)).toThrow(/still resolves 1 embedding/u);
+  });
+
+  it("refuses a configuration the product would not accept, instead of classifying it", () => {
+    expect(() => embeddingModelIds({ providers: [] }, gateway)).toThrow();
   });
 
   it("resolves the kind of embedding a run measures", () => {
@@ -190,14 +233,21 @@ describe("the private configuration a live instance gets", () => {
       answerModelId: "chat-a",
       learnModelId: "chat-a",
       embedder,
+      gateway,
     }).catch(() => undefined);
     return readFileSync(join(instanceDir, "gateway.json"), "utf8");
   }
 
+  it("drops an embedder that only the product's resolver recognises, and labels nothing it did not remove", async () => {
+    writeFileSync(configPath, JSON.stringify(BARE_CONFIG));
+    const without = JSON.parse(await privateCopy("none"));
+    expect(without.providers.map((provider) => provider.modelId)).toEqual(["gemma-chat"]);
+  });
+
   it("keeps the operator's bytes with the embedding model and drops it without", async () => {
     expect(await privateCopy("configured")).toBe(bytes);
     const without = JSON.parse(await privateCopy("none"));
-    expect(embeddingModelIds(without)).toEqual([]);
+    expect(embeddingModelIds(without, gateway)).toEqual([]);
     expect(without.providers.map((provider) => provider.modelId)).toEqual(["chat-a"]);
     expect(readFileSync(configPath, "utf8")).toBe(bytes);
   });
