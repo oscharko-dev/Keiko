@@ -4910,6 +4910,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "editor-assured-copy-containment",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["editor.assured-copy.completed"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["editor.assured-copy.completed"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["editor.assured-copy.completed"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["editor.assured-copy.completed"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "editor-workspace-watch-authority",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

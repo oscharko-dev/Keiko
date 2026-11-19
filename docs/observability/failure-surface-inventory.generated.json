@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0908ab8e379c4892bc47e7696d23ead2db1cd2a8bbcd0becab5c8e4e7e314c87"
+    "catalogDigest": "66d0fee6e7c0485048f8d6d1098b82672e759041913e413e3d71382b649ec8fd"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 721,
-    "proofCount": 744,
-    "resolvedProofCount": 744,
-    "failureClassCount": 412,
+    "operationCount": 722,
+    "proofCount": 745,
+    "resolvedProofCount": 745,
+    "failureClassCount": 413,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -689,6 +689,7 @@
         "editor.agent.bridge-registration",
         "editor.agent.changeset-byte-order-mark",
         "editor.agent.changeset-provenance",
+        "editor.assured-copy.completed",
         "editor.buffer-safety.state",
         "editor.local-history.rekey.completed",
         "editor.local-history.rekey.failed",
@@ -1078,6 +1079,7 @@
     "editor-workspace-watch-availability": ["editor-delivery.dependency-failure"],
     "editor-bridge-registration": ["editor-delivery.dependency-failure"],
     "editor-action-queue-refusal": ["editor-delivery.dependency-failure"],
+    "editor-assured-copy-containment": ["editor-delivery.dependency-failure"],
     "editor-workspace-watch-authority": ["editor-delivery.rejection"],
     "embedding-batch": ["memory-knowledge.rejection", "model-gateway.rejection"],
     "embedding-batch-grouping": ["memory-knowledge.dependency-failure"],
@@ -2181,6 +2183,9 @@
     ],
     "editor.agent.changeset-provenance.emitted-line": [
       "packages/keiko-server/src/editor/agentRoutes.test.ts"
+    ],
+    "editor.assured-copy.completed.links-skipped": [
+      "packages/keiko-server/src/editor/assuredPreFilterRunner.test.ts"
     ],
     "editor.buffer-safety.state.lifecycle": [
       "packages/keiko-server/src/editor/agentRoutes.test.ts"

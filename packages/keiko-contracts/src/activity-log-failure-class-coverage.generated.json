@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 412,
-  "completeClassCount": 412,
+  "supportedClassCount": 413,
+  "completeClassCount": 413,
   "completeness": "complete",
   "classes": [
     {
@@ -24412,6 +24412,68 @@
             "causeChain": false
           },
           "proofIds": ["editor.agent.action-queue.refusal"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "editor-assured-copy-containment",
+      "requirementContract": "editor-assured-copy-containment",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["editor.assured-copy.completed"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "editor.assured-copy.completed",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["editor.assured-copy.completed"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "editor.assured-copy.completed",
+          "owner": "keiko-server",
+          "category": "security",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "capability",
+          "safeContextFields": [
+            {
+              "name": "copiedEntryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "skippedLinkCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["editor.assured-copy.completed.links-skipped"],
           "replayReferences": [],
           "missingObligations": []
         }

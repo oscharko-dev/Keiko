@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0908ab8e379c4892bc47e7696d23ead2db1cd2a8bbcd0becab5c8e4e7e314c87",
+    "catalogDigest": "66d0fee6e7c0485048f8d6d1098b82672e759041913e413e3d71382b649ec8fd",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -20985,6 +20985,50 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/editor/changesetLineBreakProvenance.ts:26",
         "emitterSites": ["packages/keiko-server/src/editor/changesetLineBreakProvenance.ts:119"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "editor.assured-copy.completed",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "editor.assuredCopyEvidence.recordAssuredCopyCompleted",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["copied"]
+          },
+          "copiedEntryCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "skippedLinkCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "capability",
+        "failureClasses": ["editor-assured-copy-containment"],
+        "proofIds": ["editor.assured-copy.completed.links-skipped"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/editor/assuredCopyEvidence.ts:12",
+        "emitterSites": ["packages/keiko-server/src/editor/assuredCopyEvidence.ts:49"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -57483,6 +57527,27 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "editor-assured-copy-containment",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["editor.assured-copy.completed"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["editor.assured-copy.completed"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["editor.assured-copy.completed"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["editor.assured-copy.completed"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "editor-workspace-watch-authority",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -64412,8 +64477,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 412,
-      "completeClassCount": 412,
+      "supportedClassCount": 413,
+      "completeClassCount": 413,
       "completeness": "complete",
       "classes": [
         {
@@ -88998,6 +89063,68 @@
                 "causeChain": false
               },
               "proofIds": ["editor.agent.action-queue.refusal"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "editor-assured-copy-containment",
+          "requirementContract": "editor-assured-copy-containment",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["editor.assured-copy.completed"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "editor.assured-copy.completed",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["editor.assured-copy.completed"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "editor.assured-copy.completed",
+              "owner": "keiko-server",
+              "category": "security",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "capability",
+              "safeContextFields": [
+                {
+                  "name": "copiedEntryCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "skippedLinkCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["editor.assured-copy.completed.links-skipped"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -124830,6 +124957,19 @@
       "package": "keiko-server"
     },
     {
+      "op": "editor.assured-copy.cleanup-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/editor/assuredPreFilterRunner.ts:393",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "editor.assured-copy.completed",
+      "category": "security",
+      "site": "packages/keiko-server/src/editor/assuredCopyEvidence.ts:15",
+      "package": "keiko-server"
+    },
+    {
       "op": "editor.buffer-safety.state",
       "category": "security",
       "site": "packages/keiko-server/src/editor/bufferSafetyEvidence.ts:12",
@@ -127767,6 +127907,8 @@
     "editor.agent.changeset-byte-order-mark",
     "editor.agent.changeset-provenance",
     "editor.agent.root-containment",
+    "editor.assured-copy.cleanup-failed",
+    "editor.assured-copy.completed",
     "editor.buffer-safety.state",
     "editor.inlineCompletion",
     "editor.local-history.rekey.completed",
