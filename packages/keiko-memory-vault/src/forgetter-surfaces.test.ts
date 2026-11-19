@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -18,23 +18,23 @@ function productionSources(directory: string): readonly string[] {
   });
 }
 
+// A source tree that cannot be read must fail the inventory: a package silently left out would let
+// the test pass without checking its writers.
+function scanSources(directory: string): readonly string[] {
+  try {
+    return productionSources(directory);
+  } catch (error: unknown) {
+    throw new Error(`cannot scan ${directory} for forgetter surface writers`, { cause: error });
+  }
+}
+
 function allProductionSources(): readonly string[] {
+  // An entry of packages/ without a src/ directory holds no production source and is skipped on
+  // purpose; every src/ directory that exists is scanned completely.
   const packageSrcDirs = readdirSync(PACKAGES_DIR)
     .map((name) => join(PACKAGES_DIR, name, "src"))
-    .filter((dir) => {
-      try {
-        return statSync(dir).isDirectory();
-      } catch {
-        return false;
-      }
-    });
-  return [...packageSrcDirs, ROOT_SRC_DIR].flatMap((dir) => {
-    try {
-      return productionSources(dir);
-    } catch {
-      return [];
-    }
-  });
+    .filter((dir) => existsSync(dir) && statSync(dir).isDirectory());
+  return [...packageSrcDirs, ROOT_SRC_DIR].flatMap(scanSources);
 }
 
 const CONSTANTS: ReadonlyMap<string, string> = new Map(
@@ -65,6 +65,11 @@ function expressionIsAccountedFor(expression: string): string | undefined {
 }
 
 describe("forgetter surface classification (#4223)", () => {
+  it("fails the inventory when a source tree cannot be scanned, naming the directory", () => {
+    const missing = join(PACKAGES_DIR, "no-such-package", "src");
+    expect(() => scanSources(missing)).toThrow(`cannot scan ${missing}`);
+  });
+
   it("classifies each surface exactly once, as a person's or as unattended", () => {
     for (const [, value] of CONSTANTS) {
       const classes = [
