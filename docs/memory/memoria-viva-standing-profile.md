@@ -82,7 +82,7 @@ claim that this question is about it. A retrieved profile fact leaves the profil
 (`standingProfileWithout`), so it is sent once, in the question's own memory context. When the
 memory budget let recall send only part of it, its full profile line stays.
 
-**Ranking among admitted memories never follows the id.** Chat recall fuses its signals (semantic
+**Ranking among admitted memories does not follow the id until everything else is equal.** Chat recall fuses its signals (semantic
 similarity, relevance, pin, correction, recency, confidence, importance, reinforcement, graph) with
 Reciprocal Rank Fusion (`KEIKO_MEMORY_FUSION=weighted-sum` restores the weighted sum). A rule keeps
 a signal from deciding what it does not know (#4228): memories with an equal subscore share one rank

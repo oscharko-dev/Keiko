@@ -43,7 +43,8 @@ export interface RankMemoriesQuery {
   // Per-memory reinforcement strength in [0,1] keyed by memory id (#204 plasticity). When undefined,
   // the ranker zeroes the strength weight so output is byte-identical to pre-strength behaviour.
   readonly strengthById?: ReadonlyMap<MemoryId, number> | undefined;
-  // Signal-fusion strategy (#204, O-F2). Defaults to weighted-sum (byte-identical); "rrf" fuses ranks.
+  // Signal-fusion strategy (#204, O-F2). Defaults to weighted-sum (the legacy ranking; with edges, a tied group
+  // straddling the graph cut is left out of the high-rank set in both modes); "rrf" fuses ranks.
   readonly fusion?: RankingFusionMode | undefined;
 }
 

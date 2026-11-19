@@ -155,7 +155,8 @@ export interface MemoryRetrievalRequest {
   // relevance vs novelty (1 = pure relevance / inert, lower = more diverse); defaults to 0.7.
   readonly embeddingById?: ReadonlyMap<MemoryId, Float32Array>;
   readonly mmrLambda?: number;
-  // Signal-fusion strategy (#204, O-F2). Defaults to "weighted-sum" (byte-identical legacy ranking);
+  // Signal-fusion strategy (#204, O-F2). Defaults to "weighted-sum" (the legacy ranking; with edges
+  // supplied, a tied group straddling the graph cut is left out of the high-rank set in both modes);
   // "rrf" opts into rank-based Reciprocal Rank Fusion.
   readonly fusion?: RankingFusionMode;
   // Opt-in strict relevance floor for Chat (#4228). A memory is retrieved only when the question
