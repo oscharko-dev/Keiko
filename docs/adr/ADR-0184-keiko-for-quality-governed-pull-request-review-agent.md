@@ -454,8 +454,10 @@ task therefore carries the same nonce-bound rules block as the Reviewer's task, 
 there are none (R4130-047). The runtime result hands the loaded rules text to the run's
 counter-checks in memory only; the run record keeps its digest, never the text. A refutation
 takes the first reason code that applies, in one ordered list: `evidence-mismatch` for a
-candidate without wrong behaviour (as above, and also when its wrong result needs other code that
-misuses or omits the reviewed code and no such code exists in the head commit), then
+candidate without wrong behaviour (as above, and also when its wrong result needs another
+component to leave out a call that the reviewed code offers as opt-in and no such component exists
+in the head commit; a wrong result that an input to the reviewed code alone produces is confirmed,
+never refuted this way), then
 `guarded-elsewhere`, `cause-not-in-change` and `evidence-mismatch` for any other refutation. The
 task says that the code changes nothing for a refuted candidate. In development iteration 11 one
 counter-check used up its output budget in its attempt, its steered repair and its second session,

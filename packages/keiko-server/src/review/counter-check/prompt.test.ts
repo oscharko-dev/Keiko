@@ -18,8 +18,9 @@ describe("COUNTER_CHECK_INSTRUCTION", () => {
   // omit an opt-in hook. The attempt and the second session spent most of their budget deciding
   // whether that is a defect; the repair decided to refute about halfway and spent much of the rest
   // weighing "evidence-mismatch" against "cause-not-in-change", quoting the separate non-defect
-  // rule. The refutation codes are one ordered list, the non-defect rule first, and the case of
-  // misuse by code that does not exist is named.
+  // rule. The refutation codes are one ordered list, the non-defect rule first. That rule names a
+  // wrong result that needs a component leaving out an opt-in call when no such component exists,
+  // and confirmation takes precedence over it (R4130-090).
   it("orders the refutation reason codes, the non-defect rule first, and says the choice changes nothing", () => {
     const at = (text: string): number => COUNTER_CHECK_INSTRUCTION.indexOf(text);
     const nonDefect = at(
@@ -36,8 +37,14 @@ describe("COUNTER_CHECK_INSTRUCTION", () => {
     // The non-defect rule exists once, inside the list, so no second rule can give another code.
     expect(COUNTER_CHECK_INSTRUCTION.split("describes no wrong behaviour").length).toBe(2);
     expect(COUNTER_CHECK_INSTRUCTION).toContain(
-      "needs other code that misuses or omits the reviewed code and your search finds no such code in the head commit",
+      "needs another component to leave out a call that the reviewed code offers as opt-in, and your search finds no such component in the head commit",
     );
+    // R4130-090: a defect that an input to the reviewed code alone reproduces is confirmed, never
+    // refuted as misuse; an out-of-range argument from a future caller is such an input.
+    expect(COUNTER_CHECK_INSTRUCTION).toContain(
+      "This never applies when an input to the reviewed code alone produces the wrong result: then confirm.",
+    );
+    expect(COUNTER_CHECK_INSTRUCTION).not.toContain("misuses");
     expect(COUNTER_CHECK_INSTRUCTION).toContain("with the first of these reasonCodes that applies");
     expect(COUNTER_CHECK_INSTRUCTION).toContain(
       "every refuted candidate is handled the same way. Do not weigh one reasonCode against another.",
