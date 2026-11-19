@@ -519,3 +519,117 @@ describe("rankMemories — RRF fusion keeps the intended signals decisive (#4228
     expect(ranked[0]?.score).toBe(0);
   });
 });
+
+describe("rankMemories — the graph high-rank set never follows the id (#4228)", () => {
+  const ID_DRAWS = 30;
+  // Deterministic, distinct ids per draw (an LCG shuffle of 20 slots).
+  function idsFor(draw: number): string[] {
+    let state = draw * 7919 + 13;
+    return Array.from({ length: 20 }, (_, slot) => {
+      state = (Math.imul(state, 1103515245) + 12345) >>> 0;
+      return `${state.toString(16).padStart(8, "0")}-${String(slot)}`;
+    });
+  }
+  const link = (
+    from: string,
+    to: string,
+  ): Map<ReturnType<typeof memoryId>, ReturnType<typeof buildEdge>[]> => {
+    const edge = buildEdge({ from, to });
+    return new Map([
+      [memoryId(from), [edge]],
+      [memoryId(to), [edge]],
+    ]);
+  };
+
+  it.each(["weighted-sum", "rrf"] as const)(
+    "gives a record the same graph subscore for every id draw when a tie straddles the cut (%s)",
+    (fusion) => {
+      const seen = new Set<number>();
+      for (let draw = 0; draw < ID_DRAWS; draw += 1) {
+        const ids = idsFor(draw);
+        // 20 records of identical evidence; slot 0 is linked to slot 10; the cut (8) is inside the tie.
+        const records = ids.map((id) => buildRecord({ id, body: "same note", updatedAt: now }));
+        const ranked = rankMemories(
+          records,
+          { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS, fusion },
+          { edgesByMemory: link(ids[0] ?? "", ids[10] ?? "") },
+        );
+        const graph = ranked.find((e) => e.memoryId === ids[0])?.subscores.graph ?? -1;
+        seen.add(graph);
+      }
+      expect([...seen]).toEqual([0]);
+    },
+  );
+
+  it.each(["weighted-sum", "rrf"] as const)(
+    "keeps the plain top-N set when no tie straddles the cut (%s)",
+    (fusion) => {
+      // Distinct recency => distinct scores. Top 3 (cut 3): r0, r1, r2. r5 links to r1 (in), r6 to r4 (out).
+      const records = Array.from({ length: 8 }, (_, i) =>
+        buildRecord({ id: `r${String(i)}`, body: "x", updatedAt: now - i * 86_400_000 }),
+      );
+      const edgeIn = buildEdge({ from: "r5", to: "r1" });
+      const edgeOut = buildEdge({ from: "r6", to: "r4" });
+      const edgesByMemory = new Map([
+        [memoryId("r5"), [edgeIn]],
+        [memoryId("r1"), [edgeIn]],
+        [memoryId("r6"), [edgeOut]],
+        [memoryId("r4"), [edgeOut]],
+      ]);
+      const ranked = rankMemories(
+        records,
+        { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS, fusion },
+        { edgesByMemory, graphHighRankCount: 3 },
+      );
+      const graph = (id: string): number =>
+        ranked.find((e) => e.memoryId === id)?.subscores.graph ?? -1;
+      expect(graph("r5")).toBe(0.5); // neighbour r1 is inside the top 3
+      expect(graph("r6")).toBe(0); // neighbour r4 is outside
+      expect(graph("r1")).toBe(0); // r5 is outside
+    },
+  );
+
+  it("keeps a tied group that lies wholly inside the top-N in the set", () => {
+    // r0 and r1 tie at the top (same updatedAt), r2.. are older; cut 3 does not split the r0/r1 tie.
+    const records = [
+      buildRecord({ id: "r0", body: "x", updatedAt: now }),
+      buildRecord({ id: "r1", body: "x", updatedAt: now }),
+      buildRecord({ id: "r2", body: "x", updatedAt: now - 86_400_000 }),
+      buildRecord({ id: "r3", body: "x", updatedAt: now - 2 * 86_400_000 }),
+      buildRecord({ id: "r9", body: "x", updatedAt: now - 3 * 86_400_000 }),
+    ];
+    const edge = buildEdge({ from: "r9", to: "r0" });
+    const edgesByMemory = new Map([
+      [memoryId("r9"), [edge]],
+      [memoryId("r0"), [edge]],
+    ]);
+    const ranked = rankMemories(
+      records,
+      { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS },
+      { edgesByMemory, graphHighRankCount: 3 },
+    );
+    expect(ranked.find((e) => e.memoryId === "r9")?.subscores.graph).toBe(0.5);
+  });
+});
+
+describe("rankMemories — non-finite subscores say nothing (#4228)", () => {
+  it("does not let a NaN or infinite semantic score reorder the other records", () => {
+    const records = ["a", "b", "c", "d"].map((id) =>
+      buildRecord({ id, body: "x", updatedAt: now }),
+    );
+    const clean = new Map([
+      [memoryId("a"), 0.2],
+      [memoryId("b"), 0.9],
+      [memoryId("c"), 0.5],
+      [memoryId("d"), 0],
+    ]);
+    const base = { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS, fusion: "rrf" } as const;
+    const expected = rankMemories(records, { ...base, semanticById: clean }).map((e) => e.memoryId);
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const dirty = new Map(clean).set(memoryId("d"), bad);
+      const ranked = rankMemories(records, { ...base, semanticById: dirty });
+      expect(ranked.map((e) => e.memoryId)).toEqual(expected);
+      expect(ranked.every((e) => Number.isFinite(e.score))).toBe(true);
+    }
+  });
+});

@@ -8,13 +8,13 @@
 // so each of those signals hands out the ranks 1..N in memory-id order and the fused score receives
 // Σ w/(60 + idRank) with Σ w = 0.77 of 1.49 total weight. That id-ordered noise is up to about five
 // times the whole advantage of being the semantically closest record, so which memory wins is decided
-// by its random UUID. The lab's own ids reproduce the live outcome: the six supplied memories of
-// both probes sit among the 60 lowest of 321 ids, the target's id is at rank 151.
+// by its random UUID. In the live run the six supplied memories of both probes sat among the 60
+// lowest of 321 ids and the target's id was at rank 151.
 //
 // FIXED by tie-aware rank fusion (ranking.ts, #4228): equal subscores share one rank and a zero
 // subscore contributes nothing, so a signal that does not distinguish records no longer hands out
-// ids-ordered ranks. The reproductions are plain `it` now; the one `it.fails` left asserts that no
-// filler is supplied and fails because of the MMR reorder, not rank fusion (see its comment). The
+// ids-ordered ranks. The reproductions are plain `it` now; the two `it.fails` left are pins for the
+// diversity (MMR) stage, which is outside rank fusion (see their comments). The
 // controls prove the other inputs (semantic scores, floor, cap, budget) are sufficient.
 //
 // Not reproducible hermetically: whether the real embedding gave the target the nearest vector.
@@ -46,9 +46,11 @@ const ID_TIED_SIGNALS_OFF = {
   importanceWeight: 0,
 } as const;
 
-// The lab planner's id function (scripts/testing/memory-lab/seed-plan.mjs `seedId`).
-function labSeedId(label: string): string {
-  const hex = createHash("sha256").update(`memory-lab-seed:${label}`).digest("hex");
+// Plain deterministic uuid-shaped ids. The property under test is that the outcome does not depend on
+// the ids, so no copy of the lab planner's id function is kept here (it could drift silently); the
+// 50 id draws below cover the id independence and the fixed draw is just one more id assignment.
+function fixtureId(label: string): string {
+  const hex = createHash("sha256").update(`recall-distractors-fixture:${label}`).digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
@@ -125,12 +127,12 @@ const TARGET_A_BODY = "The audit review is in room Sycamore.";
 
 // Scenario A: the target (age 30 d) is the semantically nearest record of the store; 20 newer
 // near-topic distractors are moderately close; 300 filler records are far (`fillerCosine`).
-// `idSeed` undefined keeps the lab's ids; a number re-draws every id (a permutation of the ordering).
+// `idSeed` undefined keeps the fixed ids; a number re-draws every id (a permutation of the ordering).
 function storeA(fillerCosine: number, idSeed?: number): Store {
   const store = newStore();
   const random = generator(7);
   const id = (label: string): string =>
-    labSeedId(idSeed === undefined ? label : `perm${String(idSeed)}:${label}`);
+    fixtureId(idSeed === undefined ? label : `perm${String(idSeed)}:${label}`);
   SCENARIO_A.seed.records.forEach((spec, index) => {
     const isTarget = spec.body === TARGET_A_BODY;
     addRecord(store, {
@@ -163,7 +165,7 @@ const BOREALIS_FACT_ID = "d8e49029-be76-4c7e-a0e5-0c88750b2a45";
 function storeB(idSeed?: number): Store {
   const store = newStore();
   const id = (label: string): string =>
-    labSeedId(idSeed === undefined ? label : `perm${String(idSeed)}:${label}`);
+    fixtureId(idSeed === undefined ? label : `perm${String(idSeed)}:${label}`);
   SCENARIO_B.seed.records.forEach((spec, index) => {
     addRecord(store, {
       id: id(`record:${spec.key}`),
@@ -202,6 +204,10 @@ function recall(
   );
 }
 
+function fillerAmong(store: Store, supplied: readonly string[]): string[] {
+  return supplied.filter((id) => store.records.find((r) => r.id === id)?.body.startsWith("Ablage"));
+}
+
 function idOfBody(store: Store, body: string): string {
   const found = store.records.find((record) => record.body === body);
   if (found === undefined) throw new Error("fixture body missing");
@@ -238,33 +244,56 @@ describe("recall among near-topic distractors (diagnosis mv/diag-recall-distract
   });
 
   describe("scenario A: long-horizon-distractors-en, probe room-plain", () => {
-    it("supplies the target with the lab's ids and unrelated filler below the floor", () => {
+    it("supplies the target with fixed ids and unrelated filler below the floor", () => {
       const store = storeA(0.1);
       expect(recall(store, QUESTION_A_PLAIN)).toContain(idOfBody(store, TARGET_A_BODY));
     });
 
-    it("supplies the target with the lab's ids when filler clears the 0.3 semantic floor (target only)", () => {
+    it("supplies the target with fixed ids when filler clears the 0.3 semantic floor (target only)", () => {
       const store = storeA(0.35);
       expect(recall(store, QUESTION_A_PLAIN)).toContain(idOfBody(store, TARGET_A_BODY));
     });
 
-    // STILL FAILS, and not because of rank fusion: with the target supplied, the sixth slot goes to a
-    // filler record because the MMR reorder (`diversity.ts`, lambda 0.7) prefers a vector far from the
-    // clustered near-topic distractors. `mmrLambda: 1` (pure relevance) supplies the target and six
-    // near-topic records and no filler. The MMR reorder is outside this change (see #4228).
-    it.fails(
-      "supplies the target with the lab's ids when filler clears the 0.3 semantic floor",
-      () => {
-        // Live evidence: filler records WERE supplied; they share no word with the question, so they
-        // can only have passed the strict floor through semantic >= 0.3.
-        const store = storeA(0.35);
-        const supplied = recall(store, QUESTION_A_PLAIN);
+    // Not rank fusion: with the target supplied, the sixth slot goes to an unrelated filler record
+    // because the MMR reorder (`diversity.ts`, default lambda 0.7) prefers a vector far from the
+    // clustered near-topic records. Pure relevance (lambda 1) and a store without embeddings supply the
+    // target plus five near-topic records and no filler.
+    it("supplies the target and no filler when MMR is off (lambda 1, or no embeddings)", () => {
+      const store = storeA(0.35);
+      for (const overrides of [{ mmrLambda: 1 }, { embeddingById: new Map() }]) {
+        const supplied = recall(store, QUESTION_A_PLAIN, overrides);
         expect(supplied).toContain(idOfBody(store, TARGET_A_BODY));
-        expect(
-          supplied.filter((id) =>
-            store.records.find((r) => r.id === id)?.body.startsWith("Ablage"),
-          ),
-        ).toEqual([]);
+        expect(fillerAmong(store, supplied)).toEqual([]);
+      }
+    });
+
+    // Pin for the diversity stage (#4228, next step): at the default lambda a filler is supplied.
+    it.fails("supplies no filler among the six at the default MMR lambda", () => {
+      const store = storeA(0.35);
+      expect(fillerAmong(store, recall(store, QUESTION_A_PLAIN))).toEqual([]);
+    });
+
+    // Pin for the diversity stage (#4228, next step): two mutually similar records that are both the
+    // nearest to the question (cosine about 0.96 to each other) lose one of them to the MMR penalty.
+    it.fails(
+      "supplies both of two mutually similar nearest records at the default MMR lambda",
+      () => {
+        const store = storeA(0.35);
+        const twins = [
+          ["The audit review is in room Willow.", 1.0],
+          ["The audit review is in room Birch.", 1.66],
+        ] as const;
+        for (const [body, angle] of twins) {
+          addRecord(store, {
+            id: fixtureId(`twin:${body}`),
+            body,
+            ageDays: 5,
+            cosine: 0.9,
+            angle,
+          });
+        }
+        const supplied = recall(store, QUESTION_A_PLAIN);
+        for (const [body] of twins) expect(supplied).toContain(idOfBody(store, body));
       },
     );
 
@@ -307,7 +336,7 @@ describe("recall among near-topic distractors (diagnosis mv/diag-recall-distract
   });
 
   describe("scenario B: two-memories-compare-en (both facts needed)", () => {
-    it("supplies the Atlas fact and the Borealis fact with the run's ids", () => {
+    it("supplies the Atlas fact and the Borealis fact with the run file's ids", () => {
       const supplied = recall(storeB(), QUESTION_B);
       expect(supplied).toContain(ATLAS_FACT_ID);
       expect(supplied).toContain(BOREALIS_FACT_ID);
@@ -325,7 +354,7 @@ describe("recall among near-topic distractors (diagnosis mv/diag-recall-distract
       expect(missed).toEqual([]);
     });
 
-    it("control: weighted-sum fusion supplies both facts with the run's ids", () => {
+    it("control: weighted-sum fusion supplies both facts with the run file's ids", () => {
       const supplied = recall(storeB(), QUESTION_B, { fusion: "weighted-sum" });
       expect(supplied).toContain(ATLAS_FACT_ID);
       expect(supplied).toContain(BOREALIS_FACT_ID);

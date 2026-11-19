@@ -87,7 +87,10 @@ a signal from deciding what it does not know (#4228): memories with an equal sub
 nothing. Before, a signal that is identical for every candidate (pin, correction, graph, often
 confidence) handed out ranks in memory-id order, and in a store of a few hundred memories that noise
 outweighed the advantage of the semantically nearest one. Only memories whose fused scores are exactly
-equal fall back to the newer update and then the id, which keeps the order reproducible.
+equal fall back to the newer update and then the id, which keeps the order reproducible. The graph
+signal follows the same principle: the set of top memories that graph proximity refers to never
+contains part of a group tied on score and update time, so a neighbour's graph score never depends on
+which of equal memories the id happened to put inside the cut (this applies to both fusion modes).
 
 **Corrections keep their topic.** Under the strict floor a standing profile fact also shares the
 informative words of the facts it superseded (`supersedes` edges, up to four steps back on each

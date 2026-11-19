@@ -1,4 +1,4 @@
-import type { MemoryId, MemorySourceKind } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryEdge, MemoryId, MemorySourceKind } from "@oscharko-dev/keiko-contracts/memory";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -7,7 +7,7 @@ import {
   shrinkArray,
   type Random,
 } from "../../../tests/support/property-testing.js";
-import { buildRecord, memoryId } from "./_support.js";
+import { buildEdge, buildRecord, memoryId } from "./_support.js";
 import { rankMemories } from "./ranking.js";
 import { DEFAULT_RANKING_WEIGHTS, type RankingWeights } from "./types.js";
 
@@ -103,11 +103,20 @@ function bodyOf(relevance: number): string {
   return [...QUERY_WORDS.slice(0, relevance), ...FILLER_WORDS.slice(0, 4 - relevance)].join(" ");
 }
 
-function rank(
-  specs: readonly Spec[],
-  ids: readonly string[],
-  weights: RankingWeights = DEFAULT_RANKING_WEIGHTS,
-): Ranked {
+// Edges between spec indices and the size of the graph high-rank set.
+interface GraphInput {
+  readonly edges: readonly (readonly [number, number])[];
+  readonly cut: number;
+}
+
+interface Inputs {
+  readonly records: ReturnType<typeof buildRecord>[];
+  readonly semanticById: Map<MemoryId, number>;
+  readonly strengthById: Map<MemoryId, number>;
+  readonly indexById: Map<string, number>;
+}
+
+function inputsOf(specs: readonly Spec[], ids: readonly string[]): Inputs {
   const semanticById = new Map<MemoryId, number>();
   const strengthById = new Map<MemoryId, number>();
   const indexById = new Map<string, number>();
@@ -126,18 +135,62 @@ function rank(
       sourceKind: SOURCE_KINDS[spec.importance] ?? "system-default",
     });
   });
-  const ranked = rankMemories(records, {
-    queryText: QUERY,
-    nowMs: NOW,
-    weights,
-    semanticById,
-    strengthById,
-    fusion: "rrf",
-  });
+  return { records, semanticById, strengthById, indexById };
+}
+
+function rank(
+  specs: readonly Spec[],
+  ids: readonly string[],
+  weights: RankingWeights = DEFAULT_RANKING_WEIGHTS,
+  graph?: GraphInput,
+): Ranked {
+  const { records, semanticById, strengthById, indexById } = inputsOf(specs, ids);
+  const ranked = rankMemories(
+    records,
+    { queryText: QUERY, nowMs: NOW, weights, semanticById, strengthById, fusion: "rrf" },
+    graph === undefined
+      ? {}
+      : { edgesByMemory: edgeMap(graph, ids), graphHighRankCount: graph.cut },
+  );
   const order = ranked.map((entry) => indexById.get(entry.memoryId) ?? -1);
   const scoreOfSpec: number[] = [];
   for (const entry of ranked) scoreOfSpec[indexById.get(entry.memoryId) ?? -1] = entry.score;
   return { order, scoreOfSpec };
+}
+
+function edgeMap(graph: GraphInput, ids: readonly string[]): Map<MemoryId, MemoryEdge[]> {
+  const map = new Map<MemoryId, MemoryEdge[]>();
+  for (const [from, to] of graph.edges) {
+    const edge = buildEdge({ from: ids[from] ?? "", to: ids[to] ?? "" });
+    for (const end of [from, to]) {
+      const key = memoryId(ids[end] ?? "");
+      map.set(key, [...(map.get(key) ?? []), edge]);
+    }
+  }
+  return map;
+}
+
+// The spec indices tied (on weighted-sum score and updatedAt) with the last record inside the cut,
+// when that tie straddles the cut; empty otherwise. Computed without edges, as the library does.
+function straddlingGroup(specs: readonly Spec[], ids: readonly string[], cut: number): number[] {
+  const { records, semanticById, strengthById, indexById } = inputsOf(specs, ids);
+  const baseline = rankMemories(records, {
+    queryText: QUERY,
+    nowMs: NOW,
+    weights: DEFAULT_RANKING_WEIGHTS,
+    semanticById,
+    strengthById,
+    fusion: "weighted-sum",
+  });
+  const key = (entry: (typeof baseline)[number] | undefined): string | undefined => {
+    const index = indexById.get(entry?.memoryId ?? "");
+    return entry === undefined || index === undefined
+      ? undefined
+      : `${String(entry.score)}|${String(specs[index]?.recency)}`;
+  };
+  const last = key(baseline[cut - 1]);
+  if (last === undefined || key(baseline[cut]) !== last) return [];
+  return baseline.filter((e) => key(e) === last).map((e) => indexById.get(e.memoryId) ?? -1);
 }
 
 // Positions grouped into runs of exactly equal fused score, each as a sorted spec-index set.
@@ -172,26 +225,40 @@ describe("rrf fusion — tie-aware properties (#4228)", () => {
     let tiedCases = 0;
     let distinctCases = 0;
     let idOrderedTies = 0;
+    let straddled = 0;
+    let edgeIntoGroup = 0;
     interface Case {
       readonly specs: readonly Spec[];
       readonly idsA: readonly string[];
       readonly idsB: readonly string[];
+      readonly graph: GraphInput;
     }
     await checkProperty<Case>({
       name,
       runs: RUNS,
       generate: (random) => {
         const specs = generateSpecs(random);
+        const edges = Array.from({ length: random.integer(0, 6) }, (): [number, number] => [
+          random.integer(0, specs.length - 1),
+          random.integer(0, specs.length - 1),
+        ]).filter(([from, to]) => from !== to);
+        const graph = { edges, cut: random.integer(1, Math.max(1, specs.length - 1)) };
         return {
           specs,
           idsA: uniqueIds(random, specs.length),
           idsB: uniqueIds(random, specs.length),
+          graph,
         };
       },
       shrink: (value) => shrinkSpecs(value, (v, specs) => ({ ...v, specs })),
-      property: ({ specs, idsA, idsB }) => {
-        const a = rank(specs, idsA);
-        const b = rank(specs, idsB);
+      property: ({ specs, idsA, idsB, graph }) => {
+        const a = rank(specs, idsA, DEFAULT_RANKING_WEIGHTS, graph);
+        const b = rank(specs, idsB, DEFAULT_RANKING_WEIGHTS, graph);
+        const group = straddlingGroup(specs, idsA, graph.cut);
+        straddled += group.length > 0 ? 1 : 0;
+        edgeIntoGroup += graph.edges.some(([x, y]) => group.includes(x) || group.includes(y))
+          ? 1
+          : 0;
         const runsA = equalScoreRuns(a);
         expect(equalScoreRuns(b)).toEqual(runsA);
         expect(b.order.map((i) => b.scoreOfSpec[i])).toEqual(a.order.map((i) => a.scoreOfSpec[i]));
@@ -206,6 +273,9 @@ describe("rrf fusion — tie-aware properties (#4228)", () => {
     expect(tiedCases).toBeGreaterThan(runs * 0.5);
     expect(distinctCases).toBeGreaterThan(runs * 0.9);
     expect(idOrderedTies).toBeGreaterThan(runs * 0.2);
+    // Vacuity for the graph signal: a tied group straddled the cut, and an edge pointed into it.
+    expect(straddled).toBeGreaterThan(runs * 0.2);
+    expect(edgeIntoGroup).toBeGreaterThan(runs * 0.1);
   });
 
   it("a signal that is constant across all candidates never changes the order", async () => {

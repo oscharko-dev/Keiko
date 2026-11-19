@@ -242,9 +242,31 @@ const SUBSCORE_KEYS: readonly (keyof IncludedSubscores)[] = [
   "importance",
 ];
 
+// The top `count` of the baseline order, never a part of a tied group: when the entry just below the
+// cut has the same (score, updatedAt) as the last one inside, every entry of that (score, updatedAt)
+// is left out. Their order is decided by the id alone, and a signal that cannot tell who is on top
+// says nothing (#4228). Without a straddling tie the set is exactly the plain top `count`.
+function highRankSet(
+  sorted: readonly IncludedMemory[],
+  count: number,
+  recordById: ReadonlyMap<MemoryId, MemoryRecord>,
+): Set<string> {
+  const top = sorted.slice(0, count);
+  const last = top.at(-1);
+  const next = sorted[count];
+  if (last === undefined || next === undefined) return new Set(top.map((e) => e.memoryId));
+  const updatedAtOf = (e: IncludedMemory): number | undefined =>
+    recordById.get(e.memoryId)?.updatedAt;
+  const tiedWithLast = (e: IncludedMemory): boolean =>
+    e.score === last.score && updatedAtOf(e) === updatedAtOf(last);
+  const kept = tiedWithLast(next) ? top.filter((e) => !tiedWithLast(e)) : top;
+  return new Set(kept.map((e) => e.memoryId));
+}
+
 // Final subscores per memory: baseline + (when edges are supplied) the graph layer. The graph
 // high-rank set is the WEIGHTED-SUM baseline top-N, so graph proximity is computed identically
-// regardless of the final fusion mode (and the weighted-sum path stays byte-identical to before).
+// regardless of the final fusion mode. A tied group that straddles the cut is left out of the set
+// (see `highRankSet`), so the id never decides which memory counts as high-rank.
 function computeFinalSubscores(
   memories: readonly MemoryRecord[],
   query: RankMemoriesQuery,
@@ -260,9 +282,7 @@ function computeFinalSubscores(
     recordById,
   );
   const highRankCount = options.graphHighRankCount ?? DEFAULT_GRAPH_HIGH_RANK_COUNT;
-  const highRankIds = new Set<string>(
-    baselineSorted.slice(0, highRankCount).map((e) => e.memoryId),
-  );
+  const highRankIds = highRankSet(baselineSorted, highRankCount, recordById);
   const edges = options.edgesByMemory;
   for (const m of memories) {
     const base = requireEntry(map, m.id);
@@ -300,19 +320,26 @@ export function buildRankBySignal(
   return rankBySignal;
 }
 
+// A subscore that is not a finite number (NaN, ±Infinity) says nothing: it counts as 0, so it can
+// neither poison the sort order of the other records nor earn a rank.
+function signalValue(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
 // Fractional ("1 2.5 2.5 4") ranking, best subscore first: an equal run occupying positions i..j
 // (1-based) gets the mean rank (i + j) / 2. The ordering inside a run is irrelevant by construction.
 function fractionalRanks(
   scored: readonly { readonly id: MemoryId; readonly subscores: IncludedSubscores }[],
   sig: keyof IncludedSubscores,
 ): ReadonlyMap<MemoryId, number> {
-  const ordered = [...scored].sort((a, b) => b.subscores[sig] - a.subscores[sig]);
+  const ordered = scored
+    .map((m) => ({ id: m.id, value: signalValue(m.subscores[sig]) }))
+    .sort((a, b) => b.value - a.value);
   const ranks = new Map<MemoryId, number>();
   let start = 0;
   while (start < ordered.length) {
-    const value = ordered[start]?.subscores[sig];
     let end = start;
-    while (end + 1 < ordered.length && ordered[end + 1]?.subscores[sig] === value) end += 1;
+    while (ordered[end + 1]?.value === ordered[start]?.value) end += 1;
     const meanRank = (start + end + 2) / 2;
     for (const member of ordered.slice(start, end + 1)) ranks.set(member.id, meanRank);
     start = end + 1;
@@ -323,11 +350,14 @@ function fractionalRanks(
 // Every subscore is a magnitude where zero is the ABSENCE of the signal, not its worst value:
 // relevance 0 = no shared query term, semantic 0 = not among the nearest vectors (or no similarity),
 // pinned 0 = not pinned, correction 0 = not a correction, graph 0 = no edge to a top memory,
-// strength 0 = never reinforced, recency 0 = decayed to nothing, confidence 0 = no stated
-// confidence, importance (never 0 for a real source kind) = no authority. Rank-based fusion would
-// otherwise pay such a memory the rank-N reward of a signal it does not have.
+// strength 0 = never reinforced, recency 0 = decayed to nothing, importance (never 0 for a real
+// source kind) = no authority. Confidence 0 is a STATED zero ("no confidence"), not a missing
+// value; such records are normally filtered before ranking by the stale-confidence threshold (0.3),
+// so treating it as no evidence only matters for a caller that ranks them anyway. A non-finite
+// value is no evidence either. Rank-based fusion would otherwise pay such a memory the rank-N
+// reward of a signal it does not have.
 function signalEvidence(value: number): boolean {
-  return value > 0;
+  return signalValue(value) > 0;
 }
 
 function rrfRank(
