@@ -376,7 +376,8 @@ function applyExpirations(
   }
 }
 
-function applyForgets(
+// Exported for the test that proves the destructive path's last refusal (#4223).
+export function applyForgets(
   vault: MemoryVaultStore,
   auditSink: MemoryAuditSink | undefined,
   nowMs: number,
@@ -387,7 +388,9 @@ function applyForgets(
   for (const forget of forgets) {
     const record = byId.get(forget.id);
     if (record === undefined) continue;
-    // Accepted and archived are never forgotten here; a superseded record is history (#4223).
+    // Accepted and archived are never forgotten here; a superseded record is history (#4223). The
+    // query and the planner already leave history out; this is the deliberate last line before a
+    // destructive delete, so a plan that names such a record is skipped like the others.
     if (
       record.status === "accepted" ||
       record.status === "archived" ||
