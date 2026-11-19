@@ -340,11 +340,12 @@ Reading of the runs so far:
 - The other 3 checks that reached the limit ran while the lab machine slept with its lid closed
   (`pmset -g log`: clamshell sleep, then sleep between short maintenance wakes on 2026-11-18). One
   started at a maintenance wake and received its first response headers 694 seconds later, at the
-  next wake. The two others are both checks of the only blocking candidate of one review; the
-  second of them ended when the lid was opened. The run measures durations in wall time, while the
-  limit's timer does not advance during sleep, so the three settled 35 to 858 seconds past 900
-  wall-clock seconds. They measure the machine, not the Counter-checker. The review whose only
-  blocker is the candidate checked twice in that sleep is incomplete because of sleep.
+  next wake. The two others are both checks of the only blocking candidate of one review; the second
+  of them ended when the lid was opened. The limit's timer counts time asleep, so each of the three
+  reached 900 seconds while the machine slept. The process could only act at the next wake, 35 to
+  858 seconds later, and the checks spent almost all of their limit asleep (16 to 96 awake seconds).
+  They measure the machine, not the Counter-checker. The review whose only blocker is the candidate
+  checked twice in that sleep is incomplete because of sleep.
 - Counter-checks: 192 sessions, counting the sessions of the reviews the pauses cut. 46 confirmed,
   124 refuted, 1 ended undecided by its own verdict, 13 failed on the model and 8 reached the time
   limit.
