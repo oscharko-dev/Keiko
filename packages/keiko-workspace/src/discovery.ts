@@ -17,15 +17,11 @@ import {
   type WorkspaceFs,
   type WorkspaceStat,
 } from "./fs.js";
-<<<<<<< HEAD
-import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
+import { compileWorkspaceIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
 import {
   type WorkspaceEntryAvailability,
   workspaceEntryAvailabilityFailure,
 } from "./entryAvailability.js";
-=======
-import { compileWorkspaceIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
->>>>>>> origin/fix/4436-path-case
 import { resolveWithinWorkspace } from "./paths.js";
 import {
   admittedSearchScopeEntry,

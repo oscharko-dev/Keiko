@@ -139,11 +139,8 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "diagnostics-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "editor", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "evidence-retention-log", surface: "runtime-packages" },
-<<<<<<< HEAD
   { owner: "keiko-server", emitterPrefix: "figmaSnapshotRoutes", surface: "bff" },
-=======
   { owner: "keiko-server", emitterPrefix: "files-search-activity", surface: "bff" },
->>>>>>> origin/fix/4434-4435-tolerant-walk
   { owner: "keiko-server", emitterPrefix: "gateway-instance-cache", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "gateway-readiness", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "conversation-readiness-log", surface: "model-gateway" },

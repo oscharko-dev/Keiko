@@ -258,11 +258,7 @@
       }
     },
     "keiko-server": {
-<<<<<<< HEAD
       "files": 1217,
-=======
-      "files": 1215,
->>>>>>> origin/fix/4434-4435-tolerant-walk
       "uncoveredFiles": 1,
       "uncoveredLines": 6338,
       "totalLines": 113259,

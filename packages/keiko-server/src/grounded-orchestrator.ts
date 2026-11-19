@@ -11185,11 +11185,8 @@ function logSourceEvidenceDetails(
         scopeIdentitySha256: identity.scopeIdentitySha256,
         queryIdentitySha256: identity.queryIdentitySha256,
         ...observation,
-<<<<<<< HEAD
         codeIndexSourceBudgetReachedCount: execution.structural.codeIndexSourceBudgetReachedCount,
-=======
         ...discoveryChurnActivityExtra(execution.output.pack.diagnostics?.coverage),
->>>>>>> origin/fix/4434-4435-tolerant-walk
         completeness: "complete",
         loss: "none",
       },
