@@ -425,6 +425,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "workspace-layout-unlocked",
   "workspace-window-content-zoomed",
   "workspace-ownership-started",
+  "workspace-ownership-changed",
   "workspace-layout-restored",
   "workspace-layout-empty",
   "workspace-layout-unowned",

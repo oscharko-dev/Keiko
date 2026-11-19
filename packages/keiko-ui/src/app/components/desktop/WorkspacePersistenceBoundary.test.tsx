@@ -170,6 +170,87 @@ describe("workspace restoration boot boundary", () => {
     },
   );
 
+  it("mounts the new data store's workspace when the server restarts with other state", async () => {
+    // The page stays open while the Keiko behind it is started again with a different state
+    // folder. Before the repair every poll still named the old store, was refused with 409 and was
+    // repeated forever, and the page kept showing the old store's windows.
+    vi.useFakeTimers();
+    Object.defineProperty(navigator, "webdriver", { configurable: true, value: false });
+    const OTHER_ID = "b".repeat(64);
+    const oldWindow = {
+      id: "old-files",
+      type: "files",
+      x: 40,
+      y: 40,
+      w: 360,
+      h: 320,
+      z: 1,
+      cfg: { root: "/repo" },
+      max: false,
+      zoom: 1,
+    };
+    const windowsByStore: Record<string, unknown[]> = { [STORAGE_ID]: [oldWindow], [OTHER_ID]: [] };
+    let current = STORAGE_ID;
+    const requests: { method: string; storage: string | undefined; body: string }[] = [];
+    const reports = vi
+      .spyOn(clientDiagnostics, "reportClientDiagnostic")
+      .mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit) => {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        const storage = headers["X-Keiko-Workspace-Storage"];
+        const method = init?.method ?? "GET";
+        requests.push({ method, storage, body: typeof init?.body === "string" ? init.body : "" });
+        if (storage !== undefined && storage !== current) {
+          return Promise.resolve(new Response("{}", { status: 409 }));
+        }
+        if (method === "PUT") {
+          return Promise.resolve(new Response(JSON.stringify({ workspace: { revision: 1 } })));
+        }
+        const workspace = {
+          revision: 1,
+          windows: windowsByStore[current],
+          connections: [],
+          storageId: current,
+        };
+        return Promise.resolve(new Response(JSON.stringify({ workspace })));
+      }),
+    );
+    window.localStorage.setItem(`keiko.workspace.v4:${STORAGE_ID}`, JSON.stringify([oldWindow]));
+    renderWorkspace();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(screen.getByTestId("workspace")).toHaveTextContent("old-files");
+
+    current = OTHER_ID;
+    const switchedAt = requests.length;
+    // One act per second, so React commits between polls as a browser would.
+    for (let second = 0; second < 30; second += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+    }
+
+    expect(screen.getByTestId("workspace")).not.toHaveTextContent("old-files");
+    const after = requests.slice(switchedAt);
+    // At most the poll that discovered the change and one write already under way name the old
+    // store; nothing is repeated against it.
+    expect(after.filter((request) => request.storage === STORAGE_ID).length).toBeLessThanOrEqual(2);
+    expect(
+      after.some((request) => request.storage === OTHER_ID && request.body.includes("old-files")),
+    ).toBe(false);
+    expect(window.localStorage.getItem(`keiko.workspace.v4:${OTHER_ID}`) ?? "").not.toContain(
+      "old-files",
+    );
+    const changes = reports.mock.calls.filter(
+      ([, meta]) => meta?.composerActivity === "workspace-ownership-changed",
+    );
+    expect(changes).toHaveLength(1);
+    expect(JSON.stringify(reports.mock.calls)).not.toContain(OTHER_ID);
+  });
+
   it("offers a retry after the local server becomes available", async () => {
     vi.stubGlobal(
       "fetch",

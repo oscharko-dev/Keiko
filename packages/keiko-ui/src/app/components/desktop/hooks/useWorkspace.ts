@@ -75,7 +75,12 @@ import { bffRequestErrorKind } from "@/lib/http";
 import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
 import { protectWorkspaceLayout, useWorkspaceLayoutLock } from "./useWorkspaceLayoutLock";
-import { WorkspaceStorageScopeContext, workspaceStorageKey } from "./workspace-storage";
+import {
+  WORKSPACE_STORAGE_CHANGED_STATUS,
+  WorkspaceStorageScopeContext,
+  announceWorkspaceStorageChanged,
+  workspaceStorageKey,
+} from "./workspace-storage";
 
 export type { AppWindow, View };
 export type { UseWorkspaceResult, ViewportWorld };
@@ -1254,6 +1259,10 @@ async function fetchServerWorkspaceSnapshot(
       noteWorkspaceSyncRecovered();
       return "unchanged";
     }
+    if (response.status === WORKSPACE_STORAGE_CHANGED_STATUS) {
+      announceWorkspaceStorageChanged();
+      return null;
+    }
     if (!response.ok) {
       surfaceWorkspaceSyncFailure("pull", `failed with status ${String(response.status)}`);
       return null;
@@ -1457,6 +1466,10 @@ async function putServerWorkspaceSnapshot(
         kind: "conflict",
         revision: revisionFromWorkspaceEtag(response.headers.get("etag")),
       };
+    }
+    if (response.status === WORKSPACE_STORAGE_CHANGED_STATUS) {
+      announceWorkspaceStorageChanged();
+      return null;
     }
     if (!response.ok) {
       surfaceWorkspaceSyncFailure("put", `failed with status ${String(response.status)}`);
