@@ -1,5 +1,5 @@
-// The Memory Center page, statements forgotten before they were stored and the accepted-set guard
-// of a forced re-embedding, exercised at the vault's own boundary. The server suites cover the same
+// Three store operations exercised at the vault's own boundary: the Memory Center page, statements
+// forgotten before they were stored, and the accepted-set guard of a forced re-embedding. The server suites cover the same
 // paths through the built package, which does not count towards this package's coverage.
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -30,8 +30,11 @@ const EMBEDDING: MemoryEmbeddingInput = {
 };
 
 const cleanups: string[] = [];
+const opened: MemoryVaultStore[] = [];
 
 afterEach(() => {
+  // Close before removing the directory: an open database handle keeps its file locked on Windows.
+  for (const vault of opened.splice(0)) vault.close();
   for (const path of cleanups.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
@@ -59,6 +62,7 @@ function openVault(
     onMemoryEvent: (event) => events.push(event),
     ...options,
   });
+  opened.push(vault);
   return { vault, events };
 }
 
@@ -75,7 +79,7 @@ function pageIds(vault: MemoryVaultStore, options: MemoryCenterPageOptions): rea
 }
 
 describe("Memory Center page", () => {
-  it("orders by creation, then update, then id, and decrypts only the requested page", () => {
+  it("orders by creation, then update, then id, and returns the requested page", () => {
     const { vault } = openVault();
     vault.insertMemory(record("older", { createdAt: T - 30, updatedAt: T - 30 }));
     vault.insertMemory(record("tie-b", { createdAt: T - 20, updatedAt: T - 20 }));
@@ -110,17 +114,26 @@ describe("Memory Center page", () => {
     const open = record("public", writtenAt(T + 3));
     vault.insertMemory({ ...open, provenance: { ...open.provenance, sensitivity: "public" } });
     vault.insertMemory(record("project", { scope: PROJECT_SCOPE, ...writtenAt(T + 4) }));
+    // The operator page lists stored history too: a fact whose validity has ended stays visible.
+    vault.insertMemory(
+      record("ended", {
+        type: "procedural",
+        validity: { validFrom: T - 200, validUntil: T - 100 },
+        ...writtenAt(T - 200),
+      }),
+    );
 
     const whole = { limit: 50, offset: 0 } as const;
     expect(pageIds(vault, { ...whole, type: ["decision"] })).toEqual(["decision"]);
+    expect(pageIds(vault, { ...whole, type: ["procedural"] })).toEqual(["ended"]);
     expect(pageIds(vault, { ...whole, status: ["proposed"] })).toEqual(["proposed"]);
     expect(pageIds(vault, { ...whole, sensitivity: ["public"] })).toEqual(["public"]);
     expect(pageIds(vault, { ...whole, scopeKinds: ["project"] })).toEqual(["project"]);
     // An empty scope-kind list is no filter, like an absent one.
-    expect(vault.listMemoryCenterPage({ ...whole, scopeKinds: [] }).total).toBe(5);
+    expect(vault.listMemoryCenterPage({ ...whole, scopeKinds: [] }).total).toBe(6);
     expect(
       vault.listMemoryCenterPage({ ...whole, scopeKinds: ["user"], status: ["accepted"] }).total,
-    ).toBe(3);
+    ).toBe(4);
   });
 
   it.each([
@@ -228,9 +241,11 @@ describe("forced re-embedding against the accepted set", () => {
 
   it("aborts when a memory was accepted after staging", () => {
     const vault = seeded();
-    expect(() => {
+    const swap = (): void => {
       replaceWithExpectedAccepted(vault, ["first"]);
-    }).toThrow(MemoryStorageError);
+    };
+    expect(swap).toThrow(MemoryStorageError);
+    expect(swap).toThrow("Accepted memory set changed during --force staging; rerun.");
     expect(vault.listEmbeddedMemoryIds()).toEqual([]);
   });
 
