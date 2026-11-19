@@ -111,6 +111,7 @@ function neededEntries({
   suppliedIds,
   retrievedIds,
   limit,
+  orderPremise = true,
   response,
   memories,
   storeKnown = true,
@@ -140,6 +141,7 @@ function neededEntries({
       traceAvailable: response !== undefined,
       limit,
       supplied,
+      orderPremise,
       ...entry,
     });
     return {
@@ -160,6 +162,9 @@ export function buildRecallTrace({ response, failure, limitFailure, ...rest }) {
   const base = {
     source: TRACE_SOURCE,
     strictFloor: false,
+    // Whether the detailed stages were derivable: they rest on both paths ordering identically, which
+    // holds only without an embedder (recall-stage.mjs).
+    orderPremise: rest.orderPremise !== false,
     chatLimit: rest.limit,
     chatRetrievedCount: rest.retrievedIds.length,
     ...(limitFailure === undefined ? {} : { limitFailure }),
@@ -266,8 +271,9 @@ function termsCovered(truthTerms, probeTerms) {
 
 /**
  * The facts a probe's trace follows: the ones it needs (`wantedOf`) and, for a probe that expects
- * answer terms, the truth whose terms the probe's terms cover (each of its groups is contained in one of them). The second kind exists for the trace
- * only; the score never sees it.
+ * answer terms, every truth whose own body the probe's terms match, by the scorer's own matcher
+ * (normalisation, whole words, the `*` prefix): the rule the recall analyzer uses to name a probe's
+ * target. The second kind exists for the trace only; the score never sees it.
  */
 export function traceWanted(scenario, probe) {
   const wanted = wantedOf(scenario, probe);
@@ -284,7 +290,8 @@ export function traceWanted(scenario, probe) {
  * Records the trace of one answered probe on the same chat and question. Never throws: a route or
  * store failure becomes a closed failure value on the trace, and the probe result stands. `supplied`
  * is everything that reached the model, `retrievedIds` the retrieved part of it, `chatLimit` the
- * result of `readChatRetrievalLimit`. The time the trace took is its `durationMs`.
+ * result of `readChatRetrievalLimit`, `embedder` the run's kind of embedding (`none`, `scripted` or
+ * `configured`). The time the trace took is its `durationMs`.
  */
 export async function traceRecall({
   instance,
@@ -293,6 +300,7 @@ export async function traceRecall({
   supplied,
   retrievedIds,
   chatLimit,
+  embedder = "none",
   chatId,
   queryText,
   links,
@@ -311,6 +319,7 @@ export async function traceRecall({
     memories,
     storeKnown: stored.failure === undefined,
     limit: readLimit.limit ?? null,
+    orderPremise: embedder === "none",
     ...(readLimit.failure === undefined ? {} : { limitFailure: readLimit.failure }),
     suppliedLabels: new Set(
       wanted.filter((item) => suppliedCarries(supplied, item, links)).map((item) => item.label),

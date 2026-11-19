@@ -696,10 +696,25 @@ saw the fact. `scoreRank` is the place when the included entries are sorted by t
 trace never fails a unit. No memory text, question or excerpt is recorded. A sealed (`--holdout`) run
 and every real-conversation (anchor) scenario record no trace at all.
 
-**Stages.** The chat and the route rank the same candidates before their floors, so among the
-memories both admit the order is the same; what differs is the cut. The chat keeps at most
-`CHAT_MAX_RETRIEVED_MEMORIES` retrieved memories (6 today) behind a strict relevance floor and a token
-budget; the route keeps 12 behind a relaxed floor. A stage therefore names only what is known. It is
+**Stages.** The chat keeps at most `CHAT_MAX_RETRIEVED_MEMORIES` retrieved memories (6 today) behind a
+strict relevance floor and a token budget; the route keeps 12 behind a relaxed floor. A stage names
+only what is known.
+
+_The premise of the three detailed stages_ (`refused-by-chat`, `beyond-limit`, `moved-down`) is that
+the route and the chat order the memories both admit identically, so a position in the route's order
+says where the chat's cut fell. The product ranks, applies the relevance floor, reorders for diversity
+and then cuts. The premise holds **without an embedder**: the diversity reorder has no vectors to work
+on, so the floor only filters one identical order. **With an embedder it does not hold**: the reorder is
+a greedy selection whose result depends on the candidate set, and the route's set (relaxed floor, which
+also admits pinned and correction memories without a query signal, graph-only matches and profile facts
+that match only semantically) is larger than the chat's, so two memories both paths admit can come out
+in the opposite order. The rule is therefore fixed: **in a run with an embedder** (`embedder` is not
+`none`; the trace records `orderPremise: false`) a memory the route admitted and the chat did not supply
+gets the one stage `admitted-not-supplied`, which claims no cause; the three detailed stages are used
+**only without an embedder**. Where the diversity reorder is removed the premise becomes true again and
+this rule can be dropped.
+
+The stage is derived in one pure function (`recall-stage.mjs`) from three facts: the route's order, what the chat actually supplied (retrieved memories only, never the standing profile) and the chat's limit. It is
 derived in one pure function (`recall-stage.mjs`) from three facts: the route's order, what the chat
 actually supplied (retrieved memories only, never the standing profile) and the chat's limit. The
 limit is read from the subject's own build (`<subject root>/packages/keiko-server/dist/chat-handlers.js`,
@@ -720,8 +735,11 @@ Then the trace says `limitFailure: chat-limit-unreadable` and every stage that n
 - `not-a-candidate`: the memory is in neither of the route's lists.
 - `not-admitted`: the route omitted it for a reason other than its limit (for example
   `suppressed-by-status` for a parked memory).
-- For a memory the route admitted (listed, or omitted as `max-included-exceeded`) that the chat did not
-  supply: `refused-by-chat` when the chat supplied a retrieved memory that the route ranks behind it,
+- `admitted-not-supplied` (runs with an embedder, see the premise above): the route admitted it
+  (listed, or omitted as `max-included-exceeded`) and the chat did not supply it. No limit is needed
+  and no cause is claimed.
+- Without an embedder, for a memory the route admitted (listed, or omitted as `max-included-exceeded`)
+  that the chat did not supply: `refused-by-chat` when the chat supplied a retrieved memory that the route ranks behind it,
   or fewer retrieved memories than its limit. It ranked high enough, so the chat refused it, by its
   strict floor or its token budget; **the two cannot be told apart** from the outside. Otherwise it
   ranked beyond the chat's limit: `moved-down` when its place by score is within the limit but its

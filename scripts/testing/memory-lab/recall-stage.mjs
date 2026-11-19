@@ -1,12 +1,17 @@
 // The stage at which a memory an answer needs was lost (#4205): one pure derivation over three facts,
-// the route's order, what the chat actually supplied and the chat's own limit on retrieved memories.
-// Shared by the recall trace and the failure classes. Closed values only.
+// the route's order, what the chat actually supplied and the chat's own limit. Shared by the recall
+// trace and the failure classes. Closed values only.
 //
-// The chat path and the diagnostic route rank the same candidates before their floors, so among the
-// memories both admit the order is the same. What differs is the cut: the chat keeps at most its
-// limit of retrieved memories (`CHAT_MAX_RETRIEVED_MEMORIES`) behind a strict relevance floor and a
-// token budget; the route keeps 12 behind a relaxed floor. The stage therefore names what is known
-// and never a cause the route cannot know.
+// The premise of the three detailed stages (`refused-by-chat`, `beyond-limit`, `moved-down`): the
+// route and the chat order the memories BOTH admit identically, so a position in the route's order
+// says where the chat's cut fell. The product ranks, applies the relevance floor, reorders for
+// diversity and then cuts. Without an embedder the reorder has nothing to work on, the floor only
+// filters one identical order, and the premise holds. With an embedder the reorder is a greedy
+// selection that depends on the candidate set, and the route's set (relaxed floor) is larger than the
+// chat's (strict floor), so the two orders can differ. The detailed stages are therefore exact only
+// for a run without an embedder; with one, an admitted but not supplied memory has the single stage
+// `admitted-not-supplied`, which claims no more than is known. The premise becomes true again where
+// the reorder is removed.
 
 /** The closed stages of one needed fact. */
 export const RECALL_STAGES = Object.freeze([
@@ -17,6 +22,7 @@ export const RECALL_STAGES = Object.freeze([
   "refused-by-chat",
   "beyond-limit",
   "moved-down",
+  "admitted-not-supplied",
   "trace-unavailable",
 ]);
 
@@ -68,10 +74,12 @@ function beyondLimit({ position, scoreRank, limit }) {
 const verdict = (stage, reason) => (reason === undefined ? { stage } : { stage, reason });
 
 // The stage of a memory the route knows (it exists and the route answered), by what the route and the
-// chat's block say about it.
-function routeVerdict({ limit, position, scoreRank, omittedReason, supplied }) {
+// chat's block say about it. `orderPremise` is false for a run with an embedder: the position in the
+// route's order then says nothing certain about the chat's, and one stage is named.
+function routeVerdict({ limit, position, scoreRank, omittedReason, supplied, orderPremise }) {
   const ranked = routePosition({ position, omittedReason });
   if (ranked === null) return verdict(omittedReason === null ? "not-a-candidate" : "not-admitted");
+  if (!orderPremise) return verdict("admitted-not-supplied");
   if (limit === null) return verdict("trace-unavailable", "chat-limit-unreadable");
   const block = chatBlock({ supplied, limit }, ranked);
   if (block === "refused") return verdict("refused-by-chat");
@@ -83,12 +91,19 @@ function routeVerdict({ limit, position, scoreRank, omittedReason, supplied }) {
  * The one derivation of a needed fact's stage, with the closed reason when it is `trace-unavailable`.
  * Inputs as `neededStage`.
  */
-export function neededVerdict({ storeKnown = true, traceAvailable, suppliedByChat, id, ...route }) {
+export function neededVerdict({
+  storeKnown = true,
+  traceAvailable,
+  suppliedByChat,
+  id,
+  orderPremise = true,
+  ...route
+}) {
   if (suppliedByChat) return verdict("supplied");
   if (!storeKnown) return verdict("trace-unavailable", "store-unreadable");
   if (id === null) return verdict("not-stored");
   if (!traceAvailable) return verdict("trace-unavailable", "route-failed");
-  return routeVerdict(route);
+  return routeVerdict({ ...route, orderPremise });
 }
 
 /**
@@ -99,7 +114,8 @@ export function neededVerdict({ storeKnown = true, traceAvailable, suppliedByCha
  * and in the same entries sorted by score (null when not listed); `omittedReason` is the route's reason
  * (null when not omitted). `supplied` is what the chat supplied as retrieved memories (never the
  * standing profile): `count`, and `positions`, each one's route position (`Infinity` when the route
- * omitted it by its limit, null when the route did not rank it).
+ * omitted it by its limit, null when the route did not rank it). `orderPremise` is true when the run
+ * has no embedder (see the top of this file).
  */
 export function neededStage(input) {
   return neededVerdict(input).stage;

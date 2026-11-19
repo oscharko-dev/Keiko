@@ -345,6 +345,7 @@ async function runProbes(scenario, instance, context) {
         supplied: sent.supplied,
         retrievedIds: sent.retrieved.map((entry) => entry.memoryId),
         chatLimit: context.chatLimit ?? { failure: LIMIT_UNREADABLE },
+        embedder: context.embedder ?? "none",
         chatId,
         queryText: asked,
         links,

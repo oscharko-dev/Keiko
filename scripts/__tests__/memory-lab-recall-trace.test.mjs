@@ -162,6 +162,39 @@ describe("the stage of a needed memory", () => {
     });
   });
 
+  it("names one stage for an admitted but not supplied memory when the run has an embedder", () => {
+    // The auditor's case: the route's set holds a neighbour X that the chat's set does not (the
+    // relaxed floor admits it), and the diversity reorder, which depends on the set, can put the
+    // route's order against the chat's. The detailed stages rest on that order, so with an embedder
+    // none of them is claimed.
+    const routeOnlyNeighbour = { position: 1, scoreRank: 1 };
+    const needed = { position: 2, scoreRank: 2 };
+    const block = { count: 1, positions: [3] };
+    // Without an embedder the route's order is the chat's: the chat kept a memory ranked behind it.
+    expect(neededStage({ ...base, ...needed, supplied: block })).toBe("refused-by-chat");
+    // With one, the same facts name only what is known.
+    for (const fields of [
+      { ...needed, supplied: block },
+      { ...routeOnlyNeighbour, supplied: { count: LIMIT, positions: [1, 2, 3, 4, 5, 6] } },
+      { position: 9, scoreRank: 9, supplied: { count: LIMIT, positions: [1, 2, 3, 4, 5, 6] } },
+      { position: 8, scoreRank: 3, supplied: { count: LIMIT, positions: [1, 2, 3, 4, 5, 6] } },
+      { omittedReason: "max-included-exceeded", supplied: block },
+    ])
+      expect(neededVerdict({ ...base, ...fields, orderPremise: false })).toEqual({
+        stage: "admitted-not-supplied",
+      });
+    // It needs no limit, and it says nothing about what was never admitted or stored.
+    expect(neededStage({ ...base, ...needed, limit: null, orderPremise: false })).toBe(
+      "admitted-not-supplied",
+    );
+    expect(neededStage({ ...base, omittedReason: "out-of-scope", orderPremise: false })).toBe(
+      "not-admitted",
+    );
+    expect(neededStage({ ...base, orderPremise: false })).toBe("not-a-candidate");
+    expect(neededStage({ ...base, id: null, orderPremise: false })).toBe("not-stored");
+    expect(neededStage({ ...base, suppliedByChat: true, orderPremise: false })).toBe("supplied");
+  });
+
   it("names no stage that suggests a near miss or a budget cut", () => {
     expect(RECALL_STAGES).toEqual([
       "supplied",
@@ -171,6 +204,7 @@ describe("the stage of a needed memory", () => {
       "refused-by-chat",
       "beyond-limit",
       "moved-down",
+      "admitted-not-supplied",
       "trace-unavailable",
     ]);
   });
@@ -333,6 +367,60 @@ describe("the trace built from the route's answer", () => {
       "trace-unavailable",
       "trace-unavailable",
     ]);
+  });
+});
+
+describe("the trace of a run with an embedder", () => {
+  const response = {
+    included: [
+      { memoryId: "x", score: 0.9, subscores: sub },
+      { memoryId: "m-room", score: 0.8, subscores: sub },
+      { memoryId: "a", score: 0.5, subscores: sub },
+    ],
+    omitted: [],
+  };
+  const input = {
+    response,
+    wanted: [wanted[0]],
+    carriers: new Map([["room", ["m-room"]]]),
+    suppliedLabels: new Set(),
+    suppliedIds: new Set(["a"]),
+    retrievedIds: ["a"],
+    limit: 6,
+    memories: [{ id: "m-room", status: "accepted" }],
+  };
+
+  it("records that the order premise was not assumed, and names the single stage", () => {
+    const without = buildRecallTrace(input);
+    expect(without.orderPremise).toBe(true);
+    expect(without.needed[0].stage).toBe("refused-by-chat");
+    const withEmbedder = buildRecallTrace({ ...input, orderPremise: false });
+    expect(withEmbedder.orderPremise).toBe(false);
+    expect(withEmbedder.needed[0]).toMatchObject({ key: "room", stage: "admitted-not-supplied" });
+  });
+
+  it("reaches the stage through the driver: the run's embedder decides", async () => {
+    const run = async (embedder) => {
+      const product = fakeProduct({
+        memories: [ROOM, { id: "a", body: "Something else.", status: "accepted" }],
+        supply: (memory) => memory.id === "a",
+        route: answered(
+          [
+            { memoryId: "m-room", score: 0.9, subscores: {} },
+            { memoryId: "a", score: 0.4, subscores: {} },
+          ],
+          [],
+        ),
+      });
+      const result = await runScenario(scenario([NEEDS]), product.instance, context({ embedder }));
+      return result.probes[0].recallTrace;
+    };
+    expect((await run("none")).needed[0].stage).toBe("refused-by-chat");
+    for (const kind of ["scripted", "configured"]) {
+      const trace = await run(kind);
+      expect(trace.orderPremise).toBe(false);
+      expect(trace.needed[0].stage).toBe("admitted-not-supplied");
+    }
   });
 });
 

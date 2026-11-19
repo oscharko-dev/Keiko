@@ -305,6 +305,7 @@ function runContext(options, arm, fixture, instance) {
     retainBodies: options.retainBodies,
     recallTrace: options.recallTrace,
     chatLimit: readChatRetrievalLimit(options.subjectRoot ?? REPO_ROOT),
+    embedder: options.embedder,
     labelPass: options.labelPass,
     turnTimeoutMs: options.turnTimeoutMs,
     learning: {
