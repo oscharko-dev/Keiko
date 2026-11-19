@@ -67,6 +67,30 @@ describe("seeded-record loss that the scenario explains", () => {
     expect(lost(stays, scenario, ["r"])).toEqual([0]);
   });
 
+  it("counts a seeded superseded record the product removed as a lost record, and one it kept as none", () => {
+    const scenario = fixture({ records: [record({ status: "superseded" })] });
+    const list = entries([record({ status: "superseded" })]);
+    const removed = seedLoss(list, new Map(), scenario);
+    expect(removed.lostIndexes).toEqual([0]);
+    expect(removed.supersededRemoved).toBe(1);
+    // Kept as history, whatever its status now: the product did not remove it.
+    const kept = seedLoss(list, new Map([[list[0].id, { status: "superseded" }]]), scenario);
+    expect(kept.lostIndexes).toEqual([]);
+    expect(kept.supersededRemoved).toBe(0);
+    // Even a body that states a replaced value is no excuse: nothing explains a removed history.
+    const stale = entries([record({ status: "superseded", body: "Rosa nutzt Tabellen." })]);
+    expect(seedLoss(stale, new Map(), scenario).lostIndexes).toEqual([0]);
+    const failures = unitFailures({
+      scenario: "s",
+      arm: "product",
+      repetition: 0,
+      store: store(),
+      probes: [],
+      seed: { after: removed },
+    });
+    expect(failures.map((failure) => failure.class)).toEqual(["seeded-record-lost"]);
+  });
+
   it("reports faded filler as information, never as a lost record", () => {
     const filler = [{ count: 4, status: "accepted", minAgeDays: 1, maxAgeDays: 9, seed: 2 }];
     const list = entries([], filler);

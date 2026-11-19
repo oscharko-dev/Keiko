@@ -260,6 +260,14 @@ export function describePlan(plan) {
   };
 }
 
+// A seeded explicit record that was accepted and is no longer live and not explained by the
+// scenario, or a seeded superseded record the product removed (it keeps history since #4223).
+function isLost(entry, byId, scenario, liveNow) {
+  if (entry.filler) return false;
+  if (entry.status === "superseded") return !byId.has(entry.id);
+  return entry.status === "accepted" && !liveNow(entry) && !lossExplained(entry, scenario);
+}
+
 // Whether the scenario's own turns account for the loss of an explicit record: the author said so
 // (`explained`), or its body states a replaced or forgotten value of the scenario. A truth-linked or
 // `mustStay` record is never explained away.
@@ -273,18 +281,15 @@ function lossExplained(entry, scenario) {
 /**
  * What became of the seeded records after the probes. `lostIndexes` are the failures: an explicit
  * record that was accepted and is gone or no longer accepted, unless the scenario's own turns explain
- * it. Information only: seeded superseded records removed, and aged filler the product's maintenance
- * archived or removed (`fillerFaded`), which is the product's fade, not a defect of one record.
+ * it, and a seeded superseded record that is gone: since #4223 the product keeps a superseded record
+ * as history, so its removal is a loss (`supersededRemoved` counts them). Information only: aged
+ * filler the product's maintenance archived or removed (`fillerFaded`), which is the product's fade,
+ * not a defect of one record.
  */
 export function seedLoss(entries, byId, scenario) {
   const liveNow = (entry) => byId.get(entry.id)?.status === "accepted";
   const lostIndexes = entries.flatMap((entry, index) =>
-    !entry.filler &&
-    entry.status === "accepted" &&
-    !liveNow(entry) &&
-    !lossExplained(entry, scenario)
-      ? [index]
-      : [],
+    isLost(entry, byId, scenario, liveNow) ? [index] : [],
   );
   const faded = entries.filter(
     (entry) => entry.filler && entry.status === "accepted" && !liveNow(entry),

@@ -465,10 +465,11 @@ and the maintenance pass act on them as on any aged record.
 After the probes the lab checks the seed. An explicit record that was `accepted` when seeded and is
 gone or no longer accepted is the failure `seeded-record-lost` (its index is the check's key), unless
 the scenario's own turns explain it (see `explained` above); a truth-linked or `mustStay` record is
-never explained away. Reported only as information, never as a failure class: a seeded superseded
-record the product removed (`after.supersededRemoved`), and aged filler that the product's maintenance
-archived or removed (`after.fillerFaded`), as `seedInformation` in the summary and lines in
-`summary.md`. They explain, for instance, why an earlier value could not be recalled. `--no-maintenance` sets the product's own
+never explained away. A seeded **superseded** record that is gone is a loss too, counted in the same
+class and never explained away: since #4223 the product keeps a superseded record as history, so its
+removal is a defect (`after.supersededRemoved` counts them). Reported only as information, never as a
+failure class: aged filler that the product's maintenance archived or removed (`after.fillerFaded`),
+as `seedInformation` in the summary and a line in `summary.md`. `--no-maintenance` sets the product's own
 `KEIKO_MEMORY_AUTO_MAINTAIN=0` for every instance (the product runs one maintenance pass on the first
 memory-enabled turn), and the manifest records `maintenance` (`on` or `off`); it is provenance like
 the embedder.

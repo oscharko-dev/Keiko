@@ -332,8 +332,9 @@ function failedUnitList(results) {
     }));
 }
 
-// Seeded superseded records the product removed during the run: information, not a failure. A sealed
-// run carries no seed, so it reports none.
+// What the product's maintenance did to seeded records: faded filler is information, not a failure. A
+// seeded superseded record it removed is a loss (`seeded-record-lost`) and is only counted here. A
+// sealed run carries no seed, so it reports none.
 function seedInformation(results, sealed) {
   const after = sealed ? [] : results.map((result) => result.seed?.after ?? {});
   return {
@@ -496,12 +497,8 @@ function scenarioClassLines(arm, byScenario) {
 }
 
 function seedInformationLines(information) {
-  const { supersededRemoved = 0, fillerArchived = 0, fillerRemoved = 0 } = information ?? {};
+  const { fillerArchived = 0, fillerRemoved = 0 } = information ?? {};
   const lines = [];
-  if (supersededRemoved > 0)
-    lines.push(
-      `Information, not a failure: ${String(supersededRemoved)} seeded superseded record(s) were removed by the product during the run, so an earlier value could not be recalled from them.`,
-    );
   if (fillerArchived + fillerRemoved > 0)
     lines.push(
       `Information, not a failure: the product's maintenance faded seeded filler (${String(fillerArchived)} archived, ${String(fillerRemoved)} removed).`,
