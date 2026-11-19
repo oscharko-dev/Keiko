@@ -5,6 +5,7 @@
 // know, so a malformed fixture cannot silently measure nothing.
 import { createHash } from "node:crypto";
 import { matchesTermGroups, validPrefixMark } from "./score.mjs";
+import { validateSeed } from "./seed-validate.mjs";
 import { SetFileError, isRecord, loadJsonSet, nonEmptyString } from "./set-files.mjs";
 import { compareStrings } from "../../lib/compare-strings.mjs";
 
@@ -127,6 +128,19 @@ function validateTermList(id, list, name, withClass) {
   });
 }
 
+// A replaced value may carry a key so that a probe can ask for it (`expect.earlier`): "what did I
+// prefer before?". The key is optional, a slug, and unique among the replaced values.
+function validateSupersededKeys(id, superseded) {
+  const seen = new Set();
+  (superseded ?? []).forEach((entry, index) => {
+    if (entry.key === undefined) return;
+    if (!nonEmptyString(entry.key) || !/^[a-z0-9][a-z0-9-]{0,63}$/u.test(entry.key))
+      fail(id, `superseded[${String(index)}].key must be a lowercase slug when present`);
+    if (seen.has(entry.key)) fail(id, `superseded[${String(index)}].key duplicates ${entry.key}`);
+    seen.add(entry.key);
+  });
+}
+
 function validateLearnerItems(id, where, items) {
   if (items === undefined) return;
   if (!Array.isArray(items)) fail(id, `${where}.learner must be an array`);
@@ -136,8 +150,11 @@ function validateLearnerItems(id, where, items) {
   });
 }
 
-function validateTurns(id, turns) {
-  if (!Array.isArray(turns) || turns.length === 0) fail(id, "turns must be a non-empty array");
+// A scenario with a seeded store may have nothing to say before its questions: the history is the
+// seed, so its turns may be empty. Without a seed a scenario with no turn measures nothing.
+function validateTurns(id, turns, seeded) {
+  if (!Array.isArray(turns) || (turns.length === 0 && !seeded))
+    fail(id, "turns must be a non-empty array");
   turns.forEach((turn, index) => {
     const where = `turns[${String(index)}]`;
     if (!isRecord(turn)) fail(id, `${where} must be an object`);
@@ -175,17 +192,41 @@ function validateFormats(id, where, expect) {
   }
 }
 
-function validateExpectation(id, where, expect, truthKeys) {
-  if (!isRecord(expect) || !PROBE_KINDS.includes(expect.kind))
-    fail(id, `${where}.expect.kind must be one of ${PROBE_KINDS.join("|")}`);
+// `needs` names the truths an answer must carry all of (a question about two memories); `earlier`
+// names the replaced values it must carry (a question about what held before). Both belong to an
+// answer probe and name keys that exist, once each.
+function validateWanted(id, where, expect, wantedKeys) {
+  for (const [field, keys] of Object.entries(wantedKeys)) {
+    if (expect[field] === undefined) continue;
+    if (expect.kind !== "answer")
+      fail(id, `${where}.expect.${field} is only measured on an answer probe`);
+    if (!Array.isArray(expect[field]) || expect[field].length === 0)
+      fail(id, `${where}.expect.${field} must be a non-empty array of keys`);
+    if (new Set(expect[field]).size !== expect[field].length)
+      fail(id, `${where}.expect.${field} names a key twice`);
+    for (const key of expect[field])
+      if (!keys.has(key)) fail(id, `${where}.expect.${field} names no such key: ${String(key)}`);
+  }
+}
+
+function validateAnswerTerms(id, where, expect) {
+  const named = expect.needs !== undefined || expect.earlier !== undefined;
+  if (expect.kind === "answer" && named && expect.terms === undefined) return;
   if ((expect.kind === "answer" || expect.kind === "not-obeyed") && !validTermGroups(expect.terms))
     fail(id, `${where}.expect.terms must be non-empty term groups for a ${expect.kind} probe`);
+}
+
+function validateExpectation(id, where, expect, keys) {
+  if (!isRecord(expect) || !PROBE_KINDS.includes(expect.kind))
+    fail(id, `${where}.expect.kind must be one of ${PROBE_KINDS.join("|")}`);
+  validateAnswerTerms(id, where, expect);
+  validateWanted(id, where, expect, { needs: keys.truth, earlier: keys.superseded });
   if (expect.forbidden !== undefined && expect.kind !== "answer")
     fail(id, `${where}.expect.forbidden is only measured on an answer probe`);
   if (expect.forbidden !== undefined && !validTermGroups(expect.forbidden))
     fail(id, `${where}.expect.forbidden must be term groups when present`);
   validateFormats(id, where, expect);
-  validateAllowance(id, where, expect, truthKeys);
+  validateAllowance(id, where, expect, keys.truth);
 }
 
 // Memories already in the store when the conversation starts, each carrying an instruction: the lab
@@ -203,7 +244,7 @@ function validatePoison(id, poison) {
   });
 }
 
-function validateProbes(id, probes, truthKeys) {
+function validateProbes(id, probes, keys) {
   if (!Array.isArray(probes) || probes.length === 0) fail(id, "probes must be a non-empty array");
   const seen = new Set();
   probes.forEach((probe, index) => {
@@ -215,7 +256,7 @@ function validateProbes(id, probes, truthKeys) {
     if (!nonEmptyString(probe.question)) fail(id, `${where}.question is required`);
     if (probe.language !== undefined && !PROBE_LANGUAGES.includes(probe.language))
       fail(id, `${where}.language must be one of ${PROBE_LANGUAGES.join("|")} when present`);
-    validateExpectation(id, where, probe.expect, truthKeys);
+    validateExpectation(id, where, probe.expect, keys);
   });
 }
 
@@ -256,9 +297,14 @@ export function validateScenario(scenario) {
   validateTruthApartFromReplaced(id, scenario.truth, scenario.superseded);
   validateTermList(id, scenario.forgotten, "forgotten", false);
   validateTermList(id, scenario.forbidden, "forbidden", true);
+  validateSupersededKeys(id, scenario.superseded);
   validatePoison(id, scenario.poison);
-  validateTurns(id, scenario.turns);
-  validateProbes(id, scenario.probes, new Set(scenario.truth.map((fact) => fact.key)));
+  validateSeed(fail, id, scenario);
+  validateTurns(id, scenario.turns, scenario.seed !== undefined);
+  validateProbes(id, scenario.probes, {
+    truth: new Set(scenario.truth.map((fact) => fact.key)),
+    superseded: new Set((scenario.superseded ?? []).flatMap((entry) => entry.key ?? [])),
+  });
   validatePoisonProbes(id, scenario.poison, scenario.probes);
   return Object.freeze({
     ...scenario,

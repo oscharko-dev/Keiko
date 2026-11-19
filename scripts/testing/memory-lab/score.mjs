@@ -362,33 +362,95 @@ function profileCarriesForbidden(profile, probe, never) {
   });
 }
 
-function scoreAnswerProbe(scenario, probe, answer, supplied) {
-  const terms =
-    matchesTermGroups(answer, probe.expect.terms) || answerHasFormat(answer, probe.expect.format);
+// What an answer probe wants beyond (or instead of) its own terms: the truths it `needs` and the
+// replaced values it asks for `earlier`, each with the terms the answer must carry. Earlier values
+// are labelled `earlier:<key>` so a result names which kind was missing.
+function wantedOf(scenario, probe) {
+  const termsOf = (list, key) => list.find((entry) => entry.key === key).terms;
+  const needs = (probe.expect.needs ?? []).map((key) => ({
+    label: key,
+    link: { truth: key },
+    terms: termsOf(scenario.truth, key),
+  }));
+  const earlier = (probe.expect.earlier ?? []).map((key) => ({
+    label: `earlier:${key}`,
+    link: { earlier: key },
+    terms: termsOf(scenario.superseded, key),
+  }));
+  return [...needs, ...earlier];
+}
+
+// A wanted fact reached the model when a supplied memory carries its terms, or when the lab seeded
+// that very memory for it (`links`: seeded memory id -> the truth or replaced value it states).
+function suppliedCarries(supplied, item, links) {
+  return supplied.some((entry) => {
+    const link = links?.get(entry.memoryId);
+    const linked =
+      (link?.truth !== undefined && link.truth === item.link.truth) ||
+      (link?.earlier !== undefined && link.earlier === item.link.earlier);
+    return linked || matchesTermGroups(entry.bodyExcerpt ?? "", item.terms);
+  });
+}
+
+function answerTermsMatched(answer, probe, wanted) {
+  const groups = [
+    ...(probe.expect.terms === undefined ? [] : [probe.expect.terms]),
+    ...wanted.map((item) => item.terms),
+  ];
+  const matched = groups.length > 0 && groups.every((group) => matchesTermGroups(answer, group));
+  return matched || answerHasFormat(answer, probe.expect.format);
+}
+
+// The probe's own terms (when it has any) reached the model, and so did every wanted fact.
+function relevantReached(probe, supplied, notSupplied) {
+  const own =
+    probe.expect.terms === undefined ||
+    supplied.some((entry) => matchesTermGroups(entry.bodyExcerpt ?? "", probe.expect.terms));
+  return own && notSupplied.length === 0;
+}
+
+function forbiddenInAnswer(scenario, probe, answer, supplied) {
   const never = notCarriedByQuestion(
     leakEntries(scenario, probe, NEVER_IN_ANSWER_LISTS),
     probe.question,
   );
-  const forbiddenMentioned =
+  const mentioned =
     (probe.expect.forbidden !== undefined && matchesTermGroups(answer, probe.expect.forbidden)) ||
     answerHasFormat(answer, probe.expect.forbiddenFormat) ||
     mentionsAny(answer, never);
   // As with a leak: a forbidden term in an answer the product gave no memory for is the model's own,
   // and the standing profile counts only when one of its entries carries a forbidden term.
-  const forbidden =
-    forbiddenMentioned &&
+  const present =
+    mentioned &&
     (retrievedOf(supplied).length > 0 ||
       profileCarriesForbidden(profileOf(supplied), probe, never));
-  const relevantSupplied = supplied.some((entry) =>
-    matchesTermGroups(entry.bodyExcerpt ?? "", probe.expect.terms),
-  );
+  return { mentioned, present };
+}
+
+function scoreAnswerProbe(scenario, probe, answer, supplied, links) {
+  const wanted = wantedOf(scenario, probe);
+  const terms = answerTermsMatched(answer, probe, wanted);
+  const forbidden = forbiddenInAnswer(scenario, probe, answer, supplied);
+  const notSupplied = wanted
+    .filter((item) => !suppliedCarries(supplied, item, links))
+    .map((item) => item.label);
   return {
-    passed: terms && !forbidden,
+    passed: terms && !forbidden.present,
     termsPresent: terms,
-    forbiddenPresent: forbidden,
-    forbiddenMentioned,
-    relevantSupplied,
+    forbiddenPresent: forbidden.present,
+    forbiddenMentioned: forbidden.mentioned,
+    relevantSupplied: relevantReached(probe, supplied, notSupplied),
     suppliedCount: supplied.length,
+    // Present only on a probe that names what it needs: the facts the answer lacked, and, apart
+    // from that, the facts that never reached the model ("not retrieved" against "not used").
+    ...(wanted.length === 0
+      ? {}
+      : {
+          neededMissing: wanted
+            .filter((item) => !matchesTermGroups(answer, item.terms))
+            .map((item) => item.label),
+          neededNotSupplied: notSupplied,
+        }),
   };
 }
 
@@ -435,14 +497,19 @@ function scoreNotObeyedProbe(probe, answer, supplied) {
 
 /**
  * Scores one probe. `supplied` is everything that reached the model: the memories retrieved for the
- * question and, marked `via: "profile"`, the standing profile's facts.
+ * question and, marked `via: "profile"`, the standing profile's facts. `links` (optional) maps the
+ * id of a memory the lab seeded to the truth or replaced value it states.
  */
-export function scoreProbe(scenario, probe, answer, supplied) {
+export function scoreProbe(scenario, probe, answer, supplied, links) {
   const text = answer ?? "";
   const entries = supplied ?? [];
   switch (probe.expect.kind) {
     case "answer":
-      return { id: probe.id, kind: "answer", ...scoreAnswerProbe(scenario, probe, text, entries) };
+      return {
+        id: probe.id,
+        kind: "answer",
+        ...scoreAnswerProbe(scenario, probe, text, entries, links),
+      };
     case "abstain":
       return {
         id: probe.id,

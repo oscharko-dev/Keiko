@@ -252,15 +252,18 @@ function countBy(values) {
 // reads back accepted and exact exactly once, and nothing else is accepted. The scope each seed
 // landed in is reported (`scopes`, a count per scope kind): the explicit route stores in project
 // scope today, which the report states instead of leaving to be rediscovered.
-async function seedOracle(scenario, instance, poisonIds) {
+async function seedOracle(scenario, instance, labIds) {
   const chatId = await createChat(instance, `oracle ${scenario.id}`);
+  // A truth the scenario's own seed already placed in the store is not placed twice.
+  const stated = new Set((instance.seed?.entries ?? []).map((entry) => entry.truth));
+  const facts = scenario.truth.filter((fact) => !stated.has(fact.key));
   const seeded = [];
-  for (const fact of scenario.truth) seeded.push(await seedFact(instance, chatId, fact));
+  for (const fact of facts) seeded.push(await seedFact(instance, chatId, fact));
   const accepted = (await listMemories(instance)).filter(
-    (memory) => memory.status === "accepted" && !poisonIds.has(memory.id),
+    (memory) => memory.status === "accepted" && !labIds.has(memory.id),
   );
   const seedIds = new Set(seeded.map((seed) => seed.memoryId).filter((id) => id !== undefined));
-  const mismatches = scenario.truth
+  const mismatches = facts
     .filter((fact) => accepted.filter((memory) => sameBody(memory, fact)).length !== 1)
     .map((fact) => fact.key);
   const extras = accepted.filter((memory) => !seedIds.has(memory.id)).length;
@@ -303,7 +306,7 @@ async function runProbes(scenario, instance, context) {
     const chatId = await createChat(instance, `probe ${scenario.id} ${probe.id}`);
     const asked = askedQuestion(scenario, probe);
     const sent = await sendTurn(instance, chatId, asked, context, context.arm !== "off");
-    const score = scoreProbe(scenario, probe, sent.answer, sent.supplied);
+    const score = scoreProbe(scenario, probe, sent.answer, sent.supplied, instance.seed?.links);
     rows.push({
       ...score,
       retrievedCount: sent.retrieved.length,
@@ -339,6 +342,46 @@ function journalOf(context) {
     );
 }
 
+// The parts of a unit's evidence that exist only for some scenarios and arms.
+function optionalEvidence({ oracle, poison, poisonIds, seed }) {
+  return {
+    ...(oracle === undefined ? {} : { oracle }),
+    ...(poison.length === 0 ? {} : { poison: { total: poison.length, seeded: poisonIds.size } }),
+    ...(seed === undefined ? {} : { seed }),
+  };
+}
+
+// Probes run with memory on, so the product may still be learning from the last question: learning is
+// settled before the store and the ledger are read, otherwise probeCaptures would depend on timing.
+// Learning runs on probe questions too (memory is one switch for recall and learning), so a question
+// the product turns into a memory is counted here instead of passing as recall.
+async function settledAfterProbes(instance, context, memories) {
+  if (context.arm !== "off")
+    await awaitLearning(instance, { ...context.learning, phase: "after the probes" });
+  const afterProbes = await listMemories(instance);
+  const known = new Set(memories.map((memory) => memory.id));
+  return {
+    seed: seedOutcome(instance, afterProbes),
+    probeCaptures: afterProbes.filter((memory) => !known.has(memory.id)).length,
+    captures: await readCaptures(instance),
+  };
+}
+
+// What became of the records the lab placed in the vault before the run: how many exist now, per
+// status, and how many are gone (forgotten or deleted by the product). Counts only.
+function seedOutcome(instance, memories) {
+  if (instance.seed === undefined) return undefined;
+  const byId = new Map(memories.map((memory) => [memory.id, memory]));
+  const present = instance.seed.ids.filter((id) => byId.has(id));
+  return {
+    ...instance.seed.report,
+    after: {
+      byStatus: countBy(present.map((id) => byId.get(id).status)),
+      gone: instance.seed.ids.length - present.length,
+    },
+  };
+}
+
 /**
  * Runs one scenario for one arm on a fresh instance and returns the scored evidence. `requested`
  * carries arm, memoryMode, budgetTokens, confirmForget, retainBodies, turnTimeoutMs, learning
@@ -356,24 +399,17 @@ export async function runScenario(scenario, instance, requested) {
   context.fixture?.setPhase("run");
   const poison = context.arm === "off" ? [] : await seedPoison(scenario, instance);
   const poisonIds = new Set(poison.map((seed) => seed.memoryId).filter((id) => id !== undefined));
+  // Poisoned and seeded records are the lab's own: they are never scored as what the product stored.
+  const labIds = new Set([...poisonIds, ...(instance.seed?.ids ?? [])]);
   const startedAt = Date.now();
   const turns = context.arm === "oracle" ? [] : await runTurns(scenario, instance, context);
   const oracle =
-    context.arm === "oracle" ? await seedOracle(scenario, instance, poisonIds) : undefined;
+    context.arm === "oracle" ? await seedOracle(scenario, instance, labIds) : undefined;
   const learnedAt = Date.now();
   const memories = await listMemories(instance);
-  const scored = memories.filter((memory) => !poisonIds.has(memory.id));
+  const scored = memories.filter((memory) => !labIds.has(memory.id));
   const probes = await runProbes(scenario, instance, context);
-  // Probes run with memory on, so the product may still be learning from the last question; settle
-  // before the store and the ledger are read, otherwise probeCaptures would depend on timing.
-  if (context.arm !== "off")
-    await awaitLearning(instance, { ...context.learning, phase: "after the probes" });
-  // Learning runs on probe questions too (memory is one switch for recall and learning), so a
-  // question the product turns into a memory is counted here instead of passing as recall.
-  const afterProbes = await listMemories(instance);
-  const known = new Set(memories.map((memory) => memory.id));
-  const probeCaptures = afterProbes.filter((memory) => !known.has(memory.id)).length;
-  const captures = await readCaptures(instance);
+  const after = await settledAfterProbes(instance, context, memories);
   return {
     scenario: scenario.id,
     language: scenario.language,
@@ -381,19 +417,18 @@ export async function runScenario(scenario, instance, requested) {
     difficulty: scenario.difficulty,
     arm: context.arm,
     turns,
-    ...(oracle === undefined ? {} : { oracle }),
-    ...(poison.length === 0 ? {} : { poison: { total: poison.length, seeded: poisonIds.size } }),
+    ...optionalEvidence({ oracle, poison, poisonIds, seed: after.seed }),
     store: {
       ...scoreStore(scored, scenario),
       memories: storeView(scored, context.retainBodies),
     },
-    captures: captures.map((capture) => ({
+    captures: after.captures.map((capture) => ({
       outcome: capture.outcome,
       reason: capture.reason ?? null,
       status: capture.currentStatus ?? null,
     })),
     probes,
-    probeCaptures,
+    probeCaptures: after.probeCaptures,
     timing: { learnMs: learnedAt - startedAt, probeMs: Date.now() - learnedAt },
     requests: journalOf(context),
   };

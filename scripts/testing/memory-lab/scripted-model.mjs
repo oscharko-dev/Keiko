@@ -9,6 +9,8 @@ import { Buffer } from "node:buffer";
 
 export const ANSWERER_MODEL_ID = "memory-lab-answerer";
 export const LEARNER_MODEL_ID = "memory-lab-learner";
+export const EMBEDDER_MODEL_ID = "memory-lab-embedder";
+const EMBEDDING_DIMENSIONS = 256;
 const ANSWER_MODES = Object.freeze(["ok", "echo"]);
 const MEMORY_FENCE_START = "===UNTRUSTED_MEMORY_CONTEXT_START===";
 const MEMORY_FENCE_END = "===UNTRUSTED_MEMORY_CONTEXT_END===";
@@ -117,12 +119,52 @@ function promptChars(messages) {
   );
 }
 
+// FNV-1a over the token's UTF-16 code units: a stable, dependency-free hash.
+function tokenHash(token) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < token.length; index += 1)
+    hash = Math.imul(hash ^ token.charCodeAt(index), 0x01000193) >>> 0;
+  return hash;
+}
+
+/**
+ * The scripted embedding of a text: a hashed bag of its lowercase words, normalized to length one.
+ * Two texts that share words are close, texts that share none are orthogonal, which is all an offline
+ * run needs to tell semantic recall from lexical recall; it says nothing about a real embedding model.
+ */
+export function hashedEmbedding(text) {
+  const vector = new Array(EMBEDDING_DIMENSIONS).fill(0);
+  for (const token of text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
+    vector[tokenHash(token) % EMBEDDING_DIMENSIONS] += 1;
+  const norm = Math.hypot(...vector);
+  if (norm === 0) return vector.map((_, index) => (index === 0 ? 1 : 0));
+  return vector.map((value) => value / norm);
+}
+
+function embeddingBody(body) {
+  const inputs = Array.isArray(body.input) ? body.input : [body.input];
+  const texts = inputs.map((input) => (typeof input === "string" ? input : ""));
+  const tokens = texts.reduce((sum, text) => sum + tokenEstimate(text), 0);
+  return {
+    object: "list",
+    model: body.model,
+    data: texts.map((text, index) => ({
+      object: "embedding",
+      index,
+      embedding: hashedEmbedding(text),
+    })),
+    usage: { prompt_tokens: tokens, total_tokens: tokens },
+  };
+}
+
 /**
  * Starts the scripted model on an ephemeral loopback port. The returned object is also usable as the
  * `proxy` of `startObservedBff`, so the instance's close tears the fixture down with the server.
  */
-export async function startScriptedModelServer({ retainBodies = true } = {}) {
+export async function startScriptedModelServer({ retainBodies = true, embedder = false } = {}) {
   const state = {
+    embedder,
+    embeddingCalls: 0,
     answerMode: "ok",
     learnerQueue: [],
     requests: [],
@@ -161,17 +203,27 @@ export async function startScriptedModelServer({ retainBodies = true } = {}) {
     },
     requests: () => state.requests.slice(),
     learnerCalls: () => state.learnerCalls,
+    embeddingCalls: () => state.embeddingCalls,
     pendingLearner: () => state.learnerQueue.length,
   };
 }
 
-async function handle(req, res, state, retainBodies) {
-  if (req.method === "GET" && req.url === "/healthz") return writeJson(res, 200, { ok: true });
-  if (req.method === "GET" && req.url === "/v1/models")
+function handleGet(req, res, state) {
+  if (req.url === "/healthz") return writeJson(res, 200, { ok: true });
+  if (req.url === "/v1/models")
     return writeJson(res, 200, {
       object: "list",
-      data: [ANSWERER_MODEL_ID, LEARNER_MODEL_ID].map((id) => ({ id, object: "model" })),
+      data: modelIds(state).map((id) => ({ id, object: "model" })),
     });
+  return writeJson(res, 404, { error: { message: "not found" } });
+}
+
+async function handle(req, res, state, retainBodies) {
+  if (req.method === "GET") return handleGet(req, res, state);
+  if (state.embedder && req.method === "POST" && req.url === "/v1/embeddings") {
+    state.embeddingCalls += 1;
+    return writeJson(res, 200, embeddingBody(await readJson(req)));
+  }
   if (req.method !== "POST" || req.url !== "/v1/chat/completions")
     return writeJson(res, 404, { error: { message: "not found" } });
   const body = await readJson(req);
@@ -181,6 +233,10 @@ async function handle(req, res, state, retainBodies) {
   state.requests.push({ phase: state.phase, ...journalEntry(body, messages, chars, retainBodies) });
   if (body.stream === true) return writeStream(res, body.model, content, chars);
   return writeJson(res, 200, completionBody(body.model, content, chars));
+}
+
+function modelIds(state) {
+  return [ANSWERER_MODEL_ID, LEARNER_MODEL_ID, ...(state.embedder ? [EMBEDDER_MODEL_ID] : [])];
 }
 
 function journalEntry(body, messages, chars, retainBodies) {

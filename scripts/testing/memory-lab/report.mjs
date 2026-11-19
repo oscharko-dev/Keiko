@@ -458,12 +458,18 @@ function failureLines(summary) {
   ];
 }
 
+function embedderText(metadata) {
+  const kind = String(metadata.embedder ?? "unrecorded");
+  const ids = metadata.embeddingModelIds ?? [];
+  return ids.length === 0 ? kind : `${kind} (${ids.join(", ")})`;
+}
+
 /** The Markdown a person reads: what was measured, per group, and what was not. */
 export function renderLabSummary(summary, manifest, metadata) {
   return [
     "# MemoriaViva lab run",
     "",
-    `Mode: ${metadata.mode}. Product head: ${metadata.productHead}, built packages \`${String(metadata.productDistDigest ?? "unknown")}\`. Corpus: ${manifest.count} scenarios, set digest \`${manifest.setDigest}\`. Arms: ${metadata.arms.join(", ")}. Repetitions: ${String(metadata.repetitions)}. Memory mode: ${metadata.memoryMode}, ceiling: ${metadata.ceiling}, memory budget ${String(metadata.budgetTokens ?? "unknown")} tokens.`,
+    `Mode: ${metadata.mode}. Product head: ${metadata.productHead}, built packages \`${String(metadata.productDistDigest ?? "unknown")}\`. Corpus: ${manifest.count} scenarios, set digest \`${manifest.setDigest}\`. Arms: ${metadata.arms.join(", ")}. Repetitions: ${String(metadata.repetitions)}. Memory mode: ${metadata.memoryMode}, ceiling: ${metadata.ceiling}, memory budget ${String(metadata.budgetTokens ?? "unknown")} tokens. Embedding model: ${embedderText(metadata)}.`,
     `Instrument: lab digest \`${String(metadata.instrumentDigest ?? "unknown")}\` at lab head ${String(metadata.labHead ?? "unknown")}${metadata.labDirty === true ? " (uncommitted lab changes)" : ""}; gateway configuration \`${String(metadata.configDigest ?? "unknown")}\`. Two runs compare only when their instrument digests and configurations agree.`,
     "",
     ...failureLines(summary),

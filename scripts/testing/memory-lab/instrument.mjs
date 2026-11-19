@@ -21,6 +21,7 @@ export const INSTRUMENT_FILES = Object.freeze([
   "corpus/sequence.mjs",
   "corpus/values.mjs",
   "driver.mjs",
+  "embedder.mjs",
   "evidence-scan.mjs",
   "gateway-calls.mjs",
   "instance.mjs",
@@ -32,6 +33,9 @@ export const INSTRUMENT_FILES = Object.freeze([
   "scenario.mjs",
   "score.mjs",
   "scripted-model.mjs",
+  "seed-plan.mjs",
+  "seed-store.mjs",
+  "seed-validate.mjs",
   "set-files.mjs",
   "unit-failure.mjs",
 ]);

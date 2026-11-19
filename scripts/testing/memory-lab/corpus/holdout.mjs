@@ -100,9 +100,19 @@ export function maskHoldoutResult(result, name) {
       verdicts: [],
       memories: [],
     },
-    probes: result.probes.map((probe, index) => ({ ...probe, id: `probe-${String(index + 1)}` })),
+    probes: result.probes.map(maskedProbe),
     ...oracle,
+    // The shape of a hidden store (how many records, in which state) is part of the hidden scenario.
+    seed: undefined,
   };
+}
+
+// A probe's id and the fact keys it names (`neededMissing`, `neededNotSupplied`) become positions.
+function maskedProbe(probe, index) {
+  const masked = { ...probe, id: `probe-${String(index + 1)}` };
+  for (const field of ["neededMissing", "neededNotSupplied"])
+    if (Array.isArray(probe[field])) masked[field] = maskedKeys(probe[field]);
+  return masked;
 }
 
 // Checkpoints use their own derived key and retain no readable per-unit evidence at rest.

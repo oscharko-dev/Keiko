@@ -25,8 +25,10 @@ const ROUND = 10000;
 // at least three of them.
 const MIN_REPETITIONS = 3;
 // What must be equal between two runs for their difference to mean anything: the kind of run, the
-// product configuration, the arms, the two models, the gateway configuration, the environment the
-// instance ran in and the lab code that measured.
+// product configuration, the arms, the two models, the gateway configuration, whether and with which
+// embedding model memory recall ran, the environment the instance ran in and the lab code that
+// measured. A run that does not record its embedding model (older than #4207's embedder option) is
+// "unrecorded" and compares with no recorded run.
 const PROVENANCE_FIELDS = Object.freeze([
   "mode",
   "memoryMode",
@@ -37,6 +39,8 @@ const PROVENANCE_FIELDS = Object.freeze([
   "budgetTokens",
   "brokenLearner",
   "configDigest",
+  "embedder",
+  "embeddingModelIds",
   "foldedKeys",
   "instrumentDigest",
 ]);
@@ -173,8 +177,11 @@ function metricDelta(baseline, candidate, arm, metric) {
   return { metric, before, after, delta, halfRange, minimumDetectable: floor, beyondNoise };
 }
 
+const RECORDED_SINCE_EMBEDDER = new Set(["embedder", "embeddingModelIds"]);
+
 function provenanceOf(run, field) {
   const value = run.manifest.metadata?.[field];
+  if (value === undefined && RECORDED_SINCE_EMBEDDER.has(field)) return "unrecorded";
   return Array.isArray(value) ? JSON.stringify(value.toSorted(compareStrings)) : value;
 }
 

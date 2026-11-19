@@ -27,6 +27,7 @@ import {
 import { withExclusiveProcessLock } from "../jira-chat-lab/requirements/work-project-lock.mjs";
 import { openProgress } from "./progress.mjs";
 import { ARMS, runScenario } from "./driver.mjs";
+import { EMBEDDER_MODES, embeddingModelIds, resolveEmbedder } from "./embedder.mjs";
 import { SCAN_FILE, scanEvidence, secretsOfConfig } from "./evidence-scan.mjs";
 import { CEILINGS, pendingGatewayCalls, startLabInstance } from "./instance.mjs";
 import { readActivityEvents } from "../coding-workbench-lab/activity-log-events.mjs";
@@ -51,6 +52,7 @@ import {
 import { loadScenarioDirectory, scenarioSetManifest } from "./scenario.mjs";
 import {
   ANSWERER_MODEL_ID,
+  EMBEDDER_MODEL_ID,
   LEARNER_MODEL_ID,
   startScriptedModelServer,
 } from "./scripted-model.mjs";
@@ -78,6 +80,7 @@ const OPTIONS = {
   "generated-at": { type: "string", default: "0" },
   "retain-bodies": { type: "boolean", default: true },
   "label-pass": { type: "boolean", default: false },
+  embedder: { type: "boolean" },
   "quiet-ms": { type: "string", default: "1500" },
   "max-wait-ms": { type: "string", default: "60000" },
   "learner-grace-ms": { type: "string", default: "3000" },
@@ -102,6 +105,8 @@ function usage() {
     "  --allow-folded-env  measure even though the repository .env would fold KEIKO_* keys into an instance",
     "  --retain-bodies / --no-retain-bodies (bodies of real-conversation scenarios are never retained)",
     "  --label-pass  the labelling run: retain the stored bodies of anchor scenarios in the run files (real text; private directory)",
+    "  --no-embedder  measure without an embedding model (live: removed from the configuration the instances get)",
+    "  --embedder  offline: add the scripted hashed-word embedding model; live: require the configuration's own",
     "  --quiet-ms N  --max-wait-ms N  --learner-grace-ms N  --turn-timeout-ms N",
     "  live: --config <gateway.json> --answer-model <id> --learn-model <id>",
     "  --fail-on-hard-counters  exit 4 when a product-arm hard counter is above zero (the pre-PR run)",
@@ -187,6 +192,12 @@ function labelPassOption(values, source) {
   return true;
 }
 
+// `--embedder` / `--no-embedder` / neither, as the run's closed request.
+function embedderMode(value) {
+  if (value === undefined) return "default";
+  return oneOf(value ? "on" : "off", EMBEDDER_MODES, "--embedder");
+}
+
 /** Validated run options from parsed CLI values (also the shape `runLab` accepts). */
 export function normalizeOptions(raw) {
   const values = { ...DEFAULTS, ...raw };
@@ -216,6 +227,7 @@ export function normalizeOptions(raw) {
     // A sealed run never retains a body: nothing of the conversation may reach the evidence.
     retainBodies: source.holdout === undefined && values["retain-bodies"] !== false,
     labelPass,
+    embedderMode: embedderMode(values.embedder),
     quietMs: integer(values["quiet-ms"], "--quiet-ms"),
     maxWaitMs: integer(values["max-wait-ms"], "--max-wait-ms"),
     graceMs: integer(values["learner-grace-ms"], "--learner-grace-ms"),
@@ -265,7 +277,10 @@ function labState() {
 
 async function startFixture(options) {
   if (options.mode !== "offline") return undefined;
-  return startScriptedModelServer({ retainBodies: options.retainBodies });
+  return startScriptedModelServer({
+    retainBodies: options.retainBodies,
+    embedder: options.embedder === "scripted",
+  });
 }
 
 function runContext(options, arm, fixture, instance) {
@@ -336,6 +351,8 @@ async function startUnit(label, arm, repetition, options, stateRoot) {
       learnModelId: options.learnModelId,
       subjectRoot: options.subjectRoot,
       allowFoldedEnv: options.allowFoldedEnv,
+      embedder: options.embedder,
+      seed: options.seed,
     });
     return { dir, fixture, instance, instanceStartMs: Date.now() - startedAt };
   } catch (error) {
@@ -383,9 +400,11 @@ export async function closeActiveUnit() {
 async function runUnit(scenario, arm, repetition, options, stateRoot, label) {
   // Anchor text keeps no body in the evidence, whatever the run asked for, unless this is the
   // labelling pass (the fixture's journal and the driver's result both follow this).
+  // A seed is placed in every arm that has memory; the off arm never enables it.
   const unitOptions = {
     ...options,
     retainBodies: retainBodiesFor(scenario, options.retainBodies, options.labelPass),
+    seed: arm === "off" ? undefined : scenario.seed,
   };
   const starting = startUnit(label, arm, repetition, unitOptions, stateRoot);
   activeUnit = { starting, keep: unitOptions.keep };
@@ -511,6 +530,9 @@ function writeEvidence(options, corpus, results, gateway) {
     answerModelId: options.answerModelId ?? ANSWERER_MODEL_ID,
     learnModelId: options.learnModelId ?? LEARNER_MODEL_ID,
     brokenLearner: options.brokenLearner ?? null,
+    // With or without an embedding model: the manifest says which, and `compare` refuses to mix them.
+    embedder: options.embedder,
+    embeddingModelIds: options.embeddingModelIds,
     holdout: corpus.sealed,
     // `sealed` is what the judge checks before it accepts a run as the holdout part of a pair.
     sealed: corpus.sealed,
@@ -562,10 +584,23 @@ function loadCorpus(options) {
 // every conversation on this machine and name no chat model the run does not measure; its digest goes
 // into the manifest. An offline run has none.
 function gatewayEvidence(options) {
-  if (options.mode !== "live") return { digest: "offline" };
+  if (options.mode !== "live") {
+    const embedder = resolveEmbedder({ mode: options.mode, embedder: options.embedderMode });
+    return {
+      digest: "offline",
+      embedder,
+      embeddingModelIds: embedder === "scripted" ? [EMBEDDER_MODEL_ID] : [],
+    };
+  }
   const evidence = assertLoopbackGatewayConfig(options.configPath);
   assertOnlyMeasuredChatModels(options.configPath, [options.answerModelId, options.learnModelId]);
-  return evidence;
+  const configured = embeddingModelIds(JSON.parse(readFileSync(options.configPath, "utf8")));
+  const embedder = resolveEmbedder({
+    mode: options.mode,
+    embedder: options.embedderMode,
+    configuredIds: configured,
+  });
+  return { ...evidence, embedder, embeddingModelIds: embedder === "none" ? [] : configured };
 }
 
 // A unit that fails costs that unit, not the run: it is recorded with its error name (and, where the
@@ -688,9 +723,15 @@ function runProgress(options, corpus, gateway, assertOwned) {
 }
 
 /** Runs the lab with validated options and returns the summary; writes evidence under `out`. */
-export async function runLab(options, log = console.log) {
-  assertOutputAvailable(options);
-  const gateway = gatewayEvidence(options);
+export async function runLab(requested, log = console.log) {
+  assertOutputAvailable(requested);
+  const gateway = gatewayEvidence(requested);
+  // From here on the run knows which embedding model, if any, it measures.
+  const options = {
+    ...requested,
+    embedder: gateway.embedder,
+    embeddingModelIds: gateway.embeddingModelIds,
+  };
   const corpus = loadCorpus(options);
   assertKeepAllowed(corpus.scenarios, options.keep);
   return withExclusiveProcessLock(options.out, "memory-lab-run", (assertOwned) =>

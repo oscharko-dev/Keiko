@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "id": "seed-earlier-value-en",
+  "language": "en",
+  "class": "update",
+  "difficulty": "plain",
+  "description": "A seeded correction chain: the report format was PDF, now it is Markdown. One question asks for the current value, one for the earlier one (a superseded record, which retrieval does not supply today).",
+  "seed": {
+    "records": [
+      {
+        "key": "report-pdf",
+        "body": "Rosa wanted the weekly report as a PDF file.",
+        "type": "preference",
+        "scope": "project",
+        "status": "superseded",
+        "ageDays": 90,
+        "earlier": "format-before"
+      },
+      {
+        "key": "report-markdown",
+        "body": "Rosa wants the weekly report as a Markdown file.",
+        "type": "preference",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 10,
+        "supersedes": "report-pdf",
+        "truth": "format-now"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "format-now",
+      "seed": "Rosa wants the weekly report as a Markdown file.",
+      "must": false,
+      "terms": [["Markdown"]]
+    }
+  ],
+  "superseded": [{ "key": "format-before", "terms": [["PDF"]] }],
+  "turns": [],
+  "probes": [
+    {
+      "id": "now",
+      "question": "Which format does Rosa want for the weekly report?",
+      "expect": { "kind": "answer", "terms": [["Markdown"]] }
+    },
+    {
+      "id": "before",
+      "question": "Which format did Rosa want for the weekly report before?",
+      "expect": { "kind": "answer", "earlier": ["format-before"] }
+    }
+  ]
+}

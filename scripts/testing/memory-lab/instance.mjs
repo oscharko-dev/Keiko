@@ -12,7 +12,9 @@ import { readActivityEvents } from "../coding-workbench-lab/activity-log-events.
 import { buildDevBffEnv } from "../../lib/dev-bff-env.mjs";
 import { openCallKeys } from "./gateway-calls.mjs";
 import { LabConfigurationError } from "./isolation.mjs";
-import { ANSWERER_MODEL_ID, LEARNER_MODEL_ID } from "./scripted-model.mjs";
+import { embeddingModelIds, scriptedEmbedderProvider, withoutEmbedders } from "./embedder.mjs";
+import { placeSeed } from "./seed-store.mjs";
+import { ANSWERER_MODEL_ID, EMBEDDER_MODEL_ID, LEARNER_MODEL_ID } from "./scripted-model.mjs";
 
 export const CEILINGS = Object.freeze([
   "governed-assist",
@@ -65,16 +67,19 @@ function offlineCapability() {
 }
 
 /** Gateway configuration pointing both lab model ids at the scripted model server. */
-function offlineGatewayConfig(baseUrl) {
+function offlineGatewayConfig(baseUrl, embedder) {
   return {
-    providers: [ANSWERER_MODEL_ID, LEARNER_MODEL_ID].map((modelId) => ({
-      modelId,
-      baseUrl,
-      timeoutMs: 60000,
-      maxRetries: 0,
-      retryBaseDelayMs: 100,
-      capability: offlineCapability(),
-    })),
+    providers: [
+      ...[ANSWERER_MODEL_ID, LEARNER_MODEL_ID].map((modelId) => ({
+        modelId,
+        baseUrl,
+        timeoutMs: 60000,
+        maxRetries: 0,
+        retryBaseDelayMs: 100,
+        capability: offlineCapability(),
+      })),
+      ...(embedder === "scripted" ? [scriptedEmbedderProvider(baseUrl)] : []),
+    ],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 1 },
   };
 }
@@ -118,6 +123,7 @@ async function labEnvironment(dir, options, source = process.env) {
     KEIKO_LOG_LEVEL: "info",
     [apiKeyEnvName(options.answerModelId)]: source[apiKeyEnvName(options.answerModelId)] ?? "lab",
     [apiKeyEnvName(options.learnModelId)]: source[apiKeyEnvName(options.learnModelId)] ?? "lab",
+    ...(options.embedder === "scripted" ? { [apiKeyEnvName(EMBEDDER_MODEL_ID)]: "lab" } : {}),
     [await launcherSecretEnvName()]: randomBytes(32).toString("hex"),
   };
   const folded = buildDevBffEnv({
@@ -214,16 +220,35 @@ function assertNoFoldedEnvironment(foldedKeys, allowed) {
   );
 }
 
+// The bytes of the private configuration: the scripted one offline; live, the operator's file as it
+// is, unless the run measures without an embedding model and the file names one.
+function privateGatewayConfig(options, offline) {
+  if (offline)
+    return JSON.stringify(offlineGatewayConfig(options.fixture.baseUrl, options.embedder));
+  const original = readFileSync(options.configPath);
+  const parsed = JSON.parse(original.toString("utf8"));
+  const strip = options.embedder === "none" && embeddingModelIds(parsed).length > 0;
+  return strip ? JSON.stringify(withoutEmbedders(parsed)) : original;
+}
+
 function writePrivateGatewayConfig(options, offline) {
   const configPath = join(options.dir, "gateway.json");
-  writeFileSync(
-    configPath,
-    offline
-      ? JSON.stringify(offlineGatewayConfig(options.fixture.baseUrl))
-      : readFileSync(options.configPath),
-    { mode: 0o600 },
-  );
+  writeFileSync(configPath, privateGatewayConfig(options, offline), { mode: 0o600 });
   return configPath;
+}
+
+// The scenario's seed goes into the vault before the server opens it. The embedding model, when the
+// run has one, embeds the accepted records through the instance's own configuration.
+function seedFor(options, prepared, configPath) {
+  if (options.seed === undefined) return undefined;
+  return placeSeed({
+    seed: options.seed,
+    subjectRoot: options.subjectRoot,
+    memoryDir: prepared.env.KEIKO_MEMORY_DIR,
+    memoryKey: prepared.env.KEIKO_MEMORY_KEY,
+    project: prepared.project,
+    embedding: options.embedder === "none" ? undefined : { configPath, env: prepared.env },
+  });
 }
 
 /**
@@ -248,8 +273,10 @@ export async function startLabInstance(options) {
     learnModelId,
     ceiling: options.ceiling,
     subjectRoot: options.subjectRoot,
+    embedder: options.embedder,
   });
   assertNoFoldedEnvironment(prepared.foldedKeys, options.allowFoldedEnv);
+  const seed = await seedFor(options, prepared, configPath);
   const runtime = await subjectRuntime(options.subjectRoot);
   const started = await runtime.startObservedBff(
     options.dir,
@@ -272,6 +299,7 @@ export async function startLabInstance(options) {
     ...(learnsInPasses(options.subjectRoot) ? { learningIdleMs: LAB_LEARNING_IDLE_MS } : {}),
     project: prepared.project,
     foldedKeys: prepared.foldedKeys,
+    ...(seed === undefined ? {} : { seed }),
     answerModelId,
     learnModelId,
     baseUrl: started.bff.baseUrl,

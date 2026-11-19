@@ -291,12 +291,14 @@ named at the top and left out of every figure.
 The manifest names the answering and the learning model, the corpus version, every scenario digest,
 the product head and the options. Its `metadata` records `sealed` (true for a `--holdout` run, which
 the judge requires of the holdout part), `allowFoldedEnv`, `foldedKeys`, `budgetTokens`,
-`brokenLearner` and `configDigest`: the SHA-256 of the gateway configuration file in live mode,
+`brokenLearner`, `embedder` and `embeddingModelIds` (with or without an embedding model, see
+"With and without an embedding model") and `configDigest`: the SHA-256 of the gateway configuration file in live mode,
 `offline` otherwise. It also records the **instrument**: `instrumentDigest`, a SHA-256 over the lab
 sources that decide what a run measures (`INSTRUMENT_FILES` in `instrument.mjs`: `../jira-chat-lab/requirements/work-project-lock.mjs`, `corpus/holdout.mjs`, `corpus/sequence.mjs`,
-`corpus/values.mjs`, `driver.mjs`, `evidence-scan.mjs`, `gateway-calls.mjs`, `instance.mjs`,
-`isolation.mjs`, `log-text.mjs`, `progress.mjs`, `report.mjs`, `run.mjs`, `scenario.mjs`, `score.mjs`,
-`scripted-model.mjs`, `set-files.mjs`, `unit-failure.mjs`), beside
+`corpus/values.mjs`, `driver.mjs`, `embedder.mjs`, `evidence-scan.mjs`,
+`gateway-calls.mjs`, `instance.mjs`, `isolation.mjs`, `log-text.mjs`, `progress.mjs`, `report.mjs`,
+`run.mjs`, `scenario.mjs`, `score.mjs`, `scripted-model.mjs`, `seed-plan.mjs`, `seed-store.mjs`,
+`seed-validate.mjs`, `set-files.mjs`, `unit-failure.mjs`), beside
 `labHead` and `labDirty` (the lab's commit, and whether its sources carried uncommitted changes) for
 people; and the **product build**: `productHead` and `productDistDigest`, a SHA-256 over every built
 `.js` under the subject's `packages/*/dist`, because the product runs from its built packages, which a
@@ -356,7 +358,115 @@ fail-closed by `scenario.mjs`):
   optional `memory: false` for a turn written with memory off.
 - `probes[]`: questions asked in new chats with an `expect` of kind `answer`, `abstain` or
   `no-memory`; an `answer` probe names its `terms` and optional `forbidden` groups, an `abstain` or
-  `no-memory` probe may `allow` true facts by key (the person's own fact, asked for a colleague's).
+  `no-memory` probe may `allow` true facts by key (the person's own fact, asked for a colleague's). An
+  `answer` probe may instead (or also) name `needs` and `earlier`, see below.
+- `seed`: a store placed in the vault before the first turn, see "Seeding a store".
+
+### Seeding a store
+
+Long histories, scale limits and correction chains cannot be learned in a lab run: replaying weeks of
+conversation is neither fast nor deterministic. A scenario may therefore carry a `seed` section, which
+the runner places in the instance's vault **before the server starts** (in the `product` and `oracle`
+arms; the `off` arm never enables memory, so it gets none). `seed-store.mjs` follows the precedent of
+`capacity-window.mjs`: it opens the subject's built vault package with the instance's own memory
+directory and vault key, inserts the records with backdated timestamps, closes the vault, and only
+then does the instance start. A scenario with a seed may have no `turns` (the history is the seed).
+
+```json
+"seed": {
+  "records": [
+    { "key": "old", "body": "...", "type": "preference", "scope": "project", "status": "superseded",
+      "ageDays": 90, "earlier": "format-before" },
+    { "key": "new", "body": "...", "type": "preference", "scope": "user", "status": "accepted",
+      "ageDays": 10, "supersedes": "old", "truth": "format-now", "pinned": true, "learned": true,
+      "accessCount": 3, "lastAccessDays": 2 }
+  ],
+  "filler": [
+    { "count": 500, "status": "accepted", "minAgeDays": 1, "maxAgeDays": 300, "seed": 7,
+      "scope": "user", "type": "semantic-fact" }
+  ]
+}
+```
+
+- A record has a `key` (a slug, unique in the seed), `body`, `type` (the contracts' memory types),
+  `scope` (`user` or `project`; default `project`), `status` (`accepted`, `superseded`, `archived` or
+  `proposed`) and `ageDays` (how long ago it was created; a superseded record ends when its successor
+  began). Optional: `pinned`; `learned` (the record carries the person's words, which is what lets a
+  later statement replace it, as for a learned fact); `supersedes` (the key of an older, `superseded`
+  record: a `supersedes` edge runs from that record to this one, as in the product's own correction
+  path); `accessCount` and `lastAccessDays` (reinforcement: the access counter and the age of the last
+  access); `truth` (the key of a scenario truth this record states) or `earlier` (the key of a
+  `superseded[]` entry whose value it states). A link is checked: the body must match that fact's own
+  terms. The scope ids are the ones a Chat in the instance reads (`local-operator` for `user`, the
+  instance's registered project for `project`).
+- `filler` groups generate `count` (at most 5000 in total) unrelated records of one `status`, with
+  ages spread between `minAgeDays` and `maxAgeDays`. Bodies are invented words, deterministic in the
+  group's `seed` and index, and unique; loading refuses a scenario in which any term list (truth,
+  superseded, forgotten, forbidden, poison) would match a filler body.
+- The whole section is strict: an unknown field, a bad status, a `supersedes` that names a record that
+  is not `superseded` or is newer, a link whose body does not match, or an access age older than the
+  record is a load error.
+- The accepted records are embedded when the run has an embedding model (below), through the
+  product's own built embedder, the path that embeds a record at capture. A record that cannot be
+  embedded fails the unit instead of leaving a half-embedded store. Embedding costs one request per
+  accepted record, so a large live seed is a long unit start. Records that are not accepted are
+  never embedded, because they cannot be recalled.
+- The `oracle` arm places the scenario's truths through the explicit route as before, except those
+  that a seeded record already states (`truth`), which are not placed twice.
+
+**What seeding proves, and what it does not.** A seeded record was not learned by the product. A
+scenario with a seed measures what the product does with a store it already holds: retrieval,
+ranking, the standing profile, forgetting and supersession at scale, and what the answer does with
+what was supplied. It says nothing about extraction, the learner or the ledger. The lab therefore
+never scores a seeded record as something the product stored (it is excluded from `store`, like a
+poisoned record), keeps its ids to link supplied memories to the truth, and reports counts only under
+`seed` in the unit's result: records seeded per status and scope, how many were embedded, and the
+status counts after the run (`after.byStatus`, and `after.gone` for seeded records the list route no
+longer returns). The product's own maintenance runs on the aged records during the run (the first
+memory-enabled turn is due for it), so a seeded record may be archived or removed by the time the
+probes ask: that is the product's behaviour and part of what a seeded scenario measures. Seeding is
+setup; everything measured afterwards still goes through the public HTTP routes, and the lab never
+adds a route or a product seam for it.
+
+`scripts/testing/memory-lab/scenarios-next/` holds two tiny demonstration scenarios of these abilities
+(`seed-needs-two-en`, `seed-earlier-value-en`), run offline by `memory-lab-seed-offline.test.mjs`
+(`--scenarios scripts/testing/memory-lab/scenarios-next`). The curated sets in `scenarios/` and
+`scenarios-explicit/` are unchanged, and a new family belongs in a directory of its own until it is
+adopted into a baseline.
+
+### Probes that need several memories, and probes about an earlier value
+
+An `answer` probe may name, in its `expect`:
+
+- `needs`: truth keys. The probe passes only when the answer satisfies the terms of **every** named
+  truth (and carries no forbidden term). `terms` becomes optional; when both are present both must hold.
+- `earlier`: keys of `superseded[]` entries, which may now carry an optional `key`. The probe passes
+  only when the answer carries the replaced value ("what did I prefer before?"). The replaced values
+  are the same `superseded[]` entries a stale memory is judged against, and the validator's rule is
+  unchanged: a true term may not occur inside a replaced value, so the old value cannot be mistaken
+  for the new one.
+
+The probe's result records, besides `passed`, `neededMissing` (the needed facts the answer lacked) and,
+separately, `neededNotSupplied` (the needed facts no supplied memory carried, by the fact's terms or by
+the seeded record's own link). Earlier values are named `earlier:<key>`. `relevantSupplied` is true
+only when all of them were supplied. So a failure reads as "not retrieved" (`neededNotSupplied` names
+it) against "retrieved but not used" (`neededMissing` names it and `neededNotSupplied` does not). A
+probe that names neither keeps exactly the fields it always had.
+
+### With and without an embedding model
+
+Memory recall has a lexical path and a semantic one; a run that does not say which it measured cannot
+be compared. `--no-embedder` removes every embedding provider (and embedding capability record) from
+the gateway configuration the instances get, so the same scenarios can be measured lexical-only and
+with embeddings. Live, the configuration's own embedding provider stays by default; `--embedder`
+requires one. Offline there is none by default, so the existing offline baselines keep measuring what
+they always did, and `--embedder` adds a scripted one: `scripted-model.mjs` serves `/v1/embeddings`
+with a hashed bag of the words of a text, normalized to length one. Texts that share words are close,
+texts that share none are orthogonal; it tells semantic recall from lexical recall in a harness test
+and says nothing about a real embedding model. The manifest records `embedder` (`none`, `scripted` or
+`configured`) and `embeddingModelIds`, the summary names it, and `compare` and `judge` refuse two runs
+that differ in either (a run that never recorded it is "unrecorded" and compares only with another
+such run).
 
 ## Corpus
 
