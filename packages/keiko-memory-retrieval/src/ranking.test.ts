@@ -611,6 +611,93 @@ describe("rankMemories — the graph high-rank set never follows the id (#4228)"
   });
 });
 
+describe("rankMemories — which entries stay in the graph high-rank set (audit B2)", () => {
+  const DAY = 86_400_000;
+  function edgeMap(
+    pairs: readonly (readonly [string, string])[],
+  ): Map<ReturnType<typeof memoryId>, ReturnType<typeof buildEdge>[]> {
+    const map = new Map<ReturnType<typeof memoryId>, ReturnType<typeof buildEdge>[]>();
+    for (const [from, to] of pairs) {
+      const edge = buildEdge({ from, to });
+      for (const id of [from, to]) map.set(memoryId(id), [...(map.get(memoryId(id)) ?? []), edge]);
+    }
+    return map;
+  }
+  const graphOf = (ranked: ReturnType<typeof rankMemories>, id: string): number =>
+    ranked.find((e) => e.memoryId === id)?.subscores.graph ?? -1;
+  const rec = (id: string, ageDays: number): ReturnType<typeof buildRecord> =>
+    buildRecord({ id, body: "x", updatedAt: now - ageDays * DAY });
+
+  it.each(["weighted-sum", "rrf"] as const)(
+    "keeps the distinct records above a straddling tie and drops only the tied group (%s)",
+    (fusion) => {
+      // u1, u2 are distinct and newest; g1..g3 tie (same score and updatedAt) below them; the cut of 3
+      // ends inside that tie. n1..n3 are far older, each linked to one of u1, g1, g3.
+      const records = [
+        rec("u1", 0),
+        rec("u2", 1),
+        rec("g1", 3),
+        rec("g2", 3),
+        rec("g3", 3),
+        rec("n1", 10),
+        rec("n2", 11),
+        rec("n3", 12),
+      ];
+      const edgesByMemory = edgeMap([
+        ["n1", "u1"],
+        ["n2", "g1"],
+        ["n3", "g3"],
+      ]);
+      const ranked = rankMemories(
+        records,
+        { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS, fusion },
+        { edgesByMemory, graphHighRankCount: 3 },
+      );
+      expect(graphOf(ranked, "n1")).toBe(0.5); // neighbour of a distinct record keeps its score
+      expect(graphOf(ranked, "n2")).toBe(0); // neighbours of group members get nothing
+      expect(graphOf(ranked, "n3")).toBe(0);
+    },
+  );
+
+  it.each(["weighted-sum", "rrf"] as const)(
+    "keeps the plain top N when the tied scores differ in updatedAt across the cut (%s)",
+    (fusion) => {
+      // Recency weighted to 0: every score is equal, the sort falls to updatedAt, which differs at the
+      // cut, so the order is decided by evidence and not by the id and the plain top 2 stays.
+      const records = [rec("r0", 0), rec("r1", 1), rec("r2", 2), rec("r3", 3), rec("r4", 4)];
+      const ranked = rankMemories(
+        records,
+        { nowMs: now, weights: { ...DEFAULT_RANKING_WEIGHTS, recency: 0 }, fusion },
+        { edgesByMemory: edgeMap([["r4", "r1"]]), graphHighRankCount: 2 },
+      );
+      expect(graphOf(ranked, "r4")).toBe(0.5);
+    },
+  );
+
+  it("keeps every record when the count reaches the number of records, even all tied", () => {
+    const records = ["a", "b", "c"].map((id) => rec(id, 0));
+    for (const count of [3, 10]) {
+      const ranked = rankMemories(
+        records,
+        { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS },
+        { edgesByMemory: edgeMap([["a", "b"]]), graphHighRankCount: count },
+      );
+      expect(graphOf(ranked, "a")).toBe(0.5);
+      expect(graphOf(ranked, "b")).toBe(0.5);
+    }
+  });
+
+  it("keeps no record when the count is 0", () => {
+    const ranked = rankMemories(
+      [rec("a", 0), rec("b", 1)],
+      { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS },
+      { edgesByMemory: edgeMap([["a", "b"]]), graphHighRankCount: 0 },
+    );
+    expect(graphOf(ranked, "a")).toBe(0);
+    expect(graphOf(ranked, "b")).toBe(0);
+  });
+});
+
 describe("rankMemories — non-finite subscores say nothing (#4228)", () => {
   it("does not let a NaN or infinite semantic score reorder the other records", () => {
     const records = ["a", "b", "c", "d"].map((id) =>
