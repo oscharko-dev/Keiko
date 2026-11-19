@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fc55095f8dfe61eb9bf5eb9defb67403259e0517d9a6b3de1258b68dc07633fc",
+    "catalogDigest": "4fef3dcc47e9144b06f5f1cd816c0a3293abd697919bb85738df2c22d59b89ae",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -39480,7 +39480,7 @@
         "failureClasses": ["memory-capture-novelty"],
         "proofIds": ["memory.capture.novelty-gate.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:199",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:1035"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:1036"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -126661,7 +126661,7 @@
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:1155",
+      "site": "packages/keiko-server/src/memory-embedding.ts:1156",
       "package": "keiko-server"
     },
     {
