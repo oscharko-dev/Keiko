@@ -49,9 +49,7 @@ function normalizedPath(path: string): string {
 }
 
 function namesAppData(path: string): boolean {
-  return normalizedPath(path)
-    .split("/")
-    .some((segment) => segment === APP_DATA);
+  return normalizedPath(path).split("/").includes(APP_DATA);
 }
 
 /**
