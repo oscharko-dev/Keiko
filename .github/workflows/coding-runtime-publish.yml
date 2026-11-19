@@ -1,7 +1,7 @@
 name: Coding runtime packages
 
-# Publishes the optional npm coding-runtime packages (@oscharko-dev/keiko-coding-runtime-darwin-arm64
-# and -darwin-x64) through npm Trusted Publishing, the way release.yml publishes the product (#3898
+# Publishes the optional npm coding-runtime packages (@oscharko-dev/keiko-coding-runtime-<target>)
+# of every target a version carries through npm Trusted Publishing, as release.yml publishes (#3898
 # AC8). release.yml is root-only, so before this workflow these packages had no governed path.
 #
 # A release owner runs it on dev with the runtime version to publish. It publishes only the reviewed
@@ -11,7 +11,7 @@ name: Coding runtime packages
 # checks each against its pin and against the approvals compiled into this commit before npm sees it,
 # and accepts a version npm already holds only with the pinned integrity.
 #
-# The npm Trusted Publisher of both packages is bound to this file and the npm-runtime-publish
+# The npm Trusted Publisher of every package is bound to this file and the npm-runtime-publish
 # environment, whose deployment branch policy admits dev only. No registry token exists.
 on:
   workflow_dispatch:

@@ -8,6 +8,7 @@ import {
   reviewedRelease,
   selectedCodingRuntimeFailures,
 } from "../lib/coding-runtime-releases.mjs";
+import { platformRuntimePackageName } from "../release-workspace-policy.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..", "..");
 const ARM = "@oscharko-dev/keiko-coding-runtime-darwin-arm64";
@@ -86,7 +87,31 @@ describe("selected coding-runtime release gate", () => {
     for (const version of Object.keys(reviewed.releases)) {
       for (const pinned of reviewedRelease(reviewed, version)) {
         expect(pinned.opencodeVersion).toMatch(/^\d+\.\d+\.\d+$/u);
+        // The entry under a target key must name that target's own package; a mismatch would
+        // surface only in the publisher, after the immutable transport release exists.
+        expect(pinned.name).toBe(platformRuntimePackageName(pinned.target));
       }
     }
+  });
+
+  // Each root pin is checked against its own reviewed entry, so one target may move ahead of the
+  // others (darwin stays at 1.1.5 while the Windows package is reviewed as 1.1.6).
+  describe("mixed runtime versions across targets", () => {
+    const WIN = "@oscharko-dev/keiko-coding-runtime-win32-x64";
+    const mixed = document("1.1.5", "2.2.5");
+    mixed.releases["1.1.6"] = { "windows-x64": entry(WIN, "1.1.6", "2.2.5") };
+
+    it("passes when darwin pins 1.1.5 and win32 pins 1.1.6", () => {
+      const root = { optionalDependencies: { [ARM]: "1.1.5", [X64]: "1.1.5", [WIN]: "1.1.6" } };
+      expect(selectedCodingRuntimeFailures(root, mixed, "2.2.5")).toEqual([]);
+    });
+
+    it("refuses win32 at 1.1.5 and darwin at 1.1.6", () => {
+      const root = { optionalDependencies: { [ARM]: "1.1.6", [X64]: "1.1.5", [WIN]: "1.1.5" } };
+      expect(selectedCodingRuntimeFailures(root, mixed, "2.2.5")).toEqual([
+        `${ARM}@1.1.6 is not a reviewed runtime package`,
+        `${WIN}@1.1.5 is not a reviewed runtime package`,
+      ]);
+    });
   });
 });

@@ -10,7 +10,8 @@
 // checked against its pin, extracted, and verified again against the approvals compiled into this
 // checkout before npm sees it. A version npm already holds is accepted only with the pinned
 // integrity, so a re-run is idempotent and a foreign upload fails closed. Publishing happens only
-// under GitHub Actions OIDC (coding-runtime-publish.yml); no registry token is read.
+// under GitHub Actions OIDC (coding-runtime-publish.yml); no registry token is read. `--verify-only`
+// runs the same pre-publish checks on local assets without OIDC and publishes nothing.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs";
@@ -153,11 +154,13 @@ function npmRunner(env) {
     });
 }
 
-/** Verifies every target first; publishes nothing unless all of them pass. */
-export async function publishCodingRuntimePackages({ root, version, assetDir, env, deps = {} }) {
-  if (!oidcTrustedPublishingAvailable(env)) {
-    throw new Error("coding runtime packages publish only through GitHub Actions OIDC");
-  }
+/**
+ * Runs every pre-publish check on local assets and publishes nothing: the reviewed pins of the
+ * version, the approved helper source commits, and for each target the tarball pin, the receipt and
+ * the extracted package against the approvals compiled into this checkout. It needs no OIDC, so the
+ * owner can run it on the assets before the immutable transport release is published.
+ */
+export async function verifyCodingRuntimePackages({ root, version, assetDir, deps = {} }) {
   const document = JSON.parse(readFileSync(join(root, CODING_RUNTIME_RELEASES_FILE), "utf8"));
   const entries = reviewedRelease(document, version);
   await provideApprovedSourceCommits(entries, root, deps);
@@ -165,6 +168,20 @@ export async function publishCodingRuntimePackages({ root, version, assetDir, en
   for (const entry of entries) {
     tarballs.push(await verifyDownloadedRuntime(entry, version, assetDir, deps)); // NOSONAR javascript:S9382 -- one candidate is unpacked and verified at a time; the first failure stops the rest
   }
+  return { entries, tarballs };
+}
+
+/** Verifies every target first; publishes nothing unless all of them pass. */
+export async function publishCodingRuntimePackages({ root, version, assetDir, env, deps = {} }) {
+  if (!oidcTrustedPublishingAvailable(env)) {
+    throw new Error("coding runtime packages publish only through GitHub Actions OIDC");
+  }
+  const { entries, tarballs } = await verifyCodingRuntimePackages({
+    root,
+    version,
+    assetDir,
+    deps,
+  });
   const publishDeps = { npm: npmRunner(env), log: console.log, ...deps };
   const outcomes = [];
   for (const [index, entry] of entries.entries()) {
@@ -173,17 +190,47 @@ export async function publishCodingRuntimePackages({ root, version, assetDir, en
   return outcomes;
 }
 
-if (isMainModule(import.meta.url)) {
-  const [version, assetDir] = process.argv.slice(2);
-  if (version === undefined || assetDir === undefined) {
-    console.error("usage: publish-coding-runtime-npm-packages.mjs <version> <asset-dir>");
-    process.exitCode = 2;
-  } else {
-    await publishCodingRuntimePackages({
-      root: process.cwd(),
-      version,
-      assetDir,
-      env: process.env,
-    });
+const USAGE =
+  "usage: publish-coding-runtime-npm-packages.mjs <version> <asset-dir>\n" +
+  "       publish-coding-runtime-npm-packages.mjs --verify-only <version> <asset-dir>";
+
+/** The CLI: publish under OIDC, or `--verify-only` to run the same checks without publishing. */
+export async function main(
+  argv,
+  { root = process.cwd(), env = process.env, deps = {}, write = console } = {},
+) {
+  const parsed = parsePublisherArguments(argv);
+  if (parsed === undefined) {
+    write.error(USAGE);
+    return 2;
   }
+  const { verifyOnly, version, assetDir } = parsed;
+  if (!verifyOnly) {
+    await publishCodingRuntimePackages({ root, version, assetDir, env, deps });
+    return 0;
+  }
+  const { entries, tarballs } = await verifyCodingRuntimePackages({
+    root,
+    version,
+    assetDir,
+    deps,
+  });
+  for (const [index, entry] of entries.entries()) {
+    write.log(
+      `coding-runtime-verify-only: OK ${entry.name}@${version} ${entry.sha256} ${tarballs[index]}`,
+    );
+  }
+  return 0;
+}
+
+/** `[--verify-only] <version> <asset-dir>`, or undefined when the arguments are not that. */
+function parsePublisherArguments(argv) {
+  const verifyOnly = argv[0] === "--verify-only";
+  const [version, assetDir, ...extra] = verifyOnly ? argv.slice(1) : argv;
+  if (version === undefined || assetDir === undefined || extra.length > 0) return undefined;
+  return { verifyOnly, version, assetDir };
+}
+
+if (isMainModule(import.meta.url)) {
+  process.exitCode = await main(process.argv.slice(2));
 }
