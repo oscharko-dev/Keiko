@@ -6,6 +6,8 @@
 // evidence verify on GitHub. These decisions live here, not in the spawned publisher, so in-process
 // tests can prove every branch.
 
+import { PORTABLE_MANIFEST_MAX_BYTES } from "./portable-download-bounds.mjs";
+
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/u;
 
@@ -51,14 +53,21 @@ export function resumableDraftFailure(view, tag, evaluationManifestAssetName) {
  * GitHub records a SHA-256 digest for every uploaded asset. Checking it against the bytes this run
  * verified proves the upload before the release becomes immutable, instead of only afterwards.
  *
- * @param expectedAssets  [{ assetName, expectedSha256 }]
+ * An expected asset may also carry `assetId`, the immutable GitHub asset id a signed manifest
+ * recorded; an asset replaced with identical bytes keeps its digest but gets a new id, so a
+ * differing id fails too.
+ *
+ * @param expectedAssets  [{ assetName, expectedSha256, assetId? }]
  * @returns one failure per missing or mismatching digest
  */
 export function remoteDigestFailures(remoteAssets, expectedAssets) {
   const byName = new Map(
     (Array.isArray(remoteAssets) ? remoteAssets : []).map((asset) => [asset?.name, asset]),
   );
-  return expectedAssets.flatMap(({ assetName, expectedSha256 }) => {
+  return expectedAssets.flatMap(({ assetName, expectedSha256, assetId }) => {
+    if (assetId !== undefined && byName.get(assetName)?.id !== assetId) {
+      return [`${assetName} on GitHub is not the asset whose id was signed or verified.`];
+    }
     const digest = byName.get(assetName)?.digest;
     if (typeof digest !== "string" || !SHA256_DIGEST.test(digest)) {
       return [`${assetName} has no SHA-256 digest on GitHub.`];
@@ -66,6 +75,53 @@ export function remoteDigestFailures(remoteAssets, expectedAssets) {
     return digest === `sha256:${expectedSha256}`
       ? []
       : [`${assetName} on GitHub does not carry the bytes this run verified.`];
+  });
+}
+
+/**
+ * What a release carries beyond the assets this run validated, or undefined when it carries no
+ * others. Missing assets are reported by the per-asset checks. A resumed draft can still hold an
+ * asset an earlier run uploaded (a stale package of an unsupported target, a team variant); once
+ * the release is published it would be an immutable download outside the validated bundle
+ * (PR #4464).
+ *
+ * @param expected  [{ assetName }] — every asset this run validated for the release
+ * @returns a clause such as "carries assets this run did not validate: a, b"
+ */
+export function unvalidatedReleaseAssets(remoteAssets, expected) {
+  const allowed = new Set(expected.map((entry) => entry.assetName));
+  const names = (Array.isArray(remoteAssets) ? remoteAssets : []).map((asset) => asset?.name);
+  const seen = new Set();
+  const refused = new Set();
+  for (const name of names) {
+    if (!allowed.has(name) || seen.has(name)) refused.add(String(name));
+    seen.add(name);
+  }
+  return refused.size === 0
+    ? undefined
+    : `carries assets this run did not validate: ${[...refused].join(", ")}`;
+}
+
+/**
+ * The public download records of the manifests on a published release. A rerun cannot rebuild the
+ * signed manifest bytes, so after verifyPublishedPortableEvidence proved GitHub's digest against the
+ * signed download, that digest and size are what an unauthenticated download must return.
+ *
+ * @param manifestBindings  [{ assetName }] — one per portable-manifest asset
+ * @returns [{ assetName, expectedSha256, expectedSize, firstClassArchive: false }]
+ */
+export function publishedManifestDownloads(manifestBindings, remoteAssets) {
+  const remoteByName = new Map(
+    (Array.isArray(remoteAssets) ? remoteAssets : []).map((asset) => [asset?.name, asset]),
+  );
+  return manifestBindings.map(({ assetName }) => {
+    const remote = remoteByName.get(assetName);
+    return {
+      assetName,
+      expectedSha256: String(remote?.digest).slice("sha256:".length),
+      expectedSize: remote?.size,
+      firstClassArchive: false,
+    };
   });
 }
 
@@ -233,14 +289,54 @@ export function refuseIncompletePublishedRelease(publisher, releaseInfo, remoteA
   }
 }
 
+function refuseUnvalidatedAssets(publisher, releaseInfo, assets, expected, published) {
+  const unvalidated = unvalidatedReleaseAssets(assets, expected);
+  if (unvalidated === undefined) return;
+  publisher.fail(
+    published
+      ? immutableReleaseRepairFailure(releaseInfo.tag, unvalidated)
+      : `the draft GitHub release ${releaseInfo.tag} ${unvalidated}; delete them from the draft, then run the publish again.`,
+  );
+}
+
+// The set was verified before the tag check. The draft is read once more right before it is
+// published, so an asset added, removed or replaced since then never becomes an immutable public
+// download: it must still carry exactly the assets this run verified, with the same digests.
+function refuseChangedDraft(publisher, releaseInfo, expected) {
+  const { assets } = publisher.snapshot(releaseInfo);
+  refuseUnvalidatedAssets(publisher, releaseInfo, assets, expected, false);
+  const changed = remoteDigestFailures(assets, expected);
+  if (changed.length > 0) {
+    publisher.fail(
+      `the draft GitHub release ${releaseInfo.tag} changed after this run verified it: ${changed.join(" ")} Run the publish again.`,
+    );
+  }
+}
+
 /**
  * Proves the complete download set on GitHub, then publishes this run's draft as the last GitHub
- * step. Returns the assets as the public release lists them.
+ * step. The public release is read once more and must carry exactly that set again, so assets that
+ * changed between the two reads stop this run before npm, as a rerun would. Returns the assets as
+ * the public release lists them.
  */
 export function publishVerifiedPortableRelease(publisher, releaseInfo, remoteAssets, expected) {
   refuseIncompletePublishedRelease(publisher, releaseInfo, remoteAssets, expected);
+  refuseUnvalidatedAssets(
+    publisher,
+    releaseInfo,
+    remoteAssets,
+    expected,
+    releaseInfo.published === true,
+  );
   publisher.verifyAssets(remoteAssets, expected, releaseInfo);
-  const digestFailures = remoteDigestFailures(remoteAssets, expected);
+  // From here on an asset is the exact GitHub asset this run verified: a signed id (archives and
+  // setup assets) or the id of the snapshot just verified (evidence uploaded after signing).
+  const byName = new Map(remoteAssets.map((asset) => [asset?.name, asset]));
+  const pinned = expected.map((entry) => ({
+    ...entry,
+    assetId: entry.assetId ?? byName.get(entry.assetName)?.id,
+  }));
+  const digestFailures = remoteDigestFailures(remoteAssets, pinned);
   if (digestFailures.length > 0) {
     publisher.fail(
       `GitHub Release portable asset digests failed:\n  - ${digestFailures.join("\n  - ")}`,
@@ -248,6 +344,7 @@ export function publishVerifiedPortableRelease(publisher, releaseInfo, remoteAss
   }
   if (releaseInfo.draft !== true) return remoteAssets;
   publisher.assertTagAtHead(releaseInfo.tag);
+  refuseChangedDraft(publisher, releaseInfo, pinned);
   publisher.runGh([
     "release",
     "edit",
@@ -260,6 +357,9 @@ export function publishVerifiedPortableRelease(publisher, releaseInfo, remoteAss
   ]);
   publisher.log(`published GitHub release ${releaseInfo.tag}.`);
   const publicSnapshot = publisher.snapshot({ repo: releaseInfo.repo, tag: releaseInfo.tag });
+  const publishedInfo = { ...releaseInfo, published: true };
+  refuseUnvalidatedAssets(publisher, releaseInfo, publicSnapshot.assets, pinned, true);
+  refuseIncompletePublishedRelease(publisher, publishedInfo, publicSnapshot.assets, pinned);
   publisher.verifyAssets(publicSnapshot.assets, expected, releaseInfo);
   return publicSnapshot.assets;
 }
@@ -309,6 +409,11 @@ function publishedEvidenceFailuresForBinding(publisher, releaseInfo, remoteByNam
   const remote = remoteByName.get(binding.assetName);
   if (!validRemoteDigest(remote)) {
     return [`${binding.assetName} has no SHA-256 digest on GitHub.`];
+  }
+  if (typeof remote.size === "number" && remote.size > PORTABLE_MANIFEST_MAX_BYTES) {
+    return [
+      `${binding.assetName} is larger than the ${String(PORTABLE_MANIFEST_MAX_BYTES)} byte manifest limit.`,
+    ];
   }
   const download = publisher.downloadReleaseAsset(releaseInfo, binding.assetName);
   if (!validDownloadResult(download)) {
@@ -408,7 +513,8 @@ export function checkPublishedManifestBinding(manifest, expected, seams) {
   if (manifest.provenance?.sourceCommitSha !== expected.commitSha) {
     return "provenance.sourceCommitSha does not match the checked-out HEAD";
   }
-  return undefined;
+  const idFailures = signedIdFailures(manifest, expected);
+  return idFailures.length === 0 ? undefined : idFailures.join("; ");
 }
 
 /**
@@ -438,12 +544,49 @@ export function nonManifestEvidenceExpected(assets, seams) {
  * `release.commitSha` and `provenance.sourceCommitSha` must equal, and which tag its
  * `release.releaseTag` must equal.
  */
-export function manifestBindingsFromAssets(assets, head, releaseTag) {
+export function manifestBindingsFromAssets(assets, head, releaseTag, snapshot) {
+  const idOf = (name) => snapshot?.assets?.find((remote) => remote?.name === name)?.id;
   return assets.map((asset) => ({
     assetName: `${asset.platformTarget}-portable-manifest.json`,
     commitSha: head,
     releaseTag,
+    ...(snapshot === undefined
+      ? {}
+      : {
+          archiveAssetId: idOf(asset.archiveAssetName),
+          expectsSetup: asset.setupAssetName !== undefined,
+          releaseId: snapshot.id,
+          setupAssetId: asset.setupAssetName === undefined ? undefined : idOf(asset.setupAssetName),
+          target: asset.platformTarget,
+        }),
   }));
+}
+
+// A rerun's signed manifests must name the very GitHub objects of the live release; ids that
+// differ mean the manifests describe another release or asset set (PR #4464).
+// A signed setup asset for a target without a live one is as foreign as a differing id.
+function setupIdPairs(binding, expected) {
+  return expected.expectsSetup === true || binding?.setupAsset !== undefined
+    ? [["setup asset", binding?.setupAsset?.assetId, expected.setupAssetId]]
+    : [];
+}
+
+function signedIdFailures(manifest, expected) {
+  if (!("releaseId" in expected)) return [];
+  const binding = manifest.releaseImpact?.reviewedBinding;
+  const pairs = [
+    ["release", manifest.release?.releaseId, expected.releaseId],
+    ["release (reviewed binding)", binding?.releaseId, expected.releaseId],
+    ["archive asset", manifest.artifact?.assetId, expected.archiveAssetId],
+    ["archive asset (reviewed binding)", binding?.assetId, expected.archiveAssetId],
+    ...setupIdPairs(binding, expected),
+  ];
+  return pairs
+    .filter(([, signed, live]) => signed !== live || live === undefined)
+    .map(
+      ([what, signed, live]) =>
+        `${expected.target}: signed ${what} id ${String(signed)} differs from the live GitHub id ${String(live)}`,
+    );
 }
 
 /**

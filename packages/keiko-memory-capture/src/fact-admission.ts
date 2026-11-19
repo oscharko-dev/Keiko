@@ -2,6 +2,7 @@
 // person's own words only. "Im Zweifel zu wenig": a check that cannot confirm a fact drops it, and
 // the reason stays a closed value.
 
+import { statedDateDots } from "./stated-validity.js";
 import { REDACTION_PLACEHOLDER } from "@oscharko-dev/keiko-security";
 
 import {
@@ -11,11 +12,14 @@ import {
   hasWord,
   isNegated,
   lastWord,
+  isClausePunctuation,
 } from "./fact-text.js";
 import {
+  isBareRuleAnnouncement,
   isFirstPersonTaskRequest,
   isInsideCode,
   isOtherPersonsProposition,
+  ruleAnnouncementTopic,
   singleQuoteRole,
 } from "./fact-admission-guards.js";
 import { looksLikePersonalIdentifier } from "./secret-patterns.js";
@@ -64,6 +68,7 @@ export type FactAdmission =
   | {
       readonly admitted: true;
       readonly sentence: string;
+      readonly validityClause: string;
       // The person's verbatim words the fact rests on: the model's span, opened at its clause.
       readonly evidence: string;
       // The person's own words for the fact, a leading pronoun replaced by what it stood for in
@@ -79,7 +84,6 @@ export type FactAdmission =
   | { readonly admitted: false; readonly reason: FactDropReason };
 
 const EVIDENCE_MAX_CHARS = 400;
-const CLAUSE_PUNCTUATION = new Set([",", ";", ":", ".", "!", "?", "…", ")", "-", "–", "—"]);
 // A bracket opens an aside: "Ich mag Tee (aber Anna mag Kaffee)".
 const BRACKET_OPENERS = new Set(["(", "["]);
 const QUOTE_OPENERS = new Set(["„", "«", "‚"]);
@@ -87,7 +91,7 @@ const QUOTE_CLOSERS = new Set(["”", "»"]);
 const QUOTE_TOGGLES = new Set(['"', "“"]);
 const SENTENCE_END_RE = /[.!?…\n]/u;
 const DIGIT_RE = /\p{N}/u;
-const INNER_SENTENCE_RE = /[.!?…]\s+\p{Lu}/u;
+const INNER_SENTENCE_RE = /[.!?…](?=\s+\p{Lu})/gu;
 const SUBORDINATE_LEAD_RE = /(?:^|[^\p{L}])(?:dass|that)\s*$/iu;
 const SUBORDINATE_OPENING_RE = /^(?:dass|that)\s+(?=(?:ich|i|wir|we)(?![\p{L}\p{N}]))/iu;
 const CLAUSE_LEAD_RE = /(?:^|[\s,;:([–—-])(?:dass|that|und|and|aber|but|doch|denn)\s*$/iu;
@@ -928,31 +932,31 @@ function asksForTextWork(lead: string): boolean {
 const SPEAKER_REACH = 3;
 
 // A dot between digits ("31.12.2027", "3.5") is part of a number, not the end of a sentence.
-function endsSentenceAt(text: string, at: number): boolean {
+function endsSentenceAt(text: string, at: number, dateDots: ReadonlySet<number>): boolean {
   const char = text.charAt(at);
   if (!SENTENCE_END_RE.test(char)) return false;
   return !(
     char === "." &&
-    DIGIT_RE.test(text.charAt(at - 1)) &&
-    DIGIT_RE.test(text.charAt(at + 1))
+    (dateDots.has(at) || (DIGIT_RE.test(text.charAt(at - 1)) && DIGIT_RE.test(text.charAt(at + 1))))
   );
 }
 
 function sentenceAround(text: string, start: number, end: number): { from: number; to: number } {
+  const dateDots = statedDateDots(text);
   let from = start;
-  while (from > 0 && !endsSentenceAt(text, from - 1)) from -= 1;
-  if (end > start && endsSentenceAt(text, end - 1)) return { from, to: end };
+  while (from > 0 && !endsSentenceAt(text, from - 1, dateDots)) from -= 1;
+  if (end > start && endsSentenceAt(text, end - 1, dateDots)) return { from, to: end };
   let to = end;
-  while (to < text.length && !endsSentenceAt(text, to)) to += 1;
+  while (to < text.length && !endsSentenceAt(text, to, dateDots)) to += 1;
   return { from, to: Math.min(text.length, to + 1) };
 }
 
 function endsAtClause(text: string, end: number): boolean {
   const last = text.charAt(end - 1);
-  if (CLAUSE_PUNCTUATION.has(last)) return true;
+  if (isClausePunctuation(last)) return true;
   const rest = text.slice(end).trimStart();
   const next = rest.at(0);
-  if (next === undefined || CLAUSE_PUNCTUATION.has(next) || isQuote(next)) return true;
+  if (next === undefined || isClausePunctuation(next) || isQuote(next)) return true;
   // A closing single quote or a code mark ends the words it encloses.
   const nextAt = text.length - rest.length;
   if (next === "`" || singleQuoteRole(text, nextAt) === "close") return true;
@@ -1284,11 +1288,12 @@ function claimNamesOtherPronoun(evidence: string): boolean {
   );
 }
 
-// A question or a request asks for something; it states no fact.
+// Questions, requests and a bare rule announcement state no usable fact content.
 function speechActDropReason(evidence: string, sentence: string): FactDropReason | null {
   if (sentence.trimEnd().endsWith("?") || evidence.includes("?")) return "question";
   if (POLITE_REQUEST_RE.test(evidence) || IMPERATIVE_TO_ME_RE.test(evidence)) return "request";
   if (isFirstPersonTaskRequest(evidence)) return "request";
+  if (isBareRuleAnnouncement(evidence)) return "not-entailed";
   return null;
 }
 
@@ -1546,13 +1551,25 @@ function spanDropReason(evidence: string, text: string): FactDropReason | null {
   if (!text.includes(evidence)) {
     return quotesMaskedIdentifier(evidence, text) ? "personal-identifier" : "evidence-not-verbatim";
   }
-  return INNER_SENTENCE_RE.test(evidence) ? "not-clause-boundary" : null;
+  const dateDots = statedDateDots(evidence);
+  for (const stop of evidence.matchAll(INNER_SENTENCE_RE)) {
+    if (!dateDots.has(stop.index)) return "not-clause-boundary";
+  }
+  return null;
 }
 
 // "Sie beginnen immer mit einer Zusammenfassung" after "… meine Berichte": the claim's subject is the
 // person's own thing only when the model's statement names it and the person named exactly that
 // thing as theirs just before. "Diese" and "These" open a noun phrase and stand for nothing.
-const LEADING_THING_PRONOUN_RE = /^(?:Sie|Es|They|It)\s+/u;
+const THING_PRONOUN_RE = /\b(?:Sie|Es|They|It)\s+/gu;
+
+// The extraction prompt needs the preceding message only when admission could bind a clause to it.
+export function mayResolvePreviousTurn(text: string): boolean {
+  for (const match of text.matchAll(THING_PRONOUN_RE)) {
+    if (opensClause(text, match.index, 0)) return true;
+  }
+  return false;
+}
 const OWN_THING_GLOBAL_RE = /(?:^|[^\p{L}])(mein(?:e|em|en|er|es)?|my)\s+(\p{L}+)/giu;
 const LEADING_WORDS_RE = /^(?:(?:mein(?:e|em|en|er|es)?|my|die|der|das|the)\s+)?(\p{L}+)/iu;
 // The subject form of the possessive the person used: "für meine Berichte" → "Meine Berichte".
@@ -1581,18 +1598,37 @@ function ownThings(earlier: string): ReadonlyMap<string, OwnThing> {
   return things;
 }
 
+// A rule announcement names exactly one owned topic. Only a model that names its whole
+// multiword subject can resolve the later pronoun. All supplied words come from the two turns.
+function compoundRuleSubject(body: string, topic: readonly string[]): string | null {
+  const [owner, ...words] = topic;
+  const possessive = SUBJECT_POSSESSIVE[owner?.toLowerCase() ?? ""];
+  if (possessive === undefined || namesOtherPerson(`${possessive} ${words.at(-1) ?? ""}`))
+    return null;
+  const named = body
+    .normalize("NFC")
+    .trim()
+    .replace(/^(?:mein(?:e|em|en|er|es)?|my|die|der|das|the)\s+/iu, "")
+    .split(/\s+/u);
+  return words.every((word, index) => word.toLowerCase() === named[index]?.toLowerCase())
+    ? `${possessive} ${words.join(" ")}`
+    : null;
+}
+
 // The model must name which of the person's things the pronoun stands for: a pronoun alone may
 // mean anyone, so a kept pronoun never resolves. The noun is taken from the person's own words.
 function referent(body: string, earlier: string): string | null {
+  const topic = ruleAnnouncementTopic(earlier);
+  if (topic !== undefined && topic.length > 2) return compoundRuleSubject(body, topic);
   const named = LEADING_WORDS_RE.exec(body.normalize("NFC").trim())?.[1];
   const thing = named === undefined ? undefined : ownThings(earlier).get(named.toLowerCase());
   return thing === undefined ? null : `${thing.possessive} ${thing.noun}`;
 }
 
 function resolvedClaim(body: string, evidence: string, context: AdmissionContext): string {
-  const pronoun = LEADING_THING_PRONOUN_RE.exec(evidence);
+  const pronoun = evidence.matchAll(THING_PRONOUN_RE).next().value;
   const earlier = context.previousUserText?.normalize("NFC");
-  if (pronoun === null || earlier === undefined) return evidence;
+  if (pronoun?.index !== 0 || earlier === undefined) return evidence;
   const thing = referent(body, earlier);
   return thing === null ? evidence : `${thing} ${evidence.slice(pronoun[0].length)}`;
 }
@@ -1630,7 +1666,12 @@ export function admitProposedFact(
     surroundingDropReason(userText, span, fact.about);
   if (reason !== null) return dropped(reason);
   const claim = resolvedClaim(fact.body, words, context);
-  return admittedClaim(fact, { claim, evidence: words, opensSentence: start === from }, sentence);
+  return admittedClaim(
+    fact,
+    { claim, evidence: words, opensSentence: start === from },
+    sentence,
+    start - from,
+  );
 }
 
 interface ClauseSpan {
@@ -1686,10 +1727,13 @@ function opensWord(text: string, at: number): boolean {
 // Only the few characters a lead can occupy are read.
 function opensClause(text: string, at: number, sentenceFrom: number): boolean {
   let gap = at;
-  while (gap > sentenceFrom && /\s/u.test(text.charAt(gap - 1))) gap -= 1;
+  while (gap > sentenceFrom && /\s/u.test(text.charAt(gap - 1))) {
+    if (text.charAt(gap - 1) === "\n") return true;
+    gap -= 1;
+  }
   if (gap === sentenceFrom) return true;
   const last = text.charAt(gap - 1);
-  if (CLAUSE_PUNCTUATION.has(last) || BRACKET_OPENERS.has(last) || isQuote(last)) return true;
+  if (isClausePunctuation(last) || BRACKET_OPENERS.has(last) || isQuote(last)) return true;
   return CLAUSE_LEAD_RE.test(text.slice(Math.max(sentenceFrom, gap - CLAUSE_LEAD_REACH), at));
 }
 
@@ -1722,10 +1766,32 @@ interface ClaimWords {
   readonly opensSentence: boolean;
 }
 
+// A calendar qualifier may follow the copied words. Keep it with the same assertion. A comma
+// before a year and a conjunction inside a noun phrase both stay in that assertion.
+const JOINING_WORD = "and|but|und|aber|doch|while|whereas|während";
+const NEW_SUBJECT = String.raw`I|we|he|she|they|my|our|ich|wir|er|sie|mein\w*|unser\w*`;
+// These predicates can share the preceding subject. Noun phrases such as "design and use of tools"
+// and "work and use cases" keep their common qualifier.
+const COORDINATED_PREDICATE = String.raw`use(?!\s+(?:of|cases?)\b)|prefer|am|have|need|rely\s+on|work\s+(?:with|at|as|for)|live\s+in|nutze|benutze|verwende|bevorzuge|arbeite|wohne|bin|habe|brauche|benötige`;
+const INDEPENDENT_CLAUSE_RE = new RegExp(
+  String.raw`;|,\s*(?:${JOINING_WORD})\b|\b(?:${JOINING_WORD})\b(?=\s+(?:${NEW_SUBJECT}|${COORDINATED_PREDICATE})\b)`,
+  "giu",
+);
+
+function validityClauseAt(sentence: string, anchor: number): string {
+  let from = 0;
+  for (const boundary of sentence.matchAll(INDEPENDENT_CLAUSE_RE)) {
+    if (boundary.index > anchor) return sentence.slice(from, boundary.index);
+    from = boundary.index + boundary[0].length;
+  }
+  return sentence.slice(from);
+}
+
 function admittedClaim(
   fact: ProposedFact,
   { claim, evidence, opensSentence }: ClaimWords,
   sentence: string,
+  anchor: number,
 ): FactAdmission {
   const reason =
     subjectDropReason(fact.about, claim) ?? polarityDropReason(fact.body.trim(), claim);
@@ -1735,6 +1801,7 @@ function admittedClaim(
   return {
     admitted: true,
     sentence,
+    validityClause: validityClauseAt(sentence, anchor),
     evidence,
     claim: opensSentence ? withoutTrailingMarks(claim) : sentenceCase(withoutTrailingMarks(claim)),
     subject,

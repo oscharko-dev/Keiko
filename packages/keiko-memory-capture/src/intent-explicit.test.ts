@@ -34,6 +34,59 @@ function ctx(overrides: Partial<CaptureContext> = {}): CaptureContext {
 }
 
 describe("tryExtractRemember", () => {
+  it.each([
+    "Please remember that I prefer tables until November 18, 2026.",
+    "Please remember that my preferred format is tables until November 18, 2026.",
+    "Merke dir: Ich bevorzuge Tabellen bis zum 18. November 2026.",
+    "Bitte merke dir, dass ich Tabellen bis zum 18. November 2026 bevorzuge.",
+  ])("carries a current preference's stated local deadline in %s", (statement) => {
+    const nowMs = new Date(2026, 10, 17, 12).getTime();
+    expect(tryExtractRemember(statement, ctx({ nowMs }))).toMatchObject({
+      kind: "candidate",
+      proposal: {
+        validity: {
+          validFrom: nowMs,
+          validUntil: new Date(2026, 10, 18, 23, 59, 59, 999).getTime(),
+        },
+      },
+    });
+  });
+
+  it("declines a present preference whose explicitly stated end has passed", () => {
+    const nowMs = new Date(2026, 10, 17, 12).getTime();
+    expect(
+      tryExtractRemember(
+        "Please remember that I prefer tables until November 12, 2026.",
+        ctx({ nowMs }),
+      ),
+    ).toMatchObject({ kind: "rejected", reason: "expired-preference" });
+  });
+
+  it("accepts the German project qualifier with a comma and dass", () => {
+    const projectId = "project-one" as ProjectId;
+    expect(
+      tryExtractRemember(
+        "Bitte merke dir für dieses Projekt, dass wir Vitest nutzen.",
+        ctx({ projectId }),
+        { rememberScopeKind: "user" },
+      ),
+    ).toMatchObject({
+      kind: "candidate",
+      proposal: { scope: { kind: "project", projectId }, body: "wir Vitest nutzen." },
+    });
+  });
+
+  it("keeps an explicitly remembered historical event independently of the date it describes", () => {
+    const nowMs = new Date(2026, 10, 17, 12).getTime();
+    const result = tryExtractRemember(
+      "Remember that I worked on the migration until November 12, 2025.",
+      ctx({ nowMs }),
+    );
+    expect(result?.kind).toBe("candidate");
+    if (result?.kind === "candidate")
+      expect(result.proposal.validity).toEqual({ validFrom: nowMs });
+  });
+
   it('extracts "remember that X" as a preference proposal at user scope', () => {
     const outcome = tryExtractRemember("remember that I prefer dark mode", ctx());
     expect(outcome?.kind).toBe("candidate");
@@ -88,6 +141,22 @@ describe("tryExtractRemember", () => {
       ctx({ projectId: "p-1" as ProjectId }),
     );
     expect(outcome).toEqual({ kind: "rejected", reason: "scope-not-resolvable" });
+  });
+
+  it.each([
+    "Please remember about this workspace: keep diagrams local",
+    "Merke dir zu diesem Arbeitsbereich: keep diagrams local",
+    "Bitte speichere zu diesem Arbeitsbereich, dass keep diagrams local",
+    "Bitte merke dir für diesen Arbeitsbereich: keep diagrams local",
+  ])("honours the named workspace and the caller's scope constraint in %s", (statement) => {
+    const context = ctx({ projectId: "p-1" as ProjectId, workspaceId: "w-1" as WorkspaceId });
+    expect(tryExtractRemember(statement, context, { rememberScopeKind: "user" })).toMatchObject({
+      kind: "candidate",
+      proposal: { scope: { kind: "workspace", workspaceId: "w-1" }, body: "keep diagrams local" },
+    });
+    const rejected = { kind: "rejected", reason: "scope-not-resolvable" };
+    expect(tryExtractRemember(statement, context, { scopeKind: "project" })).toEqual(rejected);
+    expect(tryExtractRemember(statement, ctx(), { rememberScopeKind: "user" })).toEqual(rejected);
   });
 
   it("flips requiresApproval=true when body classifies as confidential", () => {
@@ -181,6 +250,32 @@ describe("tryExtractForget", () => {
   it("returns null for non-forget text (mutation witness on regex)", () => {
     expect(tryExtractForget("remember about X", ctx(), { resolver: () => [] })).toBeNull();
   });
+
+  it.each([
+    "Vergiss den Bericht. Oder besser nicht.",
+    "Bitte vergiss den Bericht nicht mehr.",
+    "Please forget the report. Actually, don't.",
+    "Please forget the report. Actually, don't forget it.",
+    "Please forget the report. Actually, do not.",
+    "Please forget the report. Actually, don't forget the report.",
+    "Please forget the report. Actually, please don't forget it.",
+    "Vergiss den Bericht und sag Bescheid – nein, vergiss ihn bitte nicht.",
+    "Please forget the report. On second thought, do not forget that.",
+    "Bitte vergiss den Bericht. Doch lieber nicht.",
+  ])("honours an explicit withdrawal before resolving a memory in %s", (text) => {
+    const resolver = vi.fn(() => ["memory-report" as MemoryId]);
+    expect(tryExtractForget(text, ctx(), { resolver })).toBeNull();
+    expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it.each(["Vergiss den Bericht. Danke.", "Vergiss, dass ich den Bericht nicht mehr nutze."])(
+    "still resolves a clear forget in %s",
+    (text) => {
+      expect(
+        tryExtractForget(text, ctx(), { resolver: () => ["memory-report" as MemoryId] })?.kind,
+      ).toBe("forget");
+    },
+  );
 
   it("extracts German forget intents", () => {
     const outcome = tryExtractForget("Vergiss bitte die Dark-Mode-Präferenz", ctx(), {
@@ -435,6 +530,23 @@ describe("explicit German forget and remember statements (#4211)", () => {
   };
 
   it.each([
+    "Bitte vergiss das nicht.",
+    "Bitte vergiss nie, dass ich Tabellen mag.",
+    "Bitte vergiss den Bericht nicht!",
+    "Bitte vergiss meine Formatvorliebe nicht. Danke.",
+    "Bitte vergiss den Bericht nicht, vielen Dank.",
+    "Bitte vergiss den Bericht nicht – das ist mir wichtig.",
+    "Bitte vergiss den Bericht nicht: Ich brauche ihn.",
+    "Bitte vergiss meine Aussage, dass ich im Team arbeite, nicht. Danke.",
+    "Bitte vergiss doch nicht meine Formatvorliebe.",
+    "Bitte vergiss bloß nicht, dass ich Tabellen mag.",
+    "Bitte vergiss auf gar keinen Fall den Bericht.",
+    "Bitte vergiss den Bericht auf keinen Fall, vielen Dank.",
+    "Please don't forget that.",
+    "Please forget not the report.",
+    "Please forget it.",
+    "Please forget the old API and use the new one.",
+    "She said: Please forget my address.",
     "Vergiss nicht, den Bericht zu schicken",
     "Vergiss bitte nicht den Bericht",
     "vergiss es nicht",
@@ -467,6 +579,15 @@ describe("explicit German forget and remember statements (#4211)", () => {
   });
 
   it.each([
+    ["Bitte vergiss meine Formatvorliebe.", "meine Formatvorliebe"],
+    ["Please forget my formatting preference.", "my formatting preference"],
+    ["Bitte vergiss, dass ich Tabellen mag.", "ich Tabellen mag"],
+    [
+      "Bitte vergiss, dass ich Tabellen mag, aber Layouts nicht. Danke.",
+      "ich Tabellen mag, aber Layouts nicht",
+    ],
+    ["Please forget that I use tables.", "I use tables"],
+    ["Please forget that I don't use tables. Thanks.", "I don't use tables"],
     ["Vergiss, dass ich Tabellen mag", "ich Tabellen mag"],
     ["Vergiss bitte, dass ich Tabellen mag.", "ich Tabellen mag"],
     ["Forget that I like tables.", "I like tables"],
@@ -481,6 +602,12 @@ describe("explicit German forget and remember statements (#4211)", () => {
     ],
     ["Vergiss, dass ich Tabellen mag und gern lese", "ich Tabellen mag und gern lese"],
     ["Forget my address and phone", "my address and phone"],
+    [
+      "Vergiss meine Telefonnummer und sag bitte nicht, dass ich sie gespeichert hatte.",
+      "meine Telefonnummer",
+    ],
+    ["Please forget the report. Actually, don't publish it.", "the report"],
+    ["Please forget the report. Actually, don't forget my umbrella.", "the report"],
     ["Forget my address, phone and email", "my address, phone and email"],
     ["Vergiss meine Adresse und alles andere", "meine Adresse und alles andere"],
     ["Vergiss meine Adresse, ich bin umgezogen", "meine Adresse, ich bin umgezogen"],

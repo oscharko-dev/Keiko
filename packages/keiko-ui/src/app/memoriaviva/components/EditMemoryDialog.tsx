@@ -1,5 +1,6 @@
 "use client";
 
+import { ApiError } from "@/lib/api-shared-primitives";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 
 // Issue #211 — Inline edit form for memory body, tags, and sensitivity.
@@ -16,7 +17,7 @@ import {
   MEMORY_SENSITIVITIES,
   personMemoryTags,
 } from "@oscharko-dev/keiko-contracts/runtime/memory";
-import { correctMemory, editMemory } from "@/lib/memory-api";
+import { correctMemory, editMemory, type EditMemoryInput } from "@/lib/memory-api";
 
 import { useDialogTabTrap } from "../../components/desktop/hooks/useDialogTabTrap";
 import { useModalInteractionLock } from "../../components/desktop/hooks/useModalInteractionLock";
@@ -33,6 +34,41 @@ interface EditMemoryDialogProps {
   readonly correctMemoryImpl?: typeof correctMemory;
 }
 
+function editableFieldsChanged(
+  original: MemoryRecord,
+  current: MemoryRecord,
+  versionConflict: boolean,
+): boolean {
+  return (
+    versionConflict ||
+    original.body !== current.body ||
+    original.provenance.sensitivity !== current.provenance.sensitivity ||
+    JSON.stringify(personMemoryTags(original.tags)) !==
+      JSON.stringify(personMemoryTags(current.tags))
+  );
+}
+
+function changedFields(
+  original: MemoryRecord,
+  body: string,
+  tagsRaw: string,
+  sensitivity: MemorySensitivity,
+): EditMemoryInput {
+  const originalTags = personMemoryTags(original.tags);
+  const tags =
+    tagsRaw === originalTags.join(", ")
+      ? originalTags
+      : tagsRaw
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean);
+  return {
+    ...(body === original.body.trim() ? {} : { body }),
+    ...(JSON.stringify(tags) === JSON.stringify(originalTags) ? {} : { tags }),
+    ...(sensitivity === original.provenance.sensitivity ? {} : { sensitivity }),
+  };
+}
+
 export function EditMemoryDialog({
   record,
   mode = "edit",
@@ -42,6 +78,9 @@ export function EditMemoryDialog({
   correctMemoryImpl = correctMemory,
 }: EditMemoryDialogProps): ReactNode {
   const t = useTranslate();
+  const [original] = useState(record);
+  const [versionConflict, setVersionConflict] = useState(false);
+  const contentChanged = editableFieldsChanged(original, record, versionConflict);
   const [body, setBody] = useState(record.body);
   const [tagsRaw, setTagsRaw] = useState(personMemoryTags(record.tags).join(", "));
   const [sensitivity, setSensitivity] = useState<MemorySensitivity>(record.provenance.sensitivity);
@@ -79,6 +118,7 @@ export function EditMemoryDialog({
   );
 
   const handleSave = useCallback(async (): Promise<void> => {
+    if (contentChanged) return;
     const trimmedBody = body.trim();
     if (trimmedBody.length === 0) {
       setError(t("memoria.dialog.bodyRequired"));
@@ -88,11 +128,6 @@ export function EditMemoryDialog({
       return;
     }
 
-    const tags = tagsRaw
-      .split(",")
-      .map((t) => t.trim())
-      .filter((t) => t.length > 0);
-
     setSaving(true);
     setError(null);
     try {
@@ -100,29 +135,38 @@ export function EditMemoryDialog({
         const res = await correctMemoryImpl(record.id as MemoryId, trimmedBody);
         onSave(res.correction);
       } else {
-        const res = await editMemoryImpl(record.id as MemoryId, {
-          body: trimmedBody,
-          tags,
-          sensitivity,
-        });
-        onSave(res.memory);
+        const patch = changedFields(original, trimmedBody, tagsRaw, sensitivity);
+        const saved =
+          Object.keys(patch).length === 0
+            ? record
+            : (await editMemoryImpl(record.id, { ...patch, expectedUpdatedAt: record.updatedAt }))
+                .memory;
+        onSave(saved);
       }
     } catch (err) {
-      setError(formatError(err));
+      if (!isCorrectMode && err instanceof ApiError && err.status === 409) setVersionConflict(true);
+      else setError(formatError(err));
     } finally {
       setSaving(false);
     }
   }, [
+    contentChanged,
     body,
     tagsRaw,
     sensitivity,
-    record.id,
+    original,
+    record,
     isCorrectMode,
     correctMemoryImpl,
     editMemoryImpl,
     onSave,
     t,
   ]);
+
+  function saveErrorMessage(): string | null {
+    return contentChanged ? t("memoria.dialog.editConflict") : error;
+  }
+  const errorMessage = saveErrorMessage();
 
   // One of four mutually exclusive save-button labels — extracted as early
   // returns instead of a nested ternary chain (mirrors ReviewRowActions in
@@ -173,7 +217,7 @@ export function EditMemoryDialog({
               }}
               disabled={saving}
               aria-required="true"
-              aria-invalid={bodyInvalid ? "true" : undefined}
+              aria-invalid={bodyInvalid}
               aria-describedby={bodyInvalid ? errorId : undefined}
             />
           </div>
@@ -220,9 +264,9 @@ export function EditMemoryDialog({
             </>
           )}
 
-          {error !== null ? (
+          {errorMessage !== null ? (
             <p id={errorId} role="alert" className="mc-dialog-error">
-              {error}
+              {errorMessage}
             </p>
           ) : null}
 
@@ -241,7 +285,7 @@ export function EditMemoryDialog({
               onClick={() => {
                 void handleSave();
               }}
-              disabled={saving}
+              disabled={saving || contentChanged}
               aria-busy={saving}
             >
               {resolveSaveButtonLabel()}

@@ -20,23 +20,32 @@ exceed 17 000 nodes per screen with meaningful text at depth 7–18.
    snapshot-build (scoped node fetch via `GET /v1/files/:key/nodes` + screen render via
    `GET /v1/images`). Every downstream stage reads the stored snapshot record. There is no
    polling, no webhook, no Figma MCP, no OAuth — re-snapshot is an explicit on-demand full
-   re-fetch. Concurrent builds for the same board scope coalesce server-side into one build.
+   re-fetch. Concurrent builds for the same local evidence root, board scope, and requested version
+   coalesce server-side into one build. Explicit version pins apply to both node and render requests.
+   For latest imports, the connector checks available Figma revision metadata across scoped reads and
+   rechecks it after obtaining render URLs. A detected change aborts the build before publication.
+   A first import that completed and was stored after every waiting request had timed out or
+   closed stays answerable for ten minutes: a retry receives that stored capture once instead of
+   importing the board again, while the record still exists. An explicit re-snapshot and a failed
+   build are never retained. A stored capture records `figma.snapshot.captured`; a build that
+   stopped, and a request that stopped waiting, record `figma.snapshot.capture-failed` with the
+   closed connector code and stage (`build`, `persist`, `deadline`, `client-closed`).
 2. **PAT-only credential posture.** The read-only token comes from `FIGMA_ACCESS_TOKEN`
    (allowlisted in the CLI `.env` loader) or the encrypted vault
    (`packages/keiko-server/src/qualityIntelligence/figma/figmaTokenStore.ts`). The token string
    is materialised exclusively at the transport boundary (`X-Figma-Token` header in the two port
    adapters) and never appears in logs, errors, snapshots, or the browser.
-3. **Per-screen BFS scoped pagination.** A shallow discovery fetch finds screens; each screen is
-   deep-fetched breadth-first with per-screen-independent node/fetch budgets
-   (`KEIKO_FIGMA_*` dials, defaults 8/10000/32/80, concurrency 3) so the captured tree is
-   deterministic and drift-hash stable. Budget exhaustion surfaces as coverage notices in the
-   snapshot summary — never silent truncation.
-4. **Immutable, integrity-hashed evidence record.** The snapshot persists per-screen IR + rendered
-   image + provenance (fileKey, nodeId, pinned version, fetchedAt) with per-screen and
-   snapshot-level hashes. The hash EXCLUDES `fetchedAt` and all optional hash-neutral IR fields
-   (`links`, `textColor`/`backgroundColor`, `layout`/`sizing`/`cornerRadius`/`typography`) so it
-   is stable across re-fetches of an unchanged design. The store re-verifies the snapshot-level
-   hash on load and rejects tampered records. Records are covered by retention enforcement.
+3. **Per-screen BFS scoped pagination.** Discovery follows bounded nested sections. Screen trees
+   expand breadth-first with independent budgets (`KEIKO_FIGMA_*`, defaults depth 8, 8,000 nodes and
+   six fetches per screen, 16 deep screens, and concurrency two). Discovery and screen budget limits
+   surface as coverage notices. Render downloads have per-image and aggregate byte limits. Invalid
+   or skipped renders retain their structural IR when available.
+4. **Immutable, integrity-hashed evidence record.** The snapshot stores redacted IR, rendered PNGs,
+   and provenance. The existing drift hash excludes `fetchedAt`, prototype links and optional IR
+   metadata for compatibility. New records also hash the complete stored record. The store verifies
+   hashes on reads and checks each PNG against its recorded size and digest. Write ordering makes
+   the JSON record the commit marker after the image set is durable. Existing records remain readable.
+   Retention and orphan cleanup are restricted to owned evidence paths.
 5. **Deterministic, model-free extraction pipeline.** `packages/keiko-quality-intelligence/src/domain/figma/`
    cleans the scoped tree into a lean per-screen IR (+ design tokens + inter-screen links),
    derives the navigation graph (#811), the accessibility baseline (#812), the structural test
@@ -48,9 +57,11 @@ exceed 17 000 nodes per screen with meaningful text at depth 7–18.
    code skeleton.
 6. **Drift via board-stable identity (#735).** A QI run pins the snapshot runId it was generated
    from. Because the record is write-once, drift re-check resolves the LATEST snapshot of the
-   same board scope (`listByScope(fileKey, nodeId)`) and compares integrity hashes; screen atom
-   ids are screenId-derived (board-stable), so changed screens report as changed-stale and
-   regenerate-stale re-ingests the latest snapshot. The generate path keeps exact pinning.
+   same board scope (`listByScope(fileKey, nodeId)`) and compares the derived evidence fingerprints.
+   Equal legacy drift hashes still allow changes in prototype links and accessibility metadata.
+   Re-check reports unavailable evidence when the latest indexed record fails validation. Screen
+   renames preserve the original atom identity while updating its fingerprint. Regenerate-stale
+   re-ingests the latest snapshot. The generate path keeps exact pinning.
 
 ## Consequences
 

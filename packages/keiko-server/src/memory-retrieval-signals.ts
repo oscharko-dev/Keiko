@@ -42,6 +42,9 @@ import {
   buildStrengthById,
   DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
   DEFAULT_STALE_CONFIDENCE_THRESHOLD,
+  retrieveMemoryContext,
+  type MemoryQueryPort,
+  type MemoryRetrievalResult,
   type RankingFusionMode,
 } from "@oscharko-dev/keiko-memory-retrieval";
 import type {
@@ -59,21 +62,41 @@ import {
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { emitServerDiagnostic } from "./diagnostics-log.js";
 import { configuredEmbeddingProviders } from "./local-knowledge-handlers.js";
-import { embedMemoryText, memoryEmbeddingCalibrationFor } from "./memory-embedding.js";
+import {
+  bindMemoryQueryEmbedding,
+  logMemoryEmbeddingProviderUnavailable,
+  memoryEmbeddingCalibrationFor,
+  memoryEmbeddingProviderIdentity,
+} from "./memory-embedding.js";
 
 export type SemanticRetrievalGateReason =
   | "allowed"
   | "blocked-by-policy"
   | "no-query"
+  | "no-budget"
   | "no-embeddings"
   | "no-embedder"
+  | "query-mismatch"
   | "identity-mismatch"
   | "vector-index-failed";
 
-export interface SemanticRetrievalGate {
-  readonly allowed: boolean;
-  readonly reason: SemanticRetrievalGateReason;
-}
+type SemanticRetrievalGate =
+  | {
+      readonly allowed: true;
+      readonly reason: "allowed";
+      readonly matchesQuery: (query: string | undefined) => boolean;
+      readonly providerIdentity: string;
+      readonly embedQuery: (signal?: AbortSignal) => Promise<MemoryEmbeddingInput | null>;
+    }
+  | {
+      readonly allowed: false;
+      readonly reason: "blocked-by-policy" | "no-query" | "query-mismatch";
+    }
+  | {
+      readonly allowed: false;
+      readonly reason: "no-embedder";
+      readonly eligibleForAnyProvider: boolean;
+    };
 
 const SECRET_EGRESS_REJECTION_REASONS = new Set<RejectionReason>([
   "credential-shape",
@@ -134,16 +157,6 @@ function isInTenantEndpoint(baseUrl: string): boolean {
   return false;
 }
 
-function hasInTenantEmbeddingProvider(deps: UiHandlerDeps): boolean {
-  return configuredEmbeddingProviders(currentGatewayConfig(deps)).some((provider) =>
-    isInTenantEndpoint(provider.baseUrl),
-  );
-}
-
-function hasEmbeddingProvider(deps: UiHandlerDeps): boolean {
-  return configuredEmbeddingProviders(currentGatewayConfig(deps)).length > 0;
-}
-
 export function semanticRetrievalGateForText(
   deps: UiHandlerDeps,
   queryText: string | undefined,
@@ -153,23 +166,30 @@ export function semanticRetrievalGateForText(
     return { allowed: false, reason: "no-query" };
   }
   const rejection = memoryTextEgressRejectionReason(queryText, policy);
-  if (rejection === null) {
-    return { allowed: true, reason: "allowed" };
-  }
-  if (SECRET_EGRESS_REJECTION_REASONS.has(rejection)) {
+  if (rejection !== null && SECRET_EGRESS_REJECTION_REASONS.has(rejection)) {
     return { allowed: false, reason: "blocked-by-policy" };
   }
-  if (hasInTenantEmbeddingProvider(deps)) {
-    return { allowed: true, reason: "allowed" };
+  // Use the same preferred provider as document embeddings. Authorize that recipient and bind
+  // the checked text to it so a different gateway configuration cannot change the dispatch.
+  const provider = configuredEmbeddingProviders(currentGatewayConfig(deps))[0];
+  if (provider === undefined) {
+    return { allowed: false, reason: "no-embedder", eligibleForAnyProvider: rejection === null };
+  }
+  if (rejection !== null && !isInTenantEndpoint(provider.baseUrl)) {
+    return { allowed: false, reason: "blocked-by-policy" };
   }
   return {
-    allowed: false,
-    reason: hasEmbeddingProvider(deps) ? "blocked-by-policy" : "no-embedder",
+    allowed: true,
+    reason: "allowed",
+    matchesQuery: (query) => query === queryText,
+    providerIdentity: memoryEmbeddingProviderIdentity(provider),
+    embedQuery: bindMemoryQueryEmbedding(deps, provider, queryText),
   };
 }
 
 function isSemanticRetrievalMetadataCandidate(record: MemoryMetadata, nowMs: number): boolean {
   if (record.status !== "accepted") return false;
+  if (record.validity.validFrom > nowMs) return false;
   if (record.validity.validUntil !== undefined && record.validity.validUntil <= nowMs) return false;
   return record.confidence > DEFAULT_STALE_CONFIDENCE_THRESHOLD;
 }
@@ -192,13 +212,12 @@ function cleartextCandidateScore(
   );
 }
 
-function gatherCandidateIds(
+function gatherCandidateMetadata(
   vault: MemoryVaultStore,
   scopes: readonly MemoryScope[],
   nowMs: number,
-  strengthById: ReadonlyMap<MemoryId, number>,
   signal?: AbortSignal,
-): readonly MemoryId[] {
+): MemoryMetadata[] {
   const candidates: MemoryMetadata[] = [];
   const seen = new Set<string>();
   for (const scope of scopes) {
@@ -214,6 +233,14 @@ function gatherCandidateIds(
       candidates.push(record);
     }
   }
+  return candidates;
+}
+
+function semanticCandidateIds(
+  candidates: MemoryMetadata[],
+  nowMs: number,
+  strengthById: ReadonlyMap<MemoryId, number>,
+): readonly MemoryId[] {
   candidates.sort((a, b) => {
     const scoreDelta =
       cleartextCandidateScore(b, nowMs, strengthById) -
@@ -383,18 +410,25 @@ function createMemoryVectorIndexPort(
 
 async function semanticScoresFrom(
   deps: UiHandlerDeps,
-  queryText: string,
+  gate: Extract<SemanticRetrievalGate, { readonly allowed: true }>,
   candidateIds: readonly MemoryId[],
   embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
   signal?: AbortSignal,
 ): Promise<ReadonlyMap<MemoryId, number> | undefined> {
   throwIfAborted(signal);
-  const queryEmbedding = await embedMemoryText(deps, queryText, "query");
+  // The bound provider cannot produce a comparable query vector for an old provider's rows.
+  // The configured model name can be a same-endpoint alias. The gateway supplies the canonical
+  // model only in its response, including when the alias itself looks like a familiar model ID.
+  if (!candidateIds.some((id) => embeddings.get(id)?.provider === gate.providerIdentity)) {
+    warnSkippedIncompatible(deps, embeddings.size, candidateIds.length);
+    return undefined;
+  }
+  const queryEmbedding = await gate.embedQuery(signal);
+  throwIfAborted(signal);
   if (queryEmbedding === null) {
     warnSemanticRetrievalDisabled(deps, "no-embedder", candidateIds.length);
     return undefined;
   }
-  throwIfAborted(signal);
   const queryIdentity = inputIdentity(queryEmbedding);
   const compatible = compatibleMemoryEntries(
     queryEmbedding,
@@ -403,7 +437,7 @@ async function semanticScoresFrom(
     embeddings,
   );
   warnSkippedIncompatible(deps, compatible.skipped, candidateIds.length);
-  if (compatible.entries.length === 0) return new Map<MemoryId, number>();
+  if (compatible.entries.length === 0) return undefined;
   throwIfAborted(signal);
   const result = await createMemoryVectorIndexPort(queryIdentity, compatible.entries).search({
     namespace: "memory",
@@ -443,7 +477,9 @@ function warnSemanticRetrievalDisabled(
     operation: "memory.retrieval.semantic-disabled",
     source: "memory-retrieval-signals",
     errorClass: "SemanticRetrievalDisabled",
-    ...(reason === "vector-index-failed" || reason === "identity-mismatch"
+    ...(reason === "vector-index-failed" ||
+    reason === "identity-mismatch" ||
+    reason === "query-mismatch"
       ? {}
       : { diagnosticOutcome: "routine" as const }),
     message: "Semantic memory retrieval was disabled for this turn.",
@@ -530,21 +566,14 @@ function warnSemanticGate(
   embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
   candidateCount: number,
 ): void {
-  if (semanticGate.allowed && embeddings.size === 0) {
+  const missingEligibleProvider =
+    semanticGate.reason === "no-embedder" && semanticGate.eligibleForAnyProvider;
+  if ((semanticGate.allowed || missingEligibleProvider) && embeddings.size === 0) {
     warnSemanticRetrievalDisabled(deps, "no-embeddings", candidateCount);
   } else if (!semanticGate.allowed && semanticGate.reason !== "no-query") {
+    if (missingEligibleProvider) logMemoryEmbeddingProviderUnavailable();
     warnSemanticRetrievalDisabled(deps, semanticGate.reason, candidateCount);
   }
-}
-
-function shouldComputeSemanticScores(
-  semanticGate: SemanticRetrievalGate,
-  queryText: string | undefined,
-  embeddings: ReadonlyMap<MemoryId, MemoryEmbeddingRow>,
-): queryText is string {
-  return (
-    semanticGate.allowed && queryText !== undefined && queryText.length > 0 && embeddings.size > 0
-  );
 }
 
 export async function buildConversationRetrievalSignals(
@@ -557,9 +586,13 @@ export async function buildConversationRetrievalSignals(
   signal?: AbortSignal,
 ): Promise<ConversationRetrievalSignals> {
   throwIfAborted(signal);
-  const strengthById = buildStrengthById(vault.getAccessStats(), nowMs);
+  const candidates = gatherCandidateMetadata(vault, scopes, nowMs, signal);
   throwIfAborted(signal);
-  const candidateIds = gatherCandidateIds(vault, scopes, nowMs, strengthById, signal);
+  const strengthById = buildStrengthById(
+    vault.getAccessStats(candidates.map((record) => record.id)),
+    nowMs,
+  );
+  const candidateIds = semanticCandidateIds(candidates, nowMs, strengthById);
   throwIfAborted(signal);
   const embeddings =
     candidateIds.length > 0
@@ -567,14 +600,29 @@ export async function buildConversationRetrievalSignals(
       : new Map<MemoryId, MemoryEmbeddingRow>();
   throwIfAborted(signal);
   const embeddingSignals = collectEmbeddingSignals(deps, embeddings, signal);
-  warnSemanticGate(deps, semanticGate, embeddings, candidateIds.length);
-  const semanticById = shouldComputeSemanticScores(semanticGate, queryText, embeddings)
-    ? await semanticScoresFrom(deps, queryText, candidateIds, embeddings, signal)
-    : undefined;
+  const gate: SemanticRetrievalGate =
+    semanticGate.allowed && !semanticGate.matchesQuery(queryText)
+      ? { allowed: false, reason: "query-mismatch" }
+      : semanticGate;
+  warnSemanticGate(deps, gate, embeddings, candidateIds.length);
+  const semanticById =
+    gate.allowed && embeddings.size > 0
+      ? await semanticScoresFrom(deps, gate, candidateIds, embeddings, signal)
+      : undefined;
   return {
     strengthById,
     embeddingById: embeddingSignals.embeddingById,
     ...(embeddingSignals.mmrLambda !== undefined ? { mmrLambda: embeddingSignals.mmrLambda } : {}),
     ...(semanticById !== undefined ? { semanticById } : {}),
   };
+}
+
+export function retrieveMemoryWithZeroBudget(
+  deps: UiHandlerDeps,
+  port: MemoryQueryPort,
+  scopes: readonly MemoryScope[],
+  nowMs: number,
+): MemoryRetrievalResult {
+  warnSemanticRetrievalDisabled(deps, "no-budget", 0);
+  return retrieveMemoryContext({ scopes, nowMs, budgetTokens: 0 }, port);
 }

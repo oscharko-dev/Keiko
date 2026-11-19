@@ -81,11 +81,22 @@ export interface JiraTemplateBinding extends JiraTemplateBindingIds {
 /** The word a binding writes where a typed name did not resolve to an id: that entry is matched by name. */
 export const JIRA_BINDING_UNRESOLVED = "none";
 const BINDING_DIGEST = /^[a-f0-9]{32}$/u;
-const NATIVE_TYPE_ID = /^[1-9]\d{0,15}$/u;
+const NATIVE_ID_SHAPE = /^[1-9]\d{0,18}$/u;
+const NATIVE_ID_MAX = 9223372036854775807n;
+/** The longest a native Jira id is written: the 19 digits of a signed 64-bit integer. */
+export const JIRA_NATIVE_ID_CHARS_MAX = 19;
+/**
+ * Jira's native ids (issue types, statuses, projects) are string int64 values, exact beyond
+ * JavaScript's safe integer range. THE one rule: the options read, the save check, the binding
+ * grammar and the server routes all ask here, so an id one of them offers is an id the others keep.
+ */
+export function isJiraNativeId(value: unknown): value is string {
+  return typeof value === "string" && NATIVE_ID_SHAPE.test(value) && BigInt(value) <= NATIVE_ID_MAX;
+}
 const FIELD_ID = /^(?:[a-zA-Z][a-zA-Z0-9]{0,63}|customfield_\d{1,16})$/u;
-const isTypeId = (value: string): boolean => NATIVE_TYPE_ID.test(value);
+const isTypeId = (value: string): boolean => isJiraNativeId(value);
 const isStatusId = (value: string): boolean =>
-  value === JIRA_BINDING_UNRESOLVED || NATIVE_TYPE_ID.test(value);
+  value === JIRA_BINDING_UNRESOLVED || isJiraNativeId(value);
 const isFieldId = (value: string): boolean => FIELD_ID.test(value);
 
 export interface JiraIssueTemplate {
@@ -387,12 +398,16 @@ function addBlockItem(scan: Scan, text: string, line: number): void {
   last.values.push(value);
 }
 
+function isBlockItem(text: string): boolean {
+  return text.startsWith("-") && (text.length === 1 || /\s/u.test(text.charAt(1)));
+}
+
 function scanFrontMatter(lines: readonly string[]): Scan {
   const scan: Scan = { entries: [], errors: [] };
   lines.forEach((source, offset) => {
     const text = source.trim();
     if (text.length === 0 || text.startsWith("#")) return;
-    if (text.startsWith("-") && (text.length === 1 || /\s/u.test(text.charAt(1)))) {
+    if (isBlockItem(text)) {
       addBlockItem(scan, text, offset + 2);
     } else {
       addKeyedLine(scan, text, offset + 2);
@@ -405,8 +420,230 @@ function entryOf(entries: readonly RawEntry[], key: TemplateKey): RawEntry | und
   return entries.find((entry) => entry.key === key);
 }
 
+/** The guided editor may hold an incomplete draft while the person selects its project and type. */
+export interface JiraTemplateForm {
+  readonly project: string;
+  readonly issueType: string;
+  readonly activateOn: readonly string[];
+  readonly requiredFields: readonly string[];
+}
+
+function isEmptyFormSelection(line: string): boolean {
+  const entry = keyedLine(line.trim());
+  return (entry?.key === "project" || entry?.key === "issueType") && entry.value === '""';
+}
+
+/** Reads editable values using the template grammar, before the document is complete enough to save. */
+export function readJiraTemplateForm(frontMatter: string): JiraTemplateForm | undefined {
+  // The strict save parser rejects empty selections. In the form they are empty slots. The same
+  // line splitting as the strict parser, so a bare carriage return ends a line here too.
+  const lines = splitDocument(frontMatter).map((line) =>
+    isEmptyFormSelection(line) ? line.trimEnd().slice(0, -2) + "[]" : line,
+  );
+  if (!lines.some(isMarkerLine)) return undefined;
+  const { entries, errors } = scanFrontMatter(lines);
+  if (errors.length > 0) return undefined;
+  const values = (key: TemplateKey): readonly string[] => entryOf(entries, key)?.values ?? [];
+  return {
+    project: values("project")[0] ?? "",
+    issueType: values("issueType")[0] ?? "",
+    activateOn: values("activateOn"),
+    requiredFields: values("requiredFields"),
+  };
+}
+
+/** The lines a binding writes. A form edit that changes what a binding was resolved from removes all of them. */
+const BINDING_KEYS: readonly TemplateKey[] = [
+  "issueTypeId",
+  "parentIssueTypeIds",
+  "requiredFieldIds",
+  "parentFieldId",
+  "transitionStatusIds",
+  "jiraBinding",
+];
+
+const TRANSITION_PREFIX = "transition:";
+
+/** The typed targets of `transition:<target>` entries, in order; a bare `transition` has none. */
+function formTransitionTargets(activateOn: readonly string[]): readonly string[] {
+  return activateOn.flatMap((value) =>
+    value.startsWith(TRANSITION_PREFIX) ? [value.slice(TRANSITION_PREFIX.length).trim()] : [],
+  );
+}
+
+/** Whether the patch changes the project or the issue type the binding's ids were resolved for. */
+function movesBindingTarget(
+  current: JiraTemplateForm | undefined,
+  patch: Partial<JiraTemplateForm>,
+): boolean {
+  return (
+    current === undefined ||
+    (patch.project !== undefined && patch.project !== current.project) ||
+    (patch.issueType !== undefined && patch.issueType !== current.issueType)
+  );
+}
+
+/** One id per entry of `next`: the id the entry had in `before`, else unresolved. */
+function realignedIds(
+  before: readonly string[],
+  ids: readonly string[],
+  next: readonly string[],
+): readonly string[] {
+  return next.map(
+    (entry) => ids[before.findIndex((typed) => sameName(typed, entry))] ?? JIRA_BINDING_UNRESOLVED,
+  );
+}
+
+function idListLine(key: string, ids: readonly string[]): string | undefined {
+  return ids.length === 0 ? undefined : `${key}: ${JSON.stringify(ids)}`;
+}
+
+/**
+ * The id lists of a binding the caller did not re-resolve, kept one for one with the edited rules: an
+ * entry the edit leaves alone keeps its id, a new one is unresolved. The digest stays as written, so the
+ * binding is unconfirmed until the next check binds afresh; it can never name another field or status.
+ */
+function realignedBindingLines(
+  frontMatter: string,
+  current: JiraTemplateForm,
+  patch: Partial<JiraTemplateForm>,
+): Map<string, string | undefined> {
+  const updates = new Map<string, string | undefined>();
+  const entries = scanFrontMatter(splitDocument(frontMatter)).entries;
+  const fields = entryOf(entries, "requiredFieldIds")?.values;
+  if (patch.requiredFields !== undefined && fields !== undefined) {
+    const next = [...new Set(patch.requiredFields)];
+    updates.set(
+      "requiredFieldIds",
+      idListLine("requiredFieldIds", realignedIds(current.requiredFields, fields, next)),
+    );
+  }
+  const statuses = entryOf(entries, "transitionStatusIds")?.values;
+  if (patch.activateOn !== undefined && statuses !== undefined) {
+    const before = formTransitionTargets(current.activateOn);
+    const next = formTransitionTargets(patch.activateOn);
+    updates.set(
+      "transitionStatusIds",
+      idListLine("transitionStatusIds", realignedIds(before, statuses, next)),
+    );
+  }
+  return updates;
+}
+
+function bindingUpdateLines(binding: JiraTemplateBinding): Map<string, string | undefined> {
+  const written = new Map<string, string>(
+    bindingText(binding).map((line) => [line.slice(0, line.indexOf(":")), line]),
+  );
+  return new Map(BINDING_KEYS.map((key) => [key, written.get(key)]));
+}
+
+function formUpdateLines(
+  frontMatter: string,
+  patch: Partial<JiraTemplateForm>,
+  binding: JiraTemplateBinding | undefined,
+): Map<string, string | undefined> {
+  const updates = new Map<string, string | undefined>(
+    Object.entries(patch).map(([key, value]) => [key, `${key}: ${JSON.stringify(value)}`]),
+  );
+  // The caller re-resolved the binding for the edited rules: its lines replace the old ones.
+  if (binding !== undefined) {
+    for (const [key, line] of bindingUpdateLines(binding)) updates.set(key, line);
+    return updates;
+  }
+  const current = readJiraTemplateForm(frontMatter);
+  // Ids resolved for another project or type are no one's binding; the next check binds afresh.
+  if (current === undefined || movesBindingTarget(current, patch)) {
+    for (const key of BINDING_KEYS) updates.set(key, undefined);
+    return updates;
+  }
+  for (const [key, line] of realignedBindingLines(frontMatter, current, patch))
+    updates.set(key, line);
+  return updates;
+}
+
+/**
+ * Update only fields edited in the form. Unrelated rules, comments, line endings and their order are
+ * preserved. `binding` is the binding re-resolved for the edited rules (see
+ * `rebindJiraTemplateAfterEdit`). Without it, an edit of the project or issue type removes the binding
+ * lines, and an edit of the rules keeps them aligned with the rules (see `realignedBindingLines`).
+ */
+export function editJiraTemplateForm(
+  frontMatter: string,
+  patch: Partial<JiraTemplateForm>,
+  binding?: JiraTemplateBinding,
+): string {
+  const updates = formUpdateLines(frontMatter, patch, binding);
+  const state: RewriteState = { kept: [], replacingList: false };
+  const { lines, tail } = splitTrailingEmpty(textLines(frontMatter));
+  for (const entry of lines) rewriteLine(entry, updates, state);
+  const ending = /\r\n|\n|\r/u.exec(frontMatter)?.[0] ?? "\n";
+  for (const line of updates.values()) if (line !== undefined) state.kept.push({ line, ending });
+  if (tail !== undefined) state.kept.push(tail);
+  const { kept } = state;
+  return kept
+    .map((entry, index) => entry.line + (index === kept.length - 1 ? "" : entry.ending || ending))
+    .join("");
+}
+
+/**
+ * A front matter that ends with a line ending splits into a final empty entry: new lines go before
+ * it, so they follow the last line directly instead of after a blank one.
+ */
+function splitTrailingEmpty(entries: readonly TextLine[]): {
+  readonly lines: readonly TextLine[];
+  readonly tail?: TextLine;
+} {
+  const last = entries.at(-1);
+  if (entries.length < 2 || last?.line !== "" || last.ending !== "") return { lines: entries };
+  return { lines: entries.slice(0, -1), tail: last };
+}
+
+interface RewriteState {
+  readonly kept: TextLine[];
+  /** A block list whose key is being replaced: its items go with it. */
+  replacingList: boolean;
+}
+
+/** Keeps, replaces or removes one line, with the line ending it carried. */
+function rewriteLine(
+  entry: TextLine,
+  updates: Map<string, string | undefined>,
+  state: RewriteState,
+): void {
+  const text = entry.line.trim();
+  const keyed = keyedLine(text);
+  if (keyed === undefined) {
+    if (!state.replacingList || !isBlockItem(text)) state.kept.push(entry);
+    return;
+  }
+  const updating = updates.has(keyed.key);
+  state.replacingList = updating && keyed.value === "";
+  const replacement = updating ? updates.get(keyed.key) : entry.line;
+  if (replacement === undefined) return;
+  state.kept.push({ line: replacement, ending: entry.ending });
+  // A replacement is written once; a removal stays in force for every repeated key line.
+  if (updating) updates.delete(keyed.key);
+}
+
 function boundedText(value: string, max: number): boolean {
   return value.length <= max && !/\p{Cc}/u.test(value);
+}
+
+/**
+ * THE rule for text a guided pick writes into a template scalar or list entry: nonblank after
+ * trimming, within the grammar's length and free of control characters, so the strict reader keeps
+ * what the writer wrote.
+ */
+export function isPortableJiraTemplateText(text: string): boolean {
+  return text.trim().length > 0 && boundedText(text, JIRA_ISSUE_TEMPLATE_LIMITS.textChars);
+}
+
+/**
+ * Whether a type name can be written as the portable `issueType`: it must round-trip through the
+ * reader and must not read as a native id, which the matcher takes for an id on any other Jira.
+ */
+export function isPortableJiraIssueTypeName(name: string): boolean {
+  return isPortableJiraTemplateText(name) && !isJiraNativeId(name.trim());
 }
 
 class Reader {
@@ -440,7 +677,12 @@ class Reader {
     return parsed;
   }
 
-  public list(key: TemplateKey, max: number, itemChars: number): readonly string[] {
+  public list(
+    key: TemplateKey,
+    max: number,
+    itemChars: number,
+    positional = false,
+  ): readonly string[] {
     const entry = entryOf(this.entries, key);
     if (entry === undefined) return [];
     if (!entry.list) {
@@ -455,7 +697,8 @@ class Reader {
       this.errors.push({ code: "invalid-value", key, line: entry.line });
       return [];
     }
-    return [...new Set(entry.values)];
+    // A binding id list is positional: one id per typed name, so equal ids must stay in place.
+    return positional ? [...entry.values] : [...new Set(entry.values)];
   }
 
   public pattern(key: TemplateKey): string | undefined {
@@ -630,16 +873,16 @@ function lined(found: BindingValues, typed: TypedNames): boolean {
 
 function readBindingValues(reader: Reader, entries: readonly RawEntry[]): BindingValues {
   const listOf = (key: TemplateKey, chars: number): readonly string[] | undefined => {
-    const ids = reader.list(key, JIRA_ISSUE_TEMPLATE_LIMITS.listItems, chars);
+    const ids = reader.list(key, JIRA_ISSUE_TEMPLATE_LIMITS.listItems, chars, true);
     return entryOf(entries, key) === undefined ? undefined : ids;
   };
   return {
-    issueTypeId: reader.scalar("issueTypeId", 16),
+    issueTypeId: reader.scalar("issueTypeId", JIRA_NATIVE_ID_CHARS_MAX),
     digest: reader.scalar("jiraBinding", 32),
-    parentIds: listOf("parentIssueTypeIds", 16),
+    parentIds: listOf("parentIssueTypeIds", JIRA_NATIVE_ID_CHARS_MAX),
     fieldIds: listOf("requiredFieldIds", 80),
     parentFieldId: reader.scalar("parentFieldId", 80),
-    statusIds: listOf("transitionStatusIds", 16),
+    statusIds: listOf("transitionStatusIds", JIRA_NATIVE_ID_CHARS_MAX),
   };
 }
 
@@ -937,20 +1180,149 @@ export function jiraTemplateForInstance(
   return rest;
 }
 
+/** What a guided edit knows about references it adds: ids this Jira's own metadata gave them. */
+export interface JiraTemplateEditedIds {
+  /** Field id by typed field reference (compared case-insensitively). */
+  readonly fieldIds?: ReadonlyMap<string, string>;
+  /** Status id by typed transition target (compared case-insensitively). */
+  readonly statusIds?: ReadonlyMap<string, string>;
+}
+
+function previousId(
+  typed: readonly string[],
+  ids: readonly string[] | undefined,
+  reference: string,
+): string | undefined {
+  const index = typed.findIndex((entry) => sameName(entry, reference));
+  return index < 0 ? undefined : ids?.[index];
+}
+
+function idFor(
+  typed: readonly string[],
+  ids: readonly string[] | undefined,
+  known: ReadonlyMap<string, string> | undefined,
+  reference: string,
+): string {
+  const kept = previousId(typed, ids, reference);
+  if (kept !== undefined) return kept;
+  const normal = normalisedName(reference);
+  for (const [name, id] of known ?? []) if (normalisedName(name) === normal) return id;
+  return JIRA_BINDING_UNRESOLVED;
+}
+
 /**
- * The field id a bound template carries for a typed field reference (`requiredFields` entry or
- * `parentField`), or undefined where the template is unbound or that name did not resolve: such a
- * reference is matched by name or by a typed id, as before.
+ * The binding of a template after a guided edit of its rules, for the Jira that confirmed the binding:
+ * every reference the edit leaves alone keeps the id it was bound to (its position may move, its id
+ * never changes), and a reference the edit adds takes the id this Jira's metadata gave it, or stays
+ * unresolved. Undefined when the template carries no binding that is in force for `instance`, or the
+ * edit does not read: the caller then removes the binding and the next check binds afresh.
+ */
+export function rebindJiraTemplateAfterEdit(
+  template: JiraIssueTemplate,
+  instance: string | undefined,
+  edit: { readonly requiredFields: readonly string[]; readonly activateOn: readonly string[] },
+  resolved: JiraTemplateEditedIds = {},
+): JiraTemplateBinding | undefined {
+  const bound = jiraTemplateForInstance(template, instance).binding;
+  // The strict reader (`Reader.list`) drops repeated tokens, so the digest is built over the same set.
+  const parsed = [...new Set(edit.activateOn)].map(parseActivation);
+  const activations = parsed.filter((item): item is JiraTemplateActivation => item !== undefined);
+  if (instance === undefined || bound === undefined || activations.length !== parsed.length)
+    return undefined;
+  const requiredFields = [...new Set(edit.requiredFields)];
+  const targets = jiraTemplateTransitionTargets({ activations });
+  const ids: JiraTemplateBindingIds = {
+    issueTypeId: bound.issueTypeId,
+    ...(bound.parentIssueTypeIds === undefined
+      ? {}
+      : { parentIssueTypeIds: bound.parentIssueTypeIds }),
+    ...(requiredFields.length === 0
+      ? {}
+      : {
+          requiredFieldIds: requiredFields.map((field) =>
+            idFor(template.requiredFields, bound.requiredFieldIds, resolved.fieldIds, field),
+          ),
+        }),
+    ...(bound.parentFieldId === undefined ? {} : { parentFieldId: bound.parentFieldId }),
+    ...(targets.length === 0
+      ? {}
+      : {
+          transitionStatusIds: targets.map((target) =>
+            idFor(
+              jiraTemplateTransitionTargets(template),
+              bound.transitionStatusIds,
+              resolved.statusIds,
+              target,
+            ),
+          ),
+        }),
+  };
+  const typed = {
+    issueType: template.issueType,
+    parent: template.parent,
+    requiredFields,
+    activations,
+  };
+  return { digest: jiraTemplateBindingDigest(instance, typed, ids), ...ids };
+}
+
+/** Which typed clause a field reference belongs to: a `requiredFields` entry or the `parentField`. */
+export type JiraTemplateFieldRole = "required" | "parent";
+
+/** The parts of a template that say which field a typed reference is bound to. */
+type JiraTemplateBoundFields = Pick<JiraIssueTemplate, "binding" | "requiredFields" | "parent">;
+
+/**
+ * The field id a bound template carries for a typed field reference, or undefined where the template
+ * is unbound or that name did not resolve: such a reference is matched by name or by a typed id, as
+ * before. The `role` is required: a `requiredFields` entry reads only its own required slot and the
+ * `parentField` only the parent slot, so one name used by both clauses never answers with the other's id.
  */
 export function jiraTemplateBoundFieldId(
-  template: Pick<JiraIssueTemplate, "binding" | "requiredFields" | "parent">,
+  template: JiraTemplateBoundFields,
   reference: string,
+  role: JiraTemplateFieldRole,
 ): string | undefined {
   const { binding } = template;
   if (binding === undefined) return undefined;
-  const index = template.requiredFields.findIndex((field) => sameName(field, reference));
-  const id = index >= 0 ? binding.requiredFieldIds?.[index] : parentFieldIdOf(template, reference);
-  return id === undefined || id === JIRA_BINDING_UNRESOLVED ? undefined : id;
+  const id =
+    role === "required"
+      ? binding.requiredFieldIds?.[
+          template.requiredFields.findIndex((field) => sameName(field, reference))
+        ]
+      : parentFieldIdOf(template, reference);
+  return id === JIRA_BINDING_UNRESOLVED ? undefined : id;
+}
+
+/**
+ * Ids a template reference names. A field the template is bound to by id resolves to exactly that id
+ * (and to nothing when the catalog has no such field); otherwise an exact field id first, otherwise
+ * every same-named field. THE one rule: the write gate, the report and the guided editor ask here.
+ */
+export function resolveJiraTemplateFieldIds(
+  reference: string,
+  catalog: readonly { readonly id: string; readonly name: string }[],
+): readonly string[];
+export function resolveJiraTemplateFieldIds(
+  reference: string,
+  catalog: readonly { readonly id: string; readonly name: string }[],
+  template: JiraTemplateBoundFields | undefined,
+  role: JiraTemplateFieldRole,
+): readonly string[];
+export function resolveJiraTemplateFieldIds(
+  reference: string,
+  catalog: readonly { readonly id: string; readonly name: string }[],
+  template?: JiraTemplateBoundFields,
+  role?: JiraTemplateFieldRole,
+): readonly string[] {
+  const bound =
+    template === undefined || role === undefined
+      ? undefined
+      : jiraTemplateBoundFieldId(template, reference, role);
+  if (bound !== undefined) return catalog.some((entry) => entry.id === bound) ? [bound] : [];
+  const exact = catalog.filter((entry) => entry.id === reference);
+  if (exact.length > 0) return exact.map((entry) => entry.id);
+  return catalog.filter((entry) => sameName(entry.name, reference)).map((entry) => entry.id);
 }
 
 /** The bound parent-link field id, when the reference names the template's parent field. */

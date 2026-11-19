@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-contracts",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: shared Keiko contracts. Not published independently.",
@@ -390,6 +390,10 @@
     "./runtime/figma-codegen": {
       "types": "./dist/figma-codegen.d.ts",
       "import": "./dist/figma-codegen.js"
+    },
+    "./runtime/figma-url": {
+      "types": "./dist/figma-url.d.ts",
+      "import": "./dist/figma-url.js"
     },
     "./runtime/gateway": {
       "types": "./dist/gateway.d.ts",

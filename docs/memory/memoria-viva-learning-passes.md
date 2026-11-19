@@ -14,8 +14,13 @@ that only moves forward.
 A pass reads the messages after a Chat's position in Chat order, pairs each of the person's messages
 with the answers up to their next message and learns from the person's words through the same
 governed capture a turn used before (salience extraction, deterministic admission, mode-aware
-status, hard denials first). After each turn the position moves past it, so a stopped server neither
-loses nor repeats a turn.
+status, hard denials first). The saved position moves forward after each settled turn. A stop before
+it moves leaves that turn pending.
+
+Learning confirmations also record the user turn's position beside the vault's existing per-chat
+touch. The position and confirmation count commit together, so a retry after the vault write and
+before the Chat cursor advances cannot reinforce the same fact twice. A later turn can still
+confirm it again.
 
 When the model's items for a message yield no fact, a preference the person states about themself in
 a sentence of its own ("Ich bevorzuge …", "I prefer …") is still learned from their words. It passes
@@ -38,22 +43,31 @@ The vocabulary is deliberately narrow: only these explicit first-person preferen
 `KEIKO_MEMORY_LEARNING_IDLE_MS` (0 to 3,600,000) replaces the default pause; `0` learns as soon as a
 turn settles, which the end-to-end lanes use.
 
+A continuation visits pending Chats after the previous pass's last Chat before retrying older
+unavailable Chats. Healthy Chats that reach a turn or message-page bound keep their own one-second
+continuations; they take turns again after that Chat page tour. Advancing past a full page of system
+messages is progress too. The usual backoff begins after these continuations have drained, and does
+not retry unavailable Chats early. A continuation requires marked user work after its durable
+position; unmarked trailing messages alone never start another pass. A pass that makes no cursor
+progress keeps the existing backoff.
+
 ## Foreground work wins
 
 Any serialized Chat turn (send, stream, grounded answer, delete) is foreground work. A pass does not
-start while one runs, and a starting turn aborts a running pass. The abort reaches the provider
-request (`ModelPort.call` signal, gateway cancellation, `fetch`), so the model slot is free for the
-person at once. The cancelled turn stays pending and is learned by the next pass.
+start while one runs, and a starting turn aborts a running pass. The abort reaches both extraction and
+document embedding through the gateway. A response that arrives after cancellation cannot write the
+affected candidate. The cancelled turn stays pending for the next pass.
 
 ## Outcomes per turn
 
 - **Learned**: the capture ran; the position moves on.
 - **Memory off**: a message written with memory off is never learned, even if memory is switched on
-  later.
-- **Unavailable**: no model port or a `GATEWAY_*` failure; the turn stays pending and a `retry` pass
-  follows.
-- **Failed**: any other error is recorded as a body-free diagnostic and retried; after three attempts
-  the turn is skipped so it cannot hold the Chat back.
+  later. It is also excluded from the learner's context for pronoun resolution and blocks that
+  lookup from reaching any earlier message.
+- **Unavailable**: the model is unavailable or a pending forget could not commit because of an audit
+  or storage failure. The turn stays pending and a `retry` pass follows.
+- **Failed**: other extraction errors are recorded as body-free diagnostics and retried. After three
+  attempts the turn is skipped so it cannot hold the Chat back.
 
 A forget the pass reaches in Chat order ("Vergiss, dass …") is applied again to the facts the pass
 has just learned from the same Chat's earlier messages, which were still pending when the person

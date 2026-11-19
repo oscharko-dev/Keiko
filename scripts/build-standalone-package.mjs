@@ -35,8 +35,10 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { sha256File } from "./lib/digest.mjs";
+import { sha256FileChunked } from "./lib/digest.mjs";
+import { folderChecksumText, folderPackageArchiveName } from "./lib/folder-package-release.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
+import { credentialScope, teamConfig } from "./standalone/npm/keiko-npm.mjs";
 import {
   extractZipArchiveEntries,
   readZipArchiveEntryNames,
@@ -52,7 +54,7 @@ const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 // Windows refuses paths beyond 260 characters when the archive is extracted with Explorer. The
 // package's own longest entry stays well below that, so a user folder such as
 // C:\Users\<name>\Documents\ still fits in front of it.
-const WINDOWS_MAX_ENTRY_NAME_LENGTH = 180;
+export const WINDOWS_MAX_ENTRY_NAME_LENGTH = 180;
 
 const MACOS_RESOURCES = ["Keiko", "Keiko.app", "Contents", "Resources"];
 const MACOS_LAYOUT = Object.freeze({
@@ -181,19 +183,19 @@ function verifyArchive(archivePath, expected) {
   if (!existsSync(archivePath) || !statSync(archivePath).isFile()) {
     refuse(`archive not found: ${archivePath}`);
   }
-  const actual = sha256File(archivePath);
+  const actual = sha256FileChunked(archivePath);
   if (actual !== expected) {
     refuse(`archive checksum mismatch: expected ${expected}, got ${actual}`);
   }
   return actual;
 }
 
-function assertPayloadEntryNames(archivePath, target) {
+function assertPayloadEntryNames(archivePath, target, sizeSourceEntries) {
   const names = readZipArchiveEntryNames(archivePath, { requireRegularEntries: true });
   if (names.length === 0) refuse("the archive is empty");
   const foreign = names.find((name) => !name.startsWith(PAYLOAD_ROOT_PREFIX));
   if (foreign !== undefined) refuse(`the archive is not a portable payload: ${foreign}`);
-  assertWindowsPathBudget(names, target);
+  if (sizeSourceEntries) assertWindowsPathBudget(names, target);
 }
 
 // Checked on the source names, before anything is written: every payload entry lands below
@@ -255,20 +257,6 @@ function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// Gateway Setup seals a key into the vault of the computer it ran on and leaves a reference in the
-// config. On another person's computer that reference names nothing, so a package may not carry
-// one: it becomes the team's key, or the build is refused.
-function withTeamApiKey(provider, apiKey) {
-  if (!isRecord(provider) || provider.apiKeySecretRef === undefined) return provider;
-  if (apiKey === undefined) {
-    refuse(
-      "the provisioned config refers to a key sealed on this computer (apiKeySecretRef); pass --api-key-env NAME with the team's key",
-    );
-  }
-  const kept = Object.entries(provider).filter(([field]) => field !== "apiKeySecretRef");
-  return { ...Object.fromEntries(kept), apiKey };
-}
-
 function teamApiKey(apiKeyEnv, env) {
   if (apiKeyEnv === undefined) return undefined;
   const value = env[apiKeyEnv];
@@ -276,6 +264,30 @@ function teamApiKey(apiKeyEnv, env) {
     refuse(`--api-key-env: the environment variable ${apiKeyEnv} is not set`);
   }
   return value;
+}
+
+// Gateway Setup seals a key into the vault of the computer it ran on and leaves a reference in the
+// config. On another person's computer that reference names nothing, so a package may not carry
+// one: on the gateway connection Gateway Setup verified it becomes the team's key, by the same rule
+// as the npm package's access step (system/keiko-npm.mjs). A key of any other connection refuses:
+// the team's key must never reach a service it was not verified for.
+function withTeamApiKeys(config, apiKeyEnv, env) {
+  const scope = credentialScope(config);
+  if (scope.foreign.length > 0) {
+    refuse(
+      `the provisioned config refers to keys sealed on this computer for another connection (${scope.foreign.join(", ")}); one team key covers only the gateway connection Gateway Setup verified, so write that connection's key into the file instead`,
+    );
+  }
+  // Read only now: a configuration that holds another connection's key refused above, before the
+  // team's key was looked up.
+  const apiKey = teamApiKey(apiKeyEnv, env);
+  if (scope.token.size === 0) return undefined;
+  if (apiKey === undefined) {
+    refuse(
+      "the provisioned config refers to a key sealed on this computer (apiKeySecretRef); pass --api-key-env NAME with the team's key",
+    );
+  }
+  return teamConfig(config, apiKey);
 }
 
 /**
@@ -290,17 +302,15 @@ export function readProvisionedConfig(configPath, apiKeyEnv = undefined, env = p
   if (!Array.isArray(config.providers) || config.providers.length === 0) {
     refuse("the provisioned config names no providers");
   }
-  const apiKey = teamApiKey(apiKeyEnv, env);
-  const providers = config.providers.map((provider) => withTeamApiKey(provider, apiKey));
-  providers.forEach((provider, index) => {
+  config.providers.forEach((provider, index) => {
     assertProviderOutline(provider, index);
   });
+  const team = withTeamApiKeys(config, apiKeyEnv, env);
   // The administrator's own text when nothing was sealed (without a byte order mark).
-  const unchanged = providers.every((provider, index) => provider === config.providers[index]);
   return Buffer.from(
-    unchanged
+    team === undefined
       ? readTextWithoutByteOrderMark(configPath)
-      : `${JSON.stringify({ ...config, providers }, null, 2)}\n`,
+      : `${JSON.stringify(team, null, 2)}\n`,
     "utf8",
   );
 }
@@ -330,7 +340,7 @@ function templateText(name, layout) {
   return layout.os === "windows" ? text.replaceAll(/\r?\n/gu, "\r\n") : text;
 }
 
-function writePackageFile(path, content, mode) {
+export function writePackageFile(path, content, mode) {
   writeFileSync(path, content, { mode });
   chmodSync(path, mode);
 }
@@ -357,10 +367,6 @@ function writeStandaloneManifest(packageRoot, record) {
   );
 }
 
-function archiveName(target, provisioned) {
-  return provisioned ? `keiko-${target}-standalone-team.zip` : `keiko-${target}-standalone.zip`;
-}
-
 function assemblePackage(input) {
   const { archivePath, target, workRoot, archiveSha256, configBytes } = input;
   const layout = STANDALONE_TARGETS[target];
@@ -384,7 +390,11 @@ function assemblePackage(input) {
   return { packageRoot, packageVersion };
 }
 
-function resolveBuildInput(options) {
+/**
+ * The checked build input every package form shares. `form` names the kept folder
+ * (`keiko-<target>-<form>`): `standalone` here, `npm` for the npm package.
+ */
+function resolveBuildInput(options, form) {
   const target = requireOption(options, "target", "--target");
   if (!Object.hasOwn(STANDALONE_TARGETS, target)) {
     refuse(`unsupported target ${target}: use ${Object.keys(STANDALONE_TARGETS).join(", ")}`);
@@ -400,7 +410,7 @@ function resolveBuildInput(options) {
       ? undefined
       : readProvisionedConfig(resolve(options.config), options.apiKeyEnv, options.env);
   const keptFolder =
-    options.keepFolder === true ? join(outDir, `keiko-${target}-standalone`) : undefined;
+    options.keepFolder === true ? join(outDir, `keiko-${target}-${form}`) : undefined;
   // Before any work: a kept folder is never replaced, and its absence is cheap to check now.
   if (keptFolder !== undefined && existsSync(keptFolder)) {
     refuse(`--keep-folder: ${keptFolder} already exists; remove it first`);
@@ -414,45 +424,53 @@ function publishFolder(packageRoot, keptFolder) {
   return join(keptFolder, PACKAGE_ROOT_NAME);
 }
 
-/** Builds the standalone package and returns what was written. */
-export function buildStandalonePackage(options) {
-  const { target, archivePath, outDir, expected, configBytes, keptFolder } =
-    resolveBuildInput(options);
+/**
+ * The build every folder form shares. It checks the archive, lets the form's `assemble` build the
+ * package in a private work directory, writes the ZIP and its checksum file, and keeps the folder
+ * when asked. `assemble` receives the checked input and returns `{ packageRoot, packageVersion }`.
+ * Every source entry name is checked for the payload shape and containment; its Windows path
+ * length is sized here only for a form that ships the whole payload (`sizeSourceEntries`). A form
+ * that ships a part of it sizes what it wrote, so an entry it discards cannot refuse the package.
+ */
+export function buildFolderPackage(options, form, assemble, { sizeSourceEntries = true } = {}) {
+  const { target, archivePath, outDir, expected, configBytes, keptFolder } = resolveBuildInput(
+    options,
+    form,
+  );
   const archiveSha256 = verifyArchive(archivePath, expected);
-  assertPayloadEntryNames(archivePath, target);
+  assertPayloadEntryNames(archivePath, target, sizeSourceEntries);
   mkdirSync(outDir, { recursive: true });
-  const workRoot = mkdtempSync(join(outDir, ".standalone-work-"));
+  const workRoot = mkdtempSync(join(outDir, `.${form}-work-`));
   try {
-    const { packageRoot, packageVersion } = assemblePackage({
+    const { packageRoot, packageVersion } = assemble({
       archivePath,
       target,
       workRoot,
       archiveSha256,
       configBytes,
     });
-    const outputPath = join(outDir, archiveName(target, configBytes !== undefined));
+    const provisioned = configBytes !== undefined;
+    const outputPath = join(outDir, folderPackageArchiveName(target, form, provisioned));
     writeZipArchiveFromDirectory(packageRoot, outputPath, {
       rootName: PACKAGE_ROOT_NAME,
       requireRegularEntries: true,
     });
-    const outputSha256 = sha256File(outputPath);
-    writeFileSync(`${outputPath}.sha256`, `${outputSha256}  ${basename(outputPath)}\n`);
+    const outputSha256 = sha256FileChunked(outputPath);
+    writeFileSync(`${outputPath}.sha256`, folderChecksumText(outputSha256, basename(outputPath)));
     const folder = keptFolder === undefined ? undefined : publishFolder(packageRoot, keptFolder);
-    return {
-      target,
-      packageVersion,
-      outputPath,
-      outputSha256,
-      folder,
-      provisioned: configBytes !== undefined,
-    };
+    return { target, packageVersion, outputPath, outputSha256, folder, provisioned };
   } finally {
     rmSync(workRoot, { recursive: true, force: true });
   }
 }
 
-function report(result) {
-  console.log(`PASS standalone package ${result.target} (Keiko ${result.packageVersion})`);
+/** Builds the standalone package and returns what was written. */
+export function buildStandalonePackage(options) {
+  return buildFolderPackage(options, "standalone", assemblePackage);
+}
+
+function reportFolderPackage(form, result) {
+  console.log(`PASS ${form} package ${result.target} (Keiko ${result.packageVersion})`);
   console.log(`  archive: ${result.outputPath}`);
   console.log(`  sha256:  ${result.outputSha256}`);
   if (result.folder !== undefined) console.log(`  folder:  ${result.folder}`);
@@ -463,21 +481,30 @@ function report(result) {
   }
 }
 
-function main(argv) {
+/**
+ * The command line every folder form shares: `--help` prints `usage`, a refused build prints one
+ * FAIL line under `command` and exits 1, any other error is thrown.
+ */
+export function runFolderPackageCli(argv, { form, command, usage, build }) {
   if (argv.includes("--help") || argv.includes("-h")) {
-    console.log(USAGE);
+    console.log(usage);
     return 0;
   }
   try {
-    report(buildStandalonePackage(parseStandaloneArgs(argv)));
+    reportFolderPackage(form, build(parseStandaloneArgs(argv)));
     return 0;
   } catch (error) {
     if (!(error instanceof StandaloneBuildError)) throw error;
-    console.error(`FAIL build-standalone-package: ${error.message}`);
+    console.error(`FAIL ${command}: ${error.message}`);
     return 1;
   }
 }
 
 if (isMainModule(import.meta.url)) {
-  process.exitCode = main(process.argv.slice(2));
+  process.exitCode = runFolderPackageCli(process.argv.slice(2), {
+    form: "standalone",
+    command: "build-standalone-package",
+    usage: USAGE,
+    build: buildStandalonePackage,
+  });
 }

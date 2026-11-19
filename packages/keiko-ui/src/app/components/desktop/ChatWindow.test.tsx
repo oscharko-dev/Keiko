@@ -14,7 +14,9 @@ import type {
   CapsuleSetId,
   KnowledgeCapsuleId,
   KnowledgePodSummary,
+  MemoryId,
 } from "@oscharko-dev/keiko-contracts";
+import { deleteMemory } from "@/lib/memory-api";
 import { LOCAL_KNOWLEDGE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import { KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
 import {
@@ -1340,6 +1342,79 @@ describe("ChatWindow cancel button", () => {
 });
 
 describe("ChatWindow memory disclosure", () => {
+  it.each([
+    { name: "legacy response", droppedCount: undefined },
+    { name: "empty profile", droppedCount: 0 },
+    { name: "empty profile with cap omissions", droppedCount: 2 },
+  ])("discloses cap omissions from an otherwise $name", async ({ droppedCount }) => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1200, used: 0 },
+            ...(droppedCount === undefined
+              ? {}
+              : { profile: { entries: [], tokens: 0, droppedCount } }),
+          },
+          actions: [],
+        },
+      }),
+    );
+    const button = screen.getByRole("button", { name: "No memories included" });
+    expect(button.querySelector(".chat-memory-count")).toBeNull();
+    await user.click(button);
+
+    expect(
+      screen.queryByText("Keiko selected these profile facts as background for this answer."),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/Checked profile facts omitted by the limit/)).toBe(
+      droppedCount === 2
+        ? screen.getByText("Checked profile facts omitted by the limit (2)")
+        : null,
+    );
+  });
+
+  it("preserves what the last answer selected after a live vault deletion", async () => {
+    const memoryId = "historic-context" as MemoryId;
+    const historicalProfile = "Prefers the old example";
+    const historicalAnswer = "Here is the earlier answer using that example.";
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [makeMessage({ role: "assistant", content: historicalAnswer })],
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1188, used: 0 },
+            profile: { entries: [{ memoryId, text: historicalProfile }], tokens: 12 },
+          },
+          actions: [],
+        },
+      }),
+    );
+    await user.click(screen.getByRole("button", { name: "Profile facts in context (1)" }));
+
+    await act(async () => {
+      await deleteMemory(memoryId, async () => ({
+        deleted: true,
+        memoryId,
+        memoryIds: [memoryId],
+        count: 1,
+      }));
+    });
+
+    expect(screen.getByText(historicalProfile)).toBeInTheDocument();
+    expect(screen.getByText(historicalAnswer)).toBeInTheDocument();
+  });
+
   it("exposes expanded state and disclosure linkage on the memory brain button", async () => {
     const user = userEvent.setup();
     renderWindow(
@@ -1387,6 +1462,105 @@ describe("ChatWindow memory disclosure", () => {
     expect(screen.getByText("You asked Keiko to remember it")).toBeInTheDocument();
     expect(screen.getByText("user asked Keiko to remember this")).toBeInTheDocument();
     expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
+  });
+
+  it("discloses the selected profile when no memories were retrieved", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "",
+            memories: [],
+            budget: { tokens: 1188, used: 0 },
+            profile: {
+              entries: [{ memoryId: "mem-profile", text: "Prefers concise explanations" }],
+              tokens: 12,
+            },
+          },
+          actions: [],
+        },
+      }),
+    );
+
+    const disclosure = screen.getByRole("button", { name: "Profile facts in context (1)" });
+    expect(disclosure).toHaveAttribute("data-empty", "false");
+    expect(disclosure.querySelector(".chat-memory-count")).toBeNull();
+    expect(screen.queryByRole("button", { name: "No memories included" })).toBeNull();
+    expect(screen.queryByText("Prefers concise explanations")).not.toBeInTheDocument();
+
+    disclosure.focus();
+    await user.keyboard("{Enter}");
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    const profile = screen.getByRole("region", { name: "Personal profile" });
+    expect(within(profile).getByRole("listitem")).toHaveTextContent("Prefers concise explanations");
+    expect(
+      within(profile).getByText(
+        "Keiko selected these profile facts as background for this answer.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(profile).getByText("Profile tokens used (12)")).toBeInTheDocument();
+    expect(screen.getByText("No memories retrieved for this question.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Question-specific retrieval used 0 of 1188 tokens."),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps retrieved memories, background profile facts and exclusions distinct", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "- Use tables for measurements",
+            memories: [
+              {
+                memoryId: "mem-retrieved",
+                bodyExcerpt: "Use tables for measurements",
+                inclusionReason: "lexical match",
+                sourceKind: "explicit-user-instruction",
+                sensitivity: "public",
+                confidence: 1,
+                status: "accepted",
+                capturedAt: 1_700_000_000_000,
+              },
+            ],
+            budget: { tokens: 1176, used: 12 },
+            profile: {
+              entries: [{ memoryId: "mem-profile", text: "Prefers concise explanations" }],
+              tokens: 12,
+              droppedCount: 2,
+            },
+            profileRetrievedCount: 1,
+            belowFloorCount: 3,
+          },
+          actions: [],
+        },
+      }),
+    );
+
+    const disclosure = screen.getByRole("button", {
+      name: "Question-specific memories (1) · Profile facts in context (1)",
+    });
+    expect(disclosure.querySelector(".chat-memory-count")).toHaveTextContent("1");
+    await user.click(disclosure);
+
+    const retrieved = screen.getByRole("region", { name: "Memories retrieved for this question" });
+    const profile = screen.getByRole("region", { name: "Personal profile" });
+    expect(within(retrieved).getByText("Use tables for measurements")).toBeInTheDocument();
+    expect(
+      within(retrieved).getByText("Profile facts moved in full to the retrieval context (1)"),
+    ).toBeInTheDocument();
+    expect(within(profile).getByText("Prefers concise explanations")).toBeInTheDocument();
+    expect(
+      within(profile).getByText("Checked profile facts omitted by the limit (2)"),
+    ).toBeInTheDocument();
+    expect(within(profile).queryByText("Use tables for measurements")).not.toBeInTheDocument();
+    expect(screen.getByText("Memories below the relevance threshold (3)")).toBeInTheDocument();
   });
 
   it("keeps an explicitly activated chat enabled before its first response", async () => {

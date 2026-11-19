@@ -1,0 +1,59 @@
+{
+  "budgetTokens": 1200,
+  "conditions": [
+    {
+      "distractors": 0,
+      "id": "sparse"
+    },
+    {
+      "distractors": 550,
+      "id": "archived",
+      "status": "archived"
+    },
+    {
+      "distractors": 550,
+      "futureDays": 365,
+      "id": "future",
+      "status": "accepted"
+    }
+  ],
+  "distractor": {
+    "body": "Archived material on stage lighting.",
+    "embeddings": "none",
+    "idFormat": "capacity-background-NNNN",
+    "pinned": false,
+    "placement": "newer than target",
+    "type": "semantic-fact"
+  },
+  "fixedBeforeProduct32": true,
+  "groundTruth": "Count exact supplied memory IDs per normal retrieval call, and count every unexpected returned ID, with paired positive losses and introduced negatives per probe. Keep empty/technical outcomes distinct.",
+  "inference": "Same local Qwen3-Embedding 8B provider, actual query and document vectors in both arms. Factual project memory is outside the standing profile. No response generation needed for this retrieval-only experiment.",
+  "probes": [
+    {
+      "expectedIds": ["capacity-release"],
+      "id": "lexical",
+      "query": "What do the parcel inspection sheets begin with?"
+    },
+    {
+      "expectedIds": ["capacity-release"],
+      "id": "paraphrase",
+      "query": "Which identifier goes at the top of a package check form?"
+    },
+    {
+      "expectedIds": [],
+      "id": "far",
+      "query": "How tall is Mount Kilimanjaro?"
+    }
+  ],
+  "purpose": "Capacity qualification for the normal Chat retrieval selection with actual local embeddings. Synthetic project scope. Separate from the 21 product scenarios and the blind retrieval holdout.",
+  "repetitions": 3,
+  "schemaVersion": 1,
+  "scope": "project",
+  "target": {
+    "body": "The parcel inspection sheets begin with the depot code.",
+    "id": "capacity-release",
+    "pinned": false,
+    "status": "accepted",
+    "type": "semantic-fact"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "sourceFilesChanged": false,
+  "controls": [
+    {
+      "label": "release-recall",
+      "registeredDigest": "fac1464b7a8aef293402e63bc9d4e9faa682894d6a27212ca7d14b5bb7e058a5",
+      "rawSetDigest": "fac1464b7a8aef293402e63bc9d4e9faa682894d6a27212ca7d14b5bb7e058a5",
+      "loadedSetDigest": "3e88147efaaf02b845c17e2d7509b60771c9023711ff4d462a4f085a51d3018e",
+      "scenarioCount": 1,
+      "files": [
+        {
+          "file": "project-release-recall-control-en.json",
+          "sha256": "9577fc913bd60f47be81c0b0b0324d6295fdd71a09a101a4aca904d820cc181f"
+        }
+      ]
+    },
+    {
+      "label": "rule-transfer",
+      "registeredDigest": "ee81ceabd7c196a65778379e8a1ac15586e732bbe7d4cdbc4434363769e96be8",
+      "rawSetDigest": "94de8d95261b8ec9d4ee1e408fb433e88e5c5c1d6eacc339edf31404b1198ad6",
+      "loadedSetDigest": "ee81ceabd7c196a65778379e8a1ac15586e732bbe7d4cdbc4434363769e96be8",
+      "scenarioCount": 2,
+      "files": [
+        {
+          "file": "rule-announcement-transfer-de.json",
+          "sha256": "97eac3b240d62d31bf5ac7a1836a461151bdea6882414440d2a0c92ed9fec891"
+        },
+        {
+          "file": "rule-announcement-transfer-en.json",
+          "sha256": "094ce8acebc777924422c6b71db325d90d09ddcd2f29f1bdb3b85095a69f15bf"
+        }
+      ]
+    }
+  ]
+}

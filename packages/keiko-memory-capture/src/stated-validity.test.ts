@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { statedReason, statedValidUntil } from "./stated-validity.js";
+import { statedDateDots, statedReason, statedValidUntil } from "./stated-validity.js";
 
 const NOW = Date.UTC(2026, 10, 5);
 // A stated day ends where the person lives: Keiko runs on their own machine.
@@ -21,6 +21,34 @@ describe("statedValidUntil", () => {
     ["I use Slack until 2027-03-31.", endOfDay(2027, 2, 31)],
   ])("reads %s", (sentence, expected) => {
     expect(statedValidUntil(sentence, NOW)).toBe(expected);
+  });
+
+  it("keeps genuine sentence stops outside recognized calendar punctuation", () => {
+    const text = "Fertig.bis Ende Feb. 2029. Bis zum 14. Februar. Danach folgt 2028.";
+    const preserved = [...statedDateDots(text)];
+    expect(preserved).toEqual([text.indexOf("Feb.") + 3, text.indexOf("14.") + 2]);
+    expect(statedValidUntil("bis Ende Feb. 2029", NOW)).toBe(endOfMonth(2029, 1));
+    expect(statedValidUntil("bis Ende Feb. 2020", NOW)).toBeNull();
+  });
+
+  it.each([
+    ["until March 21st, 2028", endOfDay(2028, 2, 21)],
+    ["through December 9", endOfDay(2026, 11, 9)],
+    ["bis zum 29. Februar", endOfDay(2028, 1, 29)],
+    ["until Feb. 14, 2029", endOfDay(2029, 1, 14)],
+    ["till Sept. 4th 2029", endOfDay(2029, 8, 4)],
+    ["until Feb. 30, 2028", null],
+    ["until Feb. 14, 2020", null],
+    ["until February 30, 2028", null],
+    ["bis 31. November 2028", null],
+    ["bis 29.02.2027", null],
+  ])("reads a calendar day without substituting the end of a month in %s", (deadline, expected) => {
+    expect(statedValidUntil(deadline, NOW)).toBe(expected);
+  });
+
+  it("finds the next leap day across a non-leap century", () => {
+    const afterLeapDay = new Date(2096, 2, 1).getTime();
+    expect(statedValidUntil("bis 29.02.", afterLeapDay)).toBe(endOfDay(2104, 1, 29));
   });
 
   it.each([

@@ -32,6 +32,7 @@ describe("npm registry observation", () => {
       "https://registry.example.test/npm/%40oscharko-dev/keiko/1.0.4",
     );
     expect(registryVersionProbeArgs(pkg, "https://registry.example.test/")).toEqual([
+      "-q",
       "--silent",
       "--show-error",
       "--location",

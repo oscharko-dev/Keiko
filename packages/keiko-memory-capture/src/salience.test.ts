@@ -310,6 +310,118 @@ describe("extractSalientMemories", () => {
     expect(learned?.proposal.validity).toEqual({ validFrom: FIXED_NOW, validUntil });
   });
 
+  it.each([
+    ["I use Slack until March 14, 2027.", "I use Slack", new Date(2027, 2, 14, 23, 59, 59, 999)],
+    [
+      "Ich nutze Slack bis zum 14. März 2027.",
+      "Ich nutze Slack",
+      new Date(2027, 2, 14, 23, 59, 59, 999),
+    ],
+    ["Ich nutze Slack bis 29.02.", "Ich nutze Slack", new Date(2028, 1, 29, 23, 59, 59, 999)],
+  ] as const)("retains the exact calendar day in %s", async (text, evidence, end) => {
+    const [learned] = candidates(await learn(text, [fact(evidence, evidence)]));
+    expect(learned?.proposal.validity).toEqual({ validFrom: FIXED_NOW, validUntil: end.getTime() });
+  });
+
+  it.each([
+    ["I use Slack until March 14, 2020.", "I use Slack"],
+    ["Ich nutze Slack bis zum 14. März 2020.", "Ich nutze Slack"],
+  ])("drops a fact with an explicit expired named day in %s", async (text, evidence) => {
+    expect(candidates(await learn(text, [fact(evidence, evidence)]))).toEqual([]);
+  });
+
+  it.each([
+    [2020, undefined],
+    [2029, new Date(2029, 1, 14, 23, 59, 59, 999).getTime()],
+  ])(
+    "reads the explicit year %s after an abbreviated German deadline",
+    async (year, validUntil) => {
+      const evidence = "Ich nutze Slack";
+      const [learned] = candidates(
+        await learn(`${evidence} bis zum 14. Feb. ${String(year)}. Danach reise ich ab.`, [
+          fact(evidence, evidence),
+        ]),
+      );
+      if (validUntil === undefined) expect(learned).toBeUndefined();
+      else expect(learned?.proposal.validity.validUntil).toBe(validUntil);
+    },
+  );
+
+  it.each(["März", "Feb."])(
+    "keeps the complete German %s deadline in a fallback preference",
+    async (month) => {
+      const preference = `Ich bevorzuge Tabellen bis zum 14. ${month} 2029`;
+      const [learned] = candidates(await learn(`${preference}. Morgen ist die Abgabe.`, []));
+      expect(learned?.proposal.body).toBe(preference);
+      expect(learned?.proposal.validity.validUntil).toBe(
+        new Date(2029, month === "März" ? 2 : 1, 14, 23, 59, 59, 999).getTime(),
+      );
+    },
+  );
+
+  it.each([2020, 2029])("binds a coordinated deadline in %s to its source clause", async (year) => {
+    const first = "I use Slack";
+    const second = "I use Python daily";
+    const text = `${first} until March 14, ${String(year)}, and ${second}.`;
+    const results = candidates(await learn(text, [fact(first, first), fact(second, second)]));
+    expect(results.map(({ proposal }) => [proposal.body, proposal.validity.validUntil])).toEqual(
+      year === 2020
+        ? [[second, undefined]]
+        : [
+            [first, new Date(2029, 2, 14, 23, 59, 59, 999).getTime()],
+            [second, undefined],
+          ],
+    );
+  });
+
+  it.each([
+    ["I use Python daily", "and use Slack until March 14, 2020"],
+    ["I use Python daily", "and use Slack until March 14, 2029"],
+    ["Ich nutze Python täglich", "und nutze Slack bis zum 14. März 2020"],
+    ["Ich nutze Python täglich", "und nutze Slack bis zum 14. März 2029"],
+  ])("keeps a coordinated predicate's deadline off %s in %s", async (first, next) => {
+    const learned = candidates(await learn(`${first} ${next}.`, [fact(first, first)]));
+    expect(learned.map(({ proposal }) => [proposal.body, proposal.validity.validUntil])).toEqual([
+      [first, undefined],
+    ]);
+  });
+
+  it.each(["I use Python and Slack", "I document the design and use of tools"])(
+    "keeps a shared date on the coordinated objects in %s",
+    async (claim) => {
+      const [learned] = candidates(
+        await learn(`${claim} until March 14, 2029.`, [fact(claim, claim)]),
+      );
+      expect(learned?.proposal.validity.validUntil).toBe(
+        new Date(2029, 2, 14, 23, 59, 59, 999).getTime(),
+      );
+    },
+  );
+
+  it("keeps an abbreviated English deadline in a whole preference", async () => {
+    const claim = "I prefer tables until Feb. 14, 2029";
+    const [learned] = candidates(await learn(`${claim}. Tomorrow is the deadline.`, []));
+    expect(learned?.proposal.body).toBe(claim);
+    expect(learned?.proposal.validity.validUntil).toBe(
+      new Date(2029, 1, 14, 23, 59, 59, 999).getTime(),
+    );
+  });
+
+  it("keeps the later German clause's deadline off an earlier independent fact", async () => {
+    const first = "Ich nutze Python täglich";
+    const second = "ich nutze Slack";
+    const results = candidates(
+      await learn(`${first} und ${second} bis zum 14. März 2029.`, [
+        fact(first, first),
+        fact(second, second),
+      ]),
+    );
+    expect(results.map(({ proposal }) => proposal.validity.validUntil)).toEqual([
+      undefined,
+      new Date(2029, 2, 14, 23, 59, 59, 999).getTime(),
+    ]);
+  });
+
   it("closes validity at a dotted German date stated after the copied span", async () => {
     const [learned] = candidates(
       await learn("Ich arbeite bei Acme bis 31.12.2027.", [
@@ -400,22 +512,27 @@ describe("extractSalientMemories", () => {
     expect(JSON.stringify(diagnostics)).not.toContain("internal");
   });
 
-  it("reports an unknown type with a closed reason", async () => {
-    const { deps, diagnostics } = harness(
-      reply(fact("Bevorzugt Tabellen", "Ich bevorzuge Tabellen", { type: "vibe" })),
-    );
-    expect(await extractSalientMemories(input("Ich arbeite gern mit Tabellen."), deps)).toEqual([]);
-    expect(diagnostics).toContainEqual({
-      kind: "dropped-model-items",
-      reason: "unknown-type",
-      count: 1,
-    });
-    expect(diagnostics).toContainEqual({
-      kind: "zero-candidates-after-filter",
-      rawItemCount: 1,
-      acceptedCount: 0,
-    });
-  });
+  it.each(["vibe", "__proto__", "constructor"])(
+    "reports unknown type %s with a closed reason",
+    async (type) => {
+      const { deps, diagnostics } = harness(
+        reply(fact("Bevorzugt Tabellen", "Ich bevorzuge Tabellen", { type })),
+      );
+      expect(await extractSalientMemories(input("Ich arbeite gern mit Tabellen."), deps)).toEqual(
+        [],
+      );
+      expect(diagnostics).toContainEqual({
+        kind: "dropped-model-items",
+        reason: "unknown-type",
+        count: 1,
+      });
+      expect(diagnostics).toContainEqual({
+        kind: "zero-candidates-after-filter",
+        rawItemCount: 1,
+        acceptedCount: 0,
+      });
+    },
+  );
 
   it("summarizes every extraction in counts", async () => {
     const { deps, diagnostics } = harness(

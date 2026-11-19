@@ -197,6 +197,20 @@ function dockerEngineFromResult(output: tools.CommandResult): "linux" | "windows
 
 // The binary/endpoint probe does not promise a functioning Linux container engine. Read only the
 // selected, validated local daemon's closed OS field, through the existing bounded command owner.
+// The bound covers a cold engine: a hosted Windows runner's first query answered after more than
+// five seconds while its later ones took milliseconds (PR #4464, 2026-11-18), and a query that
+// runs out still fails the qualification instead of skipping it.
+const DOCKER_ENGINE_QUERY_TIMEOUT_MS = 30_000;
+// The runtime-metadata probe's own bound; the probe tests below pin this value to production.
+const RUNTIME_METADATA_TIMEOUT_MS = 15_000;
+/**
+ * A real-engine test's budget: the engine query, each bounded metadata probe it runs after it, and
+ * 20 seconds of its own, so a slow but bounded run fails on its assertions, never on the budget.
+ */
+function realEngineTestTimeout(probes: number): number {
+  return DOCKER_ENGINE_QUERY_TIMEOUT_MS + probes * RUNTIME_METADATA_TIMEOUT_MS + 20_000;
+}
+
 async function realDockerEngine(
   workspace: ReturnType<typeof detectWorkspace>,
   probe: ReturnType<typeof probeNetworkIsolation>,
@@ -210,7 +224,7 @@ async function realDockerEngine(
         command: "docker",
         args: ["--host", endpoint.host, "info", "--format", "{{.OSType}}"],
         cwd: undefined,
-        timeoutMs: 5_000,
+        timeoutMs: DOCKER_ENGINE_QUERY_TIMEOUT_MS,
         signal: new AbortController().signal,
       },
       {
@@ -278,7 +292,7 @@ it("reads the engine only through the validated local endpoint and fixed bounded
   expect(run.mock.calls[0]?.[0]).toMatchObject({
     command: "docker",
     args: ["--host", host, "info", "--format", "{{.OSType}}"],
-    timeoutMs: 5_000,
+    timeoutMs: DOCKER_ENGINE_QUERY_TIMEOUT_MS,
   });
   expect(run.mock.calls[0]?.[1].policy.maxOutputBytes).toBe(1_024);
   expect(run.mock.calls[0]?.[1].policy.outputScrub).toBeUndefined();
@@ -442,7 +456,11 @@ it("binds the child metadata and actual selected backend without assuming host C
   expect(target.runtimeIdentitySha256).toMatch(/^[a-f0-9]{64}$/u);
   expect(Object.isFrozen(target)).toBe(true);
   const [input, deps] = run.mock.calls[0] ?? [];
-  expect(input).toMatchObject({ command: "node", cwd: undefined, timeoutMs: 15_000 });
+  expect(input).toMatchObject({
+    command: "node",
+    cwd: undefined,
+    timeoutMs: RUNTIME_METADATA_TIMEOUT_MS,
+  });
   expect(input?.args).toHaveLength(2);
   expect(input?.args[0]).toBe("-e");
   expect(deps?.policy).toMatchObject({
@@ -579,115 +597,125 @@ it("logs only measured target digest within actual held workspace admission", as
   expect(readPersistedActivityLog(log.stateRoot)).not.toContain(observed.stdout.trim());
 });
 
-it("measures the real selected isolated Node runtime through the original command owner", async (context) => {
-  const workspace = fixture();
-  const probe = probeNetworkIsolation(workspace.root);
-  if ((await realDockerEngine(workspace, probe)) === "windows")
-    context.skip(
-      "Measured Windows container engine cannot provide the Linux execution-root policy; separate real refusal proof applies.",
+it(
+  "measures the real selected isolated Node runtime through the original command owner",
+  async (context) => {
+    const workspace = fixture();
+    const probe = probeNetworkIsolation(workspace.root);
+    if ((await realDockerEngine(workspace, probe)) === "windows")
+      context.skip(
+        "Measured Windows container engine cannot provide the Linux execution-root policy; separate real refusal proof applies.",
+      );
+    const original = tools.runCommand;
+    const observed: tools.CommandResult[] = [];
+    const spawns = vi.fn(nodeSpawnFn);
+    vi.spyOn(tools, "runCommand").mockImplementation(async (input, deps) => {
+      const output = await original(input, { ...deps, spawn: spawns });
+      observed.push(output);
+      return output;
+    });
+    const pending = resolveObservedRuntimeTarget(
+      { workspace, signal: new AbortController().signal },
+      observed,
     );
-  const original = tools.runCommand;
-  const observed: tools.CommandResult[] = [];
-  const spawns = vi.fn(nodeSpawnFn);
-  vi.spyOn(tools, "runCommand").mockImplementation(async (input, deps) => {
-    const output = await original(input, { ...deps, spawn: spawns });
-    observed.push(output);
-    return output;
-  });
-  const pending = resolveObservedRuntimeTarget(
-    { workspace, signal: new AbortController().signal },
-    observed,
-  );
-  if (!probe.available) {
-    await expect(pending).rejects.toBeInstanceOf(tools.CommandDeniedError);
-    expect(spawns).not.toHaveBeenCalled();
-    expect(observed).toHaveLength(0);
-    return;
-  }
-  const target = await pending;
-  expect(spawns).toHaveBeenCalledOnce();
-  expect(observed).toHaveLength(1);
-  const output = observed[0];
-  if (output === undefined) throw new TypeError("Missing actual command output");
-  expect(target).toMatchObject(JSON.parse(output.stdout) as Record<string, unknown>);
-  expect(output.attestation).toMatchObject({ networkEnforced: true, filesystemEnforced: true });
-  expect(output.exitCode).toBe(0);
-  expect(output.truncated).toBe(false);
-}, 20_000);
+    if (!probe.available) {
+      await expect(pending).rejects.toBeInstanceOf(tools.CommandDeniedError);
+      expect(spawns).not.toHaveBeenCalled();
+      expect(observed).toHaveLength(0);
+      return;
+    }
+    const target = await pending;
+    expect(spawns).toHaveBeenCalledOnce();
+    expect(observed).toHaveLength(1);
+    const output = observed[0];
+    if (output === undefined) throw new TypeError("Missing actual command output");
+    expect(target).toMatchObject(JSON.parse(output.stdout) as Record<string, unknown>);
+    expect(output.attestation).toMatchObject({ networkEnforced: true, filesystemEnforced: true });
+    expect(output.exitCode).toBe(0);
+    expect(output.truncated).toBe(false);
+  },
+  realEngineTestTimeout(1),
+);
 
-it("proves a measured Windows container engine refuses execution-root isolation without a runtime target", async (context) => {
-  const workspace = fixture();
-  const probe = probeNetworkIsolation(workspace.root);
-  if ((await realDockerEngine(workspace, probe)) !== "windows")
-    context.skip(
-      "No Windows container engine measured; real successful-runtime qualification applies.",
+it(
+  "proves a measured Windows container engine refuses execution-root isolation without a runtime target",
+  async (context) => {
+    const workspace = fixture();
+    const probe = probeNetworkIsolation(workspace.root);
+    if ((await realDockerEngine(workspace, probe)) !== "windows")
+      context.skip(
+        "No Windows container engine measured; real successful-runtime qualification applies.",
+      );
+    writeFileSync(
+      join(workspace.root, "package.json"),
+      JSON.stringify({
+        name: "fixture",
+        scripts: { typecheck: "node -e 'process.exit(0)'" },
+        devDependencies: { typescript: "^6.0.3" },
+      }),
     );
-  writeFileSync(
-    join(workspace.root, "package.json"),
-    JSON.stringify({
-      name: "fixture",
-      scripts: { typecheck: "node -e 'process.exit(0)'" },
-      devDependencies: { typescript: "^6.0.3" },
-    }),
-  );
-  const plan = verification.buildVerificationPlan(
-    workspace,
-    verification.detectScripts(workspace),
-    { only: ["typecheck"] },
-  );
-  const original = tools.runCommand;
-  const observed: tools.CommandResult[] = [];
-  const spawns = vi.fn(nodeSpawnFn);
-  const run = vi.spyOn(tools, "runCommand").mockImplementation(async (input, deps) => {
-    const output = await original(input, { ...deps, spawn: spawns });
-    observed.push(output);
-    return output;
-  });
-  const log = loggedSink();
-  const diagnostic = vi.fn();
-  const { report } = await executeVerificationEnforced({
-    workspace,
-    plan,
-    signal: new AbortController().signal,
-    dependencyBootstrap: "auto",
-    activityLog: log,
-    diagnostics: { record: diagnostic },
-    correlationId: "windows-engine-refusal",
-  });
-  expect(spawns).toHaveBeenCalledOnce();
-  expect(run).toHaveBeenCalledOnce();
-  expect(run.mock.calls[0]?.[1].policy).toMatchObject({
-    network: "none",
-    filesystem: "execution-root",
-  });
-  expect(observed).toHaveLength(1);
-  expect(closedProbeResult(observed[0])).toMatchObject({
-    backend: "container-docker",
-    exitCode: 125,
-    stdoutBytes: 0,
-    signalPresent: false,
-    timedOut: false,
-    truncated: false,
-    outputRedacted: false,
-    networkEnforced: true,
-    filesystemEnforced: true,
-    stderrClass: "engine-option-unsupported",
-  });
-  expect(
-    observed[0]?.stderr.includes(
-      "invalid option: read-only mode is not supported for Windows containers",
-    ),
-  ).toBe(true);
-  expect(report.overallStatus).toBe("failed");
-  expect(report.dependencies?.state).toBe("failed");
-  expect(report.counts.passed).toBe(0);
-  expect(persistedTarget(log)).toMatchObject({
-    state: "runtime-target",
-    runtimeTargetOutcome: "refused",
-  });
-  expect(log.events.some((event) => event.extra?.runtimeIdentityDigest !== undefined)).toBe(false);
-  expect(diagnostic).toHaveBeenCalledOnce();
-}, 20_000);
+    const plan = verification.buildVerificationPlan(
+      workspace,
+      verification.detectScripts(workspace),
+      { only: ["typecheck"] },
+    );
+    const original = tools.runCommand;
+    const observed: tools.CommandResult[] = [];
+    const spawns = vi.fn(nodeSpawnFn);
+    const run = vi.spyOn(tools, "runCommand").mockImplementation(async (input, deps) => {
+      const output = await original(input, { ...deps, spawn: spawns });
+      observed.push(output);
+      return output;
+    });
+    const log = loggedSink();
+    const diagnostic = vi.fn();
+    const { report } = await executeVerificationEnforced({
+      workspace,
+      plan,
+      signal: new AbortController().signal,
+      dependencyBootstrap: "auto",
+      activityLog: log,
+      diagnostics: { record: diagnostic },
+      correlationId: "windows-engine-refusal",
+    });
+    expect(spawns).toHaveBeenCalledOnce();
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0]?.[1].policy).toMatchObject({
+      network: "none",
+      filesystem: "execution-root",
+    });
+    expect(observed).toHaveLength(1);
+    expect(closedProbeResult(observed[0])).toMatchObject({
+      backend: "container-docker",
+      exitCode: 125,
+      stdoutBytes: 0,
+      signalPresent: false,
+      timedOut: false,
+      truncated: false,
+      outputRedacted: false,
+      networkEnforced: true,
+      filesystemEnforced: true,
+      stderrClass: "engine-option-unsupported",
+    });
+    expect(
+      observed[0]?.stderr.includes(
+        "invalid option: read-only mode is not supported for Windows containers",
+      ),
+    ).toBe(true);
+    expect(report.overallStatus).toBe("failed");
+    expect(report.dependencies?.state).toBe("failed");
+    expect(report.counts.passed).toBe(0);
+    expect(persistedTarget(log)).toMatchObject({
+      state: "runtime-target",
+      runtimeTargetOutcome: "refused",
+    });
+    expect(log.events.some((event) => event.extra?.runtimeIdentityDigest !== undefined)).toBe(
+      false,
+    );
+    expect(diagnostic).toHaveBeenCalledOnce();
+  },
+  realEngineTestTimeout(1),
+);
 
 it("preserves accepted cancellation after the bounded command settles", async () => {
   const workspace = fixture();
@@ -852,68 +880,76 @@ function probeWith(nodeVersion: string | undefined): readonly tools.CommandResul
   return observed;
 }
 
-it("resolves the real runtime when the parent environment exports NODE_VERSION", async (context) => {
-  const workspace = fixture();
-  const probe = probeNetworkIsolation(workspace.root);
-  if (!probe.available) context.skip("No enforcing execution-root backend is available.");
-  if ((await realDockerEngine(workspace, probe)) === "windows")
-    context.skip(
-      "Measured Windows container engine cannot run the positive runtime-metadata qualification.",
-    );
-  const observed = probeWith(undefined);
-  const input = {
-    workspace,
-    signal: new AbortController().signal,
-  };
-  // The isolated backend can use a different runtime from this host. Its actual fingerprint
-  // must survive an ordinary environment value equal to its version, including in a container.
-  const before = await resolveObservedRuntimeTarget(input, observed);
-  vi.stubEnv("NODE_VERSION", before.nodeVersion.slice(1));
-  expect(await resolveObservedRuntimeTarget(input, observed)).toEqual(before);
-}, 20_000);
+it(
+  "resolves the real runtime when the parent environment exports NODE_VERSION",
+  async (context) => {
+    const workspace = fixture();
+    const probe = probeNetworkIsolation(workspace.root);
+    if (!probe.available) context.skip("No enforcing execution-root backend is available.");
+    if ((await realDockerEngine(workspace, probe)) === "windows")
+      context.skip(
+        "Measured Windows container engine cannot run the positive runtime-metadata qualification.",
+      );
+    const observed = probeWith(undefined);
+    const input = {
+      workspace,
+      signal: new AbortController().signal,
+    };
+    // The isolated backend can use a different runtime from this host. Its actual fingerprint
+    // must survive an ordinary environment value equal to its version, including in a container.
+    const before = await resolveObservedRuntimeTarget(input, observed);
+    vi.stubEnv("NODE_VERSION", before.nodeVersion.slice(1));
+    expect(await resolveObservedRuntimeTarget(input, observed)).toEqual(before);
+  },
+  realEngineTestTimeout(2),
+);
 
-it("still scrubs a credential-named value and then refuses the target", async (context) => {
-  const workspace = fixture();
-  const probe = probeNetworkIsolation(workspace.root);
-  if (!probe.available) context.skip("No enforcing execution-root backend is available.");
-  if ((await realDockerEngine(workspace, probe)) === "windows")
-    context.skip(
-      "Measured Windows container engine cannot run the positive baseline required for credential-scrub qualification.",
+it(
+  "still scrubs a credential-named value and then refuses the target",
+  async (context) => {
+    const workspace = fixture();
+    const probe = probeNetworkIsolation(workspace.root);
+    if (!probe.available) context.skip("No enforcing execution-root backend is available.");
+    if ((await realDockerEngine(workspace, probe)) === "windows")
+      context.skip(
+        "Measured Windows container engine cannot run the positive baseline required for credential-scrub qualification.",
+      );
+    const baselineOutput = probeWith(undefined);
+    const baseline = await resolveObservedRuntimeTarget(
+      { workspace, signal: new AbortController().signal },
+      baselineOutput,
     );
-  const baselineOutput = probeWith(undefined);
-  const baseline = await resolveObservedRuntimeTarget(
-    { workspace, signal: new AbortController().signal },
-    baselineOutput,
-  );
-  expect(closedProbeResult(baselineOutput[0])).toMatchObject({
-    exitCode: 0,
-    outputRedacted: false,
-    stderrBytes: 0,
-    networkEnforced: true,
-    filesystemEnforced: true,
-  });
-  vi.mocked(tools.runCommand).mockRestore();
-  // This is valid metadata without scrubbing: an invalid version or a failed daemon cannot be
-  // mistaken for evidence that the real command owner removed the credential.
-  vi.stubEnv("RUNTIME_PROBE_API_TOKEN", baseline.nodeVersion);
-  const observed = probeWith(baseline.nodeVersion);
-  await expect(
-    resolveVerificationRuntimeTarget({ workspace, signal: new AbortController().signal }),
-  ).rejects.toThrow("VERIFICATION_RUNTIME_TARGET_UNAVAILABLE");
-  expect(observed).toHaveLength(1);
-  expect(closedProbeResult(observed[0])).toMatchObject({
-    exitCode: 0,
-    outputRedacted: true,
-    stderrBytes: 0,
-    signalPresent: false,
-    timedOut: false,
-    truncated: false,
-    networkEnforced: true,
-    filesystemEnforced: true,
-  });
-  expect(observed[0]?.stdout.includes("[REDACTED]")).toBe(true);
-  expect(observed[0]?.stdout.includes(baseline.nodeVersion)).toBe(false);
-}, 20_000);
+    expect(closedProbeResult(baselineOutput[0])).toMatchObject({
+      exitCode: 0,
+      outputRedacted: false,
+      stderrBytes: 0,
+      networkEnforced: true,
+      filesystemEnforced: true,
+    });
+    vi.mocked(tools.runCommand).mockRestore();
+    // This is valid metadata without scrubbing: an invalid version or a failed daemon cannot be
+    // mistaken for evidence that the real command owner removed the credential.
+    vi.stubEnv("RUNTIME_PROBE_API_TOKEN", baseline.nodeVersion);
+    const observed = probeWith(baseline.nodeVersion);
+    await expect(
+      resolveVerificationRuntimeTarget({ workspace, signal: new AbortController().signal }),
+    ).rejects.toThrow("VERIFICATION_RUNTIME_TARGET_UNAVAILABLE");
+    expect(observed).toHaveLength(1);
+    expect(closedProbeResult(observed[0])).toMatchObject({
+      exitCode: 0,
+      outputRedacted: true,
+      stderrBytes: 0,
+      signalPresent: false,
+      timedOut: false,
+      truncated: false,
+      networkEnforced: true,
+      filesystemEnforced: true,
+    });
+    expect(observed[0]?.stdout.includes("[REDACTED]")).toBe(true);
+    expect(observed[0]?.stdout.includes(baseline.nodeVersion)).toBe(false);
+  },
+  realEngineTestTimeout(2),
+);
 
 it("keeps scrubbing the same ordinary value for every other command under the default policy", async () => {
   const workspace = fixture();
@@ -923,7 +959,7 @@ it("keeps scrubbing the same ordinary value for every other command under the de
       command: "node",
       args: ["-e", "process.stdout.write(process.version)"],
       cwd: undefined,
-      timeoutMs: 15_000,
+      timeoutMs: RUNTIME_METADATA_TIMEOUT_MS,
       signal: new AbortController().signal,
     },
     {

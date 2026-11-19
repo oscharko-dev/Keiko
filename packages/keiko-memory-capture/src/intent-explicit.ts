@@ -18,8 +18,13 @@ import { MEMORY_BODY_MAX_CHARS_DEFAULT } from "./_constants.js";
 import { buildForget, buildProposal, buildUpdate } from "./_envelopes.js";
 import { applyPolicy } from "./policy.js";
 import { inferScopeFromContext } from "./scope-inference.js";
+import { statedDateEnd } from "./stated-validity.js";
 import { memoryTextCaptureRejectionReason } from "./capture-safety.js";
-import { foldWordCase, withoutTrailingNonLetters } from "./fact-text.js";
+import {
+  foldWordCase,
+  startsWithStatedPreference,
+  withoutTrailingNonLetters,
+} from "./fact-text.js";
 import type {
   CaptureContext,
   CaptureMemoryResolver,
@@ -93,21 +98,24 @@ const REMEMBER_PATTERNS: readonly RegExp[] = [
 // "Merke dir nicht, ..." asks for the opposite, and "Remember when ..." recalls instead of stating.
 const NOT_A_FACT_START_RE =
   /^(?:nicht|nie|niemals|not|never|when|how|if|why|what|where|who|wann|wie|ob|warum|was|wo|wer)\b/iu;
-// Each branch carries its own copy of the trailing "this project/workspace:" scope hint (rather
-// than factoring it into a second matching stage) so a single execFirst pass still yields the
-// complete prefix length bodyAfterPrefix needs — matching the original REMEMBER_ABOUT_RE shape.
-// The (project|workspace) alternation is now a CAPTURING group (audit KEIKO-0336): tryExtractRemember
-// reads the captured noun and threads it into scopeOrReject as an explicit scopeKind, so
-// "remember about this workspace: X" produces workspace-scoped output even when projectId is set
-// (pickImplicitScopeKind's project-first precedence would otherwise silently override the user's
-// stated intent). When the "about this project|workspace" fragment is absent (i.e. the plain
-// "remember about X" form) the capture is undefined and scope inference falls back to context
-// precedence exactly as before.
+// Parse the imperative before interpreting the scope qualifier. Ordinary mentions of a project in
+// a stated fact keep the caller's default. The qualifier ends at its recognized clause separator.
 const REMEMBER_ABOUT_PATTERNS: readonly RegExp[] = [
-  /^\s*remember\s+about\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
-  /^\s*merk(?:e)?\s+dir\s+(?:zu|über|ueber)\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
-  /^\s*speicher(?:e)?\s+(?:zu|über|ueber)\s+(?:this\s+(project|workspace)[:,\s]+)?/iu,
+  /^\s*(?:please\s+)?remember\s+about\s+/iu,
+  /^\s*(?:bitte\s+)?merke?\s+dir(?:\s+bitte)?\s+(?:zu|über|ueber)\s+/iu,
 ];
+// "Speichere über Nacht …" is an ordinary file task. Only a complete scope qualifier makes
+// this form a memory instruction; "Speichere, dass …" and "Speichere: …" have their own prefix.
+const SAVE_ABOUT_PREFIX = /^\s*(?:bitte\s+)?speichere?\s+(?:zu|über|ueber)\s+/iu;
+const ABOUT_SCOPE_PATTERNS = [
+  /^this\s+(project|workspace)(?:[:,\s]+|$)/iu,
+  /^dies(?:em|es|en)\s+(projekt|arbeitsbereich|workspace)\s*(?::|,\s*dass\b)\s*/iu,
+];
+const FOR_SCOPE_PATTERNS = [
+  /^for\s+this\s+(project|workspace)\s*:\s*/iu,
+  /^(?:für|fuer)\s+dies(?:em|es|en)\s+(projekt|arbeitsbereich|workspace)\s*(?::|,\s*dass\b)\s*/iu,
+];
+const PROJECT_NOUNS = new Set(["project", "projekt"]);
 const FORGET_PATTERNS: readonly RegExp[] = [
   /^\s*forget(?!\s+not\b)(?:\s+about)?(?:\s+that(?=\s+\S))?\s+/iu,
   /^\s*vergiss(?:\s+bitte)?,?\s+dass\s+(?:alles\s+)?(?:über|ueber|zu|an)\s+/iu,
@@ -117,24 +125,28 @@ const FORGET_PATTERNS: readonly RegExp[] = [
   // Bare "Lösche die Datei" is a task. It must never reach a memory.
   /^\s*lösche(?:\s+bitte)?\s+die\s+erinnerung\s+(?:an|zu|über|ueber)\s+/iu,
 ];
-// "Vergiss nicht, ..." and "Vergiss nie, ..." mean the opposite of forgetting, so they are no forget.
-const VERGISS_NICHT_RE = /^\s*vergiss\s+(?:es\s+|das\s+)?(?:bitte\s+)?(?:nicht|nie|niemals)\b/iu;
+// A leading negation may follow a pronoun or modal particle: "Vergiss es bitte nicht".
+const VERGISS_NEGATION_PREFIX_RE =
+  /^\s*vergiss\s+(?:(?:es|das|bitte|ja|doch|bloß|bloss|noch|lieber|einfach|nur)\s+)*/iu;
+const GERMAN_NEGATION = String.raw`nicht|nie|niemals|auf\s+(?:gar\s+)?keinen\s+fall`;
+const NEGATED_START_RE = new RegExp(String.raw`^(?:${GERMAN_NEGATION})\b`, "iu");
 const VERGISS_RE = /^\s*vergiss\b/iu;
-const DASS_RE = /\bdass\b/iu;
-const NEGATED_ENDINGS: readonly string[] = [" nicht", " nie", " niemals"];
+const VERGISS_DASS_RE = /^\s*vergiss(?:\s+bitte)?,?\s+dass\b/iu;
+const NEGATED_END_RE = new RegExp(String.raw`(?:^|\s)(?:${GERMAN_NEGATION}|nicht\s+mehr)$`, "iu");
+// A separate sentence can take back the whole instruction before any target is resolved.
+const FORGET_WITHDRAWALS = [
+  /[.!?…]\s+(?:oder|doch|nein,?)\s+(?:(?:besser|lieber|doch)\s+)?nicht(?=[.!?…]|$)/iu,
+  /[.!?…]\s+(?:actually|on second thought|no),?\s+(?:don['’]t|do not)(?=[.!?…]|$)/iu,
+  /[.!?…]\s+(?:actually|on second thought|no),?\s+(?:don['’]t|do not)\s+forget(?:\s+(?:it|that))?(?=[.!?…]|$)/iu,
+];
 // "Vergiss es" and "Forget it" mean "never mind", so they name nothing to forget.
 const NEVER_MIND_TARGETS: ReadonlySet<string> = new Set(["es", "it"]);
 
-// "Vergiss den Bericht nicht" keeps the negation for the end. "Vergiss, dass ich das nicht mag"
-// is a real forget: its "nicht" belongs to the fact.
-function endsNegated(text: string): boolean {
-  if (!VERGISS_RE.test(text) || DASS_RE.test(text)) return false;
-  const lower = trimForgetTarget(text.trim()).toLowerCase();
-  return NEGATED_ENDINGS.some((ending) => lower.endsWith(ending));
-}
-
 function forgetPrefixMatch(text: string): RegExpExecArray | null {
-  if (VERGISS_NICHT_RE.test(text) || endsNegated(text)) return null;
+  const germanPrefix = VERGISS_NEGATION_PREFIX_RE.exec(text);
+  if (germanPrefix !== null && NEGATED_START_RE.test(text.slice(germanPrefix[0].length))) {
+    return null;
+  }
   return execFirst(FORGET_PATTERNS, text);
 }
 
@@ -153,6 +165,7 @@ const FORGET_REFERENCE_WORDS: ReadonlySet<string> = new Set([
 ]);
 const FORGET_TARGET_END_MARKS = new Set([" ", "\t", ".", "!", "?", "…"]);
 const FORGET_TARGET_POLITE_TAILS: readonly string[] = [" bitte", " please"];
+const POLITE_FORGET_OPENING = /^[ \t]*(?:bitte[ \t]+(?=vergiss\b)|please[ \t]+(?=forget\b))/iu;
 
 // Plain string walks: a regex anchored at the end would rescan a long run of spaces per position.
 function trimForgetTarget(target: string): string {
@@ -219,6 +232,22 @@ function firstNamingWord(target: string): string | undefined {
 // introduces what is forgotten ("Forget the address: Take Street 5"), never a request after it.
 const CONTINUATION_SEPARATORS = String.raw`[,;，；–—]|\s-\s|\s(?:und|and|dann|then)(?!\p{L})`;
 const CONTINUATION_RE = new RegExp(CONTINUATION_SEPARATORS, "gu");
+const FORGET_NEGATION_BOUNDARIES = new RegExp(
+  String.raw`${CONTINUATION_SEPARATORS}|[:：]|[.!?…](?=\s)`,
+  "u",
+);
+
+// A trailing German negation still governs the imperative before a follow-up. A direct "dass"
+// clause names the fact itself, where a negation belongs to that fact.
+function negatesForgetTarget(text: string, target: string): boolean {
+  return (
+    VERGISS_RE.test(text) &&
+    !VERGISS_DASS_RE.test(text) &&
+    target
+      .split(FORGET_NEGATION_BOUNDARIES)
+      .some((part) => NEGATED_END_RE.test(trimForgetTarget(part.trim())))
+  );
+}
 // "Forget that, tell me the rest": a word that refers to what was just said, directly followed by
 // the clause that goes on.
 const REFERENCE_THEN_CONTINUATION_RE = new RegExp(
@@ -318,13 +347,52 @@ interface ForgetRequest {
   readonly onlyIfStored: boolean;
 }
 
+// Read the retraction separately from the requested follow-up ("tell me when it is gone").
+// A negated different task or a reminder about a different object leaves the first request intact.
+const RETRACTION_CLAUSES = /[.!?…;–—]|,(?=\s*(?:nein|actually|on second thought)\b)/iu;
+const ENGLISH_RETRACTION =
+  /^(?:actually|on second thought|no),?\s+(?:please\s+)?(?:don['’]t|do not)\s+forget\s+/iu;
+const GERMAN_RETRACTION = /^(?:nein|doch|halt|stopp),?\s+(?:bitte\s+)?vergiss\s+/iu;
+const RETRACTED_PRONOUN = new Set(["it", "that", "this", "ihn", "sie", "es", "das"]);
+
+function withdrawnObject(clause: string): string | undefined {
+  const english = ENGLISH_RETRACTION.exec(clause);
+  if (english !== null) return clause.slice(english[0].length).trim();
+  const german = GERMAN_RETRACTION.exec(clause);
+  if (german === null) return undefined;
+  const object = clause.slice(german[0].length);
+  const negation = /\snicht$/iu.exec(object);
+  return negation === null
+    ? undefined
+    : object
+        .slice(0, negation.index)
+        .trimEnd()
+        .replace(/\sbitte$/iu, "")
+        .trim();
+}
+
+function withdrawsNamedForget(body: string, sentence: string): boolean {
+  const clauses = body.split(RETRACTION_CLAUSES);
+  return clauses.slice(1).some((clause) => {
+    const object = withdrawnObject(clause.trim().toLowerCase());
+    if (object === undefined) return false;
+    return (
+      RETRACTED_PRONOUN.has(object) ||
+      object === trimForgetTarget(sentence.slice(0, continuationOf(sentence)?.at)).toLowerCase()
+    );
+  });
+}
+
 // The thing a "Vergiss …" / "Forget …" sentence names, before reading how it goes on.
 function statedForgetTarget(text: string): string | null {
   const prefixMatch = forgetPrefixMatch(text);
   if (prefixMatch === null) return null;
   const body = bodyAfterPrefix(prefixMatch, text);
-  if (body === null || firstSentence(body).endsWith("?")) return null;
-  const target = trimForgetTarget(firstSentence(body));
+  if (body === null || FORGET_WITHDRAWALS.some((pattern) => pattern.test(body))) return null;
+  const sentence = firstSentence(body);
+  if (withdrawsNamedForget(body, sentence)) return null;
+  if (sentence.endsWith("?")) return null;
+  const target = trimForgetTarget(sentence);
   return target === "" || NEVER_MIND_TARGETS.has(target.toLowerCase()) ? null : target;
 }
 
@@ -332,9 +400,12 @@ function forgetRequestOf(text: string): ForgetRequest | null {
   for (const [pattern, target] of FORGET_REFERENCE_STATEMENTS) {
     if (pattern.test(text)) return { target, lookup: target, onlyIfStored: false };
   }
-  const target = statedForgetTarget(text);
+  // Run every guard, including negation and task continuations, on the same imperative.
+  const imperative = text.replace(POLITE_FORGET_OPENING, "");
+  const target = statedForgetTarget(imperative);
   if (target === null) return null;
   const continuation = continuationOf(target);
+  if (negatesForgetTarget(imperative, target.slice(0, continuation?.at))) return null;
   if (continuation === null) return statedForget(target, target);
   if (continuation.kind === "task") return null;
   return answeredForget(target, continuation);
@@ -494,8 +565,8 @@ function firstSentence(line: string): string {
   return line;
 }
 
-function statedFactAfterPrefix(prefixMatch: RegExpExecArray, text: string): string | null {
-  const firstLine = text.slice(prefixMatch[0].length).trim().split(LINE_TERMINATOR_RE, 1)[0];
+function statedFactAfterPrefix(remainder: string): string | null {
+  const firstLine = remainder.trim().split(LINE_TERMINATOR_RE, 1)[0];
   const body = firstLine === undefined ? "" : firstSentence(firstLine.trim());
   if (body === "" || body.endsWith("?") || NOT_A_FACT_START_RE.test(body)) return null;
   return body;
@@ -630,22 +701,35 @@ function rememberScopePolicy(
   return mergePolicyScopeKind(policy, explicitScopeKind ?? policy.rememberScopeKind);
 }
 
-// Reads the capturing group added to REMEMBER_ABOUT_PATTERNS. Returns undefined when the "about
-// this <noun>:" fragment was absent (plain "remember about X"), so the caller preserves whatever
-// policy.scopeKind (if any) was already provided by the surrounding capture pipeline. Audit
-// KEIKO-0336.
-function explicitScopeKindFromAboutMatch(
-  aboutPrefixMatch: RegExpExecArray | null,
-): ExplicitScopeKind | undefined {
-  const captured = aboutPrefixMatch?.[1];
-  if (captured === undefined) {
-    return undefined;
-  }
-  const normalized = captured.toLowerCase();
-  if (normalized === "project" || normalized === "workspace") {
-    return normalized;
-  }
-  return undefined;
+function readRememberInstruction(text: string): {
+  readonly remainder: string;
+  readonly scopeKind?: ExplicitScopeKind;
+} | null {
+  const scopedSave = SAVE_ABOUT_PREFIX.exec(text);
+  const about = scopedSave ?? execFirst(REMEMBER_ABOUT_PATTERNS, text);
+  const command = about ?? execFirst(REMEMBER_PATTERNS, text);
+  if (command === null) return null;
+  const remainder = text.slice(command[0].length);
+  const scope = execFirst(about === null ? FOR_SCOPE_PATTERNS : ABOUT_SCOPE_PATTERNS, remainder);
+  const noun = scope?.[1];
+  if (scope === null || noun === undefined) return scopedSave === null ? { remainder } : null;
+  return {
+    scopeKind: PROJECT_NOUNS.has(noun.toLowerCase()) ? "project" : "workspace",
+    remainder: remainder.slice(scope[0].length),
+  };
+}
+
+// After German "dass", the person's present-tense "bevorzuge" can close the clause.
+function explicitPreferenceEnd(body: string, nowMs: number): number | "expired" | null {
+  const preference =
+    startsWithStatedPreference(body) || (/^ich\s/iu.test(body) && /\bbevorzuge[.!]?$/iu.test(body));
+  const namedPreference =
+    /^(?:my preferred [\p{L} -]+ (?:is|are)|mein(?:e|en|er|es)? bevorzugt\p{L}* [\p{L} -]+ (?:ist|sind))\b/iu.test(
+      body,
+    );
+  if (!preference && !namedPreference) return null;
+  const end = statedDateEnd(body, nowMs);
+  return end !== null && end <= nowMs ? "expired" : end;
 }
 
 // ─── tryExtractRemember ──────────────────────────────────────────────────────
@@ -658,17 +742,9 @@ export function tryExtractRemember(
   context: CaptureContext,
   policy: CapturePolicyOptions = {},
 ): CaptureOutcome | null {
-  // "about" is tried first and, if its prefix matches at all (even with an unusable body), wins
-  // outright — falling back to the plain prefix on a matched-but-empty "about" body would let
-  // the plain pattern reinterpret the word "about" itself as body text (the same class of bug
-  // this file's regex catalogue comment documents).
-  const aboutPrefixMatch = execFirst(REMEMBER_ABOUT_PATTERNS, text);
-  const plainPrefixMatch = aboutPrefixMatch === null ? execFirst(REMEMBER_PATTERNS, text) : null;
-  const prefixMatch = aboutPrefixMatch ?? plainPrefixMatch;
-  if (prefixMatch === null) {
-    return null;
-  }
-  const body = statedFactAfterPrefix(prefixMatch, text);
+  const instruction = readRememberInstruction(text);
+  if (instruction === null) return null;
+  const body = statedFactAfterPrefix(instruction.remainder);
   if (body === null) {
     return null;
   }
@@ -676,14 +752,8 @@ export function tryExtractRemember(
   if (rejection !== null) {
     return rejection;
   }
-  // The REMEMBER_ABOUT_PATTERNS capture the noun ("project" or "workspace") when the user wrote
-  // "about this <noun>:". Thread it through scopeOrReject as an explicit scopeKind only when
-  // the CALLER has not already set one (audit KEIKO-0336). PR-review follow-up: never let
-  // user-controlled text override an authority-constraint scopeKind supplied by the pipeline
-  // — that would let "remember about this workspace" widen a project-scoped policy from an
-  // agent turn. On conflict (policy asks for one scope, text names the other) fail closed by
-  // rejecting the capture, mirroring how scope-missing already rejects.
-  const explicitScopeKind = explicitScopeKindFromAboutMatch(aboutPrefixMatch);
+  // The named scope must still agree with any authority constraint supplied by the caller.
+  const explicitScopeKind = instruction.scopeKind;
   const conflictOutcome = rejectOnScopeConflict(policy, explicitScopeKind, context);
   if (conflictOutcome !== null) return conflictOutcome;
   const scopeResolution = scopeOrReject(context, rememberScopePolicy(policy, explicitScopeKind));
@@ -695,6 +765,8 @@ export function tryExtractRemember(
       defaultSensitivity: policy.defaultSensitivity,
     }),
   });
+  const validUntil = explicitPreferenceEnd(body, context.nowMs);
+  if (validUntil === "expired") return { kind: "rejected", reason: "expired-preference" };
   const proposal = buildProposal(
     {
       context,
@@ -703,6 +775,7 @@ export function tryExtractRemember(
       type: "preference",
       sensitivity: decision.sensitivity,
       sourceKind: "explicit-user-instruction",
+      ...(validUntil === null ? {} : { validUntil }),
     },
     1.0,
   );
@@ -727,8 +800,7 @@ export function isExplicitMemoryStatement(text: string): boolean {
 
 export function explicitStatementKind(text: string): "forget" | "remember" | null {
   if (forgetTargetOf(text) !== null) return "forget";
-  const remembered = execFirst(REMEMBER_ABOUT_PATTERNS, text) ?? execFirst(REMEMBER_PATTERNS, text);
-  return remembered === null ? null : "remember";
+  return readRememberInstruction(text) === null ? null : "remember";
 }
 
 // A forget whose name matched no memory. "Forget the formatting, just give me the answer" is then an

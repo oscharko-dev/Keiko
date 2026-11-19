@@ -86,12 +86,17 @@ export const UI_BROWSER_OPEN_REQUEST_FILE = "ui.browser-open";
 // The starting UI process's sign of life for its launcher (#4358, ui-startup-progress.ts).
 export const UI_STARTUP_PROGRESS_STATE_FILE = "ui.starting";
 
+// The latest order of the folder launcher's starts since the last stop (launch-order.ts, ADR-0121
+// D9): a fenced stop leaves Keiko open when a start came after it.
+export const UI_LAUNCH_ORDER_FILE = "ui.launch-order";
+
 export const KEIKO_STATE_FILES = [
   "ui.pid",
   "ui.log",
   UI_SHUTDOWN_REQUEST_FILE,
   UI_BROWSER_OPEN_REQUEST_FILE,
   UI_STARTUP_PROGRESS_STATE_FILE,
+  UI_LAUNCH_ORDER_FILE,
   "launcher-state.json",
   "portable-install-state.json",
   UNINSTALL_JOURNAL_FILE,

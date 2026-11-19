@@ -83,15 +83,7 @@ export {
 
 export { detectWorkspace, detectWorkspaceAt } from "./detect.js";
 
-export {
-  isCaseInsensitivePathCase,
-  parseGitCoreIgnoreCase,
-  pathCaseFromGitIgnoreCase,
-  pathCaseKey,
-  pathGlobCaseSensitive,
-  platformPathCase,
-  workspacePathCase,
-} from "./pathCase.js";
+export { isCaseInsensitivePathCase, platformPathCase, workspacePathCase } from "./pathCase.js";
 
 export {
   discoverFiles,

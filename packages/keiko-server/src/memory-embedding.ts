@@ -177,6 +177,25 @@ const MEMORY_EMBEDDING_INVALIDATED_OPERATION = defineActivityLogOperation({
   proofIds: ["memory.embedding.invalidated.line"],
 });
 
+const MEMORY_EMBEDDING_REFRESH_SKIPPED_OPERATION = defineActivityLogOperation({
+  ...MEMORY_EMBEDDING_OPERATION_BASE,
+  op: "memory.embedding.refresh.skipped",
+  category: "memory",
+  emitter: "memory-embedding.logEmbeddingRefreshSkipped",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["body-changed-or-missing"],
+    },
+  },
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["memory-embedding-invalidation"],
+  proofIds: ["memory.embedding.refresh.skipped.line"],
+});
+
 const MEMORY_CAPTURE_NOVELTY_GATE_OPERATION = defineActivityLogOperation({
   ...MEMORY_EMBEDDING_OPERATION_BASE,
   op: "memory.capture.novelty-gate",
@@ -236,25 +255,25 @@ function buildAdapter(
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
   log: EmbeddingLogSink,
 ): OpenAIEmbeddingAdapter {
-  return {
+  const connection = {
     endpoint: provider.baseUrl,
     apiKey: provider.apiKey,
     ...(provider.apiKeyHeaderName !== undefined
       ? { apiKeyHeaderName: provider.apiKeyHeaderName }
       : {}),
     ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
+  };
+  return {
+    ...connection,
     request: (request) =>
       // `log` is spread first so a caller-supplied sink wins. Without one the gateway transport
       // resolves the frozen no-op sink and its failure / TLS-trust lines count as `port-unwired`.
       requestImpl({
         log,
         ...request,
-        endpoint: provider.baseUrl,
-        apiKey: provider.apiKey,
-        ...(provider.apiKeyHeaderName !== undefined
-          ? { apiKeyHeaderName: provider.apiKeyHeaderName }
-          : {}),
-        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
+        ...connection,
+        endpointStyle: provider.endpointStyle,
+        apiVersion: provider.apiVersion,
       }),
   };
 }
@@ -303,6 +322,7 @@ function toEmbeddingInput(
 export type MemoryEmbedder = (
   text: string,
   kind?: MemoryEmbeddingKind,
+  signal?: AbortSignal,
 ) => Promise<MemoryEmbeddingInput | null>;
 
 // Graceful degradation is silent by design — every failure below returns `null` and the caller
@@ -325,6 +345,10 @@ function logEmbeddingUnavailable(
   getServerLogger().log(faulty ? "warn" : "debug", () =>
     activityLogEvent(EMBEDDING_MEMORY_UNAVAILABLE_OPERATION, {}, { reason, providerCount }),
   );
+}
+
+export function logMemoryEmbeddingProviderUnavailable(): void {
+  logEmbeddingUnavailable("no-embedding-capable-model", 0, false);
 }
 
 function closedEmbeddingErrorKind(errorKind: string): ActivityLogErrorKind {
@@ -408,7 +432,7 @@ export function createMemoryEmbedder(
 ): MemoryEmbedder | null {
   const providers = configuredEmbeddingProviders(config);
   if (providers.length === 0) {
-    logEmbeddingUnavailable("no-embedding-capable-model", 0, false);
+    logMemoryEmbeddingProviderUnavailable();
     return null;
   }
   const provider = providers[0];
@@ -416,6 +440,14 @@ export function createMemoryEmbedder(
     logEmbeddingUnavailable("provider-absent", providers.length, true);
     return null;
   }
+  return bindMemoryEmbedder(provider, requestImpl, log);
+}
+
+function bindMemoryEmbedder(
+  provider: ModelProviderConfig,
+  requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
+  log: EmbeddingLogSink,
+): MemoryEmbedder {
   const adapter = buildAdapter(provider, requestImpl, log);
   // NOT `async`: an async arrow that merely returns an inner promise adopts it, adding two
   // microtask ticks before the caller observes the result. Chat streaming interleaves cancellation
@@ -424,7 +456,22 @@ export function createMemoryEmbedder(
   return (
     text: string,
     kind: MemoryEmbeddingKind = "document",
-  ): Promise<MemoryEmbeddingInput | null> => requestMemoryEmbedding(adapter, provider, text, kind);
+    signal?: AbortSignal,
+  ): Promise<MemoryEmbeddingInput | null> =>
+    requestMemoryEmbedding(adapter, provider, text, kind, signal);
+}
+
+export function bindMemoryQueryEmbedding(
+  deps: UiHandlerDeps,
+  provider: ModelProviderConfig,
+  queryText: string,
+): (signal?: AbortSignal) => Promise<MemoryEmbeddingInput | null> {
+  const embed = bindMemoryEmbedder(
+    provider,
+    requestEmbeddingImpl(deps),
+    deps.activityLog ?? processServerLogSink(),
+  );
+  return (signal) => embed(queryText, "query", signal);
 }
 
 // Split out of the factory so the request path stays inside the function-length bar once the three
@@ -434,6 +481,7 @@ async function requestMemoryEmbedding(
   provider: ModelProviderConfig,
   text: string,
   kind: MemoryEmbeddingKind,
+  signal?: AbortSignal,
 ): Promise<MemoryEmbeddingInput | null> {
   if (text.length === 0) return null;
   const elapsed = startLogTimer();
@@ -443,6 +491,7 @@ async function requestMemoryEmbedding(
       apiKey: provider.apiKey,
       modelId: provider.modelId,
       input: formatEmbeddingInput(provider.modelId, text, kind),
+      ...(signal === undefined ? {} : { signal }),
       ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
     });
     if (outcome.ok) {
@@ -465,6 +514,7 @@ export async function embedMemoryText(
   deps: UiHandlerDeps,
   text: string,
   kind: MemoryEmbeddingKind = "document",
+  signal?: AbortSignal,
 ): Promise<MemoryEmbeddingInput | null> {
   const embedder = createMemoryEmbedder(
     currentGatewayConfig(deps),
@@ -472,11 +522,11 @@ export async function embedMemoryText(
     deps.activityLog ?? processServerLogSink(),
   );
   if (embedder === null) return null;
-  return embedder(text, kind);
+  return embedder(text, kind, signal);
 }
 
-// Best-effort embed-on-capture. Embeds the memory body and upserts the vector. A null embedding
-// (no model / failure) is a no-op; a vault rejection (e.g. gateEmbeddingInput dimension/contract
+// Best-effort embed-on-capture. Stores the vector only while its captured body is still current.
+// A null embedding (no model / failure) is a no-op; a vault rejection (e.g. dimension/contract
 // guard) is swallowed so a malformed vector can never break the capture that already succeeded.
 export async function embedAndStoreMemory(
   deps: UiHandlerDeps,
@@ -487,35 +537,41 @@ export async function embedAndStoreMemory(
   const input = await embedMemoryText(deps, text, "document");
   if (input === null) return;
   try {
-    vault.upsertEmbedding(memoryId, input);
+    if (!vault.replaceEmbeddingForMemoryBody(memoryId, text, input)) logEmbeddingRefreshSkipped();
   } catch (error) {
     // gateEmbeddingInput / storage rejection — capture already succeeded; drop the embedding.
     logEmbeddingStoreRejected("store-rejected", error);
   }
 }
 
-// Invalidation, not storage, is the invariant here: after a body edit the old vector is WRONG, so
-// every failure path below ends with the row deleted rather than left stale. Each of those paths
-// leaves the memory unsearchable by similarity until the next successful refresh, which is exactly
-// the state an operator needs named when semantic recall quietly stops returning a known memory.
+// Remove the obsolete vector before awaiting the provider, then bind replacement to the body that
+// produced it. Metadata-only edits may keep the result; a changed/deleted body skips it. Failure
+// never performs a late unconditional delete that could remove another edit's valid vector.
 export async function refreshMemoryEmbeddingAfterBodyEdit(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   memoryId: MemoryId,
   text: string,
 ): Promise<void> {
+  try {
+    if (!vault.replaceEmbeddingForMemoryBody(memoryId, text, null)) {
+      logEmbeddingRefreshSkipped();
+      return;
+    }
+  } catch (error) {
+    // A successful replacement can still recover from a failed initial invalidation.
+    logEmbeddingStoreRejected("invalidation-failed", error);
+  }
   const input = await embedMemoryText(deps, text, "document");
   if (input === null) {
-    logEmbeddingInvalidated("no-embedding");
-    deleteEmbeddingBestEffort(vault, memoryId);
+    logUnavailableEditedEmbedding(vault, memoryId, text);
     return;
   }
   try {
-    vault.upsertEmbedding(memoryId, input);
+    if (!vault.replaceEmbeddingForMemoryBody(memoryId, text, input)) logEmbeddingRefreshSkipped();
   } catch (error) {
     logEmbeddingStoreRejected("store-rejected", error);
     logEmbeddingInvalidated("store-rejected");
-    deleteEmbeddingBestEffort(vault, memoryId);
   }
 }
 
@@ -523,14 +579,27 @@ function logEmbeddingInvalidated(reason: "no-embedding" | "store-rejected"): voi
   getServerLogger().warn(activityLogEvent(MEMORY_EMBEDDING_INVALIDATED_OPERATION, {}, { reason }));
 }
 
-// Missing memory / no existing row / storage rejection: the edit already succeeded, and the
-// important invariant is that we never keep using a known stale vector when refresh fails.
-function deleteEmbeddingBestEffort(vault: MemoryVaultStore, memoryId: MemoryId): void {
+function logUnavailableEditedEmbedding(
+  vault: MemoryVaultStore,
+  memoryId: MemoryId,
+  text: string,
+): void {
   try {
-    vault.deleteEmbedding(memoryId);
+    if (vault.getMemory(memoryId)?.body !== text) logEmbeddingRefreshSkipped();
+    else if (vault.getEmbedding(memoryId) === undefined) logEmbeddingInvalidated("no-embedding");
   } catch (error) {
     logEmbeddingStoreRejected("invalidation-failed", error);
   }
+}
+
+function logEmbeddingRefreshSkipped(): void {
+  getServerLogger().info(
+    activityLogEvent(
+      MEMORY_EMBEDDING_REFRESH_SKIPPED_OPERATION,
+      {},
+      { reason: "body-changed-or-missing" },
+    ),
+  );
 }
 
 // Pure cosine similarity in [0,1]. Returns 0 when the vectors differ in length or either has zero
@@ -740,11 +809,15 @@ const DEDUP_CORPUS_STATUSES = ["accepted", "proposed"] as const;
 function gatherScopeEmbeddings(
   vault: MemoryVaultStore,
   scope: MemoryScope,
+  candidate: MemoryEmbeddingInput | null,
 ): ReadonlyMap<MemoryId, MemoryEmbeddingRow> {
+  if (candidate === null) return new Map();
   const ids = vault
-    .listMemoriesByScope(scope, { status: [...DEDUP_CORPUS_STATUSES] })
-    .slice(0, MAX_DEDUP_NEIGHBORS)
-    .map((record) => record.id);
+    .listMemoryMetadataByScope(scope, {
+      status: DEDUP_CORPUS_STATUSES,
+      limit: MAX_DEDUP_NEIGHBORS,
+    })
+    .map(({ id }) => id);
   return ids.length === 0 ? new Map() : vault.getEmbeddings(ids);
 }
 
@@ -755,8 +828,8 @@ function gatherScopeEmbeddings(
 // statement that was simply false, and one that also skipped the refusal's audit event.
 export type NoveltyInsertOutcome =
   | { readonly kind: "inserted"; readonly record: MemoryRecord }
-  // The candidate is a semantic near-duplicate of a live in-scope memory: that canonical was
-  // reinforced via recordAccess and nothing new was stored.
+  // The candidate is a semantic near-duplicate of a live in-scope memory. The learning callback
+  // determines whether the source can reinforce that memory.
   | { readonly kind: "merged"; readonly mergedInto: MemoryId }
   // The local human already refused this fact (forgot or rejected it) and the candidate is a
   // PARAPHRASE of it: nothing was stored and nothing was reinforced.
@@ -765,6 +838,7 @@ export type NoveltyInsertOutcome =
   | { readonly kind: "unconfirmed" };
 
 export interface NoveltyInsertOptions {
+  readonly signal?: AbortSignal;
   // Store nothing unless a semantic duplicate confirms the candidate.
   readonly onlyConfirm?: boolean;
   // The fact this candidate replaces: it is no duplicate of what it replaces.
@@ -774,6 +848,8 @@ export interface NoveltyInsertOptions {
   // A refusal by the person that may have arrived while the embedding was computed. Checked after
   // the last wait, immediately before anything is merged or stored.
   readonly refusedSinceStart?: (record: MemoryRecord) => MemoryCaptureSuppressionReason | null;
+  // Learning turns can retry after the vault commits, so their confirmation is replay-safe.
+  readonly confirmDuplicate?: (id: MemoryId) => void;
   // Replaces the semantic duplicate when the person now gives the fact another end date. Returns
   // undefined when that duplicate may not be replaced, and the candidate then only confirms it.
   readonly replaceDuplicate?: (
@@ -820,33 +896,35 @@ function confirmedDuplicate(
 // Both are governed refusals, so both must survive a paraphrase — an exact body_hash match is
 // already handled upstream by `exactCaptureSuppressionReason` (memory-suppression.ts); this catches
 // the cosine-similar re-derivation whose normalized body differs.
-function rejectedScopeVectors(
+function rejectedScopeEmbeddings(
   vault: MemoryVaultStore,
   scope: MemoryRecord["scope"],
-): readonly Float32Array[] {
+): readonly MemoryEmbeddingRow[] {
   const ids = vault
-    .listMemoriesByScope(scope, {
+    .listMemoryMetadataByScope(scope, {
       status: ["rejected"],
       limit: MAX_DEDUP_NEIGHBORS,
       includeExpired: true,
     })
     .map((record) => record.id);
   if (ids.length === 0) return [];
-  return [...vault.getEmbeddings(ids).values()].map((row) => row.vector);
+  return [...vault.getEmbeddings(ids).values()];
 }
 
 function refusalMatchesCandidate(
   vault: MemoryVaultStore,
   scope: MemoryRecord["scope"],
-  candidate: Float32Array,
+  candidate: MemoryEmbeddingInput,
   threshold: number,
   reason: MemoryCaptureSuppressionReason,
 ): boolean {
   if (reason === FORGOTTEN_MEMORY_SUPPRESSION_REASON) {
     return vault.hasSemanticallySimilarForgetTombstone(scope, candidate, threshold);
   }
-  return rejectedScopeVectors(vault, scope).some(
-    (vector) => cosineSimilarity(candidate, vector) >= threshold,
+  return rejectedScopeEmbeddings(vault, scope).some(
+    (row) =>
+      embeddingIdentitiesCompatible(candidate, row) &&
+      cosineSimilarity(candidate.vector, row.vector) >= threshold,
   );
 }
 
@@ -861,7 +939,7 @@ function semanticSuppressionReason(
 ): MemoryCaptureSuppressionReason | null {
   if (candidate === null) return null;
   for (const reason of SEMANTIC_SUPPRESSION_REASONS) {
-    if (refusalMatchesCandidate(vault, scope, candidate.vector, threshold, reason)) {
+    if (refusalMatchesCandidate(vault, scope, candidate, threshold, reason)) {
       return reason;
     }
   }
@@ -929,7 +1007,7 @@ type DuplicateSettlement =
   | { readonly kind: "merged"; readonly mergedInto: MemoryId }
   | { readonly kind: "replaced"; readonly record: MemoryRecord };
 
-// A semantic duplicate is confirmed, or replaced when the person now gives it another end date.
+// A semantic duplicate merges, or replaces the existing memory when the end date changes.
 function settleDuplicate(
   vault: MemoryVaultStore,
   record: MemoryRecord,
@@ -939,7 +1017,11 @@ function settleDuplicate(
   if (duplicateOf === null) return { kind: "none" };
   const replaced = replacedDuplicate(vault, record, duplicateOf, options);
   if (replaced !== undefined) return { kind: "replaced", record: replaced };
-  vault.recordAccess([duplicateOf], Date.now(), record.provenance.sourceConversationId);
+  if (options.confirmDuplicate === undefined) {
+    vault.recordAccess([duplicateOf], Date.now(), record.provenance.sourceConversationId);
+  } else {
+    options.confirmDuplicate(duplicateOf);
+  }
   return { kind: "merged", mergedInto: duplicateOf };
 }
 
@@ -951,13 +1033,20 @@ function storeCandidate(
   return options.insert?.(record) ?? vault.insertMemory(record);
 }
 
+function assertCaptureNotCancelled(signal: AbortSignal | undefined): void {
+  signal?.throwIfAborted();
+}
+
 export async function insertSalienceMemoryWithNoveltyGate(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   record: MemoryRecord,
   options: NoveltyInsertOptions = {},
 ): Promise<NoveltyInsertOutcome> {
-  const embedding = await embedMemoryText(deps, record.body, "document");
+  assertCaptureNotCancelled(options.signal);
+  const embedding = await embedMemoryText(deps, record.body, "document", options.signal);
+  // A late provider response cannot write after the person's next Chat turn has started.
+  assertCaptureNotCancelled(options.signal);
   const embedded = embedding !== null;
   const scopeKind = record.scope.kind;
   const calibration = embedding === null ? {} : memoryEmbeddingCalibrationFor(deps.env, embedding);
@@ -971,7 +1060,7 @@ export async function insertSalienceMemoryWithNoveltyGate(
     });
     return { kind: "suppressed", reason: suppression };
   }
-  const neighbors = gatherScopeEmbeddings(vault, record.scope);
+  const neighbors = gatherScopeEmbeddings(vault, record.scope, embedding);
   const neighborCount = neighbors.size;
   const duplicateOf = confirmedDuplicate(
     vault,

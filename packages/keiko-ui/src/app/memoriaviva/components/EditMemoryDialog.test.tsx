@@ -1,10 +1,14 @@
 // Issue #211 — tests for EditMemoryDialog: form fields, save, cancel, validation, focus trap.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { EditMemoryDialog } from "./EditMemoryDialog";
+import { MemoryDetail } from "./MemoryDetail";
+import { ApiError } from "@/lib/api-shared-primitives";
+import { acceptMemoryProposal, editMemory, type MemoryDetailResponse } from "@/lib/memory-api";
+import { deferred } from "./__tests__/test-support";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
 import { PROFILE_EXCLUDED_MEMORY_TAG } from "@oscharko-dev/keiko-contracts/runtime/memory";
 
@@ -32,6 +36,98 @@ function makeRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
 }
 
 describe("EditMemoryDialog — rendering", () => {
+  it("restores keyboard focus during a slow canonical reload without reopening stale content", async () => {
+    const original = makeRecord();
+    const edited = {
+      ...original,
+      body: "Revised keyboard note",
+      updatedAt: original.updatedAt + 1,
+    };
+    const refresh = deferred<MemoryDetailResponse>();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ memory: original })
+      .mockReturnValue(refresh.promise);
+    const user = userEvent.setup();
+    const network = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(Response.json({ memory: edited }));
+    try {
+      render(<MemoryDetail id={original.id} fetchMemoryImpl={load} />);
+      const trigger = await screen.findByRole("button", { name: /edit memory body/i });
+      trigger.focus();
+      await user.keyboard("{Enter}");
+      const field = screen.getByRole("textbox", { name: /^body/i });
+      await user.clear(field);
+      await user.type(field, edited.body);
+      await user.click(screen.getByRole("button", { name: /^save/i }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await waitFor(() => expect(trigger).toHaveFocus());
+      expect(trigger).toHaveAttribute("aria-disabled", "true");
+      await user.keyboard("{Enter}");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      expect(screen.queryByText(original.body)).not.toBeInTheDocument();
+      await act(async () => {
+        refresh.resolve({ memory: edited });
+      });
+      expect(await screen.findByText(edited.body)).toBeInTheDocument();
+      expect(trigger).toHaveFocus();
+      expect(trigger).toHaveAttribute("aria-disabled", "false");
+    } finally {
+      network.mockRestore();
+    }
+  });
+
+  it("preserves the open form and draft when another view accepts the proposal", async () => {
+    const proposed = makeRecord({ status: "proposed" });
+    const accepted = {
+      ...proposed,
+      status: "accepted" as const,
+      updatedAt: proposed.updatedAt + 1,
+    };
+    const refresh = deferred<MemoryDetailResponse>();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ memory: proposed })
+      .mockReturnValueOnce(refresh.promise);
+    const user = userEvent.setup();
+    render(<MemoryDetail id={proposed.id} fetchMemoryImpl={load} onBack={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: /edit memory body/i }));
+    const input = screen.getByRole("textbox", { name: /^body/i });
+    await user.clear(input);
+    await user.type(input, "My unsaved replacement");
+    await act(async () => {
+      await acceptMemoryProposal(proposed.id, {}, async () => ({ memory: accepted }));
+    });
+    expect(input).toBeInTheDocument();
+    expect(input).toHaveValue("My unsaved replacement");
+    await act(async () => refresh.resolve({ memory: accepted }));
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue("My unsaved replacement");
+  });
+
+  it("keeps the draft and explains a conflicting content edit from another view", async () => {
+    const previous = makeRecord();
+    const edited = { ...previous, body: "Other window edit", updatedAt: previous.updatedAt + 1 };
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ memory: previous })
+      .mockResolvedValueOnce({ memory: edited });
+    const user = userEvent.setup();
+    render(<MemoryDetail id={previous.id} fetchMemoryImpl={load} onBack={vi.fn()} />);
+    await user.click(await screen.findByRole("button", { name: /edit memory body/i }));
+    const input = screen.getByRole("textbox", { name: /^body/i });
+    await user.clear(input);
+    await user.type(input, "My unsaved replacement");
+    await act(async () => {
+      await editMemory(previous.id, { body: edited.body }, async () => ({ memory: edited }));
+    });
+    expect(input).toBeInTheDocument();
+    expect(input).toHaveValue("My unsaved replacement");
+    expect(await screen.findByRole("alert")).toHaveTextContent(/changed/i);
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+  });
+
   it("renders with existing body, tags, and sensitivity", () => {
     render(
       <EditMemoryDialog
@@ -199,10 +295,41 @@ describe("EditMemoryDialog — interaction", () => {
     await waitFor(() => {
       expect(onSave).toHaveBeenCalledWith(updatedRecord);
     });
-    expect(editImpl).toHaveBeenCalledWith(
-      "mem-edit-1",
-      expect.objectContaining({ body: "Updated body" }),
+    expect(editImpl).toHaveBeenCalledWith("mem-edit-1", {
+      body: "Updated body",
+      expectedUpdatedAt: updatedRecord.updatedAt,
+    });
+  });
+
+  it("sends only edited tags and leaves a learned body's evidence and sensitivity untouched", async () => {
+    const record = makeRecord();
+    const save = vi.fn().mockResolvedValue({ memory: record });
+    const user = userEvent.setup();
+    render(
+      <EditMemoryDialog record={record} editMemoryImpl={save} onSave={vi.fn()} onClose={vi.fn()} />,
     );
+    await waitFor(() => expect(screen.getByRole("textbox", { name: /^body/i })).toHaveFocus());
+    const input = screen.getByRole("textbox", { name: /tags/i });
+    await user.clear(input);
+    await user.type(input, "new tag");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(save).toHaveBeenCalledExactlyOnceWith(record.id, {
+      tags: ["new tag"],
+      expectedUpdatedAt: record.updatedAt,
+    });
+  });
+
+  it("closes an unchanged form without writing a new revision", async () => {
+    const record = makeRecord({ tags: ["design, research", "release"] });
+    const save = vi.fn().mockResolvedValue({ memory: record });
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <EditMemoryDialog record={record} editMemoryImpl={save} onSave={onSave} onClose={vi.fn()} />,
+    );
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(save).not.toHaveBeenCalled();
+    expect(onSave).toHaveBeenCalledExactlyOnceWith(record);
   });
 
   it("calls correctMemoryImpl and returns the new correction record in correction mode", async () => {
@@ -235,6 +362,32 @@ describe("EditMemoryDialog — interaction", () => {
     expect(correctImpl).toHaveBeenCalledWith("mem-edit-1", "Corrected body");
   });
 
+  it("retains the draft when the server detects a newer edit before a view notification arrives", async () => {
+    const record = makeRecord();
+    const edit = vi.fn().mockRejectedValue(new ApiError("CONFLICT", "Version changed", 409));
+    const onSave = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <EditMemoryDialog record={record} editMemoryImpl={edit} onSave={onSave} onClose={vi.fn()} />,
+    );
+    const input = screen.getByRole("textbox", { name: /^body/i });
+    await user.clear(input);
+    await user.type(input, "My pending edit");
+    const save = screen.getByRole("button", { name: /^save$/i });
+    await user.click(save);
+    expect(edit).toHaveBeenCalledExactlyOnceWith(
+      record.id,
+      expect.objectContaining({
+        body: "My pending edit",
+        expectedUpdatedAt: record.updatedAt,
+      }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent(/changed/i);
+    expect(input).toHaveValue("My pending edit");
+    expect(save).toBeDisabled();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it("shows error alert when editMemoryImpl rejects", async () => {
     const editImpl = vi.fn().mockRejectedValue(new Error("save failed"));
     const user = userEvent.setup();
@@ -246,6 +399,7 @@ describe("EditMemoryDialog — interaction", () => {
         editMemoryImpl={editImpl}
       />,
     );
+    await user.type(screen.getByRole("textbox", { name: /^body/i }), " edited");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();

@@ -10,9 +10,12 @@ import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   createDefaultChatCapability,
+  createDefaultEmbeddingCapability,
   parseGatewayConfig,
   type GatewayCallRequest,
   type NormalizedResponse,
+  type OpenAIEmbeddingOutcome,
+  type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
@@ -24,6 +27,10 @@ import type { RouteContext } from "./routes.js";
 import * as multiSourceQa from "./grounded-qa-multi-source.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { memoryEmbeddingProviderIdentity } from "./memory-embedding.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 
 const MODEL = "memory-source-fixture";
 const MEMORY = "Use pnpm for package installs.";
@@ -91,7 +98,11 @@ function fixture(calls: GatewayCallRequest[]): {
   const store = createInMemoryUiStore();
   const memoryDir = join(root, "memory");
   mkdirSync(memoryDir);
-  const vault = createMemoryVault({ memoryDir, redactString: (text) => text });
+  const vault = createMemoryVault({
+    memoryDir,
+    vaultKey: Buffer.alloc(32, 29),
+    redactString: (text) => text,
+  });
   cleanups.push(() => {
     vault.close();
     store.close();
@@ -163,6 +174,73 @@ function memoryRoute(root: string, chatId: string, content: string): RouteContex
     url: new URL("http://localhost/api/chats/messages/grounded"),
   };
 }
+
+it.each([true, false] as const)(
+  "handles grounded query lifetime with disconnect=%s",
+  async (disconnect) => {
+    const calls: GatewayCallRequest[] = [];
+    const { deps, root, chatId } = fixture(calls);
+    if (deps.config === undefined || deps.memoryVault === undefined) {
+      throw new Error("missing memory runtime fixture");
+    }
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const modelId = "text-embedding-3-small";
+    const provider = { modelId, baseUrl: "http://127.0.0.1:11434/v1", apiKey: "fixture" };
+    const config = parseGatewayConfig({
+      providers: [...deps.config.providers, provider],
+      capabilities: [createDefaultChatCapability(MODEL), createDefaultEmbeddingCapability(modelId)],
+    });
+    const configured = config.providers.find((entry) => entry.modelId === modelId);
+    if (configured === undefined) throw new Error("missing embedding fixture");
+    deps.memoryVault.upsertEmbedding("memory-source-preference" as MemoryId, {
+      provider: memoryEmbeddingProviderIdentity(configured),
+      modelId,
+      metric: "cosine",
+      vector: Float32Array.from([1, 0]),
+    });
+    let finish!: (outcome: OpenAIEmbeddingOutcome) => void;
+    const pending = new Promise<OpenAIEmbeddingOutcome>((resolve) => {
+      finish = resolve;
+    });
+    let queryStarted = false;
+    const cancelled = vi.fn(() => {
+      finish({ ok: false, kind: "cancelled" });
+    });
+    const request = memoryRoute(root, chatId, "Which package manager should I use for installs?");
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const outcome = handleGroundedAsk(request, {
+      ...deps,
+      config,
+      diagnostics: { record: (record) => diagnostics.push(record) },
+      localKnowledgeEmbeddingRequest: (embedding: OpenAIEmbeddingRequest) => {
+        queryStarted = true;
+        embedding.signal?.addEventListener("abort", cancelled, { once: true });
+        return pending;
+      },
+    });
+    try {
+      await vi.waitFor(() => {
+        expect(queryStarted).toBe(true);
+      });
+      if (disconnect) request.req.emit("aborted");
+      else finish({ ok: true, value: { vector: Float32Array.from([1, 0]), modelId } });
+      // Release an unfixed adapter separately, without counting cleanup as cancellation.
+      finish({ ok: false, kind: "transport" });
+      await expect(outcome).resolves.toMatchObject({ status: disconnect ? 499 : 200 });
+      expect(cancelled).toHaveBeenCalledTimes(disconnect ? 1 : 0);
+      expect(diagnostics.filter(({ operation }) => operation === "grounded.memory")).toEqual([]);
+      expect(calls).toHaveLength(disconnect ? 0 : 1);
+      expect(sink.events.filter(({ op }) => op === "embedding.memory.failed")).toMatchObject(
+        disconnect ? [{ errorKind: "cancelled", extra: { failureKind: "cancelled" } }] : [],
+      );
+    } finally {
+      finish({ ok: false, kind: "transport" });
+      await outcome.catch(() => undefined);
+      sink.close?.();
+    }
+  },
+);
 
 it("forwards actual governed memory authority through the public plural handler with zero fitted folder evidence", async () => {
   const calls: GatewayCallRequest[] = [];

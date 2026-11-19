@@ -4,6 +4,8 @@ import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatBytes, formatDate } from "@/lib/format";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { correlationIdOf } from "@/lib/client-error-summary";
 import {
   loadFigmaSnapshotScreenJson,
   type FigmaSnapshotScreenJsonResponse,
@@ -26,6 +28,14 @@ function labelFrom(screenName: string | undefined, screenId: string | undefined)
   return screenId?.trim() ?? "Selected Figma view";
 }
 
+function matchesSource(
+  json: FigmaSnapshotScreenJsonResponse | null,
+  runId: string | undefined,
+  screenId: string | undefined,
+): json is FigmaSnapshotScreenJsonResponse {
+  return json !== null && json.runId === runId && json.screen.screenId === screenId;
+}
+
 export function FigmaJsonSourceWindow({
   snapshotRunId,
   screenId,
@@ -35,10 +45,11 @@ export function FigmaJsonSourceWindow({
   const tUi = useOptionalWidgetTranslate();
   const abortRef = useRef<AbortController | null>(null);
   const [state, setState] = useState<JsonLoadState>("idle");
-  const [screenJson, setScreenJson] = useState<FigmaSnapshotScreenJsonResponse | null>(null);
+  const [loadedJson, setLoadedJson] = useState<FigmaSnapshotScreenJsonResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const label = labelFrom(screenName, screenId);
+  const screenJson = matchesSource(loadedJson, snapshotRunId, screenId) ? loadedJson : null;
   const jsonText = useMemo(
     () => (screenJson === null ? "" : JSON.stringify(screenJson, null, 2)),
     [screenJson],
@@ -46,38 +57,47 @@ export function FigmaJsonSourceWindow({
   const jsonBytes = useMemo(() => jsonTextByteLength(jsonText), [jsonText]);
 
   const loadJson = useCallback((): void => {
+    abortRef.current?.abort();
+    setLoadedJson(null);
+    setCopyStatus(null);
     if (
       snapshotRunId === undefined ||
       snapshotRunId.trim().length === 0 ||
       screenId === undefined ||
       screenId.trim().length === 0
     ) {
-      setScreenJson(null);
       setState("error");
-      setError("Missing Figma JSON source reference.");
+      setError(tUi("figmaJson.ui.missingReference"));
       return;
     }
-    abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
     setState("loading");
     setError(null);
-    setCopyStatus(null);
     loadScreenJsonImpl(snapshotRunId, screenId, controller.signal)
       .then((result) => {
-        setScreenJson(result);
+        if (controller.signal.aborted) return;
+        if (!matchesSource(result, snapshotRunId, screenId)) {
+          reportClientDiagnostic("[keiko] Figma snapshot JSON source reference mismatch.");
+          setError(tUi("figmaJson.ui.loadFailed"));
+          setState("error");
+          return;
+        }
+        setLoadedJson(result);
         setState("done");
       })
       .catch((err: unknown) => {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        setScreenJson(null);
-        setError(err instanceof Error ? err.message : "Failed to load Figma JSON.");
+        if (controller.signal.aborted) return;
+        reportClientDiagnostic("[keiko] Figma snapshot JSON source load failed.", {
+          correlationId: correlationIdOf(err),
+        });
+        setError(err instanceof Error ? err.message : tUi("figmaJson.ui.loadFailed"));
         setState("error");
       })
       .finally(() => {
         if (abortRef.current === controller) abortRef.current = null;
       });
-  }, [loadScreenJsonImpl, screenId, snapshotRunId]);
+  }, [loadScreenJsonImpl, screenId, snapshotRunId, tUi]);
 
   useEffect(() => {
     loadJson();
@@ -90,14 +110,14 @@ export function FigmaJsonSourceWindow({
   const copyJson = useCallback((): void => {
     if (jsonText.length === 0) return;
     if (navigator.clipboard === undefined) {
-      setCopyStatus("Clipboard unavailable");
+      setCopyStatus(tUi("figmaSnapshotWindow.jsonInspector.clipboardUnavailable"));
       return;
     }
     navigator.clipboard
       .writeText(jsonText)
-      .then(() => setCopyStatus("Copied"))
-      .catch(() => setCopyStatus("Copy failed"));
-  }, [jsonText]);
+      .then(() => setCopyStatus(tUi("figmaSnapshotWindow.jsonInspector.copied")))
+      .catch(() => setCopyStatus(tUi("figmaSnapshotWindow.jsonInspector.copyFailed")));
+  }, [jsonText, tUi]);
 
   return (
     <section className="figma-json-window" aria-label={`Figma JSON source ${label}`}>
@@ -147,7 +167,7 @@ export function FigmaJsonSourceWindow({
           {copyStatus}
         </output>
       ) : null}
-      {state === "done" && jsonText.length > 0 ? (
+      {jsonText.length > 0 ? (
         <JsonSyntaxBlock
           text={jsonText}
           className="figma-json-code"

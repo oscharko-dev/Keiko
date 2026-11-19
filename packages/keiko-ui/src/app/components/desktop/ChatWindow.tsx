@@ -70,6 +70,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { useWindowStageEvidence } from "./hooks/useWindowStageEvidence";
 import {
   useChatSessionCatalog,
   useChatSessionComposer,
@@ -5370,10 +5371,30 @@ interface MemoryDisclosureState {
   readonly disclosureId: string;
   readonly disclosureButtonRef: RefObject<HTMLButtonElement | null>;
   readonly memoryCount: number;
+  readonly empty: boolean;
   readonly memoryCountLabel: string;
   readonly memoryDisclosureLabel: string;
   readonly toggleDisclosure: () => void;
   readonly handleActionSettled: (message: string) => void;
+}
+
+function memoryDisclosureButtonLabel(
+  memoryCount: number,
+  profileCount: number,
+  t: I18nTranslate,
+): string {
+  if (profileCount > 0) {
+    if (memoryCount > 0) {
+      return t("chat.memory.retrievedAndProfile", {
+        retrieved: memoryCount,
+        profile: profileCount,
+      });
+    }
+    return t("chat.memory.profileIncluded", { count: profileCount });
+  }
+  return memoryCount > 0
+    ? t("chat.memory.included", { count: memoryCount })
+    : t("chat.memory.noneIncluded");
 }
 
 function useMemoryDisclosureState(
@@ -5392,11 +5413,11 @@ function useMemoryDisclosureState(
   const toggleDisclosure = useCallback((): void => {
     setOpen((current) => !current);
   }, []);
-  const memoryCount = latestMemory?.context.memories.length ?? 0;
-  const memoryDisclosureLabel =
-    memoryCount > 0
-      ? t("chat.memory.included", { count: memoryCount })
-      : t("chat.memory.noneIncluded");
+  const context = latestMemory?.context;
+  const memoryCount = context?.enabled === true ? context.memories.length : 0;
+  const profileCount = context?.enabled === true ? (context.profile?.entries.length ?? 0) : 0;
+  const empty = memoryCount === 0 && profileCount === 0;
+  const memoryDisclosureLabel = memoryDisclosureButtonLabel(memoryCount, profileCount, t);
   const memoryCountLabel = memoryCount > 99 ? "99+" : String(memoryCount);
 
   // GEN-PERF-CHAT-014 — a fresh object literal here defeated the memo on every consumer
@@ -5410,6 +5431,7 @@ function useMemoryDisclosureState(
       disclosureId,
       disclosureButtonRef,
       memoryCount,
+      empty,
       memoryCountLabel,
       memoryDisclosureLabel,
       toggleDisclosure,
@@ -5420,6 +5442,7 @@ function useMemoryDisclosureState(
       actionStatus,
       disclosureId,
       memoryCount,
+      empty,
       memoryCountLabel,
       memoryDisclosureLabel,
       toggleDisclosure,
@@ -5441,7 +5464,7 @@ function MemoryDisclosureButton({
       aria-expanded={disclosure.open}
       aria-controls={disclosure.disclosureId}
       aria-label={disclosure.memoryDisclosureLabel}
-      data-empty={disclosure.memoryCount === 0 ? "true" : "false"}
+      data-empty={disclosure.empty ? "true" : "false"}
       data-tip={disclosure.memoryDisclosureLabel}
       onClick={disclosure.toggleDisclosure}
     >
@@ -5530,13 +5553,133 @@ function memorySummaryLabel(
   t: I18nTranslate,
 ): string {
   if (latestMemory === undefined) return t("chat.memory.disclosurePending");
-  if (latestMemory.context.enabled) {
-    return t("chat.memory.usedTokens", {
-      used: latestMemory.context.budget.used,
-      tokens: latestMemory.context.budget.tokens,
-    });
-  }
-  return t("chat.memory.disabledLast");
+  const { enabled, budget, profile, profileRetrievedCount = 0 } = latestMemory.context;
+  if (!enabled) return t("chat.memory.disabledLast");
+  // The wire budget is for retrieval, after the server reserves tokens for the profile.
+  const key =
+    profile === undefined && profileRetrievedCount === 0
+      ? "chat.memory.usedTokens"
+      : "chat.memory.retrievalTokens";
+  return t(key, { used: budget.used, tokens: budget.tokens });
+}
+
+function StandingMemoryProfile({
+  profile,
+  t,
+}: {
+  readonly profile: NonNullable<ConversationMemoryResultWire["context"]["profile"]>;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  useWindowStageEvidence("chat memory profile disclosure");
+  return (
+    <section className={styles.cmpMemoryContextGroup} aria-label={t("chat.memory.profileHeading")}>
+      <h2>{t("chat.memory.profileHeading")}</h2>
+      {profile.entries.length > 0 ? (
+        <>
+          <p className="chat-memory-summary">{t("chat.memory.profileDescription")}</p>
+          <ul className={styles.cmpMemoryProfileFacts}>
+            {profile.entries.map((entry) => (
+              <li key={entry.memoryId}>{entry.text}</li>
+            ))}
+          </ul>
+          <p className="chat-memory-summary">
+            {t("chat.memory.profileTokens", { tokens: profile.tokens })}
+          </p>
+        </>
+      ) : null}
+      {profile.droppedCount !== undefined && profile.droppedCount > 0 ? (
+        <p className="chat-memory-summary">
+          {t("chat.memory.profileDropped", { count: profile.droppedCount })}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function RetrievedMemoryCard({
+  memory,
+  t,
+}: {
+  readonly memory: ConversationMemoryResultWire["context"]["memories"][number];
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <article className="chat-memory-item">
+      <div className="chat-memory-item-head">
+        <strong>{memory.memoryId}</strong>
+        <span>{memory.inclusionReason}</span>
+      </div>
+      <p>{memory.bodyExcerpt}</p>
+      <dl
+        className="chat-memory-meta"
+        aria-label={t("chat.memory.provenance", { id: memory.memoryId })}
+      >
+        <div>
+          <dt>{t("chat.memory.source")}</dt>
+          <dd>{sourceKindLabel(memory.sourceKind, t)}</dd>
+        </div>
+        <div>
+          <dt>{t("chat.memory.sensitivity")}</dt>
+          <dd>{memory.sensitivity}</dd>
+        </div>
+        <div>
+          <dt>{t("chat.memory.status")}</dt>
+          <dd>{memory.status}</dd>
+        </div>
+        <div>
+          <dt>{t("chat.memory.confidence")}</dt>
+          <dd>{`${String(Math.round(memory.confidence * 100))}%`}</dd>
+        </div>
+        <div>
+          <dt>{t("chat.memory.captured")}</dt>
+          <dd>{formatMemoryCapturedAt(memory.capturedAt)}</dd>
+        </div>
+      </dl>
+      {memory.captureRationale !== undefined ? (
+        <p className="chat-memory-rationale">{memory.captureRationale}</p>
+      ) : null}
+    </article>
+  );
+}
+
+function MemoryContextDetails({
+  context,
+  t,
+}: {
+  readonly context: ConversationMemoryResultWire["context"];
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const { memories, profile, profileRetrievedCount = 0, belowFloorCount = 0 } = context;
+  return (
+    <>
+      {memories.length > 0 ? (
+        <section
+          className={styles.cmpMemoryContextGroup}
+          aria-label={t("chat.memory.retrievedHeading")}
+        >
+          <h2>{t("chat.memory.retrievedHeading")}</h2>
+          {profileRetrievedCount > 0 ? (
+            <p className="chat-memory-summary">
+              {t("chat.memory.profileRetrieved", { count: profileRetrievedCount })}
+            </p>
+          ) : null}
+          {memories.map((memory) => (
+            <RetrievedMemoryCard key={memory.memoryId} memory={memory} t={t} />
+          ))}
+        </section>
+      ) : (
+        <p className="chat-memory-summary">{t("chat.memory.noneRetrieved")}</p>
+      )}
+      {profile !== undefined && (profile.entries.length > 0 || (profile.droppedCount ?? 0) > 0) ? (
+        <StandingMemoryProfile profile={profile} t={t} />
+      ) : null}
+      {belowFloorCount > 0 ? (
+        <p className="chat-memory-summary">
+          {t("chat.memory.belowRelevance", { count: belowFloorCount })}
+        </p>
+      ) : null}
+    </>
+  );
 }
 
 // Extracted from MemoryPanelImpl (SonarCloud S3358) — the stable React key per memory action kind.
@@ -5574,43 +5717,9 @@ function MemoryPanelImpl({
           budgetTokens={memoryBudgetTokens}
           setBudgetTokens={setMemoryBudgetTokens}
         />
-        {latestMemory?.context.memories.map((memory) => (
-          <article key={memory.memoryId} className="chat-memory-item">
-            <div className="chat-memory-item-head">
-              <strong>{memory.memoryId}</strong>
-              <span>{memory.inclusionReason}</span>
-            </div>
-            <p>{memory.bodyExcerpt}</p>
-            <dl
-              className="chat-memory-meta"
-              aria-label={t("chat.memory.provenance", { id: memory.memoryId })}
-            >
-              <div>
-                <dt>{t("chat.memory.source")}</dt>
-                <dd>{sourceKindLabel(memory.sourceKind, t)}</dd>
-              </div>
-              <div>
-                <dt>{t("chat.memory.sensitivity")}</dt>
-                <dd>{memory.sensitivity}</dd>
-              </div>
-              <div>
-                <dt>{t("chat.memory.status")}</dt>
-                <dd>{memory.status}</dd>
-              </div>
-              <div>
-                <dt>{t("chat.memory.confidence")}</dt>
-                <dd>{`${String(Math.round(memory.confidence * 100))}%`}</dd>
-              </div>
-              <div>
-                <dt>{t("chat.memory.captured")}</dt>
-                <dd>{formatMemoryCapturedAt(memory.capturedAt)}</dd>
-              </div>
-            </dl>
-            {memory.captureRationale !== undefined ? (
-              <p className="chat-memory-rationale">{memory.captureRationale}</p>
-            ) : null}
-          </article>
-        ))}
+        {latestMemory?.context.enabled === true ? (
+          <MemoryContextDetails context={latestMemory.context} t={t} />
+        ) : null}
         {latestMemory?.actions.map((action) => (
           <MemoryActionCard
             key={memoryActionKey(action)}

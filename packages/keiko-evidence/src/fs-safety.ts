@@ -125,13 +125,13 @@ function assertDeletableOwnedTree(dir: string, label: string): void {
 }
 
 // eslint-disable-next-line complexity -- containment deletion has to check missing, symlink, hardlink, and realpath cases inline.
-export function removeOwnedRunDirectory(
+export function resolveOwnedRunDirectoryForDeletion(
   rootDir: string,
   runId: string,
   fs: WorkspaceFs,
   label: string,
   options: { readonly containmentRoot?: string | undefined } = {},
-): boolean {
+): string | undefined {
   let realRoot: string | undefined;
   try {
     realRoot = existingOwnedDirectory(rootDir, fs, label);
@@ -139,7 +139,7 @@ export function removeOwnedRunDirectory(
     if (error instanceof EvidenceReadError) throw new EvidenceWriteError(error.message);
     throw error;
   }
-  if (realRoot === undefined) return false;
+  if (realRoot === undefined) return undefined;
   if (options.containmentRoot !== undefined) {
     let realContainmentRoot: string | undefined;
     try {
@@ -154,7 +154,7 @@ export function removeOwnedRunDirectory(
   }
   const runDir = ownedChildPath(realRoot, runId);
   const stat = lstatSync(runDir, { throwIfNoEntry: false });
-  if (stat === undefined) return false;
+  if (stat === undefined) return undefined;
   if (stat.isSymbolicLink()) {
     throw new EvidenceWriteError(`${label} run directory must not be a symlink`);
   }
@@ -164,6 +164,18 @@ export function removeOwnedRunDirectory(
   const realRunDir = fs.realPath(runDir);
   assertContained(realRoot, realRunDir, `${label} run directory`);
   assertDeletableOwnedTree(runDir, `${label} run directory`);
-  rmSync(runDir, { recursive: true, force: true });
+  return runDir;
+}
+
+export function removeOwnedRunDirectory(
+  rootDir: string,
+  runId: string,
+  fs: WorkspaceFs,
+  label: string,
+  options: { readonly containmentRoot?: string | undefined } = {},
+): boolean {
+  const dir = resolveOwnedRunDirectoryForDeletion(rootDir, runId, fs, label, options);
+  if (dir === undefined) return false;
+  rmSync(dir, { recursive: true, force: true });
   return true;
 }

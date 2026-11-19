@@ -33,6 +33,7 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
         "jira-template-validate",
         "jira-template-propose",
         "jira-template-bind",
+        "jira-template-options",
       ],
     },
     phase: {
@@ -74,6 +75,8 @@ const MARKDOWN_SKILL_OPERATION = defineActivityLogOperation({
     beyondLimitCount: OPTIONAL_COUNT_FIELD,
     // Proposals kept although one of their two Jira reads was not answered (#4354).
     partialProposalCount: OPTIONAL_COUNT_FIELD,
+    projectCount: OPTIONAL_COUNT_FIELD,
+    statusCount: OPTIONAL_COUNT_FIELD,
     // Template validation/binding results: missing checkedFieldCount means the catalog was unreadable.
     checkedFieldCount: OPTIONAL_COUNT_FIELD,
     validationFindingCount: OPTIONAL_COUNT_FIELD,
@@ -102,7 +105,8 @@ export type MarkdownSkillAction =
   | "jira-template-list"
   | "jira-template-validate"
   | "jira-template-propose"
-  | "jira-template-bind";
+  | "jira-template-bind"
+  | "jira-template-options";
 
 /** What a template proposal accounted for, as counts per closed reason (#4354). */
 export interface MarkdownSkillProposalAccounting {
@@ -116,6 +120,9 @@ export interface MarkdownSkillProposalAccounting {
 }
 
 export interface MarkdownSkillTemplateAccounting {
+  readonly projectCount?: number;
+  readonly typeCount?: number;
+  readonly statusCount?: number;
   readonly checkedFieldCount?: number;
   readonly validationFindingCount?: number;
   readonly bindingUpdateCount?: number;
