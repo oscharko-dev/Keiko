@@ -602,7 +602,9 @@ function scoreAbstainProbe(scenario, probe, answer, supplied) {
   return {
     passed: abstained && !asserted && !leakage.leaked,
     abstained,
-    asserted,
+    // Present only on a probe that names a forbidden assignment, so the scorecard of every other
+    // abstain probe stays byte-identical to the one the golden digest pins.
+    ...(probe.expect.forbidden === undefined ? {} : { asserted }),
     valueStated,
     leaked: leakage.leaked,
     leakedInSupplied: leakage.inSupplied,
