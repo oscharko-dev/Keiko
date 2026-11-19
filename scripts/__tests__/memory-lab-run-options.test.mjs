@@ -45,6 +45,11 @@ describe("memory lab option guards", () => {
     expect(options.brokenLearner).toBeUndefined();
   });
 
+  it("records the recall trace by default, and only when it was not switched off", () => {
+    expect(normalizeOptions(values()).recallTrace).toBe(true);
+    expect(normalizeOptions(values({ "recall-trace": false })).recallTrace).toBe(false);
+  });
+
   it("refuses an output directory behind a symbolic link that points into the checkout", () => {
     directory = mkdtempSync(join(tmpdir(), "memory-lab-link-"));
     const link = join(directory, "into-checkout");

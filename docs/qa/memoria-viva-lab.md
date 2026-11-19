@@ -525,7 +525,7 @@ record is live, i.e. accepted), `forgotten-fact-returned`, `forbidden-fact-store
 counted once, as this class), `seeded-record-lost`, then for a failed answer probe, most
 specific first, `forbidden-term-in-answer`, `needed-memory-missing` (a `needs` or `earlier` fact never
 reached the model; with the recall trace on, each missing fact is also counted once in the class of
-its stage, `needed-not-stored` … `needed-ranked-low`, see "Recall trace"), `relevant-memory-not-supplied` (nothing relevant reached the model),
+its stage, `needed-not-stored` … `needed-trace-unavailable`, see "Recall trace"), `relevant-memory-not-supplied` (nothing relevant reached the model),
 `supplied-answer-wrong` (it reached the model and the answer is still wrong); for the other probes
 `fact-leaked` (an abstain probe that leaked, even when it also failed to abstain), `no-abstention`, `memory-on-unrelated-question`, `injected-instruction-obeyed`; and
 `unit-not-measured`. `rhythm.mjs compare` and `judge` add, per class, the count in the baseline and in
@@ -540,37 +540,66 @@ When a memory an answer needs never reaches the model, `neededNotSupplied` only 
 recall trace on (the default; `--no-recall-trace` switches it off) every answer probe of an arm with
 memory (`product`, `oracle`) records, per probe, where the loss happened. After the chat answer has
 been received, so that it cannot influence the answer, the lab calls the product's own route
-`POST /api/memory/context` once, for the same chat and question, with a token budget of 1,000,000 so
-that the budget cuts nothing, and writes a body-free `recallTrace` on the probe in the run file:
-`source` (`memory-context-route`), `strictFloor` (`false`), `includedCount`, `included` (id, 1-based
-`position`, `score`, `subscores`, in the route's final order), `omittedByReason` (counts per closed
-reason) and `needed`, one entry per fact the probe `needs` or asks for `earlier`:
-`{key, id, suppliedByChat, position, scoreRank, omittedReason, carrierCount, stage}`. `id` is the
-stored memory that carries the fact, found by the rule the scorer uses (`score.mjs`, the seeded link
-or the terms of the fact; `null` when none exists); `scoreRank` is the place when the included
-entries are sorted by the product's `score` (ties keep their order), so `position > scoreRank` shows
-that the reorder moved the memory down. A route call that fails leaves a closed `failure`
-(`http-error` with its `status`, `malformed-response`, `request-failed`, `store-unreadable`) and the
-probe result stands; the trace never fails a unit. No memory text, question or excerpt is recorded; a
-sealed (`--holdout`) run records no trace at all. The trace is not part of the scorecard or of any
-score, and the manifest names whether it was on (`recallTrace`: `on` or `off`).
+`POST /api/memory/context` once, for the same chat and question, and writes a body-free `recallTrace`
+on the probe in the run file: `source` (`memory-context-route`), `strictFloor` (`false`), `chatLimit`
+and `chatRetrievedCount` (the chat's limit on retrieved memories, and how many it supplied),
+`includedCount`, `included` (id, 1-based `position`, `score`, `subscores`, in the route's final order),
+`omittedByReason` (counts per closed reason), `durationMs` and `needed`, one entry per wanted fact:
+`{key, id, suppliedByChat, position, scoreRank, omittedReason, carrierCount, stage}`.
 
-`stage` is derived in one pure function (`recall-stage.mjs`), most specific first: `supplied` (the chat
-supplied it), `not-stored` (no stored memory carries it), `trace-unavailable` (the route call
-failed), `not-a-candidate` (the memory is in neither list), `not-admitted` (omitted for a reason other
-than the next two, for example `suppressed-by-status` for a parked memory), `ranked-out` (omitted as
-`max-included-exceeded`), `cut-by-budget` (omitted as `budget-exceeded`), `moved-down` (included, not
-supplied, `position > scoreRank`) and `ranked-low` (included, not supplied, otherwise). Every stage
-except `supplied` is a failure class (`needed-<stage>`, counted per missing fact, for probes that fail
-as `needed-memory-missing`).
+The wanted facts are the truths a probe `needs`, the values it asks for `earlier`, and, for a probe
+that expects answer `terms`, the truth whose terms are exactly those terms (the last kind is followed
+by the trace only; the score never sees it). `id` is the stored memory that carries the fact, found by
+the rule the scorer uses (`score.mjs`: the seeded link, or the terms of the fact); `null` means **no
+stored body matches the fact's terms**, which is what `not-stored` says, not that the product never
+saw the fact. `scoreRank` is the place when the included entries are sorted by the product's `score`
+(ties keep their order). A route call that fails leaves a closed `failure` (`http-error` with its
+`status`, `malformed-response`, `request-failed`, `store-unreadable`) and the probe result stands; the
+trace never fails a unit. No memory text, question or excerpt is recorded. A sealed (`--holdout`) run
+and every real-conversation (anchor) scenario record no trace at all.
 
-Three limits the trace states honestly. It is a diagnostic approximation of the chat path, not the
-chat path: (1) the route ranks with the same signals, fusion and reorder as the chat path but
-**without the chat path's strict relevance floor**, so a memory the chat's floor refuses can read as
-`ranked-low` or `moved-down` here; (2) it has **no standing profile**, so a fact the chat supplied
-through the profile is `supplied` by the chat but not by the route; (3) it uses the route's **default
-limit of 12 included memories**, so `ranked-out` is a route-limit statement, not the chat's cut. The
-route also records its usual `memory:retrieved` audit event; it bumps no access counter.
+**Stages.** The chat and the route rank the same candidates before their floors, so among the
+memories both admit the order is the same; what differs is the cut. The chat keeps at most
+`CHAT_MAX_RETRIEVED_MEMORIES` retrieved memories (6 today) behind a strict relevance floor and a token
+budget; the route keeps 12 behind a relaxed floor. A stage therefore names only what is known. It is
+derived in one pure function (`recall-stage.mjs`) from three facts: the route's order, what the chat
+actually supplied (retrieved memories only, never the standing profile) and the chat's limit. The
+limit is read from the subject's own build (`<subject root>/packages/keiko-server/dist/chat-handlers.js`,
+`CHAT_MAX_RETRIEVED_MEMORIES`), never assumed; when it cannot be read the trace says `limitFailure:
+chat-limit-unreadable` and every stage that needs it is `trace-unavailable`. In order:
+
+- `supplied`: the chat supplied it.
+- `trace-unavailable`: the store could not be read (this comes before `not-stored`), the route call
+  failed, or the chat's limit could not be read (only for the stages below that need it).
+- `not-stored`: no stored body matches the fact's terms.
+- `not-a-candidate`: the memory is in neither of the route's lists.
+- `not-admitted`: the route omitted it for a reason other than its limit (for example
+  `suppressed-by-status` for a parked memory).
+- For a memory the route admitted (listed, or omitted as `max-included-exceeded`) that the chat did not
+  supply: `refused-by-chat` when the chat supplied a retrieved memory that the route ranks behind it,
+  or fewer retrieved memories than its limit. It ranked high enough, so the chat refused it, by its
+  strict floor or its token budget; **the two cannot be told apart** from the outside. Otherwise it
+  ranked beyond the chat's limit: `moved-down` when its place by score is within the limit but its
+  position is not (the reorder moved it), else `beyond-limit`. A memory the route omitted by its limit
+  ranks behind every listed one; two such memories have no known order between them.
+
+Every stage except `supplied` is a failure class (`needed-<stage>`, counted once per fact the chat did
+not supply, for probes that fail as `needed-memory-missing` or `relevant-memory-not-supplied`). The
+route's own token budget is made so large (1,000,000) that it cuts nothing: a budget cut in the
+route would only blur the order the stages are read from, so the route's `budget-exceeded` does not
+occur and is counted as `not-admitted` if it ever does.
+
+Limits the trace states honestly. It is a diagnostic approximation of the chat path, not the chat
+path: (1) the route ranks with the same signals, fusion and reorder but **without the chat path's strict
+relevance floor**; (2) it has **no standing profile**, so a fact the chat supplied through the profile
+is `supplied` for the chat but not in the route's order; (3) it uses the route's **default limit of 12
+included memories** where the chat keeps fewer, which is why the stages above compare with the chat's
+limit and its actual block, not with the route's cut. The route also costs **one extra query-embedding
+call per answer probe** when an embedder is configured, and records its usual `memory:retrieved` audit
+event; it bumps no access counter. That time is measured apart as `traceMs` (`timing`) and
+`recallTrace.durationMs`, and is not part of `probeMs`. The manifest's `recallTrace` says what the run
+actually recorded: `on` (every answer probe of an arm with memory), `partial` (some) or `off`; it is a
+provenance field of a comparison, and a run that never recorded it reads as unrecorded.
 
 ## Corpus
 

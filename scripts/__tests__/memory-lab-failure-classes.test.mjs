@@ -115,6 +115,91 @@ describe("the failure class of a failed check", () => {
     ]);
   });
 
+  it("adds the stage where each wanted memory the chat did not supply was lost, per fact, from a trace", () => {
+    const trace = (...entries) => ({
+      source: "memory-context-route",
+      needed: entries.map(([key, stage, suppliedByChat = false]) => ({
+        key,
+        stage,
+        suppliedByChat,
+      })),
+    });
+    const probes = [
+      answer({
+        id: "traced",
+        neededNotSupplied: ["room", "day", "desk"],
+        recallTrace: trace(["room", "moved-down"], ["day", "beyond-limit"], ["desk", "not-stored"]),
+      }),
+      // A fact the chat supplied is not one of the probe's missing facts.
+      answer({
+        id: "partly",
+        neededNotSupplied: ["day"],
+        recallTrace: trace(["room", "supplied", true], ["day", "refused-by-chat"]),
+      }),
+      answer({ id: "untraced", neededNotSupplied: ["day"] }),
+      // A probe that expects terms (no needs) is staged too, once per fact.
+      answer({
+        id: "terms",
+        relevantSupplied: false,
+        recallTrace: trace(["room", "beyond-limit"]),
+      }),
+      answer({
+        id: "forbidden",
+        forbiddenPresent: true,
+        neededNotSupplied: ["day"],
+        recallTrace: trace(["day", "not-admitted"]),
+      }),
+    ];
+    const failures = unitFailures(unit({ probes }));
+    expect(failures.map((failure) => [failure.class, failure.ref])).toEqual([
+      ["needed-memory-missing", "probe:traced"],
+      ["needed-moved-down", "probe:traced:room"],
+      ["needed-beyond-limit", "probe:traced:day"],
+      ["needed-not-stored", "probe:traced:desk"],
+      ["needed-memory-missing", "probe:partly"],
+      ["needed-refused-by-chat", "probe:partly:day"],
+      ["needed-memory-missing", "probe:untraced"],
+      ["relevant-memory-not-supplied", "probe:terms"],
+      ["needed-beyond-limit", "probe:terms:room"],
+      ["forbidden-term-in-answer", "probe:forbidden"],
+    ]);
+  });
+
+  it("counts every stage as a class of its own, after needed-memory-missing", () => {
+    for (const stage of [
+      "not-stored",
+      "not-a-candidate",
+      "not-admitted",
+      "refused-by-chat",
+      "beyond-limit",
+      "moved-down",
+      "trace-unavailable",
+    ])
+      expect(FAILURE_CLASSES).toContain(`needed-${stage}`);
+    expect(FAILURE_CLASSES).not.toContain("needed-supplied");
+    for (const removed of ["ranked-low", "ranked-out", "cut-by-budget"])
+      expect(FAILURE_CLASSES).not.toContain(`needed-${removed}`);
+    const summary = summarizeFailureClasses([
+      unit({
+        probes: [
+          answer({
+            neededNotSupplied: ["a", "b"],
+            recallTrace: {
+              needed: [
+                { key: "a", stage: "beyond-limit", suppliedByChat: false },
+                { key: "b", stage: "beyond-limit", suppliedByChat: false },
+              ],
+            },
+          }),
+        ],
+      }),
+    ]);
+    expect(summary.byArm.product.total).toEqual({
+      "needed-memory-missing": 1,
+      "needed-beyond-limit": 2,
+    });
+  });
+
   it("names the failures of the other probe kinds", () => {
     const probes = [
       { id: "1", kind: "abstain", passed: false, abstained: false, leaked: false },

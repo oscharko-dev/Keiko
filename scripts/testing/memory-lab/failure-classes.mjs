@@ -8,8 +8,9 @@ import { compareStrings } from "../../lib/compare-strings.mjs";
 import { RECALL_STAGES } from "./recall-stage.mjs";
 import { isFailedUnit } from "./unit-failure.mjs";
 
-// Where a needed memory that never reached the model was lost (#4205, recall-stage.mjs): one class per
-// stage, counted per needed fact, in addition to `needed-memory-missing` (which stays one per probe).
+// Where a wanted memory that never reached the model was lost (#4205, recall-stage.mjs): one class per
+// stage, counted per fact, in addition to `needed-memory-missing` and `relevant-memory-not-supplied`
+// (which stay one per probe).
 // `supplied` is no failure: a fact the chat supplied is not among a probe's missing facts.
 const stageClass = (stage) => `needed-${stage}`;
 const NEEDED_STAGE_CLASSES = Object.freeze(
@@ -131,13 +132,13 @@ function probeClass(probe) {
   }
 }
 
-// The stage of each needed fact that never reached the model, from the probe's recall trace. A probe
+// The stage of each wanted fact the chat did not supply, from the probe's recall trace. A probe
 // without a trace (the switch was off, or an older run) names no stage.
 function stageFailures(probe) {
-  const missing = new Set(probe.neededNotSupplied ?? []);
   return (probe.recallTrace?.needed ?? [])
     .filter(
-      (entry) => missing.has(entry.key) && NEEDED_STAGE_CLASSES.includes(stageClass(entry.stage)),
+      (entry) =>
+        entry.suppliedByChat === false && NEEDED_STAGE_CLASSES.includes(stageClass(entry.stage)),
     )
     .map((entry) => ({
       class: stageClass(entry.stage),
@@ -145,14 +146,15 @@ function stageFailures(probe) {
     }));
 }
 
+// The stages refine the two classes that say a wanted fact never reached the model.
+const STAGED_CLASSES = new Set(["needed-memory-missing", "relevant-memory-not-supplied"]);
+
 function probeFailures(probes) {
   return probes
     .filter((probe) => !probe.passed)
     .flatMap((probe) => {
       const failure = { class: probeClass(probe), ref: `probe:${probe.id}` };
-      return failure.class === "needed-memory-missing"
-        ? [failure, ...stageFailures(probe)]
-        : [failure];
+      return STAGED_CLASSES.has(failure.class) ? [failure, ...stageFailures(probe)] : [failure];
     });
 }
 

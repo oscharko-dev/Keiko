@@ -5,8 +5,8 @@
 import { randomUUID } from "node:crypto";
 import { mapSequential } from "./corpus/sequence.mjs";
 import { awaitLearning, captureTotal, listMemories, readCaptures } from "./instance.mjs";
-import { retainBodiesFor } from "./isolation.mjs";
-import { traceRecall } from "./recall-trace.mjs";
+import { isAnchorScenario, retainBodiesFor } from "./isolation.mjs";
+import { LIMIT_UNREADABLE, traceRecall } from "./recall-trace.mjs";
 import { matchesTermGroups, scoreProbe, scoreStore } from "./score.mjs";
 import { countBy, seedLoss } from "./seed-plan.mjs";
 
@@ -301,9 +301,15 @@ export function askedQuestion(scenario, probe) {
 }
 
 // The recall trace (#4205) is requested explicitly, and has nothing to attribute for an arm without
-// memory or for a probe that is not an answer probe.
-function tracesRecall(context, probe) {
-  return context.recallTrace === true && context.arm !== "off" && probe.expect.kind === "answer";
+// memory, for a probe that is not an answer probe, and for real conversations (anchor scenarios),
+// whose ids and counts are not recorded beyond what a run of them already keeps.
+function tracesRecall(scenario, context, probe) {
+  return (
+    context.recallTrace === true &&
+    context.arm !== "off" &&
+    probe.expect.kind === "answer" &&
+    !isAnchorScenario(scenario)
+  );
 }
 
 async function runProbes(scenario, instance, context) {
@@ -324,12 +330,14 @@ async function runProbes(scenario, instance, context) {
       ...(context.retainBodies ? { answer: sent.answer } : {}),
     };
     // Only after the answer was received, so the trace cannot influence it.
-    if (tracesRecall(context, probe))
+    if (tracesRecall(scenario, context, probe))
       row.recallTrace = await traceRecall({
         instance,
         scenario,
         probe,
-        row,
+        supplied: sent.supplied,
+        retrievedIds: sent.retrieved.map((entry) => entry.memoryId),
+        chatLimit: context.chatLimit ?? { failure: LIMIT_UNREADABLE },
         chatId,
         queryText: asked,
         links,
@@ -404,10 +412,22 @@ function seedOutcome(scenario, instance, memories) {
   };
 }
 
+// The probe phase without the time the recall traces took (measured on their own as `traceMs`), so
+// that switching the trace on never moves `probeMs`.
+function timingOf(startedAt, learnedAt, probes) {
+  const traceMs = probes.reduce((sum, probe) => sum + (probe.recallTrace?.durationMs ?? 0), 0);
+  return {
+    learnMs: learnedAt - startedAt,
+    probeMs: Math.max(0, Date.now() - learnedAt - traceMs),
+    ...(probes.some((probe) => probe.recallTrace !== undefined) ? { traceMs } : {}),
+  };
+}
+
 /**
  * Runs one scenario for one arm on a fresh instance and returns the scored evidence. `requested`
  * carries arm, memoryMode, budgetTokens, confirmForget, retainBodies, recallTrace (`true` records the
- * recall trace of every answer probe, see recall-trace.mjs), turnTimeoutMs, learning
+ * recall trace of every answer probe, see recall-trace.mjs), chatLimit (the chat's limit on retrieved
+ * memories, from `readChatRetrievalLimit`), turnTimeoutMs, learning
  * (quietMs, maxMs, pendingLearner) and, offline, the scripted model fixture. Bodies are retained
  * only when the scenario is not anchor text, whatever the run asked for (the labelling pass,
  * `labelPass`, excepted): real conversations leave counts and verdicts, never text.
@@ -452,7 +472,7 @@ export async function runScenario(scenario, instance, requested) {
     })),
     probes,
     probeCaptures: after.probeCaptures,
-    timing: { learnMs: learnedAt - startedAt, probeMs: Date.now() - learnedAt },
+    timing: timingOf(startedAt, learnedAt, probes),
     requests: journalOf(context),
   };
 }

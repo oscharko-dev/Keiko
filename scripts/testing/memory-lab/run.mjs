@@ -33,6 +33,7 @@ import { CEILINGS, pendingGatewayCalls, startLabInstance } from "./instance.mjs"
 import { readActivityEvents } from "../coding-workbench-lab/activity-log-events.mjs";
 import { digestFiles, instrumentDigest, productDistDigest } from "./instrument.mjs";
 import { conversationTextInLog } from "./log-text.mjs";
+import { readChatRetrievalLimit, recallTraceCoverage } from "./recall-trace.mjs";
 import {
   LabConfigurationError,
   assertGatewayConfigUnchanged,
@@ -298,6 +299,7 @@ function runContext(options, arm, fixture, instance) {
     confirmForget: true,
     retainBodies: options.retainBodies,
     recallTrace: options.recallTrace,
+    chatLimit: readChatRetrievalLimit(options.subjectRoot ?? REPO_ROOT),
     labelPass: options.labelPass,
     turnTimeoutMs: options.turnTimeoutMs,
     learning: {
@@ -502,6 +504,7 @@ function timingRows(results, sealed) {
     startupRereads: result.startupRereads,
     learnMs: result.timing.learnMs,
     probeMs: result.timing.probeMs,
+    ...(result.timing.traceMs === undefined ? {} : { traceMs: result.timing.traceMs }),
     ...(isFailedUnit(result) ? { failed: true } : {}),
     turnMs: result.turns.map((turn) => turn.elapsedMs),
     modelCalls: result.requests.filter((request) => request.phase === "run").length,
@@ -544,8 +547,9 @@ function writeEvidence(options, corpus, results, gateway) {
     embeddingModelIds: options.embeddingModelIds,
     // Whether the product's automatic maintenance was on: it ages, archives and removes records.
     maintenance: options.maintenance,
-    // Whether answer probes carry a recall trace (an extra record; it never changes a score).
-    recallTrace: options.recallTrace ? "on" : "off",
+    // What the run actually recorded: `on` (every answer probe of an arm with memory), `partial`
+    // (some, for example real-conversation scenarios, which are never traced) or `off`.
+    recallTrace: recallTraceCoverage(results),
     holdout: corpus.sealed,
     // `sealed` is what the judge checks before it accepts a run as the holdout part of a pair.
     sealed: corpus.sealed,

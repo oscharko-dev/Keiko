@@ -1,17 +1,21 @@
 // Where a needed memory was lost, per answer probe (#4205). When a memory an answer needs never
 // reaches the model, `neededNotSupplied` only says so. The trace asks the product's own retrieval
 // route (`POST /api/memory/context`) AFTER the answer was received, so it cannot influence it, and
-// names the stage: not stored, not a candidate, not admitted, ranked out, cut by the budget, moved
-// down by the reorder, or ranked too low. Ids, positions, scores and closed values only: no memory
-// text, no question, no excerpt.
+// names the stage (recall-stage.mjs): not stored, not a candidate, not admitted, refused by the chat,
+// beyond the chat's limit, or moved down by the reorder. Ids, positions, scores and closed values
+// only: no memory text, no question, no excerpt. The route's own token budget is made so large that it
+// cuts nothing: a budget cut would only blur the order the stages are read from.
 //
 // An honest limit, repeated in docs/qa/memoria-viva-lab.md: the route ranks with the same signals,
 // fusion and reorder as the chat path, but without the chat path's strict relevance floor and
-// standing profile, and with the route's own limit on included memories. It is a diagnostic
-// approximation of the chat path, not the chat path.
+// standing profile, and with its own limit (12) on included memories where the chat keeps fewer. It
+// is a diagnostic approximation of the chat path, not the chat path.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { listMemories } from "./instance.mjs";
 import { neededStage } from "./recall-stage.mjs";
-import { carrierIds, wantedOf } from "./score.mjs";
+import { carrierIds, suppliedCarries, wantedOf } from "./score.mjs";
 
 export const TRACE_SOURCE = "memory-context-route";
 /** Large enough that the token budget cuts nothing: the route accepts any non-negative integer. */
@@ -89,16 +93,30 @@ function chosenCarrier(ids, { suppliedIds, positionOf, live }) {
   return null;
 }
 
+// What the chat supplied as retrieved memories (never the standing profile), each with the place the
+// route gave it: its listed position, `Infinity` when the route omitted it by its limit, null when the
+// route did not rank it at all.
+function suppliedRetrieved(retrievedIds, { positionOf, omittedBy }) {
+  const positions = retrievedIds.map((id) => {
+    if (positionOf.has(id)) return positionOf.get(id);
+    return omittedBy.get(id) === "max-included-exceeded" ? Number.POSITIVE_INFINITY : null;
+  });
+  return { count: retrievedIds.length, positions };
+}
+
 /**
- * One entry per fact the probe needs. `wanted` comes from `wantedOf`, `carriers` maps its label to
- * the ids of the stored memories that carry it, `notSupplied` is the probe's `neededNotSupplied`.
+ * One entry per wanted fact. `wanted` carries labels, `carriers` maps a label to the ids of the stored
+ * memories that carry it, `suppliedLabels` holds the labels the chat supplied, `retrievedIds` the
+ * retrieved memories the chat supplied, `limit` the chat's limit on them (null when unreadable).
  * `response` is the route's answer, or undefined when the call failed.
  */
 export function neededEntries({
   wanted,
   carriers,
-  notSupplied,
+  suppliedLabels,
   suppliedIds,
+  retrievedIds,
+  limit,
   response,
   memories,
   storeKnown = true,
@@ -114,10 +132,11 @@ export function neededEntries({
   const live = new Set(
     memories.filter((memory) => memory.status === "accepted").map((memory) => memory.id),
   );
+  const supplied = suppliedRetrieved(retrievedIds, { positionOf, omittedBy });
   return wanted.map((item) => {
     const ids = carriers.get(item.label) ?? [];
     const id = chosenCarrier(ids, { suppliedIds, positionOf, live });
-    const suppliedByChat = !notSupplied.includes(item.label);
+    const suppliedByChat = suppliedLabels.has(item.label);
     const position = id === null ? null : (positionOf.get(id) ?? null);
     const scoreRank = position === null ? null : (included?.rank.get(id) ?? null);
     const omittedReason = id === null ? null : (omittedBy.get(id) ?? null);
@@ -125,14 +144,30 @@ export function neededEntries({
     return {
       ...entry,
       carrierCount: ids.length,
-      stage: neededStage({ storeKnown, traceAvailable: response !== undefined, ...entry }),
+      stage: neededStage({
+        storeKnown,
+        traceAvailable: response !== undefined,
+        limit,
+        supplied,
+        ...entry,
+      }),
     };
   });
 }
 
-/** The body-free trace from the route's answer, or from a closed failure when there is none. */
-export function buildRecallTrace({ response, failure, ...rest }) {
-  const base = { source: TRACE_SOURCE, strictFloor: false };
+/**
+ * The body-free trace from the route's answer, or from a closed failure when there is none. It names
+ * the chat's limit it compared with (`chatLimit`, null with `limitFailure` when it could not be read)
+ * and how many retrieved memories the chat supplied.
+ */
+export function buildRecallTrace({ response, failure, limitFailure, ...rest }) {
+  const base = {
+    source: TRACE_SOURCE,
+    strictFloor: false,
+    chatLimit: rest.limit,
+    chatRetrievedCount: rest.retrievedIds.length,
+    ...(limitFailure === undefined ? {} : { limitFailure }),
+  };
   if (response === undefined)
     return {
       ...base,
@@ -184,24 +219,94 @@ async function storedMemories(instance) {
   }
 }
 
+/** The closed reason the chat's limit could not be read. */
+export const LIMIT_UNREADABLE = "chat-limit-unreadable";
+
+/**
+ * The chat's limit on retrieved memories, read from the SUBJECT's built server (the exported
+ * `CHAT_MAX_RETRIEVED_MEMORIES` of `packages/keiko-server/dist/chat-handlers.js`), never assumed.
+ * `{limit}` or `{failure: "chat-limit-unreadable"}`.
+ */
+export function readChatRetrievalLimit(subjectRoot) {
+  try {
+    const source = readFileSync(
+      join(subjectRoot, "packages", "keiko-server", "dist", "chat-handlers.js"),
+      "utf8",
+    );
+    const match = /export const CHAT_MAX_RETRIEVED_MEMORIES\s*=\s*(\d+)\s*;/u.exec(source);
+    const limit = match === null ? Number.NaN : Number(match[1]);
+    return Number.isSafeInteger(limit) && limit > 0 ? { limit } : { failure: LIMIT_UNREADABLE };
+  } catch {
+    return { failure: LIMIT_UNREADABLE };
+  }
+}
+
+/**
+ * The facts a probe's trace follows: the ones it needs (`wantedOf`) and, for a probe that expects
+ * answer terms, the truth whose terms are exactly those terms. The second kind exists for the trace
+ * only; the score never sees it.
+ */
+export function traceWanted(scenario, probe) {
+  const wanted = wantedOf(scenario, probe);
+  const terms = probe.expect.terms;
+  if (terms === undefined) return wanted;
+  const own = scenario.truth
+    .filter((fact) => isDeepStrictEqual(fact.terms, terms))
+    .filter((fact) => !wanted.some((item) => item.label === fact.key))
+    .map((fact) => ({ label: fact.key, link: { truth: fact.key }, terms: fact.terms }));
+  return [...wanted, ...own];
+}
+
 /**
  * Records the trace of one answered probe on the same chat and question. Never throws: a route or
- * store failure becomes a closed failure value on the trace, and the probe result stands.
- * `row` is the scored probe row (`neededNotSupplied`, `suppliedIds`).
+ * store failure becomes a closed failure value on the trace, and the probe result stands. `supplied`
+ * is everything that reached the model, `retrievedIds` the retrieved part of it, `chatLimit` the
+ * result of `readChatRetrievalLimit`. The time the trace took is its `durationMs`.
  */
-export async function traceRecall({ instance, scenario, probe, row, chatId, queryText, links }) {
-  const wanted = wantedOf(scenario, probe);
+export async function traceRecall({
+  instance,
+  scenario,
+  probe,
+  supplied,
+  retrievedIds,
+  chatLimit,
+  chatId,
+  queryText,
+  links,
+}) {
+  const startedAt = Date.now();
+  const wanted = traceWanted(scenario, probe);
   const stored = await storedMemories(instance);
   const memories = stored.memories ?? [];
   const carriers = new Map(wanted.map((item) => [item.label, carrierIds(memories, item, links)]));
   const asked = stored.failure === undefined ? await askRoute(instance, chatId, queryText) : stored;
-  return buildRecallTrace({
+  const trace = buildRecallTrace({
     ...asked,
     wanted,
     carriers,
     memories,
     storeKnown: stored.failure === undefined,
-    notSupplied: row.neededNotSupplied ?? [],
-    suppliedIds: new Set(row.suppliedIds),
+    limit: chatLimit.limit ?? null,
+    ...(chatLimit.failure === undefined ? {} : { limitFailure: chatLimit.failure }),
+    suppliedLabels: new Set(
+      wanted.filter((item) => suppliedCarries(supplied, item, links)).map((item) => item.label),
+    ),
+    suppliedIds: new Set(supplied.map((entry) => entry.memoryId)),
+    retrievedIds,
   });
+  return { ...trace, durationMs: Date.now() - startedAt };
+}
+
+/**
+ * What a run recorded, for its manifest: `on` when every answer probe of an arm with memory carries a
+ * trace, `off` when none does, `partial` otherwise. Counted from the results, never from the request.
+ */
+export function recallTraceCoverage(results) {
+  const eligible = results
+    .filter((result) => result.arm !== "off")
+    .flatMap((result) => result.probes ?? [])
+    .filter((probe) => probe.kind === "answer");
+  const traced = eligible.filter((probe) => probe.recallTrace !== undefined).length;
+  if (traced === 0) return "off";
+  return traced === eligible.length ? "on" : "partial";
 }

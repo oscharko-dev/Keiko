@@ -193,6 +193,7 @@ describe("a sealed run's view of such a probe", () => {
           passed: false,
           neededMissing: ["room", "earlier:before"],
           neededNotSupplied: ["day"],
+          recallTrace: { needed: [{ key: "room", id: "m-room", stage: "beyond-limit" }] },
         },
       ],
       seed: { total: 40, filler: 38 },
@@ -201,6 +202,7 @@ describe("a sealed run's view of such a probe", () => {
     expect(masked.probes[0].neededMissing).toEqual(["fact-1", "fact-2"]);
     expect(masked.probes[0].neededNotSupplied).toEqual(["fact-1"]);
     expect(masked.seed).toBeUndefined();
+    expect(masked.probes[0].recallTrace).toBeUndefined();
     expect(JSON.stringify(masked)).not.toMatch(/room|before|day|filler/u);
   });
 });

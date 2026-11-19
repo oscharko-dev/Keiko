@@ -393,7 +393,7 @@ function carriesWanted(entry, item, links) {
   return linked || matchesTermGroups(entry.bodyExcerpt ?? "", item.terms);
 }
 
-function suppliedCarries(supplied, item, links) {
+export function suppliedCarries(supplied, item, links) {
   return supplied.some((entry) => carriesWanted(entry, item, links));
 }
 

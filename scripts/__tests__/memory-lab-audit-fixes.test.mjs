@@ -351,6 +351,27 @@ describe("the maintenance switch", () => {
   });
 });
 
+describe("the recall trace in a comparison", () => {
+  const run = (metadata) => ({
+    manifest: { setDigest: "d", metadata },
+    summary: { byArm: [{ key: "product", counters: {} }] },
+    scorecard: { scenarios: [] },
+  });
+
+  it("is provenance: a traced and an untraced run differ, and a run that never recorded it is unrecorded", () => {
+    expect(
+      compareRuns(run({ recallTrace: "on" }), run({ recallTrace: "off" })).provenanceDifferences,
+    ).toContain("recallTrace");
+    expect(
+      compareRuns(run({ recallTrace: "on" }), run({ recallTrace: "on" })).provenanceDifferences,
+    ).not.toContain("recallTrace");
+    expect(compareRuns(run({}), run({ recallTrace: "off" })).provenanceDifferences).toContain(
+      "recallTrace",
+    );
+    expect(compareRuns(run({}), run({})).provenanceDifferences).not.toContain("recallTrace");
+  });
+});
+
 describe("what compare does with runs that differ in provenance", () => {
   it("names the differing fields in its line instead of refusing; only judge refuses", () => {
     const run = (embedder) => ({
