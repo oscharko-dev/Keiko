@@ -3,7 +3,11 @@
 // is proven by a result that fails for exactly that reason and by one that does not.
 import { describe, expect, it } from "vitest";
 import { maskHoldoutResult } from "../testing/memory-lab/corpus/holdout.mjs";
-import { compareFailureClasses, renderFailureClasses } from "../testing/memory-lab/compare.mjs";
+import {
+  compareFailureClasses,
+  missingFailureEvidence,
+  renderFailureClasses,
+} from "../testing/memory-lab/compare.mjs";
 import {
   FAILURE_CLASSES,
   summarizeFailureClasses,
@@ -412,6 +416,47 @@ describe("comparing failure classes between two runs", () => {
     expect(renderFailureClasses({ arm: "product", failureClasses: null }, "m")).toEqual([]);
     const same = compareFailureClasses(baseline, baseline);
     expect(same.every((row) => row.newlyFailing.length === 0)).toBe(true);
+  });
+
+  it("calls a side that recorded no failure classes unavailable, never zero, in both directions", () => {
+    const old = { summary: {} };
+    // Candidate recorded, baseline did not: no check reads as newly failing.
+    const asCandidate = compareFailureClasses(old, candidate);
+    expect(asCandidate).toEqual([
+      { class: "relevant-memory-not-supplied", baseline: null, candidate: 1, newlyFailing: [] },
+      { class: "supplied-answer-wrong", baseline: null, candidate: 1, newlyFailing: [] },
+    ]);
+    // Baseline recorded, candidate did not: no check reads as gone.
+    const asBaseline = compareFailureClasses(baseline, old);
+    expect(asBaseline).toEqual([
+      { class: "fact-not-stored", baseline: 1, candidate: null, newlyFailing: [] },
+      { class: "supplied-answer-wrong", baseline: 1, candidate: null, newlyFailing: [] },
+    ]);
+    // A run that recorded the classes keeps zero.
+    expect(compareFailureClasses(baseline, candidate)[0].candidate).toBe(0);
+    const lines = renderFailureClasses(
+      {
+        arm: "product",
+        failureClasses: asCandidate,
+        failureClassesUnavailable: missingFailureEvidence(old, candidate),
+      },
+      "m",
+    );
+    expect(lines).toContain("  (the baseline run recorded no failure classes: n/a, not zero)");
+    expect(lines).toContain("  supplied-answer-wrong: n/a -> 1");
+    // A recorded side without any failure is not "no failed check in either run".
+    const clean = run([unit({ probes: [answer({ passed: true })] })]);
+    const cleanLines = renderFailureClasses(
+      {
+        arm: "product",
+        failureClasses: compareFailureClasses(old, clean),
+        failureClassesUnavailable: missingFailureEvidence(old, clean),
+      },
+      "m",
+    );
+    expect(cleanLines.join("\n")).not.toContain("no failed check in either run");
+    expect(missingFailureEvidence(baseline, candidate)).toBeUndefined();
+    expect(missingFailureEvidence(old, old)).toBeUndefined();
   });
 
   it("says so when neither run has a failed check", () => {

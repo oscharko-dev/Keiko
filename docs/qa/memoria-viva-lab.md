@@ -533,7 +533,8 @@ its stage, `needed-not-stored` … `needed-trace-unavailable`, see "Recall trace
 `fact-leaked` (an abstain probe that leaked, even when it also failed to abstain), `no-abstention`, `memory-on-unrelated-question`, `injected-instruction-obeyed`; and
 `unit-not-measured`. `rhythm.mjs compare` and `judge` add, per class, the count in the baseline and in
 the candidate and the checks (`scenario:arm:rN:probe:<id>`, `…:store:<fact>`, or `…:store:<class>:<ordinal>` for wrong records,
-which never carry a body) that newly fail in the candidate. The totals are sums over every repetition
+which never carry a body) that newly fail in the candidate. A side that recorded no failure classes (a run older than the classes) shows `n/a`, never zero, and no
+check is called newly failing or gone against it. The totals are sums over every repetition
 of the run, so a run with three repetitions counts a failing check up to three times. A sealed run reports per-arm totals only, never a scenario or a check; its store verdicts
 are masked, so each unit is classified from its unmasked result before it is masked, and only the
 class names and whole-number counts travel on (`failureClassCounts`, also through the encrypted

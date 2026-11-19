@@ -224,6 +224,7 @@ export function compareRuns(baseline, candidate, arm = "product") {
       .filter((row) => row.beyondNoise === null && row.delta !== null && row.delta !== 0)
       .map((row) => row.metric),
     failureClasses: compareFailureClasses(baseline, candidate, arm),
+    failureClassesUnavailable: missingFailureEvidence(baseline, candidate),
   };
 }
 
@@ -234,29 +235,51 @@ function failureArm(run, arm) {
 }
 
 /**
+ * Which side recorded no failure classes at all (a run older than the classes): `"baseline"`,
+ * `"candidate"`, or `undefined` when both recorded them or neither did. Such a side is unavailable
+ * evidence, not zero failures.
+ */
+export function missingFailureEvidence(baseline, candidate) {
+  const before = baseline.summary.failureClasses !== undefined;
+  const after = candidate.summary.failureClasses !== undefined;
+  if (before === after) return undefined;
+  return before ? "candidate" : "baseline";
+}
+
+/**
  * The failed checks of one arm per failure class: the count in each run and the checks (unit and
  * probe or fact) that fail in the candidate and did not fail in the baseline. Counts only. `null`
  * when neither run recorded failure classes (a run older than the classes), so an old pair keeps its
- * old rendering. A class that neither run has is left out.
+ * old rendering. A class that neither run has is left out. When only one run recorded them, the other
+ * side is unavailable (`null` count) and no check is called newly failing or gone: zero stays
+ * reserved for a run that recorded the classes and had no failure of that class.
  */
 export function compareFailureClasses(baseline, candidate, arm = "product") {
-  const before = failureArm(baseline, arm) ?? NO_FAILURES;
-  const after = failureArm(candidate, arm) ?? NO_FAILURES;
+  const missing = missingFailureEvidence(baseline, candidate);
   if (
     baseline.summary.failureClasses === undefined &&
     candidate.summary.failureClasses === undefined
   )
     return null;
-  return FAILURE_CLASSES.flatMap((name) => failureRow(name, before, after));
+  const before = failureArm(baseline, arm) ?? NO_FAILURES;
+  const after = failureArm(candidate, arm) ?? NO_FAILURES;
+  return FAILURE_CLASSES.flatMap((name) => failureRow(name, before, after, missing));
 }
 
-// One class's row, or none when neither run has a failed check of it.
-function failureRow(name, before, after) {
-  const baselineCount = before.total[name] ?? 0;
-  const candidateCount = after.total[name] ?? 0;
-  if (baselineCount === 0 && candidateCount === 0) return [];
-  const known = new Set(before.keys[name] ?? []);
-  const newlyFailing = (after.keys[name] ?? []).filter((key) => !known.has(key));
+// A side's count of one class: `null` when that run recorded no failure classes at all.
+function sideCount(arm, name, unavailable) {
+  return unavailable ? null : (arm.total[name] ?? 0);
+}
+
+// One class's row, or none when no recorded run has a failed check of it.
+function failureRow(name, before, after, missing) {
+  const baselineCount = sideCount(before, name, missing === "baseline");
+  const candidateCount = sideCount(after, name, missing === "candidate");
+  if ((baselineCount ?? 0) === 0 && (candidateCount ?? 0) === 0) return [];
+  // Without both sides there is no basis to call a check newly failing or gone.
+  const known = new Set(missing === undefined ? (before.keys[name] ?? []) : []);
+  const newlyFailing =
+    missing === undefined ? (after.keys[name] ?? []).filter((key) => !known.has(key)) : [];
   return [{ class: name, baseline: baselineCount, candidate: candidateCount, newlyFailing }];
 }
 
@@ -392,16 +415,25 @@ function keyList(keys) {
 export function renderFailureClasses(comparison, label) {
   const rows = comparison.failureClasses;
   if (rows === null || rows === undefined) return [];
-  if (rows.length === 0) return [`${label} failure classes: no failed check in either run`];
+  const missing = comparison.failureClassesUnavailable;
+  const note =
+    missing === undefined
+      ? []
+      : [`  (the ${missing} run recorded no failure classes: n/a, not zero)`];
+  if (rows.length === 0 && missing === undefined)
+    return [`${label} failure classes: no failed check in either run`];
   return [
     `${label} failure classes (${comparison.arm} arm, failed checks):`,
+    ...note,
     ...rows.map((row) => {
       const added =
         row.newlyFailing.length === 0 ? "" : `; newly failing: ${keyList(row.newlyFailing)}`;
-      return `  ${row.class}: ${String(row.baseline)} -> ${String(row.candidate)}${added}`;
+      return `  ${row.class}: ${countText(row.baseline)} -> ${countText(row.candidate)}${added}`;
     }),
   ];
 }
+
+const countText = (count) => (count === null ? "n/a" : String(count));
 
 /** Deterministic lines a person reads; the first word is the verdict. */
 export function renderJudgement(judgement) {
