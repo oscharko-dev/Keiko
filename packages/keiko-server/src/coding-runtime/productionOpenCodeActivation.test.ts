@@ -327,28 +327,45 @@ describe("production OpenCode activation", () => {
     },
   );
 
-  it("names a desktop installation whose bundled runtime did not verify", () => {
-    const resourceRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-portable-")));
-    roots.push(resourceRoot);
-    const appRoot = join(resourceRoot, "app");
-    mkdirSync(join(appRoot, "dist", "cli"), { recursive: true });
-    writeFileSync(join(appRoot, "package.json"), '{"name":"@oscharko-dev/keiko"}');
-    writeFileSync(join(appRoot, "dist", "cli", "index.js"), "");
-    const activity: ServerLogEvent[] = [];
+  // A desktop installation is told to update or download again. A folder package or an IT-managed
+  // deployment declares itself managed outside the app: it offers no in-app update and the person
+  // installs nothing there (security software that removed a runtime file is the usual cause), so
+  // it has its own closed reason and is pointed to its administrator.
+  it.each([
+    [undefined, "portable-runtime-unverified"],
+    ["user-local", "portable-runtime-unverified"],
+    ["organization-managed", "managed-runtime-unverified"],
+    ["machine-managed", "managed-runtime-unverified"],
+  ] as const)(
+    "names an installation managed as %s whose bundled runtime did not verify as %s",
+    (management, expected) => {
+      const resourceRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-portable-")));
+      roots.push(resourceRoot);
+      const appRoot = join(resourceRoot, "app");
+      mkdirSync(join(appRoot, "dist", "cli"), { recursive: true });
+      writeFileSync(join(appRoot, "package.json"), '{"name":"@oscharko-dev/keiko"}');
+      writeFileSync(join(appRoot, "dist", "cli", "index.js"), "");
+      const activity: ServerLogEvent[] = [];
 
-    const result = resolveProductionOpenCodeActivation(
-      activationInput(
-        { KEIKO_CLI_BIN_PATH: join(appRoot, "dist", "cli", "index.js"), KEIKO_UI_PORT: "1983" },
-        { activity, platform: "linux", arch: "x64" },
-      ),
-    );
+      const result = resolveProductionOpenCodeActivation(
+        activationInput(
+          {
+            KEIKO_CLI_BIN_PATH: join(appRoot, "dist", "cli", "index.js"),
+            KEIKO_UI_PORT: "1983",
+            ...(management === undefined ? {} : { KEIKO_PORTABLE_MANAGEMENT: management }),
+          },
+          { activity, platform: "linux", arch: "x64" },
+        ),
+      );
 
-    expect(result.unavailableReason).toBe("portable-runtime-unverified");
-    expect(activity.at(-1)).toMatchObject({
-      op: "coding-runtime.install.unqualified",
-      extra: { reason: "portable-runtime-unverified" },
-    });
-  });
+      expect(result.unavailableReason).toBe(expected);
+      expect(activity.at(-1)).toMatchObject({
+        op: "coding-runtime.install.unqualified",
+        errorKind: "unavailable",
+        extra: { reason: expected },
+      });
+    },
+  );
 
   it("classifies a tampered dev-lane payload separately from routine unavailability", () => {
     const staged = devLaneFixture();

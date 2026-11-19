@@ -566,6 +566,10 @@ export type CodingWorkbenchRuntimeUnavailableReason =
   // A desktop (portable) installation whose bundled runtime did not verify: the person updates or
   // reinstalls Keiko from its release page.
   | "portable-runtime-unverified"
+  // The same, for an installation that declares itself managed outside the app (the standalone
+  // folder package, an IT-managed deployment): it offers no in-app update and the person installs
+  // nothing there, so the administrator provides a fresh package.
+  | "managed-runtime-unverified"
   | "dev-lane-refused"
   | "payload-missing"
   | "payload-unapproved"
@@ -595,6 +599,7 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
     "npm-runtime-package-missing",
     "managed-runtime-package-missing",
     "portable-runtime-unverified",
+    "managed-runtime-unverified",
     "dev-lane-refused",
     "payload-missing",
     "payload-unapproved",

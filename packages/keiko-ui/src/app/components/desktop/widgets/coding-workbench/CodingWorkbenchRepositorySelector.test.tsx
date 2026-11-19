@@ -161,11 +161,8 @@ describe("CodingWorkbenchRepositorySelector folders the read surface refuses", (
     await user.click(repository);
 
     const refused = screen.getByRole("option", { name: "Keiko, /opt/Keiko, unavailable" });
-    expect(refused).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByRole("option", { name: "app, /work/app" })).not.toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
+    expect(refused).toBeDisabled();
+    expect(screen.getByRole("option", { name: "app, /work/app" })).toBeEnabled();
     await user.click(refused);
     expect(onSelect).not.toHaveBeenCalled();
   });

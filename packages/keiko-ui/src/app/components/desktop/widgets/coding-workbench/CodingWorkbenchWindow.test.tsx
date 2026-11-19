@@ -1830,6 +1830,7 @@ describe("CodingWorkbenchWindow", () => {
     ["npm-runtime-package-missing", "This Keiko was installed with npm"],
     ["managed-runtime-package-missing", "This Keiko folder brings no coding runtime"],
     ["portable-runtime-unverified", "could not verify its bundled coding runtime"],
+    ["managed-runtime-unverified", "Your administrator can provide a fresh Keiko package"],
   ] as const)(
     "keeps Start refused and shows the actual runtime prerequisite: %s",
     (reason, explanation) => {

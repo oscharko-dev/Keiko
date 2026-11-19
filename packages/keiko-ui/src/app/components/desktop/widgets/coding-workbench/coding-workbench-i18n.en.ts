@@ -619,6 +619,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "This Keiko folder brings no coding runtime for this computer, so the Coding Workbench cannot run here. Chat and the other windows work as usual. Your administrator can provide a Keiko package that includes the coding runtime.",
   "codingWorkbench.runtime.portableRuntimeUnverified":
     "This Keiko desktop installation could not verify its bundled coding runtime. Update Keiko with Review updates, or download keiko-windows-x64-setup.exe again from the Keiko release page.",
+  "codingWorkbench.runtime.managedRuntimeUnverified":
+    "This Keiko could not verify its bundled coding runtime, so the Coding Workbench cannot run here. A file may be missing or changed, for example by security software. Chat and the other windows work as usual. Your administrator can provide a fresh Keiko package.",
   "codingWorkbench.runtime.developmentRefused":
     "The development runtime could not be activated for this checkout. Check the development setup and its refusal reason in the Activity Log, then restart Keiko.",
   "codingWorkbench.runtime.payloadMissing":

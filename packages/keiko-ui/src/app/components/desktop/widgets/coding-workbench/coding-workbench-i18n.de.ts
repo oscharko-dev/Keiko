@@ -647,6 +647,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Dieser Keiko-Ordner bringt keine Coding-Runtime für diesen Computer mit, deshalb läuft die Coding Workbench hier nicht. Chat und die anderen Fenster funktionieren wie gewohnt. Deine Administratorin oder dein Administrator kann ein Keiko-Paket bereitstellen, das die Coding-Runtime enthält.",
   "codingWorkbench.runtime.portableRuntimeUnverified":
     "Diese Keiko-Desktop-Installation konnte ihre mitgelieferte Coding-Runtime nicht prüfen. Aktualisiere Keiko über „Updates prüfen“ oder lade keiko-windows-x64-setup.exe erneut von der Keiko-Release-Seite.",
+  "codingWorkbench.runtime.managedRuntimeUnverified":
+    "Dieses Keiko konnte seine mitgelieferte Coding-Runtime nicht prüfen, deshalb läuft die Coding Workbench hier nicht. Möglicherweise fehlt eine Datei oder wurde verändert, zum Beispiel durch Sicherheitssoftware. Chat und die anderen Fenster funktionieren wie gewohnt. Deine Administratorin oder dein Administrator kann ein frisches Keiko-Paket bereitstellen.",
   "codingWorkbench.runtime.developmentRefused":
     "Die Entwicklungs-Runtime konnte für diesen Checkout nicht aktiviert werden. Prüfe das Dev-Setup und den Ablehnungsgrund im Aktivitätsprotokoll und starte Keiko danach neu.",
   "codingWorkbench.runtime.payloadMissing":

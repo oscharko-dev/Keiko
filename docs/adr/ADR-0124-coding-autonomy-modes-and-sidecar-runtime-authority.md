@@ -457,7 +457,9 @@ current helper, and the Workbench offers one Repair action for an absent, stoppe
 unreadable broker. In both cases Windows asks the local human through UAC, so the decision stays
 the human's; a declined approval changes nothing and is not repeated until the helper changes. A
 runtime that no lane offers names the installation kind the server found
-(`npm-runtime-package-missing`, `managed-runtime-package-missing` for an npm folder package that
-declares itself managed outside the app and is pointed to its administrator, never to an installer,
-`portable-runtime-unverified`), so the Workbench states the one step for it; no install kind
-relaxes a hard denial or the fail-closed launch.
+(`npm-runtime-package-missing`, `portable-runtime-unverified`), so the Workbench states the one step
+for it. An installation that declares itself managed outside the app (a folder package, an
+IT-managed deployment) has its own two reasons, `managed-runtime-package-missing` and
+`managed-runtime-unverified`: the person installs and updates nothing there, so it is pointed to
+its administrator and never to an installer or an in-app update. No install kind relaxes a hard
+denial or the fail-closed launch.

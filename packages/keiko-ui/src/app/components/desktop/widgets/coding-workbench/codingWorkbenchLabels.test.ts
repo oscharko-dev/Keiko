@@ -1288,6 +1288,11 @@ describe("runtimeUnavailableMessageKey", () => {
     expect(runtimeUnavailableMessageKey("managed-runtime-package-missing")).toBe(
       "codingWorkbench.runtime.managedRuntimePackageMissing",
     );
+    // The same for a managed installation whose bundled runtime did not verify: no in-app update
+    // and no installer, so not the desktop installation's sentence.
+    expect(runtimeUnavailableMessageKey("managed-runtime-unverified")).toBe(
+      "codingWorkbench.runtime.managedRuntimeUnverified",
+    );
     expect(runtimeUnavailableMessageKey("runtime-unqualified")).toBeUndefined();
     expect(runtimeUnavailableMessageKey("constructor")).toBeUndefined();
     expect(runtimeUnavailableMessageKey(undefined)).toBeUndefined();

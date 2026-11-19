@@ -41,6 +41,22 @@ describe("Coding Workbench translations", () => {
     }
   });
 
+  // An installation managed outside the app (a folder package, an IT-managed deployment) installs
+  // and updates nothing itself: its sentences name the administrator and never an installer, an
+  // in-app update or npm.
+  it.each([
+    "codingWorkbench.runtime.managedRuntimePackageMissing",
+    "codingWorkbench.runtime.managedRuntimeUnverified",
+  ] as const)("%s points to the administrator and suggests no installation", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en).toContain("Your administrator");
+    expect(de).toContain("Administrator");
+    for (const sentence of [en, de]) {
+      expect(sentence).not.toMatch(/setup\.exe|npm install|Review updates|Updates prüfen/u);
+    }
+  });
+
   // No command repairs this, so none may be suggested: `keiko gateway-service install` refuses a
   // runtime that is not release-qualified.
   it("says an unqualified Windows runtime cannot start coding runs, offering no command", () => {

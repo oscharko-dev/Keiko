@@ -86,7 +86,10 @@ An npm folder package (the one-folder form for workplaces where nothing may be i
 itself managed outside the app (`KEIKO_PORTABLE_MANAGEMENT`). There the runtime reason is
 `managed-runtime-package-missing`, and the Workbench says that the folder brings no coding runtime for
 this computer, that the other features work, and that the administrator can provide a package that
-includes it; it names no installer, because nothing may be installed on that computer.
+includes it; it names no installer, because nothing may be installed on that computer. A managed
+installation whose bundled runtime did not verify (a standalone folder package from which security
+software removed a runtime file, for example) reports `managed-runtime-unverified` and is pointed
+to its administrator for a fresh package, not to an in-app update.
 
 **Prevention**
 
