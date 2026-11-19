@@ -512,6 +512,40 @@ describe("deleting a record inside a supersession lineage (#4223)", () => {
     w.close();
   });
 
+  it("bridges a delete although an edge's sealed provenance is damaged", () => {
+    // The walk reads only the clear endpoint and kind columns, so neither a damaged related edge
+    // nor a damaged supersedes edge on the deleted record can roll back the person's forget.
+    const dir = freshDir();
+    const v = openVault(dir);
+    chain(v, ["a", "b", "c"]);
+    v.insertMemory(makeMemory({ id: "d" as MemoryId }));
+    v.insertEdge({
+      id: "e-related" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: "b" as MemoryId,
+      toMemoryId: "d" as MemoryId,
+      kind: "related",
+      createdAt: 1_700_000_000_600,
+      provenanceSummary: "related",
+    });
+    v.close();
+    const raw = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    try {
+      raw
+        .prepare("UPDATE memory_edges SET provenance_summary = ? WHERE id IN (?, ?)")
+        .run("kv1.not-valid", "e-related", "e-a-0");
+    } finally {
+      raw.close();
+    }
+    const reopened = openVault(dir);
+    try {
+      reopened.deleteMemory("b" as MemoryId, options);
+      expect(later(reopened, "a")).toEqual(["c"]);
+    } finally {
+      reopened.close();
+    }
+  });
+
   it("adds no edge twice and no self edge in a cycle", () => {
     const v = openVault(freshDir());
     chain(v, ["a", "b", "c"]);

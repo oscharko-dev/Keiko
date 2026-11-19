@@ -12,13 +12,24 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryEdgeId, MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
-import { insertEdgeRow, listIncomingEdgeRows, listOutgoingEdgeRows } from "./edges.js";
+import { insertEdgeRow } from "./edges.js";
 import { cachedPrepare } from "./statements.js";
 
 const BRIDGE_PROVENANCE = "history kept after a delete";
 // The scope columns are stored in clear, so the walk reads them without opening a sealed body: a
 // damaged neighbour row can never block the person's forget.
 const SCOPE_BY_ID_SQL = "SELECT scope_kind, scope_coordinate FROM memories WHERE id = ?";
+
+// The endpoints and kind of an edge are stored in clear as well: the walk never opens an edge's
+// sealed provenance, so a damaged edge can never block a forget either.
+const EARLIER_SQL =
+  "SELECT from_memory_id AS id FROM memory_edges WHERE to_memory_id = ? AND kind = 'supersedes' ORDER BY created_at ASC";
+const LATER_SQL =
+  "SELECT to_memory_id AS id FROM memory_edges WHERE from_memory_id = ? AND kind = 'supersedes' ORDER BY created_at ASC";
+
+interface EndpointRow {
+  readonly id: string;
+}
 
 interface ScopeRow {
   readonly scope_kind: string;
@@ -27,26 +38,16 @@ interface ScopeRow {
 
 type Direction = "earlier" | "later";
 
-function neighbours(
-  db: DatabaseSync,
-  id: MemoryId,
-  direction: Direction,
-  cipher: MemoryContentCipher,
-): readonly MemoryId[] {
-  if (direction === "earlier") {
-    return listIncomingEdgeRows(db, id, cipher)
-      .filter((edge) => edge.kind === "supersedes")
-      .map((edge) => edge.fromMemoryId);
-  }
-  return listOutgoingEdgeRows(db, id, cipher)
-    .filter((edge) => edge.kind === "supersedes")
-    .map((edge) => edge.toMemoryId);
+function neighbours(db: DatabaseSync, id: MemoryId, direction: Direction): readonly MemoryId[] {
+  const rows = cachedPrepare(db, direction === "earlier" ? EARLIER_SQL : LATER_SQL).all(
+    id,
+  ) as unknown as readonly EndpointRow[];
+  return rows.map((row) => row.id as MemoryId);
 }
 
 interface Walk {
   readonly db: DatabaseSync;
   readonly deleting: ReadonlySet<MemoryId>;
-  readonly cipher: MemoryContentCipher;
   /** Scope coordinate of each record read, so a lineage is checked once per record. */
   readonly scopes: Map<MemoryId, string | undefined>;
 }
@@ -70,7 +71,7 @@ function survivors(walk: Walk, start: MemoryId, direction: Direction): ReadonlyS
   const seen = new Set<MemoryId>([start]);
   const queue: MemoryId[] = [start];
   for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
-    for (const id of neighbours(walk.db, next, direction, walk.cipher)) {
+    for (const id of neighbours(walk.db, next, direction)) {
       if (seen.has(id)) continue;
       seen.add(id);
       if (home === undefined || scopeOf(walk, id) !== home) continue;
@@ -90,12 +91,12 @@ export function bridgeSupersessionAcrossDeletes(
 ): number {
   let inserted = 0;
   const linked = new Set<string>();
-  const walk: Walk = { db, deleting, cipher, scopes: new Map() };
+  const walk: Walk = { db, deleting, scopes: new Map() };
   for (const id of deleting) {
     const later = survivors(walk, id, "later");
     if (later.size === 0) continue;
     for (const fromMemoryId of survivors(walk, id, "earlier")) {
-      const existing = new Set(neighbours(db, fromMemoryId, "later", cipher));
+      const existing = new Set(neighbours(db, fromMemoryId, "later"));
       for (const toMemoryId of later) {
         const key = `${fromMemoryId}\u0000${toMemoryId}`;
         if (fromMemoryId === toMemoryId || existing.has(toMemoryId) || linked.has(key)) continue;
