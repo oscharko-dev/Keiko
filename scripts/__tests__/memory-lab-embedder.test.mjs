@@ -92,6 +92,27 @@ describe("the configuration with and without an embedding model", () => {
     expect(embeddingModelIds(stripped, gateway)).toEqual([]);
   });
 
+  // A configuration saved before KEIKO-0520 carries a chat capability with `contextWindow: 0`. The
+  // product loads it after its file-load migration; the lab classifies what the product loads.
+  it("classifies a legacy configuration the product loads after migration", () => {
+    const legacy = {
+      providers: [
+        {
+          modelId: "chat-a",
+          baseUrl: BASE,
+          apiKey: "k",
+          capability: { ...capability("chat"), contextWindow: 0 },
+        },
+        { modelId: "qwen3-embedding-8b", baseUrl: BASE, apiKey: "k" },
+      ],
+    };
+    expect(embeddingModelIds(legacy, gateway)).toEqual(["qwen3-embedding-8b"]);
+    expect(embeddingModelIds(withoutEmbedders(legacy, gateway), gateway)).toEqual([]);
+    expect(() => embeddingModelIds({ ...legacy, schemaVersion: 2 }, gateway)).toThrow(
+      /contextWindow/u,
+    );
+  });
+
   it("fails closed when the product still resolves an embedder after the removal", () => {
     // A gateway whose resolver finds an embedder in whatever it is given: the removal cannot be
     // verified, so it throws instead of returning a configuration labelled without one.

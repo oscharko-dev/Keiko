@@ -328,6 +328,31 @@ describe("validating a seed", () => {
       expect(validateScenario(scenario()).seed.records).toHaveLength(2);
     });
 
+    // The generator keeps 32 bits of its seed: 0 and 2^32 would write identical bodies.
+    it("refuses a filler seed outside one unsigned 32-bit range", () => {
+      const group = { count: 3, status: "accepted", minAgeDays: 1, maxAgeDays: 9 };
+      for (const seed of [4294967296, -1]) {
+        refused(
+          withSeed((entry) => {
+            entry.filler = [{ ...group, seed }];
+          }),
+          "seed must be an integer from 0 to 4294967295",
+        );
+      }
+      expect(
+        validateScenario(
+          scenario(
+            withSeed((entry) => {
+              entry.filler = [
+                { ...group, seed: 0 },
+                { ...group, seed: 4294967295 },
+              ];
+            }),
+          ),
+        ).seed.filler,
+      ).toHaveLength(2);
+    });
+
     it("refuses two filler groups with one seed: they write identical bodies", () => {
       const group = { count: 3, status: "accepted", minAgeDays: 1, maxAgeDays: 9 };
       refused(

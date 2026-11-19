@@ -102,7 +102,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { getServerLogger } from "./observability/index.js";
-import { bridgeSupersessionAround, earlierValues, hasStoredSuccessor } from "./memory-lineage.js";
+import { earlierValues, hasStoredSuccessor } from "./memory-lineage.js";
 import { resolveMemoryTargetRecords } from "./memory-target-resolver.js";
 import { logExplicitMemoryForget } from "./memory-explicit-statement-log.js";
 
@@ -1665,11 +1665,8 @@ function executeForgetSelection(
     if (!(error instanceof GovernanceError)) throw error;
     return { route: { status: 400, body: governanceErrorBody(error) }, scopeKind };
   }
-  const [first] = targets;
-  // One history record forgotten on its own must not cut the earlier values off from the newer one.
-  if (selector.kind === "by-id" && first !== undefined) {
-    bridgeSupersessionAround(vault, first, nowMs);
-  }
+  // The vault keeps the chain whole: a forgotten history row's earlier values stay linked to the
+  // newer ones, whichever selector removed it.
   vault.deleteMemories(
     operations.map((operation) => ({
       id: operation.memoryId,

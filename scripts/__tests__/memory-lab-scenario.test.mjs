@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -46,7 +46,7 @@ describe("memory lab scenario format", () => {
       directory = mkdtempSync(join(tmpdir(), "memory lab space-"));
       const base = pathToFileURL(join(directory, "scripts", "__tests__", "x.test.mjs")).href;
       expect(new URL("../testing/memory-lab/", base).pathname).toContain("%20");
-      expect(labRoot(base)).toBe(join(directory, "scripts", "testing", "memory-lab") + "/");
+      expect(labRoot(base)).toBe(join(directory, "scripts", "testing", "memory-lab") + sep);
       expect(labRoot()).not.toContain("%20");
     });
   });

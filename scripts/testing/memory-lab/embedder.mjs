@@ -20,21 +20,29 @@ export const EMBEDDER_MODES = Object.freeze(["default", "on", "off"]);
 // the SUBJECT it measures, with the function the product uses (`parseGatewayConfig`, which merges the
 // inline and the top-level capability records, then `listConfiguredCapabilities`).
 export async function loadSubjectGateway(subjectRoot) {
-  const file = join(
-    subjectRoot ?? REPO_ROOT,
-    "packages",
-    "keiko-model-gateway",
-    "dist",
-    "index.js",
-  );
+  const dist = join(subjectRoot ?? REPO_ROOT, "packages", "keiko-model-gateway", "dist");
   try {
-    return await import(pathToFileURL(file).href);
+    const gateway = await import(pathToFileURL(join(dist, "index.js")).href);
+    const config = await import(pathToFileURL(join(dist, "config.js")).href);
+    return { ...gateway, asFileLoaded: fileLoadMigration(config) };
   } catch (error) {
     throw new Error(
       "cannot load the subject's built model-gateway package; build the subject first",
       { cause: error },
     );
   }
+}
+
+// The product parses an operator's file only after its file-load migrations (`loadConfigFromFile`):
+// a legacy chat capability with `contextWindow: 0` is accepted there and refused by the parser alone.
+// The lab classifies the configuration the subject loads, so it applies the migrations the subject has.
+function fileLoadMigration(config) {
+  const steps = [
+    config.migrateLegacyChatContextWindows,
+    config.markAssumedPlaceholderContextWindows,
+  ];
+  return (raw) =>
+    steps.reduce((value, step) => (typeof step === "function" ? step(value) : value), raw);
 }
 
 // A key is needed to parse a provider, never to find out what it is: every credential name reads as a
@@ -53,7 +61,8 @@ const PARSE_ENV = new Proxy(
  * product would not accept throws: a run never measures one it cannot classify.
  */
 export function embeddingModelIds(config, gateway) {
-  const parsed = gateway.parseGatewayConfig(config, PARSE_ENV);
+  const loaded = gateway.asFileLoaded === undefined ? config : gateway.asFileLoaded(config);
+  const parsed = gateway.parseGatewayConfig(loaded, PARSE_ENV);
   return gateway
     .listConfiguredCapabilities(parsed)
     .filter((capability) => capability.kind === "embedding")

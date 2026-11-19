@@ -4,12 +4,7 @@
 // runs from the older record to its successor (`fromMemoryId` is replaced by `toMemoryId`), so the
 // predecessors of a record are the sources of its incoming `supersedes` edges.
 
-import { randomUUID } from "node:crypto";
-import {
-  scopeCoordinateKey,
-  type MemoryEdgeId,
-  type MemoryRecord,
-} from "@oscharko-dev/keiko-contracts/memory";
+import { scopeCoordinateKey, type MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 
 // A fact corrected this many times is not a plausible lineage. The walk stops there and says so; the
@@ -98,40 +93,4 @@ export function earlierValues(vault: MemoryVaultStore, record: MemoryRecord): Ea
     }
   }
   return { records: found, complete: true, crossScopeSkipped };
-}
-
-/**
- * Keeps the chain whole when one history record is forgotten on its own: deleting a record removes
- * its edges, which would cut the earlier values off from the newer one and make them look like a
- * separate fact. Each predecessor is linked to each successor of the record that goes.
- */
-export function bridgeSupersessionAround(
-  vault: MemoryVaultStore,
-  record: MemoryRecord,
-  nowMs: number,
-): void {
-  const successors = vault
-    .listOutgoingEdges(record.id)
-    .filter((edge) => edge.kind === "supersedes")
-    .map((edge) => edge.toMemoryId);
-  for (const fromId of predecessorIds(vault, record.id)) {
-    const existing = new Set(
-      vault
-        .listOutgoingEdges(fromId as MemoryRecord["id"])
-        .filter((edge) => edge.kind === "supersedes")
-        .map((edge) => edge.toMemoryId),
-    );
-    for (const toMemoryId of successors) {
-      if (existing.has(toMemoryId)) continue;
-      vault.insertEdge({
-        id: randomUUID() as MemoryEdgeId,
-        schemaVersion: "1",
-        fromMemoryId: fromId as MemoryRecord["id"],
-        toMemoryId,
-        kind: "supersedes",
-        createdAt: nowMs,
-        provenanceSummary: "history kept after a forget",
-      });
-    }
-  }
 }

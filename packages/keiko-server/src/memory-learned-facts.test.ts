@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchMode, NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type {
   ConversationId,
+  MemoryEdgeId,
   MemoryId,
   MemoryRecord,
   MemoryReviewerId,
@@ -1737,6 +1738,37 @@ describe("what a forget covers (#4223)", () => {
     expect(liveBodies(vault, ctx)).toEqual([newer]);
     expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
     expect(tombstonedSurfaces(vault, ctx)).toEqual(["chat-statement"]);
+  });
+
+  // The vault stores edges one at a time, so a lineage can hold a cycle. Its members cover each other
+  // and must still compete: the forget must not fall to an unrelated match the person did not mean.
+  it("asks rather than forgetting an unrelated match when a lineage holds a cycle", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const older = "I use PostgreSQL 14";
+    const newer = "I use PostgreSQL 16";
+    await say(vault, ctx, older, [stated(older)]);
+    await say(vault, ctx, newer, [stated(newer)]);
+    await say(vault, ctx, "I use PostgreSQL extensions", [stated("I use PostgreSQL extensions")]);
+    maintain(vault);
+    const [oldRecord] = recordsWith(vault, ctx, "superseded");
+    const live = recordsWith(vault, ctx, "accepted").find((record) => record.body === newer);
+    if (oldRecord === undefined || live === undefined) throw new Error("lineage not stored");
+    vault.insertEdge({
+      id: "cycle-edge" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: live.id,
+      toMemoryId: oldRecord.id,
+      kind: "supersedes",
+      createdAt: Date.now(),
+    });
+
+    const actions = await forgetByWords(vault, ctx, "Forget that I use PostgreSQL");
+
+    expect(actions).toEqual([
+      { kind: "rejected", reason: "ambiguous-forget", explicitStatement: true },
+    ]);
+    expect(liveBodies(vault, ctx)).toHaveLength(2);
   });
 
   it("still asks when two different facts match, each with its own history", async () => {

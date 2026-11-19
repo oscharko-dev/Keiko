@@ -439,6 +439,75 @@ describe("onMemoryEvent fires post-commit and never on rollback", () => {
   });
 });
 
+describe("deleting a record inside a supersession lineage (#4223)", () => {
+  function chain(v: MemoryVaultStore, ids: readonly string[]): void {
+    for (const id of ids) v.insertMemory(makeMemory({ id: id as MemoryId }));
+    ids.slice(1).forEach((to, index) => {
+      v.insertEdge({
+        id: `e-${ids[0] ?? ""}-${String(index)}` as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: ids[index] as MemoryId,
+        toMemoryId: to as MemoryId,
+        kind: "supersedes",
+        createdAt: 1_700_000_000_500,
+      });
+    });
+  }
+  const later = (v: MemoryVaultStore, id: string): readonly string[] =>
+    v
+      .listOutgoingEdges(id as MemoryId)
+      .filter((edge) => edge.kind === "supersedes")
+      .map((edge) => edge.toMemoryId);
+  const options = { tombstone: true, forgetterSurface: "test", reason: "test", nowMs: 1 } as const;
+
+  it("links the surviving earlier value to the newer one when a middle value is deleted", () => {
+    const v = openVault(freshDir());
+    chain(v, ["a", "b", "c"]);
+    v.deleteMemory("b" as MemoryId, options);
+    expect(later(v, "a")).toEqual(["c"]);
+    v.close();
+  });
+
+  it("bridges through every record one batch deletes, and adds nothing with no survivor", () => {
+    const v = openVault(freshDir());
+    chain(v, ["a", "b", "c", "d"]);
+    chain(v, ["x", "y"]);
+    v.deleteMemories([
+      { id: "b" as MemoryId, options },
+      { id: "c" as MemoryId, options },
+      { id: "y" as MemoryId, options },
+    ]);
+    expect(later(v, "a")).toEqual(["d"]);
+    expect(later(v, "x")).toEqual([]);
+    v.close();
+  });
+
+  it("adds no edge twice and no self edge in a cycle", () => {
+    const v = openVault(freshDir());
+    chain(v, ["a", "b", "c"]);
+    v.insertEdge({
+      id: "e-direct" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: "a" as MemoryId,
+      toMemoryId: "c" as MemoryId,
+      kind: "supersedes",
+      createdAt: 1_700_000_000_600,
+    });
+    v.insertEdge({
+      id: "e-back" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: "c" as MemoryId,
+      toMemoryId: "a" as MemoryId,
+      kind: "supersedes",
+      createdAt: 1_700_000_000_700,
+    });
+    v.deleteMemory("b" as MemoryId, options);
+    expect(later(v, "a")).toEqual(["c"]);
+    expect(later(v, "c")).toEqual(["a"]);
+    v.close();
+  });
+});
+
 describe("validator gate fires BEFORE any SQL touches", () => {
   it("rejects an insert with a structurally invalid record and leaves the DB untouched", () => {
     const dir = freshDir();

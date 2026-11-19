@@ -3462,10 +3462,14 @@ describe("memory handlers", () => {
       expect(thrown.value).toBe("failed");
       expectChatLine(thrown.events, { outcome: "failed", ...CHAT_BY_ID, ...NOTHING });
 
+      // A fresh vault: the audit preflight must refuse before anything is deleted.
+      const auditVault = makeVault();
+      auditVault.insertMemory(makeMemory("chat-audit", "body"));
+      const auditDeletes = vi.spyOn(auditVault, "deleteMemories");
       const audit = await withLog(() =>
         forgetMemoryFromStatement(
           makeDeps({
-            memoryVault: vault,
+            memoryVault: auditVault,
             evidenceStore: {
               put: () => {
                 throw new Error("audit store unavailable");
@@ -3475,12 +3479,14 @@ describe("memory handlers", () => {
               delete: () => undefined,
             },
           }),
-          vault,
-          memoryId("chat-fault"),
+          auditVault,
+          memoryId("chat-audit"),
           "corr-chat",
         ),
       );
       expect(audit.value).toBe("failed");
+      expect(auditDeletes).not.toHaveBeenCalled();
+      expect(auditVault.getMemory(memoryId("chat-audit"))).toBeDefined();
       expectChatLine(audit.events, { outcome: "failed", ...CHAT_BY_ID, ...NOTHING });
     });
 
@@ -3655,6 +3661,62 @@ describe("memory handlers", () => {
     expect(result.status).toBe(200);
     expect(vault.getMemory(memoryId("conv-1"))).toBeUndefined();
     expect(vault.getMemory(memoryId("conv-2"))).toBeDefined();
+  });
+
+  // A sweep that removes a middle value must not split the fact: forgetting the newest value
+  // afterwards still reaches the surviving earlier one (#4223).
+  it("keeps a lineage whole when a sweep removes its middle value", async () => {
+    const vault = makeVault();
+    const from = (conversation: string): Partial<MemoryRecord> => ({
+      provenance: {
+        sourceKind: "explicit-user-instruction",
+        sourceConversationId: conversation as MemoryConversationId,
+        capturedAt: 1,
+        confidence: 0.9,
+        sensitivity: "public",
+      },
+    });
+    vault.insertMemory(
+      makeMemory("sw-first", "Ich wohne in Trier", { status: "superseded", ...from("c-b") }),
+    );
+    vault.insertMemory(
+      makeMemory("sw-middle", "Ich wohne in Köln", { status: "superseded", ...from("c-a") }),
+    );
+    vault.insertMemory(makeMemory("sw-newest", "Ich wohne in Bonn", from("c-b")));
+    for (const [id, fromId, to] of [
+      ["sw-e0", "sw-first", "sw-middle"],
+      ["sw-e1", "sw-middle", "sw-newest"],
+    ] as const) {
+      vault.insertEdge({
+        id: id as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: memoryId(fromId),
+        toMemoryId: memoryId(to),
+        kind: "supersedes",
+        createdAt: Date.now(),
+      });
+    }
+
+    const swept = await handleForgetMemories(
+      makeCtx("/api/memory/forget", {
+        acknowledged: true,
+        selector: {
+          kind: "by-source-conversation",
+          scope: { kind: "global" },
+          sourceConversationId: "c-a",
+        },
+      }),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(swept.status).toBe(200);
+    expect(vault.getMemory(memoryId("sw-middle"))).toBeUndefined();
+
+    const forgotten = await handleForgetMemory(
+      makeCtx("/api/memory/sw-newest/forget", { acknowledged: true }, { id: "sw-newest" }),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(asJson(forgotten).count).toBe(2);
+    expect(vault.getMemory(memoryId("sw-first"))).toBeUndefined();
   });
 
   it("resolves conflicts by marking losers conflicted and linking them to the winner", async () => {

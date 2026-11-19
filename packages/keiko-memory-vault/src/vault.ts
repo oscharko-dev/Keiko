@@ -66,6 +66,7 @@ import {
   listIncomingEdgeRows,
   listOutgoingEdgeRows,
 } from "./edges.js";
+import { bridgeSupersessionAcrossDeletes } from "./lineage-bridge.js";
 import {
   deleteEmbeddingRow,
   getEmbeddingRow,
@@ -728,6 +729,7 @@ function runDelete(
   const ready = prepareDelete(db, id, options, opts);
   db.exec("BEGIN");
   try {
+    bridgeSupersessionAcrossDeletes(db, new Set([id]), opts.now(), opts.cipher);
     applyPreparedDelete(db, ready, opts);
     opts.beforeDeleteCommit(eventsForDeletedRecords([ready.result]));
     db.exec("COMMIT");
@@ -753,6 +755,8 @@ function runBatchDeleteMemories(
   const ready = deduped.map((entry) => prepareDelete(db, entry.id, entry.options, opts));
   db.exec("BEGIN");
   try {
+    const deleting = new Set(deduped.map((entry) => entry.id));
+    bridgeSupersessionAcrossDeletes(db, deleting, opts.now(), opts.cipher);
     for (const prepared of ready) {
       applyPreparedDelete(db, prepared, opts);
     }

@@ -8,11 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type {
+  MemoryEdgeId,
   MemoryId,
   MemoryRecord,
   MemoryScope,
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
+import { earlierValues } from "./memory-lineage.js";
 import { applyMemoryRetention, type MemoryRetentionPolicy } from "./memory-retention.js";
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
@@ -163,6 +165,35 @@ describe("applyMemoryRetention — maxRecordsPerScope", () => {
     expect(vault.getMemory(brandedMemoryId("aged"))).toBeUndefined();
     expect(vault.getMemory(brandedMemoryId("history"))).toBeDefined();
     expect(vault.getMemory(brandedMemoryId("live"))).toBeDefined();
+  });
+
+  // Evicting a middle value must not split the fact: its surviving earlier value stays reachable
+  // from the newest one, so forgetting that one still reaches it (#4223).
+  it("keeps the surviving earlier value linked when it evicts a middle value", () => {
+    const vault = makeVault();
+    insertRecord(vault, { id: "first", updatedAt: NOW - 2 * ONE_DAY_MS, status: "superseded" });
+    insertRecord(vault, { id: "middle", updatedAt: NOW - 3 * ONE_DAY_MS, status: "superseded" });
+    insertRecord(vault, { id: "newest", updatedAt: NOW - ONE_DAY_MS });
+    for (const [from, to] of [
+      ["first", "middle"],
+      ["middle", "newest"],
+    ] as const) {
+      vault.insertEdge({
+        id: `edge-${from}` as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: brandedMemoryId(from),
+        toMemoryId: brandedMemoryId(to),
+        kind: "supersedes",
+        createdAt: NOW - 3 * ONE_DAY_MS,
+      });
+    }
+    const policy: MemoryRetentionPolicy = { maxRecordsPerScope: 2 };
+    applyMemoryRetention({ vault, scopes: [SCOPE], policy, nowMs: NOW });
+    expect(vault.getMemory(brandedMemoryId("middle"))).toBeUndefined();
+    const newest = vault.getMemory(brandedMemoryId("newest"));
+    expect(newest).toBeDefined();
+    if (newest === undefined) return;
+    expect(earlierValues(vault, newest).records.map((record) => record.id)).toEqual(["first"]);
   });
 
   it("evicts the oldest non-pinned records once the cap is exceeded", () => {

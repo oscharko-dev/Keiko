@@ -294,7 +294,8 @@ function validateWantedTerms(id, scenario) {
   for (const probe of scenario.probes) {
     if (probe.expect.kind !== "answer") continue;
     const listed = listedTermLists(scenario, probe);
-    for (const { label, groups } of wantedTermLists(scenario, probe)) {
+    const wanted = wantedTermLists(scenario, probe);
+    for (const { label, groups } of wanted) {
       const asked = groups.flat().find((term) => matchesTermGroups(probe.question, [[term]]));
       if (asked !== undefined)
         fail(id, `probe ${probe.id}: ${label} term "${asked}" occurs in the probe's own question`);
@@ -302,6 +303,12 @@ function validateWantedTerms(id, scenario) {
       if (contradicted !== undefined)
         fail(id, `probe ${probe.id}: ${label} is also ${contradicted.label}`);
     }
+    // A complete answer carries every wanted list at once, so together they may not imply a
+    // prohibition that none of them implies alone.
+    const together = wanted.flatMap((entry) => entry.groups);
+    const jointly = listed.find((entry) => impliesGroups(together, entry.groups));
+    if (wanted.length > 1 && jointly !== undefined)
+      fail(id, `probe ${probe.id}: its wanted terms together are ${jointly.label}`);
   }
 }
 

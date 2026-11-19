@@ -221,21 +221,31 @@ function recordsInScopes(
 // fact by, so counting them as competing matches would refuse every forget once a fact was corrected.
 // Each lineage collapses to one target: the live record when it matches; otherwise the matching
 // superseded record, so naming only the old value forgets only the old value. Two different lineages
-// that both match stay two matches, and the caller asks.
+// that both match stay two matches, and the caller asks. A match is dropped only for a match that is
+// strictly newer: members of a cycle of edges cover each other and all stay, so the person is asked
+// rather than the forget falling to an unrelated match.
 function collapseLineages(
   vault: MemoryVaultStore,
   matches: readonly MemoryRecord[],
 ): readonly MemoryRecord[] {
   if (matches.length < 2) return matches;
-  const covered = new Set<string>();
-  for (const record of matches) {
-    for (const predecessor of earlierValues(vault, record).records) {
-      covered.add(String(predecessor.id));
-    }
-  }
-  const collapsed = matches.filter((record) => !covered.has(String(record.id)));
-  // A cycle of edges covers every member; the person is asked rather than nothing matching.
-  return collapsed.length === 0 ? matches : collapsed;
+  const earlier = new Map<string, ReadonlySet<string>>(
+    matches.map((record) => [
+      String(record.id),
+      new Set(earlierValues(vault, record).records.map((value) => String(value.id))),
+    ]),
+  );
+  const replacedByNewerMatch = (record: MemoryRecord): boolean =>
+    matches.some((other) => {
+      const id = String(record.id);
+      const otherId = String(other.id);
+      return (
+        otherId !== id &&
+        earlier.get(otherId)?.has(id) === true &&
+        earlier.get(id)?.has(otherId) !== true
+      );
+    });
+  return matches.filter((record) => !replacedByNewerMatch(record));
 }
 
 // Searches every scope of the conversation, because the learner chose the scope and the person

@@ -1135,6 +1135,7 @@
     "keiko-memory-vault/errors",
     "keiko-memory-vault/forgetter-surfaces",
     "keiko-memory-vault/index",
+    "keiko-memory-vault/lineage-bridge",
     "keiko-memory-vault/memories",
     "keiko-memory-vault/migrate-encrypt",
     "keiko-memory-vault/migration-failure",

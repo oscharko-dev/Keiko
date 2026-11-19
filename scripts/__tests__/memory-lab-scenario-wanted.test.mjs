@@ -145,6 +145,17 @@ describe("an expect the loader cannot measure", () => {
     ).not.toThrow();
   });
 
+  // Each wanted list alone passes; a complete answer carries both, so it always fails scoring.
+  it("refuses wanted lists that together imply what the probe forbids", () => {
+    const both = { needs: ["room", "commute"] };
+    expect(() =>
+      validateScenario(scenario(probeWith("Wie?", { ...both, forbidden: [["Birch"], ["Fähre"]] }))),
+    ).toThrow(/probe p: its wanted terms together are the probe's own forbidden terms/u);
+    expect(() =>
+      validateScenario(scenario(probeWith("Wie?", { ...both, forbidden: [["Birch"], ["Auto"]] }))),
+    ).not.toThrow();
+  });
+
   it("refuses a needed truth whose term is a forgotten or a forbidden fact", () => {
     const needsRoom = probeWith("Wie?", { needs: ["room"] });
     expect(() =>

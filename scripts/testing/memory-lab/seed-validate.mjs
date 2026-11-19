@@ -277,12 +277,17 @@ function validateFillerOrigin(fail, id, where, group) {
   oneOfIn(fail, id, where, group.type ?? "semantic-fact", types, "type");
 }
 
+const MAX_FILLER_SEED = 0xffffffff;
+
 function validateFillerShape(fail, id, where, group) {
   if (!isRecord(group)) fail(id, `${where} must be an object`);
   unknownFields(fail, id, where, group, FILLER_FIELDS);
   if (!Number.isSafeInteger(group.count) || group.count < 1 || group.count > MAX_FILLER_RECORDS)
     fail(id, `${where}.count must be an integer between 1 and ${String(MAX_FILLER_RECORDS)}`);
-  if (!Number.isSafeInteger(group.seed)) fail(id, `${where}.seed must be an integer`);
+  // The generator reduces its seed to 32 bits, so two seeds outside one unsigned 32-bit range could
+  // write identical bodies under different ids.
+  if (!Number.isSafeInteger(group.seed) || group.seed < 0 || group.seed > MAX_FILLER_SEED)
+    fail(id, `${where}.seed must be an integer from 0 to ${String(MAX_FILLER_SEED)}`);
   oneOfIn(fail, id, where, group.status, SEED_STATUSES, "status");
   oneOfIn(fail, id, where, group.scope ?? "user", SEED_SCOPES, "scope");
   validateFillerOrigin(fail, id, where, group);
