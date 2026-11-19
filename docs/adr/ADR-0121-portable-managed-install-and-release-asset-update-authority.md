@@ -1348,9 +1348,10 @@ provider's own `capability`) and the reranker on that address and header that Ga
 to share the gateway's credential. Address, header and catalog origin do not show whose key a sealed
 reference names, so Gateway Setup marks every provider it builds with the verified connection's
 credential, the primary excepted, and that reranker `credentialOrigin: "gateway-connection"`: a
-reranker when it wires a discovered one or finds an owned one whose durable credential (the vault
-reference resolved, transient `KEIKO_RERANKER_*` and per-model overrides masked) shares the stored
-connection's endpoint, header and credential, and it removes the mark otherwise; the gateway's
+reranker when it wires a discovered one or finds an owned one, named by the stored file itself,
+whose durable credential (the vault reference resolved, transient `KEIKO_RERANKER_*` and per-model
+overrides masked) shares the stored connection's endpoint, header and credential, and it removes
+the mark otherwise, also on a first setup and over a stored file it cannot parse; the gateway's
 loader accepts only that closed value. A provider without the mark is another connection, so a
 configuration an earlier Keiko saved is refused until Gateway Setup has saved it once more.
 A provider or reranker with its own connection and a sealed key is refused before the token is
