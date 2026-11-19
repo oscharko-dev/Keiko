@@ -310,11 +310,11 @@ describe("handleMemoryRetrieveContext", () => {
     const body = asJson(result);
     expect(body.included).toEqual([]);
     expect((body.contextBlock as { text: string }).text).toBe("");
-    expect(body.omitted).toContainEqual({
-      memoryId: proposalId,
-      reason: "suppressed-by-status",
-      suppressionDetail: "proposed",
-    });
+    // A proposal is not even read: the recall read asks only for statuses recall can supply, so it
+    // neither reaches the prompt nor takes a place in the bounded window (#4223). Its suppression
+    // by status stays pinned in the retrieval package (retrieve.test.ts).
+    const omitted = body.omitted as readonly { memoryId: string }[];
+    expect(omitted.some((entry) => entry.memoryId === proposalId)).toBe(false);
   });
 
   it("omits unrelated accepted memories below the relevance floor when a query is present", async () => {
@@ -367,8 +367,8 @@ describe("handleMemoryRetrieveContext", () => {
     // AC7: memory-aware conversation must exclude deleted/out-of-scope memory.
     // This test pins the "deleted" (status=forgotten) path. The vault.updateMemory call
     // transitions accepted→forgotten, which is a valid status edge per the contract.
-    // The retrieval layer receives the forgotten row (vaultAsQueryPort passes includeExpired
-    // but the vault returns all statuses by default) and suppresses it with reason="forgotten".
+    // The recall read asks the vault only for statuses recall can supply, so the forgotten row
+    // is never read.
     const vault = makeVault();
     const kept = insertAcceptedMemory(vault, { body: "Retained memory: prefer pnpm." });
     const forgotten = insertAcceptedMemory(vault, {
@@ -394,17 +394,10 @@ describe("handleMemoryRetrieveContext", () => {
     const included = body.included as readonly { memoryId: string }[];
     expect(included.every((m) => m.memoryId !== forgotten.id)).toBe(true);
 
-    // The forgotten memory must appear in omitted with suppressionDetail=forgotten.
-    const omitted = body.omitted as readonly {
-      memoryId: string;
-      reason: string;
-      suppressionDetail?: string;
-    }[];
-    expect(omitted).toContainEqual({
-      memoryId: forgotten.id,
-      reason: "suppressed-by-status",
-      suppressionDetail: "forgotten",
-    });
+    // The forgotten memory is not even read: the recall read asks only for statuses recall can
+    // supply (#4223). Its suppression by status stays pinned in the retrieval package.
+    const omitted = body.omitted as readonly { memoryId: string }[];
+    expect(omitted.some((entry) => entry.memoryId === forgotten.id)).toBe(false);
 
     // Sanity: the kept memory is still available for inclusion (scope-matched user memories
     // are included; this guards against a false-pass where ALL memories are omitted).
@@ -480,6 +473,38 @@ describe("handleMemoryRetrieveContext", () => {
     expect(port.listByScope(scope, { maxResults: 500, includeSuperseded: true })).toHaveLength(500);
     expect(port.getMemory?.(brandedMemoryId("history-0"))?.status).toBe("superseded");
   });
+
+  // Every status recall can never supply stays out of the window, not only history (#4223, lab
+  // scale-archiviert-de and scale-vorschlaege-en: 550 archived rows or 560 proposals hid an
+  // older accepted fact).
+  it.each(["archived", "proposed", "rejected", "conflicted", "expired"] as const)(
+    "keeps %s rows out of the bounded recall read window",
+    (status) => {
+      const vault = makeVault();
+      const scope: MemoryRecord["scope"] = {
+        kind: "user",
+        userId: brandedMemoryUserId("local-operator"),
+      };
+      const base = insertAcceptedMemory(vault, { body: "The one live fact.", scope });
+      const live = brandedMemoryId("live-old");
+      vault.insertMemory({ ...base, id: live, createdAt: 1_000, updatedAt: 1_000 });
+      for (let index = 0; index < 501; index += 1) {
+        vault.insertMemory({
+          ...base,
+          id: brandedMemoryId(`retired-${String(index)}`),
+          body: `Retired value ${String(index)}.`,
+          status,
+          createdAt: 10_000 + index,
+          updatedAt: 10_000 + index,
+        });
+      }
+      const window = vaultAsQueryPort(vault)
+        .listByScope(scope, { maxResults: 500 })
+        .map((record) => record.id);
+      expect(window).toContain(live);
+      expect(window).toHaveLength(2);
+    },
+  );
 
   it("rejects oversize bodies with 413", async () => {
     const vault = makeVault();

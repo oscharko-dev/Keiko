@@ -179,7 +179,8 @@ function createWorkflowContextGetter(
 
 export function createWorkflowMemoryPort(options: WorkflowMemoryPortOptions): MemoryWorkflowPort {
   const now = options.now ?? Date.now;
-  const queryPort = vaultAsQueryPort(options.vault);
+  // Every withheld memory is recorded as memory:workflow-omitted evidence, so retired rows are read.
+  const queryPort = vaultAsQueryPort(options.vault, { readRetired: true });
 
   return {
     getContextForWorkflow: createWorkflowContextGetter(options, now, queryPort),

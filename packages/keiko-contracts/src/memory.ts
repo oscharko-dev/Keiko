@@ -64,6 +64,7 @@ export {
   PROFILE_EXCLUDED_MEMORY_TAG,
   STANDING_FACT_RETENTION_POLICY_KEY,
   evaluateMemorySuppression,
+  isMemoryStatusRecallable,
   personMemoryTags,
 } from "./memory-records.js";
 

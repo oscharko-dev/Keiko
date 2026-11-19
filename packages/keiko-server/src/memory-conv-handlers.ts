@@ -40,7 +40,7 @@ import type {
   ConversationMemoryCaptureOutcomeWire,
 } from "@oscharko-dev/keiko-contracts";
 import { MEMORY_TYPES } from "@oscharko-dev/keiko-contracts/runtime/memory";
-import { MEMORY_STATUSES } from "@oscharko-dev/keiko-contracts/memory";
+import { MEMORY_STATUSES, isMemoryStatusRecallable } from "@oscharko-dev/keiko-contracts/memory";
 import type {
   MemoryAuditEvent,
   MemoryId,
@@ -137,22 +137,49 @@ function parseTypes(raw: unknown): readonly MemoryType[] | null {
   return out;
 }
 
-const RECALL_LIST_STATUSES: readonly MemoryStatus[] = MEMORY_STATUSES.filter(
+// Only statuses recall can ever supply are read, so archived, proposed, rejected and other retired
+// rows never take a place in the bounded read window ahead of a live record (#4223, lab
+// scale-archiviert-de and scale-vorschlaege-en). History joins only when a caller asks for it.
+const RECALL_HISTORY_STATUSES: readonly MemoryStatus[] =
+  MEMORY_STATUSES.filter(isMemoryStatusRecallable);
+const RECALL_LIST_STATUSES: readonly MemoryStatus[] = RECALL_HISTORY_STATUSES.filter(
+  (status) => status !== "superseded",
+);
+// A caller that records every withheld memory as evidence (the workflow port's
+// memory:workflow-omitted audit) still reads every status except history.
+const AUDITED_LIST_STATUSES: readonly MemoryStatus[] = MEMORY_STATUSES.filter(
   (status) => status !== "superseded",
 );
 
-export function vaultAsQueryPort(vault: MemoryVaultStore): MemoryQueryPort {
-  // Retrieval must see expired rows so it can omit them with a concrete suppression reason
-  // instead of having storage silently drop them. Archived/forgotten rows already come back
-  // from the vault by default and are suppressed later by the retrieval layer.
+export interface VaultQueryPortOptions {
+  /** Read retired rows too, so each one can be reported as omitted with its status. */
+  readonly readRetired?: boolean;
+}
+
+function listStatuses(
+  options: VaultQueryPortOptions,
+  includeSuperseded: boolean,
+): readonly MemoryStatus[] {
+  if (options.readRetired === true) {
+    return includeSuperseded ? MEMORY_STATUSES : AUDITED_LIST_STATUSES;
+  }
+  return includeSuperseded ? RECALL_HISTORY_STATUSES : RECALL_LIST_STATUSES;
+}
+
+export function vaultAsQueryPort(
+  vault: MemoryVaultStore,
+  portOptions: VaultQueryPortOptions = {},
+): MemoryQueryPort {
+  // Retrieval must see accepted rows whose validity ended so it can omit them with a concrete
+  // suppression reason instead of having storage silently drop them. Unless a caller asks for
+  // retired rows, rows whose status alone keeps them out of recall are not read at all, so they
+  // cannot fill the bounded window and are not reported as omitted either.
   return {
     listByScope: (scope, options): readonly MemoryRecord[] => {
       const limit = options?.maxResults;
       return vault.listMemoriesByScope(scope, {
         includeExpired: true,
-        // History is excluded at the query: replaced records must not take a place in the bounded
-        // read window ahead of the live record that replaced them.
-        ...(options?.includeSuperseded === true ? {} : { status: RECALL_LIST_STATUSES }),
+        status: listStatuses(portOptions, options?.includeSuperseded === true),
         ...(limit === undefined ? {} : { limit }),
       });
     },
