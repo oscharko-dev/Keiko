@@ -31,24 +31,39 @@ function predecessorIds(vault: MemoryVaultStore, id: MemoryRecord["id"]): readon
     .map((edge) => edge.fromMemoryId);
 }
 
+function successorIds(vault: MemoryVaultStore, id: MemoryRecord["id"]): readonly string[] {
+  return vault
+    .listOutgoingEdges(id)
+    .filter((edge) => edge.kind === "supersedes")
+    .map((edge) => edge.toMemoryId);
+}
+
 /**
  * Whether a stored record replaced this one, so that it is a history row and not the fact's newest
- * value. The successor must itself belong to the live lineage: a rejected record is a value the
- * person refused, so an edge to it makes nothing a history row. An archived or expired successor
- * still counts, because both can return to accepted and remain the fact's value. A record among its
- * own earlier values (a cycle of edges) is no successor.
+ * value. A rejected record is a value the person refused, so it is no value of the fact itself, but
+ * a value that replaced it again is: the walk passes through rejected successors and stops at the
+ * first one that is not rejected. An archived or expired successor counts, because both can return
+ * to accepted and remain the fact's value. A record among its own earlier values (a cycle of edges)
+ * is no successor. At the walk's bound the record counts as a history row, so a forget removes only
+ * the picked record and bridges the chain around it rather than more than the person picked.
  */
 export function hasStoredSuccessor(
   vault: MemoryVaultStore,
   record: MemoryRecord,
   earlier: readonly MemoryRecord[],
 ): boolean {
-  const own = new Set(earlier.map((value) => String(value.id)));
-  return vault.listOutgoingEdges(record.id).some((edge) => {
-    if (edge.kind !== "supersedes" || own.has(String(edge.toMemoryId))) return false;
-    const successor = vault.getMemory(edge.toMemoryId);
-    return successor !== undefined && successor.status !== "rejected";
-  });
+  const seen = new Set<string>([String(record.id), ...earlier.map((value) => String(value.id))]);
+  const queue = [...successorIds(vault, record.id)];
+  for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
+    if (seen.has(next)) continue;
+    if (seen.size >= MAX_LINEAGE_RECORDS + earlier.length) return true;
+    seen.add(next);
+    const successor = vault.getMemory(next as MemoryRecord["id"]);
+    if (successor === undefined) continue;
+    if (successor.status !== "rejected") return true;
+    queue.push(...successorIds(vault, successor.id));
+  }
+  return false;
 }
 
 /**

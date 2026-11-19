@@ -2640,6 +2640,49 @@ describe("memory handlers", () => {
       });
     });
 
+    // The walk does not pass through another scope: the earlier same-scope value behind a foreign
+    // record is not reached, and lineageSkippedCount is the signal (ADR-0146).
+    it("does not reach a same-scope value behind a foreign-scope middle record", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("fm-a", "Ich wohne in Köln", { status: "superseded" }));
+      vault.insertMemory(
+        makeMemory("fm-f", "Ich wohne in Ulm", {
+          status: "superseded",
+          scope: { kind: "workspace", workspaceId: workspaceId("ws-other") },
+        }),
+      );
+      vault.insertMemory(makeMemory("fm-c", "Ich wohne in Bonn"));
+      for (const [id, from, to] of [
+        ["fm-e1", "fm-a", "fm-f"],
+        ["fm-e2", "fm-f", "fm-c"],
+      ] as const) {
+        vault.insertEdge({
+          id: id as MemoryEdgeId,
+          schemaVersion: "1",
+          fromMemoryId: memoryId(from),
+          toMemoryId: memoryId(to),
+          kind: "supersedes",
+          createdAt: Date.now(),
+        });
+      }
+
+      const { result, events } = await forgetWithLog("fm-c", makeDeps({ memoryVault: vault }));
+
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(1);
+      expect(vault.getMemory(memoryId("fm-a"))).toBeDefined();
+      expect(vault.getMemory(memoryId("fm-f"))).toBeDefined();
+      expectForgetLine(events, {
+        outcome: "forgotten",
+        ...WINDOW_BY_ID,
+        scopeKind: "global",
+        tombstoneWritten: true,
+        forgottenCount: 1,
+        tombstoneCount: 1,
+        lineageSkippedCount: 1,
+      });
+    });
+
     it("counts a fact and the earlier values it replaced in one line", async () => {
       const vault = makeVault();
       const { third } = await threeValues(vault);
@@ -3178,21 +3221,18 @@ describe("memory handlers", () => {
       expect(other.getMemory(memoryId("cf2-loser"))).toBeUndefined();
     });
 
-    // The walk does not pass through another scope: the earlier same-scope value behind a foreign
-    // record is not reached, and lineageSkippedCount is the signal (ADR-0146).
-    it("does not reach a same-scope value behind a foreign-scope middle record", async () => {
+    // A rejected successor is no value of the fact, but a value after it is: the record behind a
+    // rejected correction that was itself corrected again is still a history row.
+    it("keeps a record a history row when its rejected successor was replaced again", async () => {
       const vault = makeVault();
-      vault.insertMemory(makeMemory("fm-a", "Ich wohne in Köln", { status: "superseded" }));
-      vault.insertMemory(
-        makeMemory("fm-f", "Ich wohne in Ulm", {
-          status: "superseded",
-          scope: { kind: "workspace", workspaceId: workspaceId("ws-other") },
-        }),
-      );
-      vault.insertMemory(makeMemory("fm-c", "Ich wohne in Bonn"));
+      vault.insertMemory(makeMemory("rm-first", "Ich wohne in Trier", { status: "superseded" }));
+      vault.insertMemory(makeMemory("rm-old", "Ich wohne in Köln", { status: "superseded" }));
+      vault.insertMemory(makeMemory("rm-rejected", "Ich wohne in Ulm", { status: "rejected" }));
+      vault.insertMemory(makeMemory("rm-new", "Ich wohne in Bonn"));
       for (const [id, from, to] of [
-        ["fm-e1", "fm-a", "fm-f"],
-        ["fm-e2", "fm-f", "fm-c"],
+        ["rm-e0", "rm-first", "rm-old"],
+        ["rm-e1", "rm-old", "rm-rejected"],
+        ["rm-e2", "rm-rejected", "rm-new"],
       ] as const) {
         vault.insertEdge({
           id: id as MemoryEdgeId,
@@ -3204,12 +3244,13 @@ describe("memory handlers", () => {
         });
       }
 
-      const result = await forgetById(vault, "fm-c");
+      const result = await forgetById(vault, "rm-old");
 
       expect(result.status).toBe(200);
       expect(asJson(result).count).toBe(1);
-      expect(vault.getMemory(memoryId("fm-a"))).toBeDefined();
-      expect(vault.getMemory(memoryId("fm-f"))).toBeDefined();
+      expect(vault.getMemory(memoryId("rm-old"))).toBeUndefined();
+      expect(vault.getMemory(memoryId("rm-first"))).toBeDefined();
+      expect(vault.getMemory(memoryId("rm-new"))?.status).toBe("accepted");
     });
 
     it("picking an archived history row forgets only that row", async () => {

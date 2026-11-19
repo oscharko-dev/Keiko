@@ -402,7 +402,10 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   forget counts a live record and its own predecessors as one match (the lineage collapses to the
   newest matching record); two different facts that both match are still asked about. A record
   counts as a history row only when a stored successor that is not rejected exists (an archived or
-  expired successor still counts: both can return to accepted). Picking a history row in the Memory
+  expired successor still counts: both can return to accepted). A rejected successor is passed
+  through: a value that replaced it again still makes the record history. A successor in another
+  scope counts too, so picking such a row forgets only that row and leaves the other owner's chain
+  intact. Picking a history row in the Memory
   window, or naming only the old value, forgets exactly that record and the newer value stays; the
   chain is kept whole around it. A pin that protects the live record in a Chat protects its history
   too (#4223). A maintenance pass still forgets a record whose AUTHOR-STATED validity ended, but only
