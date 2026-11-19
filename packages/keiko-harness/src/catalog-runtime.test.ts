@@ -202,6 +202,21 @@ describe("native harness catalog consumer", () => {
     ).toThrow();
     expect(getter).not.toHaveBeenCalled();
   });
+  it("refuses a bound call whose keys are not exactly id, name, arguments and invocation", () => {
+    const { ctx } = buildContext({ task: TASK, model: scriptedModel([response()]).port });
+    ctx.lastResponse = response({ toolCalls: [toolCall("call-1")] });
+    prepareToolResponse(ctx);
+    const call = ctx.lastResponse.toolCalls[0];
+    if (call?.invocation === undefined) throw new TypeError("Expected bound call");
+    const unbound = { id: call.id, name: call.name, arguments: call.arguments };
+    const extraKey = { ...call, extra: 1 };
+    const argumentsRenamed = { ...call, extra: call.arguments };
+    Reflect.deleteProperty(argumentsRenamed, "arguments");
+    for (const shape of [unbound, extraKey, argumentsRenamed])
+      expect(() => captureModelToolCalls(ctx, response({ toolCalls: [shape] }))).toThrow(
+        "Invalid bound provider call",
+      );
+  });
   it("reports receipt-only replay as unavailable output without charging or executing again", async () => {
     const tools = recordingTool();
     const { ctx } = buildContext({

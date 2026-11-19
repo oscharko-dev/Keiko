@@ -39,7 +39,7 @@ export const TERMINAL_STATES: readonly TerminalState[] = Object.freeze([
 
 const TERMINAL_STATE_VALUES: readonly HarnessStateName[] = TERMINAL_STATES;
 
-export function isTerminalHarnessState(state: HarnessStateName): boolean {
+export function isTerminalHarnessState(state: HarnessStateName): state is TerminalState {
   return TERMINAL_STATE_VALUES.includes(state);
 }
 

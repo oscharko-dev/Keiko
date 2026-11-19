@@ -38,6 +38,15 @@ export interface ToolInvocationNormalizer {
     referenceTimeMs: number,
   ) => BoundToolInvocation;
 }
+/**
+ * A binding as a caller supplies it. `createToolInvocationNormalizer` copies and verifies the
+ * catalog, the projection and the offer, so the caller need not claim they are already verified.
+ */
+export interface ToolInvocationBindingCandidate {
+  readonly catalog: object;
+  readonly projection: object;
+  readonly offered: unknown;
+}
 const ID = /^[A-Za-z0-9_.-]{1,128}$/u;
 function instant(value: unknown): number {
   requireCatalog(typeof value === "string", "invalid-shape");
@@ -136,13 +145,13 @@ function remembered(input: unknown): CapturedCatalog | undefined {
   if (typeof projection !== "object" || projection === null) return undefined;
   return CAPTURED.get(catalog)?.get(projection);
 }
-function remember(input: ToolInvocationBinding, captured: CapturedCatalog): void {
+function remember(input: ToolInvocationBindingCandidate, captured: CapturedCatalog): void {
   if (!isDeepFrozen(input.catalog) || !isDeepFrozen(input.projection)) return;
   const projections = CAPTURED.get(input.catalog) ?? new WeakMap<object, CapturedCatalog>();
   projections.set(input.projection, captured);
   CAPTURED.set(input.catalog, projections);
 }
-function captureBinding(input: ToolInvocationBinding): ToolInvocationBinding {
+function captureBinding(input: ToolInvocationBindingCandidate): ToolInvocationBinding {
   const known = remembered(input);
   if (known !== undefined) {
     const offered = captureOffer(dataValue(input, "offered"), known.projection);
@@ -230,7 +239,7 @@ function normalize(
 }
 /** Captures immutable content, not authority; runtime dispatch still re-enters the binding owner. */
 export function createToolInvocationNormalizer(
-  input: ToolInvocationBinding,
+  input: ToolInvocationBindingCandidate,
 ): ToolInvocationNormalizer {
   const binding = captureBinding(input);
   return Object.freeze({

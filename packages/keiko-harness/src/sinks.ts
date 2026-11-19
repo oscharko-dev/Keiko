@@ -97,9 +97,17 @@ const SUMMARISERS: {
     `dropped=${String(e.messagesDropped)} bytesBefore=${String(e.bytesBefore)} bytesAfter=${String(e.bytesAfter)}`,
 };
 
+// The type and the event are passed separately so TypeScript can correlate the summariser's
+// parameter with the event it receives, which a lookup by `event.type` alone cannot do.
+function summariseWith<K extends HarnessEvent["type"]>(
+  type: K,
+  event: HarnessEvent & { type: K },
+): string {
+  return SUMMARISERS[type](event);
+}
+
 function summarise(event: HarnessEvent): string {
-  const handler = SUMMARISERS[event.type] as (event: HarnessEvent) => string;
-  return handler(event);
+  return summariseWith(event.type, event);
 }
 
 function isFailureEvent(event: HarnessEvent): boolean {

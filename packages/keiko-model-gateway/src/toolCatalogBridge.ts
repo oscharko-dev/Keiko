@@ -4,9 +4,6 @@ import {
   isGatewayNativeToolAdvertisement,
   toolArgumentLimitsByToolName,
   type GatewayNativeToolAdvertisement,
-  type GatewayToolAdvertisement,
-  type GatewayToolCatalogAdvertisement,
-  type ToolInvocationBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import {
   activityLogEvent,
@@ -16,6 +13,7 @@ import {
   GENERIC_TOOL_ARGUMENT_LIMITS,
   TOOL_CATALOG_LIMITS,
   toolArgumentLimits,
+  type CatalogJsonObject,
   type ToolArgumentLimits,
   type ToolResultReason,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -23,9 +21,12 @@ import {
   captureCatalogJson,
   captureCatalogEnvelope,
   createToolInvocationNormalizer,
+  isCatalogJsonArray,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
+  readCatalogToolCall,
   ToolCatalogError,
   type CatalogFailureReason,
+  type ToolInvocationBindingCandidate,
   type ToolInvocationNormalizer,
   type CatalogSchemaMismatch,
 } from "@oscharko-dev/keiko-tool-catalog";
@@ -302,7 +303,7 @@ function frozenObject(value: unknown): object | undefined {
  * invocation binding reuses its earlier verification. Copying the whole catalog on every round made
  * a long Chat tool turn copy and re-verify every descriptor dozens of times (#4173).
  */
-function frozenBoundAdvertisement(input: unknown): GatewayToolCatalogAdvertisement | undefined {
+function frozenBoundAdvertisement(input: unknown): BoundAdvertisement | undefined {
   if (typeof input !== "object" || input === null || dataField(input, "kind") !== "bound")
     return undefined;
   if (
@@ -314,15 +315,21 @@ function frozenBoundAdvertisement(input: unknown): GatewayToolCatalogAdvertiseme
   const projection = frozenObject(dataField(input, "projection"));
   if (catalog === undefined || projection === undefined) return undefined;
   const offered = captureCatalogEnvelope(dataField(input, "offered"));
-  return Object.freeze({
-    kind: "bound",
-    catalog,
-    projection,
-    offered,
-  }) as unknown as GatewayToolCatalogAdvertisement;
+  return { kind: "bound", binding: { catalog, projection, offered } };
 }
 
-function capturedAdvertisement(input: unknown): GatewayToolAdvertisement {
+/**
+ * A bound advertisement's parts as the request carried them. `createToolInvocationNormalizer`
+ * verifies them; until then they are a candidate, not a verified binding.
+ */
+interface BoundAdvertisement {
+  readonly kind: "bound";
+  readonly binding: ToolInvocationBindingCandidate;
+}
+
+function capturedAdvertisement(
+  input: unknown,
+): BoundAdvertisement | GatewayNativeToolAdvertisement {
   const frozen = frozenBoundAdvertisement(input);
   if (frozen !== undefined) return frozen;
   // A native advertisement carries the runtime's whole tool set under its own byte contract; a
@@ -333,21 +340,33 @@ function capturedAdvertisement(input: unknown): GatewayToolAdvertisement {
     ? captureCatalogJson(input, GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES)
     : captureCatalogEnvelope(input);
   requireBridge(
-    typeof value === "object" && value !== null && !Array.isArray(value),
+    typeof value === "object" && value !== null && !isCatalogJsonArray(value),
     "projection-mismatch",
   );
-  const object = value as Readonly<Record<string, unknown>>;
-  if (object.kind === "native") {
-    requireBridge(isGatewayNativeToolAdvertisement(object), "projection-mismatch");
-    return object;
+  if (value.kind === "native") {
+    requireBridge(isGatewayNativeToolAdvertisement(value), "projection-mismatch");
+    return value;
   }
+  return boundCopy(value);
+}
+
+/** A copied bound advertisement: exactly its four keys, with an object catalog and projection. */
+function boundCopy(object: CatalogJsonObject): BoundAdvertisement {
   requireBridge(
     object.kind === "bound" &&
       Object.keys(object).length === BOUND_ADVERTISEMENT_KEYS.length &&
       BOUND_ADVERTISEMENT_KEYS.every((key) => Object.hasOwn(object, key)),
     "projection-mismatch",
   );
-  return object as unknown as GatewayToolCatalogAdvertisement;
+  const { catalog, projection, offered } = object;
+  requireBridge(
+    typeof catalog === "object" &&
+      catalog !== null &&
+      typeof projection === "object" &&
+      projection !== null,
+    "projection-mismatch",
+  );
+  return { kind: "bound", binding: { catalog, projection, offered } };
 }
 
 /**
@@ -426,14 +445,6 @@ function isNativeExtensionAlias(normalizer: ToolInvocationNormalizer, alias: str
   );
 }
 
-function normalizerFor(advertisement: GatewayToolCatalogAdvertisement): ToolInvocationNormalizer {
-  const binding: ToolInvocationBinding = {
-    catalog: advertisement.catalog,
-    projection: advertisement.projection,
-    offered: advertisement.offered,
-  };
-  return createToolInvocationNormalizer(binding);
-}
 /**
  * The argument ceilings the call is captured under: the changeset ceilings for the governed
  * changeset edit and for the native file-content tools, the generic ones for everything else. The
@@ -460,23 +471,14 @@ function captureCall(
   normalizer: ToolInvocationNormalizer | undefined,
   native: GatewayNativeToolAdvertisement | undefined,
 ): NormalizedToolCall {
-  const object = captureCatalogJson(
-    input,
-    undefined,
-    callArgumentLimits(input, normalizer, native),
-  ) as Readonly<Record<string, unknown>>;
-  requireBridge(
-    Object.keys(object).length === 3 &&
-      ["id", "name", "arguments"].every((key) => Object.hasOwn(object, key)),
-    "invalid-arguments",
+  const call = readCatalogToolCall(
+    captureCatalogJson(input, undefined, callArgumentLimits(input, normalizer, native)),
   );
   requireBridge(
-    typeof object.id === "string" &&
-      /^[A-Za-z0-9_.:-]{1,128}$/u.test(object.id) &&
-      typeof object.name === "string",
+    call !== undefined && /^[A-Za-z0-9_.:-]{1,128}$/u.test(call.id),
     "invalid-arguments",
   );
-  return object as unknown as NormalizedToolCall;
+  return call;
 }
 interface CatalogRejectionDetails {
   readonly transport?: "assistant-text";
@@ -793,7 +795,7 @@ function prepare(
       );
     return nativeBridge(advertisement, now, log);
   }
-  const normalizer = normalizerFor(advertisement);
+  const normalizer = createToolInvocationNormalizer(advertisement.binding);
   const tools = definitions(normalizer, now());
   if (recordProjection)
     log.write(
@@ -804,7 +806,7 @@ function prepare(
         // How long the advertised offer stays bindable from this point. Read next to the fetch's own
         // `durationMs` it reconstructs an `expired-compatibility` rejection from the log alone: a
         // response that took longer than this window was bound against an offer that had run out.
-        offerRemainingMs: Math.max(0, Date.parse(advertisement.offered.expiresAt) - now()),
+        offerRemainingMs: Math.max(0, Date.parse(normalizer.binding.offered.expiresAt) - now()),
       }),
     );
   return bridge(normalizer, tools, now, log);

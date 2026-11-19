@@ -68,9 +68,18 @@ const REDACTORS: {
   "run:failed": redactRunFailed,
 };
 
-function redactSensitive(event: HarnessEvent): HarnessEvent {
-  const redactor = REDACTORS[event.type] as ((e: HarnessEvent) => HarnessEvent) | undefined;
+// The type and the event are passed separately so TypeScript can correlate the redactor's
+// parameter with the event it receives, which a lookup by `event.type` alone cannot do.
+function redactWith<K extends HarnessEvent["type"]>(
+  type: K,
+  event: Extract<HarnessEvent, { type: K }>,
+): HarnessEvent {
+  const redactor = REDACTORS[type];
   return redactor === undefined ? event : redactor(event);
+}
+
+function redactSensitive(event: HarnessEvent): HarnessEvent {
+  return redactWith(event.type, event);
 }
 
 // The five identity fields every event carries, computed fresh (and consuming one seq number)
@@ -105,7 +114,7 @@ export class Emitter {
   ) {}
 
   emit(body: EventBody): void {
-    const event = { ...this.nextEnvelope(), ...body } as HarnessEvent;
+    const event: HarnessEvent = { ...this.nextEnvelope(), ...body };
     const redacted = redactSensitive(event);
     const failedIndexes = this.deliverToSinks(event, redacted);
     // Raised only after the original event has reached every sink that was still healthy at the
@@ -160,7 +169,7 @@ export class Emitter {
   // list no matter how many sinks are broken.
   private announceDegraded(sinkIndex: number): void {
     const noticeBody: EventBody = { type: "sink:degraded", sinkIndex, reason: "sink-threw" };
-    const event = { ...this.nextEnvelope(), ...noticeBody } as HarnessEvent;
+    const event: HarnessEvent = { ...this.nextEnvelope(), ...noticeBody };
     this.deliverToSinks(event, redactSensitive(event));
   }
 }

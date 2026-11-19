@@ -161,6 +161,31 @@ describe("legacy-port catalog dispatch settlement (F11)", () => {
     expect(f.observed).toHaveLength(0);
   });
 
+  it("refuses bound arguments that are not an object without reaching the ToolPort", async () => {
+    const f = fixture();
+    let calls = 0;
+    const port = scriptedPort(() => {
+      calls += 1;
+      return Promise.resolve({ toolCallId: "call-1", output: "ok", durationMs: 3 });
+    });
+    const catalogPort = createLegacyPortCatalogFactory(
+      f.catalog,
+      PROFILE,
+      port,
+      handlerAttestations(f),
+    )(f.context);
+    const outcome = await catalogPort.execute({
+      toolCallId: "call-1",
+      invocation: { ...f.invocation, arguments: ["fixture.txt"] },
+      signal: f.context.signal,
+    });
+    if (outcome.kind !== "settled") throw new TypeError("Expected settled outcome");
+    expect(outcome.result.status).toBe("failed");
+    expect(outcome.receipt.budgetDisposition).toBe("released");
+    expect(f.counters).toMatchObject({ toolCalls: 0, commandExecutions: 0 });
+    expect(calls).toBe(0);
+  });
+
   // The pin moved, it did not relax: everything it guarded stays asserted below unchanged (the
   // reservation released, the charge and run counter actually refunded, a shaped ADR-0175 D6
   // outcome instead of an unshaped throw, the handler never reached). Only the reason is
