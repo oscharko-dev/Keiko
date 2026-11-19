@@ -184,6 +184,7 @@ describe("an administrator's package", () => {
           baseUrl: "https://gateway.example.test",
           apiKeySecretRef: "cred:embed",
           catalogOrigin: "discovered",
+          credentialOrigin: "gateway-connection",
         },
         { modelId: "own-key", baseUrl: "https://other.example.test", apiKey: "sk-kept" },
       ],
@@ -204,6 +205,7 @@ describe("an administrator's package", () => {
           modelId: "embed",
           baseUrl: "https://gateway.example.test",
           catalogOrigin: "discovered",
+          credentialOrigin: "gateway-connection",
           apiKey: "sk-team",
         },
         { modelId: "own-key", baseUrl: "https://other.example.test", apiKey: "sk-kept" },
@@ -278,6 +280,22 @@ describe("an administrator's package", () => {
       },
       "own-key-embedding",
     ],
+    ...["discovered", "explicit"].map((catalogOrigin) => [
+      `a same-endpoint embedding with its own credential and catalog origin ${catalogOrigin}`,
+      {
+        providers: [
+          { modelId: "chat", baseUrl: "https://g.example.test", apiKeySecretRef: "c:1" },
+          {
+            modelId: "own-key-embedding",
+            baseUrl: "https://g.example.test",
+            apiKeySecretRef: "c:2",
+            catalogOrigin,
+          },
+        ],
+        capabilities: [{ id: "own-key-embedding", kind: "embedding" }],
+      },
+      "own-key-embedding",
+    ]),
   ])("never gives the team's key to %s", (_case, config, name) => {
     // Review finding on PR #4464 (P1): the team key replaced every sealed reference, so an
     // independent reranker or a model with its own credential received the gateway's key.
@@ -291,6 +309,32 @@ describe("an administrator's package", () => {
     expect(() => build("macos-arm64", { options })).toThrow(
       new RegExp(`for another connection \\(${name}\\)`, "u"),
     );
+  });
+
+  it("refuses another connection's key before it looks up the team's key", () => {
+    const root = tempRoot();
+    const config = {
+      providers: [
+        { modelId: "chat", baseUrl: "https://g.example.test", apiKeySecretRef: "c:1" },
+        {
+          modelId: "own-key-embedding",
+          baseUrl: "https://g.example.test",
+          apiKeySecretRef: "c:2",
+          catalogOrigin: "discovered",
+        },
+      ],
+      capabilities: [{ id: "own-key-embedding", kind: "embedding" }],
+    };
+
+    expect(() =>
+      build("macos-arm64", {
+        options: {
+          config: configFile(root, JSON.stringify(config)),
+          apiKeyEnv: "KEIKO_TEAM_KEY",
+          env: {},
+        },
+      }),
+    ).toThrow("for another connection (own-key-embedding)");
   });
 
   it("refuses a config that still refers to a key sealed on the administrator's computer", () => {

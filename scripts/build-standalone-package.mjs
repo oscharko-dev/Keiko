@@ -271,13 +271,16 @@ function teamApiKey(apiKeyEnv, env) {
 // one: on the gateway connection Gateway Setup verified it becomes the team's key, by the same rule
 // as the npm package's access step (system/keiko-npm.mjs). A key of any other connection refuses:
 // the team's key must never reach a service it was not verified for.
-function withTeamApiKeys(config, apiKey) {
+function withTeamApiKeys(config, apiKeyEnv, env) {
   const scope = credentialScope(config);
   if (scope.foreign.length > 0) {
     refuse(
       `the provisioned config refers to keys sealed on this computer for another connection (${scope.foreign.join(", ")}); one team key covers only the gateway connection Gateway Setup verified, so write that connection's key into the file instead`,
     );
   }
+  // Read only now: a configuration that holds another connection's key refused above, before the
+  // team's key was looked up.
+  const apiKey = teamApiKey(apiKeyEnv, env);
   if (scope.token.size === 0) return undefined;
   if (apiKey === undefined) {
     refuse(
@@ -302,7 +305,7 @@ export function readProvisionedConfig(configPath, apiKeyEnv = undefined, env = p
   config.providers.forEach((provider, index) => {
     assertProviderOutline(provider, index);
   });
-  const team = withTeamApiKeys(config, teamApiKey(apiKeyEnv, env));
+  const team = withTeamApiKeys(config, apiKeyEnv, env);
   // The administrator's own text when nothing was sealed (without a byte order mark).
   return Buffer.from(
     team === undefined

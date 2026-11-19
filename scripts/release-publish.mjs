@@ -146,10 +146,28 @@ function nonNegativeIntegerEnv(name, fallback) {
   return value;
 }
 
+// A refusal is an exception, never `process.exit`: the evidence, package staging and npm
+// configuration scopes own temporary folders (one holds the registry token in its `.npmrc`) and
+// release them in `finally` blocks that an immediate exit would skip. The outermost boundary
+// below turns the failure into the exit status once those scopes have unwound.
+class ReleasePublishFailure extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ReleasePublishFailure";
+  }
+}
+
 function fail(message) {
   console.error(`release-publish: FAIL - ${message}`);
-  process.exit(1);
+  throw new ReleasePublishFailure(message);
 }
+
+// Outermost boundary: a failure sets the exit status (its message is already printed); any other
+// uncaught error keeps Node's default report and a non-zero exit.
+process.on("uncaughtException", (error) => {
+  if (!(error instanceof ReleasePublishFailure)) console.error(error);
+  process.exit(1);
+});
 
 function readJson(relativePath) {
   return JSON.parse(readFileSync(join(repoRoot, relativePath), "utf8"));
@@ -1714,8 +1732,8 @@ function runPortableDownloadSmoke(remoteAssets, expectedAssets) {
   }
 }
 
-// The temporary folder is removed before a failure ends the process: `fail` exits at once, so a
-// failure inside the `try` would skip the `finally` and leave the partial download behind.
+// The temporary folder is removed whether the download succeeds or not; the failure itself is
+// raised after the folder is gone.
 function smokePortableDownloadUrl(expected, url) {
   const root = mkdtempSync(join(tmpdir(), "keiko-portable-download-"));
   let failure;
