@@ -320,9 +320,14 @@ Reading of the runs so far:
   is above it too. These are development numbers; only the holdout decides.
 - 6 of 30 reviews did not settle `complete` (20.0 %, at the limit of 20 %), against 7 in dev-9.
   What blocks each of the 6, counted once per review and cause:
-  - A candidate whose counter-check failed on the model twice: 3 reviews, the only cause in 2.
-  - A candidate whose counter-check reached its 900-second limit twice: 2 reviews, the only cause
-    in both.
+  - A candidate whose second counter-check failed on the model: 3 reviews, the only cause in 2.
+    The first check of that candidate failed on the model in 2 of them and reached the 900-second
+    limit in 1.
+  - A candidate whose second counter-check reached the 900-second limit: 2 reviews, the only cause
+    in both. The first check of that candidate reached the limit in 1 of them and failed on the
+    model in 1.
+  - Each candidate is classed by its last check. A Reviewer part whose first session failed and
+    whose second session completed is not a cause.
   - A Reviewer session that used its whole output budget after it had filed candidates: 1 review,
     the only cause there. A Reviewer session that reached the run's time limit without a candidate
     is the second cause of one of the reviews above.
@@ -330,8 +335,13 @@ Reading of the runs so far:
   4,095 events, 4,093 of them reasoning, and reached its 4,096-token output budget after 311
   seconds. The gateway's steered repair ended the same way, and the session failed. The
   Counter-checker decodes about 13 tokens a second, so a turn that reasons through its budget
-  costs five minutes, and two of them nearly fill the 900-second limit. The checks that reached
-  that limit had used 5,600 to 8,200 output tokens.
+  costs five minutes, and two of them nearly fill the 900-second limit. 5 of the 8 checks that
+  reached that limit had used 5,600 to 8,200 output tokens.
+- The other 3 checks that reached the limit waited for the model instead. One waited 694 seconds
+  for the response headers of its first call. The two others are both checks of the only blocking
+  candidate of one review: the first never received a response, the second received 719 output
+  tokens. The three settled 35 to 858 seconds after the 900-second limit, so the limit did not end
+  the model call in flight.
 - Counter-checks: 192 sessions, counting the sessions of the reviews the pauses cut. 46 confirmed,
   124 refuted, 1 ended undecided by its own verdict, 13 failed on the model and 8 reached the time
   limit.
