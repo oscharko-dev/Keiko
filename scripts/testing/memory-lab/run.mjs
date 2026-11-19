@@ -56,6 +56,7 @@ import {
   summarizeLabRun,
 } from "./report.mjs";
 import { loadScenarioDirectory, scenarioSetManifest } from "./scenario.mjs";
+import { useSubjectContract } from "./seed-validate.mjs";
 import {
   ANSWERER_MODEL_ID,
   EMBEDDER_MODEL_ID,
@@ -761,6 +762,8 @@ export async function runLab(requested, log = console.log) {
     embedder: gateway.embedder,
     embeddingModelIds: gateway.embeddingModelIds,
   };
+  // Seeds are validated against the contract of the subject that is measured.
+  await useSubjectContract(options.subjectRoot);
   const corpus = loadCorpus(options);
   assertKeepAllowed(corpus.scenarios, options.keep);
   return withExclusiveProcessLock(options.out, "memory-lab-run", (assertOwned) =>

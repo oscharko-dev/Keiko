@@ -18,14 +18,36 @@ import {
   planSeed,
 } from "./seed-plan.mjs";
 
-// The memory contract's own record validator, from the built contracts package: the vault refuses a
-// record it does not accept, at instance start, with an error that names no scenario. Absent (not
-// built) it is undefined and a scenario with a seed is refused: a seed is never accepted unchecked.
-const { validateMemoryRecord } = await import(
-  pathToFileURL(
-    join(REPO_ROOT, "packages", "keiko-contracts", "dist", "memory-record-validation.js"),
-  ).href
-).catch(() => ({}));
+// The memory contract's own record validator, from the built contracts package of the SUBJECT being
+// measured (its public entry point): the vault refuses a record it does not accept, at instance start,
+// with an error that names no scenario, and a subject at another version has another contract. Until
+// `useSubjectContract` names a subject the lab's own checkout is the subject. A contract that cannot be
+// loaded is kept as a named error with its cause, and a scenario with a seed is refused with it: a seed
+// is never accepted unchecked, and never for a reason that is hidden.
+let contract = await loadContract(REPO_ROOT);
+
+async function loadContract(subjectRoot) {
+  const entry = join(subjectRoot, "packages", "keiko-contracts", "dist", "index.js");
+  try {
+    const { validateMemoryRecord } = await import(pathToFileURL(entry).href);
+    if (typeof validateMemoryRecord !== "function")
+      throw new TypeError("it exports no validateMemoryRecord");
+    return { validateMemoryRecord };
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    return {
+      error: new Error(
+        `the memory contract of the subject at ${subjectRoot} cannot be loaded from ${entry} (build it with npm run build:packages): ${reason}`,
+        { cause },
+      ),
+    };
+  }
+}
+
+/** Names the subject whose memory contract validates the seeds of the scenarios loaded after this. */
+export async function useSubjectContract(subjectRoot) {
+  contract = await loadContract(subjectRoot ?? REPO_ROOT);
+}
 
 const MAX_AGE_DAYS = 36_500;
 const MAX_ACCESS_COUNT = 1000;
@@ -331,8 +353,10 @@ export function validateSeed(fail, id, scenario) {
 // a body the learned form copies into a bounded evidence span, a control character or an age that
 // makes a timestamp negative fails here, naming the scenario, not at instance start.
 function validateAgainstContract(fail, id, seed) {
-  if (validateMemoryRecord === undefined)
-    fail(id, "a seed cannot be checked against the memory contract: run npm run build:packages");
+  if (contract.error !== undefined) fail(id, contract.error.message);
+  const { validateMemoryRecord } = contract;
+  // The reference time is the wall clock, as at placement (`seed-store.mjs` plans with `Date.now()`);
+  // `--generated-at` is a label that defaults to 0 for digest stability and cannot date a record.
   const plan = planSeed(seed, { nowMs: Date.now(), projectId: "/lab/project" });
   plan.records.forEach((record, index) => {
     const result = validateMemoryRecord(record);

@@ -2,7 +2,7 @@
 // the store really holds what was planned, encrypted with the key the server will use, with the
 // backdated timestamps, the correction edge and the reinforcement the scenario asked for.
 import { randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,6 +18,7 @@ import {
   planSeed,
 } from "../testing/memory-lab/seed-plan.mjs";
 import { seedVault } from "../testing/memory-lab/seed-store.mjs";
+import { useSubjectContract } from "../testing/memory-lab/seed-validate.mjs";
 import { startScriptedModelServer } from "../testing/memory-lab/scripted-model.mjs";
 import { scriptedEmbedderProvider } from "../testing/memory-lab/embedder.mjs";
 
@@ -281,6 +282,47 @@ describe("validating a seed", () => {
       refused(extra({ body: "Rosa likes\u0001tea." }), /refused by the memory contract/u);
       refused(extra({ ageDays: 36_500 }), /refused by the memory contract/u);
       expect(validateScenario(scenario(extra({}))).seed.records).toHaveLength(3);
+    });
+
+    it("validates with the contract of the subject, and names the subject, the path and the cause when it cannot be loaded", async () => {
+      const root = mkdtempSync(join(tmpdir(), "memory-lab-contract-"));
+      try {
+        // A subject whose contract refuses every record: its answer, not the lab checkout's, decides.
+        const dist = join(root, "packages", "keiko-contracts", "dist");
+        mkdirSync(dist, { recursive: true });
+        writeFileSync(
+          join(dist, "index.js"),
+          'export const validateMemoryRecord = () => ({ ok: false, errors: ["subject contract says no"] });\n',
+        );
+        await useSubjectContract(root);
+        expect(() => validateScenario(scenario())).toThrow(/subject contract says no/u);
+        // A subject whose contract cannot be loaded: a named error, not a silent empty object.
+        const missing = join(root, "missing-subject");
+        await useSubjectContract(missing);
+        let message = "";
+        try {
+          validateScenario(scenario());
+        } catch (error) {
+          message = String(error.message);
+        }
+        expect(message).toContain(missing);
+        expect(message).toContain(join("packages", "keiko-contracts", "dist", "index.js"));
+        expect(message).toMatch(/cannot be loaded from/u);
+        // A subject whose index exports no validator says so.
+        // (a second subject: an ES module is cached by its path)
+        const bare = join(root, "bare-subject");
+        mkdirSync(join(bare, "packages", "keiko-contracts", "dist"), { recursive: true });
+        writeFileSync(
+          join(bare, "packages", "keiko-contracts", "dist", "index.js"),
+          "export const other = 1;\n",
+        );
+        await useSubjectContract(bare);
+        expect(() => validateScenario(scenario())).toThrow(/exports no validateMemoryRecord/u);
+      } finally {
+        await useSubjectContract(undefined);
+        rmSync(root, { recursive: true, force: true });
+      }
+      expect(validateScenario(scenario()).seed.records).toHaveLength(2);
     });
 
     it("refuses two filler groups with one seed: they write identical bodies", () => {

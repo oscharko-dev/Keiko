@@ -474,10 +474,14 @@ then does the instance start. A scenario with a seed may have no `turns` (the hi
   list (truth, superseded, forgotten, forbidden, poison, and the `expect.terms` and `expect.forbidden`
   of a probe) would match a filler body, and two groups with one `seed` (identical bodies).
 - Every planned record is also run through the memory contract's own validator
-  (`validateMemoryRecord`, from the built contracts package) when the scenario loads, so a body the
+  (`validateMemoryRecord`, a runtime export of the contracts package index, taken from the built
+  package of the SUBJECT being measured, `--subject-root`, not the lab's checkout) when the scenario
+  loads, so a body the
   learned form cannot store (its evidence span is bounded at 1,024 characters), a control character, or
   an age that makes a timestamp negative fails with the scenario's name instead of as a storage error
-  at instance start. A seed cannot be loaded without the built packages. A record is superseded by at
+  at instance start. A seed cannot be loaded without the subject's built contracts: a contract that
+  cannot be loaded is a named error with the subject, the path and the cause. The reference time of the
+  age check is the wall clock, as at placement (`--generated-at` is a label and defaults to 0). A record is superseded by at
   most one successor, and a `supersedes` chain may not return to a record it passed.
 - The whole section is strict: an unknown field, a bad status, a `supersedes` that names a record that
   is not `superseded` or is newer, a link whose body does not match, or an access age older than the
@@ -686,10 +690,12 @@ and `chatRetrievedCount` (the chat's limit on retrieved memories, and how many i
 `{key, id, suppliedByChat, position, scoreRank, omittedReason, carrierCount, stage}`.
 
 The wanted facts are the truths a probe `needs`, the values it asks for `earlier`, and, for a probe
-that expects answer `terms`, every truth whose own body the probe's terms match, by the scorer's own
-matcher (normalisation, whole words, the `*` prefix; the rule `analyze-recall.mjs` uses for a probe's
-target), so `dark` finds "I use the dark theme" and `abend*` finds "abends" (the last kind is followed
-by the trace only; the score never sees it). `id` is the stored memory that carries the fact, found by
+that expects answer `terms`, every truth whose own terms carry the probe's complete requirement: each
+term group of the probe has an alternative that the scorer's matcher (normalisation, whole words, the
+`*` prefix) finds in one of the truth's own term spellings. So `dark` finds the truth whose term is
+"dark theme" and `abend*` finds "abends", while an unrelated truth whose body merely contains "dark"
+stays unlinked, and a probe needing two groups links only a truth that carries both (the last kind is
+followed by the trace only; the score never sees it). `id` is the stored memory that carries the fact, found by
 the rule the scorer uses (`score.mjs`: the seeded link, or the terms of the fact); `null` means **no
 stored body matches the fact's terms**, which is what `not-stored` says, not that the product never
 saw the fact. `scoreRank` is the place when the included entries are sorted by the product's `score`
