@@ -109,7 +109,9 @@ export function maskHoldoutResult(result, name) {
 
 // A probe's id and the fact keys it names (`neededMissing`, `neededNotSupplied`) become positions.
 function maskedProbe(probe, index) {
+  // The recall trace names memories and facts, so a sealed probe keeps none of it.
   const masked = { ...probe, id: `probe-${String(index + 1)}` };
+  delete masked.recallTrace;
   for (const field of ["neededMissing", "neededNotSupplied"])
     if (Array.isArray(probe[field])) masked[field] = maskedKeys(probe[field]);
   return masked;

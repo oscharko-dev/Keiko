@@ -50,7 +50,7 @@ The driver reads the accepted vault records before sending that turn. If the tar
 the unit fails. The polite-forget journeys use this checkpoint to establish that a live fact
 existed before its removal. The off arm can still measure ordinary answers with an empty store.
 
-Useful flags: `--arms off,product,oracle`, `--memory-mode` and `--ceiling`, `--keep` to retain every
+Useful flags: `--no-recall-trace` (answer probes carry no recall trace, see "Recall trace"), `--arms off,product,oracle`, `--memory-mode` and `--ceiling`, `--keep` to retain every
 instance's state directory (refused for real conversations), `--subject-root <checkout>` to measure a
 separately attested baseline checkout, `--broken-learner whole-message|credential|invented` for the
 failure-first proofs, `--allow-folded-env` (see "Isolation"). `--out` must lie outside the checkout and
@@ -307,8 +307,8 @@ the judge requires of the holdout part), `allowFoldedEnv`, `foldedKeys`, `budget
 `offline` otherwise. It also records the **instrument**: `instrumentDigest`, a SHA-256 over the lab
 sources that decide what a run measures (`INSTRUMENT_FILES` in `instrument.mjs`: `../jira-chat-lab/requirements/work-project-lock.mjs`, `corpus/holdout.mjs`, `corpus/sequence.mjs`,
 `corpus/values.mjs`, `driver.mjs`, `embedder.mjs`, `evidence-scan.mjs`, `failure-classes.mjs`,
-`gateway-calls.mjs`, `instance.mjs`, `isolation.mjs`, `log-text.mjs`, `progress.mjs`, `report.mjs`,
-`run.mjs`, `scenario.mjs`, `score.mjs`, `scripted-model.mjs`, `seed-plan.mjs`, `seed-store.mjs`,
+`gateway-calls.mjs`, `instance.mjs`, `isolation.mjs`, `log-text.mjs`, `progress.mjs`, `recall-stage.mjs`,
+`recall-trace.mjs`, `report.mjs`, `run.mjs`, `scenario.mjs`, `score.mjs`, `scripted-model.mjs`, `seed-plan.mjs`, `seed-store.mjs`,
 `seed-validate.mjs`, `set-files.mjs`, `unit-failure.mjs`), beside
 `labHead` and `labDirty` (the lab's commit, and whether its sources carried uncommitted changes) for
 people; and the **product build**: `productHead` and `productDistDigest`, a SHA-256 over every built
@@ -524,7 +524,8 @@ record is live, i.e. accepted), `forgotten-fact-returned`, `forbidden-fact-store
 `private-in-project` (the hard counter, one check per record; a forbidden entry of that class is
 counted once, as this class), `seeded-record-lost`, then for a failed answer probe, most
 specific first, `forbidden-term-in-answer`, `needed-memory-missing` (a `needs` or `earlier` fact never
-reached the model), `relevant-memory-not-supplied` (nothing relevant reached the model),
+reached the model; with the recall trace on, each missing fact is also counted once in the class of
+its stage, `needed-not-stored` … `needed-ranked-low`, see "Recall trace"), `relevant-memory-not-supplied` (nothing relevant reached the model),
 `supplied-answer-wrong` (it reached the model and the answer is still wrong); for the other probes
 `fact-leaked` (an abstain probe that leaked, even when it also failed to abstain), `no-abstention`, `memory-on-unrelated-question`, `injected-instruction-obeyed`; and
 `unit-not-measured`. `rhythm.mjs compare` and `judge` add, per class, the count in the baseline and in
@@ -532,6 +533,44 @@ the candidate and the checks (`scenario:arm:rN:probe:<id>`, `…:store:<fact>`, 
 which never carry a body) that newly fail in the candidate. The totals are sums over every repetition
 of the run, so a run with three repetitions counts a failing check up to three times. A sealed run reports per-arm totals only, never a scenario or a check; its store verdicts
 are masked, so the store classes that rest on them are not derived there.
+
+### Recall trace
+
+When a memory an answer needs never reaches the model, `neededNotSupplied` only says so. With the
+recall trace on (the default; `--no-recall-trace` switches it off) every answer probe of an arm with
+memory (`product`, `oracle`) records, per probe, where the loss happened. After the chat answer has
+been received, so that it cannot influence the answer, the lab calls the product's own route
+`POST /api/memory/context` once, for the same chat and question, with a token budget of 1,000,000 so
+that the budget cuts nothing, and writes a body-free `recallTrace` on the probe in the run file:
+`source` (`memory-context-route`), `strictFloor` (`false`), `includedCount`, `included` (id, 1-based
+`position`, `score`, `subscores`, in the route's final order), `omittedByReason` (counts per closed
+reason) and `needed`, one entry per fact the probe `needs` or asks for `earlier`:
+`{key, id, suppliedByChat, position, scoreRank, omittedReason, carrierCount, stage}`. `id` is the
+stored memory that carries the fact, found by the rule the scorer uses (`score.mjs`, the seeded link
+or the terms of the fact; `null` when none exists); `scoreRank` is the place when the included
+entries are sorted by the product's `score` (ties keep their order), so `position > scoreRank` shows
+that the reorder moved the memory down. A route call that fails leaves a closed `failure`
+(`http-error` with its `status`, `malformed-response`, `request-failed`, `store-unreadable`) and the
+probe result stands; the trace never fails a unit. No memory text, question or excerpt is recorded; a
+sealed (`--holdout`) run records no trace at all. The trace is not part of the scorecard or of any
+score, and the manifest names whether it was on (`recallTrace`: `on` or `off`).
+
+`stage` is derived in one pure function (`recall-stage.mjs`), most specific first: `supplied` (the chat
+supplied it), `not-stored` (no stored memory carries it), `trace-unavailable` (the route call
+failed), `not-a-candidate` (the memory is in neither list), `not-admitted` (omitted for a reason other
+than the next two, for example `suppressed-by-status` for a parked memory), `ranked-out` (omitted as
+`max-included-exceeded`), `cut-by-budget` (omitted as `budget-exceeded`), `moved-down` (included, not
+supplied, `position > scoreRank`) and `ranked-low` (included, not supplied, otherwise). Every stage
+except `supplied` is a failure class (`needed-<stage>`, counted per missing fact, for probes that fail
+as `needed-memory-missing`).
+
+Three limits the trace states honestly. It is a diagnostic approximation of the chat path, not the
+chat path: (1) the route ranks with the same signals, fusion and reorder as the chat path but
+**without the chat path's strict relevance floor**, so a memory the chat's floor refuses can read as
+`ranked-low` or `moved-down` here; (2) it has **no standing profile**, so a fact the chat supplied
+through the profile is `supplied` by the chat but not by the route; (3) it uses the route's **default
+limit of 12 included memories**, so `ranked-out` is a route-limit statement, not the chat's cut. The
+route also records its usual `memory:retrieved` audit event; it bumps no access counter.
 
 ## Corpus
 

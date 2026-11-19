@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { mapSequential } from "./corpus/sequence.mjs";
 import { awaitLearning, captureTotal, listMemories, readCaptures } from "./instance.mjs";
 import { retainBodiesFor } from "./isolation.mjs";
+import { traceRecall } from "./recall-trace.mjs";
 import { matchesTermGroups, scoreProbe, scoreStore } from "./score.mjs";
 import { countBy, seedLoss } from "./seed-plan.mjs";
 
@@ -299,6 +300,12 @@ export function askedQuestion(scenario, probe) {
   return `${probe.question}${ANSWER_LANGUAGE_REQUEST[probe.language ?? scenario.language] ?? ""}`;
 }
 
+// The recall trace (#4205) is requested explicitly, and has nothing to attribute for an arm without
+// memory or for a probe that is not an answer probe.
+function tracesRecall(context, probe) {
+  return context.recallTrace === true && context.arm !== "off" && probe.expect.kind === "answer";
+}
+
 async function runProbes(scenario, instance, context) {
   context.fixture?.setAnswerMode("echo");
   const rows = [];
@@ -306,15 +313,28 @@ async function runProbes(scenario, instance, context) {
     const chatId = await createChat(instance, `probe ${scenario.id} ${probe.id}`);
     const asked = askedQuestion(scenario, probe);
     const sent = await sendTurn(instance, chatId, asked, context, context.arm !== "off");
-    const score = scoreProbe(scenario, probe, sent.answer, sent.supplied, instance.seed?.links);
-    rows.push({
+    const links = instance.seed?.links;
+    const score = scoreProbe(scenario, probe, sent.answer, sent.supplied, links);
+    const row = {
       ...score,
       retrievedCount: sent.retrieved.length,
       profileCount: sent.profileCount,
       elapsedMs: sent.elapsedMs,
       suppliedIds: sent.supplied.map((entry) => entry.memoryId),
       ...(context.retainBodies ? { answer: sent.answer } : {}),
-    });
+    };
+    // Only after the answer was received, so the trace cannot influence it.
+    if (tracesRecall(context, probe))
+      row.recallTrace = await traceRecall({
+        instance,
+        scenario,
+        probe,
+        row,
+        chatId,
+        queryText: asked,
+        links,
+      });
+    rows.push(row);
   }
   context.fixture?.setAnswerMode("ok");
   return rows;
@@ -386,7 +406,8 @@ function seedOutcome(scenario, instance, memories) {
 
 /**
  * Runs one scenario for one arm on a fresh instance and returns the scored evidence. `requested`
- * carries arm, memoryMode, budgetTokens, confirmForget, retainBodies, turnTimeoutMs, learning
+ * carries arm, memoryMode, budgetTokens, confirmForget, retainBodies, recallTrace (`true` records the
+ * recall trace of every answer probe, see recall-trace.mjs), turnTimeoutMs, learning
  * (quietMs, maxMs, pendingLearner) and, offline, the scripted model fixture. Bodies are retained
  * only when the scenario is not anchor text, whatever the run asked for (the labelling pass,
  * `labelPass`, excepted): real conversations leave counts and verdicts, never text.

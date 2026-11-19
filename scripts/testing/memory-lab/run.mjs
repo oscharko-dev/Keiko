@@ -82,6 +82,7 @@ const OPTIONS = {
   "label-pass": { type: "boolean", default: false },
   embedder: { type: "boolean" },
   maintenance: { type: "boolean" },
+  "recall-trace": { type: "boolean", default: true },
   "quiet-ms": { type: "string", default: "1500" },
   "max-wait-ms": { type: "string", default: "60000" },
   "learner-grace-ms": { type: "string", default: "3000" },
@@ -109,6 +110,7 @@ function usage() {
     "  --no-embedder  measure without an embedding model (live: removed from the configuration the instances get)",
     "  --embedder  offline: add the scripted hashed-word embedding model; live: require the configuration's own",
     "  --no-maintenance  switch the product's automatic memory maintenance off for every instance (KEIKO_MEMORY_AUTO_MAINTAIN=0)",
+    "  --no-recall-trace  record no recall trace on answer probes (default: on; sealed runs never record it)",
     "  --quiet-ms N  --max-wait-ms N  --learner-grace-ms N  --turn-timeout-ms N",
     "  live: --config <gateway.json> --answer-model <id> --learn-model <id>",
     "  --fail-on-hard-counters  exit 4 when a product-arm hard counter is above zero (the pre-PR run)",
@@ -231,6 +233,8 @@ export function normalizeOptions(raw) {
     labelPass,
     embedderMode: embedderMode(values.embedder),
     maintenance: values.maintenance === false ? "off" : "on",
+    // The trace names memories and facts, so a sealed run never records it, whatever was asked.
+    recallTrace: source.holdout === undefined && values["recall-trace"] !== false,
     quietMs: integer(values["quiet-ms"], "--quiet-ms"),
     maxWaitMs: integer(values["max-wait-ms"], "--max-wait-ms"),
     graceMs: integer(values["learner-grace-ms"], "--learner-grace-ms"),
@@ -293,6 +297,7 @@ function runContext(options, arm, fixture, instance) {
     budgetTokens: options.budgetTokens,
     confirmForget: true,
     retainBodies: options.retainBodies,
+    recallTrace: options.recallTrace,
     labelPass: options.labelPass,
     turnTimeoutMs: options.turnTimeoutMs,
     learning: {
@@ -539,6 +544,8 @@ function writeEvidence(options, corpus, results, gateway) {
     embeddingModelIds: options.embeddingModelIds,
     // Whether the product's automatic maintenance was on: it ages, archives and removes records.
     maintenance: options.maintenance,
+    // Whether answer probes carry a recall trace (an extra record; it never changes a score).
+    recallTrace: options.recallTrace ? "on" : "off",
     holdout: corpus.sealed,
     // `sealed` is what the judge checks before it accepts a run as the holdout part of a pair.
     sealed: corpus.sealed,

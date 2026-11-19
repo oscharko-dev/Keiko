@@ -59,7 +59,10 @@ function recordStore(card, prefix, result) {
 function probeEvidence(probe) {
   const parts = Object.entries(probe)
     .filter(
-      ([key]) => !["id", "kind", "passed", "elapsedMs", "answer", "suppliedIds"].includes(key),
+      ([key]) =>
+        !["id", "kind", "passed", "elapsedMs", "answer", "suppliedIds", "recallTrace"].includes(
+          key,
+        ),
     )
     .map(([key, value]) => `${key}=${String(value)}`);
   return `kind=${probe.kind} ${parts.join(" ")}`;

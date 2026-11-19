@@ -29,6 +29,8 @@ export const INSTRUMENT_FILES = Object.freeze([
   "isolation.mjs",
   "log-text.mjs",
   "progress.mjs",
+  "recall-stage.mjs",
+  "recall-trace.mjs",
   "report.mjs",
   "run.mjs",
   "scenario.mjs",

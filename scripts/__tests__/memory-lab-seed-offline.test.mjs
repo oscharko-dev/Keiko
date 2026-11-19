@@ -204,7 +204,17 @@ describe("the seeded demonstration scenarios", () => {
       expect(needs.seed.after.byStatus).toEqual({ accepted: 32, archived: 10 });
       const earlier = unit(root, "no-maintenance", "seed-earlier-value-en", "product");
       expect(earlier.seed.after).toMatchObject({ gone: 0, supersededRemoved: 0 });
-      expect(summary.failureClasses.byArm.product.total).toEqual({ "needed-memory-missing": 1 });
+      // The recall trace (on by default) says where the earlier value was lost: the record is still
+      // stored, but the product's retrieval admits no superseded record.
+      expect(manifest.metadata.recallTrace).toBe("on");
+      const traced = earlier.probes.find((probe) => probe.id === "before").recallTrace;
+      expect(traced.needed).toMatchObject([
+        { key: "earlier:format-before", suppliedByChat: false, stage: "not-admitted" },
+      ]);
+      expect(summary.failureClasses.byArm.product.total).toEqual({
+        "needed-memory-missing": 1,
+        "needed-not-admitted": 1,
+      });
     },
     RUN_TIMEOUT_MS,
   );

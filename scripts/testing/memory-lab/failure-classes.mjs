@@ -5,7 +5,16 @@
 // `forbiddenPresent`, `retrievedCount`, `neededNotSupplied`, ...), by the same rule for every run, so
 // two runs of different products or models list the same classes. Counts only, never a decimal.
 import { compareStrings } from "../../lib/compare-strings.mjs";
+import { RECALL_STAGES } from "./recall-stage.mjs";
 import { isFailedUnit } from "./unit-failure.mjs";
+
+// Where a needed memory that never reached the model was lost (#4205, recall-stage.mjs): one class per
+// stage, counted per needed fact, in addition to `needed-memory-missing` (which stays one per probe).
+// `supplied` is no failure: a fact the chat supplied is not among a probe's missing facts.
+const stageClass = (stage) => `needed-${stage}`;
+const NEEDED_STAGE_CLASSES = Object.freeze(
+  RECALL_STAGES.filter((stage) => stage !== "supplied").map(stageClass),
+);
 
 /** The closed list of classes, in the order a report names them. */
 export const FAILURE_CLASSES = Object.freeze([
@@ -19,6 +28,7 @@ export const FAILURE_CLASSES = Object.freeze([
   "seeded-record-lost",
   "relevant-memory-not-supplied",
   "needed-memory-missing",
+  ...NEEDED_STAGE_CLASSES,
   "supplied-answer-wrong",
   "forbidden-term-in-answer",
   "no-abstention",
@@ -121,10 +131,29 @@ function probeClass(probe) {
   }
 }
 
+// The stage of each needed fact that never reached the model, from the probe's recall trace. A probe
+// without a trace (the switch was off, or an older run) names no stage.
+function stageFailures(probe) {
+  const missing = new Set(probe.neededNotSupplied ?? []);
+  return (probe.recallTrace?.needed ?? [])
+    .filter(
+      (entry) => missing.has(entry.key) && NEEDED_STAGE_CLASSES.includes(stageClass(entry.stage)),
+    )
+    .map((entry) => ({
+      class: stageClass(entry.stage),
+      ref: `probe:${probe.id}:${entry.key}`,
+    }));
+}
+
 function probeFailures(probes) {
   return probes
     .filter((probe) => !probe.passed)
-    .map((probe) => ({ class: probeClass(probe), ref: `probe:${probe.id}` }));
+    .flatMap((probe) => {
+      const failure = { class: probeClass(probe), ref: `probe:${probe.id}` };
+      return failure.class === "needed-memory-missing"
+        ? [failure, ...stageFailures(probe)]
+        : [failure];
+    });
 }
 
 /**
