@@ -368,7 +368,10 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   stated change, and a statement that only adds ("auch", "also") never replaces. A claim of sameness that neither the lexical
   nor the semantic duplicate gate confirms stores nothing. A changed value is never a duplicate.
 - **Supersession** reuses the `supersedes` edge, the `superseded` status and the closed validity of
-  the human correction path, in one transaction with a precondition on the older fact. In every mode
+  the human correction path, in one transaction with a precondition on the older fact. A superseded
+  record is history (#4223): the maintenance pass never forgets it, even though its closed window has
+  ended, and only the person's own forget, or an operator's opt-in retention policy, deletes it. A
+  maintenance pass that finds a record whose AUTHOR-STATED validity ended still forgets it. In every mode
   the correction replaces the old fact in that transaction; only under an operator restriction (D2)
   does the new fact wait as a `correction` with its `corrects` edge, written in the same single
   transaction. A learned fact replaces only what Keiko learned in the person's own scope:
@@ -452,7 +455,9 @@ bodies or user text.
   until project memory (step 3) decides otherwise.
 - The Journal shows a forget only when a person asked for it (Memory Center, a clear statement in a
   Chat). The `memory:forgotten` audit event carries the tombstone's `forgetterSurface`, so retention
-  and maintenance tombstones never read as the person's decision.
+  and maintenance tombstones never read as the person's decision. For the same reason a tombstone
+  whose surface is `memory-maintenance` stays in the ledger but never refuses a statement, exact or
+  semantic (#4223): only a forget a person or the Memory window asked for suppresses relearning.
 - Every capture decision the Journal shows is also one registered `memory.capture.decision`
   Activity Log line under the deciding turn's or request's correlation, written by the same
   writer: closed outcome, reason, effective mode, surface, scope kind and source kind, never a

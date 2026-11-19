@@ -992,6 +992,25 @@ describe("handleRunMaintenance — un-reviewed proposals are expired, never hard
   });
 });
 
+describe("a superseded record is history, not an expired belief (#4223)", () => {
+  const SCOPE = { kind: "user", userId: "u-1" as unknown as MemoryUserId } as const;
+
+  it("keeps a superseded record with its closed window and writes no tombstone", () => {
+    const vault = makeVault();
+    insert(vault, {
+      id: "m",
+      status: "superseded",
+      confidence: 0.9,
+      createdAt: Date.now() - DAY,
+      validUntil: Date.now() - 1,
+    });
+    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    expect(counts(result).forgotten).toBe(0);
+    expect(vault.getMemory(mid("m"))?.status).toBe("superseded");
+    expect(vault.listTombstonesByScope(SCOPE)).toHaveLength(0);
+  });
+});
+
 const HOUR = 3_600_000;
 const NOW = 1_600_000_000_000;
 

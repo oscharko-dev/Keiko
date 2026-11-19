@@ -48,6 +48,7 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { handleAcceptMemoryProposal } from "./memory-handlers.js";
+import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
 import {
   MEMORY_LEARN_CHANGE_BASES,
   MEMORY_LEARN_DROP_REASONS,
@@ -1360,5 +1361,106 @@ describe("learning leaves body-free evidence", () => {
     });
     const text = sink.lines().join("\n");
     for (const word of ["PostgreSQL", "Hamburg"]) expect(text).not.toContain(word);
+  });
+});
+
+// #4223: a corrected fact stays as history; maintenance never forgets it and the person's own later
+// statement of it is never refused.
+function maintain(vault: MemoryVaultStore): void {
+  const ctx = {
+    req: {} as RouteContext["req"],
+    res: { socket: new Socket() } as unknown as RouteContext["res"],
+    params: {},
+    url: new URL("http://127.0.0.1/api/memory/maintenance"),
+    correlationId: undefined,
+  } as RouteContext;
+  expect(handleRunMaintenance(ctx, makeDeps(vault, [])).status).toBe(200);
+}
+
+function seedTombstone(
+  vault: MemoryVaultStore,
+  ctx: ConversationMemoryRuntimeContext,
+  body: string,
+  forgetterSurface: string,
+): void {
+  vault.recordForgottenStatements(
+    conversationMemoryScopes(ctx).map((scope) => ({
+      scope,
+      body,
+      forgetterSurface,
+      reviewerId: "local-operator",
+      reason: "validity-expired",
+      nowMs: Date.now(),
+    })) as never,
+  );
+}
+
+describe("a corrected fact stays as history (#4223)", () => {
+  const first = "Ich bevorzuge Tabs über Spaces";
+  const second = "Ich bevorzuge Spaces über Tabs";
+
+  it("keeps the superseded record and its edge through a maintenance pass", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    await say(vault, ctx, second, [stated(second)]);
+    const [before] = recordsWith(vault, ctx, "superseded");
+    if (before === undefined) throw new Error("expected the superseded fact");
+
+    maintain(vault);
+
+    const after = vault.getMemory(before.id);
+    expect(after?.status).toBe("superseded");
+    expect(after?.validity.validUntil).toBeDefined();
+    expect(vault.listOutgoingEdges(before.id).map((edge) => edge.kind)).toEqual(["supersedes"]);
+    const tombstones = conversationMemoryScopes(ctx).flatMap((scope) =>
+      vault.listTombstonesByScope(scope),
+    );
+    expect(tombstones).toEqual([]);
+  });
+
+  it("learns an earlier value again when the person returns to it in the same words", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    await say(vault, ctx, second, [stated(second)]);
+    maintain(vault);
+
+    await say(vault, ctx, first, [stated(first)]);
+
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+    expect(recordsWith(vault, ctx, "superseded").map((record) => record.body)).toContain(second);
+  });
+
+  it("is not refused by a maintenance tombstone left by an earlier version", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    seedTombstone(vault, ctx, first, "memory-maintenance");
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+  });
+
+  it("is still refused by a tombstone the person's own forget wrote", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    seedTombstone(vault, ctx, first, "memory-center");
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([]);
+  });
+
+  it("never sends the earlier value to an answer once the fact changed", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    await say(vault, ctx, second, [stated(second)]);
+    maintain(vault);
+
+    const request = {
+      content: "Was bevorzuge ich bei Tabs und Spaces?",
+      memory: { enabled: true, budgetTokens: 900, context: {} },
+    } as unknown as SendDesktopChatRequest;
+    const text = suppliedMemoryText(await buildMemoryResult(request, makeDeps(vault, []), ctx));
+    expect(text).toContain(second);
+    expect(text).not.toContain(first);
   });
 });

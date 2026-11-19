@@ -42,6 +42,7 @@ import type {
   MemoryType,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  MEMORY_MAINTENANCE_FORGETTER_SURFACE,
   MemoryStorageError,
   MemoryStoragePreconditionError,
   type MemoryVaultStore,
@@ -384,11 +385,18 @@ function applyForgets(
   for (const forget of forgets) {
     const record = byId.get(forget.id);
     if (record === undefined) continue;
-    if (record.status === "accepted" || record.status === "archived") continue;
+    // Accepted and archived are never forgotten here; a superseded record is history (#4223).
+    if (
+      record.status === "accepted" ||
+      record.status === "archived" ||
+      record.status === "superseded"
+    ) {
+      continue;
+    }
     try {
       vault.deleteMemory(forget.id, {
         tombstone: true,
-        forgetterSurface: "memory-maintenance",
+        forgetterSurface: MEMORY_MAINTENANCE_FORGETTER_SURFACE,
         reason: forget.reason,
         nowMs,
       });

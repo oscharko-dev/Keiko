@@ -2114,6 +2114,42 @@ describe("memory handlers", () => {
     expect(JSON.stringify(tombstones)).not.toContain("package-manager preference");
   });
 
+  // #4223: history is deletable by the person, and that deletion refuses a later relearning.
+  it("lets the person forget a superseded record, and the forget refuses its body", async () => {
+    const vault = makeVault();
+    const now = Date.now();
+    vault.insertMemory(
+      makeMemory("memory-history-1", "Ich bevorzuge Tabs über Spaces", {
+        status: "superseded",
+        validity: { validFrom: now - 1_000, validUntil: now - 1 },
+      }),
+    );
+
+    const result = await handleForgetMemory(
+      makeCtx(
+        "/api/memory/memory-history-1/forget",
+        { acknowledged: true, reason: "user-request" },
+        { id: "memory-history-1" },
+      ),
+      makeDeps({
+        memoryVault: vault,
+        memoryAuthorization: {
+          reviewerId: reviewerId("operator-a"),
+          authorizedScopes: () => [{ kind: "global" }],
+        },
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(vault.getMemory(memoryId("memory-history-1"))).toBeUndefined();
+    const [tombstone] = vault.listTombstonesByScope({ kind: "global" });
+    expect(tombstone?.originalStatus).toBe("superseded");
+    expect(tombstone?.forgetterSurface).not.toBe("memory-maintenance");
+    expect(
+      vault.hasForgetTombstoneForBody({ kind: "global" }, "Ich bevorzuge Tabs über Spaces"),
+    ).toBe(true);
+  });
+
   it("does not persist browser-supplied forget reason text into tombstones", async () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("memory-forget-sensitive-reason", "body can be forgotten"));

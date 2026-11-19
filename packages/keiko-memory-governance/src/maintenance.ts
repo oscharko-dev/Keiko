@@ -212,7 +212,10 @@ function shouldForget(
   if (
     isValidityExpired(c.record, nowMs) &&
     c.record.status !== "accepted" &&
-    c.record.status !== "archived"
+    c.record.status !== "archived" &&
+    // A superseded record's window was closed by its replacement, not by the person's own end date:
+    // it is history that keeps "what did we believe as of T" answerable, never an expired belief.
+    c.record.status !== "superseded"
   ) {
     // An author-declared end date on the belief itself, not an un-answered review item.
     return "validity-expired";

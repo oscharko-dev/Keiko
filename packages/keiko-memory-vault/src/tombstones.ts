@@ -29,6 +29,13 @@ import { cachedPrepare } from "./statements.js";
 import { sanitizeMemoryTombstoneReason } from "./tombstone-reason.js";
 import { BYTES_PER_FLOAT32, decodeVectorLE, encodeVectorLE } from "./embeddings.js";
 
+// The forgetter surface of an unattended maintenance pass. A tombstone with this surface records
+// that Keiko itself removed a record, never that a person asked to forget the fact, so it is a
+// ledger entry only and never refuses a later statement (#4223). Fixed, never user-supplied, so it
+// is safe to inline into the prepared SQL below.
+export const MEMORY_MAINTENANCE_FORGETTER_SURFACE = "memory-maintenance";
+const PERSON_REFUSAL_ONLY = `AND forgetter_surface <> '${MEMORY_MAINTENANCE_FORGETTER_SURFACE}'`;
+
 interface TombstoneRow {
   readonly id: string;
   readonly memory_id: string;
@@ -62,6 +69,7 @@ const LIST_FORGET_VECTOR_PAGE_BY_SCOPE_SQL = `
 SELECT id, forgotten_at, body_embedding FROM memory_tombstones
 WHERE scope_kind = ? AND scope_coordinate = ? AND body_embedding IS NOT NULL
   ${MATCH_EMBEDDING_SPACE}
+  ${PERSON_REFUSAL_ONLY}
 ORDER BY forgotten_at DESC, id ASC
 LIMIT ?
 `;
@@ -70,6 +78,7 @@ const LIST_FORGET_VECTOR_PAGE_AFTER_BY_SCOPE_SQL = `
 SELECT id, forgotten_at, body_embedding FROM memory_tombstones
 WHERE scope_kind = ? AND scope_coordinate = ? AND body_embedding IS NOT NULL
   ${MATCH_EMBEDDING_SPACE}
+  ${PERSON_REFUSAL_ONLY}
   AND (forgotten_at < ? OR (forgotten_at = ? AND id > ?))
 ORDER BY forgotten_at DESC, id ASC
 LIMIT ?
@@ -101,6 +110,7 @@ WHERE scope_kind = ? AND scope_coordinate = ? AND body_hash = ?
 const SELECT_SUPPRESSION_BODY_HASHES_BY_SCOPE_SQL = `
 SELECT body_hash FROM memory_tombstones
 WHERE scope_kind = ? AND scope_coordinate = ? AND body_hash IN (?, ?)
+  ${PERSON_REFUSAL_ONLY}
 `;
 
 // `reason` is the only free-text tombstone column, so it is the only sealed one (ADR-0035).

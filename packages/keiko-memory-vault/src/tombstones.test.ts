@@ -17,6 +17,7 @@ import {
   insertTombstoneRow,
   listTombstonesByScopeRows,
   listTombstonesPageRows,
+  MEMORY_MAINTENANCE_FORGETTER_SURFACE,
   selectForgetSuppressionBodyHashPresence,
 } from "./tombstones.js";
 import { memoryBodySuppressionHash } from "./body-fingerprint.js";
@@ -132,6 +133,54 @@ describe("tombstones", () => {
       ).toThrow(MemoryStorageValidationError);
     } finally {
       vault.close();
+    }
+  });
+
+  // #4223: a tombstone that unattended maintenance wrote records that Keiko removed a record, not
+  // that the person asked to forget the fact. It stays in the ledger and never refuses a statement.
+  it("never lets a maintenance tombstone refuse a statement, exact or semantic", () => {
+    const db = openTestDb();
+    try {
+      const hash = memoryBodySuppressionHash("Ich bevorzuge Tabellen");
+      const vector = Float32Array.from([1, 0, 0]);
+      insertTombstoneRow(
+        db,
+        makeTombstone({
+          id: "by-maintenance",
+          memoryId: "m-1" as MemoryId,
+          bodyHash: hash,
+          forgetterSurface: MEMORY_MAINTENANCE_FORGETTER_SURFACE,
+        }),
+        TEST_CIPHER,
+        vector,
+      );
+      expect(selectForgetSuppressionBodyHashPresence(db, userScope, hash, hash).current).toBe(
+        false,
+      );
+      expect(
+        hasSemanticallySimilarForgetTombstoneRow(db, userScope, TEST_CIPHER, vector, 0.95),
+      ).toBe(false);
+      expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER).map((row) => row.id)).toEqual([
+        "by-maintenance",
+      ]);
+
+      insertTombstoneRow(
+        db,
+        makeTombstone({
+          id: "by-person",
+          memoryId: "m-2" as MemoryId,
+          bodyHash: hash,
+          forgetterSurface: "memory-center",
+        }),
+        TEST_CIPHER,
+        vector,
+      );
+      expect(selectForgetSuppressionBodyHashPresence(db, userScope, hash, hash).current).toBe(true);
+      expect(
+        hasSemanticallySimilarForgetTombstoneRow(db, userScope, TEST_CIPHER, vector, 0.95),
+      ).toBe(true);
+    } finally {
+      db.close();
     }
   });
 
