@@ -413,7 +413,8 @@ describe("production coding repository handler composition", () => {
         path: "src/example.ts",
         startLine: 2,
         endLine: 2,
-        snippet: "export const parseConfig = true;\r",
+        // #4439: the CRLF terminator never reaches the persisted snippet.
+        snippet: "export const parseConfig = true;",
       },
     ]);
     const expected = {
