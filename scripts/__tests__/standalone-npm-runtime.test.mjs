@@ -22,6 +22,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // The two readers of the declaration: the CLI's (Windows gateway service setup) and the server's
 // (update preflight).
 import { managedOutsideApp } from "../../packages/keiko-cli/src/portable-management.ts";
+// The lifecycle owner's own fence, which the folder launcher's starts and Stops are ordered by.
+import {
+  STOP_SUPERSEDED_EXIT_CODE as CLI_STOP_SUPERSEDED,
+  checkStopFence,
+  clearLaunchOrder,
+  recordLaunchOrder,
+} from "../../packages/keiko-cli/dist/launch-order.js";
 // The gateway's own loader, whose key variables the export must name alike.
 import { parseGatewayConfig } from "../../packages/keiko-model-gateway/dist/index.js";
 import {
@@ -31,6 +38,7 @@ import {
 
 import {
   LauncherRefusal,
+  STOP_SUPERSEDED_EXIT_CODE,
   acquireInstallLock,
   closeInstallLock,
   credentialScope,
@@ -57,11 +65,11 @@ import {
   npmCliCandidates,
   npmEnv,
   npmLogsDir,
+  orderClock,
   ownedLogsDir,
   privateFileAccess,
   publishPrivateFile,
   readHidden,
-  recordStartLaunch,
   refuseForeignInstallTarget,
   releaseInstallLock,
   removeInstallLock,
@@ -71,9 +79,7 @@ import {
   saveConfig,
   start,
   startArgs,
-  startGeneration,
   stateDir,
-  stateGeneration,
   stop,
   teamConfig,
   tokenInput,
@@ -90,6 +96,9 @@ const tempRoots = [];
 // that still has a running process number is rewritten, unless the test froze the holders.
 const clock = { renewing: true, now: 0, last: 0, writes: 0, frozen: new Set() };
 const realRenewalStart = lockRenewal.start;
+// Starts and Stops are ordered by the wall clock. The tests give them one that moves on with every
+// reading, so the order in which a test makes things happen is the order of their times.
+const wall = { now: 0 };
 
 function renewEntries(dir, pattern) {
   const names = existsSync(dir) ? readdirSync(dir) : [];
@@ -118,6 +127,8 @@ beforeEach(() => {
     renewHolders(dir);
   });
   vi.spyOn(lockRenewal, "start").mockImplementation(() => () => undefined);
+  wall.now = 1_800_000_000_000;
+  vi.spyOn(orderClock, "now").mockImplementation(() => (wall.now += 1));
 });
 
 afterEach(() => {
@@ -224,6 +235,54 @@ function heldByTest(dir, keep, extra = {}) {
 // own command.
 function commandOf(call) {
   return call[1].includes("ci") ? "ci" : call[1][1];
+}
+
+// The value after a flag of a command line.
+function flagValue(args, flag) {
+  const at = args.indexOf(flag);
+  return at === -1 ? undefined : args[at + 1];
+}
+
+// Keiko's command line as the folder launcher meets it. A start opens Keiko and records its order;
+// a fenced stop asks the lifecycle owner's own fence (launch-order.ts) whether a start that began
+// after the Stop opened Keiko, and then leaves it open. Folders given the same data folder share
+// what it records. The hooks run inside a start or stop, before it takes effect: a start or
+// takeover that the lifecycle guard lets in first.
+function lifecycleCli({ beforeStart = () => undefined, beforeStop = () => undefined } = {}) {
+  const cli = { commands: [], running: true };
+  cli.run = vi.fn((_node, args) => {
+    const [, command] = args;
+    const state = flagValue(args, "--state-dir");
+    mkdirSync(state, { recursive: true });
+    if (command === "start") {
+      beforeStart();
+      cli.commands.push(command);
+      cli.running = true;
+      const order = flagValue(args, "--launch-order");
+      if (order !== undefined) recordLaunchOrder(state, Number(order), undefined);
+      return { status: 0 };
+    }
+    beforeStop();
+    cli.commands.push(command);
+    const fence = flagValue(args, "--unless-launched-after");
+    if (cli.running && fence !== undefined) {
+      if (checkStopFence(state, Number(fence), undefined) === "superseded") {
+        return { status: CLI_STOP_SUPERSEDED };
+      }
+    }
+    cli.running = false;
+    clearLaunchOrder(state, undefined);
+    return { status: 0 };
+  });
+  // A start that holds `lock` opening Keiko, as the launcher's own start does.
+  cli.open = (root, env, lock) =>
+    cli.run(process.execPath, [
+      keikoCliPath(root),
+      ...startArgs(root, env),
+      "--launch-order",
+      String(lock.orderedAt),
+    ]);
+  return cli;
 }
 
 describe("the npm package start", () => {
@@ -770,7 +829,12 @@ describe("the npm package start", () => {
       expect(run).toHaveBeenCalledOnce();
       const [node, args, options] = run.mock.calls[0];
       expect(node).toBe(process.execPath);
-      expect(args).toEqual([keikoCliPath(root), ...startArgs(root, env)]);
+      expect(args).toEqual([
+        keikoCliPath(root),
+        ...startArgs(root, env),
+        "--launch-order",
+        expect.stringMatching(/^\d+$/u),
+      ]);
       expect(options.env.KEIKO_PORTABLE_MANAGEMENT).toBe("organization-managed");
       // A Keiko that ended by a signal carries no exit code; the start reports a failure.
       expect(start(root, nodeDir, env, () => ({ status: null }))).toBe(1);
@@ -807,12 +871,17 @@ describe("the npm package start", () => {
 
       expect(start(root, nodeDir, env, run)).toBe(0);
       expect(run).toHaveBeenCalledTimes(2);
-      expect(run.mock.calls[1][1]).toEqual([keikoCliPath(root), ...startArgs(root, env)]);
+      expect(run.mock.calls[1][1]).toEqual([
+        keikoCliPath(root),
+        ...startArgs(root, env),
+        "--launch-order",
+        expect.stringMatching(/^\d+$/u),
+      ]);
       expect(existsSync(installLockPath(root))).toBe(false);
       expect(lockLeftovers(root)).toEqual([]);
       // The start says itself that Keiko is open: the start file prints only a failure.
       expect(log).toHaveBeenCalledWith(
-        "Keiko is running in your browser. You can close this window.",
+        "Keiko is running. The lines above say whether it opened in your browser. You can close this window; Keiko keeps running.",
       );
     });
 
@@ -838,7 +907,7 @@ describe("the npm package start", () => {
       expect(log).toHaveBeenCalledWith(
         expect.stringMatching(/^Another start of this folder is opening Keiko\./u),
       );
-      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/running in your browser/u));
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^Keiko is running\./u));
       expect(acquireInstallLock(root)).toBeUndefined();
       expect(releaseInstallLock(lock)).toBe(false);
       expect(existsSync(installLockPath(root))).toBe(false);
@@ -998,7 +1067,11 @@ describe("the npm package start", () => {
       const lock = acquireInstallLock(root);
       expect(requestStop(root)).toBe(true);
 
-      expect(closeInstallLock(lock)).toEqual({ owned: true, stopRequested: true });
+      expect(closeInstallLock(lock)).toEqual({
+        owned: true,
+        stopRequested: true,
+        pressedAt: expect.any(Number),
+      });
       // Closed, not released: no other start takes the lock, and no further Stop is accepted by it.
       expect(acquireInstallLock(root)).toBeUndefined();
       expect(requestStop(root)).toBe(false);
@@ -1047,7 +1120,7 @@ describe("the npm package start", () => {
       expect(log).toHaveBeenCalledWith(
         "Keiko is still being loaded. It does not stay open: the start that loads it stops it.",
       );
-      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/running in your browser/u));
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^Keiko is running\./u));
     });
 
     it("keeps Keiko from opening when Stop comes while it is being loaded", () => {
@@ -1071,7 +1144,7 @@ describe("the npm package start", () => {
       expect(log).toHaveBeenCalledWith(
         "Keiko was stopped while it was being loaded and does not start. You can close this window.",
       );
-      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/running in your browser/u));
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^Keiko is running\./u));
       expect(existsSync(installLockPath(root))).toBe(false);
       expect(lockLeftovers(root)).toEqual([]);
     });
@@ -1098,7 +1171,7 @@ describe("the npm package start", () => {
       expect(log).toHaveBeenCalledWith(
         expect.stringMatching(/^Keiko was stopped again right after it opened/u),
       );
-      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/running in your browser/u));
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^Keiko is running\./u));
     });
 
     it("leaves a Stop after the loading start to stop the opened Keiko itself", () => {
@@ -1126,7 +1199,7 @@ describe("the npm package start", () => {
       );
 
       expect(start(root, nodeDir, env, run)).toBe(4);
-      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/running in your browser/u));
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^Keiko is running\./u));
       expect(existsSync(installLockPath(root))).toBe(false);
     });
 
@@ -1246,33 +1319,41 @@ describe("the npm package start", () => {
       expect(existsSync(installLockPath(root))).toBe(false);
     });
 
-    it("records a waiting Stop in a later start's lock and does not stop Keiko itself", () => {
+    it("leaves a later start's Keiko open instead of recording a waiting Stop in its lock", () => {
       // Coordinator refinement on PR #4464 (P2): a start that wins the lock after the closing one
       // let go reports Keiko running; the waiting Stop must not then end it behind that report.
-      quiet();
+      // That start began after the Stop was pressed, so the Stop is not recorded in its lock either
+      // (owner recheck, thread GMvW): the start opens Keiko and the Stop leaves it open.
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       const { root, env } = installFixture();
       installKeiko(root);
       const closing = acquireInstallLock(root);
       closeInstallLock(closing);
       const base = lockClock.sleep.getMockImplementation();
+      const cli = lifecycleCli();
       let later;
+      let closed;
       vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
         // Only once the Stop has been turned away and waits: the first observations are its own.
         if (later === undefined && clock.now >= 30_000) {
           removeInstallLock(closing);
           later = acquireInstallLock(root);
+        } else if (later !== undefined && closed === undefined && clock.now >= 60_000) {
+          cli.open(root, env, later);
+          closed = closeInstallLock(later);
+          removeInstallLock(later);
         }
         base(milliseconds, dir);
       });
-      const run = vi.fn(() => ({ status: 0 }));
 
-      expect(stop(root, env, run)).toBe(0);
-      expect(run).not.toHaveBeenCalled();
-      expect(readdirSync(installLockPath(root)).some((name) => name.startsWith("stop-"))).toBe(
-        true,
+      expect(stop(root, env, cli.run)).toBe(0);
+      // The Stop asked that start's lock while it held it, and was not recorded there.
+      expect(closed).toEqual({ owned: true, stopRequested: false });
+      expect(cli.commands).toEqual(["start", "stop"]);
+      expect(cli.running).toBe(true);
+      expect(log).toHaveBeenCalledWith(
+        expect.stringMatching(/^Keiko was started again while Stop/u),
       );
-      // That start does not leave Keiko open: it carries the recorded Stop out.
-      expect(releaseInstallLock(later)).toBe(true);
     });
 
     it("lets a start pressed while a Stop acts wait for that Stop and then open Keiko", () => {
@@ -1818,24 +1899,21 @@ describe("the npm package start", () => {
       const closing = acquireInstallLock(root);
       closeInstallLock(closing);
       const base = lockClock.sleep.getMockImplementation();
-      const commands = [];
-      const run = vi.fn((_node, args) => {
-        commands.push(args[1]);
-        return { status: 0 };
-      });
+      const cli = lifecycleCli();
       let started;
       vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
         if (started === undefined && clock.now >= 30_000) {
           removeInstallLock(closing);
-          started = start(root, nodeDir, env, run);
+          started = start(root, nodeDir, env, cli.run);
         }
         base(milliseconds, dir);
       });
 
-      expect(stop(root, env, run)).toBe(0);
+      expect(stop(root, env, cli.run)).toBe(0);
       expect(started).toBe(0);
-      expect(commands).toEqual(["start"]);
-      expect(startGeneration(root)).toMatch(/^\d+-[0-9a-f]+\n$/u);
+      // The Stop reaches the command line, whose fence leaves B's Keiko open.
+      expect(cli.commands).toEqual(["start", "stop"]);
+      expect(cli.running).toBe(true);
       expect(log).toHaveBeenCalledWith(
         expect.stringMatching(/^Keiko was started again while Stop/u),
       );
@@ -1852,11 +1930,7 @@ describe("the npm package start", () => {
       const closing = acquireInstallLock(root);
       closeInstallLock(closing);
       const base = lockClock.sleep.getMockImplementation();
-      const commands = [];
-      const run = vi.fn((_node, args) => {
-        commands.push(args[1]);
-        return { status: 0 };
-      });
+      const cli = lifecycleCli();
       let pressed = false;
       let started;
       vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
@@ -1864,31 +1938,30 @@ describe("the npm package start", () => {
           // The first wait is the Stop's own question to the lock: A lets go and B opens Keiko.
           pressed = true;
           removeInstallLock(closing);
-          started = start(root, nodeDir, env, run);
+          started = start(root, nodeDir, env, cli.run);
         }
         base(milliseconds, dir);
       });
 
-      expect(stop(root, env, run)).toBe(0);
+      expect(stop(root, env, cli.run)).toBe(0);
       expect(started).toBe(0);
-      expect(commands).toEqual(["start"]);
+      expect(cli.commands).toEqual(["start", "stop"]);
+      expect(cli.running).toBe(true);
       expect(log).toHaveBeenCalledWith(
         expect.stringMatching(/^Keiko was started again while Stop/u),
       );
     });
 
-    // The five owner findings on PR #4464 that bind a Stop to the start it saw, to a launch that
-    // really happened, and to the lock (or a handoff a start must honour) it acts under.
+    // The owner findings on PR #4464 that order a Stop against the starts around it: by the time a
+    // start began to take its lock and the time the Stop was pressed, decided by Keiko's command
+    // line under its lifecycle guard, and by the lock (or a handoff a start must honour) it acts
+    // under.
     describe("ordering of a Stop against the starts around it", () => {
       function stopFixture() {
         const fixture = installFixture();
         installKeiko(fixture.root, `${lockfileDigest(fixture.root)}\n`);
-        const commands = [];
-        const run = vi.fn((_node, args) => {
-          commands.push(args[1]);
-          return { status: 0 };
-        });
-        return { ...fixture, commands, run };
+        const cli = lifecycleCli();
+        return { ...fixture, cli, commands: cli.commands, run: cli.run };
       }
 
       // The stop handoffs a Stop left in system/.
@@ -1909,23 +1982,47 @@ describe("the npm package start", () => {
         // during the Stop's observation and recorded its token, so the Stop took that earlier
         // start for a later one and did not stop Keiko.
         const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-        const { root, env, commands, run } = stopFixture();
+        const { root, env, cli } = stopFixture();
         const holder = acquireInstallLock(root);
         const base = lockClock.sleep.getMockImplementation();
         let finished = false;
         vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
           if (!finished) {
             finished = true;
+            cli.open(root, env, holder);
             closeInstallLock(holder);
-            recordStartLaunch(root, holder);
             removeInstallLock(holder);
           }
           base(milliseconds, dir);
         });
 
-        expect(stop(root, env, run)).toBe(0);
-        expect(commands).toEqual(["stop"]);
+        expect(stop(root, env, cli.run)).toBe(0);
+        expect(cli.commands).toEqual(["start", "stop"]);
+        expect(cli.running).toBe(false);
         expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^Keiko was started again/u));
+      });
+
+      it("leaves Keiko open when a start that began after the press takes the lock before the Stop", () => {
+        // Owner recheck on PR #4464 (thread GMvW), the reverse of the case above: nobody held the
+        // lock when Stop was pressed, and a start that began later took the free lock, opened Keiko
+        // and let go before the Stop took it. The Stop took that start for one it had seen and
+        // stopped its Keiko.
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const { root, nodeDir, env, cli } = stopFixture();
+        let later;
+        const pause = (step) => {
+          // The Stop is about to publish its own lock: a start that began after the press wins.
+          if (step !== "publish" || later !== undefined) return;
+          later = start(root, nodeDir, env, cli.run);
+        };
+
+        expect(stop(root, env, cli.run, pause)).toBe(0);
+        expect(later).toBe(0);
+        expect(cli.commands).toEqual(["start", "stop"]);
+        expect(cli.running).toBe(true);
+        expect(log).toHaveBeenCalledWith(
+          expect.stringMatching(/^Keiko was started again while Stop/u),
+        );
       });
 
       it("keeps a waiting Stop when a later start never launched Keiko", () => {
@@ -1951,7 +2048,7 @@ describe("the npm package start", () => {
         expect(stop(root, env, run)).toBe(0);
         expect(later).toBe(1);
         expect(commands).toEqual(["stop"]);
-        expect(startGeneration(root)).toBe("");
+        expect(run.mock.calls[0][1]).toContain("--unless-launched-after");
       });
 
       it("lets a start that comes while a Stop acts on the npm-only lock wait for that Stop", () => {
@@ -2015,8 +2112,8 @@ describe("the npm package start", () => {
       });
 
       it("withdraws its handoff and acts under the lock when a start takes the lock meanwhile", () => {
-        quiet();
-        const { root, env, run } = stopFixture();
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const { root, env, cli } = stopFixture();
         npmOnlyLock(root);
         let later;
         const pause = (step) => {
@@ -2026,28 +2123,43 @@ describe("the npm package start", () => {
           rmSync(installLockPath(root), { recursive: true, force: true });
           later = acquireInstallLock(root);
         };
+        const base = lockClock.sleep.getMockImplementation();
+        let closed;
+        vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+          // That start began after the press, so the Stop asks its lock in vain until it lets go.
+          if (later !== undefined && closed === undefined && clock.now >= 45_000) {
+            cli.open(root, env, later);
+            closed = closeInstallLock(later);
+            removeInstallLock(later);
+          }
+          base(milliseconds, dir);
+        });
 
-        // The start holds the lock now, so the Stop is recorded in it and that start carries it out.
-        expect(stop(root, env, run, pause)).toBe(0);
+        expect(stop(root, env, cli.run, pause)).toBe(0);
         expect(handoffsOf(root)).toEqual([]);
-        expect(run).not.toHaveBeenCalled();
-        expect(releaseInstallLock(later)).toBe(true);
+        expect(closed).toEqual({ owned: true, stopRequested: false });
+        expect(cli.commands).toEqual(["start", "stop"]);
+        expect(cli.running).toBe(true);
+        expect(log).toHaveBeenCalledWith(
+          expect.stringMatching(/^Keiko was started again while Stop/u),
+        );
       });
 
-      it("does not stop the Keiko a start opened before the handoff was written", () => {
+      it("does not stop the Keiko a start opened after the press while the handoff was written", () => {
         const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-        const { root, env, run } = stopFixture();
+        const { root, env, cli } = stopFixture();
         npmOnlyLock(root);
         const pause = (step) => {
           if (step !== "handoff") return;
           rmSync(installLockPath(root), { recursive: true, force: true });
           const later = acquireInstallLock(root);
-          recordStartLaunch(root, later);
+          cli.open(root, env, later);
           removeInstallLock(later);
         };
 
-        expect(stop(root, env, run, pause)).toBe(0);
-        expect(run).not.toHaveBeenCalled();
+        expect(stop(root, env, cli.run, pause)).toBe(0);
+        expect(cli.commands).toEqual(["start", "stop"]);
+        expect(cli.running).toBe(true);
         expect(handoffsOf(root)).toEqual([]);
         expect(log).toHaveBeenCalledWith(expect.stringMatching(/^Keiko was started again/u));
       });
@@ -2062,20 +2174,74 @@ describe("the npm package start", () => {
         expect(handoffsOf(root)).toEqual([]);
       });
 
-      it("waits for the handoff of a Stop that acts and opens Keiko once it has ended", () => {
+      it("waits for the handoff of a Stop that acts and opens Keiko as soon as it has ended", () => {
+        // Owner finding on PR #4464 (thread OqMx): a handoff that went away normally was still
+        // watched to the end of its own 60-second observation, because the folder it lies in stayed.
         quiet();
         const { root, nodeDir, env, commands, run } = stopFixture();
         const handoff = join(root, "system", `keiko-npm-stop-handoff-${String(process.pid)}-0a`);
         writeFileSync(handoff, "");
         const base = lockClock.sleep.getMockImplementation();
         vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
-          if (clock.now >= 30_000) rmSync(handoff, { force: true });
+          // The Stop ends between two of its renewals.
+          if (clock.now >= 20_000) rmSync(handoff, { force: true });
           base(milliseconds, dir);
         });
 
         expect(start(root, nodeDir, env, run)).toBe(0);
         expect(commands).toEqual(["start"]);
-        expect(clock.now).toBeGreaterThanOrEqual(30_000);
+        expect(clock.now).toBeGreaterThanOrEqual(20_000);
+        expect(clock.now).toBeLessThan(21_000);
+      });
+
+      it("does not open Keiko when a Stop pressed after the start began still acts under its handoff", () => {
+        // Independent audit on PR #4464: a Stop pressed between a start's reading of its time and
+        // the rename of its lock saw no start, acted under a handoff, and the start opened Keiko
+        // once that handoff was gone, although the Stop was pressed after the start began.
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const { root, nodeDir, env, commands, run } = stopFixture();
+        let handoff;
+        let pressedAt;
+        const pause = (step) => {
+          if (step !== "publish" || handoff !== undefined) return;
+          pressedAt = wall.now + 1;
+          const time = pressedAt.toString(16).padStart(12, "0");
+          const name = `keiko-npm-stop-handoff-${String(process.pid)}-${time}${"0".repeat(16)}`;
+          handoff = join(root, "system", name);
+          writeFileSync(handoff, "");
+        };
+        const base = lockClock.sleep.getMockImplementation();
+        vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+          if (clock.now >= 20_000) rmSync(handoff, { force: true });
+          base(milliseconds, dir);
+        });
+
+        expect(start(root, nodeDir, env, run, pause)).toBe(0);
+        expect(commands).toEqual(["stop"]);
+        expect(flagValue(run.mock.calls[0][1], "--unless-launched-after")).toBe(String(pressedAt));
+        expect(log).toHaveBeenCalledWith(
+          "Keiko was stopped while it was being loaded and does not start. You can close this window.",
+        );
+        expect(existsSync(installLockPath(root))).toBe(false);
+      });
+
+      it("watches every handoff under the one wait and reclaims stale ones together", () => {
+        // Owner finding on PR #4464 (thread OqMx): three handoffs that did not renew were each
+        // watched for a minute in turn, so the start waited three minutes, beyond the 90 seconds a
+        // Stop is given.
+        quiet();
+        const { root, nodeDir, env, commands, run } = stopFixture();
+        for (const suffix of ["0a", "0b", "0c"]) {
+          const name = `keiko-npm-stop-handoff-${String(process.pid)}-${suffix}`;
+          writeFileSync(join(root, "system", name), "");
+          clock.frozen.add(name);
+        }
+
+        expect(start(root, nodeDir, env, run)).toBe(0);
+        expect(commands).toEqual(["start"]);
+        expect(handoffsOf(root)).toEqual([]);
+        expect(clock.now).toBeGreaterThanOrEqual(60_000);
+        expect(clock.now).toBeLessThan(61_000);
       });
 
       it("ends a start with a retryable message when a Stop still acts after the wait", () => {
@@ -2127,29 +2293,6 @@ describe("the npm package start", () => {
         );
       });
 
-      it("stops Keiko when the one running start records its launch and lets go between the Stop's two observations", () => {
-        // Owner finding on PR #4464 (thread GMvW): the Stop read the start record, then the lock
-        // listing. The one start that was running recorded its launch and released the lock between
-        // the two reads, so the Stop saw the earlier record and no holder, took that start for a
-        // later one and returned 0 without stopping Keiko.
-        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
-        const { root, env, commands, run } = stopFixture();
-        const holder = acquireInstallLock(root);
-        let finished = false;
-        const pause = (step) => {
-          if (step !== "observe" || finished) return;
-          finished = true;
-          closeInstallLock(holder);
-          recordStartLaunch(root, holder);
-          removeInstallLock(holder);
-        };
-
-        expect(stop(root, env, run, pause)).toBe(0);
-        expect(finished).toBe(true);
-        expect(commands).toEqual(["stop"]);
-        expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^Keiko was started again/u));
-      });
-
       it("keeps a waiting Stop when a later start's command line refuses before it opens anything", () => {
         // Owner finding on PR #4464 (thread GMvb): the command line was spawned but refused at
         // once (its lifecycle was busy) and ended with a failure. The launch was recorded because a
@@ -2173,7 +2316,6 @@ describe("the npm package start", () => {
         expect(busy).toHaveBeenCalledOnce();
         expect(later).toBe(1);
         expect(commands).toEqual(["stop"]);
-        expect(startGeneration(root)).toBe("");
       });
 
       it("does not carry out a Stop request when the start lost its lock while it was closing it", () => {
@@ -2203,6 +2345,38 @@ describe("the npm package start", () => {
         expect(taken).toBe(true);
         expect(commands).toEqual([]);
         expect(lockOwners(root)).toEqual([replacement]);
+      });
+
+      it("leaves the Keiko of a start that took the lock over after the ownership check open", () => {
+        // Owner recheck on PR #4464 (thread GMve): A had accepted a Stop and still owned its lock
+        // when it checked. B then took the expired lock over and opened Keiko before A's stop ran,
+        // and A's stop ended B's Keiko. The stop now carries the press, and B began after it.
+        const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+        const { root, nodeDir, env } = installFixture();
+        const npm = fakeNpm(root, true, () => requestStop(root));
+        let replacement;
+        const cli = lifecycleCli({
+          beforeStop: () => {
+            if (replacement !== undefined) return;
+            rmSync(installLockPath(root), { recursive: true, force: true });
+            replacement = acquireInstallLock(root);
+            cli.open(root, env, replacement);
+            removeInstallLock(replacement);
+          },
+        });
+        const run = vi.fn((node, args, options) =>
+          args.includes("ci") ? npm.run(node, args, options) : cli.run(node, args, options),
+        );
+
+        expect(start(root, nodeDir, env, run)).toBe(0);
+        expect(replacement).toBeDefined();
+        expect(cli.commands).toEqual(["start", "stop"]);
+        expect(cli.running).toBe(true);
+        expect(log).toHaveBeenCalledWith(
+          expect.stringMatching(
+            /^Stop was pressed while Keiko was being loaded, but Keiko was started again after that/u,
+          ),
+        );
       });
 
       it("opens Keiko after a Stop that closed the lock while a start observed an orphaned installation", () => {
@@ -2280,30 +2454,31 @@ describe("the npm package start", () => {
         expect(handoffsOf(root)).toEqual([]);
       });
 
-      it("leaves the newer start record alone when a former owner returns from its command line", () => {
+      it("keeps the newer start's order when a former owner returns from its command line", () => {
         // Owner finding on PR #4464 (thread M0FQ): the launcher lost its lock while its command line
-        // ran, a replacement start opened Keiko and recorded its token, and the old launcher then
-        // wrote its own token over it, so a waiting Stop ended the replacement's Keiko.
+        // ran, a replacement start opened Keiko, and the old launcher's later write put its own
+        // record back, so a waiting Stop ended the replacement's Keiko. The order is now written by
+        // the command line under its lifecycle guard, which keeps the later one.
         quiet();
-        const { root, nodeDir, env } = stopFixture();
+        const { root, nodeDir, env, state } = stopFixture();
         let replacement;
-        const run = vi.fn(() => {
-          rmSync(installLockPath(root), { recursive: true, force: true });
-          replacement = acquireInstallLock(root);
-          recordStartLaunch(root, replacement);
-          removeInstallLock(replacement);
-          return { status: 0 };
+        let pressedBetween;
+        const cli = lifecycleCli({
+          beforeStart: () => {
+            if (replacement !== undefined) return;
+            // A Stop pressed after the former owner began and before the replacement began.
+            pressedBetween = orderClock.now();
+            rmSync(installLockPath(root), { recursive: true, force: true });
+            replacement = acquireInstallLock(root);
+            cli.open(root, env, replacement);
+            removeInstallLock(replacement);
+          },
         });
 
-        expect(start(root, nodeDir, env, run)).toBe(0);
-        expect(run).toHaveBeenCalledOnce();
-        expect(startGeneration(root)).toBe(`${replacement.token}\n`);
+        expect(start(root, nodeDir, env, cli.run)).toBe(0);
+        expect(cli.commands).toEqual(["start", "start"]);
+        expect(checkStopFence(state, pressedBetween, undefined)).toBe("superseded");
       });
-
-      // The start records a folder or the shared data folder holds.
-      function recordsIn(dir) {
-        return readdirSync(dir).filter((name) => name.startsWith("keiko-npm-start-generation-"));
-      }
 
       it("does not stop the Keiko that a start of another folder opened while its Stop waited", () => {
         // Owner finding on PR #4464 (keiko-npm.mjs:1626): two extracted folders share one data
@@ -2328,13 +2503,39 @@ describe("the npm package start", () => {
 
         expect(stop(a.root, a.env, a.run)).toBe(0);
         expect(started).toBe(0);
-        expect(a.commands).toEqual(["start"]);
-        // Folder A recorded nothing itself: only the shared record names B's start.
-        expect(startGeneration(a.root)).toBe("");
-        expect(stateGeneration(a.state)).toBe(startGeneration(b.root));
+        // B's start and A's Stop meet at the command line of the data folder both use.
+        expect(a.commands).toEqual(["start", "stop"]);
+        expect(a.cli.running).toBe(true);
         expect(log).toHaveBeenCalledWith(
           expect.stringMatching(/^Keiko was started again while Stop/u),
         );
+      });
+
+      it("stops the Keiko a start of another folder opened while the Stop waited when it began first", () => {
+        quiet();
+        const a = stopFixture();
+        const b = installFixture();
+        installKeiko(b.root, `${lockfileDigest(b.root)}\n`);
+        const closing = acquireInstallLock(a.root);
+        closeInstallLock(closing);
+        // B began to take its lock before the Stop was pressed and opens Keiko while it waits.
+        const earlier = acquireInstallLock(b.root);
+        const base = lockClock.sleep.getMockImplementation();
+        let opened = false;
+        vi.spyOn(lockClock, "sleep").mockImplementation((milliseconds, dir) => {
+          if (!opened && clock.now >= 30_000) {
+            opened = true;
+            removeInstallLock(closing);
+            a.cli.open(b.root, a.env, earlier);
+            removeInstallLock(earlier);
+          }
+          base(milliseconds, dir);
+        });
+
+        expect(stop(a.root, a.env, a.run)).toBe(0);
+        expect(opened).toBe(true);
+        expect(a.commands).toEqual(["start", "stop"]);
+        expect(a.cli.running).toBe(false);
       });
 
       it("stops Keiko when no start of another folder came while its Stop waited", () => {
@@ -2352,68 +2553,69 @@ describe("the npm package start", () => {
         expect(a.commands).toEqual(["stop"]);
       });
 
-      it("keeps one owner-private start record per folder and in the shared data folder", () => {
+      it("passes the time its lock was taken and the time Stop was pressed to the command line", () => {
         quiet();
-        const { root, nodeDir, env, state, run } = stopFixture();
+        const { root, nodeDir, env, cli } = stopFixture();
 
-        expect(start(root, nodeDir, env, run)).toBe(0);
-        expect(start(root, nodeDir, env, run)).toBe(0);
+        expect(start(root, nodeDir, env, cli.run)).toBe(0);
+        const order = Number(flagValue(cli.run.mock.calls[0][1], "--launch-order"));
+        // The Stop's first reading of the clock is its press.
+        const pressed = wall.now + 1;
+        expect(stop(root, env, cli.run)).toBe(0);
+        const fence = Number(flagValue(cli.run.mock.calls[1][1], "--unless-launched-after"));
 
-        expect(recordsIn(join(root, "system"))).toHaveLength(1);
-        expect(recordsIn(state)).toHaveLength(1);
-        expect(stateGeneration(state)).toBe(startGeneration(root));
-        expect(startGeneration(root)).toMatch(/^\d+-[0-9a-f]+\n$/u);
-        expect(readdirSync(state).filter((name) => name.endsWith(".stage"))).toEqual([]);
-        if (process.platform !== "win32") {
-          expect(statSync(join(state, recordsIn(state)[0])).mode & 0o777).toBe(0o600);
-        }
+        expect(order).toBeLessThan(fence);
+        expect(fence).toBe(pressed);
+        expect(cli.commands).toEqual(["start", "stop"]);
+        expect(cli.running).toBe(false);
+        // The launcher reads the command line's "left open" answer as the command line defines it.
+        expect(STOP_SUPERSEDED_EXIT_CODE).toBe(CLI_STOP_SUPERSEDED);
       });
 
-      it("leaves the newer record alone when the lock is lost between its check and its publication", () => {
-        // Audit of PR #4464 (thread M0FQ): the former owner checked that it still held the lock,
-        // lost it, and its rename then replaced the record the replacement had published.
-        quiet();
+      it("carries the time a start began to take its lock in the lock's own name", () => {
         const { root } = stopFixture();
-        const former = acquireInstallLock(root);
-        const restrict = privateFileAccess.restrict;
-        let replacement;
-        vi.spyOn(privateFileAccess, "restrict").mockImplementation((path) => {
-          if (replacement === undefined) {
-            rmSync(installLockPath(root), { recursive: true, force: true });
-            replacement = acquireInstallLock(root);
-            recordStartLaunch(root, replacement);
-            removeInstallLock(replacement);
-          }
-          restrict(path);
-        });
+        const lock = acquireInstallLock(root);
+        const time = lock.orderedAt.toString(16).padStart(12, "0");
 
-        expect(recordStartLaunch(root, former)).toBe(false);
-        expect(replacement).toBeDefined();
-        expect(startGeneration(root)).toBe(`${replacement.token}\n`);
-        expect(recordsIn(join(root, "system"))).toEqual([
-          `keiko-npm-start-generation-${replacement.token}`,
-        ]);
+        expect(lock.token).toMatch(new RegExp(`^${String(process.pid)}-${time}[0-9a-f]{16}$`, "u"));
+        expect(lockOwners(root)).toEqual([`owner-${lock.token}`]);
+        removeInstallLock(lock);
       });
 
-      it("withdraws its own record when the lock is lost while the record is published", () => {
-        quiet();
+      it("records a Stop only in the lock of a start that began before it was pressed", () => {
+        // Owner recheck on PR #4464 (thread GMvW): a Stop recorded in the lock of a start that came
+        // after it would have that start stop the Keiko it opens.
         const { root } = stopFixture();
-        const former = acquireInstallLock(root);
-        const restrict = privateFileAccess.restrict;
-        let taken = false;
-        vi.spyOn(privateFileAccess, "restrict").mockImplementation((path) => {
-          if (!taken) {
-            taken = true;
-            rmSync(installLockPath(root), { recursive: true, force: true });
-            acquireInstallLock(root);
-          }
-          restrict(path);
-        });
+        const pressed = orderClock.now();
+        const later = acquireInstallLock(root);
+        expect(later.orderedAt).toBeGreaterThan(pressed);
 
-        expect(recordStartLaunch(root, former)).toBe(false);
-        expect(taken).toBe(true);
-        expect(recordsIn(join(root, "system"))).toEqual([]);
-        expect(startGeneration(root)).toBe("");
+        expect(requestStop(root, pressed)).toBe(false);
+        expect(readdirSync(installLockPath(root)).filter((n) => n.startsWith("stop-"))).toEqual([]);
+        const after = orderClock.now();
+        expect(requestStop(root, after)).toBe(true);
+        expect(closeInstallLock(later)).toEqual({
+          owned: true,
+          stopRequested: true,
+          pressedAt: after,
+        });
+        removeInstallLock(later);
+      });
+
+      it("does not carry out the provisional entry of a Stop pressed before its start began", () => {
+        // An entry the requester is about to withdraw, because the lock it landed in belongs to a
+        // start that came after the Stop, is not that start's to carry out.
+        const { root } = stopFixture();
+        const pressed = orderClock.now();
+        const later = acquireInstallLock(root);
+        const time = pressed.toString(16).padStart(12, "0");
+        writeFileSync(
+          join(installLockPath(root), `stop-${String(process.pid)}-${time}${"0".repeat(16)}`),
+          "",
+        );
+
+        expect(closeInstallLock(later)).toEqual({ owned: true, stopRequested: false });
+        removeInstallLock(later);
       });
 
       it("never shows a Stop's lock as a start that is about to open Keiko", () => {
@@ -2560,7 +2762,7 @@ describe("the npm package start", () => {
       expect(run).toHaveBeenCalledOnce();
       expect(run.mock.calls[0][1][1]).toBe("start");
       expect(log).toHaveBeenCalledWith(
-        "Keiko is running in your browser. You can close this window.",
+        "Keiko is running. The lines above say whether it opened in your browser. You can close this window; Keiko keeps running.",
       );
       expect(existsSync(dir)).toBe(false);
     });
@@ -2616,7 +2818,7 @@ describe("the npm package start", () => {
       expect(log).toHaveBeenCalledWith(
         expect.stringMatching(/^In diesem Ordner laeuft noch eine Installation/u),
       );
-      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/running in your browser/u));
+      expect(log).not.toHaveBeenCalledWith(expect.stringMatching(/^Keiko is running\./u));
     });
   });
 
@@ -2624,17 +2826,19 @@ describe("the npm package start", () => {
     quiet();
     const root = packageRoot();
     const env = homeEnv(root);
-    const run = vi.fn(() => ({ status: 3 }));
+    const run = vi.fn(() => ({ status: 4 }));
 
     expect(stop(root, env, run)).toBe(0);
     expect(run).not.toHaveBeenCalled();
     installKeiko(root);
-    expect(stop(root, env, run)).toBe(3);
+    expect(stop(root, env, run)).toBe(4);
     expect(run.mock.calls[0][1]).toEqual([
       keikoCliPath(root),
       "stop",
       "--state-dir",
       stateDir(env),
+      "--unless-launched-after",
+      expect.stringMatching(/^\d+$/u),
     ]);
   });
 
@@ -2697,7 +2901,12 @@ describe("the administrator's access step", () => {
   };
 
   it("replaces the keys Gateway Setup sealed for its verified connection with the token", () => {
-    const embed = { ...sealed, modelId: "embed", catalogOrigin: "discovered" };
+    const embed = {
+      ...sealed,
+      modelId: "embed",
+      catalogOrigin: "discovered",
+      credentialOrigin: "gateway-connection",
+    };
     const config = { defaultModelId: "chat", providers: [sealed, embed] };
 
     expect(needsToken(config)).toBe(true);
@@ -2710,6 +2919,7 @@ describe("the administrator's access step", () => {
         baseUrl: "https://gw",
         timeoutMs: 1,
         catalogOrigin: "discovered",
+        credentialOrigin: "gateway-connection",
         apiKey: "token",
       },
     ]);
@@ -2858,6 +3068,40 @@ describe("the administrator's access step", () => {
       ["own-key-embedding"],
     ],
     [
+      // Review finding on PR #4464: catalog provenance says who listed a model, never whose key it
+      // holds, so neither value makes a same-endpoint model with its own credential the gateway's.
+      "a same-endpoint embedding whose catalog origin is discovered but whose key is its own",
+      {
+        providers: [
+          sealed,
+          {
+            modelId: "own-key-embedding",
+            baseUrl: "https://gw",
+            catalogOrigin: "discovered",
+            apiKeySecretRef: "e",
+          },
+        ],
+        capabilities: [{ id: "own-key-embedding", kind: "embedding" }],
+      },
+      ["own-key-embedding"],
+    ],
+    [
+      "a same-endpoint embedding whose catalog origin is explicit but whose key is its own",
+      {
+        providers: [
+          sealed,
+          {
+            modelId: "own-key-embedding",
+            baseUrl: "https://gw",
+            catalogOrigin: "explicit",
+            apiKeySecretRef: "e",
+          },
+        ],
+        capabilities: [{ id: "own-key-embedding", kind: "embedding" }],
+      },
+      ["own-key-embedding"],
+    ],
+    [
       "a model behind another header",
       {
         providers: [
@@ -2974,8 +3218,10 @@ describe("the administrator's access step", () => {
     });
   });
 
-  // What readHidden needs of process.stdin and process.stdout.
-  function fakeTerminal(isTTY = true) {
+  // What readHidden needs of process.stdin and process.stdout. `events` records the order of raw
+  // mode changes and writes; `failPrompt` makes the first write throw.
+  function fakeTerminal(isTTY = true, { failPrompt = false } = {}) {
+    const events = [];
     const stdin = Object.assign(new EventEmitter(), {
       isTTY,
       rawModes: [],
@@ -2983,6 +3229,7 @@ describe("the administrator's access step", () => {
       flowing: false,
       setRawMode(mode) {
         this.rawModes.push(mode);
+        events.push(`raw:${String(mode)}`);
       },
       setEncoding(encoding) {
         this.encoding = encoding;
@@ -2995,8 +3242,39 @@ describe("the administrator's access step", () => {
       },
     });
     const written = [];
-    return { io: { stdin, stdout: { write: (text) => written.push(text) } }, stdin, written };
+    const write = (text) => {
+      if (failPrompt && written.length === 0) {
+        written.push(null);
+        throw Object.assign(new Error("terminal gone"), { code: "EPIPE" });
+      }
+      written.push(text);
+      events.push(`write:${text}`);
+    };
+    return { io: { stdin, stdout: { write } }, stdin, written, events };
   }
+
+  it("turns terminal echo off before the prompt is shown", async () => {
+    // Owner review on PR #4464: the prompt was written before raw mode, so a token typed or pasted
+    // the moment it appeared was echoed into the transcript.
+    const terminal = fakeTerminal();
+    const token = readHidden("Token: ", terminal.io);
+    expect(terminal.events.slice(0, 2)).toEqual(["raw:true", "write:Token: "]);
+    expect(terminal.stdin.listenerCount("data")).toBe(1);
+    terminal.stdin.emit("data", "sk-a\r");
+
+    await expect(token).resolves.toBe("sk-a");
+  });
+
+  it("restores the terminal when the prompt cannot be shown", async () => {
+    const terminal = fakeTerminal(true, { failPrompt: true });
+
+    await expect(readHidden("Token: ", terminal.io)).rejects.toThrow(/terminal gone/u);
+    expect(terminal.stdin.rawModes).toEqual([true, false]);
+    expect(terminal.stdin.flowing).toBe(false);
+    for (const name of ["data", "end", "close"]) {
+      expect(terminal.stdin.listenerCount(name)).toBe(0);
+    }
+  });
 
   it("reads a token without showing it and leaves raw mode", async () => {
     const terminal = fakeTerminal();

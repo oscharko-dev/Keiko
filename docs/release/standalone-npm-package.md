@@ -101,26 +101,19 @@ closes it: a `Stop Keiko` that the lock accepted is carried out first, and one t
 lock closed is not recorded: it waits until that start has let go, takes the lock itself, closes it
 and only then stops the open Keiko, so no start opens Keiko between its decision and its effect and
 it can never stop the Keiko a later start opened (if the lock stays held for 90 seconds it says so
-and does not act). A lock a Stop takes is born closed (its closing entry arrives in the same rename), so a start that watches it never takes that Stop for a start that opens Keiko. A start that has launched Keiko writes its token as `keiko-npm-start-generation-<token>`
-only when its command line ended with success, so Keiko really opened, both in the folder's `system/` and in Keiko's data folder (`~/.keiko-standalone` by default), which every package folder of the account shares. Each record is published whole, owner-private, under a name of its own and only while the start owns its lock: it lists the records, checks the lock, publishes, checks the lock again and then removes the records it listed, so a start that lost its lock never displaces or removes a newer record. A Stop reads the data folder's record as well as the folder's, so a delayed Stop never stops the Keiko that a start of another package folder opened meanwhile (it says so and asks to be pressed again). A start whose command line
-the system refused to run, that refused at once (for example while another start is busy), or that failed records nothing, so it
-never makes a waiting Stop think Keiko was restarted. A start that no longer owns its lock, because another start took it over while
-its command line ran, leaves the record alone and never writes its own token over the newer one. The record outlives the lock. A Stop reads the records as it is pressed, together with the starts that hold the lock at that moment,
-before it asks the lock, and again once it holds the lock. The Stop reads the record on both sides of the lock listing and reads
-them again when the record changed in between, so a start that finishes while the Stop looks is never taken for a later one: if it names a start that neither the Stop saw nor held the lock at the press,
-that start opened Keiko after the Stop, and the Stop says so and leaves Keiko open (press Stop again to end it). A start that held
-the lock at the press and finishes while the Stop waits came before it, so the Stop still stops Keiko. Every stop is carried out while the one
+and does not act). A lock a Stop takes is born closed (its closing entry arrives in the same rename), so a start that watches it never takes that Stop for a start that opens Keiko. A start that has launched Keiko passes the time at which it began to take its lock to Keiko's command line (`keiko start --launch-order <ms>`), and any other start of that data (the standalone folder package, a plain `keiko start`) is ordered by the time its command began; the lock's own entry names carry that time, and a Stop's entry the time it was pressed. The command line records the latest of these orders in Keiko's data folder (`~/.keiko-standalone` by default), which every package folder of the account shares, under the lifecycle guard every start and stop of that data takes, so a start that finishes last never lowers a later start's order. A start that cannot read that record leaves it as it is, since it may hold a later order, and says its order was not recorded; a record that holds no order is replaced. A stop that cannot clear the record still stops Keiko and logs it. Every stop is `keiko stop --unless-launched-after <press>`: under the same guard, a Stop pressed before a start that opened Keiko leaves Keiko open (it says so and asks to be pressed again), whichever package folder that start came from and whether it took a lock over meanwhile. A Stop is recorded only in the lock of a start that began before it was pressed, and a start carries out only Stops pressed after it began. A start whose command line the system refused to run, that refused at once (for example while another start is busy), or that failed records nothing, so it never makes a waiting Stop think Keiko was restarted. A start that held the lock at the press and finishes while the Stop waits came before it, so the Stop still stops Keiko. The times are wall-clock milliseconds, the one clock different folders can compare: a clock set back during a Stop's wait can make it stop a later start's Keiko, or leave an earlier one open and ask to be pressed again. Every stop is carried out while the one
 who runs it owns the lock; a Stop that finds only the npm of an ended start holding the lock leaves a handoff
-(`system/keiko-npm-stop-handoff-<pid>-<random>`) for as long as its stop runs and renews it every 15 seconds from a worker thread. A
-start that takes the lock waits for a handoff that renews (up to 90 seconds, then it ends with exit code 1 and asks to start again)
-before it opens Keiko. A handoff whose process number does not run, or whose entry does not change for 60 seconds on the start's
+(`system/keiko-npm-stop-handoff-<token>`, whose token carries the time the Stop was pressed) for as long as its stop runs and renews it every 15 seconds from a worker thread. A
+start that takes the lock watches every handoff at once (up to 90 seconds in all, then it ends with exit code 1 and asks to start again)
+and opens Keiko as soon as the last one is gone, unless one of those Stops was pressed at or after the start began: then it opens nothing and says Keiko was stopped while it was being loaded. A handoff whose process number does not run, or whose entry does not change for 60 seconds on the start's
 own monotonic clock, belongs to a Stop that ended (its number was reused): the start removes it and goes on. A start whose lock
 was taken over while it closed it carries out no Stop request, confirmed or provisional, and ends with a plain message. A start
 that watches an orphaned installation checks, once the renewal is seen, that the renewing start is still in the lock and has not
 closed it; otherwise it waits for the closing lock like any other. With the handoff, the stop never lands on the Keiko that start
 opened. A Stop whose lock was taken over before it could close it
-does not act either and asks to be pressed again. If a later start wins the lock first, the Stop is recorded in that start's lock
-instead and that start, which does not leave Keiko open, carries it out; the Stop does not act itself. A
+does not act either and asks to be pressed again. If a start that began before the Stop was pressed wins the lock first, the Stop is recorded in that start's lock
+instead and that start, which does not leave Keiko open, carries it out; the Stop does not act itself. A start that began after
+the press is left to open Keiko. A
 start pressed while a Stop holds the closed lock waits for that Stop (up to 90 seconds) and then opens
 Keiko, so the button pressed last decides; when that lock is still closing after the 90 seconds, nothing opens Keiko for the start,
 so it ends with exit code 1 and says that Keiko is still being closed and to start again, never that another window opens it. A start that finds its lock taken over by another start ends with a plain message
@@ -221,7 +214,8 @@ An administrator can prepare the folder once, so that nobody in the team enters 
    and otherwise uses the public registry. The file is ordinary npm configuration; if it carries a
    registry access token, it is as confidential as `keiko.config.json`.
 2. **Gateway.** Start Keiko from the folder and complete **Gateway Setup** with the team's gateway
-   address and token. Keiko verifies the gateway and its models. Stop Keiko.
+   address and token. Keiko verifies the gateway and its models. Stop Keiko. A configuration an
+   earlier Keiko saved does not mark its models, so complete Gateway Setup once more before step 3.
 3. **Access for everyone.** Double-click `system/Zugang speichern.command` (macOS) or
    `system\Zugang speichern.cmd` (Windows) and paste the token; it is not shown. The step reads the
    configuration Gateway Setup saved and replaces the keys sealed on this computer for the gateway

@@ -51,6 +51,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-cli", emitterPrefix: "gateway-service", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "gateway-service-setup", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "install-layout", surface: "runtime-packages" },
+  { owner: "keiko-cli", emitterPrefix: "launch-order", surface: "ui" },
   { owner: "keiko-cli", emitterPrefix: "lifecycle-browser-activity", surface: "ui" },
   { owner: "keiko-cli", emitterPrefix: "lifecycle-health-activity", surface: "ui" },
   { owner: "keiko-cli", emitterPrefix: "lifecycle-native-activity", surface: "ui" },

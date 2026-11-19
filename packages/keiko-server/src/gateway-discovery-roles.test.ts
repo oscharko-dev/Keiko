@@ -1265,3 +1265,99 @@ describe("the default embedding model", () => {
     expect(chosen[1]).toEqual(chosen[0]);
   });
 });
+
+describe("a reranker's credential provenance comes from its durable key", () => {
+  const GATEWAY = "https://llm-gateway.example.com/v1";
+
+  function depsFor(
+    uiDir: string,
+    evidenceDir: string,
+    env: Readonly<Record<string, string>>,
+  ): UiHandlerDeps {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...env },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve(normalizeDiscoveryPayloadForSetup({ data: CHAT_AND_RERANKER })),
+      gatewayEmbeddingProbe: (_config, ids) => Promise.resolve(ids),
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    handlerDeps.push(deps);
+    Object.assign(deps, { rerankRequest: answeringRerankPort().rerankRequest });
+    return deps;
+  }
+
+  it("never marks a separately vaulted reranker because a transient override equalled the gateway key", async () => {
+    // Review finding on PR #4464: KEIKO_RERANKER_API_KEY supplied the primary key for one session, so
+    // the effective credentials compared equal and the reranker was marked as sharing the gateway
+    // credential, while the vault kept its own, different durable key. A team export then replaced it.
+    const uiDir = await tempDir("keiko-rerank-origin-ui-");
+    const evidenceDir = await tempDir("keiko-rerank-origin-ev-");
+    // Two keys, each sealed into the vault by the startup migration, and no origin mark anywhere.
+    const storagePath = join(uiDir, "keiko.config.json");
+    writeFileSync(
+      storagePath,
+      JSON.stringify({
+        providers: [{ modelId: "qwen-chat", baseUrl: GATEWAY, apiKey: "gateway-token" }],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        reranker: { modelId: "house-reranker", baseUrl: GATEWAY, apiKey: "own-rerank-token" },
+      }),
+    );
+    depsFor(uiDir, evidenceDir, VAULT_ENV).store.close();
+    expect(readFileSync(storagePath, "utf8")).not.toContain("own-rerank-token");
+
+    const overridden = depsFor(uiDir, evidenceDir, {
+      ...VAULT_ENV,
+      KEIKO_RERANKER_API_KEY: "gateway-token",
+    });
+    expect(currentGatewayConfig(overridden)?.reranker?.apiKey).toBe("gateway-token");
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: GATEWAY, apiKey: "gateway-token" }),
+      overridden,
+    );
+    expect(result.status).toBe(200);
+    overridden.store.close();
+
+    const persisted = JSON.parse(readFileSync(storagePath, "utf8")) as {
+      reranker?: Record<string, unknown>;
+    };
+    expect(persisted.reranker).toHaveProperty("apiKeySecretRef", "model-gateway:reranker");
+    expect(persisted.reranker).not.toHaveProperty("credentialOrigin");
+    // With the override gone, the two vault references still resolve to different keys.
+    const plain = depsFor(uiDir, evidenceDir, VAULT_ENV);
+    expect(currentGatewayConfig(plain)?.reranker?.apiKey).toBe("own-rerank-token");
+    expect(currentGatewayConfig(plain)?.providers[0]?.apiKey).toBe("gateway-token");
+    plain.store.close();
+  });
+
+  it("never marks a reranker that only the running configuration names", async () => {
+    // Audit of the round above: with no reranker in the durable file, the runtime one fell back to
+    // judging itself, so its session credential decided the mark the durable view never proved.
+    const uiDir = await tempDir("keiko-rerank-runtime-ui-");
+    const evidenceDir = await tempDir("keiko-rerank-runtime-ev-");
+    const storagePath = join(uiDir, "keiko.config.json");
+    const durable = {
+      providers: [{ modelId: "qwen-chat", baseUrl: GATEWAY, apiKey: "gateway-token" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    };
+    writeFileSync(storagePath, JSON.stringify(durable));
+    const deps = depsFor(uiDir, evidenceDir, VAULT_ENV);
+    deps.gatewayConfig?.set(
+      parseGatewayConfig({
+        ...durable,
+        reranker: { modelId: "house-reranker", baseUrl: GATEWAY, apiKey: "gateway-token" },
+      }),
+      true,
+    );
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: GATEWAY, apiKey: "gateway-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(currentGatewayConfig(deps)?.reranker).toMatchObject({ modelId: "house-reranker" });
+    expect(currentGatewayConfig(deps)?.reranker).not.toHaveProperty("credentialOrigin");
+    deps.store.close();
+  });
+});

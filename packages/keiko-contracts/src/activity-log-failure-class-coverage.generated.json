@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 407,
-  "completeClassCount": 407,
+  "supportedClassCount": 408,
+  "completeClassCount": 408,
   "completeness": "complete",
   "classes": [
     {
@@ -40090,6 +40090,68 @@
             "causeChain": false
           },
           "proofIds": ["knowledge.store.quarantined.recovery"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "launch-order-fence",
+      "requirementContract": "launch-order-fence",
+      "productSurfaces": ["keiko-cli"],
+      "lifecycleTransitions": ["end"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": ["cli.lifecycle.launch-order"],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "cli.lifecycle.launch-order",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["cli.lifecycle.launch-order"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "cli.lifecycle.launch-order",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "process-lifecycle",
+          "safeContextFields": [
+            {
+              "name": "command",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "failureKind",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": false
+            },
+            {
+              "name": "outcome",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["cli.lifecycle.launch-order.outcome"],
           "replayReferences": [],
           "missingObligations": []
         }

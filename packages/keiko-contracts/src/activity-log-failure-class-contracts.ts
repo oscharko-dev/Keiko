@@ -1244,6 +1244,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "launch-order-fence",
+    requiredProductSurfaces: ["keiko-cli"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: ["cli.lifecycle.launch-order"],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["cli.lifecycle.launch-order"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["cli.lifecycle.launch-order"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["cli.lifecycle.launch-order"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "error-kind", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "windows-gateway-service",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

@@ -1255,8 +1255,16 @@ function buildRawConfig(
   modelIds: readonly string[],
   options: ProviderRawOptions = {},
 ): Record<string, unknown> {
+  const providers = modelIds.map((modelId) => providerRaw(modelId, baseUrl, apiKey, options));
+  const mainIndex = providers.findIndex(
+    (provider) => (provider.capability as ModelCapability).kind === "chat",
+  );
   return {
-    providers: modelIds.map((modelId) => providerRaw(modelId, baseUrl, apiKey, options)),
+    // Every provider built here carries the one verified connection's credential, so each one but
+    // the main connection itself records that; the export replaces only keys carrying the record.
+    providers: providers.map((provider, index) =>
+      index === mainIndex ? provider : { ...provider, credentialOrigin: "gateway-connection" },
+    ),
     circuitBreaker: DEFAULT_CIRCUIT_BREAKER_CONFIG,
   };
 }
@@ -7473,7 +7481,15 @@ function ownedReranker(input: SetupVerificationInput): RerankerConfig | undefine
 // connection carries `credentialOrigin`, so a team export never hands the gateway token to a
 // reranker with its own key on the gateway's address (review finding on #4464).
 function rebasedReranker(input: SetupVerificationInput, reranker: RerankerConfig): RerankerConfig {
-  if (!sharesStoredGatewayConnection(reranker, storedPrimaryGatewayProvider(input.stored))) {
+  // Sharing is judged on the DURABLE reranker (vault reference resolved, transient overrides
+  // masked), not the effective one: an override that equals the gateway key for a session proves
+  // nothing about the credential that persists. A reranker no durable view names proves nothing
+  // either, so it keeps its own connection and carries no mark.
+  const durable = input.stored?.reranker;
+  if (
+    durable === undefined ||
+    !sharesStoredGatewayConnection(durable, storedPrimaryGatewayProvider(input.stored))
+  ) {
     const { credentialOrigin: _unproved, ...own } = reranker;
     return own;
   }
@@ -8442,9 +8458,22 @@ function withDiskGatewayEgress(
 const PER_MODEL_CONNECTION_OVERRIDE_RE =
   /^KEIKO_MODEL_.+_(?:BASE_URL|API_KEY|API_KEY_HEADER_NAME)$/u;
 
+// The reranker's own connection overrides are the same transient state: a KEIKO_RERANKER_API_KEY
+// that equals the gateway key for one session made a separately vaulted reranker look like it
+// shared the gateway credential (review finding on #4464).
+const RERANKER_CONNECTION_OVERRIDES: ReadonlySet<string> = new Set([
+  "KEIKO_RERANKER_BASE_URL",
+  "KEIKO_RERANKER_API_KEY",
+  "KEIKO_RERANKER_API_KEY_HEADER_NAME",
+]);
+
+function isTransientConnectionOverride(name: string): boolean {
+  return PER_MODEL_CONNECTION_OVERRIDE_RE.test(name) || RERANKER_CONNECTION_OVERRIDES.has(name);
+}
+
 function withoutPerModelEnvOverrides(env: EnvSource): EnvSource {
   return Object.fromEntries(
-    Object.entries(env).filter(([name]) => !PER_MODEL_CONNECTION_OVERRIDE_RE.test(name)),
+    Object.entries(env).filter(([name]) => !isTransientConnectionOverride(name)),
   );
 }
 

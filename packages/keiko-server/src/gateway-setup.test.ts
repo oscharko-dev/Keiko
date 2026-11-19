@@ -8239,6 +8239,61 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("marks the models built on the verified connection and never one with its own key, whatever its catalog origin", async () => {
+    // Review finding on PR #4464: the team export read `catalogOrigin` as proof that a model shares
+    // the gateway credential. Catalog provenance says who listed the model, not whose key it holds,
+    // so only the credential mark Setup writes from the durable connection may say that.
+    const uiDir = await tempDir("keiko-gw-ui-credential-origin-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-credential-origin-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve(modelIds.filter((modelId) => modelId !== "own-key-embedding")),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig === undefined) throw new Error("expected gateway config store");
+    gatewayConfig.set(
+      parseGatewayConfig({
+        providers: [
+          { modelId: "example-chat", baseUrl: "https://llm.example.com/v1", apiKey: "chat-token" },
+          {
+            modelId: "shared-embedding",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "chat-token",
+            catalogOrigin: "discovered",
+            capability: { id: "shared-embedding", kind: "embedding" },
+          },
+          {
+            modelId: "own-key-embedding",
+            baseUrl: "https://llm.example.com/v1",
+            apiKey: "embedding-only-token",
+            catalogOrigin: "discovered",
+            capability: { id: "own-key-embedding", kind: "embedding" },
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+      true,
+    );
+
+    const rotated = await handleGatewaySetup(
+      ctx({ preserveExisting: true, apiKey: "rotated-token" }),
+      deps,
+    );
+    expect(rotated.status).toBe(200);
+    const saved = JSON.parse(readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8")) as {
+      providers: Record<string, unknown>[];
+    };
+    const byId = new Map(saved.providers.map((provider) => [provider.modelId, provider]));
+    expect(byId.get("shared-embedding")).toMatchObject({ credentialOrigin: "gateway-connection" });
+    expect(byId.get("own-key-embedding")).not.toHaveProperty("credentialOrigin");
+    expect(byId.get("example-chat")).not.toHaveProperty("credentialOrigin");
+    deps.store.close();
+  });
+
   it("keeps stored voice deployments out of the chat probe during inherited rebuilds", async () => {
     // Review finding on #3031: inherited deploymentNames carried stored voice ids into the chat
     // probe — a succeeding probe persisted a DUPLICATE provider for the voice model id, a

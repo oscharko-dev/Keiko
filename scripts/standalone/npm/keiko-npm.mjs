@@ -26,7 +26,6 @@ import {
   renameSync,
   rmdirSync,
   rmSync,
-  statSync,
   writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -49,26 +48,26 @@ const STATE_DIR_NAME = ".keiko-standalone";
 // process adds `npm-<pid>-<random>` while it installs and renews only that entry. A start that is about to let go of the lock adds
 // `closing-<pid>-<random>` first: from then on no Stop is accepted by that lock.
 const INSTALL_LOCK = ["system", "keiko-npm-install.lock"];
-// The start that opened Keiko last leaves its token as `keiko-npm-start-generation-<token>`,
-// written once its launch of Keiko really happened (the CLI was spawned) and only while it still
-// holds its lock. The lock is gone once the start let go; the record is not, so a Stop that waited
-// for the lock can tell that another start opened Keiko meanwhile. A start whose launch never
-// happened records nothing. The record lives in two places: this folder's `system/`, and Keiko's
-// data folder, which every package folder of the account shares, so a Stop of one folder also sees
-// a start of another folder that uses the same data.
-const GENERATION_PREFIX = "keiko-npm-start-generation-";
-const GENERATION_DIR = "system";
+// Every entry ends in a token `<pid>-<time><random>`: twelve hex digits of the wall-clock time at
+// which its start began to take the lock, or at which its Stop was pressed, then sixteen random
+// ones. The lock carries its start's time in the one rename that makes it appear. A Stop is
+// recorded only in the lock of a start that began before the Stop was pressed, and Keiko's command
+// line orders the rest under the lifecycle guard of the data folder every package folder of the
+// account shares: a start passes its time (`--launch-order`), a Stop the time it was pressed
+// (`--unless-launched-after`), and a Stop leaves Keiko open when a later start opened it.
+const TIME_DIGITS = 12;
+const LATEST_TIME = 16 ** TIME_DIGITS - 1;
 // A Stop that acts while only npm of an ended start holds the lock holds no lock of its own: it
-// leaves `keiko-npm-stop-handoff-<pid>-<random>` in system/ for the time its stop runs, and every
-// start waits for such an entry (whose process runs) before it opens Keiko.
-const STOP_HANDOFF = /^keiko-npm-stop-handoff-(\d+)-[0-9a-f]+$/u;
+// leaves `keiko-npm-stop-handoff-<pid>-<time><random>` in system/ for the time its stop runs (the
+// time it was pressed), and every start waits for such an entry (whose process runs) before it
+// opens Keiko; a start that began before that press does not open Keiko at all.
+const STOP_HANDOFF = /^keiko-npm-stop-handoff-(\d+)-([0-9a-f]+)$/u;
 const LOCK_ENTRY = /^(owner|npm|stop|closing)-(\d+)-([0-9a-f]+)$/u;
 const START_KINDS = new Set(["owner"]);
 const HOLDER_KINDS = new Set(["owner", "npm"]);
 // A lock on its way in or out: `<lock>.<pid>-<random>.candidate` or `.released`.
 const LOCK_LEFTOVER = /^keiko-npm-install\.lock\.(\d+)-[0-9a-f]+\.(?:candidate|released)$/u;
 const LOCK_ATTEMPTS = 8;
-const OBSERVE_ATTEMPTS = 8;
 // What renaming or removing the lock folder answers while another start holds or changes it.
 const LOCK_CONTENDED = new Set(["EEXIST", "ENOTEMPTY", "EPERM", "EACCES", "EBUSY"]);
 const RENAME_ATTEMPTS = 40;
@@ -481,8 +480,29 @@ function sleepSync(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 
-function lockToken() {
-  return `${String(process.pid)}-${randomBytes(8).toString("hex")}`;
+/**
+ * The clock that orders starts and Stops: the wall clock, because Keiko's command line compares
+ * the times of launchers that run in different processes and folders. Tests replace it.
+ */
+export const orderClock = { now: () => Date.now() };
+
+/** The exit code of `keiko stop --unless-launched-after` that left Keiko open (launch-order.ts). */
+export const STOP_SUPERSEDED_EXIT_CODE = 3;
+
+// Whole milliseconds that fit the twelve hex digits of a token.
+function orderTime() {
+  return Math.min(Math.max(0, Math.trunc(orderClock.now())), LATEST_TIME);
+}
+
+function lockToken(at = orderTime()) {
+  const time = at.toString(16).padStart(TIME_DIGITS, "0");
+  return `${String(process.pid)}-${time}${randomBytes(8).toString("hex")}`;
+}
+
+// The time the hex part of a token carries, or 0 for a token without one, which counts as the
+// earliest (this launcher writes none).
+function tokenTime(hex) {
+  return hex.length === TIME_DIGITS + 16 ? Number.parseInt(hex.slice(0, TIME_DIGITS), 16) : 0;
 }
 
 export function installLockPath(root) {
@@ -662,7 +682,9 @@ function renameRetrying(from, to, taken = () => false) {
 // taken to carry out a Stop appears closed as well: its closing entry is in the same rename, so no
 // observer ever sees that Stop's owner entry as a start that is about to open Keiko.
 function publishLock(dir, pause, closing) {
-  const token = lockToken();
+  // Read before the lock can appear: a start that begins to take the lock later reads a later time.
+  const orderedAt = orderTime();
+  const token = lockToken(orderedAt);
   const candidate = `${dir}.${token}.candidate`;
   mkdirSync(candidate, { mode: 0o700 });
   const fd = openSync(join(candidate, `owner-${token}`), "wx", 0o600);
@@ -674,7 +696,9 @@ function publishLock(dir, pause, closing) {
   if (closing) closeSync(openSync(join(candidate, `closing-${token}`), "wx", 0o600));
   pause("publish");
   try {
-    return renameRetrying(candidate, dir, () => existsSync(dir)) ? { dir, token } : undefined;
+    return renameRetrying(candidate, dir, () => existsSync(dir))
+      ? { dir, token, orderedAt }
+      : undefined;
   } finally {
     rmSync(candidate, { recursive: true, force: true });
   }
@@ -712,8 +736,21 @@ export function acquireInstallLock(root, pause = () => undefined, { closing = fa
   );
 }
 
-function hasStopEntry(names) {
-  return names.some((name) => LOCK_ENTRY.exec(name)?.[1] === "stop");
+// The latest time at which a Stop recorded in the lock was pressed, of the Stops pressed at or
+// after `since` (the time the lock's start began to take it), or undefined without one. An entry of
+// an earlier Stop is a provisional one the lock turned away, which is not this start's to carry out.
+function latestStopPress(names, since) {
+  let latest;
+  for (const name of names) {
+    const match = LOCK_ENTRY.exec(name);
+    if (match?.[1] === "stop") latest = laterPress(latest, tokenTime(match[3]), since);
+  }
+  return latest;
+}
+
+// `pressed` when it is at or after `since` and later than `latest`, else `latest`.
+function laterPress(latest, pressed, since) {
+  return pressed >= since && (latest === undefined || pressed > latest) ? pressed : latest;
 }
 
 // A closing entry counts only beside the owner entry of the same start: a stray one that a killed
@@ -751,11 +788,12 @@ function refuseLostLock(lock) {
   throw lostLockRefusal();
 }
 
-// Whether a Stop was recorded in the lock this start still holds, from one read of it. A lock
-// another start took over is that start's, and one it released meanwhile is gone.
-function heldStopRecorded(lock) {
+// When the latest Stop recorded in the lock this start still holds was pressed, from one read of
+// it, or undefined without one. A lock another start took over is that start's, and one it released
+// meanwhile is gone.
+function heldStopPress(lock) {
   const names = heldEntries(lock);
-  return names !== undefined && hasStopEntry(names);
+  return names === undefined ? undefined : latestStopPress(names, lock.orderedAt ?? 0);
 }
 
 // Whether adding the entry succeeded; false when the lock went away meanwhile. An entry that is
@@ -773,10 +811,11 @@ function createLockEntry(path) {
 
 /**
  * Stops the lock accepting Stops and returns whether one was recorded in it while this start held
- * it (`owned` is false for a lock that is no longer this start's: another start took it over and
- * the Stop belongs to that start). A Stop adds its entry and then looks for this closing entry, so
- * it is either read here or turned away and stops Keiko itself. The lock stays this start's until
- * `removeInstallLock`, so no other start opens Keiko before the recorded Stop is carried out.
+ * it, and when the latest of them was pressed (`pressedAt`); `owned` is false for a lock that is no
+ * longer this start's: another start took it over and the Stop belongs to that start. A Stop adds
+ * its entry and then looks for this closing entry, so it is either read here or turned away and
+ * stops Keiko itself. The lock stays this start's until `removeInstallLock`, so no other start of
+ * this folder opens Keiko before the recorded Stop is carried out.
  */
 export function closeInstallLock(lock, pause = () => undefined) {
   if (heldEntries(lock) === undefined) return { owned: false, stopRequested: false };
@@ -789,7 +828,10 @@ export function closeInstallLock(lock, pause = () => undefined) {
     rmSync(closing, { force: true });
     return { owned: false, stopRequested: false };
   }
-  return { owned: true, stopRequested: hasStopEntry(names) };
+  const pressedAt = latestStopPress(names, lock.orderedAt ?? 0);
+  return pressedAt === undefined
+    ? { owned: true, stopRequested: false }
+    : { owned: true, stopRequested: true, pressedAt };
 }
 
 /**
@@ -820,27 +862,32 @@ export function releaseInstallLock(lock) {
   return stopRequested;
 }
 
-// Whether a start (not npm alone) holds the lock and has not closed it.
-function acceptsStop(names) {
-  return names !== undefined && hasStartEntry(names) && !hasClosingEntry(names);
+// Whether a start (not npm alone) that began to take the lock by the time the Stop was pressed
+// holds the lock and has not closed it.
+function acceptsStop(names, pressedAt) {
+  if (names === undefined || hasClosingEntry(names)) return false;
+  return names.some((name) => {
+    const match = LOCK_ENTRY.exec(name);
+    return match?.[1] === "owner" && pidAlive(match[2]) && tokenTime(match[3]) <= pressedAt;
+  });
 }
 
 /**
- * Records a Stop in the lock of the start that installs Keiko. Returns false when no start holds
- * the lock or it is closing, so the caller stops Keiko itself. Only the entry of the start counts
- * (running and renewing), never npm's alone: a start that ended while npm still runs cannot stop
- * Keiko after the installation. The entry counts only while the start's entry is still there and
- * no closing entry follows it.
+ * Records a Stop pressed at `pressedAt` in the lock of the start that installs Keiko. Returns false
+ * when no start holds the lock, it is closing, or its start began after the Stop was pressed, so
+ * the caller decides itself. Only the entry of the start counts (running and renewing), never
+ * npm's alone: a start that ended while npm still runs cannot stop Keiko after the installation.
+ * The entry counts only while the start's entry is still there and no closing entry follows it.
  */
-export function requestStop(root) {
+export function requestStop(root, pressedAt = orderTime()) {
   const dir = installLockPath(root);
   if (!renewalObserved(dir, START_KINDS)) return false;
   for (let attempt = 0; attempt < LOCK_ATTEMPTS; attempt += 1) {
-    if (!acceptsStop(lockEntries(dir))) return false;
-    const name = `stop-${lockToken()}`;
+    if (!acceptsStop(lockEntries(dir), pressedAt)) return false;
+    const name = `stop-${lockToken(pressedAt)}`;
     if (!createLockEntry(join(dir, name))) continue;
     const after = lockEntries(dir);
-    if (after?.includes(name) && acceptsStop(after)) return true;
+    if (after?.includes(name) && acceptsStop(after, pressedAt)) return true;
     rmSync(join(dir, name), { force: true });
   }
   return false;
@@ -1265,105 +1312,36 @@ export function startArgs(root, env) {
   return existsSync(config) ? [...args, "--provisioned-config", config] : args;
 }
 
-function stopKeiko(root, state, env, run) {
-  return runKeiko(root, ["stop", "--state-dir", state], env, run);
+// `pressedAt` is when the Stop was pressed. Keiko's command line decides under its lifecycle guard
+// whether a start that began after it opened Keiko, and then leaves Keiko open and answers
+// STOP_SUPERSEDED_EXIT_CODE: no start of any folder can open Keiko between that check and the stop.
+function stopKeiko(root, state, env, run, pressedAt) {
+  const args = ["stop", "--state-dir", state, "--unless-launched-after", String(pressedAt)];
+  return runKeiko(root, args, env, run);
 }
 
+// Exit code 0 of `keiko start` says that Keiko runs. Whether it opened in the browser, or an older
+// Keiko asks for `keiko restart`, Keiko's command line has said itself in the lines above.
 function reportRunning() {
   say(
-    "Keiko is running in your browser. You can close this window.",
-    "Keiko laeuft in deinem Browser. Du kannst dieses Fenster schliessen.",
+    "Keiko is running. The lines above say whether it opened in your browser. You can close this window; Keiko keeps running.",
+    "Keiko laeuft. Die Zeilen darueber zeigen, ob es in deinem Browser geoeffnet wurde. Du kannst dieses Fenster schliessen; Keiko laeuft weiter.",
   );
 }
 
-// The records of `dir`, in the order they were written (the newest last).
-function generationRecords(dir) {
-  let names;
-  try {
-    names = readdirSync(dir);
-  } catch (error) {
-    if (error?.code === "ENOENT") return [];
-    throw error;
-  }
-  const written = [];
-  for (const name of names.filter((entry) => entry.startsWith(GENERATION_PREFIX))) {
-    try {
-      written.push({ name, at: statSync(join(dir, name)).mtimeMs });
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
-  }
-  return written
-    .toSorted((a, b) => a.at - b.at || a.name.localeCompare(b.name))
-    .map(({ name }) => name);
-}
-
-// The token of the newest record of `dir`, or "" when none exists.
-function newestGeneration(dir) {
-  for (const name of generationRecords(dir).reverse()) {
-    try {
-      return readFileSync(join(dir, name), "utf8");
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-    }
-  }
-  return "";
-}
-
-/**
- * The token of the start that opened Keiko last in this folder, or "" when none did. It outlives
- * the lock, so a Stop that waited for the lock can tell that a start opened Keiko meanwhile.
- */
-export function startGeneration(root) {
-  return newestGeneration(join(root, GENERATION_DIR));
-}
-
-/** The same for every package folder that uses the data folder `state`. */
-export function stateGeneration(state) {
-  return newestGeneration(state);
-}
-
-// Publishes the record of the start that holds `lock` in `dir` and returns whether it did. The
-// record has a name of its own, so it never replaces another one, and only records that were there
-// before the lock was checked are removed, which makes them older than this start's lock
-// generation. The records are listed first, the lock checked second, the record published third and
-// the lock checked again: a start that lost its lock at any point leaves the newer record of its
-// replacement alone and withdraws only its own.
-function publishLaunchRecord(dir, lock) {
-  const own = `${GENERATION_PREFIX}${lock.token}`;
-  const earlier = generationRecords(dir).filter((name) => name !== own);
-  if (heldEntries(lock) === undefined) return false;
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  publishPrivateFile(join(dir, own), `${lock.token}\n`);
-  if (heldEntries(lock) === undefined) {
-    rmSync(join(dir, own), { force: true });
-    return false;
-  }
-  for (const name of earlier) rmSync(join(dir, name), { force: true });
-  return true;
-}
-
-// Written once the start's launch of Keiko happened: in this folder and, when `state` names it, in
-// the data folder the package folders of the account share. Each record is published whole under
-// its own name by the owner-private publisher and only while the start owns the lock generation it
-// published, so a returning former owner never displaces what a replacement start recorded.
-// Returns whether the start's records were written.
-export function recordStartLaunch(root, lock, state = undefined) {
-  if (!publishLaunchRecord(join(root, GENERATION_DIR), lock)) return false;
-  return state === undefined || publishLaunchRecord(state, lock);
-}
-
-// While it holds the lock, this start installs Keiko and opens it, unless a Stop came first.
-function installThenOpen(root, nodeDir, env, run, lock, args) {
+// While it holds the lock, this start installs Keiko and opens it, unless a Stop came first: one
+// recorded in its lock, or one that acted under a handoff it waited for (`handoffPress`).
+function installThenOpen(root, nodeDir, env, run, { lock, args, handoffPress: seen }) {
   if (!ensureInstalled(root, nodeDir, env, run, lock)) return { outcome: "install-failed" };
   refuseLostLock(lock);
-  if (heldStopRecorded(lock)) return { outcome: "cancelled" };
-  const launch = spawnKeiko(root, args, env, run);
-  // Only a start that opened Keiko (its command line ended with success) can supersede a Stop that
-  // waits. A launch the system refused, or one the command line refused before it opened anything
-  // (its lifecycle was busy), started nothing, and a failed one leaves it uncertain: none of them
-  // may make an earlier Stop look as if Keiko had been started again.
-  if (launch.spawned && launch.code === 0) recordStartLaunch(root, lock, stateDir(env));
+  const held = heldStopPress(lock);
+  const pressedAt = held === undefined ? seen : laterPress(seen, held, lock.orderedAt);
+  if (pressedAt !== undefined) return { outcome: "cancelled", pressedAt };
+  // Keiko's command line records when this start began to take its lock once Keiko answers, under
+  // its lifecycle guard: a Stop pressed before that time stops this Keiko, one pressed after it
+  // leaves it open. A launch the system refused, or one the command line refused before it opened
+  // anything (its lifecycle was busy), records nothing.
+  const launch = spawnKeiko(root, [...args, "--launch-order", String(lock.orderedAt)], env, run);
   return { outcome: "opened", code: launch.code };
 }
 
@@ -1398,6 +1376,15 @@ function reportStopNotCarriedOut(installed) {
   );
 }
 
+// A Stop pressed while this start loaded Keiko, after which a start that began later (of another
+// folder that uses the same data) opened Keiko: that start's Keiko stays open.
+function reportStartCameAfterLoadingStop() {
+  say(
+    "Stop was pressed while Keiko was being loaded, but Keiko was started again after that, so it stays open. Double-click Stop Keiko to stop it.",
+    "Beenden wurde gedrueckt, waehrend Keiko geladen wurde, aber danach wurde Keiko erneut gestartet, daher bleibt es geoeffnet. Doppelklicke auf Stop Keiko, um es zu beenden.",
+  );
+}
+
 // A Stop made while this start held the lock stops whatever opened: this start's Keiko, also one
 // that reported a failure, or one an earlier start of the folder opened. Stopping a Keiko that does
 // not run succeeds. `stop.code` is the result of a Stop already carried out under the lock.
@@ -1412,6 +1399,10 @@ function settleStart(step, stop) {
   }
   // Why Keiko did not open says more than the Stop after it.
   if (step.code !== undefined && step.code !== 0) return step.code;
+  if (stop.code === STOP_SUPERSEDED_EXIT_CODE) {
+    reportStartCameAfterLoadingStop();
+    return 0;
+  }
   if (stop.code !== 0) return stop.code;
   reportStoppedWhileLoading(step.outcome === "opened");
   return 0;
@@ -1424,27 +1415,32 @@ function settleStart(step, stop) {
 // withdrawn that provisional entry by now: the requester stops under the lock itself, and a stop
 // of a Keiko that is not running succeeds, so what matters is that no stop runs once the lock is
 // gone. A start that no longer owns its lock carries out neither kind of request: the lock, and
-// every Stop recorded in it, belongs to the start that took it over.
+// every Stop recorded in it, belongs to the start that took it over. The stop carries the time the
+// latest Stop was pressed, so a start that began after it (of another folder, or one that took this
+// lock over after it was checked here) keeps the Keiko it opened: Keiko's command line decides that
+// under its lifecycle guard.
 function closeAndStop(root, env, run, lock, step, pause) {
   const closed = closeInstallLock(lock, pause);
   if (!closed.owned) {
     if (step.outcome === "cancelled") throw lostLockRefusal();
     return { stopRequested: false, code: undefined };
   }
-  const stopRequested = closed.stopRequested || step.outcome === "cancelled";
+  const presses = [closed.pressedAt, step.pressedAt].filter((at) => at !== undefined);
+  const stopRequested = presses.length > 0;
   if (stopRequested && step.outcome !== "install-failed") {
-    return { stopRequested, code: stopKeiko(root, stateDir(env), env, run) };
+    return { stopRequested, code: stopKeiko(root, stateDir(env), env, run, Math.max(...presses)) };
   }
   return { stopRequested, code: undefined };
 }
 
 // This start holds the lock until Keiko is open, so a Stop meanwhile is carried out before the lock
 // goes, and a Stop after that finds Keiko open and stops it.
-function installAndOpen(root, nodeDir, env, run, lock, args, pause) {
+function installAndOpen(root, nodeDir, env, run, launch, pause) {
+  const { lock } = launch;
   let step;
   let stop;
   try {
-    step = installThenOpen(root, nodeDir, env, run, lock, args);
+    step = installThenOpen(root, nodeDir, env, run, launch);
     stop = closeAndStop(root, env, run, lock, step, pause);
   } catch (error) {
     if (releaseInstallLock(lock)) reportStopNotCarriedOut(true);
@@ -1559,33 +1555,66 @@ function reportInstallationStillRunning() {
   );
 }
 
-// The stop handoffs of Stops that act without a lock of their own and are renewing. A Stop renews
-// its handoff for as long as it acts, so one whose process number runs but whose handoff does not
-// change while it is watched belongs to a Stop that ended (its number was reused): it is removed,
-// like one whose process number does not run at all.
-function liveStopHandoffs(root) {
-  const system = join(root, "system");
-  return readdirSync(system).filter((name) => {
+// The content of a stop handoff, or undefined once it is gone.
+function handoffContent(system, name) {
+  try {
+    return readFileSync(join(system, name), "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+// Whether the stop handoff `name` belongs to a Stop that still acts. A Stop renews its handoff for
+// as long as it acts, so one whose process number runs but whose handoff has not changed for
+// LOCK_OBSERVE_MS belongs to a Stop that ended (its number was reused): it is removed, like one
+// whose process number does not run at all. `watched` keeps what each handoff held and since when.
+function stopStillActs(system, name, watched, now) {
+  const match = STOP_HANDOFF.exec(name);
+  if (match === null) return false;
+  const content = pidAlive(match[1]) ? handoffContent(system, name) : undefined;
+  const seen = watched.get(name);
+  if (content !== undefined && seen?.content !== content) {
+    watched.set(name, { content, since: now });
+    return true;
+  }
+  if (content !== undefined && now - seen.since < LOCK_OBSERVE_MS) return true;
+  watched.delete(name);
+  rmSync(join(system, name), { force: true });
+  return false;
+}
+
+// The latest press of the Stop handoffs among `names`, of those at or after `since`.
+function handoffPress(names, since, latest) {
+  let found = latest;
+  for (const name of names) {
     const match = STOP_HANDOFF.exec(name);
-    if (match === null) return false;
-    const acts =
-      pidAlive(match[1]) &&
-      renewedEntries(system, (entry) => entry === name, installLockPath(root)).length > 0;
-    if (!acts) rmSync(join(system, name), { force: true });
-    return acts;
-  });
+    if (match !== null) found = laterPress(found, tokenTime(match[2]), since);
+  }
+  return found;
 }
 
 // A start that holds the lock waits until no Stop acts under a handoff: that Stop decided before
-// this start took the lock, so its stop must not land on the Keiko this start opens. Returns false
-// when a Stop was still acting after the same wait a Stop gives the lock.
-function awaitStopHandoffs(root) {
+// this start took the lock, so its stop must not land on the Keiko this start opens. Every handoff
+// is watched at once under the one wait a Stop gives the lock, and the start goes on as soon as the
+// last one is gone. `settled` is false when a Stop was still acting once that wait was over.
+// `pressedAt` is the latest press, at or after `since` (when this start began to take the lock), of
+// a handoff seen meanwhile: that Stop was pressed while this start was being loaded, so the start
+// carries it out like a Stop recorded in its lock instead of opening Keiko.
+function awaitStopHandoffs(root, since) {
+  const system = join(root, "system");
   const deadline = lockClock.now() + STOP_LOCK_WAIT_MS;
-  while (liveStopHandoffs(root).length > 0) {
-    if (lockClock.now() >= deadline) return false;
+  const watched = new Map();
+  let pressedAt;
+  for (;;) {
+    const now = lockClock.now();
+    const names = readdirSync(system);
+    pressedAt = handoffPress(names, since, pressedAt);
+    const acting = names.filter((name) => stopStillActs(system, name, watched, now));
+    if (acting.length === 0) return { settled: true, pressedAt };
+    if (now >= deadline) return { settled: false, pressedAt };
     lockClock.sleep(LOCK_OBSERVE_STEP_MS, installLockPath(root));
   }
-  return true;
 }
 
 function lockRefused(closing, another) {
@@ -1608,12 +1637,20 @@ export function start(root, nodeDir, env, run = spawnSync, pause = () => undefin
     ? first
     : acquireAfterOrphanedNpm(root, pause);
   if (lock === undefined) return lockRefused(closing, another);
-  if (!awaitStopHandoffs(root)) {
+  const handoffs = awaitStopHandoffs(root, lock.orderedAt);
+  if (!handoffs.settled) {
     if (releaseInstallLock(lock)) reportStopNotCarriedOut(true);
     reportStopStillActing();
     return 1;
   }
-  return installAndOpen(root, nodeDir, env, run, lock, args, pause);
+  return installAndOpen(
+    root,
+    nodeDir,
+    env,
+    run,
+    { lock, args, handoffPress: handoffs.pressedAt },
+    pause,
+  );
 }
 
 const STOP_LOCK_WAIT_MS = 90 * 1000;
@@ -1625,16 +1662,16 @@ function reportStopRecorded() {
   );
 }
 
-// Waits for the lock of a start that is closing. A later start that wins it before this Stop does
-// records the Stop in its own lock instead (`recorded`): that start does not leave Keiko open, so
-// this Stop must not act, or it would end the Keiko that start just reported running.
-function waitForStopLock(root) {
+// Waits for the lock of a start that is closing. A start that wins it before this Stop does and
+// began before the Stop was pressed records the Stop in its own lock instead (`recorded`): that
+// start does not leave Keiko open. A start that began after it is left to open Keiko.
+function waitForStopLock(root, pressedAt, pause) {
   const deadline = lockClock.now() + STOP_LOCK_WAIT_MS;
-  let lock = acquireInstallLock(root, undefined, { closing: true });
+  let lock = acquireInstallLock(root, pause, { closing: true });
   while (lock === undefined && lockClock.now() < deadline) {
-    if (requestStop(root)) return { recorded: true };
+    if (requestStop(root, pressedAt)) return { recorded: true };
     lockClock.sleep(LOCK_OBSERVE_STEP_MS, installLockPath(root));
-    lock = acquireInstallLock(root, undefined, { closing: true });
+    lock = acquireInstallLock(root, pause, { closing: true });
   }
   return { lock, recorded: false };
 }
@@ -1653,53 +1690,13 @@ function reportStartCameAfterStop() {
   );
 }
 
-// The two start records a Stop is bound to: this folder's and the data folder's, which every
-// package folder using the same data shares.
-function readRecords(root, state) {
-  return { folder: startGeneration(root), shared: stateGeneration(state) };
-}
-
-// What a Stop saw when it was pressed: the start records, and the starts that held the lock then.
-// A start that held the lock at that moment came before the Stop, whenever it finished, so only a
-// record that names neither the one seen nor a holder seen belongs to a start that came after. The
-// data folder's record binds the Stop to the starts of every folder that uses it: a start of
-// another package folder that opened Keiko while the Stop waited came after it. The reads must
-// agree: a start that records its launch and lets go of the lock between them would show the
-// earlier record and no holder, and look like a start that came after the Stop. The reads are
-// repeated until both records are the same on both sides of the holder listing.
-function observeStart(root, state, pause = () => undefined) {
-  let records = readRecords(root, state);
-  for (let attempt = 0; attempt < OBSERVE_ATTEMPTS; attempt += 1) {
-    pause("observe");
-    const holders = new Set(
-      (lockEntries(installLockPath(root)) ?? [])
-        .map((name) => LOCK_ENTRY.exec(name))
-        .filter((match) => match?.[1] === "owner")
-        .map((match) => `${match[2]}-${match[3]}`),
-    );
-    const after = readRecords(root, state);
-    if (after.folder === records.folder && after.shared === records.shared) {
-      return { records, holders, state };
-    }
-    records = after;
-  }
-  return { records, holders: new Set([records.folder.trim(), records.shared.trim()]), state };
-}
-
-function startCameAfter(root, seen) {
-  const later = (current, before) => current !== before && !seen.holders.has(current.trim());
-  return (
-    later(startGeneration(root), seen.records.folder) ||
-    later(stateGeneration(seen.state), seen.records.shared)
-  );
-}
-
 // A Stop the lock turned away (its start is closing) acts under the lock itself: it waits until
 // that start has let go, takes the lock, closes it so no further Stop is recorded in it, and only
-// then stops Keiko. No start opens Keiko between the Stop's decision and its effect, so the Stop
-// can never end the Keiko a newer start opened.
-function stopUnderLock(root, state, env, run, seen) {
-  const { lock, recorded } = waitForStopLock(root);
+// then stops Keiko. No start of this folder opens Keiko between the Stop's decision and its effect,
+// and the stop carries the time the Stop was pressed, so a start of any folder that began after it
+// keeps the Keiko it opened.
+function stopUnderLock(root, state, env, run, pressedAt, pause) {
+  const { lock, recorded } = waitForStopLock(root, pressedAt, pause);
   if (recorded) {
     reportStopRecorded();
     return 0;
@@ -1716,11 +1713,7 @@ function stopUnderLock(root, state, env, run, seen) {
       reportStopLockLost();
       return 1;
     }
-    if (startCameAfter(root, seen)) {
-      reportStartCameAfterStop();
-      return 0;
-    }
-    return stopNow(root, state, env, run);
+    return stopNow(root, state, env, run, pressedAt);
   } finally {
     removeInstallLock(lock);
   }
@@ -1737,8 +1730,8 @@ function startHoldsLock(root) {
 // (`awaitStopHandoffs`) before it opens Keiko: the stop can never land on a Keiko that start
 // opened. Written before the lock is looked at again, so a start either sees the handoff or is seen
 // holding the lock; in that case the Stop withdraws and acts under the lock like any other.
-function stopUnderHandoff(root, state, env, run, seen, pause) {
-  const handoff = join(root, "system", `keiko-npm-stop-handoff-${lockToken()}`);
+function stopUnderHandoff(root, state, env, run, pressedAt, pause) {
+  const handoff = join(root, "system", `keiko-npm-stop-handoff-${lockToken(pressedAt)}`);
   closeSync(openSync(handoff, "wx", 0o600));
   // Renewed from a worker thread, because the stop command blocks this one.
   const stopRenewing = lockRenewal.start(handoff);
@@ -1746,22 +1739,22 @@ function stopUnderHandoff(root, state, env, run, seen, pause) {
   if (startHoldsLock(root)) {
     stopRenewing();
     rmSync(handoff, { force: true });
-    return stopUnderLock(root, state, env, run, seen);
+    return stopUnderLock(root, state, env, run, pressedAt, pause);
   }
   try {
-    if (startCameAfter(root, seen)) {
-      reportStartCameAfterStop();
-      return 0;
-    }
-    return stopNow(root, state, env, run);
+    return stopNow(root, state, env, run, pressedAt);
   } finally {
     stopRenewing();
     rmSync(handoff, { force: true });
   }
 }
 
-function stopNow(root, state, env, run) {
-  const code = stopKeiko(root, state, env, run);
+function stopNow(root, state, env, run, pressedAt) {
+  const code = stopKeiko(root, state, env, run, pressedAt);
+  if (code === STOP_SUPERSEDED_EXIT_CODE) {
+    reportStartCameAfterStop();
+    return 0;
+  }
   if (code === 0) {
     say(
       "Keiko is stopped. You can close this window.",
@@ -1788,12 +1781,10 @@ function onlyNpmHoldsLock(root) {
  * nothing to stop.
  */
 export function stop(root, env, run = spawnSync, pause = () => undefined) {
+  // Read first: a start that begins to take its lock after this line came after this Stop.
+  const pressedAt = orderTime();
   const state = stateDir(env);
-  // The start record and the starts holding the lock as this Stop was pressed, read before it asks
-  // the lock: a start that opens Keiko while the lock answers, or later while the Stop waits, and
-  // that was not holding the lock now, came after this Stop.
-  const seen = observeStart(root, state, pause);
-  if (requestStop(root)) {
+  if (requestStop(root, pressedAt)) {
     reportStopRecorded();
     return 0;
   }
@@ -1802,8 +1793,8 @@ export function stop(root, env, run = spawnSync, pause = () => undefined) {
     return 0;
   }
   return onlyNpmHoldsLock(root)
-    ? stopUnderHandoff(root, state, env, run, seen, pause)
-    : stopUnderLock(root, state, env, run, seen);
+    ? stopUnderHandoff(root, state, env, run, pressedAt, pause)
+    : stopUnderLock(root, state, env, run, pressedAt, pause);
 }
 
 // The gateway connection Gateway Setup verified, and what it built from it. One token covers only
@@ -1863,24 +1854,21 @@ function sameConnection(block, primary) {
   );
 }
 
-// Gateway Setup marks what it built from the connection it verified: every chat and embedding model
-// carries `catalogOrigin`, and a voice provider it proved to share the gateway's credential carries
-// `credentialOrigin` (as the reranker does). A voice deployment needs both that mark and the
-// gateway-managed locality the gateway's loader reads: a locality alone survives a voice key rotated
-// on its own, and the mark alone says nothing about a deployment Keiko reaches outside the gateway.
-// A model entered with its own credential carries neither mark, even on the same endpoint.
+// Gateway Setup marks what it built from the connection it verified: every model or reranker it
+// proved to hold the gateway's durable credential carries `credentialOrigin`, derived at save time
+// from the stored credentials, never from a transient environment override and never from catalog
+// provenance. `catalogOrigin` says who listed a model, not whose key it holds, so an operator's own
+// key on a model that keeps a catalog mark stays that model's own. A voice deployment also needs the
+// gateway-managed locality the gateway's loader reads: the mark alone says nothing about a
+// deployment Keiko reaches outside the gateway.
 function builtFromConnection(config, provider, primary) {
   if (provider === primary) return true;
   if (provider.endpointStyle !== primary.endpointStyle) return false;
   if (provider.apiVersion !== primary.apiVersion) return false;
   if (!sameConnection(provider, primary)) return false;
-  if (provider.catalogOrigin !== undefined) return true;
+  if (provider.credentialOrigin !== "gateway-connection") return false;
   const capability = capabilityOf(config, provider);
-  return (
-    provider.credentialOrigin === "gateway-connection" &&
-    capability?.kind === "voice" &&
-    capability.voiceProviderLocality === "gateway-managed"
-  );
+  return capability?.kind !== "voice" || capability.voiceProviderLocality === "gateway-managed";
 }
 
 function filledText(value) {
@@ -2079,6 +2067,22 @@ export function tokenInput(value, chunk, escape = "none") {
   return { value: token.join(""), end: undefined, escape: state };
 }
 
+// Echo goes off and the input is listened to before the prompt appears: a token typed or pasted
+// the moment the prompt shows is never echoed. `terminal` records what was set up, so a terminal
+// that fails here is restored.
+function showHiddenPrompt(io, prompt, listeners, terminal) {
+  const { stdin, stdout } = io;
+  stdin.setRawMode(true);
+  terminal.raw = true;
+  stdin.setEncoding("utf8");
+  stdin.on("data", listeners.onData);
+  stdin.on("end", listeners.onClosed);
+  stdin.on("close", listeners.onClosed);
+  stdout.write(prompt);
+  terminal.shown = true;
+  stdin.resume();
+}
+
 /**
  * The token is typed or pasted without being shown. Enter ends it, Ctrl+C cancels, and a terminal
  * that closes before Enter ends it with an error; each way the terminal leaves raw mode. `io` is
@@ -2091,20 +2095,20 @@ export function readHidden(prompt, io = process) {
       new Error("no terminal to read the token from / kein Terminal fuer die Eingabe des Tokens"),
     );
   }
-  stdout.write(prompt);
   return new Promise((resolveToken, rejectToken) => {
     let value = "";
     let escape = "none";
     let settled = false;
+    const terminal = { raw: false, shown: false };
     const finish = (error) => {
       if (settled) return;
       settled = true;
-      if (stdin.destroyed !== true) stdin.setRawMode(false);
+      if (terminal.raw && stdin.destroyed !== true) stdin.setRawMode(false);
       stdin.pause();
       stdin.off("data", onData);
       stdin.off("end", onClosed);
       stdin.off("close", onClosed);
-      stdout.write("\n");
+      if (terminal.shown) stdout.write("\n");
       if (error === undefined) resolveToken(value.trim());
       else rejectToken(error);
     };
@@ -2121,12 +2125,11 @@ export function readHidden(prompt, io = process) {
           "the terminal closed before the token was entered / das Terminal wurde geschlossen, bevor der Token eingegeben war",
         ),
       );
-    stdin.setRawMode(true);
-    stdin.setEncoding("utf8");
-    stdin.on("data", onData);
-    stdin.on("end", onClosed);
-    stdin.on("close", onClosed);
-    stdin.resume();
+    try {
+      showHiddenPrompt(io, prompt, { onData, onClosed }, terminal);
+    } catch (error) {
+      finish(error);
+    }
   });
 }
 

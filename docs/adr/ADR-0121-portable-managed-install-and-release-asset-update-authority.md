@@ -1268,7 +1268,7 @@ verifies that it is still there, so a start window that was closed cannot look a
 takes it over at once; otherwise it watches the entries for up to 60 seconds on its own monotonic
 clock, and any entry that changes (or appears) means the lock is held, while none means the number
 was reused or the holder is frozen and the lock is taken over. No wall-clock comparison across
-processes, no boot rule and no age limit decides. The remaining limit is stated plainly: a frozen
+processes, no boot rule and no age limit decides whether a holder runs. The remaining limit is stated plainly: a frozen
 holder that resumes after a takeover overlaps for at most one renewal interval, because its first
 renewal finds its entry gone and ends npm. A Stop is recorded only when the start's own entry (not
 npm's alone) runs and renews; a closing entry counts only beside the owner entry of the same start.
@@ -1278,35 +1278,14 @@ another start's and is never moved, read or removed. Before it lets go, a start 
 entry; a Stop adds its entry and then looks for the closing entry, so a Stop is either read by the
 closing start and carried out while it still holds the lock, or is turned away, waits until that start has
 let go, takes the lock, closes it and stops Keiko under it (a lock held for 90 seconds makes the Stop
-say so and not act). While it waits it retries recording: a later start that wins the lock first
-records the Stop in its own lock and carries it out, and the waiting Stop does not act itself. A lock a Stop takes is born
-closed: its `closing` entry is in the same rename as its owner entry, so no observer sees a Stop's owner entry as a start
-that is about to open Keiko. A start writes its token
-as `keiko-npm-start-generation-<token>` only when its launch of Keiko succeeded (the command line ended with
-success), twice: in the folder's `system/` and in Keiko's data folder, which every package folder of the account shares.
-A spawn the system refused, a command line that refused before it opened anything and a failed start record nothing.
-Each record is published whole by the owner-private publisher under a name of its own, so it never replaces another record.
-A start lists the existing records, checks that it still owns its lock, publishes its record, checks the lock again and only then
-removes the records it listed; a start that lost its lock at any point withdraws only its own record, so a returning former
-owner never displaces or removes a newer one. The newest record (by write time) is the generation. A Stop reads both records,
-and the owner tokens of the starts holding the lock,
-as it is pressed, before it asks the lock, and again after it took the lock. The records are read on both sides of the holder
-listing and read again when one changed in between. The data folder's record binds a delayed Stop to every package folder that
-uses the same data: a start of another folder that opened Keiko while the Stop waited is a start that came after it. A Stop
-cannot see the lock of another folder, so a start of another folder that held its lock at the press and finishes later is also
-taken for a later start (the Stop leaves Keiko open and asks to be pressed again). The re-read before the stop is dispatched
-is not atomic with the stop command across folders, because each folder's installation lock stays its own. It does not act only when a record names a
-start that was neither the one it saw nor one that held the lock when it was pressed (that start opened Keiko after the
-Stop); a start that held the lock at the press and finishes meanwhile came before the Stop, so the Stop still acts. It also
-does not act when closing the lock it took reports it is no longer its own. A start that lost its lock while closing it carries
-out no Stop request, confirmed or provisional. So it can never stop the Keiko a later start
-opened. Every stop runs while its dispatcher owns the lock: a start that cancelled opening because it saw a Stop carries the
+say so and not act). While it waits it retries recording: a start that wins the lock first and began before the Stop was pressed records the Stop in its own lock and carries it out, and the waiting Stop does not act itself. A lock a Stop takes is born closed: its `closing` entry is in the same rename as its owner entry, so no observer sees a Stop's owner entry as a start that is about to open Keiko.
+Starts and Stops are ordered by time, and the lifecycle owner decides. Every lock entry ends in a token `<pid>-<time><random>` whose twelve hex digits are the wall-clock milliseconds at which its start began to take the lock (read before the lock's rename) or at which its Stop was pressed (read first), so a lock carries its start's time in the one rename that makes it appear. A Stop is recorded only in the lock of a start whose time is not later than the press, and a start carries out only Stops pressed at or after its own time, so the provisional entry of a Stop the lock turned away is never carried out. A start passes its time as `keiko start --launch-order <ms>`, and a start without the flag (the standalone folder package, a plain `keiko start`) is ordered by the time its command began; once Keiko answers, the command line records the latest order since the last stop in `<state>/ui.launch-order` under the UI lifecycle guard of the data folder, which every package folder of the account shares. Every stop the launcher runs is `keiko stop --unless-launched-after <press>`: under the same guard the command line leaves Keiko open with exit code 3 when the recorded order is later than the press, stops nothing when the record cannot be read, and otherwise stops Keiko and clears the record; a record it cannot clear is logged (`clear-failed`) and the stop still succeeds. A start never replaces a record it cannot read, because it may hold a later order: Keiko is open, and the start says that its order was not recorded. A record that is not an order is reported and replaced by the start's own. The check and the stop are one step at the lifecycle owner, so no start of any folder that uses the data can open Keiko between them, and the record keeps the latest order whichever start finishes last: a former owner that returns from its command line after a takeover never lowers it. A launch the system refused, one the command line refused before it opened anything and a failed start record nothing. A start whose time equals the press counts as one before it (both happened in the same millisecond). The order is recorded as body-free `cli.lifecycle.launch-order` outcomes, never as a time. The wall clock is the one clock that processes of different folders can compare: a correction that sets it back during a Stop's wait can make a later start look earlier (that Stop then stops its Keiko) or an earlier one later (the Stop leaves Keiko open and asks to be pressed again). A Stop recorded in a start's lock is carried out with the latest press recorded there, and a start that cancelled opening because it saw a Stop carries the press it saw, also when the requester withdrew that entry. A Stop does not act when closing the lock it took reports it is no longer its own. A start that lost its lock while closing it carries out no Stop request, confirmed or provisional; a takeover after that check is a start that began after the press, so the fence leaves its Keiko open. A Stop therefore never stops the Keiko of a start that began after it was pressed. Every stop runs while its dispatcher owns the lock: a start that cancelled opening because it saw a Stop carries the
 stop out under its own closing lock, even when the requester withdrew its provisional entry. A lock that only npm of an
 already ended start holds accepts no Stop, so that Stop acts at once, but without a lock of its own: it first leaves
-`system/keiko-npm-stop-handoff-<pid>-<random>`, withdraws it and acts under the lock like any other Stop when a start holds
+`system/keiko-npm-stop-handoff-<token>`, whose token carries the time the Stop was pressed like a lock entry's, withdraws it and acts under the lock like any other Stop when a start holds
 the lock after all, and removes it when its stop has ended. The Stop renews the entry every 15 seconds from a worker thread while it acts. A start
-that holds the lock waits for such an entry that renews before it opens Keiko, for up to 90 seconds; an entry whose process does
-not run, or that does not change for 60 seconds on the start's monotonic clock (a reused process number), is removed; after that it releases the lock and ends with exit code 1 and
+that holds the lock watches every such entry at once under one wait of up to 90 seconds and opens Keiko as soon as the last one is gone; an entry whose process does
+not run, or that has not changed for 60 seconds on the start's monotonic clock (a reused process number), is removed. A start does not open Keiko when one of those Stops was pressed at or after its own time: such a Stop acts on the Keiko this start would open, so the start says Keiko was stopped while it was being loaded. When one still renews after the wait, the start releases the lock, ends with exit code 1 and
 asks to start again. A start that finds a `closing` entry waits up to the same 90 seconds for that holder to let go; if the
 lock is still closing then, nothing opens Keiko for it, so it ends with exit code 1 and says that Keiko is still being
 closed (never that another window opens it), and a Start pressed while a Stop acts opens Keiko after it. A start that finds the lock held
@@ -1362,14 +1341,18 @@ declaration for an npm installation too and reports `portable-it-managed`; the u
 then makes no registry or release request. An administrator's access step
 (`system/Zugang speichern`) reads the configuration Gateway Setup saved and replaces with one token,
 typed without echo, only the keys sealed for the gateway connection Gateway Setup verified: the
-primary provider, the providers it built on the same endpoint style, API version, base URL and key
-header (its discovered models and gateway-managed voice, whose capability is read as the gateway's
-loader merges it: the top-level `capabilities` entry, else the provider's own `capability`) and the
-reranker on that address and header that Gateway Setup proved to share the gateway's credential.
-Address and header do not show whose key a sealed reference names, so Gateway Setup marks that
-reranker `credentialOrigin: "gateway-connection"` when it wires a discovered one or finds an owned
-one sharing the stored connection's endpoint, header and credential, and removes the mark
-otherwise; the gateway's loader accepts only that closed value.
+primary provider, the providers it built on that connection with the same endpoint style, API
+version, base URL and key header (a gateway-managed voice deployment also needs that locality, its
+capability read as the gateway's loader merges it: the top-level `capabilities` entry, else the
+provider's own `capability`) and the reranker on that address and header that Gateway Setup proved
+to share the gateway's credential. Address, header and catalog origin do not show whose key a sealed
+reference names, so Gateway Setup marks every provider it builds with the verified connection's
+credential, the primary excepted, and that reranker `credentialOrigin: "gateway-connection"`: a
+reranker when it wires a discovered one or finds an owned one whose durable credential (the vault
+reference resolved, transient `KEIKO_RERANKER_*` and per-model overrides masked) shares the stored
+connection's endpoint, header and credential, and it removes the mark otherwise; the gateway's
+loader accepts only that closed value. A provider without the mark is another connection, so a
+configuration an earlier Keiko saved is refused until Gateway Setup has saved it once more.
 A provider or reranker with its own connection and a sealed key is refused before the token is
 read, so one token never reaches another service; a key written into the file as `apiKey` is
 neither replaced nor refused. So is a model without an id or an address, and a provider or

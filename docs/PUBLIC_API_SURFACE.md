@@ -116,7 +116,12 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
   `keiko-macos-x64.standalone.zip` and `keiko-windows-x64.standalone.zip`. The npm folder package is
   not a release asset; an administrator builds it from the published release as described in
   [the npm folder package guide](release/standalone-npm-package.md#build-a-package). The Jira
-  template API adds `POST /api/skills/jira-templates/options` for guided template editing. Figma
+  template API adds `POST /api/skills/jira-templates/options` for guided template editing.
+  `keiko start` and `keiko restart` accept `--launch-order MS`, and `keiko stop` accepts
+  `--unless-launched-after MS`, which leaves Keiko open with exit code 3 when a start with a later
+  order opened it; a start without `--launch-order` is ordered by the time it began. Every start
+  records its order in the state directory (`ui.launch-order`), and a stop clears it. The npm folder
+  package's start files order their starts and Stops this way. Figma
   Snapshot records without a provenance version stay readable. Existing stores carry forward
   unchanged.
 

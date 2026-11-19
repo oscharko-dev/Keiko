@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f9c12c6f7ea0605c4cdb4a0391db9d3c942e168ed47777ddea0ba89e54b1cadc"
+    "catalogDigest": "8484869ae1c42f911d46e0282d6d56f2beb05833996623a0c6677ec1490a98a7"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 715,
-    "proofCount": 738,
-    "resolvedProofCount": 738,
-    "failureClassCount": 407,
+    "operationCount": 716,
+    "proofCount": 739,
+    "resolvedProofCount": 739,
+    "failureClassCount": 408,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -90,6 +90,7 @@
       "operations": [
         "cli.lifecycle.browser-handoff",
         "cli.lifecycle.health",
+        "cli.lifecycle.launch-order",
         "cli.lifecycle.native-owner",
         "cli.lifecycle.stop-escalated",
         "cli.lifecycle.stop-escalation-failed",
@@ -946,6 +947,7 @@
     "cli-audit": ["runtime-packages.dependency-failure"],
     "cli-gateway-service": ["runtime-packages.dependency-failure"],
     "provisioned-config-adoption": ["runtime-packages.dependency-failure"],
+    "launch-order-fence": ["ui.dependency-failure"],
     "windows-gateway-service": ["tools-workflows.dependency-failure"],
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
@@ -1559,6 +1561,7 @@
       "packages/keiko-cli/src/lifecycle-health-owner.test.ts",
       "packages/keiko-cli/src/lifecycle-start-window.test.ts"
     ],
+    "cli.lifecycle.launch-order.outcome": ["packages/keiko-cli/src/lifecycle-launch-order.test.ts"],
     "cli.lifecycle.native-owner.outcome": [
       "packages/keiko-cli/src/lifecycle-diagnostics.test.ts",
       "packages/keiko-cli/src/lifecycle-native-activity.test.ts"
