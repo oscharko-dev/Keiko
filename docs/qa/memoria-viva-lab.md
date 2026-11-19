@@ -474,9 +474,12 @@ then does the instance start. A scenario with a seed may have no `turns` (the hi
   list (truth, superseded, forgotten, forbidden, poison, and the `expect.terms` and `expect.forbidden`
   of a probe) would match a filler body, and two groups with one `seed` (identical bodies).
 - Every planned record is also run through the memory contract's own validator
-  (`validateMemoryRecord`, a runtime export of the contracts package index, taken from the built
-  package of the SUBJECT being measured, `--subject-root`, not the lab's checkout) when the scenario
-  loads, so a body the
+  (`validateMemoryRecord`) when the scenario
+  loads, taken from the built contracts package of the SUBJECT being measured (`--subject-root`, not the
+  lab's checkout): its `dist/memory-record-validation.js`, the package's subpath export
+  `./memory-record-validation`. The package's root barrel is deliberately type-only, so the entry is the
+  domain module, which every subject with a memory contract has, an older one included. The manifest
+  records `seedContract`: `module` or `unavailable`. Validating at load means a body the
   learned form cannot store (its evidence span is bounded at 1,024 characters), a control character, or
   an age that makes a timestamp negative fails with the scenario's name instead of as a storage error
   at instance start. A seed cannot be loaded without the subject's built contracts: a contract that

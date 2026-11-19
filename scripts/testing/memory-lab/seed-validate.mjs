@@ -19,20 +19,29 @@ import {
 } from "./seed-plan.mjs";
 
 // The memory contract's own record validator, from the built contracts package of the SUBJECT being
-// measured (its public entry point): the vault refuses a record it does not accept, at instance start,
-// with an error that names no scenario, and a subject at another version has another contract. Until
-// `useSubjectContract` names a subject the lab's own checkout is the subject. A contract that cannot be
-// loaded is kept as a named error with its cause, and a scenario with a seed is refused with it: a seed
-// is never accepted unchecked, and never for a reason that is hidden.
+// measured: the vault refuses a record it does not accept, at instance start, with an error that names
+// no scenario, and a subject at another version has another contract. The package's root barrel is
+// deliberately type-only (runtime values come from their domain module), so the entry is the subject's
+// `dist/memory-record-validation.js`, the subpath export `./memory-record-validation` of the package;
+// every subject that has a memory contract has it, older ones included, so a before/after measurement
+// of an older subject keeps working. Until `useSubjectContract` names a subject the lab's own checkout
+// is the subject. A contract that cannot be loaded is kept as a named error with its cause, and a
+// scenario with a seed is refused with it: a seed is never accepted unchecked, never for a hidden reason.
 let contract = await loadContract(REPO_ROOT);
 
 async function loadContract(subjectRoot) {
-  const entry = join(subjectRoot, "packages", "keiko-contracts", "dist", "index.js");
+  const entry = join(
+    subjectRoot,
+    "packages",
+    "keiko-contracts",
+    "dist",
+    "memory-record-validation.js",
+  );
   try {
     const { validateMemoryRecord } = await import(pathToFileURL(entry).href);
     if (typeof validateMemoryRecord !== "function")
       throw new TypeError("it exports no validateMemoryRecord");
-    return { validateMemoryRecord };
+    return { validateMemoryRecord, source: "module" };
   } catch (cause) {
     const reason = cause instanceof Error ? cause.message : String(cause);
     return {
@@ -44,9 +53,13 @@ async function loadContract(subjectRoot) {
   }
 }
 
-/** Names the subject whose memory contract validates the seeds of the scenarios loaded after this. */
+/**
+ * Names the subject whose memory contract validates the seeds of the scenarios loaded after this, and
+ * returns where it came from: `module` or `unavailable` (the run's `seedContract`).
+ */
 export async function useSubjectContract(subjectRoot) {
   contract = await loadContract(subjectRoot ?? REPO_ROOT);
+  return contract.source ?? "unavailable";
 }
 
 const MAX_AGE_DAYS = 36_500;

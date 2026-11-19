@@ -288,17 +288,18 @@ describe("validating a seed", () => {
       const root = mkdtempSync(join(tmpdir(), "memory-lab-contract-"));
       try {
         // A subject whose contract refuses every record: its answer, not the lab checkout's, decides.
+        // It may be older than the index's era: only the module file exists, and that is the entry.
         const dist = join(root, "packages", "keiko-contracts", "dist");
         mkdirSync(dist, { recursive: true });
         writeFileSync(
-          join(dist, "index.js"),
+          join(dist, "memory-record-validation.js"),
           'export const validateMemoryRecord = () => ({ ok: false, errors: ["subject contract says no"] });\n',
         );
-        await useSubjectContract(root);
+        expect(await useSubjectContract(root)).toBe("module");
         expect(() => validateScenario(scenario())).toThrow(/subject contract says no/u);
         // A subject whose contract cannot be loaded: a named error, not a silent empty object.
         const missing = join(root, "missing-subject");
-        await useSubjectContract(missing);
+        expect(await useSubjectContract(missing)).toBe("unavailable");
         let message = "";
         try {
           validateScenario(scenario());
@@ -306,14 +307,16 @@ describe("validating a seed", () => {
           message = String(error.message);
         }
         expect(message).toContain(missing);
-        expect(message).toContain(join("packages", "keiko-contracts", "dist", "index.js"));
+        expect(message).toContain(
+          join("packages", "keiko-contracts", "dist", "memory-record-validation.js"),
+        );
         expect(message).toMatch(/cannot be loaded from/u);
-        // A subject whose index exports no validator says so.
-        // (a second subject: an ES module is cached by its path)
+        // A subject whose module exports no validator says so (a second subject: modules are cached
+        // by path).
         const bare = join(root, "bare-subject");
         mkdirSync(join(bare, "packages", "keiko-contracts", "dist"), { recursive: true });
         writeFileSync(
-          join(bare, "packages", "keiko-contracts", "dist", "index.js"),
+          join(bare, "packages", "keiko-contracts", "dist", "memory-record-validation.js"),
           "export const other = 1;\n",
         );
         await useSubjectContract(bare);

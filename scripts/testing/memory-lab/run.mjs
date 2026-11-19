@@ -521,6 +521,16 @@ function timingRows(results, sealed) {
   }));
 }
 
+// What the run recorded about itself: the recall trace (`on`, `partial` (some probes untraced, for
+// example real-conversation scenarios) or `off`) and which entry of the subject's contracts validated
+// the seeds (`module`, or `unavailable`).
+function recordedEvidence(options, results) {
+  return {
+    recallTrace: recallTraceCoverage(results),
+    seedContract: options.seedContract ?? "unavailable",
+  };
+}
+
 function writeEvidence(options, corpus, results, gateway) {
   const manifest = corpus.manifest;
   if (!corpus.sealed)
@@ -559,7 +569,7 @@ function writeEvidence(options, corpus, results, gateway) {
     maintenance: options.maintenance,
     // What the run actually recorded: `on` (every answer probe of an arm with memory), `partial`
     // (some, for example real-conversation scenarios, which are never traced) or `off`.
-    recallTrace: recallTraceCoverage(results),
+    ...recordedEvidence(options, results),
     holdout: corpus.sealed,
     // `sealed` is what the judge checks before it accepts a run as the holdout part of a pair.
     sealed: corpus.sealed,
@@ -763,7 +773,7 @@ export async function runLab(requested, log = console.log) {
     embeddingModelIds: gateway.embeddingModelIds,
   };
   // Seeds are validated against the contract of the subject that is measured.
-  await useSubjectContract(options.subjectRoot);
+  options.seedContract = await useSubjectContract(options.subjectRoot);
   const corpus = loadCorpus(options);
   assertKeepAllowed(corpus.scenarios, options.keep);
   return withExclusiveProcessLock(options.out, "memory-lab-run", (assertOwned) =>

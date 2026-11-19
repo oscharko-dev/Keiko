@@ -3466,9 +3466,6 @@ export type {
   WorkflowRunId as MemoryWorkflowRunId,
   WorkspaceId as MemoryWorkspaceId,
 } from "./memory.js";
-// The memory record validator as a runtime value: the lab validates its seeded records with the
-// subject's own contract before they reach a vault (scripts/testing/memory-lab/seed-validate.mjs).
-export { validateMemoryRecord } from "./memory-record-validation.js";
 export type {
   MEMORY_FORGET_REASON_ARCHIVED_RETENTION,
   MEMORY_AUDIT_ACTION_KINDS,
@@ -3512,6 +3509,7 @@ export type {
   validateMemoryPin,
   validateMemoryProposal,
   validateMemoryProvenance,
+  validateMemoryRecord,
   validateMemoryRejection,
   validateMemoryRetrievalRequest,
   validateMemoryScope,

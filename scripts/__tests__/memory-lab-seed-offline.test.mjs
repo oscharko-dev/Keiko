@@ -205,6 +205,8 @@ describe("the seeded demonstration scenarios", () => {
         readFileSync(join(root, "no-maintenance", "manifest.json"), "utf8"),
       );
       expect(manifest.metadata.maintenance).toBe("off");
+      // The seeds were validated with the subject's own contract module.
+      expect(manifest.metadata.seedContract).toBe("module");
       const needs = unit(root, "no-maintenance", "seed-needs-two-en", "product");
       expect(needs.seed.after.lostIndexes).toEqual([]);
       expect(needs.seed.after.byStatus).toEqual({ accepted: 32, archived: 10 });
