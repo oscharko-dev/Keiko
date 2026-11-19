@@ -198,6 +198,60 @@ describe("applyMemoryRetention — maxRecordsPerScope", () => {
     expect(vault.getMemory(brandedMemoryId("free-3"))).toBeDefined();
   });
 
+  // #4223, audit A4: a replaced value is history; it is evicted before a fact the person relies on.
+  it("evicts history before a live fact, although the history is newer", () => {
+    const vault = makeVault();
+    insertRecord(vault, { id: "live-old", updatedAt: NOW - 9 * ONE_DAY_MS });
+    for (const index of [0, 1, 2]) {
+      insertRecord(vault, {
+        id: `history-${String(index)}`,
+        updatedAt: NOW - (5 - index) * ONE_DAY_MS,
+        status: "superseded",
+      });
+    }
+    insertRecord(vault, { id: "live-new", updatedAt: NOW - ONE_DAY_MS });
+    const policy: MemoryRetentionPolicy = { maxRecordsPerScope: 4 };
+    const result = applyMemoryRetention({ vault, scopes: [SCOPE], policy, nowMs: NOW });
+    expect(result.forgotten.map((decision) => decision.memoryId)).toEqual([
+      brandedMemoryId("history-0"),
+    ]);
+    expect(vault.getMemory(brandedMemoryId("live-old"))).toBeDefined();
+    expect(vault.getMemory(brandedMemoryId("live-new"))).toBeDefined();
+  });
+
+  it("evicts history oldest first, then live facts once no history remains", () => {
+    const vault = makeVault();
+    insertRecord(vault, { id: "live-1", updatedAt: NOW - 9 * ONE_DAY_MS });
+    insertRecord(vault, { id: "live-2", updatedAt: NOW - 8 * ONE_DAY_MS });
+    insertRecord(vault, { id: "h-new", updatedAt: NOW - 2 * ONE_DAY_MS, status: "superseded" });
+    insertRecord(vault, { id: "h-old", updatedAt: NOW - 3 * ONE_DAY_MS, status: "superseded" });
+    const policy: MemoryRetentionPolicy = { maxRecordsPerScope: 1 };
+    const result = applyMemoryRetention({ vault, scopes: [SCOPE], policy, nowMs: NOW });
+    expect(result.forgotten.map((decision) => decision.memoryId)).toEqual([
+      brandedMemoryId("h-old"),
+      brandedMemoryId("h-new"),
+      brandedMemoryId("live-1"),
+    ]);
+    expect(vault.getMemory(brandedMemoryId("live-2"))).toBeDefined();
+  });
+
+  it("still enforces the cap on a store that holds history only", () => {
+    const vault = makeVault();
+    for (const index of [1, 2, 3, 4]) {
+      insertRecord(vault, {
+        id: `only-${String(index)}`,
+        updatedAt: NOW - (5 - index) * ONE_DAY_MS,
+        status: "superseded",
+      });
+    }
+    const policy: MemoryRetentionPolicy = { maxRecordsPerScope: 2 };
+    const result = applyMemoryRetention({ vault, scopes: [SCOPE], policy, nowMs: NOW });
+    expect(result.forgotten.map((decision) => decision.memoryId)).toEqual([
+      brandedMemoryId("only-1"),
+      brandedMemoryId("only-2"),
+    ]);
+  });
+
   it("issues no deletes when the non-pinned working set is at or below the cap", () => {
     const vault = makeVault();
     insertRecord(vault, { id: "k-1", updatedAt: NOW - 2 * ONE_DAY_MS });

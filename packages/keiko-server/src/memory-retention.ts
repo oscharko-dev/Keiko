@@ -96,6 +96,10 @@ function isProposalExpired(
   return nowMs - record.updatedAt > policy.expireProposalsAfterMs;
 }
 
+function historyRank(record: MemoryRecord): number {
+  return record.status === "superseded" ? 0 : 1;
+}
+
 // Returns the records that should be evicted by `maxRecordsPerScope`. Pinned records are
 // excluded from the count entirely so the cap applies to the non-pinned working set.
 function selectOverflowEvictions(
@@ -109,10 +113,15 @@ function selectOverflowEvictions(
   if (nonPinned.length <= policy.maxRecordsPerScope) {
     return [];
   }
-  // Oldest-first by updatedAt, then by id so same-timestamp retention is deterministic
-  // across vault implementations and insertion orders.
+  // History (superseded) goes first, so the cap never evicts a fact the person still relies on
+  // while replaced values remain; the cap itself still counts every record, because it bounds
+  // storage. Oldest-first by updatedAt within each group, then by id so same-timestamp retention
+  // is deterministic across vault implementations and insertion orders.
   const sorted = [...nonPinned].sort(
-    (a, b) => a.updatedAt - b.updatedAt || String(a.id).localeCompare(String(b.id)),
+    (a, b) =>
+      historyRank(a) - historyRank(b) ||
+      a.updatedAt - b.updatedAt ||
+      String(a.id).localeCompare(String(b.id)),
   );
   const overflowCount = nonPinned.length - policy.maxRecordsPerScope;
   return sorted.slice(0, overflowCount);
