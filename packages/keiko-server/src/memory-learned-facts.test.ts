@@ -1654,4 +1654,110 @@ describe("what a forget covers (#4223)", () => {
     ]);
     expect(liveBodies(vault, ctx)).toEqual([first]);
   });
+
+  function tombstonedSurfaces(
+    vault: MemoryVaultStore,
+    ctx: ConversationMemoryRuntimeContext,
+  ): readonly string[] {
+    return conversationMemoryScopes(ctx).flatMap((scope) =>
+      vault.listTombstonesByScope(scope).map((tombstone) => tombstone.forgetterSurface),
+    );
+  }
+
+  // A corrected fact stays as history, so its name occurs in the live record and in every earlier
+  // value. Naming it forgets all of them: the fact and what it replaced are one fact.
+  it.each([
+    [
+      "German",
+      "Ich bevorzuge Tabs über Spaces",
+      "Ich bevorzuge Spaces über Tabs",
+      "Vergiss, dass ich Spaces über Tabs bevorzuge",
+    ],
+    [
+      "English",
+      "I prefer tabs over spaces",
+      "I prefer spaces over tabs",
+      "Forget that I prefer spaces over tabs",
+    ],
+    [
+      "a changed number, named by the topic",
+      "I use PostgreSQL 14",
+      "I use PostgreSQL 16",
+      "Forget that I use PostgreSQL",
+    ],
+  ])(
+    "forgets a corrected fact and every earlier value when its name is said (%s)",
+    async (_name, older, newer, forget) => {
+      const vault = makeVault();
+      const ctx = context();
+      await say(vault, ctx, older, [stated(older)]);
+      await say(vault, ctx, newer, [stated(newer)]);
+      maintain(vault);
+      expect(recordsWith(vault, ctx, "superseded").map((record) => record.body)).toEqual([older]);
+
+      const actions = await forgetByWords(vault, ctx, forget);
+
+      expect(actions).toEqual([
+        {
+          kind: "forget",
+          memoryId: expect.any(String) as string,
+          requiresConfirmation: false,
+          forgotten: true,
+        },
+      ]);
+      expect(liveBodies(vault, ctx)).toEqual([]);
+      expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+      expect(tombstonedSurfaces(vault, ctx)).toEqual(["chat-statement", "chat-statement"]);
+      // Neither value is learned again unattended.
+      await say(vault, ctx, older, [stated(older)]);
+      await say(vault, ctx, newer, [stated(newer)]);
+      expect(liveBodies(vault, ctx)).toEqual([]);
+    },
+  );
+
+  it("forgets only the old value when the person's words name only the old value", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const older = "I use PostgreSQL 14";
+    const newer = "I use PostgreSQL 16";
+    await say(vault, ctx, older, [stated(older)]);
+    await say(vault, ctx, newer, [stated(newer)]);
+    maintain(vault);
+
+    const actions = await forgetByWords(vault, ctx, "Forget that I use PostgreSQL 14");
+
+    expect(actions).toEqual([
+      {
+        kind: "forget",
+        memoryId: expect.any(String) as string,
+        requiresConfirmation: false,
+        forgotten: true,
+      },
+    ]);
+    expect(liveBodies(vault, ctx)).toEqual([newer]);
+    expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+    expect(tombstonedSurfaces(vault, ctx)).toEqual(["chat-statement"]);
+  });
+
+  it("still asks when two different facts match, each with its own history", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    for (const [older, newer] of [
+      ["I use Vim 8", "I use Vim 9"],
+      ["I use Vim plugins 2", "I use Vim plugins 3"],
+    ] as const) {
+      await say(vault, ctx, older, [stated(older)]);
+      await say(vault, ctx, newer, [stated(newer)]);
+    }
+    maintain(vault);
+    expect(recordsWith(vault, ctx, "superseded")).toHaveLength(2);
+
+    const actions = await forgetByWords(vault, ctx, "Forget that I use Vim");
+
+    expect(actions).toEqual([
+      { kind: "rejected", reason: "ambiguous-forget", explicitStatement: true },
+    ]);
+    expect(liveBodies(vault, ctx)).toHaveLength(2);
+    expect(recordsWith(vault, ctx, "superseded")).toHaveLength(2);
+  });
 });

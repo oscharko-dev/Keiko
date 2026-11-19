@@ -12,6 +12,7 @@ import {
   type MemoryStatus,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryConversationTouch, MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { supersededPredecessors } from "./memory-lineage.js";
 
 const TARGETABLE_STATUSES: readonly MemoryStatus[] = [
   "accepted",
@@ -216,6 +217,26 @@ function recordsInScopes(
   return [...byId.values()];
 }
 
+// A fact and the values it replaced are one fact (#4223): they share the words the person names the
+// fact by, so counting them as competing matches would refuse every forget once a fact was corrected.
+// Each lineage collapses to one target: the live record when it matches; otherwise the matching
+// superseded record, so naming only the old value forgets only the old value. Two different lineages
+// that both match stay two matches, and the caller asks.
+function collapseLineages(
+  vault: MemoryVaultStore,
+  matches: readonly MemoryRecord[],
+): readonly MemoryRecord[] {
+  if (matches.length < 2) return matches;
+  const covered = new Set<string>();
+  for (const record of matches) {
+    if (record.status === "superseded") continue;
+    for (const predecessor of supersededPredecessors(vault, record).records) {
+      covered.add(String(predecessor.id));
+    }
+  }
+  return matches.filter((record) => !covered.has(String(record.id)));
+}
+
 // Searches every scope of the conversation, because the learner chose the scope and the person
 // does not name it. Authorization stays with the one forget implementation that acts on the result.
 export function createMemoryForgetResolver(
@@ -227,6 +248,6 @@ export function createMemoryForgetResolver(
     const matches = isMemoryForgetReference(target)
       ? referredRecords(vault, records, context)
       : records.filter((record) => namesRecord(target, record));
-    return matches.map((record) => record.id);
+    return collapseLineages(vault, matches).map((record) => record.id);
   };
 }
