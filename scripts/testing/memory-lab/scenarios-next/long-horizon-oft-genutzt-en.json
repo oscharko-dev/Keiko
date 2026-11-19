@@ -4,7 +4,7 @@
   "id": "long-horizon-oft-genutzt-en",
   "language": "en",
   "class": "long-horizon",
-  "description": "A fact that was stated once and never used again, among seven facts on the same topic, eight often-used facts on neighbouring topics and 150 unrelated facts. Limit: at most six memories are sent per question, and how often a memory was used counts beside how well it fits the question. Failure means: memories the person uses often take the six places although they do not answer the question, and needed-memory-missing names the fact that was only stated once. Maintenance: run with maintenance on; no record is old enough to fade, so on or off changes nothing. Kind: defect.",
+  "description": "A fact that was stated once and never used again, among seven facts on the same topic, eight often-used facts on neighbouring topics and 150 unrelated facts. Limit: at most six memories are sent per question, and how often a memory was used counts beside how well it fits the question. Failure means: memories the person uses often take the six places although they do not answer the question, and needed-memory-missing names the fact that was only stated once. Maintenance: run with maintenance on; fading of aged filler does not affect the probes, so on or off changes nothing for them. Kind: defect.",
   "seed": {
     "records": [
       {

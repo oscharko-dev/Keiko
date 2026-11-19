@@ -4,7 +4,7 @@
   "id": "earlier-hotfix-en",
   "language": "en",
   "class": "earlier-value",
-  "description": "A seeded chain of four hotfix review rules (two reviewers, one reviewer, no review, three reviewers) over 90 days; questions for the current, the previous and the first rule. Limit: replaced rules are superseded history that recall never supplies and that maintenance removes once its validity has ended. Failure means: the current probe failing is a chain defect, the earlier probes failing is the known absence of history recall. Maintenance: meaningful both ways; with maintenance on the superseded record is expected to be deleted (the earlier-value probe fails for that reason), with --no-maintenance it shows whether retrieval could answer at all. Kind: capability.",
+  "description": "A seeded chain of four hotfix review rules (two reviewers, one reviewer, no review, three reviewers) over 90 days; questions for the current, the previous and the first rule. Limit: replaced rules are superseded history: since #4223 the product keeps it, and recall does not supply it yet. Failure means: the current probe failing is a chain defect, the earlier probes failing is the known absence of history recall. Maintenance: meaningful both ways; with maintenance on the superseded record is expected to stay as history (the earlier-value probe fails because recall does not supply history yet, not because a record was lost), with --no-maintenance it shows whether retrieval could answer at all. Kind: capability.",
   "seed": {
     "records": [
       {

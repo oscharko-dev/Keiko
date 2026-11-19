@@ -4,7 +4,7 @@
   "id": "long-horizon-distractors-en",
   "language": "en",
   "class": "long-horizon",
-  "description": "A target fact among 300 unrelated facts and 20 newer near-topic facts that repeat more of the question's words than the target does. Limit: recall ranks by word overlap and recency and sends at most six memories, so verbose near-topic facts can push out the short exact one. Failure means: the exact fact never reaches the model although it is stored and valid. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact and the superseded record are expected to be archived or removed).",
+  "description": "A target fact among 300 unrelated facts and 20 newer near-topic facts that repeat more of the question's words than the target does. Limit: recall ranks by word overlap and recency and sends at most six memories, so verbose near-topic facts can push out the short exact one. Failure means: the exact fact never reaches the model although it is stored and valid. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (aged, unused accepted records are expected to be archived by maintenance).",
   "seed": {
     "records": [
       {

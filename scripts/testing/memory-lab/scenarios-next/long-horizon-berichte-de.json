@@ -4,7 +4,7 @@
   "id": "long-horizon-berichte-de",
   "language": "de",
   "class": "long-horizon",
-  "description": "Eight simulated weeks of history: 180 unrelated facts, a reinforced format preference, a meeting day corrected 10 days ago and a stable department fact stated 130 days ago. Limit: decay is a flat 45-day half-life, so a stable fact left unused for four months is archived by maintenance, and recall never supplies a replaced value. Failure means: dept-old failing is a design question (a valid but unused fact fades); day-before failing is the absent capability to recall an earlier value; the two controls (format-now, day-now) must pass. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact and the superseded record are expected to be archived or removed). Kind: design.",
+  "description": "Eight simulated weeks of history: 180 unrelated facts, a reinforced format preference, a meeting day corrected 10 days ago and a stable department fact stated 130 days ago. Limit: decay is a flat 45-day half-life, so a stable fact left unused for four months is archived by maintenance, and recall never supplies a replaced value. Failure means: dept-old failing is a design question (a valid but unused fact fades); day-before failing is the absent capability to recall an earlier value; the two controls (format-now, day-now) must pass. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact, unused and old, is expected to be archived); the superseded record stays as history since #4223, and the earlier-value probe fails because recall does not supply history yet, not because a record was lost. Kind: design.",
   "seed": {
     "records": [
       {
