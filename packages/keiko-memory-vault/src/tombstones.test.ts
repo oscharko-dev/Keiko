@@ -143,15 +143,18 @@ describe("tombstones", () => {
 
   // #4223: a tombstone written by an unattended surface (maintenance, operator retention) records
   // that Keiko removed a record, not that the person refused the fact. It stays in the ledger and
-  // never refuses a statement. Every other surface, including an unknown one, still refuses.
+  // does not refuse a statement when it records that the removed record was not rejected. It still
+  // refuses for a rejected record, and for a legacy row without a recorded status (written before
+  // vault schema v4), where a rejection can no longer be ruled out: the predicate fails closed.
+  // Every other surface, including an unknown one, still refuses.
   it.each([
     [MEMORY_MAINTENANCE_FORGETTER_SURFACE, "superseded", false],
     [MEMORY_MAINTENANCE_FORGETTER_SURFACE, "proposed", false],
-    [MEMORY_MAINTENANCE_FORGETTER_SURFACE, undefined, false],
+    [MEMORY_MAINTENANCE_FORGETTER_SURFACE, undefined, true],
     [MEMORY_MAINTENANCE_FORGETTER_SURFACE, "rejected", true],
     [MEMORY_RETENTION_FORGETTER_SURFACE, "superseded", false],
     [MEMORY_RETENTION_FORGETTER_SURFACE, "accepted", false],
-    [MEMORY_RETENTION_FORGETTER_SURFACE, undefined, false],
+    [MEMORY_RETENTION_FORGETTER_SURFACE, undefined, true],
     [MEMORY_RETENTION_FORGETTER_SURFACE, "rejected", true],
     [MEMORY_CENTER_FORGETTER_SURFACE, "superseded", true],
     [MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE, undefined, true],

@@ -465,7 +465,11 @@ bodies or user text.
   record, not that a person refused the fact. Their tombstones stay in the ledger. Operator retention tombstones therefore no longer refuse a statement, which reverses what the first
   #4223 change recorded. Retention and maintenance never revive a fact the person rejected: an
   unattended tombstone still refuses when it removed a `rejected` record (its stored original
-  status; an unknown original status does not refuse). A test enumerates
+  status). It also refuses when it records no original status at all: such a row was written before
+  vault schema v4 added the column, a rejection can no longer be ruled out for it, and the predicate
+  fails closed. The cost is that a fact whose only tombstone is such a legacy row is not learned
+  again from conversation; every tombstone a record deletion has written since schema v4 carries
+  the status and is unaffected. A test enumerates
   every production writer and fails for one that is not classified. Superseded records are kept as
   history until the person deletes them or an operator's opt-in retention removes them, and history
   is never sent to the model: default recall and the standing profile hide closed validity windows.

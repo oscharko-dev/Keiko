@@ -1441,9 +1441,32 @@ describe("a corrected fact stays as history (#4223)", () => {
   it("is not refused by a maintenance tombstone left by an earlier version", async () => {
     const vault = makeVault();
     const ctx = context();
-    seedTombstone(vault, ctx, first, "memory-maintenance", "validity-expired");
+    // What the earlier maintenance pass did: it deleted the superseded record itself, so its
+    // tombstone records the removed record's status (deleteMemory has written it since schema v4).
+    await say(vault, ctx, first, [stated(first)]);
+    await say(vault, ctx, second, [stated(second)]);
+    const [superseded] = recordsWith(vault, ctx, "superseded");
+    if (superseded === undefined) throw new Error("expected the superseded fact");
+    vault.deleteMemory(superseded.id, {
+      tombstone: true,
+      forgetterSurface: "memory-maintenance",
+      reason: "validity-expired",
+      nowMs: Date.now(),
+    });
+    expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+
     await say(vault, ctx, first, [stated(first)]);
     expect(liveBodies(vault, ctx)).toEqual([first]);
+  });
+
+  it("is still refused by an unattended tombstone that records no status", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    // A row from before vault schema v4 carries no status of the removed record. A rejection can
+    // no longer be ruled out for it, so the refusal fails closed.
+    seedTombstone(vault, ctx, first, "memory-maintenance", "validity-expired");
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([]);
   });
 
   it("is still refused by a tombstone the person's own forget wrote", async () => {
