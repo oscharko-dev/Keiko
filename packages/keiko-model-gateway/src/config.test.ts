@@ -476,6 +476,37 @@ describe("parseGatewayConfig", () => {
     });
   });
 
+  it("keeps a reranker's gateway-connection mark and refuses any other value", () => {
+    const reranker = {
+      modelId: "qwen3-reranker",
+      baseUrl: "https://litellm.local/v1",
+      apiKey: "rerank-secret",
+    };
+    const marked = parseGatewayConfig({
+      ...(validRaw() as Record<string, unknown>),
+      reranker: { ...reranker, credentialOrigin: "gateway-connection" },
+    });
+    expect(marked.reranker?.credentialOrigin).toBe("gateway-connection");
+    expect(() =>
+      parseGatewayConfig({
+        ...(validRaw() as Record<string, unknown>),
+        reranker: { ...reranker, credentialOrigin: "own" },
+      }),
+    ).toThrow(/reranker\.credentialOrigin/u);
+  });
+
+  it("keeps a provider's gateway-connection mark, refuses any other value and loads unmarked configs", () => {
+    const raw = validRaw() as { providers: Record<string, unknown>[] };
+    const first = raw.providers[0] ?? {};
+    const parse = (extra: Record<string, unknown>): ReturnType<typeof parseGatewayConfig> =>
+      parseGatewayConfig({ ...raw, providers: [{ ...first, ...extra }] });
+    expect(parse({ credentialOrigin: "gateway-connection" }).providers[0]?.credentialOrigin).toBe(
+      "gateway-connection",
+    );
+    expect(parse({}).providers[0]).not.toHaveProperty("credentialOrigin");
+    expect(() => parse({ credentialOrigin: "own" })).toThrow(/credentialOrigin/u);
+  });
+
   it("lets explicit reranker env vars override the config block", () => {
     const config = parseGatewayConfig(
       {

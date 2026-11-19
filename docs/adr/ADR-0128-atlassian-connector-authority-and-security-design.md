@@ -1844,6 +1844,21 @@ the approval.
   of an existing project from its create metadata and the description headings most sampled issues
   share. Both read Jira with GET only and never write to Jira or the library; the lead edits and
   saves what is proposed through the skill routes.
+  `POST /api/skills/jira-templates/options` supplies the Skills editor with visible projects, their
+  native issue types and the selected type's create fields and workflow statuses, through the same
+  authenticated Pod and bounded GET transport. The editor writes choices into the existing
+  Markdown front matter. The YAML source remains editable for advanced rules. A binding returned
+  after a save advances the open editor's saved revision and preserves any edits made in the meantime.
+  A read for a project waits until its key has stayed unchanged for 300 ms, so a key typed into the
+  YAML reaches Jira once; a project Jira does not know is an answer (404), not a client failure.
+  While the YAML does not read as rules, the editor holds the last form that did, disabled, instead
+  of removing it and reading Jira again. Choosing another project or issue type removes every
+  binding line, so the next check binds afresh. Required fields resolve by the one contracts rule
+  `resolveJiraTemplateFieldIds` (bound id, else exact id, else every same-named field) that the
+  write gate and the report use; a reference the selected type's create fields do not resolve is
+  marked as not offered, and a field a reference already names is not offered again. Transition
+  targets are not marked: a target may name a transition rather than a status.
+  The options read records only response status and counts on `skills.library.operation`.
 - **Evidence.** `jira.template.metadata` records only matched, returned, omitted and unreadable
   template counts through the composing owner's existing Activity Log port; no template reference,
   field name, section title or body enters it. `jira.template.admission` (warn, stage `pre-approval` or `dispatch`) records the

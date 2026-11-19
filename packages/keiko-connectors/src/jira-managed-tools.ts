@@ -156,6 +156,7 @@ import {
 import {
   editMetadataItems,
   issueTypeItems,
+  jiraProjectDirectory,
   jiraReadFailure as failure,
   localJiraPage,
   metadataItems,
@@ -172,7 +173,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 export type { JiraManagedConnection } from "./jira-managed-connection.js";
-import { asRecord, atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
+import { atlassianApiEndpointsFor, atlassianApiUrl } from "./atlassian-sync-classify.js";
 import { executeAdmittedJiraRequest } from "./jira-request-admission.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { executeJiraManagedMutation, requestFor } from "./jira-managed-mutations.js";
@@ -223,17 +224,6 @@ export type JiraManagedMutationExecutor<Context extends ManagedMcpInvocationCont
   ) => Promise<JiraMutationAttempt>,
 ) => Promise<ManagedMcpToolResult>;
 
-interface Project extends CatalogJsonObject {
-  readonly id: string;
-  readonly key: string;
-  readonly name: string;
-}
-function project(value: unknown): Project | undefined {
-  const raw = asRecord(value);
-  if (raw === undefined || !text(raw.id, 64) || !text(raw.key, 64) || !text(raw.name, 255))
-    return undefined;
-  return { id: raw.id, key: raw.key, name: raw.name };
-}
 function text(value: unknown, max: number): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= max;
 }
@@ -253,15 +243,10 @@ function projectPage(
   startAt: number,
   maxResults: number,
 ): ManagedMcpToolResult {
-  if (values.length > 1000) return failure("bounds-exceeded");
-  const projects = values.map(project);
-  if (projects.includes(undefined)) return failure("malformed-payload");
-  const valid = projects.filter((item) => item !== undefined);
-  if (new Set(valid.map((item) => item.id)).size !== valid.length)
-    return failure("malformed-payload");
-  // The DC endpoint is an unpaginated collection. Sort and slice only after complete validation.
-  valid.sort((left, right) => left.key.localeCompare(right.key, "en"));
-  return localJiraPage(valid, startAt, maxResults);
+  const directory = jiraProjectDirectory(values);
+  return directory.ok
+    ? localJiraPage(directory.projects, startAt, maxResults)
+    : failure(directory.reason);
 }
 interface ReadSelection {
   readonly path: string;

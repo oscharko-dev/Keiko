@@ -1217,10 +1217,10 @@
       "count": 5
     },
     "complexity": {
-      "count": 10
+      "count": 9
     },
     "max-lines-per-function": {
-      "count": 14
+      "count": 13
     }
   },
   "src/app/components/desktop/widgets/figma/JsonSyntaxBlock.tsx": {

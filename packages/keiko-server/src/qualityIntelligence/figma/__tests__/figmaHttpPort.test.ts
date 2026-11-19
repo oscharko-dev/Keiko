@@ -45,6 +45,37 @@ describe("createDefaultFigmaHttpPort — happy path", () => {
     expect(result.status).toBe(403);
   });
 
+  it("preserves rate-limit status and retry advice when the response has no JSON body", async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(new Response(null, { status: 429, headers: { "retry-after": "30" } })),
+    );
+    const port = createDefaultFigmaHttpPort(undefined, fetchImpl);
+
+    await expect(port(REQ)).resolves.toEqual({
+      status: 429,
+      json: undefined,
+      headers: { "retry-after": "30" },
+    });
+  });
+
+  it("preserves malformed successful JSON for endpoint-specific handling", async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(new Response("temporary upstream error")));
+    const port = createDefaultFigmaHttpPort(undefined, fetchImpl);
+
+    await expect(port(REQ)).resolves.toMatchObject({ status: 200, json: undefined });
+  });
+
+  it("classifies a body read timeout as an egress timeout", async () => {
+    const body = new ReadableStream({
+      start: (controller): void => {
+        controller.error(new DOMException("Fixture timeout", "TimeoutError"));
+      },
+    });
+    const port = createDefaultFigmaHttpPort(undefined, () => Promise.resolve(new Response(body)));
+
+    await expect(port(REQ)).rejects.toMatchObject({ code: "FIGMA_EGRESS_TIMEOUT" });
+  });
+
   it("sends redirect: manual so the PAT header cannot follow a cross-origin redirect", async () => {
     const fetchSpy = vi.fn((..._args: Parameters<typeof fetch>): Promise<Response> => {
       return Promise.resolve(new Response("{}", { status: 200 }));

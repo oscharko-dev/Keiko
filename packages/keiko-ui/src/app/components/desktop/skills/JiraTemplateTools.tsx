@@ -29,10 +29,12 @@ import type { ChatMarkdownSkill } from "../hooks/useChatMarkdownSkill";
 import { SkillChatToggle } from "./SkillChatToggle";
 import {
   useAutomaticTemplateBinding,
+  bindOutcomeKey,
   useJiraTemplateBinding,
   type BindOutcome,
 } from "./useJiraTemplateBinding";
 import type { MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
+import type { SkillWorkspace } from "./useSkillWorkspace";
 import styles from "./MarkdownSkillControl.module.css";
 
 /**
@@ -266,16 +268,28 @@ export function PodSelect({ jira }: { readonly jira: JiraTemplates }): ReactNode
   );
 }
 
+// The server says when the file's binding is not confirmed for this Jira: replacing that binding is
+// the person's explicit choice, never automatic (PR #4464).
+function ownedElsewhere(check: AutomaticTemplateCheck | undefined): boolean {
+  return (
+    check !== undefined && check !== "failed" && check.valid && check.bindingUnconfirmed === true
+  );
+}
+
 function bindable(check: AutomaticTemplateCheck | undefined): boolean {
   return (
     check !== undefined && check !== "failed" && check.valid && check.binding?.state === "bindable"
   );
 }
 
-/** The templates whose automatic check offers the binding. */
+/** The templates whose check offers the binding and whose file carries no binding of another Jira. */
 function useBindableEntries(tools: JiraTemplates["tools"]): readonly JiraTemplateEntry[] {
   return useMemo(
-    () => tools.templates.filter((entry) => bindable(tools.checks.get(templateKey(entry)))),
+    () =>
+      tools.templates.filter((entry) => {
+        const check = tools.checks.get(templateKey(entry));
+        return bindable(check) && !ownedElsewhere(check);
+      }),
     [tools.templates, tools.checks],
   );
 }
@@ -380,23 +394,27 @@ function TemplateRow({
 }
 
 /** The templates in the library column; each opens in the editor. */
-export function JiraTemplateList({
-  jira,
-  library,
-  openId,
-  onOpen,
-  chat,
-}: {
+interface JiraTemplateListProps {
   readonly jira: JiraTemplates;
   readonly library: MarkdownSkillLibrary;
   readonly openId: string | undefined;
   readonly onOpen: (skill: MarkdownSkillMetadata) => void;
   /** Offers choosing a stored template for the chat beside its row. */
   readonly chat?: { readonly skill: ChatMarkdownSkill; readonly disabled: boolean };
-}): ReactNode {
+  readonly adoptBinding?: SkillWorkspace["adoptBinding"];
+}
+
+export function JiraTemplateList({
+  jira,
+  library,
+  openId,
+  onOpen,
+  chat,
+  adoptBinding,
+}: JiraTemplateListProps): ReactNode {
   const t = useTranslate();
   const { tools } = jira;
-  const binding = useJiraTemplateBinding(jira.podId, library);
+  const binding = useJiraTemplateBinding(jira.podId, library, adoptBinding);
   useAutomaticTemplateBinding(binding.bind, useBindableEntries(tools), jira.podId);
   if (tools.failed)
     return (
@@ -422,8 +440,13 @@ export function JiraTemplateList({
           onOpen={onOpen}
           chat={chat}
           bind={{
-            outcome: binding.outcomes.get(entry.id),
-            onBind: () => void binding.bind(entry),
+            outcome: binding.outcomes.get(bindOutcomeKey(jira.podId, entry)),
+            // Only a binding this Jira does not confirm is migrated, and only by this explicit click.
+            onBind: () =>
+              void binding.bind(
+                entry,
+                ownedElsewhere(tools.checks.get(templateKey(entry))) ? true : undefined,
+              ),
           }}
         />
       ))}

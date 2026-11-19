@@ -1,3 +1,4 @@
+import { isJiraNativeId } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 /** Native project/component text permits ordinary line breaks, never terminal controls. */
@@ -18,11 +19,7 @@ export function jiraNativeText(value: unknown, max: number, empty = false): valu
 
 /** Jira string int64 identifiers stay exact even beyond JavaScript's safe numeric range. */
 export function jiraNativeId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    /^[1-9]\d{0,18}$/u.test(value) &&
-    BigInt(value) <= 9223372036854775807n
-  );
+  return isJiraNativeId(value);
 }
 
 /** Native JSON numbers are admitted only while exact; string int64 identities remain lossless. */

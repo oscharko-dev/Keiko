@@ -183,6 +183,27 @@ Chromium cases passed in 1.5 minutes in the Linux gates container with an init p
 26.13.1, and `npm run check:update-ui-evidence` passes. Only the three records were kept; the 14
 committed screenshots, updater assertions and harness inputs retain their existing values.
 
+The guided Jira template metadata (PR #4466, integrated in PR #4464) added two strings to both
+optional catalogs: the notice for a held form while its rules do not read, and the mark for a
+required field the selected issue type does not offer. On 2026-11-18 (UTC) the original nine
+Chromium cases passed in 1.5 minutes in the Linux gates image with an init process and Node
+26.13.1, and `npm run check:update-ui-evidence` passes. Only the three records were kept; the 14
+committed screenshots, updater assertions and harness inputs retain their existing values.
+
+The third review round of the guided Jira template editor (PR #4464) added the notices for a
+same-named field that only its id can choose and for a numeric status name to both optional
+catalogs. On 2026-11-18 (UTC) the original nine Chromium cases passed in 1.6 minutes in the Linux
+gates image with an init process and Node 26.13.1, `npm run check:update-ui-evidence` passes and
+the Linux Editor bundle gates pass unchanged. Only the three records were kept; the 14 committed
+screenshots, updater assertions and harness inputs retain their existing values.
+
+A later review round of the guided Jira template editor (PR #4464) added the notice that guided
+rule edits wait until the template metadata parses to both optional catalogs. On 2026-11-18 (UTC)
+the original nine Chromium cases passed in 1.7 minutes in the Linux gates image with an init process
+and Node 26.13.1, `npm run check:update-ui-evidence` passes and the Linux Editor bundle gates pass
+unchanged. Only the three records were kept; the 14 committed screenshots, updater assertions and
+harness inputs retain their existing values.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
@@ -804,3 +825,10 @@ cases passed in 2.4 minutes in the Linux arm64 gates container with Node 26.13.1
 and Liberation fonts. The three records bind the new catalog digests. The committed screenshots
 show the previously qualified updater rendering. The Editor B1–B3 gates also passed against the
 Linux static export with the existing measurement fingerprint.
+
+## Figma Snapshot status messages — 2026-11-18
+
+All nine updater cases passed in the Linux arm64 gates container with Node 26.13.1, a fresh
+lockfile install and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The three producer records bind the
+English and German optional catalogs after the Figma status changes. The fourteen committed
+captures retain their original renderer's typography. The freshness gate passed.

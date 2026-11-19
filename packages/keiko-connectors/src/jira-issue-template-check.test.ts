@@ -9,6 +9,7 @@ import {
   checkJiraIssueTemplates,
   evaluateJiraTemplateChange,
   jiraTemplateValuePresent,
+  jiraTransitionsFullyChecked,
   jiraNoGoverningTemplateGuidance,
   jiraTemplateGuidanceVariants,
   jiraTemplateValueText,
@@ -608,6 +609,42 @@ describe("a required field typed in another language", () => {
   });
 });
 
+// G1 (PR #4464): the system parent is shown as `Übergeordnet` while a custom field is called `Parent`;
+// the template names both clauses `Parent`, each bound to its own id. Each clause is read by its role.
+describe("a parent clause and a required clause that share one name", () => {
+  const catalog: readonly JiraFieldCatalogEntry[] = [
+    { id: "parent", name: "Übergeordnet" },
+    { id: "customfield_10200", name: "Parent" },
+  ];
+  const shared: JiraIssueTemplate = {
+    ...parsed(
+      ["requiredFields: [Parent]", "parentField: Parent", "parentIssueTypes: [Epic]"],
+      "# T",
+    ),
+    binding: {
+      digest: "0".repeat(32),
+      issueTypeId: "10001",
+      requiredFieldIds: ["customfield_10200"],
+      parentFieldId: "parent",
+    },
+  };
+
+  it("is valid for the custom required value and an allowed native parent, never template-unreadable", () => {
+    const issue = subject(
+      { customfield_10200: "value", parent: { key: "ABC-1" } },
+      { parentIssueTypes: { parent: { id: "1", name: "Epic" } } },
+    );
+    expect(checkJiraIssueTemplate(shared, issue, catalog)).toEqual([]);
+  });
+
+  it("still asks for the custom required value and for the parent separately", () => {
+    const issue = subject({ parent: { key: "ABC-1" } });
+    expect(
+      checkJiraIssueTemplate(shared, issue, catalog).map((violation) => violation.ruleId),
+    ).toContain("field-missing");
+  });
+});
+
 describe("checkJiraIssueTemplates", () => {
   it("merges the violations of every governing template once and in a stable order", () => {
     const first = parsed(["summaryMinLength: 5"], "# T");
@@ -769,7 +806,33 @@ describe("validateJiraIssueTemplateAgainstInstance", () => {
       validateJiraIssueTemplateAgainstInstance(missing, instance).map(
         (finding) => `${finding.code}:${finding.subject}`,
       ),
-    ).toEqual(["unknown-transition-target:Done"]);
+    ).toEqual([]);
+    // A project-level status list cannot disprove a transition id or action name (see the
+    // attribution tests): the unlisted target is unverified, not unknown.
+    expect(jiraTransitionsFullyChecked(missing, instance)).toBe(false);
+  });
+
+  it("judges a transition target bound to a status id by that id, not by the typed name", () => {
+    const base = parsed(["summaryMinLength: 3"], "# T");
+    const bound = {
+      ...base,
+      activations: [{ kind: "transition" as const, target: "Erledigt" }],
+      binding: { issueTypeId: "10001", digest: "d", transitionStatusIds: ["3"] },
+    };
+    const french = {
+      ...instance,
+      statuses: ["Terminé"],
+      statusRefs: [{ id: "3", name: "Terminé" }],
+    };
+    expect(validateJiraIssueTemplateAgainstInstance(bound, french)).toEqual([]);
+    const gone = {
+      ...instance,
+      statuses: ["Erledigt"],
+      statusRefs: [{ id: "9", name: "Erledigt" }],
+    };
+    expect(
+      validateJiraIssueTemplateAgainstInstance(bound, gone).map((finding) => finding.code),
+    ).toEqual(["unknown-transition-target"]);
   });
 
   it("is clean for a template that matches the instance", () => {

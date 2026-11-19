@@ -2844,7 +2844,59 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.starter.connect":
     "Aktiviere einen Jira Pod, um die Startvorlagen zu verwenden.",
   "chat.skills.jira.starter.edit":
-    "Öffne eine Startvorlage und ergänze unter Metadaten (YAML) den Projektschlüssel und den Vorgangstyp.",
+    "Öffne eine Startvorlage und wähle im Editor das Projekt und den Vorgangstyp.",
+  "chat.skills.jira.form.title": "Jira-Metadaten",
+  "chat.skills.jira.form.project": "Jira-Projekt",
+  "chat.skills.jira.form.issueType": "Vorgangstyp",
+  "chat.skills.jira.form.chooseProject": "Projekt auswählen",
+  "chat.skills.jira.form.chooseType": "Vorgangstyp auswählen",
+  "chat.skills.jira.form.projectHelp": "Wähle das Projekt, für das die Vorlage gilt.",
+  "chat.skills.jira.form.typeHelp":
+    "Die Liste zeigt die Jira-Namen der Vorgangstypen im gewählten Projekt.",
+  "chat.skills.jira.form.unmatchedType":
+    "Jira konnte „{subject}“ nicht zuordnen. Wähle den passenden Typ aus der Liste.",
+  "chat.skills.jira.form.connect":
+    "Verbinde einen Jira Pod, um Projekte und Vorgangstypen zu laden.",
+  "chat.skills.jira.form.loading": "Wird aus Jira geladen …",
+  "chat.skills.jira.form.empty": "Jira hat keine Auswahlwerte geliefert.",
+  "chat.skills.jira.form.projectMissing":
+    "Der Jira Pod konnte das gewählte Projekt nicht öffnen oder finden.",
+  "chat.skills.jira.form.readFailed": "Die Auswahlwerte konnten nicht aus Jira geladen werden.",
+  "chat.skills.jira.form.detailsUnavailable":
+    "Einige Felder oder Status konnten nicht aus Jira gelesen werden.",
+  "chat.skills.jira.form.retry": "Erneut versuchen",
+  "chat.skills.jira.form.rules": "Vorlagenregeln",
+  "chat.skills.jira.form.onWrite": "Beim Anlegen und Bearbeiten anwenden",
+  "chat.skills.jira.form.activationRequired": "Wähle, wann diese Vorlage angewendet wird.",
+  "chat.skills.jira.form.addStatus": "Beim Wechsel in einen Status anwenden",
+  "chat.skills.jira.form.anyStatus": "Jeder Statuswechsel",
+  "chat.skills.jira.form.statusHelp":
+    "Wähle den Zielstatus, bei dessen Eintritt Keiko die Regeln prüft.",
+  "chat.skills.jira.form.addField": "Pflichtfeld hinzufügen",
+  "chat.skills.jira.form.selectForFields": "Wähle einen Vorgangstyp, um seine Felder zu laden.",
+  "chat.skills.jira.form.fieldsHelp": "Wähle die Felder, die diese Vorlage voraussetzt.",
+  "chat.skills.jira.form.requiredByJira": "{subject} (Jira-Pflichtfeld)",
+  "chat.skills.jira.form.choose": "Option auswählen",
+  "chat.skills.jira.form.remove": "{subject} entfernen",
+  "chat.skills.jira.form.notOffered": "{subject} (für diesen Vorgangstyp nicht angeboten)",
+  "chat.skills.jira.form.sharedName":
+    "{subject} (mehrere Felder heißen so; schreibe die ID in die Metadaten, um es zu verwenden)",
+  "chat.skills.jira.form.statusNotChoosable":
+    "{subject} (ein rein numerischer Statusname lässt sich hier nicht wählen)",
+  "chat.skills.jira.form.statusShared":
+    "{subject} (mehrere Status heißen so; schreibe ihn in die Metadaten, um ihn zu verwenden)",
+  "chat.skills.jira.form.typeNotPortable":
+    "{subject} (für diesen Typ gibt es keinen eindeutigen Namen; schreibe ihn in die Metadaten, um ihn zu verwenden)",
+  "chat.skills.jira.form.instanceLocalName":
+    "{subject} (eine instanzlokale ID, kein übertragbarer Name; schreibe sie in die Metadaten, um sie zu verwenden)",
+  "chat.skills.jira.form.rulesInvalid":
+    "Der Metadatentext lässt sich gerade nicht als Vorlage lesen, deshalb lassen sich die Regeln hier nicht ändern; korrigiere zuerst den Metadatentext.",
+  "chat.skills.jira.form.rulesLocked":
+    "Die Regeln sind an ein Jira gebunden, das gerade nicht lesbar ist; ändere sie im Metadatentext oder verbinde dich erneut.",
+  "chat.skills.jira.form.fieldCatalogUnknown":
+    "{subject} (die vollständige Feldliste von Jira ließ sich nicht lesen, der Name lässt sich nicht prüfen; schreibe ihn in die Metadaten, um ihn zu verwenden)",
+  "chat.skills.jira.form.invalid":
+    "Korrigiere die Regeln im Text darunter; die Auswahl folgt wieder, sobald sie stimmen.",
   "chat.skills.jira.starter.epic":
     "## Ziel\n\nBeschreibe das Ziel des Epics.\n\n## Umfang\n\nListe die enthaltenen Arbeiten auf.\n\n## Akzeptanzkriterien\n\nBeschreibe, wie sich überprüfen lässt, ob das Ziel erreicht wurde.",
   "chat.skills.jira.starter.issue":
@@ -2864,7 +2916,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.finding.unknown-project":
     "Das Projekt {subject} existiert nicht oder ist nicht sichtbar.",
   "chat.skills.jira.finding.unknown-issue-type":
-    "Der Vorgangstyp {subject} existiert im Projekt nicht.",
+    "Jira konnte „{subject}“ keinem Vorgangstyp in diesem Projekt zuordnen. Wähle den Vorgangstyp in den Jira-Metadaten.",
   "chat.skills.jira.finding.unknown-field":
     "Das Feld {subject} existiert nicht. Davon betroffene Schreibvorgänge werden abgelehnt.",
   "chat.skills.jira.finding.ambiguous-field":
@@ -4046,6 +4098,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "figmaSnapshotWindow.error.generic.unknownDetail": "Ein unerwarteter Fehler ist aufgetreten.",
   "figmaSnapshotWindow.error.openTokenSettings": "Figma-Zugriffstoken-Einstellungen öffnen",
   "figmaSnapshotWindow.error.runIdClearedSuffix": "Die gespeicherte Run-ID wurde gelöscht.",
+  "figmaSnapshotWindow.error.sourceChanged":
+    "Die Figma-Datei wurde während der Erfassung geändert. Starte den Snapshot erneut oder verwende einen Link zu einer bestimmten Version.",
   "figmaSnapshotWindow.error.tokenAttention.remediation":
     "Öffnen Sie die Figma-Zugriffstoken-Einstellungen, um den schreibgeschützten Token hinzuzufügen oder zu erneuern, und versuchen Sie es dann erneut. Es wurde kein Snapshot gespeichert.",
   "figmaSnapshotWindow.error.tokenAttention.title": "Figma-Zugriffstoken erfordert Aufmerksamkeit",
@@ -6390,6 +6444,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "figmaJson.ui.figmaJson": "Figma-JSON",
   "figmaJson.ui.copyJson": "JSON kopieren",
   "figmaJson.ui.loadingJson": "JSON wird geladen…",
+  "figmaJson.ui.loadFailed": "Das JSON der ausgewählten Figma-Ansicht konnte nicht geladen werden.",
+  "figmaJson.ui.missingReference": "Die Referenz zur Figma-JSON-Quelle fehlt.",
   "figmaImage.ui.imagePreviewIsUnavailable": "Die Bildvorschau ist nicht verfügbar.",
   "resourceLimits.ui.resourceLimitDecisions": "Entscheidungen zu Ressourcenlimits",
   "relationshipPanel.ui.referenceId": "Referenz-ID: {id}",

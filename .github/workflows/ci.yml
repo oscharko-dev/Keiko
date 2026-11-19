@@ -810,12 +810,12 @@ jobs:
         # #4288: the whole suite in one 30-minute job was cancelled at the limit. 2475 s is the
         # SUMMED per-file test time; the unsharded wall time was 1596 s at `maxWorkers: 2`, plus
         # about 4 min of setup. Vitest assigns WHOLE files to shards by a sha1 hash of the path, so
-        # the shards are not equal thirds: shard 2 holds release-publish-pipeline (11-12 min) and
-        # op-catalog-drift (about 4 min), shard 1 holds portable-runtime (6-7 min), and the longest
-        # shard is bounded below by the single longest file, about 12 min. The expected wall time of
-        # the longest shard is about 13-14 min plus setup, against the 30-minute limit above, which
-        # is deliberately NOT raised. The npm script carries `default` and `blob`; the annotation
-        # reporter is added here for the same reason as in `coverage-packages`.
+        # the shards are not equal thirds: shard 2 holds release-publish-pipeline and op-catalog-drift
+        # (about 4 min), shard 1 portable-runtime (6-7 min) and release-publish-assets, split out of
+        # the pipeline file in #4464 when that file reached 20 min on a slow runner. The longest shard
+        # is bounded below by its longest file, near 13-14 min plus setup against the 30-minute limit
+        # above, which is deliberately NOT raised. The npm script carries `default` and `blob`; the
+        # annotation reporter is added here for the same reason as in `coverage-packages`.
         run: npm run test:coverage:scripts:shard -- --shard=${{ matrix.shard }}/3 --reporter=github-actions
       - name: Upload script coverage shard evidence
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
