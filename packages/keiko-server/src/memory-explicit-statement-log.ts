@@ -6,6 +6,8 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import type { MemoryScopeKind } from "@oscharko-dev/keiko-contracts";
+
 import { getServerLogger } from "./observability/index.js";
 
 const MEMORY_EXPLICIT_OPERATION_BASE = {
@@ -28,9 +30,32 @@ const MEMORY_EXPLICIT_FORGET_OUTCOMES = [
   "refused",
   "failed",
   "not-stored",
+  "not-found",
 ] as const;
 
 export type MemoryExplicitForgetOutcome = (typeof MEMORY_EXPLICIT_FORGET_OUTCOMES)[number];
+
+// `not-found`: a forget from the Memory window named a memory that does not exist. Where the forget
+// came from: a chat statement records only `outcome`; the Memory window (Journal and Memory Center
+// share one API) also records the rest, so a person's deletion is reconstructable from the log
+// alone (#4206 AC 5). No id, body or scope value: closed kinds and one flag.
+const MEMORY_FORGET_SURFACES = ["memory-center"] as const;
+
+const MEMORY_FORGET_SCOPE_KINDS = [
+  "user",
+  "workspace",
+  "project",
+  "workflow",
+  "global",
+] as const satisfies readonly MemoryScopeKind[];
+
+export type MemoryForgetSurface = (typeof MEMORY_FORGET_SURFACES)[number];
+
+export interface MemoryForgetSurfaceDetail {
+  readonly surface: MemoryForgetSurface;
+  readonly scopeKind?: MemoryScopeKind | undefined;
+  readonly tombstoneWritten: boolean;
+}
 
 const MEMORY_EXPLICIT_FORGET_OPERATION = defineActivityLogOperation({
   ...MEMORY_EXPLICIT_OPERATION_BASE,
@@ -43,6 +68,19 @@ const MEMORY_EXPLICIT_FORGET_OPERATION = defineActivityLogOperation({
       required: true,
       values: MEMORY_EXPLICIT_FORGET_OUTCOMES,
     },
+    surface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: MEMORY_FORGET_SURFACES,
+    },
+    scopeKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: MEMORY_FORGET_SCOPE_KINDS,
+    },
+    tombstoneWritten: { type: "boolean", dataClass: "closed-enum", required: false },
   },
   proofIds: ["memory.explicit.forget.line"],
 });
@@ -50,9 +88,23 @@ const MEMORY_EXPLICIT_FORGET_OPERATION = defineActivityLogOperation({
 export function logExplicitMemoryForget(
   outcome: MemoryExplicitForgetOutcome,
   correlationId: string,
+  detail?: MemoryForgetSurfaceDetail,
 ): void {
   getServerLogger().info(
-    activityLogEvent(MEMORY_EXPLICIT_FORGET_OPERATION, { correlationId }, { outcome }),
+    activityLogEvent(
+      MEMORY_EXPLICIT_FORGET_OPERATION,
+      { correlationId },
+      {
+        outcome,
+        ...(detail === undefined
+          ? {}
+          : {
+              surface: detail.surface,
+              tombstoneWritten: detail.tombstoneWritten,
+              ...(detail.scopeKind === undefined ? {} : { scopeKind: detail.scopeKind }),
+            }),
+      },
+    ),
   );
 }
 

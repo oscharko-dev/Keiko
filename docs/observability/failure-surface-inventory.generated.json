@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a5ebb126466a622a09845947ec1faed0c7ca1ad14a10ff8e2d8bcbe100a99c79"
+    "catalogDigest": "19cbd6ec7bed08b380bd2fa48caec86fd4d7f690d8034591771dd6410f5b72c0"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -2943,7 +2943,10 @@
     ],
     "memory.embedding.refresh.skipped.line": ["packages/keiko-server/src/memory-handlers.test.ts"],
     "memory.embedding.store-rejected.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
-    "memory.explicit.forget.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
+    "memory.explicit.forget.line": [
+      "packages/keiko-server/src/memory-capture-autonomy.test.ts",
+      "packages/keiko-server/src/memory-handlers.test.ts"
+    ],
     "memory.explicit.remember.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
     "memory.learn.dropped.line": ["packages/keiko-server/src/memory-learned-facts.test.ts"],
     "memory.learn.extraction.line": ["packages/keiko-server/src/memory-learned-facts.test.ts"],

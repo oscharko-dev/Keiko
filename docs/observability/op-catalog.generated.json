@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a5ebb126466a622a09845947ec1faed0c7ca1ad14a10ff8e2d8bcbe100a99c79",
+    "catalogDigest": "19cbd6ec7bed08b380bd2fa48caec86fd4d7f690d8034591771dd6410f5b72c0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -39508,8 +39508,8 @@
         "failureClasses": ["memory-edit-conflict"],
         "proofIds": ["memory.edit.settled.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/memory-handlers.ts:162",
-        "emitterSites": ["packages/keiko-server/src/memory-handlers.ts:192"]
+        "registrationSite": "packages/keiko-server/src/memory-handlers.ts:166",
+        "emitterSites": ["packages/keiko-server/src/memory-handlers.ts:196"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39674,12 +39674,29 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["forgotten", "ambiguous", "refused", "failed", "not-stored"]
+            "values": ["forgotten", "ambiguous", "refused", "failed", "not-stored", "not-found"]
+          },
+          "surface": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["memory-center"]
+          },
+          "scopeKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["user", "workspace", "project", "workflow", "global"]
+          },
+          "tombstoneWritten": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
           }
         },
         "proofIds": ["memory.explicit.forget.line"],
-        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:35",
-        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:55"]
+        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:60",
+        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:94"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39712,8 +39729,8 @@
           }
         },
         "proofIds": ["memory.explicit.remember.line"],
-        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:69",
-        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:89"]
+        "registrationSite": "packages/keiko-server/src/memory-explicit-statement-log.ts:121",
+        "emitterSites": ["packages/keiko-server/src/memory-explicit-statement-log.ts:141"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -40118,8 +40135,8 @@
         "failureClasses": ["memory-vault-selection"],
         "proofIds": ["memory.vault.records.selected.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/memory-handlers.ts:122",
-        "emitterSites": ["packages/keiko-server/src/memory-handlers.ts:154"]
+        "registrationSite": "packages/keiko-server/src/memory-handlers.ts:126",
+        "emitterSites": ["packages/keiko-server/src/memory-handlers.ts:158"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -106712,6 +106729,24 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "scopeKind",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "surface",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "tombstoneWritten",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
@@ -122287,7 +122322,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-handlers.ts:259",
+      "site": "packages/keiko-server/src/memory-handlers.ts:263",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126066,7 +126101,7 @@
     {
       "op": "memory.edit.settled",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-handlers.ts:165",
+      "site": "packages/keiko-server/src/memory-handlers.ts:169",
       "package": "keiko-server"
     },
     {
@@ -126096,13 +126131,13 @@
     {
       "op": "memory.explicit.forget",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:37",
+      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:62",
       "package": "keiko-server"
     },
     {
       "op": "memory.explicit.remember",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:71",
+      "site": "packages/keiko-server/src/memory-explicit-statement-log.ts:123",
       "package": "keiko-server"
     },
     {
@@ -126193,7 +126228,7 @@
     {
       "op": "memory.vault.records.selected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-handlers.ts:125",
+      "site": "packages/keiko-server/src/memory-handlers.ts:129",
       "package": "keiko-server"
     },
     {

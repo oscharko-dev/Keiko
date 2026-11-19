@@ -1,5 +1,8 @@
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
-import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -2182,6 +2185,132 @@ describe("memory handlers", () => {
     );
     expect(vault.getMemory(memoryId("memory-forget-audit-down"))).toBeDefined();
     expect(vault.listTombstonesByScope({ kind: "global" })).toEqual([]);
+  });
+
+  describe("Memory window forget leaves its own Activity Log line (#4206 AC 5)", () => {
+    async function forgetWithLog(
+      id: string,
+      deps: UiHandlerDeps,
+      handler: typeof handleForgetMemory = handleForgetMemory,
+    ): Promise<{ result: RouteResult; events: BufferedServerLogSink["events"] }> {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      try {
+        const ctx = makeCtx(`/api/memory/${id}/forget`, { acknowledged: true }, { id });
+        const result = await handler({ ...ctx, correlationId: "corr-forget-1" }, deps);
+        return { result, events: forgetEvents(sink.events) };
+      } finally {
+        resetServerLogger();
+      }
+    }
+    function forgetEvents(events: BufferedServerLogSink["events"]): typeof events {
+      return events.filter((event) => event.op === "memory.explicit.forget");
+    }
+
+    it("records forgotten, surface, scope kind and tombstone without an id or body", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-forget-1", "WINDOW-FORGET-BODY"));
+      const { result, events } = await forgetWithLog(
+        "window-forget-1",
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(200);
+      expect(events).toHaveLength(1);
+      const [event] = events;
+      if (event === undefined) throw new TypeError("missing forget line");
+      const line = formatActivityLogProofLine(event);
+      expect(expectActivityLogProof("memory.explicit.forget.line", line)).toMatchObject({
+        outcome: "forgotten",
+        surface: "memory-center",
+        scopeKind: "global",
+        tombstoneWritten: true,
+      });
+      expect(event.correlationId).toBe("corr-forget-1");
+      expect(line).not.toContain("window-forget-1");
+      expect(line).not.toContain("WINDOW-FORGET-BODY");
+    });
+
+    it("records the DELETE alias the same way", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-delete-1", "body"));
+      const { events } = await forgetWithLog(
+        "window-delete-1",
+        makeDeps({ memoryVault: vault }),
+        handleDeleteMemory,
+      );
+      expect(events.map((event) => event.extra)).toEqual([
+        expect.objectContaining({ outcome: "forgotten", surface: "memory-center" }),
+      ]);
+    });
+
+    it("records not-found for an unknown memory without a tombstone", async () => {
+      const { result, events } = await forgetWithLog(
+        "window-missing",
+        makeDeps({ memoryVault: makeVault() }),
+      );
+      expect(result.status).toBe(404);
+      expect(events.map((event) => event.extra)).toEqual([
+        expect.objectContaining({ outcome: "not-found", tombstoneWritten: false }),
+      ]);
+    });
+
+    it("records refused for a memory outside the caller's authorized scopes", async () => {
+      const vault = makeVault();
+      vault.insertMemory(
+        makeMemory("window-refused", "body", {
+          scope: { kind: "workspace", workspaceId: workspaceId("ws-restricted") },
+        }),
+      );
+      const { result, events } = await forgetWithLog(
+        "window-refused",
+        makeDeps({
+          memoryVault: vault,
+          memoryAuthorization: {
+            reviewerId: reviewerId("operator-a"),
+            authorizedScopes: () => [{ kind: "global" }],
+          },
+        }),
+      );
+      expect(result.status).toBe(403);
+      expect(events.map((event) => event.extra)).toEqual([
+        expect.objectContaining({
+          outcome: "refused",
+          scopeKind: "workspace",
+          tombstoneWritten: false,
+        }),
+      ]);
+    });
+
+    it("records failed when the vault throws and when the audit preflight refuses", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-throws", "body"));
+      vi.spyOn(vault, "deleteMemories").mockImplementation(() => {
+        throw new MemoryStorageError("internal", "disk full");
+      });
+      const thrown = await forgetWithLog("window-throws", makeDeps({ memoryVault: vault }));
+      expect(thrown.events.map((event) => event.extra)).toEqual([
+        expect.objectContaining({ outcome: "failed", tombstoneWritten: false }),
+      ]);
+
+      const audit = await forgetWithLog(
+        "window-audit",
+        makeDeps({
+          memoryVault: makeVault(),
+          evidenceStore: {
+            put: () => {
+              throw new Error("audit store unavailable");
+            },
+            list: () => [],
+            get: () => undefined,
+            delete: () => undefined,
+          },
+        }),
+      );
+      expect(audit.result.status).toBe(500);
+      expect(audit.events.map((event) => event.extra)).toEqual([
+        expect.objectContaining({ outcome: "failed", surface: "memory-center" }),
+      ]);
+    });
   });
 
   it("rejects by-id forgets when the caller is not authorized for the memory scope", async () => {

@@ -101,6 +101,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { getServerLogger } from "./observability/index.js";
 import { resolveMemoryTargetRecords } from "./memory-target-resolver.js";
+import {
+  logExplicitMemoryForget,
+  type MemoryForgetSurfaceDetail,
+} from "./memory-explicit-statement-log.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1542,6 +1546,56 @@ function executeForgetSelection(
   return { memoryIds: operations.map((operation) => operation.memoryId) };
 }
 
+function forgetSelectorScopeKind(
+  vault: MemoryVaultStore,
+  selector: ForgetSelector,
+): MemoryScopeKind | undefined {
+  if (selector.kind === "by-id") return vault.getMemory(selector.memoryId)?.scope.kind;
+  return selectorScope(selector)?.kind;
+}
+
+function forgetRouteOutcome(result: RouteResult): "not-found" | "refused" {
+  return result.status === 404 ? "not-found" : "refused";
+}
+
+// A forget from the Memory window (Journal and Memory Center) through the one forget path, leaving
+// its own body-free line on the Activity Log (#4206 AC 5). A thrown failure is recorded as `failed`
+// and rethrown, so the route's existing diagnostic and opaque 500 are unchanged.
+function forgetFromMemoryWindow(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  selector: ForgetSelector,
+  reason: MemoryForgetReason,
+  correlationId: string,
+): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
+  const scopeKind = forgetSelectorScopeKind(vault, selector);
+  const detail = (tombstoneWritten: boolean): MemoryForgetSurfaceDetail => ({
+    surface: "memory-center",
+    scopeKind,
+    tombstoneWritten,
+  });
+  try {
+    const result = executeForgetSelection(deps, vault, selector, reason);
+    if (isRouteResult(result)) {
+      logExplicitMemoryForget(forgetRouteOutcome(result), correlationId, detail(false));
+    } else {
+      logExplicitMemoryForget("forgotten", correlationId, detail(true));
+    }
+    return result;
+  } catch (error) {
+    logExplicitMemoryForget("failed", correlationId, detail(false));
+    throw error;
+  }
+}
+
+// The audit preflight refused before any selection: nothing was forgotten and no tombstone written.
+function logMemoryWindowForgetAuditRefused(correlationId: string): void {
+  logExplicitMemoryForget("failed", correlationId, {
+    surface: "memory-center",
+    tombstoneWritten: false,
+  });
+}
+
 function formatForgetBody(memoryIds: readonly MemoryId[]): Record<string, unknown> {
   return {
     forgotten: true,
@@ -1697,7 +1751,10 @@ async function readForgetByIdRequest(
   if (isRouteResult(input)) return input;
   const correlationId = handlerCorrelationId(ctx);
   const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
-  if (auditReady !== undefined) return auditReady;
+  if (auditReady !== undefined) {
+    logMemoryWindowForgetAuditRefused(correlationId);
+    return auditReady;
+  }
   return { vault: request.vault, id: request.id, reason: input.reason, correlationId };
 }
 
@@ -1710,7 +1767,13 @@ export async function handleForgetMemory(
   const { vault, id, reason, correlationId } = request;
 
   try {
-    const result = executeForgetSelection(deps, vault, { kind: "by-id", memoryId: id }, reason);
+    const result = forgetFromMemoryWindow(
+      deps,
+      vault,
+      { kind: "by-id", memoryId: id },
+      reason,
+      correlationId,
+    );
     if (isRouteResult(result)) return result;
     return { status: 200, body: formatForgetBody(result.memoryIds) };
   } catch (err) {
@@ -1739,10 +1802,13 @@ export async function handleForgetMemories(
   if (isRouteResult(input)) return input;
   const correlationId = handlerCorrelationId(ctx);
   const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
-  if (auditReady !== undefined) return auditReady;
+  if (auditReady !== undefined) {
+    logMemoryWindowForgetAuditRefused(correlationId);
+    return auditReady;
+  }
 
   try {
-    const result = executeForgetSelection(deps, vault, input.selector, input.reason);
+    const result = forgetFromMemoryWindow(deps, vault, input.selector, input.reason, correlationId);
     if (isRouteResult(result)) return result;
     return { status: 200, body: formatForgetBody(result.memoryIds) };
   } catch (err) {
@@ -1768,7 +1834,13 @@ export async function handleDeleteMemory(
   const { vault, id, reason, correlationId } = request;
 
   try {
-    const result = executeForgetSelection(deps, vault, { kind: "by-id", memoryId: id }, reason);
+    const result = forgetFromMemoryWindow(
+      deps,
+      vault,
+      { kind: "by-id", memoryId: id },
+      reason,
+      correlationId,
+    );
     if (isRouteResult(result)) return result;
     return {
       status: 200,
