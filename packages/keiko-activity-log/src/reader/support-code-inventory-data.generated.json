@@ -1133,6 +1133,7 @@
     "keiko-memory-vault/edges",
     "keiko-memory-vault/embeddings",
     "keiko-memory-vault/errors",
+    "keiko-memory-vault/forgetter-surfaces",
     "keiko-memory-vault/index",
     "keiko-memory-vault/memories",
     "keiko-memory-vault/migrate-encrypt",
