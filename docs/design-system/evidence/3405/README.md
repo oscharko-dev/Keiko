@@ -832,3 +832,12 @@ All nine updater cases passed in the Linux arm64 gates container with Node 26.13
 lockfile install and `KEIKO_WRITE_TRACKED_EVIDENCE=1`. The three producer records bind the
 English and German optional catalogs after the Figma status changes. The fourteen committed
 captures retain their original renderer's typography. The freshness gate passed.
+
+## MemoriaViva hardening merged with Keiko 1.5.3 — 2026-11-19 (#4205)
+
+Merging `dev` into the Memoria Viva hardening branch combines the profile disclosure labels with
+the Figma status messages in both optional catalogs. All nine updater cases passed in 1.8 minutes
+in the Linux arm64 gates container with an init process and Node 26.13.1, with
+`KEIKO_WRITE_TRACKED_EVIDENCE=1`, and `npm run check:update-ui-evidence` passed. Only the three
+producer records were kept; the fourteen committed captures retain their original renderer's
+typography.
