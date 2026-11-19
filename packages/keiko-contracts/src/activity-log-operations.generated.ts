@@ -2504,6 +2504,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      earlierValueCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       belowFloorMemoryCount: {
         type: "integer",
         dataClass: "count",
@@ -3378,6 +3383,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       retrievedMemoryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      earlierValueCount: {
         type: "integer",
         dataClass: "count",
         required: false,

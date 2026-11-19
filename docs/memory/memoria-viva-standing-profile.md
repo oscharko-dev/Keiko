@@ -36,8 +36,10 @@ recomputed per answer.
 
 **History.** The superseded fact stays in the vault with its closed validity window and its
 `supersedes` edge. The maintenance pass never forgets it, and returning to the earlier value in the
-same words is learned like any new statement. Neither the profile nor ordinary recall sends it; only
-the person's own forget, or an operator's opt-in retention policy, removes it. A tombstone from
+same words is learned like any new statement. The profile never sends it, and recall sends it only
+as an earlier value of the fact that replaced it, for a question about what held before (see
+**Earlier values**). Only the person's own forget, or an operator's opt-in retention policy, removes
+it. A tombstone from
 unattended maintenance or retention does not refuse the person's later statement, with two
 exceptions: it removed a fact the person had rejected, or it records no status of the removed record
 (a row from before vault schema v4), where a rejection can no longer be ruled out.
@@ -114,11 +116,25 @@ and not comparable across questions.
 
 **Corrections keep their topic.** Under the strict floor a standing profile fact also shares the
 informative words of the facts it superseded (`supersedes` edges, up to four steps back on each
-lineage, forgotten facts excluded). Only the match reads them; a superseded fact never reaches the
-answer. Other memories inherit nothing: they keep their semantic match, and inherited words would let
+lineage, forgotten facts excluded). Only the match reads them; a superseded fact reaches the answer
+only as a labelled earlier value (see **Earlier values**), never as a memory of its own. Other memories inherit nothing: they keep their semantic match, and inherited words would let
 a question that names only an old value ("Was macht Siemens?") retrieve the fact that replaced it.
 Inheritance follows actual profile membership: a correction the profile caps left out, or one the
 person removed from the profile, matches on its own words and semantic similarity only.
+
+**Earlier values (#4223).** A question about what held before ("Was hattest du vorher …?", "How
+were hotfixes reviewed before the current rule?") can only be answered from history. When the
+question carries a cue of time before now (a closed German and English vocabulary: früher, vorher,
+zuvor, vor meiner …, ursprünglich, before, previously, earlier, used to, at the beginning, in
+between, …), each recalled memory carries up to two superseded values it replaced, nearest first,
+rendered under it as `earlier value, since replaced:`. Only superseded records of the memory's own
+scope and of a type the request admits qualify; another scope's history is never shown. History
+fits inside the memory's own share of the token budget, so it never displaces the memory's excerpt or
+a lower-ranked memory. A question without a past cue gets the current value alone: a model shown the
+old value next to the new one can answer with the old one (lab 2026-11-11, update-lists-de). The
+same rule applies to every caller of recall with a question text, so a workflow's memory context and
+`/api/memory/context` carry history under the same cue. The `chat.context.selected` line counts the
+values sent as `earlierValueCount`.
 
 The lab showed why (2026-11-11, Gemma via LiteLLM, `update-lists-de` and `preference-tables-*`). The
 person corrected "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst." with "Ab jetzt bevorzuge ich

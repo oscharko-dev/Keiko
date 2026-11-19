@@ -197,6 +197,12 @@ export interface MemoryContextBlockEntry {
   readonly confidence: number;
   readonly status: MemoryStatus;
   readonly capturedAt: number;
+  /**
+   * Excerpts of the values this memory replaced, nearest first (#4223): a corrected fact keeps its
+   * superseded values as history, and only they answer what held before. Present only when the
+   * memory has superseded predecessors in its own scope and the entry's share of the budget held them.
+   */
+  readonly earlierValues?: readonly string[];
 }
 
 export interface MemoryContextBlock {

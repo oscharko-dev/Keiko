@@ -85,7 +85,13 @@ export function estimateTokens(text: string): number {
 export interface AssembleContextOptions {
   readonly budgetTokens: number;
   readonly maxIncluded: number;
+  /** The superseded values a record replaced, nearest first; asked only for records considered. */
+  readonly earlierValuesOf?: (record: MemoryRecord) => readonly string[];
 }
+
+// One earlier value is a past statement of the same fact, so a short excerpt carries it.
+const EARLIER_VALUE_TOKENS = 40;
+const EARLIER_VALUE_LABEL = "earlier value, since replaced:";
 
 function buildRecordIndex(records: readonly MemoryRecord[]): ReadonlyMap<MemoryId, MemoryRecord> {
   const m = new Map<MemoryId, MemoryRecord>();
@@ -159,13 +165,25 @@ function clippedWords(words: readonly string[], count: number): string {
   return count < words.length ? `${excerpt}…` : excerpt;
 }
 
-function renderText(entries: readonly MemoryContextBlockEntry[]): string {
-  if (entries.length === 0) return "";
-  const lines = ["# Relevant memories"];
-  for (const e of entries) {
-    lines.push(`- (${e.inclusionReason}) ${e.bodyExcerpt}`);
+/**
+ * The prompt lines of one memory: its excerpt, then each value it replaced, indented under it and
+ * labelled as replaced so a model answers with the current value and can still say what held before.
+ */
+export function renderMemoryContextEntry(entry: {
+  readonly inclusionReason: string;
+  readonly bodyExcerpt: string;
+  readonly earlierValues?: readonly string[] | undefined;
+}): string {
+  const lines = [`- (${entry.inclusionReason}) ${entry.bodyExcerpt}`];
+  for (const value of entry.earlierValues ?? []) {
+    lines.push(`  - ${EARLIER_VALUE_LABEL} ${value}`);
   }
   return lines.join("\n");
+}
+
+function renderText(entries: readonly MemoryContextBlockEntry[]): string {
+  if (entries.length === 0) return "";
+  return ["# Relevant memories", ...entries.map(renderMemoryContextEntry)].join("\n");
 }
 
 function renderedCost(entries: readonly MemoryContextBlockEntry[]): number {
@@ -227,6 +245,29 @@ function fitEntryToBudget(
   return best;
 }
 
+// Adds the earlier values that still fit the entry's own allowance, nearest first. History is added
+// only after the memory's own excerpt is fitted and stays inside that memory's per-entry share, so it
+// never displaces the excerpt; a memory whose excerpt already fills its share carries no history.
+function withEarlierValues(
+  entries: readonly MemoryContextBlockEntry[],
+  entry: MemoryContextBlockEntry,
+  earlier: readonly string[],
+  limits: { readonly used: number; readonly allowance: number; readonly budgetTokens: number },
+): MemoryContextBlockEntry {
+  let best = entry;
+  const kept: string[] = [];
+  for (const value of earlier) {
+    const excerpt = clipToTokenBudget(value, EARLIER_VALUE_TOKENS);
+    if (excerpt === "") break;
+    const candidate: MemoryContextBlockEntry = { ...entry, earlierValues: [...kept, excerpt] };
+    const cost = renderedCost([...entries, candidate]);
+    if (cost > limits.budgetTokens || cost - limits.used > limits.allowance) break;
+    kept.push(excerpt);
+    best = candidate;
+  }
+  return best;
+}
+
 interface AssemblyStep {
   readonly included: readonly IncludedMemory[];
   readonly entries: readonly MemoryContextBlockEntry[];
@@ -265,17 +306,21 @@ function greedyAssemble(
       omitted.push({ memoryId: rank.memoryId, reason: "out-of-scope" });
       continue;
     }
-    const entry = fitEntryToBudget(
-      entries,
-      rank,
-      record,
-      options.budgetTokens,
-      Math.max(1, Math.min(perEntry, options.budgetTokens - used)),
-    );
-    if (entry === undefined) {
+    const allowance = Math.max(1, Math.min(perEntry, options.budgetTokens - used));
+    const fitted = fitEntryToBudget(entries, rank, record, options.budgetTokens, allowance);
+    if (fitted === undefined) {
       omitted.push({ memoryId: rank.memoryId, reason: "budget-exceeded" });
       continue;
     }
+    const earlier = options.earlierValuesOf?.(record) ?? [];
+    const entry =
+      earlier.length === 0
+        ? fitted
+        : withEarlierValues(entries, fitted, earlier, {
+            used,
+            allowance,
+            budgetTokens: options.budgetTokens,
+          });
     used = renderedCost([...entries, entry]);
     included.push(rank);
     entries.push(entry);

@@ -1378,6 +1378,7 @@ function toMemoryResult(
         confidence: item.confidence,
         status: item.status,
         capturedAt: item.capturedAt,
+        ...(item.earlierValues === undefined ? {} : { earlierValues: item.earlierValues }),
       })),
       budget: retrieval.budget,
     },

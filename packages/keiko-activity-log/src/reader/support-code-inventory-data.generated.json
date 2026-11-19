@@ -1115,6 +1115,7 @@
     "keiko-memory-retrieval/diversity",
     "keiko-memory-retrieval/errors",
     "keiko-memory-retrieval/graph",
+    "keiko-memory-retrieval/history-intent",
     "keiko-memory-retrieval/index",
     "keiko-memory-retrieval/profile",
     "keiko-memory-retrieval/ranking",

@@ -1,3 +1,4 @@
+import { renderMemoryContextEntry } from "@oscharko-dev/keiko-memory-retrieval";
 import { withMarkdownSkillInstructions } from "./markdown-skill-prompt.js";
 import type {
   ContentRedactionPolicy,
@@ -58,12 +59,7 @@ interface TokenSummaryInput {
 function userProjectionTokens(input: TokenSummaryInput, includeMemory: boolean): number {
   const memory =
     includeMemory && input.memoryEntries.length > 0
-      ? [
-          "# Relevant memories",
-          ...input.memoryEntries.map(
-            (entry) => `- (${entry.inclusionReason}) ${entry.bodyExcerpt}`,
-          ),
-        ].join("\n")
+      ? ["# Relevant memories", ...input.memoryEntries.map(renderMemoryContextEntry)].join("\n")
       : undefined;
   const content = withMarkdownSkillInstructions(
     composeConversationPrompt(input.request.content, [], memory, input.request.discussionMode),

@@ -1,4 +1,5 @@
 import { redactContent } from "@oscharko-dev/keiko-security";
+import { renderMemoryContextEntry } from "@oscharko-dev/keiko-memory-retrieval";
 import type {
   ContentRedactionPolicy,
   ContextAssemblyDiagnostics,
@@ -112,7 +113,7 @@ function renderMemoryContextText(
   if (memories.length > 0) {
     lines.push(MEMORY_LIST_HEADER);
     for (const memory of memories) {
-      lines.push(`- (${memory.inclusionReason}) ${memory.bodyExcerpt}`);
+      lines.push(renderMemoryContextEntry(memory));
     }
   }
   if (compactionContextText !== undefined) {
@@ -159,7 +160,7 @@ function documentLaneItemId(index: number): string {
 }
 
 function memoryLaneItemText(memory: ConversationMemoryContextEntryWire): string {
-  return `- (${memory.inclusionReason}) ${memory.bodyExcerpt}`;
+  return renderMemoryContextEntry(memory);
 }
 
 function includedLaneIds(

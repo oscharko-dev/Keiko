@@ -121,6 +121,48 @@ describe("chat-activity.ts Activity Log proofs (#3532)", () => {
     expect(line).not.toContain("m-tables");
   });
 
+  it("sends a memory's earlier values to the model and logs only their count (#4223)", () => {
+    const sink = captureServerLog();
+    const entry = {
+      memoryId: "m-now",
+      bodyExcerpt: "Ich bevorzuge Tabellen mit Summenzeile.",
+      inclusionReason: "semantic similarity to query",
+      sourceKind: "explicit-user-instruction",
+      sensitivity: "public",
+      confidence: 0.8,
+      status: "accepted",
+      capturedAt: 1_000,
+      earlierValues: ["Ab jetzt bevorzuge ich Listen mit Nummerierung."],
+    } as const;
+    const assembly = selectGatewayPromptAssembly({
+      historyPrefix: [],
+      historyTurnCount: 0,
+      request: { content: "Was habe ich dir vorher genannt?", discussionMode: undefined },
+      profile: DEFAULT_CONTEXT_PROFILE,
+      memoryEntries: [entry],
+      documentContext: [],
+      redactionSecrets: [],
+    });
+    if (assembly === undefined) throw new Error("Missing fixture assembly");
+    expect(assembly.messages.at(-1)?.content).toContain(
+      "  - earlier value, since replaced: Ab jetzt bevorzuge ich Listen mit Nummerierung.",
+    );
+    logChatContextSelection("earlier-proof", assembly, 0, undefined, {
+      context: {
+        enabled: true,
+        text: "",
+        memories: [entry],
+        budget: { tokens: 1_200, used: 0 },
+      },
+      actions: [],
+    });
+    const line = formatActivityLogProofLine(sink.events[0] ?? {});
+    const persisted = expectActivityLogProof("chat.context.selected.budget", line);
+    expect(persisted).toMatchObject({ retrievedMemoryCount: 1, earlierValueCount: 1 });
+    expect(line).not.toContain("Listen");
+    expect(line).not.toContain("Tabellen");
+  });
+
   it("records the semantic floor only when semantic scores were used (#4228)", () => {
     const assembly = selectGatewayPromptAssembly({
       historyPrefix: [],

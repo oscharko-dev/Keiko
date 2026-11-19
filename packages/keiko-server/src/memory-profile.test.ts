@@ -474,6 +474,17 @@ describe("Chat memory with the standing profile (#4228)", () => {
     expect(result.context.profile).toBeUndefined();
     expect(result.context.profileRetrievedCount).toBe(1);
     expect(JSON.stringify(result)).not.toContain("Tabellen");
+
+    // The same history answers a question about the past, labelled as replaced (#4223).
+    const past = await buildMemoryResult(
+      ask("Wie wolltest du mir Zahlen früher zeigen?"),
+      deps(store),
+      ctx,
+    );
+    expect(past.context.memories.map((memory) => memory.memoryId)).toEqual(["lists"]);
+    expect(past.context.memories[0]?.earlierValues).toEqual([
+      "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+    ]);
   });
 
   it("keeps the profile line when recall could send only a shorter excerpt", async () => {

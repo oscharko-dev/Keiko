@@ -1262,6 +1262,11 @@ export interface ConversationMemoryContextEntryWire {
   readonly confidence: number;
   readonly status: MemoryStatus;
   readonly capturedAt: number;
+  /**
+   * Excerpts of the superseded values this memory replaced, nearest first (#4223), sent to the model
+   * under the memory for a question about what held before. The answer marker shows `bodyExcerpt`.
+   */
+  readonly earlierValues?: readonly string[] | undefined;
 }
 
 /** One fact of the standing profile (#4228): supplied with every answer, not marked per answer. */

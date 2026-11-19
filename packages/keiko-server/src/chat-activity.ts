@@ -30,6 +30,8 @@ interface MemorySelectionLogFields {
   readonly profileDroppedCount?: number;
   readonly profileRetrievedCount?: number;
   readonly retrievedMemoryCount?: number;
+  /** Earlier, superseded values the retrieved memories carried to the answer (#4223). */
+  readonly earlierValueCount?: number;
   readonly belowFloorMemoryCount?: number;
   readonly semanticFloor?: number;
 }
@@ -40,6 +42,7 @@ const MEMORY_SELECTION_LOG_FIELDS = {
   profileDroppedCount: { type: "integer", dataClass: "count", required: false },
   profileRetrievedCount: { type: "integer", dataClass: "count", required: false },
   retrievedMemoryCount: { type: "integer", dataClass: "count", required: false },
+  earlierValueCount: { type: "integer", dataClass: "count", required: false },
   belowFloorMemoryCount: { type: "integer", dataClass: "count", required: false },
   semanticFloor: { type: "number", dataClass: "count", required: false },
 } as const;
@@ -505,6 +508,10 @@ export function memorySelectionLogFields(
     ...profileLogFields(memory.context.profile),
     profileRetrievedCount: memory.context.profileRetrievedCount ?? 0,
     retrievedMemoryCount: memory.context.memories.length,
+    earlierValueCount: memory.context.memories.reduce(
+      (count, entry) => count + (entry.earlierValues?.length ?? 0),
+      0,
+    ),
     belowFloorMemoryCount: memory.context.belowFloorCount ?? 0,
     ...(memory.context.semanticFloor === undefined
       ? {}

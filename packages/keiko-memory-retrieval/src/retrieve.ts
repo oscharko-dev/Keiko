@@ -21,16 +21,18 @@
 // responses + identical request -> identical output. The cross-scope isolation test pins
 // this with a spy port that records every listByScope call.
 
-import type {
-  MemoryEdge,
-  MemoryId,
-  MemoryRecord,
-  MemoryScope,
+import {
+  scopeCoordinateKey,
+  type MemoryEdge,
+  type MemoryId,
+  type MemoryRecord,
+  type MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
 
-import { assembleContextBlock } from "./context.js";
+import { assembleContextBlock, type AssembleContextOptions } from "./context.js";
 import { DEFAULT_MMR_LAMBDA, reorderByMmr } from "./diversity.js";
 import { RetrievalError } from "./errors.js";
+import { asksAboutEarlierValues } from "./history-intent.js";
 import { sharedInformativeWordCountInText, tokenize } from "./relevance.js";
 import { rankMemories, type RankMemoriesQuery } from "./ranking.js";
 import { isMemorySuppressed } from "./suppression.js";
@@ -364,7 +366,8 @@ function strictMinSharedWords(request: MemoryRetrievalRequest): number {
 // inherit them: they are the memories semantic similarity may not admit, while another memory
 // keeps its semantic match and would otherwise be pulled into a question that only names its old
 // value ("Ich arbeite bei Bosch" for "Was macht Siemens?"). Only the match reads these words; a
-// superseded fact never reaches the answer, and a forgotten one contributes nothing.
+// superseded fact reaches the answer only as a labelled earlier value of a recalled memory (see
+// earlierValuesOf), never as a memory of its own, and a forgotten one contributes nothing.
 const SUPERSEDED_WORD_DEPTH = 4;
 
 interface Lineage {
@@ -429,6 +432,85 @@ function supersededBodies(
     frontier = next;
   }
   return bodies;
+}
+
+// A recalled memory carries at most this many of the values it replaced (#4223), and only for a
+// question about what held before (see history-intent.ts): only they answer it, and the nearest
+// ones are the ones it asks about.
+const EARLIER_VALUES_MAX = 2;
+
+function supersedingSources(
+  edges: ReadonlyMap<MemoryId, readonly MemoryEdge[]>,
+  id: MemoryId,
+): readonly MemoryId[] {
+  return (edges.get(id) ?? [])
+    .filter((edge) => edge.kind === "supersedes" && edge.toMemoryId === id)
+    .map((edge) => edge.fromMemoryId);
+}
+
+// History of the same fact only: a superseded record of the memory's own scope and of a type the
+// request admits. Another scope belongs to another owner and is never shown.
+function isEarlierValue(
+  record: MemoryRecord | undefined,
+  home: string,
+  request: MemoryRetrievalRequest,
+): record is MemoryRecord {
+  return (
+    record?.status === "superseded" &&
+    scopeCoordinateKey(record.scope) === home &&
+    (request.types === undefined || request.types.includes(record.type))
+  );
+}
+
+function newestFirst(a: MemoryRecord, b: MemoryRecord): number {
+  return b.updatedAt - a.updatedAt || a.id.localeCompare(b.id);
+}
+
+interface EarlierValueSource {
+  readonly port: MemoryQueryPort;
+  readonly request: MemoryRetrievalRequest;
+  /** The candidates' own edges, already fetched for ranking; only older generations cost a fetch. */
+  readonly candidateEdges: ReadonlyMap<MemoryId, readonly MemoryEdge[]> | undefined;
+}
+
+/**
+ * The bodies of the superseded values `record` replaced, nearest first: its direct predecessors,
+ * then theirs. The list read leaves history out, so each one is fetched by edge; a seen-set ends
+ * cycles and the walk stops once it holds EARLIER_VALUES_MAX values.
+ */
+function earlierValuesOf(source: EarlierValueSource, record: MemoryRecord): readonly string[] {
+  const { port, request } = source;
+  const home = scopeCoordinateKey(record.scope);
+  const seen = new Set<MemoryId>([record.id]);
+  const values: string[] = [];
+  let edges = source.candidateEdges;
+  let frontier: readonly MemoryRecord[] = [record];
+  while (edges !== undefined && frontier.length > 0 && values.length < EARLIER_VALUES_MAX) {
+    const index = edges;
+    const ids = frontier
+      .flatMap((current) => supersedingSources(index, current.id))
+      .filter((id) => !seen.has(id));
+    for (const id of ids) seen.add(id);
+    const next = ids
+      .map((id) => port.getMemory?.(id))
+      .filter((candidate) => isEarlierValue(candidate, home, request))
+      .sort(newestFirst);
+    values.push(...next.slice(0, EARLIER_VALUES_MAX - values.length).map((value) => value.body));
+    frontier = next;
+    edges =
+      next.length === 0 || values.length >= EARLIER_VALUES_MAX
+        ? undefined
+        : buildEdgesIndex(port, next);
+  }
+  return values;
+}
+
+// History reaches the answer only for a question about what held before (history-intent.ts).
+function earlierValueOption(
+  source: EarlierValueSource,
+): Pick<AssembleContextOptions, "earlierValuesOf"> {
+  if (!asksAboutEarlierValues(source.request.queryText)) return {};
+  return { earlierValuesOf: (record): readonly string[] => earlierValuesOf(source, record) };
 }
 
 interface StrictFloorInput {
@@ -606,6 +688,7 @@ export function retrieveMemoryContext(
   const assembled = assembleContextBlock(selectionOrder, filtered.candidates, {
     budgetTokens: resolved.budgetTokens,
     maxIncluded: resolved.maxIncluded,
+    ...earlierValueOption({ port, request, candidateEdges: edgesByMemory }),
   });
   return {
     ...assembled,

@@ -5782,6 +5782,12 @@
               "required": true
             },
             {
+              "name": "earlierValueCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "historyDocumentCandidates",
               "type": "integer",
               "dataClass": "count",
@@ -6030,6 +6036,12 @@
           "safeContextFields": [
             {
               "name": "belowFloorMemoryCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "earlierValueCount",
               "type": "integer",
               "dataClass": "count",
               "required": false
