@@ -9,7 +9,7 @@
     "records": [
       {
         "key": "target",
-        "body": "Das Release-Fenster der Kreditplattform ist freitags ab 18 Uhr.",
+        "body": "Das Release-Fenster der Kreditplattform ist freitags ab 18:20 Uhr.",
         "type": "semantic-fact",
         "scope": "project",
         "status": "accepted",
@@ -43,9 +43,9 @@
   "truth": [
     {
       "key": "window",
-      "seed": "Das Release-Fenster der Kreditplattform ist freitags ab 18 Uhr.",
+      "seed": "Das Release-Fenster der Kreditplattform ist freitags ab 18:20 Uhr.",
       "must": false,
-      "terms": [["Freitag*"], ["18"]]
+      "terms": [["Freitag*"], ["18:20", "18.20", "18 Uhr 20"]]
     },
     {
       "key": "retro",
@@ -61,7 +61,7 @@
       "question": "Wann ist das Release-Fenster der Kreditplattform?",
       "expect": {
         "kind": "answer",
-        "terms": [["Freitag*"], ["18"]]
+        "terms": [["Freitag*"], ["18:20", "18.20", "18 Uhr 20"]]
       }
     },
     {

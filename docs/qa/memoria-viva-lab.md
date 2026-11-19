@@ -585,8 +585,8 @@ in code, and a scenario written against a changed value is wrong, not the produc
 
 Measurements made with the files of this directory before the scoring audit (the near-miss abstain
 probes without forbidden terms; values a model would pick unprompted in the probes of
-`long-horizon-berichte-de`, `long-horizon-release-en`, `earlier-hotfix-en`, `earlier-theme-en`,
-`earlier-rueckkehr-de`, `paraphrase-pendeln-de`, `paraphrase-buero-de-en`, `scale-archiviert-de`,
+`long-horizon-berichte-de`, `long-horizon-release-en`, `long-horizon-gewohnheit-de`, `earlier-hotfix-en`, `earlier-theme-en`,
+`earlier-rueckkehr-de`, `paraphrase-pendeln-de`, `paraphrase-buero-de-en`, `scale-abgelaufen-de`, `scale-archiviert-de`,
 `scale-vorschlaege-en`, `seed-earlier-value-en`, `two-memories-batch-en`, `two-memories-compare-en` and
 `two-memories-format-de`) were taken with different expectations and are not comparable with a run of
 the current files.

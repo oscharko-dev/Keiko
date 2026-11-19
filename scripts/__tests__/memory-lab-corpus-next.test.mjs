@@ -195,8 +195,8 @@ describe("every probe of the next corpus can be passed and can be failed", () =>
     ["long-horizon-release-en", "cadence-before", "On a ten-day cycle."],
     ["long-horizon-release-en", "cadence-now", "We ship on a five-week cycle."],
     ["long-horizon-release-en", "cadence-now", "Every 5 weeks."],
-    ["scale-vorschlaege-en", "target", "At 10:00 pm on the last Sunday of the quarter."],
-    ["scale-vorschlaege-en", "target", "On the last Sunday of the quarter, at 10 p.m."],
+    ["scale-vorschlaege-en", "target", "At 9:45 pm on the last Sunday of the quarter."],
+    ["scale-vorschlaege-en", "target", "On the last Sunday of the quarter, at 9:45 p.m."],
     [
       "two-memories-batch-en",
       "direct",

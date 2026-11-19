@@ -9,7 +9,7 @@
     "records": [
       {
         "key": "target",
-        "body": "The payments gateway is switched to read-only mode at 22:00 on the last Sunday of the quarter.",
+        "body": "The payments gateway is switched to read-only mode at 21:45 on the last Sunday of the quarter.",
         "type": "semantic-fact",
         "scope": "project",
         "status": "accepted",
@@ -43,23 +43,9 @@
   "truth": [
     {
       "key": "readonly",
-      "seed": "The payments gateway is switched to read-only mode at 22:00 on the last Sunday of the quarter.",
+      "seed": "The payments gateway is switched to read-only mode at 21:45 on the last Sunday of the quarter.",
       "must": false,
-      "terms": [
-        ["Sunday*"],
-        [
-          "22:00",
-          "22.00",
-          "10 pm",
-          "10pm",
-          "10:00 pm",
-          "10:00pm",
-          "10 p.m.",
-          "10:00 p.m.",
-          "10 o'clock",
-          "ten pm"
-        ]
-      ]
+      "terms": [["Sunday*"], ["21:45", "21.45", "9:45 pm", "9:45pm", "9:45 p.m.", "quarter to ten"]]
     },
     {
       "key": "review",
@@ -80,18 +66,7 @@
         "kind": "answer",
         "terms": [
           ["Sunday*"],
-          [
-            "22:00",
-            "22.00",
-            "10 pm",
-            "10pm",
-            "10:00 pm",
-            "10:00pm",
-            "10 p.m.",
-            "10:00 p.m.",
-            "10 o'clock",
-            "ten pm"
-          ]
+          ["21:45", "21.45", "9:45 pm", "9:45pm", "9:45 p.m.", "quarter to ten"]
         ]
       }
     },

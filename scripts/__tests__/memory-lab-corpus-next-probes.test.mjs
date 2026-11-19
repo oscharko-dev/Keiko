@@ -52,7 +52,7 @@ const MEMORY_FREE_ANSWERS = Object.freeze({
   "long-horizon-release-en:cadence-before": "Before that you probably shipped weekly.",
   "long-horizon-release-en:team-old": "I don't know what your team is called.",
   "paraphrase-buero-de-en:cross-language":
-    "Your workplace is probably on the second or third floor.",
+    "Your workplace is probably on the 17th floor, maybe the seventeenth.",
   "paraphrase-buero-de-en:control-lexical":
     "Dein Büro liegt vermutlich im zweiten oder dritten Stock.",
   "paraphrase-commute-en:synonym":
@@ -65,16 +65,13 @@ const MEMORY_FREE_ANSWERS = Object.freeze({
     "Du pendelst vermutlich mit dem Auto, der Bahn oder dem Fahrrad.",
   "paraphrase-pendeln-de:control-lexical":
     "Du kommst vermutlich mit dem Auto oder der Bahn zur Arbeit.",
-  "scale-abgelaufen-de:target":
-    "Gleitzeitkonten werden meist am Monatsende abgeschlossen, manchmal freitags.",
+  "scale-abgelaufen-de:target": "Gleitzeitkonten werden meist freitags um 12 Uhr abgeschlossen.",
   "scale-abgelaufen-de:control-recent":
     "Deine Urlaubsvertretung übernimmt vermutlich eine Kollegin aus dem Team.",
-  "scale-archiviert-de:target":
-    "Release-Fenster liegen meist dienstags oder donnerstags am Vormittag.",
+  "scale-archiviert-de:target": "Release-Fenster liegen meist freitags um 18 Uhr.",
   "scale-archiviert-de:control-recent":
     "Retrospektiven finden oft montags oder freitags am Nachmittag statt.",
-  "scale-vorschlaege-en:target":
-    "Gateways are usually switched to read-only during a night-time maintenance window, often on a weekend.",
+  "scale-vorschlaege-en:target": "Usually Sunday at 10 pm, in a night-time maintenance window.",
   "scale-vorschlaege-en:control-recent":
     "Incident reviews are often held weekly, for example on Thursday afternoon.",
   "seed-earlier-value-en:now": "Rosa probably wants the weekly report as a PDF or Markdown file.",
@@ -117,6 +114,38 @@ describe("an answer probe of the next corpus", () => {
       const answer = MEMORY_FREE_ANSWERS[key];
       // Nothing reached the model, so a pass can only come from the answer itself.
       expect(scoreProbe(scenario, probe, answer, []).passed, answer).toBe(false);
+    },
+  );
+});
+
+// The obvious guesses, composed mechanically: a weekday with a round hour, in both languages and in
+// the spellings the scorer accepts, and a bare number. No answer probe may be passed by one of them.
+const WEEKDAYS = ["Montag", "montags", "Freitag", "freitags", "Sunday", "Thursday", "Friday"];
+const ROUND_HOURS = [
+  "8 Uhr",
+  "10 Uhr",
+  "12 Uhr",
+  "18 Uhr",
+  "22 Uhr",
+  "10 pm",
+  "10:00",
+  "22:00",
+  "6 pm",
+  "2 am",
+];
+const OBVIOUS_GUESSES = [
+  ...WEEKDAYS.flatMap((day) => ROUND_HOURS.map((hour) => `Usually ${day} at ${hour}.`)),
+  ...Array.from({ length: 30 }, (_, index) => `${String(index + 1)}`),
+  ...Array.from({ length: 30 }, (_, index) => `The ${String(index + 1)}th floor.`),
+  "Most teams use the usual default.",
+];
+
+describe("an answer probe of the next corpus against the obvious guesses", () => {
+  it.each(answerProbes.map((entry) => [entry.key, entry]))(
+    "%s is passed by no weekday with a round hour, bare number or default",
+    (_, { scenario, probe }) => {
+      for (const guess of OBVIOUS_GUESSES)
+        expect(scoreProbe(scenario, probe, guess, []).passed, guess).toBe(false);
     },
   );
 });

@@ -9,7 +9,7 @@
     "records": [
       {
         "key": "target",
-        "body": "Mein Gleitzeitkonto wird freitags um 12 Uhr abgeschlossen.",
+        "body": "Mein Gleitzeitkonto wird freitags um 11:35 Uhr abgeschlossen.",
         "type": "semantic-fact",
         "scope": "user",
         "status": "accepted",
@@ -43,9 +43,9 @@
   "truth": [
     {
       "key": "flex",
-      "seed": "Mein Gleitzeitkonto wird freitags um 12 Uhr abgeschlossen.",
+      "seed": "Mein Gleitzeitkonto wird freitags um 11:35 Uhr abgeschlossen.",
       "must": false,
-      "terms": [["Freitag*"], ["12", "zwölf", "zwoelf"]]
+      "terms": [["Freitag*"], ["11:35", "11.35", "11 Uhr 35"]]
     },
     {
       "key": "cover",
@@ -61,7 +61,7 @@
       "question": "Wann wird mein Gleitzeitkonto abgeschlossen?",
       "expect": {
         "kind": "answer",
-        "terms": [["Freitag*"], ["12", "zwölf", "zwoelf"]]
+        "terms": [["Freitag*"], ["11:35", "11.35", "11 Uhr 35"]]
       }
     },
     {

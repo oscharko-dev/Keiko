@@ -23,7 +23,10 @@
       "key": "floor",
       "seed": "Mein Büro liegt im siebzehnten Stock des Nordgebäudes.",
       "must": false,
-      "terms": [["siebzehnte*", "seventeenth", "17th", "17. stock", "17. og", "floor 17", "17"]]
+      "terms": [
+        ["siebzehnte*", "seventeenth", "17th", "17. stock", "17. og", "floor 17"],
+        ["Nordgebäude*", "north building", "north wing"]
+      ]
     }
   ],
   "turns": [],
@@ -33,7 +36,10 @@
       "question": "Which floor is my workplace on?",
       "expect": {
         "kind": "answer",
-        "terms": [["siebzehnte*", "seventeenth", "17th", "17. stock", "17. og", "floor 17", "17"]]
+        "terms": [
+          ["siebzehnte*", "seventeenth", "17th", "17. stock", "17. og", "floor 17"],
+          ["Nordgebäude*", "north building", "north wing"]
+        ]
       },
       "language": "en"
     },
@@ -42,7 +48,10 @@
       "question": "Wo liegt mein Büro?",
       "expect": {
         "kind": "answer",
-        "terms": [["siebzehnte*", "seventeenth", "17th", "17. stock", "17. og", "floor 17", "17"]]
+        "terms": [
+          ["siebzehnte*", "seventeenth", "17th", "17. stock", "17. og", "floor 17"],
+          ["Nordgebäude*", "north building", "north wing"]
+        ]
       },
       "language": "de"
     }
