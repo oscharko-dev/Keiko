@@ -404,9 +404,8 @@ describe("rankMemories — RRF fusion (#204, O-F2)", () => {
   });
 });
 
-describe("buildRankBySignal — per-signal tie-break comparator", () => {
-  // All roles fixed except the one signal under test, so `av !== bv` is false for every pair and
-  // the comparator falls all the way through to the id tiebreak.
+describe("buildRankBySignal — tie-aware fractional ranks", () => {
+  // All roles fixed except the one signal under test, so every pair is tied on it and shares one rank.
   function tiedSubscores(relevance: number): IncludedSubscores {
     return {
       relevance,
@@ -432,9 +431,9 @@ describe("buildRankBySignal — per-signal tie-break comparator", () => {
     expect(get).toHaveBeenCalledTimes(records.length);
   });
 
-  it("breaks a tie between distinct ids by ascending id, in both directions", () => {
-    // Deliberately scrambled input order so the underlying sort must compare pairs where the
-    // left id is both smaller and larger than the right id before it settles on id-ascending.
+  it("gives equal subscores one shared mean rank, whatever the ids and the input order", () => {
+    // Scrambled input order and ids: a tie must never be broken by id (#4228). Three tied records
+    // occupy positions 1..3, so each gets the mean rank 2.
     const c = buildRecord({ id: "c", updatedAt: now });
     const a = buildRecord({ id: "a", updatedAt: now });
     const b = buildRecord({ id: "b", updatedAt: now });
@@ -445,20 +444,78 @@ describe("buildRankBySignal — per-signal tie-break comparator", () => {
     ]);
     const rankBySignal = buildRankBySignal([c, a, b], subscoresById, ["relevance"]);
     const ranks = rankBySignal.get("relevance");
-    expect(ranks?.get(memoryId("a"))).toBe(1);
+    expect(ranks?.get(memoryId("a"))).toBe(2);
     expect(ranks?.get(memoryId("b"))).toBe(2);
-    expect(ranks?.get(memoryId("c"))).toBe(3);
+    expect(ranks?.get(memoryId("c"))).toBe(2);
   });
 
-  it("returns a stable 0 when two entries share both the same id and the same subscore", () => {
-    // A data-integrity edge case (duplicate id), not a normal caller shape: exercises the final
-    // `return 0` fallthrough that ascending/descending id comparisons never reach.
+  it("ranks a tied group at the mean of its positions between distinct values", () => {
+    const records = ["w", "x", "y", "z"].map((id) => buildRecord({ id, updatedAt: now }));
+    const subscoresById = new Map([
+      [memoryId("w"), tiedSubscores(0.2)],
+      [memoryId("x"), tiedSubscores(0.9)],
+      [memoryId("y"), tiedSubscores(0.2)],
+      [memoryId("z"), tiedSubscores(0.5)],
+    ]);
+    const ranks = buildRankBySignal(records, subscoresById, ["relevance"]).get("relevance");
+    expect(ranks?.get(memoryId("x"))).toBe(1);
+    expect(ranks?.get(memoryId("z"))).toBe(2);
+    expect(ranks?.get(memoryId("w"))).toBe(3.5);
+    expect(ranks?.get(memoryId("y"))).toBe(3.5);
+  });
+
+  it("ranks a duplicated id once, as a tied pair, without throwing", () => {
+    // A data-integrity edge case (duplicate id), not a normal caller shape: both entries share the
+    // same id and subscore, so they are tied (positions 1..2, mean rank 1.5) under the shared key.
     const first = buildRecord({ id: "dup", updatedAt: now });
     const second = buildRecord({ id: "dup", updatedAt: now });
     const subscoresById = new Map([[memoryId("dup"), tiedSubscores(5)]]);
     const rankBySignal = buildRankBySignal([first, second], subscoresById, ["relevance"]);
-    // Comparator never reorders the pair (always ties at 0), so the later occurrence's rank (2)
-    // is the last write to the shared "dup" key.
-    expect(rankBySignal.get("relevance")?.get(memoryId("dup"))).toBe(2);
+    expect(rankBySignal.get("relevance")?.get(memoryId("dup"))).toBe(1.5);
+  });
+});
+
+describe("rankMemories — RRF fusion keeps the intended signals decisive (#4228)", () => {
+  // The unpinned records have the SMALLEST ids, so an id-ordered tie-break would put them first.
+  const crowd = Array.from({ length: 40 }, (_, i) =>
+    buildRecord({ id: `a${String(i).padStart(2, "0")}`, body: "plain note", updatedAt: now }),
+  );
+  const query = { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS, fusion: "rrf" } as const;
+
+  it("ranks a pinned memory first among otherwise-equal memories with smaller ids", () => {
+    const pinned = buildRecord({ id: "zzz", body: "plain note", pinned: true, updatedAt: now });
+    expect(rankMemories([...crowd, pinned], query)[0]?.memoryId).toBe(memoryId("zzz"));
+  });
+
+  it("ranks an accepted correction first among otherwise-equal memories with smaller ids", () => {
+    const correction = buildRecord({
+      id: "zzz",
+      body: "plain note",
+      type: "correction",
+      sourceKind: "accepted-correction",
+      updatedAt: now,
+    });
+    expect(rankMemories([...crowd, correction], query)[0]?.memoryId).toBe(memoryId("zzz"));
+  });
+
+  it("scores memories that differ only by id exactly alike, so ids break ties only", () => {
+    const ranked = rankMemories(crowd, query);
+    expect(new Set(ranked.map((e) => e.score)).size).toBe(1);
+    expect(ranked.map((e) => e.memoryId)).toEqual(crowd.map((r) => r.id));
+  });
+
+  it("lets the semantically nearest memory beat the ids' order in a large store", () => {
+    const semanticById = new Map(crowd.map((r, i) => [r.id, i === 39 ? 0.9 : 0.5]));
+    const ranked = rankMemories(crowd, { ...query, semanticById });
+    expect(ranked[0]?.memoryId).toBe(crowd[39]?.id);
+  });
+
+  it("names no signal for a memory that has none (zero is no evidence)", () => {
+    const ranked = rankMemories([buildRecord({ id: "q", body: "plain note", confidence: 0 })], {
+      ...query,
+      weights: { ...DEFAULT_RANKING_WEIGHTS, recency: 0, importance: 0 },
+    });
+    expect(ranked[0]?.inclusionReason).toBe("included by default ranking");
+    expect(ranked[0]?.score).toBe(0);
   });
 });
