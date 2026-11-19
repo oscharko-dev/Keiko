@@ -150,3 +150,18 @@ Existing linked decisions and executable gates remain the source to check before
     symlink, which need the hosted runner's privilege; `dev-quality-workflows.test.mjs` pins the step.
   - Retirement trigger: revisit when the fixtures move to host-native roots or the Windows leg
     stops running these suites.
+
+- **`fs.cp` with `dereference: false` copies a Windows junction as a real directory (#4429).**
+  - Scope and symptom: a recursive `cp`/`cpSync` over a tree that holds a directory junction (which
+    any Windows user can create, unlike a symbolic link). On Node 26 the copy holds a real directory
+    with copies of the junction target's files, so content from outside the source is copied in; an
+    audit of the copy afterwards only sees ordinary entries. A fixture on a `"dir"` symlink does
+    not show it: `cp` keeps that one as a link, and the audit refuses it.
+  - Cause and correction: `lstat` classifies a junction like a symbolic link, `cp` does not. Refuse
+    links in the `cp` `filter` (an `lstat` per source entry) before `cp` acts on them, and keep any
+    post-copy audit as the second guard. `copyFilesEntry` in `packages/keiko-server/src/files.ts`
+    does this and records `files.copy.refused`.
+  - Evidence and validation: on 2026-11-19 the files suite case "refuses and removes a copy whose
+    source tree holds a nested directory link" on a junction resolved without the filter and is
+    refused with it on Windows 11; on Linux it runs on a directory symlink.
+  - Retirement trigger: revisit when Node's `cp` preserves junctions as links on Windows.

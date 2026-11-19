@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0908ab8e379c4892bc47e7696d23ead2db1cd2a8bbcd0becab5c8e4e7e314c87",
+    "catalogDigest": "c1ee4ab42afb9d89b90ee41e1a92aedca4b6090abd5ba6741c45da81d4ac9bab",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -24398,6 +24398,64 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:834",
         "emitterSites": ["packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:972"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "files.copy.refused",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "files-copy-log.recordFilesCopyRefusal",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["refused"]
+          },
+          "stage": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["copy-filter", "post-copy-audit"]
+          },
+          "code": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["UNSUPPORTED", "PATH_ESCAPE", "DENIED", "STALE_PATH", "OTHER"]
+          },
+          "entryKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["file", "directory", "symlink"]
+          },
+          "cleanup": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["removed", "remove-failed"]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "capability",
+        "failureClasses": ["files-copy-containment-refusal"],
+        "proofIds": ["files.copy.refused.link"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/files-copy-log.ts:18",
+        "emitterSites": ["packages/keiko-server/src/files-copy-log.ts:94"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -59519,6 +59577,27 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "files-copy-containment-refusal",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["files.copy.refused"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["files.copy.refused"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["files.copy.refused"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["files.copy.refused"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "files-search-availability",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -64412,8 +64491,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 412,
-      "completeClassCount": 412,
+      "supportedClassCount": 413,
+      "completeClassCount": 413,
       "completeness": "complete",
       "classes": [
         {
@@ -92526,6 +92605,80 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "files-copy-containment-refusal",
+          "requirementContract": "files-copy-containment-refusal",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["files.copy.refused"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "files.copy.refused",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["files.copy.refused"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "files.copy.refused",
+              "owner": "keiko-server",
+              "category": "security",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "capability",
+              "safeContextFields": [
+                {
+                  "name": "cleanup",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "code",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "entryKind",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "stage",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["files.copy.refused.link"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "files-search-availability",
           "requirementContract": "files-search-availability",
           "productSurfaces": ["keiko-server"],
@@ -120189,7 +120342,7 @@
     "violations": []
   },
   "legacyDiscovery": {
-    "dynamicCount": 101,
+    "dynamicCount": 102,
     "unknownCategoryCount": 85,
     "authoritative": false
   },
@@ -122388,7 +122541,14 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/files.ts:3272",
+      "site": "packages/keiko-server/src/files.ts:2526",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "<dynamic>",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/files.ts:3323",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -124987,6 +125147,19 @@
       "category": "diagnostic",
       "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotStore.ts:16",
       "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "files.copy.cleanup-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/files.ts:2521",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "files.copy.refused",
+      "category": "security",
+      "site": "packages/keiko-server/src/files-copy-log.ts:21",
       "package": "keiko-server"
     },
     {
@@ -127828,6 +128001,8 @@
     "figma.snapshotBuild",
     "figma.snapshotRead",
     "figma.snapshotStore",
+    "files.copy.cleanup-failed",
+    "files.copy.refused",
     "files.search.completed",
     "gateway.capability",
     "gateway.catalog.automatic.completed",

@@ -1,5 +1,12 @@
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import {
   link,
   mkdtemp,
   mkdir,
@@ -2769,10 +2776,17 @@ describe("desktop files mutations (create / rename / delete)", () => {
     ).rejects.toMatchObject({ status: 400, code: "BAD_PATH" });
   });
 
-  it("removes a copied directory if the post-copy audit finds a nested symlink", async () => {
+  // #4429: on Windows the nested link is a directory JUNCTION, which any user can create. Node's
+  // `fs.cp` with `dereference: false` copied it as a real directory holding the outside files, so the
+  // copy resolved and `src-copy/outside-link/secret.txt` carried content from outside the root.
+  it("refuses and removes a copy whose source tree holds a nested directory link", async () => {
     const outside = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-copy-outside-")));
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
     try {
-      await symlink(outside, join(root, "src", "outside-link"), "dir");
+      await writeFile(join(outside, "secret.txt"), "outside content\n");
+      await mkdir(join(root, "src", "nested"));
+      await symlink(outside, join(root, "src", "nested", "outside-link"), DIRECTORY_LINK_TYPE);
 
       await expect(
         copyFilesEntry({
@@ -2780,10 +2794,33 @@ describe("desktop files mutations (create / rename / delete)", () => {
           rootInput: root,
           sourcePathInput: "src",
           destPathInput: "src-copy",
+          correlationId: "files-copy-000001",
         }),
       ).rejects.toMatchObject({ status: 400, code: "UNSUPPORTED" });
       await expect(stat(join(root, "src-copy"))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(join(outside, "secret.txt"), "utf8")).resolves.toBe(
+        "outside content\n",
+      );
+
+      const lines = sink.events
+        .filter((event) => event.op === "files.copy.refused")
+        .map(formatActivityLogProofLine);
+      expect(lines).toHaveLength(1);
+      expectActivityLogProof("files.copy.refused.link", lines[0] ?? "");
+      expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+        level: "warn",
+        errorKind: "unsafe-target",
+        correlationId: "files-copy-000001",
+        outcome: "refused",
+        stage: "copy-filter",
+        code: "UNSUPPORTED",
+        entryKind: "directory",
+        cleanup: "removed",
+      });
+      expect(lines[0]).not.toContain("outside-link");
+      expect(lines[0]).not.toContain("src-copy");
     } finally {
+      resetServerLogger();
       await rm(outside, { recursive: true, force: true });
     }
   });

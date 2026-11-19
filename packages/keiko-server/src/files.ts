@@ -58,6 +58,8 @@ import {
   reKeyEditorLocalHistorySafely,
 } from "./editor/localHistory/localHistoryCapture.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { correlationIdOrUnknown } from "./correlation.js";
+import { recordFilesCopyRefusal, type FilesCopyRefusalStage } from "./files-copy-log.js";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import { errorBody } from "./route-error.js";
 import { STREAMING } from "./route-outcome.js";
@@ -792,7 +794,8 @@ async function mapInBatches<T, R>(
 ): Promise<R[]> {
   const results: R[] = [];
   for (let offset = 0; offset < values.length; offset += batchSize) {
-    results.push(...(await Promise.all(values.slice(offset, offset + batchSize).map(mapper))));
+    const batch = values.slice(offset, offset + batchSize);
+    results.push(...(await Promise.all(batch.map(mapper)))); // NOSONAR typescript:S9382 -- batches run one after another to cap concurrent filesystem work
   }
   return results;
 }
@@ -1866,7 +1869,7 @@ async function readStableEditableContent(
     if (statsMatch(before, after)) return { content, stats: after };
     before = after;
     if (attempt < STABLE_CONTENT_READ_ATTEMPTS - 1) {
-      await sleep(STABLE_CONTENT_RETRY_DELAY_MS);
+      await sleep(STABLE_CONTENT_RETRY_DELAY_MS); // NOSONAR typescript:S9382 -- a retry re-reads only after the previous read saw the file change
     }
   }
   throw staleSessionOpenError();
@@ -2486,6 +2489,73 @@ async function assertCopiedTreeContainsNoSymlinks(
   }
 }
 
+// #4429: on Windows `fs.cp` with `dereference: false` copies a nested directory JUNCTION as a real
+// directory holding the junction target's files, so copying a contained folder pulled content from
+// outside the root into it, and the post-copy audit then only ever saw ordinary contained entries.
+// Node's lstat classifies a junction like a symbolic link, so this filter refuses every link of the
+// source tree before `cp` acts on it: the copy never dereferences a link, on any platform. The
+// post-copy audit stays as the second guard for an entry replaced while the copy ran.
+async function refuseLinkedCopySource(sourcePath: string): Promise<boolean> {
+  let current: Stats;
+  try {
+    current = await lstat(sourcePath);
+  } catch {
+    throw stalePathError();
+  }
+  if (current.isSymbolicLink()) {
+    throw new FilesError(400, "UNSUPPORTED", "Symbolic links cannot be copied here.");
+  }
+  return true;
+}
+
+async function removeRefusedCopy(
+  targetPath: string,
+  correlationId: string | undefined,
+): Promise<"removed" | "remove-failed"> {
+  try {
+    await rm(targetPath, { recursive: true, force: true });
+    return "removed";
+  } catch (error) {
+    const diagnostic = serverDiagnosticFromError({
+      correlationId: correlationIdOrUnknown(correlationId),
+      operation: "files.copy.cleanup-failed",
+      source: "files.copy",
+      error,
+      redact: () => "A refused copy could not be removed from the destination.",
+    });
+    emitServerDiagnostic(undefined, diagnostic);
+    return "remove-failed";
+  }
+}
+
+async function copyContainedEntry(
+  source: ResolvedTarget,
+  target: ResolvedCreationTarget,
+  kind: FilesEntryKind,
+  correlationId: string | undefined,
+): Promise<void> {
+  let stage: FilesCopyRefusalStage = "copy-filter";
+  try {
+    // `force:false` + `errorOnExist` refuse to overwrite; `dereference:false` plus the link filter
+    // never follow a link (symbolic link or junction) out of the root.
+    await cp(source.path, target.path, {
+      recursive: kind === "directory",
+      force: false,
+      errorOnExist: true,
+      dereference: false,
+      filter: refuseLinkedCopySource,
+    });
+    stage = "post-copy-audit";
+    assertMutationEffectContained(target, kind);
+    await assertCopiedTreeContainsNoSymlinks(target.fs, target.realRoot, target.path);
+  } catch (error) {
+    if (!(error instanceof FilesError)) throw mapNodeFsError(error);
+    const cleanup = await removeRefusedCopy(target.path, correlationId);
+    recordFilesCopyRefusal({ stage, code: error.code, entryKind: kind, cleanup }, correlationId);
+    throw error;
+  }
+}
+
 const NOFOLLOW_WRITE_FLAG = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
 
 async function writeExistingResolvedFile(target: ResolvedTarget, content: string): Promise<Stats> {
@@ -2726,7 +2796,6 @@ export async function deleteFilesEntry(args: {
   return { root: target.root, path: target.relativePath, kind };
 }
 
-// eslint-disable-next-line max-lines-per-function -- copy containment checks are kept adjacent to the filesystem mutation.
 export async function copyFilesEntry(args: {
   readonly store: UiStore;
   readonly rootInput: string | null;
@@ -2734,6 +2803,7 @@ export async function copyFilesEntry(args: {
   readonly destPathInput: string | null;
   readonly redactor?: FilesMetadataRedactor | undefined;
   readonly resolvedRoot?: ResolvedProjectRoot | undefined;
+  readonly correlationId?: string | undefined;
 }): Promise<FilesMutationResponse> {
   const redactor = args.redactor ?? staticFilesMetadataRedactor;
   // Source must exist, be contained, and not be denied or a symlink (we never dereference one).
@@ -2767,26 +2837,7 @@ export async function copyFilesEntry(args: {
   }
   await assertResolvedTargetStillCurrent(source);
   assertCreationParentStillContained(target);
-  try {
-    // `force:false` + `errorOnExist` refuse to overwrite; `dereference:false` copies symlinks as
-    // links (never follows one out of the root). Contents stay inside the root throughout.
-    await cp(source.path, target.path, {
-      recursive: kind === "directory",
-      force: false,
-      errorOnExist: true,
-      dereference: false,
-    });
-    try {
-      assertMutationEffectContained(target, kind);
-      await assertCopiedTreeContainsNoSymlinks(target.fs, target.realRoot, target.path);
-    } catch (error) {
-      await rm(target.path, { recursive: true, force: true }).catch(() => undefined);
-      throw error;
-    }
-  } catch (error) {
-    if (error instanceof FilesError) throw error;
-    throw mapNodeFsError(error);
-  }
+  await copyContainedEntry(source, target, kind, args.correlationId);
   // The copy created a new watched file at the destination; the source is untouched and needs no
   // event (mirrors renameFilesEntry's Deleted+Created pair, minus the Deleted half a copy never has).
   notifyHostLspWorkspaceFileChanged(target.realRoot, target.path, 1);
@@ -3413,6 +3464,7 @@ export async function handleFilesCopy(
         destPathInput,
         redactor: deps.redactor,
         resolvedRoot,
+        correlationId: ctx.correlationId,
       }),
     };
   });
