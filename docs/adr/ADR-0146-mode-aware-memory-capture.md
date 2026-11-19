@@ -371,7 +371,9 @@ doubt Keiko learns too little rather than too much, because nobody approves what
   the human correction path, in one transaction with a precondition on the older fact. A superseded
   record is history (#4223): the maintenance pass never forgets it, even though its closed window has
   ended, and only the person's own forget, or an operator's opt-in retention policy, deletes it. A
-  maintenance pass that finds a record whose AUTHOR-STATED validity ended still forgets it. In every mode
+  maintenance pass still forgets a record whose AUTHOR-STATED validity ended, but only one in a
+  status `shouldForget` forgets: `proposed`, `rejected`, `conflicted` or `expired`. An `accepted` or
+  `archived` record with an ended validity is kept (recall hides it), as is a `superseded` one. In every mode
   the correction replaces the old fact in that transaction; only under an operator restriction (D2)
   does the new fact wait as a `correction` with its `corrects` edge, written in the same single
   transaction. A learned fact replaces only what Keiko learned in the person's own scope:
@@ -471,8 +473,12 @@ bodies or user text.
   vault schema v4 added the column, a rejection can no longer be ruled out for it, and the predicate
   fails closed. The cost is that a fact whose only tombstone is such a legacy row is not learned
   again from conversation; every tombstone a record deletion has written since schema v4 carries
-  the status and is unaffected. A test enumerates
-  every production writer and fails for one that is not classified. Superseded records are kept as
+  the status and is unaffected. A test scans every production source for
+  expressions that carry a surface literal or a classification constant (a property, a default
+  parameter or a positional argument), fails for an unclassified literal, requires the four known
+  writers by name and requires every exported surface constant to have a production use. A bare
+  variable or an unlisted helper that carries a surface is not recognised by the scan; the fail-closed
+  refusal is what protects such a writer. Superseded records are kept as
   history until the person deletes them or an operator's opt-in retention removes them, and history
   is never sent to the model: default recall and the standing profile hide closed validity windows.
 - Every capture decision the Journal shows is also one registered `memory.capture.decision`
