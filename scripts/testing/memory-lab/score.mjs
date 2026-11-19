@@ -120,18 +120,21 @@ function characterAt(text, index) {
  * written with the prefix mark matches at a word start whatever follows: `Tabelle*` covers Tabelle,
  * Tabellen and Tabellenform, which German inflection and compounds hide from a whole word.
  */
-function containsTerm(haystack, term) {
+function* termMatches(haystack, term) {
   const prefix = term.endsWith(TERM_PREFIX_MARK);
   const needle = prefix ? term.slice(0, -TERM_PREFIX_MARK.length) : term;
-  if (needle.length === 0) return false;
+  if (needle.length === 0) return;
   const leadingWord = isWordCharacter(characterAt(needle, 0));
   const trailingWord = !prefix && isWordCharacter(characterBefore(needle, needle.length));
   for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1)) {
     if (leadingWord && isWordCharacter(characterBefore(haystack, at))) continue;
     if (trailingWord && isWordCharacter(characterAt(haystack, at + needle.length))) continue;
-    return true;
+    yield at;
   }
-  return false;
+}
+
+function containsTerm(haystack, term) {
+  return !termMatches(haystack, term).next().done;
 }
 
 // A probe that names what it needs (`expect.needs`, `expect.earlier`) has no `terms`: with no term
@@ -370,9 +373,22 @@ const withOf = (list, key) => {
   return binding === undefined ? {} : { with: binding };
 };
 
+// The terms and `with` groups of the other bound truths a probe needs; only a bound truth has rivals.
+const rivalsOf = (list, key, needKeys) => {
+  if (list.find((entry) => entry.key === key).with === undefined) return {};
+  const rivals = needKeys
+    .filter((other) => other !== key)
+    .map((other) => list.find((entry) => entry.key === other))
+    .filter((entry) => entry.with !== undefined)
+    .map((entry) => ({ terms: entry.terms, with: entry.with }));
+  return rivals.length === 0 ? {} : { rivals };
+};
+
 // The units an answer is read in for a bound fact: split on sentence punctuation and line breaks, so a
 // sentence and a list item are each one unit. Deliberately simple and deterministic.
-const ANSWER_UNIT_BREAK = /[.!?;\n\r]+/u;
+// Sentence punctuation ends a unit only before white space or at the end, so "5.000" and "3.5" stay
+// whole numbers; a semicolon and a line break always end one.
+const ANSWER_UNIT_BREAK = /[.!?]+(?=\s|$)|[;\n\r]+/u;
 
 /** The units of an answer: sentences and list items, empty pieces dropped. */
 export function answerUnits(answer) {
@@ -381,16 +397,74 @@ export function answerUnits(answer) {
     .filter((unit) => unit.trim().length > 0);
 }
 
+// The word index of every occurrence of every alternative of the term groups in a normalized unit.
+function wordPositions(text, groups) {
+  const starts = Array.from(text.matchAll(/[\p{L}\p{N}]+/gu), (match) => match.index);
+  const wordAt = (index) => starts.filter((start) => start <= index).length - 1;
+  return groups
+    .flat()
+    .flatMap((term) => Array.from(termMatches(text, normalizeText(term)), wordAt));
+}
+
+// Words between the nearest occurrences of two positions lists.
+const gapBetween = (left, right) =>
+  Math.min(...left.flatMap((at) => right.map((other) => Math.abs(at - other))));
+
+function* permutations(items) {
+  if (items.length <= 1) {
+    yield items;
+    return;
+  }
+  for (const [index, head] of items.entries())
+    for (const rest of permutations(items.filter((_, other) => other !== index)))
+      yield [head, ...rest];
+}
+
+// More bound facts than this in one unit are too many to pair exhaustively: the unit is not read.
+const MAX_BOUND_FACTS_PER_UNIT = 6;
+
+// The total gap when each fact's subject is paired with the terms of the fact `pairing` names.
+const pairingCost = (placed, pairing) =>
+  pairing.reduce((sum, other, index) => sum + gapBetween(placed[index].subject, other.terms), 0);
+
 /**
- * True when the answer carries a wanted fact's terms. A fact with `with` is carried only where its terms
- * and every `with` group occur in one unit (a sentence or a list item); a fact without it is carried
- * wherever its terms occur in the answer, as before.
+ * One unit carries a bound fact when its terms and every `with` group occur in it. A unit that also
+ * holds another bound fact of the probe (`item.rivals`: its subject and its terms) says nothing about
+ * which subject a value belongs to by occurrence alone, so the subjects and values are paired by
+ * distance in words: the fact is carried only when pairing every subject with its own value is
+ * strictly closer, in total, than every other pairing. A tie (a coordinated clause such as "Atlas and
+ * Borealis use PostgreSQL and MongoDB") or a closer swap (a reversed sentence) carries none of them.
+ */
+function unitCarries(unit, item) {
+  const text = normalizeText(unit);
+  const present = (bound) =>
+    matchesNormalized(text, bound.terms) && matchesNormalized(text, bound.with);
+  if (!present(item)) return false;
+  const bound = [item, ...(item.rivals ?? []).filter(present)];
+  if (bound.length === 1) return true;
+  if (bound.length > MAX_BOUND_FACTS_PER_UNIT) return false;
+  const placed = bound.map((entry) => ({
+    subject: wordPositions(text, entry.with),
+    terms: wordPositions(text, entry.terms),
+  }));
+  const own = pairingCost(placed, placed);
+  return [...permutations(placed)].every(
+    (pairing) =>
+      pairing.every((entry, index) => entry === placed[index]) ||
+      own < pairingCost(placed, pairing),
+  );
+}
+
+/**
+ * True when the text carries a wanted fact's terms. A fact with `with` is carried only where its terms
+ * and every `with` group occur in one unit (a sentence or a list item), and, when that unit holds
+ * another bound fact, where the pairing of subjects with values favours it; a fact without
+ * it is carried wherever its terms occur in the text, as before. The same rule decides whether a
+ * supplied memory carries the fact.
  */
 function answerCarries(answer, item) {
   if (item.with === undefined) return matchesTermGroups(answer, item.terms);
-  return answerUnits(answer).some(
-    (unit) => matchesTermGroups(unit, item.terms) && matchesTermGroups(unit, item.with),
-  );
+  return answerUnits(answer).some((unit) => unitCarries(unit, item));
 }
 
 // What an answer probe wants beyond (or instead of) its own terms: the truths it `needs` and the
@@ -398,12 +472,15 @@ function answerCarries(answer, item) {
 // are labelled `earlier:<key>` so a result names which kind was missing.
 export function wantedOf(scenario, probe) {
   const termsOf = (list, key) => list.find((entry) => entry.key === key).terms;
-  const needs = (probe.expect.needs ?? []).map((key) => ({
+  const needKeys = probe.expect.needs ?? [];
+  const needs = needKeys.map((key) => ({
     label: key,
     link: { truth: key },
     terms: termsOf(scenario.truth, key),
-    // Optional: term groups that must occur in the same sentence or list item as the terms.
+    // Optional: term groups that must occur in the same sentence or list item as the terms, and the
+    // subjects of the probe's other bound truths, which that unit may name as well.
     ...withOf(scenario.truth, key),
+    ...rivalsOf(scenario.truth, key, needKeys),
   }));
   const earlier = (probe.expect.earlier ?? []).map((key) => ({
     label: `earlier:${key}`,

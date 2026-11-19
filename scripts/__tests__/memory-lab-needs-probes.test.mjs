@@ -275,6 +275,34 @@ describe("a needed truth bound to its subject with `with`", () => {
     ]);
   });
 
+  it("fails a reversed association inside one sentence, on both facts", () => {
+    // The failure this pins: both subjects and both values occurred in one unit, so it passed.
+    const swapped = run(compare, "Atlas uses MongoDB and Borealis uses PostgreSQL.");
+    expect(swapped.passed).toBe(false);
+    expect(swapped.neededMissing).toEqual(["atlas", "borealis"]);
+    expect(run(compare, "Atlas uses PostgreSQL and Borealis uses MongoDB.").passed).toBe(true);
+    expect(run(compare, "Atlas: Postgres, Borealis: MongoDB").passed).toBe(true);
+    expect(run(compare, "Atlas: MongoDB, Borealis: PostgreSQL").neededMissing).toEqual([
+      "atlas",
+      "borealis",
+    ]);
+  });
+
+  it("does not carry a value that two subjects share equally, or one that is no nearer its own", () => {
+    // Remaining limit: a coordinated clause cannot be decided. At most one of the facts is carried.
+    const coordinated = run(compare, "Atlas and Borealis use PostgreSQL and MongoDB.");
+    expect(coordinated.passed).toBe(false);
+    expect(coordinated.neededMissing).toContain("atlas");
+    expect(run(compare, "Atlas MongoDB Borealis PostgreSQL").passed).toBe(false);
+  });
+
+  it("keeps a decimal point inside its unit", () => {
+    expect(answerUnits("Limit 5.000 Euro. Next 3.5 days!")).toEqual([
+      "Limit 5.000 Euro",
+      " Next 3.5 days",
+    ]);
+  });
+
   it("leaves a truth without the field exactly as it was, wherever its term occurs", () => {
     expect(run(mixed, "Atlas uses PostgreSQL.\n\nThe room is Birch.").passed).toBe(true);
     expect(run(mixed, "The room is Birch, but I do not know the storage.").neededMissing).toEqual([

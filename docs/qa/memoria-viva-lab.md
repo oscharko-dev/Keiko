@@ -363,15 +363,21 @@ fail-closed by `scenario.mjs`):
   end in `*` to match at a word start).
   An optional `with` (term groups, same shape) binds the fact to its subject for a probe that `needs`
   it: the fact counts as carried by an answer only where its `terms` **and** every `with` group occur
-  in one unit, a sentence or a list item. Units are the pieces of the answer split on `.`, `!`, `?`,
-  `;` and line breaks, nothing smarter. So "Atlas uses PostgreSQL. Borealis uses MongoDB." and a list
-  with one item per project pass, while the swapped answer fails, although it carries both terms. A
-  fact without `with` is carried wherever its terms occur in the answer, exactly as before. Limits in
-  both directions: one sentence that names both subjects before both values ("Atlas and Borealis use
-  PostgreSQL and MongoDB") passes either way round; and a correct answer fails when subject and value
-  fall into different units, for example a heading or a parent list item above the value
-  ("**Atlas**" on one line, "PostgreSQL" on the next), a dot between them ("Atlas 2.0 uses
-  PostgreSQL") or a pronoun in a later sentence. Read the answer before calling such a probe a
+  in one unit, a sentence or a list item. Units are the pieces of the answer split on `.`, `!` and `?`
+  before white space or at the end (so "5.000" and "Atlas 2.0" stay whole), on `;` and on line breaks,
+  nothing smarter. So "Atlas uses PostgreSQL. Borealis uses MongoDB." and a list with one item per
+  project pass, while the swapped answer fails, although it carries both terms. Where one unit holds
+  the subject and the value of several bound facts of the probe ("Atlas uses PostgreSQL and Borealis
+  uses MongoDB"), the subjects and values are paired by distance in words: the facts are carried only
+  when pairing every subject with its own value is strictly closer, in total, than any other pairing.
+  The correct sentence passes; "Atlas uses MongoDB and Borealis uses PostgreSQL" fails on both facts.
+  A fact without `with` is carried wherever its terms occur in the answer, exactly as before. Limits:
+  a coordinated clause, "Atlas and Borealis use PostgreSQL and MongoDB", cannot be decided (the two
+  pairings are equally close) and is not carried; a unit with more than six bound facts is not read;
+  and a correct answer fails when subject and value fall into different units, for example a heading
+  or a parent list item above the value ("**Atlas**" on one line, "PostgreSQL" on the next) or a
+  pronoun in a later sentence. Read
+  the answer before calling such a probe a
   failure of the product. Keys are unique within `truth`; a duplicate is refused.
 - `superseded[]`, `forgotten[]`: facts that were true and replaced, or forgotten; a surviving memory
   is stale or a hard violation.
