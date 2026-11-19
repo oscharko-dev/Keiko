@@ -2,7 +2,7 @@
 // `POST /api/memory/context` answer from a server the lab starts itself, scripted model, no network.
 // Pins that a needed memory the route ranks at position 7 to 12 behind a full chat block reads
 // `beyond-limit` and never anything that suggests it was close.
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -10,6 +10,27 @@ import { REPO_ROOT } from "../testing/coding-workbench-lab/lab-common.mjs";
 import { normalizeOptions, runLab } from "../testing/memory-lab/run.mjs";
 
 const SCENARIO_DIR = join(REPO_ROOT, "scripts", "testing", "memory-lab", "scenarios-next");
+
+// The shipped scenario plus eight often-used records that share every informative word of the
+// question with the needed one, so the needed memory is behind the chat's limit by the product's
+// own ranking (equal relevance, the others used far more often), not by a defect the product may
+// lose. Ranked among the admitted memories since #4228, the shipped scenario alone supplies it.
+function crowdedScenario() {
+  const scenario = JSON.parse(
+    readFileSync(join(SCENARIO_DIR, "long-horizon-oft-genutzt-en.json"), "utf8"),
+  );
+  const crowd = Array.from({ length: 8 }, (_, index) => ({
+    key: `crowd-${String(index + 1)}`,
+    body: `Note ${String(index + 1)} on the caterer search for the team offsite: quote requested.`,
+    type: "semantic-fact",
+    scope: "project",
+    status: "accepted",
+    ageDays: 20 + index,
+    accessCount: 9,
+    lastAccessDays: 1,
+  }));
+  return { ...scenario, seed: { ...scenario.seed, records: [...scenario.seed.records, ...crowd] } };
+}
 
 describe("the recall trace of a real offline run", () => {
   let root;
@@ -25,9 +46,9 @@ describe("the recall trace of a real offline run", () => {
   it("reads a needed memory behind a full chat block as beyond the limit", async () => {
     const scenarios = join(root, "scenarios");
     mkdirSync(scenarios, { recursive: true });
-    copyFileSync(
-      join(SCENARIO_DIR, "long-horizon-oft-genutzt-en.json"),
+    writeFileSync(
       join(scenarios, "long-horizon-oft-genutzt-en.json"),
+      JSON.stringify(crowdedScenario()),
     );
     await runLab(
       normalizeOptions({
@@ -61,7 +82,7 @@ describe("the recall trace of a real offline run", () => {
         entry.position > trace.chatLimit &&
         entry.position <= 12,
     );
-    // Not vacuous: often-used neighbouring facts push the needed memory behind the chat's limit.
+    // Not vacuous: often-used records of equal relevance push the needed memory behind the limit.
     expect(behind.length).toBeGreaterThan(0);
     for (const entry of behind) {
       expect(entry.stage).toBe("beyond-limit");
