@@ -92,7 +92,7 @@
       "question": "Wie soll ich meine Statusberichte aufbauen?",
       "expect": {
         "kind": "answer",
-        "terms": [["Tabelle*"]]
+        "terms": [["Tabelle*", "tabellar*"]]
       }
     },
     {
