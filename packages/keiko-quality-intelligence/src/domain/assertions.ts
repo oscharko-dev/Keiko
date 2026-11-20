@@ -71,10 +71,11 @@ export const isMeaningfulText = (value: string | undefined): boolean =>
  * Type guard mapping an arbitrary string to a known QI priority. Pure; used
  * to keep the test-design model's priority field type-correct.
  */
+const KNOWN_PRIORITIES: ReadonlySet<string> = new Set(QUALITY_INTELLIGENCE_PRIORITIES);
+
 export const isKnownPriority = (
   value: string,
-): value is QualityIntelligence.QualityIntelligencePriority =>
-  QUALITY_INTELLIGENCE_PRIORITIES.some((candidate) => candidate === value);
+): value is QualityIntelligence.QualityIntelligencePriority => KNOWN_PRIORITIES.has(value);
 
 // Returns true for code points in the lower unsafe range (U+0000–U+009F plus DEL).
 // Split from isUnsafeCodePoint to keep cyclomatic complexity below the lint limit.

@@ -1667,14 +1667,9 @@ function writerOwner(value: unknown): ProcessWriterOwner | undefined {
     const handler = fields.reject;
     return typeof handler === "function" ? handler : undefined;
   });
-  if (graphToken === undefined || reject === undefined) return undefined;
-  // The foreign graph's handler is called with exactly the arguments the slot contract declares.
-  return {
-    graphToken,
-    reject: (stateDir, rejected, correlationId): void => {
-      reject.call(undefined, stateDir, rejected, correlationId);
-    },
-  };
+  return graphToken !== undefined && reject !== undefined
+    ? { graphToken, reject: reject as ProcessWriterOwner["reject"] }
+    : undefined;
 }
 
 function recordUnpersistedWriterRejection(rejected: unknown, correlationId: unknown): void {

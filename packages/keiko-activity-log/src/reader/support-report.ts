@@ -441,8 +441,10 @@ function selectionKeys(value: Record<string, unknown>): readonly string[] {
   ];
 }
 
+const SUFFICIENCY_REASON_SET: ReadonlySet<unknown> = new Set(DIAGNOSTIC_SUFFICIENCY_REASONS);
+
 function isSufficiencyReason(value: unknown): value is DiagnosticSufficiencyReason {
-  return DIAGNOSTIC_SUFFICIENCY_REASONS.some((reason) => reason === value);
+  return SUFFICIENCY_REASON_SET.has(value);
 }
 
 function validSelection(value: unknown): value is SupportReportSelection {

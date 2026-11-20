@@ -630,8 +630,10 @@ function validOptionalType(value: unknown, expected: "string" | "number"): boole
   return value === undefined || typeof value === expected;
 }
 
+const ACTIVITY_LOG_LEVEL_SET: ReadonlySet<unknown> = new Set(ACTIVITY_LOG_LEVELS);
+
 function validRecordLevel(value: unknown): boolean {
-  return ACTIVITY_LOG_LEVELS.some((level) => level === value);
+  return ACTIVITY_LOG_LEVEL_SET.has(value);
 }
 
 function validRecordStatus(

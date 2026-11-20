@@ -260,7 +260,8 @@
       "anti-slop/no-known-value-widening": 8,
       "anti-slop/no-runtime-typeof": 12,
       "anti-slop/no-unknown-parameters": 21,
-      "anti-slop/no-unsafe-dictionary-type": 10
+      "anti-slop/no-unsafe-dictionary-type": 10,
+      "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-activity-log/src/server-log.writer-ownership.test.ts": {
       "anti-slop/no-unknown-parameters": 2,
