@@ -1,5 +1,6 @@
 import type { GatewayCallRequest } from "./gateway.js";
 import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   callerAdmittedRequest,
   onceCallerReservation,
@@ -1038,11 +1039,11 @@ function redactUnknown(value: unknown, scrub: ValueScrub, depth = 0): unknown {
   return value;
 }
 
-function redactRecord(
-  value: Record<string, unknown> | null,
+function redactStructuredOutput(
+  value: NormalizedResponse["structuredOutput"],
   secrets: readonly string[],
   policy: ContentRedactionPolicy,
-): Record<string, unknown> | null {
+): NormalizedResponse["structuredOutput"] {
   return value === null
     ? null
     : (redactUnknown(value, {
@@ -1097,7 +1098,7 @@ function redactResponse(
     toolCalls: response.toolCalls.map((call) =>
       redactToolCall(call, secrets, exactContent, isExactContentTool),
     ),
-    structuredOutput: redactRecord(response.structuredOutput, secrets, policy),
+    structuredOutput: redactStructuredOutput(response.structuredOutput, secrets, policy),
     ...(response.reasoning === undefined
       ? {}
       : { reasoning: redactContent(response.reasoning, policy, secrets) }),
@@ -1589,7 +1590,7 @@ function streamedPayload(acc: StreamAccumulator): Record<string, unknown> {
 export async function readGatewayReadinessChatCompletionResponse(
   response: Response,
   maxResponseBytes: number,
-): Promise<unknown> {
+): Promise<CatalogJsonValue | Record<string, unknown>> {
   if (answeredWholeBody(response)) return readJsonCapped(response, maxResponseBytes);
   const acc = newStreamAccumulator();
   const completion = { sawDone: false };
@@ -2464,7 +2465,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     config: ModelProviderConfig,
     secrets: readonly string[],
     signal: AbortSignal,
-  ): Promise<unknown> {
+  ): Promise<CatalogJsonValue> {
     try {
       return await readJsonCapped(response);
     } catch (error) {
@@ -2486,7 +2487,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     config: ModelProviderConfig,
     secrets: readonly string[],
     signal: AbortSignal,
-  ): Promise<unknown> {
+  ): Promise<CatalogJsonValue> {
     try {
       return await readJsonCapped(response);
     } catch {

@@ -127,68 +127,78 @@ function tokenIdsFromEncoded(encoded: unknown): readonly unknown[] | undefined {
   return undefined;
 }
 
-function moduleIdentity(moduleLike: unknown): string {
-  if (typeof moduleLike !== "object" || moduleLike === null)
-    return QWEN3_SENTENCEPIECE_TOKENIZER_ID;
-  const candidate = moduleLike as { readonly tokenizerIdentity?: unknown };
-  return typeof candidate.tokenizerIdentity === "string" && candidate.tokenizerIdentity.length > 0
-    ? candidate.tokenizerIdentity
+// The members Keiko reads from a tokenizer module, its default export, a created tokenizer or its
+// processor. Every member is foreign and is checked before it is used.
+interface TokenizerMembers {
+  readonly encode?: unknown;
+  readonly tokenize?: unknown;
+  readonly processor?: unknown;
+  readonly createTokenizer?: unknown;
+  readonly default?: unknown;
+  readonly tokenizerIdentity?: unknown;
+}
+
+function tokenizerMembers(value: unknown): TokenizerMembers | undefined {
+  return typeof value === "object" && value !== null ? value : undefined;
+}
+
+function moduleIdentity(candidate: TokenizerMembers | undefined): string {
+  const identity = candidate?.tokenizerIdentity;
+  return typeof identity === "string" && identity.length > 0
+    ? identity
     : QWEN3_SENTENCEPIECE_TOKENIZER_ID;
 }
 
-type EncoderFunction = (this: unknown, text: string) => unknown;
-type TokenizerFactory = (options: Qwen3TokenizerFactoryOptions) => unknown;
+// Encodes text with the foreign tokenizer and returns its token ids, or undefined when the
+// encoding holds none.
+type TokenIdEncoder = (text: string) => readonly unknown[] | undefined;
 
-function isEncoderFunction(value: unknown): value is EncoderFunction {
-  return typeof value === "function";
-}
-
-function isTokenizerFactory(value: unknown): value is TokenizerFactory {
-  return typeof value === "function";
-}
-
-function encoderFromCandidate(candidate: unknown): ((text: string) => unknown) | undefined {
-  if (typeof candidate !== "object" || candidate === null) return undefined;
-  const maybe = candidate as {
-    readonly encode?: unknown;
-    readonly tokenize?: unknown;
-    readonly processor?: unknown;
+// Binds a callable encode or tokenize member to its owner; the encoding it returns is read only
+// through tokenIdsFromEncoded.
+function tokenIdEncoder(owner: TokenizerMembers, member: unknown): TokenIdEncoder | undefined {
+  if (typeof member !== "function") return undefined;
+  return (text: string) => {
+    const encoded: unknown = member.call(owner, text);
+    return tokenIdsFromEncoded(encoded);
   };
-  if (isEncoderFunction(maybe.encode)) {
-    const encode = maybe.encode;
-    return (text: string) => encode.call(candidate, text);
-  }
-  if (isEncoderFunction(maybe.tokenize)) {
-    const tokenize = maybe.tokenize;
-    return (text: string) => tokenize.call(candidate, text);
-  }
-  return encoderFromCandidate(maybe.processor);
+}
+
+function encoderFromCandidate(candidate: unknown): TokenIdEncoder | undefined {
+  const members = tokenizerMembers(candidate);
+  if (members === undefined) return undefined;
+  return (
+    tokenIdEncoder(members, members.encode) ??
+    tokenIdEncoder(members, members.tokenize) ??
+    encoderFromCandidate(members.processor)
+  );
+}
+
+// Creates a tokenizer through a callable createTokenizer member of its owner.
+type TokenizerFactory = (
+  options: Qwen3TokenizerFactoryOptions,
+) => Promise<TokenizerMembers | undefined>;
+
+function tokenizerFactory(owner: TokenizerMembers): TokenizerFactory | undefined {
+  const factory = owner.createTokenizer;
+  if (typeof factory !== "function") return undefined;
+  return async (options: Qwen3TokenizerFactoryOptions) => {
+    const created: unknown = await factory.call(owner, options);
+    return tokenizerMembers(created);
+  };
 }
 
 async function tokenizerCandidateFromModule(
   moduleLike: unknown,
   options: Qwen3TokenizerFactoryOptions,
-): Promise<unknown> {
-  if (typeof moduleLike === "object" && moduleLike !== null) {
-    const candidate = moduleLike as {
-      readonly createTokenizer?: unknown;
-      readonly default?: unknown;
-    };
-    if (isTokenizerFactory(candidate.createTokenizer)) {
-      return await candidate.createTokenizer(options);
-    }
-    if (candidate.default !== undefined) {
-      const defaultExport = candidate.default;
-      if (typeof defaultExport === "object" && defaultExport !== null) {
-        const defaultFactory = defaultExport as { readonly createTokenizer?: unknown };
-        if (isTokenizerFactory(defaultFactory.createTokenizer)) {
-          return await defaultFactory.createTokenizer(options);
-        }
-      }
-      return defaultExport;
-    }
-  }
-  return moduleLike;
+): Promise<TokenizerMembers | undefined> {
+  const module = tokenizerMembers(moduleLike);
+  if (module === undefined) return undefined;
+  const factory = tokenizerFactory(module);
+  if (factory !== undefined) return await factory(options);
+  if (module.default === undefined) return module;
+  const defaultExport = tokenizerMembers(module.default);
+  const defaultFactory = defaultExport === undefined ? undefined : tokenizerFactory(defaultExport);
+  return defaultFactory === undefined ? defaultExport : await defaultFactory(options);
 }
 
 export async function createQwen3SentencePieceTokenizerFromModule(
@@ -206,7 +216,7 @@ export async function createQwen3SentencePieceTokenizerFromModule(
     identity: moduleIdentity(candidate),
     kind: "tokenizer",
     countTokens: (text: string): number => {
-      const ids = tokenIdsFromEncoded(encode(text));
+      const ids = encode(text);
       if (ids === undefined) {
         throw new TokenizerLoadError("Qwen3 tokenizer encode result did not contain token ids.");
       }
@@ -215,10 +225,13 @@ export async function createQwen3SentencePieceTokenizerFromModule(
   };
 }
 
-type ImportModule = (specifier: string) => Promise<unknown>;
+// Imports the configured tokenizer module and reads its members; a module namespace is always an
+// object, and an injected loader that resolves anything else yields undefined.
+type ImportModule = (specifier: string) => Promise<TokenizerMembers | undefined>;
 
-function defaultImportModule(specifier: string): Promise<unknown> {
-  return import(specifier) as Promise<unknown>;
+async function defaultImportModule(specifier: string): Promise<TokenizerMembers | undefined> {
+  const imported: unknown = await import(specifier);
+  return tokenizerMembers(imported);
 }
 
 function fallbackDiagnostic(reason: string): OptionalTokenizerLoadResult {

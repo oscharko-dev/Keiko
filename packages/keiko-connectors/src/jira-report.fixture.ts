@@ -166,9 +166,19 @@ function extraFields(count: number): Record<string, unknown> {
       index % 2 === 0 ? "free text" : null;
   return fields;
 }
-function rawIssue(issue: FixtureIssue, requested: ReadonlySet<string>, extra: number): unknown {
+/** One issue as the Data Center search returns it, with only the requested fields present. */
+interface FixtureRawIssue {
+  readonly id: string;
+  readonly key: string;
+  readonly fields: Record<string, unknown>;
+}
+function rawIssue(
+  issue: FixtureIssue,
+  requested: ReadonlySet<string>,
+  extra: number,
+): FixtureRawIssue {
   const all = { ...plainFields(issue), ...typedFields(issue), ...extraFields(extra) };
-  const fields: Record<string, unknown> = {};
+  const fields: FixtureRawIssue["fields"] = {};
   for (const [id, value] of Object.entries(all))
     if (requested.has(id) && value !== undefined) fields[id] = value;
   return { id: issue.key.slice(4), key: issue.key, fields };

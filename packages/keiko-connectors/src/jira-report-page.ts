@@ -55,11 +55,22 @@ export type JiraReportPageFetch =
   | { readonly kind: "failed"; readonly reason: JiraReportFailure }
   | { readonly kind: "moved" };
 
-function mergeIssue(left: unknown, right: unknown): unknown {
-  const first = asRecord(left);
-  const second = asRecord(right);
-  if (first === undefined || second === undefined || first.key !== second.key) return undefined;
-  return { ...first, fields: { ...asRecord(first.fields), ...asRecord(second.fields) } };
+/**
+ * The issues of two field chunks merged pairwise, or undefined when a pair is not the same issue.
+ * Each merged issue keeps the first chunk's top-level values and combines both chunks' fields.
+ */
+function mergedIssues(
+  issues: readonly unknown[],
+  other: readonly unknown[],
+): unknown[] | undefined {
+  const merged: unknown[] = [];
+  for (const [index, issue] of issues.entries()) {
+    const first = asRecord(issue);
+    const second = asRecord(other[index]);
+    if (first === undefined || second === undefined || first.key !== second.key) return undefined;
+    merged.push({ ...first, fields: { ...asRecord(first.fields), ...asRecord(second.fields) } });
+  }
+  return merged;
 }
 /** The responses must describe the same issues in the same order, or the scope moved between them. */
 function mergePages(
@@ -72,8 +83,8 @@ function mergePages(
   for (const body of rest) {
     const other = asArray(body.issues);
     if (other?.length !== issues.length || body.total !== first.total) return undefined;
-    const merged: unknown[] = issues.map((issue, index) => mergeIssue(issue, other[index]));
-    if (merged.includes(undefined)) return undefined;
+    const merged = mergedIssues(issues, other);
+    if (merged === undefined) return undefined;
     issues = merged;
   }
   return { ...first, issues };

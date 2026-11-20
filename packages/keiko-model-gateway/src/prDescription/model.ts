@@ -130,12 +130,18 @@ function unfencedCandidate(text: string): string {
   return trimmed.slice(firstNewline + 1, -4);
 }
 
-function parseCandidate(text: string): unknown {
+// Validates the candidate JSON; text that does not parse is validated as an absent candidate.
+function parseCandidate(
+  text: string,
+  evidenceIds: readonly string[],
+): PrDescriptionCandidateValidation {
+  let parsed: unknown;
   try {
-    return JSON.parse(unfencedCandidate(text)) as unknown;
+    parsed = JSON.parse(unfencedCandidate(text));
   } catch {
-    return undefined;
+    return validatePrDescriptionCandidate(undefined, evidenceIds);
   }
+  return validatePrDescriptionCandidate(parsed, evidenceIds);
 }
 
 function candidateIsRedacted(candidate: PrDescriptionCandidate): boolean {
@@ -158,7 +164,7 @@ export function validatePrDescriptionResponse(
     return { ok: false, reason: "invalid-model-output" };
   // Parse the wire text even when the provider helpfully supplies structuredOutput: one bounded
   // input, one local validator, no alternative unbounded or trusted provider-object path.
-  const candidate = validatePrDescriptionCandidate(parseCandidate(response.content), evidenceIds);
+  const candidate = parseCandidate(response.content, evidenceIds);
   if (candidate.ok && !candidateIsRedacted(candidate.value))
     return { ok: false, reason: "unsafe-model-output" };
   return candidate;

@@ -5,6 +5,7 @@
 // consume it; it is deliberately not part of the public barrel surface.
 
 import type { AtlassianSyncFailureReason } from "@oscharko-dev/keiko-contracts";
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { AtlassianCredentialCustodyError } from "./atlassian-credential-custody.js";
 import type { AtlassianHttpBodyResult } from "./atlassian-http-port.js";
@@ -24,9 +25,11 @@ export function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function parseAtlassianJsonValue(bodyText: string): unknown {
+function parseAtlassianJsonValue(bodyText: string): CatalogJsonValue | undefined {
   try {
-    return JSON.parse(bodyText) as unknown;
+    // SAFETY: JSON.parse without a reviver returns only null, booleans, numbers, strings, arrays
+    // and plain objects of those values (ECMA-262 JSON.parse), which is exactly CatalogJsonValue.
+    return JSON.parse(bodyText) as CatalogJsonValue;
   } catch {
     return undefined;
   }

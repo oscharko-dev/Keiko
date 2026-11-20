@@ -30,6 +30,7 @@ import {
   type ModelGatewayLogSink,
 } from "./observability.js";
 import type { OutboundHttpEgressConfig } from "./types.js";
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 export type { OutboundHttpEgressConfig } from "./types.js";
 // Re-exported so a caller can classify a target's address class (e.g. "loopback") by hostname
@@ -2003,14 +2004,11 @@ export class GatewayResponseBodyValidationError extends TypeError {
   }
 }
 
-function rethrowJsonBodyFailure(error: unknown): never {
-  if (error instanceof SyntaxError) throw new GatewayResponseBodyValidationError("json-invalid");
-  throw error;
-}
-
-function parseResponseJson(body: string): unknown {
+function parseResponseJson(body: string): CatalogJsonValue {
   try {
-    return JSON.parse(body) as unknown;
+    // SAFETY: JSON.parse without a reviver returns only null, booleans, numbers, strings, arrays
+    // and plain objects of those values (ECMA-262 JSON.parse), which is exactly CatalogJsonValue.
+    return JSON.parse(body) as CatalogJsonValue;
   } catch (error) {
     if (error instanceof SyntaxError) throw new GatewayResponseBodyValidationError("json-invalid");
     throw error;
@@ -2020,9 +2018,9 @@ function parseResponseJson(body: string): unknown {
 export async function readJsonCapped(
   response: Response,
   maxBytes: number = MAX_RESPONSE_BYTES,
-): Promise<unknown> {
+): Promise<CatalogJsonValue> {
   if (response.body === null) {
-    return response.json().catch(rethrowJsonBodyFailure);
+    return parseResponseJson(await response.text());
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
