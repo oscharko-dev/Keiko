@@ -246,3 +246,43 @@ describe("request-local repeated-location eligibility classification", () => {
     },
   );
 });
+
+describe("explicit path failure codes (REVIEW-3918-088)", () => {
+  function failingStat(error: Error): WorkspaceFs {
+    return {
+      ...nodeWorkspaceFs,
+      stat: (path: string): WorkspaceStat => {
+        if (path.endsWith(TARGET)) throw error;
+        return nodeWorkspaceFs.stat(path);
+      },
+    };
+  }
+
+  function codedError(message: string, code: string, cause?: Error): Error {
+    return Object.assign(new Error(message, cause === undefined ? undefined : { cause }), { code });
+  }
+
+  it.each(["ENOENT", "EACCES"])(
+    "rethrows an error whose own code is not a filesystem code, even with a %s cause",
+    async (causeCode) => {
+      const fixture = inputs(1);
+      const error = codedError("probe", "ERR_SOMETHING", codedError("cause", causeCode));
+      await expect(admitExplicitPaths({ ...fixture.request, fs: failingStat(error) })).rejects.toBe(
+        error,
+      );
+    },
+  );
+
+  it.each([
+    ["ENOENT", "missing"],
+    ["EACCES", "denied"],
+  ] as const)(
+    "classifies a %s cause on an error without its own code as %s",
+    async (causeCode, reason) => {
+      const fixture = inputs(1);
+      const error = new Error("probe", { cause: codedError("cause", causeCode) });
+      const result = await admitExplicitPaths({ ...fixture.request, fs: failingStat(error) });
+      expect(result.observation.explicitPathRejectionReasons).toEqual([reason]);
+    },
+  );
+});
