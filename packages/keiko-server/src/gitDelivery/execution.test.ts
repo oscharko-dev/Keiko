@@ -27,6 +27,7 @@ import { buildRedactor } from "../index.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { createInMemoryUiStore } from "../store/index.js";
+import type { invalidateGitSummaryCache } from "../gitRepositoryReads.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   expectActivityLogProof,
@@ -43,12 +44,13 @@ import {
 // — mirrors the same importOriginal-plus-delegating-wrapper pattern
 // defaultPolicyPacks.test.ts already uses for this exact module graph.
 // #3644: the summary cache the Git window reads must be dropped by every finished action.
-const invalidatedSummaryDeps: object[] = [];
+type SummaryCacheDeps = Parameters<typeof invalidateGitSummaryCache>[0];
+const invalidatedSummaryDeps: SummaryCacheDeps[] = [];
 vi.mock("../gitRepositoryReads.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../gitRepositoryReads.js")>();
   return {
     ...actual,
-    invalidateGitSummaryCache: (deps: object): void => {
+    invalidateGitSummaryCache: (deps: SummaryCacheDeps): void => {
       invalidatedSummaryDeps.push(deps);
       actual.invalidateGitSummaryCache(deps);
     },

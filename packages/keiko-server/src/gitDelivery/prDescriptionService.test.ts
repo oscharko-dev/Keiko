@@ -9,9 +9,10 @@ import {
   PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
-import { DescriptionFixture } from "./prDescriptionTestSupport.js";
+import { DescriptionFixture, instrumentSnapshotReservations } from "./prDescriptionTestSupport.js";
 import type { PrDescriptionPreview } from "./prDescriptionTypes.js";
 import type { NewReferenceIdOptions } from "../reference-id.js";
+import type { GitDeliveryExecutionLease } from "./executionLease.js";
 
 const newReferenceIdSpy = vi.hoisted(() => vi.fn<(options: NewReferenceIdOptions) => string>());
 
@@ -36,36 +37,16 @@ async function preview(): Promise<PrDescriptionPreview> {
   if (result.outcome !== "preview") throw new TypeError("Preview absent");
   return result.preview;
 }
-async function approved(): Promise<{ review: PrDescriptionPreview; lease: object }> {
+async function approved(): Promise<{
+  review: PrDescriptionPreview;
+  lease: GitDeliveryExecutionLease;
+}> {
   const review = await preview();
   expect(fixture.service.issueApproval(review.proposalId)).toBeDefined();
   const lease = fixture.service.consumeApproval(review.proposalId);
   if (lease === undefined) throw new TypeError("Approval absent");
   return { review, lease };
 }
-// Wave-3 W3-4 item 3 — wraps the real registry-backed reserve/release with recording spies so the
-// tests below can assert the pairing is balanced (every reserve released exactly once on the drop
-// paths, none leaked on error paths) without reimplementing the registry.
-function instrumentSnapshotReservations(): { reserved: string[]; released: string[] } {
-  const reserved: string[] = [];
-  const released: string[] = [];
-  const original = fixture.options.snapshots;
-  Object.assign(fixture.options, {
-    snapshots: {
-      ...original,
-      reserve: (reference: string, scope: object, correlationId: string): boolean => {
-        reserved.push(reference);
-        return original.reserve?.(reference, scope, correlationId) ?? true;
-      },
-      release: (reference: string, scope: object, correlationId: string): void => {
-        released.push(reference);
-        original.release?.(reference, scope, correlationId);
-      },
-    },
-  });
-  return { reserved, released };
-}
-
 describe("body-only description application", () => {
   it("holds and applies the exact pre-generated artifact without a second generation", async () => {
     const artifact = await fixture.generateArtifact("Selected Chat intent");
@@ -640,7 +621,7 @@ describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
   it(
     "reserves the captured reference while held, and releases it when a fresh preview replaces it",
     async () => {
-      const { reserved, released } = instrumentSnapshotReservations();
+      const { reserved, released } = instrumentSnapshotReservations(fixture.options);
       const first = await preview();
       expect(reserved).toHaveLength(1);
       expect(released).toHaveLength(0);
@@ -653,7 +634,7 @@ describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
   );
 
   it("releases a held application proposal's reservation when a draft artifact replaces it", async () => {
-    const { reserved, released } = instrumentSnapshotReservations();
+    const { reserved, released } = instrumentSnapshotReservations(fixture.options);
     await preview();
     expect(reserved).toHaveLength(1);
     const artifact = await fixture.generateArtifact("Generic Workbench draft");
@@ -662,7 +643,7 @@ describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
   });
 
   it("releases the held reservation on invalidate", async () => {
-    const { reserved, released } = instrumentSnapshotReservations();
+    const { reserved, released } = instrumentSnapshotReservations(fixture.options);
     await preview();
     expect(reserved).toHaveLength(1);
     fixture.service.invalidate();
@@ -670,7 +651,7 @@ describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
   });
 
   it("releases the reservation once a proposal is approved and executed", async () => {
-    const { reserved, released } = instrumentSnapshotReservations();
+    const { reserved, released } = instrumentSnapshotReservations(fixture.options);
     const { review, lease } = await approved();
     expect(reserved).toHaveLength(1);
     expect(released).toHaveLength(0);
@@ -679,7 +660,7 @@ describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
   });
 
   it("keeps the reservation through the execution-time snapshot recheck", async () => {
-    const { reserved, released } = instrumentSnapshotReservations();
+    const { reserved, released } = instrumentSnapshotReservations(fixture.options);
     const { review, lease } = await approved();
     const snapshots = fixture.options.snapshots;
     let recheckCount = 0;
@@ -706,7 +687,7 @@ describe("snapshot reservation lifecycle (wave-3 W3-4 item 3)", () => {
   });
 
   it("releases the reservation when a prepared proposal is discarded before ever being held", async () => {
-    const { reserved, released } = instrumentSnapshotReservations();
+    const { reserved, released } = instrumentSnapshotReservations(fixture.options);
     // Bumps the service generation right after the snapshot capture that produces the reservation
     // (and therefore before the outer preview flow validates the proposal it prepared), so
     // `previewPrepared` discards the proposal without ever storing it in `this.proposals` — the

@@ -17,10 +17,14 @@ import {
   descriptionAuthorityEnvelopeDigest,
   type GitDeliveryDescriptionAuthorityScope,
 } from "./gitDelivery/runBoundAuthority.js";
+import {
+  createGitSnapshotAccessScope,
+  type GitSnapshotAccessScope,
+} from "./gitChangeSnapshotRegistry.js";
 
 export interface GitChangeChatSnapshotContext {
   readonly reference: string;
-  readonly accessScope: object;
+  readonly accessScope: GitSnapshotAccessScope;
   readonly captureInput: import("./gitChangeSnapshotService.js").GitChangeSnapshotCaptureInput;
   readonly snapshot: import("@oscharko-dev/keiko-contracts").GitChangeSnapshot;
   readonly files: readonly import("./gitChangeSnapshotEntries.js").GitSnapshotContentFile[];
@@ -243,7 +247,7 @@ export async function captureGitChangeChatSnapshot(
   );
   const repository = await resolveChatRepository(projectPath, runner, 30_000);
   if (repository === undefined) return undefined;
-  const accessScope = {};
+  const accessScope = createGitSnapshotAccessScope();
   const captureInput = {
     workspace: workspace(repository.repositoryRoot),
     baseRef: scope.baseRef,

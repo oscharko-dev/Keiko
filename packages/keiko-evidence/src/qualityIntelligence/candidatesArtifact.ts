@@ -12,7 +12,7 @@ import {
   createNodeContainedJsonArtifactStore,
   type ContainedJsonArtifactStore,
 } from "./companionStore.js";
-import { EvidenceReadError } from "../errors.js";
+import { EvidenceReadError, EvidenceWriteError } from "../errors.js";
 
 export const QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION = 1 as const;
 
@@ -59,10 +59,6 @@ export interface QualityIntelligenceCandidatesArtifact {
   readonly artifactIntegrity?: QualityIntelligenceCandidatesArtifactIntegrity;
 }
 
-type CandidateWithQualityVerdict = QualityIntelligence.QualityIntelligenceTestCaseCandidate & {
-  readonly qualityVerdict?: QualityIntelligenceCandidateQualityVerdict;
-};
-
 const cloneQualityVerdict = (
   verdict: QualityIntelligenceCandidateQualityVerdict,
 ): QualityIntelligenceCandidateQualityVerdict => ({
@@ -72,10 +68,21 @@ const cloneQualityVerdict = (
   overallRationale: verdict.overallRationale,
 });
 
+// The server attaches the judge's verdict to a generated candidate beside the contract fields. A
+// verdict the strict read validator would refuse fails the write instead of persisting an artifact
+// that can never be loaded again.
+const candidateQualityVerdict = (
+  candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate,
+): QualityIntelligenceCandidateQualityVerdict | undefined => {
+  if (!("qualityVerdict" in candidate) || candidate.qualityVerdict === undefined) return undefined;
+  if (isCandidateQualityVerdict(candidate.qualityVerdict)) return candidate.qualityVerdict;
+  throw new EvidenceWriteError("QI candidate quality verdict is malformed");
+};
+
 const toRow = (
   candidate: QualityIntelligence.QualityIntelligenceTestCaseCandidate,
 ): QualityIntelligenceCandidateRow => {
-  const qualityVerdict = (candidate as CandidateWithQualityVerdict).qualityVerdict;
+  const qualityVerdict = candidateQualityVerdict(candidate);
   return {
     id: String(candidate.id),
     title: candidate.title,
@@ -236,6 +243,27 @@ function isEditedRevision(
     isNonEmptyString(provenance.editorLabel) &&
     isEditableFields(value.editedFields)
   );
+}
+
+const isCandidateRowList = (value: unknown): value is readonly QualityIntelligenceCandidateRow[] =>
+  Array.isArray(value) && value.every(isCandidateRow);
+
+const isEditedRevisionList = (
+  value: unknown,
+): value is readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[] =>
+  Array.isArray(value) && value.every(isEditedRevision);
+
+// The injected redactor is typed `unknown -> unknown`; its output must keep the shape the strict read
+// validator accepts, or the write fails instead of persisting an unloadable artifact.
+function redactKeepingShape<T>(
+  redact: RecordQualityIntelligenceCandidatesInput["redact"],
+  value: T,
+  hasShape: (candidate: unknown) => candidate is T,
+  label: string,
+): T {
+  const redacted = redact(value);
+  if (hasShape(redacted)) return redacted;
+  throw new EvidenceWriteError(`QI candidates redaction changed the shape of ${label}`);
 }
 
 function invalidArtifact(message: string): never {
@@ -426,14 +454,17 @@ export interface RecordQualityIntelligenceCandidatesInput {
 export const recordQualityIntelligenceCandidates = (
   input: RecordQualityIntelligenceCandidatesInput,
 ): string => {
-  const rows = input.candidates.map(toRow);
-  const redactedRows = input.redact(rows) as readonly QualityIntelligenceCandidateRow[];
+  const rows: readonly QualityIntelligenceCandidateRow[] = input.candidates.map(toRow);
+  const redactedRows = redactKeepingShape(input.redact, rows, isCandidateRowList, "candidates");
   const redactedEditedRevisions =
     input.editedRevisions === undefined
       ? undefined
-      : (input.redact(
+      : redactKeepingShape(
+          input.redact,
           input.editedRevisions,
-        ) as readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[]);
+          isEditedRevisionList,
+          "editedRevisions",
+        );
   const artifact = withArtifactIntegrity({
     qiCandidatesSchemaVersion: QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION,
     runId: input.runId,
@@ -538,7 +569,12 @@ export const applyQualityIntelligenceCandidateEdit = (
   if (artifact === undefined) return { ok: false, reason: "artifact-not-found" };
   const existing = artifact.candidates.find((row) => row.id === input.candidateId);
   if (existing === undefined) return { ok: false, reason: "candidate-not-found" };
-  const redactedFields = input.redact(input.editedFields) as EditableFields;
+  const redactedFields = redactKeepingShape(
+    input.redact,
+    input.editedFields,
+    isEditableFields,
+    "editedFields",
+  );
   const updatedRow = mergeRow(existing, redactedFields);
   if (sameRow(existing, updatedRow)) {
     return { ok: true, candidate: existing, changed: false };
@@ -556,7 +592,12 @@ export const applyQualityIntelligenceCandidateEdit = (
   // them. `candidateId` likewise stays the matched row id so the revision keeps referencing its row.
   const redactedProvenance: EditProvenance = {
     ...input.provenance,
-    editorLabel: input.redact(input.provenance.editorLabel) as string,
+    editorLabel: redactKeepingShape(
+      input.redact,
+      input.provenance.editorLabel,
+      isString,
+      "editorLabel",
+    ),
   };
   const revision: EditedRevision = {
     // KEIKO-0593: candidateId is now branded QualityIntelligenceTestCaseId. input.candidateId is

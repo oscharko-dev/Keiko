@@ -64,6 +64,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { mintGitDeliveryExecutionLease } from "./executionLease.js";
 
 const PREVIEW = "/api/git-delivery/pr-description/preview";
 const REVIEW = "/api/git-delivery/pr-description/review";
@@ -1018,7 +1019,7 @@ describe("pr-description routes — an apply that rejects is logged as failed an
       review: () => undefined,
       issueApproval: () => undefined,
       matchesApproval: () => false,
-      consumeApproval: () => ({}),
+      consumeApproval: () => mintGitDeliveryExecutionLease(),
       executeApproved: () => Promise.reject(new Error("forced apply rejection")),
       reconcile: () => Promise.resolve({ outcome: "preview", preview }),
       invalidate: (): void => undefined,

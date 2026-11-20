@@ -13,6 +13,7 @@ import type { CodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntime
 import type { GitCommitCommand } from "@oscharko-dev/keiko-tools";
 import type { GitDeliveryIssuedApproval } from "./approvalStore.js";
 import type { CodingWorkbenchCodeTaskDeliveryAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import type { GitDeliveryExecutionLease } from "./executionLease.js";
 
 /** Entirely server-resolved accepted authority. Browser/model inputs cannot provide these facts. */
 export interface VerifiedCommitRunContext {
@@ -94,9 +95,17 @@ export interface VerifiedCommitBlockingPaths {
 
 export const VERIFIED_COMMIT_BLOCKING_PATHS_MAX = 8;
 
+/**
+ * A verification ticket. The service redeems it by identity from its own private WeakMap; the tag
+ * carries no authority, and a ticket cannot be reconstructed from serialized values.
+ */
+export interface VerifiedCommitVerificationTicket {
+  readonly kind: "verified-commit-verification-ticket";
+}
+
 export type VerificationTicketOutcome =
   /** The server-held identity; it cannot be reconstructed from serialized values. */
-  | { readonly kind: "ticket"; readonly ticket: object }
+  | { readonly kind: "ticket"; readonly ticket: VerifiedCommitVerificationTicket }
   | {
       readonly kind: "refused";
       /** `buffers-dirty`: nothing unstaged or untracked, but unsaved editor buffers (#3612). */
@@ -109,7 +118,7 @@ export type VerificationTicketOutcome =
 export interface VerifiedCommitService {
   beginVerification(): Promise<VerificationTicketOutcome>;
   completeVerification(
-    ticket: object,
+    ticket: VerifiedCommitVerificationTicket,
     report: VerificationReport,
     guard?: { readonly check: () => boolean; readonly signal?: AbortSignal | undefined },
   ): Promise<boolean>;
@@ -139,10 +148,13 @@ export interface VerifiedCommitService {
   ): Promise<VerifiedCommitResult | undefined>;
   matchesApproval(proposalId: string, approval?: GitDeliveryApprovalClaim): boolean;
   /** One-use, server-held execution lease. Its identity is not serializable authority. */
-  consumeApproval(proposalId: string, approval?: GitDeliveryApprovalClaim): object | undefined;
+  consumeApproval(
+    proposalId: string,
+    approval?: GitDeliveryApprovalClaim,
+  ): GitDeliveryExecutionLease | undefined;
   executeApproved(
     proposalId: string,
-    lease: object,
+    lease: GitDeliveryExecutionLease,
     guard?: { readonly check: () => boolean; readonly signal?: AbortSignal | undefined },
   ): Promise<VerifiedCommitResult | undefined>;
   review(proposalId: string): VerifiedCommitProposal | undefined;

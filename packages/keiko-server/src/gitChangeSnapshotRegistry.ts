@@ -12,8 +12,22 @@ export interface GitSnapshotContent {
   readonly files: readonly GitSnapshotContentFile[];
 }
 
+/**
+ * Identity of one snapshot reader. The registry hands a snapshot back only to the scope it was
+ * stored under, compared by identity; the `kind` tag carries no authority, so a scope with the same
+ * tag that the reader did not create reads nothing.
+ */
+export interface GitSnapshotAccessScope {
+  readonly kind: "git-snapshot-access-scope";
+}
+
+/** Creates a fresh reader identity for one capture-and-read lifetime. */
+export function createGitSnapshotAccessScope(): GitSnapshotAccessScope {
+  return { kind: "git-snapshot-access-scope" };
+}
+
 interface SnapshotRecord {
-  readonly scope: object;
+  readonly scope: GitSnapshotAccessScope;
   readonly content: GitSnapshotContent;
   readonly bytes: number;
   readonly timer: ReturnType<typeof setTimeout>;
@@ -152,7 +166,7 @@ const GIT_SNAPSHOT_RELEASED_OPERATION = defineActivityLogOperation({
 /** Process-local, bounded content handles. No store, filesystem, or browser serialization path. */
 export class GitChangeSnapshotRegistry {
   private readonly records = new Map<string, SnapshotRecord>();
-  private readonly expiredReferences = new Map<string, object>();
+  private readonly expiredReferences = new Map<string, GitSnapshotAccessScope>();
   private readonly reserved = new Set<string>();
   private bytes = 0;
 
@@ -161,7 +175,11 @@ export class GitChangeSnapshotRegistry {
     private readonly now: () => number,
   ) {}
 
-  public put(content: GitSnapshotContent, scope: object, correlationId: string): string {
+  public put(
+    content: GitSnapshotContent,
+    scope: GitSnapshotAccessScope,
+    correlationId: string,
+  ): string {
     this.prune();
     const bytes = Buffer.byteLength(JSON.stringify(content));
     if (bytes > 64 * 1024 * 1024) throw new RangeError("Snapshot registry capacity exceeded");
@@ -209,7 +227,7 @@ export class GitChangeSnapshotRegistry {
 
   public get(
     reference: string,
-    scope: object,
+    scope: GitSnapshotAccessScope,
     correlationId: string,
   ): GitSnapshotContent | undefined {
     this.prune();
@@ -224,11 +242,11 @@ export class GitChangeSnapshotRegistry {
     this.expiredReferences.clear();
   }
 
-  public wasExpired(reference: string, scope: object): boolean {
+  public wasExpired(reference: string, scope: GitSnapshotAccessScope): boolean {
     return this.expiredReferences.get(reference) === scope;
   }
 
-  public revoke(reference: string, scope: object, correlationId: string): void {
+  public revoke(reference: string, scope: GitSnapshotAccessScope, correlationId: string): void {
     if (this.records.get(reference)?.scope !== scope) return;
     this.remove(reference);
     this.log.write(activityLogEvent(GIT_SNAPSHOT_INVALIDATED_OPERATION, { correlationId }, {}));
@@ -241,7 +259,7 @@ export class GitChangeSnapshotRegistry {
    * an existing record or the reservation cap is already at `MAX_RESERVED`; the caller must treat a
    * `false` result as "not protected" rather than assuming the reservation succeeded.
    */
-  public reserve(reference: string, scope: object, correlationId: string): boolean {
+  public reserve(reference: string, scope: GitSnapshotAccessScope, correlationId: string): boolean {
     this.prune();
     const record = this.records.get(reference);
     if (record?.scope !== scope) return false;
@@ -261,7 +279,7 @@ export class GitChangeSnapshotRegistry {
   }
 
   /** Releases a reservation made by `reserve`, e.g. once a proposal is applied or abandoned. */
-  public release(reference: string, scope: object, correlationId: string): void {
+  public release(reference: string, scope: GitSnapshotAccessScope, correlationId: string): void {
     if (this.records.get(reference)?.scope !== scope) return;
     if (this.reserved.delete(reference)) {
       this.log.write(activityLogEvent(GIT_SNAPSHOT_RELEASED_OPERATION, { correlationId }, {}));
@@ -275,7 +293,7 @@ export class GitChangeSnapshotRegistry {
     return undefined;
   }
 
-  private rememberExpired(reference: string, scope: object): void {
+  private rememberExpired(reference: string, scope: GitSnapshotAccessScope): void {
     if (this.expiredReferences.size >= 32) {
       const oldest = this.expiredReferences.keys().next().value;
       if (oldest !== undefined) this.expiredReferences.delete(oldest);

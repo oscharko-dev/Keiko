@@ -79,6 +79,7 @@ import type {
   PrDescriptionContext,
   PrDescriptionServiceOptions,
 } from "./prDescriptionTypes.js";
+import { createGitSnapshotAccessScope } from "../gitChangeSnapshotRegistry.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -476,7 +477,6 @@ interface DescriptionContextProviderOptions {
   readonly workspace: WorkspaceInfo;
   readonly correlationId: string;
   readonly logSink: ServerLogSink;
-  readonly key: string;
   readonly authorityScope?: GitDeliveryDescriptionAuthorityScope;
 }
 
@@ -517,10 +517,9 @@ function readerContextProvider({
   workspace,
   correlationId,
   logSink,
-  key,
 }: Omit<DescriptionContextProviderOptions, "ctx" | "authorityScope">): () =>
   PrDescriptionContext | undefined {
-  const accessScope = { key };
+  const accessScope = createGitSnapshotAccessScope();
   const authorized = (): boolean =>
     isGitHubIssueReaderAuthorized(deps, workspace.root, { correlationId, activityLog: logSink });
   return (): PrDescriptionContext | undefined => {
@@ -542,7 +541,7 @@ function readerContextProvider({
 // by the delivery authority is re-checked against that authority.
 function admitForRoute(
   admission: DescriptionAdmission,
-  input: Omit<DescriptionContextProviderOptions, "key" | "authorityScope">,
+  input: Omit<DescriptionContextProviderOptions, "authorityScope">,
 ):
   | {
       readonly allowed: true;
@@ -561,8 +560,8 @@ function admitForRoute(
   const key = cacheKey(request, `${identity}:${admitted.scope.authorityDigest}`);
   const contextProvider =
     admission === "reader"
-      ? readerContextProvider({ deps, request, workspace, correlationId, logSink, key })
-      : descriptionContextProvider({ ...input, key });
+      ? readerContextProvider({ deps, request, workspace, correlationId, logSink })
+      : descriptionContextProvider(input);
   return { allowed: true, key, contextProvider };
 }
 
@@ -573,16 +572,15 @@ function descriptionContextProvider({
   workspace,
   correlationId,
   logSink,
-  key,
   authorityScope,
 }: DescriptionContextProviderOptions): () => PrDescriptionContext | undefined {
   // ONE object for this provider's whole lifetime (one prepared request), never rebuilt per call.
   // `PrDescriptionApplicationService.preview()`/`apply()` call `context()` more than once per
   // operation (`admittedContext()` then `current(context)`'s own re-fetch) and `sameDescriptionContext`
-  // (prDescriptionPreparation.ts) compares `accessScope` by reference — a fresh `{ key }` literal on
+  // (prDescriptionPreparation.ts) compares `accessScope` by reference. A fresh scope created on
   // every call would make that comparison fail on the very first `preview()`/`apply()` invocation,
   // never only on a genuinely revoked authority.
-  const accessScope = { key };
+  const accessScope = createGitSnapshotAccessScope();
   return (): PrDescriptionContext | undefined => {
     const reAdmitted = admitDescription(ctx, deps, request, workspace, logSink, authorityScope);
     if (!reAdmitted.allowed) return undefined;
@@ -750,7 +748,6 @@ export function resolvePrDescriptionApplicationServiceForRequest(
     workspace,
     correlationId,
     logSink,
-    key,
     ...(authorityScope === undefined ? {} : { authorityScope }),
   });
   const service = serviceFor(options, deps, seams, workspace, key, contextProvider);
@@ -786,7 +783,6 @@ export async function reconcileDescriptionStatusAsReader(
     workspace,
     correlationId,
     logSink,
-    key,
   });
   const service = serviceFor(options, deps, seams, workspace, key, contextProvider);
   if (service === undefined) return null;

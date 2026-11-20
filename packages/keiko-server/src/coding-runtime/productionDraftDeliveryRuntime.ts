@@ -6,6 +6,7 @@ import type {
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import { DraftDeliveryController } from "../gitDelivery/draftDeliveryService.js";
+import type { GitDeliveryExecutionLease } from "../gitDelivery/executionLease.js";
 import type {
   DraftDeliveryDependencies,
   DraftDeliveryService,
@@ -150,6 +151,13 @@ export async function runDraftDeliveryRequest(
   if (result.status === "unavailable") return { status: "failed", reasonCode: result.reason };
   return { status: "completed", draftDelivery: result };
 }
+// Draft delivery redeems only its own execution lease. A commit claim cannot reach this dispatch
+// (admission threads it only for commit requests), and a lease the service did not mint redeems
+// nothing, exactly like an absent one.
+function draftDeliveryLease(guard: CodingToolMutationGuard): GitDeliveryExecutionLease | undefined {
+  const approval = guard.deliveryApproval;
+  return approval !== undefined && "kind" in approval ? approval : undefined;
+}
 function dispatchDraft(
   service: DraftDeliveryService,
   request: DraftToolRequest,
@@ -161,7 +169,7 @@ function dispatchDraft(
     return request.intent === "push"
       ? service.proposePush()
       : service.proposePullRequest(request.title ?? "");
-  return service.executeApproved(request.proposalId ?? "", guard.deliveryApproval, {
+  return service.executeApproved(request.proposalId ?? "", draftDeliveryLease(guard), {
     check: guard.check,
     intent: request.intent,
     signal,

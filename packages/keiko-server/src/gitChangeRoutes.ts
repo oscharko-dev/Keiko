@@ -70,6 +70,7 @@ import type { StoredRelationship } from "./store/relationships.js";
 import { resolveChatRepository } from "./gitChangeRepository.js";
 import { MAX_GIT_CHANGE_SCOPES } from "./store/chats.js";
 import { UiStoreError } from "./store/errors.js";
+import { createGitSnapshotAccessScope } from "./gitChangeSnapshotRegistry.js";
 
 const GIT_CHANGE_CHAT_CONNECTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -361,7 +362,7 @@ async function captureComparison(
     workspace: contentFreeWorkspaceFor(repositoryRoot),
     baseRef,
     headRef,
-    accessScope: {},
+    accessScope: createGitSnapshotAccessScope(),
     correlationId,
     // B2-8 — this comparison only ever reads `capture.snapshot`/`.remoteDigest`, never
     // `.reference` (see `CapturedComparison`, which has no `reference` field), so retaining it in

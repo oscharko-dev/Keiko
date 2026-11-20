@@ -141,6 +141,8 @@ function deepRedact(
     }
     // KEIKO-0188: null-prototype seed keeps a `__proto__` key from a JSON.parse'd input as a
     // plain own-property instead of silently mutating the reconstructed object's prototype.
+    // SAFETY: Object.create(null) returns a new empty object with no prototype and no properties,
+    // so it is a valid empty Record; the lib types it as any, and no typed constructor exists.
     const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     for (const [key, child] of Object.entries(value)) {
       out[key] = deepRedact(child, additionalSecrets, counter, depth + 1, seen);

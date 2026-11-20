@@ -4,8 +4,10 @@ import type {
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchActionClass,
+  GitDeliveryApprovalClaim,
   VerificationKind,
 } from "@oscharko-dev/keiko-contracts";
+import type { GitDeliveryExecutionLease } from "../gitDelivery/executionLease.js";
 
 import type {
   CodingToolAction,
@@ -27,10 +29,25 @@ export interface CodingToolProducerBinding {
   readonly expiresAt: string;
 }
 
+// #3384 F4: the commit-execute branch of `finishAdmission` (codingToolAuthorityPort.ts) does not
+// consume the one-use commit approval at admission; see the comment there. It threads the
+// un-consumed claim through `mutationGuard.deliveryApproval` wrapped in this shape. The wrapper is
+// never `undefined` itself, so it stays distinguishable from "no delivery approval applies to this
+// request", while `claim` stays `undefined` for a binding-matched, un-tokened redemption.
+// productionManagedWorktreeTools.ts unwraps it and passes `.claim` to
+// `VerifiedCommitService.execute()`, which alone decides after its own preflight whether the claim
+// is spent.
+export interface CommitExecutionApproval {
+  readonly claim: GitDeliveryApprovalClaim | undefined;
+}
+
 export interface CodingToolMutationGuard extends ToolEffectGuard {
-  /** Server-held one-use delivery execution lease, never populated from IPC. */
-  readonly deliveryApproval?: object;
-  readonly stageApproval?: object;
+  /**
+   * Server-held one-use delivery execution lease, never populated from IPC. A commit carries its
+   * un-consumed claim instead (CommitExecutionApproval).
+   */
+  readonly deliveryApproval?: GitDeliveryExecutionLease | CommitExecutionApproval;
+  readonly stageApproval?: GitDeliveryExecutionLease;
   /** Server-private live authority projection for narrower auxiliary composition. */
   readonly resolveParentAuthority?:
     (() => CodingWorkbenchAuthorityEnvelope | undefined) | undefined;

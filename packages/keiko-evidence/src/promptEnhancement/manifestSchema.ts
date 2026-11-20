@@ -48,6 +48,11 @@ const ALLOWED_STATUSES: ReadonlySet<string> = new Set<string>([
   "rejected",
 ]);
 
+const isPromptEnhancementEvidenceStatus = (
+  value: unknown,
+): value is PromptEnhancementEvidenceStatus =>
+  typeof value === "string" && ALLOWED_STATUSES.has(value);
+
 // Counts-only redaction summary — the matched text is never preserved (lossy by design), only the
 // per-pattern hit counts so an audit can detect drift without leaking the matched secret.
 export interface PromptEnhancementRedactionSummary {
@@ -178,6 +183,12 @@ export interface PromptEnhancementSchemaValidationResult {
 
 const HEX_SHA256 = /^[0-9a-f]{64}$/u;
 
+const PROFILE_IDS: ReadonlySet<string> = new Set<string>(PROMPT_ENHANCEMENT_PROFILE_IDS);
+const SAFETY_DECISIONS: ReadonlySet<string> = new Set<string>(PROMPT_SAFETY_DECISIONS);
+const SAFETY_VERIFICATION_STATUSES: ReadonlySet<string> = new Set<string>(
+  PROMPT_SAFETY_VERIFICATION_STATUSES,
+);
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -300,12 +311,7 @@ function validateCandidateRejectionRow(row: unknown, index: number): string | un
   if (!validatePromptEnhancerIdString(row.candidateId, `${label}.candidateId`).ok) {
     return `${label}.candidateId must be a bounded, content-free identifier`;
   }
-  if (
-    typeof row.profile !== "string" ||
-    !PROMPT_ENHANCEMENT_PROFILE_IDS.includes(
-      row.profile as (typeof PROMPT_ENHANCEMENT_PROFILE_IDS)[number],
-    )
-  ) {
+  if (typeof row.profile !== "string" || !PROFILE_IDS.has(row.profile)) {
     return `${label}.profile must be a known generation profile`;
   }
   if (row.aggregateScore !== null && !isUnitInterval(row.aggregateScore)) {
@@ -335,17 +341,12 @@ function validateCandidateRejections(value: unknown): string | undefined {
 }
 
 function validateSafetyRecordScalars(value: Record<string, unknown>): string | undefined {
-  if (
-    typeof value.decision !== "string" ||
-    !PROMPT_SAFETY_DECISIONS.includes(value.decision as PromptSafetyDecision)
-  ) {
+  if (typeof value.decision !== "string" || !SAFETY_DECISIONS.has(value.decision)) {
     return "safety.decision must be a known safety decision";
   }
   if (
     typeof value.verificationStatus !== "string" ||
-    !PROMPT_SAFETY_VERIFICATION_STATUSES.includes(
-      value.verificationStatus as PromptSafetyVerificationStatus,
-    )
+    !SAFETY_VERIFICATION_STATUSES.has(value.verificationStatus)
   ) {
     return "safety.verificationStatus must be a known verification status";
   }
@@ -380,11 +381,12 @@ function validateAcceptedSafetyStatus(value: Record<string, unknown>): string | 
 }
 
 function validateReviewSafetyStatus(value: Record<string, unknown>): string | undefined {
-  const leastPrivilege = value.leastPrivilege as readonly LeastPrivilegeConstraint[];
+  const leastPrivilege = value.leastPrivilege;
   if (
     value.decision !== "requires-human-review" ||
     value.verificationStatus !== "passed-with-review" ||
     !value.requiresHumanReview ||
+    !isLeastPrivilegeArray(leastPrivilege) ||
     !leastPrivilege.includes("require-human-approval")
   ) {
     return "status requires-human-review must match a review-gated safety record";
@@ -393,10 +395,11 @@ function validateReviewSafetyStatus(value: Record<string, unknown>): string | un
 }
 
 function validateRejectedSafetyStatus(value: Record<string, unknown>): string | undefined {
-  const findingCodes = value.findingCodes as readonly PromptSafetyViolationCode[];
+  const findingCodes = value.findingCodes;
   if (
     value.decision !== "rejected" ||
     value.verificationStatus !== "failed" ||
+    !Array.isArray(findingCodes) ||
     findingCodes.length === 0
   ) {
     return "status rejected must match a failed safety record with findings";
@@ -529,7 +532,8 @@ function validateManifestNestedFields(
 function validateManifestFields(
   record: Record<string, unknown>,
 ): PromptEnhancementSchemaValidationResult {
-  const status = record.status as PromptEnhancementEvidenceStatus;
+  const status = record.status;
+  if (!isPromptEnhancementEvidenceStatus(status)) return schemaError("invalid status");
   const error =
     validateManifestIdentityFields(record) ??
     validateManifestTextFields(record) ??
@@ -548,10 +552,10 @@ function validateManifestFields(
 export function validatePromptEnhancementEvidenceManifest(
   value: unknown,
 ): PromptEnhancementSchemaValidationResult {
-  if (typeof value !== "object" || value === null) {
+  if (!isRecord(value)) {
     return { ok: false, reason: "manifest is not an object" };
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   if (record.peEvidenceSchemaVersion !== PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION) {
     return {
       ok: false,
@@ -563,8 +567,15 @@ export function validatePromptEnhancementEvidenceManifest(
       return { ok: false, reason: `unknown manifest key: ${key}` };
     }
   }
-  if (typeof record.status !== "string" || !ALLOWED_STATUSES.has(record.status)) {
-    return { ok: false, reason: "invalid status" };
-  }
   return validateManifestFields(record);
+}
+
+/**
+ * Type guard over the strict-schema gate. validatePromptEnhancementEvidenceManifest checks every
+ * field of PromptEnhancementEvidenceManifest, so a value it accepts has that shape.
+ */
+export function isPromptEnhancementEvidenceManifest(
+  value: unknown,
+): value is PromptEnhancementEvidenceManifest {
+  return validatePromptEnhancementEvidenceManifest(value).ok;
 }

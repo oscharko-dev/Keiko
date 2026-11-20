@@ -144,8 +144,15 @@ type OpaqueTarget =
   | { readonly kind: "catalog"; readonly targetId: string }
   | { readonly kind: "file"; readonly fileId: string };
 
+/** The members an untrusted opaque debug target may carry; each is read as own data and checked. */
+interface DebugTargetCandidate {
+  readonly kind?: unknown;
+  readonly targetId?: unknown;
+  readonly fileId?: unknown;
+}
+
 /** @internal Security-boundary helper exposed for direct mutation verification. */
-export function debugOwnTargetData(record: object, key: string): unknown {
+export function debugOwnTargetData(record: DebugTargetCandidate, key: string): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(record, key);
   if (descriptor === undefined) throw new DebugCapsulePlanError();
   if (!("value" in descriptor)) throw new DebugCapsulePlanError();
@@ -153,7 +160,9 @@ export function debugOwnTargetData(record: object, key: string): unknown {
 }
 
 /** @internal Security-boundary helper exposed for direct mutation verification. */
-export function assertDebugTargetCandidate(candidate: unknown): asserts candidate is object {
+export function assertDebugTargetCandidate(
+  candidate: unknown,
+): asserts candidate is DebugTargetCandidate {
   if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate))
     throw new DebugCapsulePlanError();
   const prototype = Object.getPrototypeOf(candidate) as unknown;
@@ -162,7 +171,7 @@ export function assertDebugTargetCandidate(candidate: unknown): asserts candidat
 
 /** @internal Security-boundary helper exposed for direct mutation verification. */
 export function parseDebugCatalogTarget(
-  candidate: object,
+  candidate: DebugTargetCandidate,
   keys: string[],
   kind: unknown,
 ): OpaqueTarget | undefined {
@@ -173,7 +182,7 @@ export function parseDebugCatalogTarget(
 
 /** @internal Security-boundary helper exposed for direct mutation verification. */
 export function parseDebugFileTarget(
-  candidate: object,
+  candidate: DebugTargetCandidate,
   keys: string[],
   kind: unknown,
 ): OpaqueTarget | undefined {

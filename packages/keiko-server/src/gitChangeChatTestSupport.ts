@@ -11,6 +11,7 @@ import { createGitChangeSnapshotService } from "./gitChangeSnapshotService.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatGitChangeScope } from "./store/index.js";
 import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
+import { createGitSnapshotAccessScope } from "./gitChangeSnapshotRegistry.js";
 
 const FIXTURE_NOW = Date.parse("2026-09-05T12:00:00.000Z");
 const GIT_EXECUTABLE = testGitExecutable();
@@ -152,7 +153,7 @@ export async function initializeGitChangeDescriptionFixture(root: string): Promi
     baseRef: "main",
     headRef: "feature/chat",
     expectedHeadSha: git(root, ["rev-parse", "feature/chat"]),
-    accessScope: {},
+    accessScope: createGitSnapshotAccessScope(),
     correlationId: "fixture-capture",
   });
   if (captured.reference === undefined || !("snapshotDigest" in captured.snapshot)) {

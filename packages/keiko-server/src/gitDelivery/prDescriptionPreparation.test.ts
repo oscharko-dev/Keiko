@@ -15,14 +15,13 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import { DEFAULT_DESCRIPTION_AUTHORITY_TTL_MS } from "../coding-runtime/runtimeAuthorityService.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
-import { DescriptionFixture } from "./prDescriptionTestSupport.js";
+import { DescriptionFixture, instrumentSnapshotReservations } from "./prDescriptionTestSupport.js";
 import {
   prepareDescription,
   prepareDescriptionArtifact,
   readDescriptionBody,
 } from "./prDescriptionPreparation.js";
 import { PrDescriptionFailure } from "./prDescriptionTypes.js";
-import type { PrDescriptionServiceOptions } from "./prDescriptionTypes.js";
 
 vi.mock("@oscharko-dev/keiko-model-gateway", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@oscharko-dev/keiko-model-gateway")>();
@@ -111,29 +110,6 @@ describe("prepareDescription — failed generation outcome (#3384 B5-12)", () =>
 // Wave-3 W3-4 item 3 — a retained PR-description snapshot reference must not be evicted by
 // unrelated capture activity while a proposal is in flight, and a reservation made for a proposal
 // that never ends up held must not leak.
-function instrumentSnapshotReservations(options: PrDescriptionServiceOptions): {
-  readonly reserved: string[];
-  readonly released: string[];
-} {
-  const reserved: string[] = [];
-  const released: string[] = [];
-  const original = options.snapshots;
-  Object.assign(options, {
-    snapshots: {
-      ...original,
-      reserve: (reference: string, scope: object, correlationId: string): boolean => {
-        reserved.push(reference);
-        return original.reserve?.(reference, scope, correlationId) ?? true;
-      },
-      release: (reference: string, scope: object, correlationId: string): void => {
-        released.push(reference);
-        original.release?.(reference, scope, correlationId);
-      },
-    },
-  });
-  return { reserved, released };
-}
-
 describe("prepareDescription/prepareDescriptionArtifact — snapshot reservation (wave-3 W3-4 item 3)", () => {
   afterEach(() => {
     vi.mocked(PrDescription.generatePrDescription).mockClear();

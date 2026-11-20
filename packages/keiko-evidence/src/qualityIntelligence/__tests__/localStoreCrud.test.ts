@@ -236,6 +236,15 @@ describe("recordQualityIntelligenceRun + load + list", () => {
     };
     expect(() => recordQualityIntelligenceRun(input, { evidenceDir })).toThrow();
   });
+
+  it("refuses a runId the Quality Intelligence run id brand rejects before writing", () => {
+    // `run..x` passes the filename rule (assertValidRunId) but not the branded QI run id, so the
+    // manifest would carry a runId no QI caller can construct.
+    expect(() => recordQualityIntelligenceRun(baseInput("run..x"), { evidenceDir })).toThrow(
+      TypeError,
+    );
+    expect(loadQualityIntelligenceRun("run..x", { evidenceDir })).toBeUndefined();
+  });
 });
 
 // ─── appendQualityIntelligenceExportRow (Issue #283, AC4 — export-evidence emission) ──────────────

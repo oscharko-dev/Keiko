@@ -16,6 +16,8 @@
 // `irJson` is the structural Screen-IR (#752) serialised as an opaque JSON value. It is design
 // CONTENT — the artifact's purpose — and is kept (not redacted away); only secrets are stripped.
 
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
+
 export const FIGMA_SNAPSHOT_SCHEMA_VERSION = 1 as const;
 
 /** A reference to one rendered screen image written as a binary side-file. */
@@ -231,10 +233,10 @@ function validateObjectNumbers(
   required: readonly string[],
   label: string,
 ): FigmaSnapshotValidationResult | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return { ok: false, reason: `${label} must be an object` };
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   if (!keysAllowed(record, allowed)) {
     return { ok: false, reason: `${label} has unknown keys` };
   }
@@ -269,10 +271,10 @@ function validateOptionalNumberObject(
 
 function validateMetrics(value: unknown): FigmaSnapshotValidationResult | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return { ok: false, reason: "metrics must be an object" };
   }
-  const metrics = value as Record<string, unknown>;
+  const metrics = value;
   if (!keysAllowed(metrics, ALLOWED_METRICS_KEYS)) {
     return { ok: false, reason: "metrics has unknown keys" };
   }
@@ -308,10 +310,10 @@ function validateScreenCollections(
 // Strict-schema gate for a deserialised snapshot record: schema-version literal + closed key set.
 // Structural correctness of the integrity hashes is the builder's responsibility, not this gate's.
 export function validateFigmaSnapshotRecord(value: unknown): FigmaSnapshotValidationResult {
-  if (typeof value !== "object" || value === null) {
+  if (!isRecord(value)) {
     return { ok: false, reason: "record is not an object" };
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   if (record.figmaSnapshotSchemaVersion !== FIGMA_SNAPSHOT_SCHEMA_VERSION) {
     return {
       ok: false,

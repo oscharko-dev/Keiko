@@ -115,7 +115,9 @@ function cachedGitSummary(deps: UiHandlerDeps, key: string): GitSummaryCacheEntr
  * state for up to GIT_SUMMARY_CACHE_TTL_MS, and the Git window's refresh right after the action
  * would show it (#3644).
  */
-export function invalidateGitSummaryCache(deps: object): void {
+export function invalidateGitSummaryCache(
+  deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
+): void {
   gitSummaryCache.delete(deps);
 }
 

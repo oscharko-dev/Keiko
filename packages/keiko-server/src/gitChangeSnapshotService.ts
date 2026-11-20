@@ -59,7 +59,7 @@ import { parseSnapshotMetadata } from "./gitChangeSnapshotMetadata.js";
 import { snapshotEntries } from "./gitChangeSnapshotEntries.js";
 import { resolveSnapshotBinaryFiles } from "./gitChangeSnapshotBinary.js";
 import { GitChangeSnapshotRegistry } from "./gitChangeSnapshotRegistry.js";
-import type { GitSnapshotContent } from "./gitChangeSnapshotRegistry.js";
+import type { GitSnapshotAccessScope, GitSnapshotContent } from "./gitChangeSnapshotRegistry.js";
 
 const GIT_SNAPSHOT_CAPTURE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -157,7 +157,7 @@ export interface GitChangeSnapshotCaptureInput {
   readonly headRef: string;
   readonly expectedHeadSha?: string;
   /** Server-held capability identity, compared by identity, never a browser-chosen string. */
-  readonly accessScope: object;
+  readonly accessScope: GitSnapshotAccessScope;
   readonly correlationId: string;
   readonly signal?: AbortSignal;
   readonly limits?: Partial<GitChangeSnapshotLimits>;
@@ -185,7 +185,11 @@ export interface GitChangeSnapshotRecheck {
 
 export interface GitChangeSnapshotService {
   capture(input: GitChangeSnapshotCaptureInput): Promise<GitChangeSnapshotCapture>;
-  read(reference: string, scope: object, correlationId: string): GitSnapshotContent | undefined;
+  read(
+    reference: string,
+    scope: GitSnapshotAccessScope,
+    correlationId: string,
+  ): GitSnapshotContent | undefined;
   recheck(
     reference: string,
     input: GitChangeSnapshotCaptureInput,
@@ -196,9 +200,9 @@ export interface GitChangeSnapshotService {
    * activity. Optional: existing callers/fakes that never need protection are unaffected. Returns
    * false when the reference/scope is unknown or the reservation cap is exhausted.
    */
-  reserve?(reference: string, scope: object, correlationId: string): boolean;
+  reserve?(reference: string, scope: GitSnapshotAccessScope, correlationId: string): boolean;
   /** Releases a reservation made via `reserve`, e.g. once the proposal is applied or abandoned. */
-  release?(reference: string, scope: object, correlationId: string): void;
+  release?(reference: string, scope: GitSnapshotAccessScope, correlationId: string): void;
   close(): void;
 }
 

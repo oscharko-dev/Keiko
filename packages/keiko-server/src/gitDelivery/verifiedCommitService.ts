@@ -62,7 +62,9 @@ import type {
   VerifiedCommitService,
   VerifiedCommitServiceOptions,
   VerifiedCommitBlockingPaths,
+  VerifiedCommitVerificationTicket,
 } from "./verifiedCommitTypes.js";
+import { mintGitDeliveryExecutionLease, type GitDeliveryExecutionLease } from "./executionLease.js";
 
 const VERIFIED_COMMIT_RESULT_REASONS = [
   "approval-required",
@@ -528,9 +530,12 @@ type VerificationTicketIdentity = Pick<VerifiedCommitRunContext, "runId" | "corr
 
 class VerifiedCommitController implements VerifiedCommitService {
   // Weak, body-free log identities survive invalidation without retaining any authority or facts.
-  private readonly ticketIdentities = new WeakMap<object, VerificationTicketIdentity>();
+  private readonly ticketIdentities = new WeakMap<
+    VerifiedCommitVerificationTicket,
+    VerificationTicketIdentity
+  >();
   private generation = 0;
-  private tickets = new WeakMap<object, VerificationTicket>();
+  private tickets = new WeakMap<VerifiedCommitVerificationTicket, VerificationTicket>();
   private proof: VerificationProof | undefined;
   // The run's verification history for the pull request's check list (F57). Keyed by run so a new
   // run starts empty, and kept across invalidate(), which every new verification calls.
@@ -539,7 +544,7 @@ class VerifiedCommitController implements VerifiedCommitService {
   private readonly proposals = new Map<string, VerifiedCommitProposal>();
   private executing = false;
   private executionLeases = new WeakMap<
-    object,
+    GitDeliveryExecutionLease,
     { readonly proposalId: string; readonly claim: GitDeliveryApprovalRequirement }
   >();
   public constructor(private readonly options: VerifiedCommitServiceOptions) {}
@@ -588,7 +593,9 @@ class VerifiedCommitController implements VerifiedCommitService {
       });
       return { kind: "refused", reason, blocking };
     }
-    const ticket = {};
+    const ticket: VerifiedCommitVerificationTicket = {
+      kind: "verified-commit-verification-ticket",
+    };
     this.tickets.set(ticket, { context, facts, startedAtMs: this.now(), untracked });
     this.ticketIdentities.set(ticket, identity);
     return { kind: "ticket", ticket };
@@ -604,7 +611,7 @@ class VerifiedCommitController implements VerifiedCommitService {
   }
 
   public async completeVerification(
-    ticket: object,
+    ticket: VerifiedCommitVerificationTicket,
     report: VerificationReport,
     guard?: { readonly check: () => boolean; readonly signal?: AbortSignal | undefined },
   ): Promise<boolean> {
@@ -897,7 +904,7 @@ class VerifiedCommitController implements VerifiedCommitService {
   public consumeApproval(
     proposalId: string,
     approval?: GitDeliveryApprovalClaim,
-  ): object | undefined {
+  ): GitDeliveryExecutionLease | undefined {
     const proposal = this.review(proposalId);
     if (proposal === undefined) return undefined;
     const store = this.options.execution?.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
@@ -906,7 +913,7 @@ class VerifiedCommitController implements VerifiedCommitService {
         ? store.consumeCommitBinding(approvalBinding(proposal), this.now())
         : store.consume({ approval, binding: approvalBinding(proposal), nowMs: this.now() });
     if (claim?.required !== true) return undefined;
-    const lease = {};
+    const lease = mintGitDeliveryExecutionLease();
     this.executionLeases.set(lease, { proposalId, claim });
     this.log(proposal.context, "approval", { proposalId, state: "consumed" });
     return lease;
@@ -914,7 +921,7 @@ class VerifiedCommitController implements VerifiedCommitService {
 
   public async executeApproved(
     proposalId: string,
-    lease: object,
+    lease: GitDeliveryExecutionLease,
     guard?: { readonly check: () => boolean; readonly signal?: AbortSignal | undefined },
   ): Promise<VerifiedCommitResult | undefined> {
     const consumed = this.executionLeases.get(lease);

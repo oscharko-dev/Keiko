@@ -162,6 +162,7 @@ import {
 // through `executeGovernedPullRequest`'s coupled title+body+base update path. Read-only
 // consumption of the existing owning module — never redefined here.
 import type { PrDescriptionApplicationResult } from "./gitDelivery/prDescriptionTypes.js";
+import type { GitDeliveryExecutionLease } from "./gitDelivery/executionLease.js";
 // Final-audit F5 (#3400): reuses the SAME admitted, per-(project, repository, PR) service factory
 // this route group's own preview/approve/apply handlers already run through — never a second,
 // independently-composed service surface (AGENTS.md §5).
@@ -3676,7 +3677,7 @@ export function acceptedGitChangeChatMode(
 export function applyGitChangeDescription(
   deps: UiHandlerDeps,
   proposalId: string,
-  lease: object,
+  lease: GitDeliveryExecutionLease,
 ): Promise<PrDescriptionApplicationResult> | undefined {
   return deps.prDescriptionApplicationService?.executeApproved(proposalId, lease);
 }

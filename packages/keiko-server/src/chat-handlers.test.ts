@@ -67,6 +67,7 @@ import { modelIdEvidence } from "./observability/model-id-evidence.js";
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
 import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
 import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
+import { mintGitDeliveryExecutionLease } from "./gitDelivery/executionLease.js";
 
 function deferredActivity(): { promise: Promise<void>; resolve: () => void } {
   let resolve = (): void => undefined;
@@ -1501,7 +1502,11 @@ describe("applyGitChangeDescription routes only through the description applicat
   });
 
   it("returns undefined and calls no PR-update adapter when the service is not yet composed", () => {
-    const result = applyGitChangeDescription({} as UiHandlerDeps, "proposal-1", {});
+    const result = applyGitChangeDescription(
+      {} as UiHandlerDeps,
+      "proposal-1",
+      mintGitDeliveryExecutionLease(),
+    );
     expect(result).toBeUndefined();
     expect(executeGovernedPullRequestSpy).not.toHaveBeenCalled();
   });
@@ -1513,7 +1518,7 @@ describe("applyGitChangeDescription routes only through the description applicat
     const deps = {
       prDescriptionApplicationService: { executeApproved },
     } as unknown as UiHandlerDeps;
-    const lease = { token: "lease-1" };
+    const lease = mintGitDeliveryExecutionLease();
 
     const result = await applyGitChangeDescription(deps, "proposal-1", lease);
 

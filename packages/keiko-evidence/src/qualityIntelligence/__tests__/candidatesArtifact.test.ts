@@ -682,3 +682,49 @@ describe("loadQualityIntelligenceCandidates — qualityVerdict fail-closed (KEIK
     );
   });
 });
+
+describe("candidate artifact writes keep the shape the read validator accepts", () => {
+  it("refuses a redactor output that is no longer a list of candidate rows", () => {
+    expect(() =>
+      recordQualityIntelligenceCandidates({
+        runId: "run-shape-001",
+        generatedAt: "2026-06-08T10:00:00.000Z",
+        candidates: [seedCandidate("tc-1")],
+        evidenceDir,
+        redact: () => "[REDACTED]",
+      }),
+    ).toThrow(EvidenceWriteError);
+    expect(loadQualityIntelligenceCandidates("run-shape-001", { evidenceDir })).toBeUndefined();
+  });
+
+  it("refuses a candidate whose attached quality verdict the read validator would reject", () => {
+    const outOfRange = {
+      ...seedCandidate("tc-3"),
+      qualityVerdict: { verdict: "strong", score: 500, dimensions: [], overallRationale: "r" },
+    };
+    expect(() =>
+      recordQualityIntelligenceCandidates({
+        runId: "run-shape-002",
+        generatedAt: "2026-06-08T10:00:00.000Z",
+        candidates: [outOfRange],
+        evidenceDir,
+        redact: identityRedact,
+      }),
+    ).toThrow(EvidenceWriteError);
+  });
+
+  it("refuses an edit whose redacted provenance label is no longer a string", () => {
+    expect(() =>
+      applyQualityIntelligenceCandidateEdit({
+        runId: RUN_ID,
+        candidateId: "tc-1",
+        editedFields: { title: "Edited title" },
+        provenance: provenance(),
+        evidenceDir,
+        redact: (value) => (value === "Alice" ? 7 : value),
+      }),
+    ).toThrow(EvidenceWriteError);
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    expect(reloaded?.editedRevisions).toBeUndefined();
+  });
+});

@@ -20,6 +20,10 @@ import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import { createPrDescriptionApplicationService } from "./prDescriptionService.js";
 import type { PrDescriptionContext, PrDescriptionServiceOptions } from "./prDescriptionTypes.js";
+import {
+  createGitSnapshotAccessScope,
+  type GitSnapshotAccessScope,
+} from "../gitChangeSnapshotRegistry.js";
 
 const GIT_EXECUTABLE = testGitExecutable();
 
@@ -98,7 +102,7 @@ export class DescriptionFixture {
       },
       repository: "owner/repo",
       prNumber: 123,
-      accessScope: {},
+      accessScope: createGitSnapshotAccessScope(),
       authorityDigest: sha256Hex("authority"),
       correlationId: "description-test",
       stillAuthorized: (): boolean => this.live,
@@ -330,4 +334,41 @@ export class DescriptionFixture {
     this.snapshots.close();
     rmSync(this.root, { recursive: true, force: true });
   }
+}
+
+/** The snapshot references reserved and released, in call order. */
+export interface SnapshotReservationRecord {
+  readonly reserved: string[];
+  readonly released: string[];
+}
+
+/**
+ * Wave-3 W3-4 item 3: wraps the real registry-backed reserve/release with recording spies so a test
+ * can assert the pairing is balanced (every reserve released exactly once on the drop paths, none
+ * leaked on error paths) without reimplementing the registry.
+ */
+export function instrumentSnapshotReservations(
+  options: PrDescriptionServiceOptions,
+): SnapshotReservationRecord {
+  const reserved: string[] = [];
+  const released: string[] = [];
+  const original = options.snapshots;
+  Object.assign(options, {
+    snapshots: {
+      ...original,
+      reserve: (
+        reference: string,
+        scope: GitSnapshotAccessScope,
+        correlationId: string,
+      ): boolean => {
+        reserved.push(reference);
+        return original.reserve?.(reference, scope, correlationId) ?? true;
+      },
+      release: (reference: string, scope: GitSnapshotAccessScope, correlationId: string): void => {
+        released.push(reference);
+        original.release?.(reference, scope, correlationId);
+      },
+    },
+  });
+  return { reserved, released };
 }

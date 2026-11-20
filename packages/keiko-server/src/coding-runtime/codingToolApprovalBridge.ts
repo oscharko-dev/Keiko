@@ -5,6 +5,7 @@ import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
 import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
 import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
 import type { GitDeliveryIssuedApproval } from "../gitDelivery/approvalStore.js";
+import type { GitDeliveryExecutionLease } from "../gitDelivery/executionLease.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 
 import type {
@@ -115,11 +116,20 @@ export interface CodingToolApprovalActivation {
 export type CommitToolRequest = Extract<CodingToolActionRequest, { readonly action: "delivery" }>;
 export interface CodingToolApprovalProofVerifier {
   readonly matchesDelivery?: (runId: string, request: CommitToolRequest) => boolean;
-  readonly consumeDelivery?: (runId: string, request: CommitToolRequest) => object | undefined;
+  readonly consumeDelivery?: (
+    runId: string,
+    request: CommitToolRequest,
+  ) => GitDeliveryExecutionLease | undefined;
   readonly matchesStage?: (runId: string, proposalId: string) => boolean;
-  readonly consumeStage?: (runId: string, proposalId: string) => object | undefined;
+  readonly consumeStage?: (
+    runId: string,
+    proposalId: string,
+  ) => GitDeliveryExecutionLease | undefined;
   readonly matchesCommit?: (runId: string, request: CommitToolRequest) => boolean;
-  readonly consumeCommit?: (runId: string, request: CommitToolRequest) => object | undefined;
+  readonly consumeCommit?: (
+    runId: string,
+    request: CommitToolRequest,
+  ) => GitDeliveryExecutionLease | undefined;
   /** Whether the operator declined this run's Git stage, commit, push or pull-request proposal. */
   readonly proposalDeclined?: (runId: string, proposalId: string) => boolean;
   readonly matches: (input: {
@@ -257,7 +267,7 @@ function commitApprovalMethods(
     matchesCommit: (runId, request): boolean =>
       matchingCommit(service, runId, request) &&
       service.matchesApproval(request.proposalId ?? "", commitClaim(request)),
-    consumeCommit: (runId, request): object | undefined =>
+    consumeCommit: (runId, request): GitDeliveryExecutionLease | undefined =>
       matchingCommit(service, runId, request)
         ? service.consumeApproval(request.proposalId ?? "", commitClaim(request))
         : undefined,

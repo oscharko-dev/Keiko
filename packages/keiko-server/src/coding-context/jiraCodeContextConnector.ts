@@ -98,10 +98,15 @@ function textFromUnknown(value: unknown): string {
   return textFromRecord(value);
 }
 
-function textFromRecord(value: object): string {
-  const record = value as Record<string, unknown>;
-  const ownText = typeof record.text === "string" ? record.text : "";
-  const nestedText = textFromUnknown(record.content);
+/** The two Atlassian Document Format node members that carry text. */
+interface JiraDocumentNode {
+  readonly text?: unknown;
+  readonly content?: unknown;
+}
+
+function textFromRecord(node: JiraDocumentNode): string {
+  const ownText = typeof node.text === "string" ? node.text : "";
+  const nestedText = textFromUnknown(node.content);
   return [ownText, nestedText].filter(Boolean).join("\n");
 }
 

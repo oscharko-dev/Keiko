@@ -590,6 +590,7 @@ import {
   type WorkspaceSnippetsService,
 } from "./editor/snippets/workspaceSnippetsService.js";
 import { isIdentityProofFailure } from "./task-workspace/errors.js";
+import { createGitSnapshotAccessScope } from "./gitChangeSnapshotRegistry.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -5399,7 +5400,7 @@ function workbenchDescriptionContextProvider(
   runId: string,
   activeWorkspaceRoot: () => string | undefined,
 ): () => PrDescriptionContext | undefined {
-  const accessScope = {};
+  const accessScope = createGitSnapshotAccessScope();
   const current = (): boolean =>
     activeWorkspaceRoot() === binding.request.projectId &&
     deps.gitDeliveryDescriptionAuthority?.current(

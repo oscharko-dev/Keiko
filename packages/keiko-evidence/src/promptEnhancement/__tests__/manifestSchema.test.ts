@@ -42,6 +42,7 @@ describe("validatePromptEnhancementEvidenceManifest", () => {
   it("rejects a non-object", () => {
     expect(validatePromptEnhancementEvidenceManifest(null).ok).toBe(false);
     expect(validatePromptEnhancementEvidenceManifest(42).reason).toBe("manifest is not an object");
+    expect(validatePromptEnhancementEvidenceManifest([]).reason).toBe("manifest is not an object");
   });
 
   it("rejects an unexpected schema version", () => {

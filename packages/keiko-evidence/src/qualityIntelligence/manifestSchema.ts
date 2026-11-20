@@ -10,6 +10,7 @@
 // this manifest is the persistable evidence wrapper around it.
 
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 
 type QualityIntelligenceExportAdapter = QualityIntelligence.QualityIntelligenceExportAdapter;
 
@@ -291,10 +292,10 @@ export interface QualityIntelligenceSchemaValidationResult {
 export function validateQualityIntelligenceEvidenceManifest(
   value: unknown,
 ): QualityIntelligenceSchemaValidationResult {
-  if (typeof value !== "object" || value === null) {
+  if (!isRecord(value)) {
     return { ok: false, reason: "manifest is not an object" };
   }
-  const record = value as Record<string, unknown>;
+  const record = value;
   if (record.qiEvidenceSchemaVersion !== QUALITY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION) {
     return {
       ok: false,

@@ -62,6 +62,7 @@ import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
 import { gitDeliveryActivityErrorKind } from "./execution.js";
 import { logDraftRelatedIssues } from "./draftRelatedIssuesActivity.js";
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { mintGitDeliveryExecutionLease, type GitDeliveryExecutionLease } from "./executionLease.js";
 
 type DeliveryUnavailableReason = Extract<
   CodingRuntimeDeliveryResult,
@@ -132,7 +133,7 @@ export class DraftDeliveryController implements DraftDeliveryService {
   private busy = false;
   private proposal: PreparedDraftDelivery | undefined;
   private leases = new WeakMap<
-    object,
+    GitDeliveryExecutionLease,
     { proposal: PreparedDraftDelivery; claim: GitDeliveryApprovalRequirement }
   >();
   public constructor(private readonly options: DraftDeliveryServiceOptions) {}
@@ -173,7 +174,7 @@ export class DraftDeliveryController implements DraftDeliveryService {
         true
     );
   }
-  public consumeApproval(id: string): object | undefined {
+  public consumeApproval(id: string): GitDeliveryExecutionLease | undefined {
     const proposal = this.review(id);
     if (proposal === undefined) return undefined;
     const claim = this.store().consumeDeliveryBinding?.(
@@ -181,7 +182,7 @@ export class DraftDeliveryController implements DraftDeliveryService {
       draftNow(this.options),
     );
     if (claim === undefined) return undefined;
-    const lease = Object.freeze({});
+    const lease = mintGitDeliveryExecutionLease();
     this.leases.set(lease, { proposal, claim });
     draftApprovalChanged(this.options, proposal, "approval-consumed");
     return lease;
@@ -200,7 +201,7 @@ export class DraftDeliveryController implements DraftDeliveryService {
   }
   public executeApproved(
     id: string,
-    lease: object | undefined,
+    lease: GitDeliveryExecutionLease | undefined,
     guard: DeliveryGuard,
   ): Promise<CodingRuntimeDeliveryResult> {
     return this.run((context) => this.executeCurrent(context, id, lease, guard.intent), guard);
@@ -570,7 +571,7 @@ export class DraftDeliveryController implements DraftDeliveryService {
   private async executeCurrent(
     context: DraftDeliveryRunContext,
     id: string,
-    lease: object | undefined,
+    lease: GitDeliveryExecutionLease | undefined,
     intent: "push" | "pull-request" | undefined,
   ): Promise<CodingRuntimeDeliveryResult> {
     const proposal = this.review(id);
@@ -606,7 +607,7 @@ export class DraftDeliveryController implements DraftDeliveryService {
   private executionClaim(
     context: DraftDeliveryRunContext,
     proposal: PreparedDraftDelivery,
-    lease: object | undefined,
+    lease: GitDeliveryExecutionLease | undefined,
   ): GitDeliveryApprovalRequirement {
     const approved = lease === undefined ? undefined : this.leases.get(lease);
     if (lease !== undefined) this.leases.delete(lease);

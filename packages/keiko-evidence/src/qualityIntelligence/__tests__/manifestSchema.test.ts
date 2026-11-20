@@ -143,4 +143,10 @@ describe("validateQualityIntelligenceEvidenceManifest", () => {
   it.each([null, undefined, 42, "string", []])("rejects non-object input: %p", (value) => {
     expect(validateQualityIntelligenceEvidenceManifest(value).ok).toBe(false);
   });
+
+  it("names an array manifest as a non-object, not as a schema-version mismatch", () => {
+    expect(validateQualityIntelligenceEvidenceManifest([]).reason).toBe(
+      "manifest is not an object",
+    );
+  });
 });

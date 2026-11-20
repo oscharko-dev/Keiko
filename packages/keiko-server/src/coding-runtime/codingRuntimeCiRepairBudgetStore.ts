@@ -73,7 +73,10 @@ function sameLimits(a: CiRepairBudgetRecord, b: CiRepairBudgetRecord): boolean {
 function expected(current: CiRepairBudgetRecord | undefined, revision: number | null): boolean {
   return (revision === null || ciRepairCount(revision)) && (current?.revision ?? null) === revision;
 }
-function keys(value: object, allowed: readonly string[]): boolean {
+function keys(
+  value: CiRepairBegin | CiRepairChargeInput | CiRepairSettle,
+  allowed: readonly string[],
+): boolean {
   const actual = Object.keys(value);
   return actual.length === allowed.length && actual.every((key) => allowed.includes(key));
 }
