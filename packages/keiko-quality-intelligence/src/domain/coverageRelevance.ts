@@ -217,16 +217,19 @@ const candidateCoverageText = (
     candidate.riskClass,
   ].join("\n");
 
+// A map is any source with a callable `get`; a plain record maps an atom id to its text directly.
+const isAtomTextMap = (
+  atomTextById: NonNullable<BuildCoverageMapInput["atomTextById"]>,
+): atomTextById is ReadonlyMap<string, string> =>
+  "get" in atomTextById && typeof atomTextById.get === "function";
+
 const atomTextLookup = (
   atomTextById: BuildCoverageMapInput["atomTextById"],
   atomId: QualityIntelligence.QualityIntelligenceEvidenceAtomId,
 ): string | undefined => {
   if (atomTextById === undefined) return undefined;
   const key = String(atomId);
-  const maybeMap = atomTextById as { readonly get?: unknown };
-  return typeof maybeMap.get === "function"
-    ? (atomTextById as ReadonlyMap<string, string>).get(key)
-    : (atomTextById as Readonly<Record<string, string | undefined>>)[key];
+  return isAtomTextMap(atomTextById) ? atomTextById.get(key) : atomTextById[key];
 };
 
 const isHighSignalToken = (token: string): boolean =>

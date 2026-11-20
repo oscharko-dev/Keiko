@@ -29,13 +29,6 @@ type AtomId = QualityIntelligence.QualityIntelligenceEvidenceAtomId;
 type Priority = QualityIntelligence.QualityIntelligencePriority;
 type RiskClass = QualityIntelligence.QualityIntelligenceRiskClass;
 
-const PRIORITIES: ReadonlySet<string> = new Set(
-  QualityIntelligence.QUALITY_INTELLIGENCE_PRIORITIES,
-);
-const RISK_CLASSES: ReadonlySet<string> = new Set(
-  QualityIntelligence.QUALITY_INTELLIGENCE_RISK_CLASSES,
-);
-
 export const MAX_GENERATED_CANDIDATE_OUTPUT_CHARS = 1_000_000;
 export const MAX_JSON_RECOVERY_ATTEMPTS = 32;
 export const MAX_DERIVED_ATOM_IDS_PER_CANDIDATE = 8;
@@ -288,15 +281,23 @@ interface ParsedEnumField<T> {
   readonly defaulted: boolean;
 }
 
-const parsePriority = (value: unknown, profile: PolicyProfile): ParsedEnumField<Priority> =>
-  typeof value === "string" && PRIORITIES.has(value)
-    ? { value: value as Priority, defaulted: false }
-    : { value: profile.defaultPriority, defaulted: true };
+const parsePriority = (value: unknown, profile: PolicyProfile): ParsedEnumField<Priority> => {
+  const priority = QualityIntelligence.QUALITY_INTELLIGENCE_PRIORITIES.find(
+    (candidate) => candidate === value,
+  );
+  return priority === undefined
+    ? { value: profile.defaultPriority, defaulted: true }
+    : { value: priority, defaulted: false };
+};
 
-const parseRiskClass = (value: unknown, profile: PolicyProfile): ParsedEnumField<RiskClass> =>
-  typeof value === "string" && RISK_CLASSES.has(value)
-    ? { value: value as RiskClass, defaulted: false }
-    : { value: profile.defaultRiskClass, defaulted: true };
+const parseRiskClass = (value: unknown, profile: PolicyProfile): ParsedEnumField<RiskClass> => {
+  const riskClass = QualityIntelligence.QUALITY_INTELLIGENCE_RISK_CLASSES.find(
+    (candidate) => candidate === value,
+  );
+  return riskClass === undefined
+    ? { value: profile.defaultRiskClass, defaulted: true }
+    : { value: riskClass, defaulted: false };
+};
 
 interface EvidenceIndexResolution {
   readonly ids: readonly AtomId[];

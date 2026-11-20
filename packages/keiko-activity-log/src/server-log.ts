@@ -645,7 +645,12 @@ export interface ServerLogFailureContext {
   readonly identity?: ServerLogIdentity | undefined;
 }
 
-const failureNotice = { lastAt: null as number | null, suppressed: 0 };
+interface FailureNoticeState {
+  lastAt: number | null;
+  suppressed: number;
+}
+
+const failureNotice: FailureNoticeState = { lastAt: null, suppressed: 0 };
 
 // Tests reset this so one suite's notice cannot silence the next suite's assertion; the server
 // resets it on shutdown for the same reason. Either caller is clearing `suppressed` — a count that
@@ -1662,9 +1667,14 @@ function writerOwner(value: unknown): ProcessWriterOwner | undefined {
     const handler = fields.reject;
     return typeof handler === "function" ? handler : undefined;
   });
-  return graphToken !== undefined && reject !== undefined
-    ? { graphToken, reject: reject as ProcessWriterOwner["reject"] }
-    : undefined;
+  if (graphToken === undefined || reject === undefined) return undefined;
+  // The foreign graph's handler is called with exactly the arguments the slot contract declares.
+  return {
+    graphToken,
+    reject: (stateDir, rejected, correlationId): void => {
+      reject.call(undefined, stateDir, rejected, correlationId);
+    },
+  };
 }
 
 function recordUnpersistedWriterRejection(rejected: unknown, correlationId: unknown): void {

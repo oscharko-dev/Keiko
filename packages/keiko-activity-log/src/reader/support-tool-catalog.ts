@@ -1,5 +1,6 @@
 import {
   captureToolInvocationReceipt,
+  TOOL_LIFECYCLE_OPERATIONS,
   toolLifecyclePhaseFor,
   type ToolInvocationReceipt,
   type ToolLifecycleEvent,
@@ -214,6 +215,7 @@ function receiptFor(event: ToolLifecycleEvent): ToolInvocationReceipt | undefine
 
 function lifecycleEvidence(
   record: Readonly<Record<string, unknown>>,
+  operation: ToolLifecycleOperation,
   validateLifecycle: ToolLifecycleValidator,
 ): ToolCatalogLogEvidence {
   try {
@@ -231,7 +233,7 @@ function lifecycleEvidence(
   } catch {
     return {
       kind: "invalid",
-      operation: record.op as ToolLifecycleOperation,
+      operation,
       reason: "invalid-lifecycle-evidence",
     };
   }
@@ -244,14 +246,12 @@ export function readToolCatalogEvidence(
   redactDiagnostics?: ToolDiagnosticRedactor,
 ): ToolCatalogLogEvidence | undefined {
   if (typeof record.op !== "string") return undefined;
-  if (toolLifecyclePhaseFor(record.op) !== undefined) {
+  const phase = toolLifecyclePhaseFor(record.op);
+  if (phase !== undefined) {
+    const operation = TOOL_LIFECYCLE_OPERATIONS[phase];
     if (validateLifecycle === undefined)
-      return {
-        kind: "unavailable",
-        operation: record.op as ToolLifecycleOperation,
-        reason: "lifecycle-validator-unavailable",
-      };
-    return lifecycleEvidence(record, validateLifecycle);
+      return { kind: "unavailable", operation, reason: "lifecycle-validator-unavailable" };
+    return lifecycleEvidence(record, operation, validateLifecycle);
   }
   if (!isToolSinkDiagnostic(record)) return undefined;
   return {

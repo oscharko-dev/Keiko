@@ -284,7 +284,7 @@ function intentTextSource(
   }
 
   return Object.freeze({
-    sourceTexts: Object.freeze([] as readonly string[]),
+    sourceTexts: Object.freeze([]),
     sourceMode: "empty",
     diagnostics: INTENT_DIAGNOSTICS.empty,
   });
@@ -292,9 +292,9 @@ function intentTextSource(
 
 function emptyIntentSummary(source: IntentTextSource): IntentSummary {
   return Object.freeze({
-    themes: Object.freeze([] as readonly string[]),
-    requirementCandidates: Object.freeze([] as readonly string[]),
-    riskHints: Object.freeze([] as readonly string[]),
+    themes: Object.freeze([]),
+    requirementCandidates: Object.freeze([]),
+    riskHints: Object.freeze([]),
     priorityHint: "unknown" as const,
     sourceMode: source.sourceMode,
     diagnostics: source.diagnostics,

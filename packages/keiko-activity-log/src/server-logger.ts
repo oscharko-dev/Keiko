@@ -100,7 +100,7 @@ const LIFTED_CONTEXT_KEYS = new Set<string>(["correlationId", "parentCorrelation
 // Kept in lockstep with `ServerLogCategory` in `server-log.ts` — this is the runtime mirror of that
 // compile-time union, consulted by `readCategory` below so a bound context can only ever lift a
 // category the type actually declares onto the envelope.
-const KNOWN_CATEGORIES = new Set<string>([
+const KNOWN_CATEGORIES: readonly ServerLogCategory[] = [
   "http",
   "gateway",
   "embedding",
@@ -112,7 +112,7 @@ const KNOWN_CATEGORIES = new Set<string>([
   "diagnostic",
   "process",
   "consolidation",
-]);
+];
 
 // Evidence the configured level must never silence (#3532). Every registered `loss` operation is
 // mandatory by its lifecycle phase; these operations are mandatory by name because they bound the
@@ -168,9 +168,7 @@ const EMPTY_BINDING: ResolvedBinding = {
 };
 
 function readCategory(value: unknown): ServerLogCategory | undefined {
-  return typeof value === "string" && KNOWN_CATEGORIES.has(value)
-    ? (value as ServerLogCategory)
-    : undefined;
+  return KNOWN_CATEGORIES.find((category) => category === value);
 }
 
 function resolveBinding(parent: ResolvedBinding, context: ServerLogContext): ResolvedBinding {
@@ -374,13 +372,20 @@ export function createActivityLogSink(
 
 const ACTIVITY_LOG_TEST_WRITER = Symbol.for("@oscharko-dev/keiko-server/activity-log-test-writer");
 
+// The process-global marker slot, read like any foreign object field.
+interface TestWriterHost {
+  readonly [ACTIVITY_LOG_TEST_WRITER]?: unknown;
+}
+
 export function activityLogTestWriterInstalled(): boolean {
-  return (globalThis as Readonly<Record<symbol, unknown>>)[ACTIVITY_LOG_TEST_WRITER] === true;
+  const processGlobal: object = globalThis;
+  const host: TestWriterHost = processGlobal;
+  return host[ACTIVITY_LOG_TEST_WRITER] === true;
 }
 
 /** Test harness only: marks this process as running under an explicitly injected test writer. */
 export function installActivityLogTestWriter(installed = true): void {
-  (globalThis as Record<symbol, unknown>)[ACTIVITY_LOG_TEST_WRITER] = installed;
+  Reflect.set(globalThis, ACTIVITY_LOG_TEST_WRITER, installed);
 }
 
 interface ProcessLoggerSlot {

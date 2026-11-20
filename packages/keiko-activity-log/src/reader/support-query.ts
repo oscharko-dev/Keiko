@@ -1617,12 +1617,10 @@ export interface SupportQueryJsonEvent {
 export function supportQueryJson(
   result: SupportQueryResult,
 ): Omit<SupportQueryResult, "events"> & { readonly events: readonly SupportQueryJsonEvent[] } {
-  const events: SupportQueryJsonEvent[] = result.events.map((event) => ({
-    role: event.role,
-    file: event.file.name,
-    line: event.index,
-    record: JSON.parse(event.text) as unknown,
-  }));
+  const events: SupportQueryJsonEvent[] = result.events.map((event) => {
+    const record: unknown = JSON.parse(event.text);
+    return { role: event.role, file: event.file.name, line: event.index, record };
+  });
   return { ...result, events };
 }
 

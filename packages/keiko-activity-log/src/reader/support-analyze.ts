@@ -270,12 +270,14 @@ function splitLines(text: string): readonly string[] {
   return lines;
 }
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function tryParseJsonObject(raw: string): Record<string, unknown> | undefined {
   try {
     const value: unknown = JSON.parse(raw);
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined;
+    return isJsonObject(value) ? value : undefined;
   } catch {
     return undefined;
   }
@@ -339,6 +341,8 @@ function extraFields(
   // setter instead of defining an own property — silently dropping the field from the reported
   // `extra` bucket (and, for an object value, replacing `extra`'s own prototype) rather than
   // reporting it, which is exactly the silent skip this module's header states it must not do.
+  // SAFETY: Object.create(null) returns a new empty object with no prototype and no properties,
+  // so it is a valid empty Record; the lib types it as any.
   const extra: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   let hasAny = false;
   for (const key in record) {
@@ -604,6 +608,8 @@ function registeredFields(
   record: Record<string, unknown>,
   registration: ActivityLogOperationRegistration,
 ): Readonly<Record<string, unknown>> {
+  // SAFETY: Object.create(null) returns a new empty object with no prototype and no properties,
+  // so it is a valid empty Record; the lib types it as any.
   const fields: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const name in registration.fields) {
     if (!Object.hasOwn(registration.fields, name)) continue;
@@ -613,14 +619,19 @@ function registeredFields(
   return fields;
 }
 
-const ACTIVITY_LOG_LEVELS: ReadonlySet<string> = new Set(["debug", "info", "warn", "error"]);
+const ACTIVITY_LOG_LEVELS: readonly NonNullable<ActivityLogEventEnvelope["level"]>[] = [
+  "debug",
+  "info",
+  "warn",
+  "error",
+];
 
 function validOptionalType(value: unknown, expected: "string" | "number"): boolean {
   return value === undefined || typeof value === expected;
 }
 
 function validRecordLevel(value: unknown): boolean {
-  return typeof value === "string" && ACTIVITY_LOG_LEVELS.has(value);
+  return ACTIVITY_LOG_LEVELS.some((level) => level === value);
 }
 
 function validRecordStatus(
@@ -653,7 +664,7 @@ function recordEnvelope(
   registration: ActivityLogOperationRegistration,
 ): ActivityLogEventEnvelope | undefined {
   if (!validRecordEnvelopeFields(record, registration)) return undefined;
-  const level = optionalString(record, "level") as ActivityLogEventEnvelope["level"];
+  const level = ACTIVITY_LOG_LEVELS.find((candidate) => candidate === record.level);
   const correlationId = optionalString(record, "correlationId");
   const parentCorrelationId = optionalString(record, "parentCorrelationId");
   const durationMs = optionalNumber(record, "durationMs");
