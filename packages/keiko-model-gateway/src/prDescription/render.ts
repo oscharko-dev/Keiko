@@ -29,9 +29,9 @@ export function emptyPrDescriptionCandidate(): PrDescriptionCandidate {
 export function mergePrDescriptionCandidates(
   candidates: readonly PrDescriptionCandidate[],
 ): PrDescriptionCandidate {
-  const merged = { summary: [], keyChanges: [], risks: [], reviewerFocus: [] } as {
+  const merged: {
     -readonly [Key in keyof PrDescriptionCandidate]: PrDescriptionCandidate[Key][number][];
-  };
+  } = { summary: [], keyChanges: [], risks: [], reviewerFocus: [] };
   for (const key of PR_DESCRIPTION_SECTION_KEYS) {
     const seen = new Set<string>();
     for (const statement of candidates.flatMap((candidate) => candidate[key])) {

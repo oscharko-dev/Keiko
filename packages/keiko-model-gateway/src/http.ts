@@ -932,7 +932,7 @@ function mapProxyError(error: unknown): Error {
     return tlsCaFailureError();
   }
   if (error instanceof Error) {
-    const code = isRecord(error) ? (error as Record<string, unknown>).code : undefined;
+    const code = isRecord(error) ? error.code : undefined;
     if (
       (typeof code === "string" && PROXY_UNREACHABLE_CODES.has(code)) ||
       ABORT_ERROR_NAMES.has(error.name)
@@ -2117,7 +2117,8 @@ function parseSseLine(rawLine: string): SseLineResult {
   if (payload === "[DONE]") {
     return { kind: "done" };
   }
-  return { kind: "value", value: JSON.parse(payload) as unknown };
+  const value: unknown = JSON.parse(payload);
+  return { kind: "value", value };
 }
 
 function parseSseLineOf(line: string, complete: boolean): SseLineResult {

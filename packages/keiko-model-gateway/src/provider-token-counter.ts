@@ -15,6 +15,11 @@ import {
   ConfigInvalidError,
   ProviderError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import type {
+  CatalogJsonObject,
+  CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { isCatalogJsonArray } from "@oscharko-dev/keiko-tool-catalog";
 import { gatewayFetch, readJsonCapped } from "./http.js";
 import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME } from "./config.js";
 import {
@@ -39,9 +44,10 @@ function tokenCounterUrl(baseUrl: string): string {
   return url.toString();
 }
 
-function parseTokenCount(value: unknown): ProviderTokenCount {
-  if (value === null || typeof value !== "object") return { status: "invalid" };
-  const record = value as Record<string, unknown>;
+function parseTokenCount(value: CatalogJsonValue): ProviderTokenCount {
+  if (value === null || typeof value !== "object" || isCatalogJsonArray(value))
+    return { status: "invalid" };
+  const record: CatalogJsonObject = value;
   if (record.error === true) return { status: "invalid" };
   const tokens = record.total_tokens;
   return typeof tokens === "number" &&

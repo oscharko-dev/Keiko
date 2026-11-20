@@ -20,7 +20,7 @@ export interface UsageSeed {
   readonly costClass: CostClass;
 }
 
-const FINISH_REASONS: ReadonlySet<FinishReason> = new Set([
+const FINISH_REASONS: ReadonlySet<string> = new Set<FinishReason>([
   "stop",
   "tool_calls",
   "length",
@@ -37,10 +37,12 @@ function asCount(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
+export function isFinishReason(value: string): value is FinishReason {
+  return FINISH_REASONS.has(value);
+}
+
 function mapFinishReason(value: unknown): FinishReason {
-  return typeof value === "string" && FINISH_REASONS.has(value as FinishReason)
-    ? (value as FinishReason)
-    : "stop";
+  return typeof value === "string" && isFinishReason(value) ? value : "stop";
 }
 
 // #3878: the provider's own count of reasoning tokens, only when it reports one as a whole

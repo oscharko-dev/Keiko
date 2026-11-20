@@ -577,9 +577,13 @@ function declaredMimeType(response: Response, responseFormat: SpeechResponseForm
   return RESPONSE_FORMAT_MIME[responseFormat];
 }
 
+function isSpeechResponseFormat(key: string): key is SpeechResponseFormat {
+  return Object.hasOwn(RESPONSE_FORMAT_MIME, key);
+}
+
 function speechMimeClass(mimeType: string): SpeechResponseFormat | "other-audio" {
   for (const [format, candidate] of Object.entries(RESPONSE_FORMAT_MIME)) {
-    if (candidate === mimeType) return format as SpeechResponseFormat;
+    if (candidate === mimeType && isSpeechResponseFormat(format)) return format;
   }
   return "other-audio";
 }

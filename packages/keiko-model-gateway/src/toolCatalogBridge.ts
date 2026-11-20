@@ -14,6 +14,7 @@ import {
   TOOL_CATALOG_LIMITS,
   toolArgumentLimits,
   type CatalogJsonObject,
+  type CatalogJsonValue,
   type ToolArgumentLimits,
   type ToolResultReason,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -287,6 +288,9 @@ export function retainMeasuredCatalogFailureUsage(error: unknown, usage: UsageMe
 function requireBridge(value: boolean, reason: ToolResultReason<"invalid">): asserts value {
   if (!value) throw new GatewayToolCatalogError(reason);
 }
+function isCatalogJsonObject(value: CatalogJsonValue): value is CatalogJsonObject {
+  return typeof value === "object" && value !== null && !isCatalogJsonArray(value);
+}
 // The fields the bridge reads from a request or a captured advertisement. Each is optional and
 // untyped, so every non-null object has this shape; dataField reads only own enumerable data
 // properties and leaves the value for the caller to check.
@@ -363,10 +367,7 @@ function capturedAdvertisement(
   const value = native
     ? captureCatalogJson(input, GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES)
     : captureCatalogEnvelope(input);
-  requireBridge(
-    typeof value === "object" && value !== null && !isCatalogJsonArray(value),
-    "projection-mismatch",
-  );
+  requireBridge(isCatalogJsonObject(value), "projection-mismatch");
   if (value.kind === "native") {
     requireBridge(isGatewayNativeToolAdvertisement(value), "projection-mismatch");
     return value;
@@ -655,17 +656,15 @@ function bindCall(
     }
     requireBridge(!isCodeModeProjection(normalizer), "unoffered-tool");
     const invocation = normalizer.bindAlias(call.name, call.arguments, now());
+    const boundArguments = invocation.arguments;
+    requireBridge(isCatalogJsonObject(boundArguments), "invalid-arguments");
     log.write(
       activityLogEvent(TOOL_CATALOG_CALL_BOUND_OPERATION, toolCatalogEnvelope(log, "info"), {
         projectionDigest: invocation.projectionDigest,
         toolCount: 1,
       }),
     );
-    return Object.freeze({
-      ...call,
-      arguments: invocation.arguments as Record<string, unknown>,
-      invocation,
-    });
+    return Object.freeze({ ...call, arguments: boundArguments, invocation });
   } catch (cause) {
     return reject(
       log,

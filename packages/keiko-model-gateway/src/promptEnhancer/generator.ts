@@ -1167,10 +1167,15 @@ function isProfileMetadataBound(plan: PromptEnhancementPlan): boolean {
   );
 }
 
+// The plan type pins restrictsAuthority to `true`, but a forged plan can carry any value at runtime.
+// Reading the posture through this wider view keeps the strict `=== true` check meaningful.
+interface ReceivedAuthorityRestriction {
+  readonly restrictsAuthority?: unknown;
+}
+
 function hasAuthorityRestriction(plan: PromptEnhancementPlan): boolean {
-  return (
-    (plan.safetyPosture as { readonly restrictsAuthority?: unknown }).restrictsAuthority === true
-  );
+  const posture: ReceivedAuthorityRestriction = plan.safetyPosture;
+  return posture.restrictsAuthority === true;
 }
 
 function isSafetyPostureBound(analysis: PromptTaskAnalysis, plan: PromptEnhancementPlan): boolean {

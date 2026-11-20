@@ -60,6 +60,7 @@ import {
 import {
   bindNormalizedToolCalls,
   carriedReasoning,
+  isFinishReason,
   normalizeChatResponse,
   reasoningOfChatPayload,
   reasoningText,
@@ -740,20 +741,11 @@ function buildStreamBody(
   };
 }
 
-const FINISH_REASONS: ReadonlySet<FinishReason> = new Set([
-  "stop",
-  "tool_calls",
-  "length",
-  "content_filter",
-  "error",
-  "cancelled",
-]);
-
 function firstStreamChoice(chunk: unknown): Record<string, unknown> | undefined {
   if (!isRecord(chunk) || !Array.isArray(chunk.choices)) {
     return undefined;
   }
-  const choices = chunk.choices as readonly unknown[];
+  const choices: readonly unknown[] = chunk.choices;
   const choice = choices[0];
   return isRecord(choice) ? choice : undefined;
 }
@@ -779,9 +771,7 @@ function reasoningFromChunk(chunk: unknown): string | undefined {
 function finishReasonFromChunk(chunk: unknown): FinishReason | undefined {
   const choice = firstStreamChoice(chunk);
   const raw = choice?.finish_reason;
-  return typeof raw === "string" && FINISH_REASONS.has(raw as FinishReason)
-    ? (raw as FinishReason)
-    : undefined;
+  return typeof raw === "string" && isFinishReason(raw) ? raw : undefined;
 }
 
 function nonNegativeCount(value: unknown): number {

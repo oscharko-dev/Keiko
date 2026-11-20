@@ -217,6 +217,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
 // A timer armed with more than 2^31 - 1 ms fires at once (setTimeout, AbortSignal.timeout), so a
 // larger request timeout would abort every call the moment it starts. A delay the gateway derives
 // instead of reading it from its config is held to the same ceiling where it is derived.
@@ -265,10 +269,10 @@ function optionalStringArray(
   if (value === undefined) {
     return fallback;
   }
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+  if (!isStringArray(value)) {
     throw new ConfigInvalidError(`${path} must be an array of strings`);
   }
-  return value as readonly string[];
+  return value;
 }
 
 function optionalNonNegativeInt(value: unknown, path: string, fallback: number): number {
@@ -520,11 +524,16 @@ export function apiKeyHeaderValue(headerName: string, apiKey: string): string {
   return apiKey;
 }
 
+function isAllowedMember<T extends string>(value: string, allowed: readonly T[]): value is T {
+  const names: readonly string[] = allowed;
+  return names.includes(value);
+}
+
 function requireEnum<T extends string>(value: unknown, path: string, allowed: readonly T[]): T {
-  if (typeof value !== "string" || !allowed.includes(value as T)) {
+  if (typeof value !== "string" || !isAllowedMember(value, allowed)) {
     throw new ConfigInvalidError(`${path} must be one of ${allowed.join(", ")}`);
   }
-  return value as T;
+  return value;
 }
 
 function assertKnownTokenAccountingKeys(value: Record<string, unknown>, path: string): void {
@@ -1468,10 +1477,10 @@ function requireNonNegativeIntStrict(value: unknown, path: string): number {
 }
 
 function requireStringArray(value: unknown, path: string): readonly string[] {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+  if (!isStringArray(value)) {
     throw new ConfigInvalidError(`${path} must be an array of strings`);
   }
-  return value as readonly string[];
+  return value;
 }
 
 function optionalReasoningEfforts(
@@ -1564,19 +1573,14 @@ const TOOL_CALLING_VERIFICATION_KEYS = new Set([
   "probe",
   "configurationFingerprint",
 ]);
-const TOOL_CALLING_VERIFICATION_STATUSES = new Set<ToolCallingVerification["status"]>([
-  "verified",
-  "unsupported",
-  "unverified",
-]);
+const TOOL_CALLING_VERIFICATION_STATUSES: ReadonlySet<string> = new Set<
+  ToolCallingVerification["status"]
+>(["verified", "unsupported", "unverified"]);
 
 function isToolCallingVerificationStatus(
   value: unknown,
 ): value is ToolCallingVerification["status"] {
-  return (
-    typeof value === "string" &&
-    TOOL_CALLING_VERIFICATION_STATUSES.has(value as ToolCallingVerification["status"])
-  );
+  return typeof value === "string" && TOOL_CALLING_VERIFICATION_STATUSES.has(value);
 }
 
 function requiredToolCallingVerification(value: unknown, path: string): Record<string, unknown> {
@@ -1912,6 +1916,10 @@ function requireNonNegativeInt(value: unknown, path: string): number {
   return requireNonNegativeIntStrict(value, path);
 }
 
+function isGroundingLimitKey(key: string): key is keyof GroundingLimits {
+  return Object.hasOwn(DEFAULT_GROUNDING_LIMITS, key);
+}
+
 function parseGroundingLimits(raw: unknown): GroundingLimits | undefined {
   if (!isRecord(raw) || raw.grounding === undefined) {
     return undefined;
@@ -1921,7 +1929,7 @@ function parseGroundingLimits(raw: unknown): GroundingLimits | undefined {
     throw new ConfigInvalidError("grounding must be an object");
   }
   const partial: { -readonly [K in keyof GroundingLimits]?: number } = {};
-  for (const key of Object.keys(DEFAULT_GROUNDING_LIMITS) as (keyof GroundingLimits)[]) {
+  for (const key of Object.keys(DEFAULT_GROUNDING_LIMITS).filter(isGroundingLimitKey)) {
     const value = block[key];
     if (value !== undefined) {
       // Reject non-integer / non-positive — resolveGroundingLimits silently coerces,
@@ -2042,6 +2050,10 @@ function parseFigmaConnectorConfig(raw: unknown): FigmaConnectorConfig | undefin
 // a bad branding value must degrade to Keiko's text-only attribution, not break config loading.
 const OWN_ASSESSMENT_POLICY_SET: ReadonlySet<string> = new Set(OWN_ASSESSMENT_POLICIES);
 
+function isOwnAssessmentPolicy(value: string): value is OwnAssessmentPolicy {
+  return OWN_ASSESSMENT_POLICY_SET.has(value);
+}
+
 // A governance setting: an explicit value outside the closed vocabulary fails the load, it is never
 // read as the permissive default.
 function parseGroundedAnswersConfig(raw: unknown): GroundedAnswersConfig | undefined {
@@ -2054,10 +2066,10 @@ function parseGroundedAnswersConfig(raw: unknown): GroundedAnswersConfig | undef
   }
   const policy = block.ownAssessment;
   if (policy === undefined) return {};
-  if (typeof policy !== "string" || !OWN_ASSESSMENT_POLICY_SET.has(policy)) {
+  if (typeof policy !== "string" || !isOwnAssessmentPolicy(policy)) {
     throw new ConfigInvalidError('groundedAnswers.ownAssessment must be "allowed" or "disabled"');
   }
-  return { ownAssessment: policy as OwnAssessmentPolicy };
+  return { ownAssessment: policy };
 }
 
 function parseGatewayBrandingConfig(raw: unknown): GatewayBrandingConfig | undefined {
