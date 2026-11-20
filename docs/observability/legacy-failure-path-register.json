@@ -8079,7 +8079,7 @@
     },
     {
       "path": "packages/keiko-workspace/src/discovery.ts",
-      "owner": "readWorkspaceFileBytesPrefixForInternalUse",
+      "owner": "readPrefixWithProof",
       "kind": "unregistered-catch",
       "count": 1
     },
