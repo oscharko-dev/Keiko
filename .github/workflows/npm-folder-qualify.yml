@@ -72,6 +72,7 @@ jobs:
           esac
           case "$version" in
             *[!0-9.]* ) echo "version must be x.y.z" >&2; exit 1 ;;
+            * ) ;;
           esac
           published=true
           if ! npm view "@oscharko-dev/keiko@$version" version --registry=https://registry.npmjs.org/ >/dev/null 2>&1; then
