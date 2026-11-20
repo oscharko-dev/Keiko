@@ -436,7 +436,10 @@ function useChatCreationLifetime(stateRef: { readonly current: ChatCreationAttem
   return mountedRef;
 }
 
-function useIdentityRevision(identity: object, retryFailedCreation: boolean): number {
+function useIdentityRevision(
+  identity: ChatCreationCoordinator,
+  retryFailedCreation: boolean,
+): number {
   const stateRef = useRef({ identity, revision: 0 });
   if (stateRef.current.identity !== identity) {
     // Catalog refreshes replace callbacks while a slow creation is still pending. Only a

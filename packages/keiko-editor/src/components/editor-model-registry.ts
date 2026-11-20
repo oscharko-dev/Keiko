@@ -7,6 +7,8 @@
  * structural and injectable so lifecycle, pressure, and diagnostics are testable without Monaco.
  */
 
+import type * as monaco from "monaco-editor";
+
 export interface RetainedEditorUri {
   toString(): string;
 }
@@ -25,7 +27,7 @@ export interface RetainedEditorModel {
     beforeCursorState: null,
     edits: { readonly range: RetainedEditorModelRange; readonly text: string }[],
     cursorStateComputer: () => null,
-  ): unknown;
+  ): void;
   pushStackElement?(): void;
 }
 
@@ -47,7 +49,7 @@ export interface UndoPreservingWritableModel {
     beforeCursorState: null,
     edits: { readonly range: RetainedEditorModelRange; readonly text: string }[],
     cursorStateComputer: () => null,
-  ): unknown;
+  ): void;
   pushStackElement?(): void;
   getEOL?(): string;
   // Monaco's `EndOfLineSequence`: 0 is LF, 1 is CRLF.
@@ -153,8 +155,8 @@ export interface RetainedEditorModelNamespace {
 export interface RetainedEditorModelEditor {
   getModel?(): RetainedEditorModel | null;
   setModel?(model: RetainedEditorModel | null): void;
-  saveViewState(): unknown;
-  restoreViewState(state: unknown): void;
+  saveViewState(): monaco.editor.ICodeEditorViewState | null;
+  restoreViewState(state: monaco.editor.ICodeEditorViewState | null): void;
 }
 
 export interface EditorModelProtection {
@@ -222,7 +224,7 @@ interface RegistryEntry {
   readonly rootKey: string;
   readonly uriString: string;
   readonly model: RetainedEditorModel;
-  readonly viewStates: Map<string, unknown>;
+  readonly viewStates: Map<string, monaco.editor.ICodeEditorViewState>;
   attachmentCount: number;
   estimatedBytes: number;
   lastAccess: number;
@@ -445,7 +447,7 @@ export class EditorModelRegistry {
       rootKey: input.rootKey,
       uriString: input.uri.toString(),
       model,
-      viewStates: new Map<string, unknown>(),
+      viewStates: new Map<string, monaco.editor.ICodeEditorViewState>(),
       attachmentCount: 0,
       estimatedBytes: estimateEditorModelBytes(input),
       lastAccess: this.nextAccess(),

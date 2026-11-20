@@ -119,6 +119,9 @@ export function portableInstallRootIdentitySha256(path: string): string {
   return sha256Text(realpathSync(path));
 }
 
+// Reads the registration file and returns the registration it records, or `undefined` when the
+// file holds no recognized-schema record.
+//
 // #KEIKO-0333: fail closed to `undefined` on a truncated / non-JSON registration file
 // so a crash mid-write leaves callers with "no registration recorded" instead of a
 // thrown SyntaxError. Matches launcher-state.ts loadState's behavior for the sibling
@@ -129,14 +132,18 @@ export function portableInstallRootIdentitySha256(path: string): string {
 // registration may still exist and be authoritative. Callers must see those failures
 // so they do not skip managed-update / cleanup behaviour or overwrite retained
 // installation attestation while the actual storage failure stays hidden.
-function readJson(path: string): unknown {
+function readRecordedRegistration(path: string): PortableInstallRegistration | undefined {
   const raw = readFileSync(path, "utf8");
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as unknown;
+    parsed = JSON.parse(raw) as unknown;
   } catch (error) {
     if (error instanceof SyntaxError) return undefined;
     throw error;
   }
+  if (isManagedRegistrationRecord(parsed)) return managedRegistrationFromRecord(parsed);
+  if (isFailedRegistrationRecord(parsed)) return failedRegistrationFromRecord(parsed);
+  return undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -375,15 +382,11 @@ export function readPortableInstallRegistration(
 ): PortableInstallRegistration | undefined {
   if (!hasPortableInstallRegistration(stateDir)) return undefined;
   const path = join(stateDir, REGISTRATION_FILE);
-  // #KEIKO-0333: readJson returns undefined for a truncated / non-JSON file so
-  // downstream callers observe "no registration recorded" instead of a thrown
+  // #KEIKO-0333: readRecordedRegistration returns undefined for a truncated / non-JSON file
+  // so downstream callers observe "no registration recorded" instead of a thrown
   // SyntaxError. That matches launcher-state.ts's fail-closed-to-empty semantics
   // for the sibling state file.
-  const raw = readJson(path);
-  if (raw === undefined) return undefined;
-  if (isManagedRegistrationRecord(raw)) return managedRegistrationFromRecord(raw);
-  if (isFailedRegistrationRecord(raw)) return failedRegistrationFromRecord(raw);
-  return undefined;
+  return readRecordedRegistration(path);
 }
 
 // PR-review follow-up (Codex threads 3771011311 + 3771684322 + 3771815001): destructive
@@ -406,9 +409,7 @@ export function readPortableInstallRegistration(
 export function isPortableInstallRegistrationCorrupt(stateDir: string): boolean {
   if (!hasPortableInstallRegistration(stateDir)) return false;
   const path = join(stateDir, REGISTRATION_FILE);
-  const raw = readJson(path);
-  if (raw === undefined) return true;
-  return !isManagedRegistrationRecord(raw) && !isFailedRegistrationRecord(raw);
+  return readRecordedRegistration(path) === undefined;
 }
 
 export function readManagedRegistration(stateDir: string): ManagedSetupRegistration | undefined {

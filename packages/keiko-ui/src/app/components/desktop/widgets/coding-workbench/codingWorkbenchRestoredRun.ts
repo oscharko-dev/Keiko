@@ -98,7 +98,11 @@ function utf8Bytes(text: string): number {
   return utf8.encode(text).length;
 }
 
-function serializedBytes(value: object): number {
+// The contract's measures: a message, a turn and the whole feed are bounded by their serialized
+// UTF-8 size.
+function serializedBytes(
+  value: CodingSafeActivityMessage | CodingSafeActivityTurn | AvailableCodingSafeActivityFeed,
+): number {
   return utf8Bytes(JSON.stringify(value));
 }
 

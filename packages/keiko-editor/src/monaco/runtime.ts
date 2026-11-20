@@ -107,7 +107,7 @@ function isConstructor(value: unknown): boolean {
     return false;
   }
   try {
-    Reflect.construct(Object, [], value as new (...args: never[]) => unknown);
+    Reflect.construct(Object, [], value);
     return true;
   } catch {
     return false;

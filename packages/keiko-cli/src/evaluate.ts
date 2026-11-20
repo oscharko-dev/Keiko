@@ -137,27 +137,28 @@ function selectFixtures(parsed: EvaluateArgs, evaluations: EvaluationsModule): S
   return { fixtures: evaluations.fixturesForSuite(suite) };
 }
 
-// In live mode, deep-redact the scorecard before serialization so that any model content that
-// leaked into workflow report fields (e.g. fixture reasons) is scrubbed by the same audit
-// redactor applied at evidence-persist time. Offline scorecard is static harness text — safe as-is.
-function redactedScorecard(
+// Serializes the scorecard as the JSON text written to stdout and to --output. In live mode, the
+// scorecard is deep-redacted before serialization so that any model content that leaked into
+// workflow report fields (e.g. fixture reasons) is scrubbed by the same audit redactor applied at
+// evidence-persist time. The offline scorecard is static harness text and is safe as-is.
+function serializedScorecard(
   scorecard: EvalScorecard,
   live: boolean,
   env: EnvSource,
   evidence: EvidenceModule,
-): unknown {
+): string {
   if (!live) {
-    return scorecard;
+    return `${JSON.stringify(scorecard, null, 2)}\n`;
   }
   const redactFn = evidence.createAuditRedactor(
     { additionalSecrets: keikoApiKeySecretValues(env) },
     env,
   );
-  return evidence.deepRedactStrings(scorecard, redactFn);
+  return `${JSON.stringify(evidence.deepRedactStrings(scorecard, redactFn), null, 2)}\n`;
 }
 
-function writeScorecard(path: string, output: unknown): void {
-  writeFileSync(path, `${JSON.stringify(output, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+function writeScorecard(path: string, text: string): void {
+  writeFileSync(path, text, { encoding: "utf8", flag: "wx" });
 }
 
 function emit(
@@ -167,11 +168,11 @@ function emit(
   env: EnvSource,
   modules: { readonly evaluations: EvaluationsModule; readonly evidence: EvidenceModule },
 ): void {
-  const output = redactedScorecard(scorecard, parsed.live, env, modules.evidence);
+  const output = serializedScorecard(scorecard, parsed.live, env, modules.evidence);
   // Emit --json to stdout BEFORE attempting the file write so that a file-already-exists
   // error (EEXIST from writeScorecard) does not silently suppress the JSON output.
   if (parsed.json) {
-    io.out(`${JSON.stringify(output, null, 2)}\n`);
+    io.out(output);
   }
   if (parsed.output !== undefined) {
     writeScorecard(parsed.output, output);

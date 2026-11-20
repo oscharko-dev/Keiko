@@ -29,11 +29,7 @@ import {
 import type { EditorThemeVariant } from "../monaco/theme.js";
 import type { PatchPreviewFile, PatchPreviewFileStatus } from "../patch-preview.js";
 import { buildDiffEditorOptions } from "./diff-editor-options.js";
-import {
-  wireDiffEditorOnMount,
-  type DiffMountController,
-  type MountDiffMonaco,
-} from "./diff-mount.js";
+import { wireDiffEditorOnMount, type DiffMountController } from "./diff-mount.js";
 import { reapplyEditorTheme, type MountMonaco } from "./on-mount.js";
 import {
   deriveDiffSummary,
@@ -470,8 +466,10 @@ function useDiffController(
     (editor, monaco): void => {
       controllerRef.current?.dispose();
       // The live `monaco` namespace surfaces as error-typed to the typed-lint program; narrow it at
-      // this single seam to the minimal structural view the mount wiring consumes (cf. KeikoCodeEditor).
-      const mountMonaco = monaco as unknown as MountDiffMonaco;
+      // this single seam to the structural view the mount wiring consumes (cf. use-editor-handlers.ts's
+      // initializeRuntimeMountRefs, which casts the same live namespace the same way for the code
+      // editor). `MountMonaco` contains the `MountDiffMonaco` theme registrar the diff wiring needs.
+      const mountMonaco = monaco as MountMonaco;
       controllerRef.current = wireDiffEditorOnMount({
         editor,
         monaco: mountMonaco,
@@ -479,10 +477,8 @@ function useDiffController(
         onThemeError,
       });
       // Retain the live monaco/container handles so a later themeVariant change (useDiffThemeReapply)
-      // can re-register the theme through the SAME editor instance instead of remounting (cf.
-      // use-editor-handlers.ts's initializeRuntimeMountRefs, which casts the same live namespace the
-      // same way for the code editor).
-      monacoRef.current = monaco as MountMonaco;
+      // can re-register the theme through the SAME editor instance instead of remounting.
+      monacoRef.current = mountMonaco;
       containerRef.current = editor.getContainerDomNode();
     },
     [themeVariant, onThemeError],

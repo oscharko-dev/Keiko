@@ -509,7 +509,7 @@ export interface MountEditor {
       beforeCursorState: monaco.Selection[] | null,
       edits: { readonly range: MonacoRange; readonly text: string }[],
       cursorStateComputer: () => monaco.Selection[] | null,
-    ): unknown;
+    ): void;
     pushStackElement?(): void;
     getEOL?(): string;
     pushEOL?(eol: 0 | 1): void;
@@ -523,8 +523,8 @@ export interface MountEditor {
     isDisposed?(): boolean;
   } | null;
   getContainerDomNode(): HTMLElement;
-  saveViewState(): unknown;
-  restoreViewState(state: unknown): void;
+  saveViewState(): monaco.editor.ICodeEditorViewState | null;
+  restoreViewState(state: monaco.editor.ICodeEditorViewState | null): void;
 }
 
 interface DisposableLike {

@@ -101,7 +101,7 @@ function alertScript(message: string): string {
 }
 
 interface DetachedAlertChild {
-  on(event: "error", listener: (error: Error) => void): unknown;
+  on(event: "error", listener: (error: Error) => void): void;
   unref(): void;
 }
 
