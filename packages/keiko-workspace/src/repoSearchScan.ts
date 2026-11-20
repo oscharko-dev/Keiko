@@ -502,30 +502,41 @@ function contentScoresForOrdering(
   return scores.size === 0 ? undefined : scores;
 }
 
-function resolveGatherInputs(
-  scope: ScopeShape,
-  queryOrLimits: RetrievalQuery | LimitsShape,
-  limitsOrFs: LimitsShape | WorkspaceFs,
-  fsOrPolicy?: WorkspaceFs | SearchPolicy,
-  policy?: SearchPolicy,
-  candidatePathPredicate?: (scopePath: string) => boolean,
-  executionControl?: StructuralExecutionControl,
-): GatherInputs {
-  if (isRetrievalQuery(queryOrLimits)) {
+type LegacyGatherArgs = readonly [limits: LimitsShape, fs: WorkspaceFs];
+type QueryGatherArgs = readonly [
+  query: RetrievalQuery,
+  limits: LimitsShape,
+  fs: WorkspaceFs,
+  policy?: SearchPolicy | undefined,
+  candidatePathPredicate?: ((scopePath: string) => boolean) | undefined,
+  executionControl?: StructuralExecutionControl | undefined,
+];
+type GatherArgs = LegacyGatherArgs | QueryGatherArgs;
+
+// LimitsShape has neither `kind` nor `text`, so a retrieval query in the first position
+// identifies the query overload.
+function isQueryGatherArgs(args: GatherArgs): args is QueryGatherArgs {
+  return isRetrievalQuery(args[0]);
+}
+
+function resolveGatherInputs(scope: ScopeShape, args: GatherArgs): GatherInputs {
+  if (isQueryGatherArgs(args)) {
+    const [query, limits, fs, policy, candidatePathPredicate, executionControl] = args;
     return {
-      query: queryOrLimits,
-      limits: limitsOrFs as LimitsShape,
-      fs: fsOrPolicy as WorkspaceFs,
-      policy: policy ?? resolveWorkspaceSearchPolicy(scope, fsOrPolicy as WorkspaceFs, undefined),
+      query,
+      limits,
+      fs,
+      policy: policy ?? resolveWorkspaceSearchPolicy(scope, fs, undefined),
       prescoreContent: true,
       ...(candidatePathPredicate === undefined ? {} : { candidatePathPredicate }),
       ...(executionControl === undefined ? {} : { executionControl }),
     };
   }
+  const [limits, fs] = args;
   return {
     query: DEFAULT_GATHER_QUERY,
-    limits: queryOrLimits,
-    fs: limitsOrFs as WorkspaceFs,
+    limits,
+    fs,
     policy: legacyDiscoveryPolicy(scope.relativePaths.length > 0),
     prescoreContent: false,
   };
@@ -557,25 +568,8 @@ export function gatherCandidates(
   candidatePathPredicate?: (scopePath: string) => boolean,
   executionControl?: StructuralExecutionControl,
 ): CandidateSet;
-export function gatherCandidates(
-  scope: ScopeShape,
-  queryOrLimits: RetrievalQuery | LimitsShape,
-  limitsOrFs: LimitsShape | WorkspaceFs,
-  fsOrPolicy?: WorkspaceFs | SearchPolicy,
-  policy?: SearchPolicy,
-  candidatePathPredicate?: (scopePath: string) => boolean,
-  executionControl?: StructuralExecutionControl,
-): CandidateSet {
-  const inputs = resolveGatherInputs(
-    scope,
-    queryOrLimits,
-    limitsOrFs,
-    fsOrPolicy,
-    policy,
-    candidatePathPredicate,
-    executionControl,
-  );
-  return gatherCandidatesFromInputs(scope, inputs);
+export function gatherCandidates(scope: ScopeShape, ...args: GatherArgs): CandidateSet {
+  return gatherCandidatesFromInputs(scope, resolveGatherInputs(scope, args));
 }
 
 export function gatherCandidatesWithoutContentPrescore(
@@ -866,7 +860,7 @@ export function isIoError(err: unknown): boolean {
   if (err === null || typeof err !== "object" || !("code" in err)) {
     return false;
   }
-  const { code } = err as Record<"code", unknown>;
+  const { code } = err;
   return typeof code === "string" && !isHardTrustDenial(err, code);
 }
 

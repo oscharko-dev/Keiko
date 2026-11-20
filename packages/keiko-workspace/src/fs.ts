@@ -549,12 +549,7 @@ function descriptorReadLength(size: bigint, cap: number): number {
 }
 
 function isSymbolicLinkLoop(error: unknown): boolean {
-  return (
-    error !== null &&
-    typeof error === "object" &&
-    "code" in error &&
-    (error as { readonly code?: unknown }).code === "ELOOP"
-  );
+  return error !== null && typeof error === "object" && "code" in error && error.code === "ELOOP";
 }
 
 function openNoFollow(absolutePath: string): number {

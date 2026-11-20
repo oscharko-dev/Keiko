@@ -242,6 +242,19 @@ describe("buildImportGraph", () => {
     });
   });
 
+  it("ignores tsconfig paths that are an array instead of an alias object", async () => {
+    const { scope, fs } = makeScope({
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { baseUrl: ".", paths: [["src/lib.ts"]] },
+      }),
+      "src/a.ts": 'import { lib } from "0";',
+      "src/lib.ts": "export const lib = 1;",
+    });
+    const graph = await buildImportGraph(scope, DEFAULT_SEARCH_LIMITS, fs);
+    expect(graph.edges.some((edge) => edge.resolutionKind === "tsconfig-path")).toBe(false);
+    expect(graph.edges.some((edge) => edge.targetPath === "src/lib.ts")).toBe(false);
+  });
+
   it("reserves tsconfig metadata inside the structural file ceiling", async () => {
     const { scope, fs } = makeScope({
       "tsconfig.json": JSON.stringify({

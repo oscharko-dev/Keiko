@@ -35,6 +35,11 @@ export interface SymbolGraphRecordStableIdInput {
   readonly enclosingSymbol?: string | undefined;
 }
 
+// JsonObject has no array members, so an array value is always the readonly JsonValue[] member.
+function isJsonArray(value: JsonObject | readonly JsonValue[]): value is readonly JsonValue[] {
+  return Array.isArray(value);
+}
+
 function canonicalize(value: JsonValue | undefined): string {
   if (value === undefined) {
     return "null";
@@ -42,11 +47,10 @@ function canonicalize(value: JsonValue | undefined): string {
   if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
   }
-  if (Array.isArray(value)) {
-    const items = value as readonly JsonValue[];
-    return `[${items.map((item) => canonicalize(item)).join(",")}]`;
+  if (isJsonArray(value)) {
+    return `[${value.map((item) => canonicalize(item)).join(",")}]`;
   }
-  const entries = Object.entries(value as JsonObject)
+  const entries = Object.entries(value)
     .filter((pair): pair is [string, JsonValue] => pair[1] !== undefined)
     .sort((a, b) => (a[0] < b[0] ? -1 : 1));
   const body = entries.map(([key, val]) => `${JSON.stringify(key)}:${canonicalize(val)}`).join(",");

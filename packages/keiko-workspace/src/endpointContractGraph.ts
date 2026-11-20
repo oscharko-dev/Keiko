@@ -40,7 +40,7 @@ interface EndpointBuildState {
   filesScanned: number;
 }
 
-const HTTP_METHODS = new Set<EndpointHttpMethod>(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+const HTTP_METHODS: readonly EndpointHttpMethod[] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 const SPRING_METHODS: Readonly<Record<string, EndpointHttpMethod>> = {
   GetMapping: "GET",
   PostMapping: "POST",
@@ -122,9 +122,13 @@ function firstStringLiteral(args: string | undefined): string {
   return match?.[2] ?? "/";
 }
 
+function endpointHttpMethod(value: string | undefined): EndpointHttpMethod | undefined {
+  return HTTP_METHODS.find((method) => method === value);
+}
+
 function requestMappingMethod(args: string | undefined): EndpointHttpMethod {
   const method = /RequestMethod\.(GET|POST|PUT|PATCH|DELETE)\b/u.exec(args ?? "")?.[1];
-  return HTTP_METHODS.has(method as EndpointHttpMethod) ? (method as EndpointHttpMethod) : "GET";
+  return endpointHttpMethod(method) ?? "GET";
 }
 
 function springMethod(annotation: string, args: string | undefined): EndpointHttpMethod {
@@ -271,9 +275,7 @@ function extractJava(file: SourceFile, state: EndpointBuildState): void {
 
 function methodFromOptions(options: string | undefined): EndpointHttpMethod {
   const raw = /\bmethod\s*:\s*["'](GET|POST|PUT|PATCH|DELETE)["']/iu.exec(options ?? "")?.[1];
-  return HTTP_METHODS.has(raw?.toUpperCase() as EndpointHttpMethod)
-    ? (raw?.toUpperCase() as EndpointHttpMethod)
-    : "GET";
+  return endpointHttpMethod(raw?.toUpperCase()) ?? "GET";
 }
 
 function addClientCall(
@@ -316,7 +318,7 @@ function extractAxiosCalls(file: SourceFile, state: EndpointBuildState): void {
         state,
         file,
         "axios",
-        (prefix[1] ?? "get").toUpperCase() as EndpointHttpMethod,
+        endpointHttpMethod((prefix[1] ?? "get").toUpperCase()) ?? "GET",
         literalMatch[0],
         lineNumberOf(file.text, prefix.index),
         prefix[2],
@@ -355,8 +357,8 @@ function extractConfiguredServerRoutes(file: SourceFile, state: EndpointBuildSta
     lines.map((line) => line.structural).join("\n"),
   );
   for (const declaration of declarations) {
-    const method = declaration.method.toUpperCase() as EndpointHttpMethod;
-    if (!HTTP_METHODS.has(method)) continue;
+    const method = endpointHttpMethod(declaration.method.toUpperCase());
+    if (method === undefined) continue;
     state.routes.push({
       stableId: hashEndpointContractId("ec-route", [
         method,
