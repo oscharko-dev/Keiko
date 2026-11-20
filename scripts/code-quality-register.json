@@ -4445,10 +4445,9 @@
       "anti-slop/require-safety-comment-for-type-assertion": 2
     },
     "packages/keiko-local-knowledge/src/testing.ts": {
-      "anti-slop/no-chained-type-assertions": 1,
       "anti-slop/no-conditional-empty-object-spread": 1,
       "anti-slop/no-known-value-widening": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 7
+      "anti-slop/require-safety-comment-for-type-assertion": 5
     },
     "packages/keiko-local-knowledge/src/yauzl-version-consistency.test.ts": {
       "anti-slop/no-runtime-typeof": 1,
