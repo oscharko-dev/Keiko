@@ -2004,9 +2004,8 @@ function loadWindowsPortableApproval() {
     { cwd: repoRoot, encoding: "utf8" },
   );
   if (result.status !== 0) {
-    fail(
-      `could not read the Windows helper approval from the built server: ${(result.stderr ?? "").trim() || `exit ${String(result.status)}`}`,
-    );
+    const detail = (result.stderr ?? "").trim() || `exit ${String(result.status)}`;
+    fail(`could not read the Windows helper approval from the built server: ${detail}`);
   }
   return JSON.parse(result.stdout);
 }
