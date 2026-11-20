@@ -23,6 +23,7 @@ import {
   readWorkspaceFileBytesForTextInspection,
   type InternalWorkspaceTextByteRead,
   readWorkspaceFileTextForInternalUse,
+  confirmWalkAdmittedFile,
   takeWalkObservedFile,
   type WalkAdmittedFile,
   type WorkspaceContentLane,
@@ -1639,15 +1640,41 @@ async function streamingCachedMatches(
     return undefined;
   const hit = await cache.lookup(policy.metadata);
   if (hit === undefined || abortScanFile(runner, state)) return undefined;
-  const current = filePolicyOmission(runner, file);
-  if (
-    current.metadata === undefined ||
-    !isWorkspaceIndexFileMetadataCurrent(policy.metadata, current.metadata)
-  )
-    return undefined;
+  if (!isFilePolicyStillCurrent(runner, file, policy, policy.metadata)) return undefined;
   await cache.observeReuse(policy.metadata, hit.kind);
   if (abortScanFile(runner, state)) return undefined;
   return streamingHitOutcome(runner, file, state, candidates, order, hit);
+}
+
+// A stored result stands in for a read only while the file is still the one its metadata names.
+// The walk-proven file is confirmed with one fresh no-follow stat of its proven canonical path
+// instead of a second realpath and stat (#4438). Any difference, and every file without a walk
+// proof, takes the full containment proof again, so a changed or redirected file still misses.
+function isFilePolicyStillCurrent(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  policy: ReadableFilePolicy,
+  metadata: WorkspaceIndexDiscoveredFile,
+): boolean {
+  const confirmed =
+    policy.admitted === undefined ? undefined : confirmWalkAdmittedFile(runner.fs, policy.admitted);
+  if (
+    confirmed !== undefined &&
+    namesStoredMetadata(admittedFilePolicy(runner, file, confirmed.path, confirmed.stat), metadata)
+  ) {
+    return true;
+  }
+  return namesStoredMetadata(filePolicyOmission(runner, file), metadata);
+}
+
+function namesStoredMetadata(
+  current: ReadableFilePolicy,
+  metadata: WorkspaceIndexDiscoveredFile,
+): boolean {
+  return (
+    current.metadata !== undefined &&
+    isWorkspaceIndexFileMetadataCurrent(metadata, current.metadata)
+  );
 }
 
 // #4457: stored lane text stands in for exactly the text the redacting read would return, so

@@ -1364,7 +1364,8 @@ function resolvePrefixReadableWorkspaceFile(
 
 // Confirms a walk proof with one fresh no-follow stat immediately before the read. A file whose
 // identity, size or timestamps moved since the walk is not confirmed and is proven afresh.
-function confirmWalkAdmittedFile(
+/** Internal: confirm a containment proof with one fresh no-follow stat; undefined on any change. */
+export function confirmWalkAdmittedFile(
   fs: WorkspaceFs,
   admitted: WalkAdmittedFile,
 ): WalkAdmittedFile | undefined {
@@ -1441,6 +1442,22 @@ export async function readWorkspaceFileBytesPrefixForInternalUse(
   fs: WorkspaceFs,
   admitted?: WalkAdmittedFile,
 ): Promise<InternalWorkspaceByteRead> {
+  return (await readPrefixWithProof(workspace, relPath, maxBytes, fs, admitted)).read;
+}
+
+interface ProvenPrefixRead {
+  readonly read: InternalWorkspaceByteRead;
+  // The canonical path and stat that postReadStat re-proved immediately after this read.
+  readonly proof: WalkAdmittedFile;
+}
+
+async function readPrefixWithProof(
+  workspace: WorkspaceInfo,
+  relPath: string,
+  maxBytes: number,
+  fs: WorkspaceFs,
+  admitted: WalkAdmittedFile | undefined,
+): Promise<ProvenPrefixRead> {
   const target =
     walkAdmittedReadableFile(workspace, relPath, admitted, fs) ??
     resolvePrefixReadableWorkspaceFile(workspace, relPath, maxBytes, fs);
@@ -1464,7 +1481,15 @@ export async function readWorkspaceFileBytesPrefixForInternalUse(
       target.normalizedRel,
     );
   }
-  return { bytes, stat, complete: bytes.byteLength === stat.size };
+  return {
+    read: { bytes, stat, complete: bytes.byteLength === stat.size },
+    proof: {
+      path: target.resolvedPath,
+      realBase: target.realBase,
+      realRelative: target.realRelative,
+      stat,
+    },
+  };
 }
 
 export interface InternalWorkspaceTextByteRead extends InternalWorkspaceByteRead {
@@ -1479,17 +1504,27 @@ export async function readWorkspaceFileBytesForTextInspection(
   fs: WorkspaceFs,
   admitted?: WalkAdmittedFile,
 ): Promise<InternalWorkspaceTextByteRead> {
-  const head = await readWorkspaceFileBytesPrefixForInternalUse(
+  const probe = await readPrefixWithProof(
     workspace,
     relPath,
     Math.min(maxBytes, DEFAULT_BINARY_PROBE.maxProbeBytes),
     fs,
     admitted,
   );
+  const head = probe.read;
   // Keep size exclusions authoritative even if an oversized file also has a binary header.
   const binary = head.stat.size <= maxBytes && looksBinary(head.bytes);
   if (head.complete || head.stat.size > maxBytes || binary) return { ...head, binary };
-  const full = await readWorkspaceFileBytesPrefixForInternalUse(workspace, relPath, maxBytes, fs);
+  // The head read's post-read check re-proved the canonical path; that proof replaces the full
+  // read's pre-read resolution and is confirmed with one fresh no-follow stat (#4438). Any change
+  // falls back to full resolution, and the full read keeps its own descriptor and post-read checks.
+  const full = await readWorkspaceFileBytesPrefixForInternalUse(
+    workspace,
+    relPath,
+    maxBytes,
+    fs,
+    probe.proof,
+  );
   if (!sameFileSnapshot(head.stat, full.stat)) {
     throw new WorkspaceReadError(`file changed during text inspection: ${relPath}`, relPath);
   }
