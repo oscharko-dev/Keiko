@@ -524,6 +524,21 @@ describe("registerKeikoDiagnostics — degradation and lifecycle", () => {
     expect(resolver.calls[1]?.language).toBe("javascript");
   });
 
+  it("clears the previous language's markers when the bound model switches to an ineligible language", async () => {
+    const model = buildModel();
+    const editor = buildEditor(model.model);
+    const onOverviewMarkers = vi.fn();
+    const { markers, resolver, scheduler } = register(editor, { onOverviewMarkers });
+    resolver.calls[0]?.settle([diagnostic()]);
+    await tick();
+    expect(markers.calls.at(-1)?.markers).toHaveLength(1);
+    model.setLanguage("python");
+    model.edit("print(1)");
+    scheduler.flush();
+    expect(markers.calls.at(-1)).toMatchObject({ model: model.model, markers: [] });
+    expect(onOverviewMarkers).toHaveBeenLastCalledWith([]);
+  });
+
   it("does nothing when the editor has no model", () => {
     const editor = buildEditor(null);
     const { markers, resolver } = register(editor);

@@ -299,9 +299,11 @@ function isStale(
 function runDiagnostics(rt: DiagnosticsRuntime, model: MonacoDiagnosticsModel): void {
   abortInFlight(rt);
   // Monaco can switch a bound model's language in place; a run for a language that is no longer
-  // eligible sends no request.
+  // eligible sends no request and clears the previous language's markers, as bindModel does.
   const language = eligibleLanguage(rt, model);
   if (language === undefined) {
+    rt.args.markers.setModelMarkers(model, rt.args.owner, []);
+    rt.args.onOverviewMarkers?.([]);
     return;
   }
   const versionBefore = model.getVersionId();
