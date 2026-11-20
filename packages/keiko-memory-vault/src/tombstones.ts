@@ -22,7 +22,14 @@ import type {
   MemoryTombstonePage,
 } from "./types.js";
 import type { MemoryContentCipher } from "./cipher.js";
-import { cachedPrepare } from "./statements.js";
+import {
+  blobColumn,
+  cachedPrepare,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+  type VaultSqlRow,
+} from "./statements.js";
 import { sanitizeMemoryTombstoneReason } from "./tombstone-reason.js";
 import { BYTES_PER_FLOAT32, decodeVectorLE, encodeVectorLE } from "./embeddings.js";
 
@@ -38,7 +45,22 @@ interface TombstoneRow {
   readonly reviewer_id: string | null;
   readonly original_status: string | null;
   readonly reason: string | null;
-  readonly body_embedding: Uint8Array | null;
+}
+
+function readTombstoneRow(row: VaultSqlRow): TombstoneRow {
+  return {
+    id: textColumn(row, "id"),
+    memory_id: textColumn(row, "memory_id"),
+    scope_kind: textColumn(row, "scope_kind"),
+    scope_coordinate: textColumn(row, "scope_coordinate"),
+    type: textColumn(row, "type"),
+    forgotten_at: numberColumn(row, "forgotten_at"),
+    forgetter_surface: textColumn(row, "forgetter_surface"),
+    body_hash: nullableTextColumn(row, "body_hash"),
+    reviewer_id: nullableTextColumn(row, "reviewer_id"),
+    original_status: nullableTextColumn(row, "original_status"),
+    reason: nullableTextColumn(row, "reason"),
+  };
 }
 
 const INSERT_SQL = `
@@ -169,6 +191,14 @@ interface TombstoneVectorRow {
   readonly body_embedding: Uint8Array;
 }
 
+function readTombstoneVectorRow(row: VaultSqlRow): TombstoneVectorRow {
+  return {
+    id: textColumn(row, "id"),
+    forgotten_at: numberColumn(row, "forgotten_at"),
+    body_embedding: blobColumn(row, "body_embedding"),
+  };
+}
+
 const SEMANTIC_VECTOR_PAGE_SIZE = 200;
 
 function vectorPageRows(
@@ -179,20 +209,20 @@ function vectorPageRows(
   const scopeKind = scopeKindOf(scope);
   const coordinate = scopeCoordinateOf(scope);
   if (after === undefined) {
-    return cachedPrepare(db, LIST_FORGET_VECTOR_PAGE_BY_SCOPE_SQL).all(
+    return cachedPrepare(db, LIST_FORGET_VECTOR_PAGE_BY_SCOPE_SQL)
+      .all(scopeKind, coordinate, SEMANTIC_VECTOR_PAGE_SIZE)
+      .map(readTombstoneVectorRow);
+  }
+  return cachedPrepare(db, LIST_FORGET_VECTOR_PAGE_AFTER_BY_SCOPE_SQL)
+    .all(
       scopeKind,
       coordinate,
+      after.forgottenAt,
+      after.forgottenAt,
+      after.id,
       SEMANTIC_VECTOR_PAGE_SIZE,
-    ) as unknown as readonly TombstoneVectorRow[];
-  }
-  return cachedPrepare(db, LIST_FORGET_VECTOR_PAGE_AFTER_BY_SCOPE_SQL).all(
-    scopeKind,
-    coordinate,
-    after.forgottenAt,
-    after.forgottenAt,
-    after.id,
-    SEMANTIC_VECTOR_PAGE_SIZE,
-  ) as unknown as readonly TombstoneVectorRow[];
+    )
+    .map(readTombstoneVectorRow);
 }
 
 function cosineAtLeast(a: Float32Array, b: Float32Array, threshold: number): boolean {
@@ -237,11 +267,9 @@ export function listTombstonesByScopeRows(
   scope: MemoryScope,
   cipher: MemoryContentCipher,
 ): readonly MemoryTombstone[] {
-  const rows = cachedPrepare(db, LIST_BY_SCOPE_SQL).all(
-    scopeKindOf(scope),
-    scopeCoordinateOf(scope),
-  ) as unknown as readonly TombstoneRow[];
-  return rows.map((row) => rowToTombstone(row, cipher));
+  return cachedPrepare(db, LIST_BY_SCOPE_SQL)
+    .all(scopeKindOf(scope), scopeCoordinateOf(scope))
+    .map((row) => rowToTombstone(readTombstoneRow(row), cipher));
 }
 
 function scopePredicate(scopes: readonly MemoryScope[]): string {
@@ -316,17 +344,14 @@ function ledgerRowsForScopes(
 ): readonly TombstoneRow[] {
   const cursorBindings =
     after === undefined ? [] : [after.forgottenAt, after.forgottenAt, after.id];
-  return cachedPrepare(db, ledgerPageSql(scopes, after !== undefined)).all(
-    ...scopeBindings(scopes),
-    ...cursorBindings,
-    limit,
-  ) as unknown as readonly TombstoneRow[];
+  return cachedPrepare(db, ledgerPageSql(scopes, after !== undefined))
+    .all(...scopeBindings(scopes), ...cursorBindings, limit)
+    .map(readTombstoneRow);
 }
 
 function ledgerCountForScopes(db: DatabaseSync, scopes: readonly MemoryScope[]): number {
-  const row = cachedPrepare(db, ledgerCountSql(scopes)).get(...scopeBindings(scopes)) as
-    { readonly count: number } | undefined;
-  return row?.count ?? 0;
+  const row = cachedPrepare(db, ledgerCountSql(scopes)).get(...scopeBindings(scopes));
+  return row === undefined ? 0 : numberColumn(row, "count");
 }
 
 export function tombstoneLedgerCursorBelongsToScopes(
@@ -380,17 +405,14 @@ export function selectForgetSuppressionBodyHashPresence(
   currentBodyHash: string,
   legacyBodyHash: string,
 ): { readonly current: boolean; readonly legacy: boolean } {
-  const rows = cachedPrepare(db, SELECT_SUPPRESSION_BODY_HASHES_BY_SCOPE_SQL).all(
-    scopeKindOf(scope),
-    scopeCoordinateOf(scope),
-    currentBodyHash,
-    legacyBodyHash,
-  ) as unknown as readonly { readonly body_hash: string | null }[];
+  const bodyHashes = cachedPrepare(db, SELECT_SUPPRESSION_BODY_HASHES_BY_SCOPE_SQL)
+    .all(scopeKindOf(scope), scopeCoordinateOf(scope), currentBodyHash, legacyBodyHash)
+    .map((row) => nullableTextColumn(row, "body_hash"));
   let current = false;
   let legacy = false;
-  for (const row of rows) {
-    if (row.body_hash === currentBodyHash) current = true;
-    if (row.body_hash === legacyBodyHash) legacy = true;
+  for (const bodyHash of bodyHashes) {
+    if (bodyHash === currentBodyHash) current = true;
+    if (bodyHash === legacyBodyHash) legacy = true;
   }
   return { current, legacy };
 }

@@ -8,7 +8,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
-import { cachedPrepare } from "./statements.js";
+import { cachedPrepare, numberColumn, textColumn, type VaultSqlRow } from "./statements.js";
 
 export interface MemoryAccessStat {
   readonly lastAccessedAt: number;
@@ -85,9 +85,20 @@ export function recordOutcomeRows(
   }
 }
 
-function rowsToMap(rows: readonly AccessRow[]): Map<MemoryId, MemoryAccessStat> {
+function readAccessRow(row: VaultSqlRow): AccessRow {
+  return {
+    memory_id: textColumn(row, "memory_id"),
+    last_accessed_at: numberColumn(row, "last_accessed_at"),
+    access_count: numberColumn(row, "access_count"),
+    outcome_count: numberColumn(row, "outcome_count"),
+    utility_sum: numberColumn(row, "utility_sum"),
+  };
+}
+
+function rowsToMap(rows: readonly VaultSqlRow[]): Map<MemoryId, MemoryAccessStat> {
   const map = new Map<MemoryId, MemoryAccessStat>();
-  for (const row of rows) {
+  for (const sqlRow of rows) {
+    const row = readAccessRow(sqlRow);
     map.set(row.memory_id as MemoryId, {
       lastAccessedAt: row.last_accessed_at,
       accessCount: row.access_count,
@@ -103,12 +114,10 @@ export function getAccessStatsRows(
   ids?: readonly MemoryId[],
 ): ReadonlyMap<MemoryId, MemoryAccessStat> {
   if (ids === undefined) {
-    const rows = cachedPrepare(db, SELECT_ALL_SQL).all() as unknown as readonly AccessRow[];
-    return rowsToMap(rows);
+    return rowsToMap(cachedPrepare(db, SELECT_ALL_SQL).all());
   }
   if (ids.length === 0) return new Map();
   const placeholders = ids.map(() => "?").join(",");
   const sql = `${SELECT_ALL_SQL} WHERE memory_id IN (${placeholders})`;
-  const rows = cachedPrepare(db, sql).all(...ids) as unknown as readonly AccessRow[];
-  return rowsToMap(rows);
+  return rowsToMap(cachedPrepare(db, sql).all(...ids));
 }

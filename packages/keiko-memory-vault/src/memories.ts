@@ -9,22 +9,20 @@ import type {
   MemoryRecord,
   MemoryScope,
   MemoryScopeKind,
-  ProjectId,
-  UserId,
-  WorkflowDefinitionId,
-  WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import {
+  buildScopeFromRow,
   prepareMemoryRow,
+  readMemoryMetadataRow,
+  readMemoryRow,
   rowToMemoryRecord,
-  type MemoryRow,
   type MemoryRowWrite,
 } from "./serialize.js";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import type { ListMemoriesOptions, MemoryMetadata } from "./types.js";
 import type { MemoryContentCipher } from "./cipher.js";
 import { MemoryStorageError } from "./errors.js";
-import { cachedPrepare } from "./statements.js";
+import { cachedPrepare, textColumn, type VaultSqlRow } from "./statements.js";
 import type { MemoryPhysicalWriteAdmission } from "./vault-log.js";
 
 const INSERT_SQL = `
@@ -142,13 +140,14 @@ export function insertMemoryRow(
   return prepared.record;
 }
 
-function decodeMemoryRow(row: MemoryRow, cipher: MemoryContentCipher): MemoryRecord {
+function decodeMemoryRow(row: VaultSqlRow, cipher: MemoryContentCipher): MemoryRecord {
+  const id = textColumn(row, "id");
   try {
-    return rowToMemoryRecord(row, cipher);
+    return rowToMemoryRecord(readMemoryRow(row), cipher);
   } catch {
     throw new MemoryStorageError(
       "internal",
-      `Memory row ${row.id} is unreadable; run memory diagnostics or repair before continuing.`,
+      `Memory row ${id} is unreadable; run memory diagnostics or repair before continuing.`,
     );
   }
 }
@@ -158,7 +157,7 @@ export function getMemoryRow(
   id: MemoryId,
   cipher: MemoryContentCipher,
 ): MemoryRecord | undefined {
-  const row = cachedPrepare(db, SELECT_BY_ID_SQL).get(id) as unknown as MemoryRow | undefined;
+  const row = cachedPrepare(db, SELECT_BY_ID_SQL).get(id);
   return row === undefined ? undefined : decodeMemoryRow(row, cipher);
 }
 
@@ -267,52 +266,12 @@ function buildListSql(
   return sql;
 }
 
-interface MemoryMetadataRow {
-  readonly id: string;
-  readonly schema_version: string;
-  readonly type: string;
-  readonly scope_kind: string;
-  readonly scope_coordinate: string;
-  readonly status: string;
-  readonly sensitivity: string;
-  readonly pinned: number;
-  readonly confidence: number;
-  readonly valid_from: number;
-  readonly valid_until: number | null;
-  readonly created_at: number;
-  readonly updated_at: number;
-}
-
-interface ScopeRow {
-  readonly scope_kind: string;
-  readonly scope_coordinate: string;
-}
-
-function scopeFromRow(kind: string, coordinate: string): MemoryScope {
-  switch (kind as MemoryScopeKind) {
-    case "user":
-      return { kind: "user", userId: coordinate as UserId };
-    case "workspace":
-      return { kind: "workspace", workspaceId: coordinate as WorkspaceId };
-    case "project":
-      return { kind: "project", projectId: coordinate as ProjectId };
-    case "workflow":
-      return { kind: "workflow", workflowDefinitionId: coordinate as WorkflowDefinitionId };
-    case "global":
-      return { kind: "global" };
-    default:
-      throw new MemoryStorageError(
-        "schema-mismatch",
-        "Stored memory scope kind is not recognized.",
-      );
-  }
-}
-
-function metadataRowToMemoryMetadata(row: MemoryMetadataRow): MemoryMetadata {
+function metadataRowToMemoryMetadata(sqlRow: VaultSqlRow): MemoryMetadata {
+  const row = readMemoryMetadataRow(sqlRow);
   return {
     id: row.id as MemoryId,
     schemaVersion: "1",
-    scope: scopeFromRow(row.scope_kind, row.scope_coordinate),
+    scope: buildScopeFromRow(row.scope_kind, row.scope_coordinate),
     type: row.type as MemoryMetadata["type"],
     status: row.status as MemoryMetadata["status"],
     sensitivity: row.sensitivity as MemoryMetadata["sensitivity"],
@@ -361,20 +320,21 @@ function appendPagingParams(params: (string | number)[], options: ListMemoriesOp
   }
 }
 
-export function listMemoryScopeRows(db: DatabaseSync): readonly MemoryScope[] {
-  const rows = cachedPrepare(db, LIST_SCOPES_SQL).all() as unknown as readonly ScopeRow[];
-  return rows.map((row) => scopeFromRow(row.scope_kind, row.scope_coordinate));
+function singleScopeClause(scope: MemoryScope): ListClauseBuild {
+  const kind: MemoryScopeKind = scopeKindOf(scope);
+  return {
+    clauses: ["scope_kind = ?", "scope_coordinate = ?"],
+    params: [kind, scopeCoordinateOf(scope)],
+  };
 }
 
-export function listMemoriesAcrossScopeRows(
-  db: DatabaseSync,
-  scopes: readonly MemoryScope[],
+// Extends a scope clause with the shared list filters (type, status, pinned, expiry) and the paging
+// parameters, in the order buildListSql binds them.
+function buildListQuery(
+  scopeClause: ListClauseBuild,
   options: ListMemoriesOptions,
   nowMs: number,
-  cipher: MemoryContentCipher,
-): readonly MemoryRecord[] {
-  const scopeClause = buildScopesClause(scopes);
-  if (scopeClause === undefined) return [];
+): ListClauseBuild {
   const params: (string | number)[] = [...scopeClause.params];
   const where: string[] = [...scopeClause.clauses];
   for (const built of [
@@ -388,9 +348,28 @@ export function listMemoriesAcrossScopeRows(
     params.push(...built.params);
   }
   appendPagingParams(params, options);
-  const rows = cachedPrepare(db, buildListSql(where, options)).all(
-    ...params,
-  ) as unknown as readonly MemoryRow[];
+  return { clauses: where, params };
+}
+
+export function listMemoryScopeRows(db: DatabaseSync): readonly MemoryScope[] {
+  return cachedPrepare(db, LIST_SCOPES_SQL)
+    .all()
+    .map((row) =>
+      buildScopeFromRow(textColumn(row, "scope_kind"), textColumn(row, "scope_coordinate")),
+    );
+}
+
+export function listMemoriesAcrossScopeRows(
+  db: DatabaseSync,
+  scopes: readonly MemoryScope[],
+  options: ListMemoriesOptions,
+  nowMs: number,
+  cipher: MemoryContentCipher,
+): readonly MemoryRecord[] {
+  const scopeClause = buildScopesClause(scopes);
+  if (scopeClause === undefined) return [];
+  const query = buildListQuery(scopeClause, options, nowMs);
+  const rows = cachedPrepare(db, buildListSql(query.clauses, options)).all(...query.params);
   return rows.map((row) => decodeMemoryRow(row, cipher));
 }
 
@@ -401,24 +380,8 @@ export function listMemoriesByScopeRows(
   nowMs: number,
   cipher: MemoryContentCipher,
 ): readonly MemoryRecord[] {
-  const kind: MemoryScopeKind = scopeKindOf(scope);
-  const coordinate = scopeCoordinateOf(scope);
-  const params: (string | number)[] = [kind, coordinate];
-  const where: string[] = ["scope_kind = ?", "scope_coordinate = ?"];
-  for (const built of [
-    buildEnumClause("type", options.type),
-    buildEnumClause("status", options.status),
-    buildPinnedClause(options.pinned),
-    buildExpiryClause(options.includeExpired, nowMs),
-  ]) {
-    if (built === undefined) continue;
-    where.push(...built.clauses);
-    params.push(...built.params);
-  }
-  appendPagingParams(params, options);
-  const rows = cachedPrepare(db, buildListSql(where, options)).all(
-    ...params,
-  ) as unknown as readonly MemoryRow[];
+  const query = buildListQuery(singleScopeClause(scope), options, nowMs);
+  const rows = cachedPrepare(db, buildListSql(query.clauses, options)).all(...query.params);
   return rows.map((row) => decodeMemoryRow(row, cipher));
 }
 
@@ -428,23 +391,9 @@ export function listMemoryMetadataByScopeRows(
   options: ListMemoriesOptions,
   nowMs: number,
 ): readonly MemoryMetadata[] {
-  const kind: MemoryScopeKind = scopeKindOf(scope);
-  const coordinate = scopeCoordinateOf(scope);
-  const params: (string | number)[] = [kind, coordinate];
-  const where: string[] = ["scope_kind = ?", "scope_coordinate = ?"];
-  for (const built of [
-    buildEnumClause("type", options.type),
-    buildEnumClause("status", options.status),
-    buildPinnedClause(options.pinned),
-    buildExpiryClause(options.includeExpired, nowMs),
-  ]) {
-    if (built === undefined) continue;
-    where.push(...built.clauses);
-    params.push(...built.params);
-  }
-  appendPagingParams(params, options);
-  const rows = cachedPrepare(db, buildListSql(where, options, METADATA_COLUMNS)).all(
-    ...params,
-  ) as unknown as readonly MemoryMetadataRow[];
+  const query = buildListQuery(singleScopeClause(scope), options, nowMs);
+  const rows = cachedPrepare(db, buildListSql(query.clauses, options, METADATA_COLUMNS)).all(
+    ...query.params,
+  );
   return rows.map(metadataRowToMemoryMetadata);
 }
