@@ -20,6 +20,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingJiraPodRefusal } from "./codingJiraPodBinding.js";
 import type { CodingRuntimeFailureCode } from "./codingRuntimeManager.js";
+import { isSupervisorRefusalFailureCode } from "./supervisorRefusal.js";
 
 /** A launch refused by a runtime backend, carrying the manager's structured failure code. */
 export class CodingRuntimeLaunchRejectedError extends Error {
@@ -188,7 +189,9 @@ export function classifyLaunchRejection(error: unknown): CodingWorkbenchRuntimeS
 export function classifyManagerStartFailure(
   failureCode: CodingRuntimeFailureCode,
 ): CodingWorkbenchRuntimeFailureCode {
-  return failureCode === "workspace-unqualified" ? "workspace-unqualified" : "runtime-failed";
+  if (failureCode === "workspace-unqualified") return failureCode;
+  // #4068: a launch the Windows supervisor refused keeps the refusing step's name.
+  return isSupervisorRefusalFailureCode(failureCode) ? failureCode : "runtime-failed";
 }
 
 /** The refused start a thrown launch rejection becomes: its wire code and any named model reason. */

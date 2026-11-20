@@ -580,29 +580,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.repairFailed":
     "The repair did not complete. Refresh the task workspaces, then try again.",
   "codingWorkbench.setup.findingUnknown": "its state could not be re-verified",
-  "codingWorkbench.gatewayService.absent":
-    "Coding runs need the Windows runtime gateway, which is not installed. Select Repair; Windows asks for approval once.",
-  "codingWorkbench.gatewayService.stopped":
-    "The Windows runtime gateway is stopped. It starts shortly after Windows starts. If this stays, select Repair.",
-  "codingWorkbench.gatewayService.stale":
-    "The Windows runtime gateway does not match this Keiko version. Select Repair; Windows asks for approval once.",
-  "codingWorkbench.gatewayService.unknown":
-    "Keiko could not read the state of the Windows runtime gateway. Select Repair to set it up again.",
-  "codingWorkbench.gatewayService.repair": "Repair",
-  "codingWorkbench.gatewayService.repairing":
-    "Waiting for Windows approval. If no dialog appears, look for the shield icon in the taskbar.",
-  "codingWorkbench.gatewayService.repairReady": "The Windows runtime gateway is ready.",
-  "codingWorkbench.gatewayService.repairDeclined":
-    "Windows approval was declined, so nothing was changed. Select Repair to ask again.",
-  "codingWorkbench.gatewayService.repairFailed":
-    "The Windows runtime gateway could not be repaired. Try Repair again; if it keeps failing, restart Keiko.",
-  "codingWorkbench.gatewayService.repairUnavailable":
-    "This Keiko installation cannot repair the Windows runtime gateway itself. Install Keiko with keiko-windows-x64-setup.exe from the Keiko release page.",
-  "codingWorkbench.gatewayService.repairBusy": "A repair is already waiting for Windows approval.",
   "codingWorkbench.gatewayService.unqualified":
     "This Keiko build cannot start coding runs on Windows. They need the Windows runtime gateway, which only a release-qualified Keiko package can use. Selecting another repository does not change this.",
-  "codingWorkbench.gatewayService.managedOutside":
-    "Coding runs on Windows need the Windows runtime gateway, a system service that this Keiko does not set up. Chat and the other windows work as usual.",
   "codingWorkbench.installVolume.notLocal":
     "Coding runs cannot start because Keiko is installed in a network or redirected folder. Install Keiko on a local drive of this computer.",
   "codingWorkbench.installVolume.unverified":
@@ -615,8 +594,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Keiko could not find a supported coding runtime for this installation. Install the Keiko package for this computer with its matching runtime, then restart Keiko.",
   "codingWorkbench.runtime.npmRuntimePackageMissing":
     "This Keiko was installed with npm, and the coding runtime package for this computer is not installed. Install the Keiko desktop package for this computer instead (on Windows: keiko-windows-x64-setup.exe from the Keiko release page); it brings the coding runtime with it.",
+  "codingWorkbench.runtime.managedRuntimePackageMissing":
+    "This Keiko folder brings no coding runtime for this computer, so the Coding Workbench cannot run here. Chat and the other windows work as usual. Your administrator can provide a Keiko package that includes the coding runtime.",
   "codingWorkbench.runtime.portableRuntimeUnverified":
     "This Keiko desktop installation could not verify its bundled coding runtime. Update Keiko with Review updates, or download keiko-windows-x64-setup.exe again from the Keiko release page.",
+  "codingWorkbench.runtime.managedRuntimeUnverified":
+    "This Keiko could not verify its bundled coding runtime, so the Coding Workbench cannot run here. A file may be missing or changed, for example by security software. Chat and the other windows work as usual. Your administrator can provide a fresh Keiko package.",
   "codingWorkbench.runtime.developmentRefused":
     "The development runtime could not be activated for this checkout. Check the development setup and its refusal reason in the Activity Log, then restart Keiko.",
   "codingWorkbench.runtime.payloadMissing":
@@ -777,6 +760,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.waiting-for-trust": "Waiting for approval",
   "codingWorkbench.activity.toolState.no-runnable-steps": "Nothing to run",
   "codingWorkbench.activity.toolState.not-run": "Not run",
+  "codingWorkbench.activity.toolState.isolation-unavailable": "Cannot run here",
   "codingWorkbench.activity.toolState.not-done": "Not done",
   "codingWorkbench.activity.toolState.waiting-for-approval": "Waiting for approval",
   "codingWorkbench.activity.toolState.denied": "Denied",
@@ -815,7 +799,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.conversation-not-ready":
     "This model is not activated or did not pass its readiness check. Activate it in Settings > Models, or choose another activated model.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
-    "The gateway has not confirmed yet that this model can call tools. Open the Workbench or the model list again in a minute to check it once more, or choose another ready model.",
+    "The gateway has not confirmed yet that this model can call tools. Choose Check tool calling to check it now, or choose another ready model.",
+  "codingWorkbench.toolCheck.action": "Check tool calling",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI through Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex subscription",
@@ -1299,6 +1284,18 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Keiko refused the task before it ran, for example because a file you referenced with @ is missing, outside the workspace or protected, or because the slash command is not available. Check the referenced files and the command, then start the task again.",
   "codingWorkbench.event.failure.workspace-unqualified":
     "Keiko does not let an agent work in this folder because it contains Keiko's own installation, which the agent could otherwise change. Choose a project folder outside the Keiko installation, then start the task again.",
+  "codingWorkbench.event.failure.runtime-supervisor-grants-acl":
+    "Keiko could not start the coding run on this Windows computer because Windows did not allow Keiko to use its own folder. Move or copy the Keiko folder into a folder that belongs to you, for example inside your own user folder, then start the task again. If that is not possible, ask your administrator.",
+  "codingWorkbench.event.failure.runtime-supervisor-grants-directory":
+    "Keiko could not start the coding run on this Windows computer because it could not open a folder it needs. Make sure the Keiko folder still exists and sits in a folder that belongs to you, for example inside your own user folder, then start the task again. If that does not help, ask your administrator.",
+  "codingWorkbench.event.failure.runtime-supervisor-grants-capability":
+    "Keiko could not start the coding run on this Windows computer because Windows did not let the run read the task folder. Check that the folder still exists on a drive of this computer and that you may open it, then start the task again. If that does not help, ask your administrator.",
+  "codingWorkbench.event.failure.runtime-supervisor-gateway-connect":
+    "Keiko could not start the coding run on this Windows computer because the Windows service it needs for coding runs did not answer. Select Repair at the top of the Coding Workbench if it is offered, then start the task again. If that does not help, ask your administrator.",
+  "codingWorkbench.event.failure.runtime-supervisor-gateway-admit":
+    "Keiko could not start the coding run on this Windows computer because the Windows service it needs for coding runs did not accept it. Select Repair at the top of the Coding Workbench if it is offered, then start the task again. If that does not help, ask your administrator.",
+  "codingWorkbench.event.failure.runtime-supervisor-refused":
+    "Keiko could not start the coding run on this Windows computer because Windows refused the start. Start the task again. If it happens again, ask your administrator.",
   "codingWorkbench.event.failure.generic":
     "This step could not be completed. Check the Activity Log and try again.",
   "codingWorkbench.event.failure.envelope-duration-exhausted":
@@ -1373,6 +1370,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Verification has not run: the verifier found nothing it can run for this request, for example because the selected package has no test, lint or build script. That is not a failing check.",
   "codingWorkbench.activity.verification.not-run":
     "Verification did not run to completion: a step was skipped, denied or cancelled. That is not a failing check.",
+  "codingWorkbench.activity.verification.isolation-unavailable":
+    "Verification could not run on this computer: it has no container runtime (Docker or Podman), which Keiko needs here to run project commands safely. The change is kept. Start a container runtime and run the check again, or check the change yourself.",
   "codingWorkbench.activity.git.waiting-for-approval":
     "Waiting for a decision before this step is carried out.",
   "codingWorkbench.activity.git.verification-failed":
@@ -1453,7 +1452,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.startEndedModelChanged":
     "The model changed while it was being checked, so no run was started ({code}). Choose the model you want and press Start again.",
   "codingWorkbench.alert.startRefusedWorkspaceLocation":
-    "On Windows, Keiko runs a coding task only in a new worktree, not in your own checkout or folder ({code}). Choose New local worktree as the work location of a Git repository, then start again.",
+    "On Windows, Keiko does not run a coding task in a drive, your user folder itself or a folder of Keiko's own data, because the task could read everything below it ({code}). Choose a project folder inside them, or New local worktree, then start again.",
   "codingWorkbench.alert.startRefusedWorkspaceVolume":
     "Keiko keeps its worktrees on another drive than Windows, where the Windows sandbox cannot run a coding task ({code}). An operator must set KEIKO_STATE_DIR to a folder on the Windows drive, usually C:, and restart Keiko.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":

@@ -114,6 +114,13 @@ enters the Activity Log, which is the only thing that leaves the machine. The ma
 (`ui/provisioned-config.sha256`) holds the SHA-256 of the adopted file and no content. The adoption
 logs the closed outcome and an error class, never the path or the bytes.
 
+The provisioned file is a credential store wherever a model could reach it. `keiko.config.json` and
+the sealed `*.vault` stores are in the credential subset of the always-on sensitive-path denial
+(ADR-0005 D3): no model-facing read, search, edit or native command may open them in a selected
+root, in every mode, on every platform, and the package folder that holds the file is never the
+default project (ADR-0121 D9). Redaction alone would not protect the key: a hand-issued gateway key
+has no known token shape.
+
 The residual risk is the package itself: everyone who can read the file share, or a copy of the
 package, can read the key. Encrypting the file would not remove it, because the package would have
 to carry its own key. The control is outside Keiko: a share limited to the team and a key issued

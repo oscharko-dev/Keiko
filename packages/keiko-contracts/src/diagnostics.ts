@@ -425,6 +425,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "workspace-layout-unlocked",
   "workspace-window-content-zoomed",
   "workspace-ownership-started",
+  "workspace-ownership-changed",
   "workspace-layout-restored",
   "workspace-layout-empty",
   "workspace-layout-unowned",
@@ -2381,6 +2382,9 @@ export const CLIENT_CODING_WORKBENCH_INTERACTIONS = [
   "changeset-review-prepared",
   // The person gave up a start that had no run yet (#4271).
   "start-cancelled",
+  // The person pressed the one explicit action that checks an activated model's tool calling
+  // (ADR-0171 D2, amended 2026-11-19).
+  "tool-check-requested",
   // A history task from another repository than the active one was returned and not activated: the
   // operator switched repositories, an ordinary transition and not a failure.
   "history-repository-switched",
@@ -2619,6 +2623,7 @@ export type ClientDiagnosticCodingWorkbenchInteraction =
     }
   | { readonly interaction: "changeset-review-prepared"; readonly fileCount: number }
   | { readonly interaction: "start-cancelled" }
+  | { readonly interaction: "tool-check-requested" }
   | { readonly interaction: "history-repository-switched" }
   | { readonly interaction: "event-stream-reconnecting" }
   | { readonly interaction: "history-workspace-switched" }
@@ -2706,6 +2711,7 @@ const CODING_WORKBENCH_INTERACTION_FIELDS: Readonly<
   "agent-selected": { agent: (value) => isSetMember(value, CODING_WORKBENCH_AGENT_KIND_SET) },
   "pending-decision-focused": {},
   "start-cancelled": {},
+  "tool-check-requested": {},
   "history-repository-switched": {},
   "event-stream-reconnecting": {},
   "history-workspace-switched": {},

@@ -457,13 +457,33 @@ function missingHelperReason(lane: GatewayServiceLane): GatewayServiceFailure {
   return lane === "dev-checkout" ? "dev-checkout-unverified" : "helper-not-qualified";
 }
 
-async function runAction(
+type HelperResolution =
+  | { readonly ok: true; readonly helper: WindowsGatewayHelper | undefined }
+  | { readonly ok: false; readonly error: unknown };
+
+// The helper is resolved before the start line is written, so that line names the lane the command
+// actually uses (an npm installation's supervisor is the `npm-runtime-package` lane, not the
+// requested `release-qualified` one).
+async function resolveRunHelper(
   run: GatewayServiceRun,
   env: Readonly<Record<string, string | undefined>>,
   deps: GatewayServiceCliDeps,
+): Promise<HelperResolution> {
+  try {
+    return { ok: true, helper: await (deps.resolveHelper ?? defaultResolveHelper)(env, run.lane) };
+  } catch (error) {
+    return { ok: false, error };
+  }
+}
+
+async function runAction(
+  run: GatewayServiceRun,
+  resolution: HelperResolution,
+  deps: GatewayServiceCliDeps,
 ): Promise<number> {
   try {
-    const helper = await (deps.resolveHelper ?? defaultResolveHelper)(env, run.lane);
+    if (!resolution.ok) throw resolution.error;
+    const { helper } = resolution;
     if (helper === undefined) {
       return reportFailure(run, missingHelperReason(run.lane), "NotQualified");
     }
@@ -471,8 +491,7 @@ async function runAction(
       helper,
       helperArguments(run.action, helper.helperSha256),
     );
-    // The start line names the requested lane; the outcome names the lane the helper came from.
-    return settle({ ...run, lane: helper.lane ?? run.lane }, exitCode);
+    return settle(run, exitCode);
   } catch (error) {
     // The class of failure only: a spawn error message can quote the helper's path.
     emitSecurityLogEvent(
@@ -515,8 +534,22 @@ export async function runGatewayServiceCli(
   const stateDir = env.KEIKO_STATE_DIR ?? join(deps.cwd ?? process.cwd(), ".keiko");
   const sink = createCliSecurityLogSink(stateDir, deps.securityLogSinkFactory, randomUUID());
   const run: GatewayServiceRun = { ...request, io, sink, startedAt: Date.now() };
-  emitSecurityLogEvent(sink, startedEvent(run));
-  return (deps.platform ?? process.platform) === "win32"
-    ? runAction(run, env, deps)
-    : reportFailure(run, "unsupported-platform", "Platform");
+  if ((deps.platform ?? process.platform) !== "win32") {
+    emitSecurityLogEvent(sink, startedEvent(run));
+    return reportFailure(run, "unsupported-platform", "Platform");
+  }
+  return startAndRunAction(run, env, deps);
+}
+
+// The start line follows the helper's resolution, so it names the lane the command really uses.
+async function startAndRunAction(
+  run: GatewayServiceRun,
+  env: Readonly<Record<string, string | undefined>>,
+  deps: GatewayServiceCliDeps,
+): Promise<number> {
+  const resolution = await resolveRunHelper(run, env, deps);
+  const lane = (resolution.ok ? resolution.helper?.lane : undefined) ?? run.lane;
+  const resolved: GatewayServiceRun = { ...run, lane };
+  emitSecurityLogEvent(run.sink, startedEvent(resolved));
+  return runAction(resolved, resolution, deps);
 }

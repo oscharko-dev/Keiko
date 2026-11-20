@@ -155,7 +155,13 @@ describe("the closed verification outcome on the rendering record (#3579)", () =
     const schema = activityLogOperationSchema("coding-runtime.tool-result-rendered");
     expect(schema?.diagnosticWhen).toContainEqual({
       field: "verificationOutcome",
-      values: ["failed-check", "waiting-for-trust", "no-runnable-steps", "not-run"],
+      values: [
+        "failed-check",
+        "waiting-for-trust",
+        "no-runnable-steps",
+        "not-run",
+        "isolation-unavailable",
+      ],
     });
 
     const { result } = executeLocalSupportQuery(
@@ -178,6 +184,7 @@ describe("the closed verification outcome on the rendering record (#3579)", () =
       .sort();
     expect(retained).toEqual([
       "run-failed-check",
+      "run-isolation-unavailable",
       "run-no-runnable-steps",
       "run-not-run",
       "run-waiting-for-trust",

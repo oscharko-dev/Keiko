@@ -22,6 +22,18 @@ describe("sensitive path patterns", () => {
     expect(ENV_EXAMPLE_BASENAME).toBe(".env.example");
   });
 
+  it("keeps the folder packages' data folder with the other Keiko state", () => {
+    expect(TOOL_STATE_PATH_DENY_PATTERNS).toContain(".keiko-standalone");
+    expect(CREDENTIAL_PATH_DENY_PATTERNS).not.toContain(".keiko-standalone");
+  });
+
+  it("name Keiko's own credential stores in the kernel-enforced credential subset", () => {
+    for (const store of ["keiko.config.json", "*.vault"]) {
+      expect(CREDENTIAL_PATH_DENY_PATTERNS).toContain(store);
+      expect(TOOL_STATE_PATH_DENY_PATTERNS).not.toContain(store);
+    }
+  });
+
   it("use only the segment alphabet the native sandbox can translate exactly", () => {
     for (const pattern of [...CREDENTIAL_PATH_DENY_PATTERNS, ...TOOL_STATE_PATH_DENY_PATTERNS])
       expect(pattern).toMatch(/^[A-Za-z0-9_.*-]+$/u);

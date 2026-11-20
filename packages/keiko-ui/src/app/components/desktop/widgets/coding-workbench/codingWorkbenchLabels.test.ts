@@ -32,7 +32,6 @@ import {
   startBlockedReason,
   visibleAlert,
   visibleAlertFailure,
-  gatewayServiceMessageKey,
   runtimeUnavailableMessageKey,
 } from "./codingWorkbenchLabels";
 import type { CodingWorkbenchRunPhase } from "./codingWorkbenchRunFacts";
@@ -314,6 +313,29 @@ describe("eventDetail auxiliary outcome", () => {
     // #4335: a run refused because its folder contains Keiko's own installation names the folder
     // as the thing to change, never the internal-error sentence.
     ["workspace-unqualified", "codingWorkbench.event.failure.workspace-unqualified"],
+    // #4068: a launch the Windows runtime supervisor refused names its cause, never the
+    // internal-error sentence.
+    [
+      "runtime-supervisor-grants-acl",
+      "codingWorkbench.event.failure.runtime-supervisor-grants-acl",
+    ],
+    [
+      "runtime-supervisor-grants-directory",
+      "codingWorkbench.event.failure.runtime-supervisor-grants-directory",
+    ],
+    [
+      "runtime-supervisor-grants-capability",
+      "codingWorkbench.event.failure.runtime-supervisor-grants-capability",
+    ],
+    [
+      "runtime-supervisor-gateway-connect",
+      "codingWorkbench.event.failure.runtime-supervisor-gateway-connect",
+    ],
+    [
+      "runtime-supervisor-gateway-admit",
+      "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
+    ],
+    ["runtime-supervisor-refused", "codingWorkbench.event.failure.runtime-supervisor-refused"],
   ] as const)("renders a run that failed with %s as %s", (failureCode, key) => {
     const settled = runtimeEvent({ kind: "status", state: "failed", failureCode });
     expect(eventTitle(settled, t)).toBe("codingWorkbench.event.runFailed");
@@ -1212,37 +1234,13 @@ describe("readinessFacts runtime assurance", () => {
   });
 });
 
-describe("gatewayServiceMessageKey", () => {
-  it("names a sentence only for the Windows broker reasons", () => {
-    expect(gatewayServiceMessageKey("gateway-service-absent")).toBe(
-      "codingWorkbench.gatewayService.absent",
-    );
-    expect(gatewayServiceMessageKey("gateway-service-stopped")).toBe(
-      "codingWorkbench.gatewayService.stopped",
-    );
-    expect(gatewayServiceMessageKey("gateway-service-stale")).toBe(
-      "codingWorkbench.gatewayService.stale",
-    );
-    expect(gatewayServiceMessageKey("gateway-service-unknown")).toBe(
-      "codingWorkbench.gatewayService.unknown",
-    );
-    expect(gatewayServiceMessageKey("gateway-service-unqualified")).toBe(
-      "codingWorkbench.gatewayService.unqualified",
-    );
-    expect(gatewayServiceMessageKey("gateway-service-managed-outside")).toBe(
-      "codingWorkbench.gatewayService.managedOutside",
-    );
-    expect(gatewayServiceMessageKey("runtime-unqualified")).toBeUndefined();
-    expect(gatewayServiceMessageKey("constructor")).toBeUndefined();
-    expect(gatewayServiceMessageKey(undefined)).toBeUndefined();
-  });
-});
-
 describe("runtimeUnavailableMessageKey", () => {
   it("keeps broker and installation causes distinct from an unknown prerequisite", () => {
-    expect(runtimeUnavailableMessageKey("gateway-service-stopped")).toBe(
-      "codingWorkbench.gatewayService.stopped",
+    expect(runtimeUnavailableMessageKey("gateway-service-unqualified")).toBe(
+      "codingWorkbench.gatewayService.unqualified",
     );
+    expect(runtimeUnavailableMessageKey("gateway-service-stopped")).toBeUndefined();
+    expect(runtimeUnavailableMessageKey("constructor")).toBeUndefined();
     expect(runtimeUnavailableMessageKey("install-volume-not-local")).toBe(
       "codingWorkbench.installVolume.notLocal",
     );
@@ -1259,6 +1257,16 @@ describe("runtimeUnavailableMessageKey", () => {
     );
     expect(runtimeUnavailableMessageKey("npm-runtime-package-missing")).not.toBe(
       "codingWorkbench.runtime.platformUnqualified",
+    );
+    // Walk of 1.5.3: an npm folder package declares itself managed outside the app, exists for
+    // workplaces where nothing may be installed, and has its own sentence (no installer).
+    expect(runtimeUnavailableMessageKey("managed-runtime-package-missing")).toBe(
+      "codingWorkbench.runtime.managedRuntimePackageMissing",
+    );
+    // The same for a managed installation whose bundled runtime did not verify: no in-app update
+    // and no installer, so not the desktop installation's sentence.
+    expect(runtimeUnavailableMessageKey("managed-runtime-unverified")).toBe(
+      "codingWorkbench.runtime.managedRuntimeUnverified",
     );
     expect(runtimeUnavailableMessageKey("runtime-unqualified")).toBeUndefined();
     expect(runtimeUnavailableMessageKey("constructor")).toBeUndefined();

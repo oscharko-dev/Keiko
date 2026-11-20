@@ -125,7 +125,10 @@ describe("CodingWorkbenchRepositorySelector option names", () => {
     const repository = screen.getByRole("combobox", { name: "Choose coding repository" });
     await waitFor(() => expect(repository).toBeEnabled());
     await user.click(repository);
-    await expectNamedOptions(["plain-folder", "archive, unavailable"]);
+    await expectNamedOptions([
+      "plain-folder, /repos/plain-folder",
+      "archive, /repos/archive, unavailable",
+    ]);
     await user.keyboard("{Escape}");
 
     const branch = screen.getByRole("combobox", { name: "Choose coding branch" });
@@ -136,6 +139,59 @@ describe("CodingWorkbenchRepositorySelector option names", () => {
 
     await user.click(screen.getByRole("combobox", { name: "Work in" }));
     await expectNamedOptions(["Local", "New local worktree"]);
+  });
+});
+
+// ADR-0121 D9: a folder package and a desktop installation run inside their program folder, which
+// only keeps the Chats of a person who has chosen no folder. The server lists it `readable: false`;
+// it stays visible and is never offered for a coding run, like Keiko's own state area (#4371).
+describe("CodingWorkbenchRepositorySelector folders the read surface refuses", () => {
+  it("lists a refused folder as unavailable and does not let it be chosen", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    selectableRepositories.mockResolvedValue([
+      { ...project("/opt/Keiko"), readable: false },
+      { ...project("/work/app"), readable: true },
+    ]);
+    listBranches.mockResolvedValue(branchList(["main"]));
+    renderSelector({ placement: "composer", root: "/work/app", onSelect });
+
+    const repository = screen.getByRole("combobox", { name: "Choose coding repository" });
+    await waitFor(() => expect(repository).toBeEnabled());
+    await user.click(repository);
+
+    const refused = screen.getByRole("option", { name: "Keiko, /opt/Keiko, unavailable" });
+    expect(refused).toBeDisabled();
+    expect(screen.getByRole("option", { name: "app, /work/app" })).toBeEnabled();
+    await user.click(refused);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
+// Walk of 1.5.3: two registered folders with the same name were two identical options. Each option
+// now shows its path under the name, like the Git window's repository picker, and keeps a unique
+// accessible name.
+describe("CodingWorkbenchRepositorySelector folders that share a name", () => {
+  it("tells two same-named folders apart by their path in the options", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    selectableRepositories.mockResolvedValue([
+      { ...project("/work/app"), name: "app" },
+      { ...project("/home/me/app"), name: "app" },
+    ]);
+    listBranches.mockResolvedValue(branchList(["main"]));
+    renderSelector({ placement: "composer", root: "/work/app", onSelect });
+
+    const repository = screen.getByRole("combobox", { name: "Choose coding repository" });
+    await waitFor(() => expect(repository).toBeEnabled());
+    await user.click(repository);
+
+    const names = screen.getAllByRole("option").map((option) => option.getAttribute("aria-label"));
+    expect(names).toEqual(["app, /work/app", "app, /home/me/app"]);
+    expect(new Set(names).size).toBe(names.length);
+
+    await user.click(screen.getByRole("option", { name: "app, /home/me/app" }));
+    expect(onSelect).toHaveBeenCalledWith("/home/me/app");
   });
 });
 

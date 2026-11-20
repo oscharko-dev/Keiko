@@ -1,6 +1,6 @@
 # Qualify a temporary SCM installation on a disposable Windows runner.
 [CmdletBinding()]
-param([switch]$VerifyTransport)
+param()
 $ErrorActionPreference = "Stop"
 $serviceName = "KeikoRuntimeGateway"
 $install = Join-Path $env:ProgramFiles ("Keiko-Gateway-Proof-" + [guid]::NewGuid().ToString("N"))
@@ -63,10 +63,6 @@ try {
   Write-Host "gateway-service install: foreign pin refused; install, repeat, status and repair passed"
   node scripts/testing/test-windows-gateway-service.mjs installed $installed $install
   if ($LASTEXITCODE) { throw "Installed-service proof failed" }
-  $transportArgs = @()
-  if ($VerifyTransport) { $transportArgs += "--verify-transport" }
-  node scripts/testing/test-windows-workbench-adapter.mjs $installed $install @transportArgs
-  if ($LASTEXITCODE) { throw "Workbench native adapter proof failed" }
 } finally {
   if ($created) {
     Assert-GatewayCommand @("--gateway-service-uninstall") 10 "Uninstall"

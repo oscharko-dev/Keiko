@@ -201,6 +201,68 @@ describe("an npm package", () => {
     expect(result.outputPath.endsWith("keiko-macos-arm64.npm.zip")).toBe(true);
   });
 
+  // What Node.js and npm do not run is left out; what they run stays byte for byte. The standalone
+  // folder package keeps the payload unchanged and is built elsewhere.
+  describe.each([
+    {
+      target: "macos-arm64",
+      root: "Keiko/Keiko.app/Contents/Resources/runtime/node",
+      kept: [
+        "bin/node",
+        "bin/npm",
+        "lib/node_modules/npm/bin/npm-cli.js",
+        "lib/node_modules/corepack/dist/corepack.js",
+        "LICENSE",
+        "NOTICE",
+        "NODE_RUNTIME_SOURCE.json",
+      ],
+      dropped: [
+        "include/node/node.h",
+        "include/node/v8.h",
+        "share/man/man1/node.1",
+        "share/doc/node/gdbinit",
+        "CHANGELOG.md",
+        "README.md",
+      ],
+      shipped: "Keiko/system/node",
+    },
+    {
+      target: "windows-x64",
+      root: "Keiko/runtime/node",
+      kept: [
+        "node.exe",
+        "npm",
+        "npm.cmd",
+        "npx",
+        "npx.cmd",
+        "node_modules/npm/bin/npm-cli.js",
+        "node_modules/corepack/dist/corepack.js",
+        "corepack.cmd",
+        "LICENSE",
+      ],
+      dropped: ["include/node/node.h", "share/doc/node/gdbinit", "CHANGELOG.md", "README.md"],
+      shipped: "Keiko/system/node",
+    },
+  ])("the Node.js runtime of the $target package", ({ target, root, kept, dropped, shipped }) => {
+    it("keeps exactly what runs and leaves out headers, documentation and release notes", () => {
+      const runtime = [...kept, ...dropped].map((name) => ({
+        name: `${root}/${name}`,
+        data: `bytes of ${name}`,
+      }));
+      const { result } = build(target, {
+        records: [
+          ...payloadRecords(target).filter((record) => !record.name.includes("/runtime/node/")),
+          ...runtime,
+        ],
+      });
+      const built = entriesByName(result.outputPath);
+
+      for (const name of kept) expect(built.get(`${shipped}/${name}`)).toBe(`bytes of ${name}`);
+      for (const name of dropped) expect(built.has(`${shipped}/${name}`)).toBe(false);
+      expect([...built.keys()].some((name) => /\/(include|share)\//u.test(name))).toBe(false);
+    });
+  });
+
   it("keeps the start files, the access step and Node.js executable after extraction", () => {
     const { root, result } = build("macos-arm64");
     const extracted = join(root, "extracted");

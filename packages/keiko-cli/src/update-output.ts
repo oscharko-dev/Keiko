@@ -141,9 +141,7 @@ export function renderApplyTerminal(
     const nextStep =
       portableManaged && session.phase === "succeeded"
         ? "Next step: none. Keiko relaunched and verified the new version."
-        : // The restart is a `keiko start`, which on Windows also brings the runtime gateway to the
-          // new version's helper (one Windows approval when it changed; gateway-service-setup.ts).
-          "Next step: run `keiko restart`, then `keiko update status`. On Windows the restart also updates the runtime gateway; Windows asks for approval once when it changed.";
+        : "Next step: run `keiko restart`, then `keiko update status`.";
     return [`Update apply result: ${session.phase}`, session.message, nextStep];
   }
   return [`Update apply result: ${session.phase}`, session.message];

@@ -68,7 +68,9 @@ export type CodingSafeActivityEditRefusalReason =
  * paint it as one: `waiting-for-trust` is the package-script decision only the operator can make,
  * `no-runnable-steps` a request for which the verifier found nothing it can run (the selected
  * package or target has no test, lint or build script; the repository may still define others), and
- * `not-run` a run whose steps were skipped, denied or cancelled. `failed-check` is a check that ran and went red,
+ * `not-run` a run whose steps were skipped, denied or cancelled, and `isolation-unavailable` a run
+ * whose steps were denied because this computer has no enforcing isolation backend (no container
+ * runtime), a host condition rather than a policy decision. `failed-check` is a check that ran and went red,
  * `passed` every requested check green.
  */
 export const CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES = [
@@ -77,6 +79,7 @@ export const CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES = [
   "waiting-for-trust",
   "no-runnable-steps",
   "not-run",
+  "isolation-unavailable",
 ] as const;
 export type CodingSafeActivityVerificationOutcome =
   (typeof CODING_SAFE_ACTIVITY_VERIFICATION_OUTCOMES)[number];

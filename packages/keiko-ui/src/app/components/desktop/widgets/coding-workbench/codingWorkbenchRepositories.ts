@@ -1,9 +1,6 @@
 import type { ProjectWithAvailability } from "@/lib/types";
 import { fetchGitSummary, fetchProjects } from "@/lib/api";
-
-function locallyAvailable(project: ProjectWithAvailability): boolean {
-  return project.available && project.workspaceAvailable === true;
-}
+import { locallyAvailable } from "./codingWorkbenchRepositoryAvailability";
 
 async function gitAvailable(root: string): Promise<boolean> {
   const summary = await fetchGitSummary(root);

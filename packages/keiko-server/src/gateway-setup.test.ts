@@ -18,6 +18,7 @@ import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServerResponse, type IncomingMessage } from "node:http";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { codingWorkbenchModelEligibility } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import {
@@ -9584,6 +9585,83 @@ describe("handleGatewaySetup", () => {
     await save({ preserveExisting: true, apiKey: "rotated-secret-token" });
     expect(identity()).toMatch(/^[a-f0-9]{64}$/u);
     expect(identity()).not.toBe(first);
+    deps.store.close();
+  });
+
+  // Walk of 1.5.3 against a gateway that reports the deployment behind each alias: after Gateway
+  // Setup the Coding Workbench offered no model. The setup bound the tool-calling proof to the
+  // probe's view of the provider, which lacks the deployment identity the same setup stored on the
+  // provider, so the loader withdrew the proof the moment the saved configuration was read.
+  it("binds the setup's tool-calling proof to the provider it stores, deployment included", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-proof-binding-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-proof-binding-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () =>
+        Promise.resolve(
+          parseModelDiscovery({
+            data: [
+              {
+                model_name: "identity-chat",
+                litellm_params: { model: "ollama/gemma-3" },
+                model_info: { mode: "chat" },
+              },
+            ],
+          }),
+        ),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve({
+          testedModelIds: modelIds,
+          responseFormatModelIds: [],
+          toolCallingObservations: modelIds.map((modelId) => ({
+            modelId,
+            status: "verified" as const,
+            checkedAt: new Date().toISOString(),
+          })),
+        }),
+    });
+
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    const result = await handleGatewaySetup(
+      ctx(
+        { baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" },
+        "corr-proof-binding",
+      ),
+      deps,
+    );
+    resetServerLogger();
+
+    expect(result.status).toBe(200);
+    const config = requiredGatewayConfig(deps);
+    const provider = config.providers.find((candidate) => candidate.modelId === "identity-chat");
+    if (provider === undefined) throw new TypeError("Expected the stored provider.");
+    // The premise: the stored provider carries the observed deployment, which joins the binding.
+    expect(provider.deploymentIdentitySha256).toMatch(/^[a-f0-9]{64}$/u);
+    const capability = requiredCapability(config, "identity-chat");
+    expect(capability.toolCallingVerification).toMatchObject({
+      status: "verified",
+      configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+    });
+    // The loader keeps the proof, so the model is usable for coding right after setup.
+    expect(capability.toolCalling).toBe(true);
+    expect(codingWorkbenchModelEligibility(capability)).toBe("eligible");
+    // The setup records the verdict once, with the fingerprint of the proof it stored.
+    expect(
+      sink.events.filter((event) => event.op === "gateway.tool-calling.verification"),
+    ).toMatchObject([
+      {
+        correlationId: "corr-proof-binding",
+        extra: {
+          verificationStatus: "verified",
+          configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+        },
+      },
+    ]);
     deps.store.close();
   });
 

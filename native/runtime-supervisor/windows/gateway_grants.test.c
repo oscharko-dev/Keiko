@@ -339,8 +339,96 @@ static int concurrent_rules(void) {
   return ok;
 }
 
+/* One entry for ALL APPLICATION PACKAGES with the given mode, mask and inheritance. */
+static int packages_entry(const wchar_t *path, ACCESS_MODE mode, DWORD mask, DWORD inheritance) {
+  SID_IDENTIFIER_AUTHORITY app = SECURITY_APP_PACKAGE_AUTHORITY;
+  PSID packages = NULL;
+  PACL before = NULL, after = NULL;
+  PSECURITY_DESCRIPTOR descriptor = NULL;
+  EXPLICIT_ACCESSW entry;
+  DWORD result = ERROR_INVALID_PARAMETER;
+  memset(&entry, 0, sizeof(entry));
+  if (!AllocateAndInitializeSid(&app, SECURITY_BUILTIN_APP_PACKAGE_RID_COUNT,
+                                SECURITY_APP_PACKAGE_BASE_RID, SECURITY_BUILTIN_PACKAGE_ANY_PACKAGE,
+                                0, 0, 0, 0, 0, 0, &packages))
+    return 0;
+  if (GetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, &before,
+                            NULL, &descriptor) == ERROR_SUCCESS) {
+    entry.grfAccessPermissions = mask;
+    entry.grfAccessMode = mode;
+    entry.grfInheritance = inheritance;
+    entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    entry.Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+    entry.Trustee.ptstrName = (LPWSTR)packages;
+    result = SetEntriesInAclW(1, &entry, before, &after);
+    if (result == ERROR_SUCCESS)
+      result = SetNamedSecurityInfoW((LPWSTR)path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, NULL,
+                                     NULL, after, NULL);
+  }
+  if (after != NULL) LocalFree(after);
+  LocalFree(descriptor);
+  FreeSid(packages);
+  return result == ERROR_SUCCESS;
+}
+
+/* Applies a one-entry tree frame on `path` and reports the result and the tree's own entries. */
+static int tree_grant(const char *path, int access, PSID tree, int *entries,
+                      const wchar_t *wide) {
+  unsigned char frame[2048];
+  struct keiko_gateway_grants grants = {0};
+  int result = -1;
+  if (keiko_gateway_grants_parse(frame, frame_of(frame, 1, access, KEIKO_GRANT_TREE, path, NULL),
+                                 &grants)) {
+    result = keiko_gateway_grants_apply(&grants, tree);
+    *entries = entries_for(wide, tree);
+    keiko_gateway_grants_revoke(&grants, tree);
+  }
+  keiko_gateway_grants_clear(&grants);
+  return result;
+}
+
+/* #4068: a directory every AppContainer already reads, as Program Files does with one entry for the
+ * directory and an inherit-only one for its content, takes a read grant without any DACL edit; a
+ * write grant still takes the tree's own entry, and a deny entry for the group voids the shortcut. */
+static int packages_rules(void) {
+  wchar_t shared[MAX_PATH] = L"", plain[MAX_PATH] = L"";
+  char shared_utf8[MAX_PATH * 3];
+  PSID tree = NULL;
+  int ok = 0, entries = -1;
+  if (!temporary_directory(shared, L"packages") || !temporary_directory(plain, L"plain") ||
+      FAILED(DeriveAppContainerSidFromAppContainerName(L"Keiko.Gateway.PackagesTest", &tree)) ||
+      WideCharToMultiByte(CP_UTF8, 0, shared, -1, shared_utf8, sizeof(shared_utf8), NULL, NULL) <=
+          0)
+    goto done;
+  if (keiko_gateway_grants_packages_read(shared) || keiko_gateway_grants_packages_read(plain) ||
+      !packages_entry(shared, GRANT_ACCESS, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+                      NO_INHERITANCE) ||
+      keiko_gateway_grants_packages_read(shared) ||
+      !packages_entry(shared, GRANT_ACCESS, GENERIC_READ | GENERIC_EXECUTE,
+                      SUB_CONTAINERS_AND_OBJECTS_INHERIT | INHERIT_ONLY) ||
+      !keiko_gateway_grants_packages_read(shared))
+    goto done;
+  if (tree_grant(shared_utf8, KEIKO_GRANT_READ, tree, &entries, shared) != KEIKO_GRANTS_APPLIED ||
+      entries != 0)
+    goto done;
+  if (tree_grant(shared_utf8, KEIKO_GRANT_MODIFY, tree, &entries, shared) !=
+          KEIKO_GRANTS_APPLIED ||
+      entries != 1 || entries_for(shared, tree) != 0)
+    goto done;
+  if (!packages_entry(shared, DENY_ACCESS, FILE_WRITE_DATA, NO_INHERITANCE) ||
+      keiko_gateway_grants_packages_read(shared))
+    goto done;
+  ok = 1;
+done:
+  if (tree != NULL) FreeSid(tree);
+  if (shared[0] != L'\0') RemoveDirectoryW(shared);
+  if (plain[0] != L'\0') RemoveDirectoryW(plain);
+  return ok;
+}
+
 int main(void) {
   if (!frame_rules()) { puts("gateway-grants-frame: failed"); return 1; }
+  if (!packages_rules()) { puts("gateway-grants-packages: failed"); return 1; }
   if (!grant_rules()) { puts("gateway-grants-apply: failed"); return 1; }
   if (!missing_directory_rules()) { puts("gateway-grants-missing: failed"); return 1; }
   if (!sweep_rules()) { puts("gateway-grants-sweep: failed"); return 1; }

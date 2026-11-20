@@ -22,6 +22,7 @@ import {
   isCodingWorkbenchReadinessCandidate,
   isCodingWorkbenchModel,
   isCodingWorkbenchProofRenewing,
+  isCodingWorkbenchToolCheckCandidate,
   listCodingWorkbenchReadinessCandidates,
   selectCodingWorkbenchReadinessCandidate,
   isVoiceCapability,
@@ -749,6 +750,97 @@ describe("isCodingWorkbenchProofRenewing", () => {
     });
     expect(codingWorkbenchModelEligibility(fresh)).toBe("eligible");
     expect(isCodingWorkbenchProofRenewing(fresh)).toBe(false);
+  });
+});
+
+// Walk of 1.5.3: after Gateway Setup the one chat model is activated and its tool calling is
+// unconfirmed, so the Workbench offered no model and nothing could ever check it. Such a model is
+// listed for one explicit tool check; nothing else is.
+describe("isCodingWorkbenchToolCheckCandidate", () => {
+  const unconfirmed = (overrides: Partial<ModelCapability> = {}): ModelCapability =>
+    cap({
+      toolCalling: false,
+      conversationReady: true,
+      toolCallingVerification: {
+        status: "unverified",
+        checkedAt: "2026-09-24T08:00:00.000Z",
+        probe: "gateway-tool-calling-v1",
+        configurationFingerprint: "test-fingerprint",
+      },
+      ...overrides,
+    });
+
+  it("holds for an activated chat model whose tool calling is unconfirmed or never checked", () => {
+    const candidate = unconfirmed();
+    expect(isCodingWorkbenchModel(candidate)).toBe(false);
+    expect(isCodingWorkbenchToolCheckCandidate(candidate)).toBe(true);
+    expect(
+      isCodingWorkbenchToolCheckCandidate(unconfirmed({ toolCallingVerification: undefined })),
+    ).toBe(true);
+  });
+
+  it("holds for a proof that aged out, never for a fresh one the stored flag contradicts", () => {
+    const proof = (checkedAt: string): ModelCapability["toolCallingVerification"] => ({
+      status: "verified",
+      checkedAt,
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: "test-fingerprint",
+    });
+    expect(
+      isCodingWorkbenchToolCheckCandidate(
+        unconfirmed({ toolCallingVerification: proof("2000-01-01T00:00:00.000Z") }),
+      ),
+    ).toBe(true);
+    expect(
+      isCodingWorkbenchToolCheckCandidate(
+        unconfirmed({ toolCallingVerification: proof(new Date().toISOString()) }),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["a model nobody activated", { conversationReady: undefined }],
+    ["a model whose chat check failed", { conversationReady: false }],
+    ["an embedding model", { kind: "embedding" as const }],
+    [
+      "a refuted proof",
+      {
+        toolCallingVerification: {
+          status: "unsupported" as const,
+          checkedAt: "2026-09-24T08:00:00.000Z",
+          probe: "gateway-tool-calling-v1" as const,
+          configurationFingerprint: "test-fingerprint",
+        },
+      },
+    ],
+    [
+      "a proof the server is renewing",
+      {
+        toolCallingRenewalPending: true as const,
+        toolCallingVerification: {
+          status: "verified" as const,
+          checkedAt: "2000-01-01T00:00:00.000Z",
+          probe: "gateway-tool-calling-v1" as const,
+          configurationFingerprint: "test-fingerprint",
+        },
+      },
+    ],
+  ])("does not hold for %s", (_title, overrides) => {
+    expect(isCodingWorkbenchToolCheckCandidate(unconfirmed(overrides))).toBe(false);
+  });
+
+  it("does not hold for a model the Workbench already offers", () => {
+    const eligible = cap({
+      conversationReady: true,
+      toolCallingVerification: {
+        status: "verified",
+        checkedAt: new Date().toISOString(),
+        probe: "gateway-tool-calling-v1",
+        configurationFingerprint: "test-fingerprint",
+      },
+    });
+    expect(isCodingWorkbenchModel(eligible)).toBe(true);
+    expect(isCodingWorkbenchToolCheckCandidate(eligible)).toBe(false);
   });
 });
 

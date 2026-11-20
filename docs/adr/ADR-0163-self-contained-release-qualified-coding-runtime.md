@@ -243,11 +243,14 @@ verified leaf signer identities to match before the carrier may emit a receipt. 
 comparison preserves Azure's short-lived certificate rotation model: it does not pin a leaf
 thumbprint, public key, or subject in repository content.
 
-The same supervisor image is the `KeikoRuntimeGateway` broker every Windows launch requires
-(ADR-0043 D19). The self-contained release unit therefore includes setting it up: a healthy
-`keiko start` installs or repairs the broker to the shipped supervisor's pin (one UAC prompt when
-the pin changed, never before the restart proof), and the Workbench offers Repair. A person never
-runs a separate `keiko gateway-service` step after installing or updating (2026-11-17).
+_Amended 2026-11-19 by ADR-0043 D21 (#4068): the broker is retired._ The same supervisor image
+confines every Windows launch itself, as the signed-in standard user in an AppContainer without
+network capability, reaching the attested loopback ports through a named-pipe relay. The
+self-contained release unit therefore needs no service: `keiko start` installs and repairs nothing,
+the Workbench offers no Repair, and the supervisor's verified pin is the only Windows precondition
+(`gateway-service-unqualified` when it is missing). A person never runs a separate step after
+installing or updating. A machine carrying the 1.5.x `KeikoRuntimeGateway` service removes it with
+`keiko gateway-service uninstall` or a full `keiko uninstall` (2026-11-17, superseded 2026-11-19).
 
 ### D4 — macOS uses an entitled Endpoint Security System Extension
 
@@ -678,3 +681,4 @@ done exactly that; an evaluation runtime is not such a fact and stays in the det
 | 1.10    | 2026-11-05 | Pinned OpenCode 2.2.5 (#4271). Every version fact reads from `opencode-runtime-pins.json`. The new built-in plugins are removed at the source, so the shipped payload offers no capability the previous one did not. |
 | 1.11    | 2026-11-12 | D1: `linux-x64` stays in the matrix with all its gates as a community-tier target; new operating-system features are qualified on Windows and macOS only (ADR-0183). |
 | 1.12    | 2026-11-17 | D3/D8: a Windows install or update reaches a usable Workbench without a separate service step: a healthy `keiko start` installs or repairs the gateway broker (ADR-0043 D19), and the Workbench offers Repair. A runtime that no lane offers now names the installation kind the server found (`npm-runtime-package-missing`, `portable-runtime-unverified`, otherwise `platform-unqualified`), logged as `coding-runtime.install.unqualified`. By owner decision the npm lane's Windows helper is re-pinned to the portable release build (`65cc98c3…`), so the npm and desktop packages carry one set of Windows native bytes (MSVC 14.51); the Windows npm runtime package is still unpublished until the owner publishes it (see the release publish workflow). |
+| 1.13    | 2026-11-19 | D3/D8: retired the Windows gateway broker setup; the supervisor confines every Windows run without a service, administrator or UAC prompt (#4068, ADR-0043 D21). |

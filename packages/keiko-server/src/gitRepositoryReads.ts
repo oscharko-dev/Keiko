@@ -31,6 +31,8 @@ import {
 } from "./gitRoutes.js";
 import { containsPath, GIT_BASE_ARGS } from "@oscharko-dev/keiko-git";
 import { parsePorcelainV2Branch } from "./gitPorcelainStatus.js";
+import { settleCapCutStatus, type BoundedStatusLog } from "./gitStatusBounded.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import { FilesError, runFilesHandler } from "./files.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -256,11 +258,13 @@ function runGit(
   repo: RepositoryContext,
   options: NormalizedGitRouteOptions,
   args: readonly string[],
+  expectedTruncation = false,
 ): Promise<GitProcessResult> {
   return options.runner([...GIT_BASE_ARGS, "-C", repo.repositoryRoot, ...args], {
     cwd: repo.repositoryRoot,
     maxBytes: options.maxStatusBytes,
     timeoutMs: options.timeoutMs,
+    ...(expectedTruncation ? { expectedTruncation: true } : {}),
   });
 }
 
@@ -359,7 +363,8 @@ function buildSummary(
     unstagedCount: parsed.unstagedCount,
     untrackedCount: parsed.untrackedCount,
     conflictedCount: parsed.conflictedCount,
-    clean: !parsed.dirty,
+    // A cut status proves at least the records it shows; an unseen remainder is not "clean".
+    clean: !parsed.dirty && !status.truncated,
     remotes: remoteAliases,
     lastSync,
     truncated: status.truncated,
@@ -376,7 +381,10 @@ export async function handleGitSummary(
     const cacheKey = gitSummaryCacheKey(ctx, deps, options);
     const cached = cachedGitSummary(deps, cacheKey);
     if (cached !== undefined) return cached.value;
-    const value = computeGitSummary(ctx, deps, options).catch((error: unknown) => {
+    const value = computeGitSummary(ctx, deps, options, {
+      sink: (rawOptions ?? deps.gitRouteOptions)?.activityLog ?? processServerLogSink(),
+      correlationId: ctx.correlationId,
+    }).catch((error: unknown) => {
       gitSummaryCache.get(deps)?.delete(cacheKey);
       throw error;
     });
@@ -389,17 +397,30 @@ async function computeGitSummary(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   options: NormalizedGitRouteOptions,
+  log: BoundedStatusLog,
 ): Promise<RouteResult> {
   const repo = await resolveRepository(ctx, deps, options);
   if (isUnavailable(repo)) {
     const body = unavailableSummary(repo.root, repo.repositoryRoot, repo.reason);
     return { status: 200, body: redacted(deps, body) };
   }
-  const [status, remotesResult, lastSync] = await Promise.all([
-    runGit(repo, options, ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]),
+  const [statusRun, remotesResult, lastSync] = await Promise.all([
+    runGit(
+      repo,
+      options,
+      ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"],
+      true,
+    ),
     runGit(repo, options, ["remote", "-v"]),
     readLastSync(repo, options),
   ]);
+  // A cap-terminated status is a bounded, truncated summary, not an unavailable repository (#4113).
+  const status = settleCapCutStatus(statusRun, {
+    format: "v2",
+    surface: "summary",
+    maxBytes: options.maxStatusBytes,
+    log,
+  });
   if (status.exitCode !== 0) {
     const reason = classifyFailure(status);
     return {

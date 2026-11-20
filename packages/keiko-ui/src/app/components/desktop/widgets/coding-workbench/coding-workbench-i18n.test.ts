@@ -10,25 +10,6 @@ import {
 } from "./coding-workbench-i18n.en";
 
 describe("Coding Workbench translations", () => {
-  // The sentence still names the one remedy, now the Workbench's own Repair action instead of a
-  // terminal command (one-step Windows setup): each language names its own button label, and no
-  // sentence sends the person to a terminal any more.
-  it.each([
-    "codingWorkbench.gatewayService.absent",
-    "codingWorkbench.gatewayService.stopped",
-    "codingWorkbench.gatewayService.stale",
-    "codingWorkbench.gatewayService.unknown",
-  ] as const)("%s names the Repair action in both languages", (key) => {
-    for (const language of ["en", "de"] as const) {
-      const sentence = translateCodingWorkbench(language, key);
-      expect(sentence).toContain(
-        translateCodingWorkbench(language, "codingWorkbench.gatewayService.repair"),
-      );
-      expect(sentence).not.toContain("keiko gateway-service");
-      expect(sentence).not.toMatch(/terminal/iu);
-    }
-  });
-
   // #4068: the Workbench names the installation kind the server found and the one step for it.
   it.each([
     ["codingWorkbench.runtime.npmRuntimePackageMissing", "npm"],
@@ -38,6 +19,23 @@ describe("Coding Workbench translations", () => {
       const sentence = translateCodingWorkbench(language, key);
       expect(sentence).toContain(fact);
       expect(sentence).toContain("keiko-windows-x64-setup.exe");
+    }
+  });
+
+  // An installation managed outside the app (a folder package, an IT-managed deployment) installs
+  // and updates nothing itself: its sentences name the administrator and never an installer, an
+  // in-app update or npm.
+  it.each([
+    "codingWorkbench.runtime.managedRuntimePackageMissing",
+    "codingWorkbench.runtime.managedRuntimeUnverified",
+  ] as const)("%s points to the administrator and suggests no installation", (key) => {
+    const en = translateCodingWorkbench("en", key);
+    const de = translateCodingWorkbench("de", key);
+    expect(en).toContain("Your administrator");
+    // The German catalogs say "deine Administration" throughout.
+    expect(de).toContain("Deine Administration");
+    for (const sentence of [en, de]) {
+      expect(sentence).not.toMatch(/setup\.exe|npm install|Review updates|Updates prüfen/u);
     }
   });
 
@@ -160,11 +158,13 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.activity.toolState.waiting-for-trust",
     "codingWorkbench.activity.toolState.no-runnable-steps",
     "codingWorkbench.activity.toolState.not-run",
+    "codingWorkbench.activity.toolState.isolation-unavailable",
     "codingWorkbench.activity.verification.passed",
     "codingWorkbench.activity.verification.failed-check",
     "codingWorkbench.activity.verification.waiting-for-trust",
     "codingWorkbench.activity.verification.no-runnable-steps",
     "codingWorkbench.activity.verification.not-run",
+    "codingWorkbench.activity.verification.isolation-unavailable",
     "codingWorkbench.activity.toolState.not-done",
     "codingWorkbench.activity.toolState.waiting-for-approval",
     "codingWorkbench.activity.git.waiting-for-approval",
@@ -202,6 +202,12 @@ describe("Coding Workbench translations", () => {
     "codingWorkbench.composer.blocked.commandsLoading",
     "codingWorkbench.event.failure.invalid-intent",
     "codingWorkbench.event.failure.workspace-unqualified",
+    "codingWorkbench.event.failure.runtime-supervisor-grants-acl",
+    "codingWorkbench.event.failure.runtime-supervisor-grants-directory",
+    "codingWorkbench.event.failure.runtime-supervisor-grants-capability",
+    "codingWorkbench.event.failure.runtime-supervisor-gateway-connect",
+    "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
+    "codingWorkbench.event.failure.runtime-supervisor-refused",
     "codingWorkbench.repository.folderModeUnsupported",
   ] as const)("localizes %s in both catalogs", (key) => {
     const en = translateCodingWorkbench("en", key, { name: "n", count: 1, position: 1, total: 1 });
@@ -224,6 +230,32 @@ describe("Coding Workbench translations", () => {
     expect(translateCodingWorkbench("de", key)).toContain(
       "Wähle einen Projektordner außerhalb der Keiko-Installation",
     );
+  });
+
+  // #4068: the six Windows start refusals are plain words for a non-technical reader: no "install"
+  // (a folder package installs nothing) and no internal jargon.
+  it.each([
+    "codingWorkbench.event.failure.runtime-supervisor-grants-acl",
+    "codingWorkbench.event.failure.runtime-supervisor-grants-directory",
+    "codingWorkbench.event.failure.runtime-supervisor-grants-capability",
+    "codingWorkbench.event.failure.runtime-supervisor-gateway-connect",
+    "codingWorkbench.event.failure.runtime-supervisor-gateway-admit",
+    "codingWorkbench.event.failure.runtime-supervisor-refused",
+  ] as const)("words %s in plain language without install or jargon", (key) => {
+    for (const locale of ["en", "de"] as const) {
+      const text = translateCodingWorkbench(locale, key);
+      expect(text).not.toMatch(/install/iu);
+      expect(text).not.toMatch(/\b(?:ACL|AppContainer|supervisor|capability)\b/iu);
+      expect(text).not.toMatch(/[A-Za-z]:\\|0x[0-9a-f]+/iu);
+    }
+    expect(translateCodingWorkbench("en", key)).toContain("on this Windows computer");
+    expect(translateCodingWorkbench("de", key)).toContain("auf diesem Windows-Computer");
+  });
+
+  it("points a refused folder grant at a folder that belongs to the person", () => {
+    const acl = "codingWorkbench.event.failure.runtime-supervisor-grants-acl";
+    expect(translateCodingWorkbench("en", acl)).toContain("your own user folder");
+    expect(translateCodingWorkbench("de", acl)).toContain("deinen eigenen Benutzerordner");
   });
 
   // #4068: a start the Windows broker cannot confine must name what to change, never "try again".

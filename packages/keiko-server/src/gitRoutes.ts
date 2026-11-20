@@ -38,7 +38,11 @@ import {
 import { errorBody } from "./route-error.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { isCapTerminatedTruncation, observedGitRunner } from "./gitProcessActivity.js";
+import {
+  isCapTerminatedTruncation,
+  observedGitRunner,
+  stderrHoldsOnlyGitWarnings,
+} from "./gitProcessActivity.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import {
@@ -58,6 +62,7 @@ import { DENIED_MESSAGE } from "./files-deny.js";
 import { parseGitBlamePorcelain } from "./gitBlameParser.js";
 import { parseGitEditorUnifiedDiff } from "./gitDiffParser.js";
 import { redactedDiffViewBody, type DiffViewLog } from "./gitDiffView.js";
+import { settleCapCutStatus } from "./gitStatusBounded.js";
 
 // The git core moved to @oscharko-dev/keiko-git (shared with keiko-tools). Route modules and
 // their tests keep importing the process surface from here so the BFF has one seam for it.
@@ -639,7 +644,8 @@ export function parseStatus(
     available: true,
     branch: collected.branch,
     detached: collected.detached,
-    clean: !counts.dirty,
+    // A cut listing proves only the records it shows; the unseen remainder is not "clean".
+    clean: !counts.dirty && !processTruncated,
     stagedCount: counts.stagedCount,
     unstagedCount: counts.unstagedCount,
     untrackedCount: counts.untrackedCount,
@@ -1111,13 +1117,15 @@ function normalizeNoIndexDiff(
  * The runner kills git once its output reaches the byte cap, so a large tracked diff ends with a
  * signal. That cut is the bounded, truncated view the routes report, not a failed diff (#4113).
  * Only a run the cap itself ended counts (`isCapTerminatedTruncation`): a timeout, an abort, a
- * refusal, git error output or an exit status git chose on its own stays a failure.
+ * refusal, git error output or an exit status git chose on its own stays a failure. Git's own
+ * `warning:` notices are not error output: on Windows nearly every diff of a file with LF line
+ * endings carries one, and it must not turn a large diff into a failed one.
  */
 function byteCapCutAsBoundedDiff(result: GitProcessResult): GitProcessResult {
   const cutAtByteCap =
     isCapTerminatedTruncation(result) &&
     result.refusal === undefined &&
-    result.stderr.length === 0 &&
+    stderrHoldsOnlyGitWarnings(result.stderr) &&
     result.stdout.startsWith("diff --git ");
   return cutAtByteCap ? { ...result, exitCode: 0 } : result;
 }
@@ -1261,7 +1269,7 @@ export async function handleGitStatus(
       }
       await assertOptionalContainedGitPath(repo, path);
       const relativePath = gitPath(repo.selectedRootPrefix, path);
-      const status = await options.runner(
+      const statusRun = await options.runner(
         [
           ...GIT_BASE_ARGS,
           "-C",
@@ -1279,9 +1287,17 @@ export async function handleGitStatus(
           cwd: repo.repositoryRoot,
           maxBytes: options.maxStatusBytes,
           timeoutMs: options.timeoutMs,
+          // A cap-terminated status is the bounded, truncated answer, not a failed git run (#4113).
+          expectedTruncation: true,
           ...(options.abortSignal === undefined ? {} : { abortSignal: options.abortSignal }),
         },
       );
+      const status = settleCapCutStatus(statusRun, {
+        format: "v1",
+        surface: "status",
+        maxBytes: options.maxStatusBytes,
+        log: diffViewLog(ctx, deps, rawOptions),
+      });
       if (status.exitCode !== 0) {
         const reason = classifyFailure(status);
         const body = genericUnavailable(

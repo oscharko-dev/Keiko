@@ -166,6 +166,7 @@ export type VerificationNotRunReason =
   | "script-missing"
   | "dependencies-unavailable"
   | "native-shell-required"
+  | "isolation-unavailable"
   | "denied"
   | "cancelled"
   | "skipped";

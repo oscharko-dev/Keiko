@@ -300,6 +300,7 @@ describe("POST /api/diagnostics/client", () => {
 
   it.each([
     "workspace-ownership-started",
+    "workspace-ownership-changed",
     "workspace-viewport-fitted",
     "workspace-window-sizing-retired",
     "scope-refusal-restored",
@@ -1664,6 +1665,8 @@ describe("POST /api/diagnostics/client", () => {
     },
     { interaction: "changeset-review-prepared", fileCount: 3 },
     { interaction: "changeset-review-prepared", fileCount: 100_000 },
+    // ADR-0171 D2 (2026-11-19): the person's explicit tool check of an activated model.
+    { interaction: "tool-check-requested" },
     { interaction: "history-repository-switched" },
     { interaction: "event-stream-reconnecting" },
     { interaction: "history-workspace-switched" },
@@ -1771,6 +1774,7 @@ describe("POST /api/diagnostics/client", () => {
     { interaction: "agent-selected", agent: "my-private-agent" },
     { interaction: "pending-decision-focused", fileCount: 1 },
     { interaction: "history-repository-switched", taskId: "task-one" },
+    { interaction: "tool-check-requested", modelId: "private-model-name" },
     { interaction: "event-stream-reconnecting", readyState: 2 },
     { interaction: "history-workspace-switched", workspaceId: "ws-other" },
     { interaction: "bridge-registration-refused" },

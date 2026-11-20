@@ -1,0 +1,118 @@
+name: npm folder packages
+
+# Publishes the three tested npm folder packages (keiko-macos-arm64.npm.zip, keiko-macos-x64.npm.zip
+# and keiko-windows-x64.npm.zip) as the GitHub prerelease npm-folder-<version>.
+#
+# The package cannot be an asset of the product release: its lockfile needs the integrity npm
+# reports for the released version, and the product release is immutable once published
+# (docs/release/standalone-npm-package.md). So this runs after a product release, from its own
+# button. It qualifies every package on its own platform (npm-folder-qualify.yml) and publishes only
+# when all three legs pass and each ZIP is byte for byte the one its leg tested.
+#
+# The prerelease is a transport for the tested ZIPs: never marked latest, no update trust. A failure
+# here never touches a product release: nothing in the release workflows reads this one.
+#
+# A release owner in KEIKO_RELEASE_OWNER_GITHUB_LOGINS, the variable release.yml and
+# coding-runtime-publish.yml read, runs it on dev with the version. Releases are immutable, so a
+# version that already has its prerelease is refused.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published Keiko version (x.y.z) whose npm folder packages are qualified and published"
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: npm-folder-publish
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Authorize and check the version
+    # The same gate as release.yml and coding-runtime-publish.yml: only an allowlisted human, only on
+    # dev. Empty, missing or malformed configuration refuses. Every later job needs this one.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && github.ref == 'refs/heads/dev'
+      && !endsWith(github.triggering_actor, '[bot]')
+      && contains(fromJSON(vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS), github.triggering_actor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      commit: ${{ steps.preflight.outputs.commit }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify checked-out commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Refuse an existing prerelease, resolve the product release's commit
+        id: preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_FOLDER_VERSION: ${{ inputs.version }}
+        run: node scripts/publish-npm-folder-packages.mjs preflight --version "$NPM_FOLDER_VERSION" --repository "$GITHUB_REPOSITORY"
+
+  qualify:
+    name: Qualify on native hardware
+    needs: prepare
+    uses: ./.github/workflows/npm-folder-qualify.yml
+    with:
+      version: ${{ inputs.version }}
+    permissions:
+      contents: read
+
+  publish:
+    name: Publish the tested packages as a prerelease
+    needs: [prepare, qualify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A deployment environment of its own, as release.yml and coding-runtime-publish.yml have one. It
+    # holds no secrets (the job uses only github.token), and no existing environment is named, so no
+    # secret's reach grows. The owner may add protection rules to it.
+    environment: npm-folder-publish
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Download what the three legs tested
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: npm-folder-*
+          merge-multiple: true
+          path: npm-folder-assets
+      - name: Verify that each ZIP is the exact bytes its leg tested, and write the release notes
+        env:
+          NPM_FOLDER_VERSION: ${{ inputs.version }}
+        run: node scripts/publish-npm-folder-packages.mjs verify --version "$NPM_FOLDER_VERSION" --dir npm-folder-assets --notes "$RUNNER_TEMP/npm-folder-notes.md" --repository "$GITHUB_REPOSITORY"
+      - name: Attest build provenance for the npm folder packages
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: npm-folder-assets/keiko-*.npm.zip
+      - name: Create the draft, upload, check every asset and publish the prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_FOLDER_VERSION: ${{ inputs.version }}
+          NPM_FOLDER_COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: node scripts/publish-npm-folder-packages.mjs publish --version "$NPM_FOLDER_VERSION" --commit "$NPM_FOLDER_COMMIT" --dir npm-folder-assets --notes "$RUNNER_TEMP/npm-folder-notes.md" --repository "$GITHUB_REPOSITORY"

@@ -20,6 +20,7 @@ import { fetchProjects } from "../../../../../lib/api";
 
 import type { WorkspaceManifestView } from "../../hooks/useWorkspaceManifest";
 import { Icons } from "../../Icons";
+import { startingProjects } from "../../windows/startingProjectRoot";
 
 import { WorkspaceTrustBadge } from "../../workspace-trust/WorkspaceTrustSurfaces";
 import { useWorkspaceTrust } from "../../workspace-trust/useWorkspaceTrust";
@@ -253,8 +254,8 @@ function AddRootToolbar({
         if (cancelled) return;
         const currentPaths = new Set(manifest.roots.map((root) => root.canonicalRoot));
         setProjects(
-          payload.projects
-            .filter((project) => project.available && !currentPaths.has(project.path))
+          startingProjects(payload.projects)
+            .filter((project) => !currentPaths.has(project.path))
             .map((project) => ({ name: project.name, path: project.path })),
         );
       })

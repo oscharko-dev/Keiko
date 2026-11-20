@@ -1448,8 +1448,6 @@ export type {
 } from "./github-issue-reference.js";
 export type {
   CodingWorkbenchGatewayEventKind,
-  CodingWorkbenchGatewayServiceRepairOutcome,
-  CodingWorkbenchGatewayServiceRepairResponse,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchContextCompaction,
@@ -2212,6 +2210,7 @@ export type {
   isCodingWorkbenchReadinessCandidate,
   isCodingWorkbenchModel,
   isCodingWorkbenchProofRenewing,
+  isCodingWorkbenchToolCheckCandidate,
   listCodingWorkbenchReadinessCandidates,
   selectCodingWorkbenchReadinessCandidate,
   isVoiceCapability,

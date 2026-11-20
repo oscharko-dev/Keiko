@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "4f6ff20ca625c172457ec816af7b339e62692f26debd4de578b0f94c9b7b03b5"
+    "catalogDigest": "c4cd52e2eb7345456625633410dad5130bc5e89b6ecdb1742465450512a85d3c"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,9 +75,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 720,
-    "proofCount": 744,
-    "resolvedProofCount": 744,
+    "operationCount": 718,
+    "proofCount": 742,
+    "resolvedProofCount": 742,
     "failureClassCount": 411,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -501,8 +501,6 @@
         "coding-runtime.verification",
         "coding-runtime.verification-summarized",
         "coding-runtime.websearch.performed",
-        "coding-runtime.windows-gateway-service",
-        "coding-runtime.windows-gateway-service.repair",
         "coding-runtime.workspace-discovery",
         "coding-runtime.workspace-read",
         "coding-sidecar.gateway.outcome",
@@ -756,6 +754,7 @@
         "git.snapshot.released",
         "git.snapshot.reserve-denied",
         "git.snapshot.reserved",
+        "git.status.bounded",
         "git.verified-commit",
         "lsp.java.version-probe.completed",
         "lsp.process.ownership.changed",
@@ -838,7 +837,6 @@
         "cli.audit.started",
         "cli.gateway-service.completed",
         "cli.gateway-service.failed",
-        "cli.gateway-service.setup",
         "cli.gateway-service.started",
         "cli.install-layout.normalized",
         "cli.lifecycle.provisioned-config",
@@ -952,7 +950,6 @@
     "cli-gateway-service": ["runtime-packages.dependency-failure"],
     "provisioned-config-adoption": ["runtime-packages.dependency-failure"],
     "launch-order-fence": ["ui.dependency-failure"],
-    "windows-gateway-service": ["tools-workflows.dependency-failure"],
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
@@ -1149,6 +1146,7 @@
     "git-denied-path-exclusion": ["editor-delivery.rejection"],
     "git-diff-search-bounded": ["editor-delivery.loss"],
     "git-diff-view-bounded": ["editor-delivery.dependency-failure"],
+    "git-status-bounded": ["editor-delivery.dependency-failure"],
     "git-draft-checks": ["editor-delivery.dependency-failure"],
     "git-draft-delivery": ["editor-delivery.dependency-failure"],
     "git-draft-push-preparation": ["editor-delivery.dependency-failure"],
@@ -1550,9 +1548,6 @@
       "packages/keiko-cli/src/gateway-service.test.ts"
     ],
     "cli.gateway-service.failed.real-sink-line": ["packages/keiko-cli/src/gateway-service.test.ts"],
-    "cli.gateway-service.setup.real-sink-line": [
-      "packages/keiko-cli/src/gateway-service-setup.test.ts"
-    ],
     "cli.gateway-service.started.real-sink-line": [
       "packages/keiko-cli/src/gateway-service.test.ts"
     ],
@@ -2104,12 +2099,6 @@
     ],
     "coding-runtime.websearch.performed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/nativeWebSearch.test.ts"
-    ],
-    "coding-runtime.windows-gateway-service.real-sink-line": [
-      "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.test.ts"
-    ],
-    "coding-runtime.windows-gateway-service.repair.real-sink-line": [
-      "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.test.ts"
     ],
     "coding-runtime.workspace-discovery.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolDiscoveryLifecycle.test.ts",
@@ -2688,6 +2677,7 @@
       "packages/keiko-server/src/gitChangeSnapshotRegistry.test.ts"
     ],
     "git.snapshot.reserved.line": ["packages/keiko-server/src/gitChangeSnapshotRegistry.test.ts"],
+    "git.status.bounded.emitted-line": ["packages/keiko-server/src/gitRoutes.test.ts"],
     "git.verified-commit.emitted-line": [
       "packages/keiko-server/src/gitDelivery/verifiedCommitService.test.ts"
     ],

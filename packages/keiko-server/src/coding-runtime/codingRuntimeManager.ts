@@ -105,6 +105,10 @@ import {
   type CodingRuntimeStderrSummary,
 } from "./codingRuntimeProcessIo.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import {
+  supervisorRefusalFailureCode,
+  type SupervisorRefusalFailureCode,
+} from "./supervisorRefusal.js";
 
 export type CodingRuntimeAdapterKind = "opencode-compatible" | "codex-cli";
 
@@ -127,6 +131,9 @@ export type CodingRuntimeFailureCode =
   // #4068: a confined Windows run outside a Keiko-managed worktree, or one on another volume.
   | "workspace-location-unsupported"
   | "workspace-volume-unsupported"
+  // #4068: the Windows runtime supervisor refused the launch and named the step (see
+  // supervisorRefusal.ts); the start settles with that cause instead of the internal error.
+  | SupervisorRefusalFailureCode
   | "payload-missing"
   | "platform-unsupported"
   | "protocol-schema-mismatch"
@@ -1500,7 +1507,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       return { ok: true, runId: request.runId, status: "ready" };
     }
     if (handshakeFailure === undefined || this.active !== active) {
-      return failure("runtime-crashed", false);
+      return refusedLaunchFailure(active, failure("runtime-crashed", false));
     }
     active.stopRequested = true;
     active.status = "stopping";
@@ -1511,7 +1518,7 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     }
     active.status = "stopped";
     this.active = undefined;
-    return handshakeFailure;
+    return refusedLaunchFailure(active, handshakeFailure);
   }
 
   private async revokeAndTerminate(active: ActiveRuntime): Promise<RuntimeReapReceipt | undefined> {
@@ -2962,6 +2969,15 @@ function isLoopbackUrl(raw: string): boolean {
 
 function failure(code: CodingRuntimeFailureCode, retryable: boolean): FailureResult {
   return { ok: false, failureCode: code, retryable };
+}
+
+// A launch the Windows supervisor refused names the refusing step (#4068). The refusal is the cause:
+// the handshake that then failed against a runtime that never started, or the crash it was read as,
+// is its symptom. A person's own abort stays an abort.
+function refusedLaunchFailure(active: ActiveRuntime, observed: FailureResult): FailureResult {
+  if (observed.failureCode === "start-aborted") return observed;
+  const refusal = supervisorRefusalFailureCode(active.tree.failureReason?.());
+  return refusal === undefined ? observed : failure(refusal, false);
 }
 
 function observeSandboxAttestation(

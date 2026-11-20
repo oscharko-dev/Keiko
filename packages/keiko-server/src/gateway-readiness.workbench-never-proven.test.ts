@@ -480,6 +480,65 @@ describe("a file-configured chat model whose tool-calling proof aged out", () =>
   });
 });
 
+// Walk of 1.5.3: Gateway Setup activates the default model and stores the tool-calling step that
+// ended without a verdict as `unverified`. The Workbench lists that model for one explicit tool
+// check; opening a window (`check=use`) or reading passively sends it nothing, and the explicit
+// check (`check=1`) proves it.
+describe("a chat model Gateway Setup kept with an unconfirmed tool proof", () => {
+  function unconfirmedByGatewaySetup(): ReturnType<typeof parseGatewayConfig> {
+    const configProvider = provider(CHAT);
+    const raw = parseGatewayConfig({ providers: [configProvider], capabilities: [] });
+    const [loadedProvider] = raw.providers;
+    if (loadedProvider === undefined) throw new TypeError("Expected the configured provider.");
+    return parseGatewayConfig({
+      providers: [configProvider],
+      capabilities: [
+        {
+          ...neverProvenChat(),
+          toolCalling: false,
+          toolCallingVerification: {
+            status: "unverified",
+            checkedAt: new Date().toISOString(),
+            probe: "gateway-tool-calling-v1",
+            configurationFingerprint: toolCallingConfigurationFingerprint(loadedProvider),
+          },
+        },
+      ],
+    });
+  }
+
+  it("is checked only by the explicit action, never by a window opening", async () => {
+    const gateway = stubGateway("calls");
+    const { deps, events } = await observedDeps(unconfirmedByGatewaySetup());
+    expect(deps.gatewayConfig?.verifiedCapability(CHAT)?.fields.conversationReady).toBe(true);
+    expect(codingWorkbenchModelEligibility(storedChat(deps))).toBe("ineligible");
+    const callsBefore = gateway.calls.length;
+
+    const opening = await handleCodingSidecarGatewayProfile(
+      {
+        correlationId: "profile-window-opening",
+        url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile?check=use"),
+      } as RouteContext,
+      deps,
+    );
+    await codingWorkbenchProbesSettledForTests();
+
+    expect(gateway.calls).toHaveLength(callsBefore);
+    expect(workbenchRuns(events)).toHaveLength(0);
+    expect(opening.body).toMatchObject({ status: "unavailable" });
+
+    const explicit = await handleCodingSidecarGatewayProfile(
+      profileContext("profile-explicit-tool-check", true),
+      deps,
+    );
+
+    expect(gateway.toolCalls()).toBe(1);
+    expect(workbenchRuns(events)).toHaveLength(1);
+    expect(explicit.body).toMatchObject({ status: "available", modelAlias: CHAT });
+    expect(codingWorkbenchModelEligibility(storedChat(deps))).toBe("eligible");
+  });
+});
+
 describe("the subscription and policy guard", () => {
   it.each([
     {

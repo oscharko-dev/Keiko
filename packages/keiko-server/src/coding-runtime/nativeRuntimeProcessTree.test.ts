@@ -3,7 +3,12 @@ import { PassThrough, type Readable, type Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_PACKET_BYTES, RESPONSE_HEADER_BYTES } from "./nativeRuntimeProcessProtocol.js";
-import { NativeRuntimeTree, type NativeRuntimeHelperProcess } from "./nativeRuntimeProcessTree.js";
+import {
+  NativeRuntimeTree,
+  NON_WINDOWS_SUPERVISOR_REFUSALS,
+  type NativeRuntimeHelperProcess,
+} from "./nativeRuntimeProcessTree.js";
+import { supervisorRefusalFailureCode } from "./supervisorRefusal.js";
 
 // KEIKO-0347: the packet-framing / reassembly state machine had no direct co-located test —
 // existing coverage exercised it only through the higher-level backend. These tests pin the
@@ -67,7 +72,7 @@ function proofPacket(): Buffer {
 describe("NativeRuntimeTree packet reassembly", () => {
   it("reassembles a reap-proof packet that arrives split across chunks", async () => {
     const h = harness();
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
     const packet = proofPacket();
     // Emit the packet in three progressively small chunks.
     h.controlOutput.emit("data", packet.subarray(0, 4));
@@ -80,7 +85,7 @@ describe("NativeRuntimeTree packet reassembly", () => {
 
   it("wakes a pending waitForProof exactly once a split packet completes", async () => {
     const h = harness();
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
     const packet = proofPacket();
     h.controlOutput.emit("data", packet.subarray(0, 4));
     const waiter = tree.waitForProof(1_000);
@@ -91,7 +96,7 @@ describe("NativeRuntimeTree packet reassembly", () => {
   it("finishes the tree on a byte stream that overflows MAX_PACKET_BYTES before a valid packet", () => {
     const h = harness();
     const exits: (number | null)[] = [];
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
     tree.onTreeExit((code) => exits.push(code));
     // Start a valid header — payloadLength 40 leaves a full packet of RESPONSE_HEADER_BYTES + 40 =
     // 52 bytes. Emit the header and the first bytes of the payload without ever completing the
@@ -114,7 +119,7 @@ describe("NativeRuntimeTree packet reassembly", () => {
   it("finishes the tree on a framed packet whose payloadLength exceeds the 64-byte cap", () => {
     const h = harness();
     const exits: (number | null)[] = [];
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
     tree.onTreeExit((code) => exits.push(code));
     const header = Buffer.alloc(RESPONSE_HEADER_BYTES);
     header.write("KRS1", 0, "ascii");
@@ -129,7 +134,7 @@ describe("NativeRuntimeTree packet reassembly", () => {
   it("finishes the tree on a header whose magic string is not KRS1", () => {
     const h = harness();
     const exits: (number | null)[] = [];
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
     tree.onTreeExit((code) => exits.push(code));
     const header = Buffer.alloc(RESPONSE_HEADER_BYTES);
     header.write("XXXX", 0, "ascii");
@@ -143,7 +148,7 @@ describe("NativeRuntimeTree packet reassembly", () => {
   it("forwards a child exit to onTreeExit and resolves pending waiters with the current proof state", async () => {
     const h = harness();
     const exits: (number | null)[] = [];
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
     tree.onTreeExit((code) => exits.push(code));
     const waiter = tree.waitForProof(1_000);
     // A real helper's control pipe is closed once it has exited; nothing more can arrive.
@@ -161,7 +166,7 @@ describe("NativeRuntimeTree packet reassembly", () => {
   it("accepts a reap proof that is read after the helper exit was observed", async () => {
     const h = harness();
     const exits: (number | null)[] = [];
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
     tree.onTreeExit((code) => exits.push(code));
     const waiter = tree.waitForProof(1_000);
 
@@ -177,7 +182,7 @@ describe("NativeRuntimeTree packet reassembly", () => {
 
   it("settles an unproven reap once the closed control pipe delivered nothing", async () => {
     const h = harness();
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
     const waiter = tree.waitForProof(1_000);
 
     h.emitExit(0);
@@ -195,7 +200,7 @@ describe("NativeRuntimeTree packet reassembly", () => {
     it("stops waiting for a proof after a bounded grace", async () => {
       vi.useFakeTimers();
       const h = harness();
-      const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+      const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
       const waiter = tree.waitForProof(60_000);
 
       h.emitExit(0);
@@ -208,7 +213,7 @@ describe("NativeRuntimeTree packet reassembly", () => {
   it("treats a failed write to the control pipe as the end of the helper, not an unhandled error", () => {
     const h = harness();
     const exits: (number | null)[] = [];
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
     tree.onTreeExit((code) => exits.push(code));
 
     expect(() => h.controlInput.emit("error", new Error("EPIPE"))).not.toThrow();
@@ -222,7 +227,7 @@ describe("NativeRuntimeTree packet reassembly", () => {
   it("treats an error on the control output pipe as the end of the helper", () => {
     const h = harness();
     const exits: (number | null)[] = [];
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
     tree.onTreeExit((code) => exits.push(code));
 
     expect(() => h.controlOutput.emit("error", new Error("EIO"))).not.toThrow();
@@ -256,12 +261,97 @@ describe("NativeRuntimeTree supervisor refusals", () => {
   ])("names refusal code %i as %s and ends the tree", (code, reason) => {
     const h = harness();
     const exits: (number | null)[] = [];
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
     tree.onTreeExit((exit) => exits.push(exit));
     expect(tree.failureReason()).toBeUndefined();
     h.controlOutput.emit("data", refusalPacket(code));
     expect(tree.failureReason()).toBe(reason);
     expect(exits).toEqual([null]);
+  });
+
+  // The start path reported `runtime-reap-unproven` for a launch the supervisor refused before it
+  // had created any process. Only a refusal that precedes the job object proves nothing is left.
+  it.each([
+    [2, "supervisor-job-create"],
+    [6, "supervisor-grants-frame"],
+    [7, "supervisor-grants-directory"],
+    [8, "supervisor-grants-acl"],
+    [9, "supervisor-grants-capability"],
+    [10, "supervisor-gateway-connect"],
+    [12, "supervisor-environment-guard"],
+  ])("proves nothing was left to reap after refusal %i (%s)", async (code) => {
+    const h = harness();
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
+    h.controlOutput.emit("data", refusalPacket(code));
+    expect(tree.hasReapProof()).toBe(true);
+    await expect(tree.waitForProof(50)).resolves.toBe(true);
+  });
+
+  it.each([
+    [1, "protocol: a reconcile helper answers it for a tree that may exist"],
+    [3, "process-create: the job object exists"],
+    [4, "job-assign: the job object exists"],
+    [5, "job-observe: the tree ran"],
+    [11, "gateway-admit: the suspended tree exists"],
+    [99, "an unknown code"],
+  ])("leaves the reap unproven after refusal %i (%s)", async (code) => {
+    const h = harness();
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
+    h.controlOutput.emit("data", refusalPacket(code));
+    expect(tree.hasReapProof()).toBe(false);
+    await expect(tree.waitForProof(50)).resolves.toBe(false);
+  });
+
+  it("never lets a refusal prove the absence of a tree the supervisor already launched", async () => {
+    const h = harness();
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32");
+    const launched = Buffer.alloc(RESPONSE_HEADER_BYTES);
+    launched.write("KRS1", 0, "ascii");
+    launched.writeUInt16LE(1, 4);
+    launched.writeUInt16LE(1, 6);
+    h.controlOutput.emit("data", launched);
+    h.controlOutput.emit("data", refusalPacket(8));
+    expect(tree.failureReason()).toBe("supervisor-grants-acl");
+    expect(tree.hasReapProof()).toBe(false);
+    await expect(tree.waitForProof(50)).resolves.toBe(false);
+  });
+
+  // The three supervisors number their refusals themselves. Read with the Windows table, the macOS
+  // "monitor unavailable" (6) and the Linux "kernel facility unavailable" (6) were a Windows grants
+  // frame: the run settled with a Windows sentence on a Mac, and a refusal proved a reap by
+  // coincidence. Each supervisor's number is read with its own words, and only the Windows
+  // supervisor's refusal proves that no tree existed or becomes a Windows run failure.
+  it.each([
+    ["darwin", 1, "macos-supervisor-protocol"],
+    ["darwin", 3, "macos-supervisor-process-create"],
+    ["darwin", 5, "macos-supervisor-tree-observe"],
+    ["darwin", 6, "macos-supervisor-monitor-unavailable"],
+    ["darwin", 7, "macos-supervisor-tree-already-supervised"],
+    ["darwin", 8, "macos-supervisor-unknown"],
+    ["linux", 1, "linux-supervisor-protocol"],
+    ["linux", 3, "linux-supervisor-process-create"],
+    ["linux", 5, "linux-supervisor-tree-observe"],
+    ["linux", 6, "linux-supervisor-native-unavailable"],
+    ["linux", 7, "linux-supervisor-unknown"],
+  ] as const)(
+    "reads a %s supervisor's refusal %i as %s, never as proof or a Windows cause",
+    async (supervisor, code, reason) => {
+      const h = harness();
+      const tree = new NativeRuntimeTree("a".repeat(32), h.helper, supervisor);
+      h.controlOutput.emit("data", refusalPacket(code));
+      expect(tree.failureReason()).toBe(reason);
+      expect(tree.hasReapProof()).toBe(false);
+      await expect(tree.waitForProof(50)).resolves.toBe(false);
+      expect(supervisorRefusalFailureCode(reason)).toBeUndefined();
+    },
+  );
+
+  it("maps no word of a macOS or Linux supervisor to a Windows run failure", () => {
+    expect(NON_WINDOWS_SUPERVISOR_REFUSALS.length).toBeGreaterThanOrEqual(11);
+    for (const word of NON_WINDOWS_SUPERVISOR_REFUSALS) {
+      expect(word.startsWith("supervisor-")).toBe(false);
+      expect(supervisorRefusalFailureCode(word)).toBeUndefined();
+    }
   });
 });
 
@@ -288,7 +378,9 @@ describe("NativeRuntimeTree launch responses", () => {
     const h = harness();
     const sweeps: unknown[] = [];
     const exits: (number | null)[] = [];
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, (sweep) => sweeps.push(sweep));
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32", (sweep) =>
+      sweeps.push(sweep),
+    );
     tree.onTreeExit((exit) => exits.push(exit));
     h.controlOutput.emit("data", launchedPacket(sweepPayload(3, 1)));
     expect(sweeps).toEqual([{ removed: 3, failed: 1 }]);
@@ -299,7 +391,9 @@ describe("NativeRuntimeTree launch responses", () => {
     const h = harness();
     const sweeps: unknown[] = [];
     const exits: (number | null)[] = [];
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, (sweep) => sweeps.push(sweep));
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32", (sweep) =>
+      sweeps.push(sweep),
+    );
     tree.onTreeExit((exit) => exits.push(exit));
     h.controlOutput.emit("data", launchedPacket(Buffer.alloc(0)));
     expect(sweeps).toEqual([]);
@@ -309,7 +403,7 @@ describe("NativeRuntimeTree launch responses", () => {
   it("ends the tree on a launch response of any other length", () => {
     const h = harness();
     const exits: (number | null)[] = [];
-    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, () => undefined);
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper, "win32", () => undefined);
     tree.onTreeExit((exit) => exits.push(exit));
     h.controlOutput.emit("data", launchedPacket(Buffer.alloc(4)));
     expect(exits).toEqual([null]);

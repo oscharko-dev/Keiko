@@ -36,6 +36,16 @@
         "sha256": "1952015177da85b4d29698dbfe96b7fbf1dda03660fca5c56deaa0b02d1b2b73",
         "integrity": "sha512-fKea5IO0yyAgL7DQLbqBm/3fv+Mva9TLrkStxJintyudmT570RWVOiHGE14skVZa/LsvOztxJWsZLaWpkeIn9Q=="
       }
+    },
+    "1.1.6": {
+      "windows-x64": {
+        "name": "@oscharko-dev/keiko-coding-runtime-win32-x64",
+        "opencodeVersion": "2.2.5",
+        "tarball": "oscharko-dev-keiko-coding-runtime-win32-x64-1.1.6.tgz",
+        "sizeBytes": 123466417,
+        "sha256": "462691b51d0d95fc1d5ce64a27db679e5ca6ed6f4bdc4c1773d14cd8ea68df76",
+        "integrity": "sha512-45TriL8BWjPGuLMN9nnN5A0HoD6hZnXfYJXvtr5YxwzQolcWb8YifCugcarWa/lvA6vy+9rlMqmwJgl3Umyl1A=="
+      }
     }
   }
 }

@@ -67,6 +67,13 @@ The start file runs the Node.js runtime inside `system` and opens Keiko in the b
 its data in `.keiko-standalone` in the person's user folder, not in this folder. Replacing the
 folder with a newer package therefore keeps chats, settings and credentials.
 
+The package folder is not a working folder. It holds Keiko's program files and, in a team package,
+the gateway token, so Keiko starts without a default project: the Coding Workbench, Files and Git
+wait until the person chooses a folder, and Keiko refuses its own program folder inside the package
+for them. Chat works at once and needs no folder. `keiko.config.json` beside the start files,
+`.npmrc`, the sealed `*.vault` stores and the data folder `.keiko-standalone` stay unreadable for the
+model by their names, even inside a folder the person chooses (ADR-0121 D9, ADR-0005 D3).
+
 Keiko does not write into the package folder. The qualification started the macOS package from a
 read-only folder and compared the Windows folder after a session; neither changed.
 
@@ -198,14 +205,11 @@ A new version arrives as a new folder: stop Keiko, delete the old folder, use th
 - **No managed setup.** Nothing is copied to `/Applications` or `%LOCALAPPDATA%\Programs`, and
   there is no Start Menu, Spotlight or Launchpad entry. Do not start `Keiko.app` or `Keiko.exe`
   inside `system`: those are the launchers of the managed install.
-- **No Coding Workbench on Windows.** Windows Coding needs the installed gateway service, which an
-  administrator installs. The folder form never sets that service up: its start asks for no
-  Windows approval, unlike `keiko start` of a managed install, and the Workbench offers no Repair
-  (`gateway-service-managed-outside`). An administrator can install the service separately, for
-  example with `keiko gateway-service install` from a managed Keiko installation; the folder form
-  then uses it and never removes it. Without it, a folder package on Windows offers Chat, Knowledge
-  Pods, Jira and the Editor and reports Coding as unavailable. On macOS the Coding Workbench runs with the
-  evaluation runtime of an unsigned build.
+- **Windows Coding needs no service.** The runtime supervisor in the package confines each run
+  itself, as the signed-in user, without an administrator, a UAC prompt or an installed service
+  (ADR-0043 D21), so the folder form needs no setup step and the Workbench offers no Repair. The
+  governed verification step still needs Docker or Podman, as on macOS. On macOS the Coding
+  Workbench runs with the evaluation runtime of an unsigned build.
 - **One Keiko per computer account.** Keiko listens on loopback port 1983. A second Keiko of the
   same account, or another program on that port, makes the start end with a message that names the
   port.

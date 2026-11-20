@@ -232,6 +232,7 @@ import type {
   ModelCapability,
   VoiceCapabilityResolution,
 } from "@/lib/types";
+import { isConversationEligibleModel } from "@/lib/types";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CopyIcon = Icons.copy;
@@ -2821,11 +2822,25 @@ function ChatSourceTransitionStatus({
   );
 }
 
+// Models are configured but none has a verdict in this process: `conversationReady` is undefined
+// after every start (nobody activated one) and also when an activation's check timed out or met a
+// busy gateway. The sentence is true for both and names the way out, Settings > Models, not a
+// gateway check. A model whose check failed keeps the general sentence.
+function modelsAwaitActivation(capabilities: readonly ModelCapability[] | undefined): boolean {
+  return (
+    capabilities?.some(
+      (model) => isConversationEligibleModel(model) && model.conversationReady === undefined,
+    ) ?? false
+  );
+}
+
 function NoModelAlert(): ReactNode {
   const t = useTranslate();
+  const { modelCatalogRead } = useChatSessionCatalog();
+  const awaitingActivation = modelsAwaitActivation(modelCatalogRead?.capabilities);
   return (
     <div id={NO_MODEL_ALERT_ID} role="alert" className="gw-error cmp-no-model">
-      {t("chat.noModelAlert")}
+      {t(awaitingActivation ? "chat.noModelActivated" : "chat.noModelAlert")}
     </div>
   );
 }

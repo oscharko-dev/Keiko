@@ -75,7 +75,12 @@ import { bffRequestErrorKind } from "@/lib/http";
 import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { connectedScopeFingerprint } from "./workspaceScopeIdentity";
 import { protectWorkspaceLayout, useWorkspaceLayoutLock } from "./useWorkspaceLayoutLock";
-import { WorkspaceStorageScopeContext, workspaceStorageKey } from "./workspace-storage";
+import {
+  WorkspaceStorageScopeContext,
+  announceWorkspaceStorageChanged,
+  isWorkspaceStorageChanged,
+  workspaceStorageKey,
+} from "./workspace-storage";
 
 export type { AppWindow, View };
 export type { UseWorkspaceResult, ViewportWorld };
@@ -1254,6 +1259,10 @@ async function fetchServerWorkspaceSnapshot(
       noteWorkspaceSyncRecovered();
       return "unchanged";
     }
+    if (await isWorkspaceStorageChanged(response)) {
+      announceWorkspaceStorageChanged(storageScope);
+      return null;
+    }
     if (!response.ok) {
       surfaceWorkspaceSyncFailure("pull", `failed with status ${String(response.status)}`);
       return null;
@@ -1403,6 +1412,14 @@ function workspaceStorageHeaders(scope: string | undefined): Readonly<Record<str
   return scope === undefined ? {} : { "X-Keiko-Workspace-Storage": scope };
 }
 
+// Whether a keepalive PUT may carry this body; an over-budget body is surfaced, not dropped silently.
+function keepaliveBodyFits(serializedBody: string): boolean {
+  const byteLength = serializedBodyByteLength(serializedBody);
+  if (byteLength <= KEEPALIVE_BODY_BUDGET_BYTES) return true;
+  surfaceWorkspaceKeepaliveOvercap(byteLength);
+  return false;
+}
+
 async function putServerWorkspaceSnapshot(
   wins: readonly AppWindow[],
   conns: readonly Connection[],
@@ -1424,14 +1441,7 @@ async function putServerWorkspaceSnapshot(
   // is over the keepalive budget, drop keepalive and send a normal PUT (which
   // usually still completes on visibilitychange). Sanitize's data-URL/large-
   // payload dropping upstream keeps this rare; the guard makes it non-silent.
-  let keepalive = opts.keepalive === true;
-  if (keepalive) {
-    const byteLength = serializedBodyByteLength(serializedBody);
-    if (byteLength > KEEPALIVE_BODY_BUDGET_BYTES) {
-      surfaceWorkspaceKeepaliveOvercap(byteLength);
-      keepalive = false;
-    }
-  }
+  const keepalive = opts.keepalive === true && keepaliveBodyFits(serializedBody);
   try {
     const response = await fetch(WORKSPACE_STATE_API, {
       method: "PUT",
@@ -1457,6 +1467,10 @@ async function putServerWorkspaceSnapshot(
         kind: "conflict",
         revision: revisionFromWorkspaceEtag(response.headers.get("etag")),
       };
+    }
+    if (await isWorkspaceStorageChanged(response)) {
+      announceWorkspaceStorageChanged(opts.storageScope);
+      return null;
     }
     if (!response.ok) {
       surfaceWorkspaceSyncFailure("put", `failed with status ${String(response.status)}`);

@@ -121,6 +121,7 @@ const GOVERNED_VERIFICATION_REASON_CODES = [
   "VERIFICATION_TIMED_OUT",
   "VERIFICATION_RESOURCE_EXCEEDED",
   "VERIFICATION_NOT_RUN",
+  "VERIFICATION_ISOLATION_UNAVAILABLE",
 ] as const;
 export type GovernedVerificationReasonCode = (typeof GOVERNED_VERIFICATION_REASON_CODES)[number];
 // The three runner codes that can only be minted at the HTTP boundary from the request envelope
@@ -385,6 +386,7 @@ const VERIFICATION_OUTCOME_BY_REASON: ReadonlyMap<string, CodingSafeActivityVeri
     ["WORKSPACE_TRUST_REQUIRED", "waiting-for-trust"],
     ["NO_RUNNABLE_STEPS", "no-runnable-steps"],
     ["VERIFICATION_NOT_RUN", "not-run"],
+    ["VERIFICATION_ISOLATION_UNAVAILABLE", "isolation-unavailable"],
     ["VERIFICATION_FAILED", "failed-check"],
   ]);
 
@@ -945,6 +947,11 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
     // A Python repository read "add the script" as an order and gained a package.json the task
     // forbade (AC3 lab T19, #3907); the shell command is the verification that already counts.
     VERIFICATION_NOT_RUN: `Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier, or the repository has no package.json at all: choose a verifier the repository defines, or run the repository's own command for that check in your shell (for example python3 -m unittest or pytest), where its result counts as that verification. Never add a package.json or a script only to satisfy this verifier. A step to run in your own shell cannot run in the isolated verifier on this host: run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification. ${SHELL_VERIFICATION_STATUS_RULE} Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.`,
+    // Keiko 1.5.3 Windows lab: a host with no enforcing isolation backend answered "denied by policy",
+    // and the model kept asking for a shell the profile does not have. The cause is the computer's,
+    // not the model's or the policy's: no number of retries or other verifiers changes it.
+    VERIFICATION_ISOLATION_UNAVAILABLE:
+      "Verification could not run because this computer has no container runtime (Docker or Podman), which Keiko needs to run project commands safely. This is not a failing check and no policy denied it. Do not retry verification, do not try another verifier and do not look for another way to run the command. Tell the person that the change is applied but not verified, and that they can start a container runtime and verify again, or check the change themselves.",
     // #4271 lab (T39): a verifier with no step for the package it resolved answered a bare code,
     // and the model gave up instead of running the build tool the repository already uses.
     NO_RUNNABLE_STEPS: `This verifier has nothing to run for that package. Where the detail names several packages, pass one as packageDir. Otherwise run the repository's own test command for the changed code in your shell (for example mvn test, ./gradlew test, npm test or pytest), where its result counts as that verification. ${SHELL_VERIFICATION_STATUS_RULE} Never add a script or build file only to satisfy this verifier, and do not retry the same verifier unchanged.`,
@@ -998,6 +1005,8 @@ const NOT_RUN_WORDS: Readonly<Record<VerificationNotRunReason, string>> = {
   "dependencies-unavailable": "dependencies did not install",
   "native-shell-required":
     "the isolated verifier cannot install dependencies for this host; run this check in your own shell",
+  "isolation-unavailable":
+    "this computer has no container runtime (Docker or Podman), so Keiko cannot run project commands safely here",
   denied: "denied by policy",
   cancelled: "cancelled",
   skipped: "skipped",
@@ -1020,11 +1029,30 @@ function verificationNotRunDetail(
   reasonCode: string,
   notRun: unknown,
 ): { readonly detail?: string } {
-  if (request.action !== "verification" || reasonCode !== "VERIFICATION_NOT_RUN") return {};
+  if (
+    request.action !== "verification" ||
+    (reasonCode !== "VERIFICATION_NOT_RUN" && reasonCode !== "VERIFICATION_ISOLATION_UNAVAILABLE")
+  ) {
+    return {};
+  }
   const steps = Array.isArray(notRun) ? notRun.filter(isNotRunStep).slice(0, 5) : [];
   if (steps.length === 0) return {};
-  const named = steps.map((step) => `${step.kind} (${NOT_RUN_WORDS[step.reason]})`);
+  const shell = reasonCode === "VERIFICATION_NOT_RUN";
+  const named = steps.map((step) => `${step.kind} (${notRunWords(step.reason, shell)})`);
   return { detail: `These verification steps did not run: ${named.join(", ")}.` };
+}
+
+// The isolated verifier has no container runtime on this host. A run that reaches the model as
+// VERIFICATION_NOT_RUN has a shell of its own (the port names a shell-less run
+// VERIFICATION_ISOLATION_UNAVAILABLE instead), and there the same check still counts: the model is
+// told to run it in that shell, as for a step the verifier cannot install for.
+const ISOLATION_UNAVAILABLE_WITH_SHELL =
+  "the isolated verifier has no container runtime (Docker or Podman) on this computer; run this check in your own shell";
+
+function notRunWords(reason: VerificationNotRunReason, shell: boolean): string {
+  return shell && reason === "isolation-unavailable"
+    ? ISOLATION_UNAVAILABLE_WITH_SHELL
+    : NOT_RUN_WORDS[reason];
 }
 
 // A workspace with several packages: the runner names the workspace-relative folders so the model can

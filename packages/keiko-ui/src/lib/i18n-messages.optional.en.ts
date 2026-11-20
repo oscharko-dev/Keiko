@@ -4474,6 +4474,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "{model} is not ready. Pick another model or check it in Settings > Models.",
   "chat.noModelAlert":
     "No conversation model is currently available. Check gateway and model status in Settings.",
+  "chat.noModelActivated":
+    "No model is ready yet. Open Settings > Models and activate a model, then you can chat.",
   "chat.loadingGateway": "Connecting to your gateway...",
   "chat.send.hint": "Type a message to send",
   "chat.send.label": "Send message",

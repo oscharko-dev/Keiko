@@ -710,7 +710,8 @@ The authenticated live safe-activity tool projection also carries canonical per-
 (#3874): a completed read's workspace-relative path, returned-window bytes and whole-file line
 count; the actual number of discovery entries returned; a closed edit refusal and the affected
 relative path only when materialization identified it; a governed verification's closed outcome
-(`passed`, `failed-check`, `waiting-for-trust`, `no-runnable-steps`, `not-run`, #3579); and elapsed
+(`passed`, `failed-check`, `waiting-for-trust`, `no-runnable-steps`, `not-run`, #3579, and
+`isolation-unavailable`, below); and elapsed
 bridge service time. Service time includes governed waits and excludes model generation. These
 facts come from the governed producer, remain bounded by the existing aggregate feed limits, and
 survive native restatement and immutable replay. Raw arguments/results, unknown refusal strings,
@@ -726,6 +727,21 @@ the existing tool-result operation records service duration through its standard
 and the existing `coding-runtime.tool-result-rendered` operation records the closed verification
 outcome as an optional field, declared `diagnosticWhen` for every outcome but `passed` so a support
 report keeps a verification that did not pass.
+
+A verification step the orchestrator denied for want of an enforcing isolation backend (no container
+runtime on Windows, no bubblewrap, unshare or seatbelt elsewhere; ADR-0043 D20) is a host condition,
+not an authority or policy decision. The denial detail carries the closed prefix
+`isolation unavailable: `; the governed tool answers the model with the closed reason
+`VERIFICATION_ISOLATION_UNAVAILABLE` (not the generic `VERIFICATION_NOT_RUN`) and the step reason
+`isolation-unavailable`, and the Workbench says in one sentence that the computer has no container
+runtime, that the change is kept, and that the person can start one and verify again or check the
+change themselves. The same reason enters the run's verification ledger as a run-level blocker, so no
+verification continuation runs: no model turn can change the host. The denial stays fail closed and
+nothing runs unconfined. The run settles through the existing not-verified outcome (`failed` with
+`verification-not-evidenced`, the change kept) with `errorKind=unavailable` instead of `internal`, and
+`coding-runtime.run.settled` records the closed `verificationBlockedReason`. A continuation for a run
+whose tool profile has no shell tool (the mapped profiles) never tells the model to use a shell. A
+dedicated failure code for this outcome would need a snapshot-store migration and is not taken.
 
 The same projection carries a governed Git step's closed outcome (`gitOutcome`: `completed`,
 `waiting-for-approval`, `verification-failed`, `verification-missing`, `not-staged`,

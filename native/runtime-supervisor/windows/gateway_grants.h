@@ -47,6 +47,9 @@ enum keiko_gateway_grants_result {
 /* Grants every entry, or names the step that refused one; a refusal leaves nothing of this tree
  * granted and refuses the launch. */
 int keiko_gateway_grants_apply(_Inout_ struct keiko_gateway_grants *grants, PSID tree);
+/* Whether every AppContainer (ALL APPLICATION PACKAGES) may already read the directory and all it
+ * holds, with no deny entry for that group. Such a read grant needs no entry of its own (#4068). */
+int keiko_gateway_grants_packages_read(_In_z_ const wchar_t *path);
 /* Removes the tree's own grants. A worktree capability stays with its worktree. */
 void keiko_gateway_grants_revoke(_Inout_ struct keiko_gateway_grants *grants, PSID tree);
 

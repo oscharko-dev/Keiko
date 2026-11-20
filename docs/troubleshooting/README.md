@@ -1059,6 +1059,8 @@ the list after the configuration file moved are covered in
 
 ---
 
+A repository that cannot be opened because it holds a large untracked tree (an un-ignored `node_modules`) — "The selected checkout could not be opened." or "Could not load the repository status." — is covered in [Open a repository with many untracked files](git-status-many-untracked-files.md), including the `.gitignore` advice.
+
 ---
 
 ## Related documentation

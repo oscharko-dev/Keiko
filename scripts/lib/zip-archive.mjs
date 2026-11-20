@@ -582,6 +582,7 @@ export function readZipArchiveEntries(archivePath, options = {}) {
       records.push({
         name: normalizedEntryName(entry.rawName),
         data: centralEntryData(bytes, entry),
+        mode: entry.unixMode,
       });
     }
     offset = entry.next;

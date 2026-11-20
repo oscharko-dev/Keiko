@@ -538,10 +538,16 @@ function backendOptionalPorts(
 function runBoundFacts(
   authority: CodingRuntimeAuthorityService,
   input: ProductionCodingRuntimeResolverInput,
-  { runEffort }: Pick<RunComposition, "runEffort">,
-): Pick<QualifiedProductionCodingRuntime, "runEffort" | "envelopeDurationExhausted"> {
+  { runEffort, toolProfile }: Pick<RunComposition, "runEffort" | "toolProfile">,
+): Pick<
+  QualifiedProductionCodingRuntime,
+  "runEffort" | "envelopeDurationExhausted" | "taskHasShellTool"
+> {
   return {
     runEffort: { read: runEffort.read },
+    // Only OpenCode's own (native) profile runs a shell; the mapped profiles' sole command runner
+    // is the governed verifier.
+    taskHasShellTool: toolProfile === "native",
     envelopeDurationExhausted: (runId) =>
       authority.envelopeDurationExhausted(runId, runtimeNow(input).getTime()),
   };

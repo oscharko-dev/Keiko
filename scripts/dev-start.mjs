@@ -343,21 +343,12 @@ async function fetchOk(url, validate = async () => true) {
   return (await validate(response)) ? "ok" : "unexpected response";
 }
 
-// The installed Windows runtime gateway decides whether a checkout can start coding runs (#4068,
-// ADR-0043 D19). Every `gateway-service-*` reason leaves the rest of the dev UI working.
+// A Windows checkout without a verified runtime supervisor cannot start coding runs (#4068,
+// ADR-0043 D21); the rest of the dev UI keeps working.
 const WINDOWS_GATEWAY_REASON = /^gateway-service-[a-z]+$/u;
-const DEV_GATEWAY_COMMAND = "node dist/cli/index.js gateway-service install --dev-lane";
-const DEV_GATEWAY_HINTS = {
-  "gateway-service-absent": `install it: ${DEV_GATEWAY_COMMAND}`,
-  "gateway-service-stopped": `repair it: ${DEV_GATEWAY_COMMAND.replace("install", "repair")}`,
-  "gateway-service-stale": `repair it: ${DEV_GATEWAY_COMMAND.replace("install", "repair")}`,
-};
 
 function windowsGatewayHealth(reason) {
-  const hint = DEV_GATEWAY_HINTS[reason];
-  return hint === undefined
-    ? `ok · coding runs unavailable (${reason})`
-    : `ok · coding runs unavailable (${reason}); ${hint}`;
+  return `ok · coding runs unavailable (${reason})`;
 }
 
 export async function codingRuntimeHealth(baseUrl, fetchFn = globalThis.fetch) {

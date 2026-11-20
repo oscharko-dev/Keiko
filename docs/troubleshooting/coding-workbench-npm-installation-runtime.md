@@ -79,8 +79,17 @@ the Endpoint Security containment a signed desktop package adds. Windows and Lin
 use the desktop packages: the Windows coding-runtime package
 (`@oscharko-dev/keiko-coding-runtime-win32-x64`) is not published yet, so a Windows npm
 installation cannot start coding runs. Install `keiko-windows-x64-setup.exe` from the Keiko release
-page instead; it brings the runtime and sets up the Windows runtime gateway service on its first
-launch (one Windows approval).
+page instead; it brings the runtime, and the supervisor confines each run without any service or
+administrator approval (ADR-0043 D21).
+
+An npm folder package (the one-folder form for workplaces where nothing may be installed) declares
+itself managed outside the app (`KEIKO_PORTABLE_MANAGEMENT`). There the runtime reason is
+`managed-runtime-package-missing`, and the Workbench says that the folder brings no coding runtime for
+this computer, that the other features work, and that the administrator can provide a package that
+includes it; it names no installer, because nothing may be installed on that computer. A managed
+installation whose bundled runtime did not verify (a standalone folder package from which security
+software removed a runtime file, for example) reports `managed-runtime-unverified` and is pointed
+to its administrator for a fresh package, not to an in-app update.
 
 **Prevention**
 

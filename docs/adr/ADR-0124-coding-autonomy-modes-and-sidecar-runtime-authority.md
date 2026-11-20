@@ -449,6 +449,16 @@ before any request. A run without a choice has no Jira tools and is unchanged. S
 
 ## Amendment — the Windows runtime gateway is installed with Keiko (2026-11-17)
 
+> **Amended 2026-11-19 by ADR-0043 D21 (#4068):** no Windows launch uses the `KeikoRuntimeGateway`
+> broker any more. The supervisor confines every run as the signed-in standard user in an
+> AppContainer, so `keiko start` installs or repairs nothing, readiness reads no service state, the
+> Workbench offers no Repair, and the reasons `gateway-service-absent`, `-stopped`, `-stale`,
+> `-unknown` and `-managed-outside` are removed (`gateway-service-unqualified` remains for a
+> Windows runtime without a verified supervisor pin). Windows Coding needs no administrator and no
+> UAC prompt. The rest of this amendment (no mode, ceiling or Authority Envelope change; the
+> `npm-runtime-package-missing`, `portable-runtime-unverified` and managed-install reasons; hard
+> denials stay) is unchanged. The text below is the superseded 1.5.x behavior.
+
 On Windows every runtime launch needs the `KeikoRuntimeGateway` broker (ADR-0043 D19). Setting it
 up is a host installation step, not a coding action: it sits outside the three modes, grants no run
 authority and changes no Authority Envelope, deployment ceiling or mode default. A healthy
@@ -457,5 +467,9 @@ current helper, and the Workbench offers one Repair action for an absent, stoppe
 unreadable broker. In both cases Windows asks the local human through UAC, so the decision stays
 the human's; a declined approval changes nothing and is not repeated until the helper changes. A
 runtime that no lane offers names the installation kind the server found
-(`npm-runtime-package-missing`, `portable-runtime-unverified`), so the Workbench states the one
-step for it; no install kind relaxes a hard denial or the fail-closed launch.
+(`npm-runtime-package-missing`, `portable-runtime-unverified`), so the Workbench states the one step
+for it. An installation that declares itself managed outside the app (a folder package, an
+IT-managed deployment) has its own two reasons, `managed-runtime-package-missing` and
+`managed-runtime-unverified`: the person installs and updates nothing there, so it is pointed to
+its administrator and never to an installer or an in-app update. No install kind relaxes a hard
+denial or the fail-closed launch.

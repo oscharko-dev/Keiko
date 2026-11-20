@@ -19,7 +19,7 @@ import { useCodingTaskSession, type CodingTaskSession } from "./useCodingTaskSes
 import { usePromptDeliveryNotice } from "./usePromptDeliveryNotice";
 import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
 import { CodingWorkbenchSchedules } from "./CodingWorkbenchSchedules";
-import { CodingWorkbenchGatewayRepair } from "./CodingWorkbenchGatewayRepair";
+import { CodingWorkbenchToolCheck } from "./CodingWorkbenchToolCheck";
 import { CodingTaskForkNotice } from "./CodingTaskForkNotice";
 import {
   CodingWorkbenchDeliveryReview,
@@ -65,6 +65,7 @@ import {
   electConversationDefault,
   isCodingWorkbenchModel,
   isCodingWorkbenchProofRenewing,
+  isCodingWorkbenchToolCheckCandidate,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { useTranslate } from "@/lib/i18n";
 import { CodingWorkbenchCiReadiness } from "./CodingWorkbenchCiReadiness";
@@ -1019,7 +1020,7 @@ export function CodingWorkbenchWindow({
   );
 
   const codingModels = useMemo(
-    () => chatCatalog?.models.filter(isCodingWorkbenchModel) ?? [],
+    () => offeredCodingModels(chatCatalog?.models ?? []),
     [chatCatalog?.models],
   );
   // Subscribed before the refresh below is requested, so that refresh's own outcome is observed.
@@ -1200,6 +1201,15 @@ function pendingCodingModelIds(catalog: ChatSessionCatalog | null): readonly str
 // tier a ready model before one whose answer is unknown, so wire order never decides it (#3905).
 function electedCodingDefault(models: readonly ModelCapability[]): ModelCapability | undefined {
   return electConversationDefault(models, (model) => model.conversationReady);
+}
+
+// The models the picker lists: those a run can start on. Only when there is none, the activated
+// models whose tool calling nobody confirmed are listed instead, so the person can pick one and ask
+// for its one explicit check (ADR-0171 D2, amended 2026-11-19); with an eligible model present a
+// choice that is not eligible keeps falling back to it (#3642, #3905).
+function offeredCodingModels(models: readonly ModelCapability[]): readonly ModelCapability[] {
+  const eligible = models.filter(isCodingWorkbenchModel);
+  return eligible.length > 0 ? eligible : models.filter(isCodingWorkbenchToolCheckCandidate);
 }
 
 function useCodingModelSelection(
@@ -1521,12 +1531,7 @@ function WorkbenchContent({ alert, workbenchLabel, ...columns }: WorkbenchConten
         <WorkbenchHeader columns={columns} />
         <div className={styles.body}>
           <WorkbenchAlert message={alert} failure={visibleAlertFailure(state)} />
-          {state.runtime.value?.runtimeAvailable === false ? (
-            <CodingWorkbenchGatewayRepair
-              reason={state.runtime.value.runtimeUnavailableReason}
-              onRepaired={columns.actions.refreshRuntime}
-            />
-          ) : null}
+          <CodingWorkbenchToolCheck state={state} onCheck={columns.actions.setSelectedModel} />
           <WorkbenchStatusNotice state={state} />
           <WorkbenchColumns {...columns} />
         </div>

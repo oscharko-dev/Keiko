@@ -376,6 +376,18 @@
       ]
     },
     {
+      "path": "native/runtime-supervisor/windows/gateway_relay.c",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "gateway-relay-behavior"]
+    },
+    {
+      "path": "native/runtime-supervisor/windows/gateway_relay.h",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "gateway-relay-behavior"]
+    },
+    {
       "path": "native/runtime-supervisor/windows/gateway_firewall.c",
       "language": "c",
       "platforms": ["windows"],

@@ -925,6 +925,16 @@ describe("production coding runtime resolver", () => {
       return { host, createRun, request };
     }
 
+    // The verification continuation tells a model to use its shell only where the profile has one:
+    // the native profile runs OpenCode's shell, the governed profiles only `keiko_verification`.
+    it.each([
+      ["native", true],
+      ["direct", false],
+      ["code-mode", false],
+    ] as const)("reports whether the %s profile hands the model a shell tool", (profile, shell) => {
+      expect(agentHost(profile).host.taskHasShellTool).toBe(shell);
+    });
+
     it("launches a plan request on the native profile and hands the run a turn port that offers it", () => {
       const { host, createRun, request } = agentHost("native");
 

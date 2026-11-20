@@ -3355,6 +3355,72 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
     },
   );
 
+  // Walk of 1.5.3: after every start the gateway is configured and no model is activated. The notice
+  // names the way out (Settings > Models), and a model whose check failed keeps the general sentence.
+  it.each([
+    {
+      locale: "en",
+      notice:
+        "No model is ready yet. Open Settings > Models and activate a model, then you can chat.",
+    },
+    {
+      locale: "de",
+      notice:
+        "Es ist noch kein Modell bereit. Öffne Einstellungen > Modelle und aktiviere ein Modell, dann kannst du chatten.",
+    },
+  ])(
+    "tells a person with configured, inactive models to activate one in $locale",
+    async ({ locale, notice }) => {
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      const session = makeSession({
+        activeChat: makeChat(),
+        configuredModelsAvailable: true,
+        modelCatalogStatus: "ready",
+        noEligibleModels: true,
+        selectedModel: undefined,
+        modelCatalogRead: {
+          capabilities: [chatModelCapability("inactive-chat")],
+          source: "foreground",
+          correlationId: "corr-catalog",
+        },
+      });
+      try {
+        render(
+          <I18nProvider>
+            <ChatSessionProvider value={session}>
+              <ChatWindow />
+            </ChatSessionProvider>
+          </I18nProvider>,
+        );
+        expect(await screen.findByText(notice)).toHaveAttribute("role", "alert");
+      } finally {
+        window.localStorage.removeItem(I18N_STORAGE_KEY);
+      }
+    },
+  );
+
+  it("keeps the general notice when every configured model failed its check", async () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        configuredModelsAvailable: true,
+        modelCatalogStatus: "ready",
+        noEligibleModels: true,
+        selectedModel: undefined,
+        modelCatalogRead: {
+          capabilities: [{ ...chatModelCapability("failed-chat"), conversationReady: false }],
+          source: "foreground",
+          correlationId: "corr-catalog",
+        },
+      }),
+    );
+    expect(
+      await screen.findByText(
+        "No conversation model is currently available. Check gateway and model status in Settings.",
+      ),
+    ).toHaveAttribute("role", "alert");
+  });
+
   it("renders every chat-eligible model id in the Model dropdown options", async () => {
     const user = userEvent.setup();
     // activeChat is required so the composer bar (containing the model select)

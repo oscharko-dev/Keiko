@@ -14,8 +14,8 @@ Keiko writes no environment variable values, user or system. While a confined ru
 Windows supervisor removes and later restores the "ALL APPLICATION PACKAGES" read entries on the ACL
 of the user key `HKCU\Environment` (`native/runtime-supervisor/windows/gateway_environment.c`), with
 its record under `HKCU\Software\Keiko\RuntimeSupervisor`. Before removal the ACL was in its Windows
-default state and the record was empty. The one-step setup adds no environment variable; its only
-switch, `KEIKO_GATEWAY_SERVICE_SETUP=manual`, is an optional operator setting (user scope suffices).
+default state and the record was empty. Windows needs no service, no administrator step and no environment
+variable for Coding runs.
 
 ## Removal of the previous installation
 
@@ -62,6 +62,12 @@ Without the runtime package (today's published npm state), the same start answer
 Workbench names `keiko-windows-x64-setup.exe`.
 
 ## Install with an absent service (verified 2026-11-17, a person at the PC)
+
+Historical record: the automatic service setup at `keiko start` (`cli.gateway-service.setup`) has
+been removed. Windows Coding runs are confined by the pipe-relayed AppContainer the supervisor sets
+up as the signed-in standard user; no service, UAC prompt or `KEIKO_GATEWAY_SERVICE_SETUP` setting
+exists any more. `keiko gateway-service` remains only to remove a service an earlier 1.5.x
+installation left behind.
 
 `keiko gateway-service uninstall` (one UAC approval) removed the service
 (`cli.gateway-service.completed`: action `uninstall`, state `absent`, 4.4 s). The next

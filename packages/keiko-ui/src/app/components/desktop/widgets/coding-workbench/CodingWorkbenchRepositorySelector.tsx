@@ -20,6 +20,7 @@ import {
   type RepositoryBranchState,
 } from "../../hooks/useRepositoryBranchState";
 import { selectableRepositories } from "./codingWorkbenchRepositories";
+import { locallyAvailable } from "./codingWorkbenchRepositoryAvailability";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -98,12 +99,10 @@ export type WorkbenchExecutionLocation = "local" | "worktree";
 interface RepositoryOption {
   readonly value: string;
   readonly label: string;
+  /** The full path under the name, like the Git window's picker: two folders can share a name. */
+  readonly description?: string;
   readonly disabled?: boolean;
   readonly badge?: string;
-}
-
-function projectAvailable(project: ProjectWithAvailability): boolean {
-  return project.available && project.workspaceAvailable === true;
 }
 
 function repositoryOptions(
@@ -114,14 +113,16 @@ function repositoryOptions(
   const registered = catalog.repositories.map((project) => ({
     value: project.path,
     label: project.name || repositoryName(project.path),
-    disabled: !projectAvailable(project),
-    ...(!projectAvailable(project) ? { badge: t("codingWorkbench.repository.unavailable") } : {}),
+    description: project.path,
+    disabled: !locallyAvailable(project),
+    ...(!locallyAvailable(project) ? { badge: t("codingWorkbench.repository.unavailable") } : {}),
   }));
   if (root === null || registered.some((project) => project.value === root)) return registered;
   return [
     {
       value: root,
       label: repositoryName(root),
+      description: root,
       disabled: true,
       badge: t("codingWorkbench.repository.unavailable"),
     },
@@ -179,6 +180,7 @@ function RepositoryChip({
       leadingVisual={<FolderIcon size={15} aria-hidden="true" />}
       {...chipTrigger(placement, 22)}
       showMenuHeader={false}
+      showTriggerDescription={false}
       menuPopoverMinWidth={280}
       menuPlacement="up"
       searchPlaceholder={t("codingWorkbench.repository.search")}
@@ -312,7 +314,7 @@ function LocationChip({
 function repositoryUnavailable(root: string | null, catalog: CatalogState): boolean {
   if (root === null || catalog.loading || catalog.error) return false;
   const selected = catalog.repositories.find((project) => project.path === root);
-  return selected === undefined || !projectAvailable(selected);
+  return selected === undefined || !locallyAvailable(selected);
 }
 
 // #B review: a registered, workspace-available root that is not (or no longer) a Git repository —

@@ -415,6 +415,15 @@ describe("dev quality workflows", () => {
     expect(unsafePathFallback).not.toContain('report_scope="all"');
   });
 
+  it("caps the scanner JVM so the JS/TS analyzer's Node.js heap keeps the runner memory (#2360)", () => {
+    const scanAt = ci.indexOf("SonarCloud CI-based analysis");
+    const scanStep = ci.slice(
+      scanAt,
+      ci.indexOf("- name: Verify Sonar full-analysis evidence", scanAt),
+    );
+    expect(scanStep).toMatch(/^\s+SONAR_SCANNER_OPTS: "-Xmx1536m"$/mu);
+  });
+
   it("keeps scanner files, logs, and working data outside the repository", () => {
     expect(ci).toContain('scanner_zip="$RUNNER_TEMP/sonar-scanner-cli.zip"');
     expect(ci).toContain("SONAR_SCANNER_HOME=$RUNNER_TEMP/sonar-scanner-8.1.0.6389-linux-x64");

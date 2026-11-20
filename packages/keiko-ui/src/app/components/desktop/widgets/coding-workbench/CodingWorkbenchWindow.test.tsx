@@ -1824,11 +1824,11 @@ describe("CodingWorkbenchWindow", () => {
     ["payload-missing", "Files required by the coding runtime are missing"],
     ["payload-tampered", "could not verify the integrity of its coding runtime files"],
     ["runtime-disabled", "disabled in this installation's configuration"],
-    ["gateway-service-absent", "Select Repair; Windows asks for approval once"],
     ["gateway-service-unqualified", "only a release-qualified Keiko package can use"],
-    ["gateway-service-managed-outside", "a system service that this Keiko does not set up"],
     ["npm-runtime-package-missing", "This Keiko was installed with npm"],
+    ["managed-runtime-package-missing", "This Keiko folder brings no coding runtime"],
     ["portable-runtime-unverified", "could not verify its bundled coding runtime"],
+    ["managed-runtime-unverified", "Your administrator can provide a fresh Keiko package"],
   ] as const)(
     "keeps Start refused and shows the actual runtime prerequisite: %s",
     (reason, explanation) => {
@@ -1858,10 +1858,6 @@ describe("CodingWorkbenchWindow", () => {
       expect(start).toHaveAttribute("aria-disabled", "true");
       fireEvent.click(start);
       expect(controls.start).not.toHaveBeenCalled();
-      // Only a broker state the Workbench can repair offers Repair (one-step Windows setup).
-      expect(screen.queryByRole("button", { name: "Repair" }) !== null).toBe(
-        reason === "gateway-service-absent",
-      );
     },
   );
 
@@ -5314,6 +5310,81 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
     expect(liveActions.start).toHaveBeenCalledOnce();
     expect(liveActions.adoptModel).not.toHaveBeenCalled();
+  });
+
+  // Walk of 1.5.3: after Gateway Setup the one chat model is activated and its tool calling is
+  // unconfirmed. The picker said "No coding model available", and the alert told the person to
+  // reopen the Workbench, which checks nothing. The model is listed, and one explicit action checks it.
+  describe("an activated model whose tool calling is unconfirmed", () => {
+    const UNCONFIRMED: ModelCapability = {
+      ...MODEL_A,
+      toolCalling: false,
+      toolCallingVerification: {
+        status: "unverified",
+        checkedAt: "2026-11-19T08:00:00.000Z",
+        probe: "gateway-tool-calling-v1",
+        configurationFingerprint: "fingerprint-1",
+      },
+    };
+    const unconfirmedSource = (): ReturnType<typeof liveState>["source"] => ({
+      status: "ready",
+      value: {
+        runtimePreference: "managed-gateway",
+        modelSource: "keiko-model-gateway",
+        runtimeSource: "keiko-sidecar",
+        available: false,
+        unavailableReason: "tool-calling-unverified",
+        verification: UNVERIFIED_GATEWAY,
+      },
+      error: null,
+    });
+
+    it("is listed and adopted instead of leaving the picker empty", () => {
+      chatCatalogMock.models = [UNCONFIRMED];
+      const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
+      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-a");
+    });
+
+    it("never outranks a model the Workbench can already start on", () => {
+      chatCatalogMock.models = [UNCONFIRMED, MODEL_B];
+      const liveActions = renderWorkbench(liveState({ selectedModelId: null }));
+      expect(liveActions.adoptModel).toHaveBeenCalledWith("model-b");
+      expect(liveActions.adoptModel).not.toHaveBeenCalledWith("model-a");
+    });
+
+    it("names one action that asks for the check as the person's own pick", async () => {
+      chatCatalogMock.models = [UNCONFIRMED];
+      const liveActions = actions();
+      runtimeHookMock.mockReturnValue({
+        state: liveState({
+          canStart: false,
+          selectedModelId: "model-a",
+          source: unconfirmedSource(),
+        }),
+        actions: liveActions,
+      });
+      render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        /Choose Check tool calling to check it now/u,
+      );
+      expect(screen.getByRole("combobox", { name: /Coding model/u })).toHaveTextContent("model-a");
+      expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+
+      await userEvent.setup().click(screen.getByRole("button", { name: "Check tool calling" }));
+
+      expect(liveActions.setSelectedModel).toHaveBeenCalledExactlyOnceWith("model-a");
+    });
+
+    it("offers no check while the source names another reason", () => {
+      chatCatalogMock.models = [UNCONFIRMED];
+      const liveActions = actions();
+      runtimeHookMock.mockReturnValue({
+        state: liveState({ selectedModelId: "model-a" }),
+        actions: liveActions,
+      });
+      render(<CodingWorkbenchWindow selectedRoot="/repo" />);
+      expect(screen.queryByRole("button", { name: "Check tool calling" })).not.toBeInTheDocument();
+    });
   });
 
   it("withholds Start for a selection the server observed failing", async () => {
