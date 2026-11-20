@@ -27,15 +27,9 @@ export const platformRuntimePackagePrefix = `${scope}keiko-coding-runtime-`;
 export const platformRuntimePackages = Object.freeze({
   "macos-arm64": Object.freeze({ cpu: "arm64", os: "darwin", suffix: "darwin-arm64" }),
   "macos-x64": Object.freeze({ cpu: "x64", os: "darwin", suffix: "darwin-x64" }),
-  // #4068: built and approved, but never published. The main package can declare it only once its
-  // first version exists on the registry (its lockfile must resolve it), so it is listed here as
-  // pending; the first publication removes the flag and adds the optionalDependency together.
-  "windows-x64": Object.freeze({
-    cpu: "x64",
-    os: "win32",
-    suffix: "win32-x64",
-    firstPublication: "pending",
-  }),
+  // #4068: first published on 2026-11-20; the root package declares it like the macOS packages.
+  // A future target may again wait for its first publication with `firstPublication: "pending"`.
+  "windows-x64": Object.freeze({ cpu: "x64", os: "win32", suffix: "win32-x64" }),
 });
 
 export function platformRuntimePackageName(target) {
@@ -44,18 +38,25 @@ export function platformRuntimePackageName(target) {
   return `${platformRuntimePackagePrefix}${entry.suffix}`;
 }
 
-export const requiredPlatformRuntimePackageNames = Object.freeze(
-  Object.keys(platformRuntimePackages)
-    .filter((target) => platformRuntimePackages[target].firstPublication !== "pending")
-    .map(platformRuntimePackageName),
-);
+/**
+ * Splits a platform table into the packages the root manifest must declare and the approved ones
+ * whose first version is not yet on the registry (`firstPublication: "pending"`).
+ */
+export function platformRuntimePackageNamesByPublication(packages) {
+  const names = { required: [], pending: [] };
+  for (const entry of Object.values(packages)) {
+    const name = `${platformRuntimePackagePrefix}${entry.suffix}`;
+    (entry.firstPublication === "pending" ? names.pending : names.required).push(name);
+  }
+  return names;
+}
+
+const namesByPublication = platformRuntimePackageNamesByPublication(platformRuntimePackages);
+
+export const requiredPlatformRuntimePackageNames = Object.freeze(namesByPublication.required);
 
 /** Approved packages whose first version is not yet on the registry; the main package omits them. */
-export const pendingPlatformRuntimePackageNames = Object.freeze(
-  Object.keys(platformRuntimePackages)
-    .filter((target) => platformRuntimePackages[target].firstPublication === "pending")
-    .map(platformRuntimePackageName),
-);
+export const pendingPlatformRuntimePackageNames = Object.freeze(namesByPublication.pending);
 
 export function isPlatformRuntimePackage(name) {
   return typeof name === "string" && name.startsWith(platformRuntimePackagePrefix);

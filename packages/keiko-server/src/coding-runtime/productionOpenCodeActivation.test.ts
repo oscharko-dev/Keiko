@@ -250,9 +250,10 @@ describe("production OpenCode activation", () => {
     });
   });
 
-  // #4068: an npm installation on Windows has no runtime package (none is published yet), and the
-  // Workbench told the person only that no supported runtime exists. The reason now names the
-  // installation kind, so the sentence names the one step: the desktop package.
+  // #4068: an npm installation without this computer's runtime package (on Windows, one that lacks
+  // `@oscharko-dev/keiko-coding-runtime-win32-x64`, e.g. after `--omit=optional`) used to tell the
+  // person only that no supported runtime exists. The reason now names the installation kind, so the
+  // sentence names the one step: the desktop package.
   it("names an npm installation that lacks this computer's runtime package", () => {
     const prefix = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-npm-win-")));
     roots.push(prefix);

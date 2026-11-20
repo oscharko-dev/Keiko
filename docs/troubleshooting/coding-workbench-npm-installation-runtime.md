@@ -75,12 +75,13 @@ a developer and qualification override, not the remedy for a customer installati
 
 The npm lane is digest-verified, not platform-signed: the readiness answer reports
 `runtimeEvidenceClass: "functional-not-platform-qualified"`, and on macOS the engine runs without
-the Endpoint Security containment a signed desktop package adds. Windows and Linux installations
-use the desktop packages: the Windows coding-runtime package
-(`@oscharko-dev/keiko-coding-runtime-win32-x64`) is not published yet, so a Windows npm
-installation cannot start coding runs. Install `keiko-windows-x64-setup.exe` from the Keiko release
-page instead; it brings the runtime, and the supervisor confines each run without any service or
-administrator approval (ADR-0043 D21).
+the Endpoint Security containment a signed desktop package adds. On Windows the same
+optional dependency, `@oscharko-dev/keiko-coding-runtime-win32-x64` (published 2026-11-20, #4068),
+installs the runtime beside Keiko; after an `--omit=optional` install, install it in the folder
+where Keiko is installed at exactly the version Keiko's own `package.json` names under
+`optionalDependencies` (another version is refused), and the supervisor confines each run without any service or
+administrator approval (ADR-0043 D21). Linux installations use the desktop packages. The Windows
+desktop package `keiko-windows-x64-setup.exe` from the Keiko release page brings the runtime too.
 
 An npm folder package (the one-folder form for workplaces where nothing may be installed) declares
 itself managed outside the app (`KEIKO_PORTABLE_MANAGEMENT`). There the runtime reason is

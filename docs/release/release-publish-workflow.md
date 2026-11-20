@@ -363,7 +363,7 @@ and `--verify` then check them against the pins. Such a 1.1.5 candidate passed `
 `--verify` on 2026-11-17 (10 files; tarball SHA-256 `3f74a03a…`); it was never attached to a
 release.
 
-**The Windows package is reviewed as 1.1.7 (2026-11-20); its publication is pending.** The transport
+**The Windows package is published: 1.1.6 for Keiko 1.5.4 (2026-11-20) and 1.1.7, which Keiko 1.5.5 declares.** The transport
 prerelease `coding-runtime-1.1.5` was published with the two macOS tarballs only, and a published
 release is immutable, so no Windows tarball can be added to it. The Windows package was first
 reviewed as 1.1.6 with its own transport prerelease `coding-runtime-1.1.6`; that package carries the
@@ -377,8 +377,9 @@ and the same native bytes as the 1.5.5 portable release. The two macOS packages 
 root manifest pins each runtime package on its own, and `selectedCodingRuntimeFailures` checks each
 pin against its own reviewed entry. Because `coding-runtime-1.1.6` and `coding-runtime-1.1.7` are
 immutable Windows-only transports, neither version can ever carry a macOS package, and the next
-runtime version for every target is 1.1.8 or higher. Switch this wording to the published form in
-the change that selects the package (step 4 below).
+runtime version for every target is 1.1.8 or higher. Keiko 1.5.5 declares
+`@oscharko-dev/keiko-coding-runtime-win32-x64` 1.1.7 in the root `optionalDependencies` beside the
+two darwin packages, so a Windows npm installation gets its runtime like a macOS one (#4068).
 
 _Reproducing the pinned bytes._ The reviewed 1.1.7 candidate has 10 files, every file mode 0644
 (`--pack` fixes the modes of a `windows-x64` package by target, so a POSIX host cannot change the
@@ -423,13 +424,13 @@ node scripts/build-coding-runtime-npm-package.mjs --verify windows-x64 1.2.0 C:\
 ```
 
 The main package cannot declare a runtime package before its first version exists on the registry,
-because the root lockfile must resolve it. `scripts/release-workspace-policy.mjs` therefore lists
-`windows-x64` with `firstPublication: "pending"`, and the publish-manifest gate omits it until the
-registry holds the package, because the manifest can declare it only once the root lockfile can
-resolve it. The change after the first publication removes the flag and adds the exact optional
-dependency and its lockfile entry in one change (step 4 below).
+because the root lockfile must resolve it. A target that waits for its first publication carries
+`firstPublication: "pending"` in `scripts/release-workspace-policy.mjs`, and the publish-manifest gate
+omits it until the registry holds the package. `windows-x64` waited this way until its first
+publication on 2026-11-20; no target is pending now, and the gate requires all three packages.
 
-The first Windows publication is an owner-only step, in this order:
+The first publication of a platform package is an owner-only step. This is how the Windows
+package's first publication went (recorded as the procedure for a future target), in this order:
 
 1. Build, `--pack` and `--verify` the `windows-x64` candidate at a runtime version whose transport
    prerelease does not exist yet (1.1.7 for OpenCode 2.2.5, see above), with the verified release
@@ -486,18 +487,16 @@ The first Windows publication is an owner-only step, in this order:
    Only the placeholder is published from a workstation; the 1.1.7 package itself carries
    provenance from the trusted-publishing workflow.
 
-4. In one change: remove `firstPublication: "pending"`, add
+4. In one change (done for Windows on 2026-11-20): remove `firstPublication: "pending"`, add
    `"@oscharko-dev/keiko-coding-runtime-win32-x64": "<version>"` to the root
    `optionalDependencies` beside the two darwin packages, regenerate `package-lock.json` against
    the registry, and run `npm run check:version-consistency` and `npm run check:release-impact`.
-   The same change revisits what turns false with it: `CODING_RUNTIME_BY_TARGET` and its comment
-   "Windows has none" in `scripts/build-standalone-npm-package.mjs` (otherwise the npm folder
-   package keeps shipping Windows without the runtime), the sentence "Windows has no npm
-   coding-runtime package" in `AGENTS.md`,
-   `docs/troubleshooting/coding-workbench-npm-installation-runtime.md` (line 80) and
-   `docs/coding-runtime/dev-lane.md` (line 117, "none is published for Windows yet"), the pending
-   list pinned in `scripts/__tests__/check-publish-manifests.test.mjs` (lines 211-215), the header
-   of `.github/workflows/coding-runtime-publish.yml`, and the published wording of this guide.
+   The same change revisits what turns false with it: `CODING_RUNTIME_BY_TARGET` in
+   `scripts/build-standalone-npm-package.mjs` (otherwise the npm folder package keeps shipping the
+   platform without the runtime), the statements in `AGENTS.md`,
+   `docs/troubleshooting/coding-workbench-npm-installation-runtime.md` and
+   `docs/coding-runtime/dev-lane.md`, the pending list pinned in
+   `scripts/__tests__/check-publish-manifests.test.mjs`, and the wording of this guide.
 5. On Windows, as a standard user: `npm install -g @oscharko-dev/keiko`, then `keiko start`; the
    Workbench must report the runtime as available without any prompt and complete a run. This is
    the acceptance check.
@@ -599,9 +598,8 @@ same change.
 The 1.1.5 runtime packages (#4359) carry OpenCode 2.2.5, the one OpenCode every Keiko channel runs.
 Their reviewed entry is in `docs/release/coding-runtime-npm-packages.json` for `macos-arm64` and
 `macos-x64`. The Windows package's reviewed entry is under 1.1.7 (see "The Windows package is
-reviewed as 1.1.7" above); `win32-x64` keeps `firstPublication: "pending"` until the registry
-holds that version, because the root lockfile must resolve the package before the manifest can
-declare it, and the root manifest selects it in the change of step 4. Build each macOS
+published" above); the registry holds it since 2026-11-20 and the root manifest selects
+it. Build each macOS
 target as above at 1.1.5 from a clean `dev` checkout: first the three-argument build, which writes
 the package directory (`node scripts/build-coding-runtime-npm-package.mjs <target> 1.1.5 <package dir>`),
 then `--pack`, then `--verify`; `--pack` and `--verify` only inspect an existing package directory.
@@ -629,9 +627,10 @@ cover the published-install matrix (Windows x64, Intel macOS, npm and npx), whic
 published product and remains open (#3898 AC9); the x64 package was verified by digest and by the
 publisher, never executed on Intel hardware or under Rosetta. The existing Yarn qualification uses the `node-modules`
 linker and does not prove Plug'n'Play support. Linux npm runtime availability is unchanged; its
-coding engine remains on the packaged lane described by ADR-0140. The Windows package is built and
-smoke-tested locally (#4068) but not qualified (see
-[the Windows qualification record](../qa/opencode-windows-qualification.md)) and not yet published.
+coding engine remains on the packaged lane described by ADR-0140. The Windows package is published
+since 2026-11-20 and completed coding runs on a Windows guest as a standard user (#4068); its
+qualification on real Windows hardware remains open (see
+[the Windows qualification record](../qa/opencode-windows-qualification.md)).
 
 Release notes are generated from the current version's approved catalog entries by
 `scripts/release-impact-notes.mjs` and published in GitHub Releases. Preview them with

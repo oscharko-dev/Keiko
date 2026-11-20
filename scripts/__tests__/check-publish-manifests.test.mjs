@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { validatePublishManifests } from "../check-publish-manifests.mjs";
 import {
   pendingPlatformRuntimePackageNames,
+  platformRuntimePackageNamesByPublication,
   requiredPlatformRuntimePackageNames,
 } from "../release-workspace-policy.mjs";
 import { NPM_LANE_RUNTIME_APPROVALS } from "../../packages/keiko-server/src/coding-runtime/npmLaneRuntimeApprovals.ts";
@@ -206,12 +207,23 @@ describe("platform coding-runtime packages", () => {
     );
   });
 
-  // #4068: only the never-published Windows package may wait for its first publication; any other
-  // approved package left undeclared would silently take the runtime away from its platform.
-  it("lets only the unpublished Windows package wait for its first publication", () => {
-    expect(pendingPlatformRuntimePackageNames).toStrictEqual([
-      "@oscharko-dev/keiko-coding-runtime-win32-x64",
-    ]);
+  // #4068: the Windows package was first published on 2026-11-20, so no approved package waits for
+  // a first publication any more; one left undeclared would silently take the runtime away from its
+  // platform.
+  it("lets no approved package wait for its first publication", () => {
+    expect(pendingPlatformRuntimePackageNames).toStrictEqual([]);
+  });
+
+  // The waiting state stays available for a future target: a pending package is approved but not
+  // required of the manifest, and every other package is.
+  it("keeps a target that waits for its first publication out of the required packages", () => {
+    const names = platformRuntimePackageNamesByPublication({
+      "macos-arm64": { cpu: "arm64", os: "darwin", suffix: "darwin-arm64" },
+      "linux-x64": { cpu: "x64", os: "linux", suffix: "linux-x64", firstPublication: "pending" },
+    });
+
+    expect(names.required).toStrictEqual(["@oscharko-dev/keiko-coding-runtime-darwin-arm64"]);
+    expect(names.pending).toStrictEqual(["@oscharko-dev/keiko-coding-runtime-linux-x64"]);
   });
 
   it("refuses a manifest that declares none of them", () => {

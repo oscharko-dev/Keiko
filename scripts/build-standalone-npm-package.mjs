@@ -231,12 +231,13 @@ function lockEntryProblem(name, entry) {
   return undefined;
 }
 
-// The Coding runtime package of a macOS target; Windows has none. npm may leave an optional
+// The Coding runtime package of each target. npm may leave an optional
 // package it cannot resolve out of the lockfile and still succeed, which would ship a package
 // whose installed tree has no Coding runtime.
 const CODING_RUNTIME_BY_TARGET = Object.freeze({
   "macos-arm64": "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
   "macos-x64": "@oscharko-dev/keiko-coding-runtime-darwin-x64",
+  "windows-x64": "@oscharko-dev/keiko-coding-runtime-win32-x64",
 });
 
 function assertCodingRuntimeLocked(packages, target) {
