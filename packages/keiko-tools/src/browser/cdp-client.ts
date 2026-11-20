@@ -213,7 +213,7 @@ export class CdpClient {
       params: frame.params ?? {},
       ...(typeof frame.sessionId === "string" ? { sessionId: frame.sessionId } : {}),
     };
-    for (const listener of [...this.listeners]) {
+    for (const listener of new Set(this.listeners)) {
       try {
         listener(listenerEvent);
       } catch {
@@ -249,7 +249,7 @@ export class CdpClient {
       pending.reject(new BrowserToolError("TARGET_CLOSED", "CDP connection closed."));
     }
     this.pending.clear();
-    for (const listener of [...this.closeListeners]) {
+    for (const listener of new Set(this.closeListeners)) {
       try {
         listener(reason);
       } catch {

@@ -26,6 +26,7 @@ import { embedChunkBatch } from "./indexing/embedding-batcher.js";
 import { replaceLexicalRowsForDocument } from "./indexing/lexical-index-persist.js";
 import type { ChunkToEmbed } from "./indexing/types.js";
 import { addSourceToCapsule, type AddCapsuleSourceInput } from "./source-lifecycle.js";
+import { nullableNumberColumn, textColumn, type KnowledgeSqlRow } from "./sql-row.js";
 import type { KnowledgeStore } from "./store.js";
 
 const DEFAULT_EMBEDDING: EmbeddingModelIdentity = {
@@ -303,6 +304,15 @@ interface SeedChunkSpanRow {
   readonly character_end: number | null;
 }
 
+function seedChunkSpanRow(row: KnowledgeSqlRow): SeedChunkSpanRow {
+  return {
+    id: textColumn(row, "id"),
+    source_id: textColumn(row, "source_id"),
+    character_start: nullableNumberColumn(row, "character_start"),
+    character_end: nullableNumberColumn(row, "character_end"),
+  };
+}
+
 function indexSeedLexicalRows(
   store: KnowledgeStore,
   options: ResolvedSeedOptions,
@@ -324,7 +334,8 @@ function indexSeedLexicalRows(
     .all({
       c: String(options.capsuleId),
       d: String(options.documentId),
-    }) as unknown as readonly SeedChunkSpanRow[];
+    })
+    .map(seedChunkSpanRow);
   replaceLexicalRowsForDocument(
     store._internal.db,
     options.capsuleId,
