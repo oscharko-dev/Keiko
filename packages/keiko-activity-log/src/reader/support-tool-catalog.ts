@@ -65,7 +65,13 @@ function definedFields(
   );
 }
 
-function registeredToolRef(record: Readonly<Record<string, unknown>>): unknown {
+// The tool identity a lifecycle candidate carries before the lifecycle validator checks it.
+interface ToolRefCandidate {
+  readonly canonicalId: unknown;
+  readonly contractVersion: unknown;
+}
+
+function registeredToolRef(record: Readonly<Record<string, unknown>>): ToolRefCandidate | null {
   if (record.toolRefCompleteness === "unknown") {
     if (record.toolCanonicalId !== undefined || record.toolContractVersion !== undefined) {
       throw new TypeError("Contradictory tool identity evidence");
@@ -81,17 +87,22 @@ function registeredToolRef(record: Readonly<Record<string, unknown>>): unknown {
   };
 }
 
-function registeredReservation(record: Readonly<Record<string, unknown>>): unknown {
+// The reservation field of a lifecycle candidate, checked by the lifecycle validator afterwards.
+interface ReservationCandidate {
+  readonly reservationId: unknown;
+}
+
+function registeredReservation(record: Readonly<Record<string, unknown>>): ReservationCandidate {
   if (record.reservationState === "not-reserved") {
     if (record.reservationId !== undefined) {
       throw new TypeError("Contradictory reservation evidence");
     }
-    return null;
+    return { reservationId: null };
   }
   if (record.reservationState !== "reserved") {
     throw new TypeError("Invalid reservation state");
   }
-  return record.reservationId;
+  return { reservationId: record.reservationId };
 }
 
 function registeredIdentity(record: Readonly<Record<string, unknown>>): Record<string, unknown> {
@@ -115,7 +126,7 @@ function registeredTerminal(record: Readonly<Record<string, unknown>>): Record<s
     invocationId: record.invocationId,
     toolRef: registeredToolRef(record),
     settlementId: record.settlementId,
-    reservationId: registeredReservation(record),
+    ...registeredReservation(record),
     status: record.status,
     reason: record.reason,
     durationMs: record.durationMs,

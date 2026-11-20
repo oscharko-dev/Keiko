@@ -1614,7 +1614,9 @@ export interface SupportQueryJsonEvent {
 }
 
 /** The versioned machine form. Every event is the persisted Activity Log record, parsed as-is. */
-export function supportQueryJson(result: SupportQueryResult): unknown {
+export function supportQueryJson(
+  result: SupportQueryResult,
+): Omit<SupportQueryResult, "events"> & { readonly events: readonly SupportQueryJsonEvent[] } {
   const events: SupportQueryJsonEvent[] = result.events.map((event) => ({
     role: event.role,
     file: event.file.name,

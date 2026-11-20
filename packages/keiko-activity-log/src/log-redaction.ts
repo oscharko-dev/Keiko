@@ -446,9 +446,18 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
+// What the field redaction keeps: an allowlisted primitive, a marker string, or an array or plain
+// object of kept values.
+type RedactedLogValue =
+  | string
+  | number
+  | boolean
+  | readonly RedactedLogValue[]
+  | { readonly [field: string]: RedactedLogValue };
+
 // Returns the sanitised value, or `undefined` when the value type is not on the allowlist and the
 // field must be dropped entirely.
-function redactLogValue(value: unknown, depth: number): unknown {
+function redactLogValue(value: unknown, depth: number): RedactedLogValue | undefined {
   if (typeof value === "string") return redactLogString(value);
   if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
   if (typeof value === "boolean") return value;
@@ -467,10 +476,10 @@ function redactLogValue(value: unknown, depth: number): unknown {
 // the output back to exactly `MAX_LOG_ARRAY_LENGTH` — never `MAX_LOG_ARRAY_LENGTH + 1`. An input at
 // or under the cap is untouched and carries no marker, so the configured bound holds exactly in
 // both directions instead of being a soft "roughly this many" guideline.
-function redactLogArray(value: readonly unknown[], depth: number): unknown[] {
+function redactLogArray(value: readonly unknown[], depth: number): RedactedLogValue[] {
   const isTruncated = value.length > MAX_LOG_ARRAY_LENGTH;
   const keepCount = isTruncated ? MAX_LOG_ARRAY_LENGTH - 1 : MAX_LOG_ARRAY_LENGTH;
-  const sanitized: unknown[] = [];
+  const sanitized: RedactedLogValue[] = [];
   for (const element of value.slice(0, keepCount)) {
     const redacted = redactLogValue(element, depth);
     if (redacted !== undefined) sanitized.push(redacted);
@@ -738,7 +747,11 @@ function redactGuardedScalarField(
 // or scalar result (the array form returns `undefined` when nothing in it survived, so the caller
 // omits the field entirely rather than storing an empty array), or the generic recursive redaction.
 // Split out of `redactLogObject` to keep that loop's own branching under the complexity budget.
-function redactAcceptedField(name: string, fieldValue: unknown, depth: number): unknown {
+function redactAcceptedField(
+  name: string,
+  fieldValue: unknown,
+  depth: number,
+): RedactedLogValue | undefined {
   if (isDeniedLogFieldName(name)) return REDACTED_KEY;
   const guardedArray = redactGuardedArrayField(name, fieldValue, depth);
   if (guardedArray !== undefined) return guardedArray.length > 0 ? guardedArray : undefined;
@@ -748,7 +761,7 @@ function redactAcceptedField(name: string, fieldValue: unknown, depth: number): 
 }
 
 interface AcceptedLogFields {
-  readonly entries: readonly (readonly [string, unknown])[];
+  readonly entries: readonly (readonly [string, RedactedLogValue | undefined])[];
   // Set only when the cap actually dropped a remaining field, never when the input simply ran out
   // at exactly the cap — the same "bound fired" signal `redactLogArray`'s marker gives arrays.
   readonly truncated: boolean;
@@ -765,7 +778,7 @@ function collectAcceptedLogFields(
   depth: number,
   reserved: ReadonlySet<string> | undefined,
 ): AcceptedLogFields {
-  const entries: (readonly [string, unknown])[] = [];
+  const entries: (readonly [string, RedactedLogValue | undefined])[] = [];
   for (const [name, fieldValue] of Object.entries(value)) {
     // Ineligible names are filtered FIRST: the cap counts only fields that would actually be kept,
     // so a reserved or pattern-invalid key sitting right at the boundary can never consume the last
@@ -782,13 +795,13 @@ function redactLogObject(
   value: Readonly<Record<string, unknown>>,
   depth: number,
   reserved?: ReadonlySet<string>,
-): Record<string, unknown> {
+): Record<string, RedactedLogValue> {
   const { entries, truncated } = collectAcceptedLogFields(value, depth, reserved);
   // The marker CONSUMES A SLOT: truncation keeps only `MAX_LOG_FIELD_COUNT - 1` accepted fields, so
   // `_truncatedFieldCount` brings the key count back to exactly `MAX_LOG_FIELD_COUNT` — added AFTER
   // the slice so it is never itself subject to the count it reports on.
   const kept = truncated ? entries.slice(0, MAX_LOG_FIELD_COUNT - 1) : entries;
-  const sanitized: Record<string, unknown> = {};
+  const sanitized: Record<string, RedactedLogValue> = {};
   for (const [name, redactedValue] of kept) {
     if (redactedValue !== undefined) sanitized[name] = redactedValue;
   }

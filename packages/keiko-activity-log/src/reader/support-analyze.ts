@@ -1602,10 +1602,15 @@ interface SourceFileBoundary {
   readonly terminalFragment: boolean;
 }
 
+// One declared `sourceLogFileLines` entry, read as received from the manifest line.
+interface SourceFileBoundaryFields {
+  readonly lineCount?: unknown;
+  readonly terminalFragment?: unknown;
+}
+
 function sourceFileBoundary(value: unknown): SourceFileBoundary | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const lineCount: unknown = Reflect.get(value, "lineCount");
-  const terminalFragment: unknown = Reflect.get(value, "terminalFragment");
+  const { lineCount, terminalFragment }: SourceFileBoundaryFields = value;
   return typeof lineCount === "number" &&
     Number.isSafeInteger(lineCount) &&
     lineCount >= 0 &&
@@ -2652,7 +2657,16 @@ type FixtureEntry =
     }
   | { readonly networkError: true };
 
-function successFixtureBody(attempt: GatewayReplayAttempt): unknown {
+// The OpenAI-compatible completion body a reconstructed successful attempt answers with.
+interface SuccessFixtureBody {
+  readonly choices: readonly {
+    readonly finish_reason: string;
+    readonly message: { readonly role: "assistant"; readonly content: string };
+  }[];
+  readonly usage?: { readonly prompt_tokens: number; readonly completion_tokens: number };
+}
+
+function successFixtureBody(attempt: GatewayReplayAttempt): SuccessFixtureBody {
   return {
     choices: [
       {

@@ -321,14 +321,21 @@ function validDigestIdentity(identity: ServerLogIdentity): boolean {
   );
 }
 
+// The closed identity fields, read as received: a mutated identity may hold any value in them.
+interface PersistedIdentityClassFields {
+  readonly buildClass?: unknown;
+  readonly releaseClass?: unknown;
+  readonly platformClass?: unknown;
+  readonly compatibilityState?: unknown;
+  readonly writerCapability?: unknown;
+}
+
 function validBuildIdentity(identity: ServerLogIdentity): boolean {
-  const buildClass: unknown = Reflect.get(identity, "buildClass");
-  const releaseClass: unknown = Reflect.get(identity, "releaseClass");
-  const platformClass: unknown = Reflect.get(identity, "platformClass");
+  const fields: PersistedIdentityClassFields = identity;
   return (
-    buildClass === "node-esm" &&
-    ACTIVITY_LOG_RELEASE_CLASSES.has(releaseClass) &&
-    isActivityLogPlatformClass(platformClass)
+    fields.buildClass === "node-esm" &&
+    ACTIVITY_LOG_RELEASE_CLASSES.has(fields.releaseClass) &&
+    isActivityLogPlatformClass(fields.platformClass)
   );
 }
 
@@ -340,9 +347,11 @@ function validProductIdentity(identity: ServerLogIdentity): boolean {
 }
 
 function validWriterIdentity(identity: ServerLogIdentity): boolean {
-  const compatibilityState: unknown = Reflect.get(identity, "compatibilityState");
-  const writerCapability: unknown = Reflect.get(identity, "writerCapability");
-  return compatibilityState === "supported" && PERSISTED_WRITER_CAPABILITIES.has(writerCapability);
+  const fields: PersistedIdentityClassFields = identity;
+  return (
+    fields.compatibilityState === "supported" &&
+    PERSISTED_WRITER_CAPABILITIES.has(fields.writerCapability)
+  );
 }
 
 function validServerLogIdentity(identity: ServerLogIdentity): boolean {
@@ -1601,6 +1610,11 @@ const ACTIVITY_LOG_WRITER_OWNER_KEY = Symbol.for(
 );
 const WRITER_GRAPH_TOKEN = Object.freeze({});
 
+// The process-global slot, read like any foreign object field.
+interface WriterOwnerHost {
+  readonly [ACTIVITY_LOG_WRITER_OWNER_KEY]?: unknown;
+}
+
 interface ProcessWriterOwner {
   readonly graphToken: object;
   // Persists another graph's rejected claim: that graph's own error (whose stack names the rejected
@@ -1671,7 +1685,9 @@ export function claimActivityLogWriterOwnership(stateDir: string, correlationId?
     recordUnpersistedWriterRejection(rejected, correlationId);
     throw rejected;
   }
-  const existingValue = Reflect.get(globalThis, ACTIVITY_LOG_WRITER_OWNER_KEY) as unknown;
+  const processGlobal: object = globalThis;
+  const host: WriterOwnerHost = processGlobal;
+  const existingValue = host[ACTIVITY_LOG_WRITER_OWNER_KEY];
   if (existingValue === undefined) {
     const owner: ProcessWriterOwner = {
       graphToken: WRITER_GRAPH_TOKEN,
@@ -3366,11 +3382,17 @@ export type ActivityLogPinResult =
     }
   | { readonly status: "rejected"; readonly reason: ActivityLogPinRejection };
 
+// A pin request crosses the package boundary, so its fields are read as received.
+interface PinRequestFields {
+  readonly scope?: unknown;
+  readonly expiresAtMs?: unknown;
+  readonly reason?: unknown;
+}
+
 function validPinRequest(request: ActivityLogPinRequest, nowMs: number): boolean {
-  const expiresAtMs: unknown = Reflect.get(request, "expiresAtMs");
-  const reason: unknown = Reflect.get(request, "reason");
+  const { expiresAtMs, reason, scope }: PinRequestFields = request;
   return (
-    isActivityLogPinScope(Reflect.get(request, "scope")) &&
+    isActivityLogPinScope(scope) &&
     typeof expiresAtMs === "number" &&
     Number.isSafeInteger(expiresAtMs) &&
     expiresAtMs > nowMs &&
@@ -3573,6 +3595,11 @@ export interface ActivityLogPinReleaseRequest {
   readonly correlationId?: string | undefined;
 }
 
+// The release request's pin id, read as received before it is validated.
+interface PinReleaseRequestFields {
+  readonly pinId?: unknown;
+}
+
 export type ActivityLogPinReleaseResult =
   | {
       readonly status: "released";
@@ -3637,7 +3664,8 @@ export function releaseActivityLogPin(
   // Validate only after ownership: even a rejected request must not let a second evaluated graph
   // reach this writer's store through a public mutating entry point.
   claimActivityLogWriterOwnership(stateDir, request.correlationId);
-  if (!isActivityLogPinId(Reflect.get(request, "pinId"))) {
+  const { pinId }: PinReleaseRequestFields = request;
+  if (!isActivityLogPinId(pinId)) {
     return { status: "rejected", reason: "invalid-request" };
   }
   let active: ActiveLog;
