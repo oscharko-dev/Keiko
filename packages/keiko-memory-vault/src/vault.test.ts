@@ -2181,7 +2181,8 @@ describe("exact body lookup by the keyed fingerprint index (v17)", () => {
       seen.push(...page.map(({ id }) => id));
     }
 
-    expect([...seen].sort()).toEqual(wordings.map((_, index) => `w-${String(index)}`).sort());
+    const ids = wordings.map((_, index) => `w-${String(index)}`);
+    expect(seen).toEqual([...ids].sort().reverse());
     vault.close();
   });
 
