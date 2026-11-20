@@ -42,6 +42,22 @@
       "issue": 3918
     },
     {
+      "path": "packages/keiko-cli/src/error-code.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "pending-boundary-migration",
+      "issue": 3933
+    },
+    {
+      "path": "packages/keiko-cli/src/error-code.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3933
+    },
+    {
       "path": "packages/keiko-connectors/src/atlassian-write-http.ts",
       "rule": "anti-slop/no-conditional-empty-object-spread",
       "from": 2,
@@ -1480,6 +1496,30 @@
       "to": 3,
       "reason": "dev-cutoff-sync",
       "issue": 3914
+    },
+    {
+      "path": "packages/keiko-connectors/src/json-narrowing.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3933
+    },
+    {
+      "path": "packages/keiko-connectors/src/json-narrowing.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3933
+    },
+    {
+      "path": "packages/keiko-connectors/src/json-narrowing.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 1,
+      "reason": "pending-boundary-migration",
+      "issue": 3933
     },
     {
       "path": "packages/keiko-contracts/src/__tests__/support/catalog-guard.ts",
@@ -5378,6 +5418,14 @@
       "issue": 3914
     },
     {
+      "path": "packages/keiko-local-knowledge/src/sql-row.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "pending-boundary-migration",
+      "issue": 3933
+    },
+    {
       "path": "packages/keiko-mcp/src/host.test.ts",
       "rule": "anti-slop/no-known-value-widening",
       "from": 2,
@@ -5463,6 +5511,14 @@
       "from": 0,
       "to": 2,
       "reason": "pending-boundary-migration",
+      "issue": 3933
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/tombstones.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 32,
+      "to": 33,
+      "reason": "test-witness",
       "issue": 3933
     },
     {
