@@ -183,7 +183,9 @@ export function renderMemoryContextEntry(entry: {
 
 function renderText(entries: readonly MemoryContextBlockEntry[]): string {
   if (entries.length === 0) return "";
-  return ["# Relevant memories", ...entries.map(renderMemoryContextEntry)].join("\n");
+  return ["# Relevant memories", ...entries.map((entry) => renderMemoryContextEntry(entry))].join(
+    "\n",
+  );
 }
 
 function renderedCost(entries: readonly MemoryContextBlockEntry[]): number {
