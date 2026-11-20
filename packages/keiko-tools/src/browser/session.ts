@@ -103,7 +103,10 @@ export interface BrowserSessionManagerOptions {
   // The BFF-owned writer composes deep redaction, atomic persistence, and retention. Required when
   // evidenceStore is present so the tools layer cannot create an unrotated manifest lane.
   readonly evidenceManifestWriter?: ((manifest: EvidenceManifest) => string) | undefined;
-  readonly redactor?: (value: unknown) => unknown;
+  // Redacts captured page HTML before it is returned or recorded. Defaults to no change.
+  readonly redactText?: ((input: string) => string) | undefined;
+  // Redacts the session evidence manifest before it reaches the writer. Defaults to no change.
+  readonly redactManifest?: ((manifest: EvidenceManifest) => EvidenceManifest) | undefined;
   readonly cdpClientFactory?: (url: string, opts: CdpClientOptions) => CdpClient;
   readonly fetchVersion?: (url: string) => Promise<CdpVersionDocument>;
   // ADR-0019 trust-6 + direction-3c: tools cannot import src/audit. The BFF injects these.
@@ -189,30 +192,8 @@ export interface BrowserSessionManager {
   readonly counterAccessor: () => { readonly navigations: number };
 }
 
-function defaultRedactor<T>(value: T): T {
+function unchanged<T>(value: T): T {
   return value;
-}
-
-// The injected redactor is checked once per use: captured HTML stays a string and a manifest stays
-// an object, otherwise the unredacted value is kept as before.
-function htmlRedaction(
-  redactor: NonNullable<BrowserSessionManagerOptions["redactor"]>,
-): (raw: string) => string {
-  return (raw) => {
-    const redacted = redactor(raw);
-    return typeof redacted === "string" ? redacted : raw;
-  };
-}
-
-function manifestRedaction(
-  redactor: NonNullable<BrowserSessionManagerOptions["redactor"]>,
-): (manifest: EvidenceManifest) => EvidenceManifest {
-  return (manifest) => {
-    const redacted = redactor(manifest);
-    return typeof redacted === "object" && redacted !== null
-      ? (redacted as EvidenceManifest)
-      : manifest;
-  };
 }
 
 /** The `/json/version` fields a session reads, decoded from the CDP endpoint's JSON document. */
@@ -498,9 +479,8 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
 
   public constructor(opts: BrowserSessionManagerOptions) {
     this.opts = opts;
-    const redactor = opts.redactor ?? defaultRedactor;
-    this.redactHtml = htmlRedaction(redactor);
-    this.redactManifest = manifestRedaction(redactor);
+    this.redactHtml = opts.redactText ?? unchanged;
+    this.redactManifest = opts.redactManifest ?? unchanged;
     this.clientFactory =
       opts.cdpClientFactory ?? ((url, options): CdpClient => new CdpClient(url, options));
     this.fetchVersion = opts.fetchVersion ?? fetchVersionJson;

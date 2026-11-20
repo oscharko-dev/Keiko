@@ -5,7 +5,7 @@
 // does NOT export a bare `summarizeForAudit` or `redact` (it composes them internally).
 
 export { KEIKO_EVIDENCE_VERSION } from "./version.js";
-export { buildEvidenceManifest } from "./build.js";
+export { buildEvidenceManifest, redactEvidenceManifest } from "./build.js";
 export {
   persistEvidence,
   persistEvidenceManifest,

@@ -264,9 +264,18 @@ function canonical(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${(value as unknown[]).map(canonical).join(",")}]`;
   const record = value as Record<string, unknown>;
-  const entries = Object.keys(record)
-    .sort((left, right) => left.localeCompare(right))
-    .map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`);
+  return canonicalObject(Object.keys(record).map((key) => [key, canonical(record[key])]));
+}
+
+// One object member whose value is already canonical text.
+type CanonicalMember = readonly [key: string, text: string];
+
+// Joins canonical member texts into object text. The stable sort keeps members whose keys compare
+// equal in their given order, exactly as canonical() orders an object's own keys.
+function canonicalObject(members: readonly CanonicalMember[]): string {
+  const entries = [...members]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, text]) => `${JSON.stringify(key)}:${text}`);
   return `{${entries.join(",")}}`;
 }
 
@@ -274,7 +283,9 @@ const hashArtifact = (value: unknown): string => sha256Hex(canonical(value));
 
 // Hash-neutral IR projection (mirrors figmaSnapshotHash.ts in keiko-server). The store accepts
 // `irJson` as opaque JSON, so malformed legacy/tampered shapes fall back to the raw JSON projection;
-// valid Screen-IR gets the exact same hash-neutral field pruning as the builder.
+// valid Screen-IR gets the exact same hash-neutral field pruning as the builder. The projection is
+// rendered straight to canonical text: a node keeps its other members, and its `children` member
+// is always last before sorting, a list of projected children or an empty list.
 const HASH_NEUTRAL_IR_KEYS = new Set([
   "textColor",
   "backgroundColor",
@@ -287,43 +298,46 @@ const HASH_NEUTRAL_IR_KEYS = new Set([
 const isJsonObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const stripHashNeutralChild = (child: unknown): unknown =>
-  isJsonObject(child) ? stripHashNeutralFields(child) : child;
+const canonicalIrChild = (child: unknown): string =>
+  isJsonObject(child) ? canonicalIrNode(child) : canonical(child);
 
-const stripHashNeutralFields = (node: Record<string, unknown>): Record<string, unknown> => {
-  const entries = Object.entries(node).filter(
-    ([key]) => key !== "children" && !HASH_NEUTRAL_IR_KEYS.has(key),
-  );
+const canonicalIrNode = (node: Record<string, unknown>): string => {
+  const members = Object.entries(node)
+    .filter(([key]) => key !== "children" && !HASH_NEUTRAL_IR_KEYS.has(key))
+    .map(([key, value]): CanonicalMember => [key, canonical(value)]);
   const rawChildren = node.children;
-  return {
-    ...Object.fromEntries(entries),
-    children: Array.isArray(rawChildren)
-      ? (rawChildren as readonly unknown[]).map(stripHashNeutralChild)
-      : [],
-  };
+  const children = Array.isArray(rawChildren) ? rawChildren.map(canonicalIrChild) : [];
+  return canonicalObject([...members, ["children", `[${children.join(",")}]`]]);
 };
 
-const hashStableIr = (irJson: unknown): unknown => {
-  if (!isJsonObject(irJson) || !isJsonObject(irJson.root)) return irJson;
-  return { ...irJson, root: stripHashNeutralFields(irJson.root) };
+// The `root` member keeps its own position; a root the object does not list is appended.
+const canonicalStableIr = (irJson: unknown): string => {
+  if (!isJsonObject(irJson) || !isJsonObject(irJson.root)) return canonical(irJson);
+  const root = canonicalIrNode(irJson.root);
+  const members = Object.entries(irJson).map(([key, value]): CanonicalMember => [
+    key,
+    key === "root" ? root : canonical(value),
+  ]);
+  const listsRoot = members.some(([key]) => key === "root");
+  return canonicalObject(listsRoot ? members : [...members, ["root", root]]);
 };
 
 const recomputeScreenIntegrityHash = (screen: FigmaSnapshotScreenRow): string =>
   sha256Hex(
-    canonical({
-      imageSha256: screen.image.sha256,
-      ir: hashStableIr(screen.irJson),
-      screenId: screen.screenId,
-    }),
+    canonicalObject([
+      ["imageSha256", canonical(screen.image.sha256)],
+      ["ir", canonicalStableIr(screen.irJson)],
+      ["screenId", canonical(screen.screenId)],
+    ]),
   );
 
 const recomputeStructuralScreenIntegrityHash = (screen: FigmaSnapshotStructuralScreenRow): string =>
   sha256Hex(
-    canonical({
-      ir: hashStableIr(screen.irJson),
-      screenId: screen.screenId,
-      structuralOnly: true,
-    }),
+    canonicalObject([
+      ["ir", canonicalStableIr(screen.irJson)],
+      ["screenId", canonical(screen.screenId)],
+      ["structuralOnly", canonical(true)],
+    ]),
   );
 
 const artifactHashesFor = (record: {

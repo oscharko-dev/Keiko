@@ -198,13 +198,30 @@ function navigationResponder(url: string): Responder {
   };
 }
 
-async function makeFixture(overrides?: {
-  readonly responder?: Responder;
-  readonly redactor?: (v: unknown) => unknown;
-  readonly fetchVersion?: (url: string) => Promise<CdpVersionDocument>;
-  readonly useRealFetchVersion?: boolean;
-  readonly omitEvidenceManifestWriter?: boolean;
-}): Promise<ManagerFixture> {
+interface FixtureRedaction {
+  readonly redactText?: (input: string) => string;
+  readonly redactManifest?: (manifest: EvidenceManifest) => EvidenceManifest;
+}
+
+// The fixture masks `secret=` values in captured HTML and leaves the manifest unchanged unless a
+// test supplies its own redactors.
+function fixtureRedaction(overrides: FixtureRedaction | undefined): FixtureRedaction {
+  return {
+    ...overrides,
+    redactText:
+      overrides?.redactText ??
+      ((value: string): string => value.replace(/secret=[^<]+/g, "secret=***")),
+  };
+}
+
+async function makeFixture(
+  overrides?: FixtureRedaction & {
+    readonly responder?: Responder;
+    readonly fetchVersion?: (url: string) => Promise<CdpVersionDocument>;
+    readonly useRealFetchVersion?: boolean;
+    readonly omitEvidenceManifestWriter?: boolean;
+  },
+): Promise<ManagerFixture> {
   const evidenceDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-browser-")));
   const evidenceStore = createInMemoryEvidenceStore();
   let captured: FakeCdpClient | undefined;
@@ -228,10 +245,7 @@ async function makeFixture(overrides?: {
           evidenceManifestWriter: (manifest: EvidenceManifest): string =>
             evidenceStore.put(manifest.run.runId, JSON.stringify(manifest, null, 2)),
         }),
-    redactor:
-      overrides?.redactor ??
-      ((value: unknown): unknown =>
-        typeof value === "string" ? value.replace(/secret=[^<]+/g, "secret=***") : value),
+    ...fixtureRedaction(overrides),
     ...(fetchVersion === undefined ? {} : { fetchVersion }),
     // R3 ports: the tools package cannot import src/audit, so the BFF (here: the test fixture)
     // injects both. "unknown" matches the production fallback for browser-tool's cost class.
@@ -617,8 +631,7 @@ describe("content redaction", () => {
         if (call.method === "DOM.getOuterHTML") return { outerHTML: "<html>x</html>" };
         return defaultResponder(call);
       },
-      redactor: (value: unknown): unknown =>
-        typeof value === "string" ? "x".repeat(2 * 1024 * 1024 + 1) : value,
+      redactText: (): string => "x".repeat(2 * 1024 * 1024 + 1),
     });
     const meta = await fixture.manager.openSession(9222);
     fixture.subscribe(meta.sessionId);
@@ -694,6 +707,34 @@ describe("browser evidence manifest", () => {
     expectPersistedScreenshotEvidence(browser, dry.seq);
     expectCapturedContentEvidence(browser);
     expectBrowserEventTypes(browser);
+  });
+
+  it("hands the writer the manifest the manifest redactor returned", async () => {
+    const fixture = await withFixture({
+      redactManifest: (manifest: EvidenceManifest): EvidenceManifest =>
+        manifest.browser === undefined
+          ? manifest
+          : {
+              ...manifest,
+              browser: {
+                ...manifest.browser,
+                contentCaptures: manifest.browser.contentCaptures?.map((capture) => ({
+                  ...capture,
+                  redactedHtml: "[manifest-redacted]",
+                })),
+              },
+            },
+    });
+    const meta = await fixture.manager.openSession(9222);
+    fixture.subscribe(meta.sessionId);
+    setTimeout(() => {
+      fixture.client.emitFrameNavigated("http://127.0.0.1:5173/");
+    }, 5);
+    await fixture.manager.navigate(meta.sessionId, "http://127.0.0.1:5173/");
+    const result = await fixture.manager.content(meta.sessionId);
+    const { browser } = requireBrowserManifest(fixture, meta.sessionId);
+    expect(result.redactedHtml).toContain("secret=***");
+    expect(browser.contentCaptures?.[0]?.redactedHtml).toBe("[manifest-redacted]");
   });
 
   it("persists browser:error events for failed session actions", async () => {

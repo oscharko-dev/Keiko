@@ -12,8 +12,8 @@
 // verbatim-embedded summary (context/verification) that the builder does not itself redact.
 
 import { isAbsolute, resolve } from "node:path";
-import { buildEvidenceManifest } from "./build.js";
-import { createAuditRedactor, deepRedactStrings } from "./redaction.js";
+import { buildEvidenceManifest, redactEvidenceManifest } from "./build.js";
+import { createAuditRedactor } from "./redaction.js";
 import { buildEvidenceReport, type EvidenceReport } from "./report.js";
 import { applyRetention } from "./retention.js";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "./store.js";
@@ -52,7 +52,7 @@ export function persistEvidenceManifest(
   retention: RetentionPolicy = DEFAULT_RETENTION,
   onRetentionDeleted?: (deletedCount: number) => void,
 ): PersistedEvidenceManifest {
-  const safeManifest = deepRedactStrings(manifest, redact) as EvidenceManifest;
+  const safeManifest = redactEvidenceManifest(manifest, redact);
   const location = store.put(safeManifest.run.runId, JSON.stringify(safeManifest, null, 2));
   const retentionDeletedCount = applyRetention(store, retention);
   if (retentionDeletedCount > 0) onRetentionDeleted?.(retentionDeletedCount);
