@@ -61,7 +61,7 @@ const VALUE_FLAGS = [
   "--dir-root",
 ] as const;
 type ValueFlag = (typeof VALUE_FLAGS)[number];
-type FlagValues = Record<ValueFlag, string | undefined>;
+type FlagValues = Partial<Record<ValueFlag, string | undefined>>;
 
 // Reads every value flag once; returns null if any is present without a value (a usage error).
 function readValueFlags(args: readonly string[]): FlagValues | null {

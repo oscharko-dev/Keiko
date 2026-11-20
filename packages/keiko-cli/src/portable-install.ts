@@ -46,6 +46,7 @@ import {
   windowsLegacyStartMenuRegistrationPath,
   windowsStartMenuRegistrationPath,
 } from "./portable-maintenance.js";
+import { errorCode } from "./error-code.js";
 import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import type { CliIo } from "./runner.js";
 import {
@@ -167,9 +168,9 @@ function parseSetupRuntime(value: unknown): SetupRuntimeManifest {
 }
 
 function parseSetupManifest(path: string): SetupManifest {
-  const raw = JSON.parse(
+  const raw: unknown = JSON.parse(
     readPortableFile(path, "portable setup manifest is unsafe").toString("utf8"),
-  ) as unknown;
+  );
   if (!isRecord(raw) || (raw.schemaVersion !== 1 && raw.schemaVersion !== 2)) {
     throw new Error("portable setup manifest is malformed");
   }
@@ -482,9 +483,9 @@ function validateWindowsGenerationLayout(
 }
 
 function validateAppPackage(path: string, expectedVersion: string): void {
-  const appPackage = JSON.parse(
+  const appPackage: unknown = JSON.parse(
     readPortableFile(path, "portable app package metadata is unsafe").toString("utf8"),
-  ) as unknown;
+  );
   if (!isRecord(appPackage) || appPackage.name !== PACKAGE_NAME) {
     throw new Error("portable app package name mismatch");
   }
@@ -596,7 +597,7 @@ function copyTreeSafe(source: string, destination: string): void {
 }
 
 function isEnoent(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === "ENOENT";
+  return errorCode(error) === "ENOENT";
 }
 
 // #2906 round 3 (comment 3865273684): streams directory entries with opendirSync/readSync
@@ -1196,11 +1197,10 @@ interface PortableSetupLockOwner {
 }
 
 function portableSetupLockOwnerValue(value: unknown): PortableSetupLockOwner | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  if (!("schemaVersion" in value) || value.schemaVersion !== 1) return undefined;
-  if (!("pid" in value) || typeof value.pid !== "number") return undefined;
-  if (!Number.isSafeInteger(value.pid) || value.pid <= 0) return undefined;
-  return value as PortableSetupLockOwner;
+  if (!isRecord(value) || value.schemaVersion !== 1) return undefined;
+  const pid = value.pid;
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0) return undefined;
+  return { schemaVersion: 1, pid };
 }
 
 function portableSetupLockOwnerPath(path: string): string | undefined {
@@ -1217,7 +1217,7 @@ function readPortableSetupLockOwner(path: string): PortableSetupLockOwner | unde
   try {
     const ownerPath = portableSetupLockOwnerPath(path);
     if (ownerPath === undefined) return undefined;
-    const value = JSON.parse(readFileSync(ownerPath, "utf8")) as unknown;
+    const value: unknown = JSON.parse(readFileSync(ownerPath, "utf8"));
     return portableSetupLockOwnerValue(value);
   } catch {
     return undefined;
@@ -1313,13 +1313,13 @@ function acquirePortableSetupLock(path: string): void {
   try {
     createPortableSetupLock(path);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+    if (errorCode(error) === "EEXIST") {
       if (!reclaimPortableSetupLock(path)) throw new PortableSetupBusyError();
       try {
         createPortableSetupLock(path);
         return;
       } catch (retryError) {
-        if ((retryError as NodeJS.ErrnoException).code === "EEXIST") {
+        if (errorCode(retryError) === "EEXIST") {
           throw new PortableSetupBusyError();
         }
         throw retryError;
@@ -1396,10 +1396,10 @@ function samePortableSetupLockScope(left: readonly string[], right: readonly str
 }
 
 function portableInspectionAllowanceRecord(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new Error("portable inspection allowance is malformed");
   }
-  return value as Record<string, unknown>;
+  return value;
 }
 
 function portableInspectionResourceRoots(
@@ -1410,7 +1410,8 @@ function portableInspectionResourceRoots(
   if (!Array.isArray(value) || value.length === 0 || value.length > 3) {
     throw new Error("portable inspection allowance resource roots are invalid");
   }
-  const resourceRoots = (value as readonly unknown[]).map((resourceRoot) => {
+  const entries: readonly unknown[] = value;
+  const resourceRoots = entries.map((resourceRoot) => {
     if (typeof resourceRoot !== "string") {
       throw new TypeError("portable inspection allowance resource roots are invalid");
     }

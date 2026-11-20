@@ -400,13 +400,16 @@ const REGISTRY: Readonly<Record<Platform, PlatformLauncher>> = {
   win32: windowsLauncher,
 };
 
+function isSupportedPlatform(platform: NodeJS.Platform): platform is Platform {
+  return Object.hasOwn(REGISTRY, platform);
+}
+
 export function launcherFor(platform: NodeJS.Platform): PlatformLauncher {
-  const entry = (REGISTRY as Readonly<Record<string, PlatformLauncher | undefined>>)[platform];
-  if (entry === undefined) {
+  if (!isSupportedPlatform(platform)) {
     throw new LauncherError(
       "PLATFORM_UNSUPPORTED",
       `keiko launcher: platform "${platform}" is not supported. Supported: linux, darwin, win32.`,
     );
   }
-  return entry;
+  return REGISTRY[platform];
 }

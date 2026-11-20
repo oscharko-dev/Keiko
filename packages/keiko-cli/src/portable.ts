@@ -138,11 +138,18 @@ type PortableUpgradeDeps = Pick<
   "activateMacosRuntimeFn" | "now" | "lifecycleFn"
 >;
 
-interface PortableFlag {
-  readonly name: string;
-  readonly value: string | undefined;
-  readonly nextIndex: number;
-}
+type PortableFlag =
+  | {
+      readonly name: "--dry-run" | "--no-relaunch";
+      readonly value: undefined;
+      readonly nextIndex: number;
+    }
+  | { readonly name: "--target"; readonly value: PortableTarget; readonly nextIndex: number }
+  | {
+      readonly name: "--portable-root" | "--managed-root" | "--state-dir";
+      readonly value: string;
+      readonly nextIndex: number;
+    };
 
 interface PortableRawOptions {
   readonly target: PortableTarget | undefined;
@@ -193,7 +200,9 @@ function parsePortableFlag(args: readonly string[], index: number): PortableFlag
   }
   const value = readFlag(args, index);
   if (value === undefined) return undefined;
-  if (name === "--target" && !isPortableTarget(value)) return undefined;
+  if (name === "--target") {
+    return isPortableTarget(value) ? { name, value, nextIndex: index + 1 } : undefined;
+  }
   return { name, value, nextIndex: index + 1 };
 }
 
@@ -204,7 +213,7 @@ function applyPortableFlag(
 ): PortableRawOptions {
   if (flag.name === "--dry-run") return { ...options, dryRun: true };
   if (flag.name === "--no-relaunch") return { ...options, noRelaunch: true };
-  if (flag.name === "--target") return { ...options, target: flag.value as PortableTarget };
+  if (flag.name === "--target") return { ...options, target: flag.value };
   if (flag.value === undefined) return options;
   const value = resolveInputPath(cwd, flag.value);
   if (flag.name === "--portable-root") return { ...options, portableRoot: value };

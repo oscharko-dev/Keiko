@@ -238,7 +238,8 @@ async function readJsonResponse(response: Response): Promise<ParsedJsonResponse>
   const body = await readBoundedResponseBody(response);
   if (body.trim().length === 0) return { valid: true, value: null };
   try {
-    return { valid: true, value: JSON.parse(body) as unknown };
+    const value: unknown = JSON.parse(body);
+    return { valid: true, value };
   } catch {
     return { valid: false, value: null };
   }

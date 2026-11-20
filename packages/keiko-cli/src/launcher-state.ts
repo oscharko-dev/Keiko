@@ -37,9 +37,10 @@ import {
   atomicPublishRename,
   WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
 } from "@oscharko-dev/keiko-security/fs-atomic-rename";
+import { errorCode } from "./error-code.js";
 import { LauncherError, launcherFor, type Platform } from "./launcher-platforms.js";
 import { isRealpathContained } from "./launcher-paths.js";
-import { STAGING_OWNERSHIP_MARKER } from "./state-paths.js";
+import { STAGING_OWNERSHIP_MARKER, platformOpenFlags } from "./state-paths.js";
 
 export const LAUNCHER_STATE_VERSION = 1 as const;
 const STATE_FILE_NAME = "launcher-state.json";
@@ -144,7 +145,7 @@ function statStateFile(file: string, warn: WarnFn): ReturnType<typeof lstatSync>
   try {
     stat = lstatSync(file);
   } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
+    const code = errorCode(e);
     if (code !== "ENOENT") {
       warn(`keiko launcher: cannot stat state file (${code ?? "unknown error"}): ${file}\n`);
     }
@@ -165,7 +166,7 @@ function readStateRaw(file: string, warn: WarnFn): string | null {
     return readWithoutFollow(file);
   } catch (e) {
     if (e instanceof LauncherError) throw e;
-    const code = (e as NodeJS.ErrnoException).code;
+    const code = errorCode(e);
     warn(`keiko launcher: cannot read state file (${code ?? "unknown error"}): ${file}\n`);
     return null;
   }
@@ -209,7 +210,7 @@ export const MAX_STATE_FILE_BYTES = 1 << 20;
 // O_NOFOLLOW flag is undefined; we fall back to a normal open after the `lstat` check
 // in `loadState` has already proved the path is not a link.
 function readWithoutFollow(file: string): string {
-  const nofollow = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  const nofollow = platformOpenFlags.O_NOFOLLOW ?? 0;
   const fd = openSync(file, fsConstants.O_RDONLY | nofollow);
   try {
     const stat = fstatSync(fd);

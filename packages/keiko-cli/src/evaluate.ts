@@ -18,6 +18,7 @@ import type {
 // structurally-identical readValueFlags loop this file, gen-tests.ts, and investigate.ts held —
 // flagValue itself is used only inside readNamedValueFlags now, so only that is imported here.
 import { readNamedValueFlags } from "./cli-arg-parsing.js";
+import { errorCode } from "./error-code.js";
 import { runGenTestsCli } from "./gen-tests.js";
 import { gatewayConfigFileLoader } from "./gateway-config.js";
 import { runInvestigateCli } from "./investigate.js";
@@ -57,17 +58,21 @@ interface EvaluateArgs {
 const VALUE_FLAGS = ["--suite", "--fixture", "--model", "--config", "--output"] as const;
 type ValueFlag = (typeof VALUE_FLAGS)[number];
 const BOOLEAN_FLAGS = ["--live", "--json"] as const;
+const VALUE_FLAG_SET: ReadonlySet<string> = new Set(VALUE_FLAGS);
+const BOOLEAN_FLAG_SET: ReadonlySet<string> = new Set(BOOLEAN_FLAGS);
 
-function readValueFlags(args: readonly string[]): Record<ValueFlag, string | undefined> | null {
+function readValueFlags(
+  args: readonly string[],
+): Partial<Record<ValueFlag, string | undefined>> | null {
   return readNamedValueFlags(args, VALUE_FLAGS);
 }
 
 function isValueFlag(value: string): value is ValueFlag {
-  return (VALUE_FLAGS as readonly string[]).includes(value);
+  return VALUE_FLAG_SET.has(value);
 }
 
 function isBooleanFlag(value: string): boolean {
-  return (BOOLEAN_FLAGS as readonly string[]).includes(value);
+  return BOOLEAN_FLAG_SET.has(value);
 }
 
 function findUsageError(args: readonly string[]): string | undefined {
@@ -371,12 +376,7 @@ function assertLiveEvaluationModel(
 }
 
 function isOutputAlreadyExistsError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { readonly code?: unknown }).code === "EEXIST"
-  );
+  return errorCode(error) === "EEXIST";
 }
 
 // Live-mode fail-closed: a GatewayError (incl. ConfigInvalidError) means no resolvable config or

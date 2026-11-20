@@ -2,6 +2,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 // From the contracts leaf, not the keiko-sdk fat barrel (GEN-PERF-CLI-001).
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { CliIo } from "./runner.js";
 import {
@@ -9,10 +10,6 @@ import {
   localPackageRoot,
   resolvePreferredInstallLayout,
 } from "./install-layout.js";
-
-interface PackageJsonLike {
-  readonly version?: unknown;
-}
 
 interface LocalInstall {
   readonly packageRoot: string;
@@ -37,8 +34,8 @@ export interface DoctorCliDeps {
 function readVersion(packageJsonPath: string): string | undefined {
   if (!existsSync(packageJsonPath)) return undefined;
   try {
-    const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as PackageJsonLike;
-    return typeof parsed.version === "string" ? parsed.version : undefined;
+    const parsed: unknown = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+    return isRecord(parsed) && typeof parsed.version === "string" ? parsed.version : undefined;
   } catch {
     return undefined;
   }

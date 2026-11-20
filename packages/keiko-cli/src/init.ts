@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { errorCode } from "./error-code.js";
 import type { CliIo } from "./runner.js";
 
 export const KEIKO_START_SCRIPT = "node ./node_modules/@oscharko-dev/keiko/dist/cli/index.js start";
@@ -415,7 +416,7 @@ function resolveCanonicalPackagePath(packagePath: string): string {
   try {
     stat = lstatSync(packagePath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return packagePath;
+    if (errorCode(error) === "ENOENT") return packagePath;
     throw error;
   }
   return stat.isSymbolicLink() ? realpathSync(packagePath) : packagePath;
@@ -435,7 +436,7 @@ function capturePackageMode(packagePath: string): number | undefined {
   try {
     return statSync(packagePath).mode & 0o777;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    if (errorCode(error) === "ENOENT") return undefined;
     throw error;
   }
 }

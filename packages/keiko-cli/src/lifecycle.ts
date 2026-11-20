@@ -29,6 +29,7 @@ import {
   CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS,
   encodeCodingAppSessionPairingFragment,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import {
   absoluteExistingPath,
@@ -126,11 +127,11 @@ function decodeRecoveredLaunchText(encoded: string): string {
 
 function recoveredLaunchId(encoded: string | undefined): string {
   if (encoded === undefined) return randomBytes(16).toString("hex");
-  const decoded = JSON.parse(decodeRecoveredLaunchText(encoded)) as unknown;
-  if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) {
+  const decoded: unknown = JSON.parse(decodeRecoveredLaunchText(encoded));
+  if (!isRecord(decoded)) {
     throw new TypeError("invalid recovered launch identity");
   }
-  const launchId = (decoded as Record<string, unknown>).launchId;
+  const launchId = decoded.launchId;
   if (!isKeikoUiLaunchId(launchId)) {
     throw new TypeError("invalid recovered launch identity");
   }
@@ -339,16 +340,16 @@ function lifecycleBaseUrl(options: LifecycleOptions): string {
 }
 
 function healthVersion(payload: unknown): string | undefined {
-  if (typeof payload !== "object" || payload === null) return undefined;
-  const version = (payload as { readonly version?: unknown }).version;
+  if (!isRecord(payload)) return undefined;
+  const version = payload.version;
   return typeof version === "string" ? version : undefined;
 }
 
 // The `diagnostics` block is untrusted input like the rest of the body: admitted only when it
 // passes the closed contract guard, otherwise reported as unknown.
 function healthDiagnostics(payload: unknown): ActivityLogReadinessSnapshot | undefined {
-  if (typeof payload !== "object" || payload === null) return undefined;
-  const diagnostics = (payload as { readonly diagnostics?: unknown }).diagnostics;
+  if (!isRecord(payload)) return undefined;
+  const diagnostics = payload.diagnostics;
   return isActivityLogReadinessSnapshot(diagnostics) ? diagnostics : undefined;
 }
 
@@ -357,7 +358,7 @@ function healthResult(statusCode: number | undefined, body: string): HealthProbe
     return { reachable: false, version: undefined };
   }
   try {
-    const payload = JSON.parse(body) as unknown;
+    const payload: unknown = JSON.parse(body);
     const launchId: unknown =
       typeof payload === "object" && payload !== null && "launchId" in payload
         ? payload.launchId

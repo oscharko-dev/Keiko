@@ -38,7 +38,7 @@ type HarnessModule = typeof import("@oscharko-dev/keiko-harness");
 type EvidenceModule = typeof import("@oscharko-dev/keiko-evidence");
 type RedactFn = GatewayModule["redact"];
 
-const TASK_TYPES: ReadonlySet<string> = new Set<TaskType>([
+const TASK_TYPES: ReadonlySet<string> = new Set<CliTaskType>([
   "generate-unit-tests",
   "investigate-bug",
   "explain-plan",
@@ -103,6 +103,10 @@ function parseEvidenceFlags(args: readonly string[]): EvidenceFlags {
 // neither is CLI-selectable, so both are excluded from this CLI-side narrowing. The upstream
 // `TASK_TYPES` set guards entry.
 type CliTaskType = Exclude<TaskType, "verify" | "editor-agent-turn">;
+
+function isCliTaskType(value: string): value is CliTaskType {
+  return TASK_TYPES.has(value);
+}
 
 function parseTask(taskType: CliTaskType, args: readonly string[]): TaskInput | null {
   const file = flag(args, "--file");
@@ -423,11 +427,11 @@ async function dispatchHarnessSession(
 // complexity/length bar. Returns the exit code directly (2) on either usage error.
 function parseCliTask(args: readonly string[], io: CliIo): TaskInput | number {
   const taskType = args[0];
-  if (taskType === undefined || !TASK_TYPES.has(taskType)) {
+  if (taskType === undefined || !isCliTaskType(taskType)) {
     io.err(taskType === undefined ? USAGE : `keiko run: unknown task type: ${taskType}\n${USAGE}`);
     return 2;
   }
-  const task = parseTask(taskType as CliTaskType, args.slice(1));
+  const task = parseTask(taskType, args.slice(1));
   if (task === null) {
     io.err(`keiko run: missing required argument for ${taskType}.\n${USAGE}`);
     return 2;

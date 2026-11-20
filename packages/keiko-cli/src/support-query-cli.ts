@@ -135,9 +135,7 @@ function checked(
 }
 
 const FAILURE_CLASSES: ReadonlySet<string> = new Set(
-  (ACTIVITY_LOG_FAILURE_CLASS_COVERAGE.classes as readonly { readonly failureClass: string }[]).map(
-    (entry) => entry.failureClass,
-  ),
+  ACTIVITY_LOG_FAILURE_CLASS_COVERAGE.classes.map((entry) => entry.failureClass),
 );
 
 function parseTimestamp(args: readonly string[], name: string): number | undefined {

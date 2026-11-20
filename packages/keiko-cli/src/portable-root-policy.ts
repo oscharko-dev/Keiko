@@ -4,6 +4,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { isSystemManagedPortableRoot } from "@oscharko-dev/keiko-security/portable-root-policy";
 import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
+import { errorCode } from "./error-code.js";
 import type { PortableTarget } from "./portable-shared.js";
 
 function normalizedPath(path: string): string {
@@ -66,7 +67,7 @@ function assertNoSymlinkedAncestor(path: string): void {
         throw new Error("managed install root must not use symlinked ancestors");
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (errorCode(error) !== "ENOENT") throw error;
     }
     const parent = dirname(cursor);
     if (parent === cursor) return;

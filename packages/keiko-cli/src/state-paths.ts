@@ -194,9 +194,16 @@ export function assertNotSymlink(path: string): void {
   }
 }
 
+/**
+ * `fs.constants` as the running platform defines them. `@types/node` declares O_NOFOLLOW and
+ * O_NONBLOCK as plain numbers, but Windows defines neither, so they are read as optional here.
+ */
+export const platformOpenFlags: { readonly O_NOFOLLOW?: number; readonly O_NONBLOCK?: number } =
+  fsConstants;
+
 export function openPidFileNoFollow(path: string, flags: number): number {
-  const nofollow = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
-  const nonblock = (fsConstants as { O_NONBLOCK?: number }).O_NONBLOCK ?? 0;
+  const nofollow = platformOpenFlags.O_NOFOLLOW ?? 0;
+  const nonblock = platformOpenFlags.O_NONBLOCK ?? 0;
   if (nofollow === 0) assertNotSymlink(path);
   return openSync(path, flags | nofollow | nonblock, 0o600);
 }
