@@ -338,26 +338,32 @@ CREATE INDEX IF NOT EXISTS idx_memories_body_hash_pending
   WHERE body_hash IS NULL;
 `;
 
+// The SQL of each schema version, keyed by that version. Integer keys enumerate in ascending order,
+// so the list below cannot be out of order; version 2 is the encryption sweep, which has no DDL.
+const MIGRATION_SQL: Readonly<Record<number, string>> = {
+  1: V1_SQL,
+  3: V3_SQL,
+  4: V4_SQL,
+  5: V5_SQL,
+  6: V6_SQL,
+  7: V7_SQL,
+  8: V8_SQL,
+  9: V9_SQL,
+  10: V10_SQL,
+  11: V11_SQL,
+  12: V12_SQL,
+  13: V13_SQL,
+  14: V14_SQL,
+  15: V15_SQL,
+  16: V16_SQL,
+  17: V17_SQL,
+};
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through the package's public entry point, so no packaged surface change.
-export const MIGRATIONS: readonly Migration[] = [
-  { version: 1, sql: V1_SQL },
-  { version: 3, sql: V3_SQL },
-  { version: 4, sql: V4_SQL },
-  { version: 5, sql: V5_SQL },
-  { version: 6, sql: V6_SQL },
-  { version: 7, sql: V7_SQL },
-  { version: 8, sql: V8_SQL },
-  { version: 9, sql: V9_SQL },
-  { version: 10, sql: V10_SQL },
-  { version: 11, sql: V11_SQL },
-  { version: 12, sql: V12_SQL },
-  { version: 13, sql: V13_SQL },
-  { version: 14, sql: V14_SQL },
-  { version: 15, sql: V15_SQL },
-  { version: 16, sql: V16_SQL },
-  { version: 17, sql: V17_SQL },
-];
+export const MIGRATIONS: readonly Migration[] = Object.entries(MIGRATION_SQL).map(
+  ([version, sql]) => ({ version: Number(version), sql }),
+);
 
 function currentUserVersion(db: DatabaseSync): number {
   const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
