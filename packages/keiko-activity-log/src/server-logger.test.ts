@@ -29,6 +29,7 @@ import {
   resetServerLogger,
   setServerLogger,
   startLogTimer,
+  type ServerLogEventInput,
 } from "./server-logger.js";
 import { updateRuntimeActivityEvent } from "../../keiko-server/src/update-runtime-activity.js";
 
@@ -612,8 +613,8 @@ describe("Support logger raw metadata preservation", () => {
 });
 
 describe("Support optional registration mandatory consumer", () => {
-  function carrier(registration: object): object {
-    const event = {};
+  function carrier(registration: object): ServerLogEventInput {
+    const event: ServerLogEventInput = { op: "test.registration-carrier" };
     Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, { value: registration });
     return event;
   }
@@ -633,7 +634,7 @@ describe("Support optional registration mandatory consumer", () => {
     });
     expect(mandatory(carrier(unreadableOwner))).toBe(false);
     const failure = new TypeError("fixture attachment unreadable");
-    const attachment = {};
+    const attachment: ServerLogEventInput = { op: "test.registration-carrier" };
     Object.defineProperty(attachment, ACTIVITY_LOG_EVENT_REGISTRATION, {
       get(): never {
         throw failure;

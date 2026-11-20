@@ -107,7 +107,9 @@ function byteLength(value: string): number {
   return Buffer.byteLength(value, "utf8");
 }
 
-function numberRecord(value: object): Record<string, number> {
+function numberRecord(
+  value: ConnectedContextPack["usage"] | ConnectedContextPack["budget"],
+): Record<string, number> {
   const out: Record<string, number> = {};
   for (const [key, entry] of Object.entries(value)) {
     if (typeof entry === "number") {

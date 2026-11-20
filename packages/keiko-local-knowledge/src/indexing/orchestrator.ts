@@ -2541,7 +2541,9 @@ function embeddingPreflightCacheKey(options: EmbeddingProbeOptions): string {
   ].join("\u0000");
 }
 
-function embeddingPreflightCacheFor(cacheScope: object): Map<string, EmbeddingPreflightCacheEntry> {
+function embeddingPreflightCacheFor(
+  cacheScope: NonNullable<IndexingOptions["embeddingPreflightCacheScope"]>,
+): Map<string, EmbeddingPreflightCacheEntry> {
   const existing = EMBEDDING_PREFLIGHT_CACHES.get(cacheScope);
   if (existing !== undefined) return existing;
   const created = new Map<string, EmbeddingPreflightCacheEntry>();
@@ -2631,7 +2633,7 @@ async function probeEmbeddingCapability(
 async function verifyEmbeddingPreflightCapability(
   adapter: OpenAIEmbeddingAdapter,
   options: EmbeddingProbeOptions,
-  cacheScope: object | undefined,
+  cacheScope: IndexingOptions["embeddingPreflightCacheScope"],
   now: () => number,
   log: PreflightLog,
 ): Promise<EmbeddingCapabilityCheck> {

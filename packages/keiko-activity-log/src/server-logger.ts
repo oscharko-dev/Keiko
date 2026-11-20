@@ -129,7 +129,7 @@ const MANDATORY_OPERATIONS: ReadonlySet<string> = new Set([
  * True for registered evidence that bypasses the level threshold: process lifecycle boundaries,
  * readiness, and every loss signal. Unregistered events are never mandatory.
  */
-export function isMandatoryActivityLogEvent(event: object): boolean {
+export function isMandatoryActivityLogEvent(event: ServerLogEventInput): boolean {
   // Reading the registration marker is a property read on an object this layer did not build; a
   // hostile accessor that throws makes the event ordinary, never a new failure of the caller.
   try {

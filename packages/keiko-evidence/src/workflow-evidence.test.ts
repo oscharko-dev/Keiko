@@ -112,6 +112,21 @@ describe("buildWorkflowManifest", () => {
     expect(manifest.verification).toBeUndefined();
   });
 
+  it.each([
+    ["an overallStatus outside the verification vocabulary", { overallStatus: "green" }],
+    ["no workspaceRoot or results", { workspaceRoot: undefined, results: undefined }],
+    ["a non-finite durationMs", { durationMs: Number.NaN }],
+    ["counts that are not a record", { counts: [] }],
+    ["results that are not an array", { results: {} }],
+  ])("drops a verificationSummary with %s", (_label, override) => {
+    const manifest = buildWorkflowManifest(identity(), [], {
+      workflowId: "unit-test-generation",
+      status: "completed",
+      verificationSummary: { ...verification, ...override },
+    });
+    expect(manifest.verification).toBeUndefined();
+  });
+
   it("folds bug-investigation model usage and workspace metadata", () => {
     const manifest = buildWorkflowManifest(
       identity({ kind: "bug-investigation", workspaceRoot: "/repo" }),
