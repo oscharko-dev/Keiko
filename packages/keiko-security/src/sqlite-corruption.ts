@@ -30,28 +30,42 @@ export class SqliteQuickCheckError extends Error {
   }
 }
 
-// Optional hook that lets a caller unwrap a domain error into the underlying cause BEFORE shape
-// inspection — e.g. keiko-local-knowledge passes an unwrapper that resolves KnowledgeStoreError.cause
-// so the sealed SQLite error underneath is classified rather than the wrapper. `undefined`/absent
-// means "inspect the error as-is".
-export type SqliteErrorUnwrap = (error: unknown) => unknown;
+// Optional hook that recognises a domain error wrapping the underlying cause, so classification
+// inspects that cause instead — e.g. keiko-local-knowledge recognises KnowledgeStoreError so the
+// sealed SQLite error underneath is classified rather than the wrapper. Every recognised wrapper
+// layer that carries a cause is peeled, down to the innermost cause. `undefined`/absent means
+// "inspect the error as-is".
+export type SqliteErrorWrapperGuard = (error: unknown) => error is Error;
 
-export function sqliteErrorLike(error: unknown, unwrap?: SqliteErrorUnwrap): SqliteErrorLike {
-  const unwrapped = unwrap === undefined ? error : unwrap(error);
-  return typeof unwrapped === "object" && unwrapped !== null ? unwrapped : {};
+function hasWrappedCause(
+  error: unknown,
+  isWrapper: SqliteErrorWrapperGuard | undefined,
+): error is Error {
+  return isWrapper !== undefined && isWrapper(error) && error.cause !== undefined;
 }
 
-export function sqliteErrorText(error: unknown, unwrap?: SqliteErrorUnwrap): string {
-  const e = sqliteErrorLike(error, unwrap);
+export function sqliteErrorLike(
+  error: unknown,
+  isWrapper?: SqliteErrorWrapperGuard,
+): SqliteErrorLike {
+  if (hasWrappedCause(error, isWrapper)) return sqliteErrorLike(error.cause, isWrapper);
+  return typeof error === "object" && error !== null ? error : {};
+}
+
+export function sqliteErrorText(error: unknown, isWrapper?: SqliteErrorWrapperGuard): string {
+  const e = sqliteErrorLike(error, isWrapper);
   return [e.code, e.errstr, e.message].filter((value) => typeof value === "string").join(" ");
 }
 
-export function isSqliteCorruptionError(error: unknown, unwrap?: SqliteErrorUnwrap): boolean {
+export function isSqliteCorruptionError(
+  error: unknown,
+  isWrapper?: SqliteErrorWrapperGuard,
+): boolean {
   if (error instanceof SqliteQuickCheckError) return true;
-  const e = sqliteErrorLike(error, unwrap);
+  const e = sqliteErrorLike(error, isWrapper);
   if (e.errcode === 11 || e.errcode === 26) return true;
   return /\b(SQLITE_CORRUPT|SQLITE_NOTADB)\b|database disk image is malformed|file is not a database|not a database/i.test(
-    sqliteErrorText(error, unwrap),
+    sqliteErrorText(error, isWrapper),
   );
 }
 
@@ -142,14 +156,17 @@ function boundedField(value: unknown): string | undefined {
   return typeof value === "string" ? boundedRedactedText(value) : undefined;
 }
 
-export function errorRecord(error: unknown, unwrap?: SqliteErrorUnwrap): Record<string, unknown> {
-  const cause = unwrap === undefined ? error : unwrap(error);
-  const e = sqliteErrorLike(cause);
+export function errorRecord(
+  error: unknown,
+  isWrapper?: SqliteErrorWrapperGuard,
+): Record<string, unknown> {
+  if (hasWrappedCause(error, isWrapper)) return errorRecord(error.cause, isWrapper);
+  const e = sqliteErrorLike(error);
   return {
-    errorClass: hardenedErrorClass(cause),
+    errorClass: hardenedErrorClass(error),
     code: boundedField(e.code),
     errcode: typeof e.errcode === "number" ? e.errcode : undefined,
     errstr: boundedField(e.errstr),
-    message: hardenedMessage(cause),
+    message: hardenedMessage(error),
   };
 }

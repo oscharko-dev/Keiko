@@ -13,8 +13,11 @@ import { isValidCorrelationId } from "./correlation.js";
 
 import {
   contentFreeErrorClass,
+  errorObjectField,
+  errorStringField,
   machineToken,
   safeProperty,
+  thrownErrorFields,
   closeReasonVocabulary,
   redactLogFields,
   reportServerLogFailure,
@@ -842,35 +845,45 @@ export function describeError(error: unknown): {
   // record and its sibling retry line never disagree about what a `ProviderError`/`RateLimitError`
   // carried (ADR-0173 D5 g26).
   const detail = providerErrorDetail(error);
+  const fields = thrownErrorFields(error);
   return {
     errorClass: contentFreeErrorClass(error),
-    code: machineToken(safeProperty(error, "code")),
-    gatewayRequestId: machineToken(safeProperty(error, "requestId")),
+    code: machineToken(errorStringField(fields, "code")),
+    gatewayRequestId: machineToken(errorStringField(fields, "requestId")),
     httpStatus: detail.httpStatus,
     retryAfterMs: detail.retryAfterMs,
-    partialUsage: partialUsageCounts(safeProperty(error, "partialUsage")),
+    partialUsage: partialUsageCounts(errorObjectField(fields, "partialUsage")),
     frames: nonEmpty(keikoStackFrames(error)),
     causeChain: nonEmpty(causeChain(error)),
   };
 }
 
+// The two counts of a thrown value's `partialUsage`, untrusted until `usageCount` checks them.
+interface PartialUsageFields {
+  readonly promptTokens?: unknown;
+  readonly completionTokens?: unknown;
+}
+
+function usageCount(
+  value: PartialUsageFields,
+  field: keyof PartialUsageFields,
+): number | undefined {
+  return safeProperty(() => {
+    const count = value[field];
+    return typeof count === "number" && Number.isFinite(count) ? count : undefined;
+  });
+}
+
 // Accepts only the numeric counts (GatewayError.partialUsage shape) — anything
 // else is dropped so a hostile/foreign `partialUsage` value can never smuggle
-// content into a diagnostic record.
+// content into a diagnostic record. A callable value is not that shape either.
 function partialUsageCounts(
-  value: unknown,
+  value: PartialUsageFields | undefined,
 ): { readonly promptTokens: number; readonly completionTokens: number } | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const promptTokens = safeProperty(value, "promptTokens");
-  const completionTokens = safeProperty(value, "completionTokens");
-  if (
-    typeof promptTokens !== "number" ||
-    !Number.isFinite(promptTokens) ||
-    typeof completionTokens !== "number" ||
-    !Number.isFinite(completionTokens)
-  ) {
-    return undefined;
-  }
+  if (typeof value !== "object") return undefined;
+  const promptTokens = usageCount(value, "promptTokens");
+  const completionTokens = usageCount(value, "completionTokens");
+  if (promptTokens === undefined || completionTokens === undefined) return undefined;
   return { promptTokens, completionTokens };
 }
 
@@ -1005,7 +1018,7 @@ export function emitServerDiagnostic(
     (sink ?? defaultServerDiagnosticSink).record(sanitizeDiagnosticRecord(record));
   } catch (error) {
     recordActivityLogLoss("diagnostic-sink-failed");
-    const correlationId = safeProperty(record, "correlationId");
+    const correlationId = safeProperty(() => record.correlationId);
     reportServerLogFailure(error, {
       op: "server.diagnostic.failure",
       ...(typeof correlationId === "string" ? { correlationId } : {}),

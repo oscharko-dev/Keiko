@@ -142,7 +142,13 @@ import {
   type ActivityLogSegmentTail,
   type ActivityLogStorageConfig,
 } from "./activity-log-store.js";
-import { contentFreeErrorClass, machineToken, safeProperty } from "./error-classification.js";
+import {
+  contentFreeErrorClass,
+  errorStringField,
+  machineToken,
+  safeProperty,
+  thrownErrorFields,
+} from "./error-classification.js";
 import {
   DEFAULT_SERVER_LOG_LEVEL,
   resolveServerLogThreshold,
@@ -423,10 +429,10 @@ export function errorKindOf(error: unknown): string {
   const safeArtifactKind = safeArtifactErrorKind(error);
   if (safeArtifactKind !== undefined) return safeArtifactKind;
   if (typeof error !== "object" || error === null) return "unknown";
-  const code = machineToken(safeProperty(error, "code"));
+  const code = machineToken(errorStringField(error, "code"));
   if (code !== undefined) return code;
   if (error instanceof Error) return contentFreeErrorClass(error);
-  return classifyErrorKind(safeProperty(error, "name")) ?? "unknown";
+  return classifyErrorKind(errorStringField(error, "name")) ?? "unknown";
 }
 
 const SAFE_ARTIFACT_ERROR_KINDS: ReadonlySet<string> = new Set(SAFE_ARTIFACT_FILE_FAILURE_KINDS);
@@ -437,8 +443,8 @@ function safeArtifactErrorKind(error: unknown): string | undefined {
   } catch {
     return undefined;
   }
-  const kind = safeProperty(error, "kind");
-  return typeof kind === "string" && SAFE_ARTIFACT_ERROR_KINDS.has(kind) ? kind : "open-failed";
+  const kind = errorStringField(thrownErrorFields(error), "kind");
+  return kind !== undefined && SAFE_ARTIFACT_ERROR_KINDS.has(kind) ? kind : "open-failed";
 }
 
 // LAST-RESORT FAILURE NOTICE
@@ -1121,7 +1127,7 @@ function writeChunk(handle: number, payload: Buffer, offset: number): number {
   try {
     return writeSync(handle, payload, offset, payload.length - offset);
   } catch (error) {
-    const code = machineToken(safeProperty(error, "code"));
+    const code = machineToken(errorStringField(thrownErrorFields(error), "code"));
     if (code !== undefined && DISK_FULL_CODES.has(code)) throw new ActivityLogDiskFullError();
     if (code === "EAGAIN") throw new ActivityLogBackpressureError();
     throw error;
@@ -1637,13 +1643,26 @@ function activeLogKey(directory: string): string {
   }
 }
 
+// The two fields of the process-global slot, untrusted until `writerOwner` checks them.
+interface WriterOwnerFields {
+  readonly graphToken?: unknown;
+  readonly reject?: unknown;
+}
+
 // The slot is process-global, so its value is read like any foreign object: an accessor that throws
 // makes it an unrecognized owner, which fails closed with counted evidence rather than a raw error.
 function writerOwner(value: unknown): ProcessWriterOwner | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  const graphToken = safeProperty(value, "graphToken");
-  const reject = safeProperty(value, "reject");
-  return typeof graphToken === "object" && graphToken !== null && typeof reject === "function"
+  const fields: WriterOwnerFields = value;
+  const graphToken = safeProperty(() => {
+    const token = fields.graphToken;
+    return typeof token === "object" && token !== null ? token : undefined;
+  });
+  const reject = safeProperty(() => {
+    const handler = fields.reject;
+    return typeof handler === "function" ? handler : undefined;
+  });
+  return graphToken !== undefined && reject !== undefined
     ? { graphToken, reject: reject as ProcessWriterOwner["reject"] }
     : undefined;
 }
@@ -2350,7 +2369,7 @@ function pathMissing(path: string): boolean {
     lstatSync(path);
     return false;
   } catch (error) {
-    return machineToken(safeProperty(error, "code")) === "ENOENT";
+    return machineToken(errorStringField(thrownErrorFields(error), "code")) === "ENOENT";
   }
 }
 

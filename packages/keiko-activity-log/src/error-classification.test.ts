@@ -1,37 +1,74 @@
 // Direct unit coverage for the leaf module (ADR-0173 D11). `diagnostics-log.test.ts` already
 // exercises `contentFreeErrorClass` extensively through the re-exported name, and this suite does
 // not restate that coverage — it tests the primitives this module owns in their own right:
-// `safeProperty`'s degrade-on-hostile-access contract and `machineToken`'s bounded-shape contract,
-// both of which `server-log.ts`'s `errorKindOf` now depends on directly.
+// the typed field readers' degrade-on-hostile-access contract and `machineToken`'s bounded-shape
+// contract, both of which `server-log.ts`'s `errorKindOf` now depends on directly.
 import { describe, expect, it } from "vitest";
 
 import {
   contentFreeErrorClass,
   declaredErrorClassName,
+  errorArrayField,
+  errorObjectField,
+  errorStringField,
   machineToken,
   safeProperty,
+  thrownErrorFields,
 } from "./error-classification.js";
 
 describe("safeProperty", () => {
-  it("reads an own property off a plain object", () => {
-    expect(safeProperty({ code: "X" }, "code")).toBe("X");
+  it("returns what the read returns", () => {
+    expect(safeProperty(() => "X")).toBe("X");
   });
 
-  it("reads an inherited property off the prototype chain", () => {
-    expect(safeProperty(new TypeError("x"), "name")).toBe("TypeError");
+  it("degrades to undefined instead of throwing when the read throws", () => {
+    const read = (): string => {
+      throw new Error("hostile accessor");
+    };
+    expect(() => safeProperty(read)).not.toThrow();
+    expect(safeProperty(read)).toBeUndefined();
+  });
+});
+
+describe("thrown error field readers", () => {
+  it("reads an own string field off a plain object", () => {
+    expect(errorStringField(thrownErrorFields({ code: "X" }), "code")).toBe("X");
+  });
+
+  it("reads an inherited string field off the prototype chain", () => {
+    expect(errorStringField(thrownErrorFields(new TypeError("x")), "name")).toBe("TypeError");
   });
 
   it("preserves machine metadata carried by a callable error value", () => {
     const callable = Object.assign(() => undefined, { code: "CALLABLE_FAILURE" });
 
-    expect(safeProperty(callable, "code")).toBe("CALLABLE_FAILURE");
+    expect(errorStringField(thrownErrorFields(callable), "code")).toBe("CALLABLE_FAILURE");
   });
 
-  it("degrades to undefined for a non-object, non-function receiver", () => {
-    expect(safeProperty("a string", "code")).toBeUndefined();
-    expect(safeProperty(42, "code")).toBeUndefined();
-    expect(safeProperty(null, "code")).toBeUndefined();
-    expect(safeProperty(undefined, "code")).toBeUndefined();
+  it("admits no fields for a non-object, non-function value", () => {
+    expect(thrownErrorFields("a string")).toBeUndefined();
+    expect(thrownErrorFields(42)).toBeUndefined();
+    expect(thrownErrorFields(null)).toBeUndefined();
+    expect(thrownErrorFields(undefined)).toBeUndefined();
+    expect(errorStringField(undefined, "code")).toBeUndefined();
+  });
+
+  it("returns a field only when it has the type the reader names", () => {
+    const fields = thrownErrorFields({ code: 42, cause: "text", errors: "not-an-array" });
+    expect(errorStringField(fields, "code")).toBeUndefined();
+    expect(errorObjectField(fields, "cause")).toBeUndefined();
+    expect(errorArrayField(fields, "errors")).toBeUndefined();
+  });
+
+  it("returns an object or callable field and an array field as they are", () => {
+    const cause = { code: "ENOENT" };
+    const callableCause = Object.assign(() => undefined, { code: "EACCES" });
+    const errors = [cause, "primitive"];
+    expect(errorObjectField(thrownErrorFields({ cause }), "cause")).toBe(cause);
+    expect(errorObjectField(thrownErrorFields({ cause: callableCause }), "cause")).toBe(
+      callableCause,
+    );
+    expect(errorArrayField(thrownErrorFields({ errors }), "errors")).toBe(errors);
   });
 
   it("degrades to undefined instead of throwing when the accessor itself throws", () => {
@@ -40,8 +77,8 @@ describe("safeProperty", () => {
         throw new Error("hostile accessor");
       },
     });
-    expect(() => safeProperty(hostile, "code")).not.toThrow();
-    expect(safeProperty(hostile, "code")).toBeUndefined();
+    expect(() => errorStringField(thrownErrorFields(hostile), "code")).not.toThrow();
+    expect(errorStringField(thrownErrorFields(hostile), "code")).toBeUndefined();
   });
 
   it("degrades to undefined instead of throwing when the receiver is a trapping proxy", () => {
@@ -53,8 +90,9 @@ describe("safeProperty", () => {
         },
       },
     );
-    expect(() => safeProperty(trap, "code")).not.toThrow();
-    expect(safeProperty(trap, "code")).toBeUndefined();
+    expect(() => errorObjectField(thrownErrorFields(trap), "cause")).not.toThrow();
+    expect(errorObjectField(thrownErrorFields(trap), "cause")).toBeUndefined();
+    expect(errorArrayField(thrownErrorFields(trap), "errors")).toBeUndefined();
   });
 });
 

@@ -108,3 +108,54 @@ it("keeps the native cause location when the wrapper fills the frame budget", ()
   expect(evidence.frames).toHaveLength(8);
   expect(evidence.frames).toContain(`${frame}:999:42`);
 });
+
+describe("primitive causes", () => {
+  it("records a primitive cause by its class and ends the chain there", () => {
+    const error = new Error("private", { cause: "private cause text" });
+    error.stack = `Error: private\n    at renew (${location.origin}${chunk}:10:200)`;
+    expect(clientErrorEvidence(error)).toEqual({
+      errorClass: "Error",
+      frames: [`${frame}:10:200`],
+      causeChain: ["string"],
+    });
+  });
+
+  it("records an object cause followed by its primitive cause", () => {
+    const cause = new TypeError("private", { cause: 42 });
+    expect(clientErrorEvidence(new Error("private", { cause })).causeChain).toEqual([
+      "TypeError",
+      "number",
+    ]);
+  });
+
+  it("leaves a primitive cause out once the depth cap is reached", () => {
+    let error = new Error("private", { cause: "private cause text" });
+    for (let i = 0; i < 5; i++) error = new Error("private", { cause: error });
+    expect(clientErrorEvidence(error).causeChain).toEqual([
+      "Error",
+      "Error",
+      "Error",
+      "Error",
+      "Error",
+    ]);
+  });
+
+  it("records a callable cause as an object cause", () => {
+    const cause = Object.assign(() => undefined, { cause: null });
+    expect(clientErrorEvidence(new Error("private", { cause })).causeChain).toEqual([
+      "function",
+      "object",
+    ]);
+  });
+
+  it("counts a hostile cause accessor and records no cause", () => {
+    const error = new Error("private");
+    Object.defineProperty(error, "cause", {
+      get(): never {
+        throw new Error("private accessor");
+      },
+    });
+    expect(clientErrorEvidence(error).causeChain).toEqual([]);
+    expect(takeClientDiagnosticLoss()?.errorsSuppressed).toBe(1);
+  });
+});

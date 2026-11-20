@@ -15,7 +15,8 @@ import {
   causeChain,
   keikoStackFrames,
   errorKindOf,
-  safeProperty,
+  errorObjectField,
+  thrownErrorFields,
 } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "./process-log-sink.js";
 
@@ -202,7 +203,7 @@ export function isExpectedWorkspaceRootFailure(error: unknown): boolean {
 }
 
 function workspaceRootFailureKind(error: unknown): string {
-  const causeKind = errorKindOf(safeProperty(error, "cause"));
+  const causeKind = errorKindOf(errorObjectField(thrownErrorFields(error), "cause"));
   return error instanceof WorkspaceNotFoundError && isKnownWorkspaceFilesystemFailure(causeKind)
     ? causeKind
     : errorKindOf(error);

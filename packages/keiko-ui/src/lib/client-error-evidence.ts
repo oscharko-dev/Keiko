@@ -6,20 +6,51 @@ import {
   type ClientErrorEvidence,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
-function safeProperty(error: unknown, key: "cause" | "stack"): unknown {
-  if ((typeof error !== "object" || error === null) && typeof error !== "function")
-    return undefined;
+// The two fields this reducer reads from a thrown value it did not build.
+interface ErrorChainFields {
+  readonly cause?: unknown;
+  readonly stack?: unknown;
+}
+
+function errorChainFields(value: unknown): ErrorChainFields | undefined {
+  return (typeof value === "object" && value !== null) || typeof value === "function"
+    ? value
+    : undefined;
+}
+
+// Reads from a thrown value are hostile-input reads: an accessor or proxy trap may throw, and a
+// throw is counted and degrades to absence.
+function safeProperty<T>(read: () => T | undefined): T | undefined {
   try {
-    switch (key) {
-      case "cause":
-        return "cause" in error ? error.cause : undefined;
-      case "stack":
-        return "stack" in error ? error.stack : undefined;
-    }
+    return read();
   } catch {
     recordClientDiagnosticLoss("errorsSuppressed");
     return undefined;
   }
+}
+
+function safeStack(error: ErrorChainFields | undefined): string | undefined {
+  return safeProperty(() => {
+    const stack = error !== undefined && "stack" in error ? error.stack : undefined;
+    return typeof stack === "string" ? stack : undefined;
+  });
+}
+
+// One step of the cause chain. A primitive cause has no cause or stack of its own, so it ends the
+// chain and is reduced to its class at once; only an object cause is walked further.
+type CauseLink =
+  | { readonly kind: "object"; readonly cause: ErrorChainFields }
+  | { readonly kind: "primitive"; readonly errorClass: string };
+
+function causeLink(error: ErrorChainFields | undefined): CauseLink | undefined {
+  return safeProperty((): CauseLink | undefined => {
+    const cause = error !== undefined && "cause" in error ? error.cause : undefined;
+    if (cause === undefined) return undefined;
+    const fields = errorChainFields(cause);
+    return fields === undefined
+      ? { kind: "primitive", errorClass: safeClass(cause) }
+      : { kind: "object", cause: fields };
+  });
 }
 
 function safeClass(error: unknown): string {
@@ -63,9 +94,9 @@ function safeFrame(line: string): string | undefined {
   }
 }
 
-function safeFrames(error: unknown): string[] {
-  const stack = safeProperty(error, "stack");
-  if (typeof stack !== "string") return [];
+function safeFrames(error: ErrorChainFields | undefined): string[] {
+  const stack = safeStack(error);
+  if (stack === undefined) return [];
   return stack
     .slice(0, 16_384)
     .split("\n")
@@ -77,16 +108,22 @@ function safeFrames(error: unknown): string[] {
 
 /** No raw message, origin, query string, function name or source path leaves this reducer. */
 export function clientErrorEvidence(error: unknown): ClientErrorEvidence {
-  let frames = safeFrames(error);
+  const root = errorChainFields(error);
+  let frames = safeFrames(root);
   const causeChain: string[] = [];
-  const seen = new Set<unknown>([error]);
-  let cause = safeProperty(error, "cause");
-  while (cause !== undefined && !seen.has(cause) && causeChain.length < 5) {
-    seen.add(cause);
-    causeChain.push(safeClass(cause));
+  const seen = new Set<ErrorChainFields | undefined>([root]);
+  let link = causeLink(root);
+  while (link !== undefined && causeChain.length < 5) {
+    if (link.kind === "primitive") {
+      causeChain.push(link.errorClass);
+      break;
+    }
+    if (seen.has(link.cause)) break;
+    seen.add(link.cause);
+    causeChain.push(safeClass(link.cause));
     // Prefer the original failing location over wrapper frames when the shared budget fills.
-    frames = [...new Set([...safeFrames(cause), ...frames])].slice(0, 8);
-    cause = safeProperty(cause, "cause");
+    frames = [...new Set([...safeFrames(link.cause), ...frames])].slice(0, 8);
+    link = causeLink(link.cause);
   }
   return { errorClass: safeClass(error), frames, causeChain };
 }
