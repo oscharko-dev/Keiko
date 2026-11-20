@@ -367,8 +367,11 @@ release.
 prerelease `coding-runtime-1.1.5` was published with the two macOS tarballs only, and a published
 release is immutable, so no Windows tarball can be added to it. The Windows package was first
 reviewed as 1.1.6 with its own transport prerelease `coding-runtime-1.1.6`; that package carries the
-secure-read helper `65cc98c3…`, which no release can reproduce any more (see above), so the server
-no longer approves it and 1.1.6 must never be published to npm. The Windows package therefore takes
+secure-read helper `65cc98c3…`, the bytes Keiko 1.5.4 approves. It was published to npm on
+2026-11-20 for 1.5.4, whose manifest names no Windows runtime package: a Windows npm installation of
+1.5.4 gets its Coding Workbench with `npm install @oscharko-dev/keiko-coding-runtime-win32-x64@1.1.6`
+beside Keiko (proven in a Windows guest as a standard user). From 1.5.5 on the server approves the
+bytes a release ships (see above) and refuses 1.1.6. The Windows package for 1.5.5 therefore takes
 1.1.7, with its own transport prerelease `coding-runtime-1.1.7`; it carries the same OpenCode 2.2.5
 and the same native bytes as the 1.5.5 portable release. The two macOS packages stay at 1.1.5: the
 root manifest pins each runtime package on its own, and `selectedCodingRuntimeFailures` checks each

@@ -68,8 +68,8 @@ const HELPER_MACOS_X64 = {
 // bytes; the earlier image's `65cc98c3…` (129,024 bytes, built at `1906b6a5f28a…`) no longer
 // matched what a release ships, so 1.5.4's Windows Workbench refused to start (#4068). The release
 // build now stops when its helpers differ from these pins (scripts/stage-portable-runtime.mjs).
-// The local MSVC 14.44 build (`1318171b…`) and `65cc98c3…` approve nothing any more; no npm
-// package with either was ever published.
+// The local MSVC 14.44 build (`1318171b…`) and `65cc98c3…` approve nothing any more. `65cc98c3…` is
+// the helper of the npm runtime package 1.1.6, which Keiko 1.5.4 approves and this version refuses.
 const HELPER_WINDOWS_X64 = {
   helperSha256: "8699612eabadc70f95ab969ed259edca8b18a5381c2c577acd2ca835c226ac64",
   helperSizeBytes: 128_512,
