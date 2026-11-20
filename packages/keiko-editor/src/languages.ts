@@ -24,5 +24,5 @@ export const SUPPORTED_EDITOR_LANGUAGES: readonly EditorLanguageId[] = MONACO_LA
  * supported-language list.
  */
 export function isSupportedEditorLanguage(value: string): value is EditorLanguageId {
-  return (SUPPORTED_EDITOR_LANGUAGES as readonly string[]).includes(value);
+  return SUPPORTED_EDITOR_LANGUAGES.some((language) => language === value);
 }

@@ -1159,7 +1159,7 @@ function useModelAttachmentSync(props: KeikoCodeEditorProps, refs: EditorRefs): 
 
 interface MountRuntimeArgs {
   readonly editor: MountEditor;
-  readonly monaco: unknown;
+  readonly monaco: MountMonaco;
   readonly refs: EditorRefs;
   readonly emitSave: () => void;
   readonly latestProps: RefObject<KeikoCodeEditorProps>;
@@ -1180,13 +1180,13 @@ function attachModelForRuntimeMount(args: MountRuntimeArgs): void {
   if (args.attachModel === false) {
     applyViewState(args.editor, args.refs.viewStateRef.current);
   } else {
-    attachModelOnMount(args, args.monaco as MountMonaco);
+    attachModelOnMount(args, args.monaco);
   }
 }
 
 function initializeRuntimeMountRefs(args: MountRuntimeArgs): HTMLElement {
   args.refs.editorRef.current = args.editor;
-  args.refs.monacoRef.current = args.monaco as MountMonaco;
+  args.refs.monacoRef.current = args.monaco;
   args.refs.containerRef.current = args.editor.getContainerDomNode();
   return args.refs.containerRef.current;
 }
@@ -1261,7 +1261,7 @@ function mountEditorRuntime(args: MountRuntimeArgs): void {
   attachModelForRuntimeMount(args);
   args.refs.disposeRef.current = wireEditorOnMount({
     editor: args.editor,
-    monaco: args.monaco as MountMonaco,
+    monaco: args.monaco,
     container,
     themeVariant: args.themeVariant ?? "dark",
     autoFocus: args.autoFocus ?? false,
@@ -1341,6 +1341,23 @@ function useRuntimeWiringBaseArgs(args: RuntimeWiringBaseArgs): RuntimeWiringBas
   );
 }
 
+const MOUNT_MONACO_MISSING_MESSAGE =
+  "Keiko editor mount: the Monaco namespace has no editor, KeyMod or KeyCode member.";
+
+// `@monaco-editor/react` declares the mount namespace through
+// `monaco-editor/esm/vs/editor/editor.api`, a path the `monaco-editor` exports map does not
+// resolve, so the argument arrives without a checked type. The mount reads it only after this
+// check confirms the members `MountMonaco` requires.
+function isMountMonaco(value: unknown): value is MountMonaco {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "editor" in value &&
+    "KeyMod" in value &&
+    "KeyCode" in value
+  );
+}
+
 function useMountHandler(
   props: KeikoCodeEditorProps,
   refs: EditorRefs,
@@ -1373,8 +1390,11 @@ function useMountHandler(
   );
   useRuntimeWiringRefresh(refreshArgs);
   return useCallback<OnMount>(
-    (editor, monaco): void => {
-      mountEditorRuntime({ ...baseArgs, editor, monaco, autoFocus });
+    (editor, monacoNamespace): void => {
+      if (!isMountMonaco(monacoNamespace)) {
+        throw new TypeError(MOUNT_MONACO_MISSING_MESSAGE);
+      }
+      mountEditorRuntime({ ...baseArgs, editor, monaco: monacoNamespace, autoFocus });
     },
     [autoFocus, baseArgs],
   );

@@ -128,8 +128,12 @@ function buildEditorHarness(): EditorHarness {
 // (`editor.IStandaloneCodeEditor`), not the hook's own narrower `MountEditor` seam — a real `<Editor>`
 // supplies that full instance. The lightweight harness intentionally implements only the subset the
 // mount wiring calls, so it stands in for the full editor at this single, explicit boundary.
-function mountWith(onMount: OnMount, harness: EditorHarness): void {
-  onMount(harness.editor as unknown as Parameters<OnMount>[0], harness.monaco);
+function mountWith(
+  onMount: OnMount,
+  harness: EditorHarness,
+  monacoNamespace: Partial<MountMonaco> | null = harness.monaco,
+): void {
+  onMount(harness.editor as unknown as Parameters<OnMount>[0], monacoNamespace);
 }
 
 describe("useChangeHandler — consumeProgrammaticChange edge cases (KEIKO-0407)", () => {
@@ -279,6 +283,23 @@ describe("useEditorHandlers — host edit request (KEIKO-0032, KEIKO-0033)", () 
       { text: "writable now", sizeBytes: byteLength("writable now") },
       "human",
     );
+  });
+});
+
+describe("useEditorHandlers — mount namespace check", () => {
+  it("refuses a mount whose namespace lacks the members the wiring reads", () => {
+    const { result } = renderHook(
+      (props: KeikoCodeEditorProps) => useEditorHandlers(props, false),
+      { initialProps: baseProps({}) },
+    );
+    const harness = buildEditorHarness();
+    expect(() => {
+      mountWith(result.current.onMount, harness, { editor: harness.monaco.editor });
+    }).toThrow(/Monaco namespace has no editor, KeyMod or KeyCode member/);
+    expect(() => {
+      mountWith(result.current.onMount, harness, null);
+    }).toThrow(/Monaco namespace has no editor, KeyMod or KeyCode member/);
+    expect(harness.addActionCalls()).toBe(0);
   });
 });
 

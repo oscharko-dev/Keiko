@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { EDITOR_LANGUAGE_MODE_IDS } from "@oscharko-dev/keiko-contracts/runtime/editor-language-mode-map";
+
 import {
   MONACO_LANGUAGE_BY_EXTENSION,
   MONACO_LANGUAGE_IDS,
@@ -36,6 +38,13 @@ describe("MONACO_LANGUAGE_IDS", () => {
   it("includes the plaintext fallback id", () => {
     expect(MONACO_LANGUAGE_IDS).toContain(MONACO_PLAINTEXT_LANGUAGE_ID);
     expect(MONACO_PLAINTEXT_LANGUAGE_ID).toBe("plaintext");
+  });
+
+  it("recognises every contract language mode id, so none is filtered out", () => {
+    for (const id of EDITOR_LANGUAGE_MODE_IDS) {
+      expect(isMonacoLanguageId(id)).toBe(true);
+      expect(MONACO_LANGUAGE_IDS).toContain(id);
+    }
   });
 
   it("only maps extensions onto known language ids", () => {

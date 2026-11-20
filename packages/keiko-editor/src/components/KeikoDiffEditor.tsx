@@ -15,6 +15,7 @@
  * `sideEffects:false`). No loader/worker bootstrap happens here; that is the host's job (#1196).
  */
 import { DiffEditor, type DiffOnMount } from "@monaco-editor/react";
+import type * as monaco from "monaco-editor";
 import {
   useCallback,
   useEffect,
@@ -29,8 +30,12 @@ import {
 import type { EditorThemeVariant } from "../monaco/theme.js";
 import type { PatchPreviewFile, PatchPreviewFileStatus } from "../patch-preview.js";
 import { buildDiffEditorOptions } from "./diff-editor-options.js";
-import { wireDiffEditorOnMount, type DiffMountController } from "./diff-mount.js";
-import { reapplyEditorTheme, type MountMonaco } from "./on-mount.js";
+import {
+  wireDiffEditorOnMount,
+  type DiffMountController,
+  type MountDiffMonaco,
+} from "./diff-mount.js";
+import { reapplyEditorTheme } from "./on-mount.js";
 import {
   deriveDiffSummary,
   deriveDiffTruncationNote,
@@ -437,7 +442,7 @@ interface DiffController {
 function useDiffThemeReapply(
   themeVariant: EditorThemeVariant,
   onThemeError: ((message: string) => void) | undefined,
-  monacoRef: RefObject<MountMonaco | null>,
+  monacoRef: RefObject<MountDiffMonaco | null>,
   containerRef: RefObject<HTMLElement | null>,
 ): void {
   const mounted = useRef(false);
@@ -460,25 +465,24 @@ function useDiffController(
   diffViewRendered: boolean,
 ): DiffController {
   const controllerRef = useRef<DiffMountController | null>(null);
-  const monacoRef = useRef<MountMonaco | null>(null);
+  const monacoRef = useRef<MountDiffMonaco | null>(null);
   const containerRef = useRef<HTMLElement | null>(null);
   const onMount = useCallback<DiffOnMount>(
-    (editor, monaco): void => {
+    // `@monaco-editor/react` types the namespace argument through a module path the
+    // `monaco-editor` exports map does not resolve, so the callback declares the real
+    // `monaco-editor` namespace type. The compiler then checks it against the `MountDiffMonaco`
+    // theme registrar the diff wiring needs.
+    (editor, monacoNamespace: typeof monaco): void => {
       controllerRef.current?.dispose();
-      // The live `monaco` namespace surfaces as error-typed to the typed-lint program; narrow it at
-      // this single seam to the structural view the mount wiring consumes (cf. use-editor-handlers.ts's
-      // initializeRuntimeMountRefs, which casts the same live namespace the same way for the code
-      // editor). `MountMonaco` contains the `MountDiffMonaco` theme registrar the diff wiring needs.
-      const mountMonaco = monaco as MountMonaco;
       controllerRef.current = wireDiffEditorOnMount({
         editor,
-        monaco: mountMonaco,
+        monaco: monacoNamespace,
         themeVariant,
         onThemeError,
       });
       // Retain the live monaco/container handles so a later themeVariant change (useDiffThemeReapply)
       // can re-register the theme through the SAME editor instance instead of remounting.
-      monacoRef.current = mountMonaco;
+      monacoRef.current = monacoNamespace;
       containerRef.current = editor.getContainerDomNode();
     },
     [themeVariant, onThemeError],

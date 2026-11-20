@@ -1,4 +1,4 @@
-import type { MermaidConfig } from "mermaid";
+import type { MermaidConfig, ParseResult } from "mermaid";
 
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
@@ -26,7 +26,10 @@ import { clientErrorEvidence } from "@/lib/client-error-evidence";
 export interface MermaidRenderer {
   readonly initialize: (config: MermaidConfig) => void;
   /** With `suppressErrors`, a source Mermaid cannot read resolves `false` instead of throwing. */
-  readonly parse: (text: string, options: { readonly suppressErrors: true }) => Promise<unknown>;
+  readonly parse: (
+    text: string,
+    options: { readonly suppressErrors: true },
+  ) => Promise<Pick<ParseResult, "diagramType"> | false>;
   readonly render: (id: string, text: string) => Promise<{ readonly svg: string }>;
 }
 

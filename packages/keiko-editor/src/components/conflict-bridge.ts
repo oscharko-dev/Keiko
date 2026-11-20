@@ -78,9 +78,16 @@ export interface RegisterConflictBridgeArgs {
 
 const ENCODER = new TextEncoder();
 
+// The platform globals the default digest reads. Some hosts have no `crypto`, and insecure browser
+// contexts have `crypto` without `subtle`.
+interface DigestPlatform {
+  readonly crypto?: { readonly subtle?: SubtleCrypto | undefined } | undefined;
+}
+
 async function digest(value: string): Promise<string> {
   const bytes = ENCODER.encode(value);
-  const cryptoLike = (globalThis as { readonly crypto?: Crypto }).crypto;
+  const platform: DigestPlatform = globalThis;
+  const cryptoLike = platform.crypto;
   if (cryptoLike?.subtle === undefined) throw new Error("SHA-256 unavailable");
   const hash = await cryptoLike.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(hash)].map((byte) => byte.toString(16).padStart(2, "0")).join("");

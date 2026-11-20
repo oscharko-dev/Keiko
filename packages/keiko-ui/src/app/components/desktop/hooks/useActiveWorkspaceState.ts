@@ -154,7 +154,7 @@ type MutationOutcome = { readonly ok: true } | { readonly ok: false; readonly er
 
 // The wire call as an outcome rather than a throw, so the envelope can decrement the in-flight
 // count once, on the one path both results share, instead of in two branches that can drift.
-async function runMutation(action: () => Promise<unknown>): Promise<MutationOutcome> {
+async function runMutation(action: () => Promise<void>): Promise<MutationOutcome> {
   try {
     await action();
     return { ok: true };
@@ -283,7 +283,7 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
   // answer owns the final one. A reload that itself fails after an applied mutation surfaces as
   // `error` without denying that the mutation happened.
   const mutate = useCallback(
-    async (action: () => Promise<unknown>): Promise<boolean> => {
+    async (action: () => Promise<void>): Promise<boolean> => {
       const mutationSeq = (mutationSeqRef.current += 1);
       const operationSeq = (operationSeqRef.current += 1);
       inFlightMutationsRef.current += 1;
@@ -316,7 +316,9 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
       // Serialize server mutations, not merely UI responses: the latest selection must be
       // the final applied pointer. Other mutation outcomes still reconcile with server truth.
       const run = (): Promise<boolean> =>
-        mutate(() => setActiveTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR }));
+        mutate(async () => {
+          await setActiveTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR });
+        });
       const pending = switchTail.current?.then(run, run) ?? run();
       switchTail.current = pending;
       return pending;
@@ -325,25 +327,31 @@ export function useActiveWorkspaceState(): ActiveWorkspaceApi {
   );
 
   const clearActive = useCallback(
-    (): Promise<boolean> => mutate(() => clearActiveTaskWorkspace()),
+    (): Promise<boolean> => mutate(clearActiveTaskWorkspace),
     [mutate],
   );
 
   const pause = useCallback(
     (workspaceId: string): Promise<boolean> =>
-      mutate(() => pauseTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR })),
+      mutate(async () => {
+        await pauseTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR });
+      }),
     [mutate],
   );
 
   const resume = useCallback(
     (workspaceId: string): Promise<boolean> =>
-      mutate(() => resumeTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR })),
+      mutate(async () => {
+        await resumeTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR });
+      }),
     [mutate],
   );
 
   const prepareHandoff = useCallback(
     (workspaceId: string): Promise<boolean> =>
-      mutate(() => prepareHandoffTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR })),
+      mutate(async () => {
+        await prepareHandoffTaskWorkspace({ workspaceId, requestedBy: STUDIO_OPERATOR });
+      }),
     [mutate],
   );
 

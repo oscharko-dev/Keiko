@@ -39,6 +39,7 @@ import {
   registerConflictBridge,
   type ConflictBridge,
   type ConflictEditor,
+  type ConflictModel,
   type ConflictLabels,
 } from "./conflict-bridge.js";
 import {
@@ -601,7 +602,8 @@ export function isSaveChord(event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrl
  * instance instead of forcing a remount that would discard the undo stack and view state.
  */
 export function reapplyEditorTheme(args: {
-  readonly monaco: MountMonaco;
+  // Only the theme registrar is read, so the diff editor's narrower namespace view also fits.
+  readonly monaco: { readonly editor: MonacoThemeRegistrar };
   readonly container: HTMLElement;
   readonly themeVariant: EditorThemeVariant;
   readonly onThemeError?: ((message: string) => void) | undefined;
@@ -1164,11 +1166,61 @@ function supportsConflicts(editor: MountEditor): boolean {
   );
 }
 
+// A model that offers the members the conflict bridge reads. The bridge compares models by
+// identity, so the predicate narrows the live Monaco model instead of wrapping it.
+function isConflictModel(
+  model: MountModel,
+): model is MountModel & Required<Pick<MountModel, ConflictModelMember>> {
+  return (
+    model.getVersionId !== undefined &&
+    model.getPositionAt !== undefined &&
+    model.onDidChangeContent !== undefined
+  );
+}
+
+type ConflictModelMember = "getVersionId" | "getPositionAt" | "onDidChangeContent";
+
+function conflictModel(editor: MountEditor): ConflictModel | null {
+  const model = editor.getModel?.() ?? null;
+  return model !== null && isConflictModel(model) ? model : null;
+}
+
+// The conflict bridge's editor view. The optional mount members were checked by
+// `supportsConflicts`; the forwarding calls keep the optional chain because a closure does not
+// carry that narrowing.
+function conflictEditor(
+  editor: MountEditor,
+  onDidChangeModel: ConflictEditor["onDidChangeModel"],
+): ConflictEditor {
+  return {
+    getModel: () => conflictModel(editor),
+    onDidChangeModel,
+    getPosition: () => editor.getPosition?.() ?? null,
+    setPosition: (position): void => {
+      editor.setPosition(position);
+    },
+    revealRangeInCenterIfOutsideViewport: (range): void => {
+      editor.revealRangeInCenterIfOutsideViewport(range);
+    },
+    deltaDecorations: (oldIds, decorations) => editor.deltaDecorations(oldIds, [...decorations]),
+    addAction: (descriptor) => editor.addAction(descriptor),
+    executeEdits: (source, edits) => editor.executeEdits?.(source, [...edits]) ?? false,
+    pushUndoStop: () => editor.pushUndoStop?.() ?? false,
+  };
+}
+
 function installConflicts(args: WireEditorOnMountArgs): ConflictBridge | null {
   const wiring = args.conflicts;
-  if (wiring === undefined || wiring.degraded || !supportsConflicts(args.editor)) return null;
+  if (
+    wiring === undefined ||
+    wiring.degraded ||
+    args.editor.onDidChangeModel === undefined ||
+    !supportsConflicts(args.editor)
+  ) {
+    return null;
+  }
   return registerConflictBridge({
-    editor: args.editor as ConflictEditor,
+    editor: conflictEditor(args.editor, args.editor.onDidChangeModel.bind(args.editor)),
     labels: wiring.labels,
     onChange: wiring.onChange,
     onStale: wiring.onStale,
@@ -1188,9 +1240,7 @@ function installDebugGutter(
     return null;
   const editor: MonacoBreakpointGutterEditor = {
     deltaDecorations: (oldIds, decorations): string[] =>
-      args.editor.deltaDecorations(oldIds, [
-        ...decorations,
-      ] as monaco.editor.IModelDeltaDecoration[]),
+      args.editor.deltaDecorations(oldIds, [...decorations]),
     onMouseDown: args.editor.onMouseDown.bind(args.editor),
     getPosition: (): { readonly lineNumber: number; readonly column: number } | null =>
       args.editor.getPosition?.() ?? null,
@@ -1207,9 +1257,7 @@ function installDebugValues(
   const inlays = registerDebugValueInlays({
     editor: {
       deltaDecorations: (oldIds, decorations): string[] =>
-        args.editor.deltaDecorations(oldIds, [
-          ...decorations,
-        ] as monaco.editor.IModelDeltaDecoration[]),
+        args.editor.deltaDecorations(oldIds, [...decorations]),
     },
     documentUri: (): string => args.editor.getModel?.()?.uri?.toString() ?? "",
     resolve: (): EditorDebugValueSnapshot =>

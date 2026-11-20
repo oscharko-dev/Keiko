@@ -5,6 +5,7 @@ import {
   isGitHubOwnerAndRepo,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { CLIENT_BINDING_WINDOW_REF_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type { EditorLayoutNode } from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
 import { isDesktopChatCreationRequestId } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
 // KEIKO-0628: isSecretShapedString + its helpers live in a leaf module so tests/qa's cross-package
@@ -555,7 +556,7 @@ function sanitizeEditorLayoutTreeNode(
   node: unknown,
   paneIds: ReadonlySet<string>,
   depth = 0,
-): unknown {
+): EditorLayoutNode | null {
   // Fail closed on absurd nesting: a null child collapses the whole split
   // chain, so an over-deep tree rejects the layout instead of recursing on.
   if (depth > MAX_EDITOR_LAYOUT_SPLIT_DEPTH || !isRecord(node)) return null;

@@ -71,6 +71,10 @@ interface JsonRecord {
   readonly [key: string]: unknown;
 }
 
+// A value `JSON.parse` produces. Its fields are still unchecked: the parse functions below decide
+// what a stream frame or a response body means.
+type JsonValue = string | number | boolean | null | readonly JsonValue[] | JsonRecord;
+
 interface MutationProjection {
   readonly snapshot: InstrumentationSnapshot;
 }
@@ -242,9 +246,11 @@ function hasOnlyKeys(value: JsonRecord, keys: readonly string[]): boolean {
   return Object.keys(value).every((key) => keys.includes(key));
 }
 
-function parseJson(data: string): unknown {
+function parseJson(data: string): JsonValue {
   try {
-    return JSON.parse(data) as unknown;
+    // SAFETY: JSON.parse without a reviver returns only strings, numbers, booleans, null, arrays
+    // and plain objects, which is exactly JsonValue.
+    return JSON.parse(data) as JsonValue;
   } catch {
     return null;
   }
@@ -757,9 +763,11 @@ function isRevisionConflict(error: unknown): boolean {
   return error instanceof DebugRequestError && error.status === 409;
 }
 
-async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
+async function requestJson(url: string, init?: RequestInit): Promise<JsonValue> {
   const response = await fetch(url, { credentials: "same-origin", ...init });
-  const body = (await response.json()) as unknown;
+  // SAFETY: Response.json() parses the body with the JSON parser, so it resolves only to the values
+  // JSON.parse produces, which is exactly JsonValue.
+  const body = (await response.json()) as JsonValue;
   if (!response.ok) throw new DebugRequestError(response.status, "Debug request was rejected.");
   return body;
 }
@@ -1191,7 +1199,7 @@ export function useDebugSession(
   }, [stableWorkspaceId]);
 
   const trackedRequest = useCallback(
-    async (url: string, init?: RequestInit): Promise<unknown> => {
+    async (url: string, init?: RequestInit): Promise<JsonValue> => {
       const response = await runTrackedAbortable(
         stableWorkspaceId,
         requestControllers.current,
@@ -1250,7 +1258,7 @@ export function useDebugSession(
       url: string,
       instrumentation: InstrumentationSnapshot,
       buildInit: (current: InstrumentationSnapshot) => RequestInit,
-    ): Promise<unknown> => {
+    ): Promise<JsonValue> => {
       try {
         return await trackedRequest(url, buildInit(instrumentation));
       } catch (error: unknown) {

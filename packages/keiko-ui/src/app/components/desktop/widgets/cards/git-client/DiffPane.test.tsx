@@ -414,7 +414,7 @@ const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
       claim: "d".repeat(64),
     }),
   stripFragment: (): void => undefined,
-  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+  postPairing: (): Promise<void> => Promise.resolve(),
 };
 
 // PR #3452 review: a diff of a managed task workspace is answered only for a paired browser, so the

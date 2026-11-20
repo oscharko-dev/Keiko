@@ -451,13 +451,20 @@ export const DEFAULT_COMPLETION_CONTEXT_BUDGET_BYTES = 32_768;
 
 let requestIdFallbackCounter = 0;
 
+// The platform globals the request-id factory reads. Some hosts have no `crypto`, and insecure
+// browser contexts have `crypto` without `randomUUID`.
+interface RequestIdPlatform {
+  readonly crypto?: { readonly randomUUID?: (() => string) | undefined } | undefined;
+}
+
 /**
  * Default request-id factory for the bridge: a UUID where the platform offers one, otherwise a
  * monotonic per-instance counter. Deterministic-friendly (no `Math.random`/`Date.now`) so the bridge
  * stays unit-testable; tests inject their own factory through {@link KeikoCompletionProviderDeps}.
  */
 export function createEditorRequestId(): string {
-  const cryptoObj = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  const platform: RequestIdPlatform = globalThis;
+  const cryptoObj = platform.crypto;
   if (typeof cryptoObj?.randomUUID === "function") {
     return cryptoObj.randomUUID();
   }

@@ -29,30 +29,38 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/editor-language-mode-map";
 
 /**
- * A Monaco built-in language id the Keiko Editor can render (monaco-editor 0.55.1).
- *
- * Kept as an explicit literal union — identical to the pre-#1379 union — so consumers
- * (`EditorLanguageId`, `patch-preview.ts`) keep the narrow type. The runtime ids in
- * {@link MONACO_LANGUAGE_IDS} are derived from the contract and a parity test pins them against this
- * union, so the literal type and the derived values cannot silently drift.
+ * The Monaco built-in language ids the Keiko Editor can render (monaco-editor 0.55.1). The literal
+ * list is the same as the pre-#1379 union, so consumers (`EditorLanguageId`, `patch-preview.ts`)
+ * keep the narrow type. The contract's ids reach {@link MONACO_LANGUAGE_IDS} only through
+ * {@link isMonacoLanguageId}, and a test pins every contract id to this list, so the literal type
+ * and the derived values cannot drift apart.
  */
-export type MonacoLanguageId =
-  | "typescript"
-  | "javascript"
-  | "json"
-  | "css"
-  | "scss"
-  | "less"
-  | "html"
-  | "markdown"
-  | "yaml"
-  | "python"
-  | "java"
-  | "go"
-  | "rust"
-  | "sql"
-  | "shell"
-  | "plaintext";
+const MONACO_LANGUAGE_ID_UNIVERSE = [
+  "typescript",
+  "javascript",
+  "json",
+  "css",
+  "scss",
+  "less",
+  "html",
+  "markdown",
+  "yaml",
+  "python",
+  "java",
+  "go",
+  "rust",
+  "sql",
+  "shell",
+  "plaintext",
+] as const;
+
+/** A Monaco built-in language id the Keiko Editor can render. */
+export type MonacoLanguageId = (typeof MONACO_LANGUAGE_ID_UNIVERSE)[number];
+
+/** Type guard: does `value` name a Monaco language id the editor recognises? */
+export function isMonacoLanguageId(value: string): value is MonacoLanguageId {
+  return MONACO_LANGUAGE_ID_UNIVERSE.some((id) => id === value);
+}
 
 /** The fallback language id for buffers with no recognised source language. */
 export const MONACO_PLAINTEXT_LANGUAGE_ID: MonacoLanguageId = "plaintext";
@@ -63,7 +71,7 @@ export const MONACO_PLAINTEXT_LANGUAGE_ID: MonacoLanguageId = "plaintext";
  * `plaintext` render fallback (ADR-0067 D2/D5).
  */
 export const MONACO_LANGUAGE_IDS: readonly MonacoLanguageId[] = [
-  ...(EDITOR_LANGUAGE_MODE_IDS as readonly MonacoLanguageId[]),
+  ...EDITOR_LANGUAGE_MODE_IDS.filter(isMonacoLanguageId),
   MONACO_PLAINTEXT_LANGUAGE_ID,
 ];
 
@@ -76,7 +84,13 @@ export const MONACO_LANGUAGE_IDS: readonly MonacoLanguageId[] = [
  * so AC coverage of "TSX" and "JSX" means the extensions resolve, not that new ids exist.
  */
 export const MONACO_LANGUAGE_BY_EXTENSION: Readonly<Record<string, MonacoLanguageId>> =
-  EDITOR_LANGUAGE_MODE_BY_EXTENSION as Readonly<Record<string, MonacoLanguageId>>;
+  Object.freeze(
+    Object.fromEntries(
+      Object.entries(EDITOR_LANGUAGE_MODE_BY_EXTENSION).filter(
+        (entry): entry is [string, MonacoLanguageId] => isMonacoLanguageId(entry[1]),
+      ),
+    ),
+  );
 
 /**
  * Extract the final path segment (basename) from a POSIX or Windows path.
@@ -115,9 +129,4 @@ export function inferMonacoLanguageId(pathOrName: string): MonacoLanguageId {
     return MONACO_PLAINTEXT_LANGUAGE_ID;
   }
   return MONACO_LANGUAGE_BY_EXTENSION[extension] ?? MONACO_PLAINTEXT_LANGUAGE_ID;
-}
-
-/** Type guard: does `value` name a Monaco language id the editor recognises? */
-export function isMonacoLanguageId(value: string): value is MonacoLanguageId {
-  return (MONACO_LANGUAGE_IDS as readonly string[]).includes(value);
 }

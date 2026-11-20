@@ -570,6 +570,20 @@ describe("createBrowserVoiceRtcTransport", () => {
     expect(Object.hasOwn(received[0] as object, "delta")).toBe(false);
   });
 
+  it("forwards provider object events and drops JSON that is not an object", async () => {
+    stubMedia(async () => fakeStream({ stop: vi.fn() }));
+    const session = await createBrowserVoiceRtcTransport().connect();
+    const received: unknown[] = [];
+    session.onDataChannelEvent?.((event) => received.push(event));
+
+    lastDataChannel?.fireMessage("5");
+    lastDataChannel?.fireMessage(JSON.stringify(["session.created"]));
+    lastDataChannel?.fireMessage("null");
+    lastDataChannel?.fireMessage(JSON.stringify({ type: "session.created" }));
+
+    expect(received).toEqual([{ type: "session.created" }]);
+  });
+
   it("reports the current data-channel state immediately on subscription", async () => {
     stubMedia(async () => fakeStream({ stop: vi.fn() }));
     const transport = createBrowserVoiceRtcTransport();

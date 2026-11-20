@@ -63,6 +63,7 @@ interface FakeModel {
   readonly model: MonacoDiagnosticsModel;
   edit(newText: string): void;
   bumpVersion(): void;
+  setLanguage(next: string): void;
   contentDisposeCount(): number;
   hasContentListener(): boolean;
 }
@@ -70,7 +71,7 @@ interface FakeModel {
 function buildModel(opts: { language?: string; text?: string; uri?: string } = {}): FakeModel {
   let version = 1;
   let text = opts.text ?? "const x = 1;\n";
-  const language = opts.language ?? "typescript";
+  let language = opts.language ?? "typescript";
   let listener: (() => void) | null = null;
   let contentDisposed = 0;
   const model: MonacoDiagnosticsModel = {
@@ -97,6 +98,9 @@ function buildModel(opts: { language?: string; text?: string; uri?: string } = {
     },
     bumpVersion: (): void => {
       version += 1;
+    },
+    setLanguage: (next): void => {
+      language = next;
     },
     contentDisposeCount: () => contentDisposed,
     hasContentListener: () => listener !== null,
@@ -501,6 +505,23 @@ describe("registerKeikoDiagnostics — degradation and lifecycle", () => {
     expect(resolver.calls).toHaveLength(0);
     expect(model.hasContentListener()).toBe(false);
     expect(markers.calls).toEqual([{ model: model.model, owner: "test-owner", markers: [] }]);
+  });
+
+  it("sends no request after the bound model switches to an ineligible language", () => {
+    const model = buildModel();
+    const editor = buildEditor(model.model);
+    const { resolver, scheduler } = register(editor);
+    expect(resolver.calls).toHaveLength(1);
+    model.setLanguage("python");
+    model.edit("print(1)");
+    scheduler.flush();
+    expect(resolver.calls).toHaveLength(1);
+    expect(resolver.calls[0]?.signal.aborted).toBe(true);
+    model.setLanguage("javascript");
+    model.edit("const y = 2;");
+    scheduler.flush();
+    expect(resolver.calls).toHaveLength(2);
+    expect(resolver.calls[1]?.language).toBe("javascript");
   });
 
   it("does nothing when the editor has no model", () => {

@@ -47,9 +47,16 @@ function snapshotEvent(type: string): boolean {
   return type === "editor-watch:snapshot" || type === "editor-watch:snapshot-required";
 }
 
-function parseEventData(data: string): unknown {
+// A value `JSON.parse` produces. Its fields are still unchecked: the editor-m7 parsers decide
+// whether a frame is a snapshot or a watch event.
+type JsonValue =
+  string | number | boolean | null | readonly JsonValue[] | { readonly [key: string]: JsonValue };
+
+function parseEventData(data: string): JsonValue {
   try {
-    return JSON.parse(data) as unknown;
+    // SAFETY: JSON.parse without a reviver returns only strings, numbers, booleans, null, arrays
+    // and plain objects, which is exactly JsonValue.
+    return JSON.parse(data) as JsonValue;
   } catch {
     return null;
   }
