@@ -68,7 +68,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx",
-      "sha256": "e470cb8c0fe7c18fef7d5b2b7f49eb3d16d39f26f5c3a882aed12f2ae3c715ed"
+      "sha256": "f538620f20345678a35c9818c91ede4117ebe47854db4f9f657849530b1848f2"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",

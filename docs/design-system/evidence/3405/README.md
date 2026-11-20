@@ -291,3 +291,11 @@ color (#3918, the port of source fix `8d0931a3c`), which changed `UpdateWindow.m
 progress bar's captured position) and were inspected. Neither shows a visible change. The three
 records rebind every declared digest. The evidence freshness gate passed, and both contrast-mode
 cases of `a11y.smoke.spec.ts` passed. No updater behavior, baseline or numerical ceiling changed.
+
+The update window's refreshed-action callback gained a precise result type (#3933 slice 3), which
+changed `UpdateWindow.tsx`. The original producer ran again on 2026-11-20 with Node 24.18.0. All
+nine cases passed, including the real-BFF outage journey. `10-responsive-manual-path.png`,
+`11-progress-state.png` and `13-reconnecting-state-mocked.png` changed bytes and were inspected:
+the only visible difference is the progress bar's captured position in the two progress captures.
+The three records rebind every declared digest, and the evidence freshness gate passed. The change
+is type-only; no updater behavior, baseline or numerical ceiling changed.
