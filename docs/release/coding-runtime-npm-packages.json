@@ -37,14 +37,14 @@
         "integrity": "sha512-fKea5IO0yyAgL7DQLbqBm/3fv+Mva9TLrkStxJintyudmT570RWVOiHGE14skVZa/LsvOztxJWsZLaWpkeIn9Q=="
       }
     },
-    "1.1.6": {
+    "1.1.7": {
       "windows-x64": {
         "name": "@oscharko-dev/keiko-coding-runtime-win32-x64",
         "opencodeVersion": "2.2.5",
-        "tarball": "oscharko-dev-keiko-coding-runtime-win32-x64-1.1.6.tgz",
-        "sizeBytes": 123466417,
-        "sha256": "462691b51d0d95fc1d5ce64a27db679e5ca6ed6f4bdc4c1773d14cd8ea68df76",
-        "integrity": "sha512-45TriL8BWjPGuLMN9nnN5A0HoD6hZnXfYJXvtr5YxwzQolcWb8YifCugcarWa/lvA6vy+9rlMqmwJgl3Umyl1A=="
+        "tarball": "oscharko-dev-keiko-coding-runtime-win32-x64-1.1.7.tgz",
+        "sizeBytes": 123467464,
+        "sha256": "2c322007c9693ed6e198b0337f71b4a37adb3d845a7cb275f892f825fbcb401f",
+        "integrity": "sha512-IiDb1+w+AfGaxb1tjb769EilXT3Taa5QKFZcXjLW08KKCpshrPZZr8HPa3mmw+5HA5ce1/l0+bqMdcwj9r9TVw=="
       }
     }
   }

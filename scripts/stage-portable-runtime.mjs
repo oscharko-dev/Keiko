@@ -1953,6 +1953,63 @@ function stageRuntimeSupervisor(target, resourceRoot, options, hooks) {
   });
 }
 
+/**
+ * An unsigned Windows payload may run Coding only when its native helpers are the exact bytes the
+ * server pins (`WINDOWS_PORTABLE_RUNTIME_APPROVAL`); any other bytes leave the Coding Workbench
+ * unavailable on every Windows installation of the release. The 1.5.4 release build compiled the
+ * unchanged secure-read source on an updated runner image into new bytes and shipped without a
+ * usable Windows Workbench (#4068), so a mismatch now stops the build. Returns one line per helper
+ * whose built bytes differ from its pin.
+ */
+export function windowsNativeHelperApprovalFailures(nativeHelpers, approval) {
+  const pins = [
+    [SECURE_READ_NAME, approval.helperSha256, approval.helperSizeBytes],
+    [
+      RUNTIME_SUPERVISOR_NAME,
+      approval.runtimeSupervisor?.sha256,
+      approval.runtimeSupervisor?.sizeBytes,
+    ],
+  ];
+  return pins.flatMap(([name, sha256, sizeBytes]) => {
+    const helper = nativeHelpers.find((entry) => entry.name === name);
+    if (helper === undefined) return [`${name}: not staged`];
+    if (helper.unsignedSha256 === sha256 && helper.sizeBytes === sizeBytes) return [];
+    return [
+      `${name}: built ${helper.unsignedSha256} (${helper.sizeBytes} bytes), approved ${sha256} (${sizeBytes} bytes)`,
+    ];
+  });
+}
+
+export async function verifyWindowsNativeHelpers(
+  target,
+  nativeHelpers,
+  { loadApproval = loadWindowsPortableApproval, onFailure = fail } = {},
+) {
+  if (target.platformTarget !== "windows-x64") return;
+  const failures = windowsNativeHelperApprovalFailures(nativeHelpers, await loadApproval());
+  if (failures.length === 0) return;
+  onFailure(
+    `the Windows native helpers differ from the bytes the server approves, so no Windows installation of this build could start a Coding run: ${failures.join("; ")}. Pin the built bytes in packages/keiko-server/src/coding-runtime/npmLaneRuntimeApprovals.ts together with a new Windows runtime package (docs/release/release-publish-workflow.md)`,
+  );
+  throw new Error("portable Windows native helper verification aborted");
+}
+
+// Reads the pin from the built server in its own process. The stage has built the packages by then
+// (preparePackageSurface), while the scripts that only import this module's helpers, the secure-read
+// qualification and the sidecar preparation, run without a build and never get here.
+function loadWindowsPortableApproval() {
+  const result = spawnSync(
+    process.execPath,
+    [join(repoRoot, "scripts", "print-windows-portable-approval.mjs")],
+    { cwd: repoRoot, encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    const detail = (result.stderr ?? "").trim() || `exit ${String(result.status)}`;
+    fail(`could not read the Windows helper approval from the built server: ${detail}`);
+  }
+  return JSON.parse(result.stdout);
+}
+
 function validateMacosRuntimeSupervisorSurface(supervisor) {
   const appRoot = resolve(dirname(supervisor), "../../../..");
   const required = [
@@ -2602,6 +2659,7 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
     stageSecureReadHelper(target, paths.resourceRoot, options, hooks),
     stageRuntimeSupervisor(target, paths.resourceRoot, options, hooks),
   ];
+  await (hooks.verifyWindowsNativeHelpers ?? verifyWindowsNativeHelpers)(target, nativeHelpers);
   const nativeAddons = (hooks.stageUsearchAddon ?? stageUsearchAddon)(target, paths.resourceRoot, {
     evaluation: options.evaluation === true,
   });
