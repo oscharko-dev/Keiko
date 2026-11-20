@@ -27,7 +27,23 @@ function descriptorProjection(
   };
 }
 
-function projectionSemanticTool(tool: CompiledCatalogTool): unknown {
+/** The compiled tool fields the projection digest covers. */
+type ProjectionSemanticTool = Pick<
+  CompiledCatalogTool,
+  | "toolRef"
+  | "alias"
+  | "description"
+  | "inputSchema"
+  | "resultSchema"
+  | "effects"
+  | "actionMapping"
+  | "policyReferences"
+  | "handlerRequirement"
+  | "bounds"
+  | "descriptorDigest"
+>;
+
+function projectionSemanticTool(tool: CompiledCatalogTool): ProjectionSemanticTool {
   return {
     toolRef: tool.toolRef,
     alias: tool.alias,

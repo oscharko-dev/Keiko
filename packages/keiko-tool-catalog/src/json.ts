@@ -48,18 +48,15 @@ function scalar(value: unknown, budget: CopyBudget): CatalogJsonValue {
   return result;
 }
 
-function dataEntries(value: object): readonly (readonly [string, unknown])[] {
-  const keys = Reflect.ownKeys(value);
-  requireCatalog(
-    keys.every((key) => typeof key === "string"),
-    "invalid-shape",
-  );
-  return keys
-    .map((key): readonly [string, unknown] => {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+/** An own property key with its descriptor; a descriptor is read so that no getter runs. */
+type OwnProperty = readonly [key: PropertyKey, descriptor: PropertyDescriptor | undefined];
+
+function dataEntries(properties: readonly OwnProperty[]): readonly (readonly [string, unknown])[] {
+  return properties
+    .map(([key, descriptor]): readonly [string, unknown] => {
+      requireCatalog(typeof key === "string" && !UNSAFE_KEYS.has(key), "invalid-shape");
       requireCatalog(descriptor !== undefined && "value" in descriptor, "invalid-shape");
       requireCatalog(descriptor.enumerable === true, "invalid-shape");
-      requireCatalog(typeof key === "string" && !UNSAFE_KEYS.has(key), "invalid-shape");
       return [key, descriptor.value as unknown];
     })
     .sort(([left], [right]) => compareStrings(left, right));
@@ -83,26 +80,29 @@ function copyArray(value: unknown[], budget: CopyBudget, depth: number): Catalog
   return copy;
 }
 
-function copyObject(value: object, budget: CopyBudget, depth: number): CatalogJsonObject {
-  const prototype: unknown = Object.getPrototypeOf(value);
-  requireCatalog(prototype === null || prototype === Object.prototype, "invalid-shape");
-  requireCatalog(Reflect.ownKeys(value).length <= TOOL_CATALOG_LIMITS.maxObjectKeys, "input-bound");
+function copyObject(
+  properties: readonly OwnProperty[],
+  budget: CopyBudget,
+  depth: number,
+): CatalogJsonObject {
   const copy: Record<string, CatalogJsonValue> = Object.create(null) as Record<
     string,
     CatalogJsonValue
   >;
   charge(budget, "{}");
   let count = 0;
-  for (const [key, child] of dataEntries(value)) {
+  for (const [key, child] of dataEntries(properties)) {
     charge(budget, `${count++ === 0 ? "" : ","}${JSON.stringify(key)}:`);
     copy[key] = copyValue(child, budget, depth + 1);
   }
   return copy;
 }
 
-// Single return statement by design (sonarjs/function-return-type): the scalar and
-// array/object arms both assign the same declared `CatalogJsonValue` union before one trailing
-// return, rather than returning from inside each branch.
+// Single return statement by design (sonarjs/function-return-type): the scalar, array and object
+// arms all assign the same declared `CatalogJsonValue` union before one trailing return, rather
+// than returning from inside each branch. An object's prototype and key count are checked before
+// any descriptor is read, so a large non-plain object (a typed array) is refused without reading
+// its properties.
 function copyValue(value: unknown, budget: CopyBudget, depth: number): CatalogJsonValue {
   requireCatalog(depth <= budget.maxDepth, "input-bound");
   let result: CatalogJsonValue;
@@ -111,9 +111,19 @@ function copyValue(value: unknown, budget: CopyBudget, depth: number): CatalogJs
   } else {
     requireCatalog(!budget.ancestors.has(value), "invalid-shape");
     budget.ancestors.add(value);
-    result = Array.isArray(value)
-      ? copyArray(value, budget, depth)
-      : copyObject(value, budget, depth);
+    if (Array.isArray(value)) {
+      result = copyArray(value, budget, depth);
+    } else {
+      const prototype: unknown = Object.getPrototypeOf(value);
+      requireCatalog(prototype === null || prototype === Object.prototype, "invalid-shape");
+      const keys = Reflect.ownKeys(value);
+      requireCatalog(keys.length <= TOOL_CATALOG_LIMITS.maxObjectKeys, "input-bound");
+      const properties = keys.map((key): OwnProperty => [
+        key,
+        Object.getOwnPropertyDescriptor(value, key),
+      ]);
+      result = copyObject(properties, budget, depth);
+    }
     budget.ancestors.delete(value);
   }
   return result;

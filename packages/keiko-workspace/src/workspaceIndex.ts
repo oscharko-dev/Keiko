@@ -1231,45 +1231,48 @@ type StoredSnapshotParseResult =
       readonly reason: "authentication-or-corruption" | "invalid-snapshot";
     };
 
-function isLegacyUnwrappedSnapshot(value: object): boolean {
-  const candidate = value as {
-    readonly version?: unknown;
-    readonly discovery?: unknown;
-    readonly records?: unknown;
-  };
+/**
+ * A parsed stored-snapshot JSON object: a current envelope or a legacy unwrapped snapshot. Every
+ * field is still unvalidated.
+ */
+interface StoredSnapshotFields {
+  readonly version?: unknown;
+  readonly discovery?: unknown;
+  readonly records?: unknown;
+  readonly runtimeDirBinding?: unknown;
+  readonly storageKeyHash?: unknown;
+  readonly snapshot?: unknown;
+}
+
+function isLegacyUnwrappedSnapshot(value: StoredSnapshotFields): boolean {
   return (
-    typeof candidate.version === "number" &&
-    candidate.version < WORKSPACE_INDEX_SNAPSHOT_VERSION &&
-    typeof candidate.discovery === "object" &&
-    candidate.discovery !== null &&
-    Array.isArray(candidate.records)
+    typeof value.version === "number" &&
+    value.version < WORKSPACE_INDEX_SNAPSHOT_VERSION &&
+    typeof value.discovery === "object" &&
+    value.discovery !== null &&
+    Array.isArray(value.records)
   );
 }
 
 function storedSnapshotEnvelopeMatches(
-  value: object,
+  value: StoredSnapshotFields,
   runtimeDirBinding: string,
   storageKey: string,
-): value is { readonly snapshot?: unknown } {
-  const envelope = value as {
-    readonly version?: unknown;
-    readonly runtimeDirBinding?: unknown;
-    readonly storageKeyHash?: unknown;
-    readonly snapshot?: unknown;
-  };
+): boolean {
   return (
-    envelope.version === FILE_WORKSPACE_INDEX_ENVELOPE_VERSION &&
-    envelope.runtimeDirBinding === runtimeDirBinding &&
-    envelope.storageKeyHash === sha256Hex(storageKey)
+    value.version === FILE_WORKSPACE_INDEX_ENVELOPE_VERSION &&
+    value.runtimeDirBinding === runtimeDirBinding &&
+    value.storageKeyHash === sha256Hex(storageKey)
   );
 }
 
-function isObject(value: unknown): value is object {
+// Every field of the interface is optional, so any non-null JSON object has this shape.
+function isStoredSnapshotObject(value: unknown): value is StoredSnapshotFields {
   return typeof value === "object" && value !== null;
 }
 
 function isStaleSnapshotFormat(value: unknown): boolean {
-  return isObject(value) && isLegacyUnwrappedSnapshot(value);
+  return isStoredSnapshotObject(value) && isLegacyUnwrappedSnapshot(value);
 }
 
 function parseStoredSnapshotObject(
@@ -1278,7 +1281,7 @@ function parseStoredSnapshotObject(
   runtimeDirBinding: string,
   storageKey: string,
 ): StoredSnapshotParseResult {
-  if (!isObject(parsed)) {
+  if (!isStoredSnapshotObject(parsed)) {
     return { status: "rejected", reason: "authentication-or-corruption" };
   }
   if (isLegacyUnwrappedSnapshot(parsed)) return { status: "stale-format" };

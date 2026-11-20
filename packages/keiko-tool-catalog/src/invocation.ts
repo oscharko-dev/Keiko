@@ -132,17 +132,17 @@ function captureOffer(value: unknown, projection: CompiledToolProjection): Offer
 const CAPTURED = new WeakMap<object, WeakMap<object, CapturedCatalog>>();
 type CapturedCatalog = Pick<ToolInvocationBinding, "catalog" | "projection">;
 
-function dataValue(object: object, key: string): unknown {
-  const property = Object.getOwnPropertyDescriptor(object, key);
-  return property !== undefined && "value" in property ? property.value : undefined;
+// A property is read through its descriptor, so a getter never runs; an accessor has no value.
+function objectValue(property: PropertyDescriptor | undefined): object | undefined {
+  const value: unknown = property?.value;
+  return typeof value === "object" && value !== null ? value : undefined;
 }
 function remembered(input: unknown): CapturedCatalog | undefined {
   if (typeof input !== "object" || input === null || Reflect.ownKeys(input).length !== 3)
     return undefined;
-  const catalog = dataValue(input, "catalog");
-  const projection = dataValue(input, "projection");
-  if (typeof catalog !== "object" || catalog === null) return undefined;
-  if (typeof projection !== "object" || projection === null) return undefined;
+  const catalog = objectValue(Object.getOwnPropertyDescriptor(input, "catalog"));
+  const projection = objectValue(Object.getOwnPropertyDescriptor(input, "projection"));
+  if (catalog === undefined || projection === undefined) return undefined;
   return CAPTURED.get(catalog)?.get(projection);
 }
 function remember(input: ToolInvocationBindingCandidate, captured: CapturedCatalog): void {
@@ -154,7 +154,10 @@ function remember(input: ToolInvocationBindingCandidate, captured: CapturedCatal
 function captureBinding(input: ToolInvocationBindingCandidate): ToolInvocationBinding {
   const known = remembered(input);
   if (known !== undefined) {
-    const offered = captureOffer(dataValue(input, "offered"), known.projection);
+    const offered = captureOffer(
+      Object.getOwnPropertyDescriptor(input, "offered")?.value,
+      known.projection,
+    );
     return deepFreeze({ ...known, offered });
   }
   const object = catalogObject(copyCatalogEnvelope(input));

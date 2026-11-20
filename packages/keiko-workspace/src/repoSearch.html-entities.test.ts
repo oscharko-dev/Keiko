@@ -80,8 +80,9 @@ describe("HTML character-reference search with raw source evidence", () => {
       const selected = fixture(path, encoded);
       const observed: { scopePath: string; lineCount: number }[] = [];
       const result = await searchText(selected, query("Überhitzungsschutz"), undefined, {
-        onEligibleTextFile: (file): void => {
+        onEligibleTextFile: (file): boolean => {
           observed.push(file);
+          return true;
         },
       });
       expect(result.atoms).toHaveLength(2);

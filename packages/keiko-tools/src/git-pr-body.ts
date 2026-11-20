@@ -21,10 +21,16 @@ export interface GitPullRequestBodyAdapter {
 // TAB/LF/CR are legitimate Markdown bytes; other controls are refused, never normalized.
 // eslint-disable-next-line no-control-regex -- intentionally rejects unsafe control bytes.
 const BODY_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u;
-function record(value: unknown): value is Record<string, unknown> {
+/** The fields a PR body read projects from `gh` JSON; each one is still unvalidated. */
+interface GitPrBodyFields {
+  readonly identity?: unknown;
+  readonly body?: unknown;
+  readonly updatedAt?: unknown;
+}
+function bodyFields(value: unknown): value is GitPrBodyFields {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function keys(value: object, expected: readonly string[]): boolean {
+function keys(value: GitPrReadRequest | GitPrBodyFields, expected: readonly string[]): boolean {
   return (
     Reflect.ownKeys(value).length === expected.length &&
     expected.every((key) => {
@@ -74,7 +80,7 @@ export function buildPrBodyUpdateArgv(request: GitPrBodyUpdateRequest): readonly
   ];
 }
 export function parseGitPrBody(value: unknown, request: GitPrReadRequest): GitPrBody | undefined {
-  if (!record(value) || !keys(value, ["identity", "body", "updatedAt"])) return undefined;
+  if (!bodyFields(value) || !keys(value, ["identity", "body", "updatedAt"])) return undefined;
   const identity = parseGitPrIdentity(value.identity, request.ownerAndRepo);
   const body = value.body === null ? "" : value.body;
   if (

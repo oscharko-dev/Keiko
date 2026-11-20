@@ -717,20 +717,22 @@ export async function probeBinary(fs: WorkspaceFs, abs: string, size: number): P
   return looksBinary(bytes);
 }
 
+/** A text file the search read successfully, described by counts only, never by its body. */
+export interface EligibleTextFile {
+  readonly scopePath: string;
+  readonly contentBytes: number;
+  readonly lineCount: number;
+}
+
+/** Observes one eligible text file; it returns true to continue and false to stop observing. */
+export type EligibleTextFileObserver = (file: EligibleTextFile) => boolean;
+
 export interface SearchTextRunner {
   readonly cachedLexicalQuery?: CachedLexicalQuery | undefined;
   readonly streamingWorkspaceIndex?: StreamingWorkspaceIndexSession | undefined;
   readonly queryIdentitySha256?: string | undefined;
   readonly eligibleTextObserver?:
-    | {
-        active: boolean;
-        readonly observe: (file: {
-          readonly scopePath: string;
-          readonly contentBytes: number;
-          readonly lineCount: number;
-        }) => unknown;
-      }
-    | undefined;
+    { active: boolean; readonly observe: EligibleTextFileObserver } | undefined;
   readonly scope: ScopeShape;
   readonly limits: LimitsShape;
   readonly fs: WorkspaceFs;
@@ -1742,12 +1744,11 @@ function observeEligibleTextFile(
     lineCount += 1;
     offset = text.indexOf("\n", offset + 1);
   }
-  observer.active =
-    observer.observe({
-      scopePath: file.relativePath,
-      contentBytes: Math.max(file.sizeBytes, Buffer.byteLength(text, "utf8")),
-      lineCount: Math.max(1, lineCount - Number(text.endsWith("\n"))),
-    }) !== false;
+  observer.active = observer.observe({
+    scopePath: file.relativePath,
+    contentBytes: Math.max(file.sizeBytes, Buffer.byteLength(text, "utf8")),
+    lineCount: Math.max(1, lineCount - Number(text.endsWith("\n"))),
+  });
 }
 
 // Filename inspection still yields actual admitted text, never an inferred symbol or file body.

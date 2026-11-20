@@ -48,7 +48,10 @@ describe("literal content prefilter through the public search producer", () => {
     const result = await searchText(scope(), query(example.caseSensitive), undefined, {
       fs: memFs("/ws", files),
       queryInterpretation: { kind: "literal", terms: ["AbsentAlternative", example.term] },
-      onEligibleTextFile: (file) => observed.push(file.scopePath),
+      onEligibleTextFile: (file): boolean => {
+        observed.push(file.scopePath);
+        return true;
+      },
     });
     expect(result.atoms.map((atom) => atom.scopePath)).toEqual(["nested/partial.ts"]);
     expect(result.atoms[0]?.lineRange).toEqual({ startLine: 1, endLine: 1 });

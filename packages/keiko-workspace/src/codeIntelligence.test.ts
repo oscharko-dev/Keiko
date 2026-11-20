@@ -2118,17 +2118,29 @@ describe("buildCodeIntelligenceIndex", () => {
 });
 
 describe("openApiComponentSchemas", () => {
-  it("returns undefined when the parsed document is not an object (e.g. a JSON array)", () => {
-    expect(openApiComponentSchemas(["not", "an", "object"])).toBeUndefined();
+  it("returns no schemas when the parsed document is not an object (e.g. a JSON array)", () => {
+    expect(openApiComponentSchemas(["not", "an", "object"])).toEqual([]);
   });
 
-  it("returns undefined when the document has no components object", () => {
-    expect(openApiComponentSchemas({ paths: {} })).toBeUndefined();
+  it("returns no schemas when the document has no components object", () => {
+    expect(openApiComponentSchemas({ paths: {} })).toEqual([]);
   });
 
-  it("returns the components.schemas value when present", () => {
-    const schemas = { WidgetDto: { type: "object", properties: {} } };
-    expect(openApiComponentSchemas({ components: { schemas } })).toBe(schemas);
+  it("returns no schemas when components.schemas is not an object", () => {
+    expect(openApiComponentSchemas({ components: { schemas: ["WidgetDto"] } })).toEqual([]);
+  });
+
+  it("returns each component schema with its declared property names", () => {
+    const schemas = {
+      WidgetDto: { type: "object", properties: { id: {}, label: {} } },
+      EmptyDto: { type: "object", properties: {} },
+      UntypedDto: "not a schema",
+    };
+    expect(openApiComponentSchemas({ components: { schemas } })).toEqual([
+      { name: "WidgetDto", fields: ["id", "label"] },
+      { name: "EmptyDto", fields: [] },
+      { name: "UntypedDto", fields: [] },
+    ]);
   });
 });
 
