@@ -63,7 +63,9 @@
         "package:@oscharko-dev/keiko-sandbox",
         "package:@oscharko-dev/keiko-harness",
         "package:@oscharko-dev/keiko-model-gateway",
-        "package:@oscharko-dev/keiko-evaluations"
+        "package:@oscharko-dev/keiko-evaluations",
+        "package:@oscharko-dev/keiko-editor",
+        "package:@oscharko-dev/keiko-evidence"
       ]
     },
     {
@@ -121,7 +123,17 @@
         "package:@oscharko-dev/keiko-verification",
         "package:@oscharko-dev/keiko-workflows",
         "fixtures",
-        "root-product"
+        "root-product",
+        "package:@oscharko-dev/keiko-tools",
+        "package:@oscharko-dev/keiko-activity-log",
+        "package:@oscharko-dev/keiko-local-knowledge",
+        "package:@oscharko-dev/keiko-mcp",
+        "package:@oscharko-dev/keiko-evidence",
+        "package:@oscharko-dev/keiko-security",
+        "package:@oscharko-dev/keiko-tool-catalog",
+        "package:@oscharko-dev/keiko-workspace",
+        "package:@oscharko-dev/keiko-model-gateway",
+        "package:@oscharko-dev/keiko-ui"
       ]
     },
     {
@@ -167,7 +179,8 @@
         "package:@oscharko-dev/keiko-cli",
         "package:@oscharko-dev/keiko-tools",
         "package:@oscharko-dev/keiko-security",
-        "package:@oscharko-dev/keiko-ui"
+        "package:@oscharko-dev/keiko-ui",
+        "package:@oscharko-dev/keiko-server"
       ]
     },
     {
@@ -215,7 +228,12 @@
         "package:@oscharko-dev/keiko-verification",
         "package:@oscharko-dev/keiko-workflows",
         "fixtures",
-        "root-product"
+        "root-product",
+        "package:@oscharko-dev/keiko-quality-intelligence",
+        "package:@oscharko-dev/keiko-tool-catalog",
+        "package:@oscharko-dev/keiko-workspace",
+        "package:@oscharko-dev/keiko-cli",
+        "package:@oscharko-dev/keiko-editor"
       ]
     },
     {
@@ -295,7 +313,8 @@
         "package:@oscharko-dev/keiko-verification",
         "package:@oscharko-dev/keiko-workflows",
         "package:@oscharko-dev/keiko-harness",
-        "package:@oscharko-dev/keiko-evaluations"
+        "package:@oscharko-dev/keiko-evaluations",
+        "package:@oscharko-dev/keiko-sandbox"
       ]
     },
     {
