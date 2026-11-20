@@ -87,11 +87,16 @@ class MinimalModel implements RetainedEditorModel {
   }
 }
 
-class FakeNamespace implements RetainedEditorModelNamespace {
-  readonly created: FakeModel[] = [];
+// Records every model it creates, so a test can inspect them and reuse an undisposed one by URI.
+class RecordingNamespace<
+  Model extends RetainedEditorModel & { readonly uri: RetainedEditorUri; disposed: boolean },
+> implements RetainedEditorModelNamespace {
+  readonly created: Model[] = [];
+
+  constructor(private readonly make: (uri: RetainedEditorUri, text: string) => Model) {}
 
   createModel(text: string, _language: string, uri: RetainedEditorUri): RetainedEditorModel {
-    const model = new FakeModel(uri, text);
+    const model = this.make(uri, text);
     this.created.push(model);
     return model;
   }
@@ -101,6 +106,12 @@ class FakeNamespace implements RetainedEditorModelNamespace {
       this.created.find((model) => model.uri.toString() === uri.toString() && !model.disposed) ??
       null
     );
+  }
+}
+
+class FakeNamespace extends RecordingNamespace<FakeModel> {
+  constructor() {
+    super((uri, text) => new FakeModel(uri, text));
   }
 }
 
@@ -200,20 +211,9 @@ class UndoCapableModel implements RetainedEditorModel {
   }
 }
 
-class UndoCapableNamespace implements RetainedEditorModelNamespace {
-  readonly created: UndoCapableModel[] = [];
-
-  createModel(text: string, _language: string, uri: RetainedEditorUri): RetainedEditorModel {
-    const model = new UndoCapableModel(uri, text);
-    this.created.push(model);
-    return model;
-  }
-
-  getModel(uri: RetainedEditorUri): RetainedEditorModel | null {
-    return (
-      this.created.find((model) => model.uri.toString() === uri.toString() && !model.disposed) ??
-      null
-    );
+class UndoCapableNamespace extends RecordingNamespace<UndoCapableModel> {
+  constructor() {
+    super((uri, text) => new UndoCapableModel(uri, text));
   }
 }
 
