@@ -35,12 +35,13 @@ function isSchemaRecord(value: unknown): value is Readonly<Record<string, unknow
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+// A property map's keys are names, not keywords, so only its values are projected as schemas.
 function projectSchemaProperties(
   properties: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
-  return Object.fromEntries(
-    Object.entries(properties).map(([name, schema]) => [name, projectSchemaValue(schema)]),
-  );
+  const names = Object.keys(properties);
+  const schemas = projectSchemaValues(Object.values(properties));
+  return Object.fromEntries(names.map((name, index) => [name, schemas[index]]));
 }
 
 function projectSchemaObject(
@@ -49,18 +50,23 @@ function projectSchemaObject(
   const projected: Record<string, unknown> = {};
   for (const [keyword, value] of Object.entries(schema)) {
     if (PROVIDER_UNSUPPORTED_SCHEMA_KEYWORDS.has(keyword)) continue;
-    projected[keyword] =
-      keyword === "properties" && isSchemaRecord(value)
-        ? projectSchemaProperties(value)
-        : projectSchemaValue(value);
+    if (keyword === "properties" && isSchemaRecord(value)) {
+      projected[keyword] = projectSchemaProperties(value);
+    } else if (Array.isArray(value)) {
+      projected[keyword] = projectSchemaValues(value);
+    } else {
+      projected[keyword] = isSchemaRecord(value) ? projectSchemaObject(value) : value;
+    }
   }
   return projected;
 }
 
-function projectSchemaValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(projectSchemaValue);
-  if (!isSchemaRecord(value)) return value;
-  return projectSchemaObject(value);
+// Projects each value in order: arrays and schema objects are projected, every other value is kept.
+function projectSchemaValues(values: readonly unknown[]): unknown[] {
+  return values.map((value) => {
+    if (Array.isArray(value)) return projectSchemaValues(value);
+    return isSchemaRecord(value) ? projectSchemaObject(value) : value;
+  });
 }
 
 function providerPrDescriptionSchema(): Readonly<Record<string, unknown>> {

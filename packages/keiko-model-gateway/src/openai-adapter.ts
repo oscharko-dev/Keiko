@@ -1016,27 +1016,36 @@ function literalScrub(secrets: readonly string[]): ValueScrub {
   return { secrets, text: (value) => redactSecretLiterals(value, secrets), changed: 0 };
 }
 
-function redactUnknown(value: unknown, scrub: ValueScrub, depth = 0): unknown {
-  if (depth >= MAX_REDACT_DEPTH) {
-    throw new ResponseRedactionError(
-      "gateway response payload exceeds the maximum redaction depth",
-      scrub.secrets,
-    );
-  }
-  if (typeof value === "string") {
-    const scrubbed = scrub.text(value);
-    if (scrubbed !== value) scrub.changed += 1;
-    return scrubbed;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => redactUnknown(item, scrub, depth + 1));
-  }
-  if (isRecord(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, redactUnknown(item, scrub, depth + 1)]),
-    );
-  }
-  return value;
+// The open record a tool call's arguments and a structured output share.
+type RedactedRecord = NormalizedToolCall["arguments"];
+
+function redactString(value: string, scrub: ValueScrub): string {
+  const scrubbed = scrub.text(value);
+  if (scrubbed !== value) scrub.changed += 1;
+  return scrubbed;
+}
+
+// Redacts each value at `depth`, in order: strings are scrubbed, arrays and records are walked,
+// and every other value is kept as it is. A value at the ceiling fails whatever its type.
+function redactValues(values: readonly unknown[], scrub: ValueScrub, depth: number): unknown[] {
+  return values.map((value) => {
+    if (depth >= MAX_REDACT_DEPTH) {
+      throw new ResponseRedactionError(
+        "gateway response payload exceeds the maximum redaction depth",
+        scrub.secrets,
+      );
+    }
+    if (typeof value === "string") return redactString(value, scrub);
+    if (Array.isArray(value)) return redactValues(value, scrub, depth + 1);
+    return isRecord(value) ? redactRecord(value, scrub, depth + 1) : value;
+  });
+}
+
+// `depth` is the depth of the record's own values; the top-level record sits at depth 0.
+function redactRecord(record: RedactedRecord, scrub: ValueScrub, depth = 1): RedactedRecord {
+  const keys = Object.keys(record);
+  const values = redactValues(Object.values(record), scrub, depth);
+  return Object.fromEntries(keys.map((key, index) => [key, values[index]]));
 }
 
 function redactStructuredOutput(
@@ -1046,11 +1055,11 @@ function redactStructuredOutput(
 ): NormalizedResponse["structuredOutput"] {
   return value === null
     ? null
-    : (redactUnknown(value, {
+    : redactRecord(value, {
         secrets,
         text: (text) => redactContent(text, policy, secrets),
         changed: 0,
-      }) as Record<string, unknown>);
+      });
 }
 
 // #4098: a call keeps the default content projection unless its caller asked to preserve
@@ -1076,7 +1085,7 @@ function redactToolCall(
   return {
     ...call,
     name,
-    arguments: redactUnknown(call.arguments, scrub) as Record<string, unknown>,
+    arguments: redactRecord(call.arguments, scrub),
   };
 }
 
