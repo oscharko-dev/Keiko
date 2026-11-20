@@ -331,6 +331,7 @@ async function produceOutcome(
       realRoot: ctx.realRoot,
       signal: ctx.signal,
       verification: produced.verification,
+      correlationId: ctx.correlationId,
     });
     return {
       schemaVersion: EDITOR_TEST_GENERATION_SCHEMA_VERSION,

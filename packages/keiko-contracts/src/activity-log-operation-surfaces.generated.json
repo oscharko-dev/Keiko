@@ -265,6 +265,7 @@
   "editor.agent.bridge-registration": "editor-delivery",
   "editor.agent.changeset-byte-order-mark": "editor-delivery",
   "editor.agent.changeset-provenance": "editor-delivery",
+  "editor.assured-copy.completed": "editor-delivery",
   "editor.buffer-safety.state": "editor-delivery",
   "editor.local-history.rekey.completed": "editor-delivery",
   "editor.local-history.rekey.failed": "editor-delivery",

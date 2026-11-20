@@ -20150,6 +20150,48 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "editor.assured-copy.completed",
+    category: "security",
+    owner: "keiko-server",
+    emitter: "editor.assuredCopyEvidence.recordAssuredCopyCompleted",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["copied"],
+      },
+      copiedEntryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      skippedLinkCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "capability",
+    failureClasses: ["editor-assured-copy-containment"],
+    proofIds: ["editor.assured-copy.completed.links-skipped"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "editor.buffer-safety.state",
     category: "security",
     owner: "keiko-server",
