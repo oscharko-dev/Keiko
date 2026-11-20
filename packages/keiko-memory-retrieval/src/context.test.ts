@@ -317,3 +317,26 @@ describe("earlier values in the assembled block (#4223)", () => {
     expect(withHistoryCount).toBeGreaterThan(0);
   });
 });
+
+describe("an earlier value longer than the room left (#4223)", () => {
+  it("is clipped to the room instead of being dropped", () => {
+    const record = buildRecord({ id: "now", body: "current" });
+    const long = Array.from({ length: 30 }, (_, index) => `word${String(index)}`).join(" ");
+    const result = assembleContextBlock(
+      [{ ...included("now"), inclusionReason: "match" }],
+      [record],
+      {
+        budgetTokens: 40,
+        maxIncluded: 1,
+        earlierValuesOf: () => [long],
+      },
+    );
+    const [entry] = result.contextBlock.memories;
+    expect(entry?.bodyExcerpt).toBe("current");
+    expect(entry?.earlierValues).toHaveLength(1);
+    expect(long.startsWith((entry?.earlierValues?.[0] ?? "").replace(/…$/u, "").trimEnd())).toBe(
+      true,
+    );
+    expect(result.budget.used).toBeLessThanOrEqual(40);
+  });
+});

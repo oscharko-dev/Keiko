@@ -247,29 +247,72 @@ function fitEntryToBudget(
   return best;
 }
 
-// Adds the earlier values of one fitted entry that still fit, nearest first. It runs only after every
-// memory's own excerpt is fitted, adds only from what the budget has left and stays inside the
-// entry's own per-entry share, so history never shortens or displaces any excerpt.
+// One entry's place in the fitted block, and what its history may still cost.
+interface HistorySlot {
+  readonly entries: readonly MemoryContextBlockEntry[];
+  readonly index: number;
+  readonly others: number;
+  readonly allowance: number;
+  readonly budgetTokens: number;
+}
+
+// The entries with `values` as the earlier values of the slot's entry, when that still fits.
+function fittingHistory(
+  slot: HistorySlot,
+  values: readonly string[],
+): readonly MemoryContextBlockEntry[] | undefined {
+  const entry = slot.entries[slot.index];
+  if (entry === undefined) return undefined;
+  const changed = { ...entry, earlierValues: values };
+  const candidate = slot.entries.map((other, position) =>
+    position === slot.index ? changed : other,
+  );
+  const cost = renderedCost(candidate);
+  return cost > slot.budgetTokens || cost - slot.others > slot.allowance ? undefined : candidate;
+}
+
+// The longest excerpt of `value`, at most EARLIER_VALUE_TOKENS, that still fits after `kept`.
+function longestFittingValue(
+  slot: HistorySlot,
+  kept: readonly string[],
+  value: string,
+): { readonly excerpt: string; readonly entries: readonly MemoryContextBlockEntry[] } | undefined {
+  let best: { excerpt: string; entries: readonly MemoryContextBlockEntry[] } | undefined;
+  let lo = 1;
+  let hi = EARLIER_VALUE_TOKENS;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const excerpt = clipToTokenBudget(value, mid);
+    const entries = excerpt === "" ? undefined : fittingHistory(slot, [...kept, excerpt]);
+    if (entries === undefined) {
+      hi = mid - 1;
+    } else {
+      best = { excerpt, entries };
+      lo = mid + 1;
+    }
+  }
+  return best;
+}
+
+// Adds the earlier values of one fitted entry that still fit, nearest first, each clipped to what
+// is left. It runs only after every memory's own excerpt is fitted, adds only from what the budget
+// has left and stays inside the entry's own per-entry share, so history never shortens or displaces
+// any excerpt.
 function withEarlierValues(
   entries: readonly MemoryContextBlockEntry[],
   index: number,
   earlier: readonly string[],
   limits: { readonly allowance: number; readonly budgetTokens: number },
 ): readonly MemoryContextBlockEntry[] {
-  const entry = entries[index];
-  if (entry === undefined) return entries;
   const others = renderedCost(entries.filter((_, position) => position !== index));
+  const slot: HistorySlot = { entries, index, others, ...limits };
   let best = entries;
   const kept: string[] = [];
   for (const value of earlier) {
-    const excerpt = clipToTokenBudget(value, EARLIER_VALUE_TOKENS);
-    if (excerpt === "") break;
-    const changed = { ...entry, earlierValues: [...kept, excerpt] };
-    const candidate = entries.map((other, position) => (position === index ? changed : other));
-    const cost = renderedCost(candidate);
-    if (cost > limits.budgetTokens || cost - others > limits.allowance) break;
-    kept.push(excerpt);
-    best = candidate;
+    const fitted = longestFittingValue(slot, kept, value);
+    if (fitted === undefined) break;
+    kept.push(fitted.excerpt);
+    best = fitted.entries;
   }
   return best;
 }
