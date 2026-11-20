@@ -5178,6 +5178,14 @@
       "issue": 3918
     },
     {
+      "path": "packages/keiko-editor/src/components/use-editor-handlers.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 3,
+      "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 4278
+    },
+    {
       "path": "packages/keiko-evaluations/src/render.ts",
       "rule": "anti-slop/no-runtime-typeof",
       "from": 0,
