@@ -23,6 +23,9 @@ import {
   readWorkspaceFileBytesForTextInspection,
   type InternalWorkspaceTextByteRead,
   readWorkspaceFileTextForInternalUse,
+  confirmWalkAdmittedFile,
+  takeWalkObservedFile,
+  type WalkAdmittedFile,
   type WorkspaceContentLane,
   workspaceContentPolicy,
   workspaceContentSecrets,
@@ -1058,9 +1061,10 @@ async function readRawTextForScan(
   relativePath: string,
   state: RunState,
   candidates: CandidateFile[],
+  admitted?: WalkAdmittedFile,
 ): Promise<string | undefined> {
   try {
-    return await readBoundedRawText(runner, relativePath, state, candidates);
+    return await readBoundedRawText(runner, relativePath, state, candidates, admitted);
   } catch (err) {
     if (isIoError(err)) {
       recordCandidateOmission(candidates, relativePath, "tool-unavailable", state);
@@ -1081,6 +1085,7 @@ function markSizeExclusion(runner: SearchTextRunner, state: RunState, sizeBytes:
 async function readScanBytes(
   runner: SearchTextRunner,
   relativePath: string,
+  admitted?: WalkAdmittedFile,
 ): Promise<InternalWorkspaceTextByteRead> {
   if (runner.limits.maxFilesScanned === null) {
     return readWorkspaceFileBytesForTextInspection(
@@ -1088,6 +1093,7 @@ async function readScanBytes(
       relativePath,
       runner.limits.maxBytesPerFileScanned,
       runner.fs,
+      admitted,
     );
   }
   // Finite scans already ran binaryOmission before admitting this file.
@@ -1096,6 +1102,7 @@ async function readScanBytes(
     relativePath,
     runner.limits.maxBytesPerFileScanned,
     runner.fs,
+    admitted,
   );
   return { ...read, binary: false };
 }
@@ -1134,8 +1141,9 @@ async function readBoundedRawText(
   relativePath: string,
   state: RunState,
   candidates: CandidateFile[],
+  admitted?: WalkAdmittedFile,
 ): Promise<string | undefined> {
-  const read = await readScanBytes(runner, relativePath);
+  const read = await readScanBytes(runner, relativePath, admitted);
   if (read.binary) {
     await observeStreamingRead(runner, state, relativePath, read.stat, { kind: "binary" });
     recordCandidateOmission(candidates, relativePath, "binary");
@@ -1233,9 +1241,10 @@ async function readForScan(
   relativePath: string,
   state: RunState,
   candidates: CandidateFile[],
+  admitted?: WalkAdmittedFile,
 ): Promise<string | undefined> {
   if (runner.fs.readFileBytes !== undefined) {
-    return await readRawTextForScan(runner, relativePath, state, candidates);
+    return await readRawTextForScan(runner, relativePath, state, candidates, admitted);
   }
   return readUtf8TextForScan(runner, relativePath, state, candidates);
 }
@@ -1330,6 +1339,7 @@ interface ReadableFilePolicy {
   readonly omitted?: CandidateOmissionReason | undefined;
   readonly path?: string | undefined;
   readonly metadata?: WorkspaceIndexDiscoveredFile | undefined;
+  readonly admitted?: WalkAdmittedFile | undefined;
 }
 
 function filePolicyOmission(runner: SearchTextRunner, file: DiscoveredFile): ReadableFilePolicy {
@@ -1337,26 +1347,41 @@ function filePolicyOmission(runner: SearchTextRunner, file: DiscoveredFile): Rea
   if (pathOmission !== undefined) {
     return { omitted: pathOmission };
   }
+  const observed = takeWalkObservedFile(file, runner.scope.workspace.root);
+  if (observed !== undefined) {
+    return {
+      ...admittedFilePolicy(runner, file, observed.path, observed.stat),
+      admitted: observed,
+    };
+  }
   const abs = resolveWithinWorkspace(runner.scope.workspace.root, file.relativePath);
   const contained = containedRealPathInfo(runner.fs, runner.scope.workspace.root, abs);
   const containmentOmission = fileContainmentOmission(runner, file.relativePath, contained);
   if (containmentOmission !== undefined) return { omitted: containmentOmission };
   try {
-    const stat = runner.fs.stat(contained.path);
-    if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
-      return { omitted: "ignored" };
-    }
-    return {
-      omitted: policyOmissionReason(file.relativePath, runner.policy),
-      path: contained.path,
-      metadata: workspaceIndexFileMetadata(file.relativePath, stat),
-    };
+    return admittedFilePolicy(runner, file, contained.path, runner.fs.stat(contained.path));
   } catch (err) {
     if (isIoError(err)) {
       return { omitted: "tool-unavailable" };
     }
     throw err;
   }
+}
+
+function admittedFilePolicy(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  path: string,
+  stat: WorkspaceStat,
+): ReadableFilePolicy {
+  if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
+    return { omitted: "ignored" };
+  }
+  return {
+    omitted: policyOmissionReason(file.relativePath, runner.policy),
+    path,
+    metadata: workspaceIndexFileMetadata(file.relativePath, stat),
+  };
 }
 
 function fileContainmentOmission(
@@ -1568,7 +1593,7 @@ async function collectLiveFileMatches(
   const cached = await streamingCachedMatches(runner, file, policyPath, state, candidates, order);
   if (cached !== undefined) return cached.matches;
   if (abortScanFile(runner, state)) return undefined;
-  const text = await readForScan(runner, file.relativePath, state, candidates);
+  const text = await readForScan(runner, file.relativePath, state, candidates, policyPath.admitted);
   if (text === undefined || abortScanFile(runner, state)) return undefined;
   return completedLiveFileMatches(runner, file, state, order, text);
 }
@@ -1616,15 +1641,41 @@ async function streamingCachedMatches(
     return undefined;
   const hit = await cache.lookup(policy.metadata);
   if (hit === undefined || abortScanFile(runner, state)) return undefined;
-  const current = filePolicyOmission(runner, file);
-  if (
-    current.metadata === undefined ||
-    !isWorkspaceIndexFileMetadataCurrent(policy.metadata, current.metadata)
-  )
-    return undefined;
+  if (!isFilePolicyStillCurrent(runner, file, policy, policy.metadata)) return undefined;
   await cache.observeReuse(policy.metadata, hit.kind);
   if (abortScanFile(runner, state)) return undefined;
   return streamingHitOutcome(runner, file, state, candidates, order, hit);
+}
+
+// A stored result stands in for a read only while the file is still the one its metadata names.
+// The walk-proven file is confirmed with one fresh no-follow stat of its proven canonical path
+// instead of a second realpath and stat (#4438). Any difference, and every file without a walk
+// proof, takes the full containment proof again, so a changed or redirected file still misses.
+function isFilePolicyStillCurrent(
+  runner: SearchTextRunner,
+  file: DiscoveredFile,
+  policy: ReadableFilePolicy,
+  metadata: WorkspaceIndexDiscoveredFile,
+): boolean {
+  const confirmed =
+    policy.admitted === undefined ? undefined : confirmWalkAdmittedFile(runner.fs, policy.admitted);
+  if (
+    confirmed !== undefined &&
+    namesStoredMetadata(admittedFilePolicy(runner, file, confirmed.path, confirmed.stat), metadata)
+  ) {
+    return true;
+  }
+  return namesStoredMetadata(filePolicyOmission(runner, file), metadata);
+}
+
+function namesStoredMetadata(
+  current: ReadableFilePolicy,
+  metadata: WorkspaceIndexDiscoveredFile,
+): boolean {
+  return (
+    current.metadata !== undefined &&
+    isWorkspaceIndexFileMetadataCurrent(metadata, current.metadata)
+  );
 }
 
 // #4457: stored lane text stands in for exactly the text the redacting read would return, so

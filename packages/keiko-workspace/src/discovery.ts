@@ -804,6 +804,55 @@ async function retainStreamingDirectory(
   directories.push({ absolute: current.absolutePath, relativeDir: current.relativePath });
 }
 
+// A streaming walk hands each file to its collector while the walk's containment proof is still
+// current: the collector runs before the walk visits the next entry. That proof (canonical real
+// path, allowed real-relative path, no-follow stat) is exactly what repository search re-derived for
+// every file before its read, costing one realpath and one lstat handle per file on Windows (#4438).
+// The proof is handed over once, keyed by the emitted object and the walk root, and is consumed by
+// the first lookup, so no later operation can reuse it. The read lane re-proves the file
+// independently before and after every read.
+/** A file the streaming walk proved contained, canonical and regular in the current operation. */
+export interface WalkAdmittedFile {
+  readonly path: string;
+  readonly realBase: string;
+  readonly realRelative: string;
+  readonly stat: WorkspaceStat;
+}
+
+interface WalkObservedFile extends WalkAdmittedFile {
+  readonly root: string;
+}
+
+const walkObservedFiles = new WeakMap<DiscoveredFile, WalkObservedFile>();
+
+function emitStreamedFile(state: StreamingWalk, current: CurrentEntry): Promise<void> {
+  const file: DiscoveredFile = { relativePath: current.relativePath, sizeBytes: current.stat.size };
+  const realBase = state.walk.realRoot;
+  if (realBase !== undefined) {
+    walkObservedFiles.set(file, {
+      root: state.walk.root,
+      path: current.absolutePath,
+      realBase,
+      realRelative: current.relativePath,
+      stat: current.stat,
+    });
+  }
+  return state.onFile(file);
+}
+
+/** Internal: consume the containment proof the streaming walk established for `file`. */
+export function takeWalkObservedFile(
+  file: DiscoveredFile,
+  root: string,
+): WalkAdmittedFile | undefined {
+  const observed = walkObservedFiles.get(file);
+  if (observed === undefined) return undefined;
+  walkObservedFiles.delete(file);
+  if (observed.root !== root) return undefined;
+  const { path, realBase, realRelative, stat } = observed;
+  return { path, realBase, realRelative, stat };
+}
+
 async function visitStreamingEntry(
   state: StreamingWalk,
   relativeDir: string,
@@ -824,7 +873,7 @@ async function visitStreamingEntry(
   if (current.stat.isDirectory) await retainStreamingDirectory(state, current, directories);
   else if (current.stat.isFile) {
     state.filesDiscovered += 1;
-    await state.onFile({ relativePath: path, sizeBytes: current.stat.size });
+    await emitStreamedFile(state, current);
   }
 }
 
@@ -1369,6 +1418,47 @@ function resolvePrefixReadableWorkspaceFile(
   return resolveReadableWorkspaceFile(workspace, relPath, { maxBytes }, fs, false);
 }
 
+// Confirms a walk proof with one fresh no-follow stat immediately before the read. A file whose
+// identity, size or timestamps moved since the walk is not confirmed and is proven afresh.
+/** Internal: confirm a containment proof with one fresh no-follow stat; undefined on any change. */
+export function confirmWalkAdmittedFile(
+  fs: WorkspaceFs,
+  admitted: WalkAdmittedFile,
+): WalkAdmittedFile | undefined {
+  let stat: WorkspaceStat;
+  try {
+    stat = fs.stat(admitted.path);
+  } catch (error) {
+    if (error instanceof StructuralExecutionStoppedError) throw error;
+    return undefined;
+  }
+  if (!stat.isFile || stat.isSymbolicLink || !sameFileSnapshot(admitted.stat, stat))
+    return undefined;
+  return { ...admitted, stat };
+}
+
+// The walk's proof replaces only the pre-read resolution. The descriptor read still compares the
+// opened file against that proof, and postReadStat re-resolves the canonical path afterwards.
+function walkAdmittedReadableFile(
+  workspace: WorkspaceInfo,
+  relPath: string,
+  admitted: WalkAdmittedFile | undefined,
+  fs: WorkspaceFs,
+): ReadableWorkspaceFile | undefined {
+  if (admitted === undefined) return undefined;
+  const normalizedRel = toRelative(workspace.root, resolveWithinWorkspace(workspace.root, relPath));
+  if (normalizedRel !== admitted.realRelative) return undefined;
+  const confirmed = confirmWalkAdmittedFile(fs, admitted);
+  if (confirmed === undefined) return undefined;
+  return {
+    resolvedPath: confirmed.path,
+    normalizedRel,
+    realBase: confirmed.realBase,
+    realRelative: confirmed.realRelative,
+    stat: confirmed.stat,
+  };
+}
+
 function assertStablePrefixRead(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
@@ -1406,8 +1496,27 @@ export async function readWorkspaceFileBytesPrefixForInternalUse(
   relPath: string,
   maxBytes: number,
   fs: WorkspaceFs,
+  admitted?: WalkAdmittedFile,
 ): Promise<InternalWorkspaceByteRead> {
-  const target = resolvePrefixReadableWorkspaceFile(workspace, relPath, maxBytes, fs);
+  return (await readPrefixWithProof(workspace, relPath, maxBytes, fs, admitted)).read;
+}
+
+interface ProvenPrefixRead {
+  readonly read: InternalWorkspaceByteRead;
+  // The canonical path and stat that postReadStat re-proved immediately after this read.
+  readonly proof: WalkAdmittedFile;
+}
+
+async function readPrefixWithProof(
+  workspace: WorkspaceInfo,
+  relPath: string,
+  maxBytes: number,
+  fs: WorkspaceFs,
+  admitted: WalkAdmittedFile | undefined,
+): Promise<ProvenPrefixRead> {
+  const target =
+    walkAdmittedReadableFile(workspace, relPath, admitted, fs) ??
+    resolvePrefixReadableWorkspaceFile(workspace, relPath, maxBytes, fs);
   const readBytes = fs.readFileBytes;
   if (readBytes === undefined) {
     throw new WorkspaceReadError(
@@ -1428,7 +1537,15 @@ export async function readWorkspaceFileBytesPrefixForInternalUse(
       target.normalizedRel,
     );
   }
-  return { bytes, stat, complete: bytes.byteLength === stat.size };
+  return {
+    read: { bytes, stat, complete: bytes.byteLength === stat.size },
+    proof: {
+      path: target.resolvedPath,
+      realBase: target.realBase,
+      realRelative: target.realRelative,
+      stat,
+    },
+  };
 }
 
 export interface InternalWorkspaceTextByteRead extends InternalWorkspaceByteRead {
@@ -1441,17 +1558,29 @@ export async function readWorkspaceFileBytesForTextInspection(
   relPath: string,
   maxBytes: number,
   fs: WorkspaceFs,
+  admitted?: WalkAdmittedFile,
 ): Promise<InternalWorkspaceTextByteRead> {
-  const head = await readWorkspaceFileBytesPrefixForInternalUse(
+  const probe = await readPrefixWithProof(
     workspace,
     relPath,
     Math.min(maxBytes, DEFAULT_BINARY_PROBE.maxProbeBytes),
     fs,
+    admitted,
   );
+  const head = probe.read;
   // Keep size exclusions authoritative even if an oversized file also has a binary header.
   const binary = head.stat.size <= maxBytes && looksBinary(head.bytes);
   if (head.complete || head.stat.size > maxBytes || binary) return { ...head, binary };
-  const full = await readWorkspaceFileBytesPrefixForInternalUse(workspace, relPath, maxBytes, fs);
+  // The head read's post-read check re-proved the canonical path; that proof replaces the full
+  // read's pre-read resolution and is confirmed with one fresh no-follow stat (#4438). Any change
+  // falls back to full resolution, and the full read keeps its own descriptor and post-read checks.
+  const full = await readWorkspaceFileBytesPrefixForInternalUse(
+    workspace,
+    relPath,
+    maxBytes,
+    fs,
+    probe.proof,
+  );
   if (!sameFileSnapshot(head.stat, full.stat)) {
     throw new WorkspaceReadError(`file changed during text inspection: ${relPath}`, relPath);
   }
