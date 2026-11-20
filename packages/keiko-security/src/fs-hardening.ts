@@ -1646,7 +1646,7 @@ function createPublicationIntent(
 function parsePublicationIntentBytes(buffer: Buffer, count: number): PublicationIntent {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(buffer.subarray(0, count).toString("utf8")) as unknown;
+    parsed = JSON.parse(buffer.subarray(0, count).toString("utf8"));
   } catch {
     throw safeFileError("manifest", "recovery-conflict");
   }

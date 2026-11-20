@@ -18,6 +18,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { isWorkspaceRecord } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
 import {
   resolveWindowsSystemBinary,
@@ -283,9 +284,8 @@ export function windowsShortcutFallbackContent(definition: WindowsShortcutDefini
   return `${JSON.stringify({ schema: WINDOWS_SHORTCUT_FALLBACK_SCHEMA, ...definition })}\n`;
 }
 
-function shortcutDefinitionFromRecord(raw: unknown): WindowsShortcutDefinition | undefined {
-  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
-  const record = raw as Record<string, unknown>;
+function shortcutDefinitionFromRecord(record: unknown): WindowsShortcutDefinition | undefined {
+  if (!isWorkspaceRecord(record)) return undefined;
   if (record.schema !== WINDOWS_SHORTCUT_FALLBACK_SCHEMA) return undefined;
   if (typeof record.targetPath !== "string") return undefined;
   if (typeof record.workingDirectory !== "string") return undefined;
@@ -303,7 +303,7 @@ export function parseWindowsShortcutFallback(path: string): WindowsShortcutDefin
     // and a reader that JSON-parses an unbounded file is a bug waiting for its first caller.
     const size = statSync(path).size;
     if (size <= 0 || size > WINDOWS_SHORTCUT_MAX_BYTES) return undefined;
-    return shortcutDefinitionFromRecord(JSON.parse(readFileSync(path, "utf8")) as unknown);
+    return shortcutDefinitionFromRecord(JSON.parse(readFileSync(path, "utf8")));
   } catch {
     return undefined;
   }

@@ -1,5 +1,6 @@
 import type Ts from "typescript";
 import { createRequire } from "node:module";
+import { isWorkspaceRecord } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import type { ProjectionPorts, RedactionSpan } from "./redaction-code.js";
 
 const loadTypeScript = createRequire(import.meta.url);
@@ -12,9 +13,24 @@ export class TypeScriptSyntaxRefusal extends Error {
   }
 }
 
+function isTypeScriptApi(value: unknown): value is typeof Ts {
+  return (
+    isWorkspaceRecord(value) &&
+    "createSourceFile" in value &&
+    "forEachChild" in value &&
+    "SyntaxKind" in value &&
+    "ScriptKind" in value
+  );
+}
+
 function typescriptApi(): typeof Ts {
-  compiler ??= loadTypeScript("typescript") as typeof Ts;
-  return compiler;
+  if (compiler !== undefined) return compiler;
+  const loaded: unknown = loadTypeScript("typescript");
+  if (!isTypeScriptApi(loaded)) {
+    throw new TypeError("The TypeScript compiler module has an invalid runtime shape");
+  }
+  compiler = loaded;
+  return loaded;
 }
 
 export function maskedLiteralBody(text: string): string {

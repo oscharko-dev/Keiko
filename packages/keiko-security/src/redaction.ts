@@ -238,7 +238,7 @@ export function objectContainsCredentialKey(value: unknown, seen = new WeakSet()
   if (Array.isArray(value)) {
     return value.some((entry) => objectContainsCredentialKey(entry, seen));
   }
-  for (const [key, entry] of Object.entries(value as Readonly<Record<string, unknown>>)) {
+  for (const [key, entry] of Object.entries(value)) {
     if (isCredentialKeyName(key)) return true;
     if (objectContainsCredentialKey(entry, seen)) return true;
   }
@@ -610,6 +610,8 @@ export function deepRedactStrings(
     // silently disappeared; with a null prototype the redactor preserves the field as data (its
     // string leaves still get redacted) and no property lookup on the result can be lifted from
     // a prototype the attacker chose.
+    // SAFETY: Object.create(null) returns a new empty object with no prototype and no properties,
+    // so it is a valid empty Record; the lib types it as any, and no typed constructor exists.
     const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     for (const [key, child] of Object.entries(value)) {
       out[key] = deepRedactStrings(child, redactString);

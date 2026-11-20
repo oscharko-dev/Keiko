@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { isWorkspaceRecord } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import type { CstNode, IToken } from "java-parser";
 import {
   projectSourceText,
@@ -92,9 +93,18 @@ function javaMask(source: string, input: JavaInput, token: JavaToken): Redaction
 const requireJava = createRequire(import.meta.url);
 let parser: typeof import("java-parser") | undefined;
 
+function isJavaParserApi(value: unknown): value is typeof import("java-parser") {
+  return isWorkspaceRecord(value) && "parse" in value;
+}
+
 function javaApi(): typeof import("java-parser") {
-  parser ??= requireJava("java-parser") as typeof import("java-parser");
-  return parser;
+  if (parser !== undefined) return parser;
+  const loaded: unknown = requireJava("java-parser");
+  if (!isJavaParserApi(loaded)) {
+    throw new TypeError("The java-parser module has an invalid runtime shape");
+  }
+  parser = loaded;
+  return loaded;
 }
 
 export class JavaSyntaxRefusal extends Error {

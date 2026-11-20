@@ -52,11 +52,16 @@ interface BridgeState {
   readonly pending: Set<Int32Array>;
 }
 
+// Any non-null object, arrays included. Its fields read as unknown, and callers validate each one.
+function isObjectRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null;
+}
+
 function unsigned(value: unknown, maximum: bigint): value is bigint {
   return typeof value === "bigint" && value >= 0n && value <= maximum;
 }
 
-function ownerIdentity(record: Record<string, unknown>): boolean {
+function ownerIdentity(record: Readonly<Record<string, unknown>>): boolean {
   return (
     typeof record.descriptor === "number" &&
     Number.isInteger(record.descriptor) &&
@@ -68,7 +73,7 @@ function ownerIdentity(record: Record<string, unknown>): boolean {
   );
 }
 
-function requestBuffer(record: Record<string, unknown>): boolean {
+function requestBuffer(record: Readonly<Record<string, unknown>>): boolean {
   return (
     record.reply instanceof SharedArrayBuffer &&
     record.reply.byteLength === REPLY_BYTES &&
@@ -76,10 +81,8 @@ function requestBuffer(record: Record<string, unknown>): boolean {
   );
 }
 
-function isRequest(value: unknown): value is Request {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  if (!requestBuffer(record)) return false;
+function isRequest(record: unknown): record is Request {
+  if (!isObjectRecord(record) || !requestBuffer(record)) return false;
   if (record.kind === "owner") return Object.keys(record).length === 7 && ownerIdentity(record);
   if (record.kind === "probe")
     return (
@@ -215,10 +218,9 @@ function workerFileOwner(port: MessagePort): NonNullable<ProcessScopePort["fileO
   };
 }
 
-function isWorkerData(data: unknown): data is ProcessScopeWorkerData {
-  if (typeof data !== "object" || data === null) return false;
-  const record = data as Record<string, unknown>;
+function isWorkerData(record: unknown): record is ProcessScopeWorkerData {
   return (
+    isObjectRecord(record) &&
     record.version === 1 &&
     typeof record.pid === "number" &&
     isProcessId(record.pid) &&

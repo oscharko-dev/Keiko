@@ -26,6 +26,7 @@
 
 import { lstatSync, realpathSync, statSync } from "node:fs";
 import { win32 as win32Path } from "node:path";
+import { isWorkspaceRecord } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 
 /** Thrown when `SystemRoot`/`WINDIR` — or a requested binary name — fails canonical validation. */
 export class WindowsSystemDirectoryError extends Error {
@@ -233,7 +234,7 @@ function defaultWindowsBinaryExists(resolvedPath: string): boolean {
         comparableWindowsPath(resolvedPath)
     );
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
+    const code = isWorkspaceRecord(error) ? error.code : undefined;
     if (code === "ENOENT" || code === "ENOTDIR") return false;
     throw error;
   }
