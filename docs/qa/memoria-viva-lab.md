@@ -593,7 +593,10 @@ in code, and a scenario written against a changed value is wrong, not the produc
   `MAX_KNOWN_FACTS` in `packages/keiko-server/src/memory-salience.ts`, gathered scope by scope from
   accepted and proposed public records. The vault lists a scope pinned first, then by confirmations,
   then newest first (`listMemoriesByScopeRows` in `packages/keiko-memory-vault/src/memories.ts`), so
-  "the 200 newest" is an approximation. This is the limit `scale-duplikat-en` probes.
+  "the 200 newest" is an approximation. The model sees only these facts, but the novelty gate finds a
+  repeat in the same words by the vault's body fingerprint index whatever its age (vault schema v17),
+  so `scale-duplikat-en` is a regression check for that index; a paraphrase beyond the window still
+  depends on the 200 newest vectors (`MAX_DEDUP_NEIGHBORS` in `memory-embedding.ts`).
 - **94 days** is not a product constant. It is the number the scenario descriptions cite, and it
   reproduces as the age at which `effectiveStrength` (confidence times a frequency boost, a recency
   factor and a utility factor) drops an unused record below the archive threshold, for a type whose

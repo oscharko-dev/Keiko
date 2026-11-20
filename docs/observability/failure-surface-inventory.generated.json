@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a485ee98b06f934dc2e940a8aff84071377eb8874031c925a33da27d473db123"
+    "catalogDigest": "2a0c99c09975b403e9edd7f3de21ff3613b2c05267d5b3539a8223a39758193f"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -76,8 +76,8 @@
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
     "operationCount": 720,
-    "proofCount": 743,
-    "resolvedProofCount": 743,
+    "proofCount": 744,
+    "resolvedProofCount": 744,
     "failureClassCount": 411,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -2929,6 +2929,9 @@
     ],
     "memory-vault.store.open-failed.migration": ["packages/keiko-memory-vault/src/db.test.ts"],
     "memory-vault.store.opened.key-source": ["packages/keiko-memory-vault/src/vault.test.ts"],
+    "memory-vault.store.opened.body-hash-backfill": [
+      "packages/keiko-memory-vault/src/vault.test.ts"
+    ],
     "memory-vault.store.quarantined.recovery": ["packages/keiko-memory-vault/src/db.test.ts"],
     "memory.audit.state-cache.seeded.count": ["packages/keiko-server/src/deps-activity.test.ts"],
     "memory.capture.decision.line": [

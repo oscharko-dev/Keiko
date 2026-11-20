@@ -65,7 +65,11 @@ import {
 // older refusals or exposing a plaintext vector sidecar.
 // v15 = optional structural space digest for a sealed forget-tombstone vector.
 // v16 = transactionally indexed source-message membership for exact capture replay.
-export const MEMORY_VAULT_SCHEMA_VERSION = 16;
+// v17 = keyed body fingerprint on memories. The novelty and rejection checks read a bounded window of
+// the newest rows, so an exact repeat of an older fact was stored a second time. The column holds the
+// same vault-keyed fingerprint as a forget tombstone; the vault fills it for older rows once it opens
+// with its key.
+export const MEMORY_VAULT_SCHEMA_VERSION = 17;
 
 const ENCRYPTION_VERSION = 2;
 
@@ -324,6 +328,13 @@ WHEN OLD.source_message_ids_json IS NOT NEW.source_message_ids_json BEGIN
   ${insertMessageSources("NEW")}
 END;`;
 
+const V17_SQL = `
+ALTER TABLE memories ADD COLUMN body_hash TEXT;
+CREATE INDEX IF NOT EXISTS idx_memories_scope_body_hash
+  ON memories(scope_kind, scope_coordinate, body_hash)
+  WHERE body_hash IS NOT NULL;
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through the package's public entry point, so no packaged surface change.
 export const MIGRATIONS: readonly Migration[] = [
@@ -342,6 +353,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 14, sql: V14_SQL },
   { version: 15, sql: V15_SQL },
   { version: 16, sql: V16_SQL },
+  { version: 17, sql: V17_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

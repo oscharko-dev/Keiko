@@ -872,6 +872,40 @@ function gatherScopeEmbeddings(
   return ids.length === 0 ? new Map() : vault.getEmbeddings(ids);
 }
 
+// The same body stored live in the scope, found by the vault's fingerprint index: the neighbour set
+// above holds only the newest rows, so an exact repeat of an older fact would otherwise be stored a
+// second time. Needs no embedding. The fact a candidate replaces is never its duplicate.
+function exactLiveDuplicate(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  replaces: MemoryId | undefined,
+): MemoryId | null {
+  const matches = vault.listMemoryMetadataByBody(record.scope, record.body, {
+    status: DEDUP_CORPUS_STATUSES,
+    limit: 2,
+  });
+  return matches.find(({ id }) => id !== replaces)?.id ?? null;
+}
+
+interface SemanticNeighbourhood {
+  readonly embedding: MemoryEmbeddingInput | null;
+  readonly neighbors: ReturnType<typeof gatherScopeEmbeddings>;
+  readonly dedupThreshold: number;
+}
+
+// The exact repeat first, whatever its age; otherwise the nearest neighbour above the threshold.
+function nearestDuplicate(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  near: SemanticNeighbourhood,
+  replaces: MemoryId | undefined,
+): MemoryId | null {
+  return (
+    exactLiveDuplicate(vault, record, replaces) ??
+    findSemanticDuplicate(near.embedding, near.neighbors, near.dedupThreshold)
+  );
+}
+
 // Three genuinely different endings, kept as a discriminated union so a caller cannot mistake one
 // for another. The previous shape returned `{ inserted: null, mergedInto: null }` for a SUPPRESSED
 // candidate and `{ inserted: null, mergedInto: id }` for a MERGED one; every caller discriminated on
@@ -1128,7 +1162,7 @@ export async function insertSalienceMemoryWithNoveltyGate(
   const duplicateOf = confirmedDuplicate(
     vault,
     record,
-    findSemanticDuplicate(embedding, neighbors, dedupThreshold),
+    nearestDuplicate(vault, record, { embedding, neighbors, dedupThreshold }, options.replaces),
     options.replaces,
   );
   const settled = settleDuplicate(vault, record, duplicateOf, options);

@@ -6,7 +6,7 @@ import {
   flushPlaintextResidueWithRetry,
   runMigrations,
 } from "./schema.js";
-import { makeRecord, memId, TEST_CIPHER } from "./_support.js";
+import { insertPreV17MemoryRow, makeRecord, memId, TEST_CIPHER } from "./_support.js";
 import {
   getAccessStatsRows,
   getConversationTouchRows,
@@ -14,7 +14,6 @@ import {
   recordLearnedConfirmationRows,
   recordUseRows,
 } from "./access.js";
-import { insertMemoryRow } from "./memories.js";
 import { encodeVectorLE } from "./embeddings.js";
 import { hasSemanticallySimilarForgetTombstoneRow } from "./tombstones.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
@@ -194,7 +193,7 @@ describe("runMigrations", () => {
       }
       db.exec("PRAGMA user_version = 13");
       const record = makeRecord({ id: memId("migration-confirmation") });
-      insertMemoryRow(db, record, TEST_CIPHER);
+      insertPreV17MemoryRow(db, record);
       recordAccessRows(db, [record.id], 1_000, "chat-a");
       recordUseRows(db, [record.id], 1_100, "chat-a");
 
@@ -267,6 +266,7 @@ describe("runMigrations", () => {
       "idx_embeddings_identity",
       "idx_memories_pinned",
       "idx_memories_scope",
+      "idx_memories_scope_body_hash",
       "idx_memories_scope_created",
       "idx_memories_scope_status",
       "idx_memories_scope_type",

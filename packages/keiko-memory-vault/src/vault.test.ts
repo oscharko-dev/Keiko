@@ -2002,3 +2002,128 @@ describe("activity-log seam: memory-vault.store.opened retains the key-resolutio
     }).not.toThrow();
   });
 });
+
+describe("exact body lookup by the keyed fingerprint index (v17)", () => {
+  const scope = { kind: "user", userId: "u-1" as UserId } as const;
+  const otherScope = { kind: "user", userId: "u-2" as UserId } as const;
+
+  function insertNumbered(vault: MemoryVaultStore, count: number, startMs: number): void {
+    for (let index = 0; index < count; index += 1) {
+      const t = startMs + index;
+      vault.insertMemory(
+        makeMemory({
+          id: `filler-${String(index)}` as MemoryId,
+          body: `filler fact number ${String(index)}`,
+          createdAt: t,
+          updatedAt: t,
+        }),
+      );
+    }
+  }
+
+  it("finds the oldest of 251 facts by its body, whatever its case and punctuation", () => {
+    const vault = openVault(freshDir());
+    vault.insertMemory(
+      makeMemory({ id: "old" as MemoryId, body: "I hand over on-call on Mondays." }),
+    );
+    insertNumbered(vault, 250, 1_700_000_001_000);
+
+    const found = vault.listMemoryMetadataByBody(scope, "i hand over ON CALL on mondays", {
+      status: ["accepted"],
+    });
+
+    expect(found.map(({ id }) => id)).toEqual(["old"]);
+    expect(vault.listMemoryMetadataByBody(otherScope, "I hand over on-call on Mondays.")).toEqual(
+      [],
+    );
+    expect(
+      vault.listMemoryMetadataByBody(scope, "I hand over on-call on Mondays.", {
+        status: ["proposed"],
+      }),
+    ).toEqual([]);
+    vault.close();
+  });
+
+  it("follows a body edit: the new body is found, the old one no longer", () => {
+    const vault = openVault(freshDir());
+    vault.insertMemory(makeMemory({ id: "m" as MemoryId, body: "prefers dark mode" }));
+
+    vault.updateMemory("m" as MemoryId, { body: "prefers light mode" }, 1_700_000_000_500);
+
+    expect(vault.listMemoryMetadataByBody(scope, "prefers dark mode")).toEqual([]);
+    expect(vault.listMemoryMetadataByBody(scope, "prefers light mode").map(({ id }) => id)).toEqual(
+      ["m"],
+    );
+    vault.close();
+  });
+
+  it("fills the fingerprints of a vault written before v17 when it opens, and reports the count", () => {
+    const dir = freshDir();
+    const first = openVault(dir);
+    first.insertMemory(makeMemory({ id: "a" as MemoryId, body: "prefers dark mode" }));
+    first.insertMemory(makeMemory({ id: "b" as MemoryId, body: "works in Leeds" }));
+    first.close();
+    const raw = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    raw.exec("DROP INDEX idx_memories_scope_body_hash");
+    raw.exec("ALTER TABLE memories DROP COLUMN body_hash");
+    raw.exec("PRAGMA user_version = 16");
+    raw.close();
+    const events: MemoryVaultLogEvent[] = [];
+
+    const reopened = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: TEST_VAULT_KEY,
+      logSink: { write: (event): void => void events.push(event) },
+    });
+
+    expect(reopened.listMemoryMetadataByBody(scope, "Works in Leeds!").map(({ id }) => id)).toEqual(
+      ["b"],
+    );
+    const opened = events.filter((event) => event.op === "memory-vault.store.opened");
+    expect(opened[0]?.extra).toMatchObject({ bodyHashFilledCount: 2, bodyHashUnreadableCount: 0 });
+    const persisted = expectActivityLogProof(
+      "memory-vault.store.opened.body-hash-backfill",
+      formatActivityLogProofLine(opened[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ bodyHashFilledCount: 2, bodyHashUnreadableCount: 0 });
+    reopened.close();
+    const again: MemoryVaultLogEvent[] = [];
+    createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: TEST_VAULT_KEY,
+      logSink: { write: (event): void => void again.push(event) },
+    }).close();
+    expect(
+      again.find((event) => event.op === "memory-vault.store.opened")?.extra,
+    ).not.toHaveProperty("bodyHashFilledCount");
+  });
+
+  it("keeps opening a vault whose sealed body cannot be read, and counts that row", () => {
+    const dir = freshDir();
+    const first = openVault(dir);
+    first.insertMemory(makeMemory({ id: "a" as MemoryId, body: "prefers dark mode" }));
+    first.insertMemory(makeMemory({ id: "b" as MemoryId, body: "works in Leeds" }));
+    first.close();
+    const raw = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    raw.exec("UPDATE memories SET body_hash = NULL");
+    raw.exec("UPDATE memories SET body = 'kv1.not-valid' WHERE id = 'a'");
+    raw.close();
+    const events: MemoryVaultLogEvent[] = [];
+
+    const reopened = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: TEST_VAULT_KEY,
+      logSink: { write: (event): void => void events.push(event) },
+    });
+
+    expect(reopened.listMemoryMetadataByBody(scope, "works in Leeds").map(({ id }) => id)).toEqual([
+      "b",
+    ]);
+    const opened = events.filter((event) => event.op === "memory-vault.store.opened");
+    expect(opened[0]?.extra).toMatchObject({ bodyHashFilledCount: 1, bodyHashUnreadableCount: 1 });
+    reopened.close();
+  });
+});

@@ -958,6 +958,54 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expectInserted(result, bob.id);
   });
 
+  // #4223: the neighbour window holds the 200 newest live rows, so a repeat of an older fact was
+  // stored a second time.
+  function insertNewerFillers(vault: MemoryVaultStore, count: number): void {
+    const start = Date.now() + 1;
+    for (let index = 0; index < count; index += 1) {
+      vault.insertMemory({
+        ...makeRecord(`filler fact number ${String(index)}`, `filler-${String(index)}`),
+        createdAt: start + index,
+        updatedAt: start + index,
+      });
+    }
+  }
+
+  it("merges an exact repeat of a fact older than the neighbour window (#4223)", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const canonical = makeRecord("I hand over my on-call duty every Monday morning.", "id-oncall");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
+    insertNewerFillers(vault, 210);
+
+    const repeat = makeRecord("i hand over my on-call duty every monday morning", "id-repeat");
+    const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, repeat);
+
+    expect(result).toEqual({ kind: "merged", mergedInto: canonical.id });
+    expect(vault.getMemory(repeat.id)).toBeUndefined();
+  });
+
+  it("merges an exact repeat without an embedding model, and never into the fact it replaces", async () => {
+    const deps = makeDeps({ modelId: CHAT_MODEL });
+    const vault = makeVault();
+    const canonical = makeRecord("the user works in Leeds", "id-leeds");
+    vault.insertMemory(canonical);
+    insertNewerFillers(vault, 3);
+
+    const repeat = makeRecord("The user works in Leeds.", "id-repeat");
+    expect(await insertSalienceMemoryWithNoveltyGate(deps, vault, repeat)).toEqual({
+      kind: "merged",
+      mergedInto: canonical.id,
+    });
+    const replacement = makeRecord("The user works in Leeds.", "id-replacement");
+    expectInserted(
+      await insertSalienceMemoryWithNoveltyGate(deps, vault, replacement, {
+        replaces: canonical.id,
+      }),
+      replacement.id,
+    );
+  });
+
   it("inserts without reading the neighborhood when no embedding model is configured", async () => {
     const deps = makeDeps({ modelId: CHAT_MODEL });
     const vault = makeVault();

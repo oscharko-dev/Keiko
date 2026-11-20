@@ -9,10 +9,9 @@
 // consulted — both dedup corpora read `accepted` only — so the salience extractor re-derived the
 // same fact from ordinary conversation and put it straight back in the review queue, forever.
 //
-// Body comparison is delegated to the vault's own suppression fingerprint
-// (`memoryBodySuppressionHash`), the same normalisation the forget tombstone is keyed on. It is
-// imported, never re-implemented, so the two refusal paths cannot drift apart on what "the same
-// body" means.
+// Body comparison is delegated to the vault's own keyed suppression fingerprint, the same
+// normalisation the forget tombstone is keyed on. The vault computes and indexes it, so the two
+// refusal paths cannot drift apart on what "the same body" means.
 //
 // DELIBERATE ASYMMETRY: rejection suppresses the INFERRED capture paths (model salience, voice
 // recap) — "stop deducing this about me" — while an explicit "remember that X" instruction is a
@@ -23,16 +22,12 @@
 // than it was while the record existed, so the person's own statement ignores it altogether.
 
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
-import { memoryBodySuppressionHash, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   FORGOTTEN_MEMORY_SUPPRESSION_REASON,
   REJECTED_MEMORY_SUPPRESSION_REASON,
   type MemoryCaptureSuppressionReason,
 } from "./memory-capture-policy.js";
-
-// Bounds the rejected corpus read so the check stays cheap on a large vault, mirroring the
-// MAX_EXISTING_BODIES / MAX_DEDUP_NEIGHBORS bounds on the two dedup corpora.
-const MAX_REJECTED_SUPPRESSION_RECORDS = 200;
 
 export interface ForgetTombstoneCheck {
   /** The person's own statement: a tombstone an unattended pass left does not refuse it. */
@@ -49,15 +44,16 @@ export function isSuppressedByForgetTombstone(
   });
 }
 
+// Found by the vault's body fingerprint index, so a rejection keeps refusing its fact however many
+// newer rejections the scope holds; a window of the newest rows let an older one slip back in.
 export function isSuppressedByRejection(vault: MemoryVaultStore, record: MemoryRecord): boolean {
-  const candidateHash = memoryBodySuppressionHash(record.body);
-  return vault
-    .listMemoriesByScope(record.scope, {
+  return (
+    vault.listMemoryMetadataByBody(record.scope, record.body, {
       status: ["rejected"],
-      limit: MAX_REJECTED_SUPPRESSION_RECORDS,
+      limit: 1,
       includeExpired: true,
-    })
-    .some((rejected) => memoryBodySuppressionHash(rejected.body) === candidateHash);
+    }).length > 0
+  );
 }
 
 // The single exact-body suppression gate the capture path consults. Returns the typed refusal

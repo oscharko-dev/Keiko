@@ -252,6 +252,14 @@ export interface MemoryVaultStore {
     scope: MemoryScope,
     options?: ListMemoriesOptions,
   ) => readonly MemoryMetadata[];
+  // The memories of one scope whose body is this one, after the same normalisation a forget
+  // tombstone is keyed on (case, punctuation and spacing do not count). Found by index, so the
+  // answer does not depend on how many newer facts the scope holds.
+  readonly listMemoryMetadataByBody: (
+    scope: MemoryScope,
+    body: string,
+    options?: ListMemoriesOptions,
+  ) => readonly MemoryMetadata[];
   /** Eligible personal profile rows in pin, confirmation, recency and UTF-16 ID order. */
   readonly listStandingProfileCandidates: (
     userId: UserId,

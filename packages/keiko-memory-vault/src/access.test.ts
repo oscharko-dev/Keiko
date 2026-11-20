@@ -10,10 +10,10 @@ import {
   recordUseRows,
 } from "./access.js";
 import { insertMemoryRow } from "./memories.js";
-import { makeRecord, memId, openTestDb, TEST_CIPHER } from "./_support.js";
+import { makeRecord, memId, openTestDb, TEST_SEALING } from "./_support.js";
 
 function seedMemory(db: DatabaseSync, value: string): MemoryId {
-  insertMemoryRow(db, makeRecord({ id: memId(value) }), TEST_CIPHER);
+  insertMemoryRow(db, makeRecord({ id: memId(value) }), TEST_SEALING);
   return memId(value);
 }
 

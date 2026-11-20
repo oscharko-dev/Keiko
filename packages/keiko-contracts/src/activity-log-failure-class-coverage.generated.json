@@ -42873,18 +42873,33 @@
           "analyzerProjection": "capability",
           "safeContextFields": [
             {
+              "name": "bodyHashFilledCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "bodyHashUnreadableCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "keySource",
               "type": "string",
               "dataClass": "closed-enum",
               "required": false
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false
           },
-          "proofIds": ["memory-vault.store.opened.key-source"],
+          "proofIds": [
+            "memory-vault.store.opened.key-source",
+            "memory-vault.store.opened.body-hash-backfill"
+          ],
           "replayReferences": [],
           "missingObligations": []
         }

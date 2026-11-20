@@ -49,6 +49,15 @@ provenance array; updates and physical erasure maintain the index in the same tr
 unreadable historical source array keeps the existing scoped read failure and never blocks an
 unrelated vault scope from opening.
 
+Vault schema v17 adds `memories.body_hash`: the same vault-keyed HMAC fingerprint of the normalized
+body that a forget tombstone carries (the key is sealed in `memory_vault_secrets`, so the
+fingerprint is no cross-vault dictionary key). It is cleartext and indexed by scope, so capture
+finds an exact repeat or an earlier rejection by index rather than by reading a window of the
+newest bodies. Every insert and update writes it. When the vault opens with its key it fills the
+fingerprint of rows written before v17 in one transaction; a body it cannot open keeps none, which
+only removes that row from the exact lookup, and `memory-vault.store.opened` counts both cases (an
+unreadable body is a diagnostic) (#4223).
+
 Crypto is confined to two wrapper functions in `serialize.ts` (and the per-table seal/open in `edges.ts`, `embeddings.ts`, `tombstones.ts`); the pure row↔record builders operate on plaintext exactly as before. The cipher is threaded as an explicit parameter through the row layer (keeping those modules pure and unit-testable) and resolved once, internally, in `createMemoryVault`.
 
 ### Key resolution tiers (`keiko-memory-vault/cipher.ts`)

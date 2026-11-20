@@ -8769,7 +8769,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: ["memory-vault.store.open-failed", "memory-vault.store.opened"],
     requiredReplayProofIds: [],
     requiredResourceOperations: ["memory-vault.store.opened"],
-    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
     requiredFrameOperations: [],
     requiredCauseOperations: [],
   },

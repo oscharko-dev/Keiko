@@ -30,8 +30,8 @@ INSERT INTO memories (
   tags_json, source_kind, source_conversation_id, source_workflow_run_id,
   source_evidence_manifest_id, captured_at, capture_rationale, model_provider,
   model_id, model_revision, retention_policy_key, retention_retain_until,
-  retention_notes, evidence_span, source_message_ids_json, created_at, updated_at
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  retention_notes, evidence_span, source_message_ids_json, created_at, updated_at, body_hash
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 `;
 
 const SELECT_BY_ID_SQL = "SELECT * FROM memories WHERE id = ?";
@@ -91,14 +91,23 @@ UPDATE memories SET
   retention_notes = ?,
   evidence_span = ?,
   source_message_ids_json = ?,
-  updated_at = ?
+  updated_at = ?,
+  body_hash = ?
 WHERE id = ?
 `;
 
+// How a row is written: its content sealed, its body also kept as the vault's keyed fingerprint so an
+// exact repeat is found by index however old the stored fact is (v17).
+export interface MemoryRowSealing {
+  readonly cipher: MemoryContentCipher;
+  readonly bodyHash: (body: string) => string;
+}
+
 function bindValues(
   record: MemoryRecord,
-  cipher: MemoryContentCipher,
+  sealing: MemoryRowSealing,
 ): readonly (string | number | null)[] {
+  const cipher = sealing.cipher;
   const r = memoryRecordToRow(record, cipher);
   return [
     r.id,
@@ -132,15 +141,16 @@ function bindValues(
     r.source_message_ids_json,
     r.created_at,
     r.updated_at,
+    sealing.bodyHash(record.body),
   ];
 }
 
 export function insertMemoryRow(
   db: DatabaseSync,
   record: MemoryRecord,
-  cipher: MemoryContentCipher,
+  sealing: MemoryRowSealing,
 ): void {
-  cachedPrepare(db, INSERT_SQL).run(...bindValues(record, cipher));
+  cachedPrepare(db, INSERT_SQL).run(...bindValues(record, sealing));
 }
 
 function decodeMemoryRow(row: MemoryRow, cipher: MemoryContentCipher): MemoryRecord {
@@ -179,9 +189,9 @@ export function getMemoryRowsByIds(
 export function updateMemoryRow(
   db: DatabaseSync,
   record: MemoryRecord,
-  cipher: MemoryContentCipher,
+  sealing: MemoryRowSealing,
 ): void {
-  const r = memoryRecordToRow(record, cipher);
+  const r = memoryRecordToRow(record, sealing.cipher);
   const info = cachedPrepare(db, UPDATE_SQL).run(
     r.type,
     r.body,
@@ -209,6 +219,7 @@ export function updateMemoryRow(
     r.evidence_span,
     r.source_message_ids_json,
     r.updated_at,
+    sealing.bodyHash(record.body),
     r.id,
   );
   if (info.changes === 0) {
@@ -508,6 +519,79 @@ export function listMemoryMetadataByScopeRows(
     ...params,
   ) as unknown as readonly MemoryMetadataRow[];
   return rows.map(metadataRowToMemoryMetadata);
+}
+
+// The stored memories of one scope whose body is the given one, found by the keyed fingerprint index
+// rather than by reading a window of bodies, so an exact repeat is recognised however many newer
+// facts the scope holds. The list filters apply as for any scope read.
+export function listMemoryMetadataByBodyHashRows(
+  db: DatabaseSync,
+  scope: MemoryScope,
+  bodyHash: string,
+  options: ListMemoriesOptions,
+  nowMs: number,
+): readonly MemoryMetadata[] {
+  const params: (string | number)[] = [scopeKindOf(scope), scopeCoordinateOf(scope), bodyHash];
+  const where: string[] = ["scope_kind = ?", "scope_coordinate = ?", "body_hash = ?"];
+  appendListFilters(where, params, options, nowMs);
+  const rows = cachedPrepare(db, buildListSql(where, options, METADATA_COLUMNS)).all(
+    ...params,
+  ) as unknown as readonly MemoryMetadataRow[];
+  return rows.map(metadataRowToMemoryMetadata);
+}
+
+export interface BodyHashBackfill {
+  readonly filled: number;
+  readonly unreadable: number;
+}
+
+const BODY_HASH_PENDING_SQL = "SELECT id, body FROM memories WHERE body_hash IS NULL";
+const BODY_HASH_FILL_SQL = "UPDATE memories SET body_hash = ? WHERE id = ? AND body_hash IS NULL";
+
+// A vault written before v17 holds no fingerprints. They are filled once, in one transaction, when the
+// vault opens with its key. A body that cannot be opened keeps no fingerprint: that row is only absent
+// from the exact lookup, and it is counted, never guessed.
+export function backfillMemoryBodyHashes(
+  db: DatabaseSync,
+  sealing: MemoryRowSealing,
+): BodyHashBackfill {
+  const pending = cachedPrepare(db, BODY_HASH_PENDING_SQL).all() as unknown as readonly {
+    readonly id: string;
+    readonly body: string;
+  }[];
+  if (pending.length === 0) return { filled: 0, unreadable: 0 };
+  let filled = 0;
+  let unreadable = 0;
+  const recordUnreadableBody = (): void => {
+    unreadable += 1;
+  };
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const fill = cachedPrepare(db, BODY_HASH_FILL_SQL);
+    for (const row of pending) {
+      const body = openedBody(row.body, sealing.cipher, recordUnreadableBody);
+      if (body !== undefined) filled += Number(fill.run(sealing.bodyHash(body), row.id).changes);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  return { filled, unreadable };
+}
+
+// An unreadable body is counted; the vault reports the count on its open line as a diagnostic.
+function openedBody(
+  sealed: string,
+  cipher: MemoryContentCipher,
+  recordUnreadableBody: () => void,
+): string | undefined {
+  try {
+    return cipher.openString(sealed);
+  } catch {
+    recordUnreadableBody();
+    return undefined;
+  }
 }
 
 // Only profile IDs and counters leave this query. The body and its sealed exclusion tags are

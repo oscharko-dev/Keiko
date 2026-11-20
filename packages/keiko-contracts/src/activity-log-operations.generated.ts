@@ -37710,13 +37710,32 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         values: ["env", "keychain", "keyfile"],
       },
+      bodyHashFilledCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      bodyHashUnreadableCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "none",
     lifecycle: "end",
     analyzerProjection: "capability",
     failureClasses: ["memory-vault-open"],
-    proofIds: ["memory-vault.store.opened.key-source"],
+    proofIds: [
+      "memory-vault.store.opened.key-source",
+      "memory-vault.store.opened.body-hash-backfill",
+    ],
     releaseImpact: "patch",
+    diagnosticWhen: [
+      {
+        field: "bodyHashUnreadableCount",
+        positive: true,
+      },
+    ],
   },
   {
     contractKind: "activity-log-operation",

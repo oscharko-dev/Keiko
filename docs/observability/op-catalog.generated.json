@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a485ee98b06f934dc2e940a8aff84071377eb8874031c925a33da27d473db123",
+    "catalogDigest": "2a0c99c09975b403e9edd7f3de21ff3613b2c05267d5b3539a8223a39758193f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -39139,8 +39139,8 @@
         "failureClasses": ["memory-vault-encryption-checkpoint"],
         "proofIds": ["memory-vault.store.encryption-checkpoint-degraded.state"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/schema.ts:72",
-        "emitterSites": ["packages/keiko-memory-vault/src/schema.ts:509"]
+        "registrationSite": "packages/keiko-memory-vault/src/schema.ts:76",
+        "emitterSites": ["packages/keiko-memory-vault/src/schema.ts:521"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39250,16 +39250,35 @@
             "dataClass": "closed-enum",
             "required": false,
             "values": ["env", "keychain", "keyfile"]
+          },
+          "bodyHashFilledCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "bodyHashUnreadableCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
+        "diagnosticWhen": [
+          {
+            "field": "bodyHashUnreadableCount",
+            "positive": true
+          }
+        ],
         "causal": "none",
         "lifecycle": "end",
         "analyzerProjection": "capability",
         "failureClasses": ["memory-vault-open"],
-        "proofIds": ["memory-vault.store.opened.key-source"],
+        "proofIds": [
+          "memory-vault.store.opened.key-source",
+          "memory-vault.store.opened.body-hash-backfill"
+        ],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-memory-vault/src/vault.ts:142",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault.ts:494"]
+        "registrationSite": "packages/keiko-memory-vault/src/vault.ts:147",
+        "emitterSites": ["packages/keiko-memory-vault/src/vault.ts:520"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39490,7 +39509,7 @@
         "failureClasses": ["memory-capture-novelty"],
         "proofIds": ["memory.capture.novelty-gate.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:199",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:1039"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:1073"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -61468,7 +61487,7 @@
         "requiredProofOperations": ["memory-vault.store.open-failed", "memory-vault.store.opened"],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": ["memory-vault.store.opened"],
-        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
       },
@@ -107607,18 +107626,33 @@
               "analyzerProjection": "capability",
               "safeContextFields": [
                 {
+                  "name": "bodyHashFilledCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "bodyHashUnreadableCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "keySource",
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": false
                 }
               ],
-              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
               "frameCauseEvidence": {
                 "frames": false,
                 "causeChain": false
               },
-              "proofIds": ["memory-vault.store.opened.key-source"],
+              "proofIds": [
+                "memory-vault.store.opened.key-source",
+                "memory-vault.store.opened.body-hash-backfill"
+              ],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -121452,7 +121486,7 @@
     {
       "op": "memory-vault.store.encryption-checkpoint-degraded",
       "category": "diagnostic",
-      "site": "packages/keiko-memory-vault/src/schema.ts:75",
+      "site": "packages/keiko-memory-vault/src/schema.ts:79",
       "package": "keiko-memory-vault"
     },
     {
@@ -121470,7 +121504,7 @@
     {
       "op": "memory-vault.store.opened",
       "category": "memory",
-      "site": "packages/keiko-memory-vault/src/vault.ts:145",
+      "site": "packages/keiko-memory-vault/src/vault.ts:150",
       "package": "keiko-memory-vault"
     },
     {
@@ -126735,7 +126769,7 @@
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:1165",
+      "site": "packages/keiko-server/src/memory-embedding.ts:1199",
       "package": "keiko-server"
     },
     {
