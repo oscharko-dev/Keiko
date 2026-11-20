@@ -7855,6 +7855,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "widened",
           "pinned-folder",
           "missing-evidence-added",
+          "app-data-contained",
+          "app-data-selected",
         ],
       },
       scopeKind: {
@@ -23418,6 +23420,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       vanishedEntryCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      systemEntryPrunedCount: {
         type: "integer",
         dataClass: "count",
         required: true,
@@ -41981,32 +41988,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
-      discoveryIgnoredCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
-      discoveryDeniedCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
-      discoveryUnrepresentablePathCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
-      discoverySkippedLinkCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
-      discoveryUnavailableDirectoryCount: {
-        type: "integer",
-        dataClass: "count",
-        required: false,
-      },
-      discoveryOversizedDirectoryCount: {
+      discoverySystemNoisePrunedCount: {
         type: "integer",
         dataClass: "count",
         required: false,

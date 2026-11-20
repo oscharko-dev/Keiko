@@ -872,6 +872,26 @@ sources continue with an explicit skipped-source notice. If every source is unav
 outages return 503 (taking precedence over permanent selection errors); permanent unavailable
 selections retain 400 and authority denials retain their existing status. The existing root-denial
 Activity Log records the closed failure kind and request correlation without exposing paths.
+Windows system noise is pruned while descending, never by the security tier (#4437,
+`packages/keiko-workspace/src/systemNoise.ts`). At any depth these names are pruned
+case-insensitively: `$Recycle.Bin`, `RECYCLER`, `RECYCLED`, `System Volume Information`,
+`desktop.ini`, `Thumbs.db`, `ehthumbs.db`, `ehthumbs_vista.db` and the profile registry hives
+(`ntuser.*`). Directly below a connected drive root (`C:\`) the operating-system folders and files
+`Windows`, `Windows.old`, `$Windows.~BT`, `$Windows.~WS`, `$WinREAgent`, `$GetCurrent`,
+`$SysReset`, `Config.Msi`, `PerfLogs`, `Recovery`, `pagefile.sys`, `hiberfil.sys`,
+`swapfile.sys` and `DumpStack.log`/`DumpStack.log.tmp` are pruned as well. A pruned directory is
+never opened. An explicitly selected path is a human decision and is never pruned; the deny list,
+containment and redaction are unchanged. The count is kept apart from `ignoredByDiscovery`, because
+an ignored entry starts the low-value rescue walk, and reaches coverage as
+`systemNoisePrunedByDiscovery` (complete coverage, disclosed in the answer's coverage detail),
+`search.connected-context.evidence-details` as `discoverySystemNoisePrunedCount` and the Files
+filename search as `systemEntryPrunedCount` on `files.search.completed`. `AppData` is not noise
+(owner decision 2026-11-17): it stays searchable, and Chat and Files show a plain-language notice
+that it can hold sensitive application data when a connected folder holds or is part of one. The
+notice informs and never blocks; `client.scope.notice` records it as `app-data-contained` or
+`app-data-selected` with counts only. Installed-software folders (`Program Files`, `ProgramData`)
+stay searchable for the same reason. The complete search streams a directory of any size; only the
+bounded inventory skips a directory above 10,000 entries, disclosed as max-files-pruned.
 Terminal retrieval failures do not wait for physical directory cleanup behind an outstanding
 operating-system read. The failure event
 records the number of pending iterator closures; owned observers retain the original correlation

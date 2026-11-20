@@ -365,6 +365,7 @@ interface CoverageStats {
   readonly skippedSymbolicLinksByDiscovery: number;
   readonly unavailableDirectoriesByDiscovery: number;
   readonly oversizedDirectoriesByDiscovery: number;
+  readonly systemNoisePrunedByDiscovery: number;
   readonly filesDiscovered: number;
   readonly filesAfterPolicy: number;
   readonly ignoredByDiscovery: number;
@@ -383,6 +384,7 @@ const EMPTY_COVERAGE_STATS: CoverageStats = {
   skippedSymbolicLinksByDiscovery: 0,
   unavailableDirectoriesByDiscovery: 0,
   oversizedDirectoriesByDiscovery: 0,
+  systemNoisePrunedByDiscovery: 0,
   filesDiscovered: 0,
   filesAfterPolicy: 0,
   ignoredByDiscovery: 0,
@@ -400,6 +402,7 @@ const DISCOVERY_DROP_COVERAGE_KEYS = [
   "skippedSymbolicLinksByDiscovery",
   "unavailableDirectoriesByDiscovery",
   "oversizedDirectoriesByDiscovery",
+  "systemNoisePrunedByDiscovery",
 ] as const satisfies readonly (keyof CoverageStats)[];
 
 type DiscoveryDropKey = (typeof DISCOVERY_DROP_COVERAGE_KEYS)[number];
@@ -413,6 +416,7 @@ function discoveryDropStats(diagnostics: SearchDiagnostics): Record<DiscoveryDro
     skippedSymbolicLinksByDiscovery: diagnostics.skippedSymbolicLinksByDiscovery ?? 0,
     unavailableDirectoriesByDiscovery: diagnostics.unavailableDirectoriesByDiscovery ?? 0,
     oversizedDirectoriesByDiscovery: diagnostics.oversizedDirectoriesByDiscovery ?? 0,
+    systemNoisePrunedByDiscovery: diagnostics.systemNoisePrunedByDiscovery ?? 0,
   };
 }
 
@@ -476,7 +480,8 @@ function skippedFileCount(inputs: CoverageInputs, stats: CoverageStats): number 
     stats.ignoredByDiscovery +
     stats.deniedByDiscovery +
     stats.depthPrunedByDiscovery +
-    stats.unavailableEntriesByDiscovery
+    stats.unavailableEntriesByDiscovery +
+    stats.systemNoisePrunedByDiscovery
   );
 }
 
@@ -2406,6 +2411,7 @@ function preserveCandidateMembership(ranked: CandidateSet, membership: Candidate
       deniedByDiscovery: membership.diagnostics.deniedByDiscovery,
       unrepresentablePathsByDiscovery: membership.diagnostics.unrepresentablePathsByDiscovery,
       skippedSymbolicLinksByDiscovery: membership.diagnostics.skippedSymbolicLinksByDiscovery,
+      systemNoisePrunedByDiscovery: membership.diagnostics.systemNoisePrunedByDiscovery,
       depthPrunedByDiscovery: membership.diagnostics.depthPrunedByDiscovery,
       maxFilesPrunedByDiscovery: membership.diagnostics.maxFilesPrunedByDiscovery,
     },
@@ -2710,7 +2716,8 @@ function streamedCoverage(
       collected.ignored +
       collected.denied +
       (collected.diagnostics.skippedSymbolicLinksByDiscovery ?? 0) +
-      (collected.diagnostics.unavailableEntriesByDiscovery ?? 0),
+      (collected.diagnostics.unavailableEntriesByDiscovery ?? 0) +
+      (collected.diagnostics.systemNoisePrunedByDiscovery ?? 0),
     oversizedFilesScanned: 0,
     lowValueRescueFilesDiscovered: collected.diagnostics.lowValueRescueFilesDiscovered ?? 0,
     lowValueRescueFilesScanned: collected.diagnostics.lowValueRescueFilesScanned ?? 0,

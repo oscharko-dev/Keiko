@@ -81,6 +81,8 @@ export {
   type IgnoreMatcher,
 } from "./ignore.js";
 
+export { isSystemNoiseEntry, isWindowsDriveRoot } from "./systemNoise.js";
+
 export { detectWorkspace, detectWorkspaceAt } from "./detect.js";
 
 export { isCaseInsensitivePathCase, platformPathCase, workspacePathCase } from "./pathCase.js";

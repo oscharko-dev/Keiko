@@ -81,6 +81,9 @@ describe("scope notice and evidence inspection diagnostic contracts", () => {
     { reason: "pinned-folder", scopeKind: "directory", pathCount: 1 },
     { reason: "pinned-folder", scopeKind: "workspace-root", pathCount: 0 },
     { reason: "missing-evidence-added", scopeKind: "files", pathCount: 2 },
+    { reason: "app-data-contained", scopeKind: "workspace-root", pathCount: 0 },
+    { reason: "app-data-selected", scopeKind: "directory", pathCount: 1 },
+    { reason: "app-data-selected", scopeKind: "files", pathCount: 2 },
   ])("admits each coherent scope action %j", (notice) => {
     expect(isClientDiagnosticIngestRequest({ ...envelope, scopeNotice: notice })).toBe(true);
   });
@@ -97,6 +100,8 @@ describe("scope notice and evidence inspection diagnostic contracts", () => {
     { reason: "narrowed-to-file", scopeKind: "directory" },
     { reason: "pinned-folder" },
     { reason: "missing-evidence-added", scopeKind: "directory" },
+    { reason: "app-data-contained", scopeKind: "workspace-root", pathCount: 1 },
+    { reason: "app-data", scopeKind: "workspace-root", pathCount: 0 },
     { path: "private/path.ts" },
   ])("refuses malformed or content-bearing scope facts %j", (patch) => {
     expect(

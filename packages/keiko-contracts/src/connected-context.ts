@@ -484,6 +484,9 @@ export interface ContextCoverageDiagnostics {
   readonly unavailableDirectoriesByDiscovery?: number | undefined;
   // Directories too large to re-read after membership churn; also an io-error (#4431).
   readonly oversizedDirectoriesByDiscovery?: number | undefined;
+  // Windows system entries ($Recycle.Bin, desktop.ini, ...) pruned while descending; never evidence,
+  // so coverage stays complete, but the count is disclosed (#4437).
+  readonly systemNoisePrunedByDiscovery?: number | undefined;
   readonly incomplete: boolean;
   readonly reasons: readonly ContextCoverageTruncationReason[];
   readonly filesDiscovered: number;
@@ -1685,6 +1688,7 @@ const OPTIONAL_COVERAGE_FIELDS = [
   "skippedSymbolicLinksByDiscovery",
   "unavailableDirectoriesByDiscovery",
   "oversizedDirectoriesByDiscovery",
+  "systemNoisePrunedByDiscovery",
   "oversizedFilesScanned",
   "lowValueRescueFilesDiscovered",
   "lowValueRescueFilesScanned",

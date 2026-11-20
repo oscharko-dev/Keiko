@@ -771,8 +771,9 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
   releaseImpact: "patch",
 });
 
-// Discovery churn and drops of the actual walk (#4434, #4435, #4431): every entry the walk did not
-// consider, by closed cause and as a count only. Absent when no coverage was reported.
+// Discovery churn and drops of the actual walk (#4434, #4435, #4431) and the Windows system
+// entries it pruned (#4437): by closed cause and as a count only. Absent when no coverage was
+// reported.
 const DISCOVERY_CHURN_ACTIVITY_FIELDS = {
   discoveryUnavailableEntryCount: { type: "integer", dataClass: "count", required: false },
   discoveryVanishedEntryCount: { type: "integer", dataClass: "count", required: false },
@@ -783,6 +784,7 @@ const DISCOVERY_CHURN_ACTIVITY_FIELDS = {
   discoverySkippedLinkCount: { type: "integer", dataClass: "count", required: false },
   discoveryUnavailableDirectoryCount: { type: "integer", dataClass: "count", required: false },
   discoveryOversizedDirectoryCount: { type: "integer", dataClass: "count", required: false },
+  discoverySystemNoisePrunedCount: { type: "integer", dataClass: "count", required: false },
 } as const;
 
 const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOperation({
@@ -1839,6 +1841,12 @@ function positiveCoverageDetail(label: string, count: number | undefined): reado
   return count !== undefined && count > 0 ? [`${label} ${String(count)}`] : [];
 }
 
+// Windows system entries ($Recycle.Bin, desktop.ini, ...) are pruned by policy, never read (#4437).
+function systemNoiseCoverageDetail(coverage: ContextCoverageDiagnostics): readonly string[] {
+  const count = coverage.systemNoisePrunedByDiscovery ?? 0;
+  return count > 0 ? [`system entries pruned ${String(count)}`] : [];
+}
+
 function coverageUncertainty(
   result: Awaited<ReturnType<typeof searchText>>,
   nowMs: number,
@@ -1863,6 +1871,7 @@ function coverageUncertainty(
           `denied ${String(coverage.deniedByDiscovery)}`,
           `unrepresentable entries ${String(coverage.unrepresentablePathsByDiscovery ?? 0)}`,
           ...discoveryDropCoverageDetail(coverage),
+          ...systemNoiseCoverageDetail(coverage),
           `depth-pruned ${String(coverage.depthPrunedByDiscovery)}`,
           `max-files-pruned ${String(coverage.maxFilesPrunedByDiscovery)}`,
         ].join(", ");
@@ -11182,6 +11191,7 @@ function discoveryChurnActivityExtra(
     discoverySkippedLinkCount: coverage.skippedSymbolicLinksByDiscovery ?? 0,
     discoveryUnavailableDirectoryCount: coverage.unavailableDirectoriesByDiscovery ?? 0,
     discoveryOversizedDirectoryCount: coverage.oversizedDirectoriesByDiscovery ?? 0,
+    discoverySystemNoisePrunedCount: coverage.systemNoisePrunedByDiscovery ?? 0,
   };
 }
 

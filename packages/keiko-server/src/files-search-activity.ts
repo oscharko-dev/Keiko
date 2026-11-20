@@ -29,6 +29,8 @@ const FILES_SEARCH_COMPLETED_OPERATION = defineActivityLogOperation({
     unavailableEntryCount: { type: "integer", dataClass: "count", required: true },
     // Listed entries that vanished before inspection; the folder's current state (#4435).
     vanishedEntryCount: { type: "integer", dataClass: "count", required: true },
+    // Windows system entries pruned by policy, never searched (#4437).
+    systemEntryPrunedCount: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -47,6 +49,7 @@ export interface FilesSearchOutcome {
   readonly truncated: boolean;
   readonly unavailableEntryCount?: number;
   readonly vanishedEntryCount?: number;
+  readonly systemEntryPrunedCount?: number;
 }
 
 export function recordFilesSearchCompleted(
@@ -69,6 +72,7 @@ export function recordFilesSearchCompleted(
           truncated: outcome.truncated,
           unavailableEntryCount: outcome.unavailableEntryCount ?? 0,
           vanishedEntryCount: outcome.vanishedEntryCount ?? 0,
+          systemEntryPrunedCount: outcome.systemEntryPrunedCount ?? 0,
           completeness: "complete",
           loss: "none",
         },

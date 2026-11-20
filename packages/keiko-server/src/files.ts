@@ -66,7 +66,11 @@ import type { UiHandlerDeps } from "./deps.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
 import type { Project, UiStore } from "./store/index.js";
 import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
-import { decodeTextFileBytes } from "@oscharko-dev/keiko-workspace";
+import {
+  decodeTextFileBytes,
+  isSystemNoiseEntry,
+  isWindowsDriveRoot,
+} from "@oscharko-dev/keiko-workspace";
 import {
   WorkspaceDescriptorReadError,
   workspaceEntryAvailabilityFailure,
@@ -127,6 +131,8 @@ export interface FilesSearchResponse {
   readonly unavailableEntryCount?: number;
   // Listed entries that no longer existed when inspected (#4435); absent when none.
   readonly vanishedEntryCount?: number;
+  // Windows system entries ($Recycle.Bin, desktop.ini, ...) never searched (#4437); absent when none.
+  readonly systemEntryPrunedCount?: number;
 }
 
 export type FilesSearchFileRole =
@@ -1160,6 +1166,7 @@ interface FileSearchState {
   scanTruncated: boolean;
   unavailableEntryCount: number;
   vanishedEntryCount: number;
+  systemEntryPrunedCount: number;
 }
 
 // A locked, protected or vanished entry is skipped and counted (#4434, #4435). Every other failure
@@ -1337,6 +1344,12 @@ function collectFileSearchEntry(args: {
 }): PendingFileSearchCandidate | undefined {
   const relativePath = childRelative(args.current.relativePath, args.entry.name);
   if (!entryVisibleToFileSearch(relativePath, args.entry, args.redactor)) return undefined;
+  // Operating-system entries spend the scan budget on files that are never a person's (#4437).
+  const atDriveRoot = args.current.relativePath === "" && isWindowsDriveRoot(args.root.realRoot);
+  if (isSystemNoiseEntry(args.entry.name, { atDriveRoot })) {
+    args.state.systemEntryPrunedCount += 1;
+    return undefined;
+  }
   const nativePath = join(args.current.path, args.entry.name);
   if (args.entry.isDirectory()) {
     args.state.stack.push({ path: nativePath, relativePath });
@@ -1436,6 +1449,7 @@ async function collectFileSearchResults(args: {
     scanTruncated: false,
     unavailableEntryCount: 0,
     vanishedEntryCount: 0,
+    systemEntryPrunedCount: 0,
   };
 
   while (state.stack.length > 0) {
@@ -1454,6 +1468,9 @@ async function collectFileSearchResults(args: {
       ? { unavailableEntryCount: state.unavailableEntryCount }
       : {}),
     ...(state.vanishedEntryCount > 0 ? { vanishedEntryCount: state.vanishedEntryCount } : {}),
+    ...(state.systemEntryPrunedCount > 0
+      ? { systemEntryPrunedCount: state.systemEntryPrunedCount }
+      : {}),
   };
 }
 

@@ -781,6 +781,47 @@ describe("retrieveConnectedContextPack activity log", () => {
       expect(logged).not.toContain(secret);
   });
 
+  it("records pruned Windows system entries on evidence-details, body-free (#4437)", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const target = "PRIVATE_LITERAL_TARGET";
+    const input: OrchestratorInput = {
+      ...fixtureInput(),
+      scope: {
+        ...fixtureScope(),
+        kind: "workspace-root",
+        relativePaths: [],
+        explicitConnection: true,
+      },
+      query: { ...fixtureQuery(), text: `Search for "${target}"` },
+    };
+    const output = await retrieveConnectedContextPack(input, {
+      ...fixtureDeps(activityLog, CORRELATION_ID),
+      fs: memFs(FIXTURE_ROOT, {
+        [PRIVATE_SCOPE_FILE]: `export const value = "${target}";\n`,
+        "$Recycle.Bin/S-1-5-21/PRIVATE_DELETED.ts": `export const gone = "${target}";\n`,
+        [`${PRIVATE_SCOPE_PATH}/desktop.ini`]: `[${target}]\n`,
+      }),
+    });
+    expect(output.pack.files.map((file) => file.scopePath)).toEqual([PRIVATE_SCOPE_FILE]);
+    expect(output.pack.diagnostics?.coverage).toMatchObject({
+      incomplete: false,
+      systemNoisePrunedByDiscovery: 2,
+    });
+    const evidenceDetails = activityLog.events.find(
+      (event) => event.op === "search.connected-context.evidence-details",
+    );
+    expect(evidenceDetails?.correlationId).toBe(CORRELATION_ID);
+    expect(evidenceDetails?.extra).toMatchObject({ discoverySystemNoisePrunedCount: 2 });
+    expectActivityLogProof(
+      "search.connected-context.evidence-details.line",
+      formatActivityLogProofLine(evidenceDetails ?? {}),
+    );
+    const serialized = JSON.stringify(activityLog.events);
+    for (const secret of ["$Recycle.Bin", "PRIVATE_DELETED", "desktop.ini", target]) {
+      expect(serialized).not.toContain(secret);
+    }
+  });
+
   it("logs actual selected excerpt observations without hypothetical source eviction", async () => {
     const activityLog = createBufferedServerLogSink();
     const profile = deriveContextProfile({

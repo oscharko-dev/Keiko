@@ -83,6 +83,25 @@ describe("Files filename search availability", () => {
     expect(result.results).toHaveLength(4);
     expect(result).not.toHaveProperty("unavailableEntryCount");
     expect(result).not.toHaveProperty("vanishedEntryCount");
+    expect(result).not.toHaveProperty("systemEntryPrunedCount");
+  });
+
+  it("never opens Windows system folders and counts the pruned entries (#4437)", async () => {
+    await mkdir(join(root, "$Recycle.Bin", "S-1-5-21"), { recursive: true });
+    await writeFile(join(root, "$Recycle.Bin", "S-1-5-21", "report-deleted.md"), "gone\n");
+    await writeFile(join(root, "docs", "desktop.ini"), "[report]\n");
+    const opened: string[] = [];
+    failures.opendir = (path): string | undefined => {
+      opened.push(path.replaceAll("\\", "/"));
+      return undefined;
+    };
+    const result = await searchFiles(store, root, "report", 10, buildRedactor({}));
+    expect(result.results.map((entry) => entry.path)).not.toContain(
+      "$Recycle.Bin/S-1-5-21/report-deleted.md",
+    );
+    expect(result.results).toHaveLength(4);
+    expect(result.systemEntryPrunedCount).toBe(2);
+    expect(opened.some((path) => path.includes("$Recycle.Bin"))).toBe(false);
   });
 
   it.each(["EMFILE", "ENFILE"])("still fails the search on %s", async (code) => {
@@ -110,6 +129,7 @@ describe("files.search.completed activity", () => {
       truncated: false,
       unavailableEntryCount: 2,
       vanishedEntryCount: 1,
+      systemEntryPrunedCount: 3,
     });
     expect(sink.events).toHaveLength(1);
     const line = formatActivityLogProofLine(sink.events[0] ?? {});
@@ -119,6 +139,7 @@ describe("files.search.completed activity", () => {
       truncated: false,
       unavailableEntryCount: 2,
       vanishedEntryCount: 1,
+      systemEntryPrunedCount: 3,
     });
     expect(sink.events[0]).toMatchObject({
       op: "files.search.completed",
@@ -137,6 +158,7 @@ describe("files.search.completed activity", () => {
     expect(expectActivityLogProof("files.search.completed.line", line)).toMatchObject({
       unavailableEntryCount: 0,
       vanishedEntryCount: 0,
+      systemEntryPrunedCount: 0,
     });
   });
 });

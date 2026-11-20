@@ -389,6 +389,7 @@ interface DiscoveryChurnCounts {
   readonly skippedSymbolicLinksByDiscovery: number;
   readonly unavailableDirectoriesByDiscovery: number;
   readonly oversizedDirectoriesByDiscovery: number;
+  readonly systemNoisePrunedByDiscovery: number;
 }
 
 const EMPTY_DISCOVERY_CHURN: DiscoveryChurnCounts = {
@@ -398,6 +399,7 @@ const EMPTY_DISCOVERY_CHURN: DiscoveryChurnCounts = {
   skippedSymbolicLinksByDiscovery: 0,
   unavailableDirectoriesByDiscovery: 0,
   oversizedDirectoriesByDiscovery: 0,
+  systemNoisePrunedByDiscovery: 0,
 };
 
 function discoveryChurnCounts(stats: StreamingDiscoveryStats): DiscoveryChurnCounts {
@@ -408,6 +410,7 @@ function discoveryChurnCounts(stats: StreamingDiscoveryStats): DiscoveryChurnCou
     skippedSymbolicLinksByDiscovery: stats.skippedSymbolicLinks ?? 0,
     unavailableDirectoriesByDiscovery: stats.unavailableDirectories ?? 0,
     oversizedDirectoriesByDiscovery: stats.oversizedDirectories ?? 0,
+    systemNoisePrunedByDiscovery: stats.systemNoisePruned ?? 0,
   };
 }
 
@@ -418,6 +421,7 @@ const DISCOVERY_CHURN_KEYS = [
   "skippedSymbolicLinksByDiscovery",
   "unavailableDirectoriesByDiscovery",
   "oversizedDirectoriesByDiscovery",
+  "systemNoisePrunedByDiscovery",
 ] as const satisfies readonly (keyof DiscoveryChurnCounts)[];
 
 // Only positive counts are reported, so a walk without drops keeps its existing diagnostics shape.

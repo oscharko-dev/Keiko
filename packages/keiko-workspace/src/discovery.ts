@@ -23,6 +23,7 @@ import {
   workspaceEntryAvailabilityFailure,
 } from "./entryAvailability.js";
 import { resolveWithinWorkspace } from "./paths.js";
+import { isSystemNoiseEntry, isWindowsDriveRoot } from "./systemNoise.js";
 import {
   admittedSearchScopeEntry,
   canonicalSearchScopeRelativePaths,
@@ -80,6 +81,8 @@ interface Walk {
   readonly retainMembership?: boolean;
   readonly entryLimit?: number | undefined;
   readonly executionControl?: StructuralExecutionControl | undefined;
+  /** The walk root is a Windows drive root, so its top level holds the operating system (#4437). */
+  readonly atDriveRoot: boolean;
   entriesVisited: number;
   denied: number;
   unrepresentablePaths: number;
@@ -97,6 +100,8 @@ interface Walk {
   skippedLinks?: number;
   // Streaming-walk directories too large to re-read after churn; also counted in ioErrors (#4431).
   oversizedDirectories?: number;
+  // Windows system entries pruned while descending (#4437); never read, always disclosed.
+  systemNoisePruned: number;
 }
 
 function unavailableWalkRoot(error: unknown, failOnReadError: boolean): undefined {
@@ -151,6 +156,18 @@ function isAllowed(walk: Walk, relPath: string, isDir: boolean): boolean {
     walk.ignored += 1;
     return false;
   }
+  return true;
+}
+
+// Operating-system entries such as `$Recycle.Bin` or `desktop.ini` are pruned only while descending,
+// after the deny and ignore tiers ran, so an explicitly selected path is never pruned (#4437). The
+// count stays separate from `ignored`: an ignored entry triggers the low-value rescue pass, which
+// would walk the connected root a second time for entries that are never evidence.
+function prunedAsSystemNoise(walk: Walk, relativeDir: string, name: string): boolean {
+  if (!isSystemNoiseEntry(name, { atDriveRoot: walk.atDriveRoot && relativeDir === "" })) {
+    return false;
+  }
+  walk.systemNoisePruned += 1;
   return true;
 }
 
@@ -453,6 +470,7 @@ function handleEntry(
   if (!isAllowed(walk, relPath, entry.isDirectory)) {
     return;
   }
+  if (prunedAsSystemNoise(walk, relativeDir, entry.name)) return;
   // Symlinks are skipped unconditionally (for safety/simplicity). A non-symlink entry that
   // reports neither isFile nor isDirectory is likewise treated as non-traversable noise.
   // Only genuine files and directories are walked.
@@ -526,6 +544,7 @@ async function handleEntryAsync(
   await yieldToEventLoop(state);
   const relPath = childRelative(relativeDir, entry.name);
   if (!isAllowed(walk, relPath, entry.isDirectory)) return;
+  if (prunedAsSystemNoise(walk, relativeDir, entry.name)) return;
   if (entry.isSymbolicLink) {
     recordSkippedSymbolicLink(walk, relPath);
     return;
@@ -592,10 +611,12 @@ function createWalk(
   entryLimit?: number,
 ): Walk {
   const realRoot = resolveWalkRoot(fs, workspace.root, failOnReadError);
+  const root = realRoot ?? workspace.root;
   return {
     fs: realRoot === undefined ? fs : workspaceFsBoundToCanonicalRoot(fs, realRoot),
-    root: realRoot ?? workspace.root,
+    root,
     realRoot,
+    atDriveRoot: isWindowsDriveRoot(root),
     matcher: compileWorkspaceIgnore(workspace),
     opts,
     applyGitignore: opts.applyGitignore,
@@ -612,6 +633,7 @@ function createWalk(
     ignored: 0,
     depthPruned: 0,
     maxFilesPruned: 0,
+    systemNoisePruned: 0,
   };
 }
 
@@ -652,6 +674,7 @@ function discoveryResult(walk: Walk): DiscoveryResult {
       denied: walk.denied,
       ...(walk.unrepresentablePaths > 0 ? { unrepresentablePaths: walk.unrepresentablePaths } : {}),
       ignored: walk.ignored,
+      ...(walk.systemNoisePruned > 0 ? { systemNoisePruned: walk.systemNoisePruned } : {}),
       depthPruned: walk.depthPruned,
       maxFilesPruned: walk.maxFilesPruned,
     },
@@ -725,6 +748,8 @@ export interface StreamingDiscoveryStats {
   readonly unavailableDirectories?: number;
   /** Directories too large to re-read after membership churn; part of `ioErrors` (#4431). */
   readonly oversizedDirectories?: number;
+  /** Windows system entries pruned while descending (#4437). */
+  readonly systemNoisePruned?: number;
   readonly directoriesDiscovered?: number;
   readonly directoriesPruned?: number;
 }
@@ -789,6 +814,7 @@ async function visitStreamingEntry(
   const walk = state.walk;
   const path = childRelative(relativeDir, entry.name);
   if (!isAllowed(walk, path, entry.isDirectory)) return;
+  if (prunedAsSystemNoise(walk, relativeDir, entry.name)) return;
   if (entry.isSymbolicLink) {
     recordSkippedSymbolicLink(walk, path);
     return;
@@ -1016,6 +1042,7 @@ function streamingDiscoveryStats(state: StreamingWalk): StreamingDiscoveryStats 
     ...(walk.unrepresentablePaths > 0 ? { unrepresentablePaths: walk.unrepresentablePaths } : {}),
     ioErrors: walk.ioErrors ?? 0,
     ...streamingChurnStats(walk),
+    ...(walk.systemNoisePruned > 0 ? { systemNoisePruned: walk.systemNoisePruned } : {}),
     ...(state.options === undefined
       ? {}
       : {
