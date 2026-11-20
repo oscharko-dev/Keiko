@@ -114,7 +114,9 @@ describe("buildWorkflowManifest", () => {
 
   it.each([
     ["an overallStatus outside the verification vocabulary", { overallStatus: "green" }],
-    ["no workspaceRoot or results", { workspaceRoot: undefined, results: undefined }],
+    ["no workspaceRoot", { workspaceRoot: undefined }],
+    ["a non-string workspaceRoot", { workspaceRoot: 42 }],
+    ["no results", { results: undefined }],
     ["a non-finite durationMs", { durationMs: Number.NaN }],
     ["counts that are not a record", { counts: [] }],
     ["results that are not an array", { results: {} }],
