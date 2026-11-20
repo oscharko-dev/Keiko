@@ -18,11 +18,13 @@ export type EditorLanguageId = WorkspaceLanguage | MonacoLanguageId;
 /** The concrete set of languages {@link isSupportedEditorLanguage} recognises. */
 export const SUPPORTED_EDITOR_LANGUAGES: readonly EditorLanguageId[] = MONACO_LANGUAGE_IDS;
 
+const SUPPORTED_EDITOR_LANGUAGE_SET: ReadonlySet<string> = new Set(SUPPORTED_EDITOR_LANGUAGES);
+
 /**
  * Narrow an arbitrary string to an {@link EditorLanguageId}. Lets the host validate a
  * caller-provided language identifier before handing a buffer to the editor without duplicating the
  * supported-language list.
  */
 export function isSupportedEditorLanguage(value: string): value is EditorLanguageId {
-  return SUPPORTED_EDITOR_LANGUAGES.some((language) => language === value);
+  return SUPPORTED_EDITOR_LANGUAGE_SET.has(value);
 }

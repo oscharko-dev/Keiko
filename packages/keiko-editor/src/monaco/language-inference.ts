@@ -57,9 +57,11 @@ const MONACO_LANGUAGE_ID_UNIVERSE = [
 /** A Monaco built-in language id the Keiko Editor can render. */
 export type MonacoLanguageId = (typeof MONACO_LANGUAGE_ID_UNIVERSE)[number];
 
+const MONACO_LANGUAGE_ID_SET: ReadonlySet<string> = new Set(MONACO_LANGUAGE_ID_UNIVERSE);
+
 /** Type guard: does `value` name a Monaco language id the editor recognises? */
 export function isMonacoLanguageId(value: string): value is MonacoLanguageId {
-  return MONACO_LANGUAGE_ID_UNIVERSE.some((id) => id === value);
+  return MONACO_LANGUAGE_ID_SET.has(value);
 }
 
 /** The fallback language id for buffers with no recognised source language. */
