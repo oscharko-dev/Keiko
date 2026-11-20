@@ -331,6 +331,7 @@ function buildListSql(
   where: readonly string[],
   options: ListMemoriesOptions,
   select = "*",
+  tiebreak?: string,
 ): string {
   const { column, dir } = resolveOrderBy(options);
   // Seek the source first, then the memory PK, even when a scope index could satisfy ORDER BY.
@@ -345,6 +346,7 @@ function buildListSql(
     sql += ` WHERE ${where.join(" AND ")}`;
   }
   sql += ` ORDER BY ${column} ${dir}`;
+  if (tiebreak !== undefined) sql += `, ${tiebreak} ${dir}`;
   if (typeof options.limit === "number") {
     sql += " LIMIT ?";
     if (typeof options.offset === "number") {
@@ -523,21 +525,59 @@ export function listMemoryMetadataByScopeRows(
 
 // The stored memories of one scope whose body is the given one, found by the keyed fingerprint index
 // rather than by reading a window of bodies, so an exact repeat is recognised however many newer
-// facts the scope holds. The list filters apply as for any scope read.
+// facts the scope holds. A row whose fingerprint the open could not fill yet is compared by its
+// opened body, so a deferred fill never lets a rejected or stored fact through. The list filters
+// apply as for any scope read, and the id breaks ties so pages over equal timestamps stay disjoint.
 export function listMemoryMetadataByBodyHashRows(
   db: DatabaseSync,
   scope: MemoryScope,
-  bodyHash: string,
+  body: string,
+  sealing: MemoryRowSealing,
   options: ListMemoriesOptions,
   nowMs: number,
 ): readonly MemoryMetadata[] {
+  const bodyHash = sealing.bodyHash(body);
+  const pending = pendingScopeIdsWithBodyHash(db, scope, bodyHash, sealing);
   const params: (string | number)[] = [scopeKindOf(scope), scopeCoordinateOf(scope), bodyHash];
-  const where: string[] = ["scope_kind = ?", "scope_coordinate = ?", "body_hash = ?"];
+  const where: string[] = ["scope_kind = ?", "scope_coordinate = ?"];
+  if (pending.length === 0) {
+    where.push("body_hash = ?");
+  } else {
+    where.push("(body_hash = ? OR memories.id IN (SELECT value FROM json_each(?)))");
+    params.push(JSON.stringify(pending));
+  }
   appendListFilters(where, params, options, nowMs);
-  const rows = cachedPrepare(db, buildListSql(where, options, METADATA_COLUMNS)).all(
-    ...params,
-  ) as unknown as readonly MemoryMetadataRow[];
+  const sql = buildListSql(where, options, METADATA_COLUMNS, "memories.id");
+  const rows = cachedPrepare(db, sql).all(...params) as unknown as readonly MemoryMetadataRow[];
   return rows.map(metadataRowToMemoryMetadata);
+}
+
+const PENDING_SCOPE_BODIES_SQL = `SELECT id, body FROM memories
+WHERE body_hash IS NULL AND scope_kind = ? AND scope_coordinate = ?`;
+
+// The pending set is empty once the open has filled every fingerprint; it is read only while a
+// deferred fill or an unreadable body leaves rows without one.
+function pendingScopeIdsWithBodyHash(
+  db: DatabaseSync,
+  scope: MemoryScope,
+  bodyHash: string,
+  sealing: MemoryRowSealing,
+): readonly string[] {
+  const rows = cachedPrepare(db, PENDING_SCOPE_BODIES_SQL).all(
+    scopeKindOf(scope),
+    scopeCoordinateOf(scope),
+  ) as unknown as readonly PendingBodyRow[];
+  const ids: string[] = [];
+  for (const row of rows) {
+    const opened = openedBody(row.body, sealing.cipher, unreadableBodyCountedAtOpen);
+    if (opened !== undefined && sealing.bodyHash(opened) === bodyHash) ids.push(row.id);
+  }
+  return ids;
+}
+
+function unreadableBodyCountedAtOpen(): void {
+  // An unreadable body is counted on the vault's open line (bodyHashUnreadableCount); a lookup
+  // cannot compare it and leaves it out.
 }
 
 export interface BodyHashBackfill {

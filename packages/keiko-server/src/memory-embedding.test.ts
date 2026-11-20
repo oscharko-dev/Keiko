@@ -1015,6 +1015,22 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expectInserted(await insertSalienceMemoryWithNoveltyGate(deps, vault, other), other.id);
   });
 
+  it("merges a repeat of an older fact behind more newer variants than one page holds (#4223)", async () => {
+    const deps = makeDeps({ modelId: CHAT_MODEL });
+    const vault = makeVault();
+    const oldest = makeRecord("the user prefers C++", "id-cpp");
+    vault.insertMemory({ ...oldest, createdAt: oldest.createdAt - 60_000 });
+    ["C#", "C", "C!", "C?", "C;", "C:", "C…", "C*", "C/", "C--", "C@"].forEach((suffix, index) => {
+      vault.insertMemory(makeRecord(`the user prefers ${suffix}`, `id-variant-${String(index)}`));
+    });
+
+    const repeat = makeRecord("The user prefers C++.", "id-repeat");
+    expect(await insertSalienceMemoryWithNoveltyGate(deps, vault, repeat)).toEqual({
+      kind: "merged",
+      mergedInto: oldest.id,
+    });
+  });
+
   it("inserts without reading the neighborhood when no embedding model is configured", async () => {
     const deps = makeDeps({ modelId: CHAT_MODEL });
     const vault = makeVault();

@@ -1161,8 +1161,14 @@ function listMemoryMetadataByBody(
   gateMemoryScope(lookup.scope);
   const effective = gateListOptions(lookup.options ?? {});
   const nowMs = effective.nowMs ?? opts.now();
-  const bodyHash = opts.rowSealing.bodyHash(lookup.body);
-  return listMemoryMetadataByBodyHashRows(db, lookup.scope, bodyHash, effective, nowMs);
+  return listMemoryMetadataByBodyHashRows(
+    db,
+    lookup.scope,
+    lookup.body,
+    opts.rowSealing,
+    effective,
+    nowMs,
+  );
 }
 
 function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryReadOps {

@@ -883,21 +883,24 @@ function exactLiveDuplicate(
   replaces: MemoryId | undefined,
 ): MemoryId | null {
   const wording = sameWordingKey(record.body);
-  const matches = vault.listMemoryMetadataByBody(record.scope, record.body, {
-    status: DEDUP_CORPUS_STATUSES,
-    limit: MAX_EXACT_BODY_MATCHES,
-  });
-  for (const { id } of matches) {
-    if (id === replaces) continue;
-    const existing = vault.getMemory(id);
-    if (existing !== undefined && sameWordingKey(existing.body) === wording) return id;
+  for (let offset = 0; ; offset += EXACT_BODY_PAGE_ROWS) {
+    const page = vault.listMemoryMetadataByBody(record.scope, record.body, {
+      status: DEDUP_CORPUS_STATUSES,
+      limit: EXACT_BODY_PAGE_ROWS,
+      offset,
+    });
+    for (const { id } of page) {
+      if (id === replaces) continue;
+      const existing = vault.getMemory(id);
+      if (existing !== undefined && sameWordingKey(existing.body) === wording) return id;
+    }
+    if (page.length < EXACT_BODY_PAGE_ROWS) return null;
   }
-  return null;
 }
 
-// A handful of live rows can share one fingerprint (wordings that differ only in symbols); each is
-// checked against the candidate's wording.
-const MAX_EXACT_BODY_MATCHES = 8;
+// Live rows that share one fingerprint (wordings that differ only in symbols) are read page by page
+// until none remain, so a repeat of an older one is never missed behind newer variants.
+const EXACT_BODY_PAGE_ROWS = 8;
 
 const CLOSING_MARKS = new Set([".", "!", "?", ";", ":", ",", "…"]);
 

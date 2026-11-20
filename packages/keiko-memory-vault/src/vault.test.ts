@@ -2101,10 +2101,21 @@ describe("exact body lookup by the keyed fingerprint index (v17)", () => {
     ).not.toHaveProperty("bodyHashFilledCount");
   });
 
-  it("opens although the fill cannot write, reports the deferral, and fills at a later open", () => {
+  it("opens although the fill cannot write, still finds pending rows, and fills at a later open", () => {
     const dir = freshDir();
     const first = openVault(dir);
     first.insertMemory(makeMemory({ id: "a" as MemoryId, body: "prefers dark mode" }));
+    first.insertMemory(
+      makeMemory({
+        id: "r" as MemoryId,
+        body: "works in Leeds",
+        status: "rejected",
+        validity: { validFrom: 1_700_000_000_000, validUntil: 1_700_000_000_001 },
+      }),
+    );
+    first.insertMemory(
+      makeMemory({ id: "o" as MemoryId, body: "prefers dark mode", scope: otherScope }),
+    );
     first.close();
     const raw = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
     raw.exec("UPDATE memories SET body_hash = NULL");
@@ -2121,7 +2132,21 @@ describe("exact body lookup by the keyed fingerprint index (v17)", () => {
 
     const blocked: MemoryVaultLogEvent[] = [];
     const deferredVault = open(blocked);
-    expect(deferredVault.listMemoryMetadataByBody(scope, "prefers dark mode")).toEqual([]);
+    expect(
+      deferredVault.listMemoryMetadataByBody(scope, "Prefers dark mode!").map(({ id }) => id),
+    ).toEqual(["a"]);
+    expect(
+      deferredVault
+        .listMemoryMetadataByBody(scope, "works in Leeds", {
+          status: ["rejected"],
+          includeExpired: true,
+        })
+        .map(({ id }) => id),
+    ).toEqual(["r"]);
+    expect(deferredVault.listMemoryMetadataByBody(scope, "works in Leeds")).toEqual([]);
+    expect(
+      deferredVault.listMemoryMetadataByBody(scope, "prefers dark mode", { status: ["proposed"] }),
+    ).toEqual([]);
     expect(blocked.find((event) => event.op === "memory-vault.store.opened")?.extra).toMatchObject({
       bodyHashFilledCount: 0,
       bodyHashUnreadableCount: 0,
@@ -2138,9 +2163,26 @@ describe("exact body lookup by the keyed fingerprint index (v17)", () => {
       ["a"],
     );
     expect(later.find((event) => event.op === "memory-vault.store.opened")?.extra).toMatchObject({
-      bodyHashFilledCount: 1,
+      bodyHashFilledCount: 3,
     });
     filled.close();
+  });
+
+  it("pages over rows with one timestamp without skipping or repeating one", () => {
+    const vault = openVault(freshDir());
+    const wordings = ["C++", "C#", "C", "C!", "C?", "C.", "C,", "C;", "C:", "C…", "c"];
+    wordings.forEach((body, index) => {
+      vault.insertMemory(makeMemory({ id: `w-${String(index)}` as MemoryId, body }));
+    });
+
+    const seen: string[] = [];
+    for (let offset = 0; offset < wordings.length; offset += 4) {
+      const page = vault.listMemoryMetadataByBody(scope, "C", { limit: 4, offset });
+      seen.push(...page.map(({ id }) => id));
+    }
+
+    expect([...seen].sort()).toEqual(wordings.map((_, index) => `w-${String(index)}`).sort());
+    vault.close();
   });
 
   it("keeps opening a vault whose sealed body cannot be read, and counts that row", () => {
