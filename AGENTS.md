@@ -137,7 +137,14 @@ This shapes the product _and_ how you work on it:
   `~/.keiko-standalone`, nothing downloaded at start. It declares itself managed outside the app
   (`KEIKO_PORTABLE_MANAGEMENT`), so the app reports the existing `portable-it-managed` disposition
   and never offers the portable setup. Never modify the payload inside a package, never let the
-  folder form perform or suggest an installation, and never weaken the operating system's download
+  folder form perform or suggest an installation, never let the program folder become a working
+  folder (every folder launch declares `KEIKO_LAUNCH_FROM_PROGRAM_FOLDER=1`; the program folder is
+  the launch directory, the payload's `app` folder or, in the npm form, the package folder itself;
+  the server seeds no default project from it and the read surface refuses it as a root, so it is
+  listed unreadable and is never a window's starting folder or a coding repository, while a Chat
+  started without a folder is still kept there; `keiko.config.json` and `*.vault` are credential
+  names of the sensitive-path denial, kernel-enforced for native commands, wherever they lie), and
+  never weaken the operating system's download
   checks to make a package start: an administrator removes the download mark before internal
   distribution. A team's `keiko.config.json` beside the start files is an administrator-owned
   input; Keiko adopts it and seals its key, and never writes to it (ADR-0046 D5). Every stable
@@ -158,6 +165,16 @@ This shapes the product _and_ how you work on it:
   configuration Gateway Setup saved and gives the team token only to the gateway connection Gateway
   Setup verified; a provider or reranker with its own connection is refused, never given that token.
   Windows has no npm coding-runtime package, so this form offers no Coding Workbench on Windows.
+  The folder carries the release's Node.js runtime without `include/`, `share/`, CHANGELOG.md and
+  README.md; every kept file stays the archive's, byte for byte. `keiko start` prints one line when
+  the running Node.js is outside the `engines` range of the package's own manifest and records the
+  closed `nodeSupport` value on `process.started`; it never refuses the start.
+  It is no product release asset (its lockfile needs the integrity npm reports for the published
+  version), so a release owner runs `npm-folder-publish.yml` after a release: it starts every
+  package on its own platform (`scripts/testing/qualify-npm-folder-package.mjs` on `macos-15`,
+  `macos-15-intel`, `windows-2025`) and only then publishes the exact tested ZIPs as the attested
+  GitHub prerelease `npm-folder-<version>`. That prerelease is a transport, never latest, and grants
+  no update trust; keep the dot before the form in the asset names.
 - Portable updates must not require an Apple Developer subscription (ADR-0121 D7). Verify macOS
   handoff copies against the exact current artifact digests in the validated plan after managed
   registration admission; preserve candidate authenticity, containment and process ownership.
@@ -1295,7 +1312,12 @@ records the closed readiness observation without starting a check. A window open
 selection reads the Workbench profile with `check=use`, which may join a check that already runs and
 report the state but never dispatches one; a pick or Start sends `check=1`, and a Start belongs to the
 model it was pressed for (a model adopted or picked meanwhile ends its wait with a plain message and
-starts no run). `gateway.readiness.scope` records how many models were listed and checked and why,
+starts no run). When no activated model can start a run only because its tool calling was never
+confirmed (the state after Gateway Setup) or its proof aged out, the Workbench lists those activated,
+not refuted models and offers one explicit "Check tool calling" action that sends `check=1` for the
+selected model (`client.coding-workbench.interaction` `tool-check-requested`); with an eligible model
+present the picker lists eligible models only, and nothing starts a check by opening a window
+(ADR-0171). `gateway.readiness.scope` records how many models were listed and checked and why,
 only for a check that actually sent a request; `gateway.readiness.selection` remains the record of
 the server's selection route, which the Chat picker no longer calls; and
 `gateway.readiness.automatic.started` carries the closed `checkReason` (`startup`, `fallback`,

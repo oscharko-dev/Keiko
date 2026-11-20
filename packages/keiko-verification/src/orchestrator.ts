@@ -42,6 +42,7 @@ import { outputExcerpt } from "./excerpt.js";
 import { extractFailureLocations } from "./failure-location.js";
 import { buildAppliedLimits, type BreachedDimension } from "./limits.js";
 import { nodeResourceMonitor, type ResourceMonitor } from "./monitor.js";
+import { ISOLATION_UNAVAILABLE_DENIAL_PREFIX } from "./plan.js";
 import type {
   VerificationKind,
   VerificationPlan,
@@ -851,12 +852,12 @@ async function runPlanSteps(
       results.push(
         deniedResult(
           step,
-          "network egress isolation required but no enforcing sandbox backend is available on this host; refusing to execute untrusted code",
+          `${ISOLATION_UNAVAILABLE_DENIAL_PREFIX}network egress isolation required but no enforcing sandbox backend is available on this host; refusing to execute untrusted code`,
         ),
       );
       continue;
     }
-    const run = await runStep(step, deps, baseSpawn, monitor, resolution.network);
+    const run = await runStep(step, deps, baseSpawn, monitor, resolution.network); // NOSONAR typescript:S9382 -- verification steps run one after another by contract.
     const result = toResult(step, run, deps.workspace.root, processTreeMemoryEnforced);
     reportStepOutput(deps, step, run, result);
     results.push(result);

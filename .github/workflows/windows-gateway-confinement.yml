@@ -6,11 +6,6 @@ on:
   push:
     branches: [fix/3666-windows-coding-runtime, feature/4068-windows-workbench]
   workflow_dispatch:
-    inputs:
-      verify_transport:
-        description: "Require a real gateway connection and hostile port denial through the installed Workbench adapter"
-        type: boolean
-        default: false
 
 permissions: {}
 
@@ -57,8 +52,49 @@ jobs:
         run: node scripts/testing/test-windows-gateway-filters.mjs --inbound-control-proof
       - name: Prove the confined root's process, file and network boundaries
         run: node scripts/testing/test-windows-runtime-boundary.mjs
-      - name: Exercise the installed service and Workbench adapter transport
-        env:
-          VERIFY_TRANSPORT: ${{ (github.event_name == 'push' && github.ref_name == 'feature/4068-windows-workbench') || inputs.verify_transport }}
-        run: ./scripts/testing/test-windows-gateway-scm.ps1 -VerifyTransport:($env:VERIFY_TRANSPORT -eq 'true')
+      - name: Exercise the installed service lifecycle
+        run: ./scripts/testing/test-windows-gateway-scm.ps1
         shell: pwsh
+
+  # #4068 (ADR-0043 D21): the pipe-relayed confinement that needs no installed service. Builds the
+  # supervisor exactly as the release does (windows-latest, MSVC, /Brepro), proves the relay rules
+  # and an end-to-end relayed tree, and keeps the built image so its digest can be pinned.
+  relay-confinement:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Build the runtime supervisor as the release does
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path relay-out | Out-Null
+          node scripts/build-runtime-supervisor.mjs windows-x64 "$PWD\relay-out\keiko-runtime-supervisor.exe"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Get-FileHash -Algorithm SHA256 relay-out\keiko-runtime-supervisor.exe | Format-List
+          (Get-Item relay-out\keiko-runtime-supervisor.exe).Length
+      - name: Prove the relay plan and port-rewrite rules
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          cmd /c "`"$vs\VC\Auxiliary\Build\vcvars64.bat`" >nul && cl /nologo /std:c11 /W4 /WX /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS /Fo:relay-out\ /Fe:relay-out\gateway-relay-test.exe native\runtime-supervisor\windows\gateway_relay.c native\runtime-supervisor\windows\gateway_relay.test.c /link advapi32.lib ws2_32.lib"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          relay-out\gateway-relay-test.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Prove a relayed tree end to end
+        run: node scripts/testing/test-windows-relay-confinement.mjs --helper relay-out/keiko-runtime-supervisor.exe
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: relay-runtime-supervisor-windows-x64
+          path: relay-out/keiko-runtime-supervisor.exe
+          if-no-files-found: error
+          retention-days: 14

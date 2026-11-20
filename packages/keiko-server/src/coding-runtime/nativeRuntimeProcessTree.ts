@@ -23,8 +23,18 @@ export interface NativeRuntimeHelperProcess {
 // so a pipe that never closes cannot hold a reap judgement open (audit 2026-10, finding 7).
 const CONTROL_DRAIN_GRACE_MS = 2_000;
 
-// The supervisor's KRS1 error codes (keiko_runtime_supervisor.c `error_code`), as closed words.
-const SUPERVISOR_REFUSALS: Readonly<Record<number, string>> = {
+/** The operating system of the supervisor that answers on the control pipe. */
+export type NativeRuntimeSupervisorPlatform = "win32" | "darwin" | "linux";
+
+type RefusalWords = Readonly<Record<number, string>>;
+
+// Each supervisor numbers its KRS1 refusals itself (`error_code` in its own
+// keiko_runtime_supervisor.c), and the numbers overlap with other meanings: 6 is a grants frame on
+// Windows, an unavailable monitor on macOS and an unavailable kernel facility on Linux. A refusal is
+// therefore read with the table of the supervisor that sent it. Only the Windows words start with
+// `supervisor-`; the run failure codes of supervisorRefusal.ts and the reap proof below are
+// Windows statements and must never be drawn from another supervisor's number.
+const WINDOWS_REFUSALS: RefusalWords = {
   1: "supervisor-protocol",
   2: "supervisor-job-create",
   3: "supervisor-process-create",
@@ -38,7 +48,68 @@ const SUPERVISOR_REFUSALS: Readonly<Record<number, string>> = {
   11: "supervisor-gateway-admit",
   // #4068 W1: the user environment key could not be closed to the tree.
   12: "supervisor-environment-guard",
+  // #4068 (ADR-0043 D21): the relayed launch's own steps, all before the job exists.
+  13: "supervisor-relay-frame",
+  14: "supervisor-relay-profile",
+  15: "supervisor-relay-start",
 };
+
+const MACOS_REFUSALS: RefusalWords = {
+  1: "macos-supervisor-protocol",
+  3: "macos-supervisor-process-create",
+  5: "macos-supervisor-tree-observe",
+  6: "macos-supervisor-monitor-unavailable",
+  // KEIKO-0433: reconcile found the handle, but a live connection already owns that session.
+  7: "macos-supervisor-tree-already-supervised",
+};
+
+const LINUX_REFUSALS: RefusalWords = {
+  1: "linux-supervisor-protocol",
+  3: "linux-supervisor-process-create",
+  5: "linux-supervisor-tree-observe",
+  6: "linux-supervisor-native-unavailable",
+};
+
+const SUPERVISOR_REFUSALS: Readonly<Record<NativeRuntimeSupervisorPlatform, RefusalWords>> = {
+  win32: WINDOWS_REFUSALS,
+  darwin: MACOS_REFUSALS,
+  linux: LINUX_REFUSALS,
+};
+
+const UNKNOWN_REFUSAL: Readonly<Record<NativeRuntimeSupervisorPlatform, string>> = {
+  win32: "supervisor-unknown",
+  darwin: "macos-supervisor-unknown",
+  linux: "linux-supervisor-unknown",
+};
+
+/** Every word a macOS or Linux supervisor refusal can read as; none is a Windows refusal. */
+export const NON_WINDOWS_SUPERVISOR_REFUSALS: readonly string[] = Object.freeze([
+  ...Object.values(MACOS_REFUSALS),
+  ...Object.values(LINUX_REFUSALS),
+  UNKNOWN_REFUSAL.darwin,
+  UNKNOWN_REFUSAL.linux,
+]);
+
+// The refusals the Windows supervisor sends before it has created its job object, so before any
+// process of the tree existed (windows/keiko_runtime_supervisor.c: the gateway, grants and
+// environment steps and the job creation itself precede `launch_in_job`). `supervisor-protocol` is
+// excluded because a reconcile helper answers it for a tree that may exist, and every refusal
+// after the job exists (`process-create`, `job-assign`, `job-observe`, `gateway-admit`) leaves a
+// tree that needs its own proof. Only a refusal named here, received before a launch response,
+// proves nothing was left. The macOS and Linux supervisors are not in this set: their refusals
+// prove nothing here, and their trees keep the proof they always needed.
+const REFUSED_BEFORE_TREE_EXISTED: ReadonlySet<string> = new Set([
+  "supervisor-job-create",
+  "supervisor-grants-frame",
+  "supervisor-grants-directory",
+  "supervisor-grants-acl",
+  "supervisor-grants-capability",
+  "supervisor-gateway-connect",
+  "supervisor-environment-guard",
+  "supervisor-relay-frame",
+  "supervisor-relay-profile",
+  "supervisor-relay-start",
+]);
 
 /** What a confined Windows supervisor's launch response states about its stale-grant sweep (#4068). */
 export interface NativeRuntimeLaunchSweep {
@@ -58,6 +129,8 @@ export class NativeRuntimeTree implements RuntimeProcessTree {
   private readonly proofWaiters = new Set<(proved: boolean) => void>();
   private responseBytes = Buffer.alloc(0);
   private proved = false;
+  // A launch response arrived: the supervisor created the tree, so no refusal can prove it absent.
+  private launched = false;
   private ended = false;
   private refusal: string | undefined;
   // The helper exited but its control pipe has not closed yet: a proof may still arrive.
@@ -67,6 +140,8 @@ export class NativeRuntimeTree implements RuntimeProcessTree {
   public constructor(
     recoveryHandle: string,
     private readonly child: NativeRuntimeHelperProcess,
+    // Named by every caller: a refusal number means something else for each supervisor.
+    private readonly supervisor: NativeRuntimeSupervisorPlatform,
     private readonly onLaunchSweep?: (sweep: NativeRuntimeLaunchSweep) => void,
   ) {
     this.treeId = recoveryHandle;
@@ -154,17 +229,26 @@ export class NativeRuntimeTree implements RuntimeProcessTree {
 
   private acceptResponsePacket(packet: Buffer): void {
     const kind = packet.readUInt16LE(6);
-    if (kind === 1 && this.acceptLaunchPacket(packet)) return;
+    if (kind === 1 && this.acceptLaunchPacket(packet)) {
+      this.launched = true;
+      return;
+    }
     if (kind === 2 && packet.length === RESPONSE_HEADER_BYTES + 8) {
       this.proved = packet.readUInt32LE(RESPONSE_HEADER_BYTES + 4) === 0;
       if (this.proved) this.resolveProofWaiters(true);
       return;
     }
-    if (kind === 3 && packet.length === RESPONSE_HEADER_BYTES + 2) {
-      this.refusal =
-        SUPERVISOR_REFUSALS[packet.readUInt16LE(RESPONSE_HEADER_BYTES)] ?? "supervisor-unknown";
-    }
+    if (kind === 3 && packet.length === RESPONSE_HEADER_BYTES + 2) this.acceptRefusal(packet);
     this.finish(null);
+  }
+
+  private acceptRefusal(packet: Buffer): void {
+    const words = SUPERVISOR_REFUSALS[this.supervisor];
+    this.refusal =
+      words[packet.readUInt16LE(RESPONSE_HEADER_BYTES)] ?? UNKNOWN_REFUSAL[this.supervisor];
+    // The Windows supervisor itself states that it refused before creating the tree: there is
+    // nothing to reap, so the run's start failure names the refusal instead of an unproven reap.
+    if (!this.launched && REFUSED_BEFORE_TREE_EXISTED.has(this.refusal)) this.proved = true;
   }
 
   // A launch response is the bare header or, on a confined Windows launch, the header and the

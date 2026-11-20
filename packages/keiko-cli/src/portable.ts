@@ -9,7 +9,7 @@ import {
   writeInstallLayoutOverrideEvidenceWithFactory,
 } from "./install-layout.js";
 import { runLifecycleCli } from "./lifecycle.js";
-import { PORTABLE_MANAGEMENT_ENV } from "./portable-management.js";
+import { PORTABLE_MANAGEMENT_ENV, PROGRAM_FOLDER_LAUNCH_ENV } from "./portable-management.js";
 import {
   activateMacosPortableRuntime,
   type MacosRuntimeActivationFn,
@@ -386,8 +386,12 @@ async function launchManaged(
 ): Promise<number> {
   const { target, layout, io, env, securityLogSink, recovered, launchFailure } = options;
   if (!(await macosRuntimeAdmitsLaunch(options, deps.activateMacosRuntimeFn))) return 1;
-  const launchEnv =
-    recovered === undefined ? env : { ...env, KEIKO_PORTABLE_RECOVERED_LAUNCH: recovered.encoded };
+  const launchEnv = {
+    ...env,
+    // Every managed launch runs inside the program folder (`cwd` below): it is no project.
+    [PROGRAM_FOLDER_LAUNCH_ENV]: "1",
+    ...(recovered === undefined ? {} : { KEIKO_PORTABLE_RECOVERED_LAUNCH: recovered.encoded }),
+  };
   const nativeUiRuntime =
     target === "linux-x64"
       ? (await import("./native-ui-runtime.js")).nativeUiRuntimeForLayout(layout, securityLogSink)

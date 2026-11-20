@@ -1,5 +1,10 @@
 # Proposal: a runnable Coding Workbench on Windows
 
+> **Superseded 2026-11-19 (#4068):** the broker-based design below is replaced by
+> [ADR-0043 D21](../adr/ADR-0043-enforced-execution-isolation.md): the runtime supervisor confines
+> every Windows run itself as the signed-in user, with no `KeikoRuntimeGateway` service. The body is
+> kept as the historical proposal.
+
 Issue [#4068](https://github.com/oscharko-dev/Keiko/issues/4068). Status: **A to E decided** on
 2026-11-07 by the #4068 Windows owner under the owner's scope transfer of 2026-10-24. A1, B1, C4 and
 D1 are implemented; C4's boundary test passed on the real key on Windows 11 hardware on 2026-11-07.

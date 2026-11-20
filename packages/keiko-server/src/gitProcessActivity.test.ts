@@ -4,7 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { GitProcessResult, GitProcessRunner } from "@oscharko-dev/keiko-git";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
-import { logGitProcessOutcome, observedGitRunner } from "./gitProcessActivity.js";
+import {
+  logGitProcessOutcome,
+  observedGitRunner,
+  stderrHoldsOnlyGitWarnings,
+} from "./gitProcessActivity.js";
 import { type ServerLogEvent, type ServerLogSink } from "./observability/index.js";
 import {
   expectActivityLogProof,
@@ -840,5 +844,33 @@ describe("the line that actually reaches disk", () => {
       endedBy: "not-started",
       exitCode: 128,
     });
+  });
+});
+
+// A run the byte cap ended is a bounded read only when git reported no failure of its own. Its
+// notices (`warning: `) are not failures; everything else on stderr is.
+describe("stderrHoldsOnlyGitWarnings", () => {
+  it.each([
+    ["nothing", ""],
+    ["one warning", "warning: could not open directory 'x/': Permission denied\n"],
+    [
+      "several warnings with Windows line ends",
+      "warning: in the working copy of 'a', LF will be replaced by CRLF\r\nwarning: second\r\n",
+    ],
+    ["a warning without a final line end", "warning: last line"],
+  ])("holds for %s", (_title, stderr) => {
+    expect(stderrHoldsOnlyGitWarnings(stderr)).toBe(true);
+  });
+
+  it.each([
+    ["a fatal line", "fatal: not a git repository\n"],
+    ["an error line", "error: unable to stat 'x'\n"],
+    ["an error after a warning", "warning: x\nerror: y\n"],
+    ["a hint", "hint: use --force\n"],
+    ["unprefixed text", "something went wrong\n"],
+    ["a word that only starts like the prefix", "warnings are fun\n"],
+    ["an indented continuation line", "warning: x\n  continued\n"],
+  ])("does not hold for %s", (_title, stderr) => {
+    expect(stderrHoldsOnlyGitWarnings(stderr)).toBe(false);
   });
 });

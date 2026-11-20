@@ -1795,6 +1795,29 @@ describe("FilesWidget", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
+  it("never starts in a project the server refuses to read", async () => {
+    const base = { favorite: false, createdAt: 1, lastOpenedAt: 1, available: true };
+    vi.mocked(fetchProjects).mockResolvedValueOnce({
+      projects: [
+        { ...base, path: "/keiko-state", name: "State", readable: false },
+        { ...base, path: "/my-project", name: "Mine" },
+      ],
+    });
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/my-project",
+      path: "",
+      truncated: false,
+      entries: [],
+    });
+
+    render(<FilesWidget onRootChange={() => undefined} />);
+
+    await waitFor(() => {
+      expect(fetchFilesTree).toHaveBeenCalledWith("/my-project", "", expect.any(String));
+    });
+    expect(fetchFilesTree).not.toHaveBeenCalledWith("/keiko-state", "", expect.any(String));
+  });
+
   it("keeps an explicitly restored external root instead of retargeting to the project", async () => {
     vi.mocked(fetchProjects).mockResolvedValueOnce({
       projects: [

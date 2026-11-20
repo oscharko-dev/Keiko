@@ -401,6 +401,131 @@ describe("GET /api/git/summary", () => {
   });
 });
 
+// A large untracked tree makes `git status` outgrow the byte cap; the runner then kills git and
+// returns this exact shape. That cut is a bounded, truncated summary, not an unavailable repository.
+describe("GET /api/git/summary — byte-cap cut (large untracked tree)", () => {
+  const capCut = (
+    stdout: string,
+    overrides: Partial<Awaited<ReturnType<GitProcessRunner>>> = {},
+  ): Awaited<ReturnType<GitProcessRunner>> => ({
+    exitCode: null,
+    signal: "SIGTERM",
+    stdout,
+    stderr: "",
+    truncated: true,
+    ...overrides,
+  });
+
+  async function summaryFor(
+    statusRun: Awaited<ReturnType<GitProcessRunner>>,
+    activity = captureActivityLog(),
+  ): Promise<{ readonly body: unknown; readonly activity: ReturnType<typeof captureActivityLog> }> {
+    const runner: GitProcessRunner = (args) => {
+      const subcommand = args[4];
+      if (subcommand === "rev-parse") return Promise.resolve(ok(`${root}\n`));
+      if (subcommand === "status") return Promise.resolve(statusRun);
+      return Promise.resolve(ok(""));
+    };
+    const base = deps(runner, (value) => value);
+    const result = await handleGitSummary(
+      ctx(`/api/git/summary?root=${encodeURIComponent(root)}`),
+      {
+        ...base,
+        gitRouteOptions: { ...base.gitRouteOptions, runner, activityLog: activity.sink },
+      },
+    );
+    expect(result.status).toBe(200);
+    return { body: result.body, activity };
+  }
+
+  it.each([
+    {
+      name: "inside a plain record",
+      stdout: porcelain(["# branch.head main", "# branch.ab +2 -1", "? a.ts"]) + "? node_mod",
+      untracked: 1,
+    },
+    {
+      name: "right after a NUL",
+      stdout: porcelain(["# branch.head main", "# branch.ab +2 -1", "? a.ts", "? b.ts"]),
+      untracked: 2,
+    },
+    {
+      name: "inside the old-path record of a rename",
+      stdout:
+        porcelain(["# branch.head main", "# branch.ab +2 -1", "? a.ts"]) +
+        "2 R. N... 100644 100644 100644 aaa bbb R100 renamed.ts\0old-na",
+      untracked: 1,
+    },
+    {
+      name: "right after the first record of a rename",
+      stdout: porcelain([
+        "# branch.head main",
+        "# branch.ab +2 -1",
+        "? a.ts",
+        "2 R. N... 100644 100644 100644 aaa bbb R100 renamed.ts",
+      ]),
+      untracked: 1,
+    },
+  ])("summarizes a status the cap cut $name", async ({ stdout, untracked }) => {
+    const { body, activity } = await summaryFor(capCut(stdout));
+
+    expect(body).toMatchObject({
+      state: "available",
+      available: true,
+      branch: "main",
+      ahead: 2,
+      behind: 1,
+      untrackedCount: untracked,
+      stagedCount: 0,
+      truncated: true,
+      clean: false,
+    });
+    expect(activity.withOp("git.process.failed")).toHaveLength(0);
+    expect(activity.withOp("git.status.bounded")[0]).toMatchObject({
+      extra: { surface: "summary", maxBytes: 4096 },
+    });
+  });
+
+  it("summarizes a status whose only complete records are the branch headers as not clean", async () => {
+    const { body } = await summaryFor(
+      capCut(porcelain(["# branch.oid abc", "# branch.head main"]) + "? node"),
+    );
+
+    expect(body).toMatchObject({
+      available: true,
+      branch: "main",
+      untrackedCount: 0,
+      truncated: true,
+      clean: false,
+    });
+  });
+
+  // Each row is a whole, bounded status but for the one thing its name says.
+  const wholeCut = porcelain(["# branch.head main", "? a.ts"]);
+
+  it.each([
+    { name: "a cut header", run: capCut("# branch.oi") },
+    // The v2 header is a block: a cut inside it would read as a branch without an upstream, so
+    // the block counts only when something of an entry follows it.
+    {
+      name: "a cut inside the header block",
+      run: capCut(porcelain(["# branch.oid abc", "# branch.head main"]) + "# branch.ab +1"),
+    },
+    {
+      name: "a cut right after a header record",
+      run: capCut(porcelain(["# branch.oid abc", "# branch.head main"])),
+    },
+    { name: "a timeout", run: capCut(wholeCut, { timedOut: true }) },
+    { name: "an abort", run: capCut(wholeCut, { aborted: true }) },
+    { name: "git error output", run: capCut(wholeCut, { stderr: "x" }) },
+    { name: "exit 128", run: capCut(wholeCut, { exitCode: 128 }) },
+  ])("keeps $name an unavailable summary", async ({ run }) => {
+    const { body } = await summaryFor(run);
+
+    expect(body).toMatchObject({ available: false, state: "unavailable" });
+  });
+});
+
 describe("GET /api/git/history", () => {
   function logRecord(fields: {
     sha: string;

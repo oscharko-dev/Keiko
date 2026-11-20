@@ -49,7 +49,6 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-mcp", emitterPrefix: "", surface: "tools-workflows" },
   { owner: "keiko-cli", emitterPrefix: "audit", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "gateway-service", surface: "runtime-packages" },
-  { owner: "keiko-cli", emitterPrefix: "gateway-service-setup", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "install-layout", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "launch-order", surface: "ui" },
   { owner: "keiko-cli", emitterPrefix: "lifecycle-browser-activity", surface: "ui" },
@@ -158,6 +157,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "gitChangeSnapshotService", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "gitDelivery", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "gitDiffView", surface: "editor-delivery" },
+  { owner: "keiko-server", emitterPrefix: "gitStatusBounded", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "gitProcessActivity", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "grounded-citation-log", surface: "memory-knowledge" },
   {

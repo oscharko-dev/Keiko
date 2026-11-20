@@ -1,9 +1,13 @@
 /* KRP1/KRC1/KRS1 no-shell Windows Job Object runtime supervisor. */
+#include "gateway_relay.h"
 #include "gateway_environment.h"
 #include "gateway_grants.h"
 #include "gateway_install.h"
 #include "gateway_service.h"
 #include <shlobj.h>
+#include <bcrypt.h>
+#include <userenv.h>
+#pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "uuid.lib")
@@ -40,7 +44,13 @@ enum error_code {
    * admission failed, or it answered too late. */
   ERROR_GATEWAY_ADMIT = 11,
   /* #4068 W1: the user environment key could not be closed to the tree (gateway_environment.h). */
-  ERROR_ENVIRONMENT_GUARD = 12
+  ERROR_ENVIRONMENT_GUARD = 12,
+  /* #4068: a relayed launch's open frame was missing or malformed. */
+  ERROR_RELAY_FRAME = 13,
+  /* #4068: the relayed tree's AppContainer profile could not be created. */
+  ERROR_RELAY_PROFILE = 14,
+  /* #4068: the host side of the relay (its pipes or listener) could not be created. */
+  ERROR_RELAY_START = 15
 };
 
 struct launch_request {
@@ -414,25 +424,57 @@ static int admit_gateway(struct keiko_gateway_connection *gateway, HANDLE job,
   return 0;
 }
 
+/* #4068: the relay root's command line: this image, its plan, then the runtime's own line. */
+static wchar_t *relay_command_line(const wchar_t *self, const wchar_t *plan, const wchar_t *runtime) {
+  size_t length = quoted_length(self) + wcslen(L" --container-relay ") + wcslen(plan) + 1 +
+                  wcslen(runtime) + 1;
+  wchar_t *line = calloc(length, sizeof(wchar_t)), *cursor;
+  if (line == NULL) return NULL;
+  cursor = append_quoted(line, self);
+  *cursor = L'\0';
+  if (wcscat_s(line, length, L" --container-relay ") != 0 || wcscat_s(line, length, plan) != 0 ||
+      wcscat_s(line, length, L" ") != 0 || wcscat_s(line, length, runtime) != 0) {
+    free(line);
+    return NULL;
+  }
+  return line;
+}
+
+/* The container a launch runs in: the broker's (with its loopback capability) or, for a relayed
+ * launch, one this supervisor created without any network capability (#4068, ADR-0043 D21). */
+struct confinement {
+  PSID sid;
+  /* NULL for a relayed launch: the tree holds no network capability at all. */
+  PSID network_capability;
+  struct keiko_gateway_connection *gateway;
+  /* Non-NULL for a relayed launch: the relay root's plan argument. */
+  const wchar_t *relay_plan;
+};
+
 static int launch_in_job(const struct launch_request *request, HANDLE job,
-                         PROCESS_INFORMATION *process, struct keiko_gateway_connection *gateway,
+                         PROCESS_INFORMATION *process, const struct confinement *confined,
                          struct keiko_gateway_grants *grants, int *admission_refused) {
   STARTUPINFOEXW startup;
   SECURITY_CAPABILITIES capabilities = {0};
   /* Retained through CreateProcessW, like the attribute list that points at it. */
   SID_AND_ATTRIBUTES held[KEIKO_GATEWAY_GRANTS_MAX + 1] = {0};
   wchar_t *appdata = NULL;
-  if (gateway) {
-    capabilities.AppContainerSid = gateway->sid;
+  wchar_t self[MAX_PATH + 1];
+  struct keiko_gateway_connection *gateway = confined ? confined->gateway : NULL;
+  if (confined) {
+    capabilities.AppContainerSid = confined->sid;
     /* Inbound loopback for the host's control connection, then a managed worktree's capability,
-     * granted read access before this spawn (#4068). */
-    held[0].Sid = gateway->network_capability;
-    held[0].Attributes = SE_GROUP_ENABLED;
-    capabilities.CapabilityCount = 1;
+     * granted read access before this spawn (#4068). A relayed tree holds no network capability. */
+    if (confined->network_capability != NULL) {
+      held[0].Sid = confined->network_capability;
+      held[0].Attributes = SE_GROUP_ENABLED;
+      capabilities.CapabilityCount = 1;
+    }
     for (DWORD i = 0; grants != NULL && i < grants->capability_count &&
                       i < KEIKO_GATEWAY_GRANTS_MAX; i++)
       held[capabilities.CapabilityCount++] = grants->capabilities[i];
-    capabilities.Capabilities = held;
+    /* CreateProcessW refuses a capability array of length zero (ERROR_INVALID_PARAMETER). */
+    capabilities.Capabilities = capabilities.CapabilityCount != 0 ? held : NULL;
     /* AppContainer process creation needs LOCALAPPDATA even when the caller submits a
      * hermetic environment. Resolve it for this user; never trust a packet-supplied path. */
     if (FAILED(SHGetKnownFolderPath(&FOLDERID_LocalAppData, 0, NULL, &appdata))) return 0;
@@ -446,15 +488,28 @@ static int launch_in_job(const struct launch_request *request, HANDLE job,
   wchar_t *cwd = wide_string(request->cwd);
   wchar_t *line = executable == NULL ? NULL : command_line(request, executable);
   wchar_t *environment = environment_block(request, appdata);
+  const wchar_t *image = executable;
   CoTaskMemFree(appdata);
+  /* A relayed tree's root is this image, which starts the runtime as its child. */
+  if (confined && confined->relay_plan != NULL && line != NULL) {
+    DWORD self_length = GetModuleFileNameW(NULL, self, MAX_PATH + 1);
+    wchar_t *relayed = self_length == 0 || self_length > MAX_PATH
+                           ? NULL
+                           : relay_command_line(self, confined->relay_plan, line);
+    SecureZeroMemory(line, wcslen(line) * sizeof(wchar_t));
+    free(line);
+    line = relayed;
+    image = self;
+  }
   DWORD flags = CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP |
                 EXTENDED_STARTUPINFO_PRESENT;
   BOOL created = FALSE;
   if (executable != NULL && cwd != NULL && line != NULL && environment != NULL &&
-      initialize_startup_info(&startup, inherited, &job, gateway ? &capabilities : NULL)) {
-    created = CreateProcessW(executable, line, NULL, NULL, TRUE, flags, environment, cwd,
+      initialize_startup_info(&startup, inherited, &job, confined ? &capabilities : NULL)) {
+    created = CreateProcessW(image, line, NULL, NULL, TRUE, flags, environment, cwd,
                              &startup.StartupInfo, process);
-    if (!created && gateway) fprintf(stderr, "gateway suspended spawn failed: %lu\n", GetLastError());
+    if (!created && confined)
+      fprintf(stderr, "confined suspended spawn failed: %lu\n", GetLastError());
     if (created && gateway && !admit_gateway(gateway, job, request)) *admission_refused = 1;
     if (created && (*admission_refused || ResumeThread(process->hThread) == (DWORD)-1)) {
       TerminateJobObject(job, 127);
@@ -625,6 +680,68 @@ cleanup:
   return result;
 }
 
+/* #4068: a relayed launch reads the server's KGB1 open itself (no broker consumes it) and takes
+ * only the gateway's IPv4 loopback port from it; the frame must name this run's recovery handle. */
+static int read_relay_open(const struct launch_request *request, USHORT *gateway_port) {
+  BYTE frame[KEIKO_GATEWAY_OPEN_BYTES];
+  HANDLE control = (HANDLE)_get_osfhandle(3);
+  ULONGLONG deadline = GetTickCount64() + 4000;
+  DWORD available;
+  while (PeekNamedPipe(control, NULL, 0, NULL, &available, NULL)) {
+    if (available >= sizeof(frame)) {
+      if (!read_exact(3, frame, sizeof(frame)) || memcmp(frame, "KGB1", 4) != 0 ||
+          read_u16(frame + 4) != 1 || read_u16(frame + 6) != 1 ||
+          read_u32(frame + 8) != sizeof(frame) - KRP_HEADER_BYTES ||
+          memcmp(frame + 44, request->recovery_handle, KRP_RECOVERY_HANDLE_BYTES) != 0 ||
+          read_u16(frame + 84) != 2 || read_u16(frame + 86) == 0)
+        return 0;
+      *gateway_port = read_u16(frame + 86);
+      return 1;
+    }
+    if (GetTickCount64() >= deadline) break;
+    Sleep(10);
+  }
+  return 0;
+}
+
+struct relay_container {
+  wchar_t profile[64];
+  PSID sid;
+};
+
+/* A fresh per-run AppContainer with no capability at all; a standard user may create it. */
+static int relay_profile_create(struct relay_container *container) {
+  static const wchar_t hex[] = L"0123456789abcdef";
+  BYTE random[16];
+  size_t offset;
+  HRESULT result;
+  if (BCryptGenRandom(NULL, random, sizeof(random), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) return 0;
+  wcscpy_s(container->profile, 64, L"Keiko.Relay.");
+  offset = wcslen(container->profile);
+  for (size_t i = 0; i < sizeof(random); i++) {
+    container->profile[offset++] = hex[random[i] >> 4];
+    container->profile[offset++] = hex[random[i] & 15];
+  }
+  container->profile[offset] = 0;
+  result = CreateAppContainerProfile(container->profile, container->profile,
+                                     L"Keiko supervised runtime", NULL, 0, &container->sid);
+  if (FAILED(result)) {
+    fprintf(stderr, "relay profile creation failed: %08lx\n", (unsigned long)result);
+    container->sid = NULL;
+    return 0;
+  }
+  return 1;
+}
+
+static void relay_profile_delete(struct relay_container *container) {
+  if (container->sid == NULL) return;
+  HRESULT deleted = DeleteAppContainerProfile(container->profile);
+  if (FAILED(deleted))
+    fprintf(stderr, "relay profile cleanup failed: %08lx\n", (unsigned long)deleted);
+  FreeSid(container->sid);
+  container->sid = NULL;
+}
+
 int wmain(int argc, wchar_t **argv) {
   struct keiko_gateway_connection gateway = {0};
   struct keiko_gateway_grants grants = {0};
@@ -632,7 +749,15 @@ int wmain(int argc, wchar_t **argv) {
   struct keiko_gateway_sweep sweep = {0};
   unsigned char launched[8];
   int environment_closed = 0;
-  int confined = argc == 2 && wcscmp(argv[1], L"--gateway-supervised") == 0;
+  int brokered = argc == 2 && wcscmp(argv[1], L"--gateway-supervised") == 0;
+  /* #4068 (ADR-0043 D21): the same confinement without an installed broker or elevation. */
+  int relayed = argc == 2 && wcscmp(argv[1], L"--relay-supervised") == 0;
+  int confined = brokered || relayed;
+  struct relay_container relay = {0};
+  struct keiko_relay_plan plan = {0};
+  wchar_t plan_text[KEIKO_RELAY_PLAN_CHARS];
+  struct confinement confinement = {0};
+  PSID tree_sid = NULL;
   struct launch_request request;
   PROCESS_INFORMATION process;
   HANDLE job = NULL, completion_port = NULL;
@@ -660,6 +785,9 @@ int wmain(int argc, wchar_t **argv) {
     return 0;
   }
   if (argc >= 2 && wcscmp(argv[1], L"--stdio-owner") == 0) return mcp_stdio_owner(argc, argv);
+  /* Inside the relayed tree's AppContainer: this image is the tree's root (gateway_relay.h). */
+  if (argc >= 4 && wcscmp(argv[1], L"--container-relay") == 0)
+    return keiko_relay_container_main(argc, argv);
   memset(&process, 0, sizeof(process));
   if (argc == 3 && wcscmp(argv[1], L"--reconcile") == 0) return reconcile_job(argv[2]);
   if (argc != 1 && !confined) {
@@ -670,16 +798,43 @@ int wmain(int argc, wchar_t **argv) {
     send_error(ERROR_PROTOCOL);
     return 1;
   }
-  if (confined && !keiko_gateway_connect(&gateway)) {
+  if (brokered && !keiko_gateway_connect(&gateway)) {
     send_error(ERROR_GATEWAY_CONNECT);
     goto cleanup;
   }
-  /* #4068: the tree's filesystem grants follow the launch packet. They need the SID the broker
-   * just named and must exist before the suspended root does; a refused grant refuses the launch. */
+  if (relayed && !relay_profile_create(&relay)) {
+    send_error(ERROR_RELAY_PROFILE);
+    goto cleanup;
+  }
+  tree_sid = brokered ? gateway.sid : relay.sid;
+  /* #4068: the tree's filesystem grants follow the launch packet. They need the tree's SID and
+   * must exist before the suspended root does; a refused grant refuses the launch. */
   if (confined && !keiko_gateway_grants_read(3, &grants)) {
     send_error(ERROR_GRANTS_FRAME);
     goto cleanup;
   }
+  if (relayed) {
+    USHORT gateway_port = 0;
+    if (!read_relay_open(&request, &gateway_port)) {
+      send_error(ERROR_RELAY_FRAME);
+      goto cleanup;
+    }
+    memcpy(plan.prefix, request.recovery_handle, KRP_RECOVERY_HANDLE_BYTES);
+    plan.route_count = 2;
+    plan.routes[0].direction = KEIKO_RELAY_OUTBOUND;
+    plan.routes[0].host_port = gateway_port;
+    plan.routes[1].direction = KEIKO_RELAY_INBOUND;
+    /* The host side binds the runtime's host-facing port and writes it back into the plan. */
+    if (!keiko_relay_host_start(&plan, relay.sid) ||
+        !keiko_relay_plan_format(&plan, plan_text, KEIKO_RELAY_PLAN_CHARS)) {
+      send_error(ERROR_RELAY_START);
+      goto cleanup;
+    }
+    confinement.relay_plan = plan_text;
+  }
+  confinement.sid = tree_sid;
+  confinement.network_capability = brokered ? (PSID)gateway.network_capability : NULL;
+  confinement.gateway = brokered ? &gateway : NULL;
   if (confined) {
     int refused;
     sweep.grants = &grants;
@@ -693,7 +848,7 @@ int wmain(int argc, wchar_t **argv) {
       goto cleanup;
     }
     environment_closed = 1;
-    refused = keiko_gateway_grants_apply(&grants, gateway.sid);
+    refused = keiko_gateway_grants_apply(&grants, tree_sid);
     if (refused != KEIKO_GRANTS_APPLIED) {
       send_error(refused == KEIKO_GRANTS_REFUSED_DIRECTORY    ? ERROR_GRANTS_DIRECTORY
                  : refused == KEIKO_GRANTS_REFUSED_CAPABILITY ? ERROR_GRANTS_CAPABILITY
@@ -707,7 +862,7 @@ int wmain(int argc, wchar_t **argv) {
     goto cleanup;
   }
   int admission_refused = 0;
-  if (!launch_in_job(&request, job, &process, confined ? &gateway : NULL,
+  if (!launch_in_job(&request, job, &process, confined ? &confinement : NULL,
                      confined ? &grants : NULL, &admission_refused)) {
     send_error(admission_refused ? ERROR_GATEWAY_ADMIT : ERROR_PROCESS_CREATE);
     goto cleanup;
@@ -732,14 +887,16 @@ cleanup:
   if (process.hProcess != NULL) CloseHandle(process.hProcess);
   if (completion_port != NULL) CloseHandle(completion_port);
   if (job != NULL) CloseHandle(job);
+  if (relayed) keiko_relay_host_stop();
   /* The tree is reaped or never started; its own grants go before its profile does. */
-  if (gateway.sid != NULL) keiko_gateway_grants_revoke(&grants, gateway.sid);
+  if (tree_sid != NULL) keiko_gateway_grants_revoke(&grants, tree_sid);
   /* The last run to end restores the key; a failure keeps it closed and the next run retries. */
   if (environment_closed &&
       keiko_environment_reopen(&KEIKO_ENVIRONMENT_USER, &holder) != ERROR_SUCCESS)
     fputs("gateway environment reopen failed\n", stderr);
   keiko_gateway_grants_clear(&grants);
   keiko_gateway_disconnect(&gateway);
+  relay_profile_delete(&relay);
   clear_request(&request);
   return result;
 }

@@ -319,7 +319,7 @@ describe("Sonar analysis scope", () => {
     expect(localSonarGate).toContain("rev-parse --path-format=absolute --git-common-dir");
     expect(localSonarGate).not.toContain("rev-parse --absolute-git-dir");
     expect(validProperties).toContain(
-      "sonar.typescript.tsconfigPaths=tsconfig.json,packages/*/tsconfig.json,tests/e2e/servers/tsconfig.json",
+      "sonar.typescript.tsconfigPaths=tsconfig.json,packages/keiko-ui/tsconfig.json,tests/e2e/servers/tsconfig.json",
     );
   });
 

@@ -447,6 +447,10 @@ function pickProjectPath(body: Record<string, unknown>, deps: UiHandlerDeps): st
   if (available !== undefined) {
     return available.path;
   }
+  // A person who has chosen no folder still gets a Chat: it is kept under the launch directory. When
+  // that is Keiko's own program folder (ADR-0121 D9), the folder only keeps the Chat. The read
+  // surface refuses it as a root (`pathIsDenied`), so it is listed unreadable and is never a
+  // window's starting folder.
   return validateProjectPath(process.cwd(), { mustExist: true });
 }
 

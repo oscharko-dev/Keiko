@@ -30,6 +30,7 @@ import {
   buildStandalonePackage,
   expectedArchiveSha256,
 } from "./build-standalone-package.mjs";
+import { readFlagPairs } from "./lib/flag-pairs.mjs";
 import {
   FOLDER_PACKAGES_DIRECTORY,
   FOLDER_PACKAGES_MANIFEST,
@@ -55,13 +56,7 @@ function refuse(message) {
 export function parseFolderReleaseArgs(argv) {
   const flags = { "--bundle-root": "bundleRoot", "--version": "version" };
   const options = {};
-  for (let index = 0; index < argv.length; index += 2) {
-    const name = flags[argv[index]];
-    const value = argv[index + 1];
-    if (name === undefined) refuse(`unknown argument ${String(argv[index])}`);
-    if (value === undefined || value.startsWith("--")) refuse(`${argv[index]} needs a value`);
-    options[name] = value;
-  }
+  readFlagPairs(argv, flags, options, refuse);
   if (options.bundleRoot === undefined) refuse("--bundle-root is required");
   if (options.version === undefined) refuse("--version is required");
   return options;

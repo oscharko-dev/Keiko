@@ -355,6 +355,17 @@ export function isCapTerminatedTruncation(result: GitProcessResult): boolean {
   return result.exitCode === null || result.exitCode === 0;
 }
 
+/**
+ * Whether git's error output holds nothing but notices that do not change its answer. Git writes
+ * those with the `warning: ` prefix (a line ending it will convert, common on Windows; a directory
+ * it could not open) and still exits 0, and Keiko's Git runs pin `LC_ALL=C`, so the prefix is
+ * always English. A run the byte cap ended is a bounded read only then: an `error:` or `fatal:`
+ * line, a hint or anything unprefixed is a failure git was reporting when the cap cut it.
+ */
+export function stderrHoldsOnlyGitWarnings(stderr: string): boolean {
+  return stderr.split(/\r?\n/u).every((line) => line.length === 0 || line.startsWith("warning: "));
+}
+
 // NOT a bare `exitCode === 0`. Two things make that wrong:
 //
 //   * Keiko's byte cap sets `truncated` and terminates the child independently of the exit status,

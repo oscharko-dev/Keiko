@@ -57,3 +57,61 @@ describe("isAllowedHost", () => {
     expect(isAllowedHost(req, PORT)).toBe(false);
   });
 });
+
+// #4068: a confined Windows runtime's request arrives through its pipe relay, so its Host names the
+// relay's inner loopback port, not the bound port.
+describe("isAllowedHost for a relayed coding runtime request", () => {
+  const RELAY_HOST = "127.0.0.1:50123";
+  function relayed(url: string, headers: Record<string, string | undefined> = {}): IncomingMessage {
+    return {
+      url,
+      headers: { host: RELAY_HOST, authorization: "Bearer capability", ...headers },
+    } as unknown as IncomingMessage;
+  }
+
+  it.each([
+    "/api/coding-sidecar/gateway/chat/completions",
+    "/api/coding-sidecar/tool",
+    "/api/coding-sidecar/tool?x=1",
+    "/api/coding-sidecar/mcp/relay-1",
+  ])("accepts the runtime route %s", (url) => {
+    expect(isAllowedHost(relayed(url), PORT)).toBe(true);
+  });
+
+  it("accepts the localhost name", () => {
+    const req = relayed("/api/coding-sidecar/tool", { host: "localhost:50123" });
+    expect(isAllowedHost(req, PORT)).toBe(true);
+  });
+
+  it.each([
+    "/api/coding-sidecar/gateway/profile",
+    "/api/coding-sidecar/mcp/",
+    "/api/coding-sidecar/mcp/relay-1/extra",
+    "/api/coding-sidecar/toolx",
+    "/api/chats",
+    "/",
+  ])("refuses the non-runtime route %s", (url) => {
+    expect(isAllowedHost(relayed(url), PORT)).toBe(false);
+  });
+
+  it("refuses a request that carries an Origin", () => {
+    const req = relayed("/api/coding-sidecar/tool", { origin: "http://127.0.0.1:50123" });
+    expect(isAllowedHost(req, PORT)).toBe(false);
+  });
+
+  it("refuses a request without a bearer credential", () => {
+    expect(
+      isAllowedHost(relayed("/api/coding-sidecar/tool", { authorization: undefined }), PORT),
+    ).toBe(false);
+    expect(
+      isAllowedHost(relayed("/api/coding-sidecar/tool", { authorization: "Basic abc" }), PORT),
+    ).toBe(false);
+  });
+
+  it.each(["evil.example.com:50123", "127.0.0.1", "127.0.0.1:0", "127.0.0.1:abc"])(
+    "refuses the host %s",
+    (host) => {
+      expect(isAllowedHost(relayed("/api/coding-sidecar/tool", { host }), PORT)).toBe(false);
+    },
+  );
+});

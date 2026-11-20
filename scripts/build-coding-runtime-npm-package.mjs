@@ -130,6 +130,10 @@ export function codingRuntimePackageManifest(target, version) {
   };
 }
 
+function sha256Text(text) {
+  return createHash("sha256").update(text).digest("hex");
+}
+
 function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
@@ -219,11 +223,16 @@ export function stagePinnedNpmRipgrep(
  * Stages one target into `outDir` and returns the digests the server pins. `outDir` must not exist
  * or must be empty: a runtime directory is an execution boundary, never merged into.
  */
-export async function buildCodingRuntimeNpmPackage({ target, version, outDir, deps = {} }) {
+export async function buildCodingRuntimeNpmPackage({
+  target,
+  version,
+  outDir,
+  prebuiltNativeDir,
+  deps = {},
+}) {
   assertEmptyOutDir(outDir);
   const prepare = deps.prepareSidecars ?? prepareApprovedSidecarPayloads;
-  const runBuild = deps.runBuild ?? runSecureWorkspaceReadBuild;
-  const runSupervisorBuild = deps.runSupervisorBuild ?? runRuntimeSupervisorBuild;
+  const { runBuild, runSupervisorBuild } = await nativeBuilders(target, prebuiltNativeDir, deps);
   const stageRipgrep = deps.stageRipgrep ?? stagePinnedNpmRipgrep;
   const manifest = codingRuntimePackageManifest(target, version);
   const staging = mkdtempSync(join(tmpdir(), "keiko-coding-runtime-npm-"));
@@ -250,6 +259,59 @@ export async function buildCodingRuntimeNpmPackage({ target, version, outDir, de
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
+}
+
+/** The two native builders: the verified prebuilt files when named, otherwise the compilers. */
+async function nativeBuilders(target, prebuiltNativeDir, deps) {
+  const prebuilt =
+    prebuiltNativeDir === undefined
+      ? undefined
+      : await prebuiltNativeRunners(target, prebuiltNativeDir, deps);
+  return {
+    runBuild: prebuilt?.runBuild ?? deps.runBuild ?? runSecureWorkspaceReadBuild,
+    runSupervisorBuild:
+      prebuilt?.runSupervisorBuild ?? deps.runSupervisorBuild ?? runRuntimeSupervisorBuild,
+  };
+}
+
+/**
+ * The compiled native executables of a host that cannot build them: the helper and, on Windows, the
+ * supervisor are compiled with MSVC, which only a Windows host has. `prebuiltNativeDir` names a
+ * directory holding the already built files under their package names. Each is read once, checked
+ * against the digest and size the server pins (the approval compiled into this checkout) and only
+ * those verified bytes are staged, so nothing unverified can reach the package. A missing,
+ * linked, or different file stops the build before anything is staged or downloaded.
+ */
+async function prebuiltNativeRunners(target, nativeDir, deps) {
+  if (!isAbsolute(nativeDir)) throw new TypeError("prebuiltNativeDir must be an absolute path");
+  const approval = await (deps.loadApproval ?? loadRuntimeApproval)(target);
+  const layout = runtimePackageLayout(target);
+  const verified = (relativePath, pin) => {
+    const source = join(nativeDir, relativePath.split("/").at(-1));
+    const status = lstatSync(source, { throwIfNoEntry: false });
+    if (status === undefined || !status.isFile() || status.nlink !== 1) {
+      throw new Error(`prebuilt native executable is missing or not an ordinary file: ${source}`);
+    }
+    const bytes = readFileSync(source);
+    const digest = createHash("sha256").update(bytes).digest("hex");
+    if (digest !== pin.sha256 || bytes.length !== pin.sizeBytes) {
+      throw new Error(`prebuilt native executable does not match the pinned digest: ${source}`);
+    }
+    return async ({ argv }) => {
+      mkdirSync(dirname(argv.at(-1)), { recursive: true });
+      writeFileSync(argv.at(-1), bytes);
+      return 0;
+    };
+  };
+  const runBuild = verified(layout.helperPath, {
+    sha256: approval.helperSha256,
+    sizeBytes: approval.helperSizeBytes,
+  });
+  const runSupervisorBuild =
+    layout.supervisorPath === undefined
+      ? undefined
+      : verified(layout.supervisorPath, approval.runtimeSupervisor);
+  return { runBuild, runSupervisorBuild };
 }
 
 function assertEmptyOutDir(outDir) {
@@ -360,6 +422,7 @@ function assertCandidatePins(files, approval, packageDir, target) {
   const ripgrepPath = ripgrepPortableExecutablePath(ripgrep.targetKey);
   const layout = runtimePackageLayout(target);
   const expected = new Map([
+    ["LICENSE.md", sha256Text(licenseNotice(target, ripgrep))],
     [layout.helperPath, approval.helperSha256],
     ...supervisorPin(layout, approval),
     [LICENSE_PATH, approval.licenseSha256],
@@ -581,8 +644,19 @@ function verifyPackedContents(tarballPath, candidate) {
   }
 }
 
+/**
+ * A Windows file has no POSIX permission bits, and the pinned tarball records 0644 for every one of
+ * them. A POSIX host stages the executables with 0755, which would change the tarball bytes, so the
+ * modes of a `windows-x64` package are fixed by the TARGET before it is inspected and packed,
+ * whatever the host.
+ */
+export function normalizeWindowsPackageModes(packageDir) {
+  for (const path of candidateFilePaths(packageDir)) chmodSync(join(packageDir, path), 0o644);
+}
+
 /** Packs approved bytes without rebuilding them; the receipt binds their approved source commit. */
 export async function packCodingRuntimeNpmCandidate(input, deps = {}) {
+  if (input.target === "windows-x64") normalizeWindowsPackageModes(input.packageDir);
   const candidate = await inspectRuntimeCandidate(input, deps);
   prepareArtifactDirectory(input.artifactDir);
   const packed = (deps.pack ?? packRuntimeCandidate)(input.packageDir, input.artifactDir);
@@ -629,17 +703,25 @@ export async function main(
     write.log(JSON.stringify(result, null, 2));
     return 0;
   }
-  const [target, version, outDir] = argv;
-  if (argv.length !== 3) {
+  const input = parseBuildArguments(argv);
+  if (input === undefined) {
     write.error(
-      "usage: build-coding-runtime-npm-package.mjs <target> <version> <absolute-out-dir>\n" +
+      "usage: build-coding-runtime-npm-package.mjs <target> <version> <absolute-out-dir> [--prebuilt-native-dir <absolute-dir>]\n" +
         "       build-coding-runtime-npm-package.mjs --pack|--verify <target> <version> <absolute-package-dir> <absolute-artifact-dir>",
     );
     return 2;
   }
-  const result = await build({ target, version, outDir: resolve(outDir) });
+  const result = await build(input);
   write.log(JSON.stringify(result, null, 2));
   return 0;
+}
+
+/** `<target> <version> <out-dir> [--prebuilt-native-dir <dir>]`, or undefined when it is not that. */
+function parseBuildArguments(argv) {
+  const [target, version, outDir, ...rest] = argv;
+  if (argv.length === 3) return { target, version, outDir: resolve(outDir) };
+  if (argv.length !== 5 || rest[0] !== "--prebuilt-native-dir") return undefined;
+  return { target, version, outDir: resolve(outDir), prebuiltNativeDir: resolve(rest[1]) };
 }
 
 if (isMainModule(import.meta.url)) {

@@ -4562,6 +4562,66 @@
         "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4455#6980443480",
         "rationale": "The repository owner authorized stable Keiko 1.5.3 for the npm folder package, the folder packages as release assets, the guided Jira template editing integrated from #4466 and the Figma snapshot hardening integrated from #4470, in one pull request (#4464). The protected dev checks, resolved reviews, and exact-commit release workflow govern publication. Real Windows x64 hardware qualification remains tracked in #4455; Windows Coding package qualification remains tracked in #4068."
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-11-19-keiko-1.5.4-windows-coding-without-administrator",
+      "packageVersion": "1.5.4",
+      "releaseTag": "v1.5.4",
+      "supportedFrom": ["0.2.0", "1.5.0", "1.5.1", "1.5.2", "1.5.3"],
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "The Coding Workbench runs on Windows for a standard user without administrator rights or an installed service, in the person's own project folders as well as in new worktrees; Git repositories with a large untracked tree open again, and Memory learning and recall are more reliable.",
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "UI schema 80 adds an index for Memory's lookups of earlier user messages, and schema 81 rebuilds the coding run snapshot table so that it can record six closed reasons a Windows run could not start. Rows, references and indexes carry forward. A downgrade uses its matching pre-update backup.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Windows: the Coding Workbench confines every run itself, as the signed-in user, in an isolated container whose only way out is the attested Keiko connection. No administrator, no Windows service and no approval prompt are needed any more, and an existing Keiko runtime gateway service can be removed with keiko gateway-service uninstall. #4068 #4482",
+        "Windows: coding runs work in your own project folders, not only in a new worktree. A drive root, your user folder and Keiko's own data folder stay refused, with a sentence that names what to choose instead. #4068 #4482",
+        "Git repositories with a large untracked tree open again in the Coding Workbench and the Git window. #4482",
+        "A Windows run that cannot start or verify names why, and the Workbench offers the tool-calling check after Gateway Setup. Chat points to Settings > Models when no model is activated. #4482",
+        "Memory learning, recall, Vault maintenance and the Chat disclosures are more reliable. #4471"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-11-19",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4068#7021495150",
+        "rationale": "The repository owner authorized stable Keiko 1.5.4 so that the Coding Workbench runs on Windows as on macOS for a standard user without administrator rights, with the confinement kept (ADR-0043 D21), together with the Windows coding-runtime package 1.1.6, the defect repairs found on 1.5.3 and the Memory hardening of #4471, in one pull request (#4482). The protected dev checks, resolved reviews, and exact-commit release workflow govern publication. Windows npm installations select the Windows coding-runtime package once it is published; real Windows x64 hardware qualification remains tracked in #4068."
+      }
     }
   ]
 }

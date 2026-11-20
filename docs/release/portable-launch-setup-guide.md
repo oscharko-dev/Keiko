@@ -102,19 +102,14 @@ Portable Runtime Artifact Contract for the canonical per-platform managed root t
 
 ### Windows runtime gateway
 
-Coding runs on Windows need the `KeikoRuntimeGateway` service, which confines each run to its
-gateway ([ADR-0043](../adr/ADR-0043-enforced-execution-isolation.md) D19). Setup includes it: once
-the first launch answers healthy, Keiko checks the service and, when it is missing, stopped or does
-not match this version, installs it. Windows asks for approval once (UAC); Keiko itself never runs
-elevated. Nobody runs `keiko gateway-service install` or sets an environment variable.
+Coding runs on Windows need no service, no administrator step and no environment variable: the
+runtime supervisor confines each run in a pipe-relayed AppContainer it sets up as the signed-in
+standard user, and `keiko start` asks Windows for nothing.
 
-- If the approval is declined, Keiko keeps running and does not ask again for this version. The
-  Coding Workbench then shows **Repair**, which asks Windows once more.
-- If no approval dialog appears after **Repair**, look for the shield icon in the taskbar.
-- An organisation that deploys the service itself (MDM, images) can set
-  `KEIKO_GATEWAY_SERVICE_SETUP=manual`; Keiko then only reports the service state.
-- `keiko uninstall` removes the service as well, with one more Windows approval.
-- `keiko gateway-service status|repair|uninstall` remains available for operators.
+- An earlier 1.5.x installation may have left the `KeikoRuntimeGateway` service installed. Remove
+  it with `keiko gateway-service uninstall` (one Windows approval) or with the full
+  `keiko uninstall`, which removes it as well.
+- `keiko gateway-service status|install|repair|uninstall` remains available for operators.
 
 The managed install root is separate from `.keiko` runtime state. Runtime state stores local app
 state, evidence, and content-free install/update registration; it does not store the portable
@@ -140,10 +135,9 @@ execution is offered only for a fresh eligible candidate on an attested managed 
 requires explicit confirmation. Download, verification, staging, ownership transfer, activation,
 relaunch, target-version proof, and required remediation belong to the same governed attempt.
 An expected local-server disconnect is not success: the window must retain safe progress and
-reconnect, and success requires verified target startup. On Windows the relaunched version then
-brings the runtime gateway service to its own helper, as on the first launch: one Windows approval
-when the helper changed, none otherwise, and only after the restart proof. The coding runtime itself
-is part of the new package, so nothing else needs updating.
+reconnect, and success requires verified target startup. The coding runtime itself, including
+its Windows supervisor, is part of the new package, so nothing else needs updating: the relaunch
+touches no Windows service and asks for no approval (ADR-0043 D21).
 
 `keiko update apply` does not apply a desktop update: the update's native handoff needs the running
 Keiko's own launch identity, so the command names **Review updates** instead. A Keiko installed

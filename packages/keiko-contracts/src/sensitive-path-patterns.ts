@@ -80,6 +80,14 @@ export const CREDENTIAL_PATH_DENY_PATTERNS: readonly string[] = Object.freeze([
   "*.tfvars",
   "*.tfvars.json",
   ".terraformrc",
+  // Keiko's own credential stores (ADR-0046, ADR-0121 D9). `keiko.config.json` is the gateway
+  // configuration: a team's provisioned copy beside the folder-package start files holds the team
+  // gateway token in plain text, and the adopted copy sits in the state directory. A sealed
+  // `*.vault` is the ciphertext of a provider, Figma, Atlassian or editor-snapshot store whose
+  // `*.key` keyfile is already denied above. A command a model runs must be refused them exactly as
+  // the read tool is, so they are kernel-enforced like every other credential name.
+  "keiko.config.json",
+  "*.vault",
 ]);
 
 /**
@@ -99,7 +107,9 @@ export const TOOL_STATE_PATH_DENY_PATTERNS: readonly string[] = Object.freeze([
   // Keiko runtime/evidence state. These files are internal product artifacts, not repository
   // source, and must never be discoverable through connected repository grounding.
   ".keiko",
-  "keiko.config.json",
+  // The data folder of the standalone and npm folder packages (ADR-0121 D9): the same state as
+  // `.keiko` (vaults, databases, memory, evidence), kept in the person's home folder.
+  ".keiko-standalone",
   // Local tool and IDE runtime state. These directories can contain prompts, transcripts,
   // worktrees, extension caches, shelves, and machine-local metadata; they are not source context.
   ".codex",

@@ -73,9 +73,9 @@ const HELPER_WINDOWS_X64 = {
 } as const;
 
 const RUNTIME_SUPERVISOR_WINDOWS_X64: NpmLaneRuntimeSupervisorApproval = Object.freeze({
-  sha256: "888130331e49b71d3c29f81cdb0dbae97f4c062d9eea4914a576ee06a8bada52",
-  sizeBytes: 237_056,
-  sourceTreeSha256: "ab0ad9d08504dc28eb81acdf6e4869bd69200eeebc83771df60085330ca27748",
+  sha256: "8966ba374943d8b0f7dce4bdee296084802783cda0e4a191666a0c4cd16616fb",
+  sizeBytes: 252_416,
+  sourceTreeSha256: "718efc73bdf3327c5db2eb9e294d10cfdc91a2afedeadab3db9560b535419f86",
 });
 
 const SHARED = {

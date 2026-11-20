@@ -111,6 +111,8 @@ export interface CodingRuntimeHost {
    * error; absent, no failure is attributed to the duration.
    */
   readonly envelopeDurationExhausted?: ((runId: string) => boolean) | undefined;
+  /** Whether the composed tool profile hands the model a shell tool (only `native` does). */
+  readonly taskHasShellTool?: boolean | undefined;
   readonly runtimeCapabilityAuthenticator?:
     | {
         readonly authenticate: (
@@ -330,6 +332,17 @@ function controlPlaneHistory(
     : new CodingRuntimeHistory(input.historyStore, input.serverPrincipal, input.activityLog);
 }
 
+// What the run host knows about the composed run: its effort roll-up and whether the tool profile
+// hands the model a shell tool (the verification continuation words itself accordingly).
+function hostRunFacts(
+  runtimeHost: CodingRuntimeHost | undefined,
+): Pick<Parameters<typeof createCodingRuntimeOrchestrator>[0], "runEffort" | "taskHasShellTool"> {
+  return {
+    runEffort: runtimeHost?.runEffort?.read,
+    taskHasShellTool: runtimeHost?.taskHasShellTool,
+  };
+}
+
 // eslint-disable-next-line complexity -- process-lifetime authority composition is intentionally explicit.
 function createControlPlaneOrchestrator(
   input: CodingRuntimeControlPlaneInput,
@@ -375,7 +388,7 @@ function createControlPlaneOrchestrator(
       ? { repositoryInstructions: input.repositoryInstructions }
       : {}),
     terminalFacts: codingRuntimeTerminalFacts(eventHub, input.runtimeHost),
-    runEffort: input.runtimeHost?.runEffort?.read,
+    ...hostRunFacts(input.runtimeHost),
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.activityLog ? { activityLog: input.activityLog } : {}),
   });

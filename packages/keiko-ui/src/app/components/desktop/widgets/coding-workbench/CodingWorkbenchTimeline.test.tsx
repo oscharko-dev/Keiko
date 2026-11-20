@@ -273,7 +273,12 @@ function feedWithVerificationOutcomes(): AvailableCodingSafeActivityFeed {
     callId: string,
     state: "failed" | "succeeded",
     verificationOutcome:
-      "passed" | "failed-check" | "waiting-for-trust" | "no-runnable-steps" | "not-run",
+      | "passed"
+      | "failed-check"
+      | "waiting-for-trust"
+      | "no-runnable-steps"
+      | "not-run"
+      | "isolation-unavailable",
   ): AvailableCodingSafeActivityFeed["turns"][number]["tools"][number] => ({
     callId,
     tool: "keiko_verification",
@@ -285,6 +290,7 @@ function feedWithVerificationOutcomes(): AvailableCodingSafeActivityFeed {
     call("verify-trust", "failed", "waiting-for-trust"),
     call("verify-empty", "failed", "no-runnable-steps"),
     call("verify-skipped", "failed", "not-run"),
+    call("verify-no-isolation", "failed", "isolation-unavailable"),
     call("verify-red", "failed", "failed-check"),
     call("verify-green", "succeeded", "passed"),
   ];
@@ -434,7 +440,18 @@ describe("CodingWorkbenchTimeline", () => {
     expect(skipped.querySelector('[data-state="not-run"]')).toHaveTextContent("Not run");
     expect(skipped).toHaveTextContent("a step was skipped, denied or cancelled");
 
-    for (const unrun of [trust, empty, skipped]) {
+    // Keiko 1.5.3 (Windows, no Docker or Podman): the cause and the way out in one plain sentence,
+    // never "Failed", never "denied by policy".
+    const noIsolation = card("isolation-unavailable");
+    expect(noIsolation.open).toBe(true);
+    expect(noIsolation.querySelector('[data-state="isolation-unavailable"]')).toHaveTextContent(
+      "Cannot run here",
+    );
+    expect(noIsolation).toHaveTextContent("has no container runtime (Docker or Podman)");
+    expect(noIsolation).toHaveTextContent("The change is kept");
+    expect(noIsolation).toHaveTextContent("run the check again, or check the change yourself");
+
+    for (const unrun of [trust, empty, skipped, noIsolation]) {
       expect(unrun).not.toHaveTextContent("Failed");
       expect(unrun).not.toHaveTextContent("reported an error");
       expect(unrun.querySelector('[data-state="failed"]')).toBeNull();
@@ -621,7 +638,15 @@ describe("CodingWorkbenchTimeline", () => {
       expect(text("not-run")).toContain("übersprungen, abgelehnt oder abgebrochen");
       expect(text("failed")).toContain("Fehlgeschlagen");
       expect(text("succeeded")).toContain("bestanden");
-      for (const state of ["waiting-for-trust", "no-runnable-steps", "not-run"]) {
+      expect(text("isolation-unavailable")).toContain("Hier nicht möglich");
+      expect(text("isolation-unavailable")).toContain("keine Container-Laufzeit");
+      expect(text("isolation-unavailable")).toContain("Deine Änderung bleibt erhalten");
+      for (const state of [
+        "waiting-for-trust",
+        "no-runnable-steps",
+        "not-run",
+        "isolation-unavailable",
+      ]) {
         expect(text(state)).not.toContain("Fehlgeschlagen");
       }
     } finally {

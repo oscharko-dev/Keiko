@@ -462,6 +462,32 @@ export function isCodingWorkbenchModel(capability: ModelCapability): boolean {
   );
 }
 
+/**
+ * Whether the Workbench lists this model only so a person can ask for its tool-calling check: a
+ * chat model the person activated (the server observed a successful chat check this process) whose
+ * tool calling nobody confirmed (never concluded, or a proof that aged out) and nobody refuted.
+ * After Gateway Setup, or after an activation whose tool-calling step ended without a verdict, such a
+ * model is the only one the person has, and nothing else would ever check it: the check starts only
+ * from an explicit action (ADR-0171 D2, amended 2026-11-19). A model the server is already renewing,
+ * one that was refuted, one nobody activated and one whose proof is fresh but whose stored flag
+ * disagrees with it are not candidates.
+ */
+export function isCodingWorkbenchToolCheckCandidate(capability: ModelCapability): boolean {
+  if (
+    !isCodingWorkbenchReadinessCandidate(capability) ||
+    capability.conversationReady !== true ||
+    capability.toolCallingVerification?.status === "unsupported" ||
+    isCodingWorkbenchProofRenewing(capability)
+  )
+    return false;
+  const eligibility = codingWorkbenchModelEligibility(capability);
+  if (eligibility === "eligible") return false;
+  return (
+    eligibility === "ineligible" ||
+    !isToolCallingVerificationFresh(capability.toolCallingVerification)
+  );
+}
+
 // ─── Completion / infilling capability helpers (Issue #1210, ADR-0042 D5) ──────
 // These are additive, optional fields: a future capability flag (e.g. `edit-prediction` for
 // next-edit prediction) is another optional member, never a structural break, so

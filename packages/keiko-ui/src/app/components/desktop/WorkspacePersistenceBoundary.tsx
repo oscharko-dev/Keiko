@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { I18nProvider, useTranslate } from "@/lib/i18n";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { newClientCorrelationId } from "@/lib/bff-correlation";
-import { WorkspaceStorageScopeContext } from "./hooks/workspace-storage";
+import {
+  WORKSPACE_STORAGE_CHANGED_EVENT,
+  WorkspaceStorageScopeContext,
+} from "./hooks/workspace-storage";
 import { AppBootPlaceholder, APP_BOOT_RECOVERY_HANDOFF_EVENT } from "./AppBootPlaceholder";
 import styles from "./AppShellBoundary.module.css";
 
@@ -74,11 +77,37 @@ function useWorkspaceRestoration(): { readonly state: RestoreState; readonly ret
       controller.abort();
     };
   }, [attempt]);
-  const retry = (): void => {
+  const retry = useCallback((): void => {
     setState({ kind: "loading" });
     setAttempt((current) => current + 1);
-  };
+  }, []);
+  useWorkspaceStorageChange(state, retry);
   return { state, retry };
+}
+
+// A ready workspace whose server now serves another data store re-reads the ownership: the restart
+// unmounts every window of the old store (its pollers and pending writes stop with it) and mounts
+// the workspace that belongs to the store that answers. Nothing of the old store is replayed. Only a
+// refusal of a request that named the store now mounted counts: a late refusal of the old
+// workspace's unmount flush must not remount the new one.
+function useWorkspaceStorageChange(state: RestoreState, retry: () => void): void {
+  const storageId = state.kind === "ready" ? state.storageId : undefined;
+  useEffect(() => {
+    if (storageId === undefined) return undefined;
+    const onChanged = (event: Event): void => {
+      if (!(event instanceof CustomEvent) || event.detail !== storageId) return;
+      window.removeEventListener(WORKSPACE_STORAGE_CHANGED_EVENT, onChanged);
+      reportClientDiagnostic("Workspace layout ownership changed.", {
+        correlationId: newClientCorrelationId(),
+        composerActivity: "workspace-ownership-changed",
+      });
+      retry();
+    };
+    window.addEventListener(WORKSPACE_STORAGE_CHANGED_EVENT, onChanged);
+    return (): void => {
+      window.removeEventListener(WORKSPACE_STORAGE_CHANGED_EVENT, onChanged);
+    };
+  }, [storageId, retry]);
 }
 
 export function WorkspacePersistenceBoundary({

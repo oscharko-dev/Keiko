@@ -2141,6 +2141,64 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   });
 
+  // ADR-0121 D9: a Keiko that runs inside its own program folder (folder packages, managed portable
+  // launch) holds program files and, in a team package, the gateway token; it starts with no
+  // default project, and the skip is recorded body-free.
+  it("does not seed the launch directory of a Keiko running in its own program folder", async () => {
+    const programFolder = tmp("launch-program-folder-");
+    vi.stubEnv("KEIKO_LAUNCH_FROM_PROGRAM_FOLDER", "1");
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(programFolder);
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-launch-program-"),
+      env: {},
+      uiDbPath: join(tmp("db-launch-program-"), "keiko-ui.db"),
+      initialProjectPath: programFolder,
+    });
+
+    try {
+      expect(deps.preferredProjectPath).toBeUndefined();
+      expect(deps.store.listProjects()).toEqual([]);
+      const lines = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({
+        extra: { decision: "denied", reason: "program-folder-launch" },
+      });
+      expect(JSON.stringify(lines[0])).not.toContain("launch-program-folder-");
+    } finally {
+      cwd.mockRestore();
+      await deps.dispose?.();
+      resetServerLogger();
+    }
+  });
+
+  // The rule refuses the program folder, not the launch: a folder outside it that the launcher
+  // names explicitly is the person's own choice and is seeded as before.
+  it("still seeds a folder outside the program folder on a program-folder launch", async () => {
+    const programFolder = tmp("launch-program-folder-");
+    const chosen = tmp("launch-chosen-project-");
+    vi.stubEnv("KEIKO_LAUNCH_FROM_PROGRAM_FOLDER", "1");
+    const cwd = vi.spyOn(process, "cwd").mockReturnValue(programFolder);
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-launch-chosen-"),
+      env: {},
+      uiDbPath: join(tmp("db-launch-chosen-"), "keiko-ui.db"),
+      initialProjectPath: chosen,
+      initialProjectTrustSource: "explicit-launcher-selection",
+    });
+
+    try {
+      expect(deps.preferredProjectPath).toBe(chosen);
+      expect(deps.store.listProjects().map((project) => project.path)).toEqual([chosen]);
+    } finally {
+      cwd.mockRestore();
+      await deps.dispose?.();
+    }
+  });
+
   it("grants package-script trust for an explicitly launcher-selected initial project", async () => {
     const projectDir = tmp("launcher-selected-project-");
     const deps = buildUiHandlerDeps({

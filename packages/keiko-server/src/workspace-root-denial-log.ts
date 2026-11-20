@@ -21,6 +21,7 @@ import { processServerLogSink } from "./process-log-sink.js";
 
 export type WorkspaceRootDenialReason =
   | "denied-locus"
+  | "program-folder-launch"
   | "ordinary-root-unavailable"
   | "ordinary-root-identity"
   | "credential-shaped-root"
@@ -55,6 +56,7 @@ const WORKSPACE_ROOT_DENIED_OPERATION = defineActivityLogOperation({
       required: true,
       values: [
         "denied-locus",
+        "program-folder-launch",
         "ordinary-root-unavailable",
         "ordinary-root-identity",
         "credential-shaped-root",

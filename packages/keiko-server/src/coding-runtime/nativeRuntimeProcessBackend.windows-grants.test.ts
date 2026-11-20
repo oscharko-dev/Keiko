@@ -1,6 +1,6 @@
 // #4068: the confined Windows tree's filesystem grants travel to the supervisor as one KGG1 frame,
-// between the launch packet and the broker open. The native side (gateway_grants.c) applies them once
-// the broker named the tree's SID; these cases pin the host side of that contract.
+// between the launch packet and the open frame. The native side (gateway_grants.c) applies them once
+// the supervisor created the tree's AppContainer SID; these cases pin the host side of that contract.
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -145,7 +145,7 @@ function launch(runtime: string, workspace: string): RuntimeSupervisorLaunchRequ
 }
 
 describe("a confined Windows launch", () => {
-  it("sends the launch, then the tree's grants at their real paths, then the broker open", () => {
+  it("sends the launch, then the tree's grants at their real paths, then the open frame", () => {
     const paths = fixture();
     const helper = new FakeHelper();
     const packets: Buffer[] = [];
@@ -181,7 +181,7 @@ describe("a confined Windows launch", () => {
     const supervisor = createRuntimeProcessSupervisor({
       backend: createNativeRuntimeProcessBackend({
         helperPath: paths.helper,
-        useInstalledWindowsGateway: true,
+        useWindowsRelayConfinement: true,
         expectedHelperSha256: createHash("sha256").update("helper").digest("hex"),
         runtimeRoots: [join(paths.runtime, "..")],
         workspaceRoot: paths.workspace,
@@ -216,7 +216,7 @@ describe("a confined Windows launch", () => {
       ),
     ).toMatchObject({
       correlationId: "run-4068",
-      backend: "windows-wfp",
+      backend: "windows-appcontainer",
       childExecutablePolicy: "appcontainer-inherited",
       windowsTreeGrantCount: 2,
       windowsWorktreeAccess: "capability-read",
@@ -242,7 +242,7 @@ describe("a confined Windows launch", () => {
     const supervisor = createRuntimeProcessSupervisor({
       backend: createNativeRuntimeProcessBackend({
         helperPath: paths.helper,
-        useInstalledWindowsGateway: true,
+        useWindowsRelayConfinement: true,
         expectedHelperSha256: createHash("sha256").update("helper").digest("hex"),
         runtimeRoots: [join(paths.runtime, "..")],
         workspaceRoot: paths.workspace,
@@ -288,7 +288,7 @@ describe("a confined Windows launch", () => {
         "runtime.confinement.stale-grants-swept.emitted-line",
         formatActivityLogProofLine(event),
       ),
-    ).toMatchObject({ correlationId: "run-4068", backend: "windows-wfp", ...expected });
+    ).toMatchObject({ correlationId: "run-4068", backend: "windows-appcontainer", ...expected });
   });
 
   it.each([
@@ -324,7 +324,7 @@ describe("a confined Windows launch", () => {
       const request = launch(paths.runtime, paths.workspace);
       const backend = createNativeRuntimeProcessBackend({
         helperPath: paths.helper,
-        useInstalledWindowsGateway: true,
+        useWindowsRelayConfinement: true,
         ...(refusal === "pin"
           ? {}
           : { expectedHelperSha256: createHash("sha256").update("helper").digest("hex") }),

@@ -604,6 +604,7 @@ type HandlerRefusal = readonly [Exclude<ToolResultStatus, "completed">, ToolResu
 const EXECUTED_VERIFICATION_OUTCOME_CODES: ReadonlySet<string> = new Set([
   "VERIFICATION_FAILED",
   "VERIFICATION_NOT_RUN",
+  "VERIFICATION_ISOLATION_UNAVAILABLE",
 ]);
 function isExecutedVerificationOutcome(
   request: CodingToolActionRequest,

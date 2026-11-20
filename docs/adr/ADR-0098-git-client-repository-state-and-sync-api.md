@@ -357,6 +357,15 @@ the extension grants no new authority and requires no schema-version bump.
 - The read routes are always registered (no deployment enable flag), consistent with the existing
   `/api/git/status|diff|branches` reads; each handler still degrades to a typed `available: false`
   envelope when Git is missing, the path is not a repository, or the owner is unsafe.
+- A `git status` that the runner's byte cap ended (a large untracked tree) is a bounded, truncated
+  read, not an unavailable repository (owned by `gitStatusBounded.ts`, shared by the status route,
+  the summary route and the sync preview, like the diff cut of #4113). Only a run the cap itself
+  ended counts; an incomplete last record and a rename or copy whose old-path record was cut are
+  dropped, the branch header must survive, and the response keeps its shape with `truncated: true`
+  and `clean: false`. The sync preview reports `dirty: true` for such a cut (no new wire field), and
+  the cut is recorded body-free as `git.status.bounded` rather than as a failed git run. The Git
+  change snapshot reader keeps its own fail-closed `metadata-truncated` rule. See
+  [the operator entry](../troubleshooting/git-status-many-untracked-files.md).
 - `GitSyncPreview` reuses `GitUpstreamSummary` from `git-repository-summary.ts`, so the upstream
   shape is defined once and shared across the summary and sync contracts.
 - The sync routes use `resolveProjectWorkspace` (a `projectId` that is the workspace root path,

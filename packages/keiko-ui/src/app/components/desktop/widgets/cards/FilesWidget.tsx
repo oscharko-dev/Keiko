@@ -28,6 +28,7 @@ import {
   renameFilesEntry,
 } from "../../../../../lib/api";
 import { formatBytesPrecise as formatBytes } from "../../../../../lib/format";
+import { startingProjectPaths } from "../../windows/startingProjectRoot";
 import type {
   FilesMutationResponse,
   FilesTreeEntry,
@@ -1027,7 +1028,7 @@ export function FilesWidget({
     void fetchProjects()
       .then((payload) => {
         if (cancelled) return;
-        const first = payload.projects.find((project) => project.available)?.path;
+        const first = startingProjectPaths(payload.projects)[0];
         setFallbackRoot(first ?? null);
       })
       .catch(() => {

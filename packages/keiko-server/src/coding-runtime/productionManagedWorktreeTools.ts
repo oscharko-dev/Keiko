@@ -40,6 +40,7 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
+  ISOLATION_UNAVAILABLE_DENIAL_PREFIX,
   NATIVE_SHELL_SKIP_PREFIX,
   type VerificationStepOutput,
 } from "@oscharko-dev/keiko-verification";
@@ -165,30 +166,35 @@ const CODING_VERIFICATION_STEP_NAMES = [
   "test:cancelled",
   "test:dependencies-unavailable",
   "test:native-shell-required",
+  "test:isolation-unavailable",
   "test:script-missing",
   "test:skipped",
   "targeted-test:denied",
   "targeted-test:cancelled",
   "targeted-test:dependencies-unavailable",
   "targeted-test:native-shell-required",
+  "targeted-test:isolation-unavailable",
   "targeted-test:script-missing",
   "targeted-test:skipped",
   "typecheck:denied",
   "typecheck:cancelled",
   "typecheck:dependencies-unavailable",
   "typecheck:native-shell-required",
+  "typecheck:isolation-unavailable",
   "typecheck:script-missing",
   "typecheck:skipped",
   "lint:denied",
   "lint:cancelled",
   "lint:dependencies-unavailable",
   "lint:native-shell-required",
+  "lint:isolation-unavailable",
   "lint:script-missing",
   "lint:skipped",
   "build:denied",
   "build:cancelled",
   "build:dependencies-unavailable",
   "build:native-shell-required",
+  "build:isolation-unavailable",
   "build:script-missing",
   "build:skipped",
 ] as const;
@@ -1836,6 +1842,12 @@ function observeVerificationExecution(
     executed?.(target);
   } else {
     input.verificationBlocked?.("VERIFICATION_NOT_RUN", target);
+    // A host that cannot isolate a step cannot verify any target for a run without a shell: the
+    // blocker is the run's, not the target's, so a target nobody selected yet cannot hide it from
+    // the continuation decision. It is decided by the predicate that words the model's reason.
+    if (isolationBlocksRun(input, report)) {
+      input.verificationBlocked?.("VERIFICATION_ISOLATION_UNAVAILABLE");
+    }
   }
 }
 
@@ -2110,9 +2122,14 @@ function failedVerificationOutcome(
 ): VerificationPortResult {
   const { report } = attempt;
   const status = modelFacingStatus(report);
-  const reasonCode = VERIFICATION_OUTCOME_REASON_CODES[status];
+  const reasonCode = isolationBlocksRun(input, report)
+    ? "VERIFICATION_ISOLATION_UNAVAILABLE"
+    : VERIFICATION_OUTCOME_REASON_CODES[status];
   const verificationFailure = modelVerificationFailure(report, attempt.failureOutput);
-  const notRun = reasonCode === "VERIFICATION_NOT_RUN" ? notRunSteps(report) : undefined;
+  const notRun =
+    reasonCode === "VERIFICATION_NOT_RUN" || reasonCode === "VERIFICATION_ISOLATION_UNAVAILABLE"
+      ? notRunSteps(report)
+      : undefined;
   if (notRun !== undefined) recordVerificationNotRun(input, notRun);
   return {
     status: "failed",
@@ -2169,10 +2186,46 @@ function dependenciesNotRunReason(
     : "dependencies-unavailable";
 }
 
+// A step the orchestrator denied for want of an enforcing isolation backend: the host cannot run
+// project commands safely, which no authority decision, retry or other verifier changes. Only a
+// report in which no step ran is named so; an executed red end keeps its own outcome.
+function isIsolationUnavailableDenial(result: VerificationResult): boolean {
+  return (
+    result.status === "denied" &&
+    (result.detail ?? "").startsWith(ISOLATION_UNAVAILABLE_DENIAL_PREFIX)
+  );
+}
+
+function isolationUnavailable(
+  report: VerificationReport,
+  status: Exclude<VerificationStatus, "passed">,
+): boolean {
+  return status === "denied" && report.results.some(isIsolationUnavailableDenial);
+}
+
+// Only the native profile brings the model a shell of its own, and that shell runs inside the
+// runtime's own confinement.
+function runHasShell(input: Pick<ProductionManagedWorktreeToolInput, "toolProfile">): boolean {
+  return input.toolProfile === "native";
+}
+
+// The host cannot isolate the governed verifier. A run whose model has no shell has no way left to
+// verify, so the run itself is blocked and the model is told to stop looking for one. A run with a
+// shell keeps the way it always had: the repository's own check in that shell counts as the
+// verification (SHELL_VERIFICATION_STATUS_RULE), exactly as for a step the verifier cannot install
+// for. One predicate for the model's reason and for the run's blocker, so they cannot disagree.
+function isolationBlocksRun(
+  input: Pick<ProductionManagedWorktreeToolInput, "toolProfile">,
+  report: VerificationReport,
+): boolean {
+  return !runHasShell(input) && isolationUnavailable(report, modelFacingStatus(report));
+}
+
 function notRunReason(
   result: VerificationResult,
   dependencies: ReturnType<typeof dependenciesNotRunReason>,
 ): VerificationNotRunReason {
+  if (isIsolationUnavailableDenial(result)) return "isolation-unavailable";
   if (result.status === "denied") return "denied";
   if (result.status === "cancelled") return "cancelled";
   const detail = result.detail ?? "";
@@ -2222,6 +2275,7 @@ function verificationNotRunErrorKind(
   steps: readonly VerificationNotRunStep[],
 ): ActivityLogErrorKind {
   if (steps.some((step) => step.reason === "cancelled")) return "cancelled";
+  if (steps.some((step) => step.reason === "isolation-unavailable")) return "unavailable";
   if (steps.some((step) => step.reason === "denied")) return "authority-denied";
   return "unavailable";
 }

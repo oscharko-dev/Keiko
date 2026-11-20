@@ -362,6 +362,8 @@ class TestRuntimeProcessBackend implements RuntimeProcessBackend {
       onTreeExit: (callback): void => {
         state.exitCallbacks.push(callback);
       },
+      failureReason: (): string | undefined =>
+        (child as CodingRuntimeSpawnHandle & { readonly refusal?: string }).refusal,
     };
     child.onExit((code) => {
       state.exited = true;
@@ -4547,6 +4549,43 @@ describe("coding runtime manager", () => {
         code: reason,
       }),
     );
+  });
+
+  // #4068: a Windows launch the supervisor refused settled as the internal error. The refusing step
+  // is the cause; the handshake against a runtime that never started is its symptom.
+  it.each([
+    ["supervisor-grants-acl", "runtime-supervisor-grants-acl"],
+    ["supervisor-grants-directory", "runtime-supervisor-grants-directory"],
+    ["supervisor-grants-capability", "runtime-supervisor-grants-capability"],
+    ["supervisor-gateway-connect", "runtime-supervisor-gateway-connect"],
+    ["supervisor-gateway-admit", "runtime-supervisor-gateway-admit"],
+    ["supervisor-grants-frame", "runtime-supervisor-refused"],
+    ["supervisor-unknown", "runtime-supervisor-refused"],
+  ] as const)("names the %s refusal instead of the failed handshake", async (refusal, code) => {
+    const fixture = createManagedFixture();
+    const child = fakeChild();
+    const manager = createTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(() => ({
+        ...child.handle,
+        refusal,
+        kill: (signal): void => {
+          child.kills.push(signal);
+          child.exit(1);
+        },
+      })),
+      openCodeLifecycleAdapter: {
+        handshake: vi.fn(() => Promise.resolve({ ok: false, reason: "readiness-failed" })),
+      },
+      now: () => Date.parse("2026-07-07T13:00:00.000Z"),
+    });
+
+    await expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: code, retryable: false });
+    expect(manager.health()).toEqual({ status: "stopped" });
   });
 
   it("aborts the adapter-visible handshake signal on timeout and rejects a late ready result", async () => {

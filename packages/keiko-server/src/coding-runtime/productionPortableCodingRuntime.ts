@@ -59,7 +59,9 @@ import {
   macosTeamIdentifierFromOutput,
 } from "./macosPortableCodeIdentity.js";
 import {
+  discardVerifiedHelperCopy,
   verifiedHelperExecutionCopy,
+  type HelperCopyRemovalDeps,
   type VerifiedHelperExecutionCopy,
 } from "./nativeRuntimeProcessBackend.js";
 import { safeRealDirectory, safeRealFile } from "./nativeRuntimeProcessPaths.js";
@@ -228,9 +230,10 @@ function recordGatewayStatusFailure(operation: string, error: unknown): void {
 function verifiedStatusHelper(
   helperPath: string,
   helperSha256: string,
+  removal: HelperCopyRemovalDeps,
 ): VerifiedHelperExecutionCopy | undefined {
   try {
-    return verifiedHelperExecutionCopy(helperPath, helperSha256);
+    return verifiedHelperExecutionCopy(helperPath, helperSha256, removal);
   } catch (error) {
     recordGatewayStatusFailure("coding.runtime.windows-gateway-service.verify", error);
     return undefined;
@@ -287,11 +290,12 @@ export function runVerifiedWindowsGatewayHelper(
   helperSha256: string,
   args: readonly string[],
   timeoutMs: number,
+  removal: HelperCopyRemovalDeps = {},
 ): Promise<number | null> {
   return new Promise((resolve) => {
     // The same digest check a launch applies: bytes that do not match the pin never execute, and the
     // helper that runs is a private copy of the verified bytes, not the path that could be swapped.
-    const copy = verifiedStatusHelper(helperPath, helperSha256);
+    const copy = verifiedStatusHelper(helperPath, helperSha256, removal);
     if (copy === undefined) {
       resolve(null);
       return;
@@ -300,12 +304,15 @@ export function runVerifiedWindowsGatewayHelper(
     const finish = (code: number | null): void => {
       if (settled) return;
       settled = true;
-      resolve(code);
-      try {
-        copy.cleanup();
-      } catch (error) {
-        recordGatewayStatusFailure("coding.runtime.windows-gateway-service.cleanup", error);
-      }
+      // The answer waits for the copy's removal, so a short-lived CLI does not leave it behind. The
+      // helper has exited by now; Windows may still hold its file for a moment, which the bounded
+      // retry absorbs without a diagnostic. Only a copy that stays is recorded.
+      void discardVerifiedHelperCopy(copy, {
+        operation: "coding.runtime.windows-gateway-service.cleanup",
+        source: "coding.runtime.windows-gateway-service",
+      }).then(() => {
+        resolve(code);
+      });
     };
     try {
       const child = spawn(copy.path, [...args], {

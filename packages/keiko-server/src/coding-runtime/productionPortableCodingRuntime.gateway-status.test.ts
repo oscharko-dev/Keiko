@@ -8,6 +8,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -71,6 +72,71 @@ describe.skipIf(process.platform === "win32")("readWindowsGatewayServiceStatus",
       await runVerifiedWindowsGatewayHelper(path, pin, ["--gateway-service-uninstall"], 5_000),
     ).toBe(0);
     expect(readFileSync(marker, "utf8")).toBe("--gateway-service-uninstall|");
+  });
+
+  // Windows holds an exited helper's file for a moment: EPERM on the first removal is routine. It
+  // used to be recorded as an error-level diagnostic and printed in front of every CLI answer.
+  describe("private copy removal", () => {
+    const script = "#!/bin/sh\nexit 12\n";
+    const transient = (): Error => Object.assign(new Error("held"), { code: "EPERM" });
+
+    it("retries a transient refusal and records nothing when it recovers", async () => {
+      const { path } = helper(script);
+      const recorded = vi
+        .spyOn(defaultServerDiagnosticSink, "record")
+        .mockImplementation(() => undefined);
+      const attempts: string[] = [];
+      const code = await runVerifiedWindowsGatewayHelper(
+        path,
+        digest(script),
+        ["--gateway-service-status"],
+        5_000,
+        {
+          remove: async (directory) => {
+            attempts.push(directory);
+            if (attempts.length === 1) throw transient();
+            await rm(directory, { recursive: true, force: true });
+          },
+          sleep: () => Promise.resolve(),
+        },
+      );
+      expect(code).toBe(12);
+      expect(attempts).toHaveLength(2);
+      expect(existsSync(attempts[0] ?? path)).toBe(false);
+      expect(recorded).not.toHaveBeenCalled();
+    });
+
+    it("still answers with the exit code and records a copy that never goes away", async () => {
+      const { path } = helper(script);
+      const recorded = vi
+        .spyOn(defaultServerDiagnosticSink, "record")
+        .mockImplementation(() => undefined);
+      let attempts = 0;
+      let directory = "";
+      const code = await runVerifiedWindowsGatewayHelper(
+        path,
+        digest(script),
+        ["--gateway-service-status"],
+        5_000,
+        {
+          remove: (target) => {
+            attempts += 1;
+            directory = target;
+            return Promise.reject(transient());
+          },
+          sleep: () => Promise.resolve(),
+        },
+      );
+      expect(code).toBe(12);
+      expect(attempts).toBe(6);
+      expect(recorded).toHaveBeenCalledTimes(1);
+      expect(recorded.mock.calls[0]?.[0]).toMatchObject({
+        operation: "coding.runtime.windows-gateway-service.cleanup",
+        errorClass: "Error",
+        code: "EPERM",
+      });
+      rmSync(directory, { recursive: true, force: true });
+    });
   });
 
   it("never runs a swapped helper for an install or uninstall command", async () => {

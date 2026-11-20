@@ -1999,7 +1999,12 @@ describe("production managed worktree tools", () => {
     },
   );
 
-  it("reports real no-backend verification as denied without claiming a check failed (#4413)", async () => {
+  // The report the real verifier produces on a host without an enforcing isolation backend: the
+  // step is denied and nothing is spawned.
+  async function noBackendReport(): Promise<{
+    readonly report: VerificationReport;
+    readonly spawn: ReturnType<typeof vi.fn>;
+  }> {
     const spawn = vi.fn(() => {
       throw new TypeError("verification must not spawn without isolation");
     });
@@ -2039,6 +2044,53 @@ describe("production managed worktree tools", () => {
         now: () => 1000,
       },
     );
+    return { report, spawn };
+  }
+
+  // A run whose model has a shell of its own (the native profile) keeps the way it always had on
+  // such a host: the repository's check in that shell counts as the verification. Naming the host
+  // condition a blocker for that run told the model to stop and settled the run as not verified,
+  // although its shell could have verified it. The step still names the true cause, and nothing
+  // runs in the isolated verifier.
+  it("leaves a run with its own shell the shell when the host cannot isolate the verifier", async () => {
+    const { report, spawn } = await noBackendReport();
+    const verificationBlocked = vi.fn();
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(report),
+      records: [],
+      log,
+      verificationBlocked,
+      toolProfile: "native",
+    });
+    const result = await executeVerification(facade, "verification-no-backend-shell");
+    expect(result).toMatchObject({
+      status: "failed",
+      reasonCode: "VERIFICATION_NOT_RUN",
+      detail:
+        "These verification steps did not run: test (the isolated verifier has no container runtime (Docker or Podman) on this computer; run this check in your own shell).",
+    });
+    expect(result).toHaveProperty("guidance", expect.stringContaining("in your shell") as unknown);
+    expect(codingToolVerificationPresentation(result)).not.toEqual({
+      verificationOutcome: "isolation-unavailable",
+    });
+    expect(verificationBlocked).toHaveBeenCalledTimes(1);
+    expect(verificationBlocked).toHaveBeenCalledWith(
+      "VERIFICATION_NOT_RUN",
+      expect.any(String) as unknown,
+    );
+    expect(spawn).not.toHaveBeenCalled();
+    const observed = log.find((entry) => entry.op === "coding-runtime.verification");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.verification.emitted-line",
+        formatActivityLogProofLine(observed ?? {}),
+      ),
+    ).toMatchObject({ state: "not-run", steps: ["test:isolation-unavailable"] });
+  });
+
+  it("reports real no-backend verification as denied without claiming a check failed (#4413)", async () => {
+    const { report, spawn } = await noBackendReport();
     expect(report).toMatchObject({
       overallStatus: "failed",
       counts: { passed: 0, failed: 0, denied: 1 },
@@ -2048,21 +2100,33 @@ describe("production managed worktree tools", () => {
     const events: CodingWorkbenchRuntimeEvent[] = [];
     const log: ServerLogEvent[] = [];
     const completeVerification = vi.fn<VerifiedCommitService["completeVerification"]>();
+    const verificationBlocked = vi.fn();
     const facade = verificationFacade({
       runToReport: () => Promise.resolve(report),
       records: [],
       events,
       log,
+      verificationBlocked,
       verifiedCommitService: { ...verificationService(), completeVerification },
     });
     const result = await executeVerification(facade, "verification-no-backend");
+    // Keiko 1.5.3 Windows lab: the model read "denied by policy" and kept asking for a shell. The
+    // host condition is now named; the denial itself and "not a failed check" are unchanged.
     expect(result).toMatchObject({
       status: "failed",
-      reasonCode: "VERIFICATION_NOT_RUN",
-      detail: "These verification steps did not run: test (denied by policy).",
+      reasonCode: "VERIFICATION_ISOLATION_UNAVAILABLE",
+      detail:
+        "These verification steps did not run: test (this computer has no container runtime (Docker or Podman), so Keiko cannot run project commands safely here).",
     });
     expect(result).not.toHaveProperty("verificationFailure");
-    expect(codingToolVerificationPresentation(result)).toEqual({ verificationOutcome: "not-run" });
+    expect(codingToolVerificationPresentation(result)).toEqual({
+      verificationOutcome: "isolation-unavailable",
+    });
+    expect(verificationBlocked).toHaveBeenCalledWith(
+      "VERIFICATION_NOT_RUN",
+      expect.any(String) as unknown,
+    );
+    expect(verificationBlocked).toHaveBeenLastCalledWith("VERIFICATION_ISOLATION_UNAVAILABLE");
     expect(events.find((entry) => entry.kind === "verification-summarized")).toMatchObject({
       kind: "verification-summarized",
       verificationStatus: "failed",
@@ -2080,7 +2144,12 @@ describe("production managed worktree tools", () => {
       "coding-runtime.verification.emitted-line",
       formatActivityLogProofLine(observed ?? {}),
     );
-    expect(persisted).toMatchObject({ state: "not-run", stepCount: 1, steps: ["test:denied"] });
+    expect(persisted).toMatchObject({
+      state: "not-run",
+      stepCount: 1,
+      steps: ["test:isolation-unavailable"],
+    });
+    expect(observed?.errorKind).toBe("unavailable");
   });
 
   it.each([

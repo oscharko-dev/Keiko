@@ -58,6 +58,12 @@ the service along; the Workbench offers Repair instead of a terminal command, an
 `keiko uninstall` removes the service in the same command. An installation managed outside the app
 (ADR-0121 D9) sets up no service and offers no Repair.
 
+1.11 — #4068 adds D21 (2026-11-19): the runtime supervisor confines every Windows run itself, as
+the signed-in standard user, in an AppContainer without network capabilities whose only way out is
+a named-pipe relay to the attested loopback ports. No launch uses the D18/D19 broker any more;
+`keiko start` no longer sets it up, and the Workbench offers no Repair. The work location of D18 is
+widened to the operator's own folders, with the protections D21 names.
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -889,7 +895,16 @@ packet and before the broker open (`native/runtime-supervisor/windows/gateway_gr
   `supervisor-grants-directory`, `supervisor-grants-acl`, `supervisor-grants-capability`,
   `supervisor-gateway-connect`, `supervisor-gateway-admit`, `supervisor-environment-guard`), and
   the runtime's exit diagnostic
-  records it.
+  records it. The refusal also reaches the run (2026-11-19): a launch the supervisor refused
+  settles with a closed failure code in place of the internal `runtime-failed`
+  (`runtime-supervisor-grants-acl`, `-grants-directory`, `-grants-capability`, `-gateway-connect`,
+  `-gateway-admit`, and `runtime-supervisor-refused` for every other step), shown on the
+  `coding-runtime.run.settled` line and worded in the Workbench with the one way out. A refusal
+  that precedes the job object (`job-create`, the grants frame, directory, ACL and capability
+  steps, `gateway-connect`, `environment-guard`) and arrives before any launch response proves
+  that no tree existed, so the start reports the refusal and not `runtime-reap-unproven`; every
+  refusal after the job exists, including `gateway-admit`, keeps its tree under the normal reap
+  proof.
 - **Evidence.** `runtime.confinement.spawned` records `backend: windows-wfp`,
   `childExecutablePolicy: appcontainer-inherited`, the number of tree grants and whether a worktree
   capability applied. It never records a path or a capability name.
@@ -898,15 +913,13 @@ packet and before the broker open (`native/runtime-supervisor/windows/gateway_gr
   `realpath` of its workspace failed. The same probe on the system volume succeeded. A release keeps
   its task worktrees and runtime state under the user profile, on the system volume. A checkout on
   another volume sets `KEIKO_STATE_DIR` to a directory on the system volume. A user's own checkout
-  is not granted at all.
-- **Work location.** Because only a managed worktree on the system volume can be confined, the host
-  refuses every other start before anything spawns, rather than letting the runtime fail with an
-  opaque handshake error. A start in the operator's own checkout or folder is refused as
-  `workspace-location-unsupported` (reason `local-checkout`), and a managed worktree on another
-  volume as `workspace-volume-unsupported` (reason `non-system-volume`). Both are HTTP 409 with a
-  sentence that names what to change. Readiness behind the broker lists
-  `executionLocations: ["worktree"]`, so the Workbench preselects a new worktree and offers no
-  other location. Other hosts omit the field and keep both locations.
+  on the system volume is granted as D21 describes.
+- **Work location.** Amended by D21 (2026-11-19): the operator's own checkout or folder is granted
+  through the same worktree capability, except a drive root, the user profile itself and Keiko's
+  own state, which are refused as `workspace-location-unsupported` (reason `protected-folder`). A
+  workspace on another volume stays refused as `workspace-volume-unsupported` (reason
+  `non-system-volume`). Both are HTTP 409 with a sentence that names what to change, and both are
+  decided before anything spawns. Readiness no longer restricts `executionLocations` on Windows.
 
 Inbound control (amended 2026-11-06, #4068; proposed 2026-11-07 by the #4068 assignee under the
 scope transfer of 2026-10-24, pending repository-owner approval). The host drives OpenCode through the server the runtime opens
@@ -968,6 +981,12 @@ the permitted gateway port and the hostile port stayed refused (10013), where th
 timed out (10060) before the exemption.
 
 ### D19 — An administrator installs the Windows broker once; ordinary launches never elevate
+
+Amended by D21 (2026-11-19): no launch uses this broker any more. `keiko start` no longer installs
+or repairs it, readiness no longer reads its state, and the Workbench offers no Repair; the bullets
+on automatic setup, visibility and Repair below describe the retired path. The explicit
+`keiko gateway-service` command and its removal by a full `keiko uninstall` remain, so a machine
+that carries the service from an earlier release can be cleaned up.
 
 Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
 <status|install|repair|uninstall>` owns that lifecycle (proposed 2026-11-02, pending repository-owner approval):
@@ -1105,3 +1124,50 @@ unconfined on the host.
   or the runtime confinement of D11 and D18, and D13 still holds.
 - **Open.** The container-backed loop from a Windows checkout, with dependencies installed for the
   container's target, is not yet qualified (#4068 W8).
+
+## Addendum — Windows runs are confined without a service or elevation (2026-11-19)
+
+### D21 — The runtime supervisor relays the confined tree's loopback traffic through named pipes
+
+Owner order of 2026-11-19 (#4068): the Coding Workbench runs on Windows as it does on macOS, for a
+standard user without administrator rights, in the npm, npm-folder and standalone forms, and the
+confinement stays. The D18/D19 broker could not meet that order: its installation, its repair after
+every helper change and its loopback exemption each need an administrator.
+
+Decision (`native/runtime-supervisor/windows/gateway_relay.c`, `--relay-supervised`):
+
+- **No network capability.** The pinned supervisor creates a per-run AppContainer profile
+  (`Keiko.Relay.<32 hex>`) that holds no network capability at all, so Windows itself refuses every
+  connection out of the tree, loopback included. A standard user can create such a profile; no
+  service, filter, firewall rule or loopback exemption is installed, and nothing elevates.
+- **The only way out.** For every attested loopback port of the launch (the gateway, the governed
+  tool facade, the MCP relay), the unconfined supervisor creates one named pipe per route. Its DACL
+  names only the tree's SID beside the owner and SYSTEM, and a connected instance is accepted only
+  from a process of this run's container. Each accepted instance is bridged to `127.0.0.1:<port>`
+  on the host. Inside the container the supervisor's own image runs as the tree root
+  (`--container-relay`), listens on container-local loopback ports, rewrites the runtime
+  environment's `127.0.0.1:<port>` values to them and bridges each connection to its pipe. No other
+  destination is reachable, which is what D11 requires of the gateway confinement.
+- **Inbound control.** The host's connection to the runtime's own server takes one inbound route:
+  the supervisor listens on a host loopback port, rewrites the runtime's listening line to it and
+  opens an instance to the runtime's port inside the container.
+- **Host admission.** A relayed request reaches the server with the container-side port in its
+  `Host` header. The server's DNS-rebinding guard admits that only for the runtime routes (the
+  gateway completions, tool and MCP relay routes), with a loopback host name, no `Origin` and a
+  Bearer credential; every other route and every browser request keeps the exact-port rule.
+- **Filesystem grants.** D18's KGG1 grants, sweep and per-user lock are unchanged. The worktree
+  capability now also admits the operator's own checkout or folder on the system volume, except a
+  drive root, the user profile itself, Keiko's state directory and any folder inside that state,
+  or a folder that contains it (`workspace-location-unsupported`, reason `protected-folder`). A
+  read grant on a directory that `ALL APPLICATION PACKAGES` can already read, with an entry for the
+  directory, an inheritable one for its content and no deny entry for that group, writes nothing:
+  a runtime an administrator installed under `Program Files` cannot take a user's entry and does
+  not need one. Write grants always take the tree's own entry.
+- **Evidence.** The supervisor pin, its size and its source-tree digest are built by the
+  `relay-confinement` job of `windows-gateway-confinement.yml` (MSVC, `/Brepro`) and shared by the
+  npm runtime package and the portable payload. That job also runs the relay rules
+  (`gateway_relay.test.c`), the grant rules (`gateway_grants.test.c`) and an end-to-end proof
+  (`scripts/testing/test-windows-relay-confinement.mjs`): the tree reaches the attested port
+  through its pipe and is refused the host gateway port directly and the internet.
+- **Scope.** D20 is unchanged: governed repository verification on Windows stays container-backed,
+  as it is on macOS. D13 still holds.

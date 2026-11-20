@@ -234,6 +234,7 @@ import {
   recordWorkspaceRootDenied,
 } from "./workspace-root-denial-log.js";
 import { pathIsDenied } from "./files-deny.js";
+import { insideProgramFolder } from "./launch-directory.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
 import {
   assertUiDbOutsideProject,
@@ -575,7 +576,6 @@ export function productionOpenCodeToolProfile(
   return platform === "darwin" ? "native" : "direct";
 }
 import { resolveProductionOpenCodeActivation } from "./coding-runtime/productionOpenCodeActivation.js";
-import type { WindowsGatewayServiceProbe } from "./coding-runtime/windowsGatewayServiceProbe.js";
 import { createNativeWorktreeProvisionPort } from "./coding-runtime/opencodeNativeWorktree.js";
 import { readProductionWorkspaceHead } from "./coding-runtime/productionWorkspaceHeadReader.js";
 import type { GitHubCodeContextApiPort } from "./coding-context/githubCodeContextConnector.js";
@@ -1029,7 +1029,6 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   /** Content-free reason naming the first failed activation prerequisite when unqualified. */
   readonly codingRuntimeUnavailableReason?: CodingWorkbenchRuntimeUnavailableReason | undefined;
   /** Live broker state of a released Windows runtime; absent everywhere else (#4068). */
-  readonly codingRuntimeGatewayService?: WindowsGatewayServiceProbe | undefined;
   /**
    * Available-branch twin of the reason above: how strong the qualified runtime's evidence is.
    * Every default along this path resolves to the WEAK value, so an unthreaded path degrades to
@@ -3472,15 +3471,28 @@ export function reconcileTaskWorkspacesAtStartup(
 function seedInitialProject(
   store: UiStore,
   uiDbPath: string,
-  initialProjectPath: string | undefined,
+  options: Pick<BuildHandlerDepsOptions, "initialProjectPath" | "initialProjectTrustSource">,
   workspaceScriptTrust: WorkspaceScriptTrustService,
   correlationId: string,
-  trustSource: BuildHandlerDepsOptions["initialProjectTrustSource"],
 ): string | undefined {
+  const { initialProjectPath, initialProjectTrustSource: trustSource } = options;
   if (initialProjectPath === undefined || initialProjectPath.trim().length === 0) {
     return undefined;
   }
   const normalizedPath = validateProjectPath(initialProjectPath, { mustExist: true });
+  // A Keiko that runs inside its own program folder (the folder packages, the managed portable
+  // launch) holds that folder's program files and, in a team package, the gateway token: it is no
+  // project, so Keiko starts without a default one (ADR-0121 D9). The read surface's own predicate
+  // decides it, so the seed and every later root check cannot disagree, and a folder outside the
+  // program folder that the launcher names explicitly is still seeded. Recorded body-free, like a
+  // refused launch directory.
+  if (insideProgramFolder(normalizedPath)) {
+    recordWorkspaceRootDenied(
+      { reason: "program-folder-launch", failureKind: "DENIED", errorKind: "authority-denied" },
+      { correlationId },
+    );
+    return undefined;
+  }
   assertUiDbOutsideProject(uiDbPath, normalizedPath);
   // A launch directory the read surface refuses (Keiko's own tool-state area) is no project: every
   // Git and Files read of it is denied, so offering it only starts the person on a refused folder.
@@ -4564,10 +4576,9 @@ function buildPersistenceBundle(
       preferredProjectPath: seedInitialProject(
         persistence.store,
         resolvedUiDbPath,
-        options.initialProjectPath,
+        options,
         workspaceScriptTrust,
         bootstrapCorrelationId,
-        options.initialProjectTrustSource,
       ),
     };
   } catch (error) {
@@ -6335,7 +6346,6 @@ interface CodingRuntimeControlPlaneDeps {
   codingRuntimeHostQualified?: UiHandlerDeps["codingRuntimeHostQualified"];
   codingSafeActivityProjection?: UiHandlerDeps["codingSafeActivityProjection"];
   codingRuntimeUnavailableReason?: UiHandlerDeps["codingRuntimeUnavailableReason"];
-  codingRuntimeGatewayService?: UiHandlerDeps["codingRuntimeGatewayService"];
   codingRuntimeEvidenceClass?: UiHandlerDeps["codingRuntimeEvidenceClass"];
   codingRuntimeVersion?: UiHandlerDeps["codingRuntimeVersion"];
   codingSidecarGatewayCancellationRegistry?: UiHandlerDeps["codingSidecarGatewayCancellationRegistry"];
@@ -6387,11 +6397,11 @@ function buildCodingRuntimeControlPlaneDeps(
   controlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
   composition: Pick<
     ProductionRuntimeComposition,
-    "unavailableReason" | "evidenceClass" | "runtimeVersion" | "windowsGatewayService"
+    "unavailableReason" | "evidenceClass" | "runtimeVersion"
   >,
 ): CodingRuntimeControlPlaneDeps {
   if (controlPlane === undefined) return {};
-  const { unavailableReason, evidenceClass, runtimeVersion, windowsGatewayService } = composition;
+  const { unavailableReason, evidenceClass, runtimeVersion } = composition;
   return {
     codingRuntimeOrchestrator: controlPlane.orchestrator,
     codingRuntimeEventHub: controlPlane.eventHub,
@@ -6404,9 +6414,6 @@ function buildCodingRuntimeControlPlaneDeps(
       : {
           codingRuntimeEvidenceClass: evidenceClass ?? "functional-not-platform-qualified",
           ...(runtimeVersion === undefined ? {} : { codingRuntimeVersion: runtimeVersion }),
-          ...(windowsGatewayService === undefined
-            ? {}
-            : { codingRuntimeGatewayService: windowsGatewayService }),
         }),
     ...(controlPlane.cancellationRegistry !== undefined
       ? {
@@ -6490,7 +6497,6 @@ interface ProductionRuntimeComposition {
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
-  readonly windowsGatewayService?: WindowsGatewayServiceProbe | undefined;
   readonly runtimeMutationLease?: CodingRuntimeEditorMutationLeasePort | undefined;
   readonly materializedPatches?: MaterializedPatchRegistry | undefined;
   readonly dispose?: (() => void) | undefined;
@@ -6501,14 +6507,10 @@ interface ProductionRuntimePortResolution {
   readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason | undefined;
   readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass | undefined;
   readonly runtimeVersion?: CodingWorkbenchRuntimeVersion | undefined;
-  readonly windowsGatewayService?: WindowsGatewayServiceProbe | undefined;
   readonly activated: boolean;
 }
 
-type ActivatedRuntimeFacts = Pick<
-  ProductionRuntimeComposition,
-  "evidenceClass" | "runtimeVersion" | "windowsGatewayService"
->;
+type ActivatedRuntimeFacts = Pick<ProductionRuntimeComposition, "evidenceClass" | "runtimeVersion">;
 
 function unqualifiedComposition(
   unavailableReason: CodingWorkbenchRuntimeUnavailableReason,
@@ -6659,7 +6661,6 @@ function resolveProductionRuntimePorts(
     unavailableReason: activation.unavailableReason,
     evidenceClass: activation.evidenceClass,
     runtimeVersion: activation.runtimeVersion,
-    windowsGatewayService: activation.windowsGatewayService,
     activated: activation.ports !== undefined,
   };
 }
@@ -6803,7 +6804,6 @@ function activatedRuntimeFacts(resolution: ProductionRuntimePortResolution): Act
     // Fail-closed default: an unthreaded activation degrades to the weak class, never to verified.
     evidenceClass: resolution.evidenceClass ?? "functional-not-platform-qualified",
     runtimeVersion: resolution.runtimeVersion,
-    windowsGatewayService: resolution.windowsGatewayService,
   };
 }
 

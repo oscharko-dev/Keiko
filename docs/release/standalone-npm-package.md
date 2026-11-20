@@ -36,8 +36,14 @@ Keiko/
 ```
 
 The Node.js runtime and the native search index of Knowledge Pods are taken from the verified
-portable release archive of the same Keiko version, so they are byte for byte the files the folder
-package ships; the Node.js runtime is the signed nodejs.org build. Keiko finds the search index next
+portable release archive of the same Keiko version; every file the folder keeps is byte for byte
+the archive's, and the Node.js runtime is the signed nodejs.org build. The folder leaves out what
+neither Node.js nor npm runs, because `npm ci --ignore-scripts` compiles nothing: the C headers
+(`system/node/include`), the manuals and documentation (`system/node/share`) and the release's
+CHANGELOG.md and README.md. It keeps `bin`, `lib` with npm and corepack (on Windows `node.exe`,
+`npm*`, `npx*` and `node_modules`), LICENSE, NOTICE and NODE_RUNTIME_SOURCE.json. That is about
+11.6 MB of the 61 MB Node.js runtime of a macOS package, packed. The standalone folder package ships
+the payload unchanged and keeps all of it. Keiko finds the search index next
 to that runtime, as it does in the portable payload, so Knowledge Pods search with their index. The
 only programs that run at a double-click are the system shell and that Node.js binary, and npm writes
 no download mark on what it installs.
@@ -173,13 +179,78 @@ Unblock-File .\keiko-windows-x64.npm.zip
   Coding as unavailable, even where an administrator installed the gateway service. Chat,
   Knowledge Pods, Jira and the Editor work. On macOS npm installs the coding runtime package for
   the computer, the same one a global npm installation uses.
+- **No default project.** The package folder holds Keiko's program files and, in a team package, the
+  gateway token, so Keiko never offers it as the folder of the Coding Workbench, Files or Git and
+  refuses it for them; the person chooses a folder. Chat works at once and needs no folder.
+  `keiko.config.json`, `.npmrc`, the sealed `*.vault` stores and the data folder `.keiko-standalone`
+  stay unreadable for the model even inside a chosen folder.
 - **No in-app update.** A new version arrives as a new folder.
 - **One Keiko per computer account,** on loopback port 1983, as for the folder package.
-- **No release asset.** A release carries the
+- **No asset of the product release.** A product release carries the
   [standalone folder packages](standalone-folder-package.md#download-from-a-release), not this
   one. Its lockfile needs the integrity the npm registry reports for the released version. npm
   learns that version only after the release publisher has published the immutable GitHub
-  release, so this package is built from the published release.
+  release, so this package is built from the published release. The tested ZIPs are available from
+  a companion prerelease, see [Download From GitHub](#download-from-github).
+
+## Download From GitHub
+
+After a product release is published and npm reports its version, a release owner runs the
+`npm folder packages` workflow (`.github/workflows/npm-folder-publish.yml`) on `dev` with the
+version. It qualifies each package on its own platform, on native hardware (`macos-15` for
+`macos-arm64`, `macos-15-intel` for `macos-x64`, `windows-2025` for `windows-x64`), and only when all
+three pass publishes the exact ZIPs that were tested as the GitHub **prerelease**
+`npm-folder-<version>`. The tag `npm-folder-<version>` points at the commit of the product release
+`v<version>`. The prerelease is never marked latest.
+
+| Asset                       | What it is                                                  |
+| --------------------------- | ----------------------------------------------------------- |
+| `keiko-macos-arm64.npm.zip` | the npm folder package for Apple silicon, and its `.sha256` |
+| `keiko-macos-x64.npm.zip`   | the npm folder package for Intel Macs, and its `.sha256`    |
+| `keiko-windows-x64.npm.zip` | the npm folder package for Windows x64, and its `.sha256`   |
+
+The release notes name the version and, for each target, the runner it was tested on, the checks
+that passed and the digests. Download one package, verify it, remove the download mark and extract
+it:
+
+```bash
+gh release download npm-folder-<version> --repo oscharko-dev/Keiko \
+  --pattern keiko-macos-arm64.npm.zip --pattern keiko-macos-arm64.npm.zip.sha256
+shasum -a 256 -c keiko-macos-arm64.npm.zip.sha256
+gh attestation verify keiko-macos-arm64.npm.zip --repo oscharko-dev/Keiko
+xattr -d com.apple.quarantine keiko-macos-arm64.npm.zip
+```
+
+```powershell
+gh release download npm-folder-<version> --repo oscharko-dev/Keiko --pattern keiko-windows-x64.npm.zip --pattern keiko-windows-x64.npm.zip.sha256
+(Get-FileHash .\keiko-windows-x64.npm.zip -Algorithm SHA256).Hash.ToLower()   # compare with the .sha256 file
+gh attestation verify .\keiko-windows-x64.npm.zip --repo oscharko-dev/Keiko
+Unblock-File .\keiko-windows-x64.npm.zip
+```
+
+The build provenance attestation is made before the release exists, so a publication that fails
+afterwards can leave an attestation for ZIPs that were never released. That is harmless: nothing
+points a person at them, and the next run attests and publishes the ZIPs it tested. If the final
+check after publication cannot read or confirm the release, the prerelease is already public and
+nothing was removed, because a published release is immutable.
+
+The companion prerelease is a transport for the tested ZIPs. It is not the product release and
+grants no update trust: an installed Keiko reads only the product release for updates, and an npm
+folder package never offers an in-app update. The qualification
+(`scripts/testing/qualify-npm-folder-package.mjs`) starts the package the way a person does,
+through `Start Keiko.command` or `Start Keiko.cmd` in a folder whose path holds a space, and proves
+the first start installs and exits 0, `/api/health` reports exactly the release version, the
+installation record matches the shipped lockfile, the folder gained nothing outside `node_modules`,
+a second start installs nothing, the Coding runtime package is present where the release declares
+one (and the Activity Log names it missing where the release declares none, as
+`managed-runtime-package-missing` or, from a Keiko before that distinction, as
+`npm-runtime-package-missing`), and the stop file ends Keiko with no process of the folder left. It
+uses no model, no gateway and no browser.
+
+A release is immutable once published, so a version that already has its prerelease is refused. The
+same qualification runs on a pull request that changes the builder, `scripts/standalone/**`, the
+script or the workflow, but only when the root package version is already published on npm and
+its product release `v<version>` exists; otherwise the run ends green with a notice.
 
 ## Build A Package
 

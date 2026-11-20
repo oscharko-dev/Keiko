@@ -283,28 +283,89 @@ describe("production OpenCode activation", () => {
     });
   });
 
-  it("names a desktop installation whose bundled runtime did not verify", () => {
-    const resourceRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-portable-")));
-    roots.push(resourceRoot);
-    const appRoot = join(resourceRoot, "app");
-    mkdirSync(join(appRoot, "dist", "cli"), { recursive: true });
-    writeFileSync(join(appRoot, "package.json"), '{"name":"@oscharko-dev/keiko"}');
-    writeFileSync(join(appRoot, "dist", "cli", "index.js"), "");
-    const activity: ServerLogEvent[] = [];
+  // Walk of 1.5.3: the npm folder package exists for workplaces where nothing may be installed, and
+  // declares itself managed outside the app. Telling it to install the desktop package is advice it
+  // cannot follow, so the reason is a distinct closed one; an ordinary npm installation keeps its own.
+  it.each([
+    ["organization-managed", "managed-runtime-package-missing"],
+    ["machine-managed", "managed-runtime-package-missing"],
+    ["user-local", "npm-runtime-package-missing"],
+  ] as const)(
+    "names a folder installation managed as %s without a runtime package as %s",
+    (management, expected) => {
+      const prefix = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-npm-folder-")));
+      roots.push(prefix);
+      const keikoRoot = join(prefix, "node_modules", "@oscharko-dev", "keiko");
+      mkdirSync(join(keikoRoot, "dist", "cli"), { recursive: true });
+      writeFileSync(join(keikoRoot, "package.json"), '{"name":"@oscharko-dev/keiko"}');
+      writeFileSync(join(keikoRoot, "dist", "cli", "index.js"), "");
+      const activity: ServerLogEvent[] = [];
 
-    const result = resolveProductionOpenCodeActivation(
-      activationInput(
-        { KEIKO_CLI_BIN_PATH: join(appRoot, "dist", "cli", "index.js"), KEIKO_UI_PORT: "1983" },
-        { activity, platform: "linux", arch: "x64" },
-      ),
-    );
+      const result = resolveProductionOpenCodeActivation(
+        activationInput(
+          {
+            KEIKO_CLI_BIN_PATH: join(keikoRoot, "dist", "cli", "index.js"),
+            KEIKO_UI_PORT: "1983",
+            KEIKO_PORTABLE_MANAGEMENT: management,
+          },
+          { activity, platform: "win32", arch: "x64" },
+        ),
+      );
 
-    expect(result.unavailableReason).toBe("portable-runtime-unverified");
-    expect(activity.at(-1)).toMatchObject({
-      op: "coding-runtime.install.unqualified",
-      extra: { reason: "portable-runtime-unverified" },
-    });
-  });
+      expect(result.unavailableReason).toBe(expected);
+      expect(
+        expectActivityLogProof(
+          "coding-runtime.install.unqualified.emitted-line",
+          formatActivityLogProofLine(activity.at(-1) ?? {}),
+        ),
+      ).toMatchObject({
+        correlationId: UNKNOWN_CORRELATION_ID,
+        level: "warn",
+        errorKind: "unavailable",
+        reason: expected,
+      });
+    },
+  );
+
+  // A desktop installation is told to update or download again. A folder package or an IT-managed
+  // deployment declares itself managed outside the app: it offers no in-app update and the person
+  // installs nothing there (security software that removed a runtime file is the usual cause), so
+  // it has its own closed reason and is pointed to its administrator.
+  it.each([
+    [undefined, "portable-runtime-unverified"],
+    ["user-local", "portable-runtime-unverified"],
+    ["organization-managed", "managed-runtime-unverified"],
+    ["machine-managed", "managed-runtime-unverified"],
+  ] as const)(
+    "names an installation managed as %s whose bundled runtime did not verify as %s",
+    (management, expected) => {
+      const resourceRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-portable-")));
+      roots.push(resourceRoot);
+      const appRoot = join(resourceRoot, "app");
+      mkdirSync(join(appRoot, "dist", "cli"), { recursive: true });
+      writeFileSync(join(appRoot, "package.json"), '{"name":"@oscharko-dev/keiko"}');
+      writeFileSync(join(appRoot, "dist", "cli", "index.js"), "");
+      const activity: ServerLogEvent[] = [];
+
+      const result = resolveProductionOpenCodeActivation(
+        activationInput(
+          {
+            KEIKO_CLI_BIN_PATH: join(appRoot, "dist", "cli", "index.js"),
+            KEIKO_UI_PORT: "1983",
+            ...(management === undefined ? {} : { KEIKO_PORTABLE_MANAGEMENT: management }),
+          },
+          { activity, platform: "linux", arch: "x64" },
+        ),
+      );
+
+      expect(result.unavailableReason).toBe(expected);
+      expect(activity.at(-1)).toMatchObject({
+        op: "coding-runtime.install.unqualified",
+        errorKind: "unavailable",
+        extra: { reason: expected },
+      });
+    },
+  );
 
   it("classifies a tampered dev-lane payload separately from routine unavailability", () => {
     const staged = devLaneFixture();
@@ -432,57 +493,30 @@ describe("production OpenCode activation", () => {
     });
   });
 
-  // #4068 (ADR-0043 D19): a staged Windows dev lane carries its own supervisor's broker pin, so
-  // readiness reports that broker's state before anyone presses Start, instead of refusing outright.
-  it("reads the broker state for a staged Windows dev lane", () => {
-    const staged = devLaneFixture("windows-x64");
-    const result = resolveProductionOpenCodeActivation(
-      activationInput(
-        { ...staged.env, KEIKO_UI_PORT: "1983" },
-        { platform: "win32", arch: "x64", stateDir: join(staged.root, "runtime-state") },
-      ),
-    );
-
-    // The fixture supervisor answers no known broker state, on Windows and on a POSIX host alike.
-    expect(result.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
-    expect(result.windowsGatewayService?.repair).toBeTypeOf("function");
-  });
-
-  // ADR-0121 D9: the standalone folder package declares itself managed outside the app, and such an
-  // installation sets up no system service, so the Workbench offers no Repair there. An unreadable
-  // declaration fails closed the same way; `user-local` keeps Keiko's own Repair.
-  it.each(["organization-managed", "machine-managed", "not-a-known-mode"])(
-    "offers no Windows gateway Repair for a launch managed outside the app (%s)",
+  // #4068 (ADR-0043 D21): the verified supervisor confines a Windows run itself, as the signed-in
+  // user, so readiness asks no installed service and offers Coding without elevation, whoever
+  // manages the installation. The standalone folder package (managed outside the app, ADR-0121 D9)
+  // used to read `gateway-service-managed-outside` here and could never start a run.
+  it.each([undefined, "user-local", "organization-managed", "machine-managed", "not-a-known-mode"])(
+    "needs no installed service for a staged Windows dev lane (management %s)",
     (management) => {
       const staged = devLaneFixture("windows-x64");
       const result = resolveProductionOpenCodeActivation(
         activationInput(
-          { ...staged.env, KEIKO_UI_PORT: "1983", KEIKO_PORTABLE_MANAGEMENT: management },
+          {
+            ...staged.env,
+            KEIKO_UI_PORT: "1983",
+            ...(management === undefined ? {} : { KEIKO_PORTABLE_MANAGEMENT: management }),
+          },
           { platform: "win32", arch: "x64", stateDir: join(staged.root, "runtime-state") },
         ),
       );
 
-      expect(result.windowsGatewayService?.unavailableReason()).toBe(
-        "gateway-service-managed-outside",
-      );
-      expect(result.windowsGatewayService?.repair).toBeUndefined();
+      expect(result.unavailableReason).toBeUndefined();
     },
   );
 
-  it("keeps the Windows gateway Repair for a user-local launch", () => {
-    const staged = devLaneFixture("windows-x64");
-    const result = resolveProductionOpenCodeActivation(
-      activationInput(
-        { ...staged.env, KEIKO_UI_PORT: "1983", KEIKO_PORTABLE_MANAGEMENT: "user-local" },
-        { platform: "win32", arch: "x64", stateDir: join(staged.root, "runtime-state") },
-      ),
-    );
-
-    expect(result.windowsGatewayService?.unavailableReason()).toBe("gateway-service-unknown");
-    expect(result.windowsGatewayService?.repair).toBeTypeOf("function");
-  });
-
-  it("has no Windows gateway fact for a macOS dev lane", () => {
+  it("has no Windows refusal for a macOS dev lane", () => {
     const staged = devLaneFixture();
     const result = resolveProductionOpenCodeActivation(
       activationInput(
@@ -492,7 +526,6 @@ describe("production OpenCode activation", () => {
     );
 
     expect(result.unavailableReason).toBeUndefined();
-    expect(result.windowsGatewayService).toBeUndefined();
   });
 
   it("prefers an injected secure-read port over dev-lane construction", () => {

@@ -131,9 +131,12 @@ const approvedScopeValueDigests = new Map([
   // its `node:test` files are lab targets, not Keiko tests. Re-pinned for PR #4292: the Office Open
   // XML containers named above. SHA-256 of the raw value after `=`.
   ["sonar.test.exclusions", "f2acd88bdf310da1e71b6b95f5869e9cb46d9d514039541db9337449da67a222"],
+  // Re-pinned for #2360: the root tsconfig, the UI and the e2e servers only. Each listed package
+  // tsconfig was a further overlapping program that exhausted the runner; the root program already
+  // holds every package source. SHA-256 of the raw value after `=`.
   [
     "sonar.typescript.tsconfigPaths",
-    "016c8b1bfc0b97a73ee1b5680a7b1f46ccb5c24206229367ea88a266fe20c0d5",
+    "786680f58b47c6353a9790db812fd4954a504d858cba64c59ff3759f25c5a850",
   ],
 ]);
 const forbiddenScopeProperties = Object.freeze([
@@ -471,7 +474,7 @@ function requiredPropertyFailures(properties) {
     "sonar.sources=.",
     "sonar.tests=.",
     "sonar.sourceEncoding=UTF-8",
-    "sonar.typescript.tsconfigPaths=tsconfig.json,packages/*/tsconfig.json,tests/e2e/servers/tsconfig.json",
+    "sonar.typescript.tsconfigPaths=tsconfig.json,packages/keiko-ui/tsconfig.json,tests/e2e/servers/tsconfig.json",
     "sonar.plsql.file.suffixes=-",
     "sonar.test.inclusions=",
     "sonar.test.exclusions=native/portable-launcher/**,scripts/native-quality/**,packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts",

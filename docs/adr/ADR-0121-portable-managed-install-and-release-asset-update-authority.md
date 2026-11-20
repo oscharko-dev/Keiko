@@ -303,7 +303,10 @@ safe to defer. A failed download, verification, staging, activation, relaunch, o
 must fail closed and preserve the current working install when safe. This is failure recovery, not a
 user-facing rollback feature.
 
-**Platform services follow the update (one-step Windows setup, 2026-11-17).** An update is not
+**Platform services follow the update (one-step Windows setup, 2026-11-17).** _Amended 2026-11-19
+by ADR-0043 D21 (#4068): no Windows service follows an update any more. The supervisor confines
+every Windows Coding run itself, so the relaunch installs, repairs and prompts for nothing; the
+paragraph below is the historical 1.5.x behavior._ An update is not
 complete for coding work while the Windows `KeikoRuntimeGateway` service still runs the previous
 release's helper. The relaunch that ends a governed update, the first launch after setup and the
 manual re-download fallback all end in the same managed `keiko start`, which, once the UI answered
@@ -1198,11 +1201,40 @@ disposition before it judges any registration. The app therefore states that the
 managed outside the app and makes no registry or release request (`update-preflight.test.ts` pins
 that for this disposition); it never offers the portable setup, whose
 instruction would lead the person to the installation this form exists to avoid. The same
-declaration keeps the one-step Windows setup of ADR-0043 D19 away: the start sets up no
-`KeikoRuntimeGateway` service and asks for no approval, and the Coding Workbench offers no Repair.
-It says instead that Coding runs on Windows need that system service, which this Keiko does not set
-up (`gateway-service-managed-outside`). Windows Coding therefore still never runs without the broker;
-an administrator who installs it separately enables it. A new version arrives as a new folder.
+declaration keeps any machine setup away: the start sets up no system service and asks for no
+approval. _Amended 2026-11-19 by ADR-0043 D21 (#4068): Windows Coding needs no service, so there is
+no `gateway-service-managed-outside` reason and the folder form needs no administrator step; the
+supervisor confines each run as the signed-in user._ A new version arrives as a new folder.
+
+**No default project.** An in-place launch, a managed portable launch and the npm folder package run
+Keiko inside its own program folder, and they declare it with `KEIKO_LAUNCH_FROM_PROGRAM_FOLDER=1`.
+The program folder is the launch directory: the payload's `app` folder for the portable payload
+(the desktop installation and the standalone folder package) and the package folder itself for the
+npm folder package. It holds the program files and, in the npm form, the administrator's
+`keiko.config.json` with the plaintext gateway token; in the standalone form that file lies beside
+the start files, one level above the payload, and is protected by its name. The launch directory is
+never a person's working folder. The server seeds no default project from it
+(`workspace.root.denied` with the closed reason `program-folder-launch`, no path), and the read
+surface refuses it and everything in it as a root, exactly as it refuses Keiko's state folders:
+Files, Git, the folder dialog, project registration and a Chat's connected folder all ask one gate
+(`pathIsDenied`), which knows the folder as it was launched, as it resolves and under another
+spelling of the same folder (a link, a Windows short name). A project at that path is therefore
+listed `readable: false`: no window starts in it (#4371), Files does not offer it as a root, and the
+Coding Workbench does not offer it for a run. This also covers an installation that registered its
+program folder as a project before this rule existed, and a folder outside the program folder that
+the launcher names explicitly is seeded as before. A Chat needs no folder: a person who has chosen
+none still gets one, kept under the launch directory, which only holds it; refusing that Chat would
+leave New chat dead on every fresh installation. The Coding Workbench, Files and Git start empty
+until the person chooses a folder. This is the refused-launch-directory behaviour of #4371 applied
+to the program folder. A coding run is refused in a folder that contains Keiko's own coding runtime
+(`workspace-unqualified`, #4335), which covers the npm folder package's folder; beyond that, the
+folder a run works in is chosen by the local human, never by a model, so the rule draws no further
+boundary against a person's own explicit choice. A direct `keiko ui` or a developer checkout
+declares nothing and is unaffected. Independently, the always-on
+sensitive-path denial names `keiko.config.json` and the sealed `*.vault` stores as credentials
+(kernel-enforced for native commands like the other credential names) and the folder forms' data
+folder `.keiko-standalone` beside `.keiko` (ADR-0005 D3), so a folder a person does choose, even
+their home folder, never gives a model these files.
 
 **Provisioned configuration.** An administrator may place one `keiko.config.json` beside the start
 files. `keiko start --provisioned-config PATH` adopts it as the gateway configuration whenever its
@@ -1220,7 +1252,11 @@ states its custody.
 **npm folder package.** Where an npm registry, often an internal mirror, is the approved way in, a
 second folder form ships without the program: `keiko-<target>.npm.zip`, built by
 `scripts/build-standalone-npm-package.mjs` from the same verified portable archive. It carries that
-archive's Node.js runtime with npm, moved unchanged to `system/node`, a `package.json` that pins
+archive's Node.js runtime with npm, moved to `system/node` without its C headers (`include/`), its
+`share/` manuals and documentation and its CHANGELOG.md and README.md, which neither Node.js nor npm
+runs (`npm ci --ignore-scripts` compiles nothing; about 11.6 MB of 61 MB packed per macOS package);
+every file that stays is the archive's, byte for byte, and the standalone folder package, which
+ships the payload unchanged, is not affected. A `package.json` that pins
 `@oscharko-dev/keiko` to the archive's version, and a `package-lock.json` resolved against the
 public registry. The builder runs npm with no configuration of the person who builds and refuses a
 lockfile that does not install exactly that version, names a link, or names a downloaded package
@@ -1412,15 +1448,32 @@ integrity the npm registry reports for the released version, and npm learns that
 after the publisher has published the immutable GitHub release; the publisher keeps that order, so
 the npm folder package is built from the published release.
 
+**Companion prerelease for the npm folder package.** Because the package cannot be a release asset,
+a release owner publishes it afterwards with `.github/workflows/npm-folder-publish.yml`. The
+workflow runs `scripts/testing/qualify-npm-folder-package.mjs` on native hardware (`macos-15`,
+`macos-15-intel`, `windows-2025`): it builds the package from the published release with the one
+builder, extracts the ZIP with the platform's tool into a folder whose path holds a space, starts it
+through the real start file and proves the first start installs, health reports exactly the version,
+the installation record matches the lockfile, the folder gains nothing outside `node_modules`, a
+second start installs nothing, the Coding runtime package is present where the release declares one,
+and the stop file leaves no process of the folder. Only when all three legs pass and each ZIP is
+byte for byte the one its leg tested (the evidence digest, the `.sha256` file and the bytes agree)
+does `scripts/publish-npm-folder-packages.mjs` attest the ZIPs and publish them with their
+`.sha256` files as the GitHub prerelease `npm-folder-<version>`, created as a draft, checked asset
+by asset and published last, tagged on the product release's commit and never marked latest. The
+prerelease is a transport for the tested ZIPs and grants no update trust: no updater reads it, it is
+not a release-trust candidate and no product release workflow depends on it. The asset names keep
+the dot before the form.
+
 **What this form does not do.** It does not bypass the operating system's download checks. A
 package that still carries the download mark (the macOS quarantine attribute, the Windows Mark of
 the Web) is blocked exactly as before; an administrator removes the mark before distributing the
 package over an internal share, and the builder's own output carries none. It does not weaken D7:
 a package that is neither signed by a platform vendor nor allowed by the organization's application
-control stays blocked, and that is the organization's decision. The Windows Coding Workbench keeps
-its requirement of the installed gateway service, which needs an administrator; a folder package
-on Windows therefore offers Chat, Knowledge, Jira and the Editor, and reports Coding as
-unavailable through its existing disposition.
+control stays blocked, and that is the organization's decision. _Amended 2026-11-19 by ADR-0043 D21 (#4068): Windows Coding no longer
+requires an installed service or an administrator, so the folder package with a verified runtime
+offers Coding on Windows like any other form; the npm folder package still has none, because npm
+publishes no Windows coding-runtime package._
 
 ## Security and threat model
 
@@ -1588,8 +1641,24 @@ Security review for implementation under this ADR must cover:
 | 1.4     | 2026-11-17 | Added D9: the standalone folder package runs the portable payload in place, declares itself managed outside the app and can adopt an administrator-provisioned gateway configuration. |
 | 1.5     | 2026-11-18 | Amended D9 with the npm folder package: the release's Node.js runtime and a pinned, integrity-checked lockfile; Keiko is installed into the folder from the organization's npm registry at the first start. |
 | 1.6     | 2026-11-18 | Amended D1 and D9: stable releases carry the standalone folder packages as release assets, built and attested in the stable-tag run and published in the same draft as the archives. |
+| 1.7     | 2026-11-19 | Amended D9: the npm folder package is published after a release as the qualified, attested companion prerelease `npm-folder-<version>`, a transport that grants no update trust. |
+| 1.8     | 2026-11-19 | Retired the one-step Windows gateway setup and the `gateway-service-managed-outside` reason: Windows Coding is confined by the supervisor without a service (#4068, ADR-0043 D21). |
 
 ## Amendment history
+
+- **2026-11-19 — Windows setup retired (#4068, ADR-0043 D21):** The one-step Windows gateway setup
+  (D5, 2026-11-17) and the `gateway-service-managed-outside` reason of D9 are gone: the runtime
+  supervisor confines every Windows Coding run itself as the signed-in user, so an update
+  relaunch, a first launch and a folder package install, repair and ask for nothing. A machine that
+  carries the service from 1.5.x removes it with `keiko gateway-service uninstall` or a full
+  `keiko uninstall`. The two entries below that name the service describe the superseded behavior.
+- **2026-11-19 — D9, program folder, trimmed Node.js runtime, Node.js support:** A Keiko that runs
+  inside its own program folder starts without a default project, its read surface refuses that
+  folder as a root while a Chat without a folder keeps working, and the sensitive-path denial names
+  Keiko's credential stores (see D9). The npm folder package leaves the Node.js headers,
+  manuals and release notes out. `keiko start` prints one line when the running Node.js is outside
+  the range the package's own manifest declares and records the closed `nodeSupport` value on
+  `process.started`; it never refuses the start.
 
 - **2026-09-10 — Epic #3403:** Replaced mandatory Apple/Microsoft production signing with the
   protected, platform-neutral Ed25519 release-trust contract in D1, D2, D7, and D8. Native signing
@@ -1643,7 +1712,7 @@ Security review for implementation under this ADR must cover:
   installation. The launcher also shows the failure box of a start that ended non-zero, from a
   closed reason note, every such end leaves one `portable.launch.failed` line, and the first-start
   bound is stated.
-- **2026-11-17 — D9:** Added the standalone folder package for endpoints that cannot take an
+- **2026-11-17 — D9 (the service sentence is superseded by ADR-0043 D21, 2026-11-19):** Added the standalone folder package for endpoints that cannot take an
   installation. It repacks the reviewed portable archive unchanged, starts it with
   `keiko portable launch --in-place` (no managed setup, no registration, state in
   `~/.keiko-standalone`), reports itself through the existing `portable-it-managed` disposition
@@ -1658,6 +1727,11 @@ Security review for implementation under this ADR must cover:
   the folder with `npm ci --ignore-scripts` at the first start and then starts it exactly like the
   folder package. Windows Coding stays unavailable in this form, because npm publishes no Windows
   coding-runtime package. The folder package and D1 to D8 are unchanged.
+- **2026-11-19 — D9, companion prerelease:** The npm folder package stays out of the product release
+  but is no longer built only by hand: after a release, `npm-folder-publish.yml` starts each package
+  on its own platform on native hardware and publishes the exact tested ZIPs and their `.sha256`
+  files as the attested prerelease `npm-folder-<version>`. The prerelease is a transport; the
+  product release, the updaters and D1 to D8 are unchanged.
 - **2026-11-18 — D1 and D9, release assets:** Stable releases carry the generic standalone folder
   package of `macos-arm64`, `macos-x64` and `windows-x64` with its `.sha256` file. The stable-tag
   run builds them from the archives it assembled and attests them; the publisher refuses a bundle
@@ -1667,7 +1741,7 @@ Security review for implementation under this ADR must cover:
   the archives.
   The npm folder package stays a build from the published release: npm learns the version only
   after the GitHub release is published.
-- **2026-11-17 — One-step Windows setup:** Amended D5. The relaunch that completes an update, the
+- **2026-11-17 — One-step Windows setup (retired 2026-11-19, ADR-0043 D21):** Amended D5. The relaunch that completes an update, the
   first launch and the manual re-download fallback bring the Windows `KeikoRuntimeGateway` service
   to the new helper after the healthy start (ADR-0043 D19), at most one UAC prompt per helper pin.
   Portable `keiko update apply` stays refused and now says that the gateway follows the in-app

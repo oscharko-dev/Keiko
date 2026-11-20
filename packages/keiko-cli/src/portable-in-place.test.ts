@@ -165,6 +165,8 @@ describe.each(["macos-arm64", "windows-x64"] as const)(
       expect(deps?.cwd).toBe(join(result.resources, "app"));
       // The UI process learns that this install is managed outside the app.
       expect(env?.[PORTABLE_MANAGEMENT_ENV]).toBe("organization-managed");
+      // The program folder is the launch directory and no project: Keiko starts without a default.
+      expect(env?.KEIKO_LAUNCH_FROM_PROGRAM_FOLDER).toBe("1");
       // No managed root, no registration: the home holds the unpacked folder and nothing else.
       expect(readdirSync(result.home).sort()).toEqual(["Downloads"]);
       expect(existsSync(join(result.stateDir, "portable-install-state.json"))).toBe(false);

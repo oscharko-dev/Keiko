@@ -95,11 +95,11 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
-      "sha256": "ea885d52ffd4ce978ca4aa0ed93dc542619fc73930779de1cdc18d2ad2ce6fed"
+      "sha256": "be569d1336037c3079b60cc156600a6ee1fef528f4cee6c8b7a17459888eeebc"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
-      "sha256": "8f7204745b0360de6dba1677e9d9b44591fd644f89ebbee22782eb34679367fa"
+      "sha256": "af40ee7724842eba593355c7b098cbf7a10c6b3681235bcc3cb7a783769484a9"
     },
     {
       "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
@@ -115,12 +115,12 @@
     "scripts/lib/d12-baseline.mjs": "81b71b8c5bf86a8c1cf735fed941e3d99f084bc094f372f51f85be06a481cc64",
     "scripts/lib/workspace-storage-fixture.mjs": "204a424e0b09a8ffd3238464d5eafa7c728846298bc0b92faa5014453ee53d52",
     "scripts/lib/workspace-storage-fixture.d.mts": "aa245a9a8db69741010d58225f2c53669f400bb8a546a1f47f7e71ff5d005740",
-    "packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts": "23649437b93047cf1c14280cc6fd06de170ab00d981a36a30f92979cf7a2dd99"
+    "packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts": "acfe5d210b4cba2b5397a8289c895784cac13d5f40ca883963e88cf9d4ae97e5"
   },
   "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
-  "generatedAt": "2026-11-19T05:56:31.076Z",
+  "generatedAt": "2026-11-20T00:44:05.845Z",
   "visualFixtureScope": "All screenshot captures use deterministic /api/update/* fixtures. They prove rendered UI behavior only, never native handoff, real package replacement, or production-BFF update success.",
   "captures": [
     {

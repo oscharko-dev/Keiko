@@ -364,8 +364,10 @@ process.exit(41);
   & $setupBootstrapTestOut
   if ($LASTEXITCODE -ne 0) { throw "Windows setup-bootstrap behavior verification failed" }
 
+  # /analyze:external- keeps the analyzer on Keiko's sources: the SDK's own ws2tcpip.h inline
+  # helpers raise C6101 (gateway_relay.c includes it), which /external:W0 alone does not silence.
   $c11Flags = @(
-    "/nologo", "/std:c11", "/W4", "/WX", "/analyze", "/external:env:INCLUDE", "/external:W0",
+    "/nologo", "/std:c11", "/W4", "/WX", "/analyze", "/analyze:external-", "/external:env:INCLUDE", "/external:W0",
     "/DUNICODE", "/D_UNICODE", "/D_CRT_SECURE_NO_WARNINGS"
   )
 
@@ -377,8 +379,8 @@ process.exit(41);
 
   $supervisor = Join-Path $root "native/runtime-supervisor/windows/keiko_runtime_supervisor.c"
   $supervisorOut = Join-Path $scratch "keiko-runtime-supervisor.exe"
-  $gatewaySources = @("gateway_environment", "gateway_firewall", "gateway_grants", "gateway_inbound", "gateway_install", "gateway_installed", "gateway_service", "gateway_loopback", "gateway_peer", "gateway_request", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
-  & cl.exe @c11Flags $productionMTFlag "/Fo:$scratch\" "/Fe:$supervisorOut" $supervisor @gatewaySources /link @productionLinkFlags advapi32.lib userenv.lib fwpuclnt.lib rpcrt4.lib ws2_32.lib
+  $gatewaySources = @("gateway_environment", "gateway_firewall", "gateway_grants", "gateway_inbound", "gateway_install", "gateway_installed", "gateway_service", "gateway_loopback", "gateway_peer", "gateway_relay", "gateway_request", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$scratch\" "/Fe:$supervisorOut" $supervisor @gatewaySources /link @productionLinkFlags advapi32.lib bcrypt.lib userenv.lib fwpuclnt.lib rpcrt4.lib ws2_32.lib
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-supervisor quality analysis failed" }
 
   # #4068 W1/W11: install rules that need no administrator rights. The installed lifecycle itself
@@ -403,6 +405,16 @@ process.exit(41);
   if ($LASTEXITCODE -ne 0) { throw "MSVC gateway grants test analysis failed" }
   & $grantsTestOut
   if ($LASTEXITCODE -ne 0) { throw "Windows gateway grants rules failed" }
+
+  # #4068 (ADR-0043 D21): the pipe relay's plan grammar and port rewrite. Needs no administrator.
+  $relayTest = Join-Path (Split-Path $supervisor) "gateway_relay.test.c"
+  $relayTestOut = Join-Path $scratch "gateway-relay-test.exe"
+  $relayScratch = Join-Path $scratch "relay-test"
+  New-Item -ItemType Directory -Force -Path $relayScratch | Out-Null
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$relayScratch\" "/Fe:$relayTestOut" (Join-Path (Split-Path $supervisor) "gateway_relay.c") $relayTest /link advapi32.lib ws2_32.lib
+  if ($LASTEXITCODE -ne 0) { throw "MSVC gateway relay test analysis failed" }
+  & $relayTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows gateway relay rules failed" }
 
   # #4068 W1 (proposal C): the user environment key is closed while a confined run lives and
   # restored by the last one, on fixture keys this test owns. Needs no administrator rights.

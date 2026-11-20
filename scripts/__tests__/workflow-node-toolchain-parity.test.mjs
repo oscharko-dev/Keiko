@@ -209,7 +209,10 @@ describe("workflow Node toolchain parity", () => {
     // The owner-dispatched published-install matrix on Windows x64 and Intel macOS (#4068 W3)
     // adds one more.
     // The sole Node 26 baseline retires one duplicate compatibility-job setup.
-    expect(withSetupNode).toHaveLength(37);
+    // The owner-dispatched npm folder lane (ADR-0121 D9) adds three: its native-hardware qualify
+    // matrix and the publisher's prepare and publish jobs. The pipe-relay supervisor build and
+    // proof of ADR-0043 D21 (windows-gateway-confinement.yml relay-confinement) adds one.
+    expect(withSetupNode).toHaveLength(41);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

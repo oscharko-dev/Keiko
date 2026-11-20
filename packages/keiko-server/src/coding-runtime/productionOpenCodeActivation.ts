@@ -76,14 +76,8 @@ import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorks
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
 import {
   discoverPortableOpenCode,
-  installWindowsGatewayService,
   portableInstallLayoutPresent,
-  readWindowsGatewayServiceStatus,
 } from "./productionPortableCodingRuntime.js";
-import {
-  createWindowsGatewayServiceProbe,
-  type WindowsGatewayServiceProbe,
-} from "./windowsGatewayServiceProbe.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 
 type ProductionOpenCodePorts = Pick<
@@ -196,7 +190,9 @@ const CODING_RUNTIME_UNQUALIFIED_INSTALL_OPERATION = defineActivityLogOperation(
       values: [
         "platform-unqualified",
         "npm-runtime-package-missing",
+        "managed-runtime-package-missing",
         "portable-runtime-unverified",
+        "managed-runtime-unverified",
       ],
     },
   },
@@ -208,9 +204,16 @@ const CODING_RUNTIME_UNQUALIFIED_INSTALL_OPERATION = defineActivityLogOperation(
   releaseImpact: "minor",
 });
 
+type UnqualifiedInstallReason =
+  | "platform-unqualified"
+  | "npm-runtime-package-missing"
+  | "managed-runtime-package-missing"
+  | "portable-runtime-unverified"
+  | "managed-runtime-unverified";
+
 function recordUnqualifiedInstall(
   activityLog: ServerLogSink,
-  reason: "platform-unqualified" | "npm-runtime-package-missing" | "portable-runtime-unverified",
+  reason: UnqualifiedInstallReason,
 ): void {
   activityLog.write(
     activityLogEvent(
@@ -272,15 +275,12 @@ export type ProductionOpenCodeActivationResult =
       readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass;
       /** What the activated runtime is, from its verified release metadata (#3904 AC4). */
       readonly runtimeVersion: CodingWorkbenchRuntimeVersion;
-      /** Present only for a Windows runtime, whose every launch needs the broker (#4068). */
-      readonly windowsGatewayService?: WindowsGatewayServiceProbe;
       readonly unavailableReason?: undefined;
     }
   | {
       readonly ports?: undefined;
       readonly evidenceClass?: undefined;
       readonly runtimeVersion?: undefined;
-      readonly windowsGatewayService?: undefined;
       readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
     };
 
@@ -471,65 +471,29 @@ export function resolveProductionOpenCodeActivation(
   if (secureWorkspaceTextRead === undefined) {
     return { unavailableReason: "secure-read-unavailable" };
   }
+  const refusal = windowsRuntimeRefusal(runtime.portable);
+  if (refusal !== undefined) return { unavailableReason: refusal };
   return {
     evidenceClass: runtimeEvidenceClass(runtime.portable),
     runtimeVersion: runtimeVersionFacts(runtime.portable),
-    ...windowsGatewayServiceFacts(input, runtime.portable),
     ports: activatedPorts(input, runtime.portable, endpoints, secureWorkspaceTextRead),
   };
 }
 
 /**
- * Every Windows launch carries the gateway policy, and only the installed broker can enforce it. A
- * Windows runtime that yields no broker pin therefore refuses every start (ADR-0043), so readiness
- * must not offer one. No host state changes this, hence a constant rather than a probe.
+ * #4068 (ADR-0043 D21): the verified supervisor confines every Windows run itself, as the signed-in
+ * user, in an AppContainer without network capabilities. No installed service gates readiness and
+ * nothing asks for elevation. Every Windows launch carries the gateway policy and only that
+ * supervisor can enforce it, so a Windows runtime without a supervisor pin or helper stays
+ * unavailable. No host state changes this, hence a constant rather than a probe.
  */
-const UNQUALIFIED_WINDOWS_RUNTIME: {
-  readonly windowsGatewayService: WindowsGatewayServiceProbe;
-} = {
-  windowsGatewayService: { unavailableReason: () => "gateway-service-unqualified" },
-};
-
-/**
- * Whether the launcher declared an installation managed outside the app (ADR-0121 D9): the
- * standalone folder package and IT-managed deployments. An unreadable declaration counts as managed
- * outside, the same fail-closed reading the update detection applies.
- */
-function managedOutsideApp(env: NodeJS.ProcessEnv | undefined): boolean {
-  const management = env === undefined ? undefined : portableManagementFromEnv(env);
-  // The same shape as the CLI's rule (keiko-cli portable-management.ts): only an absent or
-  // `user-local` declaration leaves Keiko in charge, so a mode added later is managed outside.
-  return management !== undefined && management !== "user-local";
-}
-
-export function windowsGatewayServiceFacts(
-  input: Pick<ProductionOpenCodeActivationInput, "activityLog"> &
-    Partial<Pick<ProductionOpenCodeActivationInput, "env">>,
+export function windowsRuntimeRefusal(
   portable: ResolvedPortableOpenCodeRuntime,
-): { readonly windowsGatewayService?: WindowsGatewayServiceProbe } {
-  if (portable.target !== "windows-x64") return {};
-  // A release-qualified or independently pinned evaluation package, a Windows dev checkout and the
-  // Windows npm runtime package carry a broker pin (ADR-0043 D19); all
-  // then report the installed broker's state, so a checkout without one is told to install it.
-  const helperSha256 = windowsGatewayHelperPin(portable);
-  const helperPath = portable.nativeHelperPath;
-  return helperSha256 === undefined || helperPath === undefined
-    ? UNQUALIFIED_WINDOWS_RUNTIME
-    : {
-        windowsGatewayService: createWindowsGatewayServiceProbe({
-          helperPath,
-          helperSha256,
-          evidenceClass: runtimeEvidenceClass(portable),
-          origin: runtimeVersionFacts(portable).origin,
-          activityLog: input.activityLog ?? processServerLogSink(),
-          runStatus: readWindowsGatewayServiceStatus,
-          // The Workbench's Repair is the person's explicit choice for every origin, the dev lane
-          // included; Windows still asks through UAC. An installation managed outside the app (the
-          // standalone folder package, ADR-0121 D9) sets up no system service and offers no Repair.
-          runInstall: installWindowsGatewayService,
-          managedOutsideApp: managedOutsideApp(input.env),
-        }),
-      };
+): "gateway-service-unqualified" | undefined {
+  if (portable.target !== "windows-x64") return undefined;
+  return windowsGatewayHelperPin(portable) === undefined || portable.nativeHelperPath === undefined
+    ? "gateway-service-unqualified"
+    : undefined;
 }
 
 /**
@@ -610,14 +574,27 @@ function resolveRuntime(
 /**
  * No lane offered a runtime. The Workbench names the one step for the installation kind it found
  * (#4068): a desktop package whose bundled runtime did not verify, an npm installation without the
- * runtime package for this computer, or neither (a checkout or an unsupported platform).
+ * runtime package for this computer, or neither (a checkout or an unsupported platform). An
+ * installation that declares itself managed outside the app (a folder package, an IT-managed
+ * deployment) is told apart in both cases: the person installs and updates nothing there, so it
+ * must not be sent to an installer or to an in-app update; its administrator provides the package.
  */
 function unqualifiedInstallReason(
   host: Pick<ProductionOpenCodeActivationInput, "env" | "platform" | "arch">,
-): "platform-unqualified" | "npm-runtime-package-missing" | "portable-runtime-unverified" {
-  if (portableInstallLayoutPresent(host)) return "portable-runtime-unverified";
-  if (npmLaneRuntimePackageExpected(host)) return "npm-runtime-package-missing";
-  return "platform-unqualified";
+): UnqualifiedInstallReason {
+  const managed = managedOutsideTheApp(host.env);
+  if (portableInstallLayoutPresent(host)) {
+    return managed ? "managed-runtime-unverified" : "portable-runtime-unverified";
+  }
+  if (!npmLaneRuntimePackageExpected(host)) return "platform-unqualified";
+  return managed ? "managed-runtime-package-missing" : "npm-runtime-package-missing";
+}
+
+// An installation declares who manages it; only a person's own `user-local` setup is the app's to
+// install into and to update.
+function managedOutsideTheApp(env: NodeJS.ProcessEnv): boolean {
+  const management = portableManagementFromEnv(env);
+  return management !== undefined && management !== "user-local";
 }
 
 function recordDevLaneDiscovery(

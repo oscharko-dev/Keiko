@@ -12,6 +12,7 @@ import type {
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { I18nProvider } from "@/lib/i18n";
 import type { WorkspaceManifestView } from "../../hooks/useWorkspaceManifest";
+import { fetchProjects } from "../../../../../lib/api";
 import { MultiRootFilesWidget } from "./MultiRootFilesWidget";
 
 const rootGroupCss = readFileSync(
@@ -144,6 +145,44 @@ describe("MultiRootFilesWidget", () => {
     expect(view.removeRoot).toHaveBeenCalledWith("root-b", "root-b");
     await user.click(screen.getByRole("treeitem", { name: "Open /repo-b" }));
     expect(onOpenFile).toHaveBeenCalledWith("/repo-b", "src/app.ts");
+  });
+
+  it("does not offer a project the server refuses to read as a root to add", async () => {
+    vi.mocked(fetchProjects).mockResolvedValueOnce({
+      projects: [
+        {
+          path: "/keiko-state",
+          name: "State",
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 1,
+          available: true,
+          readable: false,
+        },
+        {
+          path: "/repo-c",
+          name: "Repo C",
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 1,
+          available: true,
+        },
+      ],
+    });
+    const current = manifest();
+    render(
+      <I18nProvider>
+        <MultiRootFilesWidget
+          manifest={current}
+          workspace={workspace(current)}
+          onActiveFileChange={vi.fn()}
+          onOpenFile={vi.fn()}
+          onOpenGitDelivery={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+    await screen.findByRole("option", { name: "Repo C" });
+    expect(screen.queryByRole("option", { name: "State" })).toBeNull();
   });
 
   it("uses roving tabindex with ArrowUp, ArrowDown, Home, and End across root groups", async (): Promise<void> => {

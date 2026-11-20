@@ -310,7 +310,26 @@ function isShippedSourceEntry(name, layout) {
     `${resources}.portable/setup-manifest.json`,
     `${resources}app/dist/cli/index.js`,
   ];
-  return name.startsWith(`${resources}runtime/node/`) || exact.includes(name);
+  if (exact.includes(name)) return true;
+  const nodePrefix = `${resources}runtime/node/`;
+  return name.startsWith(nodePrefix) && !isNodeNonRuntimeEntry(name.slice(nodePrefix.length));
+}
+
+// What the Node.js release carries that neither Node.js nor npm runs: the C headers for building
+// native addons (`include/`, about 61 MB unpacked on macOS), the manual and documentation pages
+// (`share/`) and the release's own CHANGELOG.md and README.md. `npm ci --ignore-scripts` compiles
+// nothing, so the folder leaves them out. Everything else of the release stays as the archive has it,
+// byte for byte: the node binary (`bin/node`, `node.exe`), npm and corepack (`lib/node_modules`,
+// `node_modules`, `npm*`, `npx*`), LICENSE, NOTICE and NODE_RUNTIME_SOURCE.json. The standalone
+// folder package ships the payload unchanged and is not built here.
+export const NODE_NON_RUNTIME_DIRECTORIES = Object.freeze(["include", "share"]);
+export const NODE_NON_RUNTIME_FILES = Object.freeze(["CHANGELOG.md", "README.md"]);
+
+function isNodeNonRuntimeEntry(relativeName) {
+  const [first] = relativeName.split("/");
+  return (
+    NODE_NON_RUNTIME_DIRECTORIES.includes(first) || NODE_NON_RUNTIME_FILES.includes(relativeName)
+  );
 }
 
 function assemblePackage(input) {

@@ -74,7 +74,13 @@ The standalone folder package (ADR-0121 D9) is the portable payload, every file 
 start and stop files around it. `scripts/build-standalone-package.mjs` repacks a verified portable archive;
 the start files live in `scripts/standalone/`. A change here must keep three things true: the
 payload is never modified, the folder form never performs or suggests an installation, and nothing
-is downloaded at start. Run `scripts/__tests__/build-standalone-package.test.mjs` and the
+is downloaded at start. Both folder forms run Keiko inside their own program folder, which is never
+a working folder: they declare `KEIKO_LAUNCH_FROM_PROGRAM_FOLDER=1`, so the server seeds no default
+project from the launch directory (the payload's `app` folder, or the package folder itself in the
+npm form) and the read surface refuses it as a root (`pathIsDenied` in `files-deny.ts`); a Chat
+started without a folder is still kept there. `keiko.config.json` and `*.vault` are credential names
+of the sensitive-path denial wherever they lie, so the standalone package's configuration beside its
+start files is protected by name. Run `scripts/__tests__/build-standalone-package.test.mjs` and the
 `portable-in-place` and `provisioned-config` suites of `keiko-cli`. The operator guide is
 [`docs/release/standalone-folder-package.md`](docs/release/standalone-folder-package.md).
 
@@ -93,11 +99,23 @@ lockfile; its first start installs Keiko into the folder with `npm ci --ignore-s
 registry the folder's `.npmrc` names. `scripts/build-standalone-npm-package.mjs` builds it; the start
 logic and start files live in `scripts/standalone/npm/`. A change here must keep three things true:
 nothing is written outside the folder and the state directory, no install script runs, and every
-package npm downloads carries a public-registry sha512 integrity. Run
+package npm downloads carries a public-registry sha512 integrity. The folder carries the release's
+Node.js runtime without its headers, manuals and release notes (`include/`, `share/`, CHANGELOG.md,
+README.md); every file it keeps is the archive's, byte for byte. Run
 `scripts/__tests__/build-standalone-npm-package.test.mjs`,
 `scripts/__tests__/standalone-npm-runtime.test.mjs` and
 `scripts/__tests__/standalone-npm-install.test.mjs`, which runs the real npm against a loopback
-registry inside an enclosing workspace. The operator guide is
+registry inside an enclosing workspace. The package is no asset of the product release: after a
+release, an owner in `KEIKO_RELEASE_OWNER_GITHUB_LOGINS` runs `.github/workflows/npm-folder-publish.yml`,
+which starts each package on native hardware with
+`scripts/testing/qualify-npm-folder-package.mjs` (`macos-15`, `macos-15-intel`, `windows-2025`) and
+publishes the exact tested ZIPs through `scripts/publish-npm-folder-packages.mjs` as the attested
+GitHub prerelease `npm-folder-<version>`. The prerelease is a transport, never latest, and grants no
+update trust. A change to the builder, `scripts/standalone/**`, the script or the workflow runs the
+same qualification on a pull request when the root version is already published on npm and its
+product release `v<version>` exists; otherwise that run ends green with a notice. Run
+`scripts/__tests__/qualify-npm-folder-package.test.mjs` and
+`scripts/__tests__/publish-npm-folder-packages.test.mjs`. The operator guide is
 [`docs/release/standalone-npm-package.md`](docs/release/standalone-npm-package.md).
 
 ### Activity Log runtime changes

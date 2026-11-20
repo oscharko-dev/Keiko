@@ -20,11 +20,13 @@ export const windowsGatewaySources = [
   "gateway_service",
   "gateway_loopback",
   "gateway_peer",
+  "gateway_relay",
   "gateway_request",
   "gateway_wfp",
 ].map((name) => resolve(dirname(WINDOWS_SOURCE), name + ".c"));
 export const windowsGatewayLibraries = [
   "advapi32.lib",
+  "bcrypt.lib",
   "userenv.lib",
   "fwpuclnt.lib",
   "rpcrt4.lib",

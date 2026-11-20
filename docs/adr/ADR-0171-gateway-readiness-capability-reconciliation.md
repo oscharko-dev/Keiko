@@ -127,7 +127,15 @@ positive observation is refused and starts no check: Chat send and regeneration 
 queue retries a bounded number of times and then suspends with the transcript kept. A window's
 opening or restored selection reads with `check=use`, which may join a check that runs and report
 the state but never dispatches one; only a person's pick or Start sends `check=1`, and a Start
-belongs to the model it was pressed for. A connection is the provider entry
+belongs to the model it was pressed for. When no activated model is eligible for a coding run because
+its tool calling was never confirmed (the state after Gateway Setup, whose tool-calling step may end
+without a verdict, or after an activation whose own step did) or its proof aged out, the Workbench
+lists the activated, not refuted models of that kind instead of an empty picker and offers one
+explicit action, "Check tool calling" (amended 2026-11-19). The action sends `check=1` for the
+selected model, exactly as a pick does, and the alert names that action; opening a window, a timer or
+a passive read still dispatches nothing. With an eligible model present the picker lists eligible
+models only, as before. The press is recorded as `client.coding-workbench.interaction`
+`tool-check-requested` (no fields). A connection is the provider entry
 with its credential; a proof another model's check persists advances the generation without
 changing the connection, so it repeats no check. Startup and explicit readiness probes share the
 interactive gateway's five-minute silence floor (#4038), preserving larger configured timeouts.

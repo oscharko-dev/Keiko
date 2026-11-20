@@ -453,7 +453,13 @@ export function npmEnv(env, nodeDir, registryNamed = false) {
  * in-place launcher of the folder package pins it: an inherited `user-local` does not apply here.
  */
 export function keikoEnv(env) {
-  return { ...env, KEIKO_PORTABLE_MANAGEMENT: "organization-managed" };
+  return {
+    ...env,
+    KEIKO_PORTABLE_MANAGEMENT: "organization-managed",
+    // Keiko runs inside this folder: its program files and, in a team package, the gateway token
+    // are no project, so Keiko starts without a default one.
+    KEIKO_LAUNCH_FROM_PROGRAM_FOLDER: "1",
+  };
 }
 
 function processAlive(pid) {

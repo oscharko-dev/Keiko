@@ -1079,6 +1079,10 @@ jobs:
           # SonarCloud SCM sensor attributes changed lines to the real head instead of warning "detected
           # as changed but without having changed lines". Push/dispatch runs analyze their own head.
           SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.sonar-head.outputs.sha || github.sha }}
+          # The scanner JVM otherwise takes up to a quarter of the runner's memory, which the JS/TS
+          # analyzer's Node.js heap (sonar.javascript.node.maxspace) needs (#2360). The local gate
+          # runs the same full analysis with 768 MB.
+          SONAR_SCANNER_OPTS: "-Xmx1536m"
         run: |
           # ADR-0139 D6: transient SonarCloud-side provisioning or network failures retry with
           # backoff before failing closed; genuine quality-gate failures are never retried.
