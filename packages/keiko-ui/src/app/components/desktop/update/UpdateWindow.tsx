@@ -79,6 +79,12 @@ export interface UpdateWindowApi {
   readonly runRemediationAction: typeof runUpdateRemediationAction;
 }
 
+// The update actions the window runs before it refreshes; their results are not read.
+type RefreshedActionResult =
+  | ReturnType<UpdateWindowApi["cancelSession"]>
+  | ReturnType<UpdateWindowApi["verifyRestart"]>
+  | ReturnType<UpdateWindowApi["runRemediationAction"]>;
+
 interface UpdateWindowProps {
   readonly api?: UpdateWindowApi;
 }
@@ -1789,7 +1795,7 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
   );
 
   const runAndRefresh = useCallback(
-    async (nextBusy: BusyAction, action: () => Promise<unknown>): Promise<void> => {
+    async (nextBusy: BusyAction, action: () => RefreshedActionResult): Promise<void> => {
       setBusy(nextBusy);
       try {
         await action();
