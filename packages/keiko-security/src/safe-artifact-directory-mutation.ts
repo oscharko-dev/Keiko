@@ -1,7 +1,11 @@
 import { lstatSync, linkSync, readSync, renameSync, unlinkSync } from "node:fs";
-import { MAX_SAFE_ARTIFACT_DIRECTORY_MUTATION_PROTOCOL_BYTES } from "./safe-artifact-directory-mutation-protocol.js";
 import {
-  runSafeArtifactDirectoryMutation,
+  MAX_SAFE_ARTIFACT_DIRECTORY_MUTATION_PROTOCOL_BYTES,
+  type SafeArtifactDirectoryMutationRequest,
+} from "./safe-artifact-directory-mutation-protocol.js";
+import {
+  applySafeArtifactDirectoryMutation,
+  parseSafeArtifactDirectoryMutationRequest,
   type SafeArtifactDirectoryMutationIo,
 } from "./safe-artifact-directory-mutation-runtime.js";
 
@@ -28,7 +32,7 @@ function entryMatches(name: string, expectedDev: bigint, expectedIno: bigint): b
   }
 }
 
-function readRequest(): unknown {
+function readRequest(): SafeArtifactDirectoryMutationRequest | undefined {
   const buffer = Buffer.alloc(MAX_SAFE_ARTIFACT_DIRECTORY_MUTATION_PROTOCOL_BYTES + 1);
   let offset = 0;
   try {
@@ -38,7 +42,9 @@ function readRequest(): unknown {
       offset += count;
     }
     if (offset === 0 || offset > MAX_SAFE_ARTIFACT_DIRECTORY_MUTATION_PROTOCOL_BYTES) return;
-    return JSON.parse(buffer.subarray(0, offset).toString("utf8")) as unknown;
+    return parseSafeArtifactDirectoryMutationRequest(
+      JSON.parse(buffer.subarray(0, offset).toString("utf8")),
+    );
   } catch {
     return undefined;
   }
@@ -52,4 +58,4 @@ const mutationIo: SafeArtifactDirectoryMutationIo = {
   unlink: unlinkSync,
 };
 
-process.exitCode = runSafeArtifactDirectoryMutation(readRequest(), mutationIo);
+process.exitCode = applySafeArtifactDirectoryMutation(readRequest(), mutationIo);

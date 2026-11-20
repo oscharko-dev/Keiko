@@ -109,7 +109,10 @@ function parsedCommon(value: Readonly<Record<string, unknown>>): MutationRequest
   };
 }
 
-function parsedRequest(value: unknown): SafeArtifactDirectoryMutationRequest | undefined {
+/** Decodes the helper's untrusted stdin JSON; anything outside the closed protocol is undefined. */
+export function parseSafeArtifactDirectoryMutationRequest(
+  value: unknown,
+): SafeArtifactDirectoryMutationRequest | undefined {
   if (!isRecord(value)) return undefined;
   const common = parsedCommon(value);
   if (common === undefined) return undefined;
@@ -135,7 +138,13 @@ export function runSafeArtifactDirectoryMutation(
   value: unknown,
   io: SafeArtifactDirectoryMutationIo,
 ): number {
-  const request = parsedRequest(value);
+  return applySafeArtifactDirectoryMutation(parseSafeArtifactDirectoryMutationRequest(value), io);
+}
+
+export function applySafeArtifactDirectoryMutation(
+  request: SafeArtifactDirectoryMutationRequest | undefined,
+  io: SafeArtifactDirectoryMutationIo,
+): number {
   if (request === undefined) return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.invalidInput;
   const expectedDev = BigInt(request.expectedDev);
   const expectedIno = BigInt(request.expectedIno);

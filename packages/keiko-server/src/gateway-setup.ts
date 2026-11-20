@@ -7711,12 +7711,20 @@ const TEMPORARY_SETUP_ERROR_CODES: ReadonlySet<string> = new Set([
   ERROR_CODES.CANCELLED,
 ]);
 
-function safeErrorProperty(error: unknown, property: string): unknown {
-  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
-    return undefined;
-  }
+// The error fields the setup classifier walks. Each is read as `unknown` and checked by its caller.
+interface SetupErrorFields {
+  readonly cause?: unknown;
+  readonly code?: unknown;
+  readonly errors?: unknown;
+  readonly httpStatus?: unknown;
+  readonly status?: unknown;
+}
+
+function safeErrorProperty(error: unknown, property: keyof SetupErrorFields): unknown {
+  if (!isObjectLike(error)) return undefined;
+  const fields: SetupErrorFields = error;
   try {
-    return Reflect.get(error, property);
+    return fields[property];
   } catch {
     return undefined;
   }
@@ -7736,7 +7744,7 @@ function enqueueSetupError(value: unknown, pending: unknown[], seen: WeakSet<obj
 
 function setupErrorValue<T>(
   error: unknown,
-  property: string,
+  property: keyof SetupErrorFields,
   accepts: (value: unknown) => value is T,
 ): T | undefined {
   const pending: unknown[] = [];

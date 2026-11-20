@@ -71,6 +71,12 @@ export function startSecurityLogTimer(): () => number {
   return (): number => Math.round((performance.now() - startedAt) * 1000) / 1000;
 }
 
+// The two error fields `securityErrorKind` reads, each still unchecked.
+interface ErrorKindFields {
+  readonly code?: unknown;
+  readonly name?: unknown;
+}
+
 // The shape an error KIND may have is `classifyErrorKind` (ADR-0173 D11), imported from
 // `keiko-contracts` rather than declared here, so this reducer and the ones in
 // `knowledge-log.ts`, `keiko-activity-log/src/server-log.ts` and
@@ -83,10 +89,10 @@ export function startSecurityLogTimer(): () => number {
 // read that just threw), so a throw here would replace a diagnosable failure with a classification
 // failure. An unreadable property degrades to the next candidate, exactly like a property whose
 // value fails the shape gate.
-function errorKindProperty(error: object, key: string): string | undefined {
+function errorKindProperty(error: ErrorKindFields, key: keyof ErrorKindFields): string | undefined {
   let value: unknown;
   try {
-    value = (error as Record<string, unknown>)[key];
+    value = error[key];
   } catch {
     return undefined;
   }

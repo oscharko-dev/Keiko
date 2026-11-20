@@ -98,17 +98,33 @@ function vaultEnvelopeErrorKind(
   return fallback;
 }
 
-function safeErrorProperty(error: unknown, property: "cause" | "stack"): unknown {
-  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
+// The two fields the failure evidence reads from a thrown value this layer did not build.
+interface ErrorChainFields {
+  readonly cause?: unknown;
+  readonly stack?: unknown;
+}
+
+function errorChainFields(error: unknown): ErrorChainFields | undefined {
+  return (typeof error === "object" && error !== null) || typeof error === "function"
+    ? error
+    : undefined;
+}
+
+// Reading `stack` or `cause` can run a getter or proxy trap, so a throw degrades to "absent"
+// instead of replacing the failure being classified.
+function safeErrorStack(error: ErrorChainFields): string | undefined {
+  try {
+    const stack = "stack" in error ? error.stack : undefined;
+    return typeof stack === "string" ? stack : undefined;
+  } catch {
     return undefined;
   }
+}
+
+function safeErrorCause(error: ErrorChainFields): object | undefined {
   try {
-    switch (property) {
-      case "cause":
-        return "cause" in error ? error.cause : undefined;
-      case "stack":
-        return "stack" in error ? error.stack : undefined;
-    }
+    const cause = "cause" in error ? error.cause : undefined;
+    return typeof cause === "object" && cause !== null ? cause : undefined;
   } catch {
     return undefined;
   }
@@ -145,8 +161,9 @@ function anchoredVaultFrame(line: string): string | undefined {
 }
 
 function vaultStackFrames(error: unknown): readonly string[] {
-  const stack = safeErrorProperty(error, "stack");
-  if (typeof stack !== "string") return [];
+  const fields = errorChainFields(error);
+  const stack = fields === undefined ? undefined : safeErrorStack(fields);
+  if (stack === undefined) return [];
   const bounded = stack.slice(0, MAX_VAULT_STACK_CHARS);
   return bounded
     .split("\n")
@@ -159,11 +176,12 @@ function vaultStackFrames(error: unknown): readonly string[] {
 function vaultCauseChain(error: unknown): readonly string[] {
   const classes: string[] = [];
   const seen = new WeakSet();
-  if (typeof error === "object" && error !== null) seen.add(error);
-  let current = error;
+  let current = errorChainFields(error);
+  if (current === undefined) return classes;
+  seen.add(current);
   for (let depth = 0; depth < MAX_VAULT_CAUSES; depth += 1) {
-    const cause = safeErrorProperty(current, "cause");
-    if (typeof cause !== "object" || cause === null || seen.has(cause)) break;
+    const cause = safeErrorCause(current);
+    if (cause === undefined || seen.has(cause)) break;
     seen.add(cause);
     classes.push(securityErrorKind(cause));
     current = cause;
