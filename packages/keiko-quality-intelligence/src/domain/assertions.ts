@@ -67,12 +67,12 @@ export const normaliseText = (value: string | undefined): string => {
 export const isMeaningfulText = (value: string | undefined): boolean =>
   normaliseText(value).length > 0;
 
+const KNOWN_PRIORITIES: ReadonlySet<string> = new Set(QUALITY_INTELLIGENCE_PRIORITIES);
+
 /**
  * Type guard mapping an arbitrary string to a known QI priority. Pure; used
  * to keep the test-design model's priority field type-correct.
  */
-const KNOWN_PRIORITIES: ReadonlySet<string> = new Set(QUALITY_INTELLIGENCE_PRIORITIES);
-
 export const isKnownPriority = (
   value: string,
 ): value is QualityIntelligence.QualityIntelligencePriority => KNOWN_PRIORITIES.has(value);
