@@ -2,11 +2,11 @@ import { expect, test, type Page } from "@playwright/test";
 import { installLiveCodingWorkbenchRuntime } from "./support/coding-workbench-live-runtime.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 
-// #4068: what a person meets in the Coding Workbench on Windows. The broker confines only a new
-// Keiko-managed worktree, so the Workbench offers that location alone, and a start the broker
-// cannot confine names what to change instead of failing inside the runtime. The composer draft
-// must also survive a reload against the real draft route, which had refused the Workbench's
-// actual window id.
+// #4068: what a person meets in the Coding Workbench on Windows. Where the runtime names only a new
+// Keiko-managed worktree as a location, the Workbench offers that location alone; a start Windows
+// cannot confine (a drive, the user folder itself, Keiko's own data, a worktree drive other than
+// Windows) names what to change instead of failing inside the runtime. The composer draft must also
+// survive a reload against the real draft route, which had refused the Workbench's actual window id.
 
 const WORK_IN = "Work in";
 
@@ -53,7 +53,8 @@ test("keeps both work locations where the runtime names none @smoke", async ({ p
 for (const refusal of [
   {
     code: "CODING_RUNTIME_WORKSPACE_LOCATION_UNSUPPORTED",
-    sentence: "Keiko runs a coding task only in a new worktree, not in your own checkout or folder",
+    sentence:
+      "Keiko does not run a coding task in a drive, your user folder itself or a folder of Keiko's own data",
   },
   {
     code: "CODING_RUNTIME_WORKSPACE_VOLUME_UNSUPPORTED",
