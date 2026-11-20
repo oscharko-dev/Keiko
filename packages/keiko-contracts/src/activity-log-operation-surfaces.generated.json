@@ -319,6 +319,7 @@
   "evidence.retention": "runtime-packages",
   "figma.snapshot.capture-failed": "bff",
   "figma.snapshot.captured": "bff",
+  "files.copy.refused": "bff",
   "files.search.completed": "bff",
   "gateway.catalog.automatic.completed": "model-gateway",
   "gateway.catalog.metadata.wait": "model-gateway",

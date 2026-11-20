@@ -33,6 +33,7 @@ import {
   type WorkspaceHardLinkPolicy,
   type WorkspaceStat,
 } from "./fs.js";
+import { DIRECTORY_LINK_TYPE } from "./_memfs.js";
 
 const roots: string[] = [];
 
@@ -69,29 +70,27 @@ afterEach(() => {
 });
 
 describe("nodeWorkspaceFs", () => {
-  it.skipIf(process.platform === "win32")(
-    "does not alias a literal POSIX backslash to a path separator during snapshot validation",
-    () => {
-      const expected = {
-        size: 1,
-        isFile: true,
-        isDirectory: false,
-        isSymbolicLink: false,
-        fileIdentity: "fixture:1",
-      };
-      const fs = {
-        readFileUtf8: (): string => "x",
-        stat: (): typeof expected => expected,
-        readDir: (): readonly [] => [],
-        realPath: (): string => "/workspace/a\\b",
-        exists: (): boolean => true,
-      } satisfies WorkspaceFs;
+  // A Windows host reads the backslash as a separator, so there both spellings name one path.
+  it("does not alias a literal POSIX backslash to a path separator during snapshot validation", () => {
+    const expected = {
+      size: 1,
+      isFile: true,
+      isDirectory: false,
+      isSymbolicLink: false,
+      fileIdentity: "fixture:1",
+    };
+    const fs = {
+      readFileUtf8: (): string => "x",
+      stat: (): typeof expected => expected,
+      readDir: (): readonly [] => [],
+      realPath: (): string => "/workspace/a\\b",
+      exists: (): boolean => true,
+    } satisfies WorkspaceFs;
 
-      expect(
-        isWorkspacePathSnapshotCurrent(fs, "/workspace/input", "/workspace/a/b", expected),
-      ).toBe(false);
-    },
-  );
+    expect(isWorkspacePathSnapshotCurrent(fs, "/workspace/input", "/workspace/a/b", expected)).toBe(
+      process.platform === "win32",
+    );
+  });
 
   // A same-inode replacement can match size, link count, mtime and ctime within one timestamp
   // granule; the creation time is the field it cannot carry over, so every snapshot comparison
@@ -247,7 +246,7 @@ describe("nodeWorkspaceFs", () => {
     const canonicalFile = join(canonicalRoot, "nested", "fixture.txt");
     expect(nodeWorkspaceFs.realPath(canonicalFile)).toBe(canonicalFile);
     renameSync(nested, retained);
-    symlinkSync(outside, nested, "dir");
+    symlinkSync(outside, nested, DIRECTORY_LINK_TYPE);
 
     expect(
       nodeWorkspaceFs.readFileUtf8SameDescriptor?.(
@@ -360,9 +359,15 @@ describe("nodeWorkspaceFs", () => {
     // review; the guard under test is the in-place rewrite, not that platform rule.
     utimesSync(file, new Date(Date.now() + 60_000), new Date(Date.now() + 60_000));
     const rewritten = nodeWorkspaceFs.stat(file);
-    expect(rewritten.ctimeNs).not.toBe(before.ctimeNs);
+    // NTFS stamps the change time from the system clock tick (about 15.6 ms), so a rewrite inside
+    // one tick keeps it; the modification time the utimes above moved still shows the rewrite.
+    if (process.platform === "win32") expect(rewritten.mtimeNs).not.toBe(before.mtimeNs);
+    else expect(rewritten.ctimeNs).not.toBe(before.ctimeNs);
     expect(rewritten.birthtimeNs).toBe(before.birthtimeNs);
 
+    // NTFS file-name tunneling hands a file recreated under the same name within 15 seconds the
+    // creation time of the one it replaced, so Windows cannot show the recreate here (#4432).
+    if (process.platform === "win32") return;
     rmSync(file);
     writeFileSync(file, "recreated", "utf8");
     expect(nodeWorkspaceFs.stat(file).birthtimeNs).not.toBe(before.birthtimeNs);
@@ -527,6 +532,7 @@ describe("nodeWorkspaceFs", () => {
     await expect(reader.close()).resolves.toBeUndefined();
   });
 
+  // Windows has no FIFO a directory can hold: its named pipes live only under `\\.\pipe\` (#4432).
   it.skipIf(process.platform === "win32")(
     "rejects a FIFO without blocking a bounded production read",
     async () => {
@@ -606,7 +612,7 @@ describe("nodeWorkspaceFs", () => {
       writeFileSync(join(root, `entry-${index.toString().padStart(2, "0")}`), "x");
     }
     const alias = join(root, "directory-alias");
-    symlinkSync(root, alias);
+    symlinkSync(root, alias, DIRECTORY_LINK_TYPE);
 
     expect(nodeWorkspaceFs.readDir(root, 3)).toHaveLength(3);
     expect(() => nodeWorkspaceFs.readDir(alias, 3)).toThrow(WorkspaceDescriptorReadError);

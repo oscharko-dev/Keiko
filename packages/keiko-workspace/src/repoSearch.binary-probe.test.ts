@@ -1,6 +1,6 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
 import { executeCodingRepositoryRequest } from "./codingRepositorySearch.js";
@@ -150,7 +150,7 @@ describe("bounded native binary prefilter", () => {
     const fs: WorkspaceFs = {
       ...nodeWorkspaceFs,
       readFileBytes: async (...args): Promise<Uint8Array> => {
-        if (args[0].endsWith("/mutable.txt")) {
+        if (args[0].endsWith(join(sep, "mutable.txt"))) {
           if (args[1] <= DEFAULT_BINARY_PROBE.maxProbeBytes) sawPrefix = true;
           else if (sawPrefix) {
             writeFileSync(args[0], "changed file\n");
@@ -188,7 +188,7 @@ describe("bounded native binary prefilter", () => {
       },
       stat: (path) => {
         const snapshot = nodeWorkspaceFs.stat(path);
-        if (prefixFinished && !changed && path.endsWith("/mutable.txt")) {
+        if (prefixFinished && !changed && path.endsWith(join(sep, "mutable.txt"))) {
           // The head's post-read snapshot is stable; the later full read sees a new stable file.
           writeFileSync(path, "BinaryProbeNeedle changed file\n");
           changed = true;

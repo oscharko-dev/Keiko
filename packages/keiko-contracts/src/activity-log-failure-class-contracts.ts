@@ -6850,6 +6850,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "files-copy-containment-refusal",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["files.copy.refused"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["files.copy.refused"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["files.copy.refused"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["files.copy.refused"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "files-search-availability",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

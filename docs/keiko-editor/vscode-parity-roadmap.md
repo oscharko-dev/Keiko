@@ -161,8 +161,9 @@ protects editor- and agent-driven mutations that already hold a version.
 ### 2.7 Tree polish — ✅ delivered (scrollable tab strip deferred)
 
 Copy and duplicate (context menu, collision-free `name copy.ext`) over a new contained, deny-checked
-`POST /api/files/copy` endpoint (`fs.cp` with `force:false`/`errorOnExist:true`/`dereference:false`,
-symlink/root reject, `cp`-specific errno mapping), and drag-move within the tree (HTML5 drag from any
+`POST /api/files/copy` endpoint (`fs.cp` with `force:false`/`errorOnExist:true`/`dereference:false`
+and a filter that refuses every symbolic link or Windows junction in the source tree, symlink/root
+reject, `cp`-specific errno mapping), and drag-move within the tree (HTML5 drag from any
 row, drop onto a readable folder → reuses `renameFilesEntry`, which re-homes open tabs via the Wave-1
 mutation mechanic; keyboard-accessible alternative stays Rename/Delete/Duplicate in the context menu).
 The horizontally **scrollable** tab strip (replacing the `+N` collapse) is intentionally **deferred**:

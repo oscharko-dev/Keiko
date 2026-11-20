@@ -85,6 +85,7 @@ import {
   createFileWorkspaceIndexStore,
   type WorkspaceIndexSnapshot,
 } from "./workspaceIndex.js";
+import { DIRECTORY_LINK_TYPE } from "./_memfs.js";
 
 const KEY = Buffer.alloc(32, 41);
 const ROTATED_KEY = Buffer.alloc(32, 43);
@@ -134,6 +135,10 @@ function deferred(): { readonly promise: Promise<void>; readonly resolve: () => 
   });
   return { promise, resolve: resolvePromise };
 }
+
+// Windows refuses to rename a directory while a file inside it is open (EPERM), so a parent swap
+// cannot happen while the marker descriptor is held there and this race cannot be staged (#4432).
+const itStagesParentSwap = it.skipIf(process.platform === "win32");
 
 function armParentSwap(
   runtimeDir: string,
@@ -356,7 +361,7 @@ describe("file workspace index runtime-directory identity", () => {
     const runtimeDir = join(parent, "runtime");
     const aliasParent = join(parent, "alias-parent");
     mkdirSync(runtimeDir, { mode: 0o700 });
-    symlinkSync(parent, aliasParent, "dir");
+    symlinkSync(parent, aliasParent, DIRECTORY_LINK_TYPE);
     const firstCommitEntered = deferred();
     const releaseFirstCommit = deferred();
     let commitCount = 0;
@@ -396,90 +401,99 @@ describe("file workspace index runtime-directory identity", () => {
     }
   });
 
-  it("rejects a valid encrypted snapshot when the parent is swapped after its marker is opened", async () => {
-    const parent = await mkdtemp(join(tmpdir(), "keiko-index-parent-race-"));
-    const runtimeDir = await mkdtemp(join(parent, "runtime-"));
-    const replacementDir = await mkdtemp(join(parent, "replacement-"));
-    const displacedDir = join(parent, "displaced-runtime");
-    try {
-      const storageKey = "same-scope";
-      const expected = snapshot("src/expected.ts");
-      const poison = snapshot("src/poison.ts");
-      const expectedStore = createFileWorkspaceIndexStore({
-        runtimeDir,
-        encryptionKey: KEY,
-      });
-      const replacementStore = createFileWorkspaceIndexStore({
-        runtimeDir: replacementDir,
-        encryptionKey: KEY,
-      });
-      await expectedStore.saveSnapshot(storageKey, expected);
-      await replacementStore.saveSnapshot(storageKey, poison);
-      // Establish the original marker/identity without populating the target snapshot cache.
-      await expectedStore.saveSnapshot("identity-prime", expected);
+  itStagesParentSwap(
+    "rejects a valid encrypted snapshot when the parent is swapped after its marker is opened",
+    async () => {
+      const parent = await mkdtemp(join(tmpdir(), "keiko-index-parent-race-"));
+      const runtimeDir = await mkdtemp(join(parent, "runtime-"));
+      const replacementDir = await mkdtemp(join(parent, "replacement-"));
+      const displacedDir = join(parent, "displaced-runtime");
+      try {
+        const storageKey = "same-scope";
+        const expected = snapshot("src/expected.ts");
+        const poison = snapshot("src/poison.ts");
+        const expectedStore = createFileWorkspaceIndexStore({
+          runtimeDir,
+          encryptionKey: KEY,
+        });
+        const replacementStore = createFileWorkspaceIndexStore({
+          runtimeDir: replacementDir,
+          encryptionKey: KEY,
+        });
+        await expectedStore.saveSnapshot(storageKey, expected);
+        await replacementStore.saveSnapshot(storageKey, poison);
+        // Establish the original marker/identity without populating the target snapshot cache.
+        await expectedStore.saveSnapshot("identity-prime", expected);
 
-      armParentSwap(runtimeDir, replacementDir, displacedDir);
+        armParentSwap(runtimeDir, replacementDir, displacedDir);
 
-      await expect(expectedStore.loadSnapshot(storageKey)).resolves.toBeUndefined();
-    } finally {
-      fsHooks.afterOpen = undefined;
-      rmSync(parent, { force: true, recursive: true });
-    }
-  });
+        await expect(expectedStore.loadSnapshot(storageKey)).resolves.toBeUndefined();
+      } finally {
+        fsHooks.afterOpen = undefined;
+        rmSync(parent, { force: true, recursive: true });
+      }
+    },
+  );
 
-  it("does not reuse a parsed snapshot cache entry after the parent identity drifts", async () => {
-    const parent = await mkdtemp(join(tmpdir(), "keiko-index-cache-race-"));
-    const runtimeDir = await mkdtemp(join(parent, "runtime-"));
-    const replacementDir = await mkdtemp(join(parent, "replacement-"));
-    const displacedDir = join(parent, "displaced-runtime");
-    try {
-      const storageKey = "cached-scope";
-      const expectedStore = createFileWorkspaceIndexStore({
-        runtimeDir,
-        encryptionKey: KEY,
-      });
-      await expectedStore.saveSnapshot(storageKey, snapshot("src/cached.ts"));
-      await expect(expectedStore.loadSnapshot(storageKey)).resolves.toBeDefined();
-      const [fileName] = snapshotFiles(runtimeDir);
-      if (fileName === undefined) throw new Error("expected cached snapshot file");
-      const sourcePath = join(runtimeDir, fileName);
-      const replacementPath = join(replacementDir, fileName);
-      copyFileSync(sourcePath, replacementPath);
-      const sourceStat = statSync(sourcePath);
-      utimesSync(replacementPath, sourceStat.atime, sourceStat.mtime);
+  itStagesParentSwap(
+    "does not reuse a parsed snapshot cache entry after the parent identity drifts",
+    async () => {
+      const parent = await mkdtemp(join(tmpdir(), "keiko-index-cache-race-"));
+      const runtimeDir = await mkdtemp(join(parent, "runtime-"));
+      const replacementDir = await mkdtemp(join(parent, "replacement-"));
+      const displacedDir = join(parent, "displaced-runtime");
+      try {
+        const storageKey = "cached-scope";
+        const expectedStore = createFileWorkspaceIndexStore({
+          runtimeDir,
+          encryptionKey: KEY,
+        });
+        await expectedStore.saveSnapshot(storageKey, snapshot("src/cached.ts"));
+        await expect(expectedStore.loadSnapshot(storageKey)).resolves.toBeDefined();
+        const [fileName] = snapshotFiles(runtimeDir);
+        if (fileName === undefined) throw new Error("expected cached snapshot file");
+        const sourcePath = join(runtimeDir, fileName);
+        const replacementPath = join(replacementDir, fileName);
+        copyFileSync(sourcePath, replacementPath);
+        const sourceStat = statSync(sourcePath);
+        utimesSync(replacementPath, sourceStat.atime, sourceStat.mtime);
 
-      armParentSwap(runtimeDir, replacementDir, displacedDir);
+        armParentSwap(runtimeDir, replacementDir, displacedDir);
 
-      await expect(expectedStore.loadSnapshot(storageKey)).resolves.toBeUndefined();
-    } finally {
-      fsHooks.afterOpen = undefined;
-      rmSync(parent, { force: true, recursive: true });
-    }
-  });
+        await expect(expectedStore.loadSnapshot(storageKey)).resolves.toBeUndefined();
+      } finally {
+        fsHooks.afterOpen = undefined;
+        rmSync(parent, { force: true, recursive: true });
+      }
+    },
+  );
 
-  it("does not commit a snapshot after the parent is swapped during the write guard", async () => {
-    const parent = await mkdtemp(join(tmpdir(), "keiko-index-write-race-"));
-    const runtimeDir = await mkdtemp(join(parent, "runtime-"));
-    const replacementDir = await mkdtemp(join(parent, "replacement-"));
-    const displacedDir = join(parent, "displaced-runtime");
-    try {
-      const store = createFileWorkspaceIndexStore({ runtimeDir, encryptionKey: KEY });
-      await store.saveSnapshot("identity-prime", snapshot("src/prime.ts"));
-      armParentSwap(runtimeDir, replacementDir, displacedDir, 2);
+  itStagesParentSwap(
+    "does not commit a snapshot after the parent is swapped during the write guard",
+    async () => {
+      const parent = await mkdtemp(join(tmpdir(), "keiko-index-write-race-"));
+      const runtimeDir = await mkdtemp(join(parent, "runtime-"));
+      const replacementDir = await mkdtemp(join(parent, "replacement-"));
+      const displacedDir = join(parent, "displaced-runtime");
+      try {
+        const store = createFileWorkspaceIndexStore({ runtimeDir, encryptionKey: KEY });
+        await store.saveSnapshot("identity-prime", snapshot("src/prime.ts"));
+        armParentSwap(runtimeDir, replacementDir, displacedDir, 2);
 
-      await expect(
-        store.saveSnapshot("attacked-scope", snapshot("src/private.ts")),
-      ).rejects.toThrow("workspace index temp snapshot cleanup failed");
+        await expect(
+          store.saveSnapshot("attacked-scope", snapshot("src/private.ts")),
+        ).rejects.toThrow("workspace index temp snapshot cleanup failed");
 
-      expect(snapshotFiles(runtimeDir)).toEqual([]);
-      const orphanedTemp = readdirSync(displacedDir).find((name) => name.endsWith(".tmp"));
-      if (orphanedTemp === undefined) throw new Error("expected zeroed displaced temp file");
-      expect(statSync(join(displacedDir, orphanedTemp)).size).toBe(0);
-    } finally {
-      fsHooks.afterOpen = undefined;
-      rmSync(parent, { force: true, recursive: true });
-    }
-  });
+        expect(snapshotFiles(runtimeDir)).toEqual([]);
+        const orphanedTemp = readdirSync(displacedDir).find((name) => name.endsWith(".tmp"));
+        if (orphanedTemp === undefined) throw new Error("expected zeroed displaced temp file");
+        expect(statSync(join(displacedDir, orphanedTemp)).size).toBe(0);
+      } finally {
+        fsHooks.afterOpen = undefined;
+        rmSync(parent, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("rejects a temp-path replacement instead of reporting a corrupted snapshot as saved", async () => {
     const runtimeDir = await mkdtemp(join(tmpdir(), "keiko-index-temp-swap-"));

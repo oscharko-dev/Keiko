@@ -133,3 +133,35 @@ Existing linked decisions and executable gates remain the source to check before
   until a data cell happened to name a column. Evidence: `tests/integration/requirement-parser-contract.integration.test.ts`
   and the Word/PDF inventory comparison over the QI corpus (15 of 15 identical, 2026-11-04, PR #4238).
   Retirement trigger: the block contract is replaced or a parser stops using `block-text.ts`.
+
+- **A POSIX fixture path is not a Windows path (#4432).**
+  - Scope and symptom: a walker, search or index test over an in-memory port rooted at `/ws`, or a
+    fault injection that compares `path === "/ws/src"` or `path.endsWith("/name")`, passes on Linux
+    and goes red on Windows, where the product hands the port `D:\ws\src`. Containment then refuses
+    the file, the injected fault never fires, or the search returns nothing; 210 cases of the
+    recursive-search suites failed this way on Windows 11.
+  - Cause and correction: the fixture, not the product, mixes forms. `memFs` answers a POSIX root in
+    that form; a hand-written port compares `memoryFixturePath(path)` or is wrapped in
+    `portableFixtureFs`, all in `packages/keiko-workspace/src/_memfs.ts`; a real-disk check uses
+    `join(sep, ...)`. A directory alias uses `DIRECTORY_LINK_TYPE`, a junction on Windows that needs
+    no symbolic-link privilege. Never wrap a port over the real disk: it would strip the drive.
+  - Evidence and validation: on 2026-11-19 the step `Verify recursive search suites on Windows` in
+    `cross-platform-smoke` ran green locally on Windows 11 except the cases that create a file
+    symlink, which need the hosted runner's privilege; `dev-quality-workflows.test.mjs` pins the step.
+  - Retirement trigger: revisit when the fixtures move to host-native roots or the Windows leg
+    stops running these suites.
+
+- **`fs.cp` with `dereference: false` copies a Windows junction as a real directory (#4429).**
+  - Scope and symptom: a recursive `cp`/`cpSync` over a tree that holds a directory junction (which
+    any Windows user can create, unlike a symbolic link). On Node 26 the copy holds a real directory
+    with copies of the junction target's files, so content from outside the source is copied in; an
+    audit of the copy afterwards only sees ordinary entries. A fixture on a `"dir"` symlink does
+    not show it: `cp` keeps that one as a link, and the audit refuses it.
+  - Cause and correction: `lstat` classifies a junction like a symbolic link, `cp` does not. Refuse
+    links in the `cp` `filter` (an `lstat` per source entry) before `cp` acts on them, and keep any
+    post-copy audit as the second guard. `copyFilesEntry` in `packages/keiko-server/src/files.ts`
+    does this and records `files.copy.refused`.
+  - Evidence and validation: on 2026-11-19 the files suite case "refuses and removes a copy whose
+    source tree holds a nested directory link" on a junction resolved without the filter and is
+    refused with it on Windows 11; on Linux it runs on a directory symlink.
+  - Retirement trigger: revisit when Node's `cp` preserves junctions as links on Windows.
