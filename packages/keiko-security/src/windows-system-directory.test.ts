@@ -8,15 +8,7 @@
 // says it matters: "an exported function whose stated purpose is containment must not depend on
 // its callers staying literal to be safe."
 
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -53,17 +45,6 @@ const TRUSTED_SYSTEM_ROOT = (): boolean => true;
 function expectedSystemExecutable(selectedRoot: string, ...segments: readonly string[]): string {
   return [selectedRoot, ...segments].join("\\");
 }
-
-describe("windows-system-directory module imports", () => {
-  it("imports only node: builtins, because provision-usearch loads it before the build", () => {
-    const source = readFileSync(new URL("./windows-system-directory.ts", import.meta.url), "utf8");
-    const specifiers = [...source.matchAll(/^import[^;]*?from\s+"([^"]+)";/gmu)].map(
-      (match) => match[1],
-    );
-    expect(specifiers.length).toBeGreaterThan(0);
-    expect(specifiers.filter((specifier) => !specifier?.startsWith("node:"))).toEqual([]);
-  });
-});
 
 describe("resolveWindowsSystemDirectory", () => {
   it("resolves the hard-coded default when no override is present", () => {

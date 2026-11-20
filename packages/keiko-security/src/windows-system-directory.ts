@@ -29,7 +29,7 @@ import { win32 as win32Path } from "node:path";
 
 // scripts/provision-usearch.mjs imports this source file before any workspace package is built,
 // so it may import only node: builtins. A workspace import resolves to an unbuilt dist and stops
-// provisioning (the test file pins this).
+// provisioning (scripts/__tests__/script-loaded-source-imports.test.mjs pins this).
 
 /** Thrown when `SystemRoot`/`WINDIR` — or a requested binary name — fails canonical validation. */
 export class WindowsSystemDirectoryError extends Error {

@@ -2455,9 +2455,9 @@ export function parseGatewayConfig(
 // The parsed form of a config file's text, which the file-load migrations rewrite before strict
 // parsing. Throws SyntaxError for text that is not JSON.
 export function parseGatewayConfigJson(text: string): CatalogJsonValue {
-  // SAFETY: JSON.parse without a reviver returns only null, booleans, finite numbers, strings,
-  // arrays and plain objects of those values (ECMA-262 JSON.parse), which is exactly
-  // CatalogJsonValue.
+  // SAFETY: JSON.parse without a reviver returns only null, booleans, numbers, strings, arrays
+  // and plain objects of those values (ECMA-262 JSON.parse). Those are the members of the
+  // CatalogJsonValue type, whose number member also admits the Infinity that "1e400" parses to.
   return JSON.parse(text) as CatalogJsonValue;
 }
 
