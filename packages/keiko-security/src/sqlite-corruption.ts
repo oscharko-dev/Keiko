@@ -33,31 +33,20 @@ export class SqliteQuickCheckError extends Error {
 // Optional hook that lets a caller unwrap a domain error into the underlying cause BEFORE shape
 // inspection — e.g. keiko-local-knowledge passes an unwrapper that resolves KnowledgeStoreError.cause
 // so the sealed SQLite error underneath is classified rather than the wrapper. `undefined`/absent
-// means "inspect the error as-is". The default is identity.
+// means "inspect the error as-is".
 export type SqliteErrorUnwrap = (error: unknown) => unknown;
 
-const IDENTITY_UNWRAP: SqliteErrorUnwrap = (error: unknown): unknown => error;
-
-export function sqliteErrorLike(
-  error: unknown,
-  unwrap: SqliteErrorUnwrap = IDENTITY_UNWRAP,
-): SqliteErrorLike {
-  const unwrapped = unwrap(error);
+export function sqliteErrorLike(error: unknown, unwrap?: SqliteErrorUnwrap): SqliteErrorLike {
+  const unwrapped = unwrap === undefined ? error : unwrap(error);
   return typeof unwrapped === "object" && unwrapped !== null ? unwrapped : {};
 }
 
-export function sqliteErrorText(
-  error: unknown,
-  unwrap: SqliteErrorUnwrap = IDENTITY_UNWRAP,
-): string {
+export function sqliteErrorText(error: unknown, unwrap?: SqliteErrorUnwrap): string {
   const e = sqliteErrorLike(error, unwrap);
   return [e.code, e.errstr, e.message].filter((value) => typeof value === "string").join(" ");
 }
 
-export function isSqliteCorruptionError(
-  error: unknown,
-  unwrap: SqliteErrorUnwrap = IDENTITY_UNWRAP,
-): boolean {
+export function isSqliteCorruptionError(error: unknown, unwrap?: SqliteErrorUnwrap): boolean {
   if (error instanceof SqliteQuickCheckError) return true;
   const e = sqliteErrorLike(error, unwrap);
   if (e.errcode === 11 || e.errcode === 26) return true;
@@ -99,9 +88,14 @@ export function boundedRedactedText(value: string): string {
     : `${redacted.slice(0, MAX_ERROR_RECORD_TEXT_CHARS)}…`;
 }
 
+// The one field `safeName` reads; it is untrusted until the shape check below passes.
+interface ErrorNameField {
+  readonly name?: unknown;
+}
+
 // Reflective reads over a thrown value are hostile-input reads: a getter or proxy trap may throw.
 // Exported for the same reuse reason as `boundedRedactedText` above [w4a-security-log-port].
-export function safeName(value: object): string | undefined {
+export function safeName(value: ErrorNameField): string | undefined {
   try {
     const name: unknown = "name" in value ? value.name : undefined;
     return typeof name === "string" ? name : undefined;
@@ -148,11 +142,8 @@ function boundedField(value: unknown): string | undefined {
   return typeof value === "string" ? boundedRedactedText(value) : undefined;
 }
 
-export function errorRecord(
-  error: unknown,
-  unwrap: SqliteErrorUnwrap = IDENTITY_UNWRAP,
-): Record<string, unknown> {
-  const cause = unwrap(error);
+export function errorRecord(error: unknown, unwrap?: SqliteErrorUnwrap): Record<string, unknown> {
+  const cause = unwrap === undefined ? error : unwrap(error);
   const e = sqliteErrorLike(cause);
   return {
     errorClass: hardenedErrorClass(cause),

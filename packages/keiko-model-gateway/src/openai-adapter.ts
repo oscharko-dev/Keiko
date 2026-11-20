@@ -206,18 +206,28 @@ interface ChatCompatibilityMemo {
   readonly expiresAt: number;
 }
 
-let chatCompatibilityEndpoints = new WeakMap<object, Map<string, ChatCompatibilityMemo>>();
+let chatCompatibilityEndpoints = new WeakMap<
+  ModelProviderConfig,
+  Map<string, ChatCompatibilityMemo>
+>();
 
 // #3639: the output-token field a deployment turned out to accept when its name led to the other
 // one (a GPT-5 deployment named "prod-chat" gets max_tokens by default and rejects it). Scoped and
 // bounded like the stream memo; an operator's explicit outputTokenParameter always wins.
-let outputTokenFieldEndpoints = new WeakMap<object, Map<string, OutputTokenField>>();
+let outputTokenFieldEndpoints = new WeakMap<ModelProviderConfig, Map<string, OutputTokenField>>();
 
-function rememberedOutputTokenField(scope: object, url: string): OutputTokenField | undefined {
+function rememberedOutputTokenField(
+  scope: ModelProviderConfig,
+  url: string,
+): OutputTokenField | undefined {
   return outputTokenFieldEndpoints.get(scope)?.get(url);
 }
 
-function rememberOutputTokenField(scope: object, url: string, field: OutputTokenField): void {
+function rememberOutputTokenField(
+  scope: ModelProviderConfig,
+  url: string,
+  field: OutputTokenField,
+): void {
   const endpoints = outputTokenFieldEndpoints.get(scope) ?? new Map<string, OutputTokenField>();
   endpoints.delete(url);
   if (endpoints.size >= MAX_STRICT_STREAM_OPTIONS_ENDPOINTS) {
@@ -251,7 +261,7 @@ const MAX_STRICT_STREAM_OPTIONS_ENDPOINTS = 256;
 const STRICT_STREAM_OPTIONS_REPROBE_MS = 15 * 60_000;
 
 function chatCompatibilityMode(
-  scope: object,
+  scope: ModelProviderConfig,
   url: string,
   now: () => number,
 ): ChatCompatibilityMode | undefined {
@@ -264,7 +274,7 @@ function chatCompatibilityMode(
 }
 
 function rememberChatCompatibility(
-  scope: object,
+  scope: ModelProviderConfig,
   url: string,
   mode: ChatCompatibilityMode,
   now: number,
@@ -283,8 +293,11 @@ function rememberChatCompatibility(
 }
 
 export function resetChatCompatibilityMemoForTests(): void {
-  chatCompatibilityEndpoints = new WeakMap<object, Map<string, ChatCompatibilityMemo>>();
-  outputTokenFieldEndpoints = new WeakMap<object, Map<string, OutputTokenField>>();
+  chatCompatibilityEndpoints = new WeakMap<
+    ModelProviderConfig,
+    Map<string, ChatCompatibilityMemo>
+  >();
+  outputTokenFieldEndpoints = new WeakMap<ModelProviderConfig, Map<string, OutputTokenField>>();
 }
 
 const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
@@ -393,7 +406,7 @@ export interface AdapterDeps {
   readonly requestId: string;
   readonly costClass: CostClass;
   /** Stable, credential-scoped provider identity before per-call timeout copies are made. */
-  readonly compatibilityMemoScope?: object | undefined;
+  readonly compatibilityMemoScope?: ModelProviderConfig | undefined;
   readonly now?: (() => number) | undefined;
   // Activity-log sink (ADR-0019: a local port, see `observability.ts`). Unset means no-op.
   readonly log?: ModelGatewayLogSink | undefined;
@@ -539,7 +552,7 @@ interface ChatCompatibilityContext {
   readonly secrets: readonly string[];
   readonly bounds: StreamReadBounds | undefined;
   readonly startedAt: number;
-  readonly memoScope: object;
+  readonly memoScope: ModelProviderConfig;
   readonly url: string;
 }
 

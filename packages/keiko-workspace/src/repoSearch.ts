@@ -73,6 +73,7 @@ import {
   isRunnerTimedOut,
   probeBinary,
   type CandidateSet,
+  type EligibleTextFileObserver,
   type FileMatches,
   type RunState,
   type SearchTextRunner,
@@ -236,14 +237,9 @@ export interface ReadExcerptResult extends ReadExcerptWindowResult {
 
 interface FacadeDeps {
   // Trusted context callers may observe successful text reads without retaining file bodies.
-  // Returning false stops observation; matching and scope traversal continue unchanged.
-  readonly onEligibleTextFile?:
-    | ((file: {
-        readonly scopePath: string;
-        readonly contentBytes: number;
-        readonly lineCount: number;
-      }) => unknown)
-    | undefined;
+  // The observer returns true to continue and false to stop observing; matching and scope
+  // traversal continue unchanged.
+  readonly onEligibleTextFile?: EligibleTextFileObserver | undefined;
   readonly queryInterpretation?: LiteralQueryInterpretation | undefined;
   // Trusted auxiliary filename batches keep independent bounded target buckets on one traversal.
   readonly filePatternGroups?:

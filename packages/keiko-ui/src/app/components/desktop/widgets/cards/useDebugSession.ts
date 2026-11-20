@@ -2,10 +2,21 @@
 
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import type {
+  DebugBootstrapRequest,
   DebugEvent,
   DebugLaunchTarget,
   DebugSession,
   DebugSessionControlAction,
+  DebugSessionControlRequest,
+  DebugSessionStartRequest,
+  EvaluateWatchRequest,
+  ScopesRequest,
+  SetBreakpointsRequest,
+  SetExceptionBreakpointsRequest,
+  SetVariableRequest,
+  SetWatchesRequest,
+  StackTraceRequest,
+  VariablesRequest,
   DebugVariableNode,
   BoundedDebugText,
   ExceptionBreakpointFilter,
@@ -753,7 +764,29 @@ async function requestJson(url: string, init?: RequestInit): Promise<unknown> {
   return body;
 }
 
-function debugMutation(body: object, method = "POST", etag?: string): RequestInit {
+// The request bodies the debug mutation routes accept (keiko-contracts dap-debug).
+type DebugMutationBody =
+  | DebugBootstrapRequest
+  | DebugSessionStartRequest
+  | DebugSessionControlRequest
+  | SetBreakpointsRequest
+  | SetExceptionBreakpointsRequest
+  | StackTraceRequest
+  | ScopesRequest
+  | VariablesRequest
+  | SetVariableRequest
+  | SetWatchesRequest
+  | EvaluateWatchRequest;
+
+// The pause-bound fields inspectionMutation supplies from the DebugPauseIdentity.
+type DebugPauseRequestKey = "schemaVersion" | "sessionId" | "pauseGeneration";
+
+type DebugInspectionFields =
+  | Omit<StackTraceRequest, DebugPauseRequestKey>
+  | Omit<ScopesRequest, DebugPauseRequestKey>
+  | Omit<VariablesRequest, DebugPauseRequestKey>;
+
+function debugMutation(body: DebugMutationBody, method = "POST", etag?: string): RequestInit {
   return {
     method,
     headers: {
@@ -973,7 +1006,10 @@ function abortAllTrackedRequests(): void {
   }
 }
 
-function inspectionMutation(identity: DebugPauseIdentity, extra: object): RequestInit {
+function inspectionMutation(
+  identity: DebugPauseIdentity,
+  extra: DebugInspectionFields,
+): RequestInit {
   return debugMutation({
     schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
     sessionId: identity.sessionId,

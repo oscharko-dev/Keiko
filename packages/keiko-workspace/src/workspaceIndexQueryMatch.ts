@@ -20,12 +20,26 @@ function score(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-function validLineFields(value: {
+/** A parsed scored line whose required keys are present; every field is still unvalidated. */
+interface ParsedLineFields {
   readonly line: unknown;
   readonly startLine: unknown;
   readonly endLine: unknown;
   readonly score: unknown;
-}): value is ScoredLine {
+  readonly queryGroupKey?: unknown;
+  readonly sourceDescriptorMatch?: unknown;
+}
+
+/** A parsed query match whose required keys are present; every field is still unvalidated. */
+interface ParsedQueryMatchFields {
+  readonly queryIdentitySha256: unknown;
+  readonly best: unknown;
+  readonly maxScore: unknown;
+  readonly contentScore?: unknown;
+  readonly definitionMatch?: unknown;
+}
+
+function validLineFields(value: ParsedLineFields): value is ScoredLine {
   return (
     positiveInteger(value.line) &&
     positiveInteger(value.startLine) &&
@@ -37,7 +51,7 @@ function validLineFields(value: {
 }
 
 function normalizeLineGroup(
-  value: object,
+  value: ParsedLineFields,
 ): Pick<ScoredLine, "queryGroupKey" | "sourceDescriptorMatch"> | undefined {
   const digest = "queryGroupKey" in value ? value.queryGroupKey : undefined;
   const descriptor = "sourceDescriptorMatch" in value ? value.sourceDescriptorMatch : undefined;
@@ -66,7 +80,7 @@ function normalizeLine(value: unknown): ScoredLine | undefined {
 }
 
 function normalizeOptionalScores(
-  value: object,
+  value: ParsedQueryMatchFields,
 ): Pick<WorkspaceIndexQueryMatch, "contentScore" | "definitionMatch"> | undefined {
   const contentScore = "contentScore" in value ? value.contentScore : undefined;
   const definitionMatch = "definitionMatch" in value ? value.definitionMatch : undefined;

@@ -115,11 +115,29 @@ export function verifyLongLivedRuntimeSandboxAttestation(
   );
 }
 
+/** The attestation fields as read from an unverified candidate, before any field is checked. */
+interface AttestationCandidateFields {
+  readonly schemaVersion?: unknown;
+  readonly backend?: unknown;
+  readonly platform?: unknown;
+  readonly networkEnforced?: unknown;
+  readonly policyKind?: unknown;
+  readonly runtimeSource?: unknown;
+  readonly modelSource?: unknown;
+  readonly authorityEnvelopeDigest?: unknown;
+  readonly reviewedEgressReceipt?: unknown;
+  readonly policyDigest?: unknown;
+  readonly directEgress?: unknown;
+  readonly proxyIdentityDigest?: unknown;
+  readonly caIdentityDigest?: unknown;
+  readonly noProxyIdentityDigest?: unknown;
+}
+
 function attestationIsStructurallyValid(
   candidate: unknown,
 ): candidate is LongLivedRuntimeSandboxAttestation {
   if (candidate === null || typeof candidate !== "object" || Array.isArray(candidate)) return false;
-  const value = candidate as Record<string, unknown>;
+  const value: AttestationCandidateFields = candidate;
   const requiredStrings = [
     value.platform,
     value.runtimeSource,

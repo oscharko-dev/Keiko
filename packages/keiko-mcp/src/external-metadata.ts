@@ -42,14 +42,19 @@ interface Position {
   readonly value: unknown;
   readonly depth: number;
 }
-function plainJsonObject(value: object): boolean {
+// Any non-null object is a container to inspect; plainJsonObject then admits only arrays and plain
+// or null-prototype objects.
+function jsonContainer(value: unknown): value is readonly unknown[] | JsonObject {
+  return value !== null && typeof value === "object";
+}
+function plainJsonObject(value: readonly unknown[] | JsonObject): boolean {
   const prototype: unknown = Object.getPrototypeOf(value);
   return (
     prototype === null || prototype === (Array.isArray(value) ? Array.prototype : Object.prototype)
   );
 }
 function appendChildren(
-  value: object,
+  value: readonly unknown[] | JsonObject,
   depth: number,
   pending: Position[],
   seen: Set<object>,
@@ -75,7 +80,7 @@ function boundedMetadata(value: unknown): boolean {
   while (pending.length > 0) {
     const item = pending.pop();
     if (item === undefined || ++count > 8192 || item.depth > 32) return false;
-    if (item.value === null || typeof item.value !== "object") {
+    if (!jsonContainer(item.value)) {
       if (!jsonScalar(item.value)) return false;
     } else if (!appendChildren(item.value, item.depth, pending, seen)) return false;
   }

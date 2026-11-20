@@ -343,13 +343,21 @@ function appendYamlChildren(
   for (const child of yamlChildren(frame, ports, aliases)) pending.push(child);
 }
 
-function yamlCommentSpan(value: object, ports: ProjectionPorts): RedactionSpan | undefined {
+// The three fields of a yaml CST source token that identify a comment and locate it. The walk in
+// `yamlCommentSpans` reaches every CST node, so each field is checked before use.
+interface YamlTokenFields {
+  readonly type?: unknown;
+  readonly source?: unknown;
+  readonly offset?: unknown;
+}
+
+function yamlCommentSpan(
+  value: YamlTokenFields,
+  ports: ProjectionPorts,
+): RedactionSpan | undefined {
   if (
-    !("type" in value) ||
     value.type !== "comment" ||
-    !("source" in value) ||
     typeof value.source !== "string" ||
-    !("offset" in value) ||
     typeof value.offset !== "number"
   )
     return undefined;

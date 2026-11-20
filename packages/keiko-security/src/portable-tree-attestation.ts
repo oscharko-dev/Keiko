@@ -136,6 +136,9 @@ export interface PortableSidecarTreeAttestation {
   readonly selectedFileSha256ByPath?: Readonly<Record<string, string>>;
 }
 
+/** What `SyncIo` and `AsyncIo` hand back to the tree machine for one `IoRequest`. */
+type IoResponse = BigIntStats | Dirent | Buffer | readonly string[] | null | undefined;
+
 type TreeMachine = Generator<IoRequest, PortableSidecarTreeAttestation, unknown>;
 
 /** The existing portable sidecar tuple format; KHT1 uses its separate fixed projection. */
@@ -567,7 +570,7 @@ type SyncResource = SyncFileResource | SyncDirectoryResource;
 class SyncIo {
   readonly #resources = new Map<number, SyncResource>();
 
-  public execute(request: IoRequest): unknown {
+  public execute(request: IoRequest): IoResponse {
     switch (request.kind) {
       case "lstat":
         return lstatSync(request.path, { bigint: true });
@@ -661,7 +664,7 @@ type AsyncResource = AsyncFileResource | AsyncDirectoryResource;
 class AsyncIo {
   readonly #resources = new Map<number, AsyncResource>();
 
-  public async execute(request: IoRequest): Promise<unknown> {
+  public async execute(request: IoRequest): Promise<IoResponse> {
     switch (request.kind) {
       case "lstat":
         return await lstat(request.path, { bigint: true });

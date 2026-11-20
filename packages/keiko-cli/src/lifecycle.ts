@@ -114,19 +114,19 @@ const LIFECYCLE_FLAG_SETTERS: Readonly<Record<LifecycleFlag, LifecycleFlagSetter
   },
 };
 
-function decodeRecoveredLaunch(encoded: string): unknown {
+function decodeRecoveredLaunchText(encoded: string): string {
   if (encoded.length < 1 || encoded.length > 4096 || !/^[A-Za-z0-9_-]+$/u.test(encoded)) {
     throw new TypeError("invalid recovered launch identity");
   }
   const bytes = Buffer.from(encoded, "base64url");
   if (bytes.toString("base64url") !== encoded)
     throw new TypeError("invalid recovered launch identity");
-  return JSON.parse(bytes.toString("utf8")) as unknown;
+  return bytes.toString("utf8");
 }
 
 function recoveredLaunchId(encoded: string | undefined): string {
   if (encoded === undefined) return randomBytes(16).toString("hex");
-  const decoded = decodeRecoveredLaunch(encoded);
+  const decoded = JSON.parse(decodeRecoveredLaunchText(encoded)) as unknown;
   if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) {
     throw new TypeError("invalid recovered launch identity");
   }

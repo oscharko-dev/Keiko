@@ -131,11 +131,17 @@ function validateManifestShape(parsed: Record<string, unknown>, runId: string): 
   requireOptionalArray(parsed, "compaction", runId);
 }
 
-// Validates an ALREADY-parsed manifest value (schema version + shape) and narrows it to
-// EvidenceManifest. Split out from parseManifest so a caller that already parsed the JSON for its
-// own purposes (listEntryOrSkip's evidenceSchemaVersion pre-check) can reuse that parse instead of
-// paying for a second JSON.parse of the same string (KEIKO-0945).
-function manifestFromParsed(parsed: Record<string, unknown>, runId: string): EvidenceManifest {
+// Validates a parsed manifest value (object, schema version + shape) and narrows it to
+// EvidenceManifest. The persisted JSON is redacted by construction, so the fields not checked here
+// keep the writer's shape. listEntryOrSkip and parseManifest share it so one JSON.parse of a
+// manifest string is enough (KEIKO-0945).
+function assertEvidenceManifest(
+  parsed: unknown,
+  runId: string,
+): asserts parsed is EvidenceManifest {
+  if (!isRecord(parsed)) {
+    throw new EvidenceSchemaError(`evidence manifest is not an object: ${runId}`, "none");
+  }
   const version = parsed.evidenceSchemaVersion;
   if (version !== EVIDENCE_SCHEMA_VERSION) {
     throw new EvidenceSchemaError(
@@ -144,15 +150,12 @@ function manifestFromParsed(parsed: Record<string, unknown>, runId: string): Evi
     );
   }
   validateManifestShape(parsed, runId);
-  return parsed as unknown as EvidenceManifest;
 }
 
 function parseManifest(json: string, runId: string): EvidenceManifest {
   const parsed: unknown = parseJson(json, runId);
-  if (!isRecord(parsed)) {
-    throw new EvidenceSchemaError(`evidence manifest is not an object: ${runId}`, "none");
-  }
-  return manifestFromParsed(parsed, runId);
+  assertEvidenceManifest(parsed, runId);
+  return parsed;
 }
 
 function toListEntry(manifest: EvidenceManifest): EvidenceListEntry {
@@ -184,10 +187,8 @@ function listEntryOrSkip(store: EvidenceStore, runId: string): EvidenceListEntry
       return undefined;
     }
     const parsed: unknown = parseJson(json, runId);
-    if (!isRecord(parsed) || typeof parsed.evidenceSchemaVersion !== "string") {
-      return undefined;
-    }
-    return toListEntry(manifestFromParsed(parsed, runId));
+    assertEvidenceManifest(parsed, runId);
+    return toListEntry(parsed);
   } catch (error) {
     if (error instanceof EvidenceReadError || error instanceof EvidenceSchemaError) {
       return undefined;

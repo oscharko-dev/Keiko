@@ -2394,14 +2394,20 @@ function openApiSchemaFields(schema: unknown): readonly string[] {
   return Object.keys(schema.properties);
 }
 
-export function openApiComponentSchemas(parsed: unknown): unknown {
-  if (!isRecord(parsed)) {
-    return undefined;
+/** An OpenAPI component schema and the property names it declares. */
+export interface OpenApiComponentSchema {
+  readonly name: string;
+  readonly fields: readonly string[];
+}
+
+/** Reads `components.schemas` of a parsed OpenAPI document; any other shape has no schemas. */
+export function openApiComponentSchemas(parsed: unknown): readonly OpenApiComponentSchema[] {
+  if (!isRecord(parsed) || !isRecord(parsed.components) || !isRecord(parsed.components.schemas)) {
+    return [];
   }
-  if (!isRecord(parsed.components)) {
-    return undefined;
-  }
-  return parsed.components.schemas;
+  return Object.entries(parsed.components.schemas).map(
+    ([name, schema]): OpenApiComponentSchema => ({ name, fields: openApiSchemaFields(schema) }),
+  );
 }
 
 function collectOpenApiJsonSchemaSymbols(file: SourceFile): readonly CodeSymbol[] {
@@ -2411,13 +2417,8 @@ function collectOpenApiJsonSchemaSymbols(file: SourceFile): readonly CodeSymbol[
   } catch {
     return [];
   }
-  const schemas = openApiComponentSchemas(parsed);
-  if (!isRecord(schemas)) {
-    return [];
-  }
   const symbols: CodeSymbol[] = [];
-  for (const [name, schema] of Object.entries(schemas)) {
-    const fields = openApiSchemaFields(schema);
+  for (const { name, fields } of openApiComponentSchemas(parsed)) {
     if (fields.length === 0) {
       continue;
     }

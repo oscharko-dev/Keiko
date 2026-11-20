@@ -7,6 +7,7 @@
  * DOM/Monaco edges are touched only inside the returned callbacks/effect, never at module scope.
  */
 import { type OnChange, type OnMount } from "@monaco-editor/react";
+import type * as monaco from "monaco-editor";
 import { useCallback, useEffect, useMemo, useRef, type RefObject } from "react";
 
 import { buildSaveRequest } from "./save-state.js";
@@ -133,7 +134,7 @@ interface EditorRefs {
   readonly editorRef: RefObject<MountEditor | null>;
   readonly monacoRef: RefObject<MountMonaco | null>;
   readonly containerRef: RefObject<HTMLElement | null>;
-  readonly viewStateRef: RefObject<unknown>;
+  readonly viewStateRef: RefObject<monaco.editor.ICodeEditorViewState | null>;
   readonly disposeRef: RefObject<(() => void) | null>;
   readonly modelAttachmentRef: RefObject<RetainedEditorModelAttachment | null>;
   readonly revealDecorationIdsRef: RefObject<string[]>;
@@ -146,7 +147,7 @@ function useEditorRefs(): EditorRefs {
   const editorRef = useRef<MountEditor | null>(null);
   const monacoRef = useRef<MountMonaco | null>(null);
   const containerRef = useRef<HTMLElement | null>(null);
-  const viewStateRef = useRef<unknown>(null);
+  const viewStateRef = useRef<monaco.editor.ICodeEditorViewState | null>(null);
   const disposeRef = useRef<(() => void) | null>(null);
   const modelAttachmentRef = useRef<RetainedEditorModelAttachment | null>(null);
   const revealDecorationIdsRef = useRef<string[]>([]);

@@ -88,7 +88,20 @@ export function assertCompatibilityTime(
   );
 }
 
-function transformSemantics(descriptor: ToolDescriptor): unknown {
+/** The descriptor fields an identity transform must leave unchanged. */
+type TransformSemantics = Pick<
+  ToolDescriptor,
+  | "inputSchema"
+  | "resultSchema"
+  | "effects"
+  | "actionMapping"
+  | "policyReferences"
+  | "handlerRequirement"
+  | "idempotency"
+  | "cancellation"
+>;
+
+function transformSemantics(descriptor: ToolDescriptor): TransformSemantics {
   return {
     inputSchema: descriptor.inputSchema,
     resultSchema: descriptor.resultSchema,

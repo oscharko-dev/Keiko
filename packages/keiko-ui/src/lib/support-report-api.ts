@@ -162,6 +162,17 @@ export function createSupportReportDownload(
   return { href, dispose: (): void => URL.revokeObjectURL(href) };
 }
 
+// The support report response body as the BFF sent it, before validation: `fileName` and
+// `reportJson` are present, and every field still has to be checked by the validators below.
+interface UncheckedSupportReportResponse {
+  readonly fileName: unknown;
+  readonly reportJson: unknown;
+  readonly downloadPath?: unknown;
+  readonly downloadExpiresAtMs?: unknown;
+  readonly evidenceScope?: unknown;
+  readonly summary?: unknown;
+}
+
 function validateSupportReportResponse(
   value: unknown,
   headers: Headers | undefined,
@@ -230,7 +241,7 @@ function browserDownloadExpiry(
 }
 
 function validateDownloadTarget(
-  value: object,
+  value: UncheckedSupportReportResponse,
 ): Pick<DesktopSupportReportResponse, "downloadPath" | "downloadExpiresAtMs"> {
   if (!("downloadPath" in value) && !("downloadExpiresAtMs" in value)) return {};
   if (
@@ -244,7 +255,9 @@ function validateDownloadTarget(
   return { downloadPath: value.downloadPath, downloadExpiresAtMs: value.downloadExpiresAtMs };
 }
 
-function validateEvidenceScope(value: object): Pick<DesktopSupportReportResponse, "evidenceScope"> {
+function validateEvidenceScope(
+  value: UncheckedSupportReportResponse,
+): Pick<DesktopSupportReportResponse, "evidenceScope"> {
   if (!("evidenceScope" in value)) return {};
   if (value.evidenceScope !== "client-only")
     throw new SupportReportResponseInvalid("Invalid report evidence scope");
@@ -326,7 +339,9 @@ function isReportSummary(value: unknown): value is ReportSummary {
     validSummaryDisposition(fields)
   );
 }
-function validateSummary(value: object): Pick<DesktopSupportReportResponse, "summary"> {
+function validateSummary(
+  value: UncheckedSupportReportResponse,
+): Pick<DesktopSupportReportResponse, "summary"> {
   if (!("summary" in value) || value.summary === undefined) return {};
   if (!isReportSummary(value.summary))
     throw new SupportReportResponseInvalid("Invalid report summary");

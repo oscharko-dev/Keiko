@@ -181,11 +181,10 @@ const toRawItems = (parsed: unknown): readonly unknown[] => {
   return [];
 };
 
-const candidateContainerItemCount = (parsed: unknown): number =>
-  hasCandidateContainer(parsed) ? toRawItems(parsed).length : -1;
-
+// `itemCount` is -1 when the JSON value is not a candidate container, so its empty `items` can be
+// told apart from an empty `{ testCases: [] }` container.
 interface ParsedJsonSlice {
-  readonly parsed: unknown;
+  readonly items: readonly unknown[];
   readonly itemCount: number;
 }
 
@@ -195,18 +194,20 @@ const parseJsonSliceAt = (text: string, index: number): ParsedJsonSlice | undefi
   if (slice === undefined) return undefined;
   try {
     const parsed: unknown = JSON.parse(slice);
-    return { parsed, itemCount: candidateContainerItemCount(parsed) };
+    const items = toRawItems(parsed);
+    return { items, itemCount: hasCandidateContainer(parsed) ? items.length : -1 };
   } catch {
     return undefined;
   }
 };
 
-// Parse the first useful JSON candidate payload. If a chat model emits an invalid bracket fragment
-// before the real JSON, keep scanning; if it emits only a wrong-shape JSON value, preserve the old
-// `recovered:true, candidates:[]` behaviour by returning the first successfully parsed value.
-const parseFirstUsefulJsonValue = (text: string): unknown => {
-  let firstParsed: unknown;
-  let firstEmptyCandidateContainer: unknown;
+// Recover the raw items of the first useful JSON candidate payload. If a chat model emits an invalid
+// bracket fragment before the real JSON, keep scanning; if it emits only a wrong-shape JSON value,
+// preserve the old `recovered:true, candidates:[]` behaviour by returning that value's (empty)
+// items. `undefined` means no JSON value could be parsed at all.
+const firstUsefulCandidateItems = (text: string): readonly unknown[] | undefined => {
+  let firstParsed: readonly unknown[] | undefined;
+  let firstEmptyCandidateContainer: readonly unknown[] | undefined;
   let attempts = 0;
   for (let i = 0; i < text.length; i += 1) {
     if (!isJsonOpen(text[i])) continue;
@@ -214,19 +215,19 @@ const parseFirstUsefulJsonValue = (text: string): unknown => {
     if (attempts > MAX_JSON_RECOVERY_ATTEMPTS) break;
     const parsedSlice = parseJsonSliceAt(text, i);
     if (parsedSlice === undefined) continue;
-    const { parsed, itemCount } = parsedSlice;
-    if (firstParsed === undefined) firstParsed = parsed;
-    if (itemCount > 0) return parsed;
+    const { items, itemCount } = parsedSlice;
+    firstParsed ??= items;
+    if (itemCount > 0) return items;
     if (itemCount === 0 && firstEmptyCandidateContainer === undefined) {
-      firstEmptyCandidateContainer = parsed;
+      firstEmptyCandidateContainer = items;
     }
   }
   return firstEmptyCandidateContainer ?? firstParsed;
 };
 
-const parseJsonLoose = (raw: string): unknown => {
+const recoverRawCandidateItems = (raw: string): readonly unknown[] | undefined => {
   const stripped = stripCodeFence(raw);
-  return parseFirstUsefulJsonValue(stripped);
+  return firstUsefulCandidateItems(stripped);
 };
 
 const truncateText = (value: string, limit: number): string =>
@@ -486,11 +487,10 @@ export const parseGeneratedCandidates = (
     typeof rawText === "string" && rawText.length <= MAX_GENERATED_CANDIDATE_OUTPUT_CHARS
       ? rawText
       : "";
-  const parsed = parseJsonLoose(boundedRawText);
-  if (parsed === undefined) {
+  const rawItems = recoverRawCandidateItems(boundedRawText);
+  if (rawItems === undefined) {
     return { candidates: Object.freeze([]), recovered: false, skipped: 0, overCapSkipped: 0 };
   }
-  const rawItems = toRawItems(parsed);
   const candidateCount = assertCandidateCount(rawItems.length);
   const boundedRawItems = candidateCount.ok ? rawItems : rawItems.slice(0, MAX_CANDIDATES_PER_RUN);
   const requestedCap = Number.isFinite(input.maxCandidates)

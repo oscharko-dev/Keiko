@@ -438,8 +438,11 @@ export function redactLogString(value: string): string {
   return value;
 }
 
-function isPlainObject(value: object): value is Record<string, unknown> {
-  const prototype = Object.getPrototypeOf(value) as object | null;
+// A primitive's prototype is its wrapper's (`String.prototype`, ...), never `Object.prototype` or
+// null, so only a plain or null-prototype object passes.
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || value === undefined) return false;
+  const prototype: unknown = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }
 

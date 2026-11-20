@@ -7,6 +7,7 @@
 
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { PromptEnhancementEvidenceManifest } from "@oscharko-dev/keiko-evidence";
 import type {
   PromptEnhancementWireRequest,
   PromptEnhancementWireResponse,
@@ -175,7 +176,7 @@ function buildEvidenceManifest(
   config: GatewayConfig | undefined,
   workflows: WorkflowsModule,
   evidence: EvidenceModule,
-): unknown {
+): PromptEnhancementEvidenceManifest {
   const record = workflows.buildPromptEnhancementRecordInput({
     rawInput,
     result,

@@ -18,7 +18,13 @@ import {
   type RetentionPolicy,
 } from "./types.js";
 import type { EvidenceStore } from "./store.js";
-import type { AuditSummary, CostClass, TaskType } from "@oscharko-dev/keiko-contracts";
+import type {
+  AuditSummary,
+  CostClass,
+  TaskType,
+  VerificationAuditSummary,
+  VerificationStatus,
+} from "@oscharko-dev/keiko-contracts";
 import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts/runtime/harness";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 
@@ -188,25 +194,44 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// A minimal field-level shape guard, not a full schema validator: the sole documented consumer
-// (report.ts's verificationStatus()) reads only overallStatus, so that is the one field write-time
-// validation must confirm before this object is embedded into the typed manifest. Narrower than
-// index-api.ts's requireString/requireRecord family (which validates a manifest being READ back and
-// throws), because a malformed verificationSummary must degrade to `undefined`, not fail the run.
-function hasValidOverallStatus(value: Record<string, unknown>): boolean {
-  return typeof value.overallStatus === "string";
+// Keyed by VerificationStatus, so the compiler rejects this table when a status is added or removed.
+const VERIFICATION_STATUSES: Readonly<Record<VerificationStatus, true>> = {
+  passed: true,
+  failed: true,
+  skipped: true,
+  denied: true,
+  "timed-out": true,
+  cancelled: true,
+  "resource-exceeded": true,
+};
+
+const VERIFICATION_STATUS_VALUES: ReadonlySet<unknown> = new Set(
+  Object.keys(VERIFICATION_STATUSES),
+);
+
+// A top-level shape guard for the audit projection keiko-verification's summarizeForAudit builds,
+// not a full schema validator: the result entries are not inspected, and the deep redact in persist
+// re-scrubs every string leaf. Narrower than index-api.ts's requireString/requireRecord family
+// (which validates a manifest being READ back and throws), because a malformed verificationSummary
+// must degrade to `undefined`, not fail the run.
+function isVerificationAuditSummary(value: unknown): value is VerificationAuditSummary {
+  return (
+    isRecord(value) &&
+    typeof value.workspaceRoot === "string" &&
+    VERIFICATION_STATUS_VALUES.has(value.overallStatus) &&
+    Number.isFinite(value.durationMs) &&
+    isRecord(value.counts) &&
+    Array.isArray(value.results)
+  );
 }
 
-// Extracts the verification audit summary from a workflow report when present. The summary is already
-// the audit shape; the deep redact in persist re-scrubs every string leaf for defense in depth.
+// Extracts the verification audit summary from a workflow report when present.
 function verificationOf(report: unknown): EvidenceManifest["verification"] {
   if (!isRecord(report)) {
     return undefined;
   }
   const summary = report.verificationSummary ?? verifiedVerificationOf(report);
-  return isRecord(summary) && hasValidOverallStatus(summary)
-    ? (summary as unknown as EvidenceManifest["verification"])
-    : undefined;
+  return isVerificationAuditSummary(summary) ? summary : undefined;
 }
 
 function verifiedVerificationOf(report: Record<string, unknown>): unknown {

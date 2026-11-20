@@ -287,7 +287,21 @@ export function retainMeasuredCatalogFailureUsage(error: unknown, usage: UsageMe
 function requireBridge(value: boolean, reason: ToolResultReason<"invalid">): asserts value {
   if (!value) throw new GatewayToolCatalogError(reason);
 }
-function dataField(source: object, key: string): unknown {
+// The fields the bridge reads from a request or a captured advertisement. Each is optional and
+// untyped, so every non-null object has this shape; dataField reads only own enumerable data
+// properties and leaves the value for the caller to check.
+interface DescriptorFields {
+  readonly kind?: unknown;
+  readonly catalog?: unknown;
+  readonly projection?: unknown;
+  readonly offered?: unknown;
+  readonly toolCatalog?: unknown;
+  readonly tools?: unknown;
+}
+function isDescriptorSource(value: unknown): value is DescriptorFields {
+  return typeof value === "object" && value !== null;
+}
+function dataField(source: DescriptorFields, key: keyof DescriptorFields): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(source, key);
   if (descriptor === undefined) return undefined;
   requireBridge("value" in descriptor && descriptor.enumerable === true, "projection-mismatch");
@@ -304,8 +318,7 @@ function frozenObject(value: unknown): object | undefined {
  * a long Chat tool turn copy and re-verify every descriptor dozens of times (#4173).
  */
 function frozenBoundAdvertisement(input: unknown): BoundAdvertisement | undefined {
-  if (typeof input !== "object" || input === null || dataField(input, "kind") !== "bound")
-    return undefined;
+  if (!isDescriptorSource(input) || dataField(input, "kind") !== "bound") return undefined;
   if (
     Reflect.ownKeys(input).length !== BOUND_ADVERTISEMENT_KEYS.length ||
     !BOUND_ADVERTISEMENT_KEYS.every((key) => Object.hasOwn(input, key))
@@ -334,8 +347,7 @@ function capturedAdvertisement(
   if (frozen !== undefined) return frozen;
   // A native advertisement carries the runtime's whole tool set under its own byte contract; a
   // bound catalog keeps the per-call budget (#3897 review).
-  const native =
-    typeof input === "object" && input !== null && dataField(input, "kind") === "native";
+  const native = isDescriptorSource(input) && dataField(input, "kind") === "native";
   const value = native
     ? captureCatalogJson(input, GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES)
     : captureCatalogEnvelope(input);

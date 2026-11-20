@@ -54,28 +54,15 @@ function redactString(
   return redacted;
 }
 
-// Shared depth-ceiling + cycle guard for both container branches (array/object) of deepRedact.
-// Fails closed with a controlled EvidenceWriteError -- rather than an uncaught RangeError -- when
-// the ceiling is exceeded or `node` is already an ancestor in the current recursion path. `seen`
-// tracks only the current path (added before recursing into children, removed on the way back
-// out), so two independent, non-cyclic references to the same object are not mistaken for a cycle.
-function deepRedactContainer(
-  node: object,
-  depth: number,
-  seen: WeakSet<object>,
-  build: () => unknown,
-): unknown {
+// Depth-ceiling + cycle guard for both container branches (array/object) of deepRedact. Fails
+// closed with a controlled EvidenceWriteError -- rather than an uncaught RangeError -- when the
+// ceiling is exceeded or the container is already an ancestor in the current recursion path.
+function assertRedactionBounds(depth: number, onPath: boolean): void {
   if (depth >= MAX_REDACT_DEPTH) {
     throw new EvidenceWriteError("PE evidence payload exceeds the maximum redaction depth");
   }
-  if (seen.has(node)) {
+  if (onPath) {
     throw new EvidenceWriteError("PE evidence payload contains a circular reference");
-  }
-  seen.add(node);
-  try {
-    return build();
-  } finally {
-    seen.delete(node);
   }
 }
 
@@ -90,25 +77,29 @@ function deepRedact(
   if (typeof value === "string") {
     return redactString(value, additionalSecrets, redactAllStrings, counter);
   }
-  if (Array.isArray(value)) {
-    return deepRedactContainer(value, depth, seen, () =>
-      value.map((item): unknown =>
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+  assertRedactionBounds(depth, seen.has(value));
+  // `seen` tracks only the current path (added before recursing into children, removed on the way
+  // back out), so two independent, non-cyclic references to the same object are not a cycle.
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item): unknown =>
         deepRedact(item, additionalSecrets, redactAllStrings, counter, depth + 1, seen),
-      ),
-    );
+      );
+    }
+    // KEIKO-0188: null-prototype seed keeps a `__proto__` key from a JSON.parse'd input as a
+    // plain own-property instead of silently mutating the reconstructed object's prototype.
+    const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const [key, child] of Object.entries(value)) {
+      out[key] = deepRedact(child, additionalSecrets, redactAllStrings, counter, depth + 1, seen);
+    }
+    return out;
+  } finally {
+    seen.delete(value);
   }
-  if (typeof value === "object" && value !== null) {
-    return deepRedactContainer(value, depth, seen, () => {
-      // KEIKO-0188: null-prototype seed keeps a `__proto__` key from a JSON.parse'd input as a
-      // plain own-property instead of silently mutating the reconstructed object's prototype.
-      const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-      for (const [key, child] of Object.entries(value)) {
-        out[key] = deepRedact(child, additionalSecrets, redactAllStrings, counter, depth + 1, seen);
-      }
-      return out;
-    });
-  }
-  return value;
 }
 
 export interface PromptEnhancementRedactionOptions {

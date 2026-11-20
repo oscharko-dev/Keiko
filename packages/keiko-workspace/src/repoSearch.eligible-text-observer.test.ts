@@ -58,8 +58,9 @@ describe("successful text read observation", () => {
     writeFileSync(join(root, ".env"), "observer=private");
     const files: { scopePath: string; contentBytes: number; lineCount: number }[] = [];
     await searchText(scope(root), query, DEFAULT_SEARCH_LIMITS, {
-      onEligibleTextFile: (file): void => {
+      onEligibleTextFile: (file): boolean => {
         files.push(file);
+        return true;
       },
     });
     expect(files.map((file) => file.scopePath).sort()).toEqual([
@@ -85,8 +86,9 @@ describe("successful text read observation", () => {
     const files: string[] = [];
     const result = await searchText(scope(root), query, DEFAULT_SEARCH_LIMITS, {
       signal: controller.signal,
-      onEligibleTextFile: (file): void => {
+      onEligibleTextFile: (file): boolean => {
         files.push(file.scopePath);
+        return true;
       },
     });
     expect(files).toEqual([]);
@@ -102,8 +104,9 @@ it("omits empty context descriptors and keeps physical CRLF and final-line count
   writeFileSync(join(root, "final.txt"), "observer first\nsecond");
   const observed: { scopePath: string; lineCount: number }[] = [];
   const result = await searchText(scope(root), query, DEFAULT_SEARCH_LIMITS, {
-    onEligibleTextFile: (file): void => {
+    onEligibleTextFile: (file): boolean => {
       observed.push(file);
+      return true;
     },
   });
   expect(result.coverage.filesScanned).toBe(4);

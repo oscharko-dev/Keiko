@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type * as monaco from "monaco-editor";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -86,11 +87,16 @@ class MinimalModel implements RetainedEditorModel {
   }
 }
 
-class FakeNamespace implements RetainedEditorModelNamespace {
-  readonly created: FakeModel[] = [];
+// Records every model it creates, so a test can inspect them and reuse an undisposed one by URI.
+class RecordingNamespace<
+  Model extends RetainedEditorModel & { readonly uri: RetainedEditorUri; disposed: boolean },
+> implements RetainedEditorModelNamespace {
+  readonly created: Model[] = [];
+
+  constructor(private readonly make: (uri: RetainedEditorUri, text: string) => Model) {}
 
   createModel(text: string, _language: string, uri: RetainedEditorUri): RetainedEditorModel {
-    const model = new FakeModel(uri, text);
+    const model = this.make(uri, text);
     this.created.push(model);
     return model;
   }
@@ -103,9 +109,28 @@ class FakeNamespace implements RetainedEditorModelNamespace {
   }
 }
 
+class FakeNamespace extends RecordingNamespace<FakeModel> {
+  constructor() {
+    super((uri, text) => new FakeModel(uri, text));
+  }
+}
+
+// A Monaco code-editor view state whose first visible line identifies it in assertions.
+function viewStateAtLine(lineNumber: number): monaco.editor.ICodeEditorViewState {
+  return {
+    cursorState: [],
+    viewState: {
+      scrollLeft: 0,
+      firstPosition: { lineNumber, column: 1 },
+      firstPositionDeltaTop: 0,
+    },
+    contributionsState: {},
+  };
+}
+
 class FakeEditor implements RetainedEditorModelEditor {
   model: RetainedEditorModel | null = null;
-  viewState: unknown = null;
+  viewState: monaco.editor.ICodeEditorViewState | null = null;
   readonly setModelCalls: (RetainedEditorModel | null)[] = [];
 
   getModel(): RetainedEditorModel | null {
@@ -117,11 +142,11 @@ class FakeEditor implements RetainedEditorModelEditor {
     this.setModelCalls.push(model);
   }
 
-  saveViewState(): unknown {
+  saveViewState(): monaco.editor.ICodeEditorViewState | null {
     return this.viewState;
   }
 
-  restoreViewState(state: unknown): void {
+  restoreViewState(state: monaco.editor.ICodeEditorViewState | null): void {
     this.viewState = state;
   }
 }
@@ -186,20 +211,9 @@ class UndoCapableModel implements RetainedEditorModel {
   }
 }
 
-class UndoCapableNamespace implements RetainedEditorModelNamespace {
-  readonly created: UndoCapableModel[] = [];
-
-  createModel(text: string, _language: string, uri: RetainedEditorUri): RetainedEditorModel {
-    const model = new UndoCapableModel(uri, text);
-    this.created.push(model);
-    return model;
-  }
-
-  getModel(uri: RetainedEditorUri): RetainedEditorModel | null {
-    return (
-      this.created.find((model) => model.uri.toString() === uri.toString() && !model.disposed) ??
-      null
-    );
+class UndoCapableNamespace extends RecordingNamespace<UndoCapableModel> {
+  constructor() {
+    super((uri, text) => new UndoCapableModel(uri, text));
   }
 }
 
@@ -415,12 +429,12 @@ describe("EditorModelRegistry", () => {
     const registry = new EditorModelRegistry({ countBudget: 4, byteBudget: 1_000_000 });
     const namespace = new FakeNamespace();
     const first = attach(registry, namespace, "src/app.ts");
-    first.editor.viewState = { cursor: 12 };
+    first.editor.viewState = viewStateAtLine(12);
     first.attachment.detach();
 
     const second = attach(registry, namespace, "src/app.ts");
 
-    expect(second.editor.viewState).toEqual({ cursor: 12 });
+    expect(second.editor.viewState).toEqual(viewStateAtLine(12));
     expect(JSON.stringify(registry.diagnostics())).not.toContain("src/app.ts");
   });
 
@@ -430,7 +444,7 @@ describe("EditorModelRegistry", () => {
     const stale = attach(registry, namespace, "src/old.ts");
     const replacement = namespace.createModel("new\n", "typescript", uri("src/new.ts"));
     stale.editor.model = replacement;
-    stale.editor.viewState = { cursor: 99 };
+    stale.editor.viewState = viewStateAtLine(99);
 
     stale.attachment.detach();
     const reopened = attach(registry, namespace, "src/old.ts");
