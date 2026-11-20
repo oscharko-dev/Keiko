@@ -892,7 +892,8 @@ export function collectBestLines(
   const best = new ScoredLineCollector(runner.limits.maxMatchesReturned, state);
   const lines = repositoryPhysicalLines(text);
   const sourceLines =
-    runner.matcher.requiresSourceClassification === false
+    runner.matcher.requiresSourceClassification === false ||
+    runner.matcher.readsSourceLinesOf?.(text) === false
       ? []
       : (sourceLinesFor?.() ?? repositorySourceLines(text, scopePath));
   const braceScanCache = createBraceScanCache(lines);

@@ -40,6 +40,11 @@ export interface LineMatcher {
   readonly citationDirectiveClauseCount?: number | undefined;
   /** Only explicit false skips structural preparation; unknown injected matchers stay conservative. */
   readonly requiresSourceClassification?: boolean | undefined;
+  /**
+   * #4457: false when `match` reads no source line of any line of `text`, so the file need not be
+   * classified. Only an explicit false skips it; a matcher that rewrites lines must drop it.
+   */
+  readonly readsSourceLinesOf?: ((text: string) => boolean) | undefined;
   readonly match: (line: string, sourceLine?: RepositorySourceLine) => number;
 }
 
@@ -654,7 +659,19 @@ export function structuralLineLooksLikeSymbolDefinition(
   symbolToken: string,
   caseSensitive: boolean,
 ): boolean {
-  return definitionSymbolsInStructuralLine(structuralLine).some((symbol) =>
+  return definitionsInclude(
+    definitionSymbolsInStructuralLine(structuralLine),
+    symbolToken,
+    caseSensitive,
+  );
+}
+
+function definitionsInclude(
+  definitions: readonly string[],
+  symbolToken: string,
+  caseSensitive: boolean,
+): boolean {
+  return definitions.some((symbol) =>
     caseSensitive
       ? symbol === symbolToken
       : symbol.toLocaleLowerCase("en-US") === symbolToken.toLocaleLowerCase("en-US"),
@@ -714,13 +731,12 @@ function adjustedDefinitionIntentScore(
   if (!intent.definitionIntent) return Math.min(1, baseScore + routeBonus);
   let bonus = routeBonus;
   let penalty = 0;
-  for (const symbolToken of intent.symbolTokens) {
-    if (!structuralHaystack.includes(symbolToken)) {
-      continue;
-    }
-    if (
-      structuralLineLooksLikeSymbolDefinition(sourceLine.structural, symbolToken, caseSensitive)
-    ) {
+  // #4457: the line's definition captures do not depend on the token; capture them once.
+  const present = intent.symbolTokens.filter((token) => structuralHaystack.includes(token));
+  const definitions =
+    present.length === 0 ? [] : definitionSymbolsInStructuralLine(sourceLine.structural);
+  for (const symbolToken of present) {
+    if (definitionsInclude(definitions, symbolToken, caseSensitive)) {
       bonus = Math.max(bonus, 0.75);
     } else if (lineLooksLikeDeclaration(sourceLine.structural)) {
       bonus = Math.max(bonus, 0.55);
@@ -794,6 +810,11 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
     // #4457: only definition and route intent read a line's code/structural masks, and only on a
     // line holding one of their tokens. Every other question skips source classification.
     requiresSourceClassification: needles.length > 0,
+    // A line reads its masks only when it holds a needle (or a sigma); the file can hold one only
+    // when its folded text does. Folding is per character apart from the sigma, so the folded text
+    // is the folded lines joined by their unchanged terminators.
+    readsSourceLinesOf: (text: string): boolean =>
+      mayReadSourceLine(text, fold(text), needles, query.caseSensitive),
     matchedQueryGroups: (line: string): readonly number[] =>
       matchedNaturalLanguageGroups(line, tokenGroups, query.caseSensitive),
     match: (line: string, providedSourceLine?: RepositorySourceLine): number => {
