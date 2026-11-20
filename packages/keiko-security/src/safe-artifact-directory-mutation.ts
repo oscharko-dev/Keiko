@@ -4,8 +4,8 @@ import {
   type SafeArtifactDirectoryMutationRequest,
 } from "./safe-artifact-directory-mutation-protocol.js";
 import {
-  applySafeArtifactDirectoryMutation,
   parseSafeArtifactDirectoryMutationRequest,
+  runSafeArtifactDirectoryMutation,
   type SafeArtifactDirectoryMutationIo,
 } from "./safe-artifact-directory-mutation-runtime.js";
 
@@ -58,4 +58,5 @@ const mutationIo: SafeArtifactDirectoryMutationIo = {
   unlink: unlinkSync,
 };
 
-process.exitCode = applySafeArtifactDirectoryMutation(readRequest(), mutationIo);
+// The runtime validates the request again, so the entrypoint and its tests share one boundary.
+process.exitCode = runSafeArtifactDirectoryMutation(readRequest(), mutationIo);

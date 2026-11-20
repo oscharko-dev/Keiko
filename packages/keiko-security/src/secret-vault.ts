@@ -112,22 +112,26 @@ function errorChainFields(error: unknown): ErrorChainFields | undefined {
 
 // Reading `stack` or `cause` can run a getter or proxy trap, so a throw degrades to "absent"
 // instead of replacing the failure being classified.
-function safeErrorStack(error: ErrorChainFields): string | undefined {
+function safeErrorProperty<T>(read: () => T | undefined): T | undefined {
   try {
-    const stack = "stack" in error ? error.stack : undefined;
-    return typeof stack === "string" ? stack : undefined;
+    return read();
   } catch {
     return undefined;
   }
 }
 
+function safeErrorStack(error: ErrorChainFields): string | undefined {
+  return safeErrorProperty(() => {
+    const stack = "stack" in error ? error.stack : undefined;
+    return typeof stack === "string" ? stack : undefined;
+  });
+}
+
 function safeErrorCause(error: ErrorChainFields): object | undefined {
-  try {
+  return safeErrorProperty(() => {
     const cause = "cause" in error ? error.cause : undefined;
     return typeof cause === "object" && cause !== null ? cause : undefined;
-  } catch {
-    return undefined;
-  }
+  });
 }
 
 function frameLocation(line: string): string | undefined {

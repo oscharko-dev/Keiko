@@ -138,13 +138,7 @@ export function runSafeArtifactDirectoryMutation(
   value: unknown,
   io: SafeArtifactDirectoryMutationIo,
 ): number {
-  return applySafeArtifactDirectoryMutation(parseSafeArtifactDirectoryMutationRequest(value), io);
-}
-
-export function applySafeArtifactDirectoryMutation(
-  request: SafeArtifactDirectoryMutationRequest | undefined,
-  io: SafeArtifactDirectoryMutationIo,
-): number {
+  const request = parseSafeArtifactDirectoryMutationRequest(value);
   if (request === undefined) return SAFE_ARTIFACT_DIRECTORY_MUTATION_EXIT.invalidInput;
   const expectedDev = BigInt(request.expectedDev);
   const expectedIno = BigInt(request.expectedIno);
