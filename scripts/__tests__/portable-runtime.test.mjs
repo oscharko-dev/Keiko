@@ -62,6 +62,7 @@ import {
   moveStagedDirectory,
   ripgrepToolManifestEntry,
   stageWindowsPortableRootFiles,
+  verifyWindowsNativeHelpers,
 } from "../stage-portable-runtime.mjs";
 import {
   assemblePortableReleaseAssets,
@@ -1226,8 +1227,40 @@ async function assembleStageForTest(
       stageRipgrepTool: writeRipgrepToolFixture,
       stageUsearchAddon: writeUsearchAddonFixture,
       verifyMacosAppBundleSeal: verifyMacosSealFixture,
+      verifyWindowsNativeHelpers: verifyWindowsNativeHelpersForTest,
     },
   );
+}
+
+const windowsHelperVerifications = [];
+
+// The real verifier, handed the pins the fixture helpers below were written to match: a staging that
+// stopped verifying its Windows helpers, or verified other bytes than it staged, fails the Windows
+// stage tests (#4068).
+async function verifyWindowsNativeHelpersForTest(target, nativeHelpers) {
+  windowsHelperVerifications.push(target.platformTarget);
+  await verifyWindowsNativeHelpers(target, nativeHelpers, {
+    loadApproval: async () => fixtureWindowsHelperApproval(target),
+  });
+}
+
+function secureReadHelperFixtureText(target) {
+  return `fixture secure read helper for ${target.platformTarget}\n`;
+}
+
+function runtimeSupervisorFixtureText(target) {
+  return `fixture runtime supervisor for ${target.platformTarget}\n`;
+}
+
+function fixtureWindowsHelperApproval(target) {
+  const helper = Buffer.from(secureReadHelperFixtureText(target));
+  const supervisor = Buffer.from(runtimeSupervisorFixtureText(target));
+  const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+  return {
+    helperSha256: digest(helper),
+    helperSizeBytes: helper.length,
+    runtimeSupervisor: { sha256: digest(supervisor), sizeBytes: supervisor.length },
+  };
 }
 
 // The fixture mirrors what the real ad-hoc seal leaves behind: a `_CodeSignature/CodeResources`
@@ -1250,7 +1283,7 @@ function writePrimaryLauncherFixture(target, destination) {
 }
 
 function writeSecureReadHelperFixture(target, destination) {
-  writeFileSync(destination, `fixture secure read helper for ${target.platformTarget}\n`);
+  writeFileSync(destination, secureReadHelperFixtureText(target));
 }
 
 // The hook mirrors the real `stageUsearchAddon` signature so the lane it is handed is the lane it
@@ -1331,7 +1364,7 @@ function withRipgrepTool(candidate) {
 }
 
 function writeRuntimeSupervisorFixture(target, destination) {
-  writeFileSync(destination, `fixture runtime supervisor for ${target.platformTarget}\n`);
+  writeFileSync(destination, runtimeSupervisorFixtureText(target));
   if (target.nodePlatform !== "darwin") return;
   const appRoot = join(dirname(destination), "..", "..", "..", "..");
   writeFileSync(
@@ -4253,7 +4286,9 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     const sidecarSpec = createSidecarFixture(dir, "windows-x64");
     const outDir = join(dir, "out");
 
+    windowsHelperVerifications.length = 0;
     await assembleStageForTest("windows-x64", nodeArchive, outDir, dir, [sidecarSpec], false, true);
+    expect(windowsHelperVerifications).toEqual(["windows-x64"]);
 
     const payloadRoot = join(outDir, "windows-x64", "payload", "Keiko");
     const generationRoot = join(payloadRoot, ".portable", "generation-staging");
