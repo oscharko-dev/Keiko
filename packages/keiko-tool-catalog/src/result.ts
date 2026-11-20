@@ -115,13 +115,18 @@ function validateResultData(
   requireCatalog(metrics.outputBytes === catalogBytes(object.data), "result-contract-failed");
 }
 
+// TOOL_RESULT_REASONS has exactly one own key per result status.
+function isToolResultStatus(value: string): value is ToolResultStatus {
+  return Object.hasOwn(TOOL_RESULT_REASONS, value);
+}
+
 function validateOutcome(
   object: CatalogJsonObject,
   binding: ToolResultValidationBinding | undefined,
 ): void {
   const status = catalogString(object.status);
-  requireCatalog(Object.hasOwn(TOOL_RESULT_REASONS, status), "result-contract-failed");
-  const reasons: readonly string[] = TOOL_RESULT_REASONS[status as ToolResultStatus];
+  requireCatalog(isToolResultStatus(status), "result-contract-failed");
+  const reasons: readonly string[] = TOOL_RESULT_REASONS[status];
   requireCatalog(reasons.includes(catalogString(object.reason)), "result-contract-failed");
   const metrics = validateMetrics(object.metrics, binding);
   if (status === "completed") {

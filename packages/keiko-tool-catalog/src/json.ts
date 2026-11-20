@@ -57,7 +57,8 @@ function dataEntries(properties: readonly OwnProperty[]): readonly (readonly [st
       requireCatalog(typeof key === "string" && !UNSAFE_KEYS.has(key), "invalid-shape");
       requireCatalog(descriptor !== undefined && "value" in descriptor, "invalid-shape");
       requireCatalog(descriptor.enumerable === true, "invalid-shape");
-      return [key, descriptor.value as unknown];
+      const child: unknown = descriptor.value;
+      return [key, child];
     })
     .sort(([left], [right]) => compareStrings(left, right));
 }
@@ -85,6 +86,9 @@ function copyObject(
   budget: CopyBudget,
   depth: number,
 ): CatalogJsonObject {
+  // SAFETY: Object.create(null) returns an empty object without a prototype, so it has no
+  // property of any type yet; it is a valid empty Record. A null prototype keeps a copied key from
+  // reaching Object.prototype.
   const copy: Record<string, CatalogJsonValue> = Object.create(null) as Record<
     string,
     CatalogJsonValue
@@ -191,7 +195,7 @@ export function isCatalogJsonArray(
   return Array.isArray(value);
 }
 
-function jsonObject(value: CatalogJsonValue | undefined): CatalogJsonObject | undefined {
+export function jsonObject(value: CatalogJsonValue | undefined): CatalogJsonObject | undefined {
   return typeof value === "object" && value !== null && !isCatalogJsonArray(value)
     ? value
     : undefined;

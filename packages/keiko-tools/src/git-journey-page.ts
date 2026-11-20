@@ -86,10 +86,12 @@ function identity(
     throw new GitJourneyReadError("revision-changed");
   return value;
 }
-function pullRequestState(value: unknown): unknown {
+// A merged pull request is closed; any other provider state is matched case-insensitively.
+function pullRequestState(value: unknown): GitJourneyHeader["identity"]["state"] | undefined {
   if (value === "MERGED") return "closed";
-  if (typeof value === "string") return value.toLowerCase();
-  return value;
+  if (typeof value !== "string") return undefined;
+  const state = value.toLowerCase();
+  return state === "open" || state === "closed" ? state : undefined;
 }
 function merge(pr: Record<string, unknown>): Pick<GitJourneyHeader, "mergedAt" | "mergeCommitSha"> {
   if (pr.state !== "MERGED") {

@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import { Client, isSpecType, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { createMcpHandler, fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import {
   MANAGED_MCP_PROTOCOL_VERSION,
@@ -375,13 +375,13 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
           { toolDefinition: deepFreeze(toolDefinition(tool)), signal: bound.signal, timeout },
         );
       });
-      if (result.isError)
-        throw new ManagedMcpError(
-          "tool-error",
-          result.structuredContent as CatalogJsonObject | undefined,
-        );
-      if (result.structuredContent === undefined) throw new ManagedMcpError("protocol-error");
-      return result.structuredContent as CatalogJsonObject;
+      const structured = result.structuredContent;
+      // The SDK types structured content as a record of unknown values; it must be a JSON object.
+      if (structured !== undefined && !isSpecType.JSONObject(structured))
+        throw new ManagedMcpError("protocol-error");
+      if (result.isError) throw new ManagedMcpError("tool-error", structured);
+      if (structured === undefined) throw new ManagedMcpError("protocol-error");
+      return structured;
     } catch (error) {
       if (invocation.signal.aborted) throw new ManagedMcpError("deadline-exceeded");
       throw failure(error, bound.signal);

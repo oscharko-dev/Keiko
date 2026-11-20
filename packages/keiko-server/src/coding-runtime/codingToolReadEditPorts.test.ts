@@ -2346,11 +2346,10 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         },
       },
       scheduler: {
-        set: (callback): string => {
+        set: (callback): (() => void) => {
           callback();
-          return "timeout";
+          return (): void => undefined;
         },
-        clear: (): void => undefined,
       },
     });
     const ports = createCodingToolReadEditPorts({

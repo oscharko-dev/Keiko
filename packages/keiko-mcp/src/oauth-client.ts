@@ -52,18 +52,43 @@ function metadataEndpoints(metadata: AuthorizationServerMetadata): boolean {
       endpoint === undefined || (URL.canParse(endpoint) && secureOAuthEndpoint(new URL(endpoint))),
   );
 }
+function optionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+function optionalFiniteNumber(value: unknown): value is number | undefined {
+  return value === undefined || Number.isFinite(value);
+}
+function boundedAccessToken(value: unknown): value is string {
+  return optionalString(value) && value !== undefined && value.length > 0 && value.length <= 8192;
+}
+// Persisted state is untrusted: every field of the stored SDK token type is checked again, and only
+// a bounded Bearer access token bound to this issuer is restored.
+function isRestorableTokens(value: unknown, issuer: string): value is StoredOAuthTokens {
+  return (
+    object(value) &&
+    value.issuer === issuer &&
+    boundedAccessToken(value.access_token) &&
+    value.token_type === "Bearer" &&
+    optionalString(value.refresh_token) &&
+    optionalString(value.id_token) &&
+    optionalString(value.scope) &&
+    optionalFiniteNumber(value.expires_in)
+  );
+}
 function restoredTokens(value: unknown, issuer: string): StoredOAuthTokens | undefined {
-  if (
-    !object(value) ||
-    value.issuer !== issuer ||
-    typeof value.access_token !== "string" ||
-    value.access_token.length === 0 ||
-    value.access_token.length > 8192 ||
-    value.token_type !== "Bearer" ||
-    (value.refresh_token !== undefined && typeof value.refresh_token !== "string")
-  )
-    return undefined;
-  return value as StoredOAuthTokens;
+  return isRestorableTokens(value, issuer) ? value : undefined;
+}
+// The stored SDK client information bound to this issuer, with every field type checked again.
+function isRestorableClient(value: unknown, issuer: string): value is StoredOAuthClientInformation {
+  return (
+    object(value) &&
+    value.issuer === issuer &&
+    optionalString(value.client_id) &&
+    value.client_id !== undefined &&
+    optionalString(value.client_secret) &&
+    optionalFiniteNumber(value.client_id_issued_at) &&
+    optionalFiniteNumber(value.client_secret_expires_at)
+  );
 }
 
 function validStoredExpiry(value: unknown): value is number {
@@ -138,12 +163,7 @@ class OAuthSession implements OAuthClientProvider {
     // Refused authority still retains the known token in the bounded redaction floor.
     if (!validExpiry) this.#tokens = undefined;
     const client = saved?.client;
-    if (
-      object(client) &&
-      client.issuer === options.oauth.issuer &&
-      typeof client.client_id === "string"
-    )
-      this.#client = client as StoredOAuthClientInformation;
+    if (isRestorableClient(client, options.oauth.issuer)) this.#client = client;
   }
   private restoreFloor(value: unknown): void {
     const prior = credentialFloor(value);
