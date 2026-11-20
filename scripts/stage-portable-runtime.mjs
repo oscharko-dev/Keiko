@@ -1994,10 +1994,21 @@ export async function verifyWindowsNativeHelpers(
   throw new Error("portable Windows native helper verification aborted");
 }
 
-async function loadWindowsPortableApproval() {
-  const { WINDOWS_PORTABLE_RUNTIME_APPROVAL } =
-    await import("../packages/keiko-server/dist/coding-runtime/npmLaneRuntimeApprovals.js");
-  return WINDOWS_PORTABLE_RUNTIME_APPROVAL;
+// Reads the pin from the built server in its own process. The stage has built the packages by then
+// (preparePackageSurface), while the scripts that only import this module's helpers, the secure-read
+// qualification and the sidecar preparation, run without a build and never get here.
+function loadWindowsPortableApproval() {
+  const result = spawnSync(
+    process.execPath,
+    [join(repoRoot, "scripts", "print-windows-portable-approval.mjs")],
+    { cwd: repoRoot, encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    fail(
+      `could not read the Windows helper approval from the built server: ${(result.stderr ?? "").trim() || `exit ${String(result.status)}`}`,
+    );
+  }
+  return JSON.parse(result.stdout);
 }
 
 function validateMacosRuntimeSupervisorSurface(supervisor) {

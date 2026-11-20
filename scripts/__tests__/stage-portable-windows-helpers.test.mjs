@@ -92,6 +92,19 @@ describe("Windows native helper approval at staging", () => {
     expect(loadApproval).not.toHaveBeenCalled();
   });
 
+  it("prints the pin the built server enforces for the stage's own process", async () => {
+    // The stage reads the pin through this script in a child process, so the scripts that only
+    // import the stage's helpers never load built package output.
+    const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    try {
+      await import("../print-windows-portable-approval.mjs");
+      expect(write).toHaveBeenCalledOnce();
+      expect(JSON.parse(write.mock.calls[0][0])).toEqual(WINDOWS_PORTABLE_RUNTIME_APPROVAL);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
   it("checks a Windows stage against the pin the built server enforces", async () => {
     const onFailure = vi.fn();
     await expect(
