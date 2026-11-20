@@ -850,3 +850,13 @@ container with an init process and Node 26.13.1, with `KEIKO_WRITE_TRACKED_EVIDE
 `npm run check:update-ui-evidence` and `npm run check:editor-release-evidence` passed. Only the
 three producer records were kept; the fourteen committed captures, updater assertions and harness
 inputs retain their existing values.
+
+## Two module-local workspace storage constants — 2026-11-20 (#4482)
+
+`WORKSPACE_STORAGE_CHANGED_STATUS` and `WORKSPACE_STORAGE_CHANGED_CODE` in the workspace storage
+hook lost an export nobody consumed, which changed one harness input digest. On 2026-11-20 (UTC)
+all nine updater cases passed in 1.5 minutes in the Linux arm64 gates container with an init
+process and Node 26.13.1, with `KEIKO_WRITE_TRACKED_EVIDENCE=1`, and
+`npm run check:update-ui-evidence` and `npm run check:editor-release-evidence` passed. Only the
+three producer records were kept; the fourteen committed captures, updater assertions and other
+harness inputs retain their existing values.

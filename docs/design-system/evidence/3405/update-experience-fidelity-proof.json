@@ -115,12 +115,12 @@
     "scripts/lib/d12-baseline.mjs": "81b71b8c5bf86a8c1cf735fed941e3d99f084bc094f372f51f85be06a481cc64",
     "scripts/lib/workspace-storage-fixture.mjs": "204a424e0b09a8ffd3238464d5eafa7c728846298bc0b92faa5014453ee53d52",
     "scripts/lib/workspace-storage-fixture.d.mts": "aa245a9a8db69741010d58225f2c53669f400bb8a546a1f47f7e71ff5d005740",
-    "packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts": "2d018c3277f92c68c40b6f075b2c9620980e4266be9fd63b7cfb67a2e5a49856"
+    "packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts": "acfe5d210b4cba2b5397a8289c895784cac13d5f40ca883963e88cf9d4ae97e5"
   },
   "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
-  "generatedAt": "2026-11-19T22:09:18.239Z",
+  "generatedAt": "2026-11-20T00:44:05.845Z",
   "visualFixtureScope": "All screenshot captures use deterministic /api/update/* fixtures. They prove rendered UI behavior only, never native handoff, real package replacement, or production-BFF update success.",
   "captures": [
     {
