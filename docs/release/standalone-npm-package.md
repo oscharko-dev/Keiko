@@ -172,13 +172,12 @@ xattr -d com.apple.quarantine keiko-macos-arm64.npm.zip
 Unblock-File .\keiko-windows-x64.npm.zip
 ```
 
+On macOS and on Windows x64 npm installs the coding runtime package for the computer, the same one
+a global npm installation uses, so the Coding Workbench is available in this form on both (Windows
+since Keiko 1.5.5, #4068). On Windows a coding run needs no service and no administrator rights.
+
 ## What This Form Does Not Do
 
-- **No Coding Workbench on Windows.** The Windows coding runtime is published only inside the
-  portable release archive, not as an npm package, so npm installs none and the Workbench reports
-  Coding as unavailable, even where an administrator installed the gateway service. Chat,
-  Knowledge Pods, Jira and the Editor work. On macOS npm installs the coding runtime package for
-  the computer, the same one a global npm installation uses.
 - **No default project.** The package folder holds Keiko's program files and, in a team package, the
   gateway token, so Keiko never offers it as the folder of the Coding Workbench, Files or Git and
   refuses it for them; the person chooses a folder. Chat works at once and needs no folder.

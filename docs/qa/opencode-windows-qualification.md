@@ -2467,6 +2467,8 @@ against the broker this machine installed earlier from a dev checkout.
 
 Open: the elevated `repair` from the package, a Workbench run through it, and publication. The main
 package declares the runtime only after its first publication (`firstPublication: "pending"`).
+(Update 2026-11-20: `@oscharko-dev/keiko-coding-runtime-win32-x64` is published, the flag is removed
+and the root package declares it, #4068.)
 
 ## A real OpenAI run in the dev lane (2026-11-09)
 

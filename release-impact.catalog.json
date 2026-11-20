@@ -4651,7 +4651,7 @@
       "releaseNoteCategory": "fixes",
       "releaseNotePriority": "high",
       "userVisibleChange": "behavioral",
-      "userVisibleSummary": "The Coding Workbench starts on Windows again: Keiko 1.5.4 refused every Windows coding run because its build carried a helper whose bytes the server did not approve. The release build now stops before it can ship such a package.",
+      "userVisibleSummary": "The Coding Workbench starts on Windows again: Keiko 1.5.4 refused every Windows coding run because its build carried a helper whose bytes the server did not approve. The release build now stops before it can ship such a package. A Windows npm installation now brings its Coding Workbench runtime with the one install.",
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -4662,15 +4662,16 @@
       "oneClickEligible": true,
       "releaseNoteBullets": [
         "Windows: the Coding Workbench starts coding runs again in the desktop and folder packages. Keiko 1.5.4 carried a secure-read helper that an updated build image had compiled into different bytes than the server approves, so every Windows run was refused with \"only a release-qualified Keiko package can use\". #4068",
-        "The release build now compares every Windows native helper with the bytes the server approves and stops on a difference, so a Windows package without a usable Coding Workbench can no longer be published. #4068"
+        "The release build now compares every Windows native helper with the bytes the server approves and stops on a difference, so a Windows package without a usable Coding Workbench can no longer be published. #4068",
+        "Windows npm installations: Keiko now declares the Windows coding-runtime package (1.1.7), so `npm install @oscharko-dev/keiko` brings the Coding Workbench runtime on Windows as it does on macOS. For Keiko 1.5.4 the package `@oscharko-dev/keiko-coding-runtime-win32-x64@1.1.6` can be installed beside it. #4068"
       ],
       "review": {
         "status": "reviewed",
         "reviewer": "release-owner",
         "reviewedAt": "2026-11-20",
         "humanApproved": true,
-        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4068#7033702597",
-        "rationale": "The repository owner ordered a successful release in which the Coding Workbench runs on Windows as on macOS for a standard user without administrator rights, tested on the Windows test guest and on macOS. The test of the published 1.5.4 build on the Windows guest found every Windows coding run refused because the release build's secure-read helper no longer matched its pin; 1.5.5 carries the corrected pin, the matching Windows coding-runtime package 1.1.7 and a release-build guard. The protected dev checks, resolved reviews, and exact-commit release workflow govern publication; real Windows x64 hardware qualification remains tracked in #4068."
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4068#7036639008",
+        "rationale": "On 2026-11-20 the repository owner approved the merge of PR #4487 and the release of Keiko 1.5.5 once all checks are green, after seeing the Windows test guest results: 1.5.4 with the Windows coding-runtime package 1.1.6 completes a Coding run as a standard user from registry packages, the 1.5.4 standalone package cannot start one, and the standalone package built from PR #4487 can. 1.5.5 carries the corrected helper pin, a release-build guard, and the dependency on the Windows coding-runtime package 1.1.7. The protected dev checks, resolved reviews, and exact-commit release workflow govern publication; real Windows x64 hardware qualification remains tracked in #4068."
       }
     }
   ]
