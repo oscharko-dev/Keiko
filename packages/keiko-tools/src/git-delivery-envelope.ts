@@ -38,8 +38,7 @@ export function gitDeliveryActionEnvelope<K extends GitDeliveryActionKind>(
   inputs: GitDeliveryInputsByKind[K],
   fields: GitDeliveryEnvelopeFields,
 ): GitDeliveryEnvelopeByKind<K> {
-  const { executionResult } = fields;
-  return {
+  const envelope = {
     schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
     actionId: fields.actionId,
     kind: inputs.kind,
@@ -47,6 +46,7 @@ export function gitDeliveryActionEnvelope<K extends GitDeliveryActionKind>(
     policyDecision: fields.policyDecision,
     approvalRequirement: fields.approvalRequirement,
     preview: fields.preview,
-    ...(executionResult !== undefined ? { executionResult } : {}),
   };
+  const { executionResult } = fields;
+  return executionResult === undefined ? envelope : { ...envelope, executionResult };
 }

@@ -171,7 +171,7 @@ describe("edges read-side vocabulary", () => {
     insertMemoryRow(db, makeMemory("b"), TEST_CIPHER);
     insertEdgeRow(db, makeEdge("e1", "a", "b", "supersedes"), TEST_CIPHER);
     db.prepare("UPDATE memory_edges SET kind = 'bogus' WHERE id = 'e1'").run();
-    expect(() => listOutgoingEdgeRows(db, "a" as MemoryId, TEST_CIPHER)).toThrow(
+    expect(() => listOutgoingEdgeRows(db, makeMemory("a").id, TEST_CIPHER)).toThrow(
       expect.objectContaining({ code: "schema-mismatch" }),
     );
     db.close();
