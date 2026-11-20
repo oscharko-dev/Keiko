@@ -1006,6 +1006,15 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     );
   });
 
+  it("does not merge a fact whose fingerprint agrees but whose wording differs in symbols (#4223)", async () => {
+    const deps = makeDeps({ modelId: CHAT_MODEL });
+    const vault = makeVault();
+    vault.insertMemory(makeRecord("the user prefers C++", "id-cpp"));
+
+    const other = makeRecord("the user prefers C#", "id-csharp");
+    expectInserted(await insertSalienceMemoryWithNoveltyGate(deps, vault, other), other.id);
+  });
+
   it("inserts without reading the neighborhood when no embedding model is configured", async () => {
     const deps = makeDeps({ modelId: CHAT_MODEL });
     const vault = makeVault();

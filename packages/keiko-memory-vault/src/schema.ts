@@ -333,6 +333,9 @@ ALTER TABLE memories ADD COLUMN body_hash TEXT;
 CREATE INDEX IF NOT EXISTS idx_memories_scope_body_hash
   ON memories(scope_kind, scope_coordinate, body_hash)
   WHERE body_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_memories_body_hash_pending
+  ON memories(id)
+  WHERE body_hash IS NULL;
 `;
 
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the

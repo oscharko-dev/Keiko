@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2a0c99c09975b403e9edd7f3de21ff3613b2c05267d5b3539a8223a39758193f",
+    "catalogDigest": "97d73748b3a172a2adcc1ac3780dabad9cda2ecf6d145137b14c05f35afc3ca7",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -39140,7 +39140,7 @@
         "proofIds": ["memory-vault.store.encryption-checkpoint-degraded.state"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-memory-vault/src/schema.ts:76",
-        "emitterSites": ["packages/keiko-memory-vault/src/schema.ts:521"]
+        "emitterSites": ["packages/keiko-memory-vault/src/schema.ts:524"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39260,12 +39260,21 @@
             "type": "integer",
             "dataClass": "count",
             "required": false
+          },
+          "bodyHashBackfillDeferred": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
           }
         },
         "diagnosticWhen": [
           {
             "field": "bodyHashUnreadableCount",
             "positive": true
+          },
+          {
+            "field": "bodyHashBackfillDeferred",
+            "values": [true]
           }
         ],
         "causal": "none",
@@ -39278,7 +39287,7 @@
         ],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-memory-vault/src/vault.ts:147",
-        "emitterSites": ["packages/keiko-memory-vault/src/vault.ts:520"]
+        "emitterSites": ["packages/keiko-memory-vault/src/vault.ts:535"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -39509,7 +39518,7 @@
         "failureClasses": ["memory-capture-novelty"],
         "proofIds": ["memory.capture.novelty-gate.line"],
         "registrationSite": "packages/keiko-server/src/memory-embedding.ts:199",
-        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:1073"]
+        "emitterSites": ["packages/keiko-server/src/memory-embedding.ts:1094"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -107626,6 +107635,12 @@
               "analyzerProjection": "capability",
               "safeContextFields": [
                 {
+                  "name": "bodyHashBackfillDeferred",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "bodyHashFilledCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -126769,7 +126784,7 @@
     {
       "op": "store-rejected",
       "category": "memory",
-      "site": "packages/keiko-server/src/memory-embedding.ts:1199",
+      "site": "packages/keiko-server/src/memory-embedding.ts:1220",
       "package": "keiko-server"
     },
     {

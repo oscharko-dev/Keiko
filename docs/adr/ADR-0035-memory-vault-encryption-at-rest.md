@@ -54,9 +54,12 @@ body that a forget tombstone carries (the key is sealed in `memory_vault_secrets
 fingerprint is no cross-vault dictionary key). It is cleartext and indexed by scope, so capture
 finds an exact repeat or an earlier rejection by index rather than by reading a window of the
 newest bodies. Every insert and update writes it. When the vault opens with its key it fills the
-fingerprint of rows written before v17 in one transaction; a body it cannot open keeps none, which
-only removes that row from the exact lookup, and `memory-vault.store.opened` counts both cases (an
-unreadable body is a diagnostic) (#4223).
+fingerprint of rows written before v17, one page of 500 rows per transaction through a partial index
+of the rows still missing one. A body it cannot open keeps none, which only removes that row from the
+exact lookup and is counted again at every open; a page that cannot be written (a lock another
+process holds) is rolled back and the rest waits for a later open, so the vault still opens.
+`memory-vault.store.opened` counts filled and unreadable rows and marks a deferred fill; an unreadable
+body and a deferral are diagnostics (#4223).
 
 Crypto is confined to two wrapper functions in `serialize.ts` (and the per-table seal/open in `edges.ts`, `embeddings.ts`, `tombstones.ts`); the pure row↔record builders operate on plaintext exactly as before. The cipher is threaded as an explicit parameter through the row layer (keeping those modules pure and unit-testable) and resolved once, internally, in `createMemoryVault`.
 

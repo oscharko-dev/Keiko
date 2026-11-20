@@ -47,6 +47,7 @@ export function rewindPlaintextFixtureSchema(db: DatabaseSync): void {
     DROP TRIGGER memory_sources_update;
     DROP TABLE memory_message_sources;`);
   db.exec("DROP INDEX idx_memories_scope_body_hash");
+  db.exec("DROP INDEX idx_memories_body_hash_pending");
   db.exec("ALTER TABLE memories DROP COLUMN body_hash");
   db.exec("ALTER TABLE memories DROP COLUMN evidence_span");
   db.exec("ALTER TABLE memories DROP COLUMN source_message_ids_json");

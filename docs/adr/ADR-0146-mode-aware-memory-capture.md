@@ -251,9 +251,10 @@ unclassified writer still refuses every path.
 Saying a statement again confirms the existing memory through `recordAccess`, naming the chat,
 instead of storing a second record: in the same words without an embedder, and as a paraphrase through the existing
 novelty gate with one. A paraphrase of a forgotten fact is suppressed the same way. The same words
-are found by the vault's body fingerprint index however old the stored fact is, and so is an
-earlier rejection of them; only the paraphrase check reads the 200 newest live rows of the scope
-(#4223).
+are found by the vault's body fingerprint index however old the stored fact is, also without an
+embedder, and so is an earlier rejection of them; only the paraphrase check reads the 200 newest live
+rows of the scope. The fingerprint ignores everything but letters and digits, so a repeat merges only
+when its wording also agrees apart from case, spacing and closing marks ("C++" is not "C#") (#4223).
 
 "Vergiss das" reaches what the last turn left behind, in any scope of the conversation and
 including a parked proposal, and goes through the one forget implementation with its audit preflight

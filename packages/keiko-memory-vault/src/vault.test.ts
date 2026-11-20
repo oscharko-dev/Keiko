@@ -2065,6 +2065,7 @@ describe("exact body lookup by the keyed fingerprint index (v17)", () => {
     first.close();
     const raw = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
     raw.exec("DROP INDEX idx_memories_scope_body_hash");
+    raw.exec("DROP INDEX idx_memories_body_hash_pending");
     raw.exec("ALTER TABLE memories DROP COLUMN body_hash");
     raw.exec("PRAGMA user_version = 16");
     raw.close();
@@ -2098,6 +2099,48 @@ describe("exact body lookup by the keyed fingerprint index (v17)", () => {
     expect(
       again.find((event) => event.op === "memory-vault.store.opened")?.extra,
     ).not.toHaveProperty("bodyHashFilledCount");
+  });
+
+  it("opens although the fill cannot write, reports the deferral, and fills at a later open", () => {
+    const dir = freshDir();
+    const first = openVault(dir);
+    first.insertMemory(makeMemory({ id: "a" as MemoryId, body: "prefers dark mode" }));
+    first.close();
+    const raw = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    raw.exec("UPDATE memories SET body_hash = NULL");
+    raw.exec(`CREATE TRIGGER block_fill BEFORE UPDATE OF body_hash ON memories
+      BEGIN SELECT RAISE(ABORT, 'blocked'); END`);
+    raw.close();
+    const open = (events: MemoryVaultLogEvent[]): MemoryVaultStore =>
+      createMemoryVault({
+        memoryDir: dir,
+        env: { KEIKO_MEMORY_DIR: dir },
+        vaultKey: TEST_VAULT_KEY,
+        logSink: { write: (event): void => void events.push(event) },
+      });
+
+    const blocked: MemoryVaultLogEvent[] = [];
+    const deferredVault = open(blocked);
+    expect(deferredVault.listMemoryMetadataByBody(scope, "prefers dark mode")).toEqual([]);
+    expect(blocked.find((event) => event.op === "memory-vault.store.opened")?.extra).toMatchObject({
+      bodyHashFilledCount: 0,
+      bodyHashUnreadableCount: 0,
+      bodyHashBackfillDeferred: true,
+    });
+    deferredVault.close();
+    const unblock = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    unblock.exec("DROP TRIGGER block_fill");
+    unblock.close();
+
+    const later: MemoryVaultLogEvent[] = [];
+    const filled = open(later);
+    expect(filled.listMemoryMetadataByBody(scope, "prefers dark mode").map(({ id }) => id)).toEqual(
+      ["a"],
+    );
+    expect(later.find((event) => event.op === "memory-vault.store.opened")?.extra).toMatchObject({
+      bodyHashFilledCount: 1,
+    });
+    filled.close();
   });
 
   it("keeps opening a vault whose sealed body cannot be read, and counts that row", () => {

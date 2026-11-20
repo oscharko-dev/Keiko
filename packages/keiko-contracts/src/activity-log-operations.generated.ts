@@ -37720,6 +37720,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      bodyHashBackfillDeferred: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
     },
     causal: "none",
     lifecycle: "end",
@@ -37734,6 +37739,10 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       {
         field: "bodyHashUnreadableCount",
         positive: true,
+      },
+      {
+        field: "bodyHashBackfillDeferred",
+        values: [true],
       },
     ],
   },

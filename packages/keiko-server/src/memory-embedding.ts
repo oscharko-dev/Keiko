@@ -874,17 +874,38 @@ function gatherScopeEmbeddings(
 
 // The same body stored live in the scope, found by the vault's fingerprint index: the neighbour set
 // above holds only the newest rows, so an exact repeat of an older fact would otherwise be stored a
-// second time. Needs no embedding. The fact a candidate replaces is never its duplicate.
+// second time. Needs no embedding. The fingerprint ignores every character but letters and digits,
+// so a hit counts only when the wording also agrees apart from case, spacing and closing marks
+// ("C++" is not "C#"). The fact a candidate replaces is never its duplicate.
 function exactLiveDuplicate(
   vault: MemoryVaultStore,
   record: MemoryRecord,
   replaces: MemoryId | undefined,
 ): MemoryId | null {
+  const wording = sameWordingKey(record.body);
   const matches = vault.listMemoryMetadataByBody(record.scope, record.body, {
     status: DEDUP_CORPUS_STATUSES,
-    limit: 2,
+    limit: MAX_EXACT_BODY_MATCHES,
   });
-  return matches.find(({ id }) => id !== replaces)?.id ?? null;
+  for (const { id } of matches) {
+    if (id === replaces) continue;
+    const existing = vault.getMemory(id);
+    if (existing !== undefined && sameWordingKey(existing.body) === wording) return id;
+  }
+  return null;
+}
+
+// A handful of live rows can share one fingerprint (wordings that differ only in symbols); each is
+// checked against the candidate's wording.
+const MAX_EXACT_BODY_MATCHES = 8;
+
+const CLOSING_MARKS = new Set([".", "!", "?", ";", ":", ",", "…"]);
+
+function sameWordingKey(body: string): string {
+  const words = body.normalize("NFKC").toLocaleLowerCase("und").split(/\s/u).filter(Boolean);
+  let key = words.join(" ");
+  while (key.length > 0 && CLOSING_MARKS.has(key.at(-1) ?? "")) key = key.slice(0, -1).trimEnd();
+  return key;
 }
 
 interface SemanticNeighbourhood {

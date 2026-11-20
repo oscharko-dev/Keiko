@@ -160,9 +160,14 @@ const MEMORY_VAULT_STORE_OPENED_OPERATION = defineActivityLogOperation({
     },
     bodyHashFilledCount: { type: "integer", dataClass: "count", required: false },
     bodyHashUnreadableCount: { type: "integer", dataClass: "count", required: false },
+    bodyHashBackfillDeferred: { type: "boolean", dataClass: "closed-enum", required: false },
   },
-  // A stored body the vault could not open is a failure fact, not routine open context.
-  diagnosticWhen: [{ field: "bodyHashUnreadableCount", positive: true }],
+  // A stored body the vault could not open, or a fill that had to stop, is a failure fact, not
+  // routine open context.
+  diagnosticWhen: [
+    { field: "bodyHashUnreadableCount", positive: true },
+    { field: "bodyHashBackfillDeferred", values: [true] },
+  ],
   causal: "none",
   lifecycle: "end",
   analyzerProjection: "capability",
@@ -504,6 +509,16 @@ function resolveCipherWithSource(
   return { cipher: createMemoryContentCipher(resolved.key), keySource: resolved.source };
 }
 
+// Present only when this open met rows written before v17.
+function backfillEvidence(backfill: BodyHashBackfill): Readonly<Record<string, number | boolean>> {
+  if (backfill.filled + backfill.unreadable === 0 && !backfill.deferred) return {};
+  return {
+    bodyHashFilledCount: backfill.filled,
+    bodyHashUnreadableCount: backfill.unreadable,
+    ...(backfill.deferred ? { bodyHashBackfillDeferred: true } : {}),
+  };
+}
+
 interface VaultOpenedEvidence {
   readonly keySource: VaultKeySource | undefined;
   readonly backfill: BodyHashBackfill;
@@ -522,10 +537,7 @@ function emitVaultOpened(
       { durationMs },
       {
         ...(keySource === undefined ? {} : { keySource }),
-        // Present only when this open filled fingerprints of rows written before v17.
-        ...(backfill.filled + backfill.unreadable === 0
-          ? {}
-          : { bodyHashFilledCount: backfill.filled, bodyHashUnreadableCount: backfill.unreadable }),
+        ...backfillEvidence(backfill),
       },
     ),
   );

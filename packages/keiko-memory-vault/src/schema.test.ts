@@ -264,6 +264,7 @@ describe("runMigrations", () => {
       "idx_edges_to",
       "idx_edges_to_created",
       "idx_embeddings_identity",
+      "idx_memories_body_hash_pending",
       "idx_memories_pinned",
       "idx_memories_scope",
       "idx_memories_scope_body_hash",

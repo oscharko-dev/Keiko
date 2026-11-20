@@ -543,41 +543,83 @@ export function listMemoryMetadataByBodyHashRows(
 export interface BodyHashBackfill {
   readonly filled: number;
   readonly unreadable: number;
+  // The fill stopped at a storage failure (a lock held by another process, for example); the rows
+  // left are filled at a later open.
+  readonly deferred: boolean;
 }
 
-const BODY_HASH_PENDING_SQL = "SELECT id, body FROM memories WHERE body_hash IS NULL";
+const BODY_HASH_PAGE_ROWS = 500;
+const BODY_HASH_PENDING_SQL = `SELECT id, body FROM memories
+WHERE body_hash IS NULL AND id > ? ORDER BY id LIMIT ${String(BODY_HASH_PAGE_ROWS)}`;
 const BODY_HASH_FILL_SQL = "UPDATE memories SET body_hash = ? WHERE id = ? AND body_hash IS NULL";
 
-// A vault written before v17 holds no fingerprints. They are filled once, in one transaction, when the
-// vault opens with its key. A body that cannot be opened keeps no fingerprint: that row is only absent
-// from the exact lookup, and it is counted, never guessed.
+interface PendingBodyRow {
+  readonly id: string;
+  readonly body: string;
+}
+
+interface BackfillTally {
+  filled: number;
+  unreadable: number;
+  deferred: boolean;
+}
+
+// A vault written before v17 holds no fingerprints. They are filled when the vault opens with its
+// key, one page per transaction through the partial index of the rows still missing one, so a large
+// vault is never read whole and a failure keeps the pages already written. A body that cannot be
+// opened keeps no fingerprint: that row is only absent from the exact lookup, and it is counted at
+// every open, never guessed.
 export function backfillMemoryBodyHashes(
   db: DatabaseSync,
   sealing: MemoryRowSealing,
 ): BodyHashBackfill {
-  const pending = cachedPrepare(db, BODY_HASH_PENDING_SQL).all() as unknown as readonly {
-    readonly id: string;
-    readonly body: string;
-  }[];
-  if (pending.length === 0) return { filled: 0, unreadable: 0 };
+  const tally: BackfillTally = { filled: 0, unreadable: 0, deferred: false };
+  const recordDeferredBackfill = (): void => {
+    tally.deferred = true;
+  };
+  let after = "";
+  for (;;) {
+    const page = cachedPrepare(db, BODY_HASH_PENDING_SQL).all(
+      after,
+    ) as unknown as readonly PendingBodyRow[];
+    const last = page.at(-1);
+    if (last === undefined || !fillBodyHashPage(db, sealing, page, tally, recordDeferredBackfill)) {
+      return { ...tally };
+    }
+    after = last.id;
+  }
+}
+
+// One page in one transaction. Its counts join the tally only once it is committed; a failure rolls
+// it back and records the deferral, which the vault reports on its open line.
+function fillBodyHashPage(
+  db: DatabaseSync,
+  sealing: MemoryRowSealing,
+  page: readonly PendingBodyRow[],
+  tally: BackfillTally,
+  recordDeferredBackfill: () => void,
+): boolean {
   let filled = 0;
   let unreadable = 0;
   const recordUnreadableBody = (): void => {
     unreadable += 1;
   };
-  db.exec("BEGIN IMMEDIATE");
   try {
+    db.exec("BEGIN IMMEDIATE");
     const fill = cachedPrepare(db, BODY_HASH_FILL_SQL);
-    for (const row of pending) {
+    for (const row of page) {
       const body = openedBody(row.body, sealing.cipher, recordUnreadableBody);
       if (body !== undefined) filled += Number(fill.run(sealing.bodyHash(body), row.id).changes);
     }
     db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
+  } catch {
+    if (db.isTransaction) db.exec("ROLLBACK");
+    recordDeferredBackfill();
+    return false;
   }
-  return { filled, unreadable };
+  tally.filled += filled;
+  tally.unreadable += unreadable;
+  return true;
 }
 
 // An unreadable body is counted; the vault reports the count on its open line as a diagnostic.

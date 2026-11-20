@@ -42873,6 +42873,12 @@
           "analyzerProjection": "capability",
           "safeContextFields": [
             {
+              "name": "bodyHashBackfillDeferred",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "bodyHashFilledCount",
               "type": "integer",
               "dataClass": "count",
