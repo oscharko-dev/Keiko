@@ -103,21 +103,6 @@ export interface NodeGitPullRequestAdapterDeps {
   readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
 }
 
-function executionResult<
-  Result extends GitPrExecResult | GitPrMarkReadyExecResult = GitPrExecResult,
->(
-  outcome: GitDeliveryExecutionResult["outcome"],
-  durationMs: number,
-  extra?: Partial<Result>,
-): Result {
-  return {
-    schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
-    outcome,
-    durationMs: Math.max(0, Math.trunc(durationMs)),
-    ...extra,
-  } as Result;
-}
-
 interface RunContext {
   readonly runDeps: RunCommandDeps;
   readonly signal: AbortSignal;
@@ -172,6 +157,33 @@ function failureFromThrow(error: unknown, durationMs: number): GitPrExecResult {
     errorCode: "internal-error",
     failureClass: "invocation-error",
   });
+}
+
+function executionBase(
+  outcome: GitDeliveryExecutionResult["outcome"],
+  durationMs: number,
+): GitDeliveryExecutionResult {
+  return {
+    schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+    outcome,
+    durationMs: Math.max(0, Math.trunc(durationMs)),
+  };
+}
+
+function executionResult(
+  outcome: GitDeliveryExecutionResult["outcome"],
+  durationMs: number,
+  extra: Partial<GitPrExecResult> = {},
+): GitPrExecResult {
+  return { ...executionBase(outcome, durationMs), ...extra };
+}
+
+function markReadyResult(
+  outcome: GitDeliveryExecutionResult["outcome"],
+  durationMs: number,
+  extra: Partial<GitPrMarkReadyExecResult> = {},
+): GitPrMarkReadyExecResult {
+  return { ...executionBase(outcome, durationMs), ...extra };
 }
 
 async function runGh(ctx: RunContext, argv: readonly string[]): Promise<CommandResult | Error> {
@@ -430,7 +442,7 @@ function readPrIdentity(
 // Projects a `GitPrExecResult` failure (from `fetchPrNodeId` / `runGh`) onto the narrower mark-ready
 // result shape — never carries the create-specific `createdPrExternalId`/`createdPrIdentity` fields.
 function asMarkReadyFailure(result: GitPrExecResult): GitPrMarkReadyExecResult {
-  return executionResult<GitPrMarkReadyExecResult>(result.outcome, result.durationMs, {
+  return markReadyResult(result.outcome, result.durationMs, {
     ...(result.errorCode !== undefined ? { errorCode: result.errorCode } : {}),
     ...(result.rejectionReason !== undefined ? { rejectionReason: result.rejectionReason } : {}),
   });
@@ -496,12 +508,12 @@ async function markPullRequestReady(
 ): Promise<GitPrMarkReadyExecResult> {
   const before = await readPrIdentity(ctx, req);
   if (!before.ok) {
-    return executionResult<GitPrMarkReadyExecResult>("failed", 0, {
+    return markReadyResult("failed", 0, {
       errorCode: "precondition-failed",
     });
   }
   if (isPreMutationDrift(before.value, req)) {
-    return executionResult<GitPrMarkReadyExecResult>("failed", 0, {
+    return markReadyResult("failed", 0, {
       errorCode: "precondition-failed",
       observedIdentity: before.value,
     });
@@ -512,17 +524,17 @@ async function markPullRequestReady(
   }
   const after = await readPrIdentity(ctx, req);
   if (!after.ok) {
-    return executionResult<GitPrMarkReadyExecResult>("failed", mutation.durationMs, {
+    return markReadyResult("failed", mutation.durationMs, {
       errorCode: "precondition-failed",
     });
   }
   if (isPostMutationDrift(after.value, req)) {
-    return executionResult<GitPrMarkReadyExecResult>("failed", mutation.durationMs, {
+    return markReadyResult("failed", mutation.durationMs, {
       errorCode: "precondition-failed",
       observedIdentity: after.value,
     });
   }
-  return executionResult<GitPrMarkReadyExecResult>("succeeded", mutation.durationMs, {
+  return markReadyResult("succeeded", mutation.durationMs, {
     observedIdentity: after.value,
   });
 }
@@ -630,7 +642,8 @@ async function inspectRemote<T>(
         ok: false,
         reason: classifyGitPullRequestRejection(`${result.stdout}\n${result.stderr}`),
       };
-    const value = parse(JSON.parse(result.stdout) as unknown);
+    const parsed: unknown = JSON.parse(result.stdout);
+    const value = parse(parsed);
     return value === undefined ? { ok: false, reason: "invalid-response" } : { ok: true, value };
   } catch {
     return { ok: false, reason: "invalid-response" };

@@ -50,6 +50,8 @@ export type MarkdownLiteParseResult =
   | { readonly ok: false; readonly reason: MarkdownLiteRejectionReason };
 
 const HEADING_PATTERN = /^(#{1,6}) (.*)$/u;
+/** Heading levels by mark count less one. */
+const HEADING_LEVELS: readonly MarkdownLiteHeadingLevel[] = [1, 2, 3, 4, 5, 6];
 const BULLET_ITEM_PATTERN = /^- (.*)$/u;
 const ORDERED_ITEM_PATTERN = /^(\d{1,9})\. (.*)$/u;
 const CODE_FENCE_PATTERN = /^```(.*)$/u;
@@ -137,7 +139,8 @@ function handleLine(state: ParserState, line: string): void {
   const heading = HEADING_PATTERN.exec(line);
   if (heading !== null) {
     flushAll(state);
-    const level = (heading[1] ?? "#").length as MarkdownLiteHeadingLevel;
+    // The pattern admits one to six marks, so the lookup never misses.
+    const level = HEADING_LEVELS[(heading[1] ?? "#").length - 1] ?? 1;
     state.blocks.push({ kind: "heading", level, text: heading[2] ?? "" });
     return;
   }

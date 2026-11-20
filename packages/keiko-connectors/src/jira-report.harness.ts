@@ -11,6 +11,7 @@ import {
   type JiraReportToolDeps,
 } from "./jira-report-tool.js";
 import type { JiraReport } from "./jira-report-types.js";
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 
 export const NOW = Date.parse("2026-10-31T12:00:00Z");
 export interface ConnectionOverrides {
@@ -68,7 +69,8 @@ export function harness(
   };
 }
 export function record(value: unknown): Record<string, unknown> {
-  return value as Record<string, unknown>;
+  if (!isRecord(value)) throw new TypeError("Expected a JSON object in the report");
+  return value;
 }
 export function idOf(result: ManagedMcpToolResult): string {
   const id = result.data.reportId;

@@ -1,3 +1,4 @@
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type {
   GitDeliveryObservationFailure,
   GitDeliveryObservationFailureReason,
@@ -98,8 +99,7 @@ function parsePage(stdout: string, counted: boolean): ParsedPage | undefined {
   try {
     const value: unknown = JSON.parse(stdout);
     if (!counted) return Array.isArray(value) ? { values: value } : undefined;
-    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-    return countedPage(value as Record<string, unknown>);
+    return isRecord(value) ? countedPage(value) : undefined;
   } catch {
     return undefined;
   }

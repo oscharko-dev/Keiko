@@ -4,6 +4,7 @@
 // incrementing integer `id`; the in-process id allocator is private so a CDP response cannot spoof
 // the id of a request it didn't trigger.
 
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import { WebSocket, type RawData } from "ws";
 import { BrowserToolError } from "./errors.js";
 
@@ -51,9 +52,7 @@ type CdpFrame =
   | { readonly method: string; readonly params?: unknown; readonly sessionId?: string };
 
 function isCdpFrame(value: unknown): value is CdpFrame {
-  if (typeof value !== "object" || value === null) return false;
-  const rec = value as Record<string, unknown>;
-  return typeof rec.id === "number" || typeof rec.method === "string";
+  return isRecord(value) && (typeof value.id === "number" || typeof value.method === "string");
 }
 
 function parseCdpText(text: string): CdpFrame | undefined {

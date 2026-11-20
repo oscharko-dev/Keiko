@@ -14,7 +14,11 @@ import {
   type JiraMutationOperation,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  CatalogJsonObject,
+  CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { isCatalogJsonArray } from "@oscharko-dev/keiko-tool-catalog";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { UiHandlerDeps } from "../deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
@@ -138,9 +142,9 @@ function templatesGovernCreate(store: PreflightDeps["store"]): boolean {
     )
   );
 }
-function itemsOf(args: CatalogJsonObject): readonly Readonly<Record<string, unknown>>[] {
-  const items: unknown = args.items;
-  return Array.isArray(items) ? (items as readonly Readonly<Record<string, unknown>>[]) : [];
+function itemsOf(args: CatalogJsonObject): readonly CatalogJsonValue[] {
+  const { items } = args;
+  return isCatalogJsonArray(items) ? items : [];
 }
 
 /** Why the items of a readable draft are not put in front of a human. */

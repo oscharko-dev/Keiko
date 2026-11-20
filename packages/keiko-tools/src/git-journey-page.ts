@@ -1,3 +1,4 @@
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { sameGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import {
@@ -21,9 +22,8 @@ export class GitJourneyReadError extends Error {
   }
 }
 function object(value: unknown): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
-    throw new GitJourneyReadError("malformed-response");
-  return value as Record<string, unknown>;
+  if (!isRecord(value)) throw new GitJourneyReadError("malformed-response");
+  return value;
 }
 function count(value: unknown, max: number, min = 0): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;

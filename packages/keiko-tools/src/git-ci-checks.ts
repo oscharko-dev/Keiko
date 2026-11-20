@@ -105,10 +105,13 @@ function runAppId(raw: Record<string, unknown>, kind: GitCiCheckKind): number | 
     throw new TypeError("Invalid CI source application");
   return raw.appId;
 }
+function isList(value: unknown): value is readonly unknown[] {
+  return Array.isArray(value);
+}
 function metadataList(value: unknown): readonly unknown[] {
   if (!Array.isArray(value) || value.length > 100)
     throw new TypeError("Invalid CI workflow metadata list");
-  return value as unknown[];
+  return value;
 }
 function assertWorkflowMetadata(raw: Record<string, unknown>): void {
   if (![raw.workflowId, raw.runAttempt, raw.repositoryId, raw.headRepositoryId].every(positive))
@@ -289,10 +292,10 @@ function referencedWorkflow(
   input: GitCiChecksInput,
 ): boolean {
   const definition = workflowDefinition(input, requirement);
-  if (definition === undefined || !Array.isArray(check.raw.referencedWorkflows)) return false;
+  const candidates = check.raw.referencedWorkflows;
+  if (definition === undefined || !isList(candidates)) return false;
   const repository = definition.repository.toLowerCase();
   if (!ownWorkflowPath(requirement, check, repository, definition.sha)) return false;
-  const candidates = check.raw.referencedWorkflows as unknown[];
   if (candidates.length > 100) return false;
   return candidates.some((value) => {
     if (!object(value) || typeof value.path !== "string") return false;
@@ -325,8 +328,8 @@ function exactWorkflowContext(check: Check, input: GitCiChecksInput): boolean {
     check.raw.headRepositoryId !== input.repositoryId
   )
     return false;
-  if (check.raw.event !== "pull_request" || !Array.isArray(check.raw.pullRequests)) return false;
-  const requests = check.raw.pullRequests as unknown[];
+  const requests = check.raw.pullRequests;
+  if (check.raw.event !== "pull_request" || !isList(requests)) return false;
   return (
     requests.length <= 100 &&
     requests.some(
@@ -381,10 +384,9 @@ function workflowCandidate(requirement: GitCiWorkflowRequirement, check: Check):
     return path === requirement.path || path?.endsWith(`/${requirement.path}`) === true;
   };
   if (matchPath(check.name)) return true;
-  if (!Array.isArray(check.raw.referencedWorkflows)) return false;
-  return (check.raw.referencedWorkflows as unknown[]).some(
-    (value) => object(value) && matchPath(value.path),
-  );
+  const workflows = check.raw.referencedWorkflows;
+  if (!isList(workflows)) return false;
+  return workflows.some((value) => object(value) && matchPath(value.path));
 }
 function requirementObservation(
   requirement: GitCiRequirement,

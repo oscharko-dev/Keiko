@@ -128,11 +128,10 @@ export const GIT_PUBLISH_REJECTION_REASONS: readonly GitPublishRejectionReason[]
   "unknown",
 ] as const;
 
+const PUBLISH_REJECTION_REASONS: ReadonlySet<string> = new Set(GIT_PUBLISH_REJECTION_REASONS);
+
 export function isGitPublishRejectionReason(value: unknown): value is GitPublishRejectionReason {
-  return (
-    typeof value === "string" &&
-    (GIT_PUBLISH_REJECTION_REASONS as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && PUBLISH_REJECTION_REASONS.has(value);
 }
 
 // Publish-only phrase table. Ordered by specificity: the first reason whose any-phrase appears in

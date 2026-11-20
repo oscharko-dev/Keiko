@@ -30,6 +30,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { convertAdfToText, type AdfConversionOutcome } from "./adf-to-text.js";
 import { ATLASSIAN_SYNC_ITEM_MAX_BYTES } from "./atlassian-sync-lane.js";
+import { asRecord, isJsonArray } from "./json-narrowing.js";
 
 // The composed-document byte budget: the same per-item ceiling the sync lane enforces for every
 // provider, so a Jira issue can never out-size a Confluence page.
@@ -45,14 +46,8 @@ const CONVERSION_TRUNCATION_MARKER = "[Content truncated: conversion limits reac
 const UNREADABLE_CONTENT_MARKER = "[Content could not be converted]";
 
 // ─── Hostile-JSON narrowing ────────────────────────────────────────────────────
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function asArray(value: unknown): readonly unknown[] {
-  return Array.isArray(value) ? (value as readonly unknown[]) : [];
+  return isJsonArray(value) ? value : [];
 }
 
 function asString(value: unknown): string | undefined {
@@ -137,12 +132,15 @@ function scalarMetadataFields(
   };
 }
 
-function definedEntries(metadata: JiraIssueCitationMetadata): JiraIssueCitationMetadata {
+type CitationMetadataValue = JiraIssueCitationMetadata[keyof JiraIssueCitationMetadata];
+
+function definedEntries(
+  metadata: JiraIssueCitationMetadata,
+): Readonly<Record<string, CitationMetadataValue>> {
   // Rebuild in the contract's fixed key order with undefined fields omitted, so serialization is
-  // deterministic and never carries explicit-undefined keys.
-  return Object.fromEntries(
-    Object.entries(metadata).filter(([, value]) => value !== undefined),
-  ) as JiraIssueCitationMetadata;
+  // deterministic and never carries explicit-undefined keys. The caller that needs the contract
+  // type checks the rebuilt record with the contract's own guard.
+  return Object.fromEntries(Object.entries(metadata).filter(([, value]) => value !== undefined));
 }
 
 // Build the validated citation-metadata projection. Every field is individually fail-closed; the

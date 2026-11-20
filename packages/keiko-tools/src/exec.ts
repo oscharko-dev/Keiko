@@ -403,9 +403,9 @@ const defaultTaskkillRunner: TaskkillRunner = (command, args) => {
 };
 
 function taskkillCompletionDisposition(completed: TaskkillCompletion): WindowsTreeKillResult {
-  if (completed.error !== undefined) {
-    const code = (completed.error as NodeJS.ErrnoException).code;
-    return code === "ETIMEDOUT" ? "unknown" : "failed";
+  const { error } = completed;
+  if (error !== undefined) {
+    return "code" in error && error.code === "ETIMEDOUT" ? "unknown" : "failed";
   }
   if (completed.status === 0) return "succeeded";
   // Exit 128 proves only that the requested ROOT pid was absent. A descendant may already have

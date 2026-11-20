@@ -5,6 +5,7 @@
 // reads go through the workspace layer; all writes through the WorkspaceWriter; all spawns through
 // the injected SpawnFn — so a unit test needs no real secrets and no real processes.
 
+import { isRecord, isStringArray } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type {
   ToolCallMetadata,
   ToolCallRequest,
@@ -98,10 +99,10 @@ function optionalStringArray(args: Args, key: string, tool: string): readonly st
   if (value === undefined) {
     return undefined;
   }
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+  if (!isStringArray(value)) {
     throw new ToolArgumentError(`argument '${key}' must be a string array`, tool);
   }
-  return value as readonly string[];
+  return value;
 }
 
 function summarizeCommand(result: CommandResult): string {
@@ -366,18 +367,21 @@ export class WorkspaceToolHost implements ToolPort {
   }
 }
 
-function parseScripts(text: string, path: string): Record<string, unknown> {
+function parseScripts(text: string, path: string): Record<string, unknown> | readonly unknown[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
     throw new ToolArgumentError(`${path} is not valid JSON`, "inspect_package_scripts");
   }
-  if (typeof parsed !== "object" || parsed === null) {
+  if (typeof parsed !== "object" || parsed === null || !("scripts" in parsed)) {
     return {};
   }
-  const scripts = (parsed as Record<string, unknown>).scripts;
-  return typeof scripts === "object" && scripts !== null
-    ? (scripts as Record<string, unknown>)
-    : {};
+  const { scripts } = parsed;
+  // The value is echoed as JSON, so an array stays an array exactly as the manifest holds it.
+  if (Array.isArray(scripts)) {
+    const entries: readonly unknown[] = scripts;
+    return entries;
+  }
+  return isRecord(scripts) ? scripts : {};
 }

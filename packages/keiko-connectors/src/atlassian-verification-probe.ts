@@ -1,5 +1,6 @@
 import type { AtlassianConnectionVerificationStatus } from "@oscharko-dev/keiko-contracts";
 import type { AtlassianHttpBodyResult } from "./atlassian-http-port.js";
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 
 export const ATLASSIAN_VERIFY_MAX_BYTES = 65_536;
 type JsonProbe =
@@ -30,8 +31,7 @@ export function parseAtlassianVerificationProbe(result: AtlassianHttpBodyResult)
     return { failure: "invalid-response" };
   try {
     const value: unknown = JSON.parse(result.bodyText);
-    if (typeof value === "object" && value !== null && !Array.isArray(value))
-      return { value: value as Record<string, unknown> };
+    if (isRecord(value)) return { value };
   } catch {
     // Untrusted response contents must not reach diagnostics or the caller.
   }
