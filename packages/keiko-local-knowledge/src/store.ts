@@ -44,6 +44,7 @@ import {
 } from "@oscharko-dev/keiko-security/sqlite-corruption";
 
 import { KnowledgeStoreError } from "./errors.js";
+import { textColumn } from "./sql-row.js";
 import {
   emitKnowledgeLogEvent,
   knowledgeErrorKind,
@@ -150,10 +151,6 @@ export interface KnowledgeStore {
 
 interface VersionRow {
   readonly user_version: number;
-}
-
-interface NameRow {
-  readonly name: string;
 }
 
 function defaultClock(): number {
@@ -271,19 +268,13 @@ function applyStandardMigrationGroup(
   }
 }
 
-interface ForeignKeyViolationRow {
-  readonly table: string;
-}
-
 // `PRAGMA foreign_key_check` never throws by itself — it returns one row per violation found
 // anywhere in the database (empty when clean) — so a suspended-enforcement rebuild must query it
 // explicitly and fail closed itself rather than trust silence.
 function assertNoForeignKeyViolations(db: DatabaseSync): void {
-  const violations = db
-    .prepare("PRAGMA foreign_key_check")
-    .all() as unknown as ForeignKeyViolationRow[];
+  const violations = db.prepare("PRAGMA foreign_key_check").all();
   if (violations.length === 0) return;
-  const tables = [...new Set(violations.map((row) => row.table))]
+  const tables = [...new Set(violations.map((row) => textColumn(row, "table")))]
     .sort((a, b) => a.localeCompare(b))
     .join(", ");
   throw new KnowledgeStoreError(
@@ -353,7 +344,7 @@ function runMigrations(db: DatabaseSync): void {
 
 function listExistingTables(db: DatabaseSync): readonly string[] {
   const rows = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all();
-  return rows.map((row) => (row as unknown as NameRow).name);
+  return rows.map((row) => textColumn(row, "name"));
 }
 
 function hasAnyUserContent(db: DatabaseSync): boolean {

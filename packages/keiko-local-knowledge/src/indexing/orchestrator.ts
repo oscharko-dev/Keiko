@@ -158,6 +158,13 @@ import {
   readStoredAugmentedText,
   type StoredChunkIndexedTextColumns,
 } from "./chunk-indexed-text-persist.js";
+import {
+  type KnowledgeSqlRow,
+  nullableNumberColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+} from "../sql-row.js";
 
 // ─── Abort helper ─────────────────────────────────────────────────────────────
 // Reads `signal?.aborted` through a function call so TypeScript's control-flow analysis
@@ -617,6 +624,24 @@ interface ChunkProjectionRow {
   readonly context_status: string | null;
 }
 
+function readChunkProjectionRow(row: KnowledgeSqlRow): ChunkProjectionRow {
+  return {
+    id: textColumn(row, "id"),
+    capsule_id: textColumn(row, "capsule_id"),
+    source_id: textColumn(row, "source_id"),
+    document_id: textColumn(row, "document_id"),
+    parsed_unit_id: textColumn(row, "parsed_unit_id"),
+    order_index: numberColumn(row, "order_index"),
+    safe_excerpt_hash: textColumn(row, "safe_excerpt_hash"),
+    char_start: nullableNumberColumn(row, "char_start"),
+    char_end: nullableNumberColumn(row, "char_end"),
+    contextual_retrieval_key: nullableTextColumn(row, "contextual_retrieval_key"),
+    context_prefix: nullableTextColumn(row, "context_prefix"),
+    augmented_text: nullableTextColumn(row, "augmented_text"),
+    context_status: nullableTextColumn(row, "context_status"),
+  };
+}
+
 const SELECT_CHUNKS_WITH_OFFSETS_SQL = [
   "SELECT c.id, c.capsule_id, c.source_id, c.document_id, c.parsed_unit_id, c.order_index,",
   "  c.safe_excerpt_hash, c.contextual_retrieval_key, c.context_prefix,",
@@ -633,10 +658,10 @@ function selectChunkProjections(
   state: RunState,
   documentId: DocumentId,
 ): readonly ChunkProjectionRow[] {
-  const rows = state.options.store._internal.db
+  return state.options.store._internal.db
     .prepare(SELECT_CHUNKS_WITH_OFFSETS_SQL)
-    .all({ c: state.capsule.id, d: documentId });
-  return rows as unknown as readonly ChunkProjectionRow[];
+    .all({ c: state.capsule.id, d: documentId })
+    .map(readChunkProjectionRow);
 }
 
 function storedColumns(row: ChunkProjectionRow): StoredChunkIndexedTextColumns {

@@ -8,19 +8,26 @@ import type { MemoryEdge, MemoryEdgeId, MemoryId } from "@oscharko-dev/keiko-con
 import type { MemoryContentCipher } from "./cipher.js";
 import {
   cachedPrepare,
+  idColumn,
   nullableNumberColumn,
   nullableTextColumn,
   numberColumn,
   textColumn,
+  vocabularyColumn,
   type VaultSqlRow,
 } from "./statements.js";
+import { isAdmittedIdText, memoryIdColumn, STORED_MEMORY_EDGE_KINDS } from "./stored-values.js";
+
+function isStoredMemoryEdgeId(value: string): value is MemoryEdgeId {
+  return isAdmittedIdText(value);
+}
 
 interface EdgeRow {
-  readonly id: string;
+  readonly id: MemoryEdgeId;
   readonly schema_version: string;
-  readonly from_memory_id: string;
-  readonly to_memory_id: string;
-  readonly kind: string;
+  readonly from_memory_id: MemoryId;
+  readonly to_memory_id: MemoryId;
+  readonly kind: MemoryEdge["kind"];
   readonly created_at: number;
   readonly confidence: number | null;
   readonly provenance_summary: string | null;
@@ -41,11 +48,11 @@ const BULK_EDGE_CHUNK_SIZE = 500;
 // provenance_summary is the only free-text edge column, so it is the only sealed one (ADR-0035).
 function readEdgeRow(row: VaultSqlRow): EdgeRow {
   return {
-    id: textColumn(row, "id"),
+    id: idColumn(row, "id", isStoredMemoryEdgeId),
     schema_version: textColumn(row, "schema_version"),
-    from_memory_id: textColumn(row, "from_memory_id"),
-    to_memory_id: textColumn(row, "to_memory_id"),
-    kind: textColumn(row, "kind"),
+    from_memory_id: memoryIdColumn(row, "from_memory_id"),
+    to_memory_id: memoryIdColumn(row, "to_memory_id"),
+    kind: vocabularyColumn(row, "kind", STORED_MEMORY_EDGE_KINDS),
     created_at: numberColumn(row, "created_at"),
     confidence: nullableNumberColumn(row, "confidence"),
     provenance_summary: nullableTextColumn(row, "provenance_summary"),
@@ -55,11 +62,11 @@ function readEdgeRow(row: VaultSqlRow): EdgeRow {
 function rowToEdge(sqlRow: VaultSqlRow, cipher: MemoryContentCipher): MemoryEdge {
   const row = readEdgeRow(sqlRow);
   const base = {
-    id: row.id as MemoryEdgeId,
+    id: row.id,
     schemaVersion: "1" as const,
-    fromMemoryId: row.from_memory_id as MemoryId,
-    toMemoryId: row.to_memory_id as MemoryId,
-    kind: row.kind as MemoryEdge["kind"],
+    fromMemoryId: row.from_memory_id,
+    toMemoryId: row.to_memory_id,
+    kind: row.kind,
     createdAt: row.created_at,
   } satisfies Omit<MemoryEdge, "confidence" | "provenanceSummary">;
   return {

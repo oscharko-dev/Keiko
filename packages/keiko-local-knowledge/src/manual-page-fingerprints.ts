@@ -11,6 +11,7 @@ import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-
 
 import { compareFingerprintKeys } from "./fingerprint-diff.js";
 import type { KnowledgeStore } from "./store.js";
+import { type KnowledgeSqlRow, numberColumn, textColumn } from "./sql-row.js";
 
 // Opaque content fingerprint of a crawled page's raw bytes. `sha256:<base64url>` mirrors the
 // section-path-hash idiom; it is a one-way digest — content-free and redaction-safe.
@@ -47,6 +48,14 @@ interface ManualPageFingerprintRow {
   readonly byte_length: number;
 }
 
+function readManualPageFingerprintRow(row: KnowledgeSqlRow): ManualPageFingerprintRow {
+  return {
+    relative_path: textColumn(row, "relative_path"),
+    content_fingerprint: textColumn(row, "content_fingerprint"),
+    byte_length: numberColumn(row, "byte_length"),
+  };
+}
+
 // Read the previous crawl run's fingerprints for a source, keyed by scope-relative path.
 export function readManualPageFingerprints(
   store: KnowledgeStore,
@@ -60,7 +69,8 @@ export function readManualPageFingerprints(
         "WHERE capsule_id = :capsuleId AND source_id = :sourceId",
       ].join(" "),
     )
-    .all({ capsuleId, sourceId }) as unknown as ManualPageFingerprintRow[];
+    .all({ capsuleId, sourceId })
+    .map(readManualPageFingerprintRow);
   const map = new Map<string, ManualPageFingerprint>();
   for (const row of rows) {
     map.set(row.relative_path, {

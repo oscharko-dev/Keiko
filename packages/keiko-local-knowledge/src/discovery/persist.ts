@@ -20,6 +20,7 @@ import type { DatabaseSync, SQLOutputValue, StatementResultingChanges } from "no
 
 import { sectionPathHash } from "../section-path-hash.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
+import { type KnowledgeSqlRow, numberColumn, textColumn } from "../sql-row.js";
 
 const INSERT_DOCUMENT_SQL = [
   "INSERT INTO documents (",
@@ -648,6 +649,21 @@ interface ExistingDocumentRow {
   readonly source_id: string;
 }
 
+function readExistingDocumentColumns(row: KnowledgeSqlRow): ExistingDocumentRow {
+  return {
+    content_hash: textColumn(row, "content_hash"),
+    status: textColumn(row, "status"),
+    size_bytes: numberColumn(row, "size_bytes"),
+    media_type: textColumn(row, "media_type"),
+    parser_id: textColumn(row, "parser_id"),
+    parser_version: textColumn(row, "parser_version"),
+    last_extracted_at: numberColumn(row, "last_extracted_at"),
+    safe_display_name: textColumn(row, "safe_display_name"),
+    document_path: textColumn(row, "document_path"),
+    source_id: textColumn(row, "source_id"),
+  };
+}
+
 export function readExistingDocumentRow(
   db: DatabaseSync,
   capsuleId: KnowledgeCapsuleId,
@@ -656,5 +672,5 @@ export function readExistingDocumentRow(
   const row = db
     .prepare("SELECT * FROM documents WHERE capsule_id = :c AND id = :d")
     .get({ c: capsuleId, d: documentId });
-  return row === undefined ? undefined : (row as unknown as ExistingDocumentRow);
+  return row === undefined ? undefined : readExistingDocumentColumns(row);
 }

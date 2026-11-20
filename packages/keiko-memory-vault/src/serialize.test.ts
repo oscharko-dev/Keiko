@@ -200,6 +200,46 @@ describe("rowToMemoryRecord — defensive parsing", () => {
     expect(() => rowToMemoryRecord(row, cipher)).toThrow(/payload JSON is invalid/i);
   });
 
+  it("reads a stored key-value payload back unchanged", () => {
+    const payload = { kind: "key-value", entries: [{ key: "editor", value: "vim" }] } as const;
+    const row = memoryRecordToRow({ ...baseRecord(), payload }, cipher);
+    expect(rowToMemoryRecord(row, cipher).payload).toEqual(payload);
+  });
+
+  it.each([
+    ["an unknown kind", { kind: "bogus" }],
+    ["string-list items that are not strings", { kind: "string-list", items: ["ok", 1] }],
+    ["a string-list without items", { kind: "string-list" }],
+    ["key-value entries without a string value", { kind: "key-value", entries: [{ key: "k" }] }],
+    ["key-value entries that are not an array", { kind: "key-value", entries: "k=v" }],
+  ])("throws schema-mismatch when payload_json holds %s", (_label, payload) => {
+    const row: MemoryRow = {
+      ...memoryRecordToRow(baseRecord(), cipher),
+      payload_json: JSON.stringify(payload),
+    };
+    expect(() => rowToMemoryRecord(row, cipher)).toThrow(
+      expect.objectContaining({ code: "schema-mismatch" }),
+    );
+  });
+
+  it.each([
+    ["id", { id: "" }],
+    ["type", { type: "bogus" }],
+    ["status", { status: "bogus" }],
+    ["sensitivity", { sensitivity: "bogus" }],
+    ["source_kind", { source_kind: "bogus" }],
+    ["scope_coordinate", { scope_coordinate: "" }],
+    ["blank scope_coordinate", { scope_coordinate: "  " }],
+    ["source_conversation_id", { source_conversation_id: "" }],
+    ["source_workflow_run_id", { source_workflow_run_id: "" }],
+    ["source_evidence_manifest_id", { source_evidence_manifest_id: "" }],
+  ])("throws schema-mismatch when the stored %s is outside its type", (_column, override) => {
+    const row: MemoryRow = { ...memoryRecordToRow(baseRecord(), cipher), ...override };
+    expect(() => rowToMemoryRecord(row, cipher)).toThrow(
+      expect.objectContaining({ code: "schema-mismatch" }),
+    );
+  });
+
   it("throws schema-mismatch when scope_kind is not recognized", () => {
     const row: MemoryRow = {
       ...memoryRecordToRow(baseRecord(), cipher),

@@ -19,6 +19,7 @@ import type {
   ParserDiagnostic,
 } from "@oscharko-dev/keiko-contracts";
 import type { DatabaseSync } from "node:sqlite";
+import { type KnowledgeSqlRow, nullableTextColumn, numberColumn, textColumn } from "../sql-row.js";
 
 const UPSERT_SQL = [
   "INSERT INTO extraction_checkpoints (",
@@ -92,6 +93,33 @@ interface CheckpointRow {
   readonly terminal_diagnostics_json: string;
   readonly created_at: number;
   readonly updated_at: number;
+}
+
+function readCheckpointRow(row: KnowledgeSqlRow): CheckpointRow {
+  return {
+    capsule_id: textColumn(row, "capsule_id"),
+    document_id: textColumn(row, "document_id"),
+    job_id: textColumn(row, "job_id"),
+    strategy: textColumn(row, "strategy"),
+    phase: textColumn(row, "phase"),
+    page_cursor: numberColumn(row, "page_cursor"),
+    section_cursor: numberColumn(row, "section_cursor"),
+    object_cursor: numberColumn(row, "object_cursor"),
+    extracted_text_bytes: numberColumn(row, "extracted_text_bytes"),
+    chunk_cursor: numberColumn(row, "chunk_cursor"),
+    embedded_chunk_cursor: numberColumn(row, "embedded_chunk_cursor"),
+    last_embedded_chunk_id: nullableTextColumn(row, "last_embedded_chunk_id"),
+    retry_count: numberColumn(row, "retry_count"),
+    coverage: textColumn(row, "coverage"),
+    source_content_hash: textColumn(row, "source_content_hash"),
+    parser_version: textColumn(row, "parser_version"),
+    policy_fingerprint: textColumn(row, "policy_fingerprint"),
+    chunking_strategy_version: textColumn(row, "chunking_strategy_version"),
+    embedding_identity_json: textColumn(row, "embedding_identity_json"),
+    terminal_diagnostics_json: textColumn(row, "terminal_diagnostics_json"),
+    created_at: numberColumn(row, "created_at"),
+    updated_at: numberColumn(row, "updated_at"),
+  };
 }
 
 function diagnosticsToJson(diagnostics: readonly ParserDiagnostic[]): string {
@@ -180,7 +208,7 @@ export function selectExtractionCheckpoint(
   documentId: DocumentId,
 ): ExtractionCheckpointRecord | undefined {
   const row = db.prepare(SELECT_ONE_SQL).get({ c: String(capsuleId), d: String(documentId) });
-  return row === undefined ? undefined : rowToCheckpoint(row as unknown as CheckpointRow);
+  return row === undefined ? undefined : rowToCheckpoint(readCheckpointRow(row));
 }
 
 export function listExtractionCheckpoints(
@@ -188,7 +216,7 @@ export function listExtractionCheckpoints(
   capsuleId: KnowledgeCapsuleId,
 ): readonly ExtractionCheckpointRecord[] {
   const rows = db.prepare(SELECT_BY_CAPSULE_SQL).all({ c: String(capsuleId) });
-  return rows.map((row) => rowToCheckpoint(row as unknown as CheckpointRow));
+  return rows.map((row) => rowToCheckpoint(readCheckpointRow(row)));
 }
 
 export function deleteExtractionCheckpoint(

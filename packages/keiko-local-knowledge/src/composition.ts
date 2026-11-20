@@ -51,6 +51,7 @@ import {
 } from "./source-lifecycle.js";
 import { validateSourceRoutingForCapsule } from "./source-routing-validation.js";
 import type { KnowledgeStore } from "./store.js";
+import { type KnowledgeSqlRow, nullableTextColumn, numberColumn, textColumn } from "./sql-row.js";
 
 // ─── Errors ────────────────────────────────────────────────────────────────────
 
@@ -496,6 +497,17 @@ interface AuditRow {
   readonly occurred_at: number;
 }
 
+function readAuditRow(row: KnowledgeSqlRow): AuditRow {
+  return {
+    id: textColumn(row, "id"),
+    capsule_id: textColumn(row, "capsule_id"),
+    change_kind: textColumn(row, "change_kind"),
+    source_id: nullableTextColumn(row, "source_id"),
+    details_json: nullableTextColumn(row, "details_json"),
+    occurred_at: numberColumn(row, "occurred_at"),
+  };
+}
+
 const SELECT_AUDIT_SQL =
   "SELECT id, capsule_id, change_kind, source_id, details_json, occurred_at FROM capsule_membership_changes WHERE capsule_id = :c ORDER BY occurred_at ASC, id ASC";
 
@@ -504,7 +516,7 @@ export function listCapsuleMembershipChanges(
   capsuleId: KnowledgeCapsuleId,
 ): readonly CapsuleMembershipChange[] {
   const rows = store._internal.db.prepare(SELECT_AUDIT_SQL).all({ c: capsuleId });
-  return rows.map((row) => mapAuditRow(row as unknown as AuditRow));
+  return rows.map((row) => mapAuditRow(readAuditRow(row)));
 }
 
 function mapAuditRow(row: AuditRow): CapsuleMembershipChange {

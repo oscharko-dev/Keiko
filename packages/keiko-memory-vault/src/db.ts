@@ -81,7 +81,7 @@ export interface SidecarSnapshot {
 }
 
 function assertQuickCheckOk(db: DatabaseSync): void {
-  const rows = db.prepare("PRAGMA quick_check").all() as readonly Record<string, unknown>[];
+  const rows = db.prepare("PRAGMA quick_check").all();
   const values = rows
     .map((row) => Object.values(row)[0])
     .filter((value): value is string => typeof value === "string");

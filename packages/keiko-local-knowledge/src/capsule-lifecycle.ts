@@ -36,6 +36,13 @@ import { assertSafeDisplayField, assertSafeOptionalDisplayField } from "./displa
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import type { AuditEventSink } from "./privacy/types.js";
 import type { KnowledgeStore } from "./store.js";
+import {
+  type KnowledgeSqlRow,
+  nullableNumberColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+} from "./sql-row.js";
 
 export interface CreateCapsuleInput {
   readonly id: KnowledgeCapsuleId;
@@ -86,8 +93,47 @@ interface CapsuleRow {
   readonly updated_at: number;
 }
 
-interface SourceIdRow {
-  readonly id: string;
+function readCapsuleRow(row: KnowledgeSqlRow): CapsuleRow {
+  return {
+    id: textColumn(row, "id"),
+    display_name: textColumn(row, "display_name"),
+    description: nullableTextColumn(row, "description"),
+    tags_json: textColumn(row, "tags_json"),
+    source_routing_instructions: nullableTextColumn(row, "source_routing_instructions"),
+    always_query: numberColumn(row, "always_query"),
+    retrieval_effort: textColumn(row, "retrieval_effort"),
+    output_mode: textColumn(row, "output_mode"),
+    answer_grounding_policy: textColumn(row, "answer_grounding_policy"),
+    contextual_retrieval_enabled: nullableNumberColumn(row, "contextual_retrieval_enabled"),
+    contextual_retrieval_model_id: nullableTextColumn(row, "contextual_retrieval_model_id"),
+    contextual_retrieval_prompt_version: nullableTextColumn(
+      row,
+      "contextual_retrieval_prompt_version",
+    ),
+    contextual_retrieval_strict: nullableNumberColumn(row, "contextual_retrieval_strict"),
+    contextual_retrieval_max_context_chars: nullableNumberColumn(
+      row,
+      "contextual_retrieval_max_context_chars",
+    ),
+    contextual_retrieval_document_context_max_chars: nullableNumberColumn(
+      row,
+      "contextual_retrieval_document_context_max_chars",
+    ),
+    model_use_policy_json: nullableTextColumn(row, "model_use_policy_json"),
+    embedding_model_provider: textColumn(row, "embedding_model_provider"),
+    embedding_model_id: textColumn(row, "embedding_model_id"),
+    embedding_model_revision: nullableTextColumn(row, "embedding_model_revision"),
+    embedding_normalization: nullableTextColumn(row, "embedding_normalization"),
+    embedding_instruction_version: nullableTextColumn(row, "embedding_instruction_version"),
+    embedding_space_fingerprint: nullableTextColumn(row, "embedding_space_fingerprint"),
+    embedding_dimensions_param: nullableNumberColumn(row, "embedding_dimensions_param"),
+    vector_dimensions: numberColumn(row, "vector_dimensions"),
+    vector_metric: textColumn(row, "vector_metric"),
+    lifecycle_state: textColumn(row, "lifecycle_state"),
+    storage_reference: textColumn(row, "storage_reference"),
+    created_at: numberColumn(row, "created_at"),
+    updated_at: numberColumn(row, "updated_at"),
+  };
 }
 
 const INSERT_CAPSULE_SQL = [
@@ -230,7 +276,7 @@ function listSourceIdsFor(
   capsuleId: KnowledgeCapsuleId,
 ): readonly KnowledgeSourceId[] {
   const rows = store._internal.db.prepare(SELECT_SOURCE_IDS_FOR_CAPSULE_SQL).all({ c: capsuleId });
-  return rows.map((row) => (row as unknown as SourceIdRow).id as KnowledgeSourceId);
+  return rows.map((row) => textColumn(row, "id") as KnowledgeSourceId);
 }
 
 function buildEmbeddingIdentity(row: CapsuleRow): EmbeddingModelIdentity {
@@ -422,13 +468,13 @@ export function getCapsule(
   const row = store._internal.db.prepare(SELECT_CAPSULE_BY_ID_SQL).get({ id });
   if (row === undefined) return undefined;
   const sourceIds = listSourceIdsFor(store, id);
-  return rowToCapsule(row as unknown as CapsuleRow, sourceIds);
+  return rowToCapsule(readCapsuleRow(row), sourceIds);
 }
 
 export function listCapsules(store: KnowledgeStore): readonly KnowledgeCapsule[] {
   const rows = store._internal.db.prepare(SELECT_ALL_CAPSULES_SQL).all();
   return rows.map((row) => {
-    const typed = row as unknown as CapsuleRow;
+    const typed = readCapsuleRow(row);
     const sourceIds = listSourceIdsFor(store, typed.id as KnowledgeCapsuleId);
     return rowToCapsule(typed, sourceIds);
   });

@@ -19,6 +19,7 @@ import {
 import { assertSafeDisplayField, assertSafeOptionalDisplayField } from "./display-validation.js";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import type { KnowledgeStore } from "./store.js";
+import { textColumn } from "./sql-row.js";
 
 export interface CreateCapsuleSetInput {
   readonly id: CapsuleSetId;
@@ -33,15 +34,6 @@ interface SetMetaPayload {
   readonly description: string | null;
   readonly tags: readonly string[];
   readonly composedAt: number;
-}
-
-interface MetaRow {
-  readonly value: string;
-}
-
-interface MemberRow {
-  readonly capsule_id: string;
-  readonly ordinal: number;
 }
 
 const META_PREFIX = "capsule_set:";
@@ -80,7 +72,7 @@ function readMembers(store: KnowledgeStore, setId: CapsuleSetId): readonly Knowl
       "SELECT capsule_id, ordinal FROM capsule_set_members WHERE set_id = :s ORDER BY ordinal ASC",
     )
     .all({ s: setId });
-  return rows.map((row) => (row as unknown as MemberRow).capsule_id as KnowledgeCapsuleId);
+  return rows.map((row) => textColumn(row, "capsule_id") as KnowledgeCapsuleId);
 }
 
 function metaToCapsuleSet(
@@ -160,14 +152,9 @@ export function getCapsuleSet(store: KnowledgeStore, id: CapsuleSetId): CapsuleS
     .prepare("SELECT value FROM schema_meta WHERE key = :k")
     .get({ k: metaKey(id) });
   if (row === undefined) return undefined;
-  const payload = parseMeta((row as unknown as MetaRow).value, id);
+  const payload = parseMeta(textColumn(row, "value"), id);
   const members = readMembers(store, id);
   return metaToCapsuleSet(id, payload, members);
-}
-
-interface KeyValueRow {
-  readonly key: string;
-  readonly value: string;
 }
 
 export function listCapsuleSets(store: KnowledgeStore): readonly CapsuleSet[] {
@@ -177,9 +164,8 @@ export function listCapsuleSets(store: KnowledgeStore): readonly CapsuleSet[] {
     .prepare("SELECT key, value FROM schema_meta WHERE key LIKE :prefix")
     .all({ prefix: `${META_PREFIX}%` });
   const sets = rows.map((row) => {
-    const { key, value } = row as unknown as KeyValueRow;
-    const id = key.slice(META_PREFIX.length) as CapsuleSetId;
-    const payload = parseMeta(value, id);
+    const id = textColumn(row, "key").slice(META_PREFIX.length) as CapsuleSetId;
+    const payload = parseMeta(textColumn(row, "value"), id);
     const capsuleIds = readMembers(store, id);
     return metaToCapsuleSet(id, payload, capsuleIds);
   });

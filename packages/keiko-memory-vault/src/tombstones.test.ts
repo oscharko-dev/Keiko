@@ -292,6 +292,21 @@ describe("tombstones", () => {
     db.close();
   });
 
+  it.each([
+    ["type", "UPDATE memory_tombstones SET type = 'bogus'"],
+    ["original_status", "UPDATE memory_tombstones SET original_status = 'bogus'"],
+    ["reviewer_id", "UPDATE memory_tombstones SET reviewer_id = ''"],
+    ["memory_id", "UPDATE memory_tombstones SET memory_id = ''"],
+  ])("fails closed with schema-mismatch on a stored %s outside its type", (_column, sql) => {
+    const db = openTestDb();
+    insertTombstoneRow(db, makeTombstone({ id: "t1", memoryId: "m1" as MemoryId }), TEST_CIPHER);
+    db.prepare(sql).run();
+    expect(() => listTombstonesByScopeRows(db, userScope, TEST_CIPHER)).toThrow(
+      expect.objectContaining({ code: "schema-mismatch" }),
+    );
+    db.close();
+  });
+
   it("preserves all fields on round-trip when reason is set", () => {
     const db = openTestDb();
     const t = makeTombstone({

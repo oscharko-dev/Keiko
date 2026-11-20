@@ -34,6 +34,7 @@ import {
   type KnowledgeLogSink,
 } from "./knowledge-log.js";
 import { sectionPathHashFromJson } from "./section-path-hash.js";
+import { numberColumn } from "./sql-row.js";
 import type { StoreContentCipher } from "./store-content-cipher.js";
 
 // Sentinel `fromScope` reported on a store that had never been encrypted before this migration —
@@ -133,7 +134,7 @@ function writeSchemaMeta(db: DatabaseSync, key: string, value: string): void {
 function collectRowIds(db: DatabaseSync, table: string): number[] {
   const ids: number[] = [];
   for (const row of db.prepare(`SELECT rowid AS rowid FROM ${table}`).iterate()) {
-    ids.push((row as unknown as { readonly rowid: number }).rowid);
+    ids.push(numberColumn(row, "rowid"));
   }
   return ids;
 }

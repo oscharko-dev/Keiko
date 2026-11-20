@@ -25,40 +25,54 @@ import type { MemoryContentCipher } from "./cipher.js";
 import {
   blobColumn,
   cachedPrepare,
+  nullableIdColumn,
   nullableTextColumn,
+  nullableVocabularyColumn,
   numberColumn,
   textColumn,
+  vocabularyColumn,
   type VaultSqlRow,
 } from "./statements.js";
+import {
+  isAdmittedIdText,
+  memoryIdColumn,
+  STORED_MEMORY_SCOPE_KINDS,
+  STORED_MEMORY_STATUSES,
+  STORED_MEMORY_TYPES,
+} from "./stored-values.js";
 import { sanitizeMemoryTombstoneReason } from "./tombstone-reason.js";
 import { BYTES_PER_FLOAT32, decodeVectorLE, encodeVectorLE } from "./embeddings.js";
 
+function isStoredMemoryReviewerId(value: string): value is MemoryReviewerId {
+  return isAdmittedIdText(value);
+}
+
 interface TombstoneRow {
   readonly id: string;
-  readonly memory_id: string;
-  readonly scope_kind: string;
+  readonly memory_id: MemoryId;
+  readonly scope_kind: MemoryScopeKind;
   readonly scope_coordinate: string;
-  readonly type: string;
+  readonly type: MemoryType;
   readonly forgotten_at: number;
   readonly forgetter_surface: string;
   readonly body_hash: string | null;
-  readonly reviewer_id: string | null;
-  readonly original_status: string | null;
+  readonly reviewer_id: MemoryReviewerId | null;
+  readonly original_status: MemoryStatus | null;
   readonly reason: string | null;
 }
 
 function readTombstoneRow(row: VaultSqlRow): TombstoneRow {
   return {
     id: textColumn(row, "id"),
-    memory_id: textColumn(row, "memory_id"),
-    scope_kind: textColumn(row, "scope_kind"),
+    memory_id: memoryIdColumn(row, "memory_id"),
+    scope_kind: vocabularyColumn(row, "scope_kind", STORED_MEMORY_SCOPE_KINDS),
     scope_coordinate: textColumn(row, "scope_coordinate"),
-    type: textColumn(row, "type"),
+    type: vocabularyColumn(row, "type", STORED_MEMORY_TYPES),
     forgotten_at: numberColumn(row, "forgotten_at"),
     forgetter_surface: textColumn(row, "forgetter_surface"),
     body_hash: nullableTextColumn(row, "body_hash"),
-    reviewer_id: nullableTextColumn(row, "reviewer_id"),
-    original_status: nullableTextColumn(row, "original_status"),
+    reviewer_id: nullableIdColumn(row, "reviewer_id", isStoredMemoryReviewerId),
+    original_status: nullableVocabularyColumn(row, "original_status", STORED_MEMORY_STATUSES),
     reason: nullableTextColumn(row, "reason"),
   };
 }
@@ -122,20 +136,18 @@ function rowToTombstone(row: TombstoneRow, cipher: MemoryContentCipher): MemoryT
     row.reason === null ? undefined : sanitizeMemoryTombstoneReason(cipher.openString(row.reason));
   const base = {
     id: row.id,
-    memoryId: row.memory_id as MemoryId,
-    scopeKind: row.scope_kind as MemoryScopeKind,
+    memoryId: row.memory_id,
+    scopeKind: row.scope_kind,
     scopeCoordinate: row.scope_coordinate,
-    type: row.type as MemoryType,
+    type: row.type,
     forgottenAt: row.forgotten_at,
     forgetterSurface: row.forgetter_surface,
   };
   return {
     ...base,
     ...(row.body_hash === null ? {} : { bodyHash: row.body_hash }),
-    ...(row.reviewer_id === null ? {} : { reviewerId: row.reviewer_id as MemoryReviewerId }),
-    ...(row.original_status === null
-      ? {}
-      : { originalStatus: row.original_status as MemoryStatus }),
+    ...(row.reviewer_id === null ? {} : { reviewerId: row.reviewer_id }),
+    ...(row.original_status === null ? {} : { originalStatus: row.original_status }),
     ...(reason === undefined ? {} : { reason }),
   };
 }

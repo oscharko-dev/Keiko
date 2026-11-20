@@ -2,10 +2,17 @@ import { describe, expect, it } from "vitest";
 import { MemoryStorageError } from "./errors.js";
 import {
   blobColumn,
+  closedVocabulary,
+  idColumn,
+  nullableIdColumn,
   nullableNumberColumn,
   nullableTextColumn,
+  nullableVocabularyColumn,
   numberColumn,
+  storedId,
   textColumn,
+  vocabularyColumn,
+  vocabularyMember,
   type VaultSqlRow,
 } from "./statements.js";
 
@@ -61,5 +68,56 @@ describe("vault column readers", () => {
     expectSchemaMismatch(() => numberColumn(ROW, "missing"));
     expectSchemaMismatch(() => nullableNumberColumn(ROW, "missing"));
     expectSchemaMismatch(() => blobColumn(ROW, "missing"));
+  });
+});
+
+type Shade = "light" | "dark";
+
+const SHADES = closedVocabulary<Shade>(["light", "dark"]);
+
+function isShortCode(value: string): value is `c-${string}` {
+  return value.startsWith("c-");
+}
+
+const VOCABULARY_ROW: VaultSqlRow = {
+  shade: "dark",
+  other: "grey",
+  code: "c-1",
+  bad: "x",
+  gap: null,
+};
+
+describe("vault vocabulary readers", () => {
+  it("return the typed member for a stored value inside the vocabulary", () => {
+    expect(vocabularyMember(SHADES, "light")).toBe("light");
+    expect(vocabularyColumn(VOCABULARY_ROW, "shade", SHADES)).toBe("dark");
+    expect(nullableVocabularyColumn(VOCABULARY_ROW, "shade", SHADES)).toBe("dark");
+    expect(nullableVocabularyColumn(VOCABULARY_ROW, "gap", SHADES)).toBeNull();
+  });
+
+  it("refuse a stored value outside the vocabulary", () => {
+    expectSchemaMismatch(() => vocabularyMember(SHADES, "grey"));
+    expectSchemaMismatch(() => vocabularyMember(SHADES, "Light"));
+    expectSchemaMismatch(() => vocabularyColumn(VOCABULARY_ROW, "other", SHADES));
+    expectSchemaMismatch(() => vocabularyColumn(VOCABULARY_ROW, "gap", SHADES));
+    expectSchemaMismatch(() => nullableVocabularyColumn(VOCABULARY_ROW, "other", SHADES));
+    expectSchemaMismatch(() => vocabularyColumn(VOCABULARY_ROW, "missing", SHADES));
+  });
+});
+
+describe("vault branded id readers", () => {
+  it("return a stored id the brand predicate admits", () => {
+    expect(storedId("c-7", isShortCode)).toBe("c-7");
+    expect(idColumn(VOCABULARY_ROW, "code", isShortCode)).toBe("c-1");
+    expect(nullableIdColumn(VOCABULARY_ROW, "code", isShortCode)).toBe("c-1");
+    expect(nullableIdColumn(VOCABULARY_ROW, "gap", isShortCode)).toBeNull();
+  });
+
+  it("refuse a stored id the brand predicate rejects", () => {
+    expectSchemaMismatch(() => storedId("x", isShortCode));
+    expectSchemaMismatch(() => idColumn(VOCABULARY_ROW, "bad", isShortCode));
+    expectSchemaMismatch(() => idColumn(VOCABULARY_ROW, "gap", isShortCode));
+    expectSchemaMismatch(() => nullableIdColumn(VOCABULARY_ROW, "bad", isShortCode));
+    expectSchemaMismatch(() => idColumn(VOCABULARY_ROW, "missing", isShortCode));
   });
 });

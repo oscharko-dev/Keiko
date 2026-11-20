@@ -101,7 +101,8 @@ import {
   memoryBodySuppressionHashForVault,
 } from "./body-fingerprint.js";
 import { sanitizeMemoryTombstoneReason } from "./tombstone-reason.js";
-import { numberColumn, textColumn } from "./statements.js";
+import { numberColumn, type VaultSqlRow } from "./statements.js";
+import { memoryIdColumn } from "./stored-values.js";
 import type {
   MemoryBatchDelete,
   DeleteMemoryOptions,
@@ -218,7 +219,7 @@ function withSidecarHardening<T>(opts: ResolvedOptions, write: () => T): T {
 // front so no other writer can slip an embedding row in between the enumeration and the
 // delete phase.
 interface EmbeddingRowSnapshot {
-  readonly memory_id: string;
+  readonly memory_id: MemoryId;
   readonly created_at: number;
 }
 
@@ -227,7 +228,7 @@ function selectEmbeddingRowSnapshots(db: DatabaseSync): readonly EmbeddingRowSna
     .prepare("SELECT memory_id, created_at FROM memory_embeddings")
     .all()
     .map((row) => ({
-      memory_id: textColumn(row, "memory_id"),
+      memory_id: memoryIdColumn(row, "memory_id"),
       created_at: numberColumn(row, "created_at"),
     }));
 }
@@ -247,7 +248,7 @@ function assertReembedSetUnchanged(
   stagedIds: ReadonlySet<MemoryId>,
   expectedSnapshot: ReadonlyMap<MemoryId, number> | undefined,
 ): void {
-  const extras = existing.filter((row) => !stagedIds.has(row.memory_id as MemoryId));
+  const extras = existing.filter((row) => !stagedIds.has(row.memory_id));
   if (extras.length > 0) {
     throw new MemoryStorageError(
       "precondition-failed",
@@ -255,7 +256,7 @@ function assertReembedSetUnchanged(
     );
   }
   if (expectedSnapshot === undefined) return;
-  const currentIds = new Set<MemoryId>(existing.map((row) => row.memory_id as MemoryId));
+  const currentIds = new Set<MemoryId>(existing.map((row) => row.memory_id));
   for (const [expectedId] of expectedSnapshot) {
     if (!currentIds.has(expectedId)) {
       throw new MemoryStorageError(
@@ -265,7 +266,7 @@ function assertReembedSetUnchanged(
     }
   }
   for (const row of existing) {
-    const expected = expectedSnapshot.get(row.memory_id as MemoryId);
+    const expected = expectedSnapshot.get(row.memory_id);
     if (expected === undefined || expected !== row.created_at) {
       throw new MemoryStorageError(
         "precondition-failed",
@@ -289,8 +290,9 @@ function assertMemoryVersionsUnchanged(
   if (!expectedMemoryVersions?.size) return;
   const stmt = db.prepare("SELECT updated_at FROM memories WHERE id = ?");
   for (const [memoryId, expectedUpdatedAt] of expectedMemoryVersions) {
-    const row = stmt.get(memoryId) as { readonly updated_at: number } | undefined;
-    if (row?.updated_at !== expectedUpdatedAt) {
+    const row = stmt.get(memoryId);
+    const updatedAt = row === undefined ? undefined : numberColumn(row, "updated_at");
+    if (updatedAt !== expectedUpdatedAt) {
       throw new MemoryStorageError(
         "precondition-failed",
         "Memory revision changed during --force staging; rerun.",
@@ -316,10 +318,12 @@ function assertAcceptedSetUnchanged(
   expectedAcceptedIds: ReadonlySet<MemoryId> | undefined,
 ): void {
   if (expectedAcceptedIds === undefined) return;
-  const rows = db.prepare("SELECT id FROM memories WHERE status = 'accepted'").all() as {
-    readonly id: string;
-  }[];
-  const currentAcceptedIds = new Set<MemoryId>(rows.map((row) => row.id as MemoryId));
+  const currentAcceptedIds = new Set<MemoryId>(
+    db
+      .prepare("SELECT id FROM memories WHERE status = 'accepted'")
+      .all()
+      .map((row) => memoryIdColumn(row, "id")),
+  );
   for (const currentId of currentAcceptedIds) {
     if (!expectedAcceptedIds.has(currentId)) {
       throw new MemoryStorageError(
@@ -341,7 +345,7 @@ function assertAcceptedSetUnchanged(
 function snapshotEmbeddedMemoryIdsFromDb(db: DatabaseSync): ReadonlyMap<MemoryId, number> {
   const rows = selectEmbeddingRowSnapshots(db);
   const snapshot = new Map<MemoryId, number>();
-  for (const row of rows) snapshot.set(row.memory_id as MemoryId, row.created_at);
+  for (const row of rows) snapshot.set(row.memory_id, row.created_at);
   return snapshot;
 }
 
@@ -368,7 +372,7 @@ function replaceAllEmbeddingRowsAtomically(
     assertMemoryVersionsUnchanged(db, expectedMemoryVersions);
     assertAcceptedSetUnchanged(db, expectedAcceptedIds);
     for (const row of existing) {
-      deleteEmbeddingRow(db, row.memory_id as MemoryId);
+      deleteEmbeddingRow(db, row.memory_id);
     }
     for (const pair of pairs) {
       upsertEmbeddingRow(db, pair.memoryId, pair.input, opts.now(), opts.cipher);
@@ -379,7 +383,7 @@ function replaceAllEmbeddingRowsAtomically(
     throw error;
   }
   for (const row of existing) {
-    opts.emit({ kind: "embedding:deleted", memoryId: row.memory_id as MemoryId });
+    opts.emit({ kind: "embedding:deleted", memoryId: row.memory_id });
   }
   for (const pair of pairs) {
     opts.emit({
@@ -402,9 +406,9 @@ function decodeSuppressionKey(raw: string): Buffer | undefined {
 function resolveBodySuppressionKey(db: DatabaseSync, cipher: MemoryContentCipher): Buffer {
   const existing = db
     .prepare("SELECT value FROM memory_vault_secrets WHERE name = ?")
-    .get(SUPPRESSION_HMAC_KEY_NAME) as { value?: string } | undefined;
-  if (typeof existing?.value === "string") {
-    const opened = decodeSuppressionKey(cipher.openString(existing.value));
+    .get(SUPPRESSION_HMAC_KEY_NAME)?.value;
+  if (typeof existing === "string") {
+    const opened = decodeSuppressionKey(cipher.openString(existing));
     if (opened !== undefined) return opened;
   }
   const key = randomBytes(SUPPRESSION_HMAC_KEY_BYTES);
@@ -999,29 +1003,34 @@ function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryRead
   };
 }
 
+// COUNT(*) without GROUP BY always yields exactly one row, so a missing row counts nothing.
+function countFromRow(row: VaultSqlRow | undefined): number {
+  return row === undefined ? 0 : numberColumn(row, "n");
+}
+
 function countMemoriesByStatusFromDb(db: DatabaseSync, status: MemoryStatus): number {
-  const row = db.prepare("SELECT COUNT(*) AS n FROM memories WHERE status = ?").get(status) as {
-    readonly n: number;
-  };
-  return row.n;
+  return countFromRow(
+    db.prepare("SELECT COUNT(*) AS n FROM memories WHERE status = ?").get(status),
+  );
 }
 
 function countAcceptedMemoriesMissingEmbeddingFromDb(db: DatabaseSync): number {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM memories AS m
+  return countFromRow(
+    db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM memories AS m
        WHERE m.status = 'accepted'
          AND NOT EXISTS (SELECT 1 FROM memory_embeddings e WHERE e.memory_id = m.id)`,
-    )
-    .get() as { readonly n: number };
-  return row.n;
+      )
+      .get(),
+  );
 }
 
 function listMemoryIdsByStatusFromDb(db: DatabaseSync, status: MemoryStatus): readonly MemoryId[] {
-  const rows = db.prepare("SELECT id FROM memories WHERE status = ?").all(status) as {
-    readonly id: string;
-  }[];
-  return rows.map((row) => row.id as MemoryId);
+  return db
+    .prepare("SELECT id FROM memories WHERE status = ?")
+    .all(status)
+    .map((row) => memoryIdColumn(row, "id"));
 }
 
 function listAcceptedMemoryIdsMissingEmbeddingFromDb(
@@ -1036,8 +1045,8 @@ function listAcceptedMemoryIdsMissingEmbeddingFromDb(
          AND NOT EXISTS (SELECT 1 FROM memory_embeddings e WHERE e.memory_id = m.id)
        LIMIT ?`,
     )
-    .all(limit) as { readonly id: string }[];
-  return rows.map((row) => row.id as MemoryId);
+    .all(limit);
+  return rows.map((row) => memoryIdColumn(row, "id"));
 }
 
 function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMutators {
@@ -1187,10 +1196,10 @@ function buildEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EmbeddingOp
       });
     },
     listEmbeddedMemoryIds: (): readonly MemoryId[] => {
-      const rows = db.prepare("SELECT memory_id FROM memory_embeddings").all() as {
-        readonly memory_id: string;
-      }[];
-      return rows.map((row) => row.memory_id as MemoryId);
+      return db
+        .prepare("SELECT memory_id FROM memory_embeddings")
+        .all()
+        .map((row) => memoryIdColumn(row, "memory_id"));
     },
     snapshotEmbeddedMemoryIds: (): ReadonlyMap<MemoryId, number> =>
       snapshotEmbeddedMemoryIdsFromDb(db),

@@ -33,6 +33,13 @@ import type { DatabaseSync } from "node:sqlite";
 
 import type { KnowledgeStore } from "../store.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
+import {
+  nullableNumberColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+  type KnowledgeSqlRow,
+} from "../sql-row.js";
 
 interface ChunkRow {
   readonly id: string;
@@ -68,6 +75,48 @@ interface PageHopRow {
   readonly page_label: string | null;
 }
 
+function readChunkRow(row: KnowledgeSqlRow): ChunkRow {
+  return {
+    id: textColumn(row, "id"),
+    capsule_id: textColumn(row, "capsule_id"),
+    source_id: textColumn(row, "source_id"),
+    document_id: textColumn(row, "document_id"),
+    parsed_unit_id: textColumn(row, "parsed_unit_id"),
+    character_start: nullableNumberColumn(row, "character_start"),
+    character_end: nullableNumberColumn(row, "character_end"),
+  };
+}
+
+function readParsedUnitHopRow(row: KnowledgeSqlRow): ParsedUnitHopRow {
+  return {
+    kind: textColumn(row, "kind"),
+    page_number: nullableNumberColumn(row, "page_number"),
+    page_label: nullableTextColumn(row, "page_label"),
+    section_path_json: nullableTextColumn(row, "section_path_json"),
+    heading_path_json: nullableTextColumn(row, "heading_path_json"),
+    anchor_id: nullableTextColumn(row, "anchor_id"),
+    json_pointer: nullableTextColumn(row, "json_pointer"),
+    table_name: nullableTextColumn(row, "table_name"),
+    row_index: nullableNumberColumn(row, "row_index"),
+    character_start: nullableNumberColumn(row, "character_start"),
+    character_end: nullableNumberColumn(row, "character_end"),
+  };
+}
+
+function readDocumentHopRow(row: KnowledgeSqlRow): DocumentHopRow {
+  return {
+    source_id: textColumn(row, "source_id"),
+    safe_display_name: textColumn(row, "safe_display_name"),
+  };
+}
+
+function readPageHopRow(row: KnowledgeSqlRow): PageHopRow {
+  return {
+    page_number: numberColumn(row, "page_number"),
+    page_label: nullableTextColumn(row, "page_label"),
+  };
+}
+
 const SELECT_CHUNK_SQL =
   "SELECT id, capsule_id, source_id, document_id, parsed_unit_id, character_start, character_end FROM chunks WHERE capsule_id = :c AND id = :id";
 
@@ -99,7 +148,7 @@ function fetchChunkRow(
   chunkId: ChunkId,
 ): ChunkRow | undefined {
   const row = db.prepare(SELECT_CHUNK_SQL).get({ c: capsuleId, id: String(chunkId) });
-  return row === undefined ? undefined : (row as unknown as ChunkRow);
+  return row === undefined ? undefined : readChunkRow(row);
 }
 
 function fetchParsedUnitRow(
@@ -108,7 +157,7 @@ function fetchParsedUnitRow(
   parsedUnitId: string,
 ): ParsedUnitHopRow | undefined {
   const row = db.prepare(SELECT_PARSED_UNIT_SQL).get({ c: capsuleId, id: parsedUnitId });
-  return row === undefined ? undefined : (row as unknown as ParsedUnitHopRow);
+  return row === undefined ? undefined : readParsedUnitHopRow(row);
 }
 
 function fetchDocumentRow(
@@ -117,7 +166,7 @@ function fetchDocumentRow(
   documentId: DocumentId,
 ): DocumentHopRow | undefined {
   const row = db.prepare(SELECT_DOCUMENT_SQL).get({ c: capsuleId, id: String(documentId) });
-  return row === undefined ? undefined : (row as unknown as DocumentHopRow);
+  return row === undefined ? undefined : readDocumentHopRow(row);
 }
 
 function fetchPageForRange(
@@ -130,7 +179,7 @@ function fetchPageForRange(
   const row = db
     .prepare(SELECT_PAGE_FOR_RANGE_SQL)
     .get({ c: capsuleId, d: String(documentId), s: characterStart, e: characterEnd });
-  return row === undefined ? undefined : (row as unknown as PageHopRow);
+  return row === undefined ? undefined : readPageHopRow(row);
 }
 
 function parseStringArray(

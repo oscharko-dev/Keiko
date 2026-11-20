@@ -9,6 +9,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { readDocumentTextSpan } from "../discovery/persist.js";
 import { lexicalExactText, lexicalIndexedText } from "../retrieval/lexical-normalization.js";
 import type { KnowledgeStore } from "../store.js";
+import { type KnowledgeSqlRow, nullableNumberColumn, textColumn } from "../sql-row.js";
 
 const DELETE_LEXICAL_FOR_DOCUMENT_SQL =
   "DELETE FROM chunk_lexical_index WHERE capsule_id = :c AND document_id = :d";
@@ -64,6 +65,15 @@ interface ChunkLexicalSpanRow {
   readonly source_id: string;
   readonly char_start: number | null;
   readonly char_end: number | null;
+}
+
+function readChunkLexicalSpanRow(row: KnowledgeSqlRow): ChunkLexicalSpanRow {
+  return {
+    id: textColumn(row, "id"),
+    source_id: textColumn(row, "source_id"),
+    char_start: nullableNumberColumn(row, "char_start"),
+    char_end: nullableNumberColumn(row, "char_end"),
+  };
 }
 
 function runInSavepoint(db: DatabaseSync, name: string, work: () => void): void {
@@ -158,10 +168,10 @@ function selectChunkLexicalSpans(
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId,
 ): readonly ChunkLexicalSpanRow[] {
-  return db.prepare(SELECT_CHUNK_LEXICAL_SPANS_SQL).all({
-    c: String(capsuleId),
-    d: String(documentId),
-  }) as unknown as readonly ChunkLexicalSpanRow[];
+  return db
+    .prepare(SELECT_CHUNK_LEXICAL_SPANS_SQL)
+    .all({ c: String(capsuleId), d: String(documentId) })
+    .map(readChunkLexicalSpanRow);
 }
 
 export function replaceLexicalRowsFromStoredSpans(

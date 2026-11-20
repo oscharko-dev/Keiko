@@ -35,6 +35,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 
 import { getCapsule } from "../capsule-lifecycle.js";
+import { KnowledgeStoreError } from "../errors.js";
 import type { ComposedRetrievalScope } from "../composition.js";
 import { resolveCapsuleModelUsePolicy } from "../model-use-policy.js";
 import type { KnowledgeStore } from "../store.js";
@@ -64,6 +65,14 @@ import {
   type VectorIndexOptions,
 } from "./vector-index.js";
 import { dotProduct, scoreVector, vectorNorm } from "./vector-scoring.js";
+import {
+  blobColumn,
+  type KnowledgeSqlRow,
+  nullableNumberColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+} from "../sql-row.js";
 
 const LEXICAL_RECALL_MAX_TERMS = 12;
 const LEXICAL_RECALL_MIN_TOKEN_LENGTH = 3;
@@ -199,6 +208,26 @@ interface VectorRow {
   readonly created_at: number;
 }
 
+function readVectorRow(row: KnowledgeSqlRow): VectorRow {
+  return {
+    chunk_id: textColumn(row, "chunk_id"),
+    capsule_id: textColumn(row, "capsule_id"),
+    source_id: textColumn(row, "source_id"),
+    document_id: textColumn(row, "document_id"),
+    embedding: blobColumn(row, "embedding"),
+    embedding_model_provider: textColumn(row, "embedding_model_provider"),
+    embedding_model_id: textColumn(row, "embedding_model_id"),
+    embedding_model_revision: nullableTextColumn(row, "embedding_model_revision"),
+    embedding_normalization: nullableTextColumn(row, "embedding_normalization"),
+    embedding_instruction_version: nullableTextColumn(row, "embedding_instruction_version"),
+    embedding_space_fingerprint: nullableTextColumn(row, "embedding_space_fingerprint"),
+    embedding_dimensions_param: nullableNumberColumn(row, "embedding_dimensions_param"),
+    vector_dimensions: numberColumn(row, "vector_dimensions"),
+    vector_metric: textColumn(row, "vector_metric"),
+    created_at: numberColumn(row, "created_at"),
+  };
+}
+
 interface DecodedVectorRow extends Omit<VectorRow, "embedding"> {
   readonly vector: Float32Array;
   // Euclidean norm of `vector`, precomputed at decode time with the same ascending-index
@@ -209,6 +238,15 @@ interface DecodedVectorRow extends Omit<VectorRow, "embedding"> {
 interface VectorCacheStampRow {
   readonly n: number;
   readonly max_created_at: number | null;
+}
+
+// COUNT(*) and MAX() without GROUP BY always return exactly one row.
+function readVectorCacheStampRow(row: KnowledgeSqlRow | undefined): VectorCacheStampRow {
+  if (row === undefined) throw new KnowledgeStoreError("vector cache stamp query returned no row");
+  return {
+    n: numberColumn(row, "n"),
+    max_created_at: nullableNumberColumn(row, "max_created_at"),
+  };
 }
 
 const SELECT_VECTORS_FOR_CAPSULE_SQL = [
@@ -300,16 +338,17 @@ function readVectorsForCapsule(
       c: String(capsuleId),
       ...sourceParams(sourceFilter),
       ...chunkParams(chunkFilter),
-    }) as unknown as readonly VectorRow[];
+    })
+    .map(readVectorRow);
 }
 
 function vectorCacheStamp(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
 ): VectorCacheStampRow {
-  return store._internal.db
-    .prepare(SELECT_VECTOR_CACHE_STAMP_SQL)
-    .get({ c: String(capsuleId) }) as unknown as VectorCacheStampRow;
+  return readVectorCacheStampRow(
+    store._internal.db.prepare(SELECT_VECTOR_CACHE_STAMP_SQL).get({ c: String(capsuleId) }),
+  );
 }
 
 function vectorCacheStampForScope(
@@ -323,7 +362,7 @@ function vectorCacheStampForScope(
   }
   if (sourceFilter?.length === 0) return { n: 0, max_created_at: null };
   if (chunkFilter?.length === 0) return { n: 0, max_created_at: null };
-  return store._internal.db
+  const row = store._internal.db
     .prepare(
       [
         "SELECT COUNT(*) AS n, MAX(created_at) AS max_created_at",
@@ -338,7 +377,8 @@ function vectorCacheStampForScope(
       c: String(capsuleId),
       ...sourceParams(sourceFilter),
       ...chunkParams(chunkFilter),
-    }) as unknown as VectorCacheStampRow;
+    });
+  return readVectorCacheStampRow(row);
 }
 
 function decodeCacheForStore(store: KnowledgeStore): Map<string, readonly DecodedVectorRow[]> {
@@ -533,6 +573,26 @@ interface CitationRow {
   readonly character_end: number | null;
 }
 
+function readCitationRow(row: KnowledgeSqlRow): CitationRow {
+  return {
+    chunk_id: textColumn(row, "chunk_id"),
+    capsule_id: textColumn(row, "capsule_id"),
+    source_id: textColumn(row, "source_id"),
+    document_id: textColumn(row, "document_id"),
+    parsed_unit_id: nullableTextColumn(row, "parsed_unit_id"),
+    safe_display_name: nullableTextColumn(row, "safe_display_name"),
+    page_number: nullableNumberColumn(row, "page_number"),
+    page_label: nullableTextColumn(row, "page_label"),
+    section_path_json: nullableTextColumn(row, "section_path_json"),
+    json_pointer: nullableTextColumn(row, "json_pointer"),
+    table_name: nullableTextColumn(row, "table_name"),
+    row_index: nullableNumberColumn(row, "row_index"),
+    anchor_id: nullableTextColumn(row, "anchor_id"),
+    character_start: nullableNumberColumn(row, "character_start"),
+    character_end: nullableNumberColumn(row, "character_end"),
+  };
+}
+
 function readCitationRows(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -574,8 +634,7 @@ function readCitationRows(
   for (let i = 0; i < chunkIds.length; i += 1) {
     params[`c${String(i)}`] = chunkIds[i] ?? "";
   }
-  const rows = store._internal.db.prepare(sql).all(params);
-  return rows as unknown as readonly CitationRow[];
+  return store._internal.db.prepare(sql).all(params).map(readCitationRow);
 }
 
 // ─── Similarity primitives ───────────────────────────────────────────────────
@@ -992,12 +1051,24 @@ interface LexicalIndexCandidateRow {
   readonly bm25_score: number;
 }
 
+function readLexicalIndexCandidateRow(row: KnowledgeSqlRow): LexicalIndexCandidateRow {
+  return {
+    chunk_id: textColumn(row, "chunk_id"),
+    capsule_id: textColumn(row, "capsule_id"),
+    bm25_score: numberColumn(row, "bm25_score"),
+  };
+}
+
 interface LexicalIndexCountRow {
   readonly n: number;
 }
 
 interface ExactLexicalIndexCandidateRow extends LexicalIndexCandidateRow {
   readonly exact_text: string;
+}
+
+function readExactLexicalIndexCandidateRow(row: KnowledgeSqlRow): ExactLexicalIndexCandidateRow {
+  return { ...readLexicalIndexCandidateRow(row), exact_text: textColumn(row, "exact_text") };
 }
 
 function sourceFilterClause(
@@ -1121,8 +1192,8 @@ function readFtsCandidatesForCapsule(
     limit,
     ...sourceParams(sourceFilter),
     ...chunkParams(chunkFilter),
-  }) as unknown as readonly LexicalIndexCandidateRow[];
-  return rows.map((row) => ({
+  });
+  return rows.map(readLexicalIndexCandidateRow).map((row) => ({
     chunkId: row.chunk_id,
     capsuleId: row.capsule_id as KnowledgeCapsuleId,
     bm25Score: row.bm25_score,
@@ -1217,8 +1288,9 @@ function readExactLexicalCandidatesForCapsule(
       ...sourceParams(sourceFilter),
       ...chunkParams(chunkFilter),
       ...exactParams,
-    }) as unknown as readonly ExactLexicalIndexCandidateRow[];
+    });
   return rows
+    .map(readExactLexicalIndexCandidateRow)
     .map((row): LexicalCandidate | undefined => {
       const matchCount = boundaryExactMatchCount(row.exact_text, exactTerms);
       if (matchCount === 0) return undefined;

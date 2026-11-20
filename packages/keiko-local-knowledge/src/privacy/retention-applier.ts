@@ -22,6 +22,7 @@ import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-
 import { KnowledgeStoreError } from "../errors.js";
 import { invalidateVectorIndexStateForCapsule } from "../indexing/vector-index-state.js";
 import type { KnowledgeStore } from "../store.js";
+import { textColumn } from "../sql-row.js";
 
 import type { AuditEventSink, CapsuleRetentionPolicy, RetentionApplyResult } from "./types.js";
 
@@ -61,10 +62,6 @@ const DELETE_UNREFERENCED_DOCUMENT_BLOBS_SQL = [
 
 interface ChangesRow {
   readonly changes: number;
-}
-
-interface SourceIdRow {
-  readonly id: string;
 }
 
 function cutoffFor(now: number, days: number): number {
@@ -135,8 +132,8 @@ function sourceIdsForCapsule(
 ): readonly KnowledgeSourceId[] {
   const rows = store._internal.db
     .prepare("SELECT id FROM capsule_sources WHERE capsule_id = :capsule_id ORDER BY id ASC")
-    .all({ capsule_id: capsuleId }) as unknown as readonly SourceIdRow[];
-  return rows.map((row) => row.id as KnowledgeSourceId);
+    .all({ capsule_id: capsuleId });
+  return rows.map((row) => textColumn(row, "id") as KnowledgeSourceId);
 }
 
 // Runs the retention DELETEs inside a single transaction. Extracted from applyRetentionToCapsule to
