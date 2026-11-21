@@ -16,7 +16,7 @@ import type {
   ParserDiagnostic,
   SectionRecord,
 } from "@oscharko-dev/keiko-contracts";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, SQLOutputValue, StatementResultingChanges } from "node:sqlite";
 
 import { sectionPathHash } from "../section-path-hash.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
@@ -165,11 +165,11 @@ type SqlValue = string | number | null | Uint8Array;
 type SqlParams = Record<string, SqlValue>;
 
 interface RunStatement {
-  readonly run: (params?: SqlParams) => unknown;
+  readonly run: (params?: SqlParams) => StatementResultingChanges;
 }
 
 interface GetStatement {
-  readonly get: (params?: SqlParams) => unknown;
+  readonly get: (params?: SqlParams) => Record<string, SQLOutputValue> | undefined;
 }
 
 interface DiscoveryStatements {

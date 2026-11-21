@@ -11,7 +11,14 @@ import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryEmbeddingInput, MemoryEmbeddingMetric, MemoryEmbeddingRow } from "./types.js";
 import type { MemoryContentCipher } from "./cipher.js";
 import { MemoryStorageError } from "./errors.js";
-import { cachedPrepare } from "./statements.js";
+import {
+  blobColumn,
+  cachedPrepare,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+  type VaultSqlRow,
+} from "./statements.js";
 
 // Hard upper bound on vector dimensions. The largest production embedding model in scope today
 // (OpenAI text-embedding-3-large) is 3072 dims; 4096 gives one binary-doubling of headroom while
@@ -42,6 +49,25 @@ interface ActiveVectorSpaceRow {
   readonly model_revision: string | null;
   readonly vector_dimensions: number;
   readonly vector_metric: string;
+}
+
+function readActiveVectorSpaceRow(row: VaultSqlRow): ActiveVectorSpaceRow {
+  return {
+    provider: textColumn(row, "provider"),
+    model_id: textColumn(row, "model_id"),
+    model_revision: nullableTextColumn(row, "model_revision"),
+    vector_dimensions: numberColumn(row, "vector_dimensions"),
+    vector_metric: textColumn(row, "vector_metric"),
+  };
+}
+
+function readEmbeddingDbRow(row: VaultSqlRow): EmbeddingDbRow {
+  return {
+    ...readActiveVectorSpaceRow(row),
+    memory_id: textColumn(row, "memory_id"),
+    vector: blobColumn(row, "vector"),
+    created_at: numberColumn(row, "created_at"),
+  };
 }
 
 // PR-review follow-up (Codex thread 3771600800): the ON CONFLICT branch computes the new
@@ -121,9 +147,9 @@ function assertCompatibleActiveVectorSpace(
   embedding: MemoryEmbeddingInput,
 ): void {
   const revision = embedding.modelRevision ?? null;
-  const rows = cachedPrepare(db, ACTIVE_VECTOR_SPACES_SQL).all(
-    memoryId,
-  ) as unknown as readonly ActiveVectorSpaceRow[];
+  const rows = cachedPrepare(db, ACTIVE_VECTOR_SPACES_SQL)
+    .all(memoryId)
+    .map(readActiveVectorSpaceRow);
   if (rows.length === 0) {
     return;
   }
@@ -186,9 +212,9 @@ export function getEmbeddingRow(
   memoryId: MemoryId,
   cipher: MemoryContentCipher,
 ): MemoryEmbeddingRow | undefined {
-  const row = cachedPrepare(db, SELECT_SQL).get(memoryId) as unknown as EmbeddingDbRow | undefined;
+  const row = cachedPrepare(db, SELECT_SQL).get(memoryId);
   if (row === undefined) return undefined;
-  return rowToEmbedding(row, cipher);
+  return rowToEmbedding(readEmbeddingDbRow(row), cipher);
 }
 
 function rowToEmbedding(row: EmbeddingDbRow, cipher: MemoryContentCipher): MemoryEmbeddingRow {
@@ -229,7 +255,9 @@ export function getEmbeddingRows(
     const rows = cachedPrepare(
       db,
       `SELECT * FROM memory_embeddings WHERE memory_id IN (${placeholders})`,
-    ).all(...chunk) as unknown as readonly EmbeddingDbRow[];
+    )
+      .all(...chunk)
+      .map(readEmbeddingDbRow);
     for (const row of rows) {
       out.set(row.memory_id as MemoryId, rowToEmbedding(row, cipher));
     }

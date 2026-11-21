@@ -8,6 +8,11 @@ import { parseAtlassianNetworkConfig } from "./atlassian-network-config.js";
 import { isIP } from "node:net";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
+import type {
+  CatalogJsonObject,
+  CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { isCatalogJsonArray } from "@oscharko-dev/keiko-tool-catalog";
 import {
   DEFAULT_GROUNDING_LIMITS,
   DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG,
@@ -212,6 +217,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
 // A timer armed with more than 2^31 - 1 ms fires at once (setTimeout, AbortSignal.timeout), so a
 // larger request timeout would abort every call the moment it starts. A delay the gateway derives
 // instead of reading it from its config is held to the same ceiling where it is derived.
@@ -260,10 +269,10 @@ function optionalStringArray(
   if (value === undefined) {
     return fallback;
   }
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+  if (!isStringArray(value)) {
     throw new ConfigInvalidError(`${path} must be an array of strings`);
   }
-  return value as readonly string[];
+  return value;
 }
 
 function optionalNonNegativeInt(value: unknown, path: string, fallback: number): number {
@@ -515,11 +524,16 @@ export function apiKeyHeaderValue(headerName: string, apiKey: string): string {
   return apiKey;
 }
 
+function isAllowedMember<T extends string>(value: string, allowed: readonly T[]): value is T {
+  const names: readonly string[] = allowed;
+  return names.includes(value);
+}
+
 function requireEnum<T extends string>(value: unknown, path: string, allowed: readonly T[]): T {
-  if (typeof value !== "string" || !allowed.includes(value as T)) {
+  if (typeof value !== "string" || !isAllowedMember(value, allowed)) {
     throw new ConfigInvalidError(`${path} must be one of ${allowed.join(", ")}`);
   }
-  return value as T;
+  return value;
 }
 
 function assertKnownTokenAccountingKeys(value: Record<string, unknown>, path: string): void {
@@ -691,21 +705,26 @@ function resolveApiKeyHeaderName(
 
 // Shared precedence for a per-model override: the per-model env var wins when set and
 // non-empty, otherwise the raw config value wins when present at all (even empty string),
-// otherwise the default-env fallback applies. Used by resolveProviderEndpointStyle,
-// resolveProviderApiVersion, and resolveRealtimeAuthMode, which all resolve a value from the
-// same three-source precedence.
-function resolvePerModelValue(
+// otherwise the default-env fallback applies. An empty or absent winner leaves the setting unset.
+// resolveProviderEndpointStyle and resolveRealtimeAuthMode resolve an enum through this
+// precedence; resolveProviderApiVersion applies the same order to a free-form version string.
+function nonEmptyPerModelOverride(perModel: string | undefined): string | undefined {
+  return perModel !== undefined && perModel.length > 0 ? perModel : undefined;
+}
+
+function resolvePerModelEnum<T extends string>(
   perModel: string | undefined,
   rawValue: unknown,
   defaultValue: string | undefined,
-): unknown {
-  if (perModel !== undefined && perModel.length > 0) {
-    return perModel;
+  path: string,
+  allowed: readonly T[],
+): T | undefined {
+  const value =
+    nonEmptyPerModelOverride(perModel) ?? (rawValue === undefined ? defaultValue : rawValue);
+  if (value === undefined || value === "") {
+    return undefined;
   }
-  if (rawValue !== undefined) {
-    return rawValue;
-  }
-  return defaultValue;
+  return requireEnum<T>(value, path, allowed);
 }
 
 function resolveProviderEndpointStyle(
@@ -718,11 +737,7 @@ function resolveProviderEndpointStyle(
   const perModelName = `KEIKO_MODEL_${token}_ENDPOINT_STYLE`;
   const perModel = env[perModelName];
   const defaultValue = env.KEIKO_DEFAULT_ENDPOINT_STYLE;
-  const value = resolvePerModelValue(perModel, rawValue, defaultValue);
-  if (value === undefined || value === "") {
-    return undefined;
-  }
-  return requireEnum<ProviderEndpointStyle>(value, path, PROVIDER_ENDPOINT_STYLES);
+  return resolvePerModelEnum(perModel, rawValue, defaultValue, path, PROVIDER_ENDPOINT_STYLES);
 }
 
 function resolveProviderApiVersion(
@@ -743,7 +758,8 @@ function resolveProviderApiVersion(
   // per-model and file values stay authoritative and still fail the pairing loudly).
   const defaultValue =
     endpointStyle === "azure-openai-deployment" ? env.KEIKO_DEFAULT_API_VERSION : undefined;
-  const value = resolvePerModelValue(perModel, rawValue, defaultValue);
+  const value =
+    nonEmptyPerModelOverride(perModel) ?? (rawValue === undefined ? defaultValue : rawValue);
   if (value === undefined || value === "") {
     return undefined;
   }
@@ -781,11 +797,7 @@ function resolveRealtimeAuthMode(
   const perModelName = `KEIKO_MODEL_${token}_REALTIME_AUTH_MODE`;
   const perModel = env[perModelName];
   const defaultValue = env.KEIKO_DEFAULT_REALTIME_AUTH_MODE;
-  const value = resolvePerModelValue(perModel, rawValue, defaultValue);
-  if (value === undefined || value === "") {
-    return undefined;
-  }
-  return requireEnum<RealtimeAuthMode>(value, path, REALTIME_AUTH_MODES);
+  return resolvePerModelEnum(perModel, rawValue, defaultValue, path, REALTIME_AUTH_MODES);
 }
 
 function outputTokenParameterConfig(
@@ -1029,14 +1041,19 @@ function assertContextWindowForKind(kind: ModelKind, contextWindow: number, path
 const LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT = 4096;
 export const GATEWAY_CONFIG_SCHEMA_VERSION = 2;
 
+// The object form of a parsed config value; arrays are not objects here.
+function isJsonObject(value: CatalogJsonValue | undefined): value is CatalogJsonObject {
+  return isRecord(value);
+}
+
 function isLegacySchemaRoot(root: Record<string, unknown>): boolean {
   const version = root.schemaVersion;
   if (version === undefined) return true;
   return version === 1;
 }
 
-function migrateChatCapabilityContextWindow(raw: unknown): unknown {
-  if (!isRecord(raw)) return raw;
+function migrateChatCapabilityContextWindow(raw: CatalogJsonValue): CatalogJsonValue {
+  if (!isJsonObject(raw)) return raw;
   if (raw.kind !== "chat") return raw;
   if (raw.contextWindow !== 0) return raw;
   return { ...raw, contextWindow: LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT };
@@ -1053,34 +1070,34 @@ function migrateChatCapabilityContextWindow(raw: unknown): unknown {
 // answer or the startup context-window probe replaces it with the real window.
 // A provider-reported window carries its own provenance and is never reclassified, even when the
 // provider stated exactly 4,096 tokens.
-function markAssumedChatCapability(raw: unknown): unknown {
-  if (!isRecord(raw) || raw.kind !== "chat") return raw;
+function markAssumedChatCapability(raw: CatalogJsonValue): CatalogJsonValue {
+  if (!isJsonObject(raw) || raw.kind !== "chat") return raw;
   if (raw.contextWindowAssumed !== undefined || raw.contextWindowReported !== undefined) return raw;
   const placeholder =
     raw.contextWindow === PLACEHOLDER_CHAT_CONTEXT_WINDOW &&
     placeholderOutputLimit(raw.maxOutputTokens) &&
-    Array.isArray(raw.knownLimitations) &&
+    isCatalogJsonArray(raw.knownLimitations) &&
     raw.knownLimitations.includes(RUNTIME_CONFIGURED_CAPABILITY_LIMITATION);
   return placeholder ? { ...raw, contextWindowAssumed: true } : raw;
 }
 
 // No declared output limit, or one that cannot fit inside the placeholder window.
-function placeholderOutputLimit(maxOutputTokens: unknown): boolean {
+function placeholderOutputLimit(maxOutputTokens: CatalogJsonValue | undefined): boolean {
   if (maxOutputTokens === undefined || maxOutputTokens === null || maxOutputTokens === 0) {
     return true;
   }
   return typeof maxOutputTokens === "number" && maxOutputTokens > PLACEHOLDER_CHAT_CONTEXT_WINDOW;
 }
 
-export function markAssumedPlaceholderContextWindows(raw: unknown): unknown {
-  if (!isRecord(raw)) return raw;
-  const marked: Record<string, unknown> = { ...raw };
-  if (Array.isArray(marked.capabilities)) {
-    marked.capabilities = (marked.capabilities as unknown[]).map(markAssumedChatCapability);
+export function markAssumedPlaceholderContextWindows(raw: CatalogJsonValue): CatalogJsonValue {
+  if (!isJsonObject(raw)) return raw;
+  const marked = { ...raw };
+  if (isCatalogJsonArray(raw.capabilities)) {
+    marked.capabilities = raw.capabilities.map(markAssumedChatCapability);
   }
-  if (Array.isArray(marked.providers)) {
-    marked.providers = (marked.providers as unknown[]).map((provider) =>
-      isRecord(provider) && isRecord(provider.capability)
+  if (isCatalogJsonArray(raw.providers)) {
+    marked.providers = raw.providers.map((provider) =>
+      isJsonObject(provider) && isJsonObject(provider.capability)
         ? { ...provider, capability: markAssumedChatCapability(provider.capability) }
         : provider,
     );
@@ -1088,23 +1105,21 @@ export function markAssumedPlaceholderContextWindows(raw: unknown): unknown {
   return marked;
 }
 
-export function migrateLegacyChatContextWindows(raw: unknown): unknown {
-  if (!isRecord(raw)) return raw;
+export function migrateLegacyChatContextWindows(raw: CatalogJsonValue): CatalogJsonValue {
+  if (!isJsonObject(raw)) return raw;
   if (!isLegacySchemaRoot(raw)) return raw;
-  const migrated: Record<string, unknown> = { ...raw };
-  if (Array.isArray(migrated.capabilities)) {
-    migrated.capabilities = (migrated.capabilities as unknown[]).map(
-      migrateChatCapabilityContextWindow,
-    );
+  const migrated = { ...raw };
+  if (isCatalogJsonArray(raw.capabilities)) {
+    migrated.capabilities = raw.capabilities.map(migrateChatCapabilityContextWindow);
   }
-  if (Array.isArray(migrated.providers)) {
-    migrated.providers = (migrated.providers as unknown[]).map(migrateProviderCapability);
+  if (isCatalogJsonArray(raw.providers)) {
+    migrated.providers = raw.providers.map(migrateProviderCapability);
   }
   return migrated;
 }
 
-function migrateProviderCapability(provider: unknown): unknown {
-  if (!isRecord(provider) || !isRecord(provider.capability)) return provider;
+function migrateProviderCapability(provider: CatalogJsonValue): CatalogJsonValue {
+  if (!isJsonObject(provider) || !isJsonObject(provider.capability)) return provider;
   return { ...provider, capability: migrateChatCapabilityContextWindow(provider.capability) };
 }
 
@@ -1462,10 +1477,10 @@ function requireNonNegativeIntStrict(value: unknown, path: string): number {
 }
 
 function requireStringArray(value: unknown, path: string): readonly string[] {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+  if (!isStringArray(value)) {
     throw new ConfigInvalidError(`${path} must be an array of strings`);
   }
-  return value as readonly string[];
+  return value;
 }
 
 function optionalReasoningEfforts(
@@ -1558,19 +1573,14 @@ const TOOL_CALLING_VERIFICATION_KEYS = new Set([
   "probe",
   "configurationFingerprint",
 ]);
-const TOOL_CALLING_VERIFICATION_STATUSES = new Set<ToolCallingVerification["status"]>([
-  "verified",
-  "unsupported",
-  "unverified",
-]);
+const TOOL_CALLING_VERIFICATION_STATUSES: ReadonlySet<string> = new Set<
+  ToolCallingVerification["status"]
+>(["verified", "unsupported", "unverified"]);
 
 function isToolCallingVerificationStatus(
   value: unknown,
 ): value is ToolCallingVerification["status"] {
-  return (
-    typeof value === "string" &&
-    TOOL_CALLING_VERIFICATION_STATUSES.has(value as ToolCallingVerification["status"])
-  );
+  return typeof value === "string" && TOOL_CALLING_VERIFICATION_STATUSES.has(value);
 }
 
 function requiredToolCallingVerification(value: unknown, path: string): Record<string, unknown> {
@@ -1906,6 +1916,10 @@ function requireNonNegativeInt(value: unknown, path: string): number {
   return requireNonNegativeIntStrict(value, path);
 }
 
+function isGroundingLimitKey(key: string): key is keyof GroundingLimits {
+  return Object.hasOwn(DEFAULT_GROUNDING_LIMITS, key);
+}
+
 function parseGroundingLimits(raw: unknown): GroundingLimits | undefined {
   if (!isRecord(raw) || raw.grounding === undefined) {
     return undefined;
@@ -1915,7 +1929,7 @@ function parseGroundingLimits(raw: unknown): GroundingLimits | undefined {
     throw new ConfigInvalidError("grounding must be an object");
   }
   const partial: { -readonly [K in keyof GroundingLimits]?: number } = {};
-  for (const key of Object.keys(DEFAULT_GROUNDING_LIMITS) as (keyof GroundingLimits)[]) {
+  for (const key of Object.keys(DEFAULT_GROUNDING_LIMITS).filter(isGroundingLimitKey)) {
     const value = block[key];
     if (value !== undefined) {
       // Reject non-integer / non-positive — resolveGroundingLimits silently coerces,
@@ -2036,6 +2050,10 @@ function parseFigmaConnectorConfig(raw: unknown): FigmaConnectorConfig | undefin
 // a bad branding value must degrade to Keiko's text-only attribution, not break config loading.
 const OWN_ASSESSMENT_POLICY_SET: ReadonlySet<string> = new Set(OWN_ASSESSMENT_POLICIES);
 
+function isOwnAssessmentPolicy(value: string): value is OwnAssessmentPolicy {
+  return OWN_ASSESSMENT_POLICY_SET.has(value);
+}
+
 // A governance setting: an explicit value outside the closed vocabulary fails the load, it is never
 // read as the permissive default.
 function parseGroundedAnswersConfig(raw: unknown): GroundedAnswersConfig | undefined {
@@ -2048,10 +2066,10 @@ function parseGroundedAnswersConfig(raw: unknown): GroundedAnswersConfig | undef
   }
   const policy = block.ownAssessment;
   if (policy === undefined) return {};
-  if (typeof policy !== "string" || !OWN_ASSESSMENT_POLICY_SET.has(policy)) {
+  if (typeof policy !== "string" || !isOwnAssessmentPolicy(policy)) {
     throw new ConfigInvalidError('groundedAnswers.ownAssessment must be "allowed" or "disabled"');
   }
-  return { ownAssessment: policy as OwnAssessmentPolicy };
+  return { ownAssessment: policy };
 }
 
 function parseGatewayBrandingConfig(raw: unknown): GatewayBrandingConfig | undefined {
@@ -2434,16 +2452,25 @@ export function parseGatewayConfig(
   return buildGatewayConfig(raw, providersRaw, env, egress, options);
 }
 
-function readGatewayConfigFile(path: string): unknown {
+// The parsed form of a config file's text, which the file-load migrations rewrite before strict
+// parsing. Throws SyntaxError for text that is not JSON.
+export function parseGatewayConfigJson(text: string): CatalogJsonValue {
+  // SAFETY: JSON.parse without a reviver returns only null, booleans, numbers, strings, arrays
+  // and plain objects of those values (ECMA-262 JSON.parse). Those are the members of the
+  // CatalogJsonValue type, whose number member also admits the Infinity that "1e400" parses to.
+  return JSON.parse(text) as CatalogJsonValue;
+}
+
+function readGatewayConfigFile(path: string): CatalogJsonValue {
   let text: string;
   try {
     text = readFileSync(path, "utf8");
   } catch {
     throw new ConfigInvalidError(`config file could not be read: ${path}`);
   }
-  let parsed: unknown;
+  let parsed: CatalogJsonValue;
   try {
-    parsed = JSON.parse(text);
+    parsed = parseGatewayConfigJson(text);
   } catch {
     throw new ConfigInvalidError(`config file is not valid JSON: ${path}`);
   }
@@ -2472,7 +2499,7 @@ export function loadEgressConfigFromFile(
   env: EnvSource = {},
 ): OutboundHttpEgressConfig | undefined {
   const parsed = readGatewayConfigFile(path);
-  if (!isRecord(parsed)) {
+  if (!isJsonObject(parsed)) {
     throw new ConfigInvalidError("config root must be a JSON object");
   }
   return resolveOutboundHttpEgressConfig(parsed.egress, env);

@@ -132,7 +132,7 @@ export {
 
 // Shared, fs-agnostic SQLite corruption classifier — the pure subset lifted out of the per-store db
 // lifecycles [GEN-DUP-SEMANTIC-019 / GEN-DUP-NEAR-002].
-export type { SqliteErrorLike, SqliteErrorUnwrap } from "./sqlite-corruption.js";
+export type { SqliteErrorLike, SqliteErrorWrapperGuard } from "./sqlite-corruption.js";
 export {
   SqliteQuickCheckError,
   sqliteErrorLike,

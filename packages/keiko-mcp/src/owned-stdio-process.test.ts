@@ -5,7 +5,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import spawn from "cross-spawn";
 import { runOwnedStdio } from "./owned-stdio-process.js";
 
-vi.mock("cross-spawn", () => ({ default: vi.fn() }));
+// Production calls the `spawn` member, which cross-spawn sets to the default export itself.
+vi.mock("cross-spawn", () => {
+  const spawn = vi.fn();
+  return { default: Object.assign(spawn, { spawn }) };
+});
 
 afterEach(() => {
   vi.useRealTimers();

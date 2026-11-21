@@ -29,7 +29,8 @@ function validEvidence(evidence: unknown, evidenceIds: readonly string[]): boole
   if (!Array.isArray(evidence)) return false;
   const known = new Set(evidenceIds);
   const seen = new Set<string>();
-  for (const item of evidence as readonly unknown[]) {
+  const items: readonly unknown[] = evidence;
+  for (const item of items) {
     if (!isEvidenceItem(item) || !known.has(item.evidenceId) || seen.has(item.evidenceId))
       return false;
     seen.add(item.evidenceId);

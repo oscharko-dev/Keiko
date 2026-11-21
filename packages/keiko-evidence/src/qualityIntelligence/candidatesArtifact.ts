@@ -299,12 +299,15 @@ function readArtifactIntegrity(
   };
 }
 
-function artifactIntegrityPayload(artifact: {
+// The artifact fields the content hash covers; the schema version and integrity block are excluded.
+interface ArtifactIntegrityPayload {
   readonly runId: string;
   readonly generatedAt: string;
   readonly candidates: readonly QualityIntelligenceCandidateRow[];
   readonly editedRevisions?: readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[];
-}): unknown {
+}
+
+function artifactIntegrityPayload(artifact: ArtifactIntegrityPayload): ArtifactIntegrityPayload {
   return {
     runId: artifact.runId,
     generatedAt: artifact.generatedAt,

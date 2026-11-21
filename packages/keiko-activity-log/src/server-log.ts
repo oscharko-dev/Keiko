@@ -142,7 +142,13 @@ import {
   type ActivityLogSegmentTail,
   type ActivityLogStorageConfig,
 } from "./activity-log-store.js";
-import { contentFreeErrorClass, machineToken, safeProperty } from "./error-classification.js";
+import {
+  contentFreeErrorClass,
+  errorStringField,
+  machineToken,
+  safeProperty,
+  thrownErrorFields,
+} from "./error-classification.js";
 import {
   DEFAULT_SERVER_LOG_LEVEL,
   resolveServerLogThreshold,
@@ -321,14 +327,21 @@ function validDigestIdentity(identity: ServerLogIdentity): boolean {
   );
 }
 
+// The closed identity fields, read as received: a mutated identity may hold any value in them.
+interface PersistedIdentityClassFields {
+  readonly buildClass?: unknown;
+  readonly releaseClass?: unknown;
+  readonly platformClass?: unknown;
+  readonly compatibilityState?: unknown;
+  readonly writerCapability?: unknown;
+}
+
 function validBuildIdentity(identity: ServerLogIdentity): boolean {
-  const buildClass: unknown = Reflect.get(identity, "buildClass");
-  const releaseClass: unknown = Reflect.get(identity, "releaseClass");
-  const platformClass: unknown = Reflect.get(identity, "platformClass");
+  const fields: PersistedIdentityClassFields = identity;
   return (
-    buildClass === "node-esm" &&
-    ACTIVITY_LOG_RELEASE_CLASSES.has(releaseClass) &&
-    isActivityLogPlatformClass(platformClass)
+    fields.buildClass === "node-esm" &&
+    ACTIVITY_LOG_RELEASE_CLASSES.has(fields.releaseClass) &&
+    isActivityLogPlatformClass(fields.platformClass)
   );
 }
 
@@ -340,9 +353,11 @@ function validProductIdentity(identity: ServerLogIdentity): boolean {
 }
 
 function validWriterIdentity(identity: ServerLogIdentity): boolean {
-  const compatibilityState: unknown = Reflect.get(identity, "compatibilityState");
-  const writerCapability: unknown = Reflect.get(identity, "writerCapability");
-  return compatibilityState === "supported" && PERSISTED_WRITER_CAPABILITIES.has(writerCapability);
+  const fields: PersistedIdentityClassFields = identity;
+  return (
+    fields.compatibilityState === "supported" &&
+    PERSISTED_WRITER_CAPABILITIES.has(fields.writerCapability)
+  );
 }
 
 function validServerLogIdentity(identity: ServerLogIdentity): boolean {
@@ -414,10 +429,10 @@ export function errorKindOf(error: unknown): string {
   const safeArtifactKind = safeArtifactErrorKind(error);
   if (safeArtifactKind !== undefined) return safeArtifactKind;
   if (typeof error !== "object" || error === null) return "unknown";
-  const code = machineToken(safeProperty(error, "code"));
+  const code = machineToken(errorStringField(error, "code"));
   if (code !== undefined) return code;
   if (error instanceof Error) return contentFreeErrorClass(error);
-  return classifyErrorKind(safeProperty(error, "name")) ?? "unknown";
+  return classifyErrorKind(errorStringField(error, "name")) ?? "unknown";
 }
 
 const SAFE_ARTIFACT_ERROR_KINDS: ReadonlySet<string> = new Set(SAFE_ARTIFACT_FILE_FAILURE_KINDS);
@@ -428,8 +443,8 @@ function safeArtifactErrorKind(error: unknown): string | undefined {
   } catch {
     return undefined;
   }
-  const kind = safeProperty(error, "kind");
-  return typeof kind === "string" && SAFE_ARTIFACT_ERROR_KINDS.has(kind) ? kind : "open-failed";
+  const kind = errorStringField(thrownErrorFields(error), "kind");
+  return kind !== undefined && SAFE_ARTIFACT_ERROR_KINDS.has(kind) ? kind : "open-failed";
 }
 
 // LAST-RESORT FAILURE NOTICE
@@ -630,7 +645,12 @@ export interface ServerLogFailureContext {
   readonly identity?: ServerLogIdentity | undefined;
 }
 
-const failureNotice = { lastAt: null as number | null, suppressed: 0 };
+interface FailureNoticeState {
+  lastAt: number | null;
+  suppressed: number;
+}
+
+const failureNotice: FailureNoticeState = { lastAt: null, suppressed: 0 };
 
 // Tests reset this so one suite's notice cannot silence the next suite's assertion; the server
 // resets it on shutdown for the same reason. Either caller is clearing `suppressed` — a count that
@@ -1112,7 +1132,7 @@ function writeChunk(handle: number, payload: Buffer, offset: number): number {
   try {
     return writeSync(handle, payload, offset, payload.length - offset);
   } catch (error) {
-    const code = machineToken(safeProperty(error, "code"));
+    const code = machineToken(errorStringField(thrownErrorFields(error), "code"));
     if (code !== undefined && DISK_FULL_CODES.has(code)) throw new ActivityLogDiskFullError();
     if (code === "EAGAIN") throw new ActivityLogBackpressureError();
     throw error;
@@ -1601,6 +1621,11 @@ const ACTIVITY_LOG_WRITER_OWNER_KEY = Symbol.for(
 );
 const WRITER_GRAPH_TOKEN = Object.freeze({});
 
+// The process-global slot, read like any foreign object field.
+interface WriterOwnerHost {
+  readonly [ACTIVITY_LOG_WRITER_OWNER_KEY]?: unknown;
+}
+
 interface ProcessWriterOwner {
   readonly graphToken: object;
   // Persists another graph's rejected claim: that graph's own error (whose stack names the rejected
@@ -1623,13 +1648,26 @@ function activeLogKey(directory: string): string {
   }
 }
 
+// The two fields of the process-global slot, untrusted until `writerOwner` checks them.
+interface WriterOwnerFields {
+  readonly graphToken?: unknown;
+  readonly reject?: unknown;
+}
+
 // The slot is process-global, so its value is read like any foreign object: an accessor that throws
 // makes it an unrecognized owner, which fails closed with counted evidence rather than a raw error.
 function writerOwner(value: unknown): ProcessWriterOwner | undefined {
   if (typeof value !== "object" || value === null) return undefined;
-  const graphToken = safeProperty(value, "graphToken");
-  const reject = safeProperty(value, "reject");
-  return typeof graphToken === "object" && graphToken !== null && typeof reject === "function"
+  const fields: WriterOwnerFields = value;
+  const graphToken = safeProperty(() => {
+    const token = fields.graphToken;
+    return typeof token === "object" && token !== null ? token : undefined;
+  });
+  const reject = safeProperty(() => {
+    const handler = fields.reject;
+    return typeof handler === "function" ? handler : undefined;
+  });
+  return graphToken !== undefined && reject !== undefined
     ? { graphToken, reject: reject as ProcessWriterOwner["reject"] }
     : undefined;
 }
@@ -1671,7 +1709,9 @@ export function claimActivityLogWriterOwnership(stateDir: string, correlationId?
     recordUnpersistedWriterRejection(rejected, correlationId);
     throw rejected;
   }
-  const existingValue = Reflect.get(globalThis, ACTIVITY_LOG_WRITER_OWNER_KEY) as unknown;
+  const processGlobal: object = globalThis;
+  const host: WriterOwnerHost = processGlobal;
+  const existingValue = host[ACTIVITY_LOG_WRITER_OWNER_KEY];
   if (existingValue === undefined) {
     const owner: ProcessWriterOwner = {
       graphToken: WRITER_GRAPH_TOKEN,
@@ -2334,7 +2374,7 @@ function pathMissing(path: string): boolean {
     lstatSync(path);
     return false;
   } catch (error) {
-    return machineToken(safeProperty(error, "code")) === "ENOENT";
+    return machineToken(errorStringField(thrownErrorFields(error), "code")) === "ENOENT";
   }
 }
 
@@ -3366,11 +3406,17 @@ export type ActivityLogPinResult =
     }
   | { readonly status: "rejected"; readonly reason: ActivityLogPinRejection };
 
+// A pin request crosses the package boundary, so its fields are read as received.
+interface PinRequestFields {
+  readonly scope?: unknown;
+  readonly expiresAtMs?: unknown;
+  readonly reason?: unknown;
+}
+
 function validPinRequest(request: ActivityLogPinRequest, nowMs: number): boolean {
-  const expiresAtMs: unknown = Reflect.get(request, "expiresAtMs");
-  const reason: unknown = Reflect.get(request, "reason");
+  const { expiresAtMs, reason, scope }: PinRequestFields = request;
   return (
-    isActivityLogPinScope(Reflect.get(request, "scope")) &&
+    isActivityLogPinScope(scope) &&
     typeof expiresAtMs === "number" &&
     Number.isSafeInteger(expiresAtMs) &&
     expiresAtMs > nowMs &&
@@ -3573,6 +3619,11 @@ export interface ActivityLogPinReleaseRequest {
   readonly correlationId?: string | undefined;
 }
 
+// The release request's pin id, read as received before it is validated.
+interface PinReleaseRequestFields {
+  readonly pinId?: unknown;
+}
+
 export type ActivityLogPinReleaseResult =
   | {
       readonly status: "released";
@@ -3637,7 +3688,8 @@ export function releaseActivityLogPin(
   // Validate only after ownership: even a rejected request must not let a second evaluated graph
   // reach this writer's store through a public mutating entry point.
   claimActivityLogWriterOwnership(stateDir, request.correlationId);
-  if (!isActivityLogPinId(Reflect.get(request, "pinId"))) {
+  const { pinId }: PinReleaseRequestFields = request;
+  if (!isActivityLogPinId(pinId)) {
     return { status: "rejected", reason: "invalid-request" };
   }
   let active: ActiveLog;

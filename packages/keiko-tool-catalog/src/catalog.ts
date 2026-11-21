@@ -29,7 +29,8 @@ export interface CatalogCompilationContext {
 }
 
 const DESCRIPTORS_BY_REF = new WeakMap<ToolCatalog, ReadonlyMap<string, ToolDescriptor>>();
-const VALIDATED_CATALOGS = new WeakSet();
+// Each catalog this module validated, keyed by itself: a lookup returns the typed catalog.
+const VALIDATED_CATALOGS = new WeakMap<object, ToolCatalog>();
 
 function descriptorsFrom(
   value: unknown,
@@ -139,7 +140,7 @@ function snapshot(
   );
   assertProfiles(catalog);
   const frozen = deepFreeze(catalog);
-  VALIDATED_CATALOGS.add(frozen);
+  VALIDATED_CATALOGS.set(frozen, frozen);
   return frozen;
 }
 
@@ -189,9 +190,9 @@ function assertProfileProgression(
 
 /** Verify content identity; time-dependent compatibility eligibility remains the producer's check. */
 export function verifyToolCatalogSnapshot(value: unknown): ToolCatalog {
-  if (typeof value === "object" && value !== null && VALIDATED_CATALOGS.has(value)) {
-    return value as ToolCatalog;
-  }
+  const validated =
+    typeof value === "object" && value !== null ? VALIDATED_CATALOGS.get(value) : undefined;
+  if (validated !== undefined) return validated;
   const object = catalogObject(copyCatalogEnvelope(value));
   exactCatalogKeys(object, ["catalogRevision", "descriptors", "profiles", "compatibility"]);
   const revision = catalogDigest(object.catalogRevision);

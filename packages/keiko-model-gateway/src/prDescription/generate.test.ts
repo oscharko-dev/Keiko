@@ -16,6 +16,7 @@ import {
   summarizeGitChangeSnapshotCompleteness,
 } from "@oscharko-dev/keiko-contracts/runtime/git-change-snapshot";
 import {
+  PR_DESCRIPTION_SECTION_KEYS,
   prDescriptionArtifactDigestFields,
   prDescriptionArtifactEvidence,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
@@ -373,6 +374,33 @@ describe("production Gateway PR narrative composition", () => {
     expect(result.status).toBe("generated");
     if (result.status !== "generated") throw new Error("Missing fixture artifact");
     expect(result.usage).toMatchObject({ latencyMs: 1, requestCount: 1 });
+  });
+
+  it("sends the closed schema without the provider-unsupported keywords, in source key order", async () => {
+    const setup = fixture({ flags: { structuredOutput: true, supportsResponseFormat: true } });
+    await generatePrDescription(REQUEST, setup.deps);
+    const statement = {
+      type: "object",
+      additionalProperties: false,
+      required: ["text", "evidenceIds"],
+      properties: {
+        text: { type: "string" },
+        evidenceIds: { type: "array", items: { type: "string" } },
+      },
+    };
+    const expected = {
+      type: "object",
+      additionalProperties: false,
+      required: [...PR_DESCRIPTION_SECTION_KEYS],
+      properties: Object.fromEntries(
+        PR_DESCRIPTION_SECTION_KEYS.map((key) => [key, { type: "array", items: statement }]),
+      ),
+    };
+    const format = setup.calls[0]?.responseFormat;
+    expect(format?.type).toBe("json_schema");
+    expect(JSON.stringify(format?.type === "json_schema" ? format.schema : null)).toBe(
+      JSON.stringify(expected),
+    );
   });
 
   it.each([

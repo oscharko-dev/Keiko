@@ -83,7 +83,7 @@ export const deduplicateCandidates = (
   candidates: readonly QualityIntelligence.QualityIntelligenceTestCaseCandidate[],
 ): readonly QualityIntelligence.QualityIntelligenceTestCaseCandidate[] => {
   if (candidates.length === 0) {
-    return Object.freeze([] as readonly QualityIntelligence.QualityIntelligenceTestCaseCandidate[]);
+    return Object.freeze([]);
   }
 
   const survivorBySignature = new Map<

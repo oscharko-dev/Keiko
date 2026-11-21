@@ -103,9 +103,12 @@ export interface BrowserSessionManagerOptions {
   // The BFF-owned writer composes deep redaction, atomic persistence, and retention. Required when
   // evidenceStore is present so the tools layer cannot create an unrotated manifest lane.
   readonly evidenceManifestWriter?: ((manifest: EvidenceManifest) => string) | undefined;
-  readonly redactor?: (value: unknown) => unknown;
+  // Redacts captured page HTML before it is returned or recorded. Defaults to no change.
+  readonly redactText?: ((input: string) => string) | undefined;
+  // Redacts the session evidence manifest before it reaches the writer. Defaults to no change.
+  readonly redactManifest?: ((manifest: EvidenceManifest) => EvidenceManifest) | undefined;
   readonly cdpClientFactory?: (url: string, opts: CdpClientOptions) => CdpClient;
-  readonly fetchVersion?: (url: string) => Promise<unknown>;
+  readonly fetchVersion?: (url: string) => Promise<CdpVersionDocument>;
   // ADR-0019 trust-6 + direction-3c: tools cannot import src/audit. The BFF injects these.
   readonly costClassResolver?: (modelId: string) => CostClass | "unknown";
   readonly sideFileWriter?: BrowserSideFileWriter;
@@ -189,8 +192,35 @@ export interface BrowserSessionManager {
   readonly counterAccessor: () => { readonly navigations: number };
 }
 
-function defaultRedactor(value: unknown): unknown {
+function unchanged<T>(value: T): T {
   return value;
+}
+
+/** The `/json/version` fields a session reads, decoded from the CDP endpoint's JSON document. */
+export interface CdpVersionDocument {
+  readonly webSocketDebuggerUrl: string | null;
+  readonly userAgent: string | null;
+  readonly browserVersion: string | null;
+}
+
+const EMPTY_VERSION_DOCUMENT: CdpVersionDocument = {
+  webSocketDebuggerUrl: null,
+  userAgent: null,
+  browserVersion: null,
+};
+
+// Chrome names the fields `User-Agent` and `Browser`; other CDP hosts use `userAgent` and `product`.
+function decodeVersionDocument(version: unknown): CdpVersionDocument {
+  if (typeof version !== "object" || version === null) return EMPTY_VERSION_DOCUMENT;
+  const rec = version as Record<string, unknown>;
+  const ws = rec.webSocketDebuggerUrl;
+  const ua = rec["User-Agent"] ?? rec.userAgent;
+  const product = rec.Browser ?? rec.product;
+  return {
+    webSocketDebuggerUrl: typeof ws === "string" ? ws : null,
+    userAgent: typeof ua === "string" ? ua : null,
+    browserVersion: typeof product === "string" ? product : null,
+  };
 }
 
 interface VersionInfo {
@@ -231,23 +261,13 @@ export function assertWsUrlTrusted(ws: string, expectedPort: number): void {
   }
 }
 
-function browserWsUrlFromVersion(version: unknown, fallbackPort: number): VersionInfo {
-  if (typeof version !== "object" || version === null) {
-    return defaultVersionInfo(fallbackPort);
-  }
-  const rec = version as Record<string, unknown>;
-  const ws = rec.webSocketDebuggerUrl;
-  if (typeof ws !== "string" || !ws.startsWith("ws://")) {
+function browserWsUrlFromVersion(version: CdpVersionDocument, fallbackPort: number): VersionInfo {
+  const ws = version.webSocketDebuggerUrl;
+  if (!ws?.startsWith("ws://")) {
     return defaultVersionInfo(fallbackPort);
   }
   assertWsUrlTrusted(ws, fallbackPort);
-  const ua = rec["User-Agent"] ?? rec.userAgent;
-  const product = rec.Browser ?? rec.product;
-  return {
-    url: ws,
-    userAgent: typeof ua === "string" ? ua : null,
-    browserVersion: typeof product === "string" ? product : null,
-  };
+  return { url: ws, userAgent: version.userAgent, browserVersion: version.browserVersion };
 }
 
 function defaultVersionInfo(port: number): VersionInfo {
@@ -258,7 +278,7 @@ function defaultVersionInfo(port: number): VersionInfo {
   };
 }
 
-async function fetchVersionJson(url: string): Promise<unknown> {
+async function fetchVersionJson(url: string): Promise<CdpVersionDocument> {
   const controller = new AbortController();
   const timer = setTimeout(() => {
     controller.abort();
@@ -273,7 +293,7 @@ async function fetchVersionJson(url: string): Promise<unknown> {
     }
     const text = await readCappedText(res);
     try {
-      return JSON.parse(text) as unknown;
+      return decodeVersionDocument(JSON.parse(text));
     } catch {
       throw new BrowserToolError(
         "CHROME_UNREACHABLE",
@@ -440,9 +460,10 @@ async function readCappedText(res: Response): Promise<string> {
 // state region. Method names match the BrowserSessionManager port shape.
 class BrowserSessionManagerImpl implements BrowserSessionManager {
   private readonly opts: BrowserSessionManagerOptions;
-  private readonly redactor: (value: unknown) => unknown;
+  private readonly redactHtml: (raw: string) => string;
+  private readonly redactManifest: (manifest: EvidenceManifest) => EvidenceManifest;
   private readonly clientFactory: (url: string, opts: CdpClientOptions) => CdpClient;
-  private readonly fetchVersion: (url: string) => Promise<unknown>;
+  private readonly fetchVersion: (url: string) => Promise<CdpVersionDocument>;
   // Falls back to "unknown" when the BFF didn't inject a resolver (e.g. evidence-store-less
   // dev runs). Manifests still build; just no per-model cost tier annotation.
   private readonly costClassResolver: (modelId: string) => CostClass | "unknown";
@@ -458,7 +479,8 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
 
   public constructor(opts: BrowserSessionManagerOptions) {
     this.opts = opts;
-    this.redactor = opts.redactor ?? defaultRedactor;
+    this.redactHtml = opts.redactText ?? unchanged;
+    this.redactManifest = opts.redactManifest ?? unchanged;
     this.clientFactory =
       opts.cdpClientFactory ?? ((url, options): CdpClient => new CdpClient(url, options));
     this.fetchVersion = opts.fetchVersion ?? fetchVersionJson;
@@ -527,10 +549,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
         ...(record.contentCaptures.length === 0 ? {} : { contentCaptures: record.contentCaptures }),
       },
     };
-    const redacted = this.redactor(manifest);
-    return typeof redacted === "object" && redacted !== null
-      ? (redacted as EvidenceManifest)
-      : manifest;
+    return this.redactManifest(manifest);
   }
 
   private persistRecord(record: SessionRecord): void {
@@ -997,8 +1016,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       if (Buffer.byteLength(raw, "utf8") > MAX_CONTENT_BYTES) {
         throw new BrowserToolError("CONTENT_TOO_LARGE", "Page content exceeds the size limit.");
       }
-      const redacted = this.redactor(raw);
-      const redactedHtml = typeof redacted === "string" ? redacted : raw;
+      const redactedHtml = this.redactHtml(raw);
       const byteLength = Buffer.byteLength(redactedHtml, "utf8");
       if (byteLength > MAX_CONTENT_BYTES) {
         throw new BrowserToolError("CONTENT_TOO_LARGE", "Page content exceeds the size limit.");

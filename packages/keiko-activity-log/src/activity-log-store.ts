@@ -509,7 +509,12 @@ function policyBootstrapAbsent(directory: string, error: unknown): boolean {
   );
 }
 
-function readPolicyValueOnce(directory: string, trustedRoot: string): unknown {
+// `undefined` is a complete JSON value that is not a policy record. It is not retried: only a torn
+// read (unparseable or unreadable text) can be a peer's publication still in progress.
+function readPolicyValueOnce(
+  directory: string,
+  trustedRoot: string,
+): ActivityLogPolicyRecord | undefined {
   let descriptor: number | undefined;
   try {
     descriptor = openSafeArtifactFile(policyRecordPath(directory), {
@@ -520,13 +525,16 @@ function readPolicyValueOnce(directory: string, trustedRoot: string): unknown {
     const text = readBoundedText(descriptor, fstatSync(descriptor).size);
     if (text === undefined) throw new SafeArtifactFileError("activity-log", "read-failed");
     const value: unknown = JSON.parse(text);
-    return value;
+    return isActivityLogPolicyRecord(value) ? value : undefined;
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
   }
 }
 
-function readPolicyValue(directory: string, trustedRoot: string): unknown {
+function readPolicyValue(
+  directory: string,
+  trustedRoot: string,
+): ActivityLogPolicyRecord | undefined {
   try {
     return readPolicyValueOnce(directory, trustedRoot);
   } catch (error) {
@@ -549,10 +557,9 @@ export function readActivityLogPolicyRecord(
   options: { readonly requireReadable?: boolean } = {},
 ): ActivityLogPolicyRecord | undefined {
   try {
-    const value = readPolicyValue(directory, trustedRoot);
-    if (!isActivityLogPolicyRecord(value))
-      throw new SafeArtifactFileError("activity-log", "read-failed");
-    return value;
+    const record = readPolicyValue(directory, trustedRoot);
+    if (record === undefined) throw new SafeArtifactFileError("activity-log", "read-failed");
+    return record;
   } catch (error) {
     if (options.requireReadable !== true) return undefined;
     if (policyBootstrapAbsent(directory, error)) return undefined;

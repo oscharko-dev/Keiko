@@ -45,7 +45,12 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { isWorkspacePathSnapshotCurrent } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { isCanonicalAllowedContainedPath } from "@oscharko-dev/keiko-workspace/internal/realpath-policy";
-import { safeProperty } from "@oscharko-dev/keiko-activity-log";
+import {
+  errorObjectField,
+  safeProperty,
+  thrownErrorFields,
+  type ThrownErrorFields,
+} from "@oscharko-dev/keiko-activity-log";
 import { isConnectedDocumentPath } from "./grounded-document-evidence.js";
 
 export const EXPLICIT_PATH_REJECTION_REASONS = [
@@ -170,9 +175,24 @@ function localFileUrlPath(url: URL): string | undefined {
   }
 }
 
+// The filesystem codes a path rejection distinguishes. Any other present `code` is "other", so
+// it still takes precedence over the cause's code.
+type PathFailureCode = "ENOENT" | "ENOTDIR" | "EACCES" | "EPERM" | "other";
+
+function pathFailureCode(fields: ThrownErrorFields | undefined): PathFailureCode | undefined {
+  return safeProperty((): PathFailureCode | undefined => {
+    const code = fields?.code;
+    if (code === undefined || code === null) return undefined;
+    return code === "ENOENT" || code === "ENOTDIR" || code === "EACCES" || code === "EPERM"
+      ? code
+      : "other";
+  });
+}
+
 function expectedPathFailure(error: unknown): ExplicitPathRejectionReason | undefined {
   if (error instanceof PathDeniedError) return "denied";
-  const code = safeProperty(error, "code") ?? safeProperty(safeProperty(error, "cause"), "code");
+  const fields = thrownErrorFields(error);
+  const code = pathFailureCode(fields) ?? pathFailureCode(errorObjectField(fields, "cause"));
   if (code === "ENOENT" || code === "ENOTDIR") return "missing";
   return code === "EACCES" || code === "EPERM" ? "denied" : undefined;
 }

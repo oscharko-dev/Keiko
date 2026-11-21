@@ -12,6 +12,7 @@ import {
 import type {
   CodingWorkbenchRuntimeQuestionRequest,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
+  CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -507,7 +508,7 @@ function runQuestionMutation(
   action: CodingWorkbenchQuestionAction,
   questionId: string,
   answers: readonly (readonly string[])[],
-): Promise<unknown> {
+): Promise<CodingWorkbenchRuntimeSnapshot> {
   const envelope = {
     requestId: newCodingWorkbenchRuntimeRequestId(),
     expectedRevision: context.revisionRef.current,

@@ -2173,7 +2173,7 @@ function admitEvaluation(
 
 function eventFrames(event: ServerLogEvent): readonly unknown[] | undefined {
   const frames = event.extra?.frames;
-  return Array.isArray(frames) ? [...(frames as readonly unknown[])] : undefined;
+  return Array.isArray(frames) ? Array.from<unknown>(frames) : undefined;
 }
 
 type AdmissionOutcome =

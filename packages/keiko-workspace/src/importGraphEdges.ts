@@ -1,4 +1,5 @@
 import { posix as path } from "node:path";
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import {
   readWorkspaceFile,
   readWorkspaceFileBytesForTextInspection,
@@ -385,10 +386,7 @@ function readJson(scope: SearchScope, fs: WorkspaceFs, scopePath: string): Parse
       readWorkspaceFile(scope.workspace, scopePath, { maxBytes: 256 * 1024 }, fs).text,
     );
     return {
-      value:
-        typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-          ? (parsed as Record<string, unknown>)
-          : undefined,
+      value: isRecord(parsed) ? parsed : undefined,
       failed: false,
     };
   } catch {
@@ -404,12 +402,11 @@ function tsconfigAliases(
   if (scopePath === undefined) return { items: [], filesSkipped: 0, truncated: false };
   const result = readJson(scope, fs, scopePath);
   const parsed = result.value;
-  const compilerOptions = parsed?.compilerOptions as Record<string, unknown> | undefined;
-  const paths = compilerOptions?.paths as Record<string, unknown> | undefined;
+  const compilerOptions = isRecord(parsed?.compilerOptions) ? parsed.compilerOptions : undefined;
+  const paths = isRecord(compilerOptions?.paths) ? compilerOptions.paths : undefined;
   const baseUrl = typeof compilerOptions?.baseUrl === "string" ? compilerOptions.baseUrl : ".";
-  if (paths === undefined) {
-    return { items: [], filesSkipped: result.failed ? 1 : 0, truncated: false };
-  }
+  const filesSkipped = result.failed ? 1 : 0;
+  if (paths === undefined) return { items: [], filesSkipped, truncated: false };
   const items = Object.entries(paths)
     .map(([pattern, value]) => ({
       pattern,
@@ -419,7 +416,7 @@ function tsconfigAliases(
       baseUrl,
     }))
     .filter((entry) => entry.targets.length > 0);
-  return { items, filesSkipped: result.failed ? 1 : 0, truncated: false };
+  return { items, filesSkipped, truncated: false };
 }
 
 function packageInfos(
@@ -509,10 +506,9 @@ function resolveAlias(
 
 function stringExportTarget(value: unknown): string | undefined {
   if (typeof value === "string") return value;
-  if (value === null || typeof value !== "object") return undefined;
-  const object = value as Record<string, unknown>;
+  if (!isRecord(value)) return undefined;
   for (const key of ["import", "default", "require", "types"]) {
-    const nested = stringExportTarget(object[key]);
+    const nested = stringExportTarget(value[key]);
     if (nested !== undefined) return nested;
   }
   return undefined;
@@ -523,10 +519,9 @@ function packageExportTarget(pkg: PackageInfo, exportKey: string): string | unde
   if (typeof exportsField === "string") {
     return exportKey === "." ? exportsField : undefined;
   }
-  if (exportsField !== null && typeof exportsField === "object") {
-    const exportsObject = exportsField as Record<string, unknown>;
-    const declaredTarget = stringExportTarget(exportsObject[exportKey]);
-    return declaredTarget ?? (exportKey === "." ? stringExportTarget(exportsObject) : undefined);
+  if (isRecord(exportsField)) {
+    const declaredTarget = stringExportTarget(exportsField[exportKey]);
+    return declaredTarget ?? (exportKey === "." ? stringExportTarget(exportsField) : undefined);
   }
   return undefined;
 }

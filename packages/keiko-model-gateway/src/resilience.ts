@@ -447,7 +447,7 @@ export function steeredAnswerRepair(error: Error): RetryRepairReason | undefined
 // configuration, the gateway's own redaction pass refusing to walk a pathologically deep response
 // body (review finding on PR #3394 — an untyped RangeError from that last case used to slip past
 // this list and trip the breaker for an otherwise healthy model; ResponseRedactionError is now
-// thrown instead, see openai-adapter.ts's redactUnknown), or a ProviderOutputExhaustedError (an
+// thrown instead, see openai-adapter.ts's redactRecord), or a ProviderOutputExhaustedError (an
 // HTTP 200 with `finish_reason: "length"` and no content — the model answered, it just spent its
 // budget on reasoning; that is a caller-fixable budget problem, not evidence the provider is
 // failing), or a ProviderEmptyAnswerError (#3610: an HTTP 200 answer that completed with neither

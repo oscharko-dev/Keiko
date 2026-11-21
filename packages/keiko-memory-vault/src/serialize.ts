@@ -40,6 +40,13 @@ import {
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import { MemoryStorageValidationError, MemoryStorageError } from "./errors.js";
 import type { MemoryContentCipher } from "./cipher.js";
+import {
+  nullableNumberColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+  type VaultSqlRow,
+} from "./statements.js";
 import { redactMemoryRecord } from "./redact-record.js";
 import {
   emitMemoryWriteCaptureFailed,
@@ -86,20 +93,27 @@ function encryptContentColumns(row: MemoryRowWrite, cipher: MemoryContentCipher)
   };
 }
 
-export interface MemoryRow {
+// The cleartext metadata columns of a `memories` row: everything a metadata listing reads without
+// a key. MemoryRow adds the content and provenance columns.
+export interface MemoryMetadataRow {
   readonly id: string;
   readonly schema_version: string;
   readonly type: string;
   readonly scope_kind: string;
   readonly scope_coordinate: string;
-  readonly body: string;
-  readonly payload_json: string | null;
   readonly status: string;
   readonly sensitivity: string;
   readonly pinned: number;
   readonly confidence: number;
   readonly valid_from: number;
   readonly valid_until: number | null;
+  readonly created_at: number;
+  readonly updated_at: number;
+}
+
+export interface MemoryRow extends MemoryMetadataRow {
+  readonly body: string;
+  readonly payload_json: string | null;
   readonly stale_reason: string | null;
   readonly tags_json: string;
   readonly source_kind: string;
@@ -114,11 +128,52 @@ export interface MemoryRow {
   readonly retention_policy_key: string | null;
   readonly retention_retain_until: number | null;
   readonly retention_notes: string | null;
-  readonly created_at: number;
-  readonly updated_at: number;
 }
 
-function buildScopeFromRow(kind: string, coord: string): MemoryScope {
+// Reads the metadata columns of one `memories` row through the typed column readers, so a column
+// whose stored value does not match the schema's declared type fails closed.
+export function readMemoryMetadataRow(row: VaultSqlRow): MemoryMetadataRow {
+  return {
+    id: textColumn(row, "id"),
+    schema_version: textColumn(row, "schema_version"),
+    type: textColumn(row, "type"),
+    scope_kind: textColumn(row, "scope_kind"),
+    scope_coordinate: textColumn(row, "scope_coordinate"),
+    status: textColumn(row, "status"),
+    sensitivity: textColumn(row, "sensitivity"),
+    pinned: numberColumn(row, "pinned"),
+    confidence: numberColumn(row, "confidence"),
+    valid_from: numberColumn(row, "valid_from"),
+    valid_until: nullableNumberColumn(row, "valid_until"),
+    created_at: numberColumn(row, "created_at"),
+    updated_at: numberColumn(row, "updated_at"),
+  };
+}
+
+// Reads a whole `memories` row the same way, before any decrypt or record build runs.
+export function readMemoryRow(row: VaultSqlRow): MemoryRow {
+  return {
+    ...readMemoryMetadataRow(row),
+    body: textColumn(row, "body"),
+    payload_json: nullableTextColumn(row, "payload_json"),
+    stale_reason: nullableTextColumn(row, "stale_reason"),
+    tags_json: textColumn(row, "tags_json"),
+    source_kind: textColumn(row, "source_kind"),
+    source_conversation_id: nullableTextColumn(row, "source_conversation_id"),
+    source_workflow_run_id: nullableTextColumn(row, "source_workflow_run_id"),
+    source_evidence_manifest_id: nullableTextColumn(row, "source_evidence_manifest_id"),
+    captured_at: numberColumn(row, "captured_at"),
+    capture_rationale: nullableTextColumn(row, "capture_rationale"),
+    model_provider: nullableTextColumn(row, "model_provider"),
+    model_id: nullableTextColumn(row, "model_id"),
+    model_revision: nullableTextColumn(row, "model_revision"),
+    retention_policy_key: nullableTextColumn(row, "retention_policy_key"),
+    retention_retain_until: nullableNumberColumn(row, "retention_retain_until"),
+    retention_notes: nullableTextColumn(row, "retention_notes"),
+  };
+}
+
+export function buildScopeFromRow(kind: string, coord: string): MemoryScope {
   switch (kind as MemoryScopeKind) {
     case "user":
       return { kind: "user", userId: coord as UserId };

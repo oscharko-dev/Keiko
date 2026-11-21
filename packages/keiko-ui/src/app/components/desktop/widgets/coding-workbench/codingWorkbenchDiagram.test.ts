@@ -37,7 +37,7 @@ function renderer(
 ): RecordingRenderer {
   return {
     initialize: vi.fn<MermaidRenderer["initialize"]>(),
-    parse: vi.fn<MermaidRenderer["parse"]>(() => Promise.resolve({})),
+    parse: vi.fn<MermaidRenderer["parse"]>(() => Promise.resolve({ diagramType: "flowchart" })),
     render: vi.fn<MermaidRenderer["render"]>(render),
   };
 }

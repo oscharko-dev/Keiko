@@ -43,7 +43,7 @@ const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
       claim: "e".repeat(64),
     }),
   stripFragment: (): void => undefined,
-  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+  postPairing: (): Promise<void> => Promise.resolve(),
 };
 
 function snapshot(droppedEventCount = 0, runId = "run-1"): CodingAppSessionChannelSnapshot {

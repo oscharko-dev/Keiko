@@ -22,6 +22,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { isWorkspaceRecord } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 
 import {
   emitSecurityLogEvent,
@@ -158,12 +159,11 @@ function readOutcome(error: unknown): MacosKeychainRead {
 type BoundedExitKind = "timeout" | "signal" | "exit-status" | "spawn-error" | "unknown";
 
 function classifyBoundedExit(error: unknown): BoundedExitKind {
-  if (typeof error !== "object" || error === null) return "unknown";
-  const e = error as { code?: unknown; signal?: unknown; status?: unknown };
-  if (e.code === "ETIMEDOUT") return "timeout";
-  if (typeof e.signal === "string") return "signal";
-  if (typeof e.status === "number") return "exit-status";
-  if (typeof e.code === "string") return "spawn-error";
+  if (!isWorkspaceRecord(error)) return "unknown";
+  if (error.code === "ETIMEDOUT") return "timeout";
+  if (typeof error.signal === "string") return "signal";
+  if (typeof error.status === "number") return "exit-status";
+  if (typeof error.code === "string") return "spawn-error";
   return "unknown";
 }
 

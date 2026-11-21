@@ -278,7 +278,9 @@ function serializeApprovedDataChannelEvent(event: unknown): string | undefined {
   return JSON.stringify(event);
 }
 
-function parseBoundedDataChannelEvent(data: unknown): unknown {
+// An inbound provider event as a JSON object. Oversized or unparseable data becomes the error
+// event; well-formed JSON that is not an object is no realtime event, so it is dropped (undefined).
+function parseBoundedDataChannelEvent(data: unknown): JsonRecord | undefined {
   if (typeof data !== "string" || data.length > MAX_INBOUND_DATA_CHANNEL_EVENT_BYTES) {
     return INVALID_DATA_CHANNEL_EVENT;
   }
@@ -286,7 +288,8 @@ function parseBoundedDataChannelEvent(data: unknown): unknown {
     return INVALID_DATA_CHANNEL_EVENT;
   }
   try {
-    return JSON.parse(data) as unknown;
+    const parsed: unknown = JSON.parse(data);
+    return isRecord(parsed) ? parsed : undefined;
   } catch {
     return INVALID_DATA_CHANNEL_EVENT;
   }
@@ -521,7 +524,10 @@ function buildSession(
     if (dataChannelEventCb === undefined) {
       return;
     }
-    dataChannelEventCb(parseBoundedDataChannelEvent(event.data));
+    const parsed = parseBoundedDataChannelEvent(event.data);
+    if (parsed !== undefined) {
+      dataChannelEventCb(parsed);
+    }
   });
 
   return {

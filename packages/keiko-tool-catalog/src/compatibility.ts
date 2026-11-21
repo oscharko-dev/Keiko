@@ -13,7 +13,7 @@ import {
   copyCatalogJson,
   exactCatalogKeys,
 } from "./json.js";
-import { verifyToolDescriptor } from "./descriptor.js";
+import { RESULT_BOUND_KEYS, verifyToolDescriptor } from "./descriptor.js";
 import {
   catalogDigest,
   runtimeRefFrom,
@@ -140,10 +140,7 @@ export function assertIdentityCompatibility(
     "invalid-compatibility",
   );
   requireCatalog(
-    Object.keys(to.bounds).every(
-      (key) =>
-        to.bounds[key as keyof typeof to.bounds] <= from.bounds[key as keyof typeof from.bounds],
-    ),
+    RESULT_BOUND_KEYS.every((key) => to.bounds[key] <= from.bounds[key]),
     "invalid-compatibility",
   );
 }

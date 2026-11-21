@@ -65,9 +65,11 @@ export type RealtimeVoice = (typeof REALTIME_VOICES)[number];
 /** Compatibility only. Realtime provider voices are not used by the canonical Twin chat pipeline. */
 export const DEFAULT_REALTIME_VOICE: RealtimeVoice = "alloy";
 
+const REALTIME_VOICE_NAMES: ReadonlySet<string> = new Set(REALTIME_VOICES);
+
 /** Compatibility only. Realtime provider voices are not used by the canonical Twin chat pipeline. */
 export function isRealtimeVoice(voiceId: string | undefined): voiceId is RealtimeVoice {
-  return voiceId !== undefined && (REALTIME_VOICES as readonly string[]).includes(voiceId);
+  return voiceId !== undefined && REALTIME_VOICE_NAMES.has(voiceId);
 }
 
 /** Compatibility only. Realtime provider voices are not used by the canonical Twin chat pipeline. */

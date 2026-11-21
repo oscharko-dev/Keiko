@@ -36,8 +36,15 @@ interface Unavailable {
   readonly failure: GitDeliveryObservationFailure;
 }
 
+/** Classic branch protection after `validProtection`: exactly these three fields. */
+export interface GitCiBranchProtection {
+  readonly checks: Readonly<Record<string, unknown>> | null;
+  readonly strict: boolean;
+  readonly reviewCount: number;
+}
+
 export type GitCiProtectionFacts =
-  | { readonly outcome: "protected"; readonly value: Readonly<Record<string, unknown>> }
+  | { readonly outcome: "protected"; readonly value: GitCiBranchProtection }
   | { readonly outcome: "unprotected" }
   | { readonly outcome: "unknown"; readonly failure: GitDeliveryObservationFailure };
 
@@ -128,7 +135,7 @@ function prFacts(value: unknown, target: GitCiReadTarget): PrFacts | undefined {
   };
 }
 
-function validProtection(value: unknown): value is Record<string, unknown> {
+function validProtection(value: unknown): value is GitCiBranchProtection {
   return (
     object(value) &&
     Object.keys(value).length === 3 &&
@@ -232,7 +239,7 @@ function policyChanged(first: PolicyObservation, last: PolicyObservation): boole
     last.workflowDefinitions.status === "unknown"
   )
     return false;
-  const reviews = (value: PolicyObservation): unknown =>
+  const reviews = (value: PolicyObservation): number =>
     value.protection.outcome === "protected" ? value.protection.value.reviewCount : 0;
   return (
     first.requirements.digest !== last.requirements.digest ||

@@ -9,6 +9,7 @@
 // Exported from the package barrel exactly like the manual fixture fetcher so keiko-server's
 // composition tests reuse the same fixture space instead of growing a second one.
 
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   AtlassianHttpBodyPort,
   AtlassianHttpBodyRequest,
@@ -92,7 +93,7 @@ function buildModel(spaces: readonly ConfluenceFixtureSpace[]): FixtureModel {
   return { spacesByKey, spacesById, pagesById };
 }
 
-function spacesListing(model: FixtureModel, url: URL): unknown {
+function spacesListing(model: FixtureModel, url: URL): CatalogJsonObject {
   const keysParam = url.searchParams.get("keys") ?? "";
   const results = keysParam
     .split(",")
@@ -107,7 +108,7 @@ function pageListing(
   url: URL,
   apiPathPrefix: string,
   listPageSize: number,
-): unknown {
+): CatalogJsonObject {
   const cursor = Number.parseInt(url.searchParams.get("cursor") ?? "0", 10);
   const start = Number.isFinite(cursor) && cursor > 0 ? cursor : 0;
   const slice = space.pages.slice(start, start + listPageSize);
@@ -127,7 +128,7 @@ function pageListing(
   return { results, _links: links };
 }
 
-function pageBody(page: ConfluenceFixturePage, spaceKey: string): unknown {
+function pageBody(page: ConfluenceFixturePage, spaceKey: string): CatalogJsonObject {
   return {
     id: page.pageId,
     title: page.title,
@@ -139,7 +140,7 @@ function pageBody(page: ConfluenceFixturePage, spaceKey: string): unknown {
   };
 }
 
-function commentsListing(page: ConfluenceFixturePage): unknown {
+function commentsListing(page: ConfluenceFixturePage): CatalogJsonObject {
   const results = (page.comments ?? []).map((comment, index) => ({
     id: `${page.pageId}-comment-${String(index)}`,
     body: { storage: { value: comment, representation: "storage" } },

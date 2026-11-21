@@ -260,8 +260,13 @@ interface DiagnosticsRuntime {
   readonly state: DiagnosticsState;
 }
 
-function isEligibleModel(rt: DiagnosticsRuntime, model: MonacoDiagnosticsModel): boolean {
-  return rt.args.documentLanguages.includes(model.getLanguageId() as EditorLanguageId);
+// The model's current language when it is one of the eligible languages, otherwise undefined.
+function eligibleLanguage(
+  rt: DiagnosticsRuntime,
+  model: MonacoDiagnosticsModel,
+): EditorLanguageId | undefined {
+  const languageId = model.getLanguageId();
+  return rt.args.documentLanguages.find((language) => language === languageId);
 }
 
 function cancelTimer(rt: DiagnosticsRuntime): void {
@@ -293,6 +298,14 @@ function isStale(
 
 function runDiagnostics(rt: DiagnosticsRuntime, model: MonacoDiagnosticsModel): void {
   abortInFlight(rt);
+  // Monaco can switch a bound model's language in place; a run for a language that is no longer
+  // eligible sends no request and clears the previous language's markers, as bindModel does.
+  const language = eligibleLanguage(rt, model);
+  if (language === undefined) {
+    rt.args.markers.setModelMarkers(model, rt.args.owner, []);
+    rt.args.onOverviewMarkers?.([]);
+    return;
+  }
   const versionBefore = model.getVersionId();
   rt.state.latestSeq += 1;
   const sequence = rt.state.latestSeq;
@@ -305,7 +318,7 @@ function runDiagnostics(rt: DiagnosticsRuntime, model: MonacoDiagnosticsModel): 
     request: identity,
     document: {
       uri: model.uri.toString(),
-      language: model.getLanguageId() as EditorLanguageId,
+      language,
       version: versionBefore,
     },
   };
@@ -360,7 +373,7 @@ function bindModel(rt: DiagnosticsRuntime, model: MonacoDiagnosticsModel | null)
   if (model === null) {
     return;
   }
-  if (!isEligibleModel(rt, model)) {
+  if (eligibleLanguage(rt, model) === undefined) {
     // Unsupported language: ensure no stale markers remain and register no analysis.
     rt.args.markers.setModelMarkers(model, rt.args.owner, []);
     rt.args.onOverviewMarkers?.([]);

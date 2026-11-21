@@ -28,6 +28,13 @@ import { requireCatalog } from "./errors.js";
 import { compileCatalogSchema } from "./schema.js";
 
 const EFFECTS: ReadonlySet<string> = new Set(CODING_WORKBENCH_ACTION_CLASSES);
+/** The result bound fields, in the order a declaration lists them. */
+export const RESULT_BOUND_KEYS = [
+  "maxArgumentBytes",
+  "maxResultBytes",
+  "maxResultCount",
+  "maxDurationMs",
+] as const satisfies readonly (keyof ToolResultBounds)[];
 const DECLARATION_KEYS = [
   "toolRef",
   "description",
@@ -51,13 +58,15 @@ function uniqueStrings(value: CatalogJsonValue | undefined): readonly string[] {
   return [...strings].sort(compareStrings);
 }
 
+// EFFECTS holds exactly the coding workbench action classes, which are the catalog effects.
+function isCatalogEffect(value: string): value is CatalogEffect {
+  return EFFECTS.has(value);
+}
+
 function effectsFrom(value: CatalogJsonValue | undefined): readonly CatalogEffect[] {
   const effects = uniqueStrings(value);
-  requireCatalog(
-    effects.every((effect) => EFFECTS.has(effect)),
-    "ambiguous-effects",
-  );
-  return effects as readonly CatalogEffect[];
+  requireCatalog(effects.every(isCatalogEffect), "ambiguous-effects");
+  return effects;
 }
 
 function actionMappings(
@@ -91,12 +100,7 @@ export function resultBoundsFrom(
 ): ToolResultBounds {
   requireCatalog(value !== undefined, "missing-bounds");
   const bounds = catalogObject(value);
-  exactCatalogKeys(bounds, [
-    "maxArgumentBytes",
-    "maxResultBytes",
-    "maxResultCount",
-    "maxDurationMs",
-  ]);
+  exactCatalogKeys(bounds, RESULT_BOUND_KEYS);
   return {
     maxArgumentBytes: catalogPositive(bounds.maxArgumentBytes, argumentLimits.maxArgumentBytes),
     maxResultBytes: catalogPositive(bounds.maxResultBytes, TOOL_CATALOG_LIMITS.maxResultBytes),
@@ -163,18 +167,20 @@ export function createToolDescriptor(value: unknown, previous?: ToolDescriptor):
       requireCatalog(descriptorDigest === prior.descriptorDigest, "incompatible-version");
   }
   const descriptor = deepFreeze({ ...declaration, descriptorDigest });
-  issuedDescriptors.add(descriptor);
+  issuedDescriptors.set(descriptor, descriptor);
   return descriptor;
 }
 
 // Descriptors this module issued: deeply frozen at issue, so they cannot have changed since they
 // were verified, and membership cannot be forged. Re-verifying them on every catalog offer, gateway
 // bridge and stored-transcript read made each tool round copy and hash every descriptor again.
-const issuedDescriptors = new WeakSet();
+// Each descriptor is keyed by itself, so a lookup returns the typed descriptor.
+const issuedDescriptors = new WeakMap<object, ToolDescriptor>();
 
 export function verifyToolDescriptor(value: unknown): ToolDescriptor {
-  if (typeof value === "object" && value !== null && issuedDescriptors.has(value))
-    return value as ToolDescriptor;
+  const issued =
+    typeof value === "object" && value !== null ? issuedDescriptors.get(value) : undefined;
+  if (issued !== undefined) return issued;
   const object = catalogObject(copyCatalogJson(value));
   exactCatalogKeys(object, [...DECLARATION_KEYS, "descriptorDigest"]);
   const { descriptorDigest, ...declaration } = object;

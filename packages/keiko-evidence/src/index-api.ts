@@ -26,12 +26,15 @@ export interface EvidenceListEntry {
 // JSON.parse can throw a raw SyntaxError on a truncated/hand-edited manifest; the parse is a system
 // boundary (reading developer-writable files), so catching it and re-throwing a typed AuditError is
 // correct — the CLI maps AuditError to an exit code instead of leaking an unhandled stack (C1).
-function parseJson(json: string, runId: string): unknown {
+function parseJson(json: string, runId: string): EvidenceManifest {
+  let parsed: unknown;
   try {
-    return JSON.parse(json);
+    parsed = JSON.parse(json);
   } catch {
     throw new EvidenceReadError(`evidence manifest is not valid JSON: ${runId}`);
   }
+  assertEvidenceManifest(parsed, runId);
+  return parsed;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -133,8 +136,8 @@ function validateManifestShape(parsed: Record<string, unknown>, runId: string): 
 
 // Validates a parsed manifest value (object, schema version + shape) and narrows it to
 // EvidenceManifest. The persisted JSON is redacted by construction, so the fields not checked here
-// keep the writer's shape. listEntryOrSkip and parseManifest share it so one JSON.parse of a
-// manifest string is enough (KEIKO-0945).
+// keep the writer's shape. parseJson applies it after its single JSON.parse of a manifest string;
+// listEntryOrSkip and loadEvidence share that parse (KEIKO-0945).
 function assertEvidenceManifest(
   parsed: unknown,
   runId: string,
@@ -150,12 +153,6 @@ function assertEvidenceManifest(
     );
   }
   validateManifestShape(parsed, runId);
-}
-
-function parseManifest(json: string, runId: string): EvidenceManifest {
-  const parsed: unknown = parseJson(json, runId);
-  assertEvidenceManifest(parsed, runId);
-  return parsed;
 }
 
 function toListEntry(manifest: EvidenceManifest): EvidenceListEntry {
@@ -186,9 +183,7 @@ function listEntryOrSkip(store: EvidenceStore, runId: string): EvidenceListEntry
     if (json === undefined) {
       return undefined;
     }
-    const parsed: unknown = parseJson(json, runId);
-    assertEvidenceManifest(parsed, runId);
-    return toListEntry(parsed);
+    return toListEntry(parseJson(json, runId));
   } catch (error) {
     if (error instanceof EvidenceReadError || error instanceof EvidenceSchemaError) {
       return undefined;
@@ -213,5 +208,5 @@ export function loadEvidence(store: EvidenceStore, runId: string): EvidenceManif
   if (json === undefined) {
     return undefined;
   }
-  return parseManifest(json, runId);
+  return parseJson(json, runId);
 }

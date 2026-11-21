@@ -99,15 +99,24 @@ export const PR_DESCRIPTION_LIMIT_CEILINGS: PrDescriptionLimits = Object.freeze(
   timeoutMs: 30_000,
 });
 
+// An absent override keeps the ceiling; a supplied value can only lower it, and an invalid one
+// (not a non-negative safe integer) closes the limit to zero.
+function limitWithinCeiling(ceiling: number, supplied: number | undefined): number {
+  if (supplied === undefined) return ceiling;
+  return Number.isSafeInteger(supplied) && supplied >= 0 ? Math.min(ceiling, supplied) : 0;
+}
+
 export function resolvePrDescriptionLimits(
   overrides: Partial<PrDescriptionLimits> = {},
 ): PrDescriptionLimits {
-  const result = { ...PR_DESCRIPTION_LIMIT_CEILINGS };
-  for (const key of Object.keys(result) as (keyof PrDescriptionLimits)[]) {
-    const supplied = overrides[key];
-    if (supplied === undefined) continue;
-    result[key] =
-      Number.isSafeInteger(supplied) && supplied >= 0 ? Math.min(result[key], supplied) : 0;
-  }
-  return result;
+  const ceilings = PR_DESCRIPTION_LIMIT_CEILINGS;
+  return {
+    maxCalls: limitWithinCeiling(ceilings.maxCalls, overrides.maxCalls),
+    maxTokens: limitWithinCeiling(ceilings.maxTokens, overrides.maxTokens),
+    maxInputBytes: limitWithinCeiling(ceilings.maxInputBytes, overrides.maxInputBytes),
+    maxOutputBytes: limitWithinCeiling(ceilings.maxOutputBytes, overrides.maxOutputBytes),
+    maxChunkBytes: limitWithinCeiling(ceilings.maxChunkBytes, overrides.maxChunkBytes),
+    maxOutputTokens: limitWithinCeiling(ceilings.maxOutputTokens, overrides.maxOutputTokens),
+    timeoutMs: limitWithinCeiling(ceilings.timeoutMs, overrides.timeoutMs),
+  };
 }

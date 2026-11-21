@@ -8,6 +8,16 @@
 
 export type TableColumnRole = "id" | "title" | "statement" | "priority" | "criteria";
 
+// Every role in the order the vocabulary declares its table columns; a later role wins a header
+// name two roles share.
+const TABLE_COLUMN_ROLES: readonly TableColumnRole[] = [
+  "id",
+  "title",
+  "statement",
+  "priority",
+  "criteria",
+];
+
 export interface RequirementVocabulary {
   /** Keys that introduce a priority value (`Priorität: Muss`). */
   readonly priorityKeys: readonly string[];
@@ -345,11 +355,8 @@ export function mergeRequirementVocabulary(
 
 function tableRoleMap(vocabulary: RequirementVocabulary): ReadonlyMap<string, TableColumnRole> {
   const roles = new Map<string, TableColumnRole>();
-  for (const [role, names] of Object.entries(vocabulary.tableColumns) as [
-    TableColumnRole,
-    readonly string[],
-  ][])
-    for (const name of names) roles.set(foldTerm(name), role);
+  for (const role of TABLE_COLUMN_ROLES)
+    for (const name of vocabulary.tableColumns[role]) roles.set(foldTerm(name), role);
   return roles;
 }
 

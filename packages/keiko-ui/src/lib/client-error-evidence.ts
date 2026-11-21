@@ -6,16 +6,23 @@ import {
   type ClientErrorEvidence,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
-function safeProperty(error: unknown, key: "cause" | "stack"): unknown {
-  if ((typeof error !== "object" || error === null) && typeof error !== "function")
-    return undefined;
+// The two fields this reducer reads from a thrown value it did not build.
+interface ThrownFields {
+  readonly cause?: unknown;
+  readonly stack?: unknown;
+}
+
+function thrownFields(value: unknown): ThrownFields | undefined {
+  return (typeof value === "object" && value !== null) || typeof value === "function"
+    ? value
+    : undefined;
+}
+
+// Reads from a thrown value are hostile-input reads: an accessor or proxy trap may throw, and a
+// throw is counted and degrades to absence.
+function safeProperty<T>(read: () => T): T | undefined {
   try {
-    switch (key) {
-      case "cause":
-        return "cause" in error ? error.cause : undefined;
-      case "stack":
-        return "stack" in error ? error.stack : undefined;
-    }
+    return read();
   } catch {
     recordClientDiagnosticLoss("errorsSuppressed");
     return undefined;
@@ -63,8 +70,8 @@ function safeFrame(line: string): string | undefined {
   }
 }
 
-function safeFrames(error: unknown): string[] {
-  const stack = safeProperty(error, "stack");
+function safeFrames(fields: ThrownFields | undefined): string[] {
+  const stack = safeProperty(() => fields?.stack);
   if (typeof stack !== "string") return [];
   return stack
     .slice(0, 16_384)
@@ -77,16 +84,17 @@ function safeFrames(error: unknown): string[] {
 
 /** No raw message, origin, query string, function name or source path leaves this reducer. */
 export function clientErrorEvidence(error: unknown): ClientErrorEvidence {
-  let frames = safeFrames(error);
+  let frames = safeFrames(thrownFields(error));
   const causeChain: string[] = [];
   const seen = new Set<unknown>([error]);
-  let cause = safeProperty(error, "cause");
+  let cause = safeProperty(() => thrownFields(error)?.cause);
   while (cause !== undefined && !seen.has(cause) && causeChain.length < 5) {
-    seen.add(cause);
-    causeChain.push(safeClass(cause));
+    const current = cause;
+    seen.add(current);
+    causeChain.push(safeClass(current));
     // Prefer the original failing location over wrapper frames when the shared budget fills.
-    frames = [...new Set([...safeFrames(cause), ...frames])].slice(0, 8);
-    cause = safeProperty(cause, "cause");
+    frames = [...new Set([...safeFrames(thrownFields(current)), ...frames])].slice(0, 8);
+    cause = safeProperty(() => thrownFields(current)?.cause);
   }
   return { errorClass: safeClass(error), frames, causeChain };
 }

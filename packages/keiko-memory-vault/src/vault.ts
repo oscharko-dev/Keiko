@@ -101,6 +101,7 @@ import {
   memoryBodySuppressionHashForVault,
 } from "./body-fingerprint.js";
 import { sanitizeMemoryTombstoneReason } from "./tombstone-reason.js";
+import { numberColumn, textColumn } from "./statements.js";
 import type {
   MemoryBatchDelete,
   DeleteMemoryOptions,
@@ -221,6 +222,16 @@ interface EmbeddingRowSnapshot {
   readonly created_at: number;
 }
 
+function selectEmbeddingRowSnapshots(db: DatabaseSync): readonly EmbeddingRowSnapshot[] {
+  return db
+    .prepare("SELECT memory_id, created_at FROM memory_embeddings")
+    .all()
+    .map((row) => ({
+      memory_id: textColumn(row, "memory_id"),
+      created_at: numberColumn(row, "created_at"),
+    }));
+}
+
 // PR-review follow-up (Codex threads 3769711634 + 3769903807 + 3770110875): concurrent
 // INSERT, UPDATE, and DELETE detection for --force. The CLI staged vectors OUTSIDE this
 // transaction (network embed calls are slow), so between snapshot and swap another writer
@@ -328,9 +339,7 @@ function assertAcceptedSetUnchanged(
 }
 
 function snapshotEmbeddedMemoryIdsFromDb(db: DatabaseSync): ReadonlyMap<MemoryId, number> {
-  const rows = db
-    .prepare("SELECT memory_id, created_at FROM memory_embeddings")
-    .all() as unknown as EmbeddingRowSnapshot[];
+  const rows = selectEmbeddingRowSnapshots(db);
   const snapshot = new Map<MemoryId, number>();
   for (const row of rows) snapshot.set(row.memory_id as MemoryId, row.created_at);
   return snapshot;
@@ -354,9 +363,7 @@ function replaceAllEmbeddingRowsAtomically(
   db.exec("BEGIN IMMEDIATE");
   let existing: readonly EmbeddingRowSnapshot[];
   try {
-    existing = db
-      .prepare("SELECT memory_id, created_at FROM memory_embeddings")
-      .all() as unknown as EmbeddingRowSnapshot[];
+    existing = selectEmbeddingRowSnapshots(db);
     assertReembedSetUnchanged(existing, stagedIds, expectedSnapshot);
     assertMemoryVersionsUnchanged(db, expectedMemoryVersions);
     assertAcceptedSetUnchanged(db, expectedAcceptedIds);

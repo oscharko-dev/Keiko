@@ -9,6 +9,7 @@
 // runtime dependency: ADR-0023 D12 + supply-chain gate forbid it.
 
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { QUALITY_INTELLIGENCE_PRIORITIES } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 // Single canonical Unicode-strip primitive lives in the base layer (keiko-contracts).
 // It is a true SUPERSET of the former QI-local removal set (GEN-DUP-NEAR-003): it additionally
 // strips the U+2060..U+206F block. Re-export it here so the QI-internal call sites and the QI
@@ -66,25 +67,15 @@ export const normaliseText = (value: string | undefined): string => {
 export const isMeaningfulText = (value: string | undefined): boolean =>
   normaliseText(value).length > 0;
 
+const KNOWN_PRIORITIES: ReadonlySet<string> = new Set(QUALITY_INTELLIGENCE_PRIORITIES);
+
 /**
  * Type guard mapping an arbitrary string to a known QI priority. Pure; used
  * to keep the test-design model's priority field type-correct.
  */
 export const isKnownPriority = (
   value: string,
-): value is QualityIntelligence.QualityIntelligencePriority => {
-  for (const candidate of [
-    "P0",
-    "P1",
-    "P2",
-    "P3",
-  ] as readonly QualityIntelligence.QualityIntelligencePriority[]) {
-    if (candidate === value) {
-      return true;
-    }
-  }
-  return false;
-};
+): value is QualityIntelligence.QualityIntelligencePriority => KNOWN_PRIORITIES.has(value);
 
 // Returns true for code points in the lower unsafe range (U+0000–U+009F plus DEL).
 // Split from isUnsafeCodePoint to keep cyclomatic complexity below the lint limit.

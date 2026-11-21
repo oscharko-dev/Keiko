@@ -57,7 +57,7 @@ export function caughtGroundedPackValidation(
   error: unknown,
 ): GroundedPackValidationFailure | undefined {
   if (!(error instanceof ContextPackValidationError)) return undefined;
-  const reasons = safeProperty(error, "validationReasons");
+  const reasons = safeProperty(() => error.validationReasons);
   return {
     error,
     originalCode: error.code,

@@ -9,8 +9,8 @@ import {
   readSync,
   readdirSync,
   type BigIntStats,
+  Dirent,
   type Dir,
-  type Dirent,
 } from "node:fs";
 import { lstat, open, opendir, readdir, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
@@ -137,9 +137,45 @@ export interface PortableSidecarTreeAttestation {
 }
 
 /** What `SyncIo` and `AsyncIo` hand back to the tree machine for one `IoRequest`. */
-type IoResponse = BigIntStats | Dirent | Buffer | readonly string[] | null | undefined;
+type IoResponse = BigIntStats | Dirent | Buffer | string[] | null | undefined;
 
-type TreeMachine = Generator<IoRequest, PortableSidecarTreeAttestation, unknown>;
+type TreeStep<T> = Generator<IoRequest, T, IoResponse>;
+
+type TreeMachine = TreeStep<PortableSidecarTreeAttestation>;
+
+type StatRequest = Extract<IoRequest, { readonly kind: "lstat" | "fstat-file" }>;
+
+function invalidIoResponse(): never {
+  fail("portable handoff tree I/O response is invalid");
+}
+
+// Each request kind has exactly one response shape. A mismatch is an executor defect and refuses
+// the attestation instead of reading a value of another shape.
+function* requestStat(request: StatRequest): TreeStep<BigIntStats> {
+  const response = yield request;
+  if (response === null || response === undefined || !("mtimeNs" in response)) {
+    invalidIoResponse();
+  }
+  return response;
+}
+
+function* readDirectoryEntry(id: number): TreeStep<Dirent | null> {
+  const response = yield { kind: "read-directory", id };
+  if (response === null || response instanceof Dirent) return response;
+  invalidIoResponse();
+}
+
+function* readDirectoryOrder(path: string): TreeStep<readonly string[]> {
+  const response = yield { kind: "directory-order", path };
+  if (!Array.isArray(response)) invalidIoResponse();
+  return response;
+}
+
+function* readFileChunk(id: number): TreeStep<Buffer> {
+  const response = yield { kind: "read-file", id };
+  if (!Buffer.isBuffer(response)) invalidIoResponse();
+  return response;
+}
 
 /** The existing portable sidecar tuple format; KHT1 uses its separate fixed projection. */
 export function computePortableSidecarPayloadTreeDigest(
@@ -218,7 +254,7 @@ interface SnapshotTraversal {
 function* readSnapshotDirectory(
   traversal: SnapshotTraversal,
   directory: TreeEntrySnapshot,
-): Generator<IoRequest, void, unknown> {
+): TreeStep<void> {
   const relativeDirectory = directory.name;
   const children: TreeEntrySnapshot[] = [];
   traversal.orderedChildren?.set(relativeDirectory, children);
@@ -232,14 +268,11 @@ function* readSnapshotDirectory(
   };
   try {
     for (;;) {
-      const entry = (yield { kind: "read-directory", id }) as Dirent | null;
+      const entry = yield* readDirectoryEntry(id);
       if (entry === null) return;
       const name = relativeDirectory === "" ? entry.name : `${relativeDirectory}/${entry.name}`;
       recordTreeEntry(traversal.budget, name);
-      const stat = (yield {
-        kind: "lstat",
-        path: portablePath(traversal.root, name),
-      }) as BigIntStats;
+      const stat = yield* requestStat({ kind: "lstat", path: portablePath(traversal.root, name) });
       const kind = treeEntryKind(entry, stat);
       const snapshot = { name, stat };
       if (traversal.orderedChildren !== undefined) children.push(snapshot);
@@ -259,8 +292,8 @@ function* snapshotTree(
   root: string,
   handles: { next: number },
   legacyOrder = false,
-): Generator<IoRequest, TreeSnapshot, unknown> {
-  const rootStat = (yield { kind: "lstat", path: root }) as BigIntStats;
+): TreeStep<TreeSnapshot> {
+  const rootStat = yield* requestStat({ kind: "lstat", path: root });
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
     fail("portable handoff tree root is unsafe");
   }
@@ -330,16 +363,16 @@ function* restoreHistoricalDirectoryOrder(
   root: string,
   directories: readonly TreeEntrySnapshot[],
   children: Map<string, TreeEntrySnapshot[]>,
-): Generator<IoRequest, void, unknown> {
+): TreeStep<void> {
   for (const directory of directories) {
     const path = portablePath(root, directory.name);
-    assertUnchangedDirectory(directory.stat, (yield { kind: "lstat", path }) as BigIntStats);
-    const names = (yield { kind: "directory-order", path }) as readonly string[];
+    assertUnchangedDirectory(directory.stat, yield* requestStat({ kind: "lstat", path }));
+    const names = yield* readDirectoryOrder(path);
     children.set(
       directory.name,
       historicalChildren(directory.name, names, children.get(directory.name) ?? []),
     );
-    assertUnchangedDirectory(directory.stat, (yield { kind: "lstat", path }) as BigIntStats);
+    assertUnchangedDirectory(directory.stat, yield* requestStat({ kind: "lstat", path }));
   }
 }
 
@@ -350,7 +383,7 @@ function* legacyDepthFirstFiles(
   capturedFiles: readonly TreeEntrySnapshot[],
   directories: readonly TreeEntrySnapshot[],
   children: Map<string, TreeEntrySnapshot[]>,
-): Generator<IoRequest, readonly TreeEntrySnapshot[], unknown> {
+): TreeStep<readonly TreeEntrySnapshot[]> {
   if (!legacyOrderHasTies(capturedFiles)) return capturedFiles;
   yield* restoreHistoricalDirectoryOrder(root, directories, children);
   const pending = [...(children.get("") ?? [])].reverse();
@@ -376,7 +409,7 @@ function* portableTreeSnapshot(
   root: string,
   handles: { next: number },
   legacyOrder = false,
-): Generator<IoRequest, TreeSnapshot, unknown> {
+): TreeStep<TreeSnapshot> {
   const snapshot = yield* snapshotTree(root, handles, legacyOrder);
   return {
     directories: sortTreeEntries(snapshot.directories),
@@ -480,21 +513,18 @@ function assertStableFile(
   }
 }
 
-function* digestFile(
-  path: string,
-  handles: { next: number },
-): Generator<IoRequest, Buffer, unknown> {
+function* digestFile(path: string, handles: { next: number }): TreeStep<Buffer> {
   const id = handles.next;
   handles.next += 1;
   yield { kind: "open-file", id, path };
   try {
-    const before = (yield { kind: "lstat", path }) as BigIntStats;
-    const opened = (yield { kind: "fstat-file", id }) as BigIntStats;
+    const before = yield* requestStat({ kind: "lstat", path });
+    const opened = yield* requestStat({ kind: "fstat-file", id });
     assertOpenedFile(before, opened);
     const hash = createHash("sha256");
     let bytes = 0;
     for (;;) {
-      const content = (yield { kind: "read-file", id }) as Buffer;
+      const content = yield* readFileChunk(id);
       if (content.byteLength === 0) break;
       bytes += content.byteLength;
       if (BigInt(bytes) > opened.size || bytes > MAX_FILE_BYTES) {
@@ -502,8 +532,8 @@ function* digestFile(
       }
       hash.update(content);
     }
-    const after = (yield { kind: "fstat-file", id }) as BigIntStats;
-    const current = (yield { kind: "lstat", path }) as BigIntStats;
+    const after = yield* requestStat({ kind: "fstat-file", id });
+    const current = yield* requestStat({ kind: "lstat", path });
     assertStableFile(opened, after, current, bytes);
     return hash.digest();
   } finally {
@@ -528,7 +558,7 @@ function* portableTreeMachine(
   let totalBytes = 0n;
   for (const file of snapshot.legacyFiles ?? snapshot.files) {
     const path = portablePath(root, file.name);
-    const current = (yield { kind: "lstat", path }) as BigIntStats;
+    const current = yield* requestStat({ kind: "lstat", path });
     totalBytes += current.size;
     if (totalBytes > BigInt(MAX_TREE_BYTES)) fail("portable handoff tree is too large");
     const digest = yield* digestFile(path, handles);
@@ -744,7 +774,7 @@ function runTreeMachineSync(
 ): PortableSidecarTreeAttestation {
   assertDeadline(deadline);
   const io = new SyncIo();
-  let response: unknown;
+  let response: IoResponse;
   try {
     for (;;) {
       assertSyncOperation(deadline);
@@ -763,7 +793,7 @@ async function runTreeMachineAsync(
 ): Promise<PortableSidecarTreeAttestation> {
   assertDeadline(operation.deadline);
   const io = new AsyncIo();
-  let response: unknown;
+  let response: IoResponse;
   let readSteps = 0;
   let ioSteps = 0;
   try {

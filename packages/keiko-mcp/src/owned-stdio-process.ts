@@ -26,7 +26,7 @@ function signalGroup(pid: number, signal: NodeJS.Signals): boolean {
     process.kill(-pid, signal);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    if (error instanceof Error && "code" in error && error.code === "ESRCH") return false;
     throw error;
   }
 }
@@ -51,12 +51,13 @@ interface OwnedStdioOptions {
 
 export async function runOwnedStdio(options: OwnedStdioOptions): Promise<number> {
   if (options.signal.aborted || options.input.readableEnded) return 1;
-  const child = spawn(options.command, [...options.args], {
+  // cross-spawn's `spawn` member carries Node's overloads, which type an all-pipe child.
+  const child = spawn.spawn(options.command, [...options.args], {
     env: options.environment,
     detached: options.stopOwner === undefined,
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
-  }) as ChildProcessWithoutNullStreams;
+  });
   let stopping: Promise<boolean> | undefined;
   let drainDeadline: ReturnType<typeof setTimeout> | undefined;
   const stop = (): void => {

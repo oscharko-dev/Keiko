@@ -56,14 +56,22 @@ export interface ScreenTestBaseline {
   readonly items: readonly StructuralTestItem[];
 }
 
-const INTERACTION_HINTS = new Set<string>([
+const INTERACTION_HINTS: readonly IrNode["interactionHint"][] = [
   "button",
   "input",
   "link",
   "text",
   "image",
   "container",
-]);
+];
+
+// The member of a closed vocabulary equal to `value`, or undefined when it names none.
+function closedVocabularyValue<Value extends string>(
+  values: readonly Value[],
+  value: string,
+): Value | undefined {
+  return values.find((candidate) => candidate === value);
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -158,25 +166,29 @@ function parseOptionalNodeFields(value: Record<string, unknown>): Partial<IrNode
   };
 }
 
-const LAYOUT_MODES = new Set(["row", "column"]);
-const ALIGN_VALUES = new Set(["start", "center", "end", "space-between"]);
-const SIZING_VALUES = new Set(["fixed", "hug", "fill"]);
-
+type IrLayoutMode = NonNullable<IrNode["layout"]>["mode"];
 type IrAlign = NonNullable<NonNullable<IrNode["layout"]>["primaryAlign"]>;
+type IrSizingValue = NonNullable<NonNullable<IrNode["sizing"]>["horizontal"]>;
+
+const LAYOUT_MODES: readonly IrLayoutMode[] = ["row", "column"];
+const ALIGN_VALUES: readonly IrAlign[] = ["start", "center", "end", "space-between"];
+const SIZING_VALUES: readonly IrSizingValue[] = ["fixed", "hug", "fill"];
 
 const parseAlign = (value: unknown): IrAlign | undefined =>
-  isString(value) && ALIGN_VALUES.has(value) ? (value as IrAlign) : undefined;
+  isString(value) ? closedVocabularyValue(ALIGN_VALUES, value) : undefined;
 
 // Re-hydrate the layout-fidelity fields persisted in irJson (codegen path). Persisted snapshots
 // from before these fields existed simply omit them — every branch is total and optional.
 function parseIrLayout(value: unknown): IrNode["layout"] | undefined {
-  if (!isObject(value) || !isString(value.mode) || !LAYOUT_MODES.has(value.mode)) return undefined;
+  if (!isObject(value) || !isString(value.mode)) return undefined;
+  const mode = closedVocabularyValue(LAYOUT_MODES, value.mode);
+  if (mode === undefined) return undefined;
   const padding = parsePadding(value.padding);
   const itemSpacing = isFiniteNumber(value.itemSpacing) ? value.itemSpacing : undefined;
   const primaryAlign = parseAlign(value.primaryAlign);
   const counterAlign = parseAlign(value.counterAlign);
   return {
-    mode: value.mode as NonNullable<IrNode["layout"]>["mode"],
+    mode,
     ...(itemSpacing !== undefined ? { itemSpacing } : {}),
     ...(padding !== undefined ? { padding } : {}),
     ...(primaryAlign !== undefined ? { primaryAlign } : {}),
@@ -194,10 +206,8 @@ function parsePadding(value: unknown): readonly [number, number, number, number]
   return Array.isArray(value) && isPaddingTuple(value) ? value : undefined;
 }
 
-type IrSizingValue = NonNullable<NonNullable<IrNode["sizing"]>["horizontal"]>;
-
 const parseSizingValue = (value: unknown): IrSizingValue | undefined =>
-  isString(value) && SIZING_VALUES.has(value) ? (value as IrSizingValue) : undefined;
+  isString(value) ? closedVocabularyValue(SIZING_VALUES, value) : undefined;
 
 function parseIrSizing(value: unknown): IrNode["sizing"] | undefined {
   if (!isObject(value)) return undefined;
@@ -233,13 +243,15 @@ function parseIrNodeAt(value: unknown, depth: number, budget: IrParseBudget): Ir
   if (!isObject(value)) return undefined;
   const { id, name, type, interactionHint } = value;
   if (!isString(id) || !isString(name) || !isString(type)) return undefined;
-  if (!isString(interactionHint) || !INTERACTION_HINTS.has(interactionHint)) return undefined;
+  if (!isString(interactionHint)) return undefined;
+  const hint = closedVocabularyValue(INTERACTION_HINTS, interactionHint);
+  if (hint === undefined) return undefined;
   budget.remaining -= 1;
   return {
     id,
     name,
     type,
-    interactionHint: interactionHint as IrNode["interactionHint"],
+    interactionHint: hint,
     ...parseOptionalNodeFields(value),
     imageFills: parseImageFills(value.imageFills),
     children: parseIrChildren(value.children, depth + 1, budget),

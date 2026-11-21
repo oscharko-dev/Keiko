@@ -1385,3 +1385,97 @@ describe("figma snapshot store-init retention (Issue #1323 AC4)", () => {
     }
   });
 });
+
+describe("createNodeFigmaSnapshotStore — hash-neutral screen IR projection", () => {
+  // Hash-neutral fields sit at the root and in a nested node; children mix nodes, a node without a
+  // `children` key, and non-object values. The loaded hashes are pinned so a change to the
+  // projection or to the canonical text cannot drift from the server builder unnoticed.
+  interface ProjectionNode {
+    readonly id: string;
+    readonly type: string;
+    readonly textColor?: string;
+    readonly characters?: string;
+    readonly children?: readonly (ProjectionNode | string | number | null)[] | string;
+  }
+  interface ProjectionIr {
+    readonly id: string;
+    readonly name: string;
+    readonly revision: number;
+    readonly root: ProjectionNode & {
+      readonly backgroundColor: string;
+      readonly layout: { readonly mode: string; readonly gap: number };
+      readonly sizing: string;
+      readonly cornerRadius: number;
+      readonly typography: { readonly size: number };
+    };
+  }
+
+  const projectionIr = (textColor: string): ProjectionIr => ({
+    id: "9:1",
+    name: "Projection",
+    revision: 2,
+    root: {
+      id: "9:1:root",
+      type: "FRAME",
+      textColor,
+      backgroundColor: "#ffffff",
+      layout: { mode: "row", gap: 8 },
+      sizing: "fixed",
+      cornerRadius: 4,
+      typography: { size: 12 },
+      children: [
+        { id: "9:1:a", type: "TEXT", textColor, characters: "Ab", children: [] },
+        { id: "9:1:b", type: "FRAME", children: "not-a-list" },
+        "loose-child",
+        7,
+        null,
+      ],
+    },
+  });
+
+  const recordProjection = (textColor: string): FigmaSnapshotRecord => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      screens: [
+        {
+          screenId: "9:1",
+          irJson: projectionIr(textColor),
+          integrityHash: STALE_SCREEN_HASH,
+          image: { mimeType: "image/png", bytes: png(30) },
+        },
+      ],
+      structuralScreens: [
+        {
+          screenId: "9:2",
+          reason: "render-screen-cap-exceeded",
+          irJson: { id: "9:2", root: "flat" },
+          integrityHash: STALE_SCREEN_HASH,
+        },
+      ],
+    });
+    return loadOrThrow(store, RUN_ID);
+  };
+
+  it("hashes the projected IR to the pinned digests", () => {
+    const loaded = recordProjection("#000000");
+
+    expect(firstScreen(loaded).integrityHash).toBe(
+      "98254fa3a1a53804e5240fd60254e8e431868fa47dd05d1b3b0b5187171d55d2",
+    );
+    expect(loaded.structuralScreens?.[0]?.integrityHash).toBe(
+      "fd21d6d7d10b731e30bc16dbb4861dfeef439685f7bc33cf32d089caf7e8a11d",
+    );
+    expect(loaded.integrityHash).toBe(
+      "62d2db34b117cf9b1e9ea12b888aa1ed420cf84e611c60090c5b50f7401b8f04",
+    );
+  });
+
+  it("keeps the screen hash when only a hash-neutral field changes", () => {
+    const first = firstScreen(recordProjection("#000000")).integrityHash;
+    rmSync(join(dir, QI_SUBDIR), { recursive: true, force: true });
+    __resetFigmaSnapshotSweepRegistryForTests();
+
+    expect(firstScreen(recordProjection("#123456")).integrityHash).toBe(first);
+  });
+});

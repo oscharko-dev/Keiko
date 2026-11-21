@@ -404,7 +404,7 @@ export const designTestCaseCandidates = (
   const { runId, intent, atoms, atomTextById } = input;
   const profile = input.profile ?? regressionDefault;
   if (atoms.length === 0) {
-    return Object.freeze([] as readonly QualityIntelligence.QualityIntelligenceTestCaseCandidate[]);
+    return Object.freeze([]);
   }
 
   const sorted = stableSortAtoms(atoms);

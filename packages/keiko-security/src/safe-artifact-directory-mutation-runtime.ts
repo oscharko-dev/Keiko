@@ -8,6 +8,9 @@ import {
 
 const DECIMAL_INTEGER_PATTERN = /^(?:0|[1-9]\d*)$/u;
 const UNSUPPORTED_LINK_CODES = new Set(["EPERM", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EXDEV"]);
+const MUTATION_OPERATIONS: ReadonlySet<string> = new Set(
+  SAFE_ARTIFACT_DIRECTORY_MUTATION_OPERATIONS,
+);
 
 export interface SafeArtifactDirectoryMutationIo {
   readonly directoryMatches: (expectedDev: bigint, expectedIno: bigint) => boolean;
@@ -23,10 +26,7 @@ function errorCode(error: unknown): string | undefined {
 }
 
 function isMutationOperation(value: unknown): value is SafeArtifactDirectoryMutationOperation {
-  return (
-    typeof value === "string" &&
-    (SAFE_ARTIFACT_DIRECTORY_MUTATION_OPERATIONS as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && MUTATION_OPERATIONS.has(value);
 }
 
 function isSafeBasename(value: unknown): value is string {

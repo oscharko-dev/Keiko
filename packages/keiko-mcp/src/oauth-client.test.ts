@@ -22,10 +22,46 @@ function fixture(
   saved: () => Readonly<Record<string, unknown>> | undefined;
   requests: { url: string; body: string }[];
   revoke: () => void;
+  serve: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 } {
   let saved: Readonly<Record<string, unknown>> | undefined;
   let current = true;
   const requests: { url: string; body: string }[] = [];
+  const serve = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const request = new Request(input, init);
+    requests.push({ url: request.url, body: await request.text() });
+    if (request.url.includes("oauth-protected-resource"))
+      return Response.json({
+        resource: url,
+        authorization_servers: [issuer],
+        scopes_supported: ["tools.read", "tools.write"],
+      });
+    if (request.url.includes("well-known"))
+      return Response.json({
+        issuer,
+        scopes_supported: ["tools.read", "tools.write", "offline_access"],
+        authorization_endpoint: `${issuer}/authorize`,
+        token_endpoint: `${issuer}/token`,
+        response_types_supported: ["code"],
+        code_challenge_methods_supported: ["S256"],
+        token_endpoint_auth_methods_supported: ["none"],
+        authorization_response_iss_parameter_supported: true,
+      });
+    if (denyRefresh && requests.at(-1)?.body.includes("grant_type=refresh_token")) {
+      rejectedRefresh?.();
+      return refreshRejection(denyRefresh);
+    }
+    return Response.json({
+      access_token:
+        rotate && requests.at(-1)?.body.includes("grant_type=refresh_token")
+          ? "synthetic-rotated-access-token"
+          : "synthetic-access-token",
+      token_type: "Bearer",
+      expires_in: 3600,
+      refresh_token: "synthetic-refresh-token",
+      scope: "tools.read",
+    });
+  };
   const client = createMcpOAuthClient({
     url,
     oauth: { issuer, clientId: "synthetic-public-client", ...(scope === null ? {} : { scope }) },
@@ -36,46 +72,13 @@ function fixture(
       },
     },
     beforeEffect: () => current,
-    fetch: async (input, init): Promise<Response> => {
-      const request = new Request(input, init);
-      requests.push({ url: request.url, body: await request.text() });
-      if (request.url.includes("oauth-protected-resource"))
-        return Response.json({
-          resource: url,
-          authorization_servers: [issuer],
-          scopes_supported: ["tools.read", "tools.write"],
-        });
-      if (request.url.includes("well-known"))
-        return Response.json({
-          issuer,
-          scopes_supported: ["tools.read", "tools.write", "offline_access"],
-          authorization_endpoint: `${issuer}/authorize`,
-          token_endpoint: `${issuer}/token`,
-          response_types_supported: ["code"],
-          code_challenge_methods_supported: ["S256"],
-          token_endpoint_auth_methods_supported: ["none"],
-          authorization_response_iss_parameter_supported: true,
-        });
-      if (denyRefresh && requests.at(-1)?.body.includes("grant_type=refresh_token")) {
-        rejectedRefresh?.();
-        return refreshRejection(denyRefresh);
-      }
-      return Response.json({
-        access_token:
-          rotate && requests.at(-1)?.body.includes("grant_type=refresh_token")
-            ? "synthetic-rotated-access-token"
-            : "synthetic-access-token",
-        token_type: "Bearer",
-        expires_in: 3600,
-        refresh_token: "synthetic-refresh-token",
-        scope: "tools.read",
-      });
-    },
+    fetch: serve,
   });
   return {
     client,
     saved: () => saved,
     requests,
+    serve,
     revoke: (): void => {
       current = false;
       saved = undefined;
@@ -90,6 +93,9 @@ describe("central MCP OAuth SDK adapter", () => {
     { label: "oversized access token", patch: { access_token: "x".repeat(8193) } },
     { label: "unsupported token type", patch: { token_type: "Basic" } },
     { label: "non-string refresh token", patch: { refresh_token: 7 } },
+    { label: "non-string id token", patch: { id_token: 7 } },
+    { label: "non-string scope", patch: { scope: ["tools.read"] } },
+    { label: "non-numeric lifetime", patch: { expires_in: "3600" } },
   ])("rejects a malformed restored token before network activity: $label", async ({ patch }) => {
     const network = vi.fn();
     const write = vi.fn();
@@ -116,6 +122,49 @@ describe("central MCP OAuth SDK adapter", () => {
     expect(network).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
   });
+
+  it.each([
+    { label: "a stored client", patch: {}, restored: true },
+    { label: "a non-string client secret", patch: { client_secret: 7 }, restored: false },
+    { label: "a non-numeric issue time", patch: { client_id_issued_at: "1" }, restored: false },
+    {
+      label: "a non-numeric secret expiry",
+      patch: { client_secret_expires_at: [] },
+      restored: false,
+    },
+  ])(
+    "refreshes with restored client information only when well formed: $label",
+    async ({ patch, restored }) => {
+      const f = fixture();
+      const requests: string[] = [];
+      const client = createMcpOAuthClient({
+        url,
+        oauth: { issuer, scope: "tools.read" },
+        persistence: {
+          read: () => ({
+            tokens: {
+              issuer,
+              access_token: "synthetic-access-token",
+              token_type: "Bearer",
+              refresh_token: "synthetic-refresh-token",
+            },
+            expiresAt: Date.now() + 1_000,
+            client: { issuer, client_id: "synthetic-registered-client", ...patch },
+          }),
+          write: vi.fn(),
+        },
+        beforeEffect: () => true,
+        fetch: (input, init): Promise<Response> => {
+          requests.push(new Request(input, init).url);
+          return f.serve(input, init);
+        },
+      });
+      const refreshed = client.token();
+      if (restored) await expect(refreshed).resolves.toBe("synthetic-access-token");
+      else await expect(refreshed).rejects.toMatchObject({ reason: "not-admitted" });
+      expect(requests.some((request) => request.endsWith("/token"))).toBe(restored);
+    },
+  );
 
   it("preserves the explicit zero expiry used for tokens without a server-provided lifetime", async () => {
     const network = vi.fn();

@@ -52,6 +52,17 @@ describe("defaultTokenEstimator", () => {
   });
 });
 
+// Encodings a foreign tokenizer may return: with `ids`, with `inputIds`, or with neither.
+interface EncodingWithIds {
+  readonly ids: readonly number[];
+}
+interface EncodingWithInputIds {
+  readonly inputIds: readonly number[];
+}
+interface EncodingWithoutIds {
+  readonly tokens: number;
+}
+
 describe("Qwen3/SentencePiece tokenizer adapter", () => {
   it("counts tokens through a provided Qwen3-compatible encode implementation", async () => {
     const tokenizer = await createQwen3SentencePieceTokenizerFromModule({
@@ -66,6 +77,71 @@ describe("Qwen3/SentencePiece tokenizer adapter", () => {
     expect(tokenizer.identity).toBe(QWEN3_SENTENCEPIECE_TOKENIZER_ID);
     expect(tokenizer.kind).toBe("tokenizer");
     expect(tokenizer.countTokens("alpha beta gamma")).toBe(3);
+  });
+
+  it("creates the tokenizer through a module factory bound to its module", async () => {
+    const module = {
+      prefix: "factory",
+      createTokenizer(
+        this: { readonly prefix: string },
+        options: { readonly modelPath?: string },
+      ): Promise<{
+        readonly tokenizerIdentity: string;
+        readonly encode: (text: string) => Int32Array;
+      }> {
+        return Promise.resolve({
+          tokenizerIdentity: `${this.prefix}:${options.modelPath ?? "none"}`,
+          encode: (text: string): Int32Array => Int32Array.from(Array.from(text), () => 1),
+        });
+      },
+    };
+
+    const tokenizer = await createQwen3SentencePieceTokenizerFromModule(module, {
+      modelPath: "model",
+    });
+
+    expect(tokenizer.identity).toBe("factory:model");
+    expect(tokenizer.countTokens("abcd")).toBe(4);
+  });
+
+  it("reads a default export factory and a processor's tokenize result ids", async () => {
+    const created = {
+      processor: {
+        tokenize(this: { readonly ids: readonly number[] }, text: string): EncodingWithIds {
+          return { ids: [...this.ids, text.length] };
+        },
+        ids: [7, 8],
+      },
+    };
+    const tokenizer = await createQwen3SentencePieceTokenizerFromModule({
+      default: { createTokenizer: (): Promise<typeof created> => Promise.resolve(created) },
+    });
+
+    expect(tokenizer.identity).toBe(QWEN3_SENTENCEPIECE_TOKENIZER_ID);
+    expect(tokenizer.countTokens("abc")).toBe(3);
+  });
+
+  it("falls back to the module's own encoder when the created tokenizer is not an object", async () => {
+    const tokenizer = await createQwen3SentencePieceTokenizerFromModule({
+      tokenizerIdentity: "ignored-module-identity",
+      createTokenizer: (): Promise<string> => Promise.resolve("not a tokenizer"),
+      encode: (): EncodingWithInputIds => ({ inputIds: [1, 2] }),
+    });
+
+    expect(tokenizer.identity).toBe(QWEN3_SENTENCEPIECE_TOKENIZER_ID);
+    expect(tokenizer.countTokens("anything")).toBe(2);
+  });
+
+  it("refuses a module without an encoder and an encoding without token ids", async () => {
+    await expect(createQwen3SentencePieceTokenizerFromModule({ default: 42 })).rejects.toThrow(
+      "Qwen3 tokenizer module must expose encode(text), tokenize(text), or createTokenizer().",
+    );
+    const tokenizer = await createQwen3SentencePieceTokenizerFromModule({
+      encode: (): EncodingWithoutIds => ({ tokens: 3 }),
+    });
+    expect(() => tokenizer.countTokens("abc")).toThrow(
+      "Qwen3 tokenizer encode result did not contain token ids.",
+    );
   });
 
   it("loads the optional Qwen3 tokenizer when the runtime module is configured", async () => {

@@ -227,22 +227,23 @@ function isOwnRegisteredFailure(
   );
 }
 
-function projectField(
+// The replacement a field's value receives, or `undefined` when the value is kept as received.
+function projectedField(
   name: string,
   value: unknown,
   contract: ActivityLogFieldContract | undefined,
   context: PrivacyContext,
-): unknown {
-  if (PROJECTED_MARKERS.has(name)) return value;
+): string | readonly unknown[] | undefined {
+  if (PROJECTED_MARKERS.has(name)) return undefined;
   if (name === "correlationId" || name === "parentCorrelationId")
-    return typeof value === "string" ? context.reference(value) : value;
-  if (contract === undefined) return value;
+    return typeof value === "string" ? context.reference(value) : undefined;
+  if (contract === undefined) return undefined;
   if (typeof value === "string") return projectString(name, value, contract, context);
   if (Array.isArray(value))
     return value.map((entry: unknown) =>
       typeof entry === "string" ? projectString(name, entry, contract, context) : entry,
     );
-  return value;
+  return undefined;
 }
 
 function projectEvent(
@@ -263,7 +264,7 @@ function projectEvent(
     Object.entries(event.record).flatMap(([name, value]) => {
       if (name === "frames")
         return safeFrames === undefined || safeFrames.length === 0 ? [] : [[name, safeFrames]];
-      return [[name, projectField(name, value, fields?.[name], context)]];
+      return [[name, projectedField(name, value, fields?.[name], context) ?? value]];
     }),
   );
   return { ...event, record };

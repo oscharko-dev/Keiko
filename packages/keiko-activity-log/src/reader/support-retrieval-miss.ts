@@ -161,19 +161,22 @@ function updateFields(fields: MutableFields, extra: Readonly<Record<string, unkn
   assignDefined(fields, observedEnums(extra));
 }
 
+function hasEveryOmissionCount(
+  counts: Partial<Record<CandidateOmissionReason, number>>,
+): counts is Record<CandidateOmissionReason, number> {
+  return CANDIDATE_OMISSION_REASONS.every((reason) => counts[reason] !== undefined);
+}
+
 function omissionGroups(
   extra: Readonly<Record<string, unknown>>,
 ): SupportRetrievalMissFinding["omissionGroups"] {
-  const counts: Record<CandidateOmissionReason, number> = Object.create(null) as Record<
-    CandidateOmissionReason,
-    number
-  >;
+  const counts: Partial<Record<CandidateOmissionReason, number>> = {};
   for (const reason of CANDIDATE_OMISSION_REASONS) {
     const value = count(extra[OMISSION_FIELDS[reason]]);
     if (value === undefined) return undefined;
     counts[reason] = value;
   }
-  return groupConnectedContextOmissions(counts);
+  return hasEveryOmissionCount(counts) ? groupConnectedContextOmissions(counts) : undefined;
 }
 
 function sourceRequired(extra: Readonly<Record<string, unknown>>): boolean {

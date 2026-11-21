@@ -832,6 +832,35 @@ describe("OpenAiAdapter.call", () => {
     await expect(rejection).rejects.toMatchObject({ code: ERROR_CODES.MALFORMED_TOOL_CALL });
   });
 
+  // The redaction ceiling counts the top-level record as depth 0 and fails on any value that sits
+  // at depth 32, a number as much as a string, whether it is reached through objects or arrays.
+  it.each([
+    { depth: 31, rejected: false },
+    { depth: 32, rejected: true },
+  ])("redacts structured output up to the depth ceiling: %j", async ({ depth, rejected }) => {
+    let content = "7";
+    for (let level = depth; level > 0; level -= 1) {
+      content = level % 2 === 0 ? `[${content}]` : `{"a":${content}}`;
+    }
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [{ message: { role: "assistant", content }, finish_reason: "stop" }],
+        }),
+      ),
+    );
+    const call = adapter.call(
+      { ...REQUEST, responseFormat: { type: "json_schema", schema: { type: "object" } } },
+      CONFIG,
+    );
+    if (rejected) {
+      await expect(call).rejects.toBeInstanceOf(ResponseRedactionError);
+    } else {
+      const result = await call;
+      expect(JSON.stringify(result.structuredOutput)).toBe(content);
+    }
+  });
+
   it("throws TimeoutError when fetch aborts with a TimeoutError DOMException", async () => {
     const adapter = adapterWith(() =>
       Promise.reject(new DOMException("timed out", "TimeoutError")),

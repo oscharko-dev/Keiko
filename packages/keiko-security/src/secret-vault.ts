@@ -43,6 +43,7 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { isWorkspaceRecord } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { isSealed, openString, sealString } from "./secretbox.js";
 import { atomicPublishRename } from "./fs-atomic-rename.js";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: this package now owns the 0o700/0o600 hardening
@@ -619,7 +620,7 @@ function isSymlink(path: string): boolean {
   try {
     return lstatSync(path).isSymbolicLink();
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (isEnoent(error)) {
       return false;
     }
     throw error;
@@ -632,15 +633,15 @@ interface StoreFile {
 }
 
 function emptyVaultEntries(): Record<string, string> {
+  // SAFETY: Object.create(null) returns a new empty object with no prototype and no properties,
+  // so it is a valid empty Record; the lib types it as any, and no typed constructor exists.
   return Object.create(null) as Record<string, string>;
 }
 
 function isStoreFile(value: unknown): value is StoreFile {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
-  if (record.version !== STORE_VERSION) return false;
-  const entries = record.entries;
-  if (typeof entries !== "object" || entries === null || Array.isArray(entries)) return false;
+  if (!isWorkspaceRecord(value) || value.version !== STORE_VERSION) return false;
+  const entries = value.entries;
+  if (!isWorkspaceRecord(entries)) return false;
   return Object.values(entries).every((entry) => typeof entry === "string");
 }
 
@@ -1026,12 +1027,7 @@ function deleteStoreEntry(storePath: string, reference: string, sink?: SecurityL
 // miss on a fresh vault would emit one. Only a read that fails for a reason OTHER than "not there"
 // (EISDIR, EACCES, EIO) is the genuine unreadable-entry case this event exists to surface.
 function isEnoent(cause: unknown): boolean {
-  return (
-    typeof cause === "object" &&
-    cause !== null &&
-    "code" in cause &&
-    (cause as NodeJS.ErrnoException).code === "ENOENT"
-  );
+  return typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ENOENT";
 }
 
 function emitShardUnreadable(sink: SecurityLogSink | undefined, cause: unknown): void {

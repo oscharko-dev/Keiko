@@ -16,6 +16,9 @@ import { DEFAULT_LSP_PROCESS_CONFIG } from "@oscharko-dev/keiko-contracts/runtim
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
   isEditorAgentActionResult,
+  isEditorAgentConflictDetail,
+  isEditorAgentFailureCode,
+  isEditorAgentFileActionResult,
   isEditorAgentRootAttribution,
   parseEditorAgentQueryGitData,
   isEditorAgentSessionSnapshot,
@@ -25,6 +28,7 @@ import { parseEditorAgentVerificationResult } from "@oscharko-dev/keiko-contract
 
 type EditorAgentConflictDetail = NonNullable<EditorAgentActionResult["conflict"]>;
 type EditorAgentFileActionResult = NonNullable<EditorAgentActionResult["files"]>[number];
+type EditorAgentFailureDetail = NonNullable<EditorAgentActionResult["failure"]>;
 
 export const DEFAULT_EDITOR_AGENT_HTTP_TIMEOUT_MS = 2_000;
 // Issue #2298: allow a 5-second client margin over the bounded 20-second server worst case.
@@ -89,8 +93,8 @@ export interface EditorAgentHttpTransport {
 }
 
 export interface EditorAgentTimeoutScheduler {
-  readonly set: (callback: () => void, timeoutMs: number) => unknown;
-  readonly clear: (handle: unknown) => void;
+  /** Starts the timeout and returns the function that cancels it. */
+  readonly set: (callback: () => void, timeoutMs: number) => () => void;
 }
 
 export type EditorAgentClientErrorKind = "cancelled" | "transport" | "route" | "malformed-response";
@@ -120,9 +124,11 @@ type TransportOutcome = TransportSuccess | EditorAgentClientFailure;
 type ResponseParser<T> = (value: unknown) => T | null;
 
 const scheduler: EditorAgentTimeoutScheduler = {
-  set: (callback, timeoutMs) => setTimeout(callback, timeoutMs),
-  clear: (handle): void => {
-    clearTimeout(handle as ReturnType<typeof setTimeout>);
+  set: (callback, timeoutMs) => {
+    const handle = setTimeout(callback, timeoutMs);
+    return (): void => {
+      clearTimeout(handle);
+    };
   },
 };
 
@@ -224,27 +230,44 @@ function redactActionResult(result: EditorAgentActionResult): EditorAgentActionR
   };
 }
 
-function redactUnknownConflict(value: unknown): unknown {
-  if (!isRecord(value)) return value;
-  return {
-    code: value.code,
-    message: typeof value.message === "string" ? REDACTED_ROUTE_MESSAGE : value.message,
-    ...(value.file === undefined ? {} : { file: value.file }),
-  };
+// A string message is replaced by REDACTED_ROUTE_MESSAGE; any other value stays for a guard to refuse.
+function isRouteMessage(message: unknown): message is string {
+  return typeof message === "string";
 }
 
-function redactUnknownFileResult(value: unknown): unknown {
-  if (!isRecord(value)) return value;
-  return {
+// Each redactUnknown* reader replaces route message text before the contract guard runs, so an
+// unbounded message cannot fail validation, and returns null for any shape the guard refuses. A null
+// nested detail makes the enclosing result fail its own guard, as the unredacted value did.
+function redactUnknownConflict(value: unknown): EditorAgentConflictDetail | null {
+  if (!isRecord(value)) return null;
+  const conflict = {
+    code: value.code,
+    message: isRouteMessage(value.message) ? REDACTED_ROUTE_MESSAGE : value.message,
+    ...(value.file === undefined ? {} : { file: value.file }),
+  };
+  return isEditorAgentConflictDetail(conflict) ? conflict : null;
+}
+
+function redactUnknownFailure(value: unknown): EditorAgentFailureDetail | null {
+  if (!isRecord(value) || !isEditorAgentFailureCode(value.code)) return null;
+  return isRouteMessage(value.message)
+    ? { code: value.code, message: REDACTED_ROUTE_MESSAGE }
+    : null;
+}
+
+function redactUnknownFileResult(value: unknown): EditorAgentFileActionResult | null {
+  if (!isRecord(value)) return null;
+  const result = {
     file: value.file,
     status: value.status,
     ...(value.message === undefined
       ? {}
       : {
-          message: typeof value.message === "string" ? REDACTED_ROUTE_MESSAGE : value.message,
+          message: isRouteMessage(value.message) ? REDACTED_ROUTE_MESSAGE : value.message,
         }),
     ...(value.conflict === undefined ? {} : { conflict: redactUnknownConflict(value.conflict) }),
   };
+  return isEditorAgentFileActionResult(result) ? result : null;
 }
 
 // Extracted from the spread below purely to unnest a three-armed ternary (sonarjs/no-nested-
@@ -256,9 +279,9 @@ function redactUnknownFiles(files: unknown): Record<string, unknown> {
   return files === undefined ? {} : { files };
 }
 
-function redactUnknownActionResult(value: unknown): unknown {
-  if (!isRecord(value)) return value;
-  return {
+function redactUnknownActionResult(value: unknown): EditorAgentActionResult | null {
+  if (!isRecord(value)) return null;
+  const result = {
     schemaVersion: value.schemaVersion,
     actionId: value.actionId,
     sessionId: value.sessionId,
@@ -269,19 +292,20 @@ function redactUnknownActionResult(value: unknown): unknown {
     ...(value.message === undefined
       ? {}
       : {
-          message: typeof value.message === "string" ? REDACTED_ROUTE_MESSAGE : value.message,
+          message: isRouteMessage(value.message) ? REDACTED_ROUTE_MESSAGE : value.message,
         }),
     ...(value.conflict === undefined ? {} : { conflict: redactUnknownConflict(value.conflict) }),
-    ...(value.failure === undefined ? {} : { failure: redactUnknownConflict(value.failure) }),
+    ...(value.failure === undefined ? {} : { failure: redactUnknownFailure(value.failure) }),
     ...redactUnknownFiles(value.files),
     ...(value.data === undefined ? {} : { data: value.data }),
   };
+  return isEditorAgentActionResult(result) ? result : null;
 }
 
 function parseActionResult(value: unknown): EditorAgentActionQueuedResponse | null {
   if (!isRecord(value)) return null;
   const result = redactUnknownActionResult(value.result);
-  return isEditorAgentActionResult(result) ? { result: redactActionResult(result) } : null;
+  return result === null ? null : { result: redactActionResult(result) };
 }
 
 function parseQueryGitActionResult(value: unknown): EditorAgentActionQueuedResponse | null {
@@ -312,11 +336,6 @@ function parseRouteCode(value: unknown): string | null {
   if (!isRecord(value) || !isRecord(value.error)) return null;
   const code = value.error.code;
   return typeof code === "string" && code.length > 0 && code.length <= 128 ? code : null;
-}
-
-function decodeJson(body: Uint8Array): unknown {
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(body);
-  return JSON.parse(text) as unknown;
 }
 
 function responseIsRedirect(
@@ -581,13 +600,13 @@ export class EditorAgentHttpClient {
     };
     signal.addEventListener("abort", onAbort, { once: true });
     if (isAborted(signal)) onAbort();
-    const handle = this.scheduler.set(() => {
+    const cancelTimeout = this.scheduler.set(() => {
       controller.abort();
       stop?.(transportError("TIMED_OUT", "The editor agent route timed out."));
     }, timeoutMs);
     const transport = this.callTransport(boundedRequest, signal);
     const outcome = await Promise.race([transport, stopped]);
-    this.scheduler.clear(handle);
+    cancelTimeout();
     signal.removeEventListener("abort", onAbort);
     return outcome;
   }
@@ -624,9 +643,10 @@ export class EditorAgentHttpClient {
     if (response.body.byteLength > this.maxResponseBytes) {
       return transportError("RESPONSE_TOO_LARGE", "The editor agent response exceeded its cap.");
     }
+    // The route parsers below decode this untrusted JSON document into their typed responses.
     let decoded: unknown;
     try {
-      decoded = decodeJson(response.body);
+      decoded = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(response.body));
     } catch {
       return this.malformed();
     }

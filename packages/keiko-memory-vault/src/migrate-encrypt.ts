@@ -16,6 +16,13 @@ import {
 
 import type { MemoryContentCipher } from "./cipher.js";
 import {
+  blobColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+  type VaultSqlRow,
+} from "./statements.js";
+import {
   emitMemoryVaultLogEvent,
   startMemoryVaultLogTimer,
   type MemoryVaultLogSink,
@@ -29,6 +36,14 @@ interface IdStringRow {
 interface EmbeddingBlobRow {
   readonly memory_id: string;
   readonly vector: Uint8Array;
+}
+
+function readIdStringRow(row: VaultSqlRow): IdStringRow {
+  return { rowid: numberColumn(row, "rowid"), value: nullableTextColumn(row, "value") };
+}
+
+function readEmbeddingBlobRow(row: VaultSqlRow): EmbeddingBlobRow {
+  return { memory_id: textColumn(row, "memory_id"), vector: blobColumn(row, "vector") };
 }
 
 const STORE_ENCRYPTION_MIGRATED_OPERATION = defineActivityLogOperation({
@@ -104,7 +119,8 @@ function sweepStringColumn(
   // interpolation is not an injection surface (the same rule schema.ts relies on for PRAGMA).
   const rows = db
     .prepare(`SELECT rowid AS rowid, ${column} AS value FROM ${table}`)
-    .all() as unknown as readonly IdStringRow[];
+    .all()
+    .map(readIdStringRow);
   const update = db.prepare(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`);
   let sealed = 0;
   for (const row of rows) {
@@ -125,7 +141,8 @@ function sweepStringColumn(
 function sweepEmbeddingVectors(db: DatabaseSync, cipher: MemoryContentCipher): number {
   const rows = db
     .prepare("SELECT memory_id, vector FROM memory_embeddings")
-    .all() as unknown as readonly EmbeddingBlobRow[];
+    .all()
+    .map(readEmbeddingBlobRow);
   const update = db.prepare("UPDATE memory_embeddings SET vector = ? WHERE memory_id = ?");
   for (const row of rows) {
     update.run(cipher.sealBytes(Buffer.from(row.vector)), row.memory_id);

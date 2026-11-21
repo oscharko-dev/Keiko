@@ -12,6 +12,7 @@ import { assumedChatCapability, createDefaultChatCapability } from "./capabiliti
 import {
   loadConfigFromFile,
   markAssumedPlaceholderContextWindows,
+  parseGatewayConfigJson,
   parseModelCapability,
   toolCallingConfigurationFingerprint,
 } from "./config.js";
@@ -351,10 +352,14 @@ describe("assumed context windows", () => {
   it("marks the exact legacy placeholder signature at load and nothing else", () => {
     const placeholder = { ...createDefaultChatCapability("legacy") };
     const declared = { ...createDefaultChatCapability("declared"), maxOutputTokens: 4_096 };
-    const marked = markAssumedPlaceholderContextWindows({
-      capabilities: [placeholder, declared],
-      providers: [{ modelId: "p", capability: { ...createDefaultChatCapability("p") } }],
-    }) as {
+    const marked = markAssumedPlaceholderContextWindows(
+      parseGatewayConfigJson(
+        JSON.stringify({
+          capabilities: [placeholder, declared],
+          providers: [{ modelId: "p", capability: { ...createDefaultChatCapability("p") } }],
+        }),
+      ),
+    ) as {
       capabilities: Record<string, unknown>[];
       providers: { capability: Record<string, unknown> }[];
     };
@@ -371,17 +376,21 @@ describe("assumed context windows", () => {
       ...createDefaultChatCapability(id),
       maxOutputTokens,
     });
-    const marked = markAssumedPlaceholderContextWindows({
-      capabilities: [
-        withOutput("partial", 8_192),
-        withOutput("fits", 2_048),
-        withOutput("equal", 4_096),
-        { ...withOutput("reported", 8_192), contextWindowReported: true },
-        { ...withOutput("larger-window", 8_192), contextWindow: 8_192 },
-        { ...withOutput("larger-output", 16_384), contextWindow: 8_192 },
-        { ...withOutput("enriched", 8_192), knownLimitations: ["Operator-reviewed"] },
-      ],
-    }) as { capabilities: Record<string, unknown>[] };
+    const marked = markAssumedPlaceholderContextWindows(
+      parseGatewayConfigJson(
+        JSON.stringify({
+          capabilities: [
+            withOutput("partial", 8_192),
+            withOutput("fits", 2_048),
+            withOutput("equal", 4_096),
+            { ...withOutput("reported", 8_192), contextWindowReported: true },
+            { ...withOutput("larger-window", 8_192), contextWindow: 8_192 },
+            { ...withOutput("larger-output", 16_384), contextWindow: 8_192 },
+            { ...withOutput("enriched", 8_192), knownLimitations: ["Operator-reviewed"] },
+          ],
+        }),
+      ),
+    ) as { capabilities: Record<string, unknown>[] };
     const flags = marked.capabilities.map((capability) => capability.contextWindowAssumed);
     expect(flags).toEqual([true, undefined, undefined, undefined, undefined, undefined, undefined]);
   });

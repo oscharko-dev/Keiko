@@ -68,16 +68,66 @@ function constructorShape(): void {
 // literal into the reflective call. The hosted full-analysis evidence gate pins the workaround.
 const CONSTRUCTOR_KEY = Object.getOwnPropertyNames(constructorShape.prototype).at(0) ?? "";
 
+// The fields a classifier reads from a thrown value it did not build. Every value is untrusted
+// until one of the typed readers below has checked it.
+export interface ThrownErrorFields {
+  readonly cause?: unknown;
+  readonly code?: unknown;
+  readonly errors?: unknown;
+  readonly kind?: unknown;
+  readonly name?: unknown;
+  readonly partialUsage?: unknown;
+  readonly reason?: unknown;
+  readonly requestId?: unknown;
+}
+
+// Admits any value a property can be read from (an object or a function); a primitive has no
+// fields to read.
+export function thrownErrorFields(value: unknown): ThrownErrorFields | undefined {
+  return isPropertyReceiver(value) ? value : undefined;
+}
+
 // Reflective reads from a thrown value are hostile-input reads: accessors and proxy traps may
-// throw. Every optional machine field, and every field this module reads off an unknown error,
-// goes through this helper and degrades to absence.
-export function safeProperty(value: unknown, property: string): unknown {
-  if (!isPropertyReceiver(value)) return undefined;
+// throw. Every read this module and its consumers make off an unknown error runs inside `read`
+// here, and a throw degrades to absence.
+export function safeProperty<T>(read: () => T | undefined): T | undefined {
   try {
-    return value[property];
+    return read();
   } catch {
     return undefined;
   }
+}
+
+export function errorStringField(
+  fields: ThrownErrorFields | undefined,
+  field: keyof ThrownErrorFields,
+): string | undefined {
+  return safeProperty(() => {
+    const value = fields?.[field];
+    return typeof value === "string" ? value : undefined;
+  });
+}
+
+// An object or function field, such as a `cause` whose own fields are read next.
+export function errorObjectField(
+  fields: ThrownErrorFields | undefined,
+  field: keyof ThrownErrorFields,
+): object | undefined {
+  return safeProperty(() => {
+    const value = fields?.[field];
+    return isPropertyReceiver(value) ? value : undefined;
+  });
+}
+
+// An array field, such as `AggregateError.errors`. Its elements are thrown values themselves.
+export function errorArrayField(
+  fields: ThrownErrorFields | undefined,
+  field: keyof ThrownErrorFields,
+): readonly unknown[] | undefined {
+  return safeProperty(() => {
+    const value = fields?.[field];
+    return Array.isArray(value) ? value : undefined;
+  });
 }
 
 // Forwards a `code`/`requestId` style value only when it is a bounded machine token: the charset
@@ -98,10 +148,12 @@ export function declaredErrorClassName(error: Error): string | undefined {
     const proto = Reflect.getPrototypeOf(error);
     if (proto === null) return undefined;
 
-    const ctor = safeProperty(proto, CONSTRUCTOR_KEY);
-    const name = safeProperty(ctor, "name");
-    if (typeof ctor !== "function" || typeof name !== "string") return undefined;
-    if (!DECLARED_ERROR_CLASS_SHAPE.test(name)) return undefined;
+    const ctor = safeProperty(() => {
+      const value = isPropertyReceiver(proto) ? proto[CONSTRUCTOR_KEY] : undefined;
+      return typeof value === "function" ? value : undefined;
+    });
+    const name = errorStringField(ctor, "name");
+    if (name === undefined || !DECLARED_ERROR_CLASS_SHAPE.test(name)) return undefined;
     return name;
   } catch {
     // Every reflection point above may be trapped by hostile input. This function is exported and
@@ -117,8 +169,8 @@ export function declaredErrorClassName(error: Error): string | undefined {
 export function contentFreeErrorClass(error: unknown): string {
   try {
     if (!(error instanceof Error)) return typeof error;
-    const name = safeProperty(error, "name");
-    if (typeof name === "string" && SPECIFIC_BUILT_IN_ERROR_NAMES.has(name)) return name;
+    const name = errorStringField(error, "name");
+    if (name !== undefined && SPECIFIC_BUILT_IN_ERROR_NAMES.has(name)) return name;
     return declaredErrorClassName(error) ?? "Error";
   } catch {
     // Reflection over a hostile value (a proxy trap or throwing accessor) must never turn the

@@ -417,7 +417,7 @@ export const validateCandidates = (
   options: ValidateCandidatesOptions = {},
 ): readonly QualityIntelligence.QualityIntelligenceValidationFinding[] => {
   if (candidates.length === 0) {
-    return Object.freeze([] as readonly QualityIntelligence.QualityIntelligenceValidationFinding[]);
+    return Object.freeze([]);
   }
   const atomTextById = normaliseAtomTextSource(options.atomTextById);
   const out: QualityIntelligence.QualityIntelligenceValidationFinding[] = [];

@@ -14,6 +14,7 @@ import {
   TOOL_CATALOG_LIMITS,
   toolArgumentLimits,
   type CatalogJsonObject,
+  type CatalogJsonValue,
   type ToolArgumentLimits,
   type ToolResultReason,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -287,6 +288,9 @@ export function retainMeasuredCatalogFailureUsage(error: unknown, usage: UsageMe
 function requireBridge(value: boolean, reason: ToolResultReason<"invalid">): asserts value {
   if (!value) throw new GatewayToolCatalogError(reason);
 }
+function isCatalogJsonObject(value: CatalogJsonValue): value is CatalogJsonObject {
+  return typeof value === "object" && value !== null && !isCatalogJsonArray(value);
+}
 // The fields the bridge reads from a request or a captured advertisement. Each is optional and
 // untyped, so every non-null object has this shape; dataField reads only own enumerable data
 // properties and leaves the value for the caller to check.
@@ -301,15 +305,32 @@ interface DescriptorFields {
 function isDescriptorSource(value: unknown): value is DescriptorFields {
   return typeof value === "object" && value !== null;
 }
-function dataField(source: DescriptorFields, key: keyof DescriptorFields): unknown {
+// An own, enumerable data property of a descriptor source. Reading it ran no getter; its value is
+// not yet checked.
+interface OwnDataProperty {
+  readonly value: unknown;
+}
+function dataField(
+  source: DescriptorFields,
+  key: keyof DescriptorFields,
+): OwnDataProperty | undefined {
   const descriptor = Object.getOwnPropertyDescriptor(source, key);
   if (descriptor === undefined) return undefined;
   requireBridge("value" in descriptor && descriptor.enumerable === true, "projection-mismatch");
-  return descriptor.value as unknown;
+  const value: unknown = descriptor.value;
+  return { value };
 }
 const BOUND_ADVERTISEMENT_KEYS = ["kind", "catalog", "projection", "offered"];
 function frozenObject(value: unknown): object | undefined {
   return typeof value === "object" && value !== null && isDeepFrozen(value) ? value : undefined;
+}
+// A bound advertisement carries its kind and exactly its four own keys.
+function hasBoundAdvertisementKeys(input: DescriptorFields): boolean {
+  return (
+    dataField(input, "kind")?.value === "bound" &&
+    Reflect.ownKeys(input).length === BOUND_ADVERTISEMENT_KEYS.length &&
+    BOUND_ADVERTISEMENT_KEYS.every((key) => Object.hasOwn(input, key))
+  );
 }
 /**
  * A bound advertisement whose catalog and projection are deeply frozen cannot change while the
@@ -318,16 +339,11 @@ function frozenObject(value: unknown): object | undefined {
  * a long Chat tool turn copy and re-verify every descriptor dozens of times (#4173).
  */
 function frozenBoundAdvertisement(input: unknown): BoundAdvertisement | undefined {
-  if (!isDescriptorSource(input) || dataField(input, "kind") !== "bound") return undefined;
-  if (
-    Reflect.ownKeys(input).length !== BOUND_ADVERTISEMENT_KEYS.length ||
-    !BOUND_ADVERTISEMENT_KEYS.every((key) => Object.hasOwn(input, key))
-  )
-    return undefined;
-  const catalog = frozenObject(dataField(input, "catalog"));
-  const projection = frozenObject(dataField(input, "projection"));
+  if (!isDescriptorSource(input) || !hasBoundAdvertisementKeys(input)) return undefined;
+  const catalog = frozenObject(dataField(input, "catalog")?.value);
+  const projection = frozenObject(dataField(input, "projection")?.value);
   if (catalog === undefined || projection === undefined) return undefined;
-  const offered = captureCatalogEnvelope(dataField(input, "offered"));
+  const offered = captureCatalogEnvelope(dataField(input, "offered")?.value);
   return { kind: "bound", binding: { catalog, projection, offered } };
 }
 
@@ -347,14 +363,11 @@ function capturedAdvertisement(
   if (frozen !== undefined) return frozen;
   // A native advertisement carries the runtime's whole tool set under its own byte contract; a
   // bound catalog keeps the per-call budget (#3897 review).
-  const native = isDescriptorSource(input) && dataField(input, "kind") === "native";
+  const native = isDescriptorSource(input) && dataField(input, "kind")?.value === "native";
   const value = native
     ? captureCatalogJson(input, GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES)
     : captureCatalogEnvelope(input);
-  requireBridge(
-    typeof value === "object" && value !== null && !isCatalogJsonArray(value),
-    "projection-mismatch",
-  );
+  requireBridge(isCatalogJsonObject(value), "projection-mismatch");
   if (value.kind === "native") {
     requireBridge(isGatewayNativeToolAdvertisement(value), "projection-mismatch");
     return value;
@@ -643,17 +656,15 @@ function bindCall(
     }
     requireBridge(!isCodeModeProjection(normalizer), "unoffered-tool");
     const invocation = normalizer.bindAlias(call.name, call.arguments, now());
+    const boundArguments = invocation.arguments;
+    requireBridge(isCatalogJsonObject(boundArguments), "invalid-arguments");
     log.write(
       activityLogEvent(TOOL_CATALOG_CALL_BOUND_OPERATION, toolCatalogEnvelope(log, "info"), {
         projectionDigest: invocation.projectionDigest,
         toolCount: 1,
       }),
     );
-    return Object.freeze({
-      ...call,
-      arguments: invocation.arguments as Record<string, unknown>,
-      invocation,
-    });
+    return Object.freeze({ ...call, arguments: boundArguments, invocation });
   } catch (cause) {
     return reject(
       log,
@@ -787,8 +798,8 @@ function prepare(
   log: ModelGatewayLogSink,
   recordProjection: boolean,
 ): GatewayToolCatalogBridge {
-  const input = dataField(request, "toolCatalog");
-  const oldTools = dataField(request, "tools");
+  const input = dataField(request, "toolCatalog")?.value;
+  const oldTools = dataField(request, "tools")?.value;
   if (input === undefined) {
     requireBridge(oldTools === undefined, "projection-mismatch");
     return bridge(undefined, Object.freeze([]), now, log);

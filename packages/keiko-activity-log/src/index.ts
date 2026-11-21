@@ -25,8 +25,13 @@ export {
 export {
   contentFreeErrorClass,
   declaredErrorClassName,
+  errorArrayField,
+  errorObjectField,
+  errorStringField,
   machineToken,
   safeProperty,
+  thrownErrorFields,
+  type ThrownErrorFields,
   DECLARED_ERROR_CLASS_SHAPE,
   MACHINE_TOKEN_SHAPE,
   SPECIFIC_BUILT_IN_ERROR_NAMES,

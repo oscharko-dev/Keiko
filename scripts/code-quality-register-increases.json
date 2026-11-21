@@ -5178,6 +5178,14 @@
       "issue": 3918
     },
     {
+      "path": "packages/keiko-editor/src/components/use-editor-handlers.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 3,
+      "to": 4,
+      "reason": "pending-boundary-migration",
+      "issue": 3955
+    },
+    {
       "path": "packages/keiko-evaluations/src/render.ts",
       "rule": "anti-slop/no-runtime-typeof",
       "from": 0,
@@ -5448,6 +5456,14 @@
       "to": 5,
       "reason": "pending-boundary-migration",
       "issue": 3918
+    },
+    {
+      "path": "packages/keiko-memory-vault/src/statements.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "pending-boundary-migration",
+      "issue": 3933
     },
     {
       "path": "packages/keiko-memory-vault/src/vault-log.test.ts",

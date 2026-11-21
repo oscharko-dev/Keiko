@@ -1,5 +1,6 @@
 import {
   captureToolInvocationReceipt,
+  TOOL_LIFECYCLE_OPERATIONS,
   toolLifecyclePhaseFor,
   type ToolInvocationReceipt,
   type ToolLifecycleEvent,
@@ -65,7 +66,13 @@ function definedFields(
   );
 }
 
-function registeredToolRef(record: Readonly<Record<string, unknown>>): unknown {
+// The tool identity a lifecycle candidate carries before the lifecycle validator checks it.
+interface ToolRefCandidate {
+  readonly canonicalId: unknown;
+  readonly contractVersion: unknown;
+}
+
+function registeredToolRef(record: Readonly<Record<string, unknown>>): ToolRefCandidate | null {
   if (record.toolRefCompleteness === "unknown") {
     if (record.toolCanonicalId !== undefined || record.toolContractVersion !== undefined) {
       throw new TypeError("Contradictory tool identity evidence");
@@ -81,17 +88,22 @@ function registeredToolRef(record: Readonly<Record<string, unknown>>): unknown {
   };
 }
 
-function registeredReservation(record: Readonly<Record<string, unknown>>): unknown {
+// The reservation field of a lifecycle candidate, checked by the lifecycle validator afterwards.
+interface ReservationCandidate {
+  readonly reservationId: unknown;
+}
+
+function registeredReservation(record: Readonly<Record<string, unknown>>): ReservationCandidate {
   if (record.reservationState === "not-reserved") {
     if (record.reservationId !== undefined) {
       throw new TypeError("Contradictory reservation evidence");
     }
-    return null;
+    return { reservationId: null };
   }
   if (record.reservationState !== "reserved") {
     throw new TypeError("Invalid reservation state");
   }
-  return record.reservationId;
+  return { reservationId: record.reservationId };
 }
 
 function registeredIdentity(record: Readonly<Record<string, unknown>>): Record<string, unknown> {
@@ -115,7 +127,7 @@ function registeredTerminal(record: Readonly<Record<string, unknown>>): Record<s
     invocationId: record.invocationId,
     toolRef: registeredToolRef(record),
     settlementId: record.settlementId,
-    reservationId: registeredReservation(record),
+    ...registeredReservation(record),
     status: record.status,
     reason: record.reason,
     durationMs: record.durationMs,
@@ -203,6 +215,7 @@ function receiptFor(event: ToolLifecycleEvent): ToolInvocationReceipt | undefine
 
 function lifecycleEvidence(
   record: Readonly<Record<string, unknown>>,
+  operation: ToolLifecycleOperation,
   validateLifecycle: ToolLifecycleValidator,
 ): ToolCatalogLogEvidence {
   try {
@@ -220,7 +233,7 @@ function lifecycleEvidence(
   } catch {
     return {
       kind: "invalid",
-      operation: record.op as ToolLifecycleOperation,
+      operation,
       reason: "invalid-lifecycle-evidence",
     };
   }
@@ -233,14 +246,12 @@ export function readToolCatalogEvidence(
   redactDiagnostics?: ToolDiagnosticRedactor,
 ): ToolCatalogLogEvidence | undefined {
   if (typeof record.op !== "string") return undefined;
-  if (toolLifecyclePhaseFor(record.op) !== undefined) {
+  const phase = toolLifecyclePhaseFor(record.op);
+  if (phase !== undefined) {
+    const operation = TOOL_LIFECYCLE_OPERATIONS[phase];
     if (validateLifecycle === undefined)
-      return {
-        kind: "unavailable",
-        operation: record.op as ToolLifecycleOperation,
-        reason: "lifecycle-validator-unavailable",
-      };
-    return lifecycleEvidence(record, validateLifecycle);
+      return { kind: "unavailable", operation, reason: "lifecycle-validator-unavailable" };
+    return lifecycleEvidence(record, operation, validateLifecycle);
   }
   if (!isToolSinkDiagnostic(record)) return undefined;
   return {

@@ -4,7 +4,14 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
-import { catalogArray, catalogObject, catalogString, copyCatalogJson } from "./json.js";
+import {
+  catalogArray,
+  catalogObject,
+  catalogString,
+  copyCatalogJson,
+  isCatalogJsonArray,
+  jsonObject,
+} from "./json.js";
 import { requireCatalog, type CatalogSchemaMismatch } from "./errors.js";
 import { isExternalJsonSchemaDialect } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { compileExternalCatalogSchema, externalCatalogSchemaMismatch } from "./external-schema.js";
@@ -21,20 +28,28 @@ const TYPE_KEYS: Readonly<Record<string, ReadonlySet<string>>> = Object.freeze({
   null: new Set<string>(),
 });
 
+function numericBound(
+  schema: CatalogJsonObject,
+  key: string,
+  integers: boolean,
+): number | undefined {
+  const value = schema[key];
+  if (value === undefined) return undefined;
+  requireCatalog(typeof value === "number" && Number.isFinite(value), "invalid-schema");
+  if (integers) requireCatalog(Number.isSafeInteger(value) && value >= 0, "invalid-schema");
+  return value;
+}
+
 function numericBounds(
   schema: CatalogJsonObject,
   lower: string,
   upper: string,
   integers: boolean,
 ): void {
-  for (const key of [lower, upper]) {
-    const value = schema[key];
-    if (value === undefined) continue;
-    requireCatalog(typeof value === "number" && Number.isFinite(value), "invalid-schema");
-    if (integers) requireCatalog(Number.isSafeInteger(value) && value >= 0, "invalid-schema");
-  }
-  if (schema[lower] !== undefined && schema[upper] !== undefined)
-    requireCatalog((schema[lower] as number) <= (schema[upper] as number), "invalid-schema");
+  const minimum = numericBound(schema, lower, integers);
+  const maximum = numericBound(schema, upper, integers);
+  if (minimum !== undefined && maximum !== undefined)
+    requireCatalog(minimum <= maximum, "invalid-schema");
 }
 
 function scalarMatches(type: string, value: CatalogJsonValue): boolean {
@@ -232,13 +247,16 @@ function collectArrayMismatch(
   path: string,
   out: MismatchCollector,
 ): boolean {
-  if (!Array.isArray(value) || !withinNumericBounds(schema, value.length, "minItems", "maxItems")) {
+  if (
+    !isCatalogJsonArray(value) ||
+    !withinNumericBounds(schema, value.length, "minItems", "maxItems")
+  ) {
     return noteInvalid(out, path);
   }
   const items = catalogObject(schema.items);
   let matched = true;
   for (const child of value) {
-    matched = collectMismatch(items, child as CatalogJsonValue, `${path}[]`, out) && matched;
+    matched = collectMismatch(items, child, `${path}[]`, out) && matched;
   }
   return matched;
 }
@@ -251,9 +269,10 @@ function collectTypedMismatch(
 ): boolean {
   const type = catalogString(schema.type);
   if (type === "object") {
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? collectObjectMismatch(schema, value as CatalogJsonObject, path, out)
-      : noteInvalid(out, path);
+    const object = jsonObject(value);
+    return object === undefined
+      ? noteInvalid(out, path)
+      : collectObjectMismatch(schema, object, path, out);
   }
   if (type === "array") return collectArrayMismatch(schema, value, path, out);
   return scalarWithinSchema(schema, type, value) ? true : noteInvalid(out, path);

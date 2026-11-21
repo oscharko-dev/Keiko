@@ -441,6 +441,12 @@ function selectionKeys(value: Record<string, unknown>): readonly string[] {
   ];
 }
 
+const SUFFICIENCY_REASON_SET: ReadonlySet<unknown> = new Set(DIAGNOSTIC_SUFFICIENCY_REASONS);
+
+function isSufficiencyReason(value: unknown): value is DiagnosticSufficiencyReason {
+  return SUFFICIENCY_REASON_SET.has(value);
+}
+
 function validSelection(value: unknown): value is SupportReportSelection {
   if (
     !reportObject(value) ||
@@ -448,15 +454,9 @@ function validSelection(value: unknown): value is SupportReportSelection {
     !validLifetimes(value.lifetimes)
   )
     return false;
-  const declared = value.reasons;
-  if (
-    !Array.isArray(declared) ||
-    !declared.every((reason: unknown) =>
-      DIAGNOSTIC_SUFFICIENCY_REASONS.includes(reason as DiagnosticSufficiencyReason),
-    )
-  )
-    return false;
-  const safe = declared as DiagnosticSufficiencyReason[];
+  const declared: unknown = value.reasons;
+  if (!Array.isArray(declared) || !declared.every(isSufficiencyReason)) return false;
+  const safe: readonly DiagnosticSufficiencyReason[] = declared;
   return (
     canonicalSupportJson(safe) === canonicalSupportJson(reasons(safe)) &&
     value.status === diagnosticSufficiencyStatus(safe) &&

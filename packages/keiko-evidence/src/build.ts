@@ -315,5 +315,15 @@ export function buildEvidenceManifest(
   // a DIRECT builder caller (not only via persistEvidence) gets a truly redacted-by-construction
   // manifest. Idempotent, so the fold's per-field redaction still stands and persist's DiD pass is a
   // no-op on already-redacted tokens.
+  return redactEvidenceManifest(manifest, redact);
+}
+
+// Re-applies a string redactor to every string leaf of a manifest and returns the rebuilt copy; the
+// input is never mutated. The builder, the persist step and the browser capture manifest port share
+// this one manifest-in, manifest-out redaction instead of each reading the deep result back itself.
+export function redactEvidenceManifest(
+  manifest: EvidenceManifest,
+  redact: (input: string) => string,
+): EvidenceManifest {
   return deepRedactStrings(manifest, redact) as EvidenceManifest;
 }

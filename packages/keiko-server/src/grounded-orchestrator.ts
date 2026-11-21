@@ -318,8 +318,12 @@ import {
 import {
   causeChain,
   contentFreeErrorClass,
+  errorArrayField,
+  errorObjectField,
+  errorStringField,
   safeProperty,
   keikoStackFrames,
+  thrownErrorFields,
 } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "./process-log-sink.js";
 import { AbortDeadlineRaceError, raceAbortDeadline } from "./abort-race.js";
@@ -4024,7 +4028,8 @@ function metadataUnavailableReason(error: unknown): MetadataUnavailableReason {
   if (isMetadataTraversalDeadline(error)) return "deadline";
   if (error instanceof PathEscapeError || error instanceof PathDeniedError)
     return "containment-denied";
-  if (safeProperty(error, "reason") === "directory-membership-changed") return "directory-changed";
+  if (errorStringField(thrownErrorFields(error), "reason") === "directory-membership-changed")
+    return "directory-changed";
   const code = errorKindOf(error);
   if (code === "EACCES" || code === "EPERM") return "permission-denied";
   return isExpectedWorkspaceRootFailure(error) ? "filesystem-unavailable" : "unexpected";
@@ -5139,7 +5144,7 @@ function unavailableStructuralEvidence(
   inputs: StructuralEvidenceRecoveryInputs,
 ): DeterministicContextEvidence {
   const path = error.requestedPath;
-  const cause = safeProperty(error, "cause");
+  const cause = safeProperty(() => error.cause);
   const kind = errorKindOf(cause);
   if (
     path === "." ||
@@ -10882,7 +10887,7 @@ function sourceDetailsActivityExtra(
 
 function originalSearchFailure(error: unknown): unknown {
   if (contentFreeErrorClass(error) !== "AggregateError") return error;
-  const primary = safeProperty(error, "cause");
+  const primary = errorObjectField(thrownErrorFields(error), "cause");
   return isRecord(primary) ? (activityProperty(primary, "cause") ?? primary) : primary;
 }
 
@@ -10893,10 +10898,10 @@ function aggregateSearchFailureDetails(
   "secondaryFailureCount" | "secondaryFailureKinds" | "primaryFailureScopeDigest"
 > {
   if (contentFreeErrorClass(error) !== "AggregateError") return {};
-  const candidates = safeProperty(error, "errors");
-  if (!Array.isArray(candidates)) return {};
-  const failures: readonly unknown[] = candidates;
-  const primary = safeProperty(error, "cause");
+  const fields = thrownErrorFields(error);
+  const failures = errorArrayField(fields, "errors");
+  if (failures === undefined) return {};
+  const primary = safeProperty(() => fields?.cause);
   const path = isRecord(primary) ? activityProperty(primary, "requestedPath") : undefined;
   const kinds = failures
     .slice(0, 16)

@@ -1,5 +1,6 @@
 import { REDACTION_PLACEHOLDER } from "./redaction-source-map.js";
 import { createRequire } from "node:module";
+import { isWorkspaceRecord } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import type { Document, Node, Scalar } from "yaml";
 import type { ProjectionPorts, RedactionSpan } from "./redaction-code.js";
 import { maskedLiteralBody } from "./redaction-typescript.js";
@@ -7,9 +8,23 @@ import { maskedLiteralBody } from "./redaction-typescript.js";
 const requireYaml = createRequire(import.meta.url);
 let parser: typeof import("yaml") | undefined;
 
+function isYamlApi(value: unknown): value is typeof import("yaml") {
+  return (
+    isWorkspaceRecord(value) &&
+    "parseDocument" in value &&
+    "Parser" in value &&
+    "isScalar" in value &&
+    "isMap" in value &&
+    "isNode" in value
+  );
+}
+
 function yamlApi(): typeof import("yaml") {
-  parser ??= requireYaml("yaml") as typeof import("yaml");
-  return parser;
+  if (parser !== undefined) return parser;
+  const loaded: unknown = requireYaml("yaml");
+  if (!isYamlApi(loaded)) throw new TypeError("The yaml module has an invalid runtime shape");
+  parser = loaded;
+  return loaded;
 }
 
 function parsePrivacyDocument(text: string): Document {

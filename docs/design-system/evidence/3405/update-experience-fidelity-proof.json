@@ -67,7 +67,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx",
-      "sha256": "e470cb8c0fe7c18fef7d5b2b7f49eb3d16d39f26f5c3a882aed12f2ae3c715ed"
+      "sha256": "f538620f20345678a35c9818c91ede4117ebe47854db4f9f657849530b1848f2"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",
@@ -115,7 +115,7 @@
   "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
-  "generatedAt": "2026-11-06T06:09:14.324Z",
+  "generatedAt": "2026-11-20T05:34:24.148Z",
   "visualFixtureScope": "All screenshot captures use deterministic /api/update/* fixtures. They prove rendered UI behavior only, never native handoff, real package replacement, or production-BFF update success.",
   "captures": [
     {

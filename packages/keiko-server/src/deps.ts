@@ -121,6 +121,7 @@ import {
   deepRedactStrings,
   createNodeEvidenceStore,
   persistEvidenceManifest,
+  redactEvidenceManifest,
   resolveEvidenceDir,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
@@ -2598,15 +2599,17 @@ function buildBrowserManager(options: {
   readonly redactor: Redactor;
   readonly diagnostics: ServerDiagnosticSink | undefined;
 }): BrowserSessionManager {
+  const redactText = (value: string): string => redactEvidenceString(options.redactor, value);
   return createBrowserSessionManager({
     evidenceDir: options.evidenceDir,
     evidenceStore: options.evidenceStore,
-    redactor: options.redactor,
+    redactText,
+    redactManifest: (manifest) => redactEvidenceManifest(manifest, redactText),
     evidenceManifestWriter: (manifest) =>
       persistEvidenceManifest(
         manifest,
         options.evidenceStore,
-        (value): string => redactEvidenceString(options.redactor, value),
+        redactText,
         DEFAULT_RETENTION,
         evidenceRetentionObserver("browser-capture"),
       ).location,

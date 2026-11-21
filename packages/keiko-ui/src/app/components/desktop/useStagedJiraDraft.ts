@@ -5,12 +5,16 @@ import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { bffRequestErrorKind } from "@/lib/http";
 import type { JiraStagedDraft } from "@/lib/atlassian-connectors-api";
+import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+
+/** The arguments of the `jira.draft` call, as the chat transcript carries them. */
+export type JiraDraftCallArguments = ChatToolExchange["call"]["arguments"];
 
 // A large backlog draft is staged on the server in pages; its `jira.draft` call then carries only the
 // draft's id and digest (#4178). The human still reviews every item, so the card reads them from the
 // server for exactly that digest.
 export type StagedJiraDraft =
-  | { readonly status: "inline"; readonly args: unknown }
+  | { readonly status: "inline"; readonly args: JiraDraftCallArguments }
   | { readonly status: "loading" }
   | { readonly status: "unavailable" }
   | { readonly status: "ready"; readonly args: { readonly items: readonly unknown[] } };
@@ -36,7 +40,7 @@ interface Loaded {
 export function useStagedJiraDraft(input: {
   readonly enabled: boolean;
   readonly chatId: string;
-  readonly args: unknown;
+  readonly args: JiraDraftCallArguments;
   readonly load: (draftId: string, chatId: string, digest: string) => Promise<JiraStagedDraft>;
 }): StagedJiraDraft {
   const { enabled, chatId, args, load } = input;

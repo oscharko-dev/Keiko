@@ -112,25 +112,44 @@ const RELATIVE_PATH_PATTERN = /^[A-Za-z0-9_./-]{1,160}\.(?:js|ts)$/;
 const TRAVERSAL_SEGMENT_PATTERN = /(?:^|\/)\.\.(?:$|\/)/;
 const LINE_OR_COL_PATTERN = /^\d{1,6}$/;
 
-// Reflective reads from a thrown value are hostile-input reads: an accessor or proxy trap may
-// throw. Structurally identical to `error-classification.ts`'s exported `safeProperty` (guard the
-// receiver shape, then wrap the read in try/catch) — kept as its own local copy rather than an
-// import so this reducer's only dependency stays `contentFreeErrorClass` itself; consolidating the
-// two is a follow-up, not required for the cycle this module already avoids.
-function safeErrorProperty(value: unknown, property: string): unknown {
-  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
-    return undefined;
-  }
+// The two fields this reducer reads from a thrown value it did not build.
+interface ErrorChainFields {
+  readonly cause?: unknown;
+  readonly stack?: unknown;
+}
+
+function errorChainFields(value: unknown): ErrorChainFields | undefined {
+  return (typeof value === "object" && value !== null) || typeof value === "function"
+    ? value
+    : undefined;
+}
+
+// Reads from a thrown value are hostile-input reads: an accessor or proxy trap may throw, and a
+// throw degrades to absence. Kept local rather than importing `error-classification.ts`'s
+// `safeProperty`, so this reducer's only dependency stays `contentFreeErrorClass` itself.
+function safeErrorProperty<T>(read: () => T | undefined): T | undefined {
   try {
-    return Reflect.get(value, property);
+    return read();
   } catch {
     return undefined;
   }
 }
 
 function safeStack(error: unknown): string | undefined {
-  const stack = safeErrorProperty(error, "stack");
-  return typeof stack === "string" ? stack : undefined;
+  const fields = errorChainFields(error);
+  if (fields === undefined) return undefined;
+  return safeErrorProperty(() => {
+    const stack = fields.stack;
+    return typeof stack === "string" ? stack : undefined;
+  });
+}
+
+// Only an object cause is walked further; a primitive cause ends the chain.
+function safeCause(error: ErrorChainFields): object | undefined {
+  return safeErrorProperty(() => {
+    const cause = error.cause;
+    return typeof cause === "object" && cause !== null ? cause : undefined;
+  });
 }
 
 // Drops the leading "Name: message" line unconditionally, then skips any further leading lines
@@ -284,11 +303,11 @@ export function causeChain(error: unknown, maxDepth = 5): readonly string[] {
   const classes: string[] = [];
   const seen = new WeakSet();
   if (typeof error === "object" && error !== null) seen.add(error);
-  let current: unknown = error;
+  let current = errorChainFields(error);
+  if (current === undefined) return classes;
   for (let depth = 0; depth < maxDepth; depth += 1) {
-    const cause = safeErrorProperty(current, "cause");
-    if (typeof cause !== "object" || cause === null) break;
-    if (seen.has(cause)) break;
+    const cause = safeCause(current);
+    if (cause === undefined || seen.has(cause)) break;
     seen.add(cause);
     classes.push(contentFreeErrorClass(cause));
     current = cause;

@@ -42,13 +42,14 @@ const WITHOUT_SESSION_REPAIR = { repairSession: false } as const;
 export interface CodingAppSessionPairingSeams {
   readonly readFragment: () => string;
   readonly stripFragment: () => void;
+  // Both endpoints answer with a content-free acknowledgement, so the seams resolve without a value.
   readonly postPairing: (
     attestation: CodingAppSessionPairingAttestation,
     correlationId: string,
-  ) => Promise<unknown>;
+  ) => Promise<void>;
   // `correlationId` is the id the local-session request carries. The caller mints it, so a failure
   // that never reached the server still names its request.
-  readonly postLocalSession?: (correlationId: string) => Promise<unknown>;
+  readonly postLocalSession?: (correlationId: string) => Promise<void>;
 }
 
 function defaultSeams(): CodingAppSessionPairingSeams | undefined {
@@ -58,8 +59,8 @@ function defaultSeams(): CodingAppSessionPairingSeams | undefined {
     stripFragment: (): void => {
       window.history.replaceState(null, "", window.location.pathname + window.location.search);
     },
-    postPairing: (attestation, correlationId): Promise<unknown> =>
-      bffFetchJson(
+    postPairing: async (attestation, correlationId): Promise<void> => {
+      await bffFetchJson(
         PAIR_PATH,
         {
           method: "POST",
@@ -68,10 +69,11 @@ function defaultSeams(): CodingAppSessionPairingSeams | undefined {
           signal: AbortSignal.timeout(LOCAL_SESSION_TIMEOUT_MS),
         },
         { ...WITHOUT_SESSION_REPAIR, correlationId },
-      ),
-    postLocalSession: async (correlationId: string): Promise<unknown> => {
+      );
+    },
+    postLocalSession: async (correlationId: string): Promise<void> => {
       const signal = AbortSignal.timeout(LOCAL_SESSION_TIMEOUT_MS);
-      const response = await bffFetchJson(
+      await bffFetchJson(
         LOCAL_SESSION_PATH,
         {
           method: "POST",
@@ -81,7 +83,6 @@ function defaultSeams(): CodingAppSessionPairingSeams | undefined {
         { ...WITHOUT_SESSION_REPAIR, correlationId },
       );
       await restoreRememberedBrowserSession(correlationId, signal);
-      return response;
     },
   };
 }

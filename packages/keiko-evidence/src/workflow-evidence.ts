@@ -234,9 +234,13 @@ function verificationOf(report: unknown): EvidenceManifest["verification"] {
   return isVerificationAuditSummary(summary) ? summary : undefined;
 }
 
-function verifiedVerificationOf(report: Record<string, unknown>): unknown {
+function verifiedVerificationOf(
+  report: Record<string, unknown>,
+): VerificationAuditSummary | undefined {
   const verified = report.verified;
-  return isRecord(verified) ? verified.verification : undefined;
+  if (!isRecord(verified)) return undefined;
+  const summary = verified.verification;
+  return isVerificationAuditSummary(summary) ? summary : undefined;
 }
 
 // Builds patch metadata from a workflow report. unit-tests reports carry `addedTestFiles`;

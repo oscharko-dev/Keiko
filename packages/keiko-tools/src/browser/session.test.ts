@@ -24,7 +24,8 @@ import {
   type CdpClientOptions,
   type CdpEventListener,
 } from "../index.js";
-import { assertWsUrlTrusted } from "./session.js";
+import { assertWsUrlTrusted, type CdpVersionDocument } from "./session.js";
+import type { CdpReachability } from "./types.js";
 
 // Local in-memory EvidenceStore: the test only needs to read back what was put. Mirrors the
 // shape of src/audit/store.ts createInMemoryEvidenceStore — kept local because the tools
@@ -197,22 +198,39 @@ function navigationResponder(url: string): Responder {
   };
 }
 
-async function makeFixture(overrides?: {
-  readonly responder?: Responder;
-  readonly redactor?: (v: unknown) => unknown;
-  readonly fetchVersion?: (url: string) => Promise<unknown>;
-  readonly useRealFetchVersion?: boolean;
-  readonly omitEvidenceManifestWriter?: boolean;
-}): Promise<ManagerFixture> {
+interface FixtureRedaction {
+  readonly redactText?: (input: string) => string;
+  readonly redactManifest?: (manifest: EvidenceManifest) => EvidenceManifest;
+}
+
+// The fixture masks `secret=` values in captured HTML and leaves the manifest unchanged unless a
+// test supplies its own redactors.
+function fixtureRedaction(overrides: FixtureRedaction | undefined): FixtureRedaction {
+  return {
+    ...overrides,
+    redactText:
+      overrides?.redactText ??
+      ((value: string): string => value.replace(/secret=[^<]+/g, "secret=***")),
+  };
+}
+
+async function makeFixture(
+  overrides?: FixtureRedaction & {
+    readonly responder?: Responder;
+    readonly fetchVersion?: (url: string) => Promise<CdpVersionDocument>;
+    readonly useRealFetchVersion?: boolean;
+    readonly omitEvidenceManifestWriter?: boolean;
+  },
+): Promise<ManagerFixture> {
   const evidenceDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-browser-")));
   const evidenceStore = createInMemoryEvidenceStore();
   let captured: FakeCdpClient | undefined;
   const events: BrowserEventEnvelope[] = [];
-  const stubFetchVersion = (): Promise<unknown> =>
+  const stubFetchVersion = (): Promise<CdpVersionDocument> =>
     Promise.resolve({
       webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/xyz",
-      "User-Agent": "Chrome/130.0",
-      Browser: "Chrome/130.0",
+      userAgent: "Chrome/130.0",
+      browserVersion: "Chrome/130.0",
     });
   const fetchVersion =
     overrides?.useRealFetchVersion === true
@@ -227,10 +245,7 @@ async function makeFixture(overrides?: {
           evidenceManifestWriter: (manifest: EvidenceManifest): string =>
             evidenceStore.put(manifest.run.runId, JSON.stringify(manifest, null, 2)),
         }),
-    redactor:
-      overrides?.redactor ??
-      ((value: unknown): unknown =>
-        typeof value === "string" ? value.replace(/secret=[^<]+/g, "secret=***") : value),
+    ...fixtureRedaction(overrides),
     ...(fetchVersion === undefined ? {} : { fetchVersion }),
     // R3 ports: the tools package cannot import src/audit, so the BFF (here: the test fixture)
     // injects both. "unknown" matches the production fallback for browser-tool's cost class.
@@ -616,8 +631,7 @@ describe("content redaction", () => {
         if (call.method === "DOM.getOuterHTML") return { outerHTML: "<html>x</html>" };
         return defaultResponder(call);
       },
-      redactor: (value: unknown): unknown =>
-        typeof value === "string" ? "x".repeat(2 * 1024 * 1024 + 1) : value,
+      redactText: (): string => "x".repeat(2 * 1024 * 1024 + 1),
     });
     const meta = await fixture.manager.openSession(9222);
     fixture.subscribe(meta.sessionId);
@@ -693,6 +707,34 @@ describe("browser evidence manifest", () => {
     expectPersistedScreenshotEvidence(browser, dry.seq);
     expectCapturedContentEvidence(browser);
     expectBrowserEventTypes(browser);
+  });
+
+  it("hands the writer the manifest the manifest redactor returned", async () => {
+    const fixture = await withFixture({
+      redactManifest: (manifest: EvidenceManifest): EvidenceManifest =>
+        manifest.browser === undefined
+          ? manifest
+          : {
+              ...manifest,
+              browser: {
+                ...manifest.browser,
+                contentCaptures: manifest.browser.contentCaptures?.map((capture) => ({
+                  ...capture,
+                  redactedHtml: "[manifest-redacted]",
+                })),
+              },
+            },
+    });
+    const meta = await fixture.manager.openSession(9222);
+    fixture.subscribe(meta.sessionId);
+    setTimeout(() => {
+      fixture.client.emitFrameNavigated("http://127.0.0.1:5173/");
+    }, 5);
+    await fixture.manager.navigate(meta.sessionId, "http://127.0.0.1:5173/");
+    const result = await fixture.manager.content(meta.sessionId);
+    const { browser } = requireBrowserManifest(fixture, meta.sessionId);
+    expect(result.redactedHtml).toContain("secret=***");
+    expect(browser.contentCaptures?.[0]?.redactedHtml).toBe("[manifest-redacted]");
   });
 
   it("persists browser:error events for failed session actions", async () => {
@@ -786,8 +828,8 @@ describe("webSocketDebuggerUrl host validation (H1)", () => {
       fetchVersion: () =>
         Promise.resolve({
           webSocketDebuggerUrl: "ws://evil.example:9222/devtools/browser/x",
-          "User-Agent": "Chrome/130",
-          Browser: "Chrome/130",
+          userAgent: "Chrome/130",
+          browserVersion: "Chrome/130",
         }),
     });
     await expect(fixture.manager.openSession(9222)).rejects.toMatchObject({
@@ -800,8 +842,8 @@ describe("webSocketDebuggerUrl host validation (H1)", () => {
       fetchVersion: () =>
         Promise.resolve({
           webSocketDebuggerUrl: "ws://127.0.0.1:9999/devtools/browser/x",
-          "User-Agent": "Chrome/130",
-          Browser: "Chrome/130",
+          userAgent: "Chrome/130",
+          browserVersion: "Chrome/130",
         }),
     });
     await expect(fixture.manager.openSession(9222)).rejects.toMatchObject({
@@ -837,6 +879,82 @@ describe("webSocketDebuggerUrl host validation (H1)", () => {
       await closeHttp(target);
     }
   });
+});
+
+describe("CDP /json/version decoding", () => {
+  type VersionFixture =
+    null | string | number | readonly string[] | Readonly<Record<string, string | number>>;
+
+  // Serves one /json/version document built for the listening port, then reads the status.
+  async function statusFor(document: (port: number) => VersionFixture): Promise<CdpReachability> {
+    let port = 0;
+    const server = createServer((_req, res) => {
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(document(port)));
+    });
+    port = await listenHttp(server);
+    try {
+      const fixture = await withFixture({ useRealFetchVersion: true });
+      return await fixture.manager.checkStatus(port);
+    } finally {
+      await closeHttp(server);
+    }
+  }
+  const ws = (port: number): string => `ws://127.0.0.1:${String(port)}/devtools/browser/x`;
+
+  it("reads Chrome's User-Agent and Browser fields", async () => {
+    const status = statusFor((port) => ({
+      webSocketDebuggerUrl: ws(port),
+      "User-Agent": "HeadlessChrome/130",
+      Browser: "Chrome/130.0",
+    }));
+    await expect(status).resolves.toMatchObject({
+      reachable: true,
+      userAgent: "HeadlessChrome/130",
+      browserVersion: "Chrome/130.0",
+    });
+  });
+
+  it("reads the userAgent and product fields of other CDP hosts", async () => {
+    const status = statusFor((port) => ({
+      webSocketDebuggerUrl: ws(port),
+      userAgent: "Chrome/131",
+      product: "Chrome/131.0",
+    }));
+    await expect(status).resolves.toMatchObject({
+      userAgent: "Chrome/131",
+      browserVersion: "Chrome/131.0",
+    });
+  });
+
+  it("prefers User-Agent over userAgent", async () => {
+    const status = statusFor((port) => ({
+      webSocketDebuggerUrl: ws(port),
+      "User-Agent": "Firefox/130",
+      userAgent: "Chrome/130",
+    }));
+    await expect(status).rejects.toMatchObject({ code: "CHROME_VERSION_MISMATCH" });
+  });
+
+  it("keeps a present non-string User-Agent as no user agent", async () => {
+    const status = statusFor((port) => ({
+      webSocketDebuggerUrl: ws(port),
+      "User-Agent": 7,
+      userAgent: "Firefox/130",
+    }));
+    await expect(status).resolves.toMatchObject({ reachable: true, userAgent: null });
+  });
+
+  it.each([null, "text", 7, ["ws://127.0.0.1:1"]])(
+    "falls back to the default endpoint for a non-object document (%#)",
+    async (document) => {
+      await expect(statusFor(() => document)).resolves.toMatchObject({
+        reachable: true,
+        userAgent: null,
+        browserVersion: null,
+      });
+    },
+  );
 });
 
 describe("assertWsUrlTrusted — implicit default port resolution (H1)", () => {
@@ -905,13 +1023,13 @@ describe("session-limit TOCTOU reservation (M2)", () => {
     const releaseSignals: (() => void)[] = [];
     const fixture = await withFixture({
       fetchVersion: () =>
-        new Promise<unknown>((resolve) => {
+        new Promise<CdpVersionDocument>((resolve) => {
           // Hold the version fetch until release() is called so all 6 calls are in-flight.
           releaseSignals.push(() => {
             resolve({
               webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/x",
-              "User-Agent": "Chrome/130",
-              Browser: "Chrome/130",
+              userAgent: "Chrome/130",
+              browserVersion: "Chrome/130",
             });
           });
         }),

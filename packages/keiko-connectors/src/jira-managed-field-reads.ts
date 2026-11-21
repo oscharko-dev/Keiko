@@ -109,18 +109,24 @@ function opaqueReadValue(value: unknown): CatalogJsonObject {
     ? { state: "value", text }
     : { state: "unavailable" };
 }
-function nested(raw: Record<string, unknown> | undefined, key: string, name: string): unknown {
-  return asRecord(raw?.[key])?.[name];
-}
 const LINKS_READ_MAX = 100;
+interface LinkedIssue {
+  readonly direction: "inward" | "outward";
+  readonly issueKey: string;
+}
+/** The other issue of a link; an outward key that is present but not text makes it unreadable. */
+function linkedIssue(raw: Record<string, unknown> | undefined): LinkedIssue | undefined {
+  const outward = asRecord(raw?.outwardIssue)?.key;
+  const issueKey = outward ?? asRecord(raw?.inwardIssue)?.key;
+  return typeof issueKey === "string"
+    ? { direction: outward === undefined ? "inward" : "outward", issueKey }
+    : undefined;
+}
 function linkReadEntry(entry: unknown): CatalogJsonObject | undefined {
   const raw = asRecord(entry);
-  const type = nested(raw, "type", "name");
-  const outward = nested(raw, "outwardIssue", "key");
-  const issueKey = outward ?? nested(raw, "inwardIssue", "key");
-  return typeof type === "string" && typeof issueKey === "string"
-    ? { type, direction: outward === undefined ? "inward" : "outward", issueKey }
-    : undefined;
+  const type = asRecord(raw?.type)?.name;
+  const linked = linkedIssue(raw);
+  return typeof type === "string" && linked !== undefined ? { type, ...linked } : undefined;
 }
 /**
  * Links read as `{ type, direction, issueKey }` JSON text from this issue's perspective. Only the

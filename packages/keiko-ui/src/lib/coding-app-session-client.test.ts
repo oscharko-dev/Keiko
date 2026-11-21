@@ -78,8 +78,8 @@ function seams(fragment: string): {
   posted: () => readonly unknown[];
 } {
   const strip = vi.fn();
-  const post = vi.fn((_attestation: CodingAppSessionPairingAttestation) =>
-    Promise.resolve<unknown>({ schemaVersion: "1" }),
+  const post = vi.fn((_attestation: CodingAppSessionPairingAttestation): Promise<void> =>
+    Promise.resolve(),
   );
   return {
     seams: { readFragment: () => fragment, stripFragment: strip, postPairing: post },
@@ -182,7 +182,7 @@ describe("redeemCodingAppSessionPairingFragment (#2478)", () => {
 
   it("ensures a local app-session through the injected browser seam", async () => {
     const target = seams("");
-    const postLocalSession = vi.fn(() => Promise.resolve<unknown>({ schemaVersion: "1" }));
+    const postLocalSession = vi.fn((): Promise<void> => Promise.resolve());
 
     await expect(ensureLocalCodingAppSession({ ...target.seams, postLocalSession })).resolves.toBe(
       true,

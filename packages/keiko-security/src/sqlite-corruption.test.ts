@@ -210,11 +210,11 @@ describe("errorRecord hardening (persisted quarantine diagnostic)", () => {
   });
 });
 
-// The optional unwrap hook lets a wrapping domain error (e.g. keiko-local-knowledge's
+// The optional wrapper guard lets a wrapping domain error (e.g. keiko-local-knowledge's
 // KnowledgeStoreError, which carries the real SQLite error on `.cause`) be classified by its
-// underlying cause rather than the wrapper. Without unwrap the wrapper's own (non-corruption) shape
-// is inspected; with unwrap the sealed SQLite error underneath drives the verdict.
-describe("unwrap hook", () => {
+// underlying cause rather than the wrapper. Without the guard the wrapper's own (non-corruption)
+// shape is inspected; with it the sealed SQLite error underneath drives the verdict.
+describe("wrapper guard", () => {
   class WrappingError extends Error {
     constructor(
       message: string,
@@ -224,23 +224,53 @@ describe("unwrap hook", () => {
     }
   }
 
-  const unwrap = (error: unknown): unknown =>
-    error instanceof WrappingError && error.cause !== undefined ? error.cause : error;
+  const isWrapper = (error: unknown): error is WrappingError => error instanceof WrappingError;
 
-  it("does NOT see corruption through a wrapper without the hook", () => {
+  it("does NOT see corruption through a wrapper without the guard", () => {
     const wrapped = new WrappingError("store open failed", { code: "SQLITE_CORRUPT" });
     expect(isSqliteCorruptionError(wrapped)).toBe(false);
   });
 
-  it("classifies corruption via the unwrapped cause when the hook is supplied", () => {
+  it("classifies corruption via the wrapped cause when the guard is supplied", () => {
     const wrapped = new WrappingError("store open failed", { code: "SQLITE_CORRUPT" });
-    expect(isSqliteCorruptionError(wrapped, unwrap)).toBe(true);
+    expect(isSqliteCorruptionError(wrapped, isWrapper)).toBe(true);
   });
 
-  it("errorRecord reports the unwrapped cause's fields when a hook is supplied", () => {
+  it("peels nested wrappers down to the innermost cause", () => {
+    const inner = Object.assign(new Error("malformed"), { errcode: 11, code: "SQLITE_CORRUPT" });
+    const wrapped = new WrappingError("outer", new WrappingError("inner", inner));
+    expect(isSqliteCorruptionError(wrapped, isWrapper)).toBe(true);
+    expect(errorRecord(wrapped, isWrapper).message).toBe("malformed");
+  });
+
+  it("inspects the wrapper itself when it carries no cause", () => {
+    const wrapped = new WrappingError(
+      "SQLITE_CORRUPT: database disk image is malformed",
+      undefined,
+    );
+    expect(isSqliteCorruptionError(wrapped, isWrapper)).toBe(true);
+    expect(errorRecord(wrapped, isWrapper).message).toBe(
+      "SQLITE_CORRUPT: database disk image is malformed",
+    );
+  });
+
+  it("classifies a primitive cause as the primitive, not as the wrapper", () => {
+    const wrapped = new WrappingError("store open failed", "SQLITE_CORRUPT");
+    // A primitive has no SQLite fields, so it is not a corruption shape.
+    expect(isSqliteCorruptionError(wrapped, isWrapper)).toBe(false);
+    expect(errorRecord(wrapped, isWrapper)).toEqual({
+      errorClass: "string",
+      code: undefined,
+      errcode: undefined,
+      errstr: undefined,
+      message: "SQLITE_CORRUPT",
+    });
+  });
+
+  it("errorRecord reports the wrapped cause's fields when the guard is supplied", () => {
     const inner = Object.assign(new Error("malformed"), { errcode: 11, code: "SQLITE_CORRUPT" });
     const wrapped = new WrappingError("store open failed", inner);
-    const record = errorRecord(wrapped, unwrap);
+    const record = errorRecord(wrapped, isWrapper);
     expect(record.errcode).toBe(11);
     expect(record.code).toBe("SQLITE_CORRUPT");
     expect(record.message).toBe("malformed");

@@ -46,8 +46,12 @@ export const PROMPT_INJECTION_SIGNAL_CODES: readonly PromptInjectionSignalCode[]
   "embedded-secret-material",
 ] as const;
 
+const PROMPT_INJECTION_SIGNAL_CODE_SET: ReadonlySet<string> = new Set(
+  PROMPT_INJECTION_SIGNAL_CODES,
+);
+
 export const isPromptInjectionSignalCode = (value: unknown): value is PromptInjectionSignalCode =>
-  typeof value === "string" && (PROMPT_INJECTION_SIGNAL_CODES as readonly string[]).includes(value);
+  typeof value === "string" && PROMPT_INJECTION_SIGNAL_CODE_SET.has(value);
 
 // Relative danger of a signal. `critical` signals (override / disclosure / exfiltration / tool / egress)
 // indicate an active attack attempt; `elevated` signals (manipulative framing, embedded secrets)

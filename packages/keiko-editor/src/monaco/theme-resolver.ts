@@ -227,29 +227,43 @@ function splitOklchBody(color: string, body: string): OklchBodyParts {
   };
 }
 
-function parseOklchChannelTokens(color: string, channels: string): [string, string, string] {
-  const parts = splitCssWhitespace(channels.trim());
-  if (parts.length !== 3) {
-    throw new Error(`Keiko editor theme: unparseable oklch colour "${color}".`);
+// Exactly three whitespace-separated channel tokens, or a thrown parse failure with `message`.
+function threeChannelTokens(channels: string, message: string): [string, string, string] {
+  const [first, second, third, ...rest] = splitCssWhitespace(channels.trim());
+  if (first === undefined || second === undefined || third === undefined || rest.length > 0) {
+    throw new Error(message);
   }
-  return parts as [string, string, string];
+  return [first, second, third];
 }
 
-function parseOklchComponents(color: string): OklchComponents | undefined {
-  const body = oklchBody(color);
+// Splits a functional colour body into its alpha and exactly three channel tokens, then builds
+// the components from them. A missing body means the colour uses another notation.
+function parseChannelColor<Components>(
+  color: string,
+  body: string | undefined,
+  kind: "oklch" | "lab",
+  build: (alpha: OklchBodyParts["alpha"], tokens: [string, string, string]) => Components,
+): Components | undefined {
   if (body === undefined) {
     return undefined;
   }
   const { alpha, channels } = splitOklchBody(color, body);
-  const [lToken, cToken, hToken] = parseOklchChannelTokens(color, channels);
+  return build(
+    alpha,
+    threeChannelTokens(channels, `Keiko editor theme: unparseable ${kind} colour "${color}".`),
+  );
+}
 
-  const lightness = parseOklchLightness(lToken);
-  const chroma = Number.parseFloat(cToken);
-  const hueDeg = parseOklchHue(hToken);
-  if (!Number.isFinite(lightness) || !Number.isFinite(chroma) || !Number.isFinite(hueDeg)) {
-    throw new TypeError(`Keiko editor theme: unparseable oklch colour "${color}".`);
-  }
-  return { alpha, chroma, hueDeg, lightness };
+function parseOklchComponents(color: string): OklchComponents | undefined {
+  return parseChannelColor(color, oklchBody(color), "oklch", (alpha, [lToken, cToken, hToken]) => {
+    const lightness = parseOklchLightness(lToken);
+    const chroma = Number.parseFloat(cToken);
+    const hueDeg = parseOklchHue(hToken);
+    if (!Number.isFinite(lightness) || !Number.isFinite(chroma) || !Number.isFinite(hueDeg)) {
+      throw new TypeError(`Keiko editor theme: unparseable oklch colour "${color}".`);
+    }
+    return { alpha, chroma, hueDeg, lightness };
+  });
 }
 
 function hexFromOklchColor(color: string): string | undefined {
@@ -290,29 +304,16 @@ function labBody(color: string): string | undefined {
   return color.slice(prefix.length, -1);
 }
 
-function parseLabChannelTokens(color: string, channels: string): [string, string, string] {
-  const parts = splitCssWhitespace(channels.trim());
-  if (parts.length !== 3) {
-    throw new Error(`Keiko editor theme: unparseable lab colour "${color}".`);
-  }
-  return parts as [string, string, string];
-}
-
 function parseLabComponents(color: string): LabComponents | undefined {
-  const body = labBody(color);
-  if (body === undefined) {
-    return undefined;
-  }
-  const { alpha, channels } = splitOklchBody(color, body);
-  const [lToken, aToken, bToken] = parseLabChannelTokens(color, channels);
-
-  const lightness = parseLabLightness(lToken);
-  const a = parseLabAxis(aToken);
-  const b = parseLabAxis(bToken);
-  if (!Number.isFinite(lightness) || !Number.isFinite(a) || !Number.isFinite(b)) {
-    throw new TypeError(`Keiko editor theme: unparseable lab colour "${color}".`);
-  }
-  return { alpha, a, b, lightness };
+  return parseChannelColor(color, labBody(color), "lab", (alpha, [lToken, aToken, bToken]) => {
+    const lightness = parseLabLightness(lToken);
+    const a = parseLabAxis(aToken);
+    const b = parseLabAxis(bToken);
+    if (!Number.isFinite(lightness) || !Number.isFinite(a) || !Number.isFinite(b)) {
+      throw new TypeError(`Keiko editor theme: unparseable lab colour "${color}".`);
+    }
+    return { alpha, a, b, lightness };
+  });
 }
 
 function labChannelToXyz(channel: number): number {

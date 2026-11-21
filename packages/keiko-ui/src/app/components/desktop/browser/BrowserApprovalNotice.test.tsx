@@ -46,7 +46,7 @@ function inspection(): BrowserApprovalManagementResult {
     : { state: "unavailable" };
 }
 
-function repairSeams(post: () => Promise<unknown>): CodingAppSessionPairingSeams {
+function repairSeams(post: () => Promise<void>): CodingAppSessionPairingSeams {
   return {
     readFragment: () => "",
     stripFragment: () => undefined,
@@ -120,7 +120,7 @@ describe("browser notice authentication lifecycle", () => {
     render(<BrowserApprovalNotice />);
     await waitFor(() => expect(api.inspectBrowserApprovals).toHaveBeenCalledOnce());
     active = false;
-    const post = vi.fn().mockResolvedValue({ schemaVersion: "1" });
+    const post = vi.fn((): Promise<void> => Promise.resolve());
     await act(async () => {
       expect(await ensureLocalCodingAppSession(repairSeams(post))).toBe(true);
     });

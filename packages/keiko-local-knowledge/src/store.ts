@@ -36,7 +36,7 @@ import {
 } from "@oscharko-dev/keiko-security/fs-hardening";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 // Shared SQLite corruption classifier [GEN-DUP-SEMANTIC-019]: the pure classification vocabulary. The
-// KnowledgeStoreError-unwrap hook (see unwrapKnowledgeStoreError) resolves the sealed cause underneath.
+// KnowledgeStoreError wrapper guard (see isKnowledgeStoreError) peels to the sealed cause underneath.
 import {
   SqliteQuickCheckError,
   errorRecord as sharedErrorRecord,
@@ -388,19 +388,16 @@ type OpenAttempt =
   | { readonly status: "corrupt"; readonly cause: unknown }
   | { readonly status: "error"; readonly cause: unknown };
 
-// Unwrap hook for the shared classifier: peel every KnowledgeStoreError layer that carries a cause so
-// the sealed SQLite error underneath is classified rather than the wrapper. Recursive to match the
-// previous local sqliteErrorLike, which stripped nested wrappers to the innermost cause.
-function unwrapKnowledgeStoreError(error: unknown): unknown {
-  return error instanceof KnowledgeStoreError && error.cause !== undefined
-    ? unwrapKnowledgeStoreError(error.cause)
-    : error;
+// Wrapper guard for the shared classifier: it peels every KnowledgeStoreError layer that carries a
+// cause, so the sealed SQLite error underneath is classified rather than the wrapper.
+function isKnowledgeStoreError(error: unknown): error is KnowledgeStoreError {
+  return error instanceof KnowledgeStoreError;
 }
 
 const isSqliteCorruptionError = (error: unknown): boolean =>
-  sharedIsSqliteCorruptionError(error, unwrapKnowledgeStoreError);
+  sharedIsSqliteCorruptionError(error, isKnowledgeStoreError);
 const errorRecord = (error: unknown): Record<string, unknown> =>
-  sharedErrorRecord(error, unwrapKnowledgeStoreError);
+  sharedErrorRecord(error, isKnowledgeStoreError);
 
 function assertQuickCheckOk(db: DatabaseSync): void {
   const rows = db.prepare("PRAGMA quick_check").all() as readonly Record<string, unknown>[];

@@ -311,9 +311,8 @@ describe("EditorAgentHttpClient", () => {
     const scheduler: EditorAgentTimeoutScheduler = {
       set: (callback) => {
         callback();
-        return "timeout";
+        return (): void => undefined;
       },
-      clear: (): void => undefined,
     };
     const transport: EditorAgentHttpTransport = {
       request: () => new Promise(() => undefined),
@@ -341,11 +340,10 @@ describe("EditorAgentHttpClient", () => {
       baseUrl: "http://127.0.0.1:1983",
       transport,
       scheduler: {
-        set: (): string => {
+        set: () => {
           scheduledTimeouts += 1;
-          return "timeout";
+          return (): void => undefined;
         },
-        clear: (): void => undefined,
       },
     }).listSessions(controller.signal);
     expect(result).toMatchObject({ ok: false, error: { kind: "cancelled", code: "CANCELLED" } });
@@ -662,7 +660,12 @@ function capturingScheduler(): {
   return {
     timeouts,
     // Record the requested timeout but never fire it, so the transport response wins the race.
-    scheduler: { set: (_callback, timeoutMs) => timeouts.push(timeoutMs), clear: () => undefined },
+    scheduler: {
+      set: (_callback, timeoutMs) => {
+        timeouts.push(timeoutMs);
+        return (): void => undefined;
+      },
+    },
   };
 }
 

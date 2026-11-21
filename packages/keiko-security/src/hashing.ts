@@ -10,6 +10,7 @@
 import { createHash } from "node:crypto";
 
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import { isWorkspaceRecord } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 
 // Canonical JSON: object keys sorted recursively, array order preserved, undefined values omitted
 // (matching JSON.stringify semantics). Two structurally equal inputs serialise to byte-identical
@@ -18,13 +19,13 @@ export function canonicalise(value: unknown): string {
   if (value === undefined) {
     return "null";
   }
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value);
-  }
   if (Array.isArray(value)) {
     return `[${value.map((item) => canonicalise(item)).join(",")}]`;
   }
-  const entries = Object.entries(value as Record<string, unknown>)
+  if (!isWorkspaceRecord(value)) {
+    return JSON.stringify(value);
+  }
+  const entries = Object.entries(value)
     .filter(([, v]) => v !== undefined)
     .sort(([a], [b]) => compareStrings(a, b))
     .map(([key, v]) => `${JSON.stringify(key)}:${canonicalise(v)}`);

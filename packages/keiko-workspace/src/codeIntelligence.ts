@@ -846,7 +846,7 @@ function readTsCompilerOptions(
     const text = readWorkspaceFile(scope.workspace, relativePath, { maxBytes: 262_144 }, fs).text;
     const result = typeScriptCompiler().parseConfigFileTextToJson(relativePath, text);
     if (result.error !== undefined) return { readFailed: true };
-    const parsed: unknown = result.config as unknown;
+    const parsed: unknown = result.config;
     const options =
       isRecord(parsed) && isRecord(parsed.compilerOptions) ? parsed.compilerOptions : undefined;
     return options === undefined ? { readFailed: false } : { options, readFailed: false };
@@ -5804,35 +5804,32 @@ function* codeIntelligenceBuildSteps(
     truncated: truncated || importResolver.truncated,
   };
   yield "stage";
-  const packageDependencies = controlledBuild(
+  const packageDependencies = controlledBuild<readonly PackageDependencyEdge[]>(
     executionControl,
     buildState,
-    [] as readonly PackageDependencyEdge[],
+    [],
     () => linkPackageDependencies(importResolver.packages),
   );
   yield "stage";
-  const imports = controlledBuild(
-    executionControl,
-    buildState,
-    [] as readonly CodeImportEdge[],
-    () => files.flatMap((file) => collectImportEdges(file, pathSet, importResolver)),
+  const imports = controlledBuild<readonly CodeImportEdge[]>(executionControl, buildState, [], () =>
+    files.flatMap((file) => collectImportEdges(file, pathSet, importResolver)),
   );
   yield "stage";
-  const symbols = controlledBuild(executionControl, buildState, [] as readonly CodeSymbol[], () =>
+  const symbols = controlledBuild<readonly CodeSymbol[]>(executionControl, buildState, [], () =>
     files.flatMap((file) => collectSymbols(file)),
   );
   yield "stage";
-  const reExports = controlledBuild(
+  const reExports = controlledBuild<readonly TypescriptReExportBinding[]>(
     executionControl,
     buildState,
-    [] as readonly TypescriptReExportBinding[],
+    [],
     () => files.flatMap((file) => collectTypescriptReExportBindings(file, imports)),
   );
   yield "stage";
-  const defaultExports = controlledBuild(
+  const defaultExports = controlledBuild<readonly TypescriptDefaultExport[]>(
     executionControl,
     buildState,
-    [] as readonly TypescriptDefaultExport[],
+    [],
     () => files.flatMap((file) => collectTypescriptDefaultExports(file)),
   );
   yield "stage";
@@ -5845,10 +5842,10 @@ function* codeIntelligenceBuildSteps(
     certifiedModuleImportsByFile(imports, pathSet, importResolver, executionControl),
   );
   yield "stage";
-  const importBindings = controlledBuild(
+  const importBindings = controlledBuild<readonly CodeImportBinding[]>(
     executionControl,
     buildState,
-    [] as readonly CodeImportBinding[],
+    [],
     () =>
       files.flatMap((file) =>
         file.syntaxTree === undefined
@@ -5857,35 +5854,32 @@ function* codeIntelligenceBuildSteps(
       ),
   );
   yield "stage";
-  const calls = controlledBuild(executionControl, buildState, [] as readonly CodeCallEdge[], () =>
+  const calls = controlledBuild<readonly CodeCallEdge[]>(executionControl, buildState, [], () =>
     collectCalls(files, symbols, imports, importBindings),
   );
   yield "stage";
-  const references = controlledBuild(
+  const references = controlledBuild<readonly CodeReferenceEdge[]>(
     executionControl,
     buildState,
-    [] as readonly CodeReferenceEdge[],
+    [],
     () => collectReferences(files, symbols, importBindings),
   );
   yield "stage";
-  const endpoints = controlledBuild(
-    executionControl,
-    buildState,
-    [] as readonly ApiEndpoint[],
-    () => files.flatMap((file) => collectEndpoints(file)),
+  const endpoints = controlledBuild<readonly ApiEndpoint[]>(executionControl, buildState, [], () =>
+    files.flatMap((file) => collectEndpoints(file)),
   );
   yield "stage";
-  const apiContracts = controlledBuild(
+  const apiContracts = controlledBuild<readonly ApiContractEdge[]>(
     executionControl,
     buildState,
-    [] as readonly ApiContractEdge[],
+    [],
     () => linkApiContracts(endpoints, executionControl),
   );
   yield "stage";
-  const dtoContracts = controlledBuild(
+  const dtoContracts = controlledBuild<readonly DtoContractEdge[]>(
     executionControl,
     buildState,
-    [] as readonly DtoContractEdge[],
+    [],
     () => linkDtoContracts(symbols, executionControl),
   );
   yield "stage";

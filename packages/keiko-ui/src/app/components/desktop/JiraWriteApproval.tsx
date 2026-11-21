@@ -28,7 +28,11 @@ import { jiraActionFacts } from "./jiraActionFacts";
 import { jiraDraftExcluded, jiraDraftTree } from "./jiraDraftTree";
 import { JiraNamesContext } from "./jiraNames";
 import { useJiraDecision } from "./useJiraDecision";
-import { useStagedJiraDraft, type StagedJiraDraft } from "./useStagedJiraDraft";
+import {
+  useStagedJiraDraft,
+  type JiraDraftCallArguments,
+  type StagedJiraDraft,
+} from "./useStagedJiraDraft";
 import styles from "./JiraChatTools.module.css";
 
 const APPROVAL_KEYS: Readonly<Record<ChatToolWriteApprovalView["state"], WidgetMessageKey>> = {
@@ -208,9 +212,11 @@ function StagedDraftNote({ status }: { readonly status: "loading" | "unavailable
 /** The draft's tree when it is readable as one, otherwise the request's facts. */
 const ATTACHMENT_FILE_ARGS = new Set(["name", "source"]);
 /** The file named by these arguments is shown once, as the server read it. */
-function shownArgs(approval: ChatToolWriteApprovalView, args: unknown): unknown {
+function shownArgs(
+  approval: ChatToolWriteApprovalView,
+  args: JiraDraftCallArguments,
+): JiraDraftCallArguments {
   if (approval.kind !== "jira-chat-write" || approval.attachment === undefined) return args;
-  if (typeof args !== "object" || args === null) return args;
   return Object.fromEntries(Object.entries(args).filter(([key]) => !ATTACHMENT_FILE_ARGS.has(key)));
 }
 

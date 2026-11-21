@@ -294,6 +294,8 @@ const parseInlineContent = (
   return { runs, links };
 };
 
+const HEADING_LEVELS = [1, 2, 3, 4, 5, 6] as const;
+
 const parseHeading = (
   node: Record<string, unknown>,
   path: string,
@@ -302,13 +304,14 @@ const parseHeading = (
 ): IngestedBlock => {
   const attrs = node.attrs;
   const rawLevel = isPlainObject(attrs) ? attrs.level : undefined;
-  if (typeof rawLevel !== "number" || !Number.isInteger(rawLevel) || rawLevel < 1 || rawLevel > 6) {
+  const level = HEADING_LEVELS.find((candidate) => candidate === rawLevel);
+  if (level === undefined) {
     throw new AdfParserError("INVALID_HEADING_LEVEL", path, "Heading level must be integer 1–6");
   }
   const inline = parseInlineContent(collectArrayContent(node), `${path}.content`, depth + 1, state);
   return {
     kind: "heading",
-    level: rawLevel as 1 | 2 | 3 | 4 | 5 | 6,
+    level,
     runs: inline.runs,
   };
 };

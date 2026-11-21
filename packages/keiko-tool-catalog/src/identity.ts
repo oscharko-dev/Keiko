@@ -20,18 +20,21 @@ import {
 } from "./json.js";
 import { requireCatalog } from "./errors.js";
 
+// The brands are erased at runtime; each pattern is the whole definition of its brand.
+function isCanonicalToolId(value: string): value is CanonicalToolId {
+  return /^keiko\.[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$/u.test(value);
+}
+
+function isCatalogDigest(value: string): value is CatalogDigest {
+  return /^[a-f0-9]{64}$/u.test(value);
+}
+
 export function toolRefFrom(value: CatalogJsonValue | undefined): ToolRef {
   const object = catalogObject(value);
   exactCatalogKeys(object, ["canonicalId", "contractVersion"]);
   const canonicalId = catalogString(object.canonicalId);
-  requireCatalog(
-    /^keiko\.[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)+$/u.test(canonicalId),
-    "invalid-identity",
-  );
-  return {
-    canonicalId: canonicalId as CanonicalToolId,
-    contractVersion: catalogPositive(object.contractVersion),
-  };
+  requireCatalog(isCanonicalToolId(canonicalId), "invalid-identity");
+  return { canonicalId, contractVersion: catalogPositive(object.contractVersion) };
 }
 
 export function createToolRef(canonicalId: string, contractVersion: number): ToolRef {
@@ -75,8 +78,8 @@ export function runtimeRefFrom(value: CatalogJsonValue | undefined): CatalogRunt
 
 export function catalogDigest(value: CatalogJsonValue | undefined): CatalogDigest {
   const digest = catalogString(value);
-  requireCatalog(/^[a-f0-9]{64}$/u.test(digest), "invalid-identity");
-  return digest as CatalogDigest;
+  requireCatalog(isCatalogDigest(digest), "invalid-identity");
+  return digest;
 }
 
 export function semanticDigest(
@@ -91,5 +94,5 @@ export function semanticDigest(
     domain === "keiko.tool-descriptor.v1" ? copyCatalogJson(fields) : copyCatalogEnvelope(fields),
   );
   requireCatalog(!Object.hasOwn(object, "domain"), "invalid-shape");
-  return sha256Hex(canonicalise({ domain, ...object })) as CatalogDigest;
+  return catalogDigest(sha256Hex(canonicalise({ domain, ...object })));
 }

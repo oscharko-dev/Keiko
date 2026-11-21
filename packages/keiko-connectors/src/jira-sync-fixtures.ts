@@ -10,6 +10,7 @@
 // barrel exactly like the Confluence fixture so keiko-server's composition tests reuse the same
 // fixture project instead of growing a second one.
 
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   AtlassianHttpBodyPort,
   AtlassianHttpBodyRequest,
@@ -115,10 +116,37 @@ function fullIssueFields(issue: JiraFixtureIssue): Record<string, unknown> {
   };
 }
 
+// One issue as Jira Cloud serves it: its identity and the fields of the request.
+interface JiraFixtureIssuePayload {
+  readonly id: string;
+  readonly key: string;
+  readonly fields: Record<string, unknown>;
+}
+
+interface JiraFixtureSearchPage {
+  readonly issues: readonly JiraFixtureIssuePayload[];
+  readonly isLast: boolean;
+  readonly nextPageToken?: string;
+}
+
+interface JiraFixtureCommentPayload {
+  readonly id: string;
+  readonly author: { readonly displayName: string };
+  readonly created: string;
+  readonly body: unknown;
+}
+
+interface JiraFixtureCommentsPage {
+  readonly startAt: number;
+  readonly maxResults: number;
+  readonly total: number;
+  readonly comments: readonly JiraFixtureCommentPayload[];
+}
+
 // `/rest/api/3/search/jql` result page: issues in stable model order with exactly the REQUESTED
 // fields served (the sync enumeration asks for `summary,updated`; the live search (#2248) asks
 // for the full metadata field list), `nextPageToken` present exactly while more pages remain.
-function searchPage(model: FixtureModel, url: URL, pageSize: number): unknown {
+function searchPage(model: FixtureModel, url: URL, pageSize: number): JiraFixtureSearchPage {
   const token = url.searchParams.get("nextPageToken") ?? "0";
   const parsed = Number.parseInt(token, 10);
   const start = Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
@@ -143,7 +171,7 @@ function searchPage(model: FixtureModel, url: URL, pageSize: number): unknown {
   };
 }
 
-function issuePayload(issue: JiraFixtureIssue): unknown {
+function issuePayload(issue: JiraFixtureIssue): JiraFixtureIssuePayload {
   return {
     id: issue.issueId,
     key: issue.key,
@@ -151,7 +179,11 @@ function issuePayload(issue: JiraFixtureIssue): unknown {
   };
 }
 
-function commentsPage(issue: JiraFixtureIssue, url: URL, pageSize: number): unknown {
+function commentsPage(
+  issue: JiraFixtureIssue,
+  url: URL,
+  pageSize: number,
+): JiraFixtureCommentsPage {
   const startAtRaw = Number.parseInt(url.searchParams.get("startAt") ?? "0", 10);
   const startAt = Number.isFinite(startAtRaw) && startAtRaw > 0 ? startAtRaw : 0;
   const all = issue.comments ?? [];
@@ -248,7 +280,7 @@ export function createInMemoryJiraFixture(
 // deliberately exceeds the converter's depth cap so the full stack proves the bounded-degradation
 // path: the document indexes with an explicit conversion-truncation marker, never a crash or
 // hang.
-export function buildHostileJiraAdfDocument(totalNodes: number): unknown {
+export function buildHostileJiraAdfDocument(totalNodes: number): CatalogJsonObject {
   // The depth chain contributes exactly 102 typed nodes (100 blockquotes + 1 tail paragraph + 1
   // tail text node) plus the 1 root "doc" node added below — 103 fixed nodes total. Each breadth
   // pair contributes 2 (a paragraph + its one text node), and the remainder is rounded UP so the
@@ -261,7 +293,7 @@ export function buildHostileJiraAdfDocument(totalNodes: number): unknown {
     type: "paragraph",
     content: [{ type: "text", text: `hostile breadth node ${String(index)}` }],
   }));
-  let deep: Record<string, unknown> = {
+  let deep: CatalogJsonObject = {
     type: "paragraph",
     content: [{ type: "text", text: "hostile depth tail" }],
   };

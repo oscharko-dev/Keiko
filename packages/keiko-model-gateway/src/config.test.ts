@@ -17,6 +17,7 @@ import {
   parseCapabilityList,
   parseEnvEgressConfigFaultTolerant,
   parseGatewayConfig,
+  parseGatewayConfigJson,
   parseModelCapability,
   resolveOutboundHttpEgressConfig,
   resolvePrDescriptionBrandingFromConfig,
@@ -234,6 +235,60 @@ describe("parseGatewayConfig", () => {
       KEIKO_MODEL_EXAMPLE_CHAT_MODEL_REALTIME_AUTH_MODE: "ephemeral-session",
     });
     expect(fromEnv.providers[0]?.realtimeAuthMode).toBe("ephemeral-session");
+  });
+
+  // Per-model precedence: a non-empty per-model env value wins, then any file value (even an
+  // empty one), then the default env value; an empty winner leaves the setting unset.
+  it("resolves per-model endpoint settings in env, file, default order", () => {
+    const azure = "azure-openai-deployment";
+    const envWins = parseGatewayConfig(
+      rawWithProvider((p) => ({ ...p, endpointStyle: 7, realtimeAuthMode: 7 })),
+      {
+        KEIKO_MODEL_EXAMPLE_CHAT_MODEL_ENDPOINT_STYLE: azure,
+        KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_VERSION: "2025-03-01-preview",
+        KEIKO_MODEL_EXAMPLE_CHAT_MODEL_REALTIME_AUTH_MODE: "ephemeral-session",
+      },
+    );
+    expect(envWins.providers[0]).toMatchObject({
+      endpointStyle: azure,
+      apiVersion: "2025-03-01-preview",
+      realtimeAuthMode: "ephemeral-session",
+    });
+    const emptyFileValues = parseGatewayConfig(
+      rawWithProvider((p) => ({ ...p, endpointStyle: "", realtimeAuthMode: "" })),
+      {
+        KEIKO_MODEL_EXAMPLE_CHAT_MODEL_ENDPOINT_STYLE: "",
+        KEIKO_DEFAULT_ENDPOINT_STYLE: azure,
+        KEIKO_DEFAULT_API_VERSION: "2025-03-01-preview",
+        KEIKO_DEFAULT_REALTIME_AUTH_MODE: "ephemeral-session",
+      },
+    );
+    expect(emptyFileValues.providers[0]?.endpointStyle).toBeUndefined();
+    expect(emptyFileValues.providers[0]?.apiVersion).toBeUndefined();
+    expect(emptyFileValues.providers[0]?.realtimeAuthMode).toBeUndefined();
+    const defaults = parseGatewayConfig(validRaw(), {
+      KEIKO_DEFAULT_ENDPOINT_STYLE: azure,
+      KEIKO_DEFAULT_API_VERSION: "2025-03-01-preview",
+      KEIKO_DEFAULT_REALTIME_AUTH_MODE: "ephemeral-session",
+    });
+    expect(defaults.providers[0]).toMatchObject({
+      endpointStyle: azure,
+      apiVersion: "2025-03-01-preview",
+      realtimeAuthMode: "ephemeral-session",
+    });
+  });
+
+  it.each([
+    [{ endpointStyle: 7 }, /providers\[0\]\.endpointStyle must be one of/u],
+    [{ realtimeAuthMode: false }, /providers\[0\]\.realtimeAuthMode must be one of/u],
+    [
+      { endpointStyle: "azure-openai-deployment", apiVersion: 20250301 },
+      /providers\[0\]\.apiVersion must be a non-empty string/u,
+    ],
+  ])("rejects a non-string per-model file value %j with its own message", (fields, message) => {
+    expect(() => parseGatewayConfig(rawWithProvider((p) => ({ ...p, ...fields })))).toThrow(
+      message,
+    );
   });
 
   it("rejects an unknown realtime auth mode", () => {
@@ -1500,7 +1555,9 @@ describe("parseGatewayConfig", () => {
         contextWindow: 0,
       },
     }));
-    const config = parseGatewayConfig(migrateLegacyChatContextWindows(raw));
+    const config = parseGatewayConfig(
+      migrateLegacyChatContextWindows(parseGatewayConfigJson(JSON.stringify(raw))),
+    );
     const cap = config.capabilities?.find((c) => c.id === "example-legacy-file-load-chat");
     expect(cap?.kind).toBe("chat");
     expect(cap?.contextWindow).toBe(4096);

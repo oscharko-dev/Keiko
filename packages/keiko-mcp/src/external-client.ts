@@ -6,6 +6,7 @@ import {
   StreamableHTTPClientTransport,
   SSEClientTransport, // NOSONAR typescript:S1874 -- ADR-0181 explicitly supports opt-in legacy SSE; the SDK documents coexistence during migration.
   SseError,
+  isSpecType,
   type Transport,
   type Tool,
 } from "@modelcontextprotocol/client";
@@ -13,7 +14,10 @@ import {
   DEFAULT_INHERITED_ENV_VARS,
   StdioClientTransport,
 } from "@modelcontextprotocol/client/stdio";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  CatalogJsonObject,
+  CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ExternalMcpConnection,
   ExternalMcpTool,
@@ -64,11 +68,42 @@ const TIMEOUT_MS = 30_000;
 const MAX_BYTES = 1024 * 1024;
 // Retain the object-root types established by the SDK tools/list parser across JSON capture.
 type AdmittedTool = ExternalMcpTool & Pick<Tool, "inputSchema" | "outputSchema">;
+// The SDK values that cross a JSON capture: listed tools, call arguments and a call result.
+type CaptureSource = readonly Tool[] | CatalogJsonObject | Awaited<ReturnType<Client["callTool"]>>;
 
-function captured<T>(value: T): T {
+function captured(value: CaptureSource): CatalogJsonValue {
   const text = JSON.stringify(value);
   if (Buffer.byteLength(text, "utf8") > MAX_BYTES) throw new ManagedMcpError("protocol-error");
-  return deepFreeze(JSON.parse(text) as T);
+  const parsed: unknown = JSON.parse(text);
+  if (!isSpecType.JSONValue(parsed)) throw new ManagedMcpError("protocol-error");
+  return deepFreeze(parsed);
+}
+
+function capturedObject(value: CaptureSource): CatalogJsonObject {
+  const copy = captured(value);
+  if (!isSpecType.JSONObject(copy)) throw new ManagedMcpError("protocol-error");
+  return copy;
+}
+
+// The SDK parser re-establishes every Tool field on the captured JSON copy; the object-root schemas
+// must again pass the bounded external schema admission.
+function isAdmittedTool(value: CatalogJsonValue): value is CatalogJsonObject & AdmittedTool {
+  return (
+    isSpecType.Tool(value) &&
+    isBoundedExternalJsonSchema(value.inputSchema) &&
+    (value.outputSchema === undefined || isBoundedExternalJsonSchema(value.outputSchema))
+  );
+}
+
+function capturedTools(tools: readonly Tool[]): readonly AdmittedTool[] {
+  const copy = captured(tools);
+  if (!isSpecType.JSONArray(copy)) throw new ManagedMcpError("protocol-error");
+  const admitted: AdmittedTool[] = [];
+  for (const tool of copy) {
+    if (!isAdmittedTool(tool)) throw new ManagedMcpError("protocol-error");
+    admitted.push(tool);
+  }
+  return Object.freeze(admitted);
 }
 
 function admittedLocalPath(value: string): boolean {
@@ -259,7 +294,7 @@ class ExternalClient implements ExternalMcpConnection {
       )
     )
       throw new ManagedMcpError("protocol-error");
-    this.#tools = captured(listed.tools) as readonly AdmittedTool[];
+    this.#tools = capturedTools(listed.tools);
     this.#digest = sha256Hex(canonicalise(this.#tools));
     const processOwner = process.platform === "win32" ? "windows-job" : "posix-process-group";
     recordManagedMcp(
@@ -288,7 +323,7 @@ class ExternalClient implements ExternalMcpConnection {
     if (this.#drifted) throw new ManagedMcpError("descriptor-drift");
     if (this.#closed || tool === undefined || signal.aborted || !context.beforeEffect())
       throw new ManagedMcpError("not-admitted");
-    const args = captured(argumentsValue);
+    const args = capturedObject(argumentsValue);
     const inputSchema: CatalogJsonObject = tool.inputSchema;
     const validation =
       await fromJsonSchema<CatalogJsonObject>(inputSchema)["~standard"].validate(args);
@@ -308,7 +343,7 @@ class ExternalClient implements ExternalMcpConnection {
           },
         ),
       );
-      const data = captured(result) as CatalogJsonObject;
+      const data = capturedObject(result);
       this.record("completed", context);
       return data;
     } catch (error) {

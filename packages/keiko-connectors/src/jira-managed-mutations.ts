@@ -210,7 +210,6 @@ export function requestFor(
   context: ManagedMcpInvocationContext,
 ): JiraMutationRequest {
   const { http, baseUrl } = connection;
-  const beforeEffect: () => unknown = context.beforeEffect;
   const signal = AbortSignal.any([
     context.signal,
     AbortSignal.timeout(ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS),
@@ -221,7 +220,7 @@ export function requestFor(
       {
         signal,
         http: (request) =>
-          signal.aborted || beforeEffect() !== true
+          signal.aborted || !context.beforeEffect()
             ? Promise.resolve({ kind: "network-error" })
             : http(request),
       },

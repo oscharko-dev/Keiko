@@ -11,13 +11,17 @@ export function normalizeHost(hostname: string): string {
 function parseIpv4(hostname: string): readonly [number, number, number, number] | undefined {
   if (isIP(hostname) !== 4) return undefined;
   const parts = hostname.split(".").map((part) => Number.parseInt(part, 10));
+  if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return undefined;
+  const [a, b, c, d] = parts;
   if (
     parts.length !== 4 ||
-    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
-  ) {
+    a === undefined ||
+    b === undefined ||
+    c === undefined ||
+    d === undefined
+  )
     return undefined;
-  }
-  return parts as [number, number, number, number];
+  return [a, b, c, d];
 }
 
 function isLoopbackIpv4(parts: readonly [number, number, number, number]): boolean {

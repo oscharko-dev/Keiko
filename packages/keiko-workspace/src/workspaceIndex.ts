@@ -1289,6 +1289,10 @@ function parseStoredSnapshotObject(
     return { status: "rejected", reason: "authentication-or-corruption" };
   }
   if (isStaleSnapshotFormat(parsed.snapshot)) return { status: "stale-format" };
+  // SAFETY: openString authenticated these AES-256-GCM bytes under the store key, and only
+  // sealStoredSnapshot writes them, from a WorkspaceIndexSnapshot inside a matching envelope.
+  // normalizeSnapshot rejects every snapshot version but the current one, and parseStoredSnapshot
+  // turns any remaining shape fault into "invalid-snapshot".
   const normalized = normalizeSnapshot(parsed.snapshot as WorkspaceIndexSnapshot);
   if (normalized === undefined || !snapshotFitsStoreBounds(normalized, maxSnapshotEntries)) {
     return { status: "rejected", reason: "invalid-snapshot" };
@@ -1591,12 +1595,7 @@ async function writeSnapshotTempFile(
 }
 
 function isMissingPathError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { readonly code?: unknown }).code === "ENOENT"
-  );
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
 async function snapshotPathMatchesIdentity(snapshot: SnapshotFileIdentity): Promise<boolean> {

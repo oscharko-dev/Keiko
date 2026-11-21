@@ -9,6 +9,7 @@
 // table that #263 already introduced for composition history.
 
 import { createHash, randomUUID } from "node:crypto";
+import type { StatementResultingChanges } from "node:sqlite";
 
 import type { KnowledgeStore } from "../store.js";
 
@@ -28,7 +29,7 @@ type SqlValue = string | number | null;
 type SqlParams = Record<string, SqlValue>;
 
 interface RunStatement {
-  readonly run: (params?: SqlParams) => unknown;
+  readonly run: (params?: SqlParams) => StatementResultingChanges;
 }
 
 type SourceOnlyAuditEvent = Extract<

@@ -122,20 +122,22 @@ function rejectTransaction(
   reject(reason);
 }
 
-async function transact(
+// Resolves with the last captured value once the transaction completes, or undefined when nothing was
+// captured. `T` defaults to `never` for a transaction that captures nothing.
+async function transact<T = never>(
   factory: IDBFactory | undefined,
   mode: IDBTransactionMode,
   apply: (
     store: IDBObjectStore,
-    capture: (value: unknown) => void,
+    capture: (value: T) => void,
     fail: (error: unknown) => void,
   ) => void,
-): Promise<unknown> {
+): Promise<T | undefined> {
   const database = await openDatabase(factory);
   try {
-    return await new Promise((resolve, reject): void => {
+    return await new Promise<T | undefined>((resolve, reject): void => {
       const transaction = database.transaction(STORE, mode);
-      let value: unknown;
+      let value: T | undefined;
       const timer = setTimeout(
         (): void =>
           rejectTransaction(
@@ -171,6 +173,9 @@ async function transact(
   }
 }
 
+// The active record as read: a valid remembered approval, or a value that is not one.
+type StoredApproval = RememberedBrowserApproval | "unreadable";
+
 function loadKey(
   factory: IDBFactory | undefined,
   origin: string,
@@ -179,12 +184,15 @@ function loadKey(
   return observeBrowserApproval(
     "key-load",
     async () => {
-      const record = await transact(factory, "readonly", (store, capture): void => {
+      const record = await transact<StoredApproval>(factory, "readonly", (store, capture): void => {
         const request = store.get(ACTIVE);
-        request.onsuccess = (): void => capture(request.result);
+        request.onsuccess = (): void => {
+          const stored: unknown = request.result;
+          if (stored !== undefined) capture(validRecord(stored, origin) ? stored : "unreadable");
+        };
       });
       if (record === undefined) return { value: undefined, outcome: "missing" };
-      if (!validRecord(record, origin) || record.approval.expiresAtMs <= Date.now())
+      if (record === "unreadable" || record.approval.expiresAtMs <= Date.now())
         return { value: undefined, outcome: "unavailable" };
       return { value: record, outcome: "available" };
     },
