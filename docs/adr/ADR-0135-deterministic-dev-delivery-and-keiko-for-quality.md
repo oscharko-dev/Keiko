@@ -121,8 +121,8 @@ The ADR-0131 amendment of 2026-11-21 retires that required Sonar run. The full-p
 bridge heap of about 10 GB beside the scanner engine on a 16 GB hosted runner, and its verdict
 depended on the runner rather than on the change (#4481); splitting the TypeScript program was
 measured and did not fit either. A pull request is now held by `check:sonar-rules` over its changed
-files inside the required `ci` and by the local pre-push scan. Neither is represented as
-full-project merge evidence: the full analysis and its Banking Grade validator run on every push to
+files inside the required `ci`; the local pre-push scan supplements it, can be skipped and is no
+pull-request check. Neither is represented as full-project merge evidence: the full analysis and its Banking Grade validator run on every push to
 `dev`, a finding there turns the `dev` run red, and the next pull request repairs it. The #3377
 sequence is therefore possible again and is accepted by the owner; the red `dev` run is its signal.
 

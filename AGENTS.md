@@ -1703,8 +1703,8 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   repository variable, credential consumer, or protected context here.
   The hosted performance dashboard and quota-paced reviewer evaluated in ADR-0169 are fully
   retired: neither has repository configuration, an installed App, a workflow, or a protected
-  context. Sonar holds a pull request through the SonarJS rule step inside `ci` and the pre-push
-  scan, and runs in full on `dev` after integration (ADR-0131). Full mutation and
+  context. Sonar holds a pull request through the SonarJS rule step inside `ci`; the pre-push scan
+  is a skippable local supplement, and the full analysis runs on `dev` after integration (ADR-0131). Full mutation and
   reference-machine performance evidence run outside the PR critical path; fast OSS duplicate,
   secret, and deterministic performance proxies run inside `ci` in parallel.
 

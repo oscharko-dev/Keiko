@@ -60,8 +60,8 @@ stay on every pull request.
 ## Hosted supplemental checks
 
 Socket remains independently required. SonarCloud is no longer a protected context: pull requests
-are held by the `SonarJS rules on the changed files` step inside `ci` and the local pre-push scan,
-and `dev` is analyzed in full after integration (ADR-0131 amendment 2026-11-21). CodeRabbit uses the assertive profile on every
+are held by the `SonarJS rules on the changed files` step inside `ci` (the local pre-push scan is a
+skippable supplement, never a pull-request check), and `dev` is analyzed in full after integration (ADR-0131 amendment 2026-11-21). CodeRabbit uses the assertive profile on every
 `dev` pull request and every subsequent push with auto-pause disabled. Its status is not required
 because PR #2876 proved quota can omit a review while reporting success. When CodeRabbit emits an
 inline finding, GitHub's conversation-resolution requirement blocks merge until the thread is
@@ -96,7 +96,8 @@ tooling. No payment method or paid entitlement may be introduced to restore a re
 Since the ADR-0131 amendment of 2026-11-21 the full SonarCloud analysis runs on every push to
 `dev`, and `scripts/check-sonar-main-quality-gate.mjs` verifies it on that push and on a manual
 dispatch; pull
-requests are held by `check:sonar-rules` inside `ci` and the local pre-push scan.
+requests are held by `check:sonar-rules` inside `ci`; the local pre-push scan supplements it and
+can be skipped.
 `scripts/check-sonar-pr-quality-gate.mjs` remains the validator for a pull-request analysis that is
 run by hand; it is no longer a CI step. The repository validator binds the exact current head, native gate status,
 custom gate definition, metric values, unresolved issue count, and new-violation count. No review

@@ -936,9 +936,11 @@ All required status checks must pass on the current pull-request head before a c
 
 The full SonarCloud analysis is not a pull-request check (ADR-0131, amended 2026-11-21). It needs
 most of a hosted runner's memory, and its verdict depended on the runner rather than on the change.
-A pull request is held by two SonarJS checks of its changed files: the `SonarJS rules on the changed
-files` step of Core quality inside `ci`, and the local pre-push scan (`npm run gates:sonar`, run by
-`.githooks/pre-push` once `node scripts/install-git-hooks.mjs` has been run in the checkout).
+A pull request is held by the `SonarJS rules on the changed files` step of Core quality inside the
+required `ci`. The local pre-push scan (`npm run gates:sonar`, run by `.githooks/pre-push` once
+`node scripts/install-git-hooks.mjs` has been run in the checkout) adds the analyzer rules the
+plugin does not ship. It is a local check, not a pull-request check: a contributor can skip it (no
+hook installed, `git push --no-verify`), so it never stands in for the CI step.
 The full analysis runs on every push to `dev` and on a manual dispatch; a finding there turns the `dev` run
 red and is repaired by the next pull request.
 
@@ -998,8 +1000,8 @@ request here.
 
 Qodo is retired by
 [ADR-0167](docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md); it is not Sonar evidence.
-Sonar is enforced on pull requests by the SonarJS rule step inside `ci` and the pre-push scan,
-and in full on `dev` after integration. Full mutation runs daily/on demand and reference-machine performance evidence runs
+Sonar is enforced on pull requests by the SonarJS rule step inside `ci`, supplemented by the
+skippable local pre-push scan, and in full on `dev` after integration. Full mutation runs daily/on demand and reference-machine performance evidence runs
 outside the pull-request critical path. Fast semantic-duplication, secret, coverage, static-analysis,
 and deterministic performance proxies run in parallel on pull requests. Thresholds and operational details are
 in [`docs/qa/autonomous-quality-gates.md`](docs/qa/autonomous-quality-gates.md) and
