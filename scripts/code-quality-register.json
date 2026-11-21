@@ -8264,9 +8264,6 @@
     "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadArtifact.ts": {
       "anti-slop/no-unknown-parameters": 2
     },
-    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadNodeProcess.test.ts": {
-      "anti-slop/no-unknown-returns": 2
-    },
     "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadNodeProcess.ts": {
       "anti-slop/no-conditional-empty-object-spread": 2,
       "anti-slop/no-unknown-parameters": 1
@@ -11696,8 +11693,6 @@
     },
     "packages/keiko-server/src/qualityIntelligence/__tests__/coverageConsistency.test.ts": {
       "anti-slop/no-chained-type-assertions": 1,
-      "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unknown-returns": 1,
       "anti-slop/no-unsafe-dictionary-type": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 10
     },
@@ -11713,8 +11708,6 @@
     },
     "packages/keiko-server/src/qualityIntelligence/__tests__/editRoutes.test.ts": {
       "anti-slop/no-chained-type-assertions": 3,
-      "anti-slop/no-unknown-parameters": 2,
-      "anti-slop/no-unknown-returns": 2,
       "anti-slop/no-unsafe-dictionary-type": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 32
     },
@@ -11722,8 +11715,6 @@
       "anti-slop/no-chained-type-assertions": 3,
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/no-unknown-parameters": 19,
-      "anti-slop/no-unknown-returns": 19,
       "anti-slop/no-unsafe-dictionary-type": 6,
       "anti-slop/require-safety-comment-for-type-assertion": 76
     },
@@ -11799,8 +11790,6 @@
       "anti-slop/no-chained-type-assertions": 4,
       "anti-slop/no-conditional-empty-object-spread": 2,
       "anti-slop/no-runtime-typeof": 3,
-      "anti-slop/no-unknown-parameters": 8,
-      "anti-slop/no-unknown-returns": 8,
       "anti-slop/no-unsafe-dictionary-type": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 67
     },
@@ -11812,20 +11801,12 @@
     },
     "packages/keiko-server/src/qualityIntelligence/__tests__/retentionRoutes.test.ts": {
       "anti-slop/no-chained-type-assertions": 1,
-      "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unknown-returns": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 9
     },
     "packages/keiko-server/src/qualityIntelligence/__tests__/reviewRoutes.test.ts": {
       "anti-slop/no-chained-type-assertions": 2,
-      "anti-slop/no-unknown-parameters": 10,
-      "anti-slop/no-unknown-returns": 10,
       "anti-slop/no-unsafe-dictionary-type": 3,
       "anti-slop/require-safety-comment-for-type-assertion": 18
-    },
-    "packages/keiko-server/src/qualityIntelligence/__tests__/reviewStore.locking.test.ts": {
-      "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unknown-returns": 1
     },
     "packages/keiko-server/src/qualityIntelligence/__tests__/reviewStore.terminalMatrix.test.ts": {
       "anti-slop/no-known-value-widening": 1,
@@ -11875,16 +11856,12 @@
       "anti-slop/no-chained-type-assertions": 4,
       "anti-slop/no-conditional-empty-object-spread": 1,
       "anti-slop/no-known-value-widening": 1,
-      "anti-slop/no-unknown-parameters": 5,
-      "anti-slop/no-unknown-returns": 5,
       "anti-slop/no-unsafe-dictionary-type": 2,
       "anti-slop/require-safety-comment-for-type-assertion": 15
     },
     "packages/keiko-server/src/qualityIntelligence/__tests__/traceabilityRoutes.exportAudit.test.ts": {
       "anti-slop/no-chained-type-assertions": 2,
       "anti-slop/no-conditional-empty-object-spread": 1,
-      "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unknown-returns": 1,
       "anti-slop/no-unsafe-dictionary-type": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 7
     },
@@ -11892,16 +11869,13 @@
       "anti-slop/no-chained-type-assertions": 4,
       "anti-slop/no-conditional-empty-object-spread": 1,
       "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/no-unknown-parameters": 2,
-      "anti-slop/no-unknown-returns": 2,
       "anti-slop/no-unsafe-dictionary-type": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 24
     },
     "packages/keiko-server/src/qualityIntelligence/__tests__/uiRoutes.test.ts": {
       "anti-slop/no-known-value-widening": 2,
       "anti-slop/no-module-mocking": 1,
-      "anti-slop/no-unknown-parameters": 3,
-      "anti-slop/no-unknown-returns": 10,
+      "anti-slop/no-unknown-returns": 7,
       "anti-slop/no-unsafe-dictionary-type": 4,
       "anti-slop/require-safety-comment-for-type-assertion": 27
     },
