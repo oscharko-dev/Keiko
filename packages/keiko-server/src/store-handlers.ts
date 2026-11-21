@@ -229,7 +229,9 @@ async function runHandler(worker: () => Promise<RouteResult> | RouteResult): Pro
   } catch (error) {
     if (error instanceof BodyTooLargeError) return payloadTooLarge();
     if (error instanceof InvalidRequest) return badRequest("INVALID_REQUEST", error.message);
-    if (error instanceof UiStoreError) return uiStoreErrorResult(error);
+    // A store fault (status 500) is no client error: the top-level handler records its correlated
+    // diagnostic and answers with an opaque 500. A deliberate 503 keeps its retry answer.
+    if (error instanceof UiStoreError && error.status !== 500) return uiStoreErrorResult(error);
     throw error;
   }
 }
@@ -628,7 +630,9 @@ function runHandlerSync(worker: () => RouteResult): RouteResult {
     return worker();
   } catch (error) {
     if (error instanceof InvalidRequest) return badRequest("INVALID_REQUEST", error.message);
-    if (error instanceof UiStoreError) return uiStoreErrorResult(error);
+    // A store fault (status 500) is no client error: the top-level handler records its correlated
+    // diagnostic and answers with an opaque 500. A deliberate 503 keeps its retry answer.
+    if (error instanceof UiStoreError && error.status !== 500) return uiStoreErrorResult(error);
     throw error;
   }
 }

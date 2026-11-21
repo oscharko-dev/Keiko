@@ -6,7 +6,7 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 // subscribers, backpressure kills that detach only the non-draining client, and timer
 // teardown when the last subscriber leaves.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ServerResponse } from "node:http";
 import { EventEmitter } from "node:events";
 import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
@@ -17,6 +17,8 @@ import {
   type ActivitySubscriber,
 } from "./relationship-activity-broadcast.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import { UiStoreError } from "./store/errors.js";
 
 const REFRESH_MS = 5_000;
 const PING_MS = 30_000;
@@ -367,5 +369,110 @@ describe("ActivitySubscriber correlationId threading (#2902 audit finding 0)", (
       "corr-first",
       "corr-second",
     ]);
+  });
+});
+
+describe("a failing frame computation", () => {
+  let records: ServerDiagnosticRecord[] = [];
+  let fail = false;
+  let revision = 1;
+  const source = {
+    collectFrames: (): readonly ActivityFrame[] => {
+      // The store's row reader refuses a drifted row with this INTERNAL error.
+      if (fail)
+        throw new UiStoreError("INTERNAL", "A stored record holds an unexpected type.", 500);
+      return [frame("snap-1", revision)];
+    },
+    refreshMs: REFRESH_MS,
+    pingMs: PING_MS,
+    diagnostics: {
+      record: (record: ServerDiagnosticRecord): void => {
+        records.push(record);
+      },
+    },
+  };
+
+  beforeEach(() => {
+    records = [];
+    fail = false;
+    revision = 1;
+  });
+
+  it("records a failed tick under each subscriber's correlation and keeps the timer running", () => {
+    vi.useFakeTimers();
+    const scope = {};
+    const a = fakeSseRes();
+    const b = fakeSseRes();
+    const unsubA = subscribeActivityBroadcast(
+      scope,
+      "ws-fail",
+      { res: a.res, controller: new AbortController(), correlationId: "corr-subscriber-a" },
+      source,
+    );
+    const unsubB = subscribeActivityBroadcast(
+      scope,
+      "ws-fail",
+      { res: b.res, controller: new AbortController(), correlationId: "corr-subscriber-b" },
+      source,
+    );
+    fail = true;
+    // A throw escaping the interval callback would fail this call as an uncaught exception.
+    expect(() => vi.advanceTimersByTime(REFRESH_MS * 3)).not.toThrow();
+    expect(records.map((record) => record.correlationId)).toEqual([
+      "corr-subscriber-a",
+      "corr-subscriber-b",
+    ]);
+    expect(records[0]).toMatchObject({
+      operation: "GET /api/relationships/events",
+      source: "relationship-activity-broadcast",
+      errorClass: "UiStoreError",
+      message: "server-operation-failed",
+    });
+    expect(JSON.stringify(records)).not.toContain("unexpected type");
+    fail = false;
+    revision = 2;
+    vi.advanceTimersByTime(REFRESH_MS);
+    expect(a.written.filter((w) => w.includes('"rev":2'))).toHaveLength(1);
+    expect(b.written.filter((w) => w.includes('"rev":2'))).toHaveLength(1);
+    // A later failure is a new episode and is recorded again.
+    fail = true;
+    vi.advanceTimersByTime(REFRESH_MS);
+    expect(records).toHaveLength(4);
+    unsubA();
+    unsubB();
+    expect(_activeBroadcastCountForTests(scope)).toBe(0);
+  });
+
+  it("records a failed join under the joiner's correlation and sends it the state later", () => {
+    vi.useFakeTimers();
+    const scope = {};
+    const early = fakeSseRes();
+    const unsubEarly = subscribeActivityBroadcast(
+      scope,
+      "ws-join",
+      { res: early.res, controller: new AbortController(), correlationId: "corr-joined-early" },
+      source,
+    );
+    fail = true;
+    const late = fakeSseRes();
+    const lateController = new AbortController();
+    let unsubLate: (() => void) | undefined;
+    expect(() => {
+      unsubLate = subscribeActivityBroadcast(
+        scope,
+        "ws-join",
+        { res: late.res, controller: lateController, correlationId: "corr-joined-late" },
+        source,
+      );
+    }).not.toThrow();
+    expect(records.map((record) => record.correlationId)).toEqual(["corr-joined-late"]);
+    expect(lateController.signal.aborted).toBe(false);
+    fail = false;
+    vi.advanceTimersByTime(REFRESH_MS);
+    // The state did not change, yet the joiner that missed it receives it on the next tick.
+    expect(late.written.filter((w) => w.includes('"rev":1'))).toHaveLength(1);
+    unsubEarly();
+    unsubLate?.();
+    expect(_activeBroadcastCountForTests(scope)).toBe(0);
   });
 });

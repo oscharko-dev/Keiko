@@ -113,8 +113,10 @@ export function replayChatCreationIntent(
     if (chat !== undefined) logChatCreationIntent("reused", intent.correlationId);
     return chat;
   } catch (error) {
+    // A store refusal (status below 500) refuses the request; a store fault or any other error
+    // fails it.
     logChatCreationIntent(
-      error instanceof UiStoreError ? "refused" : "failed",
+      error instanceof UiStoreError && error.status < 500 ? "refused" : "failed",
       intent.correlationId,
     );
     throw error;
@@ -130,8 +132,10 @@ export function withChatCreationIntent(
   try {
     return settleChatCreationIntent(db, intent, create);
   } catch (error) {
+    // A store refusal (status below 500) refuses the request; a store fault or any other error
+    // fails it.
     logChatCreationIntent(
-      error instanceof UiStoreError ? "refused" : "failed",
+      error instanceof UiStoreError && error.status < 500 ? "refused" : "failed",
       intent.correlationId,
     );
     throw error;

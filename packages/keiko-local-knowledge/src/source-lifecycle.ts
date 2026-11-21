@@ -106,7 +106,9 @@ function parseScope(kind: string, json: string): KnowledgeSourceScope {
   if (typeof parsed !== "object" || parsed === null) {
     throw new KnowledgeStoreError(`Corrupt capsule_sources.scope_json (kind=${kind}).`);
   }
-  // Every scope write passes validateKnowledgeSourceScope, so the same validator admits the read.
+  // Every scope writer in this package runs validateKnowledgeSourceScope first, and so does the
+  // server's index-time realpath rewrite (canonicalizeCapsuleSourceRoots). So the same validator
+  // admits the read, and a stored scope it refuses is corrupt.
   const validation = validateKnowledgeSourceScope({ kind, ...parsed });
   if (!validation.ok) {
     throw new KnowledgeStoreError(`Corrupt capsule_sources.scope_json (kind=${kind}).`);

@@ -49,7 +49,7 @@ import {
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
-import { isValidCorrelationId } from "../correlation.js";
+import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   createCodingRuntimeManager,
@@ -287,6 +287,7 @@ import { processServerLogSink } from "../process-log-sink.js";
 import {
   openCodeCatalogAliasFor,
   openCodeCatalogSettlementBudgetMs,
+  recordCatalogDispatchUnbound,
 } from "../tool-catalog/catalogToolFacadeBridge.js";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -3826,7 +3827,12 @@ function prepareNativeBridgeBeginInput(
 ): (CodingToolNativeReadBeginInput & { readonly body: string }) | undefined {
   try {
     const owned = captureNativeReadBegin(input);
-    if (owned === undefined) return undefined;
+    if (owned === undefined) {
+      // A malformed context, offset or limit never reaches the producer, which recorded this
+      // refusal before the bridge captured the input itself (#3933).
+      recordCatalogDispatchUnbound(deps.activityLog, nativeBridgeCorrelationId(deps), "read");
+      return undefined;
+    }
     const body = privateNativeToolBody(
       owned.body,
       owned.capability,
@@ -3838,6 +3844,11 @@ function prepareNativeBridgeBeginInput(
     emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
     return undefined;
   }
+}
+
+// The bridge serves one run; its tool results are recorded under that run's correlation.
+function nativeBridgeCorrelationId(deps: ToolBridgeExecutionDeps): string {
+  return deps.renderedResults?.correlationId ?? UNKNOWN_CORRELATION_ID;
 }
 
 async function callNativeReadBegin(

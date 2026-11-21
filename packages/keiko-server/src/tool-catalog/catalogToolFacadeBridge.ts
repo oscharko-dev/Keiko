@@ -932,15 +932,27 @@ function recordUnbound(
   request: Pick<CodingToolActionRequest, "action">,
 ): void {
   const context = bridgeInput.context();
-  bridgeInput.logPort.primary.write(
+  recordCatalogDispatchUnbound(
+    bridgeInput.logPort.primary,
+    context?.correlationId ?? UNKNOWN_CORRELATION_ID,
+    request.action,
+  );
+}
+
+/**
+ * Records a tool request that no canonical catalog binding admitted. The private native read
+ * bridge refuses a malformed read before it reaches this catalog and records it here too.
+ */
+export function recordCatalogDispatchUnbound(
+  sink: CatalogLifecycleLogPort["primary"],
+  correlationId: string,
+  action: CodingToolActionRequest["action"],
+): void {
+  sink.write(
     activityLogEvent(
       TOOL_CATALOG_DISPATCH_UNBOUND_OPERATION,
-      {
-        level: "warn",
-        correlationId: context?.correlationId ?? UNKNOWN_CORRELATION_ID,
-        errorKind: "unavailable",
-      },
-      { action: request.action },
+      { level: "warn", correlationId, errorKind: "unavailable" },
+      { action },
     ),
   );
 }

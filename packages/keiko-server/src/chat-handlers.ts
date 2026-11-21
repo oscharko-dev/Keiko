@@ -571,6 +571,15 @@ export function desktopChatErrorResult(
   if (error instanceof CatalogDispatchFault)
     return catalogDispatchErrorResult(error, deps, correlationId, emitDiagnostic);
   if (error instanceof UiStoreError) {
+    // A store fault (status 500 or above) leaves a correlated, body-free diagnostic.
+    if (error.status >= 500 && emitDiagnostic)
+      emitGatewayErrorDiagnostic(
+        deps,
+        error,
+        correlationId,
+        "POST /api/desktop/chat",
+        "chat.store",
+      );
     return {
       status: error.status,
       body: errorBody(error.code, redactErrorMessage(error.message, deps)),

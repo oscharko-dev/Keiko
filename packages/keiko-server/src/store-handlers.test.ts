@@ -38,6 +38,7 @@ import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore, type ChatConnectedScope } from "./store/index.js";
+import { UiStoreError } from "./store/errors.js";
 import {
   clearAllGroundedContextIndexes,
   groundedContextIndexRegistry,
@@ -2926,6 +2927,35 @@ describe("GET chats by ID review regressions", () => {
       expect(result).toMatchObject({ status: 400, body: { error: { code: "INVALID_REQUEST" } } });
     },
   );
+
+  it("rethrows a store fault so the top-level handler answers with a correlated 500", () => {
+    store.createProject(projDir);
+    vi.spyOn(store, "listChats").mockImplementation(() => {
+      throw new UiStoreError(
+        "INTERNAL",
+        "A stored record holds a value of an unexpected type.",
+        500,
+      );
+    });
+    expect(() =>
+      handleListChats(
+        directRouteContext(`/api/chats?projectPath=${encodeURIComponent(projDir)}`).ctx,
+        deps(),
+      ),
+    ).toThrow(UiStoreError);
+  });
+
+  it("still answers a client-side store refusal with its own status", () => {
+    store.createProject(projDir);
+    vi.spyOn(store, "listChats").mockImplementation(() => {
+      throw new UiStoreError("NOT_FOUND", "Project not found.", 404);
+    });
+    const result = handleListChats(
+      directRouteContext(`/api/chats?projectPath=${encodeURIComponent(projDir)}`).ctx,
+      deps(),
+    );
+    expect(result).toMatchObject({ status: 404, body: { error: { code: "NOT_FOUND" } } });
+  });
 
   it("does not expose a Coding History chat through the ordinary ID lookup", () => {
     const history = store.codingHistory;
