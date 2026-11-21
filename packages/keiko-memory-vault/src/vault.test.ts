@@ -36,6 +36,7 @@ import {
   type MemoryVaultStore,
 } from "./index.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
+import { listMemoryMetadataByBodyHashRows, type MemoryRowSealing } from "./memories.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -435,6 +436,139 @@ describe("onMemoryEvent fires post-commit and never on rollback", () => {
     expect(v.listOutgoingEdges("m1" as MemoryId)).toEqual([]);
     expect(v.listIncomingEdges("m2" as MemoryId)).toEqual([]);
     expect(v.getAccessStats(["m1" as MemoryId]).get("m1" as MemoryId)).toBeUndefined();
+    v.close();
+  });
+});
+
+describe("deleting a record inside a supersession lineage (#4223)", () => {
+  function chain(v: MemoryVaultStore, ids: readonly string[]): void {
+    for (const id of ids) v.insertMemory(makeMemory({ id: id as MemoryId }));
+    ids.slice(1).forEach((to, index) => {
+      v.insertEdge({
+        id: `e-${ids[0] ?? ""}-${String(index)}` as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: ids[index] as MemoryId,
+        toMemoryId: to as MemoryId,
+        kind: "supersedes",
+        createdAt: 1_700_000_000_500,
+      });
+    });
+  }
+  const later = (v: MemoryVaultStore, id: string): readonly string[] =>
+    v
+      .listOutgoingEdges(id as MemoryId)
+      .filter((edge) => edge.kind === "supersedes")
+      .map((edge) => edge.toMemoryId);
+  const options = { tombstone: true, forgetterSurface: "test", reason: "test", nowMs: 1 } as const;
+
+  it("links the surviving earlier value to the newer one when a middle value is deleted", () => {
+    const v = openVault(freshDir());
+    chain(v, ["a", "b", "c"]);
+    v.deleteMemory("b" as MemoryId, options);
+    expect(later(v, "a")).toEqual(["c"]);
+    v.close();
+  });
+
+  it("bridges through every record one batch deletes, and adds nothing with no survivor", () => {
+    const v = openVault(freshDir());
+    chain(v, ["a", "b", "c", "d"]);
+    chain(v, ["x", "y"]);
+    v.deleteMemories([
+      { id: "b" as MemoryId, options },
+      { id: "c" as MemoryId, options },
+      { id: "y" as MemoryId, options },
+    ]);
+    expect(later(v, "a")).toEqual(["d"]);
+    expect(later(v, "x")).toEqual([]);
+    v.close();
+  });
+
+  it("never bridges across a record of another scope", () => {
+    // A(user) -> B(project) -> C(user): C's earlier values stop at B, so deleting B must not link A
+    // to C, which would hand A to a later forget of C (ADR-0146).
+    const w = openVault(freshDir());
+    w.insertMemory(makeMemory({ id: "a" as MemoryId }));
+    w.insertMemory(
+      makeMemory({
+        id: "b" as MemoryId,
+        scope: { kind: "project", projectId: "p-1" as ProjectId },
+      }),
+    );
+    w.insertMemory(makeMemory({ id: "c" as MemoryId }));
+    for (const [from, to] of [
+      ["a", "b"],
+      ["b", "c"],
+    ] as const) {
+      w.insertEdge({
+        id: `e-${from}-${to}` as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: from as MemoryId,
+        toMemoryId: to as MemoryId,
+        kind: "supersedes",
+        createdAt: 1_700_000_000_500,
+      });
+    }
+    w.deleteMemory("b" as MemoryId, options);
+    expect(later(w, "a")).toEqual([]);
+    w.close();
+  });
+
+  it("bridges a delete although an edge's sealed provenance is damaged", () => {
+    // The walk reads only the clear endpoint and kind columns, so neither a damaged related edge
+    // nor a damaged supersedes edge on the deleted record can roll back the person's forget.
+    const dir = freshDir();
+    const v = openVault(dir);
+    chain(v, ["a", "b", "c"]);
+    v.insertMemory(makeMemory({ id: "d" as MemoryId }));
+    v.insertEdge({
+      id: "e-related" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: "b" as MemoryId,
+      toMemoryId: "d" as MemoryId,
+      kind: "related",
+      createdAt: 1_700_000_000_600,
+      provenanceSummary: "related",
+    });
+    v.close();
+    const raw = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    try {
+      raw
+        .prepare("UPDATE memory_edges SET provenance_summary = ? WHERE id IN (?, ?)")
+        .run("kv1.not-valid", "e-related", "e-a-0");
+    } finally {
+      raw.close();
+    }
+    const reopened = openVault(dir);
+    try {
+      reopened.deleteMemory("b" as MemoryId, options);
+      expect(later(reopened, "a")).toEqual(["c"]);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("adds no edge twice and no self edge in a cycle", () => {
+    const v = openVault(freshDir());
+    chain(v, ["a", "b", "c"]);
+    v.insertEdge({
+      id: "e-direct" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: "a" as MemoryId,
+      toMemoryId: "c" as MemoryId,
+      kind: "supersedes",
+      createdAt: 1_700_000_000_600,
+    });
+    v.insertEdge({
+      id: "e-back" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: "c" as MemoryId,
+      toMemoryId: "a" as MemoryId,
+      kind: "supersedes",
+      createdAt: 1_700_000_000_700,
+    });
+    v.deleteMemory("b" as MemoryId, options);
+    expect(later(v, "a")).toEqual(["c"]);
+    expect(later(v, "c")).toEqual(["a"]);
     v.close();
   });
 });
@@ -1113,6 +1247,35 @@ describe("list filters", () => {
         vault.updateMemory(record.id, { tags: ["after-failure"] }, record.updatedAt + 1).tags,
       ).toEqual(["after-failure"]);
       expect(vault.listMemoryReviewQueue().map(({ id }) => id)).toEqual([record.id]);
+    } finally {
+      vault.close();
+    }
+  });
+
+  it("keeps superseded history out of the review queue, whatever its stale reason (#4223, audit A5)", () => {
+    const vault = openVault(freshDir());
+    try {
+      vault.insertMemory(
+        makeMemory({
+          id: "replaced" as MemoryId,
+          status: "superseded",
+          staleReason: "replaced by a newer statement",
+        }),
+      );
+      vault.insertMemory(makeMemory({ id: "waiting" as MemoryId, status: "proposed" }));
+      vault.insertMemory(
+        makeMemory({
+          id: "changed" as MemoryId,
+          status: "accepted",
+          staleReason: "changed-source",
+        }),
+      );
+      expect(
+        vault
+          .listMemoryReviewQueue()
+          .map(({ id }) => id)
+          .sort(),
+      ).toEqual(["changed", "waiting"]);
     } finally {
       vault.close();
     }
@@ -1838,5 +2001,325 @@ describe("activity-log seam: memory-vault.store.opened retains the key-resolutio
     expect(() => {
       rmSync(dir, { recursive: true, force: true });
     }).not.toThrow();
+  });
+});
+
+describe("exact body lookup by the keyed fingerprint index (v17)", () => {
+  const scope = { kind: "user", userId: "u-1" as UserId } as const;
+  const otherScope = { kind: "user", userId: "u-2" as UserId } as const;
+
+  function insertNumbered(vault: MemoryVaultStore, count: number, startMs: number): void {
+    for (let index = 0; index < count; index += 1) {
+      const t = startMs + index;
+      vault.insertMemory(
+        makeMemory({
+          id: `filler-${String(index)}` as MemoryId,
+          body: `filler fact number ${String(index)}`,
+          createdAt: t,
+          updatedAt: t,
+        }),
+      );
+    }
+  }
+
+  it("finds the oldest of 251 facts by its body, whatever its case and punctuation", () => {
+    const vault = openVault(freshDir());
+    vault.insertMemory(
+      makeMemory({ id: "old" as MemoryId, body: "I hand over on-call on Mondays." }),
+    );
+    insertNumbered(vault, 250, 1_700_000_001_000);
+
+    const found = vault.listMemoryMetadataByBody(scope, "i hand over ON CALL on mondays", {
+      status: ["accepted"],
+    });
+
+    expect(found.map(({ id }) => id)).toEqual(["old"]);
+    expect(vault.listMemoryMetadataByBody(otherScope, "I hand over on-call on Mondays.")).toEqual(
+      [],
+    );
+    expect(
+      vault.listMemoryMetadataByBody(scope, "I hand over on-call on Mondays.", {
+        status: ["proposed"],
+      }),
+    ).toEqual([]);
+    vault.close();
+  });
+
+  it("follows a body edit: the new body is found, the old one no longer", () => {
+    const vault = openVault(freshDir());
+    vault.insertMemory(makeMemory({ id: "m" as MemoryId, body: "prefers dark mode" }));
+
+    vault.updateMemory("m" as MemoryId, { body: "prefers light mode" }, 1_700_000_000_500);
+
+    expect(vault.listMemoryMetadataByBody(scope, "prefers dark mode")).toEqual([]);
+    expect(vault.listMemoryMetadataByBody(scope, "prefers light mode").map(({ id }) => id)).toEqual(
+      ["m"],
+    );
+    vault.close();
+  });
+
+  it("fills the fingerprints of a vault written before v17 when it opens, and reports the count", () => {
+    const dir = freshDir();
+    const first = openVault(dir);
+    first.insertMemory(makeMemory({ id: "a" as MemoryId, body: "prefers dark mode" }));
+    first.insertMemory(makeMemory({ id: "b" as MemoryId, body: "works in Leeds" }));
+    first.close();
+    const raw = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    raw.exec("DROP INDEX idx_memories_scope_body_hash");
+    raw.exec("DROP INDEX idx_memories_body_hash_pending");
+    raw.exec("ALTER TABLE memories DROP COLUMN body_hash");
+    raw.exec("PRAGMA user_version = 16");
+    raw.close();
+    const events: MemoryVaultLogEvent[] = [];
+
+    const reopened = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: TEST_VAULT_KEY,
+      logSink: { write: (event): void => void events.push(event) },
+    });
+
+    expect(reopened.listMemoryMetadataByBody(scope, "Works in Leeds!").map(({ id }) => id)).toEqual(
+      ["b"],
+    );
+    const opened = events.filter((event) => event.op === "memory-vault.store.opened");
+    expect(opened[0]?.extra).toMatchObject({ bodyHashFilledCount: 2, bodyHashUnreadableCount: 0 });
+    const persisted = expectActivityLogProof(
+      "memory-vault.store.opened.body-hash-backfill",
+      formatActivityLogProofLine(opened[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ bodyHashFilledCount: 2, bodyHashUnreadableCount: 0 });
+    reopened.close();
+    const again: MemoryVaultLogEvent[] = [];
+    createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: TEST_VAULT_KEY,
+      logSink: { write: (event): void => void again.push(event) },
+    }).close();
+    expect(
+      again.find((event) => event.op === "memory-vault.store.opened")?.extra,
+    ).not.toHaveProperty("bodyHashFilledCount");
+  });
+
+  it("opens although the fill cannot write, still finds pending rows, and fills at a later open", () => {
+    const dir = freshDir();
+    const first = openVault(dir);
+    first.insertMemory(makeMemory({ id: "a" as MemoryId, body: "prefers dark mode" }));
+    first.insertMemory(
+      makeMemory({
+        id: "r" as MemoryId,
+        body: "works in Leeds",
+        status: "rejected",
+        validity: { validFrom: 1_700_000_000_000, validUntil: 1_700_000_000_001 },
+      }),
+    );
+    first.insertMemory(
+      makeMemory({ id: "o" as MemoryId, body: "prefers dark mode", scope: otherScope }),
+    );
+    first.close();
+    const raw = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    raw.exec("UPDATE memories SET body_hash = NULL");
+    raw.exec(`CREATE TRIGGER block_fill BEFORE UPDATE OF body_hash ON memories
+      BEGIN SELECT RAISE(ABORT, 'blocked'); END`);
+    raw.close();
+    const open = (events: MemoryVaultLogEvent[]): MemoryVaultStore =>
+      createMemoryVault({
+        memoryDir: dir,
+        env: { KEIKO_MEMORY_DIR: dir },
+        vaultKey: TEST_VAULT_KEY,
+        logSink: { write: (event): void => void events.push(event) },
+      });
+
+    const blocked: MemoryVaultLogEvent[] = [];
+    const deferredVault = open(blocked);
+    expect(
+      deferredVault.listMemoryMetadataByBody(scope, "Prefers dark mode!").map(({ id }) => id),
+    ).toEqual(["a"]);
+    expect(
+      deferredVault
+        .listMemoryMetadataByBody(scope, "works in Leeds", {
+          status: ["rejected"],
+          includeExpired: true,
+        })
+        .map(({ id }) => id),
+    ).toEqual(["r"]);
+    expect(deferredVault.listMemoryMetadataByBody(scope, "works in Leeds")).toEqual([]);
+    expect(
+      deferredVault.listMemoryMetadataByBody(scope, "prefers dark mode", { status: ["proposed"] }),
+    ).toEqual([]);
+    expect(blocked.find((event) => event.op === "memory-vault.store.opened")?.extra).toMatchObject({
+      bodyHashFilledCount: 0,
+      bodyHashUnreadableCount: 0,
+      bodyHashBackfillDeferred: true,
+    });
+    deferredVault.close();
+    const unblock = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    unblock.exec("DROP TRIGGER block_fill");
+    unblock.close();
+
+    const later: MemoryVaultLogEvent[] = [];
+    const filled = open(later);
+    expect(filled.listMemoryMetadataByBody(scope, "prefers dark mode").map(({ id }) => id)).toEqual(
+      ["a"],
+    );
+    expect(later.find((event) => event.op === "memory-vault.store.opened")?.extra).toMatchObject({
+      bodyHashFilledCount: 3,
+    });
+    filled.close();
+  });
+
+  it("reads a pending match and its row from one snapshot while another connection edits it", () => {
+    const dir = freshDir();
+    const first = openVault(dir);
+    first.insertMemory(
+      makeMemory({ id: "a" as MemoryId, body: "prefers dark mode", updatedAt: 1_700_000_000_000 }),
+    );
+    first.close();
+    const file = join(dir, MEMORY_DB_FILENAME);
+    const reader = new DatabaseSync(file);
+    const writer = new DatabaseSync(file);
+    reader.exec("UPDATE memories SET body_hash = NULL");
+    let edited = false;
+    // The scan opens the pending body; at that moment another connection rewrites the row to a
+    // different fact, as a concurrent edit would.
+    const sealing: MemoryRowSealing = {
+      cipher: {
+        sealString: (plaintext) => plaintext,
+        openString: () => {
+          if (!edited) {
+            writer.exec(
+              "UPDATE memories SET body_hash = 'h:works in leeds', updated_at = 1700000009999 WHERE id = 'a'",
+            );
+            edited = true;
+          }
+          return "prefers dark mode";
+        },
+        sealBytes: (buf) => buf,
+        openBytes: (envelope) => envelope,
+        isSealed: () => true,
+      },
+      bodyHash: (body) => `h:${body}`,
+    };
+
+    const found = listMemoryMetadataByBodyHashRows(
+      reader,
+      scope,
+      "prefers dark mode",
+      sealing,
+      {},
+      1_700_000_000_000,
+    );
+
+    expect(edited).toBe(true);
+    expect(found.map(({ id, updatedAt }) => ({ id, updatedAt }))).toEqual([
+      { id: "a", updatedAt: 1_700_000_000_000 },
+    ]);
+    expect(reader.isTransaction).toBe(false);
+    writer.close();
+    reader.close();
+  });
+
+  it("ends the read snapshot when the lookup fails, so the connection stays usable", () => {
+    const dir = freshDir();
+    openVault(dir).close();
+    const reader = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    const failing: MemoryRowSealing = {
+      cipher: {
+        sealString: (plaintext) => plaintext,
+        openString: (envelope) => envelope,
+        sealBytes: (buf) => buf,
+        openBytes: (envelope) => envelope,
+        isSealed: () => true,
+      },
+      bodyHash: () => {
+        throw new Error("hash unavailable");
+      },
+    };
+
+    expect(() =>
+      listMemoryMetadataByBodyHashRows(reader, scope, "prefers dark mode", failing, {}, 0),
+    ).toThrow("hash unavailable");
+    expect(reader.isTransaction).toBe(false);
+    reader.close();
+  });
+
+  it("reads inside a transaction the caller already holds and leaves it open", () => {
+    const dir = freshDir();
+    const first = openVault(dir);
+    first.insertMemory(makeMemory({ id: "a" as MemoryId, body: "prefers dark mode" }));
+    first.close();
+    const reader = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    const sealing: MemoryRowSealing = {
+      cipher: {
+        sealString: (plaintext) => plaintext,
+        openString: () => "prefers dark mode",
+        sealBytes: (buf) => buf,
+        openBytes: (envelope) => envelope,
+        isSealed: () => true,
+      },
+      bodyHash: (body) => `h:${body}`,
+    };
+    reader.exec("UPDATE memories SET body_hash = NULL");
+    reader.exec("BEGIN");
+
+    const found = listMemoryMetadataByBodyHashRows(
+      reader,
+      scope,
+      "prefers dark mode",
+      sealing,
+      {},
+      1_700_000_000_000,
+    );
+
+    expect(found.map(({ id }) => id)).toEqual(["a"]);
+    expect(reader.isTransaction).toBe(true);
+    reader.exec("ROLLBACK");
+    reader.close();
+  });
+
+  it("pages over rows with one timestamp without skipping or repeating one", () => {
+    const vault = openVault(freshDir());
+    const wordings = ["C++", "C#", "C", "C!", "C?", "C.", "C,", "C;", "C:", "C…", "c"];
+    wordings.forEach((body, index) => {
+      vault.insertMemory(makeMemory({ id: `w-${String(index)}` as MemoryId, body }));
+    });
+
+    const seen: string[] = [];
+    for (let offset = 0; offset < wordings.length; offset += 4) {
+      const page = vault.listMemoryMetadataByBody(scope, "C", { limit: 4, offset });
+      seen.push(...page.map(({ id }) => id));
+    }
+
+    const ids = wordings.map((_, index) => `w-${String(index)}`);
+    expect(seen).toEqual([...ids].sort().reverse());
+    vault.close();
+  });
+
+  it("keeps opening a vault whose sealed body cannot be read, and counts that row", () => {
+    const dir = freshDir();
+    const first = openVault(dir);
+    first.insertMemory(makeMemory({ id: "a" as MemoryId, body: "prefers dark mode" }));
+    first.insertMemory(makeMemory({ id: "b" as MemoryId, body: "works in Leeds" }));
+    first.close();
+    const raw = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    raw.exec("UPDATE memories SET body_hash = NULL");
+    raw.exec("UPDATE memories SET body = 'kv1.not-valid' WHERE id = 'a'");
+    raw.close();
+    const events: MemoryVaultLogEvent[] = [];
+
+    const reopened = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: TEST_VAULT_KEY,
+      logSink: { write: (event): void => void events.push(event) },
+    });
+
+    expect(reopened.listMemoryMetadataByBody(scope, "works in Leeds").map(({ id }) => id)).toEqual([
+      "b",
+    ]);
+    const opened = events.filter((event) => event.op === "memory-vault.store.opened");
+    expect(opened[0]?.extra).toMatchObject({ bodyHashFilledCount: 1, bodyHashUnreadableCount: 1 });
+    reopened.close();
   });
 });

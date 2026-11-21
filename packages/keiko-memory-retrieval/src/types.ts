@@ -39,6 +39,11 @@ export interface MemoryQueryPort {
   listOutgoingEdges?(memoryId: MemoryId): readonly MemoryEdge[];
   /** Fetch incoming edges. */
   listIncomingEdges?(memoryId: MemoryId): readonly MemoryEdge[];
+  /**
+   * Fetch one record by id, whatever its status. Lets the standing-profile lineage walk reach a
+   * superseded predecessor by edge although the list read leaves history out.
+   */
+  getMemory?(memoryId: MemoryId): MemoryRecord | undefined;
   /** Fetch all incident edges for the candidate set in one bounded pass. */
   listEdgesForMemories?(
     memoryIds: readonly MemoryId[],
@@ -49,6 +54,11 @@ export interface ListByScopeOptions {
   readonly includeForgotten?: boolean;
   readonly includeArchived?: boolean;
   readonly includeExpired?: boolean;
+  /**
+   * History (status `superseded`) stays out of the read window unless a caller asks for it, so a
+   * live record is never pushed out of a bounded read by replaced ones.
+   */
+  readonly includeSuperseded?: boolean;
   readonly maxResults?: number;
 }
 
@@ -155,7 +165,8 @@ export interface MemoryRetrievalRequest {
   // relevance vs novelty (1 = pure relevance / inert, lower = more diverse); defaults to 0.7.
   readonly embeddingById?: ReadonlyMap<MemoryId, Float32Array>;
   readonly mmrLambda?: number;
-  // Signal-fusion strategy (#204, O-F2). Defaults to "weighted-sum" (byte-identical legacy ranking);
+  // Signal-fusion strategy (#204, O-F2). Defaults to "weighted-sum" (the legacy ranking; with edges
+  // supplied, a tied group straddling the graph cut is left out of the high-rank set in both modes);
   // "rrf" opts into rank-based Reciprocal Rank Fusion.
   readonly fusion?: RankingFusionMode;
   // Opt-in strict relevance floor for Chat (#4228). A memory is retrieved only when the question
@@ -186,6 +197,12 @@ export interface MemoryContextBlockEntry {
   readonly confidence: number;
   readonly status: MemoryStatus;
   readonly capturedAt: number;
+  /**
+   * Excerpts of the values this memory replaced, nearest first (#4223): a corrected fact keeps its
+   * superseded values as history, and only they answer what held before. Present only when the
+   * memory has superseded predecessors in its own scope and the entry's share of the budget held them.
+   */
+  readonly earlierValues?: readonly string[];
 }
 
 export interface MemoryContextBlock {

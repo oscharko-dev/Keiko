@@ -330,7 +330,10 @@ describe("dev quality workflows", () => {
     );
     expect(sonarEvidence).toMatchObject({
       if: "${{ always() && steps.sonar-scan.outcome != 'skipped' }}",
-      run: 'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log" --require-full-analysis',
+      run:
+        'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log" ' +
+        "--require-full-analysis --require-runner-memory-budget " +
+        `--runner-swap-mb "$(awk '/^SwapTotal:/ { print int($2 / 1024) }' /proc/meminfo)"`,
     });
     expect(ci).not.toContain("oscharko-dev/Keiko/.github/actions/verify-");
     expect(ciWorkflow.jobs["coverage-sonar"]["timeout-minutes"]).toBe(50);
@@ -415,13 +418,23 @@ describe("dev quality workflows", () => {
     expect(unsafePathFallback).not.toContain('report_scope="all"');
   });
 
-  it("caps the scanner JVM so the JS/TS analyzer's Node.js heap keeps the runner memory (#2360)", () => {
+  // #2360 capped SONAR_SCANNER_OPTS, which sizes only the CLI bootstrapper; the provisioned engine
+  // JVM stayed at a quarter of the runner and the runner was lost mid-scan (#4481). Pin the engine
+  // cap itself and the log check that proves both heaps fit the runner on every analysis.
+  it("caps the scanner engine JVM and proves the runner memory budget (#2360, #4481)", () => {
     const scanAt = ci.indexOf("SonarCloud CI-based analysis");
-    const scanStep = ci.slice(
-      scanAt,
-      ci.indexOf("- name: Verify Sonar full-analysis evidence", scanAt),
+    const verifyAt = ci.indexOf("- name: Verify Sonar full-analysis evidence", scanAt);
+    const scanStep = ci.slice(scanAt, verifyAt);
+    const verifyStep = ci.slice(verifyAt, ci.indexOf("- name:", verifyAt + 1));
+    expect(scanStep).toMatch(/^\s+SONAR_SCANNER_OPTS: "-Xmx512m"$/mu);
+    expect(scanStep).toMatch(/^\s+SONAR_SCANNER_JAVA_OPTS: "-Xmx6144m"$/mu);
+    expect(scanStep).toMatch(/^\s+sudo swapon \/sonar-extra\.swap$/mu);
+    expect(verifyStep).toContain("--require-full-analysis");
+    expect(verifyStep).toContain("--require-runner-memory-budget");
+    expect(verifyStep).toContain("--runner-swap-mb");
+    expect(localSonarCompose).toContain(
+      'SONAR_SCANNER_JAVA_OPTS: "${KEIKO_LOCAL_SONAR_ENGINE_JAVA_OPTS:--Xmx2048m}"',
     );
-    expect(scanStep).toMatch(/^\s+SONAR_SCANNER_OPTS: "-Xmx1536m"$/mu);
   });
 
   it("keeps scanner files, logs, and working data outside the repository", () => {

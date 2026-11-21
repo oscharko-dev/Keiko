@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "two-memories-format-de",
+  "language": "de",
+  "class": "two-memories",
+  "description": "A format preference and a narrower exception learned as two statements; a direct question and an indirect one. Limit: an answer that needs both the rule and its exception needs both retrieved; the profile carries the preference to every answer but not the exception. Failure means: needed-memory-missing names the exception (or the rule) that did not reach the model. Maintenance: no seed and no aged records, so on or off changes nothing. Kind: capability.",
+  "truth": [
+    {
+      "key": "rule",
+      "seed": "Berichte bekomme ich als ODT-Datei.",
+      "must": false,
+      "terms": [["ODT", "OpenDocument"]]
+    },
+    {
+      "key": "exception",
+      "seed": "Berichte zu Mittelstandskunden bekomme ich ausnahmsweise als RTF-Datei.",
+      "must": false,
+      "terms": [["RTF", "Rich Text"]],
+      "with": [["Mittelstand*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Berichte bekomme ich als ODT-Datei.",
+      "learner": [
+        {
+          "body": "Berichte bekomme ich als ODT-Datei.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "Berichte zu Mittelstandskunden bekomme ich ausnahmsweise als RTF-Datei.",
+      "learner": [
+        {
+          "body": "Berichte zu Mittelstandskunden bekomme ich ausnahmsweise als RTF-Datei.",
+          "type": "fact"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "direct",
+      "question": "In welchen Formaten bekomme ich Berichte?",
+      "expect": {
+        "kind": "answer",
+        "needs": ["rule", "exception"]
+      }
+    },
+    {
+      "id": "indirect",
+      "question": "In welcher Form erreichen mich Zusammenfassungen, auch wenn es um Kunden aus dem Mittelstand geht?",
+      "expect": {
+        "kind": "answer",
+        "needs": ["rule", "exception"]
+      }
+    }
+  ]
+}

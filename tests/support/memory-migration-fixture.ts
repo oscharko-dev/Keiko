@@ -1,7 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { MIGRATIONS } from "../../packages/keiko-memory-vault/src/schema.js";
-import { insertMemoryRow } from "../../packages/keiko-memory-vault/src/memories.js";
-import { makeRecord, memId, TEST_CIPHER } from "../../packages/keiko-memory-vault/src/_support.js";
+import {
+  insertPreV17MemoryRow,
+  makeRecord,
+  memId,
+} from "../../packages/keiko-memory-vault/src/_support.js";
 
 /** Real V12 DDL with the missing legacy column observed in the startup incident. */
 export function seedBrokenV12MemoryVault(path: string): void {
@@ -16,7 +19,7 @@ export function seedBrokenV12MemoryVault(path: string): void {
       "PRAGMA user_version = 12; ALTER TABLE memory_access DROP COLUMN last_accessed_conversation_id",
     );
     const id = memId("memory-migration-fixture");
-    insertMemoryRow(db, makeRecord({ id, body: "migration-row-canary" }), TEST_CIPHER);
+    insertPreV17MemoryRow(db, makeRecord({ id, body: "migration-row-canary" }));
     db.prepare(
       "INSERT INTO memory_access (memory_id, last_accessed_at, access_count) VALUES (?, 1000, 3)",
     ).run(id);

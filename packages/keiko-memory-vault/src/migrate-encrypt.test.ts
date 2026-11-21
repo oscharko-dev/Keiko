@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { insertMemoryRow } from "./memories.js";
 import { encryptExistingContent } from "./migrate-encrypt.js";
-import { makeRecord, memId, openTestDb, TEST_CIPHER } from "./_support.js";
+import { makeRecord, memId, openTestDb, TEST_CIPHER, TEST_SEALING } from "./_support.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
 import {
   expectActivityLogProof,
@@ -59,7 +59,7 @@ describe("encryptExistingContent — memory-vault.store.encryption-migrated even
   // unobservable from the activity log.
   it("emits exactly one event, with fromScope/toScope/durationMs, when content is re-sealed", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_CIPHER);
+    insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_SEALING);
     overwriteBodyWithPlaintext(db, "m1", "plaintext body");
     const { sink, events } = recordingSink();
 
@@ -93,7 +93,7 @@ describe("encryptExistingContent — memory-vault.store.encryption-migrated even
 
   it("is idempotent: a sweep over already-sealed content emits nothing", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_CIPHER);
+    insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_SEALING);
     overwriteBodyWithPlaintext(db, "m1", "plaintext body");
     encryptExistingContent(db, TEST_CIPHER); // first sweep, no sink — must not throw either.
 
@@ -106,7 +106,7 @@ describe("encryptExistingContent — memory-vault.store.encryption-migrated even
 
   it("never throws when no sink is supplied", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_CIPHER);
+    insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_SEALING);
     overwriteBodyWithPlaintext(db, "m1", "plaintext body");
 
     expect(() => {
@@ -128,7 +128,7 @@ describe("encryptExistingContent — memory-vault.store.encryption-migrated even
   it("never lets a throwing sink surface as a migration failure, and reports the drop", () => {
     const warnSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
     const db = openTestDb();
-    insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_CIPHER);
+    insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_SEALING);
     overwriteBodyWithPlaintext(db, "m1", "plaintext body");
     const dead: MemoryVaultLogSink = {
       write: (): never => {

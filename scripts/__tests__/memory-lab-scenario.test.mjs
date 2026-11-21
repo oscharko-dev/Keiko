@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
+import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   SCENARIO_CLASSES,
@@ -27,11 +28,50 @@ function valid() {
   };
 }
 
+// The lab directory as a filesystem path. `URL.pathname` keeps `%20` for a space and a drive letter
+// as `/C:/`, so it names another path; `fileURLToPath` converts the URL.
+function labRoot(base = import.meta.url) {
+  return fileURLToPath(new URL("../testing/memory-lab/", base));
+}
+
 describe("memory lab scenario format", () => {
   let directory;
   afterEach(() => {
     if (directory) rmSync(directory, { recursive: true, force: true });
     directory = undefined;
+  });
+
+  describe("the lab directory in a test", () => {
+    it("is a real path when the checkout path contains a space", () => {
+      directory = mkdtempSync(join(tmpdir(), "memory lab space-"));
+      const base = pathToFileURL(join(directory, "scripts", "__tests__", "x.test.mjs")).href;
+      expect(new URL("../testing/memory-lab/", base).pathname).toContain("%20");
+      expect(labRoot(base)).toBe(join(directory, "scripts", "testing", "memory-lab") + sep);
+      expect(labRoot()).not.toContain("%20");
+    });
+  });
+
+  describe("truth keys", () => {
+    const fact = (key, term) => ({ key, seed: `Ich mag ${term}.`, must: true, terms: [[term]] });
+
+    it("refuses two truths with one key, and keeps distinct keys valid", () => {
+      // The failure this pins: the second truth was swallowed, `wantedOf` took the first, and an
+      // answer with only the first truth's term passed a probe that needs both.
+      const twice = { ...valid(), truth: [fact("k", "Tabellen"), fact("k", "Listen")] };
+      expect(() => validateScenario(twice)).toThrow(/truth\[1\]\.key "k" duplicates/u);
+      const distinct = { ...valid(), truth: [fact("a", "Tabellen"), fact("b", "Listen")] };
+      expect(validateScenario(distinct).truth).toHaveLength(2);
+    });
+
+    it("holds for every scenario of the three scenario directories", () => {
+      const root = labRoot();
+      for (const name of ["scenarios", "scenarios-next", "scenarios-explicit"]) {
+        for (const scenario of loadScenarioDirectory(join(root, name))) {
+          const keys = scenario.truth.map((entry) => entry.key);
+          expect(new Set(keys).size, `${name}/${scenario.id}`).toBe(keys.length);
+        }
+      }
+    });
   });
 
   describe("a not-obeyed probe", () => {
@@ -140,12 +180,17 @@ describe("memory lab scenario format", () => {
   });
 
   it("refuses forbidden terms on a probe that cannot measure them", () => {
+    // An abstain probe measures them since the near-miss audit (F2); a no-memory probe still cannot.
     const probes = [
-      { id: "p", question: "q", expect: { kind: "abstain", forbidden: [["Tabellen"]] } },
+      { id: "p", question: "q", expect: { kind: "no-memory", forbidden: [["Tabellen"]] } },
     ];
     expect(() => validateScenario({ ...valid(), probes })).toThrow(
-      /only measured on an answer probe/u,
+      /only measured on an answer or abstain probe/u,
     );
+    const abstain = [
+      { id: "p", question: "q", expect: { kind: "abstain", forbidden: [["Tabellen"]] } },
+    ];
+    expect(() => validateScenario({ ...valid(), probes: abstain })).not.toThrow();
   });
 
   it("measures the form of an answer on an answer probe only, and knows two forms and languages", () => {
@@ -189,6 +234,18 @@ describe("memory lab scenario format", () => {
     directory = mkdtempSync(join(tmpdir(), "memory-lab-scenarios-"));
     writeFileSync(join(directory, "broken.json"), "{ not json");
     expect(() => loadScenarioDirectory(directory)).toThrow(/not valid JSON/u);
+  });
+
+  it("knows the classes of the next corpus families", () => {
+    for (const name of [
+      "long-horizon",
+      "paraphrase",
+      "scale-window",
+      "two-memories",
+      "earlier-value",
+      "near-miss",
+    ])
+      expect(SCENARIO_CLASSES).toContain(name);
   });
 
   it("ships a curated set whose classes are all known and whose manifest is stable", () => {

@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "long-horizon-release-en",
+  "language": "en",
+  "class": "long-horizon",
+  "description": "Eight simulated weeks: 120 unrelated facts, an editor theme reinforced six times, a release cadence changed nine days ago and a team name stated 140 days ago. Limit: flat 45-day decay archives a still-valid fact left unused, and recall never supplies a replaced value. Failure means: team-old failing is a design question (a valid but unused fact fades); cadence-before failing is the absent capability to recall an earlier value; the two controls (theme-now, cadence-now) must pass. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact, unused and old, is expected to be archived); the superseded record stays as history since #4223, and the earlier-value probe is answered from the superseded value recall sends under the current fact; failing it is not a lost record. Kind: design.",
+  "seed": {
+    "records": [
+      {
+        "key": "theme",
+        "body": "I use the Poimandres theme in my editor.",
+        "type": "preference",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 52,
+        "accessCount": 6,
+        "lastAccessDays": 4,
+        "truth": "theme"
+      },
+      {
+        "key": "cadence-old",
+        "body": "We ship a release every ten days.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "superseded",
+        "ageDays": 38,
+        "earlier": "cadence-before"
+      },
+      {
+        "key": "cadence-new",
+        "body": "We ship a release every five weeks.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 9,
+        "supersedes": "cadence-old",
+        "truth": "cadence"
+      },
+      {
+        "key": "team",
+        "body": "My team is called Platform Quality.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 140,
+        "truth": "team"
+      }
+    ],
+    "filler": [
+      {
+        "count": 120,
+        "status": "accepted",
+        "minAgeDays": 1,
+        "maxAgeDays": 56,
+        "seed": 102,
+        "scope": "user",
+        "type": "semantic-fact"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "theme",
+      "seed": "I use the Poimandres theme in my editor.",
+      "must": false,
+      "terms": [["Poimandres"]]
+    },
+    {
+      "key": "cadence",
+      "seed": "We ship a release every five weeks.",
+      "must": false,
+      "terms": [
+        [
+          "every five weeks",
+          "every 5 weeks",
+          "five weeks",
+          "5 weeks",
+          "five-week",
+          "5-week",
+          "every fifth week"
+        ]
+      ]
+    },
+    {
+      "key": "team",
+      "seed": "My team is called Platform Quality.",
+      "must": false,
+      "terms": [["Platform Quality"]]
+    }
+  ],
+  "superseded": [
+    {
+      "key": "cadence-before",
+      "terms": [
+        [
+          "every ten days",
+          "every 10 days",
+          "ten days",
+          "10 days",
+          "ten-day",
+          "10-day",
+          "every tenth day",
+          "every 10th day"
+        ]
+      ]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "theme-now",
+      "question": "Which editor theme do I use?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Poimandres"]]
+      }
+    },
+    {
+      "id": "cadence-now",
+      "question": "How often do we ship a release?",
+      "expect": {
+        "kind": "answer",
+        "terms": [
+          [
+            "every five weeks",
+            "every 5 weeks",
+            "five weeks",
+            "5 weeks",
+            "five-week",
+            "5-week",
+            "every fifth week"
+          ]
+        ],
+        "forbidden": [
+          ["every ten days", "every 10 days", "ten days", "10 days", "ten-day", "10-day"]
+        ]
+      }
+    },
+    {
+      "id": "cadence-before",
+      "question": "How often did we ship a release before?",
+      "expect": {
+        "kind": "answer",
+        "earlier": ["cadence-before"]
+      }
+    },
+    {
+      "id": "team-old",
+      "question": "What is my team called?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Platform Quality"]]
+      }
+    }
+  ]
+}

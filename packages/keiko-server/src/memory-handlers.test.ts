@@ -1,5 +1,8 @@
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
-import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+} from "../../../tests/support/buffered-server-log.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -24,6 +27,7 @@ import {
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
 import { runConsolidation } from "@oscharko-dev/keiko-memory-consolidation";
+import { GovernanceError } from "@oscharko-dev/keiko-memory-governance";
 import {
   MEMORY_STATUSES,
   MEMORY_STATUS_TRANSITIONS,
@@ -56,6 +60,7 @@ import {
   handleEditMemory,
   handleForgetMemories,
   handleForgetMemory,
+  forgetStatementNotLearned,
   handleGetCorrectionPredecessors,
   handleGetMemory,
   handleListMemories,
@@ -65,6 +70,7 @@ import {
   handleRejectMemoryProposal,
   handleResolveMemoryConflict,
   handleUnpinMemory,
+  forgetMemoryFromStatement,
 } from "./memory-handlers.js";
 import { standingProfileForUser } from "./memory-profile.js";
 import { handleMemoryCaptureFromConversation } from "./memory-conv-handlers.js";
@@ -267,6 +273,37 @@ function vectorForText(text: string): Float32Array {
 
 function asJson(result: RouteResult): Record<string, unknown> {
   return result.body as Record<string, unknown>;
+}
+
+// The person's own corrections, through the production correction and acceptance routes: three
+// values of one fact, the first two superseded.
+async function correctAndAccept(
+  vault: MemoryVaultStore,
+  id: string,
+  body: string,
+): Promise<MemoryId> {
+  const proposal = await handleCorrectMemory(
+    makeCtx(`/api/memory/${id}/correct`, { body }, { id }),
+    makeDeps({ memoryVault: vault }),
+  );
+  const correction = asJson(proposal).correction as MemoryRecord;
+  const accepted = await handleAcceptMemoryProposal(
+    makeCtx(`/api/memory/proposals/${String(correction.id)}/accept`, {}, { id: correction.id }),
+    makeDeps({ memoryVault: vault }),
+  );
+  expect(accepted.status).toBe(200);
+  return correction.id;
+}
+
+async function threeValues(vault: MemoryVaultStore): Promise<{
+  readonly first: MemoryId;
+  readonly second: MemoryId;
+  readonly third: MemoryId;
+}> {
+  vault.insertMemory(makeMemory("lineage-1", "Ich wohne in Köln"));
+  const second = await correctAndAccept(vault, "lineage-1", "Ich wohne in Düsseldorf");
+  const third = await correctAndAccept(vault, String(second), "Ich wohne in Bonn");
+  return { first: memoryId("lineage-1"), second, third };
 }
 
 function readAllAuditEvents(store: EvidenceStore): readonly MemoryAuditEvent[] {
@@ -796,7 +833,7 @@ describe("memory handlers", () => {
       "expired-stale",
       "proposed-current",
       "proposed-stale",
-      "superseded-stale",
+      // "superseded-stale" is kept history, no review item (#4223, audit A5).
     ]);
     const decoded = reads.mock.results.flatMap((call) =>
       (call.value as readonly MemoryRecord[]).map((memory) => memory.id),
@@ -2111,6 +2148,42 @@ describe("memory handlers", () => {
     expect(JSON.stringify(tombstones)).not.toContain("package-manager preference");
   });
 
+  // #4223: history is deletable by the person, and that deletion refuses a later relearning.
+  it("lets the person forget a superseded record, and the forget refuses its body", async () => {
+    const vault = makeVault();
+    const now = Date.now();
+    vault.insertMemory(
+      makeMemory("memory-history-1", "Ich bevorzuge Tabs über Spaces", {
+        status: "superseded",
+        validity: { validFrom: now - 1_000, validUntil: now - 1 },
+      }),
+    );
+
+    const result = await handleForgetMemory(
+      makeCtx(
+        "/api/memory/memory-history-1/forget",
+        { acknowledged: true, reason: "user-request" },
+        { id: "memory-history-1" },
+      ),
+      makeDeps({
+        memoryVault: vault,
+        memoryAuthorization: {
+          reviewerId: reviewerId("operator-a"),
+          authorizedScopes: () => [{ kind: "global" }],
+        },
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(vault.getMemory(memoryId("memory-history-1"))).toBeUndefined();
+    const [tombstone] = vault.listTombstonesByScope({ kind: "global" });
+    expect(tombstone?.originalStatus).toBe("superseded");
+    expect(tombstone?.forgetterSurface).not.toBe("memory-maintenance");
+    expect(
+      vault.hasForgetTombstoneForBody({ kind: "global" }, "Ich bevorzuge Tabs über Spaces"),
+    ).toBe(true);
+  });
+
   it("does not persist browser-supplied forget reason text into tombstones", async () => {
     const vault = makeVault();
     vault.insertMemory(makeMemory("memory-forget-sensitive-reason", "body can be forgotten"));
@@ -2182,6 +2255,548 @@ describe("memory handlers", () => {
     );
     expect(vault.getMemory(memoryId("memory-forget-audit-down"))).toBeDefined();
     expect(vault.listTombstonesByScope({ kind: "global" })).toEqual([]);
+  });
+
+  describe("Memory window forget leaves its own Activity Log line (#4206 AC 5)", () => {
+    async function forgetWithLog(
+      id: string,
+      deps: UiHandlerDeps,
+      handler: typeof handleForgetMemory = handleForgetMemory,
+    ): Promise<{ result: RouteResult; events: BufferedServerLogSink["events"] }> {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      try {
+        const ctx = makeCtx(`/api/memory/${id}/forget`, { acknowledged: true }, { id });
+        const result = await handler({ ...ctx, correlationId: "corr-forget-1" }, deps);
+        return { result, events: forgetEvents(sink.events) };
+      } finally {
+        resetServerLogger();
+      }
+    }
+    function forgetEvents(events: BufferedServerLogSink["events"]): typeof events {
+      return events.filter((event) => event.op === "memory.explicit.forget");
+    }
+    const WINDOW_BY_ID = { surface: "memory-center", selectorKind: "by-id" } as const;
+    const NOTHING = { tombstoneWritten: false, forgottenCount: 0, tombstoneCount: 0 } as const;
+    // One line with exactly the expected fields, its correlation id and its registered shape,
+    // through the real formatter. Returns the persisted line for content checks.
+    function expectForgetLine(
+      events: BufferedServerLogSink["events"],
+      expected: Record<string, unknown>,
+      correlationId = "corr-forget-1",
+    ): string {
+      expect(events).toHaveLength(1);
+      const [event] = events;
+      if (event === undefined) throw new TypeError("missing forget line");
+      expect(event.extra).toEqual({ completeness: "complete", loss: "none", ...expected });
+      expect(event.correlationId).toBe(correlationId);
+      const line = formatActivityLogProofLine(event);
+      expect(expectActivityLogProof("memory.explicit.forget.line", line)).toMatchObject({
+        ...expected,
+        correlationId,
+      });
+      return line;
+    }
+
+    it("records forgotten, surface, scope kind and tombstone without an id or body", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-forget-1", "WINDOW-FORGET-BODY"));
+      const { result, events } = await forgetWithLog(
+        "window-forget-1",
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(200);
+      const line = expectForgetLine(events, {
+        outcome: "forgotten",
+        ...WINDOW_BY_ID,
+        scopeKind: "global",
+        tombstoneWritten: true,
+        forgottenCount: 1,
+        tombstoneCount: 1,
+      });
+      expect(line).not.toContain("window-forget-1");
+      expect(line).not.toContain("WINDOW-FORGET-BODY");
+    });
+
+    it("records the DELETE alias the same way", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-delete-1", "body"));
+      const { events } = await forgetWithLog(
+        "window-delete-1",
+        makeDeps({ memoryVault: vault }),
+        handleDeleteMemory,
+      );
+      expectForgetLine(events, {
+        outcome: "forgotten",
+        ...WINDOW_BY_ID,
+        scopeKind: "global",
+        tombstoneWritten: true,
+        forgottenCount: 1,
+        tombstoneCount: 1,
+      });
+    });
+
+    it("records not-found for an unknown memory without a tombstone", async () => {
+      const { result, events } = await forgetWithLog(
+        "window-missing",
+        makeDeps({ memoryVault: makeVault() }),
+      );
+      expect(result.status).toBe(404);
+      expectForgetLine(events, { outcome: "not-found", ...WINDOW_BY_ID, ...NOTHING });
+    });
+
+    it("records refused for a memory outside the caller's authorized scopes", async () => {
+      const vault = makeVault();
+      vault.insertMemory(
+        makeMemory("window-refused", "body", {
+          scope: { kind: "workspace", workspaceId: workspaceId("ws-restricted") },
+        }),
+      );
+      const { result, events } = await forgetWithLog(
+        "window-refused",
+        makeDeps({
+          memoryVault: vault,
+          memoryAuthorization: {
+            reviewerId: reviewerId("operator-a"),
+            authorizedScopes: () => [{ kind: "global" }],
+          },
+        }),
+      );
+      expect(result.status).toBe(403);
+      expectForgetLine(events, {
+        outcome: "refused",
+        ...WINDOW_BY_ID,
+        scopeKind: "workspace",
+        ...NOTHING,
+      });
+    });
+
+    // Every request that ends before the selection still leaves one body-free line under the
+    // request's correlation id, with no tombstone.
+    async function expectEarlyExitLine(
+      ctx: RouteContext,
+      deps: UiHandlerDeps,
+      handler: typeof handleForgetMemory,
+      expected: { readonly status: number; readonly outcome: "failed" | "refused" },
+    ): Promise<void> {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      let result: RouteResult;
+      try {
+        result = await handler({ ...ctx, correlationId: "corr-early-exit" }, deps);
+      } finally {
+        resetServerLogger();
+      }
+      expect(result.status).toBe(expected.status);
+      expectForgetLine(
+        forgetEvents(sink.events),
+        { outcome: expected.outcome, surface: "memory-center", tombstoneWritten: false },
+        "corr-early-exit",
+      );
+    }
+
+    it.each([
+      ["handleForgetMemory", handleForgetMemory],
+      ["handleDeleteMemory", handleDeleteMemory],
+    ])("records failed when the vault is unavailable (%s)", async (_name, handler) => {
+      await expectEarlyExitLine(
+        makeCtx("/api/memory/x/forget", { acknowledged: true }, { id: "x" }),
+        makeDeps({ memoryVault: undefined }),
+        handler,
+        { status: 503, outcome: "failed" },
+      );
+    });
+
+    it.each([
+      ["handleForgetMemory", handleForgetMemory],
+      ["handleDeleteMemory", handleDeleteMemory],
+    ])("records refused for a missing id (%s)", async (_name, handler) => {
+      await expectEarlyExitLine(
+        makeCtx("/api/memory/forget", { acknowledged: true }),
+        makeDeps({ memoryVault: makeVault() }),
+        handler,
+        { status: 400, outcome: "refused" },
+      );
+    });
+
+    it.each([
+      ["handleForgetMemory", handleForgetMemory],
+      ["handleDeleteMemory", handleDeleteMemory],
+    ])("records refused for a rejected body (%s)", async (_name, handler) => {
+      await expectEarlyExitLine(
+        makeCtx("/api/memory/x/forget", ["not", "an", "object"], { id: "x" }),
+        makeDeps({ memoryVault: makeVault() }),
+        handler,
+        { status: 400, outcome: "refused" },
+      );
+    });
+
+    it.each([
+      ["handleForgetMemory", handleForgetMemory],
+      ["handleDeleteMemory", handleDeleteMemory],
+    ])("records refused for a missing acknowledgement (%s)", async (_name, handler) => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-no-ack", "must remain"));
+      await expectEarlyExitLine(
+        makeCtx("/api/memory/window-no-ack/forget", {}, { id: "window-no-ack" }),
+        makeDeps({ memoryVault: vault }),
+        handler,
+        { status: 400, outcome: "refused" },
+      );
+      expect(vault.getMemory(memoryId("window-no-ack"))).toBeDefined();
+    });
+
+    it("records the early exits of the bulk route", async () => {
+      const ack = { acknowledged: true };
+      const bulk = async (
+        payload: unknown,
+        deps: UiHandlerDeps,
+        expected: { readonly status: number; readonly outcome: "failed" | "refused" },
+      ): Promise<void> =>
+        expectEarlyExitLine(
+          makeCtx("/api/memory/forget", payload),
+          deps,
+          handleForgetMemories,
+          expected,
+        );
+      const deps = makeDeps({ memoryVault: makeVault() });
+      await bulk(ack, makeDeps({ memoryVault: undefined }), { status: 503, outcome: "failed" });
+      await bulk(["x"], deps, { status: 400, outcome: "refused" });
+      await bulk({}, deps, { status: 400, outcome: "refused" });
+      await bulk({ ...ack, selector: { kind: "unknown" } }, deps, {
+        status: 400,
+        outcome: "refused",
+      });
+      await bulk({ ...ack, selector: { kind: "by-id", memoryId: "" } }, deps, {
+        status: 400,
+        outcome: "refused",
+      });
+    });
+
+    it("records refused when a bulk selector matches only pinned records (409)", async () => {
+      const vault = makeVault();
+      vault.insertMemory(
+        makeMemory("window-pinned-only", "pinned preference", { type: "preference", pinned: true }),
+      );
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      let result: RouteResult;
+      try {
+        result = await handleForgetMemories(
+          {
+            ...makeCtx("/api/memory/forget", {
+              acknowledged: true,
+              selector: { kind: "by-type", scope: { kind: "global" }, type: "preference" },
+            }),
+            correlationId: "corr-forget-1",
+          },
+          makeDeps({ memoryVault: vault }),
+        );
+      } finally {
+        resetServerLogger();
+      }
+      expect(result.status).toBe(409);
+      expect(vault.getMemory(memoryId("window-pinned-only"))).toBeDefined();
+      expect(vault.listTombstonesByScope({ kind: "global" })).toEqual([]);
+      expectForgetLine(forgetEvents(sink.events), {
+        outcome: "refused",
+        surface: "memory-center",
+        selectorKind: "by-type",
+        scopeKind: "global",
+        ...NOTHING,
+      });
+    });
+
+    it("forgets a pinned record through a by-id selector on the bulk route", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-bulk-pinned", "pinned and unwanted", { pinned: true }));
+      const result = await handleForgetMemories(
+        makeCtx("/api/memory/forget", {
+          acknowledged: true,
+          selector: { kind: "by-id", memoryId: "window-bulk-pinned" },
+        }),
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(200);
+      expect(vault.getMemory(memoryId("window-bulk-pinned"))).toBeUndefined();
+      expect(vault.listTombstonesByScope({ kind: "global" }).map((t) => t.memoryId)).toEqual([
+        memoryId("window-bulk-pinned"),
+      ]);
+    });
+
+    it("records failed when getMemory throws inside the guarded block", async () => {
+      const vault = makeVault();
+      vi.spyOn(vault, "getMemory").mockImplementation(() => {
+        throw new MemoryStorageError("internal", "vault unreadable");
+      });
+      const { result, events } = await forgetWithLog(
+        "window-getmemory-throws",
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(500);
+      expectForgetLine(events, { outcome: "failed", ...WINDOW_BY_ID, ...NOTHING });
+    });
+
+    it("records failed when the vault throws and when the audit preflight refuses", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-throws", "body"));
+      vi.spyOn(vault, "deleteMemories").mockImplementation(() => {
+        throw new MemoryStorageError("internal", "disk full");
+      });
+      const thrown = await forgetWithLog("window-throws", makeDeps({ memoryVault: vault }));
+      expectForgetLine(thrown.events, { outcome: "failed", ...WINDOW_BY_ID, ...NOTHING });
+
+      const audit = await forgetWithLog(
+        "window-audit",
+        makeDeps({
+          memoryVault: makeVault(),
+          evidenceStore: {
+            put: () => {
+              throw new Error("audit store unavailable");
+            },
+            list: () => [],
+            get: () => undefined,
+            delete: () => undefined,
+          },
+        }),
+      );
+      expect(audit.result.status).toBe(500);
+      expectForgetLine(audit.events, {
+        outcome: "failed",
+        surface: "memory-center",
+        tombstoneWritten: false,
+      });
+    });
+
+    async function bulkWithLog(
+      payload: unknown,
+      deps: UiHandlerDeps,
+    ): Promise<{ result: RouteResult; events: BufferedServerLogSink["events"] }> {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      try {
+        const ctx = { ...makeCtx("/api/memory/forget", payload), correlationId: "corr-forget-1" };
+        const result = await handleForgetMemories(ctx, deps);
+        return { result, events: forgetEvents(sink.events) };
+      } finally {
+        resetServerLogger();
+      }
+    }
+
+    it("tells a sweep from one entry: the selector kind and the number forgotten", async () => {
+      const vault = makeVault();
+      for (let index = 0; index < 5; index += 1) {
+        vault.insertMemory(makeMemory(`sweep-${String(index)}`, `body ${String(index)}`));
+      }
+      const { result, events } = await bulkWithLog(
+        { acknowledged: true, selector: { kind: "by-scope", scope: { kind: "global" } } },
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(200);
+      expectForgetLine(events, {
+        outcome: "forgotten",
+        surface: "memory-center",
+        selectorKind: "by-scope",
+        scopeKind: "global",
+        tombstoneWritten: true,
+        forgottenCount: 5,
+        tombstoneCount: 5,
+      });
+    });
+
+    it("does not follow an edge into another scope and counts it", async () => {
+      const vault = makeVault();
+      const { first, second, third } = await threeValues(vault);
+      const foreign = makeMemory("lineage-foreign", "Ich wohne in Ulm", {
+        scope: { kind: "workspace", workspaceId: workspaceId("ws-other") },
+        status: "superseded",
+      });
+      vault.insertMemory(foreign);
+      vault.insertEdge({
+        id: "lineage-cross" as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: foreign.id,
+        toMemoryId: third,
+        kind: "supersedes",
+        createdAt: Date.now(),
+      });
+
+      const { result, events } = await forgetWithLog(
+        String(third),
+        makeDeps({ memoryVault: vault }),
+      );
+
+      expect(result.status).toBe(200);
+      for (const id of [first, second, third]) expect(vault.getMemory(id)).toBeUndefined();
+      expect(vault.getMemory(foreign.id)).toBeDefined();
+      expectForgetLine(events, {
+        outcome: "forgotten",
+        ...WINDOW_BY_ID,
+        scopeKind: "global",
+        tombstoneWritten: true,
+        forgottenCount: 3,
+        tombstoneCount: 3,
+        lineageSkippedCount: 1,
+      });
+    });
+
+    // The walk does not pass through another scope: the earlier same-scope value behind a foreign
+    // record is not reached, and lineageSkippedCount is the signal (ADR-0146).
+    it("does not reach a same-scope value behind a foreign-scope middle record", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("fm-a", "Ich wohne in Köln", { status: "superseded" }));
+      vault.insertMemory(
+        makeMemory("fm-f", "Ich wohne in Ulm", {
+          status: "superseded",
+          scope: { kind: "workspace", workspaceId: workspaceId("ws-other") },
+        }),
+      );
+      vault.insertMemory(makeMemory("fm-c", "Ich wohne in Bonn"));
+      for (const [id, from, to] of [
+        ["fm-e1", "fm-a", "fm-f"],
+        ["fm-e2", "fm-f", "fm-c"],
+      ] as const) {
+        vault.insertEdge({
+          id: id as MemoryEdgeId,
+          schemaVersion: "1",
+          fromMemoryId: memoryId(from),
+          toMemoryId: memoryId(to),
+          kind: "supersedes",
+          createdAt: Date.now(),
+        });
+      }
+
+      const { result, events } = await forgetWithLog("fm-c", makeDeps({ memoryVault: vault }));
+
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(1);
+      expect(vault.getMemory(memoryId("fm-a"))).toBeDefined();
+      expect(vault.getMemory(memoryId("fm-f"))).toBeDefined();
+      expectForgetLine(events, {
+        outcome: "forgotten",
+        ...WINDOW_BY_ID,
+        scopeKind: "global",
+        tombstoneWritten: true,
+        forgottenCount: 1,
+        tombstoneCount: 1,
+        lineageSkippedCount: 1,
+      });
+    });
+
+    it("counts a fact and the earlier values it replaced in one line", async () => {
+      const vault = makeVault();
+      const { third } = await threeValues(vault);
+      const { result, events } = await forgetWithLog(
+        String(third),
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(200);
+      expectForgetLine(events, {
+        outcome: "forgotten",
+        ...WINDOW_BY_ID,
+        scopeKind: "global",
+        tombstoneWritten: true,
+        forgottenCount: 3,
+        tombstoneCount: 3,
+      });
+    });
+
+    it("records refused for a sweep of a scope the caller may not use (403)", async () => {
+      const { result, events } = await bulkWithLog(
+        {
+          acknowledged: true,
+          selector: {
+            kind: "by-scope",
+            scope: { kind: "workspace", workspaceId: workspaceId("ws-restricted") },
+          },
+        },
+        makeDeps({
+          memoryVault: makeVault(),
+          memoryAuthorization: {
+            reviewerId: reviewerId("operator-a"),
+            authorizedScopes: () => [{ kind: "global" }],
+          },
+        }),
+      );
+      expect(result.status).toBe(403);
+      expectForgetLine(events, {
+        outcome: "refused",
+        surface: "memory-center",
+        selectorKind: "by-scope",
+        scopeKind: "workspace",
+        ...NOTHING,
+      });
+    });
+
+    // A governance refusal is answered with 400 and a storage not-found with 404: neither is a fault.
+    it("records refused for a sweep over an archived memory (400), and forgets nothing", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("sweep-archived", "archived body", { status: "archived" }));
+      vault.insertMemory(makeMemory("sweep-live", "live body"));
+      const { result, events } = await bulkWithLog(
+        { acknowledged: true, selector: { kind: "by-scope", scope: { kind: "global" } } },
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(400);
+      expect(vault.getMemory(memoryId("sweep-archived"))).toBeDefined();
+      expect(vault.getMemory(memoryId("sweep-live"))).toBeDefined();
+      expectForgetLine(events, {
+        outcome: "refused",
+        surface: "memory-center",
+        selectorKind: "by-scope",
+        scopeKind: "global",
+        ...NOTHING,
+      });
+    });
+
+    it("records refused when the governance layer throws while deleting (400)", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-governance", "body"));
+      vi.spyOn(vault, "deleteMemories").mockImplementation(() => {
+        throw new GovernanceError("illegal-status-transition", "not forgettable");
+      });
+      const { result, events } = await forgetWithLog(
+        "window-governance",
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(400);
+      expectForgetLine(events, { outcome: "refused", ...WINDOW_BY_ID, ...NOTHING });
+    });
+
+    it("records not-found when the memory vanished before it was deleted (404)", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-vanished", "body"));
+      vi.spyOn(vault, "deleteMemories").mockImplementation(() => {
+        throw new MemoryStorageError("not-found", "gone");
+      });
+      const { result, events } = await forgetWithLog(
+        "window-vanished",
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(404);
+      expectForgetLine(events, { outcome: "not-found", ...WINDOW_BY_ID, ...NOTHING });
+    });
+
+    // The person picked exactly this entry, so the pick is the acknowledgement an archived entry needs.
+    it("forgets an archived entry the person picked", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("window-archived", "archived body", { status: "archived" }));
+      const { result, events } = await forgetWithLog(
+        "window-archived",
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(200);
+      expect(vault.getMemory(memoryId("window-archived"))).toBeUndefined();
+      expect(vault.listTombstonesByScope({ kind: "global" })[0]?.originalStatus).toBe("archived");
+      expectForgetLine(events, {
+        outcome: "forgotten",
+        ...WINDOW_BY_ID,
+        scopeKind: "global",
+        tombstoneWritten: true,
+        forgottenCount: 1,
+        tombstoneCount: 1,
+      });
+    });
   });
 
   it("rejects by-id forgets when the caller is not authorized for the memory scope", async () => {
@@ -2329,6 +2944,640 @@ describe("memory handlers", () => {
     ]);
   });
 
+  // Pinning protects a fact from a sweep, not from the person who names it: seeing, correcting and
+  // deleting one entry must always work (#4214).
+  it.each([
+    ["the forget route", handleForgetMemory],
+    ["the delete route", handleDeleteMemory],
+  ])("forgets a pinned memory the person names through %s", async (_route, handler) => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("pinned-named", "pinned and unwanted", { pinned: true }));
+
+    const result = await handler(
+      makeCtx("/api/memory/pinned-named/forget", { acknowledged: true }, { id: "pinned-named" }),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(vault.getMemory(memoryId("pinned-named"))).toBeUndefined();
+    expect(vault.listTombstonesByScope({ kind: "global" }).map((t) => t.memoryId)).toEqual([
+      memoryId("pinned-named"),
+    ]);
+  });
+
+  // The Chat gets its id from a word match or from what "das" refers to, not from a row the person
+  // picked, so the pin keeps protecting there (ADR-0146 D4b, #4223).
+  it("keeps a pinned memory a Chat statement resolved to, and forgets it once the person picks it", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("pinned-chat", "pinned and unwanted", { pinned: true }));
+    const deps = makeDeps({ memoryVault: vault });
+
+    expect(forgetMemoryFromStatement(deps, vault, memoryId("pinned-chat"), "corr-chat")).toBe(
+      "refused",
+    );
+    expect(vault.getMemory(memoryId("pinned-chat"))).toBeDefined();
+    expect(vault.listTombstonesByScope({ kind: "global" })).toEqual([]);
+
+    const picked = await handleForgetMemory(
+      makeCtx("/api/memory/pinned-chat/forget", { acknowledged: true }, { id: "pinned-chat" }),
+      deps,
+    );
+    expect(picked.status).toBe(200);
+    expect(vault.getMemory(memoryId("pinned-chat"))).toBeUndefined();
+  });
+
+  it("forgets an unpinned memory a Chat statement resolved to", () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("unpinned-chat", "unwanted"));
+    const deps = makeDeps({ memoryVault: vault });
+    expect(forgetMemoryFromStatement(deps, vault, memoryId("unpinned-chat"), "corr-chat")).toBe(
+      "forgotten",
+    );
+    expect(vault.getMemory(memoryId("unpinned-chat"))).toBeUndefined();
+  });
+
+  it("sweeps a scope over pinned and unpinned memories and keeps the pinned ones", async () => {
+    const vault = makeVault();
+    vault.insertMemory(makeMemory("sweep-pinned", "keep me", { pinned: true }));
+    vault.insertMemory(makeMemory("sweep-loose-1", "drop me"));
+    vault.insertMemory(makeMemory("sweep-loose-2", "drop me too"));
+
+    const result = await handleForgetMemories(
+      makeCtx("/api/memory/forget", {
+        acknowledged: true,
+        selector: { kind: "by-scope", scope: { kind: "global" } },
+      }),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(asJson(result).count).toBe(2);
+    expect(vault.getMemory(memoryId("sweep-pinned"))).toBeDefined();
+    expect(vault.getMemory(memoryId("sweep-loose-1"))).toBeUndefined();
+    expect(vault.getMemory(memoryId("sweep-loose-2"))).toBeUndefined();
+  });
+
+  // #4223: a fact and the earlier values it replaced are one fact. The person's own corrections go
+  // through the production correction and acceptance routes.
+  describe("forgetting a corrected fact from the Memory window", () => {
+    async function forgetById(vault: MemoryVaultStore, id: string): Promise<RouteResult> {
+      return handleForgetMemory(
+        makeCtx(`/api/memory/${id}/forget`, { acknowledged: true }, { id }),
+        makeDeps({ memoryVault: vault }),
+      );
+    }
+
+    it("forgets every earlier value with the current entry, each with its own tombstone", async () => {
+      const vault = makeVault();
+      const { first, second, third } = await threeValues(vault);
+      vault.insertMemory(makeMemory("lineage-other", "Ich nutze Vim"));
+
+      const result = await forgetById(vault, String(third));
+
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(3);
+      expect(new Set(asJson(result).memoryIds as readonly MemoryId[])).toEqual(
+        new Set([first, second, third]),
+      );
+      for (const id of [first, second, third]) expect(vault.getMemory(id)).toBeUndefined();
+      expect(vault.getMemory(memoryId("lineage-other"))).toBeDefined();
+      const tombstones = vault.listTombstonesByScope({ kind: "global" });
+      expect(tombstones.map((tombstone) => tombstone.forgetterSurface)).toEqual([
+        "memory-center",
+        "memory-center",
+        "memory-center",
+      ]);
+      for (const body of ["Ich wohne in Köln", "Ich wohne in Düsseldorf", "Ich wohne in Bonn"]) {
+        expect(vault.hasForgetTombstoneForBody({ kind: "global" }, body)).toBe(true);
+      }
+    });
+
+    it("forgets only the picked history row and keeps the chain whole", async () => {
+      const vault = makeVault();
+      const { first, second, third } = await threeValues(vault);
+
+      const result = await forgetById(vault, String(second));
+
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(1);
+      expect(vault.getMemory(second)).toBeUndefined();
+      expect(vault.getMemory(first)?.status).toBe("superseded");
+      expect(vault.getMemory(third)?.status).toBe("accepted");
+      // The earlier value is still linked to the live one, so forgetting the fact later reaches it.
+      expect(
+        vault
+          .listOutgoingEdges(first)
+          .some((edge) => edge.kind === "supersedes" && edge.toMemoryId === third),
+      ).toBe(true);
+
+      const later = await forgetById(vault, String(third));
+      expect(later.status).toBe(200);
+      expect(vault.getMemory(first)).toBeUndefined();
+    });
+
+    it("ends on a cycle of supersession edges", async () => {
+      const vault = makeVault();
+      const { first, third } = await threeValues(vault);
+      vault.insertEdge({
+        id: "lineage-cycle" as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: third,
+        toMemoryId: first,
+        kind: "supersedes",
+        createdAt: Date.now(),
+      });
+
+      const result = await forgetById(vault, String(third));
+
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(3);
+    });
+
+    async function archive(vault: MemoryVaultStore, id: MemoryId): Promise<void> {
+      const result = await handleArchiveMemory(
+        makeCtx(
+          `/api/memory/${String(id)}/archive`,
+          { reason: "user-request" },
+          { id: String(id) },
+        ),
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(result.status).toBe(200);
+    }
+
+    // Archive is a legal transition from superseded: an archived history row is still a value of the
+    // fact, so forgetting the fact reaches it, and the rows before it.
+    it.each(["the middle", "the oldest", "every earlier"] as const)(
+      "forgets archived history too (%s value archived)",
+      async (which) => {
+        const vault = makeVault();
+        const { first, second, third } = await threeValues(vault);
+        if (which !== "the oldest") await archive(vault, second);
+        if (which !== "the middle") await archive(vault, first);
+
+        const result = await forgetById(vault, String(third));
+
+        expect(result.status).toBe(200);
+        expect(asJson(result).count).toBe(3);
+        for (const id of [first, second, third]) expect(vault.getMemory(id)).toBeUndefined();
+        expect(vault.listTombstonesByScope({ kind: "global" })).toHaveLength(3);
+        for (const body of ["Ich wohne in Köln", "Ich wohne in Düsseldorf", "Ich wohne in Bonn"]) {
+          expect(vault.hasForgetTombstoneForBody({ kind: "global" }, body)).toBe(true);
+        }
+      },
+    );
+
+    it("forgets an expired and a rejected earlier value as well", async () => {
+      const vault = makeVault();
+      const { first, second, third } = await threeValues(vault);
+      vault.updateMemory(first, { status: "archived" }, Date.now());
+      vault.updateMemory(first, { status: "expired" }, Date.now());
+      vault.updateMemory(second, { status: "rejected" }, Date.now());
+      const result = await forgetById(vault, String(third));
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(3);
+    });
+
+    // An edge to a rejected record makes nothing a history row: the newest value is still the
+    // fact, and its earlier values go with it.
+    it("forgets the earlier values although the newest value has an edge to a rejected record", async () => {
+      const vault = makeVault();
+      const { first, second, third } = await threeValues(vault);
+      vault.insertMemory(
+        makeMemory("lineage-rejected", "Ich wohne in Trier", { status: "rejected" }),
+      );
+      vault.insertEdge({
+        id: "lineage-to-rejected" as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: third,
+        toMemoryId: memoryId("lineage-rejected"),
+        kind: "supersedes",
+        createdAt: Date.now(),
+      });
+
+      const result = await forgetById(vault, String(third));
+
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(3);
+      for (const id of [first, second, third]) expect(vault.getMemory(id)).toBeUndefined();
+      expect(vault.getMemory(memoryId("lineage-rejected"))).toBeDefined();
+    });
+
+    // An archived or expired successor can return to accepted, so it keeps its predecessor a history row.
+    it.each(["archived", "expired"] as const)(
+      "keeps a record with a %s successor a history row",
+      async (status) => {
+        const vault = makeVault();
+        vault.insertMemory(makeMemory("hist-old", "Ich wohne in Köln", { status: "superseded" }));
+        vault.insertMemory(makeMemory("hist-new", "Ich wohne in Bonn", { status }));
+        vault.insertEdge({
+          id: "hist-edge" as MemoryEdgeId,
+          schemaVersion: "1",
+          fromMemoryId: memoryId("hist-old"),
+          toMemoryId: memoryId("hist-new"),
+          kind: "supersedes",
+          createdAt: Date.now(),
+        });
+        const result = await forgetById(vault, "hist-old");
+        expect(result.status).toBe(200);
+        expect(asJson(result).count).toBe(1);
+        expect(vault.getMemory(memoryId("hist-new"))).toBeDefined();
+      },
+    );
+
+    // A conflict loser stays `conflicted` with an edge to the winner (and may be rehabilitated).
+    it("forgets a conflict loser with the winner, and a rehabilitated loser alone", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("cf-winner", "formatter is biome"));
+      vault.insertMemory(makeMemory("cf-loser", "formatter is prettier"));
+      const resolved = await handleResolveMemoryConflict(
+        makeCtx("/api/memory/conflicts/resolve", {
+          winner: "cf-winner",
+          losers: ["cf-loser"],
+          reason: "conflict-resolved",
+        }),
+        makeDeps({ memoryVault: vault }),
+      );
+      expect(resolved.status).toBe(200);
+      vault.updateMemory(memoryId("cf-loser"), { status: "accepted" }, Date.now());
+
+      const alone = await forgetById(vault, "cf-loser");
+      expect(asJson(alone).count).toBe(1);
+      expect(vault.getMemory(memoryId("cf-winner"))).toBeDefined();
+
+      const other = makeVault();
+      other.insertMemory(makeMemory("cf2-winner", "formatter is biome"));
+      other.insertMemory(makeMemory("cf2-loser", "formatter is prettier"));
+      await handleResolveMemoryConflict(
+        makeCtx("/api/memory/conflicts/resolve", {
+          winner: "cf2-winner",
+          losers: ["cf2-loser"],
+          reason: "conflict-resolved",
+        }),
+        makeDeps({ memoryVault: other }),
+      );
+      const together = await forgetById(other, "cf2-winner");
+      expect(asJson(together).count).toBe(2);
+      expect(other.getMemory(memoryId("cf2-loser"))).toBeUndefined();
+    });
+
+    // A rejected successor is no value of the fact, but a value after it is: the record behind a
+    // rejected correction that was itself corrected again is still a history row.
+    it("keeps a record a history row when its rejected successor was replaced again", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("rm-first", "Ich wohne in Trier", { status: "superseded" }));
+      vault.insertMemory(makeMemory("rm-old", "Ich wohne in Köln", { status: "superseded" }));
+      vault.insertMemory(makeMemory("rm-rejected", "Ich wohne in Ulm", { status: "rejected" }));
+      vault.insertMemory(makeMemory("rm-new", "Ich wohne in Bonn"));
+      for (const [id, from, to] of [
+        ["rm-e0", "rm-first", "rm-old"],
+        ["rm-e1", "rm-old", "rm-rejected"],
+        ["rm-e2", "rm-rejected", "rm-new"],
+      ] as const) {
+        vault.insertEdge({
+          id: id as MemoryEdgeId,
+          schemaVersion: "1",
+          fromMemoryId: memoryId(from),
+          toMemoryId: memoryId(to),
+          kind: "supersedes",
+          createdAt: Date.now(),
+        });
+      }
+
+      const result = await forgetById(vault, "rm-old");
+
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(1);
+      expect(vault.getMemory(memoryId("rm-old"))).toBeUndefined();
+      expect(vault.getMemory(memoryId("rm-first"))).toBeDefined();
+      expect(vault.getMemory(memoryId("rm-new"))?.status).toBe("accepted");
+    });
+
+    it("picking an archived history row forgets only that row", async () => {
+      const vault = makeVault();
+      const { first, second, third } = await threeValues(vault);
+      await archive(vault, second);
+      const result = await forgetById(vault, String(second));
+      expect(result.status).toBe(200);
+      expect(asJson(result).count).toBe(1);
+      expect(vault.getMemory(first)).toBeDefined();
+      expect(vault.getMemory(third)?.status).toBe("accepted");
+    });
+
+    it("refuses and deletes nothing when the history is too long to forget whole", async () => {
+      const vault = makeVault();
+      const total = 260;
+      for (let index = 0; index < total; index += 1) {
+        const last = index === total - 1;
+        vault.insertMemory(
+          makeMemory(`long-${String(index)}`, `Value ${String(index)}`, {
+            status: last ? "accepted" : "superseded",
+          }),
+        );
+        if (index > 0) {
+          vault.insertEdge({
+            id: `long-edge-${String(index)}` as MemoryEdgeId,
+            schemaVersion: "1",
+            fromMemoryId: memoryId(`long-${String(index - 1)}`),
+            toMemoryId: memoryId(`long-${String(index)}`),
+            kind: "supersedes",
+            createdAt: Date.now(),
+          });
+        }
+      }
+
+      const result = await forgetById(vault, `long-${String(total - 1)}`);
+
+      expect(result.status).toBe(409);
+      expect(vault.getMemory(memoryId(`long-${String(total - 1)}`))).toBeDefined();
+      expect(vault.listTombstonesByScope({ kind: "global" })).toEqual([]);
+    });
+
+    it("keeps a pinned live entry and its history when a Chat statement named it", async () => {
+      const vault = makeVault();
+      const { first, third } = await threeValues(vault);
+      vault.updateMemory(third, { pinned: true }, Date.now());
+
+      const deps = makeDeps({ memoryVault: vault });
+      expect(forgetMemoryFromStatement(deps, vault, third, "corr-lineage")).toBe("refused");
+
+      expect(vault.getMemory(third)).toBeDefined();
+      expect(vault.getMemory(first)).toBeDefined();
+      expect(vault.listTombstonesByScope({ kind: "global" })).toEqual([]);
+    });
+  });
+
+  describe("a Chat forget leaves its own Activity Log line (#4223)", () => {
+    const CHAT_BY_ID = { surface: "chat", selectorKind: "by-id" } as const;
+    const NOTHING = { tombstoneWritten: false, forgottenCount: 0, tombstoneCount: 0 } as const;
+
+    async function withLog<T>(
+      run: () => Promise<T> | T,
+    ): Promise<{ value: T; events: BufferedServerLogSink["events"] }> {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      try {
+        const value = await run();
+        return {
+          value,
+          events: sink.events.filter((event) => event.op === "memory.explicit.forget"),
+        };
+      } finally {
+        resetServerLogger();
+      }
+    }
+
+    function expectChatLine(
+      events: BufferedServerLogSink["events"],
+      expected: Record<string, unknown>,
+    ): void {
+      expect(events).toHaveLength(1);
+      const [event] = events;
+      if (event === undefined) throw new TypeError("missing forget line");
+      expect(event.extra).toEqual({ completeness: "complete", loss: "none", ...expected });
+      expect(event.correlationId).toBe("corr-chat");
+      expect(
+        expectActivityLogProof("memory.explicit.forget.line", formatActivityLogProofLine(event)),
+      ).toMatchObject({ ...expected, correlationId: "corr-chat" });
+    }
+
+    it("records one forgotten entry with its scope kind and tombstone", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("chat-forget-1", "body"));
+      const { value, events } = await withLog(() =>
+        forgetMemoryFromStatement(
+          makeDeps({ memoryVault: vault }),
+          vault,
+          memoryId("chat-forget-1"),
+          "corr-chat",
+        ),
+      );
+      expect(value).toBe("forgotten");
+      expectChatLine(events, {
+        outcome: "forgotten",
+        ...CHAT_BY_ID,
+        scopeKind: "global",
+        tombstoneWritten: true,
+        forgottenCount: 1,
+        tombstoneCount: 1,
+      });
+    });
+
+    it("counts a fact and the earlier values it replaced", async () => {
+      const vault = makeVault();
+      const { third } = await threeValues(vault);
+      const { value, events } = await withLog(() =>
+        forgetMemoryFromStatement(makeDeps({ memoryVault: vault }), vault, third, "corr-chat"),
+      );
+      expect(value).toBe("forgotten");
+      expectChatLine(events, {
+        outcome: "forgotten",
+        ...CHAT_BY_ID,
+        scopeKind: "global",
+        tombstoneWritten: true,
+        forgottenCount: 3,
+        tombstoneCount: 3,
+      });
+    });
+
+    it("records refused for a pinned entry and for an unknown one (not-found)", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("chat-pinned", "body", { pinned: true }));
+      const deps = makeDeps({ memoryVault: vault });
+      const pinned = await withLog(() =>
+        forgetMemoryFromStatement(deps, vault, memoryId("chat-pinned"), "corr-chat"),
+      );
+      expect(pinned.value).toBe("refused");
+      expectChatLine(pinned.events, {
+        outcome: "refused",
+        ...CHAT_BY_ID,
+        scopeKind: "global",
+        ...NOTHING,
+      });
+      const unknown = await withLog(() =>
+        forgetMemoryFromStatement(deps, vault, memoryId("chat-unknown"), "corr-chat"),
+      );
+      expect(unknown.value).toBe("refused");
+      expectChatLine(unknown.events, { outcome: "not-found", ...CHAT_BY_ID, ...NOTHING });
+    });
+
+    // The person's own words name the entry, so a Chat forget acts on an archived memory too
+    // (ADR-0146 D4b); a governance refusal thrown by the vault is a plain "not applied", not a fault.
+    it("forgets an archived entry a Chat statement named", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("chat-archived", "body", { status: "archived" }));
+      const { value, events } = await withLog(() =>
+        forgetMemoryFromStatement(
+          makeDeps({ memoryVault: vault }),
+          vault,
+          memoryId("chat-archived"),
+          "corr-chat",
+        ),
+      );
+      expect(value).toBe("forgotten");
+      expect(vault.getMemory(memoryId("chat-archived"))).toBeUndefined();
+      expect(vault.listTombstonesByScope({ kind: "global" })[0]?.originalStatus).toBe("archived");
+      expectChatLine(events, {
+        outcome: "forgotten",
+        ...CHAT_BY_ID,
+        scopeKind: "global",
+        tombstoneWritten: true,
+        forgottenCount: 1,
+        tombstoneCount: 1,
+      });
+    });
+
+    it("records refused, not failed, when the vault refuses a Chat forget on governance grounds", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("chat-governed", "body"));
+      vi.spyOn(vault, "deleteMemories").mockImplementation(() => {
+        throw new GovernanceError("illegal-status-transition", "not forgettable");
+      });
+      const { value, events } = await withLog(() =>
+        forgetMemoryFromStatement(
+          makeDeps({ memoryVault: vault }),
+          vault,
+          memoryId("chat-governed"),
+          "corr-chat",
+        ),
+      );
+      expect(value).toBe("refused");
+      expectChatLine(events, { outcome: "refused", ...CHAT_BY_ID, ...NOTHING });
+    });
+
+    it("records failed for a storage fault and for an unwritable audit store", async () => {
+      const vault = makeVault();
+      vault.insertMemory(makeMemory("chat-fault", "body"));
+      vi.spyOn(vault, "deleteMemories").mockImplementation(() => {
+        throw new MemoryStorageError("internal", "disk full");
+      });
+      const thrown = await withLog(() =>
+        forgetMemoryFromStatement(
+          makeDeps({ memoryVault: vault }),
+          vault,
+          memoryId("chat-fault"),
+          "corr-chat",
+        ),
+      );
+      expect(thrown.value).toBe("failed");
+      expectChatLine(thrown.events, { outcome: "failed", ...CHAT_BY_ID, ...NOTHING });
+
+      // A fresh vault: the audit preflight must refuse before anything is deleted.
+      const auditVault = makeVault();
+      auditVault.insertMemory(makeMemory("chat-audit", "body"));
+      const auditDeletes = vi.spyOn(auditVault, "deleteMemories");
+      const audit = await withLog(() =>
+        forgetMemoryFromStatement(
+          makeDeps({
+            memoryVault: auditVault,
+            evidenceStore: {
+              put: () => {
+                throw new Error("audit store unavailable");
+              },
+              list: () => [],
+              get: () => undefined,
+              delete: () => undefined,
+            },
+          }),
+          auditVault,
+          memoryId("chat-audit"),
+          "corr-chat",
+        ),
+      );
+      expect(audit.value).toBe("failed");
+      expect(auditDeletes).not.toHaveBeenCalled();
+      expect(auditVault.getMemory(memoryId("chat-audit"))).toBeDefined();
+      expectChatLine(audit.events, { outcome: "failed", ...CHAT_BY_ID, ...NOTHING });
+    });
+
+    describe("a statement nothing was stored from", () => {
+      const STATEMENT = { surface: "chat", selectorKind: "statement" } as const;
+      const scopes: readonly MemoryScope[] = [
+        { kind: "user", userId: userId("u-1") },
+        { kind: "workspace", workspaceId: workspaceId("ws-1") },
+        { kind: "project", projectId: "p-1" as ProjectId },
+      ];
+
+      it("records one tombstone per scope and no forgotten memory", async () => {
+        const vault = makeVault();
+        const { value, events } = await withLog(() =>
+          forgetStatementNotLearned(
+            makeDeps({ memoryVault: vault }),
+            vault,
+            "Ich wohne in Köln",
+            scopes,
+            "corr-chat",
+          ),
+        );
+        expect(value).toBe("forgotten");
+        expectChatLine(events, {
+          outcome: "forgotten",
+          ...STATEMENT,
+          tombstoneWritten: true,
+          forgottenCount: 0,
+          tombstoneCount: 3,
+        });
+      });
+
+      it("names the scope kind when there is only one", async () => {
+        const vault = makeVault();
+        const { events } = await withLog(() =>
+          forgetStatementNotLearned(
+            makeDeps({ memoryVault: vault }),
+            vault,
+            "Ich wohne in Köln",
+            [{ kind: "global" }],
+            "corr-chat",
+          ),
+        );
+        expectChatLine(events, {
+          outcome: "forgotten",
+          ...STATEMENT,
+          scopeKind: "global",
+          tombstoneWritten: true,
+          forgottenCount: 0,
+          tombstoneCount: 1,
+        });
+      });
+
+      it("records refused when no scope is allowed, and failed when the vault cannot write", async () => {
+        const vault = makeVault();
+        const refused = await withLog(() =>
+          forgetStatementNotLearned(
+            makeDeps({
+              memoryVault: vault,
+              memoryAuthorization: {
+                reviewerId: reviewerId("operator-a"),
+                authorizedScopes: () => [],
+              },
+            }),
+            vault,
+            "Ich wohne in Köln",
+            scopes,
+            "corr-chat",
+          ),
+        );
+        expect(refused.value).toBe("refused");
+        expectChatLine(refused.events, { outcome: "refused", ...STATEMENT, ...NOTHING });
+
+        vi.spyOn(vault, "recordForgottenStatements").mockImplementation(() => {
+          throw new MemoryStorageError("internal", "disk full");
+        });
+        const failed = await withLog(() =>
+          forgetStatementNotLearned(
+            makeDeps({ memoryVault: vault }),
+            vault,
+            "Ich wohne in Köln",
+            scopes,
+            "corr-chat",
+          ),
+        );
+        expect(failed.value).toBe("failed");
+        expectChatLine(failed.events, { outcome: "failed", ...STATEMENT, ...NOTHING });
+      });
+    });
+  });
+
   it("selectively forgets matching records through one batch delete", async () => {
     const vault = makeVault();
     vault.insertMemory(
@@ -2412,6 +3661,62 @@ describe("memory handlers", () => {
     expect(result.status).toBe(200);
     expect(vault.getMemory(memoryId("conv-1"))).toBeUndefined();
     expect(vault.getMemory(memoryId("conv-2"))).toBeDefined();
+  });
+
+  // A sweep that removes a middle value must not split the fact: forgetting the newest value
+  // afterwards still reaches the surviving earlier one (#4223).
+  it("keeps a lineage whole when a sweep removes its middle value", async () => {
+    const vault = makeVault();
+    const from = (conversation: string): Partial<MemoryRecord> => ({
+      provenance: {
+        sourceKind: "explicit-user-instruction",
+        sourceConversationId: conversation as MemoryConversationId,
+        capturedAt: 1,
+        confidence: 0.9,
+        sensitivity: "public",
+      },
+    });
+    vault.insertMemory(
+      makeMemory("sw-first", "Ich wohne in Trier", { status: "superseded", ...from("c-b") }),
+    );
+    vault.insertMemory(
+      makeMemory("sw-middle", "Ich wohne in Köln", { status: "superseded", ...from("c-a") }),
+    );
+    vault.insertMemory(makeMemory("sw-newest", "Ich wohne in Bonn", from("c-b")));
+    for (const [id, fromId, to] of [
+      ["sw-e0", "sw-first", "sw-middle"],
+      ["sw-e1", "sw-middle", "sw-newest"],
+    ] as const) {
+      vault.insertEdge({
+        id: id as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: memoryId(fromId),
+        toMemoryId: memoryId(to),
+        kind: "supersedes",
+        createdAt: Date.now(),
+      });
+    }
+
+    const swept = await handleForgetMemories(
+      makeCtx("/api/memory/forget", {
+        acknowledged: true,
+        selector: {
+          kind: "by-source-conversation",
+          scope: { kind: "global" },
+          sourceConversationId: "c-a",
+        },
+      }),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(swept.status).toBe(200);
+    expect(vault.getMemory(memoryId("sw-middle"))).toBeUndefined();
+
+    const forgotten = await handleForgetMemory(
+      makeCtx("/api/memory/sw-newest/forget", { acknowledged: true }, { id: "sw-newest" }),
+      makeDeps({ memoryVault: vault }),
+    );
+    expect(asJson(forgotten).count).toBe(2);
+    expect(vault.getMemory(memoryId("sw-first"))).toBeUndefined();
   });
 
   it("resolves conflicts by marking losers conflicted and linking them to the winner", async () => {

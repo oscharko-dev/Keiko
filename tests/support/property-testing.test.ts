@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  assertFrequencyFloor,
   checkProperty,
   createRandom,
   LINEAR_RATIO_MAX,
+  MIN_RUNS_FOR_ANY_FLOOR,
   measureScaling,
   scalingRatio,
   propertySettings,
@@ -235,5 +237,39 @@ describe("measureScaling", () => {
     expect(scaling.measurable).toBe(false);
     expect(scaling.size).toBe(4);
     expect(scaling.repetitions).toBe(1 << 20);
+  });
+});
+
+describe("assertFrequencyFloor", () => {
+  const floor = { what: "a tied group", share: 0.2, validatedRuns: 300 };
+
+  it("asserts the share from the validated run count upwards", () => {
+    expect(() => {
+      assertFrequencyFloor({ ...floor, runs: 300, count: 60 });
+    }).toThrow('"a tied group" was reached 60 times in 300 runs');
+    expect(() => {
+      assertFrequencyFloor({ ...floor, runs: 300, count: 61 });
+    }).not.toThrow();
+    expect(() => {
+      assertFrequencyFloor({ ...floor, runs: 2000, count: 400 });
+    }).toThrow("more than 400 are required");
+  });
+
+  it("requires a shorter but substantial run to have reached the situation at least once", () => {
+    expect(() => {
+      assertFrequencyFloor({ ...floor, runs: MIN_RUNS_FOR_ANY_FLOOR, count: 0 });
+    }).toThrow("was never reached in 50 runs");
+    expect(() => {
+      assertFrequencyFloor({ ...floor, runs: MIN_RUNS_FOR_ANY_FLOOR, count: 1 });
+    }).not.toThrow();
+  });
+
+  it("asserts nothing for the replay of a single seed", () => {
+    expect(() => {
+      assertFrequencyFloor({ ...floor, runs: 1, count: 0 });
+    }).not.toThrow();
+    expect(() => {
+      assertFrequencyFloor({ ...floor, runs: MIN_RUNS_FOR_ANY_FLOOR - 1, count: 0 });
+    }).not.toThrow();
   });
 });

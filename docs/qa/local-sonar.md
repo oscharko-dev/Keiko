@@ -126,10 +126,22 @@ npm run gates:sonar:stop     # stop the server, keep its cache
 Both local containers are limited to 2 CPUs each from startup (up to 4 CPUs combined) for controlled
 load without performance qualification.
 
-The local runner gives the SonarJS bridge 4.5 GiB and caps the scanner coordinator at 768 MiB. This
-keeps enough analyzer headroom while leaving space for the concurrently required SonarQube service
-inside Docker Desktop's common 8 GiB VM; the scanner's automatic heap choice can otherwise exceed
-the VM limit and terminate the bridge before it reports findings.
+The local runner gives the SonarJS bridge 4.5 GiB, caps the scanner CLI at 768 MiB
+(`SONAR_SCANNER_OPTS`) and the scanner engine that runs the analysis at 2 GiB
+(`SONAR_SCANNER_JAVA_OPTS`; override with `KEIKO_LOCAL_SONAR_ENGINE_JAVA_OPTS`). `SONAR_SCANNER_OPTS`
+sizes only the CLI that provisions and starts the engine; without its own cap the engine takes a
+quarter of the VM. This keeps enough analyzer headroom while leaving space for the concurrently
+required SonarQube service inside Docker Desktop's common 8 GiB VM; the scanner's automatic heap
+choice can otherwise exceed the VM limit and terminate the bridge before it reports findings.
+
+CI runs the same two caps on a 16 GB runner: the engine at 6 GiB in `ci.yml` (after adding 8 GiB swap), the bridge at
+`sonar.javascript.node.maxspace` in `sonar-project.properties`. The `Verify Sonar full-analysis
+evidence` step reads both configured ceilings from the scanner log (an engine without `-Xmx` is
+charged its default quarter of the runner) and fails when they leave less than 2 GiB of the runner's RAM plus its measured swap
+(`--require-runner-memory-budget`), so a raised ceiling turns the job red with a named reason
+instead of losing the runner mid-scan. A local checkout with built `dist` folders analyzes
+larger TypeScript programs than CI (#4481: 9074 + 4399 against 7059 + 2629 program files), so a
+local whole-project scan needs more bridge heap than CI and says nothing about CI's ceiling.
 
 A whole-project scan — requested with `--all` or required when a changed path cannot be expressed
 as an exact inclusion — needs more than 4.5 GiB on this repository. On a machine whose Docker VM

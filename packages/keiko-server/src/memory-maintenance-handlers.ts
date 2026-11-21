@@ -39,9 +39,12 @@ import type {
   MemoryId,
   MemoryRecord,
   MemoryScope,
+  MemoryStatus,
   MemoryType,
 } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_STATUSES } from "@oscharko-dev/keiko-contracts/memory";
 import {
+  MEMORY_MAINTENANCE_FORGETTER_SURFACE,
   MemoryStorageError,
   MemoryStoragePreconditionError,
   type MemoryVaultStore,
@@ -373,7 +376,8 @@ function applyExpirations(
   }
 }
 
-function applyForgets(
+// Exported for the test that proves the destructive path's last refusal (#4223).
+export function applyForgets(
   vault: MemoryVaultStore,
   auditSink: MemoryAuditSink | undefined,
   nowMs: number,
@@ -384,11 +388,20 @@ function applyForgets(
   for (const forget of forgets) {
     const record = byId.get(forget.id);
     if (record === undefined) continue;
-    if (record.status === "accepted" || record.status === "archived") continue;
+    // Accepted and archived are never forgotten here; a superseded record is history (#4223). The
+    // query and the planner already leave history out; this is the deliberate last line before a
+    // destructive delete, so a plan that names such a record is skipped like the others.
+    if (
+      record.status === "accepted" ||
+      record.status === "archived" ||
+      record.status === "superseded"
+    ) {
+      continue;
+    }
     try {
       vault.deleteMemory(forget.id, {
         tombstone: true,
-        forgetterSurface: "memory-maintenance",
+        forgetterSurface: MEMORY_MAINTENANCE_FORGETTER_SURFACE,
         reason: forget.reason,
         nowMs,
       });
@@ -460,6 +473,10 @@ export interface RunMaintenanceOptions {
   // so an existing caller that supplies no id keeps compiling and logging unchanged.
   readonly correlationId?: string;
 }
+
+const PLANNABLE_STATUSES: readonly MemoryStatus[] = MEMORY_STATUSES.filter(
+  (status) => status !== "superseded",
+);
 
 const MILLIS_PER_DAY = 24 * 60 * 60 * 1000;
 const RETENTION_ENV_FIELDS = {
@@ -586,8 +603,15 @@ export function runMemoryMaintenance(
   runConsolidationPass(vault, nowMs, reviewable, counts, correlationId);
   // Phase 3 — archive / forget on the post-consolidation snapshot. The access stats feed the
   // strength model; confidence itself is never mutated (O-V2).
-  const all = vault.listMemoriesAcrossScopes(scopes, { includeExpired: true });
-  const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
+  // A superseded record is history (#4223) and can produce no effect here, so it is excluded at the
+  // query: its body is not decoded and its access counters are not read.
+  const all = vault.listMemoriesAcrossScopes(scopes, {
+    includeExpired: true,
+    status: PLANNABLE_STATUSES,
+  });
+  const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats(
+    all.map(({ id }) => id),
+  );
   const plan = planMemoryMaintenance(all, accessStats, { nowMs, policy: planPolicy });
   applyFadeEffects(vault, auditSink, nowMs, plan, recordsById(all), counts);
   // Phase 4 — explicit retention and tombstone purge. It shares this bounded pass, scope snapshot,

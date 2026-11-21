@@ -58,12 +58,27 @@ MemoriaViva exposes separate lifecycle controls:
   proposed correction and preserve a body-free supersession audit record when
   accepted.
 - **Pin / unpin** controls retention priority. Pinned memories are not eligible
-  for retention cleanup.
+  for retention cleanup, and a forget by any other selector (scope, type, source conversation or time window) leaves them in place. An
+  entry the person picks in the Memory window is forgotten whether or not it is pinned. A "Vergiss
+  …" in a Chat does not pick a row: Keiko matches the person's words, so a pinned fact stays and the
+  Chat says the forget was not applied; the person unpins or deletes it in the Memory window. An
+  archived entry the person picks in the Memory window or names with a "Vergiss …" in a Chat is
+  forgotten too; a sweep by scope or type that contains an archived memory is refused as a whole.
 - **Archive** removes a memory from the active working set without deleting the
   audit trail.
 - **Forget / delete** removes the active memory record and writes a tombstone so
   reviewers can audit that deletion happened without retaining the raw body in
-  diagnostics.
+  diagnostics. When a fact was corrected, Keiko keeps the earlier values as history. A fact and the
+  values it replaced are one fact: forgetting the current entry, in the Memory window or with a
+  "Vergiss …" in a Chat, forgets every earlier value of the fact that is still stored in the same
+  scope, whatever its status now (replaced, archived, expired or rejected), each with its own
+  tombstone, so none of them is learned again by itself. The walk stays in the fact's own scope and
+  does not pass through another scope: an earlier value that is only reachable through a record in
+  another scope is kept, and the activity log counts the edge it did not follow
+  (`lineageSkippedCount`), so the person can see it and forget that value on its own. A record is a
+  history row only when a later value of the fact exists that the person did not reject. Picking a history row in the Memory window forgets only that
+  value and leaves the newer one. Without an operator retention policy, history stays until the
+  person forgets it.
 - **Tombstone retention** purges expired tombstones through the local vault port
   when a tombstone-retention threshold is configured.
 

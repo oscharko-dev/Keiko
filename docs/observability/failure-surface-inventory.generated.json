@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d07808d376d9d6a7910a16d4d06ddc7144530bcd5387205d88945d6e5e54e030"
+    "catalogDigest": "c4cd52e2eb7345456625633410dad5130bc5e89b6ecdb1742465450512a85d3c"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -76,8 +76,8 @@
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
     "operationCount": 718,
-    "proofCount": 741,
-    "resolvedProofCount": 741,
+    "proofCount": 742,
+    "resolvedProofCount": 742,
     "failureClassCount": 411,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -2919,6 +2919,9 @@
     ],
     "memory-vault.store.open-failed.migration": ["packages/keiko-memory-vault/src/db.test.ts"],
     "memory-vault.store.opened.key-source": ["packages/keiko-memory-vault/src/vault.test.ts"],
+    "memory-vault.store.opened.body-hash-backfill": [
+      "packages/keiko-memory-vault/src/vault.test.ts"
+    ],
     "memory-vault.store.quarantined.recovery": ["packages/keiko-memory-vault/src/db.test.ts"],
     "memory.audit.state-cache.seeded.count": ["packages/keiko-server/src/deps-activity.test.ts"],
     "memory.capture.decision.line": [
@@ -2933,7 +2936,10 @@
     ],
     "memory.embedding.refresh.skipped.line": ["packages/keiko-server/src/memory-handlers.test.ts"],
     "memory.embedding.store-rejected.line": ["packages/keiko-server/src/memory-embedding.test.ts"],
-    "memory.explicit.forget.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
+    "memory.explicit.forget.line": [
+      "packages/keiko-server/src/memory-capture-autonomy.test.ts",
+      "packages/keiko-server/src/memory-handlers.test.ts"
+    ],
     "memory.explicit.remember.line": ["packages/keiko-server/src/memory-capture-autonomy.test.ts"],
     "memory.learn.dropped.line": ["packages/keiko-server/src/memory-learned-facts.test.ts"],
     "memory.learn.extraction.line": ["packages/keiko-server/src/memory-learned-facts.test.ts"],

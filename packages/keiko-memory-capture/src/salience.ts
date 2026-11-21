@@ -559,6 +559,7 @@ function outcomeForItem(
     label: comparable ? item.relation : "new",
     ...(comparable ? { related } : {}),
     known: turn.known.filter((known) => comparableFact(fact, known)),
+    remark: sentenceBefore(turn.input.userText, fact.evidence),
   });
   if (fact.subjectless && decision.kind !== "supersede") {
     turn.drop("no-first-person");
@@ -678,6 +679,14 @@ function endsInAbbreviation(text: string): boolean {
   if (stem.length === token.length) return false;
   const word = stem.replace(OPENING_MARKS_RE, "");
   return word.includes(".") || /^\p{L}$/u.test(word) || ABBREVIATIONS.has(word.toLowerCase());
+}
+
+// The person's sentence just before the one the evidence starts in, if any.
+function sentenceBefore(userText: string, evidence: string): string | undefined {
+  const sentences = sentencesOf(userText);
+  const start = evidence.trim();
+  const index = sentences.findIndex((sentence) => sentence.length > 0 && sentence.includes(start));
+  return index > 0 ? sentences[index - 1] : undefined;
 }
 
 // The person's sentences, verbatim: a line break or a stop before a capital ends one, unless the

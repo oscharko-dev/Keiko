@@ -894,6 +894,10 @@
     "./runtime/bounded-concurrency": {
       "types": "./dist/bounded-concurrency.d.ts",
       "import": "./dist/bounded-concurrency.js"
+    },
+    "./memory-record-validation": {
+      "types": "./dist/memory-record-validation.d.ts",
+      "import": "./dist/memory-record-validation.js"
     }
   },
   "scripts": {

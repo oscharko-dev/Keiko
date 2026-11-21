@@ -19,6 +19,8 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   createMemoryVault,
   MEMORY_CENTER_PAGE_LIMIT,
+  MEMORY_CENTER_FORGETTER_SURFACE,
+  MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE,
   MemoryStorageError,
   MemoryStoragePreconditionError,
   MemoryStorageValidationError,
@@ -100,7 +102,9 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { getServerLogger } from "./observability/index.js";
+import { earlierValues, hasStoredSuccessor } from "./memory-lineage.js";
 import { resolveMemoryTargetRecords } from "./memory-target-resolver.js";
+import { logExplicitMemoryForget } from "./memory-explicit-statement-log.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1314,7 +1318,8 @@ export async function handleArchiveMemory(
 // ─── Handler: POST /api/memory/:id/forget + POST /api/memory/forget ───────────
 // The public destructive surfaces all use the same governed path:
 //   1. require explicit acknowledgement,
-//   2. let the governance selector protect pinned/forgotten records,
+//   2. let the governance selector protect pinned/forgotten records (the one exception is an entry
+//      the person picked in the Memory window; see `ForgetCaller`),
 //   3. delete with an audit tombstone.
 
 interface DestructiveInput {
@@ -1497,36 +1502,171 @@ function listForgetCandidates(
   return sortMemories(vault.listMemoriesByScope(selector.scope, { includeExpired: true }));
 }
 
+// Who asks for a forget decides whether a pin protects the entry. Only the Memory window shows the
+// person a row they pick and confirm, so only there does a by-id forget ignore the pin (#4214). In a
+// Chat the id comes from words that matched a record or from what "das" refers to, which is a
+// heuristic: the pin stays the person's protection against it (ADR-0146 D4b). The exemption is a
+// property of the call site, never of the selector kind.
+interface ForgetCaller {
+  readonly forgetterSurface: string;
+  readonly personPickedEntry: boolean;
+}
+
+const MEMORY_WINDOW_FORGET_CALLER: ForgetCaller = {
+  forgetterSurface: MEMORY_CENTER_FORGETTER_SURFACE,
+  personPickedEntry: true,
+};
+
+const CHAT_STATEMENT_FORGET_CALLER: ForgetCaller = {
+  forgetterSurface: MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE,
+  personPickedEntry: false,
+};
+
+// A refused forget keeps the scope kind of what it reached, so its line on the Activity Log says
+// where it stopped without reading the record a second time.
+interface ForgetRefusal {
+  readonly route: RouteResult;
+  readonly scopeKind: MemoryScopeKind | undefined;
+}
+
+interface ForgetDone {
+  readonly memoryIds: readonly MemoryId[];
+  readonly scopeKind: MemoryScopeKind | undefined;
+  /** Earlier values in another scope that the forget did not follow. */
+  readonly crossScopeSkipped: number;
+}
+
+function isForgetRefusal(value: object): value is ForgetRefusal {
+  return "route" in value;
+}
+
+// A fact and the earlier values it replaced are one fact (#4223): forgetting the newest value by id
+// forgets every earlier value still stored in its scope, whatever its status now (a history row may
+// have been archived or expired since), each with its own tombstone, so no earlier value can be
+// learned again unattended. A history row picked on its own is forgotten alone. A pin that protects
+// the newest value protects its history too, because nothing is selected then.
+interface ForgetTargets {
+  readonly records: readonly MemoryRecord[];
+  readonly crossScopeSkipped: number;
+}
+
+function withEarlierValues(
+  vault: MemoryVaultStore,
+  selected: readonly MemoryRecord[],
+  caller: ForgetCaller,
+): ForgetTargets | RouteResult {
+  const [record] = selected;
+  if (record === undefined) return { records: selected, crossScopeSkipped: 0 };
+  const history = earlierValues(vault, record);
+  if (hasStoredSuccessor(vault, record, history.records)) {
+    return { records: selected, crossScopeSkipped: 0 };
+  }
+  if (!history.complete) {
+    return {
+      status: 409,
+      body: errorBody(
+        "GOVERNANCE_ERROR",
+        "The history of this memory is too long to forget in one step.",
+      ),
+    };
+  }
+  const keepPinned = !caller.personPickedEntry;
+  return {
+    records: [...selected, ...history.records.filter((earlier) => !(keepPinned && earlier.pinned))],
+    crossScopeSkipped: history.crossScopeSkipped,
+  };
+}
+
+interface ForgetCandidates {
+  readonly records: readonly MemoryRecord[];
+  readonly scopeKind: MemoryScopeKind | undefined;
+}
+
+// The records a selector reaches, or why the caller may not forget them.
+function authorizedForgetCandidates(
+  vault: MemoryVaultStore,
+  selector: ForgetSelector,
+  authorizedScopes: readonly MemoryScope[],
+): ForgetCandidates | ForgetRefusal {
+  const requestedScope = selectorScope(selector);
+  if (requestedScope !== undefined && !scopeAuthorized(requestedScope, authorizedScopes)) {
+    return { route: forbiddenMemoryScopeResult(), scopeKind: requestedScope.kind };
+  }
+  const records = listForgetCandidates(vault, selector);
+  if (isRouteResult(records)) return { route: records, scopeKind: requestedScope?.kind };
+  const scopeKind = requestedScope?.kind ?? records[0]?.scope.kind;
+  if (records.some((record) => !scopeAuthorized(record.scope, authorizedScopes))) {
+    return { route: forbiddenMemoryScopeResult(), scopeKind };
+  }
+  return { records, scopeKind };
+}
+
+function selectForgetTargets(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  selector: ForgetSelector,
+  caller: ForgetCaller,
+  nowMs: number,
+): ForgetTargets | ForgetRefusal {
+  const authorizedScopes = authorizedMemoryScopes(deps, vault);
+  const found = authorizedForgetCandidates(vault, selector, authorizedScopes);
+  if (isForgetRefusal(found)) return found;
+  const { records, scopeKind } = found;
+  // Pinning protects a fact from a sweep by scope or type and from a Chat's word match. An entry the
+  // person picked in the Memory window is their own decision: it is forgotten pinned or not.
+  const candidates = selectMemoriesForForget(records, selector, {
+    nowMs,
+    protectPinned: !(caller.personPickedEntry && selector.kind === "by-id"),
+  });
+  if (candidates.length === 0) {
+    const none = errorBody("GOVERNANCE_ERROR", "No matching memories can be forgotten.");
+    return { route: { status: 409, body: none }, scopeKind };
+  }
+  if (selector.kind !== "by-id") return { records: candidates, crossScopeSkipped: 0 };
+  const targets = withEarlierValues(vault, candidates, caller);
+  return isRouteResult(targets) ? { route: targets, scopeKind } : targets;
+}
+
+// A forget by id names its entry, in the Memory window by a pick and in a Chat by the person's own
+// words, so that naming is the acknowledgement the governance layer demands for an archived record
+// (the entry and its archived history). A sweep names no entry and acknowledges none.
+function acknowledgedArchivedIds(
+  selector: ForgetSelector,
+  targets: readonly MemoryRecord[],
+): MemoryId[] {
+  if (selector.kind !== "by-id") return [];
+  return targets.filter((record) => record.status === "archived").map((record) => record.id);
+}
+
 function executeForgetSelection(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   selector: ForgetSelector,
   reason: MemoryForgetReason,
-  forgetterSurface = "memory-center",
-): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
+  caller: ForgetCaller,
+): ForgetDone | ForgetRefusal {
   const nowMs = Date.now();
-  const authorizedScopes = authorizedMemoryScopes(deps, vault);
-  const requestedScope = selectorScope(selector);
-  if (requestedScope !== undefined && !scopeAuthorized(requestedScope, authorizedScopes)) {
-    return forbiddenMemoryScopeResult();
+  const selected = selectForgetTargets(deps, vault, selector, caller, nowMs);
+  if (isForgetRefusal(selected)) return selected;
+  const { records: targets, crossScopeSkipped } = selected;
+  const scopeKind = targets[0]?.scope.kind;
+  let operations: ReturnType<typeof buildForgetOperations>;
+  try {
+    operations = buildForgetOperations(
+      targets,
+      { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
+      {
+        reason,
+        writeTombstone: true,
+        acknowledgedArchivedMemoryIds: acknowledgedArchivedIds(selector, targets),
+      },
+    );
+  } catch (error) {
+    if (!(error instanceof GovernanceError)) throw error;
+    return { route: { status: 400, body: governanceErrorBody(error) }, scopeKind };
   }
-  const records = listForgetCandidates(vault, selector);
-  if (isRouteResult(records)) return records;
-  if (records.some((record) => !scopeAuthorized(record.scope, authorizedScopes))) {
-    return forbiddenMemoryScopeResult();
-  }
-  const candidates = selectMemoriesForForget(records, selector, { nowMs });
-  if (candidates.length === 0) {
-    return {
-      status: 409,
-      body: errorBody("GOVERNANCE_ERROR", "No matching memories can be forgotten."),
-    };
-  }
-  const operations = buildForgetOperations(
-    candidates,
-    { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
-    { reason, writeTombstone: true },
-  );
+  // The vault keeps the chain whole: a forgotten history row's earlier values stay linked to the
+  // newer ones, whichever selector removed it.
   vault.deleteMemories(
     operations.map((operation) => ({
       id: operation.memoryId,
@@ -1534,12 +1674,94 @@ function executeForgetSelection(
         tombstone: true,
         reviewerId: operation.reviewerId,
         reason: operation.reason,
-        forgetterSurface,
+        forgetterSurface: caller.forgetterSurface,
         nowMs: operation.forgottenAt,
       },
     })),
   );
-  return { memoryIds: operations.map((operation) => operation.memoryId) };
+  return {
+    memoryIds: operations.map((operation) => operation.memoryId),
+    scopeKind,
+    crossScopeSkipped,
+  };
+}
+
+// What a thrown failure of a forget was: a governance refusal or a storage not-found is answered
+// with 400 or 404 by the route, so it is `refused` or `not-found`; only a technical fault is
+// `failed` (#4223).
+function forgetFailureOutcome(error: unknown): "refused" | "not-found" | "failed" {
+  if (error instanceof GovernanceError) return "refused";
+  if (error instanceof MemoryStorageError && error.code === "not-found") return "not-found";
+  return "failed";
+}
+
+function forgetRouteOutcome(result: RouteResult): "not-found" | "refused" {
+  return result.status === 404 ? "not-found" : "refused";
+}
+
+// A cross-scope edge the forget did not follow is recorded as a count, never silently.
+function skippedField(done: ForgetDone): { readonly lineageSkippedCount?: number } {
+  return done.crossScopeSkipped > 0 ? { lineageSkippedCount: done.crossScopeSkipped } : {};
+}
+
+// The counts of a forget that ended without forgetting anything.
+const NOTHING_FORGOTTEN = {
+  tombstoneWritten: false,
+  forgottenCount: 0,
+  tombstoneCount: 0,
+} as const;
+
+// A forget from the Memory window (Journal and Memory Center) through the one forget path, leaving
+// its own body-free line on the Activity Log (#4206 AC 5). A thrown failure is recorded as `failed`
+// (a governance refusal or a storage not-found as `refused` or `not-found`, as the route answers
+// it) and rethrown, so the route's existing diagnostic and opaque 500 are unchanged.
+function forgetFromMemoryWindow(
+  deps: UiHandlerDeps,
+  vault: MemoryVaultStore,
+  selector: ForgetSelector,
+  reason: MemoryForgetReason,
+  correlationId: string,
+): { readonly memoryIds: readonly MemoryId[] } | RouteResult {
+  const line = { surface: "memory-center", selectorKind: selector.kind } as const;
+  try {
+    const result = executeForgetSelection(
+      deps,
+      vault,
+      selector,
+      reason,
+      MEMORY_WINDOW_FORGET_CALLER,
+    );
+    if (isForgetRefusal(result)) {
+      const detail = { ...line, ...NOTHING_FORGOTTEN, scopeKind: result.scopeKind };
+      logExplicitMemoryForget(forgetRouteOutcome(result.route), correlationId, detail);
+      return result.route;
+    }
+    const count = result.memoryIds.length;
+    logExplicitMemoryForget("forgotten", correlationId, {
+      ...line,
+      scopeKind: result.scopeKind,
+      tombstoneWritten: true,
+      forgottenCount: count,
+      tombstoneCount: count,
+      ...skippedField(result),
+    });
+    return { memoryIds: result.memoryIds };
+  } catch (error) {
+    const detail = { ...line, ...NOTHING_FORGOTTEN, scopeKind: selectorScope(selector)?.kind };
+    logExplicitMemoryForget(forgetFailureOutcome(error), correlationId, detail);
+    throw error;
+  }
+}
+
+// A Memory window forget that ended before any selection (vault unavailable, invalid id, rejected
+// body, missing acknowledgement, rejected selector, refused audit preflight): nothing was forgotten
+// and no tombstone written. An unavailable service (5xx) is `failed`, a rejected request `refused`.
+function logMemoryWindowForgetEarlyExit(result: RouteResult, correlationId: string): RouteResult {
+  logExplicitMemoryForget(result.status >= 500 ? "failed" : "refused", correlationId, {
+    surface: "memory-center",
+    tombstoneWritten: false,
+  });
+  return result;
 }
 
 function formatForgetBody(memoryIds: readonly MemoryId[]): Record<string, unknown> {
@@ -1598,40 +1820,99 @@ function preflightPrivacyCriticalAudit(
 
 export type ExplicitMemoryForgetResult = "forgotten" | "refused" | "failed";
 
+const CHAT_BY_ID_LINE = { surface: "chat", selectorKind: "by-id" } as const;
+
 // A person's clear "Vergiss das" in a chat, through the one forget implementation: the same audit
-// preflight, authorization, tombstone and deletion as the Memory window. It never throws, because
-// the chat answer is already there; the caller shows the result in a plain sentence.
+// preflight, authorization, tombstone and deletion as the Memory window, except that a pin keeps
+// protecting (the id came from the person's words, not from a row they picked). It never throws,
+// because the chat answer is already there; the caller shows the result in a plain sentence. The
+// forget leaves its own line on the Activity Log.
 export function forgetMemoryFromStatement(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
   memoryId: MemoryId,
   correlationId: string,
 ): ExplicitMemoryForgetResult {
-  if (preflightPrivacyCriticalAudit(deps, correlationId) !== undefined) return "failed";
+  if (preflightPrivacyCriticalAudit(deps, correlationId) !== undefined) {
+    logExplicitMemoryForget("failed", correlationId, { ...CHAT_BY_ID_LINE, ...NOTHING_FORGOTTEN });
+    return "failed";
+  }
   try {
     const result = executeForgetSelection(
       deps,
       vault,
       { kind: "by-id", memoryId },
       MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
-      "chat-statement",
+      CHAT_STATEMENT_FORGET_CALLER,
     );
-    return isRouteResult(result) ? "refused" : "forgotten";
+    if (isForgetRefusal(result)) {
+      const detail = { ...CHAT_BY_ID_LINE, ...NOTHING_FORGOTTEN, scopeKind: result.scopeKind };
+      logExplicitMemoryForget(forgetRouteOutcome(result.route), correlationId, detail);
+      return "refused";
+    }
+    const count = result.memoryIds.length;
+    logExplicitMemoryForget("forgotten", correlationId, {
+      ...CHAT_BY_ID_LINE,
+      scopeKind: result.scopeKind,
+      tombstoneWritten: true,
+      forgottenCount: count,
+      tombstoneCount: count,
+      ...skippedField(result),
+    });
+    return "forgotten";
   } catch (error) {
-    reportMemoryHandlerFailure(
-      deps,
-      correlationId,
-      "memory.forget.statement",
-      "memory-handlers.forgetMemoryFromStatement",
-      error,
-    );
-    return "failed";
+    return reportFailedChatForget(deps, correlationId, error, {
+      operation: "memory.forget.statement",
+      site: "memory-handlers.forgetMemoryFromStatement",
+      line: CHAT_BY_ID_LINE,
+    });
   }
+}
+
+interface ChatForgetFailure {
+  readonly operation: string;
+  readonly site: string;
+  readonly line: { readonly surface: "chat"; readonly selectorKind: "by-id" | "statement" };
+}
+
+// A thrown failure of a Chat forget: a governance refusal is a plain "not applied", not a fault; any
+// other failure is reported and the Chat is told it failed.
+function reportFailedChatForget(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  error: unknown,
+  failure: ChatForgetFailure,
+): ExplicitMemoryForgetResult {
+  const outcome = forgetFailureOutcome(error);
+  logExplicitMemoryForget(outcome, correlationId, { ...failure.line, ...NOTHING_FORGOTTEN });
+  if (outcome !== "failed") return "refused";
+  reportMemoryHandlerFailure(deps, correlationId, failure.operation, failure.site, error);
+  return "failed";
+}
+
+// The line of a statement forgotten before it was learned: one tombstone per scope, no memory. The
+// scope kind is named only when every tombstone is in one kind.
+function logStatementForgotten(
+  correlationId: string,
+  scopes: readonly MemoryScope[],
+  tombstoneCount: number,
+): void {
+  const kinds = new Set(scopes.map((scope) => scope.kind));
+  const [onlyKind] = kinds;
+  logExplicitMemoryForget("forgotten", correlationId, {
+    surface: "chat",
+    selectorKind: "statement",
+    ...(kinds.size === 1 ? { scopeKind: onlyKind } : {}),
+    tombstoneWritten: true,
+    forgottenCount: 0,
+    tombstoneCount,
+  });
 }
 
 // "Vergiss das" about a statement nothing was stored from: leaves a tombstone in every scope a later
 // learning pass could choose, so that pass stores nothing. A statement carrying a credential keeps
-// its hash only and never reaches the embedding endpoint.
+// its hash only and never reaches the embedding endpoint. Its line records one tombstone per scope
+// and no forgotten memory.
 export async function forgetStatementNotLearned(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -1639,7 +1920,11 @@ export async function forgetStatementNotLearned(
   scopes: readonly MemoryScope[],
   correlationId: string,
 ): Promise<ExplicitMemoryForgetResult> {
-  if (preflightPrivacyCriticalAudit(deps, correlationId) !== undefined) return "failed";
+  const line = { surface: "chat", selectorKind: "statement" } as const;
+  if (preflightPrivacyCriticalAudit(deps, correlationId) !== undefined) {
+    logExplicitMemoryForget("failed", correlationId, { ...line, ...NOTHING_FORGOTTEN });
+    return "failed";
+  }
   try {
     // Unlike a stored memory, the statement's scopes need not hold anything yet, so an installation
     // without scope authorization allows the conversation's own scopes.
@@ -1648,32 +1933,33 @@ export async function forgetStatementNotLearned(
       memoryAuthorization === undefined
         ? scopes
         : scopes.filter((scope) => scopeAuthorized(scope, memoryAuthorization.authorizedScopes()));
-    if (allowed.length === 0) return "refused";
+    if (allowed.length === 0) {
+      logExplicitMemoryForget("refused", correlationId, { ...line, ...NOTHING_FORGOTTEN });
+      return "refused";
+    }
     const carriesSecret =
       memoryTextSecretEgressRejectionReason(body, memoryCapturePolicyForDeps(deps)) !== null;
     const embedding = carriesSecret ? null : await embedMemoryText(deps, body, "document");
     const nowMs = Date.now();
-    vault.recordForgottenStatements(
+    const written = vault.recordForgottenStatements(
       allowed.map((scope) => ({
         scope,
         body,
-        forgetterSurface: "chat-statement",
+        forgetterSurface: MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE,
         reviewerId: reviewerIdForMemoryMutation(deps),
         reason: MEMORY_FORGET_REASON_EXPLICIT_USER_REQUEST,
         nowMs,
         ...(embedding === null ? {} : { bodyEmbedding: embedding }),
       })),
     );
+    logStatementForgotten(correlationId, allowed, written.length);
     return "forgotten";
   } catch (error) {
-    reportMemoryHandlerFailure(
-      deps,
-      correlationId,
-      "memory.forget.statement",
-      "memory-handlers.forgetStatementNotLearned",
-      error,
-    );
-    return "failed";
+    return reportFailedChatForget(deps, correlationId, error, {
+      operation: "memory.forget.statement",
+      site: "memory-handlers.forgetStatementNotLearned",
+      line,
+    });
   }
 }
 
@@ -1691,13 +1977,13 @@ async function readForgetByIdRequest(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<ForgetByIdRequest | RouteResult> {
-  const request = await readMemoryBodyRequest(ctx, deps);
-  if (isRouteResult(request)) return request;
-  const input = parseDestructiveInput(request.body);
-  if (isRouteResult(input)) return input;
   const correlationId = handlerCorrelationId(ctx);
+  const request = await readMemoryBodyRequest(ctx, deps);
+  if (isRouteResult(request)) return logMemoryWindowForgetEarlyExit(request, correlationId);
+  const input = parseDestructiveInput(request.body);
+  if (isRouteResult(input)) return logMemoryWindowForgetEarlyExit(input, correlationId);
   const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
-  if (auditReady !== undefined) return auditReady;
+  if (auditReady !== undefined) return logMemoryWindowForgetEarlyExit(auditReady, correlationId);
   return { vault: request.vault, id: request.id, reason: input.reason, correlationId };
 }
 
@@ -1710,7 +1996,13 @@ export async function handleForgetMemory(
   const { vault, id, reason, correlationId } = request;
 
   try {
-    const result = executeForgetSelection(deps, vault, { kind: "by-id", memoryId: id }, reason);
+    const result = forgetFromMemoryWindow(
+      deps,
+      vault,
+      { kind: "by-id", memoryId: id },
+      reason,
+      correlationId,
+    );
     if (isRouteResult(result)) return result;
     return { status: 200, body: formatForgetBody(result.memoryIds) };
   } catch (err) {
@@ -1728,21 +2020,23 @@ export async function handleForgetMemories(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
+  const correlationId = handlerCorrelationId(ctx);
   const vault = resolveVault(deps);
-  if (isRouteResult(vault)) return vault;
+  if (isRouteResult(vault)) return logMemoryWindowForgetEarlyExit(vault, correlationId);
 
   const outcome = await readJsonBody(ctx.req, ctx.correlationId);
-  if (outcome.kind === "rejected") return outcome.response;
+  if (outcome.kind === "rejected") {
+    return logMemoryWindowForgetEarlyExit(outcome.response, correlationId);
+  }
   const body = outcome.value;
 
   const input = parseForgetSelectionInput(body);
-  if (isRouteResult(input)) return input;
-  const correlationId = handlerCorrelationId(ctx);
+  if (isRouteResult(input)) return logMemoryWindowForgetEarlyExit(input, correlationId);
   const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
-  if (auditReady !== undefined) return auditReady;
+  if (auditReady !== undefined) return logMemoryWindowForgetEarlyExit(auditReady, correlationId);
 
   try {
-    const result = executeForgetSelection(deps, vault, input.selector, input.reason);
+    const result = forgetFromMemoryWindow(deps, vault, input.selector, input.reason, correlationId);
     if (isRouteResult(result)) return result;
     return { status: 200, body: formatForgetBody(result.memoryIds) };
   } catch (err) {
@@ -1768,7 +2062,13 @@ export async function handleDeleteMemory(
   const { vault, id, reason, correlationId } = request;
 
   try {
-    const result = executeForgetSelection(deps, vault, { kind: "by-id", memoryId: id }, reason);
+    const result = forgetFromMemoryWindow(
+      deps,
+      vault,
+      { kind: "by-id", memoryId: id },
+      reason,
+      correlationId,
+    );
     if (isRouteResult(result)) return result;
     return {
       status: 200,

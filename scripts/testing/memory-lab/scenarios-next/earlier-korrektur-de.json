@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "earlier-korrektur-de",
+  "language": "de",
+  "class": "earlier-value",
+  "description": "A wrong fact corrected in conversation (Köln, then Düsseldorf), then the current value and what had been stored before. Limit: the correction is stored but the wrong value stays live next to it, and recall never supplies a replaced value. Failure means: the current probe failing is an update defect (stale value live); the earlier probe failing is the absent capability to recall an earlier value. Maintenance: on or off changes nothing; the supersession happens in a later turn of the same run and the maintenance pass runs only on the first memory turn. Kind: defect.",
+  "truth": [
+    {
+      "key": "now",
+      "seed": "Ich arbeite in Düsseldorf.",
+      "must": false,
+      "terms": [["Düsseldorf", "Duesseldorf"]]
+    }
+  ],
+  "superseded": [
+    {
+      "key": "wrong",
+      "terms": [["Köln", "Koeln"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich arbeite in Köln.",
+      "learner": [
+        {
+          "body": "Ich arbeite in Köln.",
+          "type": "fact"
+        }
+      ]
+    },
+    {
+      "user": "Das war falsch. Ich arbeite in Düsseldorf.",
+      "learner": [
+        {
+          "body": "Ich arbeite in Düsseldorf.",
+          "type": "fact",
+          "relation": "update",
+          "related": 1
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "current",
+      "question": "Wo arbeite ich?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Düsseldorf", "Duesseldorf"]],
+        "forbidden": [["Köln", "Koeln"]]
+      }
+    },
+    {
+      "id": "previous",
+      "question": "Was hattest du vorher darüber gespeichert, wo ich arbeite?",
+      "expect": {
+        "kind": "answer",
+        "earlier": ["wrong"]
+      }
+    }
+  ]
+}

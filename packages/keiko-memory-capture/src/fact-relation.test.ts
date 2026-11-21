@@ -299,6 +299,118 @@ describe("mostSimilarFacts", () => {
     expect(decide(body, body, "update", old)).toEqual({ kind: "new" });
   });
 
+  it.each([
+    [
+      "Das war falsch. Ich arbeite in Düsseldorf.",
+      "Ich arbeite in Düsseldorf.",
+      "Ich arbeite in Köln.",
+    ],
+    ["Correction: I work in Leeds.", "I work in Leeds.", "I work in York."],
+    ["Korrektur: ich wohne in Bonn.", "Ich wohne in Bonn.", "Ich wohne in Bonn-Beuel."],
+  ])("replaces a known fact the person corrects: %s", (evidence, body, old) => {
+    for (const label of ["update", "contradiction"] as const) {
+      expect(decide(body, evidence, label, old)).toMatchObject({
+        kind: "supersede",
+        factId: "old",
+      });
+    }
+    expect(decide(body, evidence, "new", old)).toEqual({ kind: "new" });
+  });
+
+  it.each([
+    [
+      "I use the Everforest theme in my editor again.",
+      "I switched to the Kanagawa theme in my editor.",
+    ],
+    ["Ich arbeite wieder mit Vim als Editor.", "Ich arbeite mit Helix als Editor."],
+  ])("replaces the value a person returns from: %s", (statement, old) => {
+    expect(decide(statement, statement, "update", old)).toMatchObject({
+      kind: "supersede",
+      factId: "old",
+    });
+  });
+
+  it("reads a changed value phrase of a chosen preference as a changed preference", () => {
+    const statement = "Ich bevorzuge Tabellen mit Summenzeile, wenn du mir Zahlen zeigst.";
+    const old = "Ab jetzt bevorzuge ich Listen mit Nummerierung, wenn du mir Zahlen zeigst.";
+    expect(decide(statement, statement, "update", old)).toEqual({
+      kind: "supersede",
+      factId: "old",
+      basis: "slot-changed",
+    });
+    expect(decide(statement, statement, "new", old)).toEqual({ kind: "new" });
+  });
+
+  it.each([
+    ["Bevorzugt Tee am Morgen", "Bevorzugt Kaffee am Abend"],
+    ["Prefers tea in the morning", "Prefers coffee in the evening"],
+    ["Bevorzugt Python für Skripte", "Bevorzugt Skripte mit Bash"],
+  ])("keeps a preference whose context changes with its value: %s / %s", (body, old) => {
+    expect(decide(body, body, "update", old)).toEqual({ kind: "new" });
+  });
+
+  it.each([
+    ["Das war falsch.", "supersede"],
+    ["Correction:", "supersede"],
+    ["Hallo zusammen.", "new"],
+    ["Das war falsch?", "new"],
+    ["Korrektur?", "new"],
+    ["Das war falsch mit dem Termin am Montag in Bonn.", "new"],
+  ])("reads the remark %s before a corrected fact (#4223)", (remark, kind) => {
+    const known = { id: "old", body: "Ich arbeite in Köln." };
+    const decision = decideFactRelation({
+      body: "Ich arbeite in Düsseldorf.",
+      evidence: "Ich arbeite in Düsseldorf.",
+      label: "contradiction",
+      related: known,
+      known: [known],
+      remark,
+    });
+    expect(decision.kind).toBe(kind);
+  });
+
+  it.each([
+    ["Ich arbeite im Projekt Atlas an der Korrektur.", "Ich arbeite im Projekt Atlas in Köln."],
+    ["I work on the correction for Atlas.", "I work on Atlas in Cologne."],
+  ])("never reads the noun in %s as a correction", (body, old) => {
+    for (const label of ["update", "contradiction"] as const) {
+      expect(decide(body, body, label, old)).toEqual({ kind: "new" });
+    }
+  });
+
+  it.each([
+    ["Plays guitar", "I play guitar again", "Plays piano"],
+    ["Isst Pizza", "Ich esse wieder Pizza", "Isst Pasta"],
+    ["Mag Pizza", "Ich mag eigentlich Pizza", "Mag Pasta"],
+    ["Trinkt Tee", "Ich trinke Tee, back to back Meetings", "Trinkt Kaffee"],
+    [
+      "Nutzt Python auf Linux",
+      "Ich korrigiere Klausuren mit Python auf Linux",
+      "Nutzt Java auf Linux",
+    ],
+    ["Ich nutze auch Python.", "Eigentlich nutze ich auch Python.", "Nutzt Excel"],
+  ])("keeps %s beside %s when nothing says the old value ended", (body, evidence, old) => {
+    for (const label of ["update", "contradiction"] as const) {
+      expect(decide(body, evidence, label, old)).toEqual({ kind: "new" });
+    }
+  });
+
+  it.each([
+    ["Ich spiele eigentlich Gitarre am Freitag", "Ich spiele Klavier am Freitag"],
+    ["I actually use Python on Linux", "I use Java on Linux"],
+    ["I use Python on Linux again", "I use Java on Linux"],
+  ])("keeps the old fact when a statement %s names no change", (statement, old) => {
+    expect(factReplacedByStatement(statement, [{ id: "old", body: old }])).toBeNull();
+  });
+
+  it.each([
+    ["Bevorzugt Tee morgens im Büro", "Bevorzugt Kaffee abends im Büro"],
+    ["Bevorzugt Tabellen mit Summen", "Bevorzugt Summen mit Listen"],
+    ["Bevorzugt kurze knappe klare Antworten", "Bevorzugt lange Antworten"],
+  ])("keeps %s beside %s: no single value differs", (body, old) => {
+    expect(decide(body, body, "update", old)).toEqual({ kind: "new" });
+  });
+
   it("keeps a preference in another context on a stated change", () => {
     expect(
       factReplacedByStatement("I now prefer light mode in the terminal", [

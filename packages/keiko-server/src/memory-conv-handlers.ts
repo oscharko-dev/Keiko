@@ -40,12 +40,14 @@ import type {
   ConversationMemoryCaptureOutcomeWire,
 } from "@oscharko-dev/keiko-contracts";
 import { MEMORY_TYPES } from "@oscharko-dev/keiko-contracts/runtime/memory";
+import { MEMORY_STATUSES, isMemoryStatusRecallable } from "@oscharko-dev/keiko-contracts/memory";
 import type {
   MemoryAuditEvent,
   MemoryId,
   MemoryProposalId,
   MemoryRecord,
   MemoryScope,
+  MemoryStatus,
   MemoryType,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
@@ -135,18 +137,30 @@ function parseTypes(raw: unknown): readonly MemoryType[] | null {
   return out;
 }
 
+// Only statuses recall can ever supply are read, so archived, proposed, rejected and other retired
+// rows never take a place in the bounded read window ahead of a live record (#4223, lab
+// scale-archiviert-de and scale-vorschlaege-en). History joins only when a caller asks for it.
+const RECALL_HISTORY_STATUSES: readonly MemoryStatus[] =
+  MEMORY_STATUSES.filter(isMemoryStatusRecallable);
+const RECALL_LIST_STATUSES: readonly MemoryStatus[] = RECALL_HISTORY_STATUSES.filter(
+  (status) => status !== "superseded",
+);
 export function vaultAsQueryPort(vault: MemoryVaultStore): MemoryQueryPort {
-  // Retrieval must see expired rows so it can omit them with a concrete suppression reason
-  // instead of having storage silently drop them. Archived/forgotten rows already come back
-  // from the vault by default and are suppressed later by the retrieval layer.
+  // Retrieval must see accepted rows whose validity ended so it can omit them with a concrete
+  // suppression reason instead of having storage silently drop them. Rows whose status alone keeps
+  // them out of recall are not read at all, so they cannot fill the bounded window and are not
+  // reported as omitted either.
   return {
     listByScope: (scope, options): readonly MemoryRecord[] => {
       const limit = options?.maxResults;
       return vault.listMemoriesByScope(scope, {
         includeExpired: true,
+        status:
+          options?.includeSuperseded === true ? RECALL_HISTORY_STATUSES : RECALL_LIST_STATUSES,
         ...(limit === undefined ? {} : { limit }),
       });
     },
+    getMemory: (memoryId) => vault.getMemory(memoryId),
     listOutgoingEdges: (memoryId) => vault.listOutgoingEdges(memoryId),
     listIncomingEdges: (memoryId) => vault.listIncomingEdges(memoryId),
     listEdgesForMemories: (memoryIds) => vault.listEdgesForMemories(memoryIds),
@@ -239,6 +253,7 @@ function buildRetrievalRequest(
     types?: readonly MemoryType[];
     budgetTokens?: number;
     semanticById?: ReadonlyMap<MemoryId, number>;
+    semanticMinScore?: number;
     strengthById?: ReadonlyMap<MemoryId, number>;
     embeddingById?: ReadonlyMap<MemoryId, Float32Array>;
     mmrLambda?: number;
@@ -255,6 +270,7 @@ function buildRetrievalRequest(
   // the chat path. Passed only when present so a vault with no embeddings / no access history ranks
   // byte-identically.
   if (signals.semanticById !== undefined) req.semanticById = signals.semanticById;
+  if (signals.semanticMinScore !== undefined) req.semanticMinScore = signals.semanticMinScore;
   if (signals.strengthById.size > 0) req.strengthById = signals.strengthById;
   if (signals.embeddingById.size > 0) req.embeddingById = signals.embeddingById;
   if (signals.mmrLambda !== undefined) req.mmrLambda = signals.mmrLambda;
@@ -499,7 +515,8 @@ function persistCandidateOutcome(
   }
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
-  if (isSuppressedByForgetTombstone(vault, record)) {
+  const explicitStatement = outcome.proposal.provenance.sourceKind === "explicit-user-instruction";
+  if (isSuppressedByForgetTombstone(vault, record, { explicitStatement })) {
     return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
   }
   const candidate = memoryCaptureAutoAcceptEligible(deps, mode, outcome)

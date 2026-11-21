@@ -13,6 +13,7 @@
 // not a security boundary against a determined agent with the same user rights. The rule is that an
 // optimizing agent never opens the holdout and never reads the key; the runner masks every scenario
 // name and writes no scenario text. Rotate the holdout whenever the corpus version changes.
+import { failureClassCounts } from "../failure-classes.mjs";
 import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -100,9 +101,24 @@ export function maskHoldoutResult(result, name) {
       verdicts: [],
       memories: [],
     },
-    probes: result.probes.map((probe, index) => ({ ...probe, id: `probe-${String(index + 1)}` })),
+    probes: result.probes.map(maskedProbe),
+    // Classified here, from the unmasked result: the mask empties the verdicts the store classes rest
+    // on. Class names and counts only.
+    failureClassCounts: failureClassCounts(result),
     ...oracle,
+    // The shape of a hidden store (how many records, in which state) is part of the hidden scenario.
+    seed: undefined,
   };
+}
+
+// A probe's id and the fact keys it names (`neededMissing`, `neededNotSupplied`) become positions.
+function maskedProbe(probe, index) {
+  // The recall trace names memories and facts, so a sealed probe keeps none of it.
+  const masked = { ...probe, id: `probe-${String(index + 1)}` };
+  delete masked.recallTrace;
+  for (const field of ["neededMissing", "neededNotSupplied"])
+    if (Array.isArray(probe[field])) masked[field] = maskedKeys(probe[field]);
+  return masked;
 }
 
 // Checkpoints use their own derived key and retain no readable per-unit evidence at rest.
@@ -170,6 +186,12 @@ function decrypt(envelope, key) {
  * Encrypts the scenario set of a directory into one file. Creates the key file when it does not
  * exist, refuses paths inside the checkout and refuses to overwrite an existing holdout.
  */
+// A sealed holdout reports counts only; an authored seed would put the shape of its store in them.
+function assertNoSeed(scenarios) {
+  if (scenarios.some((scenario) => scenario.seed !== undefined))
+    throw new HoldoutError("a sealed holdout holds no seeded scenario");
+}
+
 export function sealHoldout({ scenarios, out, keyFile }) {
   // The guard resolves links to judge the destination; the files are then used as spelled, so the
   // key reader still sees, and refuses, a key file that is itself a link.
@@ -180,6 +202,7 @@ export function sealHoldout({ scenarios, out, keyFile }) {
   if (existsSync(target)) throw new HoldoutError("refusing to overwrite an existing holdout");
   const set = loadScenarioDirectory(scenarios);
   if (set.length === 0) throw new HoldoutError("the scenario directory holds no scenario");
+  assertNoSeed(set);
   if (!existsSync(keyPath)) createKeyFile(keyPath);
   const envelope = encrypt(JSON.stringify(set), readKey(keyPath));
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
@@ -217,6 +240,7 @@ export function openSealedHoldout(file, keyFile) {
   if (!Array.isArray(parsed) || parsed.length === 0)
     throw new HoldoutError("the holdout holds no scenario");
   const scenarios = parsed.map((scenario) => validateScenario(scenario));
+  assertNoSeed(scenarios);
   if (new Set(scenarios.map((scenario) => scenario.id)).size !== scenarios.length)
     throw new HoldoutError("the holdout holds two scenarios with one id");
   return {

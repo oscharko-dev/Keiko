@@ -5,8 +5,10 @@
 import { randomUUID } from "node:crypto";
 import { mapSequential } from "./corpus/sequence.mjs";
 import { awaitLearning, captureTotal, listMemories, readCaptures } from "./instance.mjs";
-import { retainBodiesFor } from "./isolation.mjs";
+import { isAnchorScenario, retainBodiesFor } from "./isolation.mjs";
+import { traceRecall } from "./recall-trace.mjs";
 import { matchesTermGroups, scoreProbe, scoreStore } from "./score.mjs";
+import { countBy, seedLoss } from "./seed-plan.mjs";
 
 export const ARMS = Object.freeze(["off", "product", "oracle"]);
 // The explicit path recognizes "Merke dir <fact>"; a colon after "dir" is not an intent today.
@@ -242,27 +244,36 @@ async function seedFact(instance, chatId, fact) {
   };
 }
 
-function countBy(values) {
-  const counts = {};
-  for (const value of values) counts[value] = (counts[value] ?? 0) + 1;
-  return counts;
-}
-
 // The oracle arm asserts its own precondition: every truth fact was stored by its own seeding and
 // reads back accepted and exact exactly once, and nothing else is accepted. The scope each seed
 // landed in is reported (`scopes`, a count per scope kind): the explicit route stores in project
 // scope today, which the report states instead of leaving to be rediscovered.
-async function seedOracle(scenario, instance, poisonIds) {
+async function seedOracle(scenario, instance, labIds) {
   const chatId = await createChat(instance, `oracle ${scenario.id}`);
+  // A truth the scenario's own seed already placed in the store is not placed twice, provided its
+  // record is accepted NOW: maintenance may have archived it since it was planned, and a truth with
+  // no accepted copy is not met, and is not seeded again either.
+  const current = new Map((await listMemories(instance)).map((memory) => [memory.id, memory]));
+  const planned = (instance.seed?.entries ?? []).filter(
+    (entry) => entry.status === "accepted" && entry.truth !== undefined,
+  );
+  const stated = new Set(planned.map((entry) => entry.truth));
+  const lostStated = planned
+    .filter((entry) => current.get(entry.id)?.status !== "accepted")
+    .map((entry) => entry.truth);
+  const facts = scenario.truth.filter((fact) => !stated.has(fact.key));
   const seeded = [];
-  for (const fact of scenario.truth) seeded.push(await seedFact(instance, chatId, fact));
+  for (const fact of facts) seeded.push(await seedFact(instance, chatId, fact));
   const accepted = (await listMemories(instance)).filter(
-    (memory) => memory.status === "accepted" && !poisonIds.has(memory.id),
+    (memory) => memory.status === "accepted" && !labIds.has(memory.id),
   );
   const seedIds = new Set(seeded.map((seed) => seed.memoryId).filter((id) => id !== undefined));
-  const mismatches = scenario.truth
-    .filter((fact) => accepted.filter((memory) => sameBody(memory, fact)).length !== 1)
-    .map((fact) => fact.key);
+  const mismatches = [
+    ...lostStated,
+    ...facts
+      .filter((fact) => accepted.filter((memory) => sameBody(memory, fact)).length !== 1)
+      .map((fact) => fact.key),
+  ];
   const extras = accepted.filter((memory) => !seedIds.has(memory.id)).length;
   return {
     seeded,
@@ -296,6 +307,18 @@ export function askedQuestion(scenario, probe) {
   return `${probe.question}${ANSWER_LANGUAGE_REQUEST[probe.language ?? scenario.language] ?? ""}`;
 }
 
+// The recall trace (#4205) is requested explicitly, and has nothing to attribute for an arm without
+// memory, for a probe that is not an answer probe, and for real conversations (anchor scenarios),
+// whose ids and counts are not recorded beyond what a run of them already keeps.
+function tracesRecall(scenario, context, probe) {
+  return (
+    context.recallTrace === true &&
+    context.arm !== "off" &&
+    probe.expect.kind === "answer" &&
+    !isAnchorScenario(scenario)
+  );
+}
+
 async function runProbes(scenario, instance, context) {
   context.fixture?.setAnswerMode("echo");
   const rows = [];
@@ -303,15 +326,29 @@ async function runProbes(scenario, instance, context) {
     const chatId = await createChat(instance, `probe ${scenario.id} ${probe.id}`);
     const asked = askedQuestion(scenario, probe);
     const sent = await sendTurn(instance, chatId, asked, context, context.arm !== "off");
-    const score = scoreProbe(scenario, probe, sent.answer, sent.supplied);
-    rows.push({
+    const links = instance.seed?.links;
+    const score = scoreProbe(scenario, probe, sent.answer, sent.supplied, links);
+    const row = {
       ...score,
       retrievedCount: sent.retrieved.length,
       profileCount: sent.profileCount,
       elapsedMs: sent.elapsedMs,
       suppliedIds: sent.supplied.map((entry) => entry.memoryId),
       ...(context.retainBodies ? { answer: sent.answer } : {}),
-    });
+    };
+    // Only after the answer was received, so the trace cannot influence it.
+    if (tracesRecall(scenario, context, probe))
+      row.recallTrace = await traceRecall({
+        instance,
+        scenario,
+        probe,
+        supplied: sent.supplied,
+        retrievedIds: sent.retrieved.map((entry) => entry.memoryId),
+        chatId,
+        queryText: asked,
+        links,
+      });
+    rows.push(row);
   }
   context.fixture?.setAnswerMode("ok");
   return rows;
@@ -339,9 +376,63 @@ function journalOf(context) {
     );
 }
 
+// The parts of a unit's evidence that exist only for some scenarios and arms.
+function optionalEvidence({ oracle, poison, poisonIds, seed }) {
+  return {
+    ...(oracle === undefined ? {} : { oracle }),
+    ...(poison.length === 0 ? {} : { poison: { total: poison.length, seeded: poisonIds.size } }),
+    ...(seed === undefined ? {} : { seed }),
+  };
+}
+
+// Probes run with memory on, so the product may still be learning from the last question: learning is
+// settled before the store and the ledger are read, otherwise probeCaptures would depend on timing.
+// Learning runs on probe questions too (memory is one switch for recall and learning), so a question
+// the product turns into a memory is counted here instead of passing as recall.
+async function settledAfterProbes(scenario, instance, context, memories) {
+  if (context.arm !== "off")
+    await awaitLearning(instance, { ...context.learning, phase: "after the probes" });
+  const afterProbes = await listMemories(instance);
+  const known = new Set(memories.map((memory) => memory.id));
+  return {
+    seed: seedOutcome(scenario, instance, afterProbes),
+    probeCaptures: afterProbes.filter((memory) => !known.has(memory.id)).length,
+    captures: await readCaptures(instance),
+  };
+}
+
+// What became of the records the lab placed in the vault before the run: how many exist now, per
+// status, and how many are gone (forgotten or deleted by the product). Counts only.
+function seedOutcome(scenario, instance, memories) {
+  if (instance.seed === undefined) return undefined;
+  const byId = new Map(memories.map((memory) => [memory.id, memory]));
+  const { entries, ids } = instance.seed;
+  const present = ids.filter((id) => byId.has(id));
+  return {
+    ...instance.seed.report,
+    after: {
+      byStatus: countBy(present.map((id) => byId.get(id).status)),
+      gone: ids.length - present.length,
+      ...seedLoss(entries, byId, scenario),
+    },
+  };
+}
+
+// The probe phase without the time the recall traces took (measured on their own as `traceMs`), so
+// that switching the trace on never moves `probeMs`.
+function timingOf(startedAt, learnedAt, probes) {
+  const traceMs = probes.reduce((sum, probe) => sum + (probe.recallTrace?.durationMs ?? 0), 0);
+  return {
+    learnMs: learnedAt - startedAt,
+    probeMs: Math.max(0, Date.now() - learnedAt - traceMs),
+    ...(probes.some((probe) => probe.recallTrace !== undefined) ? { traceMs } : {}),
+  };
+}
+
 /**
  * Runs one scenario for one arm on a fresh instance and returns the scored evidence. `requested`
- * carries arm, memoryMode, budgetTokens, confirmForget, retainBodies, turnTimeoutMs, learning
+ * carries arm, memoryMode, budgetTokens, confirmForget, retainBodies, recallTrace (`true` records the
+ * recall trace of every answer probe, see recall-trace.mjs), turnTimeoutMs, learning
  * (quietMs, maxMs, pendingLearner) and, offline, the scripted model fixture. Bodies are retained
  * only when the scenario is not anchor text, whatever the run asked for (the labelling pass,
  * `labelPass`, excepted): real conversations leave counts and verdicts, never text.
@@ -356,24 +447,17 @@ export async function runScenario(scenario, instance, requested) {
   context.fixture?.setPhase("run");
   const poison = context.arm === "off" ? [] : await seedPoison(scenario, instance);
   const poisonIds = new Set(poison.map((seed) => seed.memoryId).filter((id) => id !== undefined));
+  // Poisoned and seeded records are the lab's own: they are never scored as what the product stored.
+  const labIds = new Set([...poisonIds, ...(instance.seed?.ids ?? [])]);
   const startedAt = Date.now();
   const turns = context.arm === "oracle" ? [] : await runTurns(scenario, instance, context);
   const oracle =
-    context.arm === "oracle" ? await seedOracle(scenario, instance, poisonIds) : undefined;
+    context.arm === "oracle" ? await seedOracle(scenario, instance, labIds) : undefined;
   const learnedAt = Date.now();
   const memories = await listMemories(instance);
-  const scored = memories.filter((memory) => !poisonIds.has(memory.id));
+  const scored = memories.filter((memory) => !labIds.has(memory.id));
   const probes = await runProbes(scenario, instance, context);
-  // Probes run with memory on, so the product may still be learning from the last question; settle
-  // before the store and the ledger are read, otherwise probeCaptures would depend on timing.
-  if (context.arm !== "off")
-    await awaitLearning(instance, { ...context.learning, phase: "after the probes" });
-  // Learning runs on probe questions too (memory is one switch for recall and learning), so a
-  // question the product turns into a memory is counted here instead of passing as recall.
-  const afterProbes = await listMemories(instance);
-  const known = new Set(memories.map((memory) => memory.id));
-  const probeCaptures = afterProbes.filter((memory) => !known.has(memory.id)).length;
-  const captures = await readCaptures(instance);
+  const after = await settledAfterProbes(scenario, instance, context, memories);
   return {
     scenario: scenario.id,
     language: scenario.language,
@@ -381,20 +465,19 @@ export async function runScenario(scenario, instance, requested) {
     difficulty: scenario.difficulty,
     arm: context.arm,
     turns,
-    ...(oracle === undefined ? {} : { oracle }),
-    ...(poison.length === 0 ? {} : { poison: { total: poison.length, seeded: poisonIds.size } }),
+    ...optionalEvidence({ oracle, poison, poisonIds, seed: after.seed }),
     store: {
       ...scoreStore(scored, scenario),
       memories: storeView(scored, context.retainBodies),
     },
-    captures: captures.map((capture) => ({
+    captures: after.captures.map((capture) => ({
       outcome: capture.outcome,
       reason: capture.reason ?? null,
       status: capture.currentStatus ?? null,
     })),
     probes,
-    probeCaptures,
-    timing: { learnMs: learnedAt - startedAt, probeMs: Date.now() - learnedAt },
+    probeCaptures: after.probeCaptures,
+    timing: timingOf(startedAt, learnedAt, probes),
     requests: journalOf(context),
   };
 }
