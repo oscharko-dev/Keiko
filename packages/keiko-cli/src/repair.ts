@@ -39,6 +39,7 @@ import {
   isSafeAtlassianConnectorBaseUrl,
   isSafeAtlassianDisplayName,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 import { collectDoctorReport } from "./doctor.js";
@@ -71,6 +72,7 @@ import {
   defaultUiDataDir,
   defaultIsProcessAlive,
   inspectStateRoot,
+  platformOpenFlags,
   resolveStateDir,
   scanRuntimeState,
   type RetainedNode,
@@ -353,7 +355,7 @@ function tightenOpenFlagCandidates(): readonly number[] {
   // rests on an early return in another function, and removing that early return would weaken this
   // one silently (KfQ thread 3780545514). With no candidates, `tightenNodeMode` refuses and the
   // operator sees the entry reported, which is the documented fail-closed path.
-  const noFollow = (fsConstants as { readonly O_NOFOLLOW?: number }).O_NOFOLLOW;
+  const noFollow = platformOpenFlags.O_NOFOLLOW;
   if (noFollow === undefined) return [];
   return [fsConstants.O_RDONLY | noFollow, fsConstants.O_WRONLY | noFollow];
 }
@@ -805,20 +807,16 @@ function readPortableRecordForRepair(
 // store.
 // Reads only the non-secret reference index (no vault key resolution, no decryption).
 function orphanedSecretRefs(raw: unknown, configPath: string, vault: CredentialVault): number {
-  if (typeof raw !== "object" || raw === null) return 0;
-  const providers = (raw as { readonly providers?: unknown }).providers;
+  if (!isRecord(raw)) return 0;
+  const providers = raw.providers;
   const refs = Array.isArray(providers)
     ? providers
-        .map((provider) =>
-          typeof provider === "object" && provider !== null
-            ? (provider as { readonly apiKeySecretRef?: unknown }).apiKeySecretRef
-            : undefined,
-        )
+        .map((provider) => (isRecord(provider) ? provider.apiKeySecretRef : undefined))
         .filter((ref): ref is string => typeof ref === "string" && ref.length > 0)
     : [];
-  const reranker = (raw as { readonly reranker?: unknown }).reranker;
-  if (typeof reranker === "object" && reranker !== null) {
-    const ref = (reranker as { readonly apiKeySecretRef?: unknown }).apiKeySecretRef;
+  const reranker = raw.reranker;
+  if (isRecord(reranker)) {
+    const ref = reranker.apiKeySecretRef;
     if (typeof ref === "string" && ref.length > 0) {
       refs.push(ref === vault.RERANKER_SECRET_REF ? ref : "__invalid-reranker-secret-ref__");
     }
@@ -891,26 +889,24 @@ function hasValidAtlassianCreatedAt(value: unknown): value is number {
 }
 
 function isCompleteAtlassianMetadata(reference: string, value: unknown): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
   return (
-    hasCompleteAtlassianMetadataKeys(record) &&
-    hasValidAtlassianMetadataIdentity(reference, record) &&
-    hasValidAtlassianMetadataDetails(record) &&
-    hasValidAtlassianCreatedAt(record.createdAt)
+    hasCompleteAtlassianMetadataKeys(value) &&
+    hasValidAtlassianMetadataIdentity(reference, value) &&
+    hasValidAtlassianMetadataDetails(value) &&
+    hasValidAtlassianCreatedAt(value.createdAt)
   );
 }
 
 function readAtlassianMetadataReferences(path: string): readonly string[] {
   if (!existsSync(path)) return [];
   try {
-    const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    const raw: unknown = JSON.parse(readFileSync(path, "utf8"));
+    if (!isRecord(raw)) {
       throw new TypeError("metadata envelope is malformed");
     }
-    const record = raw as Record<string, unknown>;
-    const credentials = record.credentials;
-    if (record.version !== 1 || typeof credentials !== "object" || credentials === null) {
+    const credentials = raw.credentials;
+    if (raw.version !== 1 || typeof credentials !== "object" || credentials === null) {
       throw new TypeError("metadata schema is unsupported");
     }
     return Object.entries(credentials).map(([reference, entry]) => {

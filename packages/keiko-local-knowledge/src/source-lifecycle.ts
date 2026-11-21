@@ -18,6 +18,7 @@ import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import { deleteDocumentRow, listPersistedDocumentsForSource } from "./discovery/persist.js";
 import type { AuditEventSink } from "./privacy/types.js";
 import type { KnowledgeStore } from "./store.js";
+import { type KnowledgeSqlRow, nullableTextColumn, numberColumn, textColumn } from "./sql-row.js";
 
 export interface AddCapsuleSourceInput {
   readonly id: KnowledgeSourceId;
@@ -27,9 +28,9 @@ export interface AddCapsuleSourceInput {
   readonly scope: KnowledgeSourceScope;
 }
 
+// The knowledge_sources columns the `ks.*` selects return; that table carries no capsule_id.
 interface CapsuleSourceRow {
   readonly id: string;
-  readonly capsule_id: string;
   readonly display_name: string;
   readonly description: string | null;
   readonly tags_json: string;
@@ -37,6 +38,19 @@ interface CapsuleSourceRow {
   readonly scope_json: string;
   readonly created_at: number;
   readonly updated_at: number;
+}
+
+function readCapsuleSourceRow(row: KnowledgeSqlRow): CapsuleSourceRow {
+  return {
+    id: textColumn(row, "id"),
+    display_name: textColumn(row, "display_name"),
+    description: nullableTextColumn(row, "description"),
+    tags_json: textColumn(row, "tags_json"),
+    scope_kind: textColumn(row, "scope_kind"),
+    scope_json: textColumn(row, "scope_json"),
+    created_at: numberColumn(row, "created_at"),
+    updated_at: numberColumn(row, "updated_at"),
+  };
 }
 
 interface SourceParams extends Readonly<Record<string, string | number | null>> {
@@ -203,7 +217,7 @@ function readSource(
       `Source not found: capsule=${String(capsuleId)} source=${String(sourceId)}`,
     );
   }
-  return rowToSource(row as unknown as CapsuleSourceRow);
+  return rowToSource(readCapsuleSourceRow(row));
 }
 
 export function listCapsuleSources(
@@ -211,7 +225,7 @@ export function listCapsuleSources(
   capsuleId: KnowledgeCapsuleId,
 ): readonly KnowledgeSource[] {
   const rows = store._internal.db.prepare(SELECT_BY_CAPSULE_SQL).all({ c: capsuleId });
-  return rows.map((row) => rowToSource(row as unknown as CapsuleSourceRow));
+  return rows.map((row) => rowToSource(readCapsuleSourceRow(row)));
 }
 
 export function updateSourceScopeInCapsule(

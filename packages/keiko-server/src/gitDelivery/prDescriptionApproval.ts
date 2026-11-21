@@ -7,11 +7,12 @@ import {
   type GitDeliveryApprovalStore,
 } from "./approvalStore.js";
 import type { PreparedPrDescription } from "./prDescriptionTypes.js";
+import { mintGitDeliveryExecutionLease, type GitDeliveryExecutionLease } from "./executionLease.js";
 
 /** Transient one-use continuation of the existing approval store. No serialized lease or recovery authority. */
 export class PrDescriptionApprovals {
   private leases = new WeakMap<
-    object,
+    GitDeliveryExecutionLease,
     { proposal: PreparedPrDescription; requirement: GitDeliveryApprovalRequirement }
   >();
   public constructor(
@@ -45,7 +46,10 @@ export class PrDescriptionApprovals {
       })
     );
   }
-  public consume(proposal: PreparedPrDescription, now: number): object | undefined {
+  public consume(
+    proposal: PreparedPrDescription,
+    now: number,
+  ): GitDeliveryExecutionLease | undefined {
     if (proposal.approval === undefined) return undefined;
     const requirement = this.store.consume({
       approval: proposal.approval,
@@ -53,13 +57,13 @@ export class PrDescriptionApprovals {
       nowMs: now,
     });
     if (requirement === undefined) return undefined;
-    const lease = Object.freeze({});
+    const lease = mintGitDeliveryExecutionLease();
     this.leases.set(lease, { proposal, requirement });
     return lease;
   }
   public redeem(
     proposal: PreparedPrDescription,
-    lease: object,
+    lease: GitDeliveryExecutionLease,
   ): GitDeliveryApprovalRequirement | undefined {
     const held = this.leases.get(lease);
     this.leases.delete(lease);

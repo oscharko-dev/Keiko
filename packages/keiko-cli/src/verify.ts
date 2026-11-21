@@ -33,12 +33,13 @@ interface VerifyArgs {
   readonly json: boolean;
 }
 
+function isVerificationKind(value: string): value is VerificationKind {
+  return VALID_KINDS.has(value);
+}
+
 function parseKinds(raw: string): readonly VerificationKind[] | null {
   const parts = raw.split(",").map((p) => p.trim());
-  if (parts.some((p) => !VALID_KINDS.has(p))) {
-    return null;
-  }
-  return parts as readonly VerificationKind[];
+  return parts.every(isVerificationKind) ? parts : null;
 }
 
 interface RawVerifyOptions {

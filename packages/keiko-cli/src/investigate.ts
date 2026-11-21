@@ -24,6 +24,7 @@
 //     — unlike `keiko run` — never echoed to stdout, so `--json`'s single-JSON-object contract stays
 //     intact; a write failure still fails the command closed (exit 1) before the report is printed.
 
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
@@ -38,6 +39,7 @@ import type {
 // structurally-identical readValueFlags loop this file, evaluate.ts, and gen-tests.ts held —
 // flagValue itself is used only inside readNamedValueFlags now, so only that is imported here.
 import { readNamedValueFlags } from "./cli-arg-parsing.js";
+import { errorCode } from "./error-code.js";
 // KEIKO-0655: shared model-resolution helpers replace the byte-identical buildModel /
 // resolveConfiguredModelId / resolveModel copies this file and gen-tests.ts held.
 import { resolveModelOrExitCode } from "./cli-model-resolution.js";
@@ -119,7 +121,7 @@ const VALUE_FLAGS = [
   "--evidence-dir",
 ] as const;
 type ValueFlag = (typeof VALUE_FLAGS)[number];
-type FlagValues = Record<ValueFlag, string | undefined>;
+type FlagValues = Partial<Record<ValueFlag, string | undefined>>;
 
 function readValueFlags(args: readonly string[]): FlagValues | null {
   return readNamedValueFlags(args, VALUE_FLAGS);
@@ -255,14 +257,13 @@ export function timelineToBugReportInput(timeline: LogTimeline): BugReportInput 
 }
 
 function isServerLogLineView(value: unknown): value is ServerLogLineView {
-  if (typeof value !== "object" || value === null) {
+  if (!isRecord(value)) {
     return false;
   }
-  const record = value as Record<string, unknown>;
   return (
-    typeof record.ts === "string" &&
-    typeof record.category === "string" &&
-    typeof record.op === "string"
+    typeof value.ts === "string" &&
+    typeof value.category === "string" &&
+    typeof value.op === "string"
   );
 }
 
@@ -285,14 +286,13 @@ function hasLogTimelineCoreFields(record: Record<string, unknown>): boolean {
 // is hostile") — validate its shape structurally before trusting it as a LogTimeline, rather than
 // trusting whatever JSON.parse happened to accept.
 function isLogTimeline(value: unknown): value is LogTimeline {
-  if (typeof value !== "object" || value === null) {
+  if (!isRecord(value)) {
     return false;
   }
-  const record = value as Record<string, unknown>;
   return (
-    hasLogTimelineCoreFields(record) &&
-    isStringArray(record.errorKinds) &&
-    (record.frames === undefined || isStringArray(record.frames))
+    hasLogTimelineCoreFields(value) &&
+    isStringArray(value.errorKinds) &&
+    (value.frames === undefined || isStringArray(value.frames))
   );
 }
 
@@ -686,6 +686,6 @@ const FS_READ_ERROR_CODES: ReadonlySet<string> = new Set([
 ]);
 
 function isFileReadError(error: Error): boolean {
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "string" && FS_READ_ERROR_CODES.has(code);
+  const code = errorCode(error);
+  return code !== undefined && FS_READ_ERROR_CODES.has(code);
 }

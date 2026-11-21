@@ -12,12 +12,21 @@ import type { DatabaseSync } from "node:sqlite";
 
 import { readExistingDocumentRow } from "./discovery/persist.js";
 import type { KnowledgeStore } from "./store.js";
+import { textColumn, type KnowledgeSqlRow } from "./sql-row.js";
 import { mapChunkToCitation } from "./chunking/citation-mapper.js";
 
 interface ChunkRow {
   readonly id: string;
   readonly source_id: string;
   readonly document_id: string;
+}
+
+function chunkRowFrom(row: KnowledgeSqlRow): ChunkRow {
+  return {
+    id: textColumn(row, "id"),
+    source_id: textColumn(row, "source_id"),
+    document_id: textColumn(row, "document_id"),
+  };
 }
 
 const SELECT_CHUNK_SQL = [
@@ -58,7 +67,7 @@ function readChunkRow(
   const row = db
     .prepare(SELECT_CHUNK_SQL)
     .get({ capsule_id: String(capsuleId), chunk_id: String(chunkId) });
-  return row === undefined ? undefined : (row as unknown as ChunkRow);
+  return row === undefined ? undefined : chunkRowFrom(row);
 }
 
 function readChunkRowByStoredSpan(
@@ -75,7 +84,7 @@ function readChunkRowByStoredSpan(
     character_start: citation.characterStart,
     character_end: citation.characterEnd,
   });
-  return row === undefined ? undefined : (row as unknown as ChunkRow);
+  return row === undefined ? undefined : chunkRowFrom(row);
 }
 
 function buildSnapshot(

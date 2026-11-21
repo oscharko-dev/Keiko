@@ -11,6 +11,7 @@
 // Composition: validators (M1) + CDP client (M2) + side-file writer (M3) + the existing audit
 // redactor. No new safety primitives — every guard is reused.
 
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, resolve, sep } from "node:path";
@@ -170,8 +171,9 @@ interface DocumentRoot {
 interface OuterHtmlResult {
   readonly outerHTML: string;
 }
+// The helpers below read each field with its own check; an event may carry anything.
 interface FrameNavigatedParams {
-  readonly frame?: { readonly url?: string; readonly parentId?: string };
+  readonly frame?: { readonly url?: unknown; readonly parentId?: unknown };
 }
 
 export interface BrowserSessionManager {
@@ -210,9 +212,8 @@ const EMPTY_VERSION_DOCUMENT: CdpVersionDocument = {
 };
 
 // Chrome names the fields `User-Agent` and `Browser`; other CDP hosts use `userAgent` and `product`.
-function decodeVersionDocument(version: unknown): CdpVersionDocument {
-  if (typeof version !== "object" || version === null) return EMPTY_VERSION_DOCUMENT;
-  const rec = version as Record<string, unknown>;
+function decodeVersionDocument(rec: unknown): CdpVersionDocument {
+  if (!isRecord(rec)) return EMPTY_VERSION_DOCUMENT;
   const ws = rec.webSocketDebuggerUrl;
   const ua = rec["User-Agent"] ?? rec.userAgent;
   const product = rec.Browser ?? rec.product;
@@ -412,9 +413,8 @@ function evidenceNullableNumberField(
   return typeof value === "number" || value === null ? { [key]: value } : {};
 }
 
-function browserViewportPayload(value: unknown): BrowserViewportPx | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const rec = value as Record<string, unknown>;
+function browserViewportPayload(rec: unknown): BrowserViewportPx | undefined {
+  if (!isRecord(rec)) return undefined;
   return typeof rec.width === "number" && typeof rec.height === "number"
     ? { width: rec.width, height: rec.height }
     : undefined;
@@ -423,6 +423,13 @@ function browserViewportPayload(value: unknown): BrowserViewportPx | undefined {
 function evidenceViewportField(value: unknown): EvidenceBrowserEventPatch {
   const viewportPx = browserViewportPayload(value);
   return viewportPx === undefined ? {} : { viewportPx };
+}
+
+/** The frame fields a navigation event carries; anything else in the event is not read. */
+function frameNavigatedParams(event: Parameters<CdpEventListener>[0]): FrameNavigatedParams {
+  const { params } = event;
+  const frame = isRecord(params) ? params.frame : undefined;
+  return isRecord(frame) ? { frame: { url: frame.url, parentId: frame.parentId } } : {};
 }
 
 function isSubframeNavigation(params: FrameNavigatedParams): boolean {
@@ -1103,7 +1110,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
   private frameNavigatedListener(record: SessionRecord): CdpEventListener {
     return (event): void => {
       if (event.method !== "Page.frameNavigated") return;
-      this.handleFrameNavigated(record, event.params as FrameNavigatedParams);
+      this.handleFrameNavigated(record, frameNavigatedParams(event));
     };
   }
 

@@ -28,6 +28,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
 import { handleRegenerateDesktopChat, handleSendDesktopChat } from "../chat-handlers.js";
 import { CatalogDispatchFault } from "../tool-catalog/catalogToolErrors.js";
@@ -1478,8 +1479,8 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
   const EPICS = 5;
   const STORIES = 65;
   const LARGE = { epics: 12, stories: 1188 };
-  function backlog(epics: number, stories: number): Record<string, unknown>[] {
-    const item = (ref: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+  function backlog(epics: number, stories: number): CatalogJsonObject[] {
+    const item = (ref: string, extra: CatalogJsonObject = {}): CatalogJsonObject => ({
       ref,
       projectId: "10000",
       issueTypeId: "10001",

@@ -55,6 +55,7 @@ import type { ParserRegistry } from "./parsers/index.js";
 import type { AuditEventSink } from "./privacy/index.js";
 import { addSourceToCapsule, listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
+import { numberColumn, textColumn, type KnowledgeSqlRow } from "./sql-row.js";
 
 const REPOSITORY_FINGERPRINT_DIFF_COMPLETED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -542,6 +543,38 @@ export async function refreshRepositoryPod(
   };
 }
 
+// The repository_pod_runs CHECK constraint admits exactly these four outcomes.
+function storedRunOutcome(row: KnowledgeSqlRow): RepositoryPodRunRecord["outcome"] {
+  const outcome = textColumn(row, "outcome");
+  if (
+    outcome === "succeeded" ||
+    outcome === "partial" ||
+    outcome === "failed" ||
+    outcome === "cancelled"
+  ) {
+    return outcome;
+  }
+  throw new KnowledgeStoreError("A stored repository pod run has an unknown outcome.");
+}
+
+function readRepositoryPodRunRow(row: KnowledgeSqlRow): RepositoryPodRunRecord {
+  return {
+    runId: textColumn(row, "run_id"),
+    outcome: storedRunOutcome(row),
+    applied: numberColumn(row, "applied") === 1,
+    counts: {
+      addedFiles: numberColumn(row, "added_files"),
+      changedFiles: numberColumn(row, "changed_files"),
+      removedFiles: numberColumn(row, "removed_files"),
+      unchangedFiles: numberColumn(row, "unchanged_files"),
+      failedDocuments: numberColumn(row, "failed_documents"),
+      rejectedEntries: numberColumn(row, "rejected_entries"),
+    },
+    fingerprintSetDigest: textColumn(row, "fingerprint_set_digest"),
+    completedAt: numberColumn(row, "completed_at"),
+  };
+}
+
 // Scope args stay positional to match the package's `list*` reader convention
 // (`listConnectorSourceMetadata(store, capsuleId)`), which the barrel-surface gate in
 // `index.test.ts` enforces as the Foundry-IQ no-global-pool proxy: every `list*` export other than
@@ -551,19 +584,6 @@ export function listRepositoryPodRuns(
   capsuleId: KnowledgeCapsuleId,
   sourceId: KnowledgeSourceId,
 ): readonly RepositoryPodRunRecord[] {
-  interface Row {
-    readonly run_id: string;
-    readonly outcome: RepositoryPodRunRecord["outcome"];
-    readonly applied: number;
-    readonly added_files: number;
-    readonly changed_files: number;
-    readonly removed_files: number;
-    readonly unchanged_files: number;
-    readonly failed_documents: number;
-    readonly rejected_entries: number;
-    readonly fingerprint_set_digest: string;
-    readonly completed_at: number;
-  }
   const rows = store._internal.db
     .prepare(
       `SELECT run_id, outcome, applied, added_files, changed_files, removed_files,
@@ -573,22 +593,8 @@ export function listRepositoryPodRuns(
        WHERE capsule_id = :capsule_id AND source_id = :source_id
        ORDER BY completed_at ASC, run_id ASC`,
     )
-    .all({ capsule_id: capsuleId, source_id: sourceId }) as unknown as readonly Row[];
-  return rows.map((row) => ({
-    runId: row.run_id,
-    outcome: row.outcome,
-    applied: row.applied === 1,
-    counts: {
-      addedFiles: row.added_files,
-      changedFiles: row.changed_files,
-      removedFiles: row.removed_files,
-      unchangedFiles: row.unchanged_files,
-      failedDocuments: row.failed_documents,
-      rejectedEntries: row.rejected_entries,
-    },
-    fingerprintSetDigest: row.fingerprint_set_digest,
-    completedAt: row.completed_at,
-  }));
+    .all({ capsule_id: capsuleId, source_id: sourceId });
+  return rows.map(readRepositoryPodRunRow);
 }
 
 export function deleteRepositoryPod(deps: RepositoryPodDeps): void {

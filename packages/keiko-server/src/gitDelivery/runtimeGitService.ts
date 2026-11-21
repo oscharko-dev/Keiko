@@ -71,6 +71,7 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { errorKindOf } from "@oscharko-dev/keiko-activity-log";
 import type { GitSyncOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-sync";
+import { mintGitDeliveryExecutionLease, type GitDeliveryExecutionLease } from "./executionLease.js";
 
 const RUNTIME_GIT_STATE_FIELD = {
   type: "string",
@@ -476,7 +477,7 @@ export class RuntimeGitService {
   private branchStep: Promise<void> = Promise.resolve();
   private readonly proposals = new Map<string, RuntimeGitProposal>();
   private leases = new WeakMap<
-    object,
+    GitDeliveryExecutionLease,
     { proposal: RuntimeGitProposal; claim: GitDeliveryApprovalRequirement }
   >();
   public constructor(private readonly options: RuntimeGitOptions) {}
@@ -516,12 +517,12 @@ export class RuntimeGitService {
       this.store().matchesStageBinding?.(proposal.binding, this.now()) === true
     );
   }
-  public consumeApproval(id: string): object | undefined {
+  public consumeApproval(id: string): GitDeliveryExecutionLease | undefined {
     const proposal = this.review(id);
     if (proposal === undefined) return undefined;
     const claim = this.store().consumeStageBinding?.(proposal.binding, this.now());
     if (claim === undefined) return undefined;
-    const lease = Object.freeze({});
+    const lease = mintGitDeliveryExecutionLease();
     this.leases.set(lease, { proposal, claim });
     this.log(proposal.context, "approval", { state: "consumed", proposalId: id });
     return lease;
@@ -879,7 +880,7 @@ export class RuntimeGitService {
     context: VerifiedCommitRunContext,
     kind: "stage" | "unstage",
     id: string,
-    lease: object | undefined,
+    lease: GitDeliveryExecutionLease | undefined,
   ): Promise<RuntimeGitOutcome> {
     const proposal = this.review(id);
     if (proposal === undefined) return { kind: "refused", reason: this.redemptionRefusal(id) };
@@ -904,7 +905,7 @@ export class RuntimeGitService {
   // approval.
   private approvedFor(
     proposal: RuntimeGitProposal,
-    lease: object | undefined,
+    lease: GitDeliveryExecutionLease | undefined,
     consumed: { readonly proposal: RuntimeGitProposal } | undefined,
   ): boolean {
     if (lease === undefined && this.options.mode() !== "governed-assist") return true;
@@ -920,7 +921,7 @@ export class RuntimeGitService {
       : "authority-revoked";
   }
   private consumeLease(
-    lease: object | undefined,
+    lease: GitDeliveryExecutionLease | undefined,
   ): { proposal: RuntimeGitProposal; claim: GitDeliveryApprovalRequirement } | undefined {
     if (lease === undefined) return undefined;
     const consumed = this.leases.get(lease);

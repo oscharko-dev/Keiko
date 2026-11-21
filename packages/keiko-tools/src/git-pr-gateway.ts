@@ -18,6 +18,7 @@
 // The actual PR title/body strings flow command → adapter → GitHub; the content-free contract inputs
 // carry only their byte lengths, so evidence never persists raw content.
 
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type {
   CommandRule,
   GitDeliveryActionEnvelope,
@@ -51,6 +52,7 @@ import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runti
 import { isGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { validGitPrBodyText } from "./git-pr-body.js";
+import { gitDeliveryActionEnvelope } from "./git-delivery-envelope.js";
 import { buildGitHubApiGetArgv } from "./git-provider-value.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";
@@ -560,8 +562,8 @@ const GRAPHQL_ERROR_TYPE_REASONS: Readonly<Record<string, GitPullRequestRejectio
 };
 
 function graphqlErrorType(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null) return undefined;
-  const type = (error as { readonly type?: unknown }).type;
+  if (typeof error !== "object" || error === null || !("type" in error)) return undefined;
+  const { type } = error;
   return typeof type === "string" ? type : undefined;
 }
 
@@ -576,7 +578,7 @@ function graphqlErrorTypes(output: string): readonly string[] {
     } catch {
       continue;
     }
-    const errors = (parsed as { readonly errors?: unknown } | null)?.errors;
+    const errors = isRecord(parsed) ? parsed.errors : undefined;
     if (!Array.isArray(errors)) continue;
     for (const error of errors) {
       const type = graphqlErrorType(error);
@@ -752,16 +754,13 @@ function assembleEnvelope(
   preview: GitDeliveryActionPreview,
   executionResult: GitDeliveryExecutionResult | undefined,
 ): GitDeliveryActionEnvelope {
-  return {
-    schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+  return gitDeliveryActionEnvelope(inputs, {
     actionId,
-    kind: inputs.kind,
-    resolvedInputs: inputs,
     policyDecision,
     approvalRequirement: approval,
     preview,
-    ...(executionResult !== undefined ? { executionResult } : {}),
-  } as GitDeliveryActionEnvelope;
+    executionResult,
+  });
 }
 
 type PrGate =

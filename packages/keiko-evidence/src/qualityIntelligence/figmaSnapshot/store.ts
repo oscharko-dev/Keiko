@@ -70,6 +70,7 @@ import {
   type FigmaSnapshotMetrics,
   type FigmaSnapshotRecord,
   type FigmaSnapshotScreenRow,
+  type FigmaSnapshotSkipReason,
   type FigmaSnapshotStructuralScreenRow,
   type FigmaSnapshotSkippedScreenRow,
 } from "./schema.js";
@@ -92,7 +93,7 @@ export interface RecordFigmaSnapshotScreenInput {
 
 export interface RecordFigmaSnapshotStructuralScreenInput {
   readonly screenId: string;
-  readonly reason: string;
+  readonly reason: FigmaSnapshotSkipReason;
   readonly irJson: unknown;
   readonly integrityHash: string;
 }
@@ -109,10 +110,9 @@ export interface RecordFigmaSnapshotInput {
   readonly screens: readonly RecordFigmaSnapshotScreenInput[];
   /** Structural Screen-IR for skipped/non-rendered screens. Optional for callers predating this. */
   readonly structuralScreens?: readonly RecordFigmaSnapshotStructuralScreenInput[];
-  // `reason` is typed as string (not FigmaSnapshotSkipReason) so the routes layer can pass
-  // FigmaSkippedScreenReason from keiko-server without a cross-package import; the store casts
-  // it to FigmaSnapshotSkipReason internally when building the persisted row.
-  readonly skippedScreens: readonly { readonly screenId: string; readonly reason: string }[];
+  // keiko-server's FigmaSkippedScreenReason is the same closed union, so the routes layer passes
+  // its rows here structurally without a cross-package import.
+  readonly skippedScreens: readonly FigmaSnapshotSkippedScreenRow[];
   /** Raw inter-screen transitions for the navigation/flow graph (#811). Optional + additive. */
   readonly links?: readonly FigmaSnapshotLinkRow[];
   /** Deterministic design-tokens artifact (#752), opaque, for design-to-code (#755). Optional. */
@@ -261,10 +261,9 @@ const sha256Bytes = (input: Uint8Array): string => createHash("sha256").update(i
 // Stable stringify: keys emitted in sorted order at every depth (mirrors canonical() in hash.ts).
 function canonical(value: unknown): string {
   if (value === undefined) return "null";
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${(value as unknown[]).map(canonical).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  return canonicalObject(Object.keys(record).map((key) => [key, canonical(record[key])]));
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (!isJsonObject(value)) return JSON.stringify(value);
+  return canonicalObject(Object.keys(value).map((key) => [key, canonical(value[key])]));
 }
 
 // One object member whose value is already canonical text.
@@ -399,6 +398,11 @@ const safeLinkRows = (
 ): readonly FigmaSnapshotLinkRow[] | undefined =>
   links?.filter((link) => !isExternalLinkTarget(link.targetNodeId));
 
+// A record copy whose optional artifacts can be removed before it is returned.
+type MutableFigmaSnapshotRecord = {
+  -readonly [Key in keyof FigmaSnapshotRecord]: FigmaSnapshotRecord[Key];
+};
+
 const omitUnverifiedArtifacts = (
   record: FigmaSnapshotRecord,
   omitLinks: boolean,
@@ -406,14 +410,11 @@ const omitUnverifiedArtifacts = (
   omitMetrics: boolean,
 ): FigmaSnapshotRecord => {
   if (!omitLinks && !omitTokens && !omitMetrics) return record;
-  const omitted = new Set<string>([
-    ...(omitLinks ? ["links"] : []),
-    ...(omitTokens ? ["tokens"] : []),
-    ...(omitMetrics ? ["metrics"] : []),
-  ]);
-  return Object.fromEntries(
-    Object.entries(record).filter(([key]) => !omitted.has(key)),
-  ) as FigmaSnapshotRecord;
+  const kept: MutableFigmaSnapshotRecord = { ...record };
+  if (omitLinks) delete kept.links;
+  if (omitTokens) delete kept.tokens;
+  if (omitMetrics) delete kept.metrics;
+  return kept;
 };
 
 type ArtifactKind = "links" | "tokens" | "metrics";
@@ -549,7 +550,7 @@ function atomicWriteOnce(target: string, json: string, randomSuffix: () => strin
       linkSync(temp, target);
       fsyncDirectoryContaining(target);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      if (error instanceof Error && "code" in error && error.code === "EEXIST") {
         throw new EvidenceWriteError("Figma snapshot already exists for this run (write-once)");
       }
       throw error;
@@ -609,8 +610,8 @@ function userMetadataRecord(
   value: unknown,
   expectedRunId: string,
 ): Record<string, unknown> | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
+  if (!isJsonObject(value)) return undefined;
+  const record = value;
   if (record.figmaSnapshotManagementSchemaVersion !== FIGMA_SNAPSHOT_MANAGEMENT_SCHEMA_VERSION) {
     return undefined;
   }
@@ -697,11 +698,9 @@ function assembleRecord(
       fetchedAt: input.provenance.fetchedAt,
     },
     screens: screenRows,
-    skippedScreens: input.skippedScreens as readonly FigmaSnapshotSkippedScreenRow[],
+    skippedScreens: input.skippedScreens,
     ...(input.structuralScreens !== undefined
-      ? {
-          structuralScreens: input.structuralScreens as readonly FigmaSnapshotStructuralScreenRow[],
-        }
+      ? { structuralScreens: input.structuralScreens }
       : {}),
     // Omit `links`/`tokens` entirely when absent so an older snapshot stays byte-minimal and the
     // optional fields never serialise as `undefined` (exactOptionalPropertyTypes-safe).
@@ -824,6 +823,28 @@ function verifyPersistedScreenMetadata(rec: FigmaSnapshotRecord, runId: string):
   for (const screen of rec.structuralScreens ?? []) verifyStructuralScreenIntegrity(screen, runId);
 }
 
+/** The members of a snapshot record file that place it in a Figma scope; each is checked here. */
+interface SnapshotScopeCandidate {
+  readonly runId?: unknown;
+  readonly integrityHash?: unknown;
+  readonly provenance?: unknown;
+}
+
+// The scope entry of one parsed snapshot record, or null when it belongs to another scope.
+function scopeEntryOf(
+  record: SnapshotScopeCandidate,
+  fileKey: string,
+  nodeId: string,
+): FigmaSnapshotScopeEntry | null {
+  const prov = isJsonObject(record.provenance) ? record.provenance : undefined;
+  if (!prov?.fileKey || prov.fileKey !== fileKey || prov.nodeId !== nodeId) return null;
+  const runId = typeof record.runId === "string" ? record.runId : undefined;
+  if (runId === undefined) return null;
+  const fetchedAt = typeof prov.fetchedAt === "string" ? prov.fetchedAt : "";
+  const integrityHash = typeof record.integrityHash === "string" ? record.integrityHash : "";
+  return { runId, fetchedAt, integrityHash };
+}
+
 // Parse one raw JSON string from a snapshot record file into a scope entry, or null when the
 // file does not belong to the requested scope or cannot be parsed.
 function parseScopeEntry(
@@ -832,14 +853,8 @@ function parseScopeEntry(
   nodeId: string,
 ): FigmaSnapshotScopeEntry | null {
   try {
-    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
-    const prov = parsed.provenance as Record<string, unknown> | undefined;
-    if (!prov?.fileKey || prov.fileKey !== fileKey || prov.nodeId !== nodeId) return null;
-    const runId = typeof parsed.runId === "string" ? parsed.runId : undefined;
-    if (runId === undefined) return null;
-    const fetchedAt = typeof prov.fetchedAt === "string" ? prov.fetchedAt : "";
-    const integrityHash = typeof parsed.integrityHash === "string" ? parsed.integrityHash : "";
-    return { runId, fetchedAt, integrityHash };
+    const parsed: unknown = JSON.parse(readFileSync(filePath, "utf8"));
+    return isJsonObject(parsed) ? scopeEntryOf(parsed, fileKey, nodeId) : null;
   } catch {
     return null;
   }
@@ -900,8 +915,9 @@ function sweepOrphanedSideDirs(qiDir: string, sideFileBase: string): void {
 // Read the fetchedAt timestamp from one snapshot file, or undefined when missing/unparseable.
 function readFetchedAt(filePath: string): string | undefined {
   try {
-    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as Record<string, unknown>;
-    const prov = parsed.provenance as Record<string, unknown> | undefined;
+    const parsed: unknown = JSON.parse(readFileSync(filePath, "utf8"));
+    const prov =
+      isJsonObject(parsed) && isJsonObject(parsed.provenance) ? parsed.provenance : undefined;
     if (typeof prov?.fetchedAt !== "string" || prov.fetchedAt.trim() === "") {
       return undefined;
     }

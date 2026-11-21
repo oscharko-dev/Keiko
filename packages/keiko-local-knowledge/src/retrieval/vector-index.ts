@@ -23,6 +23,14 @@ import {
   type UsearchAnnSearchResult,
   type UsearchVectorEntry,
 } from "./usearch-ann-index.js";
+import {
+  blobColumn,
+  type KnowledgeSqlRow,
+  nullableNumberColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+} from "../sql-row.js";
 
 export type VectorIndexMode = "disabled" | "auto" | "usearch";
 
@@ -110,14 +118,43 @@ interface StoredVectorIdentityRow {
   readonly vector_metric: string;
 }
 
+function readStoredVectorIdentityRow(row: KnowledgeSqlRow): StoredVectorIdentityRow {
+  return {
+    embedding_model_provider: textColumn(row, "embedding_model_provider"),
+    embedding_model_id: textColumn(row, "embedding_model_id"),
+    embedding_model_revision: nullableTextColumn(row, "embedding_model_revision"),
+    embedding_normalization: nullableTextColumn(row, "embedding_normalization"),
+    embedding_instruction_version: nullableTextColumn(row, "embedding_instruction_version"),
+    embedding_space_fingerprint: nullableTextColumn(row, "embedding_space_fingerprint"),
+    embedding_dimensions_param: nullableNumberColumn(row, "embedding_dimensions_param"),
+    vector_dimensions: numberColumn(row, "vector_dimensions"),
+    vector_metric: textColumn(row, "vector_metric"),
+  };
+}
+
 interface StoredVectorRow extends StoredVectorIdentityRow {
   readonly chunk_id: string;
   readonly embedding: Uint8Array;
 }
 
+function readStoredVectorRow(row: KnowledgeSqlRow): StoredVectorRow {
+  return {
+    ...readStoredVectorIdentityRow(row),
+    chunk_id: textColumn(row, "chunk_id"),
+    embedding: blobColumn(row, "embedding"),
+  };
+}
+
 interface CandidateMetadataRow {
   readonly chunk_id: string;
   readonly source_id: string;
+}
+
+function readCandidateMetadataRow(row: KnowledgeSqlRow): CandidateMetadataRow {
+  return {
+    chunk_id: textColumn(row, "chunk_id"),
+    source_id: textColumn(row, "source_id"),
+  };
 }
 
 const USEARCH_PROVIDER = "usearch";
@@ -243,7 +280,8 @@ function storedIdentitiesCompatible(request: VectorIndexSearchRequest): boolean 
     )
     .all({
       capsule_id: String(request.capsule.id),
-    }) as unknown as readonly StoredVectorIdentityRow[];
+    })
+    .map(readStoredVectorIdentityRow);
   return rows.every((row) => {
     const identity = identityFromRow(row);
     return (
@@ -271,7 +309,8 @@ function storedVectorRows(request: VectorIndexSearchRequest): readonly StoredVec
         "ORDER BY chunk_id ASC",
       ].join(" "),
     )
-    .all(requestParams(request)) as unknown as readonly StoredVectorRow[];
+    .all(requestParams(request))
+    .map(readStoredVectorRow);
 }
 
 function decodeStoredVectors(request: VectorIndexSearchRequest): readonly UsearchVectorEntry[] {
@@ -439,7 +478,8 @@ function candidateMetadata(
     .all({
       capsule_id: String(request.capsule.id),
       candidate_ids_json: JSON.stringify(chunkIds),
-    }) as unknown as readonly CandidateMetadataRow[];
+    })
+    .map(readCandidateMetadataRow);
   return new Map(rows.map((row) => [row.chunk_id, row.source_id as KnowledgeSourceId]));
 }
 

@@ -51,7 +51,8 @@ export async function readGitProviderValue(request: Input): Promise<GitProviderV
   if (Buffer.byteLength(result.stdout, "utf8") + Buffer.byteLength(result.stderr, "utf8") > 262_144)
     return { status: "unavailable", failure: gitDeliveryObservationFailure("output-truncated") };
   try {
-    return { status: "observed", value: JSON.parse(result.stdout) as unknown };
+    const value: unknown = JSON.parse(result.stdout);
+    return { status: "observed", value };
   } catch {
     return { status: "unavailable", failure: gitDeliveryObservationFailure("malformed-response") };
   }

@@ -111,6 +111,7 @@ import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.
 import type {
   VerifiedCommitProposal,
   VerifiedCommitService,
+  VerifiedCommitVerificationTicket,
 } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
@@ -134,6 +135,10 @@ import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
+
+const VERIFICATION_TICKET: VerifiedCommitVerificationTicket = {
+  kind: "verified-commit-verification-ticket",
+};
 
 const DIGEST = "a".repeat(64);
 // #3873: through the production facade an edit is the replacement form with every member present;
@@ -2781,11 +2786,16 @@ describe("production managed worktree tools", () => {
     ],
     [
       "candidate drift",
-      { kind: "ticket", ticket: {} } as const,
+      { kind: "ticket", ticket: VERIFICATION_TICKET } as const,
       false,
       { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "verify-again" },
     ],
-    ["recorded proof", { kind: "ticket", ticket: {} } as const, true, { commitProof: "recorded" }],
+    [
+      "recorded proof",
+      { kind: "ticket", ticket: VERIFICATION_TICKET } as const,
+      true,
+      { commitProof: "recorded" },
+    ],
   ] as const)(
     "reports a passed run with %s commit-proof status",
     async (_label, ticket, recorded, expected) => {
@@ -2856,7 +2866,7 @@ describe("production managed worktree tools", () => {
         beginVerification: () => {
           open += 1;
           maxOpen = Math.max(maxOpen, open);
-          return Promise.resolve({ kind: "ticket", ticket: {} });
+          return Promise.resolve({ kind: "ticket", ticket: VERIFICATION_TICKET });
         },
         completeVerification: () => {
           open -= 1;
@@ -2902,7 +2912,7 @@ describe("production managed worktree tools", () => {
       records: [],
       verifiedCommitService: {
         ...verificationService(),
-        beginVerification: () => Promise.resolve({ kind: "ticket", ticket: {} }),
+        beginVerification: () => Promise.resolve({ kind: "ticket", ticket: VERIFICATION_TICKET }),
         completeVerification: () => Promise.resolve(false),
         unprovenAdmission: () => blocking,
       },
@@ -4615,7 +4625,7 @@ describe("a native check line proves the staged commit candidate (#3907 AC3)", (
     const begin_ = vi.fn<VerifiedCommitService["beginVerification"]>(
       begin ??
         ((): ReturnType<VerifiedCommitService["beginVerification"]> =>
-          Promise.resolve({ kind: "ticket" as const, ticket: {} })),
+          Promise.resolve({ kind: "ticket" as const, ticket: VERIFICATION_TICKET })),
     );
     const complete = vi.fn<VerifiedCommitService["completeVerification"]>(() =>
       Promise.resolve(recorded),
@@ -5403,7 +5413,9 @@ function governedEnvelope(): never {
 
 function verificationService(): VerifiedCommitService {
   return {
-    beginVerification: vi.fn(() => Promise.resolve({ kind: "ticket" as const, ticket: {} })),
+    beginVerification: vi.fn(() =>
+      Promise.resolve({ kind: "ticket" as const, ticket: VERIFICATION_TICKET }),
+    ),
     completeVerification: vi.fn(() => Promise.resolve(true)),
     observeVerification: vi.fn(),
     propose: vi.fn(),

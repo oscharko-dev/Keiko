@@ -14,11 +14,13 @@ import { MemoryStorageError } from "./errors.js";
 import {
   blobColumn,
   cachedPrepare,
+  closedVocabulary,
   nullableTextColumn,
   numberColumn,
   textColumn,
   type VaultSqlRow,
 } from "./statements.js";
+import { memoryIdColumn } from "./stored-values.js";
 
 // Hard upper bound on vector dimensions. The largest production embedding model in scope today
 // (OpenAI text-embedding-3-large) is 3072 dims; 4096 gives one binary-doubling of headroom while
@@ -32,8 +34,10 @@ export const ALLOWED_EMBEDDING_METRICS: readonly MemoryEmbeddingMetric[] = [
   "dot",
 ];
 
+const STORED_EMBEDDING_METRICS = closedVocabulary(ALLOWED_EMBEDDING_METRICS);
+
 interface EmbeddingDbRow {
-  readonly memory_id: string;
+  readonly memory_id: MemoryId;
   readonly provider: string;
   readonly model_id: string;
   readonly model_revision: string | null;
@@ -64,7 +68,7 @@ function readActiveVectorSpaceRow(row: VaultSqlRow): ActiveVectorSpaceRow {
 function readEmbeddingDbRow(row: VaultSqlRow): EmbeddingDbRow {
   return {
     ...readActiveVectorSpaceRow(row),
-    memory_id: textColumn(row, "memory_id"),
+    memory_id: memoryIdColumn(row, "memory_id"),
     vector: blobColumn(row, "vector"),
     created_at: numberColumn(row, "created_at"),
   };
@@ -190,13 +194,14 @@ export function upsertEmbeddingRow(
 }
 
 function narrowMetric(raw: string): MemoryEmbeddingMetric {
-  if (!ALLOWED_EMBEDDING_METRICS.includes(raw as MemoryEmbeddingMetric)) {
+  const metric = STORED_EMBEDDING_METRICS.get(raw);
+  if (metric === undefined) {
     throw new MemoryStorageError(
       "schema-mismatch",
       "Stored embedding metric is not in the allowed set.",
     );
   }
-  return raw as MemoryEmbeddingMetric;
+  return metric;
 }
 
 function openVectorBytes(stored: Uint8Array, cipher: MemoryContentCipher): Buffer {
@@ -230,7 +235,7 @@ function rowToEmbedding(row: EmbeddingDbRow, cipher: MemoryContentCipher): Memor
     );
   }
   const base = {
-    memoryId: row.memory_id as MemoryId,
+    memoryId: row.memory_id,
     provider: row.provider,
     modelId: row.model_id,
     dimensions: row.vector_dimensions,
@@ -259,7 +264,7 @@ export function getEmbeddingRows(
       .all(...chunk)
       .map(readEmbeddingDbRow);
     for (const row of rows) {
-      out.set(row.memory_id as MemoryId, rowToEmbedding(row, cipher));
+      out.set(row.memory_id, rowToEmbedding(row, cipher));
     }
   }
   return out;

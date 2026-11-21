@@ -17,6 +17,7 @@
 
 import { lstatSync, realpathSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import { errorCode } from "./error-code.js";
 import { LauncherError } from "./launcher-platforms.js";
 
 function realpathOrResolve(p: string): string {
@@ -72,7 +73,7 @@ function segmentExists(path: string): boolean {
     lstatSync(path);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    if (errorCode(error) === "ENOENT") return false;
     throw error;
   }
 }

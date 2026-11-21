@@ -85,6 +85,10 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { CodingRuntimeMentionables } from "./opencodeCommands.js";
+import {
+  createGitSnapshotAccessScope,
+  type GitSnapshotAccessScope,
+} from "../gitChangeSnapshotRegistry.js";
 
 const CODING_RUNTIME_TASK_REPLACEMENT_REASON_FIELD = {
   type: "string",
@@ -1519,7 +1523,7 @@ async function dispatchWorkbenchDescription(
 ): Promise<ProductionWorkbenchDescriptionOutcome> {
   const root = deps.activeWorkspaceRoot();
   if (root === undefined) return { reason: "generation-unavailable" };
-  const accessScope = {};
+  const accessScope = createGitSnapshotAccessScope();
   const captureInput: GitChangeSnapshotCaptureInput = {
     workspace: minimalWorkspaceInfo(root),
     baseRef: scope.baseRef ?? scope.baseSha,
@@ -1797,7 +1801,7 @@ function resolveWorkbenchSnapshot(
   snapshots: GitChangeSnapshotService,
   reference: string,
   correlationId: string,
-  accessScope: object,
+  accessScope: GitSnapshotAccessScope,
   supplied: string,
   signal: AbortSignal,
 ): Promise<PrDescription.PrDescriptionResolvedSnapshot | undefined> {

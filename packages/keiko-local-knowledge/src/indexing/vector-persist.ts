@@ -26,6 +26,7 @@ import { KnowledgeStoreError } from "../errors.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 
 import { invalidateVectorIndexStateForCapsule } from "./vector-index-state.js";
+import { type KnowledgeSqlRow, numberColumn, textColumn } from "../sql-row.js";
 
 type PreparedStatement = ReturnType<DatabaseSync["prepare"]>;
 const STATEMENTS = new WeakMap<DatabaseSync, Map<string, PreparedStatement>>();
@@ -99,6 +100,19 @@ export interface ChunkRow {
   readonly order_index: number;
   readonly token_count: number;
   readonly safe_excerpt_hash: string;
+}
+
+function readChunkRow(row: KnowledgeSqlRow): ChunkRow {
+  return {
+    id: textColumn(row, "id"),
+    capsule_id: textColumn(row, "capsule_id"),
+    source_id: textColumn(row, "source_id"),
+    document_id: textColumn(row, "document_id"),
+    parsed_unit_id: textColumn(row, "parsed_unit_id"),
+    order_index: numberColumn(row, "order_index"),
+    token_count: numberColumn(row, "token_count"),
+    safe_excerpt_hash: textColumn(row, "safe_excerpt_hash"),
+  };
 }
 
 export interface VectorInsertRow {
@@ -222,11 +236,9 @@ export function selectChunksForDocument(
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId,
 ): readonly ChunkRow[] {
-  const rows = statement(db, SELECT_CHUNKS_FOR_DOCUMENT_SQL).all({
-    c: capsuleId,
-    d: documentId,
-  });
-  return rows as unknown as readonly ChunkRow[];
+  return statement(db, SELECT_CHUNKS_FOR_DOCUMENT_SQL)
+    .all({ c: capsuleId, d: documentId })
+    .map(readChunkRow);
 }
 
 // VectorRecord composition is consolidated here so the batcher and any future replay tool

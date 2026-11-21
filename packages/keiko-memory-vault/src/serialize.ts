@@ -12,7 +12,6 @@
 //                     flat keeps the scoped-list query free of payload parsing for the common case)
 
 import type {
-  MemoryId,
   MemoryProvenance,
   MemoryRecord,
   MemoryRetentionHint,
@@ -20,19 +19,17 @@ import type {
   MemoryScopeKind,
   MemorySensitivity,
   MemorySourceKind,
-  MemoryStatus,
   MemoryStructuredPayload,
-  MemoryType,
+  MemoryValidation,
   MemoryValidityInterval,
   ConversationId,
   EvidenceManifestId,
-  ProjectId,
-  UserId,
-  WorkflowDefinitionId,
   WorkflowRunId,
-  WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { validateMemoryRecord } from "@oscharko-dev/keiko-contracts/runtime/memory";
+import {
+  validateMemoryRecord,
+  validateMemoryScope,
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
 import {
   MEMORY_TAGS_MAX_COUNT,
   MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES,
@@ -44,9 +41,20 @@ import {
   nullableNumberColumn,
   nullableTextColumn,
   numberColumn,
+  storedId,
   textColumn,
+  vocabularyMember,
   type VaultSqlRow,
 } from "./statements.js";
+import {
+  isAdmittedIdText,
+  isStoredMemoryId,
+  STORED_MEMORY_SCOPE_KINDS,
+  STORED_MEMORY_SENSITIVITIES,
+  STORED_MEMORY_SOURCE_KINDS,
+  STORED_MEMORY_STATUSES,
+  STORED_MEMORY_TYPES,
+} from "./stored-values.js";
 import { redactMemoryRecord } from "./redact-record.js";
 import {
   emitMemoryWriteCaptureFailed,
@@ -174,23 +182,44 @@ export function readMemoryRow(row: VaultSqlRow): MemoryRow {
 }
 
 export function buildScopeFromRow(kind: string, coord: string): MemoryScope {
-  switch (kind as MemoryScopeKind) {
-    case "user":
-      return { kind: "user", userId: coord as UserId };
-    case "workspace":
-      return { kind: "workspace", workspaceId: coord as WorkspaceId };
-    case "project":
-      return { kind: "project", projectId: coord as ProjectId };
-    case "workflow":
-      return { kind: "workflow", workflowDefinitionId: coord as WorkflowDefinitionId };
-    case "global":
-      return { kind: "global" };
-    default:
-      throw new MemoryStorageError(
-        "schema-mismatch",
-        "Stored memory scope kind is not recognized.",
-      );
+  const scopeKind = STORED_MEMORY_SCOPE_KINDS.get(kind);
+  if (scopeKind === undefined) {
+    throw new MemoryStorageError("schema-mismatch", "Stored memory scope kind is not recognized.");
   }
+  const scope = validateStoredScope(scopeKind, coord);
+  if (!scope.ok) {
+    throw new MemoryStorageError("schema-mismatch", "Stored memory scope coordinate is not valid.");
+  }
+  return scope.value;
+}
+
+// The record validator admitted every stored scope through validateMemoryScope, so the same
+// validator brands the coordinate again on read.
+function validateStoredScope(kind: MemoryScopeKind, coord: string): MemoryValidation<MemoryScope> {
+  switch (kind) {
+    case "user":
+      return validateMemoryScope({ kind, userId: coord });
+    case "workspace":
+      return validateMemoryScope({ kind, workspaceId: coord });
+    case "project":
+      return validateMemoryScope({ kind, projectId: coord });
+    case "workflow":
+      return validateMemoryScope({ kind, workflowDefinitionId: coord });
+    case "global":
+      return validateMemoryScope({ kind });
+  }
+}
+
+function isStoredConversationId(value: string): value is ConversationId {
+  return isAdmittedIdText(value);
+}
+
+function isStoredWorkflowRunId(value: string): value is WorkflowRunId {
+  return isAdmittedIdText(value);
+}
+
+function isStoredEvidenceManifestId(value: string): value is EvidenceManifestId {
+  return isAdmittedIdText(value);
 }
 
 function buildProvenanceFromRow(row: MemoryRow): MemoryProvenance {
@@ -205,19 +234,22 @@ function buildProvenanceFromRow(row: MemoryRow): MemoryProvenance {
     modelIdentity?: { provider: string; modelId: string; modelRevision?: string };
     captureRationale?: string;
   } = {
-    sourceKind: row.source_kind as MemorySourceKind,
+    sourceKind: vocabularyMember(STORED_MEMORY_SOURCE_KINDS, row.source_kind),
     capturedAt: row.captured_at,
     confidence: row.confidence,
-    sensitivity: row.sensitivity as MemorySensitivity,
+    sensitivity: vocabularyMember(STORED_MEMORY_SENSITIVITIES, row.sensitivity),
   };
   if (row.source_conversation_id !== null) {
-    base.sourceConversationId = row.source_conversation_id as ConversationId;
+    base.sourceConversationId = storedId(row.source_conversation_id, isStoredConversationId);
   }
   if (row.source_workflow_run_id !== null) {
-    base.sourceWorkflowRunId = row.source_workflow_run_id as WorkflowRunId;
+    base.sourceWorkflowRunId = storedId(row.source_workflow_run_id, isStoredWorkflowRunId);
   }
   if (row.source_evidence_manifest_id !== null) {
-    base.sourceEvidenceManifestId = row.source_evidence_manifest_id as EvidenceManifestId;
+    base.sourceEvidenceManifestId = storedId(
+      row.source_evidence_manifest_id,
+      isStoredEvidenceManifestId,
+    );
   }
   if (row.capture_rationale !== null) {
     base.captureRationale = row.capture_rationale;
@@ -249,6 +281,30 @@ function buildRetentionHintFromRow(row: MemoryRow): MemoryRetentionHint | undefi
   return hint;
 }
 
+function isStoredText(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function isStoredTextList(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every(isStoredText);
+}
+
+function isStoredPayloadEntry(value: unknown): value is { key: string; value: string } {
+  return isMemoryFieldGroup(value) && isStoredText(value.key) && isStoredText(value.value);
+}
+
+// The stored payload must have the shape of one MemoryStructuredPayload member. Content bounds are
+// the write-time validator's job; they changed over time, so a read does not reapply them.
+function isStoredPayload(value: unknown): value is MemoryStructuredPayload {
+  if (!isMemoryFieldGroup(value)) return false;
+  if (value.kind === "string-list") return isStoredTextList(value.items);
+  return (
+    value.kind === "key-value" &&
+    Array.isArray(value.entries) &&
+    value.entries.every(isStoredPayloadEntry)
+  );
+}
+
 function parseTagsJson(raw: string): readonly string[] {
   let parsed: unknown;
   try {
@@ -256,13 +312,13 @@ function parseTagsJson(raw: string): readonly string[] {
   } catch {
     throw new MemoryStorageError("schema-mismatch", "Stored memory tags JSON is invalid.");
   }
-  if (!Array.isArray(parsed) || parsed.some((value) => typeof value !== "string")) {
+  if (!isStoredTextList(parsed)) {
     throw new MemoryStorageError(
       "schema-mismatch",
       "Stored memory tags JSON must be an array of strings.",
     );
   }
-  return parsed as string[];
+  return parsed;
 }
 
 function parsePayloadJson(raw: string | null): MemoryStructuredPayload | undefined {
@@ -273,13 +329,13 @@ function parsePayloadJson(raw: string | null): MemoryStructuredPayload | undefin
   } catch {
     throw new MemoryStorageError("schema-mismatch", "Stored memory payload JSON is invalid.");
   }
-  if (typeof parsed !== "object" || parsed === null || !("kind" in parsed)) {
+  if (!isStoredPayload(parsed)) {
     throw new MemoryStorageError(
       "schema-mismatch",
-      "Stored memory payload JSON must be an object payload.",
+      "Stored memory payload JSON must be a string-list or key-value payload.",
     );
   }
-  return parsed as MemoryStructuredPayload;
+  return parsed;
 }
 
 export function rowToMemoryRecord(row: MemoryRow, cipher: MemoryContentCipher): MemoryRecord {
@@ -291,14 +347,14 @@ function decryptedRowToMemoryRecord(row: MemoryRow): MemoryRecord {
   const payload = parsePayloadJson(row.payload_json);
   const retentionHint = buildRetentionHintFromRow(row);
   const base = {
-    id: row.id as MemoryId,
+    id: storedId(row.id, isStoredMemoryId),
     schemaVersion: "1" as const,
     scope: buildScopeFromRow(row.scope_kind, row.scope_coordinate),
-    type: row.type as MemoryType,
+    type: vocabularyMember(STORED_MEMORY_TYPES, row.type),
     body: row.body,
     provenance: buildProvenanceFromRow(row),
     validity: buildValidityFromRow(row),
-    status: row.status as MemoryStatus,
+    status: vocabularyMember(STORED_MEMORY_STATUSES, row.status),
     pinned: row.pinned === 1,
     tags: parseTagsJson(row.tags_json),
     createdAt: row.created_at,

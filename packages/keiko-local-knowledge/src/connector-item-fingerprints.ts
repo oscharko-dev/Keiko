@@ -17,6 +17,7 @@ import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-
 import { compareFingerprintKeys } from "./fingerprint-diff.js";
 import { computeManualPageFingerprint } from "./manual-page-fingerprints.js";
 import type { KnowledgeStore } from "./store.js";
+import { type KnowledgeSqlRow, nullableTextColumn, numberColumn, textColumn } from "./sql-row.js";
 
 export interface ConnectorItemFingerprint {
   readonly itemKey: string;
@@ -57,6 +58,17 @@ interface ConnectorItemFingerprintRow {
   readonly citation_metadata_json: string | null;
 }
 
+function readConnectorItemFingerprintRow(row: KnowledgeSqlRow): ConnectorItemFingerprintRow {
+  return {
+    item_key: textColumn(row, "item_key"),
+    content_fingerprint: textColumn(row, "content_fingerprint"),
+    byte_length: numberColumn(row, "byte_length"),
+    relative_path: textColumn(row, "relative_path"),
+    webui_path: nullableTextColumn(row, "webui_path"),
+    citation_metadata_json: nullableTextColumn(row, "citation_metadata_json"),
+  };
+}
+
 // Read the previous applied sync run's fingerprints for a connector source, keyed by item key.
 export function readConnectorItemFingerprints(
   store: KnowledgeStore,
@@ -72,7 +84,8 @@ export function readConnectorItemFingerprints(
         "WHERE capsule_id = :capsuleId AND source_id = :sourceId",
       ].join(" "),
     )
-    .all({ capsuleId, sourceId }) as unknown as ConnectorItemFingerprintRow[];
+    .all({ capsuleId, sourceId })
+    .map(readConnectorItemFingerprintRow);
   const map = new Map<string, ConnectorItemFingerprint>();
   for (const row of rows) {
     map.set(row.item_key, {

@@ -56,3 +56,59 @@ export function blobColumn(row: VaultSqlRow, column: string): Uint8Array {
   if (!(value instanceof Uint8Array)) throw columnTypeMismatch();
   return value;
 }
+
+// A closed vocabulary keyed by its stored spelling. A lookup returns the typed member, so a stored
+// value outside the vocabulary is absent instead of being asserted into the member type.
+export type ClosedVocabulary<T extends string> = ReadonlyMap<string, T>;
+
+export function closedVocabulary<T extends string>(members: readonly T[]): ClosedVocabulary<T> {
+  return new Map(members.map((member): [string, T] => [member, member]));
+}
+
+export function vocabularyMember<T extends string>(
+  vocabulary: ClosedVocabulary<T>,
+  value: string,
+): T {
+  const member = vocabulary.get(value);
+  if (member === undefined) throw columnTypeMismatch();
+  return member;
+}
+
+export function vocabularyColumn<T extends string>(
+  row: VaultSqlRow,
+  column: string,
+  vocabulary: ClosedVocabulary<T>,
+): T {
+  return vocabularyMember(vocabulary, textColumn(row, column));
+}
+
+export function nullableVocabularyColumn<T extends string>(
+  row: VaultSqlRow,
+  column: string,
+  vocabulary: ClosedVocabulary<T>,
+): T | null {
+  return row[column] === null ? null : vocabularyColumn(row, column, vocabulary);
+}
+
+// A branded id is a plain string at runtime. `isId` states the whole runtime definition of the
+// brand, so a stored value it refuses fails closed instead of being asserted into the brand.
+export function storedId<T extends string>(value: string, isId: (value: string) => value is T): T {
+  if (!isId(value)) throw columnTypeMismatch();
+  return value;
+}
+
+export function idColumn<T extends string>(
+  row: VaultSqlRow,
+  column: string,
+  isId: (value: string) => value is T,
+): T {
+  return storedId(textColumn(row, column), isId);
+}
+
+export function nullableIdColumn<T extends string>(
+  row: VaultSqlRow,
+  column: string,
+  isId: (value: string) => value is T,
+): T | null {
+  return row[column] === null ? null : idColumn(row, column, isId);
+}

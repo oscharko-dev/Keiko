@@ -319,7 +319,7 @@ export type JiraFieldValidationResult =
 type ValueResult =
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly message?: string };
-const INVALID: ValueResult = { ok: false };
+const INVALID = { ok: false } as const;
 function invalidWith(message: string): ValueResult {
   return { ok: false, message };
 }
@@ -328,15 +328,19 @@ function calendarDate(value: string): boolean {
   const date = new Date(`${value}T00:00:00.000Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
 }
+/** A reference read: the one-key reference itself, or INVALID. */
+type ReferenceResult =
+  { readonly ok: true; readonly value: Readonly<Record<string, string>> } | typeof INVALID;
+/** The one-key reference `{ [key]: text }`, checked against the allowed entries when given. */
 function referenceOf(
   value: unknown,
   key: "id" | "name" | "accountId",
   allowed: readonly JiraFieldReference[] | undefined,
-): ValueResult {
+): ReferenceResult {
   const raw = asRecord(value);
-  if (raw === undefined || Object.keys(raw).length !== 1 || !boundedText(raw[key], 256))
-    return INVALID;
+  if (raw === undefined || Object.keys(raw).length !== 1) return INVALID;
   const ref = raw[key];
+  if (!boundedText(ref, 256)) return INVALID;
   if (allowed !== undefined && !allowed.some((entry) => entry[key] === ref)) return INVALID;
   return { ok: true, value: { [key]: ref } };
 }
@@ -390,9 +394,7 @@ function cascadingValue(field: JiraFieldMetadata, value: unknown): ValueResult {
   const parent = referenceOf(parentPart, "id", field.allowedValues);
   if (!parent.ok || !Object.hasOwn(raw, "child")) return parent;
   const selected = referenceOf(child, "id", undefined);
-  return selected.ok
-    ? { ok: true, value: { ...(parent.value as Record<string, unknown>), child: selected.value } }
-    : INVALID;
+  return selected.ok ? { ok: true, value: { ...parent.value, child: selected.value } } : INVALID;
 }
 function optionValue(
   field: JiraFieldMetadata,
@@ -517,9 +519,9 @@ function opaqueShape(value: unknown, depth: number): boolean {
 function opaqueValue(value: unknown): ValueResult {
   if (!opaqueShape(value, 0)) return INVALID;
   const serialized = JSON.stringify(value);
-  return new TextEncoder().encode(serialized).byteLength <= OPAQUE_MAX_BYTES
-    ? { ok: true, value: JSON.parse(serialized) as unknown }
-    : INVALID;
+  if (new TextEncoder().encode(serialized).byteLength > OPAQUE_MAX_BYTES) return INVALID;
+  const copy: unknown = JSON.parse(serialized);
+  return { ok: true, value: copy };
 }
 function dateValue(value: unknown): ValueResult {
   return typeof value === "string" && calendarDate(value) ? { ok: true, value } : INVALID;

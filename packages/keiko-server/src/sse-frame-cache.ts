@@ -20,10 +20,14 @@
 // levels are WeakMaps: an entry dies with its event (ring-buffer eviction) or its deps.
 
 import type { Redactor } from "./deps.js";
+import type { StreamEvent } from "./sink.js";
 
-const FRAME_CACHES = new WeakMap<Redactor, WeakMap<object, string>>();
+/** A run stream event, or one of the namespaced domain stream events (`command`, `terminal`, ...). */
+type RedactedSseEvent = StreamEvent | { readonly kind: string };
 
-export function redactedEventJson(redactor: Redactor, event: object): string {
+const FRAME_CACHES = new WeakMap<Redactor, WeakMap<RedactedSseEvent, string>>();
+
+export function redactedEventJson(redactor: Redactor, event: RedactedSseEvent): string {
   let byEvent = FRAME_CACHES.get(redactor);
   if (byEvent === undefined) {
     byEvent = new WeakMap();

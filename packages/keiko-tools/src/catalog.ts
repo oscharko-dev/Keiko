@@ -1,3 +1,4 @@
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type {
   ToolDescriptor,
   ToolRef,
@@ -40,9 +41,8 @@ export function captureWorkspaceToolArguments(
   const descriptor = workspaceToolDescriptor(alias);
   try {
     const captured = validateToolArguments(input, descriptor);
-    if (typeof captured !== "object" || captured === null || Array.isArray(captured))
-      throw new TypeError("Workspace tool requires object arguments");
-    return captured as Record<string, unknown>;
+    if (!isRecord(captured)) throw new TypeError("Workspace tool requires object arguments");
+    return captured;
   } catch {
     throw new ToolArgumentError(
       "Arguments do not match the canonical workspace tool contract",

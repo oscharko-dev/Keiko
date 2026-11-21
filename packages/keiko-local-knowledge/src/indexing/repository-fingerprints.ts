@@ -20,7 +20,14 @@ import { isContained, walkSource } from "../discovery/walk.js";
 import type { DiscoveryOptions } from "../discovery/types.js";
 import { compareFingerprintKeys } from "../fingerprint-diff.js";
 import { DEFAULT_MAX_BYTES } from "../parsers/types.js";
+import { KnowledgeStoreError } from "../errors.js";
 import type { KnowledgeStore } from "../store.js";
+import {
+  type KnowledgeSqlRow,
+  nullableNumberColumn,
+  numberColumn,
+  textColumn,
+} from "../sql-row.js";
 
 const MAX_GIT_INDEX_BYTES = 64 * 1024 * 1024;
 const MAX_SINGLE_READ_BYTES = 64 * 1024 * 1024;
@@ -490,6 +497,23 @@ interface StoredFingerprintRow {
   readonly mtime_ms: number | null;
 }
 
+// The table's CHECK constraint admits exactly these two kinds.
+function storedFingerprintKind(row: KnowledgeSqlRow): RepositoryFingerprintKind {
+  const kind = textColumn(row, "fingerprint_kind");
+  if (kind === "git-blob-sha1" || kind === "file-state") return kind;
+  throw new KnowledgeStoreError("A stored repository fingerprint has an unknown kind.");
+}
+
+function readStoredFingerprintRow(row: KnowledgeSqlRow): StoredFingerprintRow {
+  return {
+    relative_path: textColumn(row, "relative_path"),
+    content_fingerprint: textColumn(row, "content_fingerprint"),
+    fingerprint_kind: storedFingerprintKind(row),
+    byte_length: numberColumn(row, "byte_length"),
+    mtime_ms: nullableNumberColumn(row, "mtime_ms"),
+  };
+}
+
 function fromStoredFingerprint(row: StoredFingerprintRow): RepositoryFileFingerprint {
   return {
     relativePath: row.relative_path,
@@ -515,7 +539,8 @@ export function readRepositoryFileFingerprints(
     .all({
       capsule_id: capsuleId,
       source_id: sourceId,
-    }) as unknown as readonly StoredFingerprintRow[];
+    })
+    .map(readStoredFingerprintRow);
   return new Map(rows.map((row) => [row.relative_path, fromStoredFingerprint(row)]));
 }
 

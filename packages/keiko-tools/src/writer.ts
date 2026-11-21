@@ -102,6 +102,11 @@ function writeFileNoFollow(absolutePath: string, content: string): void {
   }
 }
 
+/** Whether a failed filesystem call carries this Node.js error code, such as `ENOENT`. */
+function hasErrnoCode(cause: unknown, code: string): boolean {
+  return cause instanceof Error && "code" in cause && cause.code === code;
+}
+
 function existingFileMode(absolutePath: string): number {
   try {
     const stats = lstatSync(absolutePath);
@@ -110,7 +115,7 @@ function existingFileMode(absolutePath: string): number {
     }
     return stats.mode & 0o777;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return 0o666;
     }
     throw error;
@@ -157,7 +162,7 @@ function createMissingContainedDirectorySegment(current: string, causeError: unk
   try {
     mkdirSync(current);
   } catch (mkdirError) {
-    if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError;
+    if (!hasErrnoCode(mkdirError, "EEXIST")) throw mkdirError;
   }
   const created = lstatSync(current);
   if (created.isSymbolicLink() || !created.isDirectory()) {
@@ -177,7 +182,7 @@ function ensureContainedDirectorySegment(root: string, current: string): void {
       throw new Error("workspace writer refused a non-directory path segment");
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if (!hasErrnoCode(error, "ENOENT")) throw error;
     createMissingContainedDirectorySegment(current, error);
   }
   assertContained(root, realpathSync(current));

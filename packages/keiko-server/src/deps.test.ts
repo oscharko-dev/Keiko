@@ -121,6 +121,10 @@ import { createCodingSafeActivityProjection } from "./coding-runtime/codingSafeA
 import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
 import { createUpdateRemediationManager } from "./update-remediation.js";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
+import {
+  createGitSnapshotAccessScope,
+  type GitSnapshotAccessScope,
+} from "./gitChangeSnapshotRegistry.js";
 
 const tmpDirs: string[] = [];
 
@@ -667,7 +671,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         workspace,
         baseRef: "main",
         headRef: "feature",
-        accessScope: {},
+        accessScope: createGitSnapshotAccessScope(),
         correlationId: "snapshot-composition",
       };
       const first = await a.capture(input);
@@ -1862,12 +1866,12 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       languages: [],
       ignoreLines: [],
     };
-    const accessScope = {};
+    const accessScope = createGitSnapshotAccessScope();
     const context = (): {
       readonly workspace: WorkspaceInfo;
       readonly repository: string;
       readonly prNumber: number;
-      readonly accessScope: object;
+      readonly accessScope: GitSnapshotAccessScope;
       readonly authorityDigest: string;
       readonly correlationId: string;
       readonly stillAuthorized: () => boolean;
@@ -1916,7 +1920,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       languages: [],
       ignoreLines: [],
     };
-    const accessScope = {};
+    const accessScope = createGitSnapshotAccessScope();
     const result = resolvePrDescriptionApplicationServiceForContext(
       deps,
       { projectId: root, ownerAndRepo: "octo/repo", prNumber: 17 },

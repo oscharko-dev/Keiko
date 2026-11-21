@@ -31,13 +31,16 @@ const MAX_AUTH_NAVIGATION_INTENT_TTL_MS = 60_000;
 const DEFAULT_AUTH_NAVIGATION_INTENT_CAPACITY = 16;
 const MAX_AUTH_NAVIGATION_INTENT_CAPACITY = 32;
 
+/** A timer handle: Node's Timeout in production, a plain number from a test scheduler. */
+type CodexTimerHandle = ReturnType<typeof setTimeout> | number;
+
 export interface CodexSubscriptionProfileCoordinatorDeps {
   readonly probe: (signal: AbortSignal) => Promise<unknown>;
   readonly now: () => number;
   readonly ttlMs: number;
   readonly timeoutMs: number;
-  readonly setTimeout: (callback: () => void, delayMs: number) => object | number;
-  readonly clearTimeout: (handle: object | number) => void;
+  readonly setTimeout: (callback: () => void, delayMs: number) => CodexTimerHandle;
+  readonly clearTimeout: (handle: CodexTimerHandle) => void;
 }
 
 export interface CodexSubscriptionProfileCoordinator {
@@ -67,8 +70,8 @@ export interface CodexAuthNavigationIntentCoordinatorDeps {
   readonly maxIntents: number;
   readonly newNonce: () => string;
   readonly sha256: (value: string) => string;
-  readonly setTimeout: (callback: () => void, delayMs: number) => object | number;
-  readonly clearTimeout: (handle: object | number) => void;
+  readonly setTimeout: (callback: () => void, delayMs: number) => CodexTimerHandle;
+  readonly clearTimeout: (handle: CodexTimerHandle) => void;
 }
 
 export interface CodexAuthNavigationIntentCoordinator {
@@ -133,7 +136,7 @@ export function createCodexAuthNavigationIntentCoordinator(
 ): CodexAuthNavigationIntentCoordinator {
   const configured = navigationIntentDeps(deps);
   const intents = new Map<string, StoredCodexAuthNavigationIntent>();
-  const timers = new Map<string, object | number>();
+  const timers = new Map<string, CodexTimerHandle>();
   return {
     create: (input): CodexAuthNavigationIntent | undefined =>
       createNavigationIntent(input, intents, timers, configured),
@@ -159,7 +162,7 @@ export function createCodexAuthNavigationIntentCoordinator(
 function createNavigationIntent(
   input: CodexAuthNavigationIntentInput,
   intents: Map<string, StoredCodexAuthNavigationIntent>,
-  timers: Map<string, object | number>,
+  timers: Map<string, CodexTimerHandle>,
   deps: CodexAuthNavigationIntentCoordinatorDeps,
 ): CodexAuthNavigationIntent | undefined {
   clearExpiredIntents(intents, timers, deps);
@@ -183,7 +186,7 @@ function createNavigationIntent(
 function consumeNavigationIntent(
   input: CodexAuthNavigationIntentConsumption,
   intents: Map<string, StoredCodexAuthNavigationIntent>,
-  timers: Map<string, object | number>,
+  timers: Map<string, CodexTimerHandle>,
   deps: CodexAuthNavigationIntentCoordinatorDeps,
 ): string | undefined {
   clearExpiredIntents(intents, timers, deps);
@@ -195,7 +198,7 @@ function consumeNavigationIntent(
 
 function clearExpiredIntents(
   intents: Map<string, StoredCodexAuthNavigationIntent>,
-  timers: Map<string, object | number>,
+  timers: Map<string, CodexTimerHandle>,
   deps: CodexAuthNavigationIntentCoordinatorDeps,
 ): void {
   for (const [nonce, intent] of intents) {
@@ -205,7 +208,7 @@ function clearExpiredIntents(
 
 function invalidateIntents(
   intents: Map<string, StoredCodexAuthNavigationIntent>,
-  timers: Map<string, object | number>,
+  timers: Map<string, CodexTimerHandle>,
   deps: CodexAuthNavigationIntentCoordinatorDeps,
   matches: (intent: StoredCodexAuthNavigationIntent) => boolean,
 ): void {
@@ -217,7 +220,7 @@ function invalidateIntents(
 function removeIntent(
   nonce: string,
   intents: Map<string, StoredCodexAuthNavigationIntent>,
-  timers: Map<string, object | number>,
+  timers: Map<string, CodexTimerHandle>,
   deps: Pick<CodexAuthNavigationIntentCoordinatorDeps, "clearTimeout">,
 ): void {
   const timer = timers.get(nonce);
@@ -279,7 +282,7 @@ function navigationIntentDeps(
     clearTimeout:
       deps.clearTimeout ??
       ((handle): void => {
-        clearTimeout(handle as ReturnType<typeof setTimeout>);
+        clearTimeout(handle);
       }),
   };
 }

@@ -27,6 +27,7 @@ import {
   type SetupStatus,
   type WindowsGenerationBinding,
 } from "./portable-shared.js";
+import { errorCode } from "./error-code.js";
 import { STAGING_OWNERSHIP_MARKER } from "./state-paths.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
@@ -136,7 +137,7 @@ function readRecordedRegistration(path: string): PortableInstallRegistration | u
   const raw = readFileSync(path, "utf8");
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw) as unknown;
+    parsed = JSON.parse(raw);
   } catch (error) {
     if (error instanceof SyntaxError) return undefined;
     throw error;
@@ -173,7 +174,7 @@ function registrationFileExists(path: string): boolean {
     lstatSync(path);
     return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    if (errorCode(error) === "ENOENT") return false;
     throw error;
   }
 }

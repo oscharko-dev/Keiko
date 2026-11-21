@@ -163,3 +163,17 @@ describe("deleteEdgeRow", () => {
     db.close();
   });
 });
+
+describe("edges read-side vocabulary", () => {
+  it("fails closed with schema-mismatch on a stored edge kind outside the vocabulary", () => {
+    const db = openTestDb();
+    insertMemoryRow(db, makeMemory("a"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("b"), TEST_CIPHER);
+    insertEdgeRow(db, makeEdge("e1", "a", "b", "supersedes"), TEST_CIPHER);
+    db.prepare("UPDATE memory_edges SET kind = 'bogus' WHERE id = 'e1'").run();
+    expect(() => listOutgoingEdgeRows(db, makeMemory("a").id, TEST_CIPHER)).toThrow(
+      expect.objectContaining({ code: "schema-mismatch" }),
+    );
+    db.close();
+  });
+});

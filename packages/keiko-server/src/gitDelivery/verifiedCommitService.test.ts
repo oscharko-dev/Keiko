@@ -16,7 +16,10 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { GIT_STAGE_FILE_MAX_BYTES } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import { RuntimeGitService } from "./runtimeGitService.js";
 import { commitFacadeFixture } from "./verifiedCommitFacadeTestSupport.js";
-import type { VerificationTicketOutcome } from "./verifiedCommitTypes.js";
+import type {
+  VerificationTicketOutcome,
+  VerifiedCommitVerificationTicket,
+} from "./verifiedCommitTypes.js";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
@@ -335,7 +338,9 @@ function expectVerificationFailureRetention(retained: boolean): void {
   ).toBe(retained);
 }
 
-function ticketOf(outcome: VerificationTicketOutcome): object | undefined {
+function ticketOf(
+  outcome: VerificationTicketOutcome,
+): VerifiedCommitVerificationTicket | undefined {
   return outcome.kind === "ticket" ? outcome.ticket : undefined;
 }
 

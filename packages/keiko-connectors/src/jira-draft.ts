@@ -11,11 +11,11 @@ import {
   type JiraFieldMetadata,
   type JiraMutationAttempt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { compareByCodeUnit } from "./adf-to-text.js";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { JIRA_ISSUE_LINKS_MAX, parseJiraIssueLinks } from "./jira-issue-links.js";
+import { isJsonArray } from "./json-narrowing.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 
 /** A relation names an item of the same draft (`ref`) or an existing issue (`issueKey`). */
@@ -171,6 +171,9 @@ function itemFields(
     : fields;
 }
 const REQUIREMENT_ID_PATTERN = /^[A-Za-z0-9._:/-]{1,80}$/u;
+function isRequirementId(entry: unknown): entry is string {
+  return typeof entry === "string" && REQUIREMENT_ID_PATTERN.test(entry);
+}
 /** Up to {@link JIRA_REQUIREMENT_IDS_MAX} plain reference strings; `undefined` when malformed. */
 export function parseRequirementIds(value: unknown): readonly string[] | null | undefined {
   if (value === undefined) return null;
@@ -179,10 +182,10 @@ export function parseRequirementIds(value: unknown): readonly string[] | null | 
     list === undefined ||
     list.length === 0 ||
     list.length > JIRA_REQUIREMENT_IDS_MAX ||
-    !list.every((entry) => typeof entry === "string" && REQUIREMENT_ID_PATTERN.test(entry))
+    !list.every(isRequirementId)
   )
     return undefined;
-  return list as readonly string[];
+  return list;
 }
 
 interface ItemRelations {
@@ -449,21 +452,34 @@ export function jiraDraftParentKey(
   return item.parent === undefined ? undefined : relatedKey(item.parent, keys);
 }
 
+/** A link whose target has its issue key. */
+interface ResolvedJiraDraftLink {
+  readonly type: string;
+  readonly direction: JiraDraftLink["direction"];
+  readonly issueKey: string;
+}
+/** The create a draft item stands for once every relation names an existing issue. */
+interface ResolvedJiraDraftItem {
+  readonly projectId: string;
+  readonly issueTypeId: string;
+  readonly fields: JiraDraftItem["fields"];
+  readonly links?: readonly ResolvedJiraDraftLink[];
+}
+function resolvedLink(
+  link: JiraDraftLink,
+  keys: ReadonlyMap<string, string>,
+): readonly ResolvedJiraDraftLink[] {
+  const issueKey = relatedKey(link, keys);
+  return issueKey ? [{ type: link.type, direction: link.direction, issueKey }] : [];
+}
 /** Relations resolved to issue keys; undefined while a referenced item has no key. */
 export function resolveJiraDraftItem(
   item: JiraDraftItem,
   keys: ReadonlyMap<string, string>,
-): CatalogJsonObject | undefined {
+): ResolvedJiraDraftItem | undefined {
   const parentKey = jiraDraftParentKey(item, keys);
-  const links = item.links.map((link) => ({
-    type: link.type,
-    direction: link.direction,
-    issueKey: relatedKey(link, keys),
-  }));
-  if (
-    (item.parent !== undefined && parentKey === undefined) ||
-    links.some((link) => !link.issueKey)
-  )
+  const links = item.links.flatMap((link) => resolvedLink(link, keys));
+  if ((item.parent !== undefined && parentKey === undefined) || links.length !== item.links.length)
     return undefined;
   return {
     projectId: item.projectId,
@@ -473,7 +489,7 @@ export function resolveJiraDraftItem(
       ...(item.parent === undefined ? {} : { [item.parent.fieldId]: parentKey }),
     },
     ...(links.length === 0 ? {} : { links }),
-  } as CatalogJsonObject;
+  };
 }
 
 function labelsWritable(metadata: readonly JiraFieldMetadata[]): boolean {
@@ -488,8 +504,9 @@ export function withJiraDraftIdentity(
   if (!labelsWritable(metadata)) return fields;
   // A malformed value stays as given so field validation refuses it; replacing it would send the
   // issue without the labels the caller asked for.
-  if (fields.labels !== undefined && !Array.isArray(fields.labels)) return fields;
-  const labels = (fields.labels ?? []) as readonly unknown[];
+  const given = fields.labels;
+  if (given !== undefined && !isJsonArray(given)) return fields;
+  const labels = given ?? [];
   return labels.includes(identity) ? fields : { ...fields, labels: [...labels, identity] };
 }
 

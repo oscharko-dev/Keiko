@@ -24,13 +24,6 @@ import {
 } from "./git-ci-workflow-definitions.js";
 
 type ListKind = "branch-rules" | "check-runs" | "commit-statuses" | "workflow-runs" | "reviews";
-const LISTS: readonly ListKind[] = [
-  "branch-rules",
-  "check-runs",
-  "commit-statuses",
-  "workflow-runs",
-  "reviews",
-];
 interface Unavailable {
   readonly status: "unavailable";
   readonly failure: GitDeliveryObservationFailure;
@@ -188,13 +181,20 @@ function readList(input: Input, kind: ListKind): Promise<GitProviderPageResult> 
   });
 }
 async function readLists(input: Input): Promise<Readonly<Record<ListKind, GitProviderPageResult>>> {
-  const entries = await Promise.all(
-    LISTS.map(async (kind): Promise<readonly [ListKind, GitProviderPageResult]> => [
-      kind,
-      await readList(input, kind),
-    ]),
-  );
-  return Object.fromEntries(entries) as Record<ListKind, GitProviderPageResult>;
+  const [branchRules, checkRuns, commitStatuses, workflowRuns, reviews] = await Promise.all([
+    readList(input, "branch-rules"),
+    readList(input, "check-runs"),
+    readList(input, "commit-statuses"),
+    readList(input, "workflow-runs"),
+    readList(input, "reviews"),
+  ]);
+  return {
+    "branch-rules": branchRules,
+    "check-runs": checkRuns,
+    "commit-statuses": commitStatuses,
+    "workflow-runs": workflowRuns,
+    reviews,
+  };
 }
 interface PolicyObservation {
   readonly protection: GitCiProtectionFacts;

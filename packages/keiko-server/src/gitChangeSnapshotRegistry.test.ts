@@ -16,6 +16,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
+import { createGitSnapshotAccessScope } from "./gitChangeSnapshotRegistry.js";
 
 const FIXED_NOW = Date.parse("2026-01-01T00:00:00.000Z");
 const correlationId = "registry-regression";
@@ -104,7 +105,7 @@ function buildRegistry(): { registry: GitChangeSnapshotRegistry; events: ServerL
 describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
   it("keeps a reserved reference alive across an eviction sweep that would otherwise remove it", () => {
     const { registry, events } = buildRegistry();
-    const protectedScope = {};
+    const protectedScope = createGitSnapshotAccessScope();
     const protectedRef = registry.put(content("0".repeat(64)), protectedScope, correlationId);
     expect(registry.reserve(protectedRef, protectedScope, correlationId)).toBe(true);
     const reservedEvent = events.find((event) => event.op === "git.snapshot.reserved");
@@ -118,9 +119,9 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
     // Fill every remaining slot with unreserved entries, one past capacity, so `put` must evict
     // something to make room for the last insert below.
     let lastRef = "";
-    let lastScope: object = {};
+    let lastScope = createGitSnapshotAccessScope();
     for (let index = 0; index < 32; index += 1) {
-      lastScope = {};
+      lastScope = createGitSnapshotAccessScope();
       lastRef = registry.put(
         content(index.toString(16).padStart(64, "0")),
         lastScope,
@@ -145,18 +146,18 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
 
   it("refuses to reserve an unknown reference or a mismatched scope (fail-closed)", () => {
     const { registry } = buildRegistry();
-    const scope = {};
+    const scope = createGitSnapshotAccessScope();
     const ref = registry.put(content("1".repeat(64)), scope, correlationId);
 
     expect(registry.reserve("gcs_does-not-exist", scope, correlationId)).toBe(false);
-    expect(registry.reserve(ref, {}, correlationId)).toBe(false);
+    expect(registry.reserve(ref, createGitSnapshotAccessScope(), correlationId)).toBe(false);
     expect(registry.reserve(ref, scope, correlationId)).toBe(true);
   });
 
   it("caps the number of simultaneous reservations so eviction can never be starved entirely", () => {
     const { registry, events } = buildRegistry();
     const entries = Array.from({ length: 25 }, (_, index) => {
-      const scope = {};
+      const scope = createGitSnapshotAccessScope();
       const ref = registry.put(content(index.toString(16).padStart(64, "0")), scope, correlationId);
       return { scope, ref };
     });
@@ -185,7 +186,7 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
 
   it("makes a released reference evictable again", () => {
     const { registry, events } = buildRegistry();
-    const scope = {};
+    const scope = createGitSnapshotAccessScope();
     const ref = registry.put(content("2".repeat(64)), scope, correlationId);
     expect(registry.reserve(ref, scope, correlationId)).toBe(true);
 
@@ -199,14 +200,18 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
     expect(persistedReleased).toMatchObject({ correlationId, category: "process" });
 
     for (let index = 0; index < 32; index += 1) {
-      registry.put(content(index.toString(16).padStart(64, "0")), {}, correlationId);
+      registry.put(
+        content(index.toString(16).padStart(64, "0")),
+        createGitSnapshotAccessScope(),
+        correlationId,
+      );
     }
     expect(registry.get(ref, scope, correlationId)).toBeUndefined();
   });
 
   it("drops a reservation when its record is removed by ordinary means (no reservation leak)", () => {
     const { registry, events } = buildRegistry();
-    const scope = {};
+    const scope = createGitSnapshotAccessScope();
     const first = registry.put(content("3".repeat(64)), scope, correlationId);
     registry.reserve(first, scope, correlationId);
     registry.revoke(first, scope, correlationId);
@@ -232,7 +237,7 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
     // 32-entry cap, so the entry-count limit alone cannot explain what happens next.
     let retainedBytes = 0;
     for (let index = 0; index < 6; index += 1) {
-      const scope = {};
+      const scope = createGitSnapshotAccessScope();
       const ref = registry.put(
         bigContent(index.toString(16).padStart(64, "0"), BYTES_PER_RECORD),
         scope,
@@ -247,7 +252,7 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
     // Every existing entry is reserved, so `oldestEvictable()` has nothing to reclaim: the fix
     // must refuse this insertion (closed capacity failure) rather than silently exceeding the cap
     // the way the pre-fix registry did (reproduced: 71,798,419 bytes retained).
-    const seventhScope = {};
+    const seventhScope = createGitSnapshotAccessScope();
     expect(() =>
       registry.put(bigContent("7".repeat(64), BYTES_PER_RECORD), seventhScope, correlationId),
     ).toThrow(RangeError);
@@ -272,7 +277,7 @@ describe("GitChangeSnapshotRegistry reservation (B2-8)", () => {
     vi.useFakeTimers();
     try {
       const { registry, events } = buildRegistry();
-      const scope = {};
+      const scope = createGitSnapshotAccessScope();
       const digest = "6".repeat(64);
       registry.put(content(digest), scope, correlationId);
 

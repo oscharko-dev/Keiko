@@ -149,20 +149,18 @@ export function gitMutationFailureIsRecoverable(category: GitMutationFailureCate
 
 // ─── Guards ─────────────────────────────────────────────────────────────────────────────
 
+const LIFECYCLE_PHASES: ReadonlySet<string> = new Set(GIT_MUTATION_LIFECYCLE_PHASES);
+const FAILURE_CATEGORIES: ReadonlySet<string> = new Set(GIT_MUTATION_FAILURE_CATEGORIES);
+const STATUSES: ReadonlySet<string> = new Set(GIT_MUTATION_STATUSES);
+
 export function isGitMutationLifecyclePhase(value: unknown): value is GitMutationLifecyclePhase {
-  return (
-    typeof value === "string" &&
-    (GIT_MUTATION_LIFECYCLE_PHASES as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && LIFECYCLE_PHASES.has(value);
 }
 
 export function isGitMutationFailureCategory(value: unknown): value is GitMutationFailureCategory {
-  return (
-    typeof value === "string" &&
-    (GIT_MUTATION_FAILURE_CATEGORIES as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && FAILURE_CATEGORIES.has(value);
 }
 
 export function isGitMutationStatus(value: unknown): value is GitMutationStatus {
-  return typeof value === "string" && (GIT_MUTATION_STATUSES as readonly string[]).includes(value);
+  return typeof value === "string" && STATUSES.has(value);
 }

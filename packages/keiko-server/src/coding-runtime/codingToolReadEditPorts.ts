@@ -896,7 +896,14 @@ function validSnapshotRead(
   );
 }
 
-function ownSnapshotValue(info: object, key: string): unknown {
+/** The three members a secure text snapshot's file info carries. */
+interface SnapshotInfoCandidate {
+  readonly type?: unknown;
+  readonly size?: unknown;
+  readonly mtimeMs?: unknown;
+}
+
+function ownSnapshotValue(info: SnapshotInfoCandidate, key: keyof SnapshotInfoCandidate): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(info, key);
   return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
 }

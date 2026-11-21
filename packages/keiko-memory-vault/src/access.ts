@@ -8,7 +8,8 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
-import { cachedPrepare, numberColumn, textColumn, type VaultSqlRow } from "./statements.js";
+import { cachedPrepare, numberColumn, type VaultSqlRow } from "./statements.js";
+import { memoryIdColumn } from "./stored-values.js";
 
 export interface MemoryAccessStat {
   readonly lastAccessedAt: number;
@@ -50,7 +51,7 @@ const SELECT_ALL_SQL =
   "SELECT memory_id, last_accessed_at, access_count, outcome_count, utility_sum FROM memory_access";
 
 interface AccessRow {
-  readonly memory_id: string;
+  readonly memory_id: MemoryId;
   readonly last_accessed_at: number;
   readonly access_count: number;
   readonly outcome_count: number;
@@ -87,7 +88,7 @@ export function recordOutcomeRows(
 
 function readAccessRow(row: VaultSqlRow): AccessRow {
   return {
-    memory_id: textColumn(row, "memory_id"),
+    memory_id: memoryIdColumn(row, "memory_id"),
     last_accessed_at: numberColumn(row, "last_accessed_at"),
     access_count: numberColumn(row, "access_count"),
     outcome_count: numberColumn(row, "outcome_count"),
@@ -99,7 +100,7 @@ function rowsToMap(rows: readonly VaultSqlRow[]): Map<MemoryId, MemoryAccessStat
   const map = new Map<MemoryId, MemoryAccessStat>();
   for (const sqlRow of rows) {
     const row = readAccessRow(sqlRow);
-    map.set(row.memory_id as MemoryId, {
+    map.set(row.memory_id, {
       lastAccessedAt: row.last_accessed_at,
       accessCount: row.access_count,
       outcomeCount: row.outcome_count,

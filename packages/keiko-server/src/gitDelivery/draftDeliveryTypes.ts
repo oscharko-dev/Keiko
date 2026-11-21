@@ -21,6 +21,7 @@ import type { GitDeliveryExecutionSeams, GitDeliveryMutationDeps } from "./execu
 import type { GitDeliveryPublishSeams } from "./pushExecution.js";
 import type { GitDeliveryPullRequestSeams } from "./prExecution.js";
 import type { CodingWorkbenchCodeTaskDeliveryAction } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import type { GitDeliveryExecutionLease } from "./executionLease.js";
 
 export interface DraftDeliveryRunContext extends VerifiedCommitRunContext {
   readonly taskId: string;
@@ -157,10 +158,10 @@ export interface DraftDeliveryService {
   review(proposalId: string): DraftDeliveryProposal | undefined;
   issueApproval(proposalId: string): GitDeliveryIssuedApproval | undefined;
   matchesApproval(proposalId: string): boolean;
-  consumeApproval(proposalId: string): object | undefined;
+  consumeApproval(proposalId: string): GitDeliveryExecutionLease | undefined;
   executeApproved(
     proposalId: string,
-    lease: object | undefined,
+    lease: GitDeliveryExecutionLease | undefined,
     guard: {
       readonly check: () => boolean;
       readonly intent?: "push" | "pull-request" | undefined;

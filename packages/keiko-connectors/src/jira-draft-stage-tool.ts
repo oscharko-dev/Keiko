@@ -4,7 +4,10 @@ import {
   JIRA_DRAFT_PAGE_ITEMS_MAX,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  CatalogJsonObject,
+  CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ManagedMcpInvocationContext,
   ManagedMcpToolResult,
@@ -18,6 +21,7 @@ import {
 } from "./jira-draft.js";
 import {
   jiraDraftDigest,
+  stagedJiraDraftRef,
   type JiraDraftStore,
   type StagedJiraDraft,
   type StagedJiraDraftItem,
@@ -31,6 +35,7 @@ import {
   type JiraDraftFieldRefusal,
 } from "./jira-managed-mutations.js";
 import { connectionFingerprint } from "./jira-report-tool.js";
+import { isCatalogJsonArray, isCatalogJsonObject } from "./json-narrowing.js";
 
 export type JiraDraftRefusal =
   | "invalid-input"
@@ -92,31 +97,44 @@ function invalidPageGuidance(raw: CatalogJsonObject): string {
   return `${subject} Correct the page and send it again; nothing was staged.`;
 }
 
+/** A page item in the jira.draft item form; the form admits only a JSON object. */
+function isStagedItem(value: CatalogJsonValue): value is StagedJiraDraftItem {
+  return isCatalogJsonObject(value) && isJiraDraftItem(value);
+}
 /** One page of well-formed items and, when it extends a draft, that draft's id. */
 function parseStageArgs(raw: CatalogJsonObject): StageArgs | undefined {
   if (!Object.keys(raw).every((key) => STAGE_KEYS.has(key))) return undefined;
   const { draftId, items } = raw;
   if (draftId !== undefined && !(typeof draftId === "string" && DRAFT_ID.test(draftId)))
     return undefined;
-  if (!Array.isArray(items) || items.length === 0 || items.length > JIRA_DRAFT_PAGE_ITEMS_MAX)
+  if (!isCatalogJsonArray(items) || items.length === 0 || items.length > JIRA_DRAFT_PAGE_ITEMS_MAX)
     return undefined;
-  const page: readonly unknown[] = items;
-  if (!page.every(isJiraDraftItem)) return undefined;
-  return { draftId, items: page as readonly StagedJiraDraftItem[] };
+  if (!items.every(isStagedItem)) return undefined;
+  return { draftId, items };
 }
 
+/** A staged link with a stand-in key in place of a draft item's ref; the item form validated it. */
+function standInLink(link: CatalogJsonValue): readonly CatalogJsonObject[] {
+  if (!isCatalogJsonObject(link)) return [];
+  const { type, direction, issueKey } = link;
+  if (type === undefined || direction === undefined) return [];
+  return [
+    {
+      type,
+      direction,
+      issueKey: typeof issueKey === "string" ? issueKey : JIRA_DRAFT_STAND_IN_KEY,
+    },
+  ];
+}
 /** The key a relation to another draft item stands for until that item exists. */
 function standInLinks(item: StagedJiraDraftItem): readonly CatalogJsonObject[] {
-  const links: unknown = item.links;
-  if (!Array.isArray(links)) return [];
-  return (links as readonly Record<string, unknown>[]).map(
-    (link) =>
-      ({
-        type: link.type,
-        direction: link.direction,
-        issueKey: typeof link.issueKey === "string" ? link.issueKey : JIRA_DRAFT_STAND_IN_KEY,
-      }) as CatalogJsonObject,
-  );
+  const links = item.links;
+  return isCatalogJsonArray(links) ? links.flatMap(standInLink) : [];
+}
+/** The item's own value under `key`, as an entry to spread, or none when the item has none. */
+function ownEntry(item: StagedJiraDraftItem, key: string): CatalogJsonObject {
+  const value = item[key];
+  return value === undefined ? {} : { [key]: value };
 }
 /**
  * The create the item stands for. A parent or link target held by another draft item gets a
@@ -124,19 +142,19 @@ function standInLinks(item: StagedJiraDraftItem): readonly CatalogJsonObject[] {
  * `parentLink`) and the item that will be created carries exactly these.
  */
 export function jiraDraftTemplateSource(item: StagedJiraDraftItem): CatalogJsonObject {
-  const fields = (item.fields ?? {}) as Record<string, unknown>;
-  const parent = item.parent as { readonly fieldId?: unknown } | undefined;
+  const fields = isCatalogJsonObject(item.fields) ? item.fields : {};
+  const parent = isCatalogJsonObject(item.parent) ? item.parent : undefined;
   const parentFieldId = typeof parent?.fieldId === "string" ? parent.fieldId : undefined;
   const links = standInLinks(item);
   return {
-    projectId: item.projectId,
-    issueTypeId: item.issueTypeId,
+    ...ownEntry(item, "projectId"),
+    ...ownEntry(item, "issueTypeId"),
     fields: {
       ...fields,
       ...(parentFieldId === undefined ? {} : { [parentFieldId]: JIRA_DRAFT_STAND_IN_KEY }),
     },
     ...(links.length === 0 ? {} : { links }),
-  } as CatalogJsonObject;
+  };
 }
 
 export interface JiraDraftTemplateRefusal {
@@ -149,22 +167,33 @@ export interface JiraDraftTemplateRefusal {
  * because each check reads Jira's metadata through the same bounded connection.
  */
 export async function firstJiraDraftTemplateRefusal(
-  items: readonly StagedJiraDraftItem[],
+  items: readonly CatalogJsonValue[],
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
   index = 0,
 ): Promise<JiraDraftTemplateRefusal | undefined> {
   const item = items[index];
   if (item === undefined) return undefined;
+  // A staged draft holds only item objects; any other value has no create to check.
+  const refusal = isCatalogJsonObject(item)
+    ? await itemTemplateRefusal(item, context, connection)
+    : undefined;
+  return refusal ?? firstJiraDraftTemplateRefusal(items, context, connection, index + 1);
+}
+async function itemTemplateRefusal(
+  item: StagedJiraDraftItem,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+): Promise<JiraDraftTemplateRefusal | undefined> {
   const result = await checkJiraManagedMutationTemplates(
     "jira.create",
     jiraDraftTemplateSource(item),
     context,
     connection,
   );
-  if (!result.ok && result.violations !== undefined)
-    return { ref: String(item.ref), violations: result.violations };
-  return firstJiraDraftTemplateRefusal(items, context, connection, index + 1);
+  return !result.ok && result.violations !== undefined
+    ? { ref: stagedJiraDraftRef(item), violations: result.violations }
+    : undefined;
 }
 
 function stagedView(draft: StagedJiraDraft, newDraft: boolean): ManagedMcpToolResult {
@@ -370,6 +399,6 @@ export function resolveJiraDraftArguments(
   if (reference === undefined || draft === undefined)
     return { ok: false, reason: "draft-not-found" };
   return draft.digest === reference.draftDigest && jiraDraftDigest(draft.items) === draft.digest
-    ? { ok: true, arguments: { items: draft.items } as CatalogJsonObject }
+    ? { ok: true, arguments: { items: draft.items } }
     : { ok: false, reason: "draft-changed" };
 }

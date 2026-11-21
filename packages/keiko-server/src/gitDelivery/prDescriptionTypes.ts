@@ -17,13 +17,15 @@ import type {
 import type { GitDeliveryMutationDeps } from "./execution.js";
 import type { GitDeliveryPullRequestSeams } from "./prExecution.js";
 import type { GitDeliveryApprovalBinding, GitDeliveryIssuedApproval } from "./approvalStore.js";
+import type { GitDeliveryExecutionLease } from "./executionLease.js";
+import type { GitSnapshotAccessScope } from "../gitChangeSnapshotRegistry.js";
 
 /** Accepted server authority. Generic external PRs do not require a Workbench issue binding. */
 export interface PrDescriptionContext {
   readonly workspace: WorkspaceInfo;
   readonly repository: string;
   readonly prNumber: number;
-  readonly accessScope: object;
+  readonly accessScope: GitSnapshotAccessScope;
   readonly authorityDigest: string;
   readonly correlationId: string;
   readonly runId?: string;
@@ -112,10 +114,10 @@ export interface PrDescriptionApplicationService {
   review(proposalId: string): PrDescriptionPreview | undefined;
   issueApproval(proposalId: string): GitDeliveryIssuedApproval | undefined;
   matchesApproval(proposalId: string): boolean;
-  consumeApproval(proposalId: string): object | undefined;
+  consumeApproval(proposalId: string): GitDeliveryExecutionLease | undefined;
   executeApproved(
     proposalId: string,
-    lease: object,
+    lease: GitDeliveryExecutionLease,
     guard?: { readonly check: () => boolean; readonly signal?: AbortSignal },
   ): Promise<PrDescriptionExecutionResult>;
   reconcile(): Promise<PrDescriptionApplicationResult>;

@@ -49,6 +49,13 @@ import {
 } from "./chunk-indexed-text-persist.js";
 import { upsertLexicalRows } from "./lexical-index-persist.js";
 import type { ChunkToEmbed, EmbedBatchResult, EmbedRetryOptions } from "./types.js";
+import {
+  type KnowledgeSqlRow,
+  nullableNumberColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+} from "../sql-row.js";
 
 export interface BoundedChunkParams {
   readonly capsuleId: KnowledgeCapsuleId;
@@ -226,6 +233,21 @@ interface ChunkOffsetRow {
   readonly context_status: string | null;
 }
 
+function readChunkOffsetRow(row: KnowledgeSqlRow): ChunkOffsetRow {
+  return {
+    id: textColumn(row, "id"),
+    source_id: textColumn(row, "source_id"),
+    order_index: numberColumn(row, "order_index"),
+    safe_excerpt_hash: textColumn(row, "safe_excerpt_hash"),
+    char_start: nullableNumberColumn(row, "char_start"),
+    char_end: nullableNumberColumn(row, "char_end"),
+    contextual_retrieval_key: nullableTextColumn(row, "contextual_retrieval_key"),
+    context_prefix: nullableTextColumn(row, "context_prefix"),
+    augmented_text: nullableTextColumn(row, "augmented_text"),
+    context_status: nullableTextColumn(row, "context_status"),
+  };
+}
+
 // Selects the next batch of chunks that do NOT yet have a vector. The missing-vector gate is the
 // resume mechanism: it self-heals across an interrupted embed, an externally deleted vector, and an
 // incompatible-checkpoint restart (which deletes vectors first), without trusting a fragile cursor.
@@ -284,11 +306,14 @@ export interface BoundedEmbedResult {
 }
 
 function nextBatch(db: DatabaseSync, deps: BoundedEmbedDeps): readonly ChunkOffsetRow[] {
-  return db.prepare(SELECT_BOUNDED_CHUNKS_SQL).all({
-    c: String(deps.capsuleId),
-    d: String(deps.documentId),
-    limit: deps.batchSize,
-  }) as unknown as readonly ChunkOffsetRow[];
+  return db
+    .prepare(SELECT_BOUNDED_CHUNKS_SQL)
+    .all({
+      c: String(deps.capsuleId),
+      d: String(deps.documentId),
+      limit: deps.batchSize,
+    })
+    .map(readChunkOffsetRow);
 }
 
 function storedColumns(row: ChunkOffsetRow): StoredChunkIndexedTextColumns {

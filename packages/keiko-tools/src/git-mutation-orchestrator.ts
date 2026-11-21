@@ -36,6 +36,7 @@ import {
   gitDeliveryRiskClassForInputs,
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitLocalMutationAdapter } from "./git-mutation-adapter.js";
+import { gitDeliveryActionEnvelope } from "./git-delivery-envelope.js";
 import type {
   GitPreflightFinding,
   GitPreflightReport,
@@ -435,18 +436,13 @@ function assembleEnvelope(
   preview: GitDeliveryActionPreview,
   executionResult: GitDeliveryExecutionResult | undefined,
 ): GitDeliveryActionEnvelope {
-  // kind === inputs.kind holds by construction, so the literal is a sound member of the envelope
-  // union; the single cast mirrors the contract module's own validated-construction idiom.
-  return {
-    schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+  return gitDeliveryActionEnvelope(inputs, {
     actionId,
-    kind: inputs.kind,
-    resolvedInputs: inputs,
     policyDecision,
     approvalRequirement: approval,
     preview,
-    ...(executionResult !== undefined ? { executionResult } : {}),
-  } as GitDeliveryActionEnvelope;
+    executionResult,
+  });
 }
 
 // ─── Orchestration entry point ───────────────────────────────────────────────────────────────

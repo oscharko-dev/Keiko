@@ -25,6 +25,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, readFileSync, lstatSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { asQualityIntelligenceRunId } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import { resolveWithinWorkspace, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -624,7 +625,7 @@ function buildRunManifest(
 ): QualityIntelligenceEvidenceManifest {
   return {
     qiEvidenceSchemaVersion: QUALITY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION,
-    runId: input.runId as QualityIntelligenceEvidenceManifest["runId"],
+    runId: asQualityIntelligenceRunId(input.runId),
     planAt: redacted.planAt,
     completedAt: redacted.completedAt,
     status: input.status,

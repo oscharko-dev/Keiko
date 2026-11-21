@@ -70,6 +70,7 @@ import type {
   GitPreflightRemediation,
   GitPreflightFinding,
 } from "@oscharko-dev/keiko-contracts/runtime/git-preflight";
+import type { GitDeliveryInputsByKind } from "./git-delivery-envelope.js";
 
 // Frozen, exhaustive code → remediation table. Keyed on every code so a new code forces an explicit
 // classification here (the Record is not Partial).
@@ -319,7 +320,7 @@ function preflightNoLocalPrecondition(): readonly GitPreflightFinding[] {
 // is a compile error here rather than a silent skip — the same exhaustiveness an assertNever switch
 // gives, with a single-step lookup instead of a long branch.
 type PreflightEvaluator<K extends GitDeliveryActionKind> = (
-  inputs: Extract<GitDeliveryResolvedInputs, { kind: K }>,
+  inputs: GitDeliveryInputsByKind[K],
   snapshot: GitWorktreeSnapshot,
 ) => readonly GitPreflightFinding[];
 
@@ -348,14 +349,16 @@ const PREFLIGHT_DISPATCH: PreflightDispatch = {
   merge: preflightNoLocalPrecondition,
 };
 
+/** The evaluator of one kind; the mapped dispatch type pairs each kind with its own inputs. */
+function preflightEvaluator<K extends GitDeliveryActionKind>(kind: K): PreflightEvaluator<K> {
+  return PREFLIGHT_DISPATCH[kind];
+}
+
 export function evaluateGitPreflight(
   inputs: GitDeliveryResolvedInputs,
   snapshot: GitWorktreeSnapshot,
 ): GitPreflightReport {
-  // The lookup is keyed by inputs.kind, so the selected evaluator's parameter type matches inputs by
-  // construction; the cast bridges the union-to-member variance the indexed access cannot prove.
-  const evaluate = PREFLIGHT_DISPATCH[inputs.kind] as PreflightEvaluator<GitDeliveryActionKind>;
-  return report(evaluate(inputs, snapshot));
+  return report(preflightEvaluator(inputs.kind)(inputs, snapshot));
 }
 
 // ─── Guards ─────────────────────────────────────────────────────────────────────────────────

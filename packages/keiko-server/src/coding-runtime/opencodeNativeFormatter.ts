@@ -179,7 +179,7 @@ export function mergedFormatterSetting(documents: readonly Readonly<Record<strin
       refused += 1;
       continue;
     }
-    const merged = mergeEntries(typeof value === "object" ? value : {}, setting);
+    const merged = mergeEntries(typeof value === "object" ? value : {}, Object.entries(setting));
     value = merged.entries;
     refused += merged.refused;
   }
@@ -188,14 +188,14 @@ export function mergedFormatterSetting(documents: readonly Readonly<Record<strin
 
 function mergeEntries(
   base: Readonly<Record<string, OpenCodeNativeFormatterEntry>>,
-  setting: object,
+  settingEntries: readonly (readonly [name: string, value: unknown])[],
 ): {
   readonly entries: Readonly<Record<string, OpenCodeNativeFormatterEntry>>;
   readonly refused: number;
 } {
   const entries: Record<string, OpenCodeNativeFormatterEntry> = { ...base };
   let refused = 0;
-  for (const [name, value] of Object.entries(setting as Readonly<Record<string, unknown>>)) {
+  for (const [name, value] of settingEntries) {
     const admitted = admittedEntry(value);
     refused += admitted.refused;
     if (!FORMATTER_NAME.test(name) || admitted.entry === undefined) {

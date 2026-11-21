@@ -19,6 +19,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { mapChunkToCitation } from "../chunking/citation-mapper.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 import type { KnowledgeStore } from "../store.js";
+import { nullableTextColumn, numberColumn, textColumn, type KnowledgeSqlRow } from "../sql-row.js";
 
 export const SCOPE_DOCUMENTS_MAX = 64;
 export const SCOPE_DOCUMENT_CHARS_MAX = 4_000_000;
@@ -73,6 +74,16 @@ interface DocumentRow {
   readonly safe_display_name: string;
 }
 
+function readDocumentRow(row: KnowledgeSqlRow): DocumentRow {
+  return {
+    id: textColumn(row, "id"),
+    capsule_id: textColumn(row, "capsule_id"),
+    source_id: textColumn(row, "source_id"),
+    content_hash: textColumn(row, "content_hash"),
+    safe_display_name: textColumn(row, "safe_display_name"),
+  };
+}
+
 const EXTRACTED_STATUS = "extracted";
 
 function notExtractedCount(db: DatabaseSync, scope: ScopeDocumentScope): number {
@@ -83,13 +94,10 @@ function notExtractedCount(db: DatabaseSync, scope: ScopeDocumentScope): number 
   );
   let count = 0;
   for (const capsuleId of scope.capsuleIds) {
-    const rows = statement.all({
-      c: String(capsuleId),
-      s: EXTRACTED_STATUS,
-    }) as unknown as readonly {
-      readonly source_id: string;
-    }[];
-    count += rows.filter((row) => allowed === undefined || allowed.has(row.source_id)).length;
+    const sourceIds = statement
+      .all({ c: String(capsuleId), s: EXTRACTED_STATUS })
+      .map((row) => textColumn(row, "source_id"));
+    count += sourceIds.filter((sourceId) => allowed === undefined || allowed.has(sourceId)).length;
   }
   return count;
 }
@@ -102,23 +110,27 @@ function eligibleDocumentRows(db: DatabaseSync, scope: ScopeDocumentScope): read
     "SELECT id, capsule_id, source_id, content_hash, safe_display_name FROM documents WHERE capsule_id = :c AND status = :s ORDER BY document_path, id",
   );
   for (const capsuleId of scope.capsuleIds) {
-    for (const row of statement.all({
-      c: String(capsuleId),
-      s: EXTRACTED_STATUS,
-    }) as unknown as readonly DocumentRow[]) {
+    for (const row of statement
+      .all({ c: String(capsuleId), s: EXTRACTED_STATUS })
+      .map(readDocumentRow)) {
       if (allowed === undefined || allowed.has(row.source_id)) rows.push(row);
     }
   }
   return rows;
 }
 
-interface TextRow {
-  readonly normalized_text: string;
-}
 interface WindowRow {
   readonly normalized_text: string;
   readonly character_start: number;
   readonly character_end: number;
+}
+
+function readWindowRow(row: KnowledgeSqlRow): WindowRow {
+  return {
+    normalized_text: textColumn(row, "normalized_text"),
+    character_start: numberColumn(row, "character_start"),
+    character_end: numberColumn(row, "character_end"),
+  };
 }
 
 /** The whole text, or undefined when it is absent, not contiguous or beyond the bound. */
@@ -133,16 +145,17 @@ function readWholeText(
     .prepare(
       "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
     )
-    .get(params) as TextRow | undefined;
+    .get(params);
   if (single !== undefined) {
-    const text = cipher.openText(single.normalized_text);
+    const text = cipher.openText(textColumn(single, "normalized_text"));
     return text.length <= maxChars ? text : undefined;
   }
   const windows = db
     .prepare(
       "SELECT normalized_text, character_start, character_end FROM document_text_windows WHERE capsule_id = :c AND document_id = :d ORDER BY window_index",
     )
-    .all(params) as unknown as readonly WindowRow[];
+    .all(params)
+    .map(readWindowRow);
   if (windows.length === 0) return undefined;
   if ((windows.at(-1)?.character_end ?? Number.POSITIVE_INFINITY) > maxChars) return undefined;
   const parts: string[] = [];
@@ -175,6 +188,23 @@ interface UnitRow {
   readonly character_end: number;
 }
 
+function readSectionRow(row: KnowledgeSqlRow): SectionRow {
+  return {
+    section_path_json: textColumn(row, "section_path_json"),
+    character_start: numberColumn(row, "character_start"),
+    character_end: numberColumn(row, "character_end"),
+  };
+}
+
+function readUnitRow(row: KnowledgeSqlRow): UnitRow {
+  return {
+    section_path_json: nullableTextColumn(row, "section_path_json"),
+    heading_path_json: nullableTextColumn(row, "heading_path_json"),
+    character_start: numberColumn(row, "character_start"),
+    character_end: numberColumn(row, "character_end"),
+  };
+}
+
 /**
  * Section boundaries as the parsers recorded them: the `sections` table (Word, PowerPoint) and the
  * section and HTML-block units (Markdown, HTML), which carry the heading paths those formats keep.
@@ -185,30 +215,36 @@ function readSections(
   row: DocumentRow,
 ): readonly ScopeDocumentSection[] {
   const params = { c: row.capsule_id, d: row.id };
-  const recorded = (
-    db
-      .prepare(
-        "SELECT section_path_json, character_start, character_end FROM sections WHERE capsule_id = :c AND document_id = :d",
-      )
-      .all(params) as unknown as readonly SectionRow[]
-  ).flatMap((entry) => {
-    const sectionPath = parsePath(entry.section_path_json, cipher);
-    return sectionPath === undefined
-      ? []
-      : [{ sectionPath, characterStart: entry.character_start, characterEnd: entry.character_end }];
-  });
-  const units = (
-    db
-      .prepare(
-        "SELECT section_path_json, heading_path_json, character_start, character_end FROM parsed_units WHERE capsule_id = :c AND document_id = :d AND kind IN ('section', 'html-block') AND character_start IS NOT NULL AND character_end IS NOT NULL ORDER BY rowid",
-      )
-      .all(params) as unknown as readonly UnitRow[]
-  ).flatMap((unit) => {
-    const sectionPath = parsePath(unit.section_path_json ?? unit.heading_path_json, cipher);
-    return sectionPath === undefined || sectionPath.length === 0
-      ? []
-      : [{ sectionPath, characterStart: unit.character_start, characterEnd: unit.character_end }];
-  });
+  const recorded = db
+    .prepare(
+      "SELECT section_path_json, character_start, character_end FROM sections WHERE capsule_id = :c AND document_id = :d",
+    )
+    .all(params)
+    .map(readSectionRow)
+    .flatMap((entry) => {
+      const sectionPath = parsePath(entry.section_path_json, cipher);
+      return sectionPath === undefined
+        ? []
+        : [
+            {
+              sectionPath,
+              characterStart: entry.character_start,
+              characterEnd: entry.character_end,
+            },
+          ];
+    });
+  const units = db
+    .prepare(
+      "SELECT section_path_json, heading_path_json, character_start, character_end FROM parsed_units WHERE capsule_id = :c AND document_id = :d AND kind IN ('section', 'html-block') AND character_start IS NOT NULL AND character_end IS NOT NULL ORDER BY rowid",
+    )
+    .all(params)
+    .map(readUnitRow)
+    .flatMap((unit) => {
+      const sectionPath = parsePath(unit.section_path_json ?? unit.heading_path_json, cipher);
+      return sectionPath === undefined || sectionPath.length === 0
+        ? []
+        : [{ sectionPath, characterStart: unit.character_start, characterEnd: unit.character_end }];
+    });
   return unionSections(recorded, units);
 }
 

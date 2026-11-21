@@ -17,7 +17,7 @@
 // payload is JSON-encoded into `payload_json` because storing it as a normalised table would
 // require a schema change every time a payload kind landed (#205 ships only two kinds today).
 
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite";
 
 import {
   activityLogEvent,
@@ -26,6 +26,7 @@ import {
 
 import type { MemoryContentCipher } from "./cipher.js";
 import { emitEncryptionMigrated, sweepExistingContent } from "./migrate-encrypt.js";
+import type { VaultSqlRow } from "./statements.js";
 import {
   emitMemoryVaultLogEvent,
   memoryVaultErrorKind,
@@ -257,8 +258,8 @@ export const MIGRATIONS: readonly Migration[] = [
 ];
 
 function currentUserVersion(db: DatabaseSync): number {
-  const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
-  return typeof row?.user_version === "number" ? row.user_version : 0;
+  const version = db.prepare("PRAGMA user_version").get()?.user_version;
+  return typeof version === "number" ? version : 0;
 }
 
 function setUserVersion(db: DatabaseSync, v: number): void {
@@ -382,21 +383,27 @@ type WalCheckpointAttempt =
 
 function attemptWalCheckpointTruncate(db: WalCheckpointConnection): WalCheckpointAttempt {
   try {
-    const row = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
-      Partial<WalCheckpointResult> | undefined;
-    if (!isWellFormedCheckpointRow(row)) return { kind: "malformed" };
-    return { kind: "ok", result: row };
+    const result = readCheckpointRow(db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get());
+    if (result === undefined) return { kind: "malformed" };
+    return { kind: "ok", result };
   } catch (error) {
     return { kind: "threw", errorKind: memoryVaultErrorKind(error) };
   }
 }
 
-function isWellFormedCheckpointRow(
-  row: Partial<WalCheckpointResult> | undefined,
-): row is WalCheckpointResult {
-  return (
-    Number.isInteger(row?.busy) && Number.isInteger(row?.log) && Number.isInteger(row?.checkpointed)
-  );
+// Number.isInteger is true only for a number value, so a bigint, text or missing column is refused.
+function isCheckpointCount(value: SQLOutputValue | undefined): value is number {
+  return Number.isInteger(value);
+}
+
+function readCheckpointRow(row: VaultSqlRow | undefined): WalCheckpointResult | undefined {
+  const busy = row?.busy;
+  const log = row?.log;
+  const checkpointed = row?.checkpointed;
+  if (!isCheckpointCount(busy) || !isCheckpointCount(log) || !isCheckpointCount(checkpointed)) {
+    return undefined;
+  }
+  return { busy, log, checkpointed };
 }
 
 // Mirrors keiko-local-knowledge/store-content-encryption.ts's isCheckpointComplete: busy=0 alone

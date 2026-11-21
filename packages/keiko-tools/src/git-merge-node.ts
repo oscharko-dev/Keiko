@@ -21,6 +21,7 @@
 // Lives on the `./internal/git-mutation` subpath (re-exported by git-mutation-node.ts) because it carries
 // the Node execution effect; the pure port, builders, and rules it implements are on the barrel.
 
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import { gitRemoteReadContext, gitRemoteReadWasRedacted } from "./git-remote-read-context.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type {
@@ -188,9 +189,7 @@ interface RawPrFacts {
 function parseJsonObject(stdout: string): Record<string, unknown> | undefined {
   try {
     const parsed: unknown = JSON.parse(stdout);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
+    return isRecord(parsed) ? parsed : undefined;
   } catch {
     return undefined;
   }
@@ -480,9 +479,8 @@ interface BranchProtectionProjection {
   readonly requiredChecks: readonly RequiredCheck[];
 }
 
-function requiredCheck(value: unknown): RequiredCheck | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
+function requiredCheck(record: unknown): RequiredCheck | undefined {
+  if (!isRecord(record)) return undefined;
   if (typeof record.name !== "string" || record.name.length === 0) return undefined;
   if (record.providerId === null) return { name: record.name };
   if (typeof record.providerId !== "number" || !Number.isSafeInteger(record.providerId)) {

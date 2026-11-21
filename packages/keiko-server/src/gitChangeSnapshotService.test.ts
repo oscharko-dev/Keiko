@@ -19,6 +19,10 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
+import {
+  createGitSnapshotAccessScope,
+  type GitSnapshotAccessScope,
+} from "./gitChangeSnapshotRegistry.js";
 
 const roots: string[] = [];
 const correlationId = "snapshot-regression";
@@ -77,10 +81,16 @@ function inputFor(workspace: WorkspaceInfo): {
   workspace: WorkspaceInfo;
   baseRef: string;
   headRef: string;
-  accessScope: object;
+  accessScope: GitSnapshotAccessScope;
   correlationId: string;
 } {
-  return { workspace, baseRef: "main", headRef: "feature", accessScope: {}, correlationId };
+  return {
+    workspace,
+    baseRef: "main",
+    headRef: "feature",
+    accessScope: createGitSnapshotAccessScope(),
+    correlationId,
+  };
 }
 
 async function allKinds(workspace: WorkspaceInfo): Promise<void> {
@@ -579,7 +589,7 @@ describe("immutable Git change snapshot production", () => {
     const service = createGitChangeSnapshotService({
       logSink: { write: (event) => events.push(event) },
     });
-    const accessScope = {};
+    const accessScope = createGitSnapshotAccessScope();
     const input = { workspace, baseRef: "main", headRef: "feature", accessScope, correlationId };
     const initial = await service.capture(input);
     expect(initial.snapshot.outcome, JSON.stringify(events)).toBe("complete");
@@ -592,7 +602,9 @@ describe("immutable Git change snapshot production", () => {
       throw new Error("capture failed");
     expect(dirty.snapshot.snapshotDigest).toBe(initial.snapshot.snapshotDigest);
     expect(dirty.snapshot.localDivergence).toMatchObject({ unstagedCount: 1, untrackedCount: 1 });
-    expect(service.read(initial.reference ?? "", {}, correlationId)).toBeUndefined();
+    expect(
+      service.read(initial.reference ?? "", createGitSnapshotAccessScope(), correlationId),
+    ).toBeUndefined();
     const content = service.read(initial.reference ?? "", accessScope, correlationId);
     expect(JSON.stringify(content)).toContain("reviewed change");
     expect(JSON.stringify(content)).not.toContain("LOCAL PRIVATE DIRT");
@@ -632,7 +644,7 @@ describe("immutable Git change snapshot production", () => {
   it("omits a registry reference when the caller opts out with retain: false", async () => {
     const workspace = await repository();
     const service = createGitChangeSnapshotService({});
-    const accessScope = {};
+    const accessScope = createGitSnapshotAccessScope();
     const retained = await service.capture({
       workspace,
       baseRef: "main",
@@ -661,7 +673,7 @@ describe("immutable Git change snapshot production", () => {
   it("wires reserve/release through to the underlying registry", async () => {
     const workspace = await repository();
     const service = createGitChangeSnapshotService({});
-    const accessScope = {};
+    const accessScope = createGitSnapshotAccessScope();
     const captured = await service.capture({
       workspace,
       baseRef: "main",
@@ -673,14 +685,14 @@ describe("immutable Git change snapshot production", () => {
     if (reference === undefined) throw new Error("expected a retained reference");
 
     // Wrong scope is refused (fail-closed), matching `read`/`revoke`'s own identity check.
-    expect(service.reserve?.(reference, {}, correlationId)).toBe(false);
+    expect(service.reserve?.(reference, createGitSnapshotAccessScope(), correlationId)).toBe(false);
     // The correct scope succeeds and is idempotent.
     expect(service.reserve?.(reference, accessScope, correlationId)).toBe(true);
     expect(service.reserve?.(reference, accessScope, correlationId)).toBe(true);
 
     // Releasing with the wrong scope is a no-op; the reservation this asserts against is proven
     // to still exist because `release` with the correct scope below is the one that removes it.
-    service.release?.(reference, {}, correlationId);
+    service.release?.(reference, createGitSnapshotAccessScope(), correlationId);
     service.release?.(reference, accessScope, correlationId);
     // Re-reserving after release still succeeds — the release actually cleared the prior state
     // rather than merely reporting success without effect.

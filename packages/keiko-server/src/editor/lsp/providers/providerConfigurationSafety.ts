@@ -33,20 +33,25 @@ function workspacePaths(
     const value = pending.pop();
     if (typeof value !== "object" || value === null || seen.has(value)) continue;
     seen.add(value);
-    if (isWorkspacePath(value)) paths.push(value.path);
-    else enqueueChildren(pending, value);
+    if (isWorkspacePath(value)) {
+      paths.push(value.path);
+      continue;
+    }
+    const children: readonly unknown[] = Array.isArray(value) ? value : Object.values(value);
+    pending.push(...children);
   }
   return seen.size <= MAX_CONFIGURATION_NODES ? paths : undefined;
 }
 
-function enqueueChildren(pending: unknown[], value: object): void {
-  const children: readonly unknown[] = Array.isArray(value)
-    ? (value as readonly unknown[])
-    : Object.values(value as Readonly<Record<string, unknown>>);
-  for (const child of children) pending.push(child);
+/** The members a workspace-relative path entry of a provider configuration carries. */
+interface ConfigurationPathCandidate {
+  readonly kind?: unknown;
+  readonly path?: unknown;
 }
 
-function isWorkspacePath(value: object): value is { readonly kind: string; readonly path: string } {
+function isWorkspacePath(
+  value: ConfigurationPathCandidate,
+): value is { readonly kind: string; readonly path: string } {
   return (
     "kind" in value &&
     "path" in value &&

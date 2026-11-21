@@ -21,6 +21,7 @@ import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { captureJourneyFacts, produceJourneyOutcome } from "./journeyOutcome.js";
+import type { GitSnapshotAccessScope } from "../gitChangeSnapshotRegistry.js";
 
 const JOURNEY_OBSERVATION_OPERATION_BASE = {
   contractKind: "activity-log-operation",
@@ -202,7 +203,7 @@ export function logJourneyObservationActivity(
 /** Read authority from the selected workspace/connection; not a resumed coding-runtime mutation lease. */
 export interface JourneyObservationContext {
   readonly draft: IssueBoundDraftDeliveryRecord;
-  readonly accessScope: object;
+  readonly accessScope: GitSnapshotAccessScope;
   readonly correlationId: string;
   readonly signal?: AbortSignal;
   readonly stillAuthorized: () => boolean;

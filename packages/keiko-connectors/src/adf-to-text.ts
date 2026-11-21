@@ -27,6 +27,8 @@
 // placeholder. Unsupported doc versions degrade gracefully: content is still converted
 // best-effort and the outcome reports the shape.
 
+import { asRecord, isJsonArray } from "./json-narrowing.js";
+
 export const ADF_SUPPORTED_DOC_VERSION = 1;
 export const ADF_TO_TEXT_MAX_DEPTH = 64;
 export const ADF_TO_TEXT_MAX_NODES = 20_000;
@@ -82,14 +84,8 @@ type AdfNode = Record<string, unknown>;
 type NodeRenderer = (node: AdfNode, state: ConversionState, depth: number) => string;
 
 // ─── Hostile-input narrowing ────────────────────────────────────────────────────
-function asRecord(value: unknown): AdfNode | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as AdfNode)
-    : undefined;
-}
-
 function asArray(value: unknown): readonly unknown[] {
-  return Array.isArray(value) ? (value as readonly unknown[]) : [];
+  return isJsonArray(value) ? value : [];
 }
 
 function asString(value: unknown): string | undefined {

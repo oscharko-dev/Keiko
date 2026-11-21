@@ -173,9 +173,18 @@ function generatedToolSources(input: ScriptedGovernedToolsInput): Readonly<Recor
     : createGeneratedOpenCodeBundle().toolSources;
 }
 
-function generatedToolOutput(result: object, pluginVersion: "v1" | "v2" | undefined): unknown {
-  if (pluginVersion === "v2") return "content" in result ? result.content : undefined;
-  return "output" in result ? result.output : undefined;
+/** The members a generated tool result carries its text in: `content` for v2, `output` for v1. */
+interface GeneratedToolResult {
+  readonly content?: unknown;
+  readonly output?: unknown;
+}
+
+function generatedToolOutput(
+  result: GeneratedToolResult,
+  pluginVersion: "v1" | "v2" | undefined,
+): string | undefined {
+  const output = pluginVersion === "v2" ? result.content : result.output;
+  return typeof output === "string" ? output : undefined;
 }
 
 /**
@@ -294,7 +303,7 @@ export class ScriptedGovernedTools {
       throw new Error("functional-generated-tool-output-invalid");
     }
     const output = generatedToolOutput(result, this.input.pluginVersion);
-    if (typeof output !== "string") throw new Error("functional-generated-tool-output-invalid");
+    if (output === undefined) throw new Error("functional-generated-tool-output-invalid");
     return output;
   }
 

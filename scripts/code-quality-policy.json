@@ -66,7 +66,8 @@
         "package:@oscharko-dev/keiko-evaluations",
         "package:@oscharko-dev/keiko-editor",
         "package:@oscharko-dev/keiko-evidence",
-        "package:@oscharko-dev/keiko-memory-vault"
+        "package:@oscharko-dev/keiko-memory-vault",
+        "package:@oscharko-dev/keiko-local-knowledge"
       ]
     },
     {
@@ -240,7 +241,8 @@
         "package:@oscharko-dev/keiko-activity-log",
         "package:@oscharko-dev/keiko-local-knowledge",
         "package:@oscharko-dev/keiko-model-gateway",
-        "package:@oscharko-dev/keiko-ui"
+        "package:@oscharko-dev/keiko-ui",
+        "package:@oscharko-dev/keiko-tools"
       ]
     },
     {
@@ -328,7 +330,9 @@
         "package:@oscharko-dev/keiko-quality-intelligence",
         "package:@oscharko-dev/keiko-model-gateway",
         "package:@oscharko-dev/keiko-security",
-        "package:@oscharko-dev/keiko-workspace"
+        "package:@oscharko-dev/keiko-workspace",
+        "package:@oscharko-dev/keiko-connectors",
+        "package:@oscharko-dev/keiko-memory-vault"
       ]
     },
     {

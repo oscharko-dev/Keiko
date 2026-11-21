@@ -94,7 +94,11 @@ export function response(value: unknown, override: Partial<CommandResult> = {}):
     ...override,
   };
 }
-export function checkValue(check = CHECK): Record<string, unknown> {
+/** Any check-run record the provider lists; the runner finds it by its id. */
+interface CheckRunRecord {
+  readonly id: unknown;
+}
+export function checkValue(check: typeof CHECK | CheckRunRecord = CHECK): Record<string, unknown> {
   return {
     ...check,
     url: `https://api.github.com/repos/owner/repo/check-runs/${String(check.id)}`,
@@ -119,16 +123,10 @@ export function failureRunner(
         }),
       );
     if (endpoint.includes("/annotations?")) return Promise.resolve(response([ANNOTATION]));
-    const check = facts.lists["check-runs"].values.find(
-      (value) =>
-        typeof value === "object" &&
-        value !== null &&
-        "id" in value &&
-        endpoint.endsWith(`/${String(value.id)}`),
-    );
-    return Promise.resolve(
-      response(check === undefined ? null : checkValue(check as typeof CHECK)),
-    );
+    const check = facts.lists["check-runs"].values
+      .filter((value) => typeof value === "object" && value !== null && "id" in value)
+      .find((value) => endpoint.endsWith(`/${String(value.id)}`));
+    return Promise.resolve(response(check === undefined ? null : checkValue(check)));
   });
 }
 export const WORKFLOW = {

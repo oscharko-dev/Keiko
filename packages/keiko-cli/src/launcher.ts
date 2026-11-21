@@ -43,6 +43,7 @@ import { homedir as defaultHomedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { resolveWindowsPowerShellExecutable } from "@oscharko-dev/keiko-security";
+import { errorCode } from "./error-code.js";
 import type { CliIo } from "./runner.js";
 import {
   LauncherError,
@@ -67,7 +68,7 @@ import {
   resolveKeikoBinary,
   writeInstallLayoutOverrideEvidenceWithFactory,
 } from "./install-layout.js";
-import { resolveContainedStateDir } from "./state-paths.js";
+import { platformOpenFlags, resolveContainedStateDir } from "./state-paths.js";
 import {
   createCliSecurityLogSink,
   emitCliWindowsSystemFailure,
@@ -246,13 +247,13 @@ function assertTargetNotSymlink(target: string): void {
 function writeAtomicExcl(target: string, content: string, mode: number): void {
   const dir = dirname(target);
   mkdirSync(dir, { recursive: true, mode: 0o755 });
-  const nofollow = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  const nofollow = platformOpenFlags.O_NOFOLLOW ?? 0;
   const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | nofollow;
   let fd: number;
   try {
     fd = openSync(target, flags, mode);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+    if (errorCode(e) === "EEXIST") {
       throw new LauncherError(
         "TARGET_EXISTS",
         `keiko launcher: ${target} appeared between the pre-flight existsSync check and the O_EXCL open. Refusing to overwrite (TOCTOU defense).`,
@@ -385,11 +386,8 @@ function handleExistingTarget(
 // KEIKO-0795: extract only the errno code from an unknown fs failure. Never include the
 // full ErrnoException message (which can quote absolute paths) in the LauncherError line.
 function errorCodeOf(error: unknown): string {
-  if (typeof error === "object" && error !== null && "code" in error) {
-    const code = (error as { readonly code?: unknown }).code;
-    if (typeof code === "string" && code.length > 0) return code;
-  }
-  return "unreadable";
+  const code = errorCode(error);
+  return code === undefined || code.length === 0 ? "unreadable" : code;
 }
 
 function cmdInstall(

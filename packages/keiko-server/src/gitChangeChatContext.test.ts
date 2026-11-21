@@ -20,6 +20,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
+import { createGitSnapshotAccessScope } from "./gitChangeSnapshotRegistry.js";
 
 const NOW = Date.parse("2026-09-05T12:00:00.000Z");
 let root: string;
@@ -81,7 +82,7 @@ async function scopeAndDeps(rawModelOutput?: string): Promise<{
     baseRef: "main",
     headRef: "feature/chat",
     expectedHeadSha: git(["rev-parse", "feature/chat"]),
-    accessScope: {},
+    accessScope: createGitSnapshotAccessScope(),
     correlationId: "capture",
   });
   if (captured.reference === undefined || !("snapshotDigest" in captured.snapshot)) {

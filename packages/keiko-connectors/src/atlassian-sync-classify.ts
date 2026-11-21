@@ -9,16 +9,13 @@ import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/gov
 import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { AtlassianCredentialCustodyError } from "./atlassian-credential-custody.js";
 import type { AtlassianHttpBodyResult } from "./atlassian-http-port.js";
+import { asRecord, isJsonArray } from "./json-narrowing.js";
 
 // ─── Hostile-JSON narrowing (no `any`) ─────────────────────────────────────────
-export function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
+export { asRecord };
 
 export function asArray(value: unknown): readonly unknown[] | undefined {
-  return Array.isArray(value) ? (value as readonly unknown[]) : undefined;
+  return isJsonArray(value) ? value : undefined;
 }
 
 export function asString(value: unknown): string | undefined {

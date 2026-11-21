@@ -14,7 +14,6 @@ import type {
   CodingWorkbenchRuntimeAuthorityFacts,
   CodingWorkbenchRuntimeAuthorityEnvelope,
   CodingWorkbenchRuntimeDelegationUsage,
-  GitDeliveryApprovalClaim,
 } from "@oscharko-dev/keiko-contracts";
 import {
   codingWorkbenchCodeTaskDeliveryEffectFor,
@@ -46,6 +45,7 @@ import type {
   CodingToolNativeReadListResult,
   CodingToolMutationGuard,
   CodingToolProducerBinding,
+  CommitExecutionApproval,
   CodingToolNativeVerificationHooks,
   MaterializedPatchCharge,
 } from "./codingToolFacadePorts.js";
@@ -352,16 +352,9 @@ function admit(
   });
 }
 
-// #3384 F4: the commit-execute branch of `finishAdmission` no longer consumes the one-use commit
-// approval at admission — see the comment there. It instead threads the un-consumed claim through
-// `mutationGuard.deliveryApproval` wrapped in this shape (never `undefined` itself, so it stays
-// distinguishable from "no delivery approval applies to this request"); `claim` itself legitimately
-// stays `undefined` for a binding-matched, un-tokened redemption. productionManagedWorktreeTools.ts
-// unwraps it and passes `.claim` to `VerifiedCommitService.execute()`, which alone decides — after
-// its own preflight — whether the claim is spent.
-export interface CommitExecutionApproval {
-  readonly claim: GitDeliveryApprovalClaim | undefined;
-}
+// #3384 F4: the commit-execute branch of `finishAdmission` threads the un-consumed commit claim
+// through `mutationGuard.deliveryApproval`; codingToolFacadePorts.ts owns that shape beside the guard.
+export type { CommitExecutionApproval } from "./codingToolFacadePorts.js";
 
 interface FinishAdmissionInput {
   readonly authority: Pick<
@@ -492,7 +485,7 @@ function approved(
 }
 
 interface GuardExtras {
-  readonly deliveryApproval?: object | undefined;
+  readonly deliveryApproval?: CodingToolMutationGuard["deliveryApproval"];
   /** True only for an edit whose admission reserved the run's edit budget (#3873 review). */
   readonly chargesMaterializedPatch?: boolean | undefined;
 }

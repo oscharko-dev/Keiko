@@ -27,6 +27,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
+import { mintGitDeliveryExecutionLease } from "./executionLease.js";
 
 const GIT_FIXTURE_TIMEOUT_MS = 15_000;
 
@@ -316,7 +317,9 @@ describe("draft delivery hard boundaries", () => {
   it("denies a forged lease and never reuses the actual one", async () => {
     const proposal = await fixture.service.proposePush();
     expect(
-      await fixture.service.executeApproved(id(proposal), {}, { check: () => true }),
+      await fixture.service.executeApproved(id(proposal), mintGitDeliveryExecutionLease(), {
+        check: () => true,
+      }),
     ).toMatchObject({ record: { reason: "approval-invalid" } });
     const next = await fixture.service.proposePush();
     fixture.service.issueApproval(id(next));

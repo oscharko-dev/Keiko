@@ -13,6 +13,12 @@ import type {
 import type { DatabaseSync } from "node:sqlite";
 
 import { DEFAULT_CHUNKING_STRATEGY_KEY } from "./types.js";
+import {
+  type KnowledgeSqlRow,
+  nullableNumberColumn,
+  nullableTextColumn,
+  textColumn,
+} from "../sql-row.js";
 
 const INSERT_CHUNK_SQL = [
   "INSERT INTO chunks (",
@@ -181,13 +187,31 @@ export interface ParsedUnitRow {
   readonly character_end: number | null;
 }
 
+function readParsedUnitRow(row: KnowledgeSqlRow): ParsedUnitRow {
+  return {
+    id: textColumn(row, "id"),
+    kind: textColumn(row, "kind"),
+    page_number: nullableNumberColumn(row, "page_number"),
+    page_label: nullableTextColumn(row, "page_label"),
+    section_path_json: nullableTextColumn(row, "section_path_json"),
+    json_pointer: nullableTextColumn(row, "json_pointer"),
+    table_name: nullableTextColumn(row, "table_name"),
+    row_index: nullableNumberColumn(row, "row_index"),
+    heading_path_json: nullableTextColumn(row, "heading_path_json"),
+    anchor_id: nullableTextColumn(row, "anchor_id"),
+    unsupported_reason: nullableTextColumn(row, "unsupported_reason"),
+    character_start: nullableNumberColumn(row, "character_start"),
+    character_end: nullableNumberColumn(row, "character_end"),
+  };
+}
+
 export function selectParsedUnitsForDocument(
   db: DatabaseSync,
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId,
 ): readonly ParsedUnitRow[] {
-  const rows = db
+  return db
     .prepare(SELECT_PARSED_UNITS_FOR_DOCUMENT_SQL)
-    .all({ c: capsuleId, d: documentId });
-  return rows as unknown as readonly ParsedUnitRow[];
+    .all({ c: capsuleId, d: documentId })
+    .map(readParsedUnitRow);
 }

@@ -34,6 +34,7 @@ import {
   type PrDescriptionPreview,
 } from "./prDescriptionTypes.js";
 import type { GitDeliveryIssuedApproval } from "./approvalStore.js";
+import type { GitDeliveryExecutionLease } from "./executionLease.js";
 
 type ProposalPreparation = (
   context: PrDescriptionContext,
@@ -234,7 +235,7 @@ class DescriptionService implements PrDescriptionApplicationService {
     const proposal = this.held(id);
     return proposal !== undefined && this.approvals.matches(proposal, this.time());
   }
-  public consumeApproval(id: string): object | undefined {
+  public consumeApproval(id: string): GitDeliveryExecutionLease | undefined {
     const proposal = this.held(id);
     return proposal === undefined || this.busy
       ? undefined
@@ -242,7 +243,7 @@ class DescriptionService implements PrDescriptionApplicationService {
   }
   public async executeApproved(
     id: string,
-    lease: object,
+    lease: GitDeliveryExecutionLease,
     guard?: { readonly check: () => boolean; readonly signal?: AbortSignal },
   ): Promise<PrDescriptionExecutionResult> {
     const proposal = this.held(id);

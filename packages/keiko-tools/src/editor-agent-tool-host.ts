@@ -299,12 +299,10 @@ interface ParsedNavigateSymbolArguments {
 }
 
 function navigateSymbolOperation(value: unknown): EditorAgentNavigateSymbolOperation {
-  if (
-    typeof value === "string" &&
-    EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS.includes(value as EditorAgentNavigateSymbolOperation)
-  ) {
-    return value as EditorAgentNavigateSymbolOperation;
-  }
+  const operation = EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS.find(
+    (candidate) => candidate === value,
+  );
+  if (operation !== undefined) return operation;
   throw new InvalidArgumentsError("Symbol navigation operation is invalid.");
 }
 

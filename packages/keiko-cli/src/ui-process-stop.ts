@@ -21,6 +21,7 @@ import {
   securityErrorKind,
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
+import { errorCode } from "./error-code.js";
 import { loadTools } from "./lazy-modules.js";
 import { liveProcessHasLaunchId, type LiveLaunchIdentityReaders } from "./ui-process-identity.js";
 import { clearShutdownRequest, readPidRecord, writeShutdownRequest } from "./state-paths.js";
@@ -403,10 +404,4 @@ function emitStopEscalationFailed(input: TerminateUiProcessInput, errorKind: str
       { failureKind: errorKind },
     ),
   );
-}
-
-export function errorCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
-  const code = error.code;
-  return typeof code === "string" ? code : undefined;
 }

@@ -35,8 +35,8 @@ export function flagValue(args: readonly string[], name: string): string | undef
 export function readNamedValueFlags<K extends string>(
   args: readonly string[],
   flags: readonly K[],
-): Record<K, string | undefined> | null {
-  const values = {} as Record<K, string | undefined>;
+): Partial<Record<K, string | undefined>> | null {
+  const values: Partial<Record<K, string | undefined>> = {};
   for (const flag of flags) {
     const value = flagValue(args, flag);
     if (value === null) {

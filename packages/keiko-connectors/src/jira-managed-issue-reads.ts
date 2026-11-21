@@ -13,6 +13,7 @@ import {
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { asArray, asRecord } from "./atlassian-sync-classify.js";
 import { jiraReadFailure, remoteJiraPage, projectJiraCollection } from "./jira-managed-metadata.js";
+import { isCatalogJsonArray } from "./json-narrowing.js";
 
 export const JIRA_MANAGED_ISSUE_FIELDS =
   "summary,description,status,issuetype,project,assignee,reporter,priority,labels,duedate,created,updated";
@@ -212,10 +213,9 @@ export function jiraIssueReadResult(
 export function boundJiraReadResult(result: ManagedMcpToolResult): ManagedMcpToolResult {
   if (jiraProjectionBytes(result.data) <= ISSUE_DATA_MAX_BYTES) return result;
   const start = result.data.startAt;
-  const values = result.data.items;
-  if (typeof start !== "number" || !Array.isArray(values))
+  const source = result.data.items;
+  if (typeof start !== "number" || !isCatalogJsonArray(source))
     return jiraReadFailure("bounds-exceeded");
-  const source = values as readonly CatalogJsonValue[];
   const items: CatalogJsonValue[] = [];
   const base = { ...result.data, items: [], nextStartAt: start + source.length };
   let remaining = ISSUE_DATA_MAX_BYTES - jiraProjectionBytes(base);

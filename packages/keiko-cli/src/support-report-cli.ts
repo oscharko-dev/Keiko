@@ -68,7 +68,7 @@ import {
 import { resolveStateDir } from "./state-paths.js";
 import { loadActivityLog, loadToolLifecycle } from "./lazy-modules.js";
 import { collectSupportReportQuery } from "./support-selective-export.js";
-import { errorCode } from "./ui-process-stop.js";
+import { errorCode } from "./error-code.js";
 import { type SupportQueryRun, type SupportSelectorArgs } from "./support-query-cli.js";
 import {
   emitSupportReportStarted,

@@ -22,7 +22,19 @@ import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import type { ListMemoriesOptions, MemoryMetadata } from "./types.js";
 import type { MemoryContentCipher } from "./cipher.js";
 import { MemoryStorageError } from "./errors.js";
-import { cachedPrepare, textColumn, type VaultSqlRow } from "./statements.js";
+import {
+  cachedPrepare,
+  storedId,
+  textColumn,
+  vocabularyMember,
+  type VaultSqlRow,
+} from "./statements.js";
+import {
+  isStoredMemoryId,
+  STORED_MEMORY_SENSITIVITIES,
+  STORED_MEMORY_STATUSES,
+  STORED_MEMORY_TYPES,
+} from "./stored-values.js";
 import type { MemoryPhysicalWriteAdmission } from "./vault-log.js";
 
 const INSERT_SQL = `
@@ -269,12 +281,12 @@ function buildListSql(
 function metadataRowToMemoryMetadata(sqlRow: VaultSqlRow): MemoryMetadata {
   const row = readMemoryMetadataRow(sqlRow);
   return {
-    id: row.id as MemoryId,
+    id: storedId(row.id, isStoredMemoryId),
     schemaVersion: "1",
     scope: buildScopeFromRow(row.scope_kind, row.scope_coordinate),
-    type: row.type as MemoryMetadata["type"],
-    status: row.status as MemoryMetadata["status"],
-    sensitivity: row.sensitivity as MemoryMetadata["sensitivity"],
+    type: vocabularyMember(STORED_MEMORY_TYPES, row.type),
+    status: vocabularyMember(STORED_MEMORY_STATUSES, row.status),
+    sensitivity: vocabularyMember(STORED_MEMORY_SENSITIVITIES, row.sensitivity),
     pinned: row.pinned === 1,
     confidence: row.confidence,
     validity:

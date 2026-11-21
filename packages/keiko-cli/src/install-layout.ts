@@ -9,6 +9,7 @@ import {
   type RegisteredActivityLogEvent,
   type RejectedActivityLogEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 const ROOT_PACKAGE_NAME = "@oscharko-dev/keiko";
@@ -179,16 +180,12 @@ export interface KeikoBinaryResolution {
   readonly source: KeikoBinarySource;
 }
 
-interface RootPackageJson {
-  readonly name?: unknown;
-}
-
 function readRootPackageName(cwd: string): string | undefined {
   const packageJsonPath = join(cwd, "package.json");
   if (!existsSync(packageJsonPath)) return undefined;
   try {
-    const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as RootPackageJson;
-    return typeof parsed.name === "string" ? parsed.name : undefined;
+    const parsed: unknown = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+    return isRecord(parsed) && typeof parsed.name === "string" ? parsed.name : undefined;
   } catch {
     return undefined;
   }

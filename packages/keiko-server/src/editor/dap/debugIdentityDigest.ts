@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import type { DebugSpawnEnvelope } from "./debugCapsulePlan.js";
+
+/** The spawn envelope before signing: every member except its own digest and plan id. */
+export type DebugSpawnEnvelopeValues = Omit<DebugSpawnEnvelope, "identityDigest" | "planId">;
 
 /**
  * Generic `sha256(JSON.stringify(value))` digest. This is the single implementation of the
@@ -53,7 +57,9 @@ export function deriveDebugRuntimeMountIdentityDigest(
  * This is a distinct invariant from the runtime-mount identity digest above and must stay a
  * separate function.
  */
-export function deriveDebugSpawnEnvelopeIdentityDigest(envelope: object): string {
+export function deriveDebugSpawnEnvelopeIdentityDigest(
+  envelope: DebugSpawnEnvelopeValues | DebugSpawnEnvelope,
+): string {
   const values = Object.fromEntries(
     Object.entries(envelope).filter(([key]) => key !== "identityDigest" && key !== "planId"),
   );

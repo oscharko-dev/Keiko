@@ -88,7 +88,7 @@ function name(value: unknown): value is string {
 function list(value: unknown): readonly unknown[] {
   if (!Array.isArray(value) || value.length > 500)
     throw new TypeError("Invalid CI requirements list");
-  return value as unknown[];
+  return value;
 }
 function appId(value: unknown, legacy: boolean): number | null {
   if (value === undefined || value === null || (legacy && value === -1)) return null;

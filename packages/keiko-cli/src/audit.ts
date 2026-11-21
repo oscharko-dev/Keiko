@@ -8,6 +8,7 @@ import {
   type ActivityLogErrorKind,
   type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { isRecord, isStringArray } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import {
   emitSecurityLogEvent,
   securityErrorKind,
@@ -287,40 +288,40 @@ function importAuditor(specifier: string): Promise<AuditorModule> {
  * command whose whole job is proving the at-rest claims would have announced a clean tree on
  * malformed input (review finding on #3159). Validated rather than cast.
  */
-function isStringArray(value: unknown): boolean {
-  return Array.isArray(value) && (value as readonly unknown[]).every((s) => typeof s === "string");
-}
-
-function isAuditClass(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
+function isAuditClass(value: unknown): value is AuditClass {
+  if (!isRecord(value)) return false;
   return (
-    typeof record.title === "string" &&
+    typeof value.id === "string" &&
+    typeof value.title === "string" &&
     // Domain-checked, not just typed: renderReport falls back to printing an unknown status
     // verbatim, so a status outside the vocabulary would reach the operator as an unlabelled row
     // that reads neither PASS nor FAIL (review finding on #3159).
-    typeof record.status === "string" &&
-    Object.hasOwn(TAG, record.status) &&
-    isStringArray(record.findings)
+    typeof value.status === "string" &&
+    Object.hasOwn(TAG, value.status) &&
+    isStringArray(value.findings)
+  );
+}
+
+function isAuditResult(value: unknown): value is AuditResult {
+  return (
+    isRecord(value) &&
+    typeof value.ok === "boolean" &&
+    typeof value.stateDir === "string" &&
+    Array.isArray(value.classes) &&
+    value.classes.every(isAuditClass)
   );
 }
 
 function asAuditResult(value: unknown): AuditResult | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  const record = value as Record<string, unknown>;
-  if (typeof record.ok !== "boolean") return undefined;
-  if (typeof record.stateDir !== "string") return undefined;
-  if (!Array.isArray(record.classes)) return undefined;
-  const classes = record.classes as readonly unknown[];
-  if (!classes.every(isAuditClass)) return undefined;
+  if (!isAuditResult(value)) return undefined;
   // Vacuous: an empty class list would render an empty report and print PASS, which reads as
   // "audited, nothing wrong" for a tree nothing was checked against.
-  if (classes.length === 0) return undefined;
+  if (value.classes.length === 0) return undefined;
   // Contradictory: ok=true alongside a failing class. Reporting the headline verdict over the
   // detail would hide the finding (review finding on #3159).
-  const anyFailed = classes.some((c) => (c as { status: string }).status === "fail");
-  if (record.ok && anyFailed) return undefined;
-  return value as AuditResult;
+  const anyFailed = value.classes.some((auditClass) => auditClass.status === "fail");
+  if (value.ok && anyFailed) return undefined;
+  return value;
 }
 
 /** Why `loadAuditResult` failed, kept as a closed set rather than a raw message: `threw` is the

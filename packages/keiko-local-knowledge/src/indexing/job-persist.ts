@@ -20,6 +20,13 @@ import type {
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 import type { DatabaseSync } from "node:sqlite";
+import {
+  type KnowledgeSqlRow,
+  nullableNumberColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+} from "../sql-row.js";
 
 const INSERT_JOB_SQL = [
   "INSERT INTO indexing_jobs (",
@@ -93,6 +100,25 @@ export interface IndexingJobRow {
   readonly cancellation_requested: number;
 }
 
+function readIndexingJobRow(row: KnowledgeSqlRow): IndexingJobRow {
+  return {
+    id: textColumn(row, "id"),
+    capsule_id: textColumn(row, "capsule_id"),
+    source_ids_json: textColumn(row, "source_ids_json"),
+    started_at: numberColumn(row, "started_at"),
+    finished_at: nullableNumberColumn(row, "finished_at"),
+    status: textColumn(row, "status"),
+    total_documents: numberColumn(row, "total_documents"),
+    processed_documents: numberColumn(row, "processed_documents"),
+    failed_documents: numberColumn(row, "failed_documents"),
+    skipped_documents: numberColumn(row, "skipped_documents"),
+    last_error_code: nullableTextColumn(row, "last_error_code"),
+    last_error_message: nullableTextColumn(row, "last_error_message"),
+    resume_token: nullableTextColumn(row, "resume_token"),
+    cancellation_requested: numberColumn(row, "cancellation_requested"),
+  };
+}
+
 export interface InsertJobInput {
   readonly id: string;
   readonly capsuleId: KnowledgeCapsuleId;
@@ -157,12 +183,12 @@ export function selectRunningJobByCapsule(
   capsuleId: KnowledgeCapsuleId,
 ): IndexingJobRow | undefined {
   const row = db.prepare(SELECT_RUNNING_BY_CAPSULE_SQL).get({ c: String(capsuleId) });
-  return row === undefined ? undefined : (row as unknown as IndexingJobRow);
+  return row === undefined ? undefined : readIndexingJobRow(row);
 }
 
 export function selectJobById(db: DatabaseSync, id: string): IndexingJobRow | undefined {
   const row = db.prepare(SELECT_BY_ID_SQL).get({ id });
-  return row === undefined ? undefined : (row as unknown as IndexingJobRow);
+  return row === undefined ? undefined : readIndexingJobRow(row);
 }
 
 export function isJobCancellationRequested(db: DatabaseSync, id: string): boolean {

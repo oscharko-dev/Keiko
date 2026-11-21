@@ -23,6 +23,7 @@ import type {
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  isAtlassianConnectorProvider,
   isJiraIssueCitationMetadata,
   isSafeAtlassianConnectorBaseUrl,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -30,6 +31,13 @@ import { validateAtlassianSyncBounds } from "@oscharko-dev/keiko-contracts/runti
 
 import { KnowledgeStoreError } from "./errors.js";
 import type { KnowledgeStore } from "./store.js";
+import {
+  nullableNumberColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+  type KnowledgeSqlRow,
+} from "./sql-row.js";
 
 export interface ConnectorSourceDefinition {
   readonly provider: AtlassianConnectorProvider;
@@ -74,6 +82,37 @@ interface ConnectorSourceRow {
   readonly last_failure_reason: string | null;
   readonly last_change_summary_json: string | null;
   readonly provider_watermark: string | null;
+}
+
+// The connector_sources CHECK constraint admits only the Atlassian providers.
+function storedProvider(row: KnowledgeSqlRow): AtlassianConnectorProvider {
+  const provider = textColumn(row, "provider");
+  if (!isAtlassianConnectorProvider(provider)) {
+    throw new KnowledgeStoreError("A stored connector source has an unknown provider.");
+  }
+  return provider;
+}
+
+function readConnectorSourceRow(row: KnowledgeSqlRow): ConnectorSourceRow {
+  return {
+    capsule_id: textColumn(row, "capsule_id"),
+    source_id: textColumn(row, "source_id"),
+    provider: storedProvider(row),
+    connector_id: textColumn(row, "connector_id"),
+    base_url: textColumn(row, "base_url"),
+    scope_keys_json: textColumn(row, "scope_keys_json"),
+    scope_jql: nullableTextColumn(row, "scope_jql"),
+    max_items: numberColumn(row, "max_items"),
+    max_bytes: numberColumn(row, "max_bytes"),
+    max_duration_ms: numberColumn(row, "max_duration_ms"),
+    max_concurrency: numberColumn(row, "max_concurrency"),
+    last_sync_at: nullableNumberColumn(row, "last_sync_at"),
+    last_sync_run_id: nullableTextColumn(row, "last_sync_run_id"),
+    last_sync_status: nullableTextColumn(row, "last_sync_status"),
+    last_failure_reason: nullableTextColumn(row, "last_failure_reason"),
+    last_change_summary_json: nullableTextColumn(row, "last_change_summary_json"),
+    provider_watermark: nullableTextColumn(row, "provider_watermark"),
+  };
 }
 
 // Persist the approved connector scope at pod-create time. `INSERT OR REPLACE` resets the row to
@@ -223,8 +262,8 @@ export function readConnectorSourceMetadata(
     .prepare(
       "SELECT * FROM connector_sources WHERE capsule_id = :capsuleId AND source_id = :sourceId",
     )
-    .get({ capsuleId, sourceId }) as ConnectorSourceRow | undefined;
-  return row === undefined ? undefined : rowToMetadata(row);
+    .get({ capsuleId, sourceId });
+  return row === undefined ? undefined : rowToMetadata(readConnectorSourceRow(row));
 }
 
 // List every connector source attached to a capsule (a connector pod carries exactly one today;
@@ -235,8 +274,8 @@ export function listConnectorSourceMetadata(
 ): readonly ConnectorSourceMetadata[] {
   const rows = store._internal.db
     .prepare("SELECT * FROM connector_sources WHERE capsule_id = :capsuleId ORDER BY source_id")
-    .all({ capsuleId }) as unknown as ConnectorSourceRow[];
-  return rows.map(rowToMetadata);
+    .all({ capsuleId });
+  return rows.map((row) => rowToMetadata(readConnectorSourceRow(row)));
 }
 
 // ─── Citation click-through resolution ─────────────────────────────────────────

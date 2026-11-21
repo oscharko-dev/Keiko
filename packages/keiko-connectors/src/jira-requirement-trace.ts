@@ -7,13 +7,18 @@
 
 import type {
   JiraFieldMetadata,
+  JiraFieldOperation,
   JiraMutationAttempt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { asArray, asRecord } from "./atlassian-sync-classify.js";
+import type {
+  CatalogJsonObject,
+  CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { asRecord } from "./atlassian-sync-classify.js";
 import { JIRA_METADATA_MAX_UPDATES } from "./jira-field-metadata.js";
 import { readJiraMutationIssue } from "./jira-mutation-confirmation.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
+import { isCatalogJsonArray, isCatalogJsonObject, isJsonArray } from "./json-narrowing.js";
 
 /** What of the requested trace reached the issue. */
 export interface JiraTraceOutcome {
@@ -38,10 +43,12 @@ export interface JiraTraceRequest {
   readonly report?: (outcome: JiraTraceOutcome) => void;
 }
 
-function settable(metadata: readonly JiraFieldMetadata[], id: string, operation: string): boolean {
-  return metadata.some(
-    (field) => field.id === id && (field.operations as readonly string[]).includes(operation),
-  );
+function settable(
+  metadata: readonly JiraFieldMetadata[],
+  id: string,
+  operation: JiraFieldOperation,
+): boolean {
+  return metadata.some((field) => field.id === id && field.operations.includes(operation));
 }
 
 function joinParagraphs(parts: readonly string[]): string {
@@ -92,7 +99,7 @@ export function traceCreateFields(
   metadata: readonly JiraFieldMetadata[],
   trace: JiraTraceRequest,
 ): Fields {
-  const present = Array.isArray(fields.labels) ? (fields.labels as readonly unknown[]) : [];
+  const present = isJsonArray(fields.labels) ? fields.labels : [];
   const labelsApplied = settable(metadata, "labels", "set");
   const description = fields.description;
   const footerApplied =
@@ -120,7 +127,7 @@ export function traceCreateFields(
   return next;
 }
 
-type Updates = readonly unknown[];
+type Updates = readonly CatalogJsonValue[];
 
 function isStale(label: string, trace: JiraTraceRequest): boolean {
   return (
@@ -169,14 +176,14 @@ function labelsAfter(current: readonly string[], updates: Updates): readonly str
 }
 
 interface LabelPlan {
-  readonly fields: Fields;
+  readonly fields: CatalogJsonObject;
   readonly updates: Updates;
   readonly applied: boolean;
 }
 
 /** A replacement set from the caller keeps its human labels and gains the trace. */
 function mergeIntoSet(
-  fields: Fields,
+  fields: CatalogJsonObject,
   metadata: readonly JiraFieldMetadata[],
   trace: JiraTraceRequest,
 ): Pick<LabelPlan, "fields" | "applied"> {
@@ -228,8 +235,8 @@ function planLabels(
   metadata: readonly JiraFieldMetadata[],
   trace: JiraTraceRequest,
 ): LabelPlan {
-  const fields = asRecord(args.fields ?? {}) ?? {};
-  const own = asArray(args.updates ?? []) ?? [];
+  const fields = isCatalogJsonObject(args.fields) ? args.fields : {};
+  const own = isCatalogJsonArray(args.updates) ? args.updates : [];
   if (Object.hasOwn(fields, "labels"))
     return { ...mergeIntoSet(fields, metadata, trace), updates: own };
   const current = stringLabels(prior.labels);
@@ -291,6 +298,6 @@ export async function traceEditArguments(
       ...args,
       ...(Object.keys(fields).length === 0 ? {} : { fields }),
       ...(labels.updates.length === 0 ? {} : { updates: labels.updates }),
-    } as CatalogJsonObject,
+    },
   };
 }

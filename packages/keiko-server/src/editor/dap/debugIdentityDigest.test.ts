@@ -7,6 +7,7 @@ import {
   deriveDebugRuntimeMountIdentityDigest,
   deriveDebugSpawnEnvelopeIdentityDigest,
   sha256Json,
+  type DebugSpawnEnvelopeValues,
 } from "./debugIdentityDigest.js";
 
 const roots: string[] = [];
@@ -89,14 +90,54 @@ describe("deriveDebugRuntimeMountIdentityDigest", () => {
   });
 });
 
+function unsignedEnvelope(): DebugSpawnEnvelopeValues {
+  const identity = { realPath: "/runtime", device: 1, inode: 2, mode: 0o700, ownerUid: 501 };
+  return {
+    schemaVersion: "1",
+    providerId: "node",
+    backend: "linuxNamespace",
+    provisioningDigest: "a".repeat(64),
+    runtimeIdentityDigest: "b".repeat(64),
+    runtimeDirectoryIdentity: { ...identity, identityDigest: "c".repeat(64) },
+    capsuleCommand: "/usr/bin/bwrap",
+    capsuleArgs: [],
+    adapterExecutable: "/opt/keiko-debug/adapter",
+    adapterArgs: ["--server"],
+    environment: { HOME: "/run/keiko-debug/home" },
+    home: "/runtime/home",
+    temp: "/runtime",
+    cwd: "/keiko-execution-root",
+    endpoint: {
+      kind: "posixSocket",
+      hostRuntimeDirectory: "/runtime",
+      hostSocketPath: "/runtime/dap.sock",
+      capsuleRuntimeDirectory: "/run/keiko-debug",
+      capsuleSocketPath: "/run/keiko-debug/dap.sock",
+      runtimeIdentity: "d".repeat(64),
+    },
+    artifacts: [],
+    workspaceIdentity: {
+      ...identity,
+      realPath: "/workspace",
+      identityDigest: "e".repeat(64),
+      objectIdentityDigest: "f".repeat(64),
+    },
+    targetIdentityDigest: "0".repeat(64),
+    targetReference: { kind: "file", fileId: "app.js" },
+    activationRevision: 7,
+    epoch: 3,
+    expiresAtMs: 1_000,
+  };
+}
+
 describe("deriveDebugSpawnEnvelopeIdentityDigest", () => {
   it("is a no-op filter when identityDigest/planId are absent -- the pre-signing call shape", () => {
-    const values = { a: 1, b: 2, c: "keep" };
+    const values = unsignedEnvelope();
     expect(deriveDebugSpawnEnvelopeIdentityDigest(values)).toBe(sha256Json(values));
   });
 
   it("excludes identityDigest and planId so re-deriving from an already-signed envelope reproduces the same digest", () => {
-    const values = { a: 1, b: 2, c: "keep" };
+    const values = unsignedEnvelope();
     const identityDigest = deriveDebugSpawnEnvelopeIdentityDigest(values);
     const signed = { ...values, planId: identityDigest, identityDigest };
     expect(deriveDebugSpawnEnvelopeIdentityDigest(signed)).toBe(identityDigest);

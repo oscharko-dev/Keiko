@@ -228,9 +228,7 @@ function hasValidMetadataFields(record: Record<string, unknown>): boolean {
 export function isAtlassianCredentialMetadata(
   value: unknown,
 ): value is AtlassianCredentialMetadata {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return hasOnlyMetadataKeys(record) && hasValidMetadataFields(record);
+  return isRecord(value) && hasOnlyMetadataKeys(value) && hasValidMetadataFields(value);
 }
 
 // ─── Injected ports (implemented by keiko-server, the composition root) ───────
@@ -368,9 +366,34 @@ const CREATE_INPUT_KEYS: ReadonlySet<string> = new Set([
 
 type ValidatedCreateInput = AtlassianCredentialCreateRequest;
 
-function assertSupportedAuthScheme(input: Record<string, unknown>, errors: string[]): void {
+/** The auth-scheme part of a create request, read only from fields its own checks admitted. */
+type CreateAuthVariant =
+  | {
+      readonly authScheme: "basic-api-token";
+      readonly accountEmail: string;
+      readonly cloud: boolean;
+    }
+  | { readonly authScheme: "bearer-pat"; readonly livePodCreationRequestId?: string };
+
+function validateCreateFields(
+  input: Record<string, unknown>,
+  errors: string[],
+): CreateAuthVariant | undefined {
   validateLivePodCreateIntent(input, errors);
-  validateAuthVariant(input, errors);
+  const variant = validateAuthVariant(input, errors);
+  if (!isAtlassianConnectorProvider(input.provider)) {
+    errors.push("provider must be confluence or jira");
+  }
+  if (!isSafeAtlassianDisplayName(input.displayName)) {
+    errors.push("displayName must be bounded redaction-safe display text");
+  }
+  if (!isSafeAtlassianConnectorBaseUrl(input.baseUrl)) {
+    errors.push("baseUrl must be an https URL without credentials, query, or fragment");
+  }
+  if (!isSafeAtlassianApiToken(input.apiToken)) {
+    errors.push("apiToken must be printable ASCII between 8 and 1024 characters");
+  }
+  return variant;
 }
 
 function validateLivePodCreateIntent(input: Record<string, unknown>, errors: string[]): void {
@@ -381,46 +404,58 @@ function validateLivePodCreateIntent(input: Record<string, unknown>, errors: str
     errors.push("livePodCreationRequestId must identify a Data Center Pod creation");
 }
 
-function validateAuthVariant(input: Record<string, unknown>, errors: string[]): void {
-  if (input.authScheme === "basic-api-token") {
-    if (input.deployment !== undefined && input.deployment !== "cloud")
-      errors.push("deployment must match authScheme");
-    if (!isSafeAtlassianAccountEmail(input.accountEmail))
-      errors.push("accountEmail must be a bounded email address");
-    return;
-  }
+function validateAuthVariant(
+  input: Record<string, unknown>,
+  errors: string[],
+): CreateAuthVariant | undefined {
   if (input.authScheme === "bearer-pat") {
     if (input.provider !== "jira" || input.deployment !== "data-center")
       throw new AtlassianCredentialCustodyError("unsupported-auth-scheme");
     if (Object.hasOwn(input, "accountEmail"))
       errors.push("accountEmail must be absent for bearer-pat");
-    return;
+    // validateLivePodCreateIntent has already refused a present id that is not a Pod creation id.
+    const { livePodCreationRequestId } = input;
+    return isChatJiraPodId(livePodCreationRequestId)
+      ? { authScheme: "bearer-pat", livePodCreationRequestId }
+      : { authScheme: "bearer-pat" };
   }
-  errors.push("authScheme must be basic-api-token or bearer-pat");
+  if (input.authScheme !== "basic-api-token") {
+    errors.push("authScheme must be basic-api-token or bearer-pat");
+    return undefined;
+  }
+  if (input.deployment !== undefined && input.deployment !== "cloud")
+    errors.push("deployment must match authScheme");
+  if (isSafeAtlassianAccountEmail(input.accountEmail))
+    return {
+      authScheme: "basic-api-token",
+      accountEmail: input.accountEmail,
+      cloud: input.deployment === "cloud",
+    };
+  errors.push("accountEmail must be a bounded email address");
+  return undefined;
 }
 
-function validatedCreateVariant(input: Record<string, unknown>): ValidatedCreateInput {
-  const common = {
-    displayName: input.displayName as string,
-    baseUrl: input.baseUrl as string,
-    apiToken: input.apiToken as string,
-  };
-  if (input.authScheme === "bearer-pat")
+function validatedCreateVariant(
+  common: Pick<ValidatedCreateInput, "displayName" | "baseUrl" | "apiToken">,
+  provider: AtlassianConnectorProvider,
+  variant: CreateAuthVariant,
+): ValidatedCreateInput {
+  if (variant.authScheme === "bearer-pat")
     return {
       ...common,
       provider: "jira",
       deployment: "data-center",
       authScheme: "bearer-pat",
-      ...(input.livePodCreationRequestId === undefined
+      ...(variant.livePodCreationRequestId === undefined
         ? {}
-        : { livePodCreationRequestId: input.livePodCreationRequestId as string }),
+        : { livePodCreationRequestId: variant.livePodCreationRequestId }),
     };
   return {
     ...common,
-    provider: input.provider as AtlassianConnectorProvider,
+    provider,
     authScheme: "basic-api-token",
-    accountEmail: input.accountEmail as string,
-    ...(input.deployment === "cloud" ? { deployment: "cloud" } : {}),
+    accountEmail: variant.accountEmail,
+    ...(variant.cloud ? { deployment: "cloud" } : {}),
   };
 }
 
@@ -437,23 +472,21 @@ function validateCreateInput(input: unknown): ValidatedCreateInput {
   if (Object.keys(input).some((key) => !CREATE_INPUT_KEYS.has(key))) {
     errors.push("input must not include unexpected fields");
   }
-  assertSupportedAuthScheme(input, errors);
-  if (!isAtlassianConnectorProvider(input.provider)) {
-    errors.push("provider must be confluence or jira");
-  }
-  if (!isSafeAtlassianDisplayName(input.displayName)) {
-    errors.push("displayName must be bounded redaction-safe display text");
-  }
-  if (!isSafeAtlassianConnectorBaseUrl(input.baseUrl)) {
-    errors.push("baseUrl must be an https URL without credentials, query, or fragment");
-  }
-  if (!isSafeAtlassianApiToken(input.apiToken)) {
-    errors.push("apiToken must be printable ASCII between 8 and 1024 characters");
-  }
-  if (errors.length > 0) {
+  const variant = validateCreateFields(input, errors);
+  const { provider, displayName, baseUrl, apiToken } = input;
+  // The field checks validateCreateFields reported, repeated so each admitted field keeps its
+  // checked type.
+  if (
+    variant === undefined ||
+    !isAtlassianConnectorProvider(provider) ||
+    !isSafeAtlassianDisplayName(displayName) ||
+    !isSafeAtlassianConnectorBaseUrl(baseUrl) ||
+    !isSafeAtlassianApiToken(apiToken) ||
+    errors.length > 0
+  ) {
     throw new AtlassianCredentialCustodyError("invalid-input", errors);
   }
-  return validatedCreateVariant(input);
+  return validatedCreateVariant({ displayName, baseUrl, apiToken }, provider, variant);
 }
 
 // `atlassian-cred:<16 random bytes, base64url>` — 22 unpadded characters (ADR-0128 D2), matching

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { createJiraDraftStore, type JiraDraftStore } from "@oscharko-dev/keiko-connectors";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -14,7 +15,7 @@ import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
 
 const DRAFT_ID = "11111111-2222-4333-8444-555555555555";
 
-function item(ref: string): Record<string, unknown> {
+function item(ref: string): CatalogJsonObject {
   return { ref, projectId: "10000", issueTypeId: "10001", fields: { summary: `Item ${ref}` } };
 }
 function seeded(): { readonly store: JiraDraftStore; readonly digest: string } {

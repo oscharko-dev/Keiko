@@ -49,8 +49,15 @@ function reportRequest(value: unknown): DesktopSupportReportRequest | undefined 
   return reportRequestFields(value, failure);
 }
 
+/** The members a support report request body may carry; each is validated before use. */
+interface SupportReportRequestBody {
+  readonly correlationId?: unknown;
+  readonly evidenceScope?: unknown;
+  readonly failure?: unknown;
+}
+
 function reportRequestFields(
-  value: object,
+  value: SupportReportRequestBody,
   failure: DesktopSupportReportRequest["failure"],
 ): DesktopSupportReportRequest {
   const correlationId = normalizeSupportReportCorrelationId(
@@ -63,7 +70,7 @@ function reportRequestFields(
   };
 }
 
-function validReportCorrelation(value: object): boolean {
+function validReportCorrelation(value: SupportReportRequestBody): boolean {
   return !("correlationId" in value) || isActivityLogCorrelationId(value.correlationId);
 }
 

@@ -1,10 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { JIRA_DRAFT_STAGE_BYTES_MAX } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_DRAFT_STAGE_BYTES_MAX,
+  isJiraDraftRef,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { trimOwnedBytes } from "./jira-store-bounds.js";
 
 /** One validated item as the model sent it; relations are resolved only when the draft is run. */
-export type StagedJiraDraftItem = Readonly<Record<string, unknown>>;
+export type StagedJiraDraftItem = CatalogJsonObject;
+
+/** The item's ref; the item form admits only a draft ref, so a staged item always has one. */
+export function stagedJiraDraftRef(item: StagedJiraDraftItem): string {
+  const { ref } = item;
+  return isJiraDraftRef(ref) ? ref : "";
+}
 
 /**
  * A backlog draft being assembled in pages (#4178). It lives in memory only: the model appends
@@ -91,7 +101,7 @@ function refsOf(items: readonly StagedJiraDraftItem[]): ReadonlySet<string> {
 function repeatsRef(held: ReadonlySet<string>, page: readonly StagedJiraDraftItem[]): boolean {
   const seen = new Set(held);
   return page.some((item) => {
-    const ref = String(item.ref);
+    const ref = stagedJiraDraftRef(item);
     const repeated = seen.has(ref);
     seen.add(ref);
     return repeated;

@@ -14,6 +14,7 @@ import {
 import { JourneyObservationController } from "../../../packages/keiko-server/src/gitDelivery/journeyObservationService.js";
 import { journeyFixture } from "../../../packages/keiko-server/src/gitDelivery/journeyOutcomeTest/_support.js";
 import { DescriptionFixture } from "../../../packages/keiko-server/src/gitDelivery/prDescriptionTestSupport.js";
+import { createGitSnapshotAccessScope } from "../../../packages/keiko-server/src/gitChangeSnapshotRegistry.js";
 import {
   assertQualificationSpendEnvelope,
   buildQualificationFlowArtifact,
@@ -412,7 +413,7 @@ describe("completed live qualification flow evidence", () => {
       };
       const context = {
         draft,
-        accessScope: {},
+        accessScope: createGitSnapshotAccessScope(),
         correlationId: "run-1",
         stillAuthorized: (): boolean => true,
       };

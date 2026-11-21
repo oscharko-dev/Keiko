@@ -70,8 +70,9 @@ const BOOLEAN_FLAG_KEYS: Readonly<Record<string, BooleanFlagKey>> = {
   "-h": "help",
 };
 
-const isValueFlag = (value: string): value is ValueFlag =>
-  (VALUE_FLAGS as readonly string[]).includes(value);
+const VALUE_FLAG_SET: ReadonlySet<string> = new Set(VALUE_FLAGS);
+
+const isValueFlag = (value: string): value is ValueFlag => VALUE_FLAG_SET.has(value);
 
 interface ParsedFlags {
   readonly values: Partial<Record<ValueFlag, string>>;

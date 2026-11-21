@@ -30,6 +30,7 @@ import {
 } from "../fs-safety.js";
 import {
   PROMPT_ENHANCEMENT_EVIDENCE_SCHEMA_VERSION,
+  isPromptEnhancementEvidenceManifest,
   validatePromptEnhancementEvidenceManifest,
   type PromptEnhancementCandidateScoreRow,
   type PromptEnhancementEvidenceManifest,
@@ -163,11 +164,8 @@ function buildManifestIntegrityHashes(
 function withoutIntegrityHashes(
   manifest: PromptEnhancementEvidenceManifest,
 ): PromptEnhancementEvidenceManifestWithoutHashes {
-  const record = { ...manifest } as {
-    integrityHashes?: PromptEnhancementEvidenceManifest["integrityHashes"];
-  } & PromptEnhancementEvidenceManifestWithoutHashes;
-  delete record.integrityHashes;
-  return record;
+  const { integrityHashes: _integrityHashes, ...withoutHashes } = manifest;
+  return withoutHashes;
 }
 
 function withRecomputedIntegrityHashes(
@@ -474,13 +472,12 @@ function parseAndValidateManifest(json: string): PromptEnhancementEvidenceManife
       `PE manifest is not valid JSON: ${error instanceof Error ? error.message : "unknown"}`,
     );
   }
-  const validation = validatePromptEnhancementEvidenceManifest(parsed);
-  if (!validation.ok) {
+  if (!isPromptEnhancementEvidenceManifest(parsed)) {
+    const validation = validatePromptEnhancementEvidenceManifest(parsed);
     throw new EvidenceReadError(`PE manifest schema invalid: ${validation.reason ?? "unknown"}`);
   }
-  const manifest = parsed as PromptEnhancementEvidenceManifest;
-  assertManifestIntegrity(manifest);
-  return manifest;
+  assertManifestIntegrity(parsed);
+  return parsed;
 }
 
 // ─── Node adapter ──────────────────────────────────────────────────────────────────

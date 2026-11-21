@@ -53,7 +53,9 @@ function subjectOf(value: string | undefined): string | undefined {
 const TOKEN_PATTERN = /[A-Za-z0-9][A-Za-z0-9._-]*/gu;
 const SUMMARY_MAX = 255;
 const LABEL_CHARS_MAX = 255;
-const CATEGORIES: ReadonlySet<string> = new Set(JIRA_REPORT_STATUS_CATEGORIES);
+const CATEGORIES: ReadonlyMap<string, JiraReportStatusCategory> = new Map(
+  JIRA_REPORT_STATUS_CATEGORIES.map((entry) => [entry, entry]),
+);
 
 function reference(value: unknown): Record<string, unknown> | undefined {
   return asRecord(value);
@@ -63,9 +65,7 @@ function stringOf(value: unknown, max: number): string | undefined {
 }
 function category(status: Record<string, unknown> | undefined): JiraReportStatusCategory {
   const key = reference(status?.statusCategory)?.key;
-  return typeof key === "string" && CATEGORIES.has(key)
-    ? (key as JiraReportStatusCategory)
-    : "undefined";
+  return (typeof key === "string" ? CATEGORIES.get(key) : undefined) ?? "undefined";
 }
 /** A Jira value that names another issue: a key, or an object carrying one. */
 function issueKeyOf(value: unknown): string | undefined {

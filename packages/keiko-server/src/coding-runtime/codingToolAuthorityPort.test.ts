@@ -42,6 +42,10 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import {
+  mintGitDeliveryExecutionLease,
+  type GitDeliveryExecutionLease,
+} from "../gitDelivery/executionLease.js";
 
 const DIGEST = "a".repeat(64);
 const liveFacts: CodingWorkbenchRuntimeAuthorityFacts = {
@@ -198,6 +202,37 @@ async function duplicateResults(
     results.push(await runtime.execute({ body, capability: "runtime-capability-secret" }));
   }
   return results;
+}
+
+// The commit approval spy an approved commit port hands back to its test.
+interface ApprovedCommitVerifier {
+  readonly matches: Mock<() => boolean>;
+  readonly consume: Mock<() => boolean>;
+  readonly matchesCommit: Mock<() => boolean>;
+  readonly consumeCommit: Mock<() => GitDeliveryExecutionLease>;
+}
+
+interface ApprovedCommitPort {
+  readonly port: ReturnType<typeof createCodingToolAuthorityPort>;
+  readonly approvalProofVerifier: ApprovedCommitVerifier;
+}
+
+// An authority port whose live envelope is `envelope` and whose operator approved the commit.
+function approvedCommitPort(envelope: ReturnType<typeof restrictedEnvelope>): ApprovedCommitPort {
+  const authority = {
+    revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+    resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+  };
+  const approvalProofVerifier: ApprovedCommitVerifier = {
+    matches: vi.fn(() => false),
+    consume: vi.fn(() => false),
+    matchesCommit: vi.fn(() => true),
+    consumeCommit: vi.fn(() => mintGitDeliveryExecutionLease()),
+  };
+  const port = createCodingToolAuthorityPort(authority, runtimeContext, {
+    approvalProofVerifier,
+  });
+  return { port, approvalProofVerifier };
 }
 
 describe("CodingToolAuthorityPort", () => {
@@ -917,19 +952,7 @@ describe("CodingToolAuthorityPort", () => {
         connectorScopes: ["source-control.read", "source-control.write"],
         networkPolicy: { mode: "deny-all", connectorScopes: [] },
       });
-      const authority = {
-        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
-        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
-      };
-      const approvalProofVerifier = {
-        matches: vi.fn(() => false),
-        consume: vi.fn(() => false),
-        matchesCommit: vi.fn(() => true),
-        consumeCommit: vi.fn(() => ({ approvalId: "commit-approved" })),
-      };
-      const port = createCodingToolAuthorityPort(authority, runtimeContext, {
-        approvalProofVerifier,
-      });
+      const { port, approvalProofVerifier } = approvedCommitPort(envelope);
       const request = {
         action: "delivery" as const,
         actionId: "commit-after-narrow",
@@ -964,19 +987,7 @@ describe("CodingToolAuthorityPort", () => {
         connectorScopes: ["source-control.read", "source-control.write"],
         networkPolicy: { mode: "deny-all", connectorScopes: [] },
       });
-      const authority = {
-        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
-        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
-      };
-      const approvalProofVerifier = {
-        matches: vi.fn(() => false),
-        consume: vi.fn(() => false),
-        matchesCommit: vi.fn(() => true),
-        consumeCommit: vi.fn(() => ({ approvalId: "commit-approved" })),
-      };
-      const port = createCodingToolAuthorityPort(authority, runtimeContext, {
-        approvalProofVerifier,
-      });
+      const { port } = approvedCommitPort(envelope);
       const request = {
         action: "delivery" as const,
         actionId: "commit-missing-class",
@@ -997,19 +1008,7 @@ describe("CodingToolAuthorityPort", () => {
         connectorScopes: [],
         networkPolicy: { mode: "deny-all", connectorScopes: [] },
       });
-      const authority = {
-        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
-        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
-      };
-      const approvalProofVerifier = {
-        matches: vi.fn(() => false),
-        consume: vi.fn(() => false),
-        matchesCommit: vi.fn(() => true),
-        consumeCommit: vi.fn(() => ({ approvalId: "commit-approved" })),
-      };
-      const port = createCodingToolAuthorityPort(authority, runtimeContext, {
-        approvalProofVerifier,
-      });
+      const { port } = approvedCommitPort(envelope);
       const request = {
         action: "delivery" as const,
         actionId: "commit-missing-scope",

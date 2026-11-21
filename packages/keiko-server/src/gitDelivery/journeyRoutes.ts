@@ -68,6 +68,7 @@ import {
 import { produceCiReadinessSnapshot } from "./ciReadinessSnapshot.js";
 import { createPrDescriptionReceiptStore } from "./prDescriptionReceiptStore.js";
 import type { PrDescriptionContext } from "./prDescriptionTypes.js";
+import { createGitSnapshotAccessScope } from "../gitChangeSnapshotRegistry.js";
 
 const GIT_JOURNEY_OPERATION_BASE = {
   contractKind: "activity-log-operation",
@@ -342,7 +343,7 @@ function readDescriptionStatus(
     workspace,
     repository,
     prNumber,
-    accessScope: {},
+    accessScope: createGitSnapshotAccessScope(),
     // A read-only lookup mints no authority of its own; this digest only satisfies the receipt
     // store's shape guard (a valid 64-hex string) and is never compared against a real authority.
     authorityDigest: sha256Hex(
@@ -783,7 +784,7 @@ function journeyContext(
 ): JourneyObservationContext {
   const context: JourneyObservationContext = {
     draft,
-    accessScope: {},
+    accessScope: createGitSnapshotAccessScope(),
     correlationId,
     stillAuthorized: (): boolean => reader(context) !== undefined,
   };

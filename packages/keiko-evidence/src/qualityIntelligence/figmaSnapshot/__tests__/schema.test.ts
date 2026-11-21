@@ -41,6 +41,7 @@ describe("validateFigmaSnapshotRecord", () => {
 
   it.each([
     ["non-object record", null, "record is not an object"],
+    ["array record", [], "record is not an object"],
     [
       "wrong schema version",
       { ...validRecord(), figmaSnapshotSchemaVersion: 2 },

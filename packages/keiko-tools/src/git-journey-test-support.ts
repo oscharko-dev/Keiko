@@ -1,3 +1,4 @@
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import type { CommandResult } from "./types.js";
 
@@ -31,11 +32,12 @@ const ISSUE = {
   closedAt: null,
   repository: { nameWithOwner: "owner/repo" },
 };
+/** The GraphQL JSON document a journey read receives; each argument overrides its part. */
 export function payload(
-  pr: Readonly<Record<string, unknown>> = {},
-  issue: Readonly<Record<string, unknown>> = {},
-  connection: Readonly<Record<string, unknown>> = {},
-): unknown {
+  pr: CatalogJsonObject = {},
+  issue: CatalogJsonObject = {},
+  connection: CatalogJsonObject = {},
+): CatalogJsonObject {
   return {
     data: {
       repository: {

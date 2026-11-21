@@ -8,6 +8,7 @@ import {
   type JiraTemplateActivation,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { asRecord, isJsonArray } from "./json-narrowing.js";
 
 /**
  * The single pure template checker (#4177). Write admission (create, edit, transition), the
@@ -53,8 +54,8 @@ export function jiraTemplateValueText(value: unknown): string {
   if (typeof value === "string") return value;
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : "";
   if (Array.isArray(value)) return value.map(jiraTemplateValueText).join(" ").trim();
-  if (typeof value !== "object" || value === null) return "";
-  const record = value as Record<string, unknown>;
+  const record = asRecord(value);
+  if (record === undefined) return "";
   return VALUE_KEYS.map((key) => scalarText(record[key])).find((text) => text !== "") ?? "";
 }
 
@@ -72,9 +73,7 @@ function presentAt(value: unknown, depth: number): boolean {
   if (typeof value === "string") return value.trim().length > 0;
   if (typeof value !== "object" || value === null) return false;
   if (depth >= PRESENCE_DEPTH_MAX) return true;
-  const members: readonly unknown[] = Array.isArray(value)
-    ? (value as readonly unknown[])
-    : Object.values(value);
+  const members: readonly unknown[] = isJsonArray(value) ? value : Object.values(value);
   return members.some((member) => presentAt(member, depth + 1));
 }
 export function jiraTemplateValuePresent(value: unknown): boolean {

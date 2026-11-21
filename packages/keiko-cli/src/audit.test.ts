@@ -554,6 +554,10 @@ describe("runAuditCli", () => {
       },
     ],
     ["a missing stateDir", { ok: true, classes: [] }],
+    [
+      "a class entry without an id",
+      { ok: true, stateDir: "/x", classes: [{ title: "t", status: "pass", findings: [] }] },
+    ],
   ])("refuses %s", async (_label, malformed) => {
     const c = makeIo();
     const code = await runAuditCli(["local-state"], c.io, env, {

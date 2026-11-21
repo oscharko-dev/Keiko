@@ -13,6 +13,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { createGitSnapshotAccessScope } from "../gitChangeSnapshotRegistry.js";
 
 function fixture(): {
   source: ReturnType<typeof journeyFixture>;
@@ -28,7 +29,7 @@ function fixture(): {
   const logs: ServerLogEvent[] = [];
   const context = {
     draft: source.draft,
-    accessScope: {},
+    accessScope: createGitSnapshotAccessScope(),
     correlationId: "journey-run-1",
     stillAuthorized: (): boolean => true,
   };
@@ -174,7 +175,8 @@ describe("read-only journey observation owner", () => {
       const f = fixture();
       f.readiness.mockImplementation(() => {
         if (kind === "authority") Object.assign(f.context, { stillAuthorized: () => false });
-        if (kind === "scope") Object.assign(f.context, { accessScope: {} });
+        if (kind === "scope")
+          Object.assign(f.context, { accessScope: createGitSnapshotAccessScope() });
         if (kind === "draft")
           Object.assign(f.source.draft, { revision: f.source.draft.revision + 1 });
         if (kind === "expiry")

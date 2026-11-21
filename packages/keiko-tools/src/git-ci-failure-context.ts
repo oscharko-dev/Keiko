@@ -1,7 +1,6 @@
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import { gitDeliveryObservationFailure } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import { classifyGitProviderReadFailure } from "./git-provider-observation.js";
-import type { GitCiProviderFacts } from "./git-ci-facts.js";
 import { selectGitCiFailureSources } from "./git-ci-failure-context-selection.js";
 import { GitCiFailureReader, failure } from "./git-ci-failure-context-reader.js";
 import {
@@ -31,7 +30,7 @@ function capture(request: GitCiFailureContextInput): GitCiFailureContextInput {
   const json = JSON.stringify(request.facts);
   if (Buffer.byteLength(json, "utf8") > 1_048_576) failure("output-truncated");
   // Detach all caller-owned source arrays before the first await; this is not a durable snapshot.
-  return Object.freeze({ ...request, facts: JSON.parse(json) as GitCiProviderFacts });
+  return Object.freeze({ ...request, facts: structuredClone(request.facts) });
 }
 function validateJob(
   raw: unknown,

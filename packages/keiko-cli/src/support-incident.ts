@@ -61,8 +61,18 @@ export type ParsedSupportIncidentArgs =
   | { readonly kind: "usage"; readonly message: string }
   | { readonly kind: "ok"; readonly value: SupportIncidentArgs };
 
-const COMMANDS: ReadonlySet<string> = new Set(["list", "show", "preview", "report", "dismiss"]);
+const COMMANDS: ReadonlySet<string> = new Set<IncidentCommand>([
+  "list",
+  "show",
+  "preview",
+  "report",
+  "dismiss",
+]);
 const ID_COMMANDS: ReadonlySet<string> = new Set(["show", "preview", "dismiss"]);
+
+function isIncidentCommand(value: string): value is IncidentCommand {
+  return COMMANDS.has(value);
+}
 
 function usage(message: string): ParsedSupportIncidentArgs {
   return {
@@ -87,7 +97,7 @@ export function parseSupportIncidentArgs(args: readonly string[]): ParsedSupport
   ) {
     return { kind: "help" };
   }
-  if (!COMMANDS.has(command)) return usage(`unknown subcommand: ${command}`);
+  if (!isIncidentCommand(command)) return usage(`unknown subcommand: ${command}`);
   const incidentId = parseIncidentId(command, rest);
   if (incidentId === null) return usage(`${command} requires an incident ID (32 hex characters).`);
   const stateDir = flagValue(rest, "--state-dir");
@@ -95,7 +105,7 @@ export function parseSupportIncidentArgs(args: readonly string[]): ParsedSupport
   return {
     kind: "ok",
     value: {
-      command: command as IncidentCommand,
+      command,
       incidentId,
       stateDir,
       json: rest.includes("--json"),
