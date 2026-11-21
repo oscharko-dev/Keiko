@@ -80,7 +80,8 @@ describe("AppData notice detection (#4437)", () => {
     expect(
       appDataReasonForScope(scope({ kind: "files", relativePaths: ["Desktop/a.txt"] })),
     ).toBeUndefined();
-    expect(appDataReasonForScope({ ...scope(), root: undefined })).toBeUndefined();
+    const { root: _root, ...withoutRoot } = scope();
+    expect(appDataReasonForScope(withoutRoot)).toBeUndefined();
   });
 });
 
