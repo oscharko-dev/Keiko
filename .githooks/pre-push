@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Pre-push SonarJS gate (ADR-0131 amendment 2026-11-21).
+#
+# The full SonarCloud analysis runs only after integration, on `dev`. Before a branch leaves this
+# machine, the real SonarJS analyzer checks the files the branch changed against origin/dev in the
+# self-hosted local SonarQube (docker/gates/run-sonar.sh, docs/qa/local-sonar.md). A finding on a
+# changed file, or a scan that cannot run, stops the push.
+#
+# Installed once per checkout with `npm run hooks:install`.
+set -euo pipefail
+
+zero_sha="0000000000000000000000000000000000000000"
+pushes_commits=0
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  if [[ "${local_sha}" != "${zero_sha}" ]]; then
+    pushes_commits=1
+  fi
+done
+
+# A push that only deletes remote refs carries no code to analyze.
+if [[ "${pushes_commits}" -eq 0 ]]; then
+  exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+printf 'pre-push: SonarJS analysis of the files this branch changed against origin/dev\n'
+if ! "${repo_root}/docker/gates/run-sonar.sh"; then
+  printf 'pre-push: FAIL - fix the findings above, or start Docker if the scan could not run.\n' >&2
+  exit 1
+fi

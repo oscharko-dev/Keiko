@@ -97,6 +97,43 @@ describe("dev quality workflows", () => {
     );
   });
 
+  // ADR-0131 amendment (2026-11-21): the whole-project SonarCloud scan needs most of a hosted
+  // runner's memory and was the one gate whose verdict depended on the runner. It runs after
+  // integration only; a pull request is held by the SonarJS rules on its changed files in Core
+  // quality and by the pre-push hook.
+  it("runs the full SonarCloud analysis after integration only and the SonarJS rules on every PR", () => {
+    const steps = ciWorkflow.jobs["coverage-sonar"].steps;
+    const sonarSteps = steps.filter(
+      (step) =>
+        /Sonar/u.test(step.name ?? "") && !/Verify governed Sonar analysis scope/u.test(step.name),
+    );
+    expect(sonarSteps.map((step) => step.name)).toEqual([
+      "Resolve project version for SonarCloud",
+      "Restore the pinned Sonar Scanner CLI archive",
+      "Download Sonar Scanner CLI",
+      "SonarCloud CI-based analysis (ADR-0131 / ADR-0134)",
+      "Verify Sonar full-analysis evidence",
+      "Verify SonarCloud Banking Grade dev evidence",
+    ]);
+    for (const step of sonarSteps) {
+      expect(step.if ?? "").not.toContain("pull_request");
+    }
+    expect(steps.find((step) => step.id === "sonar-scan").if).toBe(
+      "${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}",
+    );
+    expect(ci).not.toContain("check-sonar-pr-quality-gate.mjs");
+
+    const rules = ciWorkflow.jobs["core-quality"].steps.find(
+      (step) => step.name === "SonarJS rules on the changed files",
+    );
+    expect(rules).toEqual({
+      name: "SonarJS rules on the changed files",
+      if: "${{ github.event_name == 'pull_request' }}",
+      env: { KEIKO_NEW_CODE_BASE_REF: "${{ github.event.pull_request.base.sha }}" },
+      run: "npm run check:sonar-rules",
+    });
+  });
+
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
     expect(mutation).not.toContain("pull_request:");
     expect(mutation).toContain('cron: "17 2 * * *"');
@@ -255,15 +292,13 @@ describe("dev quality workflows", () => {
     );
   });
 
-  it("runs PR analysis on dev and binds manual full analysis to remote dev", () => {
+  it("analyzes dev after integration and binds manual full analysis to remote dev", () => {
     const scanner = ci.indexOf("SonarCloud CI-based analysis");
-    const verifier = ci.indexOf("Verify SonarCloud Banking Grade PR evidence");
     const mainVerifier = ci.indexOf("Verify SonarCloud Banking Grade dev evidence");
     expect(scanner).toBeGreaterThan(-1);
-    expect(verifier).toBeGreaterThan(scanner);
-    expect(mainVerifier).toBeGreaterThan(verifier);
+    expect(mainVerifier).toBeGreaterThan(scanner);
+    expect(ci).not.toContain("Verify SonarCloud Banking Grade PR evidence");
     expect(ci).toContain("github.base_ref == 'dev'");
-    expect(ci).toContain("SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}");
     expect(ci).toContain("Verify changed production sources are mapped into LCOV");
     expect(ci).toContain(
       "ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}",

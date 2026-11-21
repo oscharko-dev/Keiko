@@ -90,7 +90,10 @@ tooling. No payment method or paid entitlement may be introduced to restore a re
 
 ## Sonar independence
 
-The native `SonarCloud Code Analysis` context and `scripts/check-sonar-pr-quality-gate.mjs` enforce
-Sonar independently. The repository validator binds the exact current head, native gate status,
+Since the ADR-0131 amendment of 2026-11-21 the full SonarCloud analysis runs on every push to
+`dev`, and `scripts/check-sonar-main-quality-gate.mjs` verifies it on a manual dispatch; pull
+requests are held by `check:sonar-rules` inside `ci` and the local pre-push scan.
+`scripts/check-sonar-pr-quality-gate.mjs` remains the validator for a pull-request analysis that is
+run by hand; it is no longer a CI step. The repository validator binds the exact current head, native gate status,
 custom gate definition, metric values, unresolved issue count, and new-violation count. No review
 bot or retired aggregate participates in that decision.

@@ -242,6 +242,7 @@
     "gates:sonar": "./docker/gates/run-sonar.sh",
     "gates:sonar:all": "./docker/gates/run-sonar.sh --all",
     "gates:sonar:stop": "./docker/gates/run-sonar.sh --stop",
+    "hooks:install": "node scripts/install-git-hooks.mjs",
     "gates:local:shell": "docker compose -f docker/gates/docker-compose.yml run --rm gates bash",
     "check:coverage:new-code": "node scripts/check-new-code-coverage.mjs",
     "report:settlement-latency": "node scripts/report-settlement-latency.mjs",

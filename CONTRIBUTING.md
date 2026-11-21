@@ -922,7 +922,7 @@ remove it first.
 ## Pull requests
 
 All required status checks must pass on the current pull-request head before a change can merge into
-`dev`. The stable app-bound set is the ten checks below:
+`dev`. The stable app-bound set is the nine checks below:
 
 1. `ci`
 2. `workflow hygiene`
@@ -931,9 +931,16 @@ All required status checks must pass on the current pull-request head before a c
 5. `Build, scan, SBOM, smoke`
 6. `Review dependency diff (dev/main)`
 7. `ui`
-8. `SonarCloud Code Analysis`
-9. `Socket Security: Project Report`
-10. `Socket Security: Pull Request Alerts`
+8. `Socket Security: Project Report`
+9. `Socket Security: Pull Request Alerts`
+
+The full SonarCloud analysis is not a pull-request check (ADR-0131, amended 2026-11-21). It needs
+most of a hosted runner's memory, and its verdict depended on the runner rather than on the change.
+A pull request is held by two SonarJS checks of its changed files: the `SonarJS rules on the changed
+files` step of Core quality inside `ci`, and the local pre-push scan (`npm run gates:sonar`, run by
+`.githooks/pre-push` once `npm run hooks:install` has been run in the checkout). The full
+analysis runs on every push to `dev` and on a manual dispatch; a finding there turns the `dev` run
+red and is repaired by the next pull request.
 
 `workflow hygiene` runs actionlint, the pinned-SHA verification, zizmor and the OSV lockfile scan as
 one context (ADR-0159); the tools, pinned versions and rule sets are unchanged. It also runs the
@@ -991,8 +998,8 @@ request here.
 
 Qodo is retired by
 [ADR-0167](docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md); it is not Sonar evidence.
-Sonar remains independently enforced by its native required check and the exact-head validator
-inside `ci`. Full mutation runs daily/on demand and reference-machine performance evidence runs
+Sonar is enforced on pull requests by the SonarJS rule step inside `ci` and the pre-push scan,
+and in full on `dev` after integration. Full mutation runs daily/on demand and reference-machine performance evidence runs
 outside the pull-request critical path. Fast semantic-duplication, secret, coverage, static-analysis,
 and deterministic performance proxies run in parallel on pull requests. Thresholds and operational details are
 in [`docs/qa/autonomous-quality-gates.md`](docs/qa/autonomous-quality-gates.md) and

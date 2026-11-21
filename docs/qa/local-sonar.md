@@ -5,8 +5,13 @@ npm run gates:sonar
 ```
 
 **Run it before you open or update a pull request against `dev`. Not after. Not "if the diff looks
-risky".** A finding SonarCloud reports is a full CI round and a review round; a finding this command
-reports costs a minute.
+risky".** After `npm run hooks:install` (once per checkout), `.githooks/pre-push` runs it on every
+push and stops the push on a finding or on a scan that cannot run.
+
+Since the ADR-0131 amendment of 2026-11-21 the full SonarCloud analysis runs only after
+integration, on every push to `dev`. A pull request is held by this scan and by the
+`SonarJS rules on the changed files` step inside `ci`; a finding SonarCloud reports on `dev` turns
+`dev` red and costs a repair pull request, while a finding this command reports costs a minute.
 
 ## Why this exists — the gap it closes
 
@@ -78,8 +83,8 @@ analyzer. Do not replace a bounded loop with unbounded parallelism or a promise 
 change its syntax. Rules, gate thresholds and the zero-unresolved requirement remain unchanged.
 
 A green `check:sonar-rules` therefore says **nothing** about these. Only a real analyzer does, which
-is what this command runs. The `Coverage and SonarCloud` job demands **zero** unresolved issues, so a
-single MINOR of this class fails the required `ci` context.
+is what this command runs. The full analysis on `dev` demands **zero** unresolved issues, so a
+single MINOR of this class turns `dev` red after the merge.
 
 PR #4276 also confirmed that `NOSONAR` must be on the diagnostic's **primary start line**, not a
 later line in its range. For an object-property async function, S7503 starts at the property name,
@@ -175,8 +180,8 @@ complete substitute: SonarCloud's `shelldre:S7679` (bind a positional parameter 
 `shelldre:S7688` (`[[` over `[`) have no shellcheck equivalent, so review changed shell by hand
 against those two as well.
 
-**It is not the gate.** The verdict stays with SonarCloud on the pull request
-([`local-gates.md`](local-gates.md)). These things differ by construction:
+**It is not the full analysis.** The complete verdict stays with SonarCloud on `dev` after
+integration ([`local-gates.md`](local-gates.md)). These things differ by construction:
 
 - the quality **profile** is SonarQube's built-in "Sonar way comprehensive", the one SonarCloud
   applies to this project for JavaScript, TypeScript, CSS, JSON and YAML. A fresh SonarQube defaults
@@ -197,7 +202,7 @@ against those two as well.
   by two lines since long before that branch; the repair was a smaller diff, not a reworded one.
 
 So read a clean run as _"no known rule violation on my diff"_ — which is exactly the local question
-you need answered before pushing — and never as _"SonarCloud will be green"_. Required PR CI uses
+you need answered before pushing — and never as _"SonarCloud will be green"_. The `dev` analysis uses
 the cloud profile and, since incidents #3377 and #3380, disables both the analysis cache and
 Cloud's injected sensor cache. The direct repository validator requires zero cache hits, an exact
 miss receipt for Sonar's eligible JS/TS inventory, and completed fresh inventories covering at

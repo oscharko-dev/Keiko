@@ -75,6 +75,7 @@ jobs:
     name: Protected branch gate
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions: {}
     steps:
       - name: Confirm dev branch gate
@@ -127,6 +128,7 @@ jobs:
     name: Change scope
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -435,6 +437,14 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=12288
       - run: npm run format:check
+      # ADR-0131 amendment (2026-11-21): the full SonarCloud analysis left the pull-request path, so
+      # the SonarJS rule engine runs here over the files this pull request changed. Unlike the
+      # pre-push hook, a pull request cannot skip this step.
+      - name: SonarJS rules on the changed files
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_NEW_CODE_BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: npm run check:sonar-rules
       - name: UI i18n guard
         env:
           KEIKO_I18N_GUARD_BASE_REF: ${{ github.base_ref }}
@@ -1027,8 +1037,15 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: node scripts/check-lcov-source-mapping.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
+      # ADR-0131 amendment (2026-11-21): the full SonarCloud analysis runs after integration only, on
+      # every push to `dev` and on a manual dispatch, never on a pull request. The whole-project scan
+      # needs most of a hosted runner's memory and was the one gate whose verdict depended on the
+      # runner rather than on the change. Pull requests are held by the pre-push SonarJS scan of the
+      # changed files (`.githooks/pre-push`, `npm run gates:sonar`) and by `check:sonar-rules` in
+      # Core quality; a finding this analysis reports on `dev` turns the `dev` run red and is
+      # repaired by the next pull request.
       - name: Resolve project version for SonarCloud
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         id: sonar-version
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Verify manual analysis is bound to remote dev
@@ -1043,7 +1060,7 @@ jobs:
           fi
           echo "sha=$actual" >> "$GITHUB_OUTPUT"
       - name: Restore the pinned Sonar Scanner CLI archive
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # Keyed on the archive's own pinned digest, so a new scanner version or a corrected
@@ -1055,7 +1072,7 @@ jobs:
       - name: Download Sonar Scanner CLI
         # Downloaded and checksum-verified directly rather than through a marketplace action whose
         # license is denied by the repository dependency-review policy.
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         run: |
           set -euo pipefail
           scanner_zip="$RUNNER_TEMP/sonar-scanner-cli.zip"
@@ -1069,7 +1086,7 @@ jobs:
           unzip -q "$scanner_zip" -d "$RUNNER_TEMP"
           echo "SONAR_SCANNER_HOME=$RUNNER_TEMP/sonar-scanner-8.1.0.6389-linux-x64" >> "$GITHUB_ENV"
       - name: SonarCloud CI-based analysis (ADR-0131 / ADR-0134)
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         id: sonar-scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -1130,14 +1147,6 @@ jobs:
           --require-full-analysis
           --require-runner-memory-budget
           --runner-swap-mb "$(awk '/^SwapTotal:/ { print int($2 / 1024) }' /proc/meminfo)"
-      - name: Verify SonarCloud Banking Grade PR evidence
-        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' }}
-        env:
-          SONAR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          SONAR_PULL_REQUEST: ${{ github.event.pull_request.number }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: node scripts/check-sonar-pr-quality-gate.mjs
       - name: Verify SonarCloud Banking Grade dev evidence
         if: ${{ always() && github.event_name == 'workflow_dispatch' }}
         env:
@@ -1207,6 +1216,7 @@ jobs:
       - ui
       - sbom-provenance
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions: {}
     steps:
       - name: Aggregate required CI results fail closed
