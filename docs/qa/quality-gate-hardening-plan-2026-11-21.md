@@ -139,10 +139,19 @@ additional SonarCloud project, paid runner or required context is introduced.
 - A nightly lane that repeats the unit suites and the smoke journeys several times with shuffled
   order and reports every test that does not give the same verdict each time. It files into the
   existing nightly reporting; it is not a required check.
-- Lint rules for the three patterns that produced incidents: a bare short substring asserted
-  against text that carries digests (#4481), wall-clock assertions outside
-  `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS` (ADR-0139 D1), and fixed sleeps. Existing violations go into a
-  shrink-only register, like the UI lint bar.
+- **Lint rules (done in this change):** `scripts/lib/eslint-test-determinism.mjs` holds every test
+  file of the root config to three rules: no measured wall-clock duration compared outside
+  `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS` (ADR-0139 D1; a timestamp ordered against another is allowed),
+  no fixed sleep outside a polling loop (`setTimeout(resolve, n)` in a promise, `timers/promises`,
+  `waitForTimeout`), and no negative substring assertion with at most four hexadecimal characters,
+  which a 64-character digest contains with a chance of about 1 in 1000 (#4481). Over 4401 linted
+  files they found 75 sleeps, 204 wall-clock comparisons and 19 short hex literals **(M)**. Six of
+  those literals sat in JSON or prompt text that carries digests (`JSON.stringify(manifest)` and
+  `not.toContain("503")`, for example) and were repaired with word boundaries, as #4481 did; the
+  other 292 are held in the shrink-only register `eslint-suppressions.json`, pinned with a ceiling
+  per rule by `scripts/__tests__/test-determinism-register.test.mjs`. The register shrinks
+  through `node scripts/lint-repository.mjs --prune-suppressions`, the only flag that script
+  forwards. `keiko-ui` keeps its own config and register (KEIKO-0118) and is not covered yet.
 
 ### P4 — Drift gates repair themselves on request
 
@@ -166,9 +175,23 @@ additional SonarCloud project, paid runner or required context is introduced.
 
 ### P6 — Gate health report
 
-- `npm run report:ci-health`: the measurement of section 1 as a script, plus a weekly scheduled run
-  that writes the table into its job summary and fails when a budget or a failure-rate ceiling is
-  crossed.
+- **Done in this change:** `node scripts/report-ci-health.mjs [--days 7] [--json]` measures the
+  pull-request runs of `ci.yml` from the Actions API: completed, cancelled, failed and succeeded
+  runs, heads run more than once, hours on runs that were then cancelled, verdict median and p90
+  per outcome, and the jobs that failed most. `.github/workflows/ci-health.yml` runs it every
+  Monday with `actions: read`, writes the table into the job summary, and fails when a ceiling is
+  crossed (exit 1), or reports that it could not measure (exit 2). It is a script, not an npm
+  script, for the same `package.json` digest reason as P4.
+- Reproduction of section 1, 2026-11-21, same window of 300 runs **(M)**: 284 completed, 211
+  cancelled, 37 failed, 34 succeeded, 84 of 174 heads run more than once, 68.1 cancelled hours,
+  failed verdict median 67 / p90 596 min. Every count matches the hand measurement within the few
+  runs the window moved. The successful verdict measured 82 / 180 min, not 71 / 116: the hand value
+  came from a smaller sample, and the scripted value replaces it as the reference.
+- Ceilings, at that scripted baseline: failed share of decided runs ≤ 0.53, successful verdict
+  median ≤ 85 min. Heads run more than once carry no ceiling, because an ADR-0178 D6 edit run on
+  the same head is intended and run metadata cannot tell it from a second matrix. The seven days
+  before this change measured 84 of 149 decided runs failed, which crosses the first ceiling: the
+  report is red on the state this plan exists to fix **(M)**.
 
 ## 4. Proof per package
 

@@ -931,7 +931,7 @@ describe("natural connected-folder context", () => {
         .join("\n");
       for (const interval of [731, 1193, 1687, 428])
         expect(content).toContain(`${String(interval)} Betriebsstunden`);
-      expect(content).not.toContain("9999");
+      expect(content).not.toMatch(/\b9999\b/u);
       expect(out.pack.usage.filesRead).toBe(4);
       expect(out.pack.diagnostics?.coverage).toMatchObject({
         filesDiscovered: 5,

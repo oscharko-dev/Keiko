@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import config from "../../eslint.config.js";
 import {
   PEAK_RSS_BUDGET_BYTES,
+  forwardedArgs,
   globalIgnores,
   lintPartitions,
   peakBudgetFailures,
@@ -173,4 +174,21 @@ describe("lint peak memory budget", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+});
+
+describe("lint argument forwarding", () => {
+  it("forwards pruning, once, and nothing by default", () => {
+    expect(forwardedArgs([])).toEqual([]);
+    expect(forwardedArgs(["--prune-suppressions", "--prune-suppressions"])).toEqual([
+      "--prune-suppressions",
+    ]);
+  });
+
+  // The test-determinism register may only shrink through this command.
+  it.each([["--suppress-all"], ["--suppress-rule"], ["--fix"], ["packages/keiko-server"]])(
+    "refuses %s",
+    (arg) => {
+      expect(() => forwardedArgs([arg])).toThrow(TypeError);
+    },
+  );
 });

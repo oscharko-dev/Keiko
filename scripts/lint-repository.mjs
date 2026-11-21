@@ -126,15 +126,30 @@ export function lintPartition(root, args, peakFile) {
   return result.status ?? 1;
 }
 
+/**
+ * The flags this script hands to every partition. Only pruning is accepted: the test-determinism
+ * register (eslint-suppressions.json) may shrink through this command, never grow, so a flag that
+ * adds suppressions is refused rather than forwarded.
+ */
+export function forwardedArgs(argv) {
+  for (const arg of argv) {
+    if (arg !== "--prune-suppressions") {
+      throw new TypeError(`lint-repository: unsupported argument ${arg}`);
+    }
+  }
+  return [...new Set(argv)];
+}
+
 async function main() {
   const root = process.cwd();
+  const extra = forwardedArgs(process.argv.slice(2));
   const { default: config } = await import(pathToFileURL(join(root, "eslint.config.js")).href);
   const partitions = lintPartitions(workspacePackages(root), globalIgnores(config));
   const peakDirectory = mkdtempSync(join(tmpdir(), "keiko-lint-peak-"));
   const peaks = [];
   const failed = runPartitions(partitions, (args) => {
     const peakFile = join(peakDirectory, `${peaks.length}.txt`);
-    const status = lintPartition(root, args, peakFile);
+    const status = lintPartition(root, [...args, ...extra], peakFile);
     const label = partitions[peaks.length].label;
     peaks.push({ label, peakBytes: readPeak(peakFile) });
     console.log(`lint-repository: ${label} peak ${gib(peaks.at(-1).peakBytes)} GiB`);

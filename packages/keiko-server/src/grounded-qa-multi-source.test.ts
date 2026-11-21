@@ -731,7 +731,7 @@ describe("buildMultiSourceGatewayMessages", () => {
     expect(handbook).toContain("omitted files: 5000");
     expect(handbook).toContain("Files excluded by file-size policy: 5000");
     expect(handbook).toContain("Additional excluded paths not listed: 4999");
-    expect(app).not.toContain("5000");
+    expect(app).not.toMatch(/\b5000\b/u);
     const summary = mergeContextPackSummaries([
       buildGroundedAnswerContextPackSummary(first, 1, 0),
       buildGroundedAnswerContextPackSummary(scopePack("src/b.ts", 1, "second"), 1, 0),

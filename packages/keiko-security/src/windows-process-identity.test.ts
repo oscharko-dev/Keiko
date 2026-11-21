@@ -48,7 +48,7 @@ describe("readWindowsProcessCommandLine", () => {
     const program = Buffer.from(args?.at(-1) ?? "", "base64").toString("utf16le");
     expect(options?.input).toBe("4711\n");
     // The pid is data, never program text.
-    expect(program).not.toContain("4711");
+    expect(program).not.toMatch(/\b4711\b/u);
     expect(program).toContain("Get-CimInstance -ClassName Win32_Process");
     expect(program).toContain(`'^[0-9]{1,10}$'`);
   });
@@ -205,6 +205,6 @@ describe("readWindowsProcessCommandLine", () => {
       op: "security.windows-program.run",
       extra: { program: "process-identity", outcome: "host-start-timeout" },
     });
-    expect(JSON.stringify(events)).not.toContain("4711");
+    expect(JSON.stringify(events)).not.toMatch(/\b4711\b/u);
   });
 });

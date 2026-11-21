@@ -1634,6 +1634,13 @@ second root review-policy file.
 - **E2E** lives in `tests/e2e/` and runs on Playwright (chromium is the reference browser; WebKit
   timing/render on CI is a software-render artifact — don't gate on it). Smoke: `npm run
 test:e2e:smoke`. Performance-evidence and per-feature suites have their own `test:e2e:*` scripts.
+- **Test files are held to three determinism rules** (`scripts/lib/eslint-test-determinism.mjs`):
+  no measured wall-clock duration compared outside `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS`, no fixed
+  sleep outside a polling loop, and no negative substring assertion of at most four hexadecimal
+  characters, which a digest contains by chance (#4481). Older occurrences sit in the shrink-only
+  root `eslint-suppressions.json`; after removing one, run
+  `node scripts/lint-repository.mjs --prune-suppressions` and lower the ceiling in
+  `scripts/__tests__/test-determinism-register.test.mjs`.
 - Cover the input space, not one happy path: empty, boundary, malformed, and hostile inputs;
   both branches of every guard you add.
 - **Pure text rules also get seeded property tests** (`*.property.test.ts`) on the repo-owned

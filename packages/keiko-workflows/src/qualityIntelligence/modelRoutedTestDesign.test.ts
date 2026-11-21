@@ -1404,7 +1404,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     );
     expect(judgeFailures).toHaveLength(1);
     expect(judgeFailures[0]?.reasonSummary).toContain("qi-judge-runtime: 2");
-    expect(qualityFindings.map((f) => f.summaryRedacted).join("\n")).not.toContain("503");
+    expect(qualityFindings.map((f) => f.summaryRedacted).join("\n")).not.toMatch(/\b503\b/u);
   });
 
   it("persists a judge stage failure when every judge prompt exceeds the model budget", async () => {
@@ -1707,7 +1707,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — generation gateway-cal
       generationFallbackReason: "qi-gateway-provider-http",
     });
     // The raw provider message must never leak into the persisted/summary reason.
-    expect(JSON.stringify(manifest)).not.toContain("503");
+    expect(JSON.stringify(manifest)).not.toMatch(/\b503\b/u);
   });
 
   it("does NOT over-count the deterministic model-free baseline (modelCallCount 0 → 0 dispatches)", async () => {

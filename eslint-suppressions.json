@@ -1,0 +1,832 @@
+{
+  "native/runtime-supervisor/linux/protocol.test.mjs": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 2
+    }
+  },
+  "native/runtime-supervisor/macos/app-runtime.test.mjs": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-cli/src/memory.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-cli/src/process-guards.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 2
+    }
+  },
+  "packages/keiko-cli/src/uninstall-windows-helper.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-connectors/src/adf-to-text.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-connectors/src/jira-issue-template-check.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-connectors/src/jira-sync-adapter.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-contracts/src/citation-markers.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-contracts/src/editor-snippets.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-contracts/src/jira-description-sections.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-contracts/src/jira-markdown-wiki.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-contracts/src/qualityIntelligence/__tests__/assertNever.test.ts": {
+    "keiko-test-determinism/no-short-hex-negative-substring": {
+      "count": 1
+    }
+  },
+  "packages/keiko-contracts/src/qualityIntelligence/__tests__/sourceEnvelope.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-evidence/src/qualityIntelligence/__tests__/verificationCache.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-local-knowledge/src/chunking/chunker.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-local-knowledge/src/discovery/extract.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-local-knowledge/src/manual-source-metadata.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 3
+    }
+  },
+  "packages/keiko-local-knowledge/src/parsers/code-parser.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 3
+    }
+  },
+  "packages/keiko-local-knowledge/src/parsers/csv-parser.review.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-local-knowledge/src/parsers/csv-parser.tables.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-local-knowledge/src/parsers/docx-parser.structure.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-local-knowledge/src/parsers/html-parser.review.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-local-knowledge/src/parsers/html-parser.structure.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-local-knowledge/src/parsers/html-parser.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-local-knowledge/src/parsers/pdf-layout.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 5
+    }
+  },
+  "packages/keiko-local-knowledge/src/parsers/text-parser.structure.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-local-knowledge/src/parsers/xlsx-merged-cells.review.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-local-knowledge/src/parsers/xlsx-parser.tables.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 3
+    }
+  },
+  "packages/keiko-local-knowledge/src/parsers/xlsx-parser.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 3
+    }
+  },
+  "packages/keiko-local-knowledge/src/retrieval/lexical-normalization.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-local-knowledge/src/retrieval/query-decomposition.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-memory-capture/src/fact-admission.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-memory-capture/src/fact-relation.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-memory-capture/src/intent-ambient.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 4
+    }
+  },
+  "packages/keiko-memory-capture/src/intent-explicit.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 7
+    }
+  },
+  "packages/keiko-memory-capture/src/secret-patterns.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-memory-consolidation/src/conflicts.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-memory-vault/src/cipher.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-memory-vault/src/tombstones.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-model-gateway/src/context-window-report.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-model-gateway/src/prDescription/generate.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-quality-intelligence/src/__tests__/figma/navGraph.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-quality-intelligence/src/__tests__/generation/parseGeneratedCandidates.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-quality-intelligence/src/__tests__/generation/prompt.test.ts": {
+    "keiko-test-determinism/no-short-hex-negative-substring": {
+      "count": 1
+    }
+  },
+  "packages/keiko-quality-intelligence/src/__tests__/generation/requirementsIngestion.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-quality-intelligence/src/__tests__/intentDerivation.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-quality-intelligence/src/__tests__/requirementExcerpt.test.ts": {
+    "keiko-test-determinism/no-short-hex-negative-substring": {
+      "count": 1
+    }
+  },
+  "packages/keiko-quality-intelligence/src/__tests__/requirementInventory.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-quality-intelligence/src/__tests__/testDesignModel.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-quality-intelligence/src/hardening/__tests__/promptInjectionScrub.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 3
+    }
+  },
+  "packages/keiko-quality-intelligence/src/ingestion/__tests__/untrustedContentNormalisation.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-sandbox/src/runtime-service.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-security/src/macos-keychain.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 11
+    }
+  },
+  "packages/keiko-security/src/redaction-java.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    },
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 7
+    }
+  },
+  "packages/keiko-security/src/secret-vault.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/atlassian/jiraAttachmentMarkupText.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/atlassian/jiraAttachmentPdfSyntax.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/atlassian/jiraChatApprovalNames.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/atlassian/jiraChatApprovalProjects.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    },
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/atlassian/jiraChatCatalogWrite.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/atlassian/jiraDraftBatch.test.ts": {
+    "keiko-test-determinism/no-short-hex-negative-substring": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/coding-codex-subscription.integration.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    },
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/coding-runtime/codingRuntimeInstructionSources.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryInstructions.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/coding-runtime/codingRuntimeSnapshotStore.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/coding-runtime/opencodeNativeChildLifecycle.real.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 4
+    }
+  },
+  "packages/keiko-server/src/coding-runtime/opencodeNativeProjectBoundary.real.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/coding-runtime/opencodeNativeQualification.real.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 3
+    },
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/coding-runtime/opencodeRemoteSkills.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.hints.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 2
+    }
+  },
+  "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 3
+    }
+  },
+  "packages/keiko-server/src/coding-runtime/opencodeV2HttpClient.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/coding-sidecar-tool-facade.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    },
+    "keiko-test-determinism/no-short-hex-negative-substring": {
+      "count": 2
+    }
+  },
+  "packages/keiko-server/src/editor/builtinLanguageProviders.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/editor/dap/dapProductionService.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/editor/dap/dapReferenceStore.test.ts": {
+    "keiko-test-determinism/no-short-hex-negative-substring": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/editor/lsp/lspProcessManager.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/editor/lsp/lspSemanticTokens.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/editor/lsp/providers/goProvider.performance.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/editor/lsp/providers/javaProvider.performance.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/editor/lsp/providers/pythonProvider.performance.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/editor/lsp/providers/rustProvider.performance.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/editor/lsp/providers/shellProvider.performance.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/editor/watch/workspaceWatchService.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 4
+    }
+  },
+  "packages/keiko-server/src/gateway-context-window.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/gateway-models-in-use.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 5
+    }
+  },
+  "packages/keiko-server/src/gateway-readiness.on-demand.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 2
+    }
+  },
+  "packages/keiko-server/src/gateway-readiness.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-server/src/gitBlameParser.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/gitDelivery/agentOperationsRoutes.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/gitRepositoryReads.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-server/src/gitRoutes.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/grounded-faithfulness.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/grounded-jira-mixed.public-handler.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-server/src/grounded-qa-hybrid.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/grounded-qa-multi-source.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/local-knowledge-grounded-embedding.logging.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/local-knowledge-remediation.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/mcp/mcpCredentialRelay.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/memory-learning.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    },
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/native-file-dialog/adapter.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-server/src/ownerPrivateStateFile.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/qualityIntelligence/__tests__/figmaSnapshotAdapter.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/qualityIntelligence/__tests__/runIngestion.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/qualityIntelligence/figma/__tests__/figmaTokenStore.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/store-handlers.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/task-workspace/authorization.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/task-workspace/naming.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/task-workspace/provisioning.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-server/src/task-workspace/scale.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 3
+    }
+  },
+  "packages/keiko-server/src/update-preflight-registry.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 3
+    }
+  },
+  "packages/keiko-server/src/voice-speech-text.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 6
+    }
+  },
+  "packages/keiko-tools/src/browser/session.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 2
+    }
+  },
+  "packages/keiko-tools/src/exec.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 12
+    },
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-tools/src/git-ci-failure-context.test.ts": {
+    "keiko-test-determinism/no-short-hex-negative-substring": {
+      "count": 1
+    }
+  },
+  "packages/keiko-tools/src/patch-normalize.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-tools/src/sandbox.test.ts": {
+    "keiko-test-determinism/no-short-hex-negative-substring": {
+      "count": 1
+    }
+  },
+  "packages/keiko-verification/src/failure-location.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 7
+    }
+  },
+  "packages/keiko-workflows/src/bug-investigation/failure-parse.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-workflows/src/bug-investigation/parse.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-workflows/src/context-budget/structured-digest.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-workflows/src/planner/anchors.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-workflows/src/planner/intent.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-workflows/src/promptEnhancer/index.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-workspace/src/codeIntelligence.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 5
+    }
+  },
+  "packages/keiko-workspace/src/document-extraction.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-workspace/src/ecosystems.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-workspace/src/endpointContracts.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-workspace/src/ignore.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-workspace/src/importGraphEdges.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "packages/keiko-workspace/src/repoSearchQueryFacets.test.ts": {
+    "keiko-test-determinism/no-short-hex-negative-substring": {
+      "count": 1
+    }
+  },
+  "packages/keiko-workspace/src/repoSearchQueryTerms.test.ts": {
+    "keiko-test-determinism/no-short-hex-negative-substring": {
+      "count": 2
+    },
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-workspace/src/symbolGraphLexing.physical-lines.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "packages/keiko-workspace/src/workspaceIndex.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "scripts/__tests__/check-knip.test.mjs": {
+    "keiko-test-determinism/no-short-hex-negative-substring": {
+      "count": 1
+    }
+  },
+  "scripts/__tests__/check-local-state.test.mjs": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "scripts/__tests__/check-release-required-workflow-names.test.mjs": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "scripts/__tests__/check-ui-i18n-guard.test.mjs": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "scripts/__tests__/customer-shape-litellm-twin.test.mjs": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    },
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "scripts/__tests__/dev-runner.test.mjs": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 2
+    }
+  },
+  "scripts/__tests__/dotenv-token.test.mjs": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "scripts/__tests__/editor-bundle-size.test.mjs": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "scripts/__tests__/jira-lab-requirements-lanes.test.mjs": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 4
+    }
+  },
+  "scripts/__tests__/jira-lab-tls-lifetime.test.mjs": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "scripts/__tests__/jira-lab-work-project-lock.test.mjs": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 2
+    }
+  },
+  "scripts/__tests__/memory-lab-anchor-redact.test.mjs": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "scripts/__tests__/memory-lab-learning-wait.test.mjs": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 5
+    }
+  },
+  "scripts/__tests__/memory-lab-lifecycle.test.mjs": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "scripts/__tests__/memory-lab-run-options.test.mjs": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    },
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 3
+    }
+  },
+  "scripts/__tests__/portable-launch-setup-smoke.test.mjs": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "scripts/__tests__/portable-runtime.test.mjs": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 2
+    }
+  },
+  "scripts/__tests__/registry-install-smoke-security.test.mjs": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "scripts/__tests__/release-impact-notes.test.mjs": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "tests/atlassian-connectors/hostile-provider.integration.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "tests/atlassian-connectors/jira-draft-result-outcome-view.test.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "tests/e2e/editor-debugging-2348.spec.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  },
+  "tests/e2e/editor-language-intelligence-1383.spec.ts": {
+    "keiko-test-determinism/no-unguarded-wall-clock-assertion": {
+      "count": 1
+    }
+  },
+  "tests/e2e/workspace-performance.spec.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 3
+    }
+  },
+  "tests/scripts/dev-runner-readiness.test.ts": {
+    "keiko-test-determinism/no-fixed-sleep": {
+      "count": 1
+    }
+  }
+}
