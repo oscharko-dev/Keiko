@@ -332,7 +332,8 @@ describe("dev quality workflows", () => {
       if: "${{ always() && steps.sonar-scan.outcome != 'skipped' }}",
       run:
         'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log" ' +
-        "--require-full-analysis --require-runner-memory-budget",
+        "--require-full-analysis --require-runner-memory-budget " +
+        `--runner-swap-mb "$(awk '/^SwapTotal:/ { print int($2 / 1024) }' /proc/meminfo)"`,
     });
     expect(ci).not.toContain("oscharko-dev/Keiko/.github/actions/verify-");
     expect(ciWorkflow.jobs["coverage-sonar"]["timeout-minutes"]).toBe(50);
@@ -426,9 +427,11 @@ describe("dev quality workflows", () => {
     const scanStep = ci.slice(scanAt, verifyAt);
     const verifyStep = ci.slice(verifyAt, ci.indexOf("- name:", verifyAt + 1));
     expect(scanStep).toMatch(/^\s+SONAR_SCANNER_OPTS: "-Xmx512m"$/mu);
-    expect(scanStep).toMatch(/^\s+SONAR_SCANNER_JAVA_OPTS: "-Xmx4352m"$/mu);
+    expect(scanStep).toMatch(/^\s+SONAR_SCANNER_JAVA_OPTS: "-Xmx6144m"$/mu);
+    expect(scanStep).toMatch(/^\s+sudo swapon \/sonar-extra\.swap$/mu);
     expect(verifyStep).toContain("--require-full-analysis");
     expect(verifyStep).toContain("--require-runner-memory-budget");
+    expect(verifyStep).toContain("--runner-swap-mb");
     expect(localSonarCompose).toContain(
       'SONAR_SCANNER_JAVA_OPTS: "${KEIKO_LOCAL_SONAR_ENGINE_JAVA_OPTS:--Xmx2048m}"',
     );

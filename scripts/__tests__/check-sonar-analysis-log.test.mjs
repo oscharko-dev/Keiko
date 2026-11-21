@@ -525,6 +525,21 @@ describe("Sonar scanner warning gate", () => {
       run: (input) => runs.push(input),
     });
     expect(runs.at(-1)).toEqual({ path: "/tmp/sonar.log", requireRunnerMemoryBudget: true });
+    executeSonarLogCli({
+      argv: [
+        "--log",
+        "/tmp/sonar.log",
+        "--require-runner-memory-budget",
+        "--runner-swap-mb",
+        "11263",
+      ],
+      run: (input) => runs.push(input),
+    });
+    expect(runs.at(-1)).toEqual({
+      path: "/tmp/sonar.log",
+      requireRunnerMemoryBudget: true,
+      runnerSwapMb: 11263,
+    });
     const errors = [];
     const exitCodes = [];
     executeSonarLogCli({
@@ -686,6 +701,53 @@ describe("hosted runner memory budget", () => {
         "runner memory budget: Node.js 10432 MB plus scanner engine 3995 MB leaves 1556 MB of " +
           "15983 MB, below the 2048 MB reserve",
       ]);
+    }
+  });
+
+  // Run 44903653244: Node.js at 9216 MB ran out in the JS/TS phase, and an engine at 3072 MB ran
+  // out in the architecture phase; the ceilings that fit both exceed the runner's RAM alone.
+  it("counts the measured swap the job adds, and still rejects ceilings beyond it", () => {
+    const ceilings = hostedMemoryLog({ engineJavaOpts: "-Xmx6144m", nodeMb: 10432 });
+    expect(runnerMemoryBudgetFailures(ceilings)).toEqual([
+      "runner memory budget: Node.js 10432 MB plus scanner engine 6144 MB leaves -593 MB of " +
+        "15983 MB, below the 2048 MB reserve",
+    ]);
+    expect(runnerMemoryBudgetFailures(ceilings, 11263)).toEqual([]);
+    expect(runnerMemoryBudgetFailures(ceilings, 2640)).toEqual([
+      "runner memory budget: Node.js 10432 MB plus scanner engine 6144 MB leaves 2047 MB of " +
+        "15983 MB plus 2640 MB swap, below the 2048 MB reserve",
+    ]);
+    expect(() =>
+      runSonarLogCheck({
+        log: (message) => message,
+        path: "/tmp/sonar.log",
+        read: () => ceilings,
+        requireRunnerMemoryBudget: true,
+        runnerSwapMb: 11263,
+      }),
+    ).not.toThrow();
+  });
+
+  it("refuses a swap total that is not a whole number of MB", () => {
+    for (const value of ["", "-1", "1.5", "8G"]) {
+      const errors = [];
+      const exitCodes = [];
+      executeSonarLogCli({
+        argv: [
+          "--log",
+          "/tmp/sonar.log",
+          "--require-runner-memory-budget",
+          "--runner-swap-mb",
+          value,
+        ],
+        error: (message) => errors.push(message),
+        run: () => undefined,
+        setExitCode: (code) => exitCodes.push(code),
+      });
+      expect(errors).toEqual([
+        "sonar-analysis-log: FAIL - --runner-swap-mb must be a whole number of MB",
+      ]);
+      expect(exitCodes).toEqual([1]);
     }
   });
 

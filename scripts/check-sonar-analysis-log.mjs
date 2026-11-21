@@ -459,7 +459,9 @@ export function fullAnalysisEvidenceFailures(contents) {
 // Node.js ceiling of 12480 MB and an uncapped engine on a 15983 MB runner). SonarJS reports the
 // machine and the Node.js ceiling. The CLI reports SONAR_SCANNER_JAVA_OPTS when it is set; without
 // an -Xmx there the engine JVM takes its default ceiling, a quarter of the machine. A committed
-// engine heap above the configured ceiling (`memory total=`) is never ignored.
+// engine heap above the configured ceiling (`memory total=`) is never ignored. CI adds swap before
+// the scan and passes the measured total (--runner-swap-mb): the Node.js bridge peaks in the JS/TS
+// phase and the engine in the architecture phase, so swap absorbs the ceiling that is idle.
 const RUNNER_MEMORY_RESERVE_MB = 2048;
 const JVM_DEFAULT_HEAP_FRACTION = 4;
 const NODE_MEMORY_CONFIGURATION = /Memory configuration: OS \((\d+) MB\), Node\.js \((\d+) MB\)/u;
@@ -486,7 +488,7 @@ function configuredEngineHeapMb(lines) {
   return amount === undefined || unit === undefined ? undefined : Math.ceil(amount * unit);
 }
 
-export function runnerMemoryBudgetFailures(contents) {
+export function runnerMemoryBudgetFailures(contents, swapMb = 0) {
   const lines = contents.split(/\r?\n/u);
   const osMb = largestMatch(lines, NODE_MEMORY_CONFIGURATION, 1);
   const nodeMb = largestMatch(lines, NODE_MEMORY_CONFIGURATION, 2);
@@ -495,12 +497,14 @@ export function runnerMemoryBudgetFailures(contents) {
   }
   const ceilingMb = configuredEngineHeapMb(lines) ?? Math.floor(osMb / JVM_DEFAULT_HEAP_FRACTION);
   const engineMb = Math.max(ceilingMb, largestMatch(lines, ENGINE_HEAP_TOTAL, 1) ?? 0);
-  const headroomMb = osMb - nodeMb - engineMb;
+  const headroomMb = osMb + swapMb - nodeMb - engineMb;
+  const capacity =
+    swapMb > 0 ? `${String(osMb)} MB plus ${String(swapMb)} MB swap` : `${String(osMb)} MB`;
   return headroomMb >= RUNNER_MEMORY_RESERVE_MB
     ? []
     : [
         `runner memory budget: Node.js ${String(nodeMb)} MB plus scanner engine ` +
-          `${String(engineMb)} MB leaves ${String(headroomMb)} MB of ${String(osMb)} MB, below ` +
+          `${String(engineMb)} MB leaves ${String(headroomMb)} MB of ${capacity}, below ` +
           `the ${String(RUNNER_MEMORY_RESERVE_MB)} MB reserve`,
       ];
 }
@@ -512,23 +516,39 @@ export function runSonarLogCheck(input = {}) {
   const failures = [
     ...sonarLogFailures(contents),
     ...(input.requireFullAnalysis === true ? fullAnalysisEvidenceFailures(contents) : []),
-    ...(input.requireRunnerMemoryBudget === true ? runnerMemoryBudgetFailures(contents) : []),
+    ...(input.requireRunnerMemoryBudget === true
+      ? runnerMemoryBudgetFailures(contents, input.runnerSwapMb ?? 0)
+      : []),
   ];
   if (failures.length > 0) throw new Error(failures.join("\n"));
   (input.log ?? console.log)("sonar-analysis-log: PASS - no scanner warnings.");
   return failures;
 }
 
+function runnerSwapOption(argv) {
+  if (!argv.includes("--runner-swap-mb")) return undefined;
+  const swapMb = decimalInteger(optionValue(argv, "--runner-swap-mb") ?? "");
+  if (swapMb === undefined || swapMb < 0) {
+    throw new TypeError("--runner-swap-mb must be a whole number of MB");
+  }
+  return swapMb;
+}
+
+function cliCheckInput(argv) {
+  const requireFullAnalysis = argv.includes("--require-full-analysis");
+  const requireRunnerMemoryBudget = argv.includes("--require-runner-memory-budget");
+  const runnerSwapMb = runnerSwapOption(argv);
+  return {
+    path: optionValue(argv, "--log"),
+    ...(requireFullAnalysis ? { requireFullAnalysis } : {}),
+    ...(requireRunnerMemoryBudget ? { requireRunnerMemoryBudget } : {}),
+    ...(runnerSwapMb === undefined ? {} : { runnerSwapMb }),
+  };
+}
+
 export function executeSonarLogCli(input = {}) {
   try {
-    const argv = input.argv ?? process.argv.slice(2);
-    const requireFullAnalysis = argv.includes("--require-full-analysis");
-    const requireRunnerMemoryBudget = argv.includes("--require-runner-memory-budget");
-    (input.run ?? runSonarLogCheck)({
-      path: optionValue(argv, "--log"),
-      ...(requireFullAnalysis ? { requireFullAnalysis } : {}),
-      ...(requireRunnerMemoryBudget ? { requireRunnerMemoryBudget } : {}),
-    });
+    (input.run ?? runSonarLogCheck)(cliCheckInput(input.argv ?? process.argv.slice(2)));
   } catch (error) {
     (input.error ?? console.error)(
       `sonar-analysis-log: FAIL - ${error instanceof Error ? error.message : String(error)}`,

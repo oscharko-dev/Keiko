@@ -1084,11 +1084,17 @@ jobs:
           # (sonar.scanner.javaOpts). Uncapped, the engine took a quarter of the runner (3996 MB)
           # beside the JS/TS analyzer's Node.js heap (sonar.javascript.node.maxspace) and the runner
           # was lost mid-scan (#4481). The verify step below fails the job when both ceilings leave
-          # the runner less than its reserve. A 3072 MB engine ran out of heap in the architecture
-          # phase (2026-11-21), so the engine keeps more than its former default quarter.
+          # the runner less than its reserve. In CI a 9216 MB bridge ran out in the JS/TS phase and a
+          # 3072 MB engine in the architecture phase (2026-11-21); the ceilings that fit both exceed
+          # the runner's RAM, so the step adds swap first: the two heaps peak in different phases.
           SONAR_SCANNER_OPTS: "-Xmx512m"
-          SONAR_SCANNER_JAVA_OPTS: "-Xmx4352m"
+          SONAR_SCANNER_JAVA_OPTS: "-Xmx6144m"
         run: |
+          sudo fallocate -l 8G /sonar-extra.swap
+          sudo chmod 600 /sonar-extra.swap
+          sudo mkswap /sonar-extra.swap >/dev/null
+          sudo swapon /sonar-extra.swap
+          free -m
           # ADR-0139 D6: transient SonarCloud-side provisioning or network failures retry with
           # backoff before failing closed; genuine quality-gate failures are never retried.
           for attempt in 1 2 3; do
@@ -1123,6 +1129,7 @@ jobs:
           --log "$RUNNER_TEMP/sonar-scanner.log"
           --require-full-analysis
           --require-runner-memory-budget
+          --runner-swap-mb "$(awk '/^SwapTotal:/ { print int($2 / 1024) }' /proc/meminfo)"
       - name: Verify SonarCloud Banking Grade PR evidence
         if: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' }}
         env:
