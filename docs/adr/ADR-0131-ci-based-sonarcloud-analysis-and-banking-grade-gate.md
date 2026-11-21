@@ -203,8 +203,8 @@ change.
   `npm run gates:sonar`: the real SonarJS analyzer over the changed files in the self-hosted local
   SonarQube. It covers the rules the plugin does not ship. A hook can be skipped; the full
   analysis on `dev` is the backstop.
-- `SonarCloud Code Analysis` is no longer a required status check of `dev`. The repository owner
-  removes it from the branch protection; until then a pull request cannot report it.
+- `SonarCloud Code Analysis` is no longer a required status check of `dev`; it was removed from the
+  branch protection on 2026-11-21, which now requires nine checks.
 
 ## Consequences
 
