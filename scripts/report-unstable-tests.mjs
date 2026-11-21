@@ -100,13 +100,16 @@ export function classify(samples, runCount) {
   return { unstable, failing };
 }
 
+const TABLE_SEPARATOR = String.raw`\|`;
+
 export function formatReport(label, testCount, runCount, { unstable, failing }) {
   const rows = (entries) =>
     entries.length === 0
       ? ["| none | |"]
-      : entries.map(
-          ({ id, statuses }) => `| ${id.replaceAll("|", "\\|")} | ${statuses.join(", ")} |`,
-        );
+      : entries.map(({ id, statuses }) => {
+          const cell = id.replaceAll("|", TABLE_SEPARATOR);
+          return `| ${cell} | ${statuses.join(", ")} |`;
+        });
   return [
     `### Unstable tests: ${label}`,
     "",

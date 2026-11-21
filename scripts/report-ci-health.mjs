@@ -159,35 +159,37 @@ export function formatReport(health, failingJobs, violations, since) {
  * One GitHub API read. A 5xx answer is retried up to `attempts` times with a growing pause, since
  * the jobs endpoint answers an occasional 502 under load; any other failure is final.
  */
-export async function api(path, token, { fetch = globalThis.fetch, attempts = 3, pause } = {}) {
-  const wait = pause ?? sleep;
-  for (let attempt = 1; ; attempt += 1) {
-    const response = await fetch(`${API_ROOT}${path}`, {
-      headers: {
-        accept: "application/vnd.github+json",
-        authorization: `Bearer ${token}`,
-        "x-github-api-version": "2022-11-28",
-      },
-    });
-    if (response.ok) return response.json();
-    if (response.status < 500 || attempt >= attempts) {
-      throw new Error(`GitHub API ${response.status} for ${path}`);
-    }
-    await wait(attempt * 2000);
+export async function api(
+  path,
+  token,
+  { fetch = globalThis.fetch, attempts = 3, pause, attempt = 1 } = {},
+) {
+  const response = await fetch(`${API_ROOT}${path}`, {
+    headers: {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${token}`,
+      "x-github-api-version": "2022-11-28",
+    },
+  });
+  if (response.ok) return response.json();
+  if (response.status < 500 || attempt >= attempts) {
+    throw new Error(`GitHub API ${response.status} for ${path}`);
   }
+  // A retry follows its pause, so it is a tail call rather than an await inside a loop.
+  await (pause ?? sleep)(attempt * 2000);
+  return api(path, token, { fetch, attempts, pause, attempt: attempt + 1 });
 }
 
-async function fetchRuns(repo, token, since) {
-  const runs = [];
-  for (let page = 1; ; page += 1) {
-    const body = await api(
-      `/repos/${repo}/actions/workflows/ci.yml/runs?event=pull_request&created=%3E%3D${since}&per_page=${PAGE_SIZE}&page=${page}`,
-      token,
-    );
-    const batch = Array.isArray(body.workflow_runs) ? body.workflow_runs : [];
-    runs.push(...batch);
-    if (batch.length < PAGE_SIZE || page >= MAX_PAGES) return runs;
-  }
+async function fetchRuns(repo, token, since, page = 1, runs = []) {
+  const body = await api(
+    `/repos/${repo}/actions/workflows/ci.yml/runs?event=pull_request&created=%3E%3D${since}&per_page=${PAGE_SIZE}&page=${page}`,
+    token,
+  );
+  const batch = Array.isArray(body.workflow_runs) ? body.workflow_runs : [];
+  runs.push(...batch);
+  // The next page exists only when this one was full, so pages are read one after another.
+  if (batch.length < PAGE_SIZE || page >= MAX_PAGES) return runs;
+  return fetchRuns(repo, token, since, page + 1, runs);
 }
 
 /** The `--days <n>` window (default 7) as the ISO date it starts on. */
@@ -202,12 +204,13 @@ async function failedRunJobs(repo, token, runs) {
   const failedRuns = runs
     .filter((run) => run.event === "pull_request" && run.conclusion === "failure")
     .slice(0, FAILED_RUNS_INSPECTED);
-  const jobsByRun = [];
-  for (const run of failedRuns) {
-    const body = await api(`/repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`, token);
-    jobsByRun.push(Array.isArray(body.jobs) ? body.jobs : []);
-  }
-  return jobsByRun;
+  // At most FAILED_RUNS_INSPECTED independent reads, well inside the API's concurrency limits.
+  return Promise.all(
+    failedRuns.map(async (run) => {
+      const body = await api(`/repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`, token);
+      return Array.isArray(body.jobs) ? body.jobs : [];
+    }),
+  );
 }
 
 function publish(argv, result) {

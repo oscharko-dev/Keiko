@@ -1,5 +1,5 @@
 import { RuleTester } from "eslint";
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { testDeterminismPlugin } from "../lib/eslint-test-determinism.mjs";
 
@@ -9,6 +9,20 @@ RuleTester.itOnly = it.only;
 
 const tester = new RuleTester({ languageOptions: { ecmaVersion: 2024, sourceType: "module" } });
 const { rules } = testDeterminismPlugin;
+
+describe("testDeterminismPlugin", () => {
+  it("exports exactly the three determinism rules, each a problem with its own message", () => {
+    expect(Object.keys(rules).sort()).toEqual([
+      "no-fixed-sleep",
+      "no-short-hex-negative-substring",
+      "no-unguarded-wall-clock-assertion",
+    ]);
+    for (const rule of Object.values(rules)) {
+      expect(rule.meta.type).toBe("problem");
+      expect(Object.keys(rule.meta.messages)).toHaveLength(1);
+    }
+  });
+});
 
 tester.run("no-unguarded-wall-clock-assertion", rules["no-unguarded-wall-clock-assertion"], {
   valid: [
