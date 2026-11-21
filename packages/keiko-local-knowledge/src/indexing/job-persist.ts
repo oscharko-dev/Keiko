@@ -19,13 +19,16 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { INDEXING_JOB_STATUSES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-records";
 import type { DatabaseSync } from "node:sqlite";
+import { capsuleIdColumn, isKnowledgeSourceId, nullableChunkIdColumn } from "../knowledge-ids.js";
 import {
   type KnowledgeSqlRow,
   nullableNumberColumn,
   nullableTextColumn,
   numberColumn,
   textColumn,
+  vocabularyAdmission,
 } from "../sql-row.js";
 
 const INSERT_JOB_SQL = [
@@ -85,7 +88,7 @@ const SELECT_BY_ID_SQL = [
 
 export interface IndexingJobRow {
   readonly id: string;
-  readonly capsule_id: string;
+  readonly capsule_id: KnowledgeCapsuleId;
   readonly source_ids_json: string;
   readonly started_at: number;
   readonly finished_at: number | null;
@@ -96,14 +99,14 @@ export interface IndexingJobRow {
   readonly skipped_documents: number;
   readonly last_error_code: string | null;
   readonly last_error_message: string | null;
-  readonly resume_token: string | null;
+  readonly resume_token: ChunkId | null;
   readonly cancellation_requested: number;
 }
 
 function readIndexingJobRow(row: KnowledgeSqlRow): IndexingJobRow {
   return {
     id: textColumn(row, "id"),
-    capsule_id: textColumn(row, "capsule_id"),
+    capsule_id: capsuleIdColumn(row, "capsule_id"),
     source_ids_json: textColumn(row, "source_ids_json"),
     started_at: numberColumn(row, "started_at"),
     finished_at: nullableNumberColumn(row, "finished_at"),
@@ -114,7 +117,7 @@ function readIndexingJobRow(row: KnowledgeSqlRow): IndexingJobRow {
     skipped_documents: numberColumn(row, "skipped_documents"),
     last_error_code: nullableTextColumn(row, "last_error_code"),
     last_error_message: nullableTextColumn(row, "last_error_message"),
-    resume_token: nullableTextColumn(row, "resume_token"),
+    resume_token: nullableChunkIdColumn(row, "resume_token"),
     cancellation_requested: numberColumn(row, "cancellation_requested"),
   };
 }
@@ -194,38 +197,33 @@ export function selectJobById(db: DatabaseSync, id: string): IndexingJobRow | un
 export function isJobCancellationRequested(db: DatabaseSync, id: string): boolean {
   const row = db
     .prepare("SELECT cancellation_requested FROM indexing_jobs WHERE id = :id")
-    .get({ id }) as { readonly cancellation_requested: number } | undefined;
-  return row?.cancellation_requested === 1;
+    .get({ id });
+  return row !== undefined && numberColumn(row, "cancellation_requested") === 1;
 }
 
 // ─── Row → IndexingJobRecord ──────────────────────────────────────────────────
 function parseSourceIds(json: string): readonly KnowledgeSourceId[] {
   const parsed: unknown = JSON.parse(json);
+  if (!Array.isArray(parsed)) return [];
+  const entries: readonly unknown[] = parsed;
   if (
-    !Array.isArray(parsed) ||
-    !parsed.every(
-      (entry): entry is string =>
-        typeof entry === "string" && entry.length > 0 && entry.trim() === entry,
+    !entries.every(
+      (entry): entry is KnowledgeSourceId =>
+        typeof entry === "string" && entry.trim() === entry && isKnowledgeSourceId(entry),
     )
   ) {
     return [];
   }
-  return parsed.map((entry) => entry as KnowledgeSourceId);
+  return entries;
 }
 
-const VALID_STATUSES: ReadonlySet<IndexingJobStatus> = new Set<IndexingJobStatus>([
-  "queued",
-  "running",
-  "succeeded",
-  "failed",
-  "cancelled",
-]);
+const isIndexingJobStatus = vocabularyAdmission(INDEXING_JOB_STATUSES);
 
 function parseStatus(raw: string): IndexingJobStatus {
   // The schema does not CHECK status, so a corrupt row could carry an unexpected string.
   // Default to "failed" so consumers do not silently accept a row that violates the closed
   // union — the row remains visible (operators can recover it manually).
-  return VALID_STATUSES.has(raw as IndexingJobStatus) ? (raw as IndexingJobStatus) : "failed";
+  return isIndexingJobStatus(raw) ? raw : "failed";
 }
 
 function buildLastError(row: IndexingJobRow): IndexingJobError | undefined {
@@ -249,7 +247,7 @@ function optionalJobFields(row: IndexingJobRow): OptionalJobFields {
 export function rowToIndexingJobRecord(row: IndexingJobRow): IndexingJobRecord {
   return {
     id: row.id,
-    capsuleId: row.capsule_id as KnowledgeCapsuleId,
+    capsuleId: row.capsule_id,
     sourceIds: parseSourceIds(row.source_ids_json),
     startedAt: row.started_at,
     status: parseStatus(row.status),
@@ -266,6 +264,6 @@ export function rowToResumableIndexingJobRecord(
 ): IndexingJobRecord & { readonly resumeToken?: ChunkId } {
   return {
     ...rowToIndexingJobRecord(row),
-    ...(row.resume_token !== null ? { resumeToken: row.resume_token as ChunkId } : {}),
+    ...(row.resume_token !== null ? { resumeToken: row.resume_token } : {}),
   };
 }

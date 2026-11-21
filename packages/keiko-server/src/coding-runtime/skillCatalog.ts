@@ -123,22 +123,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function own(record: Record<string, unknown>, key: string): unknown {
-  return Object.hasOwn(record, key) ? record[key] : undefined;
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === "boolean";
+}
+
+// The record's own `key` when it passes `accept`; an inherited or failing value is `undefined`.
+function ownField<T>(
+  record: Record<string, unknown>,
+  key: string,
+  accept: (value: unknown) => value is T,
+): T | undefined {
+  if (!Object.hasOwn(record, key)) return undefined;
+  const value = record[key];
+  return accept(value) ? value : undefined;
 }
 
 // Canonicalize and close one candidate's definition. Any field that does not validate fails the
 // whole entry closed (`undefined`); a capability the bound catalog does not hold is refused like a
 // malformed one, so a skill can never name a tool the catalog lacks.
 function definitionOf(entry: Record<string, unknown>): SkillDefinition | undefined {
-  const skillId = own(entry, "skillId");
-  const implicitAllowed = own(entry, "implicitAllowed");
-  const category = own(entry, "category");
-  const capabilities = own(entry, "capabilities");
-  const compatibility = own(entry, "compatibility");
-  if (!isCodeTaskSkillId(skillId) || typeof implicitAllowed !== "boolean") return undefined;
-  if (!isSkillCategory(category) || !isSkillCompatibilityV1(compatibility)) return undefined;
-  if (!isSkillCapabilitySet(capabilities)) return undefined;
+  const skillId = ownField(entry, "skillId", isCodeTaskSkillId);
+  const implicitAllowed = ownField(entry, "implicitAllowed", isBoolean);
+  const category = ownField(entry, "category", isSkillCategory);
+  const capabilities = ownField(entry, "capabilities", isSkillCapabilitySet);
+  const compatibility = ownField(entry, "compatibility", isSkillCompatibilityV1);
+  if (skillId === undefined || implicitAllowed === undefined) return undefined;
+  if (category === undefined || compatibility === undefined) return undefined;
+  if (capabilities === undefined) return undefined;
   if (!capabilities.every((id) => CATALOGUED_TOOL_IDS.has(id))) return undefined;
   return {
     skillId,
@@ -155,8 +166,12 @@ function definitionOf(entry: Record<string, unknown>): SkillDefinition | undefin
 
 function canonicalizeEntry(candidate: unknown): SkillCatalogEntry | undefined {
   if (!isRecord(candidate)) return undefined;
-  const enabled = own(candidate, "enabled") ?? true;
-  if (typeof enabled !== "boolean") return undefined;
+  // An absent or undefined `enabled` flag enables the entry; any other value must be a boolean.
+  const enabled =
+    Object.hasOwn(candidate, "enabled") && candidate.enabled !== undefined
+      ? ownField(candidate, "enabled", isBoolean)
+      : true;
+  if (enabled === undefined) return undefined;
   const definition = definitionOf(candidate);
   if (definition === undefined) return undefined;
   return Object.freeze({

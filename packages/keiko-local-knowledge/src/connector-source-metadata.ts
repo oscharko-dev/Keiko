@@ -24,6 +24,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   isAtlassianConnectorProvider,
+  isAtlassianSyncFailureReason,
+  isAtlassianSyncTerminalStatus,
   isJiraIssueCitationMetadata,
   isSafeAtlassianConnectorBaseUrl,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -31,6 +33,7 @@ import { validateAtlassianSyncBounds } from "@oscharko-dev/keiko-contracts/runti
 
 import { KnowledgeStoreError } from "./errors.js";
 import type { KnowledgeStore } from "./store.js";
+import { capsuleIdColumn, sourceIdColumn } from "./knowledge-ids.js";
 import {
   nullableNumberColumn,
   nullableTextColumn,
@@ -65,8 +68,8 @@ export interface ConnectorSourceMetadata extends ConnectorSourceDefinition {
 }
 
 interface ConnectorSourceRow {
-  readonly capsule_id: string;
-  readonly source_id: string;
+  readonly capsule_id: KnowledgeCapsuleId;
+  readonly source_id: KnowledgeSourceId;
   readonly provider: AtlassianConnectorProvider;
   readonly connector_id: string;
   readonly base_url: string;
@@ -95,8 +98,8 @@ function storedProvider(row: KnowledgeSqlRow): AtlassianConnectorProvider {
 
 function readConnectorSourceRow(row: KnowledgeSqlRow): ConnectorSourceRow {
   return {
-    capsule_id: textColumn(row, "capsule_id"),
-    source_id: textColumn(row, "source_id"),
+    capsule_id: capsuleIdColumn(row, "capsule_id"),
+    source_id: sourceIdColumn(row, "source_id"),
     provider: storedProvider(row),
     connector_id: textColumn(row, "connector_id"),
     base_url: textColumn(row, "base_url"),
@@ -207,17 +210,14 @@ function scopeKeysFromJson(json: string): readonly string[] {
   return parsed;
 }
 
-const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
-  "partial",
-  "succeeded",
-  "failed",
-  "cancelled",
-]);
-
+// A stored status or failure reason outside the contract vocabulary reads as absent, so stale
+// bookkeeping never blocks a re-sync.
 function optionalTerminalStatus(value: string | null): AtlassianSyncTerminalStatus | undefined {
-  return value !== null && TERMINAL_STATUSES.has(value)
-    ? (value as AtlassianSyncTerminalStatus)
-    : undefined;
+  return isAtlassianSyncTerminalStatus(value) ? value : undefined;
+}
+
+function optionalFailureReason(value: string | null): AtlassianSyncFailureReason | undefined {
+  return isAtlassianSyncFailureReason(value) ? value : undefined;
 }
 
 function rowToMetadata(row: ConnectorSourceRow): ConnectorSourceMetadata {
@@ -231,9 +231,10 @@ function rowToMetadata(row: ConnectorSourceRow): ConnectorSourceMetadata {
     throw new KnowledgeStoreError("persisted connector sync bounds are invalid; cannot sync");
   }
   const status = optionalTerminalStatus(row.last_sync_status);
+  const failureReason = optionalFailureReason(row.last_failure_reason);
   return {
-    capsuleId: row.capsule_id as KnowledgeCapsuleId,
-    sourceId: row.source_id as KnowledgeSourceId,
+    capsuleId: row.capsule_id,
+    sourceId: row.source_id,
     provider: row.provider,
     connectorId: row.connector_id,
     baseUrl: row.base_url,
@@ -243,9 +244,7 @@ function rowToMetadata(row: ConnectorSourceRow): ConnectorSourceMetadata {
     ...(row.last_sync_at !== null ? { lastSyncAt: row.last_sync_at } : {}),
     ...(row.last_sync_run_id !== null ? { lastSyncRunId: row.last_sync_run_id } : {}),
     ...(status !== undefined ? { lastSyncStatus: status } : {}),
-    ...(row.last_failure_reason !== null
-      ? { lastFailureReason: row.last_failure_reason as AtlassianSyncFailureReason }
-      : {}),
+    ...(failureReason !== undefined ? { lastFailureReason: failureReason } : {}),
     ...(row.last_change_summary_json !== null
       ? { lastChangeSummaryJson: row.last_change_summary_json }
       : {}),
@@ -307,6 +306,21 @@ interface CitationItemRow {
   readonly citation_metadata_json: string | null;
 }
 
+function readCitationDocumentRow(row: KnowledgeSqlRow): CitationDocumentRow {
+  return {
+    document_path: textColumn(row, "document_path"),
+    safe_display_name: textColumn(row, "safe_display_name"),
+  };
+}
+
+function readCitationItemRow(row: KnowledgeSqlRow): CitationItemRow {
+  return {
+    item_key: textColumn(row, "item_key"),
+    webui_path: nullableTextColumn(row, "webui_path"),
+    citation_metadata_json: nullableTextColumn(row, "citation_metadata_json"),
+  };
+}
+
 // Fail-closed re-validation of the persisted metadata projection: parse, then require the shared
 // contract guard. Anything else (unparseable, non-record, unvalidated shape) resolves to absent.
 function validatedCitationMetadata(json: string | null): JiraIssueCitationMetadata | undefined {
@@ -326,14 +340,15 @@ function readCitationDocument(
   sourceId: KnowledgeSourceId,
   documentId: DocumentId,
 ): CitationDocumentRow | undefined {
-  return store._internal.db
+  const row = store._internal.db
     .prepare(
       [
         "SELECT document_path, safe_display_name FROM documents",
         "WHERE capsule_id = :capsuleId AND source_id = :sourceId AND id = :documentId",
       ].join(" "),
     )
-    .get({ capsuleId, sourceId, documentId }) as CitationDocumentRow | undefined;
+    .get({ capsuleId, sourceId, documentId });
+  return row === undefined ? undefined : readCitationDocumentRow(row);
 }
 
 function readItemByRelativePath(
@@ -342,7 +357,7 @@ function readItemByRelativePath(
   sourceId: KnowledgeSourceId,
   relativePath: string,
 ): CitationItemRow | undefined {
-  return store._internal.db
+  const row = store._internal.db
     .prepare(
       [
         "SELECT item_key, webui_path, citation_metadata_json FROM connector_item_fingerprints",
@@ -350,7 +365,8 @@ function readItemByRelativePath(
         "AND relative_path = :relativePath",
       ].join(" "),
     )
-    .get({ capsuleId, sourceId, relativePath }) as CitationItemRow | undefined;
+    .get({ capsuleId, sourceId, relativePath });
+  return row === undefined ? undefined : readCitationItemRow(row);
 }
 
 // Document rows may store either the absolute mount path (`<virtual root>/pages/<id>.html`) or

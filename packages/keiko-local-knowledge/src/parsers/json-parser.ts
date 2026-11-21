@@ -183,6 +183,12 @@ function descendObject(
   }
 }
 
+// JSON.parse yields only scalars, arrays and plain objects, so a non-array Object reached by the
+// walk is a parsed JSON object keyed by strings.
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return value instanceof Object && !Array.isArray(value);
+}
+
 function walk(ctx: ScanContext, value: unknown, pointer: string, depth: number): void {
   if (ctx.stopped || ctx.nestingStopped) return;
   if (isScalarOrEmpty(value)) {
@@ -197,14 +203,15 @@ function walk(ctx: ScanContext, value: unknown, pointer: string, depth: number):
     descendArray(ctx, value, pointer, depth);
     return;
   }
-  descendObject(ctx, value as Record<string, unknown>, pointer, depth);
+  if (isJsonObject(value)) descendObject(ctx, value, pointer, depth);
 }
 
 function parseJsonValue(
   text: string,
 ): { readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly error: string } {
   try {
-    return { ok: true, value: JSON.parse(text) as unknown };
+    const value: unknown = JSON.parse(text);
+    return { ok: true, value };
   } catch (error) {
     // Return only the error TYPE name, never the raw parser message. Modern Node embeds a
     // fragment of the surrounding document text in JSON.parse error messages, which would

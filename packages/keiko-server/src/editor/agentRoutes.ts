@@ -14,10 +14,10 @@
 //
 // No raw source content (snapshot text, text edits, patch bodies) is logged anywhere in this path.
 
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { IncomingMessage, ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { basename, resolve } from "node:path";
-import { Readable } from "node:stream";
+import { Socket } from "node:net";
 import type {
   EditorAgentAction,
   EditorAgentActionDenyReason,
@@ -1613,21 +1613,26 @@ function serverResolvedPathIssues(
 // operator reconstructs. `executeServerResolvedAction` already keys its diagnostics on the same
 // value, so a delegated route's activity-log lines now join to the identical id (AGENTS.md §8).
 function serverActionContext(body: unknown, path: string, actionId: string): RouteContext {
-  const req = Readable.from([
-    Buffer.from(JSON.stringify(body), "utf8"),
-  ]) as unknown as IncomingMessage;
-  (req as { method?: string }).method = "POST";
-  const res = {
-    writableEnded: false,
-    on: (): typeof res => res,
-  } as unknown as ServerResponse;
+  const req = inProcessRequest("POST", Buffer.from(JSON.stringify(body), "utf8"));
   return {
     req,
-    res,
+    res: new ServerResponse(req),
     params: {},
     url: new URL(`http://127.0.0.1${path}`),
     correlationId: actionId,
   };
+}
+
+// An in-process request whose body is already complete. Its unconnected socket never reads, so the
+// pushed body is all it yields. `complete` is set as for a fully received request, so an abort guard
+// that reads it does not take the end of this body for a client disconnect.
+function inProcessRequest(method: "GET" | "POST", body: Buffer | undefined): IncomingMessage {
+  const req = new IncomingMessage(new Socket());
+  req.method = method;
+  if (body !== undefined) req.push(body);
+  req.push(null);
+  req.complete = true;
+  return req;
 }
 
 function actionAbortSignal(ctx: RouteContext): AbortSignal {
@@ -2857,13 +2862,8 @@ function gitReadContext(
 ): RouteContext {
   const url = new URL(`http://127.0.0.1${path}`);
   for (const [key, value] of entries) url.searchParams.set(key, value);
-  const req = Readable.from([]) as unknown as IncomingMessage;
-  (req as { method?: string }).method = "GET";
-  const res = {
-    writableEnded: false,
-    on: (): typeof res => res,
-  } as unknown as ServerResponse;
-  return { req, res, params: {}, url, correlationId: actionId };
+  const req = inProcessRequest("GET", undefined);
+  return { req, res: new ServerResponse(req), params: {}, url, correlationId: actionId };
 }
 
 function runGitStatusResult(

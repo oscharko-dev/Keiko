@@ -17,6 +17,12 @@ import type {
 import type { DatabaseSync } from "node:sqlite";
 
 import { mapChunkToCitation } from "../chunking/citation-mapper.js";
+import {
+  capsuleIdColumn,
+  chunkIdColumn,
+  documentIdColumn,
+  sourceIdColumn,
+} from "../knowledge-ids.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 import type { KnowledgeStore } from "../store.js";
 import { nullableTextColumn, numberColumn, textColumn, type KnowledgeSqlRow } from "../sql-row.js";
@@ -67,18 +73,18 @@ export interface ScopeDocumentScope {
 }
 
 interface DocumentRow {
-  readonly id: string;
-  readonly capsule_id: string;
-  readonly source_id: string;
+  readonly id: DocumentId;
+  readonly capsule_id: KnowledgeCapsuleId;
+  readonly source_id: KnowledgeSourceId;
   readonly content_hash: string;
   readonly safe_display_name: string;
 }
 
 function readDocumentRow(row: KnowledgeSqlRow): DocumentRow {
   return {
-    id: textColumn(row, "id"),
-    capsule_id: textColumn(row, "capsule_id"),
-    source_id: textColumn(row, "source_id"),
+    id: documentIdColumn(row, "id"),
+    capsule_id: capsuleIdColumn(row, "capsule_id"),
+    source_id: sourceIdColumn(row, "source_id"),
     content_hash: textColumn(row, "content_hash"),
     safe_display_name: textColumn(row, "safe_display_name"),
   };
@@ -283,9 +289,9 @@ export function unionSections(
 function toDocument(store: KnowledgeStore, row: DocumentRow, text: string): ScopeDocument {
   const { db, contentCipher } = store._internal;
   return {
-    capsuleId: row.capsule_id as KnowledgeCapsuleId,
-    sourceId: row.source_id as KnowledgeSourceId,
-    documentId: row.id as DocumentId,
+    capsuleId: row.capsule_id,
+    sourceId: row.source_id,
+    documentId: row.id,
     displayName: row.safe_display_name,
     contentHash: row.content_hash,
     text,
@@ -338,20 +344,20 @@ function coveringChunk(
   db: DatabaseSync,
   document: DocumentRef,
   offset: number,
-): string | undefined {
+): ChunkId | undefined {
   const params = { c: String(document.capsuleId), d: String(document.documentId), o: offset };
   const covering = db
     .prepare(
       "SELECT id FROM chunks WHERE capsule_id = :c AND document_id = :d AND character_start <= :o AND character_end > :o ORDER BY order_index LIMIT 1",
     )
-    .get(params) as { readonly id: string } | undefined;
-  if (covering !== undefined) return covering.id;
+    .get(params);
+  if (covering !== undefined) return chunkIdColumn(covering, "id");
   const next = db
     .prepare(
       "SELECT id FROM chunks WHERE capsule_id = :c AND document_id = :d AND character_start >= :o ORDER BY character_start, order_index LIMIT 1",
     )
-    .get(params) as { readonly id: string } | undefined;
-  return next?.id;
+    .get(params);
+  return next === undefined ? undefined : chunkIdColumn(next, "id");
 }
 
 /**
@@ -366,7 +372,7 @@ export function referenceForSpan(
 ): RetrievalReference | undefined {
   const chunkId = coveringChunk(store._internal.db, document, span.characterStart);
   if (chunkId === undefined) return undefined;
-  const citation = mapChunkToCitation(store, document.capsuleId, chunkId as ChunkId);
+  const citation = mapChunkToCitation(store, document.capsuleId, chunkId);
   if (citation === null) return undefined;
   const sectionPath = citation.sectionPath ?? span.sectionPath;
   return {

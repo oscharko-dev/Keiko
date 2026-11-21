@@ -41,8 +41,10 @@ function localPath(entry: PluginEntry): string | undefined {
   return source?.type === "local" && typeof source.path === "string" ? source.path : undefined;
 }
 
-function status(entry: PluginEntry): unknown {
-  return record(entry.state)?.status;
+// The plugin's reported state as readiness: `pending` for every state but `active` and `failed`.
+function status(entry: PluginEntry): OpenCodeNativePluginReadiness {
+  const reported = record(entry.state)?.status;
+  return reported === "active" || reported === "failed" ? reported : "pending";
 }
 
 function requiredState(
@@ -62,9 +64,7 @@ function requiredState(
   if (claimed === undefined) return "pending";
   // The id must come from Keiko's own generated file, once, and nowhere else.
   if (byId.length > 1 || !atPath.includes(claimed)) return "failed";
-  const state = status(claimed);
-  if (state === "active") return "active";
-  return state === "failed" ? "failed" : "pending";
+  return status(claimed);
 }
 
 /**

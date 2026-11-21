@@ -11,6 +11,7 @@
 // gates -> dispose, with dispose guaranteed) is unit-tested with fakes; the node ports that perform the
 // real filesystem copy and sandboxed command runs are assembled in assuredPreFilterRunner.ts.
 
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { currentPlatform, planIsolatedRun, probeBackends } from "@oscharko-dev/keiko-sandbox";
 import {
   DEFAULT_ASSURED_PRE_FILTER_CONFIG,
@@ -59,8 +60,8 @@ export interface DisposableExecutionPorts {
   readonly applyCandidate: (root: string) => Promise<void>;
   // Runs one untrusted command inside the disposable root through the enforced sandbox.
   readonly run: (root: string, cmd: SandboxedCommand) => Promise<SandboxedRunResult>;
-  // Reads a JSON report a gate command wrote into the disposable root.
-  readonly readReport: (root: string, relativePath: string) => unknown;
+  // Reads a JSON report a gate command wrote into the disposable root; undefined when absent/invalid.
+  readonly readReport: (root: string, relativePath: string) => CatalogJsonValue | undefined;
   // Removes the disposable root (always called, even on failure).
   readonly dispose: (root: string) => Promise<void>;
   readonly buildCommand: SandboxedCommand;

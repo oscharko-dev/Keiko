@@ -33,6 +33,7 @@ import type {
 import {
   VOICE_PROFILE_NEGOTIATION_MODE,
   VOICE_PROTOCOL_VERSION,
+  isVoiceControlMessage,
   validateVoiceControlMessage,
 } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import {
@@ -143,10 +144,6 @@ function closeRejectedSocket(ws: WsSocket, code: number, reason: string): void {
     clearTimeout(terminateTimer);
   });
 }
-
-type LiveSessionCreateMessage = VoiceSessionCreateMessage & {
-  readonly transcriptionLanguage?: unknown;
-};
 
 interface LiveDictationSessionState {
   readonly sessionId: string;
@@ -323,7 +320,7 @@ function readSessionCreateFrame(
   ws: WsSocket,
   raw: string,
   redact: (value: unknown) => unknown,
-): LiveSessionCreateMessage | undefined {
+): VoiceSessionCreateMessage | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -331,11 +328,7 @@ function readSessionCreateFrame(
     closeRejectedSocket(ws, 1008, "invalid opening frame");
     return undefined;
   }
-  if (
-    !validateVoiceControlMessage(parsed).ok ||
-    !isRecord(parsed) ||
-    parsed.kind !== "session.create"
-  ) {
+  if (!isVoiceControlMessage(parsed) || parsed.kind !== "session.create") {
     closeRejectedSocket(ws, 1008, "expected session.create");
     return undefined;
   }
@@ -345,7 +338,7 @@ function readSessionCreateFrame(
     closeRejectedSocket(ws, 1008, "dialogue fields are not accepted");
     return undefined;
   }
-  return parsed as unknown as LiveSessionCreateMessage;
+  return parsed;
 }
 
 class VoiceLiveDictationConnection {

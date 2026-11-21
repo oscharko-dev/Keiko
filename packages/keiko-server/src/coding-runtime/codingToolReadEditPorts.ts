@@ -1,3 +1,4 @@
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import { createHash } from "node:crypto";
 import type {
   CodingWorkbenchRuntimeFailureCode,
@@ -890,9 +891,9 @@ function validSnapshotRead(
 ): info is Extract<SecureWorkspaceTextSnapshotResult, { readonly ok: true }>["info"] {
   if (info === null || typeof info !== "object" || Reflect.ownKeys(info).length !== 3) return false;
   return (
-    ownSnapshotValue(info, "type") === "file" &&
-    ownSnapshotValue(info, "size") === Buffer.byteLength(text, "utf8") &&
-    Number.isFinite(ownSnapshotValue(info, "mtimeMs"))
+    ownSnapshotValueIs(info, "type", "file") &&
+    ownSnapshotValueIs(info, "size", Buffer.byteLength(text, "utf8")) &&
+    ownSnapshotFiniteNumber(info, "mtimeMs")
   );
 }
 
@@ -903,9 +904,23 @@ interface SnapshotInfoCandidate {
   readonly mtimeMs?: unknown;
 }
 
-function ownSnapshotValue(info: SnapshotInfoCandidate, key: keyof SnapshotInfoCandidate): unknown {
+// Whether `key` is an own data member of `info` holding exactly `expected`; an accessor never is.
+function ownSnapshotValueIs(
+  info: SnapshotInfoCandidate,
+  key: keyof SnapshotInfoCandidate,
+  expected: string | number,
+): boolean {
   const descriptor = Object.getOwnPropertyDescriptor(info, key);
-  return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
+  return descriptor !== undefined && "value" in descriptor && descriptor.value === expected;
+}
+
+// Whether `key` is an own data member of `info` holding a finite number; an accessor never is.
+function ownSnapshotFiniteNumber(
+  info: SnapshotInfoCandidate,
+  key: keyof SnapshotInfoCandidate,
+): boolean {
+  const descriptor = Object.getOwnPropertyDescriptor(info, key);
+  return descriptor !== undefined && "value" in descriptor && Number.isFinite(descriptor.value);
 }
 
 // A path that does not exist is a legitimate precondition of the file a materialization creates or
@@ -2282,9 +2297,9 @@ function isAborted(signal: AbortSignal | undefined): boolean {
 function mutationBinding(
   mutationGuard: CodingToolMutationGuard,
 ): RuntimeProducerBinding | undefined | null {
-  const record = mutationGuard as unknown as Record<string, unknown>;
-  if (!("binding" in record)) return undefined;
-  return isRuntimeProducerBinding(record.binding) ? record.binding : null;
+  if (!("binding" in mutationGuard)) return undefined;
+  const binding: unknown = mutationGuard.binding;
+  return isRuntimeProducerBinding(binding) ? binding : null;
 }
 
 function safeMutationBinding(
@@ -2297,23 +2312,27 @@ function safeMutationBinding(
   }
 }
 
+const PRODUCER_BINDING_DIGEST = /^[a-f0-9]{64}$/u;
+
+// Non-empty identities, two SHA-256 hex digests and a parseable expiry. The binding is checked as
+// unknown: a guard whose binding breaks its declared type (null, a wrong-typed field) is refused as
+// binding-unavailable instead of throwing.
 function isRuntimeProducerBinding(value: unknown): value is RuntimeProducerBinding {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
   return (
-    nonEmpty(record.runId) &&
-    digest(record.envelopeDigest) &&
-    nonEmpty(record.workspaceId) &&
-    digest(record.workspaceRootDigest) &&
-    typeof record.expiresAt === "string" &&
-    Number.isFinite(Date.parse(record.expiresAt))
+    isRecord(value) &&
+    nonEmptyBindingText(value.runId) &&
+    bindingDigest(value.envelopeDigest) &&
+    nonEmptyBindingText(value.workspaceId) &&
+    bindingDigest(value.workspaceRootDigest) &&
+    typeof value.expiresAt === "string" &&
+    Number.isFinite(Date.parse(value.expiresAt))
   );
 }
 
-function nonEmpty(value: unknown): value is string {
+function nonEmptyBindingText(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function digest(value: unknown): value is string {
-  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+function bindingDigest(value: unknown): value is string {
+  return typeof value === "string" && PRODUCER_BINDING_DIGEST.test(value);
 }

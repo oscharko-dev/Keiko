@@ -3,6 +3,7 @@ import { captureCatalogJson, createToolRef } from "@oscharko-dev/keiko-tool-cata
 import type {
   CatalogDigest,
   CatalogJsonObject,
+  CatalogJsonValue,
   CatalogVersionRef,
   ToolRef,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -47,38 +48,55 @@ function object(value: unknown): CatalogJsonObject {
   );
   return value as CatalogJsonObject;
 }
-function scalarFields(value: CatalogJsonObject): void {
-  requireDispatch(
-    [value.requestDigest, value.projectionDigest, value.scopeDigest].every(
-      (digest) => typeof digest === "string" && DIGEST.test(digest),
-    ),
-    "invalid",
-    "cursor-invalid",
-  );
-  requireDispatch(
-    [value.budgetReservationId, value.nonce].every(
-      (id) => typeof id === "string" && /^[A-Za-z0-9_.-]{1,128}$/u.test(id),
-    ),
-    "invalid",
-    "cursor-invalid",
-  );
-  requireDispatch(
-    typeof value.expiresAt === "string" &&
-      Number.isSafeInteger(Date.parse(value.expiresAt)) &&
-      new Date(value.expiresAt).toISOString() === value.expiresAt,
-    "invalid",
-    "cursor-invalid",
-  );
-  requireDispatch(
-    typeof value.pageSequence === "number" &&
-      Number.isSafeInteger(value.pageSequence) &&
-      value.pageSequence >= 1 &&
-      value.pageSequence <= 10_000,
-    "invalid",
-    "cursor-invalid",
-  );
+// The CatalogDigest brand is erased at runtime; 64 lowercase hex characters are its whole definition.
+function isCursorDigest(value: CatalogJsonValue | undefined): value is CatalogDigest {
+  return typeof value === "string" && DIGEST.test(value);
 }
-function identityFields(value: CatalogJsonObject): void {
+function isCursorId(value: CatalogJsonValue | undefined): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_.-]{1,128}$/u.test(value);
+}
+type CursorScalars = Omit<CursorBinding, "toolRef" | "profile">;
+function scalarFields(value: CatalogJsonObject): CursorScalars {
+  const { requestDigest, projectionDigest, scopeDigest, budgetReservationId, nonce } = value;
+  requireDispatch(
+    isCursorDigest(requestDigest) &&
+      isCursorDigest(projectionDigest) &&
+      isCursorDigest(scopeDigest),
+    "invalid",
+    "cursor-invalid",
+  );
+  requireDispatch(
+    isCursorId(budgetReservationId) && isCursorId(nonce),
+    "invalid",
+    "cursor-invalid",
+  );
+  const { expiresAt, pageSequence } = value;
+  requireDispatch(
+    typeof expiresAt === "string" &&
+      Number.isSafeInteger(Date.parse(expiresAt)) &&
+      new Date(expiresAt).toISOString() === expiresAt,
+    "invalid",
+    "cursor-invalid",
+  );
+  requireDispatch(
+    typeof pageSequence === "number" &&
+      Number.isSafeInteger(pageSequence) &&
+      pageSequence >= 1 &&
+      pageSequence <= 10_000,
+    "invalid",
+    "cursor-invalid",
+  );
+  return {
+    requestDigest,
+    scopeDigest,
+    projectionDigest,
+    expiresAt,
+    budgetReservationId,
+    nonce,
+    pageSequence,
+  };
+}
+function identityFields(value: CatalogJsonObject): Pick<CursorBinding, "toolRef" | "profile"> {
   const ref = object(value.toolRef);
   requireDispatch(
     Object.keys(ref)
@@ -89,7 +107,7 @@ function identityFields(value: CatalogJsonObject): void {
     "invalid",
     "cursor-invalid",
   );
-  createToolRef(ref.canonicalId, ref.contractVersion);
+  const toolRef = createToolRef(ref.canonicalId, ref.contractVersion);
   const profile = object(value.profile);
   requireDispatch(
     Object.keys(profile).sort(compareStrings).join() === "id,version" &&
@@ -101,6 +119,7 @@ function identityFields(value: CatalogJsonObject): void {
     "invalid",
     "cursor-invalid",
   );
+  return { toolRef, profile: { id: profile.id, version: profile.version } };
 }
 export function captureCursorBinding(source: unknown): CursorBinding {
   try {
@@ -112,9 +131,9 @@ export function captureCursorBinding(source: unknown): CursorBinding {
       "invalid",
       "cursor-invalid",
     );
-    scalarFields(value);
-    identityFields(value);
-    return deepFreeze(value) as unknown as CursorBinding;
+    const scalars = scalarFields(value);
+    const { toolRef, profile } = identityFields(value);
+    return deepFreeze({ toolRef, ...scalars, profile });
   } catch (error) {
     if (error instanceof CatalogDispatchFault) throw error;
     throw new CatalogDispatchFault("invalid", "cursor-invalid");

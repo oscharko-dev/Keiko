@@ -43,6 +43,21 @@ import type { CodingSafeActivityProjection } from "./codingSafeActivityProjectio
 import type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
 import type { CodingRuntimeEditOutcomeObserver } from "./codingToolFacadePorts.js";
 import type { SemanticSearchProvider } from "@oscharko-dev/keiko-workspace";
+import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import type {
+  RuntimeCapabilityAudience,
+  RuntimeCapabilityResolution,
+} from "./runtimeCapabilityStore.js";
+
+/**
+ * What a runtime prompt-token reservation answers: the run it admitted, or the closed refusal. An
+ * admitted reservation may also name its model call, which the settlement hands back (#3873).
+ */
+export type CodingRuntimePromptReservation = ReturnType<
+  CodingRuntimeAuthorityService["reservePromptTokens"]
+> & {
+  readonly modelCallId?: number;
+};
 
 /**
  * One opened repository semantic index, and the handle that closes it again (#3416). Structurally
@@ -120,10 +135,11 @@ export interface CodingRuntimeHost {
     | {
         readonly authenticate: (
           capability: string,
-          audience: "model-gateway" | "tool-facade",
-        ) => unknown;
+          audience: RuntimeCapabilityAudience,
+        ) => RuntimeCapabilityResolution;
         readonly reservePromptTokens?:
-          ((capability: string, promptTokens: number) => unknown) | undefined;
+          | ((capability: string, promptTokens: number) => CodingRuntimePromptReservation)
+          | undefined;
         readonly unavailableOptionalTools?:
           ((runId: string) => ReadonlySet<OpenCodeOptionalToolName> | undefined) | undefined;
       }

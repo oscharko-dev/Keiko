@@ -6,6 +6,7 @@
 // adapter authority.
 
 import { createHash } from "node:crypto";
+import { canonicalise } from "@oscharko-dev/keiko-security";
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import type {
@@ -438,26 +439,10 @@ function cacheKey(request: GitRepositoryAgentOperationRequest): string | undefin
   return `${request.projectId}\0${request.idempotencyKey}`;
 }
 
-function compareCodeUnits(left: string, right: string): number {
-  if (left < right) return -1;
-  if (left > right) return 1;
-  return 0;
-}
-
-function normalizedForDigest(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalizedForDigest);
-  if (!isPlainObject(value)) return value;
-  return Object.fromEntries(
-    Object.keys(value)
-      .sort(compareCodeUnits)
-      .map((key) => [key, normalizedForDigest(value[key])]),
-  );
-}
-
 function fingerprintRequest(request: GitRepositoryAgentOperationRequest): string {
-  return createHash("sha256")
-    .update(JSON.stringify(normalizedForDigest(request)))
-    .digest("hex");
+  // Canonical JSON (keys in code-unit order, undefined members dropped): the text the former
+  // sort-then-stringify form produced, so request fingerprints are unchanged.
+  return createHash("sha256").update(canonicalise(request)).digest("hex");
 }
 
 function deniedStatus(reason: GitRepositoryAgentDenialReason): number {

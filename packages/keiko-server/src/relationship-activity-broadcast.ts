@@ -15,6 +15,13 @@
 // hold the process alive during shutdown.
 
 import type { ServerResponse } from "node:http";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticRecord,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 import { writeSseFrame, type SseBackpressureSignal } from "./sse-write.js";
 
 /** One serialized SSE frame for one activity snapshot, keyed for change detection. */
@@ -28,6 +35,8 @@ export interface ActivityBroadcastSource {
   readonly collectFrames: () => readonly ActivityFrame[];
   readonly refreshMs: number;
   readonly pingMs: number;
+  /** Where a failed frame computation is recorded; the default diagnostic sink when absent. */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 /** Consumer half: one SSE connection. Aborting the controller detaches the subscriber. */
@@ -46,6 +55,8 @@ interface Broadcaster {
   // Change-detection state is broadcaster-global: frames are deterministic per snapshot
   // content (redaction included), so one diff baseline serves every subscriber.
   lastFrames: ReadonlyMap<string, string>;
+  // Set while consecutive ticks fail, so one failure episode records one diagnostic per subscriber.
+  tickFailing: boolean;
   readonly source: ActivityBroadcastSource;
   readonly refresh: NodeJS.Timeout;
   readonly ping: NodeJS.Timeout;
@@ -70,9 +81,49 @@ function writeTo(subscriber: ActivitySubscriber, frame: string): void {
   );
 }
 
+// The labels of the diagnostic for a frame computation that threw (a stored row of an unexpected
+// type, a database fault). The record is body-free; each subscriber receives it under its own
+// request correlation.
+const FRAME_FAILURE_DIAGNOSTIC = {
+  correlationId: UNKNOWN_CORRELATION_ID,
+  operation: "GET /api/relationships/events",
+  source: "relationship-activity-broadcast",
+  redact: (): string => "server-operation-failed",
+};
+
+function recordFrameFailure(
+  source: ActivityBroadcastSource,
+  subscribers: Iterable<ActivitySubscriber>,
+  record: ServerDiagnosticRecord,
+): void {
+  for (const subscriber of subscribers) {
+    emitServerDiagnostic(source.diagnostics, {
+      ...record,
+      correlationId: subscriber.correlationId ?? UNKNOWN_CORRELATION_ID,
+    });
+  }
+}
+
+// A tick runs from a timer, where a thrown error is an uncaught exception that ends the process.
+// A failed computation is recorded and skipped: the diff baseline stays, and the next tick retries.
 function runTick(broadcaster: Broadcaster): void {
+  let frames: readonly ActivityFrame[];
+  try {
+    frames = broadcaster.source.collectFrames();
+  } catch (error) {
+    if (!broadcaster.tickFailing) {
+      recordFrameFailure(
+        broadcaster.source,
+        broadcaster.subscribers,
+        serverDiagnosticFromError({ ...FRAME_FAILURE_DIAGNOSTIC, error }),
+      );
+    }
+    broadcaster.tickFailing = true;
+    return;
+  }
+  broadcaster.tickFailing = false;
   const nextFrames = new Map<string, string>();
-  for (const { id, frame } of broadcaster.source.collectFrames()) {
+  for (const { id, frame } of frames) {
     nextFrames.set(id, frame);
     if (broadcaster.lastFrames.get(id) !== frame) {
       // Iterating the live Set is safe: a backpressure kill that aborts→detaches mid-iteration
@@ -107,6 +158,7 @@ function ensureBroadcaster(
     workspaceId,
     subscribers: new Set(),
     lastFrames: new Map(),
+    tickFailing: false,
     source,
     refresh: setInterval((): void => {
       runTick(broadcaster);
@@ -131,9 +183,24 @@ function teardownIfEmpty(scope: object, broadcaster: Broadcaster): void {
 // baseline advances. This keeps one compute per join instead of a per-connection sweep
 // while guaranteeing existing subscribers never miss a transition that happened
 // between ticks.
+// A failed computation is recorded under the joiner's correlation. The joiner stays subscribed, and
+// the cleared baseline makes the next successful tick send every frame, so the joiner still
+// receives the full state; a repeated frame is harmless to the existing subscribers.
 function emitJoinState(broadcaster: Broadcaster, joiner: ActivitySubscriber): void {
+  let frames: readonly ActivityFrame[];
+  try {
+    frames = broadcaster.source.collectFrames();
+  } catch (error) {
+    recordFrameFailure(
+      broadcaster.source,
+      [joiner],
+      serverDiagnosticFromError({ ...FRAME_FAILURE_DIAGNOSTIC, error }),
+    );
+    broadcaster.lastFrames = new Map();
+    return;
+  }
   const nextFrames = new Map<string, string>();
-  for (const { id, frame } of broadcaster.source.collectFrames()) {
+  for (const { id, frame } of frames) {
     nextFrames.set(id, frame);
     const changed = broadcaster.lastFrames.get(id) !== frame;
     for (const subscriber of broadcaster.subscribers) {

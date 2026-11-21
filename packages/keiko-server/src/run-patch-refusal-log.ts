@@ -120,22 +120,20 @@ function refusalReason(value: unknown): RunPatchRefusalReason {
  * activity-log sink swallows its own write failures.
  */
 export function logRunPatchRefusal(
-  event: { readonly type: string; readonly runId: string },
+  event: { readonly type: string; readonly runId: string } & PatchValidationRaw,
   activityLog: ServerLogSink = processServerLogSink(),
 ): void {
   const workflow = PATCH_VALIDATION_EVENT_WORKFLOWS[event.type];
-  if (workflow === undefined) return;
-  const raw = event as unknown as PatchValidationRaw;
-  if (raw.ok !== false) return;
+  if (workflow === undefined || event.ok !== false) return;
   activityLog.write(
     activityLogEvent(
       RUN_PATCH_REFUSAL_OPERATION,
       { correlationId: correlationIdOrUnknown(event.runId) },
       {
         workflow,
-        reason: refusalReason(raw.rejectionCode),
-        patchBytes: count(raw.patchBytes),
-        fileCount: count(raw.filesChanged),
+        reason: refusalReason(event.rejectionCode),
+        patchBytes: count(event.patchBytes),
+        fileCount: count(event.filesChanged),
         completeness: "complete",
         loss: "none",
       },

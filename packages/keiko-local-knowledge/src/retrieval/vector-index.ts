@@ -6,6 +6,12 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  EMBEDDING_VECTOR_METRICS,
+  EMBEDDING_VECTOR_NORMALIZATIONS,
+  type EmbeddingVectorMetric,
+  type EmbeddingVectorNormalization,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
 
 import {
@@ -13,6 +19,7 @@ import {
   writeVectorIndexState,
   type VectorIndexStateRecord,
 } from "../indexing/vector-index-state.js";
+import { sourceIdColumn } from "../knowledge-ids.js";
 import type { KnowledgeLogSink } from "../knowledge-log.js";
 import type { KnowledgeStore } from "../store.js";
 
@@ -30,6 +37,7 @@ import {
   nullableTextColumn,
   numberColumn,
   textColumn,
+  vocabularyAdmission,
 } from "../sql-row.js";
 
 export type VectorIndexMode = "disabled" | "auto" | "usearch";
@@ -147,19 +155,19 @@ function readStoredVectorRow(row: KnowledgeSqlRow): StoredVectorRow {
 
 interface CandidateMetadataRow {
   readonly chunk_id: string;
-  readonly source_id: string;
+  readonly source_id: KnowledgeSourceId;
 }
 
 function readCandidateMetadataRow(row: KnowledgeSqlRow): CandidateMetadataRow {
   return {
     chunk_id: textColumn(row, "chunk_id"),
-    source_id: textColumn(row, "source_id"),
+    source_id: sourceIdColumn(row, "source_id"),
   };
 }
 
 const USEARCH_PROVIDER = "usearch";
-const VECTOR_METRICS = new Set(["cosine", "dot", "euclidean"]);
-const VECTOR_NORMALIZATIONS = new Set(["l2", "none", "unknown"]);
+const isVectorMetric = vocabularyAdmission(EMBEDDING_VECTOR_METRICS);
+const isVectorNormalization = vocabularyAdmission(EMBEDDING_VECTOR_NORMALIZATIONS);
 const DEFAULT_MAX_INDEX_BYTES = 256 * 1024 * 1024;
 const STORE_TAGS = new WeakMap<KnowledgeStore, string>();
 let storeTagCounter = 0;
@@ -219,24 +227,29 @@ function vectorStamp(request: VectorIndexSearchRequest, filtered: boolean): Vect
         `WHERE ${where}`,
       ].join(" "),
     )
-    .get(filtered ? requestParams(request) : { capsule_id: String(request.capsule.id) }) as
-    VectorIndexStampRow | undefined;
-  return row ?? { n: 0, max_created_at: null };
+    .get(filtered ? requestParams(request) : { capsule_id: String(request.capsule.id) });
+  if (row === undefined) return { n: 0, max_created_at: null };
+  return { n: numberColumn(row, "n"), max_created_at: nullableNumberColumn(row, "max_created_at") };
 }
 
-function validStoredIdentityRow(row: StoredVectorIdentityRow): boolean {
+interface AdmittedVectorIdentityRow extends StoredVectorIdentityRow {
+  readonly embedding_normalization: EmbeddingVectorNormalization | null;
+  readonly vector_metric: EmbeddingVectorMetric;
+}
+
+function validStoredIdentityRow(row: StoredVectorIdentityRow): row is AdmittedVectorIdentityRow {
   const normalization = row.embedding_normalization;
   return (
     Number.isSafeInteger(row.vector_dimensions) &&
     row.vector_dimensions > 0 &&
-    VECTOR_METRICS.has(row.vector_metric) &&
-    (normalization === null || VECTOR_NORMALIZATIONS.has(normalization))
+    isVectorMetric(row.vector_metric) &&
+    (normalization === null || isVectorNormalization(normalization))
   );
 }
 
 function identityFromRow(row: StoredVectorIdentityRow): EmbeddingModelIdentity | undefined {
-  const normalization = row.embedding_normalization;
   if (!validStoredIdentityRow(row)) return undefined;
+  const normalization = row.embedding_normalization;
   return {
     provider: row.embedding_model_provider,
     modelId: row.embedding_model_id,
@@ -244,12 +257,8 @@ function identityFromRow(row: StoredVectorIdentityRow): EmbeddingModelIdentity |
       ? { modelRevision: row.embedding_model_revision }
       : {}),
     vectorDimensions: row.vector_dimensions,
-    vectorMetric: row.vector_metric as EmbeddingModelIdentity["vectorMetric"],
-    ...(normalization !== null
-      ? {
-          normalization: normalization as NonNullable<EmbeddingModelIdentity["normalization"]>,
-        }
-      : {}),
+    vectorMetric: row.vector_metric,
+    ...(normalization !== null ? { normalization } : {}),
     ...(row.embedding_instruction_version !== null
       ? { instructionVersion: row.embedding_instruction_version }
       : {}),
@@ -480,7 +489,7 @@ function candidateMetadata(
       candidate_ids_json: JSON.stringify(chunkIds),
     })
     .map(readCandidateMetadataRow);
-  return new Map(rows.map((row) => [row.chunk_id, row.source_id as KnowledgeSourceId]));
+  return new Map(rows.map((row) => [row.chunk_id, row.source_id]));
 }
 
 function successfulResult(

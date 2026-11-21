@@ -186,12 +186,16 @@ class PdfTextImageData {
   }
 }
 
+// The DOM lib declares these browser globals as always present, but Node lacks them until this
+// module installs a polyfill, so the polyfill writes through a view that marks them optional.
+interface PdfTextDomGlobals {
+  DOMMatrix?: unknown;
+  ImageData?: unknown;
+  Path2D?: unknown;
+}
+
 function installPdfTextExtractionDomPolyfills(): void {
-  const target = globalThis as {
-    DOMMatrix?: unknown;
-    ImageData?: unknown;
-    Path2D?: unknown;
-  };
+  const target: PdfTextDomGlobals = globalThis;
   target.DOMMatrix ??= PdfTextDomMatrix;
   target.ImageData ??= PdfTextImageData;
   target.Path2D ??= function PdfTextPath2D(): void {

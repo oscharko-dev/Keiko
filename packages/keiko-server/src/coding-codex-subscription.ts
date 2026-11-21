@@ -1,10 +1,12 @@
 import type {
   CodingWorkbenchCodexAuthMethod,
+  CodingWorkbenchCodexAuthSetupRequest,
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexAuthStateRoot,
   CodingWorkbenchCodexAuthStatus,
   CodingWorkbenchCodexCredentialStore,
   CodingWorkbenchCodexSubscriptionProfile,
+  CodingWorkbenchValidationResult,
 } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_CODEX_AUTH_STATUSES,
@@ -563,9 +565,12 @@ function readBody(req: RouteContext["req"]): Promise<string> {
   });
 }
 
-async function readJson(req: RouteContext["req"]): Promise<unknown> {
+async function readSetupRequest(
+  req: RouteContext["req"],
+): Promise<CodingWorkbenchValidationResult<CodingWorkbenchCodexAuthSetupRequest>> {
   const body = await readBody(req);
-  return body.trim().length === 0 ? {} : JSON.parse(body);
+  const value: unknown = body.trim().length === 0 ? {} : JSON.parse(body);
+  return validateCodingWorkbenchCodexAuthSetupRequest(value);
 }
 
 function invalidSetupRequest(): RouteResult {
@@ -640,7 +645,7 @@ export async function handleCodingCodexSubscriptionSetup(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   try {
-    const parsed = validateCodingWorkbenchCodexAuthSetupRequest(await readJson(ctx.req));
+    const parsed = await readSetupRequest(ctx.req);
     if (!parsed.ok) return invalidSetupRequest();
     if (deps.codexRuntimeAvailability?.isApprovedVerified() !== true) {
       return redistributionUnapproved();

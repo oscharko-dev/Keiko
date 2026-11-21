@@ -333,13 +333,12 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
     const scheduled = new Set<number>();
     let nextTimer = 0;
     const editorRegistry = createEditorAgentRegistry({
-      setTimer: (): number => {
+      setTimer: (): (() => void) => {
         const timer = (nextTimer += 1);
         scheduled.add(timer);
-        return timer;
-      },
-      clearTimer: (timer): void => {
-        scheduled.delete(timer as number);
+        return (): void => {
+          scheduled.delete(timer);
+        };
       },
     });
     editorRegistry.registerSnapshot(snapshot(), CAPABILITY_DIGEST);

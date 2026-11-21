@@ -8,6 +8,8 @@ import type { ChunkId, DocumentId, KnowledgeCapsuleId } from "@oscharko-dev/keik
 import type { DatabaseSync } from "node:sqlite";
 
 import type { KnowledgeStore } from "../store.js";
+import { isChunkId, isDocumentId } from "../knowledge-ids.js";
+import type { KnowledgeSqlRow, TextAdmission } from "../sql-row.js";
 
 const INSERT_LINE_RANGE_SQL = `
 INSERT INTO repository_chunk_line_ranges (
@@ -100,35 +102,43 @@ export function persistRepositoryChunkLineRange(
 }
 
 interface StoredLineRangeRow {
-  readonly chunk_id: string;
-  readonly document_id: string;
+  readonly chunk_id: ChunkId;
+  readonly document_id: DocumentId;
   readonly document_path: string;
   readonly start_line: number;
   readonly end_line: number;
   readonly document_line_count: number;
 }
 
-function stringField(row: Record<string, unknown>, key: string): string | undefined {
+function stringField(row: KnowledgeSqlRow, key: string): string | undefined {
   const value = row[key];
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function integerField(row: Record<string, unknown>, key: string): number | undefined {
+function idField<T extends string>(
+  row: KnowledgeSqlRow,
+  key: string,
+  isId: TextAdmission<T>,
+): T | undefined {
+  const value = stringField(row, key);
+  return value !== undefined && isId(value) ? value : undefined;
+}
+
+function integerField(row: KnowledgeSqlRow, key: string): number | undefined {
   const value = row[key];
   return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
 }
 
-// The driver hands back `unknown`, and casting straight to the row shape would let an undefined
-// field surface deep inside citation rendering, far from whatever produced it.
+// The driver hands back an open record of SQL values, and casting straight to the row shape would
+// let an undefined field surface deep inside citation rendering, far from whatever produced it.
 //
 // Honest scope: this cannot fire against the current schema. Both tables in the join are STRICT
 // with NOT NULL on every column read here, so SQLite itself rejects a row that would fail this
 // check. It guards the next migration, not today's data — relax a column or add a LEFT JOIN and
 // the cast would start lying silently, whereas this stops at the row that broke the contract.
-function asLineRangeRow(value: unknown): StoredLineRangeRow {
-  const row = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
-  const chunkId = stringField(row, "chunk_id");
-  const documentId = stringField(row, "document_id");
+function asLineRangeRow(row: KnowledgeSqlRow): StoredLineRangeRow {
+  const chunkId = idField(row, "chunk_id", isChunkId);
+  const documentId = idField(row, "document_id", isDocumentId);
   const documentPath = stringField(row, "document_path");
   const startLine = integerField(row, "start_line");
   const endLine = integerField(row, "end_line");
@@ -155,8 +165,8 @@ function asLineRangeRow(value: unknown): StoredLineRangeRow {
 
 function toLineRange(row: StoredLineRangeRow): RepositoryChunkLineRange {
   return {
-    chunkId: row.chunk_id as ChunkId,
-    documentId: row.document_id as DocumentId,
+    chunkId: row.chunk_id,
+    documentId: row.document_id,
     relativePath: row.document_path,
     startLine: row.start_line,
     endLine: row.end_line,
@@ -177,7 +187,7 @@ export function resolveRepositoryChunkLineRange(
        JOIN documents AS d ON d.capsule_id = r.capsule_id AND d.id = r.document_id
        WHERE r.capsule_id = :capsule_id AND r.chunk_id = :chunk_id`,
     )
-    .get({ capsule_id: capsuleId, chunk_id: chunkId }) as unknown;
+    .get({ capsule_id: capsuleId, chunk_id: chunkId });
   return row === undefined ? undefined : toLineRange(asLineRangeRow(row));
 }
 
@@ -200,6 +210,6 @@ export function listRepositoryChunkLineRanges(
       documentId === undefined
         ? { capsule_id: capsuleId }
         : { capsule_id: capsuleId, document_id: documentId },
-    ) as readonly unknown[];
+    );
   return rows.map((row) => toLineRange(asLineRangeRow(row)));
 }

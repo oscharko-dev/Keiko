@@ -1,4 +1,5 @@
 import type { DebugProcessErrorCode } from "@oscharko-dev/keiko-contracts";
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { isUtf8 } from "node:buffer";
 import { DapFrameRejectError, type DapByteSource } from "./dapFrameCodec.js";
 
@@ -211,9 +212,12 @@ function decodeBody(body: Buffer): string {
   return body.toString("utf8");
 }
 
-function parseJson(body: string): unknown {
+function parseJson(body: string): CatalogJsonValue {
   try {
-    return JSON.parse(body) as unknown;
+    // SAFETY: JSON.parse without a reviver returns only null, booleans, numbers (Infinity for
+    // "1e400"), strings, arrays and plain objects of those values (ECMA-262 JSON.parse), the
+    // members of the CatalogJsonValue type.
+    return JSON.parse(body) as CatalogJsonValue;
   } catch {
     throw new DapProtocolError("MALFORMED_MESSAGE");
   }

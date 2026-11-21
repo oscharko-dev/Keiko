@@ -15,6 +15,8 @@ import type {
   ParserDiagnostic,
 } from "@oscharko-dev/keiko-contracts";
 
+import { isDocumentId, mintedId } from "../knowledge-ids.js";
+
 // ─── Discovered file (before parsing/persistence) ────────────────────────────
 export interface DiscoveredFile {
   // POSIX-style path relative to the scope's rootPath. Never starts with `/`.
@@ -132,7 +134,7 @@ export interface DocumentIdSource {
   readonly relativePath: string;
 }
 
-// Branded helper so callers (extract.ts) don't need to repeat the cast. The returned id is
+// Branded helper so callers (extract.ts) mint document ids in one place. The returned id is
 // deterministic in `(capsuleId, sourceId, relativePath)` so a re-walk of the same scope
 // targets the SAME `documents` row — that's the lineage anchor for incremental updates.
 //
@@ -147,5 +149,5 @@ export function documentIdFor(input: DocumentIdSource): DocumentId {
   const encodedCapsuleId = encodeDocumentIdComponent(String(input.capsuleId));
   const encodedSourceId = encodeDocumentIdComponent(String(input.sourceId));
   const encodedPath = encodeDocumentIdComponent(input.relativePath);
-  return `doc:${encodedCapsuleId}:${encodedSourceId}:${encodedPath}` as DocumentId;
+  return mintedId(`doc:${encodedCapsuleId}:${encodedSourceId}:${encodedPath}`, isDocumentId);
 }

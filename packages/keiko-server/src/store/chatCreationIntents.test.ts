@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createInMemoryUiStore, createNodeUiStore, UiStoreError, type UiStore } from "./index.js";
+import { withChatCreationIntent } from "./chatCreationIntents.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
@@ -174,6 +175,40 @@ describe("durable chat creation intents", () => {
     } finally {
       fault.close();
       persistent.close();
+    }
+  });
+
+  it("reports a store fault during creation as failed, not refused", () => {
+    const path = join(directory, "store-fault.sqlite");
+    createNodeUiStore(path).close();
+    const db = new DatabaseSync(path);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const fault = new UiStoreError("INTERNAL", "A stored record holds an unexpected type.", 500);
+    try {
+      expect(() =>
+        withChatCreationIntent(
+          db,
+          {
+            requestId: REQUEST,
+            projectPath: project,
+            title: "Original",
+            requestedModelId: undefined,
+            branchLabel: undefined,
+            correlationId: undefined,
+          },
+          () => {
+            throw fault;
+          },
+        ),
+      ).toThrow(fault);
+      expect(
+        sink.events
+          .filter((event) => event.op === "chat.creation.intent")
+          .map((event) => event.extra?.outcome),
+      ).toEqual(["failed"]);
+    } finally {
+      db.close();
     }
   });
 

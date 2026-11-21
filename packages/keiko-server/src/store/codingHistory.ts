@@ -7,7 +7,8 @@ import type {
   ChatMessage,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { UiStore } from "./types.js";
-import { invalidRequest, notFound } from "./errors.js";
+import { invalidRequest, notFound, UiStoreError } from "./errors.js";
+import { textColumn, type UiStoreSqlRow } from "./sql-row.js";
 
 export interface CodingHistoryCreateInput {
   readonly projectPath: string;
@@ -148,6 +149,26 @@ interface HistoryRow {
   readonly status: "active" | "completed";
 }
 
+// The schema's CHECK admits exactly these statuses; the lookup returns the typed member.
+const HISTORY_STATUSES: ReadonlyMap<string, HistoryRow["status"]> = new Map([
+  ["active", "active"],
+  ["completed", "completed"],
+]);
+
+function readHistoryRow(row: UiStoreSqlRow): HistoryRow {
+  const status = HISTORY_STATUSES.get(textColumn(row, "status"));
+  if (status === undefined) {
+    throw new UiStoreError("INTERNAL", "Stored coding history status is invalid.", 500);
+  }
+  return {
+    chat_id: textColumn(row, "chat_id"),
+    workspace_id: textColumn(row, "workspace_id"),
+    task_id: textColumn(row, "task_id"),
+    operator_digest: textColumn(row, "operator_digest"),
+    status,
+  };
+}
+
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 /** Run ids that hold an imported file's messages; no runtime run is ever given one. */
 const IMPORT_RUN_PREFIX = "import-";
@@ -172,11 +193,10 @@ function readTask(
   id: string,
   operator?: string,
 ): CodingHistoryTask | undefined {
-  const row = db
-    .prepare("SELECT * FROM coding_history_tasks WHERE chat_id = ?")
-    .get(id) as unknown as HistoryRow | undefined;
-  if (row === undefined || (operator !== undefined && row.operator_digest !== operator))
-    return undefined;
+  const stored = db.prepare("SELECT * FROM coding_history_tasks WHERE chat_id = ?").get(id);
+  if (stored === undefined) return undefined;
+  const row = readHistoryRow(stored);
+  if (operator !== undefined && row.operator_digest !== operator) return undefined;
   const chat = store.findChatById(id);
   if (chat === undefined) return undefined;
   return {

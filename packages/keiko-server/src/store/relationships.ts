@@ -27,6 +27,13 @@ import {
   RELATIONSHIP_SUPPORTED_OBJECT_KINDS,
 } from "@oscharko-dev/keiko-contracts/runtime/relationships";
 import { invalidRequest, notFound, UiStoreError } from "./errors.js";
+import {
+  nullableNumberColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+  type UiStoreSqlRow,
+} from "./sql-row.js";
 
 // GEN-PERF-RELACT-002 — per-database prepared-statement cache (same idiom as
 // keiko-local-knowledge vector-persist.ts). The relationship-activity SSE poll calls
@@ -208,6 +215,27 @@ interface RelationshipRow {
   readonly etag: string;
   readonly confidence: number | null;
   readonly summary: string | null;
+}
+
+function readRelationshipRow(row: UiStoreSqlRow): RelationshipRow {
+  return {
+    id: textColumn(row, "id"),
+    schema_version: textColumn(row, "schema_version"),
+    workspace_scope_id: textColumn(row, "workspace_scope_id"),
+    scope_kind: textColumn(row, "scope_kind"),
+    scope_coordinate: textColumn(row, "scope_coordinate"),
+    type: textColumn(row, "type"),
+    source_kind: textColumn(row, "source_kind"),
+    source_id: textColumn(row, "source_id"),
+    target_kind: textColumn(row, "target_kind"),
+    target_id: textColumn(row, "target_id"),
+    lifecycle: textColumn(row, "lifecycle"),
+    created_at: numberColumn(row, "created_at"),
+    updated_at: numberColumn(row, "updated_at"),
+    etag: textColumn(row, "etag"),
+    confidence: nullableNumberColumn(row, "confidence"),
+    summary: nullableTextColumn(row, "summary"),
+  };
 }
 
 function rebuildScope(row: RelationshipRow): RelationshipScope {
@@ -578,7 +606,9 @@ export function listRelationships(
     " etag, confidence, summary FROM relationships WHERE " +
     clauses.join(" AND ") +
     " ORDER BY etag DESC, id ASC LIMIT ?";
-  const rows = statement(db, sql).all(...params) as unknown as RelationshipRow[];
+  const rows = statement(db, sql)
+    .all(...params)
+    .map(readRelationshipRow);
   const truncated = rows.length > q.limit;
   const slice = truncated ? rows.slice(0, q.limit) : rows;
   const entries = slice.map(rowToRelationship);
@@ -591,30 +621,39 @@ export function listRelationships(
     : { entries, truncated, nextCursor };
 }
 
-export function findRelationshipsBySource(
+interface RelationshipEndpoint {
+  readonly kind: RelationshipObjectKind;
+  readonly id: string;
+}
+
+function findRelationshipsByEndpoint(
   db: DatabaseSync,
+  sql: string,
   workspaceId: string,
-  source: { readonly kind: RelationshipObjectKind; readonly id: string },
+  endpoint: RelationshipEndpoint,
   limit: number,
 ): readonly StoredRelationship[] {
   if (limit <= 0 || limit > MAX_LIST_LIMIT) throw invalidRequest("Limit out of bounds.");
-  const rows = db
-    .prepare(SQL_FIND_BY_SOURCE)
-    .all(workspaceId, source.kind, source.id, limit) as unknown as RelationshipRow[];
-  return rows.map(rowToRelationship);
+  const rows = db.prepare(sql).all(workspaceId, endpoint.kind, endpoint.id, limit);
+  return rows.map((row) => rowToRelationship(readRelationshipRow(row)));
+}
+
+export function findRelationshipsBySource(
+  db: DatabaseSync,
+  workspaceId: string,
+  source: RelationshipEndpoint,
+  limit: number,
+): readonly StoredRelationship[] {
+  return findRelationshipsByEndpoint(db, SQL_FIND_BY_SOURCE, workspaceId, source, limit);
 }
 
 export function findRelationshipsByTarget(
   db: DatabaseSync,
   workspaceId: string,
-  target: { readonly kind: RelationshipObjectKind; readonly id: string },
+  target: RelationshipEndpoint,
   limit: number,
 ): readonly StoredRelationship[] {
-  if (limit <= 0 || limit > MAX_LIST_LIMIT) throw invalidRequest("Limit out of bounds.");
-  const rows = db
-    .prepare(SQL_FIND_BY_TARGET)
-    .all(workspaceId, target.kind, target.id, limit) as unknown as RelationshipRow[];
-  return rows.map(rowToRelationship);
+  return findRelationshipsByEndpoint(db, SQL_FIND_BY_TARGET, workspaceId, target, limit);
 }
 
 export function listRelationshipLifecycleHistory(
@@ -738,6 +777,18 @@ interface RawHealthRow {
   readonly lifecycle: string;
 }
 
+function readRawHealthRow(row: UiStoreSqlRow): RawHealthRow {
+  return {
+    id: textColumn(row, "id"),
+    type: textColumn(row, "type"),
+    source_kind: textColumn(row, "source_kind"),
+    source_id: textColumn(row, "source_id"),
+    target_kind: textColumn(row, "target_kind"),
+    target_id: textColumn(row, "target_id"),
+    lifecycle: textColumn(row, "lifecycle"),
+  };
+}
+
 function rawRowToRef(r: RawHealthRow): RelationshipHealthRelationshipRef {
   return {
     id: r.id,
@@ -757,7 +808,8 @@ function selectFindingsByLifecycle(
   const cap = MAX_RELATIONSHIPS_PER_QUERY;
   const raw = db
     .prepare(SQL_HEALTH_FINDINGS_BY_LIFECYCLE)
-    .all(workspaceId, lifecycle, cap + 1) as unknown as RawHealthRow[];
+    .all(workspaceId, lifecycle, cap + 1)
+    .map(readRawHealthRow);
   const truncated = raw.length > cap;
   const sliced = truncated ? raw.slice(0, cap) : raw;
   return { rows: sliced.map(rawRowToRef), truncated };
@@ -776,7 +828,8 @@ function selectInvalidReferences(
   // relationship as referencing an unsupported object kind.
   const raw = db
     .prepare(SQL_HEALTH_ACTIVE_RELATIONSHIPS)
-    .all(workspaceId, cap + 1) as unknown as RawHealthRow[];
+    .all(workspaceId, cap + 1)
+    .map(readRawHealthRow);
   const scanTruncated = raw.length > cap;
   const sliced = scanTruncated ? raw.slice(0, cap) : raw;
   const out: RelationshipHealthRelationshipRef[] = [];
@@ -798,7 +851,8 @@ function selectCycleParticipants(
   const cap = MAX_RELATIONSHIPS_PER_QUERY;
   const raw = db
     .prepare(SQL_HEALTH_ACTIVE_RELATIONSHIPS)
-    .all(workspaceId, cap + 1) as unknown as RawHealthRow[];
+    .all(workspaceId, cap + 1)
+    .map(readRawHealthRow);
   const scanTruncated = raw.length > cap;
   const sliced = scanTruncated ? raw.slice(0, cap) : raw;
   // Build adjacency keyed by endpoint, then DFS to find back-edges. Detection is
@@ -893,12 +947,13 @@ function selectOrphanedEndpoints(
   const cap = MAX_RELATIONSHIPS_PER_QUERY;
   const raw = db
     .prepare(SQL_HEALTH_ENDPOINT_PARTICIPATION)
-    .all(workspaceId, workspaceId, cap + 1) as unknown as {
-    kind: string;
-    id: string;
-    active_total: number;
-    any_total: number;
-  }[];
+    .all(workspaceId, workspaceId, cap + 1)
+    .map((row) => ({
+      kind: textColumn(row, "kind"),
+      id: textColumn(row, "id"),
+      active_total: numberColumn(row, "active_total"),
+      any_total: numberColumn(row, "any_total"),
+    }));
   const truncated = raw.length > cap;
   const sliced = truncated ? raw.slice(0, cap) : raw;
   const out: RelationshipHealthEndpointRef[] = [];
@@ -1248,8 +1303,9 @@ function collectNeighbourPage(
   node: { readonly kind: RelationshipObjectKind; readonly id: string },
   out: StoredRelationship[],
 ): boolean {
-  const rows = (prepared?.all(workspaceId, node.kind, node.id, MAX_LIST_LIMIT + 1) ??
-    []) as unknown as RelationshipRow[];
+  const rows = (prepared?.all(workspaceId, node.kind, node.id, MAX_LIST_LIMIT + 1) ?? []).map(
+    readRelationshipRow,
+  );
   const capped = rows.length > MAX_LIST_LIMIT;
   for (const row of capped ? rows.slice(0, MAX_LIST_LIMIT) : rows) {
     out.push(rowToRelationship(row));

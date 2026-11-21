@@ -209,10 +209,6 @@ export function deleteVectorsForCapsule(db: DatabaseSync, capsuleId: KnowledgeCa
   invalidateVectorIndexStateForCapsule(db, capsuleId);
 }
 
-interface CountRow {
-  readonly n: number;
-}
-
 export function countVectorsForDocument(
   db: DatabaseSync,
   capsuleId: KnowledgeCapsuleId,
@@ -221,14 +217,15 @@ export function countVectorsForDocument(
   const row = statement(db, COUNT_VECTORS_FOR_DOCUMENT_SQL).get({
     c: capsuleId,
     d: documentId,
-  }) as CountRow | undefined;
-  return typeof row?.n === "number" ? row.n : 0;
+  });
+  const count = row?.n;
+  return typeof count === "number" ? count : 0;
 }
 
 export function countVectorsForCapsule(db: DatabaseSync, capsuleId: KnowledgeCapsuleId): number {
-  const row = statement(db, COUNT_VECTORS_FOR_CAPSULE_SQL).get({ c: capsuleId }) as
-    CountRow | undefined;
-  return typeof row?.n === "number" ? row.n : 0;
+  const row = statement(db, COUNT_VECTORS_FOR_CAPSULE_SQL).get({ c: capsuleId });
+  const count = row?.n;
+  return typeof count === "number" ? count : 0;
 }
 
 export function selectChunksForDocument(

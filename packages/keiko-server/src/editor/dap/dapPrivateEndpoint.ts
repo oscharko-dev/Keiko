@@ -181,7 +181,9 @@ function assertPosixEndpointPlan(
   const safe =
     isSafeDapSocketBasename(basename(endpoint.hostSocketPath)) &&
     isSafeDapSocketBasename(basename(endpoint.capsuleSocketPath));
-  const runtimeMount = mount as unknown as Readonly<Record<string, unknown>>;
+  // The plan type pins the mode and writability to their one valid value; reading them as unknown
+  // lets this boundary re-prove those exact values instead of trusting the type.
+  const runtimeMount: { readonly mode: unknown; readonly writable: unknown } = mount;
   const bound =
     mount.hostPath === endpoint.hostRuntimeDirectory &&
     mount.capsulePath === endpoint.capsuleRuntimeDirectory &&

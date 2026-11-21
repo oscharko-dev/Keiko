@@ -1119,13 +1119,20 @@ function admittedCount(value: unknown): number | undefined {
     : undefined;
 }
 
-function failureValue(result: unknown, detail: GitDeliveryFailureDetail, key: string): unknown {
+// An explicit detail value wins when it is closed; otherwise the result's own field, when closed.
+// Every admitted vocabulary word and count is closed, so the filter keeps each admissible value.
+function failureValue(
+  result: unknown,
+  detail: GitDeliveryFailureDetail,
+  key: string,
+): string | number | undefined {
+  const explicitValue: string | number | undefined = detail[key];
+  if (closedFailureDetailValue(explicitValue)) return explicitValue;
   const resultValue: unknown =
     typeof result === "object" && result !== null
       ? (result as Readonly<Record<string, unknown>>)[key]
       : undefined;
-  const explicitValue: string | number | undefined = detail[key];
-  return closedFailureDetailValue(explicitValue) ? explicitValue : resultValue;
+  return closedFailureDetailValue(resultValue) ? resultValue : undefined;
 }
 
 export function executionFailureDetail(

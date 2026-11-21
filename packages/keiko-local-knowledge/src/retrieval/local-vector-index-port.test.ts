@@ -292,6 +292,33 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
     }
   });
 
+  it.each([
+    ["a blank capsule id", "%20"],
+    ["a blank source id", "cap-port-a|%20%09"],
+  ])("fails closed with invalid-partition-key for %s", async (_name, partitionKey) => {
+    // A decoded component must be an admitted id. A blank capsule or source id cannot address a
+    // stored partition, so the port refuses it like an undecodable key instead of searching.
+    const fixture = freshStore();
+    try {
+      createTestCapsule(fixture.store);
+      const port = createLocalKnowledgeStoreVectorIndexPort({
+        namespace: "knowledge",
+        store: fixture.store,
+      });
+      const result = await port.search(baseQuery({ partitionKey }));
+      expect(result).toStrictEqual({
+        ok: false,
+        diagnostics: {
+          provider: "brute-force",
+          status: "port-invalid-query",
+          reason: "invalid-partition-key",
+        },
+      });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("round-trips a capsule id containing the partition-key separator without collision", async () => {
     // Regression: an earlier revision used a raw `::` delimiter without escaping, so a capsule
     // id like `victim|source-x` (or `victim::source-x` under the earlier scheme) would be

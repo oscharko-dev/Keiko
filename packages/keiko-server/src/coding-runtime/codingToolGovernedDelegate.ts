@@ -80,6 +80,17 @@ export type GovernedCodingToolResult =
       readonly packageCandidates?: readonly string[] | undefined;
     };
 
+type GovernedCompletedResult = Extract<GovernedCodingToolResult, { readonly status: "completed" }>;
+type GovernedFailedResult = Extract<GovernedCodingToolResult, { readonly status: "failed" }>;
+
+/**
+ * What the governed delegate answers the facade: the closed outcome and only the payload members
+ * the action may carry. The facade still validates it as untrusted delegate output.
+ */
+export type GovernedCodingToolOutcome =
+  | ({ readonly outcome: "completed" } & Omit<GovernedCompletedResult, "status">)
+  | ({ readonly outcome: "failed" } & Omit<GovernedFailedResult, "status">);
+
 export interface CodingToolGovernedPorts {
   readonly repositoryRead: GovernedCodingToolPort<"read">;
   readonly repositoryDiscover: GovernedCodingToolPort<"discover">;
@@ -108,7 +119,7 @@ export function createCodingToolGovernedDelegate(
   activityLog: ServerLogSink = processServerLogSink(),
 ): CodingToolDelegatePort {
   return {
-    execute: async (request, signal, mutationGuard): Promise<unknown> => {
+    execute: async (request, signal, mutationGuard): Promise<GovernedCodingToolOutcome> => {
       if (signal?.aborted === true) return { outcome: "failed" };
       if (!mutationGuard.check()) return { outcome: "failed" };
       const lease = budget?.admitTool(request);
@@ -193,7 +204,7 @@ const AUXILIARY_BEARING_ACTIONS: ReadonlySet<CodingToolActionRequest["action"]> 
 function governedOutcome(
   action: CodingToolActionRequest["action"],
   result: GovernedCodingToolResult,
-): unknown {
+): GovernedCodingToolOutcome {
   if (result.status === "failed") return governedFailureOutcome(action, result);
   const domain = gitOutcome(action, result);
   if (domain !== undefined) return domain;
@@ -209,7 +220,7 @@ function governedOutcome(
 function governedFailureOutcome(
   action: CodingToolActionRequest["action"],
   result: Extract<GovernedCodingToolResult, { readonly status: "failed" }>,
-): unknown {
+): GovernedCodingToolOutcome {
   if (result.reasonCode === undefined) return { outcome: "failed" };
   if (action === "verification" && result.verificationFailure !== undefined) {
     return {
@@ -238,7 +249,7 @@ function governedFailureOutcome(
 // the rest.
 function editFailureOutcome(
   result: Extract<GovernedCodingToolResult, { readonly status: "failed" }>,
-): unknown {
+): GovernedCodingToolOutcome {
   return {
     outcome: "failed",
     reasonCode: result.reasonCode,
@@ -251,7 +262,7 @@ function editFailureOutcome(
 function gitOutcome(
   action: CodingToolActionRequest["action"],
   result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
-): unknown {
+): GovernedCodingToolOutcome | undefined {
   return (
     deliveryOutcome(action, result) ??
     searchOutcome(action, result) ??
@@ -263,7 +274,7 @@ function gitOutcome(
 function verificationOutcome(
   action: CodingToolActionRequest["action"],
   result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
-): unknown {
+): GovernedCodingToolOutcome | undefined {
   return action === "verification" && result.verification !== undefined
     ? { outcome: "completed", verification: result.verification }
     : undefined;
@@ -272,7 +283,7 @@ function verificationOutcome(
 function deliveryOutcome(
   action: CodingToolActionRequest["action"],
   result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
-): unknown {
+): GovernedCodingToolOutcome | undefined {
   if (action === "git" && result.ci !== undefined) return { outcome: "completed", ci: result.ci };
   if (action === "git" && result.git !== undefined)
     return { outcome: "completed", git: result.git };
@@ -284,9 +295,9 @@ function deliveryOutcome(
 }
 
 function withApprovalDisposition(
-  domain: Readonly<Record<string, unknown>>,
-  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
-): Readonly<Record<string, unknown>> {
+  domain: Pick<GovernedCompletedResult, "draftDelivery" | "verifiedCommit">,
+  result: GovernedCompletedResult,
+): GovernedCodingToolOutcome {
   return {
     outcome: "completed",
     ...domain,
@@ -299,7 +310,7 @@ function withApprovalDisposition(
 function searchOutcome(
   action: CodingToolActionRequest["action"],
   result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
-): unknown {
+): GovernedCodingToolOutcome | undefined {
   return action === "search" && result.search !== undefined
     ? { outcome: "completed", search: result.search }
     : undefined;
@@ -308,7 +319,7 @@ function searchOutcome(
 function skillsOutcome(
   action: CodingToolActionRequest["action"],
   result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
-): unknown {
+): GovernedCodingToolOutcome | undefined {
   return action === "skill-discover" && result.skills !== undefined
     ? { outcome: "completed", skills: result.skills }
     : undefined;

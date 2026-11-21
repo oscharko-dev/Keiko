@@ -6994,6 +6994,14 @@
       "issue": 3914
     },
     {
+      "path": "packages/keiko-server/src/editor/dap/debugLaunchPlan.test.ts",
+      "rule": "anti-slop/require-safety-comment-for-type-assertion",
+      "from": 21,
+      "to": 22,
+      "reason": "test-witness",
+      "issue": 3943
+    },
+    {
       "path": "packages/keiko-server/src/editor/languageRoutes.test.ts",
       "rule": "anti-slop/no-conditional-empty-object-spread",
       "from": 0,
@@ -7576,6 +7584,14 @@
       "to": 7,
       "reason": "dev-cutoff-sync",
       "issue": 3914
+    },
+    {
+      "path": "packages/keiko-server/src/store/sql-row.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "pending-boundary-migration",
+      "issue": 3943
     },
     {
       "path": "packages/keiko-server/src/terminal-routes.test.ts",

@@ -136,6 +136,9 @@ export interface Layer2DebugCapsulePlan extends DebugCapsulePlanBinding {
   readonly launchRequest: ClosedDebugLaunchRequest;
 }
 
+/** Every Layer-2 plan member except the erased brand, which only the plan's producer adds. */
+export type Layer2DebugCapsulePlanFields = Omit<Layer2DebugCapsulePlan, typeof layer2PlanBrand>;
+
 export interface DebugCapsuleLayer2Input {
   readonly candidate: unknown;
   /** Operation correlation minted by the server-owned launch route. */

@@ -16,6 +16,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { UiStoreError, notFound } from "./errors.js";
 import { withImmediateTransaction } from "./transaction.js";
+import { numberColumn, textColumn, type UiStoreSqlRow } from "./sql-row.js";
 import {
   readMarkdownSkillSelection,
   selectMarkdownSkill,
@@ -60,6 +61,21 @@ const METADATA_COLUMNS =
   "r.skill_id AS id, r.revision, r.digest, r.name, r.byte_count AS byteCount, r.created_at AS createdAt";
 const LIVE_REVISIONS = "markdown_skill_revisions r JOIN markdown_skills s ON s.id = r.skill_id";
 
+function readSkillMetadata(row: UiStoreSqlRow): MarkdownSkillMetadata {
+  return {
+    id: textColumn(row, "id"),
+    revision: numberColumn(row, "revision"),
+    digest: textColumn(row, "digest"),
+    name: textColumn(row, "name"),
+    byteCount: numberColumn(row, "byteCount"),
+    createdAt: numberColumn(row, "createdAt"),
+  };
+}
+
+function readSkillDocument(row: UiStoreSqlRow): MarkdownSkillDocument {
+  return { ...readSkillMetadata(row), body: textColumn(row, "body") };
+}
+
 function readSkill(
   db: DatabaseSync,
   id: string,
@@ -71,15 +87,16 @@ function readSkill(
     .prepare(
       `SELECT ${METADATA_COLUMNS}, r.body FROM ${LIVE_REVISIONS} WHERE s.id = ? AND ${condition}`,
     )
-    .get(...(revision === undefined ? [id] : [id, revision])) as MarkdownSkillDocument | undefined;
+    .get(...(revision === undefined ? [id] : [id, revision]));
   if (row === undefined) return undefined;
+  const skill = readSkillDocument(row);
   if (
-    markdownSkillDigest(row.body) !== row.digest ||
-    Buffer.byteLength(row.body) !== row.byteCount
+    markdownSkillDigest(skill.body) !== skill.digest ||
+    Buffer.byteLength(skill.body) !== skill.byteCount
   ) {
     throw new UiStoreError("INTERNAL", "Stored skill integrity check failed.", 500);
   }
-  return { ...row };
+  return skill;
 }
 
 // Only a superset of `isJiraIssueTemplateDocument` (which tolerates spacing and quotes around the
@@ -105,7 +122,8 @@ function readJiraTemplates(db: DatabaseSync): readonly JiraTemplateSkill[] {
       WHERE r.revision = s.revision AND instr(r.body, ?) > 0
       ORDER BY r.created_at DESC, s.id`,
     )
-    .all(TEMPLATE_MARKER_SQL) as unknown as MarkdownSkillDocument[];
+    .all(TEMPLATE_MARKER_SQL)
+    .map(readSkillDocument);
   return rows.flatMap(({ body, ...skill }): readonly JiraTemplateSkill[] => {
     if (markdownSkillDigest(body) !== skill.digest) {
       throw new UiStoreError("INTERNAL", "Stored skill integrity check failed.", 500);
@@ -231,7 +249,8 @@ export function createMarkdownSkillStore(db: DatabaseSync, now: () => number): M
           `SELECT ${METADATA_COLUMNS} FROM ${LIVE_REVISIONS}
       WHERE r.revision = s.revision ORDER BY r.created_at DESC, s.id`,
         )
-        .all() as unknown as MarkdownSkillMetadata[],
+        .all()
+        .map(readSkillMetadata),
     get: (id, revision) => readSkill(db, id, revision),
     import: (input): MarkdownSkillDocument => {
       const validated = validateMarkdownSkillUpload(input);

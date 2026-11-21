@@ -61,13 +61,12 @@ function manualScheduler(): { scheduler: LspRpcScheduler; fireAll(): void; activ
   let nextHandle = 1;
   return {
     scheduler: {
-      setTimer: (callback): unknown => {
+      setTimer: (callback): (() => void) => {
         const handle = nextHandle++;
         timers.set(handle, callback);
-        return handle;
-      },
-      clearTimer: (handle): void => {
-        timers.delete(handle as number);
+        return (): void => {
+          timers.delete(handle);
+        };
       },
     },
     fireAll: (): void => {
@@ -106,7 +105,11 @@ describe("createLspJsonRpcClient", () => {
       source: io.source,
       sendFrame: (body) => sent.push(body),
     });
-    client.onRequest((method, params) => ({ method, params }));
+    const receivedParams: unknown[] = [];
+    client.onRequest((method, params) => {
+      receivedParams.push(params);
+      return { method };
+    });
 
     io.push({ jsonrpc: "2.0", id: 77, method: "workspace/configuration", params: { items: [] } });
     await tick();
@@ -114,8 +117,9 @@ describe("createLspJsonRpcClient", () => {
     expect(parsedMessages(sent)).toContainEqual({
       jsonrpc: "2.0",
       id: 77,
-      result: { method: "workspace/configuration", params: { items: [] } },
+      result: { method: "workspace/configuration" },
     });
+    expect(receivedParams).toEqual([{ items: [] }]);
     expect(client.pendingCount()).toBe(0);
   });
 
@@ -377,7 +381,7 @@ describe("createLspJsonRpcClient", () => {
     io.push({ jsonrpc: "2.0", id: request.id, result: 99 });
     await expect(pending).resolves.toBe(99);
     // The timer was already cleared by settle(); fireAll finds nothing. But even if a stale
-    // timer fired (e.g. scheduler ignores clearTimer), the guard must make it a no-op.
+    // timer fired (e.g. a scheduler whose cancel is a no-op), the guard must make it a no-op.
     // Simulate a stale fire by calling the callback directly after re-inserting a dead handle.
     // We verify the client remains healthy: no new rejection, pendingCount still 0.
     timer.fireAll(); // harmless — timer was cleared; no callback registered.

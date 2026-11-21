@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   coveredDelta,
   createSandboxedGateRunner,
@@ -65,7 +66,7 @@ describe("strykerKilled", () => {
 
 describe("createSandboxedGateRunner", () => {
   function spec(overrides: Partial<SandboxedGateRunnerSpec>): SandboxedGateRunnerSpec {
-    const reports: Record<string, unknown> = {
+    const reports: Record<string, CatalogJsonValue> = {
       "coverage/baseline.json": { [TARGET]: { lines: { covered: 5 }, branches: { covered: 1 } } },
       "coverage/patched.json": { [TARGET]: { lines: { covered: 9 }, branches: { covered: 2 } } },
       "reports/mutation.json": {

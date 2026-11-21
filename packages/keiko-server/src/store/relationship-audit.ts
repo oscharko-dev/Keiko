@@ -19,6 +19,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { deepRedactStrings } from "@oscharko-dev/keiko-security";
 import { RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS } from "@oscharko-dev/keiko-contracts/runtime/relationships";
 import { invalidRequest } from "./errors.js";
+import { nullableTextColumn, numberColumn, textColumn, type UiStoreSqlRow } from "./sql-row.js";
 
 export const RELATIONSHIP_AUDIT_SCHEMA_VERSION = "1" as const;
 export const RELATIONSHIP_AUDIT_SUMMARY_MAX_CHARS = 240;
@@ -207,6 +208,22 @@ interface AuditRowSqlite {
   readonly payload_json: string;
 }
 
+function readAuditRow(row: UiStoreSqlRow): AuditRowSqlite {
+  return {
+    event_id: textColumn(row, "event_id"),
+    workspace_id: textColumn(row, "workspace_id"),
+    sequence: numberColumn(row, "sequence"),
+    occurred_at: numberColumn(row, "occurred_at"),
+    kind: textColumn(row, "kind"),
+    relationship_id: nullableTextColumn(row, "relationship_id"),
+    actor_surface: textColumn(row, "actor_surface"),
+    redacted_actor_id: textColumn(row, "redacted_actor_id"),
+    redaction_state: textColumn(row, "redaction_state"),
+    summary: textColumn(row, "summary"),
+    payload_json: textColumn(row, "payload_json"),
+  };
+}
+
 function rowToEntry(row: AuditRowSqlite): RelationshipAuditEntryRow {
   const payload = JSON.parse(row.payload_json) as Readonly<Record<string, unknown>>;
   return {
@@ -235,8 +252,8 @@ export function listRelationshipAuditEntries(
   if (limit <= 0 || limit > MAX_AUDIT_LIST_LIMIT) {
     throw invalidRequest("Audit limit out of bounds.");
   }
-  const rows = db.prepare(SQL_LIST_AUDIT).all(workspaceId, limit) as unknown as AuditRowSqlite[];
-  return rows.map(rowToEntry);
+  const rows = db.prepare(SQL_LIST_AUDIT).all(workspaceId, limit);
+  return rows.map((row) => rowToEntry(readAuditRow(row)));
 }
 
 export function listRelationshipAuditEntriesForRelationship(
@@ -248,8 +265,6 @@ export function listRelationshipAuditEntriesForRelationship(
   if (limit <= 0 || limit > MAX_AUDIT_LIST_LIMIT) {
     throw invalidRequest("Audit limit out of bounds.");
   }
-  const rows = db
-    .prepare(SQL_LIST_AUDIT_FOR_RELATIONSHIP)
-    .all(workspaceId, relationshipId, limit) as unknown as AuditRowSqlite[];
-  return rows.map(rowToEntry);
+  const rows = db.prepare(SQL_LIST_AUDIT_FOR_RELATIONSHIP).all(workspaceId, relationshipId, limit);
+  return rows.map((row) => rowToEntry(readAuditRow(row)));
 }

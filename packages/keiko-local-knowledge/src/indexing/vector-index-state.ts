@@ -2,6 +2,7 @@ import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import type { DatabaseSync } from "node:sqlite";
 
 import { KnowledgeStoreError } from "../errors.js";
+import { capsuleIdColumn } from "../knowledge-ids.js";
 import {
   nullableNumberColumn,
   nullableTextColumn,
@@ -31,7 +32,7 @@ export interface VectorIndexStateRecord extends VectorIndexStateKey {
 }
 
 interface VectorIndexStateRow {
-  readonly capsule_id: string;
+  readonly capsule_id: KnowledgeCapsuleId;
   readonly provider: VectorIndexProvider;
   readonly index_name: string;
   readonly vector_dimensions: number;
@@ -60,7 +61,7 @@ function storedStatus(row: KnowledgeSqlRow): VectorIndexStateStatus {
 
 function readVectorIndexStateRow(row: KnowledgeSqlRow): VectorIndexStateRow {
   return {
-    capsule_id: textColumn(row, "capsule_id"),
+    capsule_id: capsuleIdColumn(row, "capsule_id"),
     provider: storedProvider(row),
     index_name: textColumn(row, "index_name"),
     vector_dimensions: numberColumn(row, "vector_dimensions"),
@@ -141,7 +142,7 @@ export function readVectorIndexState(
   if (stored === undefined) return undefined;
   const row = readVectorIndexStateRow(stored);
   return {
-    capsuleId: row.capsule_id as KnowledgeCapsuleId,
+    capsuleId: row.capsule_id,
     provider: row.provider,
     indexName: row.index_name,
     vectorDimensions: row.vector_dimensions,

@@ -1633,7 +1633,9 @@ function migratedRuntimeState(
 }
 
 // eslint-disable-next-line complexity, max-lines-per-function
-function validRuntimeState(value: Record<string, unknown>): boolean {
+function validRuntimeState(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & UpdateRuntimeState {
   return (
     hasOnlyKeys(value, [
       "schemaVersion",
@@ -1708,7 +1710,7 @@ function parseInspectedRuntimeState(
   return validRuntimeState(parsed)
     ? {
         status: "ok",
-        state: parsed as unknown as UpdateRuntimeState,
+        state: parsed,
         contentSha256: createHash("sha256").update(rawBytes).digest("hex"),
       }
     : { status: "corrupt" };
@@ -1808,7 +1810,7 @@ function publishRuntimeState(
   const currentRevision = persisted.state.revision;
   if (
     state.revision !== currentRevision ||
-    !validRuntimeState(state as unknown as Record<string, unknown>) ||
+    !validRuntimeState({ ...state }) ||
     !validActivationWalAdvance(persisted.state, state, currentRevision + 1)
   ) {
     throw new UpdateRuntimeStateError("unwritable");

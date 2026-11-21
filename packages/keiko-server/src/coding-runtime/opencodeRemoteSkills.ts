@@ -327,7 +327,7 @@ async function fetchIndex(
 ): Promise<readonly IndexEntry[] | undefined> {
   const text = await fetchText(input, new URL("index.json", source).href, signal, MAX_INDEX_BYTES);
   if (text === undefined) return undefined;
-  const skills = plainRecord(parsedJson(text))?.skills;
+  const skills = parsedJson(text)?.skills;
   if (!Array.isArray(skills) || skills.length > MAX_INDEX_ENTRIES) return undefined;
   const entries = (skills as readonly unknown[]).map(indexEntry);
   return entries.every((entry) => entry !== undefined) ? entries : undefined;
@@ -341,9 +341,10 @@ function indexEntry(value: unknown): IndexEntry | undefined {
   return names.length === files.length ? { name: entry.name, files: names } : undefined;
 }
 
-function parsedJson(text: string): unknown {
+// The text's JSON object; `undefined` for text that is no JSON or a value that is no object.
+function parsedJson(text: string): ReturnType<typeof plainRecord> {
   try {
-    return JSON.parse(text) as unknown;
+    return plainRecord(JSON.parse(text));
   } catch (error) {
     // Not JSON is not an index; anything else is a defect that must surface.
     if (error instanceof SyntaxError) return undefined;

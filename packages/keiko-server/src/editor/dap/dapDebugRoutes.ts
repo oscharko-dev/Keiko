@@ -6,7 +6,10 @@ import type {
   DebugSession,
   DebugSessionStatus,
   DebugActivationSummary,
+  DebugStackPage,
   DebugVariableInput,
+  DebugVariableTree,
+  DebugVariableTruncatedNode,
   EvaluateWatchRequest,
   ExceptionBreakpointFilter,
   InstrumentationSnapshot,
@@ -48,6 +51,7 @@ import { readJsonObject, resolveRoot, runFilesHandler } from "../../files.js";
 import {
   STREAMING,
   errorBody,
+  type ApiError,
   type HandlerOutcome,
   type RouteContext,
   type RouteDefinition,
@@ -721,9 +725,26 @@ type InstrumentationProjection = Omit<
     readonly watches: InstrumentationSnapshot["watches"];
   };
 
+// A mutation result whose snapshot is the bounded HTTP projection, for each result variant.
+type ProjectedMutationResult<
+  Result extends BreakpointStoreMutationResult = BreakpointStoreMutationResult,
+> = Result extends BreakpointStoreMutationResult
+  ? Omit<Result, "snapshot"> & { readonly snapshot: InstrumentationProjection }
+  : never;
+
+interface EventUnavailableBody extends ApiError {
+  readonly snapshot: InstrumentationProjection;
+}
+
+// The response bodies an instrumentation projection is sent in.
+type InstrumentationBody =
+  InstrumentationProjection | ProjectedMutationResult | EventUnavailableBody;
+
+// `wrap` builds the response body around a candidate projection, so the byte bound applies to the
+// body the route actually sends.
 function instrumentationProjection(
   snapshot: InstrumentationSnapshot,
-  wrap: (projection: InstrumentationProjection) => unknown = (projection) => projection,
+  wrap: (projection: InstrumentationProjection) => InstrumentationBody = (projection) => projection,
 ): InstrumentationProjection {
   const breakpoints = [...snapshot.breakpoints];
   const exceptionFilters = [...snapshot.exceptionFilters];
@@ -758,11 +779,13 @@ function instrumentationProjection(
 function mutationEnvelope(
   result: BreakpointStoreMutationResult,
   snapshot: InstrumentationProjection,
-): unknown {
+): ProjectedMutationResult {
   return { ...result, snapshot };
 }
 
-function instrumentationMutationProjection(result: BreakpointStoreMutationResult): unknown {
+function instrumentationMutationProjection(
+  result: BreakpointStoreMutationResult,
+): ProjectedMutationResult {
   const projected = instrumentationProjection(result.snapshot, (snapshot) =>
     mutationEnvelope(result, snapshot),
   );
@@ -810,7 +833,7 @@ function publishInstrumentationChange(
 }
 
 function eventUnavailableResponse(snapshot: InstrumentationSnapshot): RouteResult {
-  const envelope = (projection: InstrumentationProjection): unknown => ({
+  const envelope = (projection: InstrumentationProjection): EventUnavailableBody => ({
     ...errorBody("EVENT_UNAVAILABLE", "Debug state changed but event delivery failed."),
     snapshot: projection,
   });
@@ -1694,6 +1717,21 @@ function stackFrameInput(
   };
 }
 
+// The paused-session identity every stack and variable page carries.
+interface DebugPausePageHeader {
+  readonly schemaVersion: typeof DAP_DEBUG_CONTRACT_SCHEMA_VERSION;
+  readonly sessionId: string;
+  readonly pauseGeneration: number;
+}
+
+interface DebugStackTraceBody extends DebugPausePageHeader, DebugStackPage {
+  readonly nextCursor?: string;
+}
+
+interface DebugVariablePageBody extends DebugPausePageHeader, DebugVariableTree {
+  readonly parentRef: string;
+}
+
 function stackTraceResult(
   request: StackTraceRequest,
   startFrame: number,
@@ -1711,7 +1749,7 @@ function stackTraceResult(
     typeof reportedTotal === "number" && Number.isSafeInteger(reportedTotal) && reportedTotal >= 0
       ? reportedTotal
       : startFrame + inputs.length;
-  const projection = (nextCursor: string | undefined): unknown => {
+  const projection = (nextCursor: string | undefined): DebugStackTraceBody => {
     const nextStart = startFrame + frames.length;
     return {
       schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
@@ -2023,7 +2061,7 @@ function variableDepth(
 function variableTruncationMarker(
   reason: "depth" | "width" | "nodeLimit",
   omittedCount: number,
-): Readonly<Record<string, unknown>> {
+): DebugVariableTruncatedNode {
   return Object.freeze({ kind: "truncated", reason, omittedCount, truncated: true });
 }
 
@@ -2031,7 +2069,7 @@ function depthTruncatedVariableResponse(request: {
   readonly sessionId: string;
   readonly pauseGeneration: number;
   readonly variableRef: string;
-}): unknown {
+}): DebugVariablePageBody {
   return {
     schemaVersion: DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
     sessionId: request.sessionId,
@@ -2053,9 +2091,9 @@ function boundedVariableResponse(
   },
   variables: readonly DebugVariableInput[],
   capacityOmittedCount = 0,
-): unknown {
+): DebugVariablePageBody {
   const retained = [...variables];
-  const body = (): unknown => {
+  const body = (): DebugVariablePageBody => {
     const tree = buildDebugVariableTree(retained);
     const projectionOmittedCount = variables.length - retained.length;
     const omittedCount = capacityOmittedCount + projectionOmittedCount;

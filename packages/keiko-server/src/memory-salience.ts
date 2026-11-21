@@ -43,7 +43,7 @@ import {
   conversationMemoryScopes,
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
-import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import { buildMemoryRecordFromProposal, memoryIdOfProposal } from "./memory-record-builders.js";
 import { insertSalienceMemoryWithNoveltyGate } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import {
@@ -435,7 +435,7 @@ async function persistCandidate(
   if (!isPersistableMemoryCandidate(outcome)) {
     return rejectedCandidate(deps, mode, surface, outcome, SENSITIVE_MEMORY_REJECTION_REASON);
   }
-  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+  const proposalId = memoryIdOfProposal(outcome.proposal.proposalId);
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   const exactSuppression = exactCaptureSuppressionReason(vault, record);
   if (exactSuppression !== null) {

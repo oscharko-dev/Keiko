@@ -6,6 +6,7 @@
 // parsers are pure and unit-tested; the command execution + report reads are the injected effects, so
 // every gate runs inside the enforced egress boundary and the user's workspace is never written.
 
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   AssuredGateRunner,
   CoverageOutcome,
@@ -28,7 +29,7 @@ export interface SandboxedRunResult {
 export type SandboxedRun = (cmd: SandboxedCommand) => Promise<SandboxedRunResult>;
 
 // Reads a JSON report the gate command wrote into the disposable root; undefined when absent/invalid.
-export type ReportReader = (relativePath: string) => unknown;
+export type ReportReader = (relativePath: string) => CatalogJsonValue | undefined;
 
 // ─── Pure parsers ──────────────────────────────────────────────────────────────────────────────────
 

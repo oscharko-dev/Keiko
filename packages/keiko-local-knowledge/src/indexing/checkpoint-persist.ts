@@ -8,17 +8,14 @@
 // embedding identity.
 
 import type {
-  ChunkId,
-  CoverageQuality,
   DocumentId,
-  EmbeddingModelIdentity,
   ExtractionCheckpointRecord,
-  ExtractionPhase,
   KnowledgeCapsuleId,
-  LargeDocumentExtractionStrategy,
   ParserDiagnostic,
 } from "@oscharko-dev/keiko-contracts";
+import { validateExtractionCheckpointRecord } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document-validation";
 import type { DatabaseSync } from "node:sqlite";
+import { KnowledgeStoreError } from "../errors.js";
 import { type KnowledgeSqlRow, nullableTextColumn, numberColumn, textColumn } from "../sql-row.js";
 
 const UPSERT_SQL = [
@@ -157,27 +154,30 @@ export function upsertExtractionCheckpoint(
   });
 }
 
-function parseDiagnostics(json: string): readonly ParserDiagnostic[] {
+// The stored diagnostics column keeps its lenient read: a value that is not a JSON array reads as
+// no diagnostics. Its entries stay unvalidated here; rowToCheckpoint admits them together with the
+// rest of the record.
+function parseDiagnostics(json: string): readonly unknown[] {
   try {
     const parsed: unknown = JSON.parse(json);
-    return Array.isArray(parsed) ? (parsed as readonly ParserDiagnostic[]) : [];
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
 }
 
-function parseEmbeddingIdentity(json: string): EmbeddingModelIdentity {
-  const parsed: unknown = JSON.parse(json);
-  return parsed as EmbeddingModelIdentity;
-}
-
+// The stored row is rebuilt as an unbranded candidate and admitted through the contracts
+// checkpoint validator, the runtime definition of ExtractionCheckpointRecord. Every row this
+// module writes comes from such a record, so valid data reads as before; a drifted or tampered
+// row (unknown phase, blank id, malformed embedding identity or diagnostic) fails closed.
 function rowToCheckpoint(row: CheckpointRow): ExtractionCheckpointRecord {
-  return {
-    capsuleId: row.capsule_id as KnowledgeCapsuleId,
-    documentId: row.document_id as DocumentId,
+  const embeddingIdentity: unknown = JSON.parse(row.embedding_identity_json);
+  const admission = validateExtractionCheckpointRecord({
+    capsuleId: row.capsule_id,
+    documentId: row.document_id,
     jobId: row.job_id,
-    strategy: row.strategy as LargeDocumentExtractionStrategy,
-    phase: row.phase as ExtractionPhase,
+    strategy: row.strategy,
+    phase: row.phase,
     pageCursor: row.page_cursor,
     sectionCursor: row.section_cursor,
     objectCursor: row.object_cursor,
@@ -186,20 +186,24 @@ function rowToCheckpoint(row: CheckpointRow): ExtractionCheckpointRecord {
     embeddedChunkCursor: row.embedded_chunk_cursor,
     ...(row.last_embedded_chunk_id === null
       ? {}
-      : { lastEmbeddedChunkId: row.last_embedded_chunk_id as ChunkId }),
+      : { lastEmbeddedChunkId: row.last_embedded_chunk_id }),
     retryCount: row.retry_count,
-    coverage: row.coverage as CoverageQuality,
+    coverage: row.coverage,
     fingerprint: {
       sourceContentHash: row.source_content_hash,
       parserVersion: row.parser_version,
       policyFingerprint: row.policy_fingerprint,
       chunkingStrategyVersion: row.chunking_strategy_version,
-      embeddingIdentity: parseEmbeddingIdentity(row.embedding_identity_json),
+      embeddingIdentity,
     },
     terminalDiagnostics: parseDiagnostics(row.terminal_diagnostics_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  };
+  });
+  if (!admission.ok) {
+    throw new KnowledgeStoreError("A stored extraction checkpoint does not match its contract");
+  }
+  return admission.value;
 }
 
 export function selectExtractionCheckpoint(

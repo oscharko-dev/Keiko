@@ -46,6 +46,7 @@ import {
   type IndexingLogContext,
 } from "./types.js";
 import type { KnowledgeStore } from "../store.js";
+import { isVectorId, mintedId } from "../knowledge-ids.js";
 import { chunkDedupeKey } from "../chunking/chunker.js";
 import { knowledgeErrorKind, startKnowledgeLogTimer } from "../knowledge-log.js";
 import { conservativeTokenEstimatorTokenizer } from "../chunking/token-estimator.js";
@@ -194,12 +195,10 @@ async function runBounded<T, R>(
 ): Promise<readonly R[]> {
   const limit = Math.max(1, Math.floor(concurrency));
   const outputs: R[] = new Array<R>(inputs.length);
-  let nextIndex = 0;
+  // One iterator shared by every worker: each takes the next unclaimed (index, input) pair.
+  const pending = inputs.entries();
   async function worker(): Promise<void> {
-    while (nextIndex < inputs.length) {
-      const i = nextIndex;
-      nextIndex += 1;
-      const input = inputs[i] as T;
+    for (const [i, input] of pending) {
       outputs[i] = await work(input, i);
     }
   }
@@ -909,7 +908,7 @@ function persistOutcomes(
       if (!out.ok) continue;
       const observed = identityFromAdapter(pinnedIdentity, out.success);
       const row = {
-        id: `vec:${String(out.chunk.id)}` as VectorRecord["id"],
+        id: mintedId(`vec:${String(out.chunk.id)}`, isVectorId),
         capsuleId: out.chunk.capsuleId,
         sourceId: out.chunk.sourceId,
         documentId: out.chunk.documentId,

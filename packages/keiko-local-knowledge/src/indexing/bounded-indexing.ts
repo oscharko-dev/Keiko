@@ -56,6 +56,7 @@ import {
   numberColumn,
   textColumn,
 } from "../sql-row.js";
+import { chunkIdColumn, sourceIdColumn } from "../knowledge-ids.js";
 
 export interface BoundedChunkParams {
   readonly capsuleId: KnowledgeCapsuleId;
@@ -221,8 +222,8 @@ function optionsWithBudget(options: ChunkingOptions | undefined, budget: number)
 
 // ─── Bounded embedding ────────────────────────────────────────────────────────
 interface ChunkOffsetRow {
-  readonly id: string;
-  readonly source_id: string;
+  readonly id: ChunkId;
+  readonly source_id: KnowledgeSourceId;
   readonly order_index: number;
   readonly safe_excerpt_hash: string;
   readonly char_start: number | null;
@@ -235,8 +236,8 @@ interface ChunkOffsetRow {
 
 function readChunkOffsetRow(row: KnowledgeSqlRow): ChunkOffsetRow {
   return {
-    id: textColumn(row, "id"),
-    source_id: textColumn(row, "source_id"),
+    id: chunkIdColumn(row, "id"),
+    source_id: sourceIdColumn(row, "source_id"),
     order_index: numberColumn(row, "order_index"),
     safe_excerpt_hash: textColumn(row, "safe_excerpt_hash"),
     char_start: nullableNumberColumn(row, "char_start"),
@@ -270,8 +271,8 @@ const COUNT_VECTORS_SQL =
 function embeddedChunkCount(db: DatabaseSync, deps: BoundedEmbedDeps): number {
   const row = db
     .prepare(COUNT_VECTORS_SQL)
-    .get({ c: String(deps.capsuleId), d: String(deps.documentId) }) as { n: number };
-  return row.n;
+    .get({ c: String(deps.capsuleId), d: String(deps.documentId) });
+  return row === undefined ? 0 : numberColumn(row, "n");
 }
 
 export interface BoundedEmbedDeps {
@@ -338,9 +339,9 @@ async function toChunkToEmbed(deps: BoundedEmbedDeps, row: ChunkOffsetRow): Prom
   );
   if (stored !== undefined) {
     return {
-      id: row.id as ChunkId,
+      id: row.id,
       capsuleId: deps.capsuleId,
-      sourceId: row.source_id as KnowledgeSourceId,
+      sourceId: row.source_id,
       documentId: deps.documentId,
       text: stored,
     };
@@ -357,7 +358,7 @@ async function toChunkToEmbed(deps: BoundedEmbedDeps, row: ChunkOffsetRow): Prom
   const result = await contextualizeChunk(
     {
       documentId: deps.documentId,
-      chunkId: row.id as ChunkId,
+      chunkId: row.id,
       originalText,
       safeExcerptHash: row.safe_excerpt_hash,
       documentText: originalText,
@@ -367,7 +368,7 @@ async function toChunkToEmbed(deps: BoundedEmbedDeps, row: ChunkOffsetRow): Prom
   );
   persistChunkIndexedText(deps.store._internal.db, deps.store._internal.contentCipher, {
     capsuleId: deps.capsuleId,
-    chunkId: row.id as ChunkId,
+    chunkId: row.id,
     contextualRetrievalKey: result.contextualRetrievalKey,
     contextPrefix: result.contextPrefix,
     augmentedText: result.augmentedText,
@@ -375,9 +376,9 @@ async function toChunkToEmbed(deps: BoundedEmbedDeps, row: ChunkOffsetRow): Prom
     updatedAt: deps.now(),
   });
   return {
-    id: row.id as ChunkId,
+    id: row.id,
     capsuleId: deps.capsuleId,
-    sourceId: row.source_id as KnowledgeSourceId,
+    sourceId: row.source_id,
     documentId: deps.documentId,
     text: result.augmentedText,
   };

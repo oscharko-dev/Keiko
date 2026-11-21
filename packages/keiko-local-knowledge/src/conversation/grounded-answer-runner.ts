@@ -49,6 +49,9 @@ import type {
   ReferenceReranker,
 } from "./types.js";
 
+// An answer with no evidence reranks nothing and cites nothing.
+const NO_REFERENCES: readonly RetrievalReference[] = [];
+
 export interface GroundedAnswerDependencies {
   readonly retrieval: RetrievalDependencies;
   readonly answerGenerator: AnswerGenerator;
@@ -292,7 +295,7 @@ export async function runGroundedAnswer(
 
   const answerOnly = retrieval.noEvidence;
   const { references, diagnostics: rerankerDiagnostics } = answerOnly
-    ? { references: [] as readonly RetrievalReference[], diagnostics: undefined }
+    ? { references: NO_REFERENCES, diagnostics: undefined }
     : await rerankReferences(deps, query, retrieval);
   const pack = assembleGroundedContext(references);
   const answerInput: AnswerGeneratorInput = {

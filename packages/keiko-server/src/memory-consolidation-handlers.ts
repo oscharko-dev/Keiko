@@ -8,7 +8,6 @@ import {
   type ConsolidationResult,
 } from "@oscharko-dev/keiko-memory-consolidation";
 import type {
-  MemoryEdgeId,
   MemoryId,
   MemoryRecord,
   MemoryScope,
@@ -51,6 +50,7 @@ import type {
 import { enrichReviewItemsWithAdvisory } from "./memory-conflict-advisory.js";
 import { readJsonRequestBodyOutcome, type JsonRequestBodyOutcome } from "./bounded-request-body.js";
 import { consolidationLogSinkFor } from "./process-log-sink.js";
+import { newMemoryEdgeId } from "./memory-record-builders.js";
 
 const MAX_BODY_BYTES = 64_000;
 const DEFAULT_JACCARD_THRESHOLD = 0.85;
@@ -249,7 +249,7 @@ function parseSettings(raw: unknown): ConsolidationJobSettings | RouteResult {
     maxClustersPerRun: DEFAULT_MAX_CLUSTERS_PER_RUN,
     maxRecordsPerRun: DEFAULT_MAX_RECORDS_PER_RUN,
   };
-  const result: Record<string, number> = {};
+  const result: Record<keyof ConsolidationJobSettings, number> = { ...defaults };
   for (const key of keys) {
     const value = resolveSetting(record, key, defaults[key]);
     if (value === null) {
@@ -261,7 +261,7 @@ function parseSettings(raw: unknown): ConsolidationJobSettings | RouteResult {
     }
     result[key] = value;
   }
-  return result as unknown as ConsolidationJobSettings;
+  return result;
 }
 
 interface CreateJobInput {
@@ -429,10 +429,6 @@ function projectConsolidationResult(
     ...result,
     reviewItems: result.reviewItems.map((item) => projectReviewItem(deps, record, vault, item)),
   };
-}
-
-function newMemoryEdgeId(): MemoryEdgeId {
-  return randomUUID() as unknown as MemoryEdgeId;
 }
 
 interface BuildRunOptionsArgs {

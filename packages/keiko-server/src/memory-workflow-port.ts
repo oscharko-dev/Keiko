@@ -18,7 +18,7 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { recordMemoryAudit, recordMemoryAudits } from "./memory-audit-handler.js";
 import { vaultAsQueryPort } from "./memory-conv-handlers.js";
 import { LOCAL_CONVERSATION_MEMORY_USER_ID } from "./memory-conversation-context.js";
-import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import { buildMemoryRecordFromProposal, memoryIdOfProposal } from "./memory-record-builders.js";
 import { isPersistableMemoryCandidate } from "./memory-capture-policy.js";
 
 interface WorkflowMemoryPortOptions {
@@ -220,7 +220,7 @@ function persistWorkflowCandidates(
     if (!isPersistableMemoryCandidate(outcome)) {
       continue;
     }
-    const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+    const proposalId = memoryIdOfProposal(outcome.proposal.proposalId);
     const record = buildMemoryRecordFromProposal(proposalId, outcome);
     options.vault.insertMemory(record, { correlationId: options.runId });
     proposedMemoryIds.push(record.id);

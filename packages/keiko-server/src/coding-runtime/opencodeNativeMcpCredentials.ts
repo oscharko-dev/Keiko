@@ -110,15 +110,14 @@ function credentialRows(handle: DatabaseSync): readonly CredentialRow[] {
     if (typeof integrationId !== "string" || typeof text !== "string") return [];
     // A row that is not JSON is no credential Keiko could keep; it is still scrubbed.
     const value = parsedValue(text);
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? [{ integrationId, value: value as Readonly<Record<string, unknown>> }]
-      : [];
+    return value === undefined ? [] : [{ integrationId, value }];
   });
 }
 
-function parsedValue(text: string): unknown {
+// The row's JSON object, or `undefined` for a value that is no JSON or no plain object.
+function parsedValue(text: string): CredentialRow["value"] | undefined {
   try {
-    return JSON.parse(text) as unknown;
+    return plainRecord(JSON.parse(text));
   } catch (error) {
     if (error instanceof SyntaxError) return undefined;
     throw error;

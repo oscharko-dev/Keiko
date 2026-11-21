@@ -7,6 +7,7 @@ import type {
 import type { UpdateRuntimeFacts } from "./update-install-mode.js";
 import {
   preparePortableHandoffPlan,
+  type PortableHandoffPreparedPlan,
   type PortableHandoffProcessIdentity,
 } from "./update-portable-handoff-builder.js";
 import {
@@ -127,7 +128,7 @@ function prepareHandoffPlan(
   input: PortableUpdateActivateInput,
   stateDir: string,
   dependencies: PortableHandoffDependencies,
-): Promise<unknown> {
+): Promise<PortableHandoffPreparedPlan> {
   return preparePortableHandoffPlan(
     {
       env: options.env,

@@ -1,5 +1,8 @@
 import type { IncomingMessage } from "node:http";
-import type { MemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts";
+import type {
+  MemoryAutonomyPolicyWire,
+  UpdateMemoryAutonomyPolicyWire,
+} from "@oscharko-dev/keiko-contracts";
 import { parseUpdateMemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import type { UiHandlerDeps } from "./deps.js";
 import {
@@ -63,13 +66,13 @@ function readRequestBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-async function parseUpdate(req: IncomingMessage): Promise<unknown> {
+async function parseUpdate(
+  req: IncomingMessage,
+): Promise<UpdateMemoryAutonomyPolicyWire | undefined> {
   const raw = await readRequestBody(req);
   if (raw.length === 0) return undefined;
   const parsed: unknown = JSON.parse(raw);
-  return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-    ? parsed
-    : undefined;
+  return parseUpdateMemoryAutonomyPolicyWire(parsed);
 }
 
 export function handleGetMemoryAutonomyPolicy(
@@ -83,16 +86,15 @@ export async function handlePutMemoryAutonomyPolicy(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  let update: unknown;
+  let parsed: UpdateMemoryAutonomyPolicyWire | undefined;
   try {
-    update = await parseUpdate(ctx.req);
+    parsed = await parseUpdate(ctx.req);
   } catch {
     return {
       status: 400,
       body: errorBody("BAD_REQUEST", "Invalid memory autonomy policy.", ctx.correlationId),
     };
   }
-  const parsed = parseUpdateMemoryAutonomyPolicyWire(update);
   if (parsed === undefined) {
     return {
       status: 400,

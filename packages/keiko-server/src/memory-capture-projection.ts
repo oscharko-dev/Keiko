@@ -363,8 +363,14 @@ function hasValidInitiatorSurface(value: Record<string, unknown>): boolean {
   return isMember(surface, MEMORY_AUDIT_INITIATOR_SURFACES);
 }
 
-function hasValidRelevantAuditEnvelope(value: Record<string, unknown>): boolean {
+// A relevant event read back as stored: its kind, the whole envelope and, for a forgotten event,
+// its `tombstoned` flag. Its other stored fields, such as `integrity`, stay on the object.
+function isValidRelevantAuditEvent(
+  value: Record<string, unknown>,
+): value is typeof value & MemoryAuditEvent {
   return (
+    isRelevantAuditKind(value.kind) &&
+    (value.kind !== "memory:forgotten" || typeof value.tombstoned === "boolean") &&
     hasValidAuditIdentity(value) &&
     hasValidOccurredAt(value) &&
     hasValidInitiatorSurface(value) &&
@@ -374,11 +380,8 @@ function hasValidRelevantAuditEnvelope(value: Record<string, unknown>): boolean 
 
 function parseRelevantAuditEvent(value: unknown): MemoryAuditEvent | null {
   if (!isRecord(value) || !isRelevantAuditKind(value.kind)) return null;
-  if (!hasValidRelevantAuditEnvelope(value)) throw new MemoryCaptureProjectionReadError();
-  if (value.kind === "memory:forgotten" && typeof value.tombstoned !== "boolean") {
-    throw new MemoryCaptureProjectionReadError();
-  }
-  return value as unknown as MemoryAuditEvent;
+  if (!isValidRelevantAuditEvent(value)) throw new MemoryCaptureProjectionReadError();
+  return value;
 }
 
 function parseAuditManifest(json: string): readonly MemoryAuditEvent[] {

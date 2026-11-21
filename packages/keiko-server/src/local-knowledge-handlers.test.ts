@@ -4,10 +4,18 @@ import {
   htmlManualSourceFingerprintTag,
 } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+} from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1130,6 +1138,36 @@ describe("local-knowledge handlers", () => {
 
     expect(result.status).toBe(400);
     expect(JSON.stringify(result.body)).toContain("denied");
+  });
+
+  it("refuses a source whose realpath the scope validator rejects, keeping the pod listing", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    // A connected folder that later resolves to the filesystem root (`/`, or a drive root such as
+    // `C:\` through a junction): the deny list passes it, but the scope validator refuses it.
+    // Storing that realpath would break every pod listing.
+    const seeded = seedStore(tmp);
+    const linkedRoot = join(tmp, "linked-root");
+    symlinkSync(parse(tmp).root, linkedRoot, "junction");
+    addSourceToCapsule(seeded.store, seeded.capId, {
+      // SAFETY: a fixed, non-blank test literal names the source; the store stores it unchanged.
+      id: "src-linked-root" as KnowledgeSourceId,
+      displayName: "linked root",
+      tags: [],
+      scope: { kind: "folder", rootPath: linkedRoot, recursive: true },
+    });
+    seeded.store.close();
+
+    const result = await startIndexingToTerminal(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("scope.rootPath is unsafe or empty");
+    const listed = await handleListLocalKnowledgeCapsules(baseCtx(tmp, "GET"), depsFor(tmp));
+    expect(listed.status).toBe(200);
+    expect(listed.body).toMatchObject({ capsules: [{ id: "cap-1" }] });
   });
 
   it("refuses a non-existent source path", async () => {

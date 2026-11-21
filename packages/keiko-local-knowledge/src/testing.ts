@@ -25,6 +25,12 @@ import {
 import { embedChunkBatch } from "./indexing/embedding-batcher.js";
 import type { ChunkToEmbed } from "./indexing/types.js";
 import { addSourceToCapsule, type AddCapsuleSourceInput } from "./source-lifecycle.js";
+import {
+  isDocumentId,
+  isKnowledgeCapsuleId,
+  isKnowledgeSourceId,
+  mintedId,
+} from "./knowledge-ids.js";
 import type { KnowledgeStore } from "./store.js";
 import { indexSeedLexicalRows } from "./seed-lexical-rows.js";
 
@@ -187,9 +193,9 @@ function normalizeSeedText(
 }
 
 function resolveSeedOptions(options: SeedVectorsOptions): ResolvedSeedOptions {
-  const capsuleId = (options.capsuleId ?? "cap-1") as KnowledgeCapsuleId;
-  const sourceId = (options.sourceId ?? "src-1") as KnowledgeSourceId;
-  const documentId = (options.documentId ?? "doc-1") as DocumentId;
+  const capsuleId = mintedId(options.capsuleId ?? "cap-1", isKnowledgeCapsuleId);
+  const sourceId = mintedId(options.sourceId ?? "src-1", isKnowledgeSourceId);
+  const documentId = mintedId(options.documentId ?? "doc-1", isDocumentId);
   const identity = options.identity ?? DEFAULT_EMBEDDING;
   const text = normalizeSeedText(options.unit, options.text);
   return {

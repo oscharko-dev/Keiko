@@ -21,8 +21,7 @@ const WRONG_CAPABILITY_DIGEST = "c".repeat(64);
 // A controllable timer seam so the queue lifecycle (timeout, cleanup, clear-on-result) is
 // deterministic without global fake timers.
 function fakeScheduler(): {
-  setTimer: (handler: () => void, ms: number) => unknown;
-  clearTimer: (handle: unknown) => void;
+  setTimer: (handler: () => void, ms: number) => () => void;
   pending: () => number;
   delays: () => readonly number[];
   fireAll: () => void;
@@ -30,13 +29,12 @@ function fakeScheduler(): {
   let nextId = 0;
   const handlers = new Map<number, { readonly handler: () => void; readonly ms: number }>();
   return {
-    setTimer: (handler: () => void, ms: number): unknown => {
+    setTimer: (handler: () => void, ms: number): (() => void) => {
       const id = (nextId += 1);
       handlers.set(id, { handler, ms });
-      return id;
-    },
-    clearTimer: (handle: unknown): void => {
-      handlers.delete(handle as number);
+      return (): void => {
+        handlers.delete(id);
+      };
     },
     pending: (): number => handlers.size,
     delays: (): readonly number[] => [...handlers.values()].map((entry) => entry.ms),

@@ -2,6 +2,7 @@
 // mutation carries a closed WorkspaceRootDispatch; no active/focused-root fallback exists.
 
 import type { IncomingMessage } from "node:http";
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import { workspaceManifestAccessResponse } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import type { UiHandlerDeps } from "./deps.js";
 import {
@@ -112,14 +113,14 @@ function requiredStringArray(body: Record<string, unknown>, key: string): readon
   return value;
 }
 
-function dispatchForWorkspace(body: Record<string, unknown>, workspaceId: string): unknown {
+// The submitted dispatch object, bound to this route's workspace. The manifest service validates
+// the rest of its shape.
+function dispatchForWorkspace(
+  body: Record<string, unknown>,
+  workspaceId: string,
+): Record<string, unknown> {
   const dispatch = body.dispatch;
-  if (
-    typeof dispatch !== "object" ||
-    dispatch === null ||
-    Array.isArray(dispatch) ||
-    (dispatch as Record<string, unknown>).workspaceId !== workspaceId
-  ) {
+  if (!isRecord(dispatch) || dispatch.workspaceId !== workspaceId) {
     throw new InvalidWorkspaceRequest();
   }
   return dispatch;

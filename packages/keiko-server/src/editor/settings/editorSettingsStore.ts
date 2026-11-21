@@ -296,20 +296,15 @@ function isRevision(value: unknown): value is number {
 
 function parseIdempotencyRecord(value: unknown): EditorSettingsIdempotencyRecord | undefined {
   if (!isRecord(value)) return undefined;
-  return validIdempotencyRecord(value)
-    ? (value as unknown as EditorSettingsIdempotencyRecord)
+  if (!hasOnlyKeys(value, ["keyHash", "requestHash", "resultKind", "changed", "revision"])) {
+    return undefined;
+  }
+  const { keyHash, requestHash, resultKind, changed, revision } = value;
+  if (!validSha(keyHash) || !validSha(requestHash)) return undefined;
+  if (resultKind !== "ok" && resultKind !== "invalid") return undefined;
+  return typeof changed === "boolean" && isRevision(revision)
+    ? { keyHash, requestHash, resultKind, changed, revision }
     : undefined;
-}
-
-function validIdempotencyRecord(value: UnknownRecord): boolean {
-  return (
-    hasOnlyKeys(value, ["keyHash", "requestHash", "resultKind", "changed", "revision"]) &&
-    validSha(value.keyHash) &&
-    validSha(value.requestHash) &&
-    (value.resultKind === "ok" || value.resultKind === "invalid") &&
-    typeof value.changed === "boolean" &&
-    isRevision(value.revision)
-  );
 }
 
 function validSha(value: unknown): value is string {

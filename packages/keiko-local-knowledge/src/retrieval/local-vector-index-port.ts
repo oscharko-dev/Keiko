@@ -33,7 +33,9 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { getCapsule } from "../capsule-lifecycle.js";
+import { isKnowledgeCapsuleId, isKnowledgeSourceId } from "../knowledge-ids.js";
 import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "../knowledge-log.js";
+import { vocabularyAdmission } from "../sql-row.js";
 import type { KnowledgeStore } from "../store.js";
 
 import type { RetrievalVectorIndexDiagnostics } from "./types.js";
@@ -126,6 +128,22 @@ function parsePartitionKey(partitionKey: string): ParsedPartitionKey | undefined
   } catch {
     return undefined;
   }
+}
+
+interface AdmittedPartitionKey {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId?: KnowledgeSourceId;
+}
+
+// A decoded component must also be an admitted id: a blank capsule or source id cannot address a
+// stored partition, so it fails closed with the same invalid-partition-key refusal as a key that
+// cannot be decoded.
+function admittedPartitionKey(partitionKey: string): AdmittedPartitionKey | undefined {
+  const parsed = parsePartitionKey(partitionKey);
+  if (parsed === undefined || !isKnowledgeCapsuleId(parsed.capsuleId)) return undefined;
+  if (parsed.sourceId === undefined) return { capsuleId: parsed.capsuleId };
+  if (!isKnowledgeSourceId(parsed.sourceId)) return undefined;
+  return { capsuleId: parsed.capsuleId, sourceId: parsed.sourceId };
 }
 
 function diagnostic(provider: string, status: string, reason?: string): VectorIndexDiagnostics {
@@ -269,9 +287,9 @@ export function createLocalKnowledgeStoreVectorIndexPort(
     async search(query: VectorIndexQuery): Promise<VectorIndexResult> {
       if (!isValidVectorIndexQuery(query)) return portInvalidQuery();
       if (query.namespace !== namespace) return portNamespaceMismatch(namespace);
-      const parsed = parsePartitionKey(query.partitionKey);
+      const parsed = admittedPartitionKey(query.partitionKey);
       if (parsed === undefined) return portInvalidPartitionKey();
-      const capsule = getCapsule(store, parsed.capsuleId as KnowledgeCapsuleId);
+      const capsule = getCapsule(store, parsed.capsuleId);
       if (capsule === undefined) return portCapsuleAbsent();
       if (
         embeddingIdentityKey(query.identity) !==
@@ -283,9 +301,7 @@ export function createLocalKnowledgeStoreVectorIndexPort(
       const request: VectorIndexSearchRequest = {
         store,
         capsule,
-        ...(parsed.sourceId !== undefined
-          ? { sourceFilter: [parsed.sourceId as KnowledgeSourceId] }
-          : {}),
+        ...(parsed.sourceId !== undefined ? { sourceFilter: [parsed.sourceId] } : {}),
         ...(query.candidateIds !== undefined ? { chunkFilter: query.candidateIds } : {}),
         queryVector: query.queryVector,
         candidateLimit: query.candidateLimit,
@@ -324,7 +340,7 @@ function reconstructLkFlags(result: VectorIndexResult): {
 // The port's OWN refusal reasons (`port-invalid-query`, `port-namespace-mismatch`,
 // `port-capsule-absent`) all map through this default — they express caller-side breakage the
 // LK path never sees, and calling `searchVectorIndex` directly would not have produced them.
-const LK_STATUS_VALUES: ReadonlySet<RetrievalVectorIndexDiagnostics["status"]> = new Set([
+const isLkStatus = vocabularyAdmission<RetrievalVectorIndexDiagnostics["status"]>([
   "disabled",
   "available",
   "fallback-unavailable",
@@ -336,20 +352,16 @@ const LK_STATUS_VALUES: ReadonlySet<RetrievalVectorIndexDiagnostics["status"]> =
 ]);
 
 function toLkStatus(status: string): RetrievalVectorIndexDiagnostics["status"] {
-  return LK_STATUS_VALUES.has(status as RetrievalVectorIndexDiagnostics["status"])
-    ? (status as RetrievalVectorIndexDiagnostics["status"])
-    : "fallback-query-error";
+  return isLkStatus(status) ? status : "fallback-query-error";
 }
 
-const LK_PROVIDER_VALUES: ReadonlySet<RetrievalVectorIndexDiagnostics["provider"]> = new Set([
+const isLkProvider = vocabularyAdmission<RetrievalVectorIndexDiagnostics["provider"]>([
   "brute-force",
   "usearch",
 ]);
 
 function toLkProvider(provider: string): RetrievalVectorIndexDiagnostics["provider"] {
-  return LK_PROVIDER_VALUES.has(provider as RetrievalVectorIndexDiagnostics["provider"])
-    ? (provider as RetrievalVectorIndexDiagnostics["provider"])
-    : "usearch";
+  return isLkProvider(provider) ? provider : "usearch";
 }
 
 function toLkDiagnostics(source: VectorIndexDiagnostics): RetrievalVectorIndexDiagnostics {

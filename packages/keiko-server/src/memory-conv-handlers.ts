@@ -59,7 +59,11 @@ import {
 } from "./memory-conversation-context.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { recordAutoAcceptedMemoryCaptureDecision } from "./memory-capture-audit.js";
-import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import {
+  buildMemoryRecordFromProposal,
+  memoryIdOfProposal,
+  proposalIdOfMemory,
+} from "./memory-record-builders.js";
 import { persistCapturedMemory } from "./memory-capture-persistence.js";
 import { readJsonRequestBodyOutcome, type JsonRequestBodyOutcome } from "./bounded-request-body.js";
 import {
@@ -466,7 +470,7 @@ function persistCandidateOutcome(
   if (!isPersistableMemoryCandidate(outcome)) {
     return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
   }
-  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+  const proposalId = memoryIdOfProposal(outcome.proposal.proposalId);
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   if (isSuppressedByForgetTombstone(vault, record)) {
     return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
@@ -483,7 +487,7 @@ function persistCandidateOutcome(
     ...outcome,
     proposal: {
       ...outcome.proposal,
-      proposalId: persisted.memory.id as unknown as MemoryProposalId,
+      proposalId: proposalIdOfMemory(persisted.memory.id),
     },
     requiresApproval: outcome.requiresApproval,
     status: accepted ? "accepted" : "proposed",
