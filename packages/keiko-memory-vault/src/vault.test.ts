@@ -36,6 +36,7 @@ import {
   type MemoryVaultStore,
 } from "./index.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
+import { listMemoryMetadataByBodyHashRows, type MemoryRowSealing } from "./memories.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -2166,6 +2167,81 @@ describe("exact body lookup by the keyed fingerprint index (v17)", () => {
       bodyHashFilledCount: 3,
     });
     filled.close();
+  });
+
+  it("reads a pending match and its row from one snapshot while another connection edits it", () => {
+    const dir = freshDir();
+    const first = openVault(dir);
+    first.insertMemory(
+      makeMemory({ id: "a" as MemoryId, body: "prefers dark mode", updatedAt: 1_700_000_000_000 }),
+    );
+    first.close();
+    const file = join(dir, MEMORY_DB_FILENAME);
+    const reader = new DatabaseSync(file);
+    const writer = new DatabaseSync(file);
+    reader.exec("UPDATE memories SET body_hash = NULL");
+    let edited = false;
+    // The scan opens the pending body; at that moment another connection rewrites the row to a
+    // different fact, as a concurrent edit would.
+    const sealing: MemoryRowSealing = {
+      cipher: {
+        sealString: (plaintext) => plaintext,
+        openString: () => {
+          if (!edited) {
+            writer.exec(
+              "UPDATE memories SET body_hash = 'h:works in leeds', updated_at = 1700000009999 WHERE id = 'a'",
+            );
+            edited = true;
+          }
+          return "prefers dark mode";
+        },
+        sealBytes: (buf) => buf,
+        openBytes: (envelope) => envelope,
+        isSealed: () => true,
+      },
+      bodyHash: (body) => `h:${body}`,
+    };
+
+    const found = listMemoryMetadataByBodyHashRows(
+      reader,
+      scope,
+      "prefers dark mode",
+      sealing,
+      {},
+      1_700_000_000_000,
+    );
+
+    expect(edited).toBe(true);
+    expect(found.map(({ id, updatedAt }) => ({ id, updatedAt }))).toEqual([
+      { id: "a", updatedAt: 1_700_000_000_000 },
+    ]);
+    expect(reader.isTransaction).toBe(false);
+    writer.close();
+    reader.close();
+  });
+
+  it("ends the read snapshot when the lookup fails, so the connection stays usable", () => {
+    const dir = freshDir();
+    openVault(dir).close();
+    const reader = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    const failing: MemoryRowSealing = {
+      cipher: {
+        sealString: (plaintext) => plaintext,
+        openString: (envelope) => envelope,
+        sealBytes: (buf) => buf,
+        openBytes: (envelope) => envelope,
+        isSealed: () => true,
+      },
+      bodyHash: () => {
+        throw new Error("hash unavailable");
+      },
+    };
+
+    expect(() =>
+      listMemoryMetadataByBodyHashRows(reader, scope, "prefers dark mode", failing, {}, 0),
+    ).toThrow("hash unavailable");
+    expect(reader.isTransaction).toBe(false);
+    reader.close();
   });
 
   it("pages over rows with one timestamp without skipping or repeating one", () => {

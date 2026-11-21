@@ -528,6 +528,8 @@ export function listMemoryMetadataByScopeRows(
 // facts the scope holds. A row whose fingerprint the open could not fill yet is compared by its
 // opened body, so a deferred fill never lets a rejected or stored fact through. The list filters
 // apply as for any scope read, and the id breaks ties so pages over equal timestamps stay disjoint.
+// The pending scan and the final query read one snapshot, so a row another connection edits between
+// them is returned as it stood when its body matched.
 export function listMemoryMetadataByBodyHashRows(
   db: DatabaseSync,
   scope: MemoryScope,
@@ -535,6 +537,37 @@ export function listMemoryMetadataByBodyHashRows(
   sealing: MemoryRowSealing,
   options: ListMemoriesOptions,
   nowMs: number,
+): readonly MemoryMetadata[] {
+  return inOneReadSnapshot(db, () =>
+    readMemoryMetadataByBodyHash(db, { scope, body, sealing, options, nowMs }),
+  );
+}
+
+function inOneReadSnapshot<T>(db: DatabaseSync, read: () => T): T {
+  if (db.isTransaction) return read();
+  db.exec("BEGIN");
+  let result: T;
+  try {
+    result = read();
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  db.exec("COMMIT");
+  return result;
+}
+
+interface BodyHashRead {
+  readonly scope: MemoryScope;
+  readonly body: string;
+  readonly sealing: MemoryRowSealing;
+  readonly options: ListMemoriesOptions;
+  readonly nowMs: number;
+}
+
+function readMemoryMetadataByBodyHash(
+  db: DatabaseSync,
+  { scope, body, sealing, options, nowMs }: BodyHashRead,
 ): readonly MemoryMetadata[] {
   const bodyHash = sealing.bodyHash(body);
   const pending = pendingScopeIdsWithBodyHash(db, scope, bodyHash, sealing);
