@@ -810,7 +810,7 @@ describe("handleQiReview — review persistence failures", () => {
     const lockPath = reviewLockPath("run-review-001");
     const failingDeps = {
       ...deps(evidenceDir),
-      redactor: (): unknown => {
+      redactor: (): never => {
         throw new Error("redactor failed");
       },
     };

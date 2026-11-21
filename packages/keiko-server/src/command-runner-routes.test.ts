@@ -32,6 +32,7 @@ import type {
   CommandRunnerEventEmitter,
   CommandRunnerManager,
 } from "./command-runner.js";
+import { stringLeafRedactor } from "./_support.js";
 
 interface FakeOptions {
   readonly result?: Partial<CommandTaskRunResult>;
@@ -259,8 +260,7 @@ describe("POST /api/commands/runs", () => {
     commandRunner = new FakeCommandRunnerManager({ result: { stdout: "token=SECRET-VALUE" } });
     await rebuild({
       commandRunner,
-      redactor: (value: unknown): unknown =>
-        typeof value === "string" ? value.replace("SECRET-VALUE", "[REDACTED]") : value,
+      redactor: stringLeafRedactor((text) => text.replace("SECRET-VALUE", "[REDACTED]")),
     });
     const res = await fetch(`${baseUrl()}/api/commands/runs`, {
       method: "POST",
@@ -390,8 +390,7 @@ describe("GET /api/commands/events", () => {
 
   it("applies Layer-2 redaction to every SSE event frame", async () => {
     await rebuild({
-      redactor: (value: unknown): unknown =>
-        JSON.parse(JSON.stringify(value).replace(/SECRET-VALUE/g, "[REDACTED]")) as unknown,
+      redactor: stringLeafRedactor((text) => text.replace(/SECRET-VALUE/g, "[REDACTED]")),
     });
     const res = await fetch(`${baseUrl()}/api/commands/events`, {
       headers: { Accept: "text/event-stream" },

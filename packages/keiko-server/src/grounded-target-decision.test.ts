@@ -13,6 +13,7 @@ import type {
 import { retrieveConnectedContextPack, scanFirstSymbolLine } from "./grounded-orchestrator.js";
 import { buildGroundedGatewayMessages } from "./grounded-qa.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { identityRedactor } from "./_support.js";
 
 let root = "";
 beforeEach(() => {
@@ -161,7 +162,7 @@ it("projects semantic-only context without claiming the missing named definition
   expect(
     excerpts.every((excerpt) => excerpt.atom.provenance.tool.startsWith("repo.semanticSearch:")),
   ).toBe(true);
-  const messages = buildGroundedGatewayMessages(question, pack, (value) => value);
+  const messages = buildGroundedGatewayMessages(question, pack, identityRedactor);
   expect(messages[1]?.content).toContain(
     "Related semantic context (not verified as an exact literal match)",
   );

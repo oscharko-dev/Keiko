@@ -294,7 +294,7 @@ function emitSalienceFailureDiagnostic(
       operation,
       source,
       error,
-      redact: (summary): string => String(deps.redactor(summary)),
+      redact: (summary): string => deps.redactor(summary),
     }),
   );
 }
@@ -524,7 +524,7 @@ function logSalienceCaptureDropped(
 // Memory proposals keep the default projection, so a preserved answer is projected again here.
 function memoryAssistantText(deps: UiHandlerDeps, assistantText: string): string {
   return deploymentContentPolicy(deps) === "preserve"
-    ? String(deps.redactor(assistantText))
+    ? deps.redactor(assistantText)
     : assistantText;
 }
 

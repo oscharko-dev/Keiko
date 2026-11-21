@@ -11,7 +11,7 @@ import type { JiraReport, JiraReportStore } from "@oscharko-dev/keiko-connectors
 import { openKnowledgeStore, resolveKnowledgeStorePath } from "@oscharko-dev/keiko-local-knowledge";
 import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 
-import { buildRedactor, type UiHandlerDeps } from "./deps.js";
+import { buildRedactor, type Redactor, type UiHandlerDeps } from "./deps.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/db.js";
 
@@ -159,7 +159,7 @@ function handlerDeps(
 
 export async function podFixture(
   pods: readonly PodSpec[],
-  options: { readonly redactor?: (value: unknown) => unknown; readonly bindPods?: boolean } = {},
+  options: { readonly redactor?: Redactor; readonly bindPods?: boolean } = {},
 ): Promise<PodFixture> {
   const runtimeDir = mkdtempSync(join(tmpdir(), "keiko-requirements-"));
   const uiDbPath = join(runtimeDir, "ui.db");

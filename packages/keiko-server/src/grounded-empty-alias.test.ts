@@ -10,10 +10,10 @@ import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/inte
 import { assembleContextPack } from "@oscharko-dev/keiko-workflows";
 import { createInMemoryUiStore } from "./store/index.js";
 import { evidenceLines, fittedGroundedGatewayPrompt, promptExcerptCount } from "./grounded-qa.js";
+import { identityRedactor } from "./_support.js";
 
 const PATH = "src/decision.ts";
 const CONTENT = "The selected source validates the accepted operation.";
-const redactor = (value: unknown): unknown => value;
 
 function atom(stableId: string): EvidenceAtom {
   return {
@@ -76,27 +76,29 @@ describe("grounded prompt presentation of deduplicated metadata aliases", () => 
     const pack = await assembled(true);
     expect(pack.files.flatMap((file) => file.excerpts)).toHaveLength(2);
     expect(promptExcerptCount([pack])).toBe(1);
-    const headers = evidenceLines(pack, redactor).filter((line) => line.startsWith("- Evidence "));
+    const headers = evidenceLines(pack, identityRedactor).filter((line) =>
+      line.startsWith("- Evidence "),
+    );
     expect(headers).toHaveLength(promptExcerptCount([pack]));
   });
 
   it("does not repeat empty fences for a deduplicated reference observation", async () => {
     const pack = await assembled(true);
     const plain = await assembled(false);
-    expect(evidenceLines(pack, redactor)).toEqual(evidenceLines(plain, redactor));
+    expect(evidenceLines(pack, identityRedactor)).toEqual(evidenceLines(plain, identityRedactor));
   });
 
   it("retains the physical source and its exact line annotation without aliases", async () => {
     const pack = await assembled(false);
-    expect(evidenceLines(pack, redactor)).toContain(`1 | ${CONTENT}`);
+    expect(evidenceLines(pack, identityRedactor)).toContain(`1 | ${CONTENT}`);
     expect(promptExcerptCount([pack])).toBe(1);
   });
 
   it("retains a nonempty whitespace-only source line", async () => {
     const pack = await assembled(true, " ");
     expect(promptExcerptCount([pack])).toBe(1);
-    expect(evidenceLines(pack, redactor)).toContain("1 |  ");
-    expect(evidenceLines(pack, redactor).filter((line) => line === "```")).toHaveLength(2);
+    expect(evidenceLines(pack, identityRedactor)).toContain("1 |  ");
+    expect(evidenceLines(pack, identityRedactor).filter((line) => line === "```")).toHaveLength(2);
   });
 
   it("does not render an empty metadata-only file as source evidence", async () => {
@@ -110,7 +112,7 @@ describe("grounded prompt presentation of deduplicated metadata aliases", () => 
     };
     expect(validateConnectedContextPack(metadataOnly)).toEqual({ ok: true });
     expect(promptExcerptCount([metadataOnly])).toBe(0);
-    expect(evidenceLines(metadataOnly, redactor)).toEqual([
+    expect(evidenceLines(metadataOnly, identityRedactor)).toEqual([
       `File: ${PATH}`,
       "- No excerpt content was available for this selected file.",
     ]);
@@ -134,7 +136,7 @@ describe("grounded prompt presentation of deduplicated metadata aliases", () => 
       })),
     };
     expect(validateConnectedContextPack(document)).toEqual({ ok: true });
-    const lines = evidenceLines(document, redactor);
+    const lines = evidenceLines(document, identityRedactor);
     expect(lines.filter((line) => line.startsWith("- Document evidence"))).toEqual([
       "- Document evidence (PDF, extracted text) docs/decision.pdf:1-1 (score 1.00):",
     ]);
@@ -153,10 +155,15 @@ describe("grounded prompt presentation of deduplicated metadata aliases", () => 
           "base64",
         ),
       });
-      const sent = fittedGroundedGatewayPrompt("Explain the selected operation.", pack, redactor, {
-        protectedSkill: skill,
-        modelInputTokensMax: pack.budget.modelInputTokensMax,
-      });
+      const sent = fittedGroundedGatewayPrompt(
+        "Explain the selected operation.",
+        pack,
+        identityRedactor,
+        {
+          protectedSkill: skill,
+          modelInputTokensMax: pack.budget.modelInputTokensMax,
+        },
+      );
       const content = sent.messages.map((message) => message.content).join("\n");
       const sentPack = sent.sentEvidencePacks?.[0];
       if (sentPack === undefined) throw new TypeError("Expected the fitted source pack");

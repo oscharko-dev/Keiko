@@ -127,6 +127,7 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import {
   bindSecurityLogCorrelation,
+  type DeepRedacted,
   keikoApiKeySecretValues,
   redact,
   redactContent,
@@ -593,8 +594,9 @@ import { isIdentityProofFailure } from "./task-workspace/errors.js";
 import { createGitSnapshotAccessScope } from "./gitChangeSnapshotRegistry.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
-// `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
-export type Redactor = (value: unknown) => unknown;
+// `deepRedactStrings` composed with the audit redactor; reused, never a new regex. It returns what
+// `deepRedactStrings` returns: the same structure with every string leaf typed as `string`.
+export type Redactor = <T>(value: T) => DeepRedacted<T>;
 
 // Builds a ModelPort for a run. The default builds a `GatewayModelPort` from the resolved config
 // (mirroring the CLI); tests inject a deterministic fake so runs are offline. Throws/returns when no
@@ -2225,7 +2227,7 @@ export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor 
     },
     env,
   );
-  return (value: unknown): unknown => deepRedactStrings(value, redactString);
+  return <T>(value: T): DeepRedacted<T> => deepRedactStrings(value, redactString);
 }
 
 // #4098: the private Chat history redactor. Under the default policy it is the live redactor
@@ -6758,7 +6760,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     options.codingWorkbenchEvidenceStore ??
     createNodeEvidenceStore(join(resolvedEvidenceDir, "coding-workbench"));
   const redactString = runtimeRedactString(options.env, runtimeConfig, egress);
-  const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
+  const liveRedactor = <T>(value: T): DeepRedacted<T> => deepRedactStrings(value, redactString);
   const localKnowledgeKeyProvider = localKnowledgeKeys(options.env);
   const contentPolicy = resolveLoggedContentPolicy(options.env, bootstrapCorrelationId);
   const bundle = buildPersistenceBundle(

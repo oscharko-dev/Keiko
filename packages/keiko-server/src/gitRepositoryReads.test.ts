@@ -31,17 +31,19 @@ import {
   type GitProcessRunner,
 } from "./gitRoutes.js";
 import { writeNodeExecutableFixture } from "./editor/lsp/testing/executableFixture.js";
+import { stringLeafRedactor } from "./_support.js";
 
 let root: string;
 let store: UiStore;
 
-function deps(runner: GitProcessRunner, redactor = buildRedactor({})): UiHandlerDeps {
+// `redactText`, when given, redacts each string leaf in place of the production redactor.
+function deps(runner: GitProcessRunner, redactText?: (text: string) => string): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
     env: {},
-    redactor,
+    redactor: redactText === undefined ? buildRedactor({}) : stringLeafRedactor(redactText),
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,

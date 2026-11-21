@@ -28,7 +28,7 @@ import { matchRoute, type RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import type { ServerLogSink } from "./observability/index.js";
 import type { UiStore } from "./store/index.js";
-import { mockRequest, mockResponse } from "./_support.js";
+import { mockRequest, mockResponse, identityRedactor } from "./_support.js";
 import {
   GIT_DIFF_ROUTE_TEMPLATE,
   GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE,
@@ -246,7 +246,7 @@ describe("GET /api/git/status", () => {
 
     const result = await handleGitStatus(
       ctx(`/api/git/status?root=${encodeURIComponent(selectedRoot)}`),
-      deps(runner, (value) => value),
+      deps(runner, identityRedactor),
       { runner, maxStatusBytes: 4096, maxChanges: 2 },
     );
 
@@ -367,7 +367,7 @@ describe("GET /api/git/status", () => {
 
     const result = await handleGitStatus(
       ctx(`/api/git/status?root=${encodeURIComponent(selectedRoot)}`),
-      deps(runner, (value) => value),
+      deps(runner, identityRedactor),
     );
 
     expect(result.status).toBe(200);
@@ -507,7 +507,7 @@ describe("GET /api/git/status", () => {
       ctx(
         `/api/git/status?root=${encodeURIComponent(selectedRoot)}&path=${encodeURIComponent(path)}`,
       ),
-      deps(runner, (value) => value),
+      deps(runner, identityRedactor),
     );
 
     expect(result).toMatchObject({
@@ -934,7 +934,7 @@ describe("GET /api/git/diff", () => {
 
     const result = await handleGitDiff(
       ctx(`/api/git/diff?root=${encodeURIComponent(root)}&scope=all`),
-      deps(runner, (value) => value),
+      deps(runner, identityRedactor),
       { maxDiffBytes: 12, runner, maxStatusBytes: 4096, maxChanges: 10 },
     );
 

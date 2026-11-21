@@ -50,6 +50,7 @@ import { executeGovernedMerge, KEIKO_DEFAULT_MERGE_POLICY_PACK } from "./mergeEx
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import { executeGovernedPullRequest, KEIKO_DEFAULT_PR_POLICY_PACK } from "./prExecution.js";
 import { executeGovernedPublish, KEIKO_DEFAULT_PUBLISH_POLICY_PACK } from "./pushExecution.js";
+import { identityRedactor } from "../_support.js";
 
 // KEIKO-0526: only mint-route-backed action kinds may name approval-gated. A future policy pack
 // that named approval-gated for another action kind would silently fail closed at execute time
@@ -209,7 +210,7 @@ describe("mutating route groups wire their fallback default through defaultMinta
   };
   const DEPS = {
     evidenceStore: createInMemoryEvidenceStore(),
-    redactor: (value: unknown): unknown => value,
+    redactor: identityRedactor,
   };
 
   beforeEach(() => {

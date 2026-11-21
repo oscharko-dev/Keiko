@@ -725,12 +725,12 @@ function activityPriority(state: RelationshipActivitySnapshot["state"]): number 
 }
 
 function activityEventLine(redactor: Redactor, snapshot: RelationshipActivitySnapshot): string {
-  const payload = redactor(snapshot) ?? snapshot;
+  const payload = redactor(snapshot);
   return `event: relationship:activity\ndata: ${JSON.stringify(payload)}\n\n`;
 }
 
 function activityNdjsonLine(redactor: Redactor, snapshot: RelationshipActivitySnapshot): string {
-  const payload = redactor(snapshot) ?? snapshot;
+  const payload = redactor(snapshot);
   return `${JSON.stringify(payload)}\n`;
 }
 

@@ -33,7 +33,7 @@ import {
   InvalidRunIdError,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
-import { probeVerifiedGatewayConfig } from "./_support.js";
+import { probeVerifiedGatewayConfig, stringLeafRedactor } from "./_support.js";
 
 function ctx(path: string, params: Record<string, string> = {}): RouteContext {
   return {
@@ -56,22 +56,7 @@ function emptyStore(): EvidenceStore {
   return { put: () => "", list: () => [], get: () => undefined, delete: () => undefined };
 }
 
-function redactTopSecret(value: unknown): unknown {
-  if (typeof value === "string") {
-    return value.replaceAll("topsecret", "[REDACTED]");
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => redactTopSecret(entry));
-  }
-  if (value === null || typeof value !== "object") {
-    return value;
-  }
-  const out: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    out[key] = redactTopSecret(entry);
-  }
-  return out;
-}
+const redactTopSecret = stringLeafRedactor((text) => text.replaceAll("topsecret", "[REDACTED]"));
 
 function createWorkspaceFixture(): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-ui-workspace-"));

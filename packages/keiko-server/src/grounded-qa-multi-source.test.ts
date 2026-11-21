@@ -117,6 +117,7 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { stringLeafRedactor } from "./_support.js";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -556,8 +557,7 @@ describe("sourceLabels", () => {
 
   it("redacts a selected source label at the citation projection boundary", () => {
     const secret = "tenantcredentialvalue987";
-    const redact = (value: unknown): unknown =>
-      typeof value === "string" ? value.replaceAll(secret, "[REDACTED]") : value;
+    const redact = stringLeafRedactor((text) => text.replaceAll(secret, "[REDACTED]"));
 
     const citations = buildLabeledAnswerCitations(
       scopePack("src/a.ts", 0.8, "a"),

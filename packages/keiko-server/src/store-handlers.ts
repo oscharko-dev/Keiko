@@ -1352,7 +1352,7 @@ function groundingPatchConflict(
       operation: "PATCH /api/chats",
       source: "chat.scope-update-conflict",
       error: Object.assign(new Error(message), { code: "GROUNDING_SCOPE_CHANGED" }),
-      redact: (value): string => String(deps.redactor(value)),
+      redact: (value): string => deps.redactor(value),
     }),
     errorClass: "invalid-request",
     httpStatus: 409,

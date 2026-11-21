@@ -19,7 +19,12 @@ import type {
   ContainerTaskCatalog,
 } from "@oscharko-dev/keiko-contracts";
 import { buildCspHeader } from "../csp.js";
-import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
+import {
+  buildRedactor,
+  createInMemoryUiStore,
+  type Redactor,
+  type UiHandlerDeps,
+} from "../index.js";
 import { createRunRegistry } from "../runs.js";
 import { createUiServer, UI_HOST } from "../server.js";
 import { ContainerRunnerError } from "./containerRunner-errors.js";
@@ -29,6 +34,7 @@ import type {
   ContainerRunnerEventEmitter,
   ContainerRunnerManager,
 } from "./containerRunner.js";
+import { identityRedactor, stringLeafRedactor } from "../_support.js";
 
 interface FakeOptions {
   readonly anyAvailable?: boolean;
@@ -312,8 +318,7 @@ describe("POST /api/containers/runs", () => {
     containerRunner = new FakeContainerRunnerManager({ result: { stdout: "tok=SECRET-VALUE" } });
     await rebuild({
       containerRunner,
-      redactor: (value: unknown): unknown =>
-        typeof value === "string" ? value.replace("SECRET-VALUE", "[REDACTED]") : value,
+      redactor: stringLeafRedactor((text) => text.replace("SECRET-VALUE", "[REDACTED]")),
     });
     const res = await fetch(`${baseUrl()}/api/containers/runs`, {
       method: "POST",
@@ -477,9 +482,9 @@ describe("openContainerSseStream fan-out serialization", () => {
   it("redacts one event once across two subscribed streams", () => {
     const manager = new FakeContainerRunnerManager();
     const calls = { count: 0 };
-    const redactor = (value: unknown): unknown => {
+    const redactor: Redactor = (value) => {
       calls.count += 1;
-      return value;
+      return identityRedactor(value);
     };
     const first = makeFakeSseRes();
     const second = makeFakeSseRes();

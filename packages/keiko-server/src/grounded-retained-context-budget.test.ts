@@ -10,6 +10,7 @@ import {
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { buildGroundedGatewayMessages, buildQuery } from "./grounded-qa.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
+import { identityRedactor } from "./_support.js";
 
 const NOW = 1_784_653_600_000;
 let root = "";
@@ -104,7 +105,7 @@ describe("retained results follow accepted context capacity", () => {
     const pack = input.pack;
     expect(pack.files).toHaveLength(256);
     expect(pack.usage.filesRead).toBe(256);
-    const messages = buildGroundedGatewayMessages(content, pack, (value) => value);
+    const messages = buildGroundedGatewayMessages(content, pack, identityRedactor);
     const prompt = JSON.stringify(messages);
     for (let index = 1; index <= 256; index += 1)
       expect(prompt.includes(`CompactFactProbe ${String(10000 + index)}`)).toBe(true);
@@ -120,7 +121,7 @@ describe("retained results follow accepted context capacity", () => {
     expect(pack.diagnostics?.coverage).toMatchObject({ filesScanned: 256, incomplete: false });
     expect(pack.omitted).toEqual([]);
     expect(pack.uncertainty).toEqual([]);
-    const messages = buildGroundedGatewayMessages(question(256), pack, (value) => value);
+    const messages = buildGroundedGatewayMessages(question(256), pack, identityRedactor);
     const prompt = JSON.stringify(messages);
     for (let index = 1; index <= 256; index += 1) {
       expect(prompt.includes(`return ${String(10000 + index)};`)).toBe(true);

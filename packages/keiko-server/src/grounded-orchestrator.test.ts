@@ -86,6 +86,7 @@ import {
 } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { GitFileHistoryEvidenceProvider } from "./grounded-git-history-evidence.js";
 import { fittedGroundedGatewayPrompt } from "./grounded-qa.js";
+import { identityRedactor } from "./_support.js";
 
 const NOW = 1_700_000_000_000;
 const listingGuardPhase = new AsyncLocalStorage<boolean>();
@@ -2341,11 +2342,7 @@ describe("runGroundedExploration", () => {
     );
     const selected = out.pack.files.find((file) => file.scopePath === "src/service.ts");
     expect(selected?.excerpts.some((excerpt) => excerpt.content.includes(fact))).toBe(true);
-    const sent = fittedGroundedGatewayPrompt(
-      query.text,
-      out.pack,
-      (value: unknown): unknown => value,
-    );
+    const sent = fittedGroundedGatewayPrompt(query.text, out.pack, identityRedactor);
     expect(sent.messages.some((message) => message.content.includes(fact))).toBe(true);
     const matcher = buildMatcher(query);
     const evidence = selected?.excerpts.find((excerpt) => excerpt.content.includes(fact));

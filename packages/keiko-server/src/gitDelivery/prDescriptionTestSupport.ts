@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDefaultChatCapability, PrDescription } from "@oscharko-dev/keiko-model-gateway";
 import type { NormalizedResponse, PrDescriptionArtifact } from "@oscharko-dev/keiko-contracts";
-import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { deepRedactStrings, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import type {
   GitPrBody,
@@ -215,7 +215,7 @@ export class DescriptionFixture {
       generation: this.generation(),
       adapter: () => this.adapter(),
       mutationDeps: {
-        redactor: (value) => value,
+        redactor: (value) => deepRedactStrings(value, (text) => text),
         evidenceStore: {
           put: (id, value): string => {
             this.evidence.set(id, value);

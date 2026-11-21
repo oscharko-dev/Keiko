@@ -83,7 +83,12 @@ import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { sentPromptContext } from "./grounded-prompt-context.js";
 import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
-import { currentConversationReady, type RuntimeGatewayConfig, type UiHandlerDeps } from "./deps.js";
+import {
+  currentConversationReady,
+  type Redactor,
+  type RuntimeGatewayConfig,
+  type UiHandlerDeps,
+} from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type {
@@ -176,6 +181,7 @@ import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
 import { deriveManagedWorktreePath } from "./task-workspace/naming.js";
 import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.js";
 import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
+import { stringLeafRedactor } from "./_support.js";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -1353,11 +1359,15 @@ describe("buildGroundedGatewayMessages", () => {
       ],
     };
     const redact = buildRedactor({});
-    const observed = vi.fn(redact);
+    const seen: unknown[] = [];
+    const observed: Redactor = (value) => {
+      seen.push(value);
+      return redact(value);
+    };
     const sent = fittedGroundedGatewayPrompt("Read the source", pack, observed, {
       modelInputTokensMax: 1024,
     });
-    expect(observed.mock.calls.filter(([value]) => value === content)).toHaveLength(1);
+    expect(seen.filter((value) => value === content)).toHaveLength(1);
     expect(sent.sentReferenceCount).toBe(1);
     expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(1024);
     const reuse = vi
@@ -2066,7 +2076,7 @@ describe("handleGroundedAsk", () => {
       undefined,
       {},
       {
-        redactor: (value: unknown): unknown => (value === admittedRoot ? "[REDACTED]" : value),
+        redactor: stringLeafRedactor((text) => (text === admittedRoot ? "[REDACTED]" : text)),
       },
     );
     setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));

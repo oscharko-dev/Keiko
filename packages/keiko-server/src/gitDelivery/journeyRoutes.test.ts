@@ -45,6 +45,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { identityRedactor } from "../_support.js";
 
 // Builds a fully-typed UiHandlerDeps (all 8 required fields), matching the `deps(overrides)`
 // pattern shared by the sibling gitDelivery route test files (e.g. actionSheetRoutes.test.ts),
@@ -96,7 +97,7 @@ function harness(): Harness {
   const deps = baseDeps({
     codingRuntimeSnapshotStore: snapshots,
     evidenceStore: createNodeEvidenceStore(dir),
-    redactor: (value: unknown): unknown => value,
+    redactor: identityRedactor,
     activityLog: {
       write: (event: ServerLogEvent): void => {
         events.push(event);
@@ -482,7 +483,7 @@ describe("journey observation route (#3389 AC1/AC5/AC6)", () => {
       const deps = baseDeps({
         codingRuntimeSnapshotStore: snapshots,
         evidenceStore: createNodeEvidenceStore(evidenceDir),
-        redactor: (value: unknown): unknown => value,
+        redactor: identityRedactor,
       });
       // No `outcomes` override: exercises the same default wiring the mounted production route
       // group (`GIT_DELIVERY_JOURNEY_ROUTE_GROUP`) uses.
@@ -559,7 +560,7 @@ describe("journey readiness renewal after the run has settled (regression, epic 
     const deps = baseDeps({
       codingRuntimeSnapshotStore: snapshots,
       evidenceStore: createNodeEvidenceStore(dir),
-      redactor: (value: unknown): unknown => value,
+      redactor: identityRedactor,
       activityLog: {
         write: (event: ServerLogEvent): void => {
           events.push(event);
@@ -992,7 +993,7 @@ async function seedJourneyWithAppliedReceipt(input: {
       store,
       codingRuntimeSnapshotStore: snapshots,
       evidenceStore,
-      redactor: (value: unknown): unknown => value,
+      redactor: identityRedactor,
       workspaceLifecycle: {
         list: (root: string): readonly unknown[] =>
           root === parentDir ? [{ managedWorktreePath: description.root }] : [],

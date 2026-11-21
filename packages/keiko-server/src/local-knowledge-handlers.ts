@@ -3160,7 +3160,7 @@ function reportDetachedIndexingFailure(
       source: "local-knowledge.detached-indexing",
       error,
       summary: "A detached capsule indexing run failed before reaching a terminal state.",
-      redact: (message): string => String(deps.redactor(message)),
+      redact: (message): string => deps.redactor(message),
     }),
   );
 }

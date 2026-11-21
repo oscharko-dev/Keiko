@@ -30,6 +30,7 @@ import {
   handleValidateWorkspaceSnippets,
   handleWorkspaceSnippetsEvents,
 } from "./workspaceSnippetsRoutes.js";
+import { identityRedactor } from "../../_support.js";
 
 let root = "";
 let store: UiStore;
@@ -154,7 +155,7 @@ function deps(service: WorkspaceSnippetsService | undefined): UiHandlerDeps {
       delete: () => undefined,
     },
     env: {},
-    redactor: (value: unknown) => value,
+    redactor: identityRedactor,
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,

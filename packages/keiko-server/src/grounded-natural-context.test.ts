@@ -30,6 +30,7 @@ import {
   type OrchestratorInput,
   type RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
+import { identityRedactor } from "./_support.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -217,7 +218,7 @@ function minimumFittedBudget(question: string, pack: ConnectedContextPack): numb
   while (low < high) {
     const middle = Math.floor((low + high) / 2);
     try {
-      fittedGroundedGatewayPrompt(question, pack, (value: unknown): unknown => value, {
+      fittedGroundedGatewayPrompt(question, pack, identityRedactor, {
         modelInputTokensMax: middle,
       });
       high = middle;
@@ -447,7 +448,7 @@ describe("named documents beyond whole-folder context", () => {
       const observedPrefix = `${"x ".repeat(25)}Unit-G42 `;
       writeFileSync(join(root, "a.txt"), `${observedPrefix}${"details ".repeat(300)}`);
       const { pack } = await retrieve(root, question);
-      const redactor = (value: unknown): unknown => value;
+      const redactor = identityRedactor;
       const minimal = withPromptExcerptBudget(pack, Buffer.byteLength(observedPrefix, "utf8"));
       const options = { modelInputTokensMax };
       const positive = fittedGroundedGatewayPrompt(question, minimal, redactor, options);
@@ -490,7 +491,7 @@ describe("named documents beyond whole-folder context", () => {
   it("binds fitted prompt confidence to its actual retained subject evidence", async () => {
     const question = "What is the shipment ceiling for Unit-G42?";
     const { pack } = await retrieve(compoundDocumentCorpus(), question);
-    const redactor = (value: unknown): unknown => value;
+    const redactor = identityRedactor;
     const complete = fittedGroundedGatewayPrompt(question, pack, redactor);
     expect(complete.withoutSources.map((message) => message.content).join("\n")).not.toContain(
       "The supplied evidence may be unrelated to the question.",
@@ -669,11 +670,7 @@ describe("natural connected-folder context", () => {
       expect(evidence).toContain("Ölwechsel 750 hours");
       expect(evidence).toContain("[REDACTED]");
       expect(JSON.stringify(output.pack)).not.toContain(secret);
-      const sent = fittedGroundedGatewayPrompt(
-        query,
-        output.pack,
-        (value: unknown): unknown => value,
-      );
+      const sent = fittedGroundedGatewayPrompt(query, output.pack, identityRedactor);
       const prompt = sent.messages.map((message) => message.content).join("\n");
       expect(prompt).toContain("Ölwechsel 750 hours");
       expect(prompt).not.toContain(secret);
@@ -871,11 +868,7 @@ describe("natural connected-folder context", () => {
     expect(out.pack.usage.modelInputTokens).toBeLessThanOrEqual(
       out.pack.budget.modelInputTokensMax,
     );
-    const prompt = fittedGroundedGatewayPrompt(
-      QUESTION,
-      out.pack,
-      (value: unknown): unknown => value,
-    );
+    const prompt = fittedGroundedGatewayPrompt(QUESTION, out.pack, identityRedactor);
     expect(prompt.messages.some((message) => message.content.includes("AZALEA"))).toBe(true);
     expect(countGatewayPromptTokens({ messages: prompt.messages })).toBeLessThanOrEqual(
       out.pack.budget.modelInputTokensMax,
@@ -899,11 +892,7 @@ describe("natural connected-folder context", () => {
         file.excerpts.some((excerpt) => excerpt.content.includes("FREESIA")),
       ),
     ).toBe(true);
-    const prompt = fittedGroundedGatewayPrompt(
-      QUESTION,
-      out.pack,
-      (value: unknown): unknown => value,
-    );
+    const prompt = fittedGroundedGatewayPrompt(QUESTION, out.pack, identityRedactor);
     expect(countGatewayPromptTokens({ messages: prompt.messages })).toBeLessThanOrEqual(1024);
     expect(prompt.messages.map((message) => message.content).join("\n")).not.toContain("FREESIA");
     expect(prompt.sentReferenceCount).toBeLessThan(prompt.availableReferenceCount);
@@ -940,7 +929,7 @@ describe("natural connected-folder context", () => {
       });
       expect(out.pack.diagnostics?.coverage?.reasons).toContain("io-error");
       expect(out.pack.uncertainty.some((entry) => entry.kind === "scope-incomplete")).toBe(true);
-      const sent = fittedGroundedGatewayPrompt(text, out.pack, (value: unknown): unknown => value);
+      const sent = fittedGroundedGatewayPrompt(text, out.pack, identityRedactor);
       const prompt = sent.messages.map((message) => message.content).join("\n");
       expect(prompt).toContain("Candidate file evidence unavailable for reading/retrieval: 1.");
       expect(prompt).toContain("Current traversal incomplete: true; reasons: io-error.");

@@ -222,7 +222,7 @@ async function streamConversation(
 ): Promise<StreamedTurn | undefined> {
   const iterator = stream[Symbol.asyncIterator]();
   const publication = createStreamingRedactor(
-    (text): string => currentContentRedactor(deps)(text) as string,
+    (text): string => currentContentRedactor(deps)(text),
     currentRedactionSecrets(deps),
   );
   const publish = tokenPublisher(ctx, controller, termination);
@@ -277,7 +277,7 @@ async function persistStreamedTurn(
   correlationId: string | undefined,
 ): Promise<DesktopChatSendResponse | undefined> {
   const { request, chat, modelId, memoryContext } = prepared;
-  const redactedContent = currentContentRedactor(deps)(turn.response.content) as string;
+  const redactedContent = currentContentRedactor(deps)(turn.response.content);
   const actions = await collectMemoryActions(deps, request, memoryContext, { correlationId });
   if (signal.aborted) return undefined;
   const createdAssistant = createAssistantMessage(

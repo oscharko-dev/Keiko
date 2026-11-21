@@ -6,8 +6,7 @@ import {
   codingContextEvidenceRunId,
   recordCodingContextEvidence,
 } from "./codingContextEvidence.js";
-
-const identity = (value: unknown): unknown => value;
+import { identityRedactor } from "../_support.js";
 
 function wirePack(overrides: Partial<CodingContextWirePack> = {}): CodingContextWirePack {
   return {
@@ -60,7 +59,12 @@ describe("codingContextEvidenceRunId", () => {
 describe("recordCodingContextEvidence", () => {
   it("persists a content-free record retrievable by run id", () => {
     const store = createInMemoryEvidenceStore();
-    const runId = recordCodingContextEvidence(store, identity, wirePack(), 1_700_000_000_000);
+    const runId = recordCodingContextEvidence(
+      store,
+      identityRedactor,
+      wirePack(),
+      1_700_000_000_000,
+    );
     const json = store.get(runId);
     expect(json).toBeDefined();
     const manifest = JSON.parse(json ?? "{}") as Record<string, unknown>;
@@ -79,7 +83,12 @@ describe("recordCodingContextEvidence", () => {
   // without this test naming it.
   it("emits exactly the coding catalog's tier keys in tierCounts, never a neutral-only tier", () => {
     const store = createInMemoryEvidenceStore();
-    const runId = recordCodingContextEvidence(store, identity, wirePack(), 1_700_000_000_000);
+    const runId = recordCodingContextEvidence(
+      store,
+      identityRedactor,
+      wirePack(),
+      1_700_000_000_000,
+    );
     const json = store.get(runId);
     const manifest = JSON.parse(json ?? "{}") as Record<string, unknown>;
     expect(manifest.codingContextSchemaVersion).toBe("1");
@@ -90,7 +99,7 @@ describe("recordCodingContextEvidence", () => {
 
   it("does not pollute the grounded/QI evidence index", () => {
     const store = createInMemoryEvidenceStore();
-    recordCodingContextEvidence(store, identity, wirePack(), 1_700_000_000_000);
+    recordCodingContextEvidence(store, identityRedactor, wirePack(), 1_700_000_000_000);
     // listEvidence requires evidenceSchemaVersion; the coding-context record omits it and is skipped.
     expect(listEvidence(store)).toHaveLength(0);
   });
@@ -105,7 +114,7 @@ describe("recordCodingContextEvidence", () => {
       delete: (): void => undefined,
     };
     expect(() =>
-      recordCodingContextEvidence(failingStore, identity, wirePack(), 1_700_000_000_000),
+      recordCodingContextEvidence(failingStore, identityRedactor, wirePack(), 1_700_000_000_000),
     ).not.toThrow();
   });
 });

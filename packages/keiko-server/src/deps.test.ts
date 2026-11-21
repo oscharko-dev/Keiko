@@ -125,16 +125,20 @@ import {
   createGitSnapshotAccessScope,
   type GitSnapshotAccessScope,
 } from "./gitChangeSnapshotRegistry.js";
+import { stringLeafRedactor } from "./_support.js";
 
 const tmpDirs: string[] = [];
 
 describe("redactEvidenceString", () => {
   it("fails closed when the evidence redactor returns a non-string value", () => {
-    expect(() => redactEvidenceString(() => ({ raw: true }), "secret-value")).toThrow(TypeError);
+    // An untyped mock stands in for a JavaScript caller that breaks the Redactor contract.
+    const nonString = vi.fn().mockReturnValue({ raw: true });
+    expect(() => redactEvidenceString(nonString, "secret-value")).toThrow(TypeError);
   });
 
   it("returns the validated redacted string", () => {
-    expect(redactEvidenceString(() => "[REDACTED]", "secret-value")).toBe("[REDACTED]");
+    const redactor = stringLeafRedactor(() => "[REDACTED]");
+    expect(redactEvidenceString(redactor, "secret-value")).toBe("[REDACTED]");
   });
 });
 

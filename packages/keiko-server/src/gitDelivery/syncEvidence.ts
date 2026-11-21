@@ -209,7 +209,7 @@ export function persistGitSyncResult(
   recordGitSyncEvidence(
     {
       evidenceStore: deps.evidenceStore,
-      redactString: (text: string): string => deps.redactor(text) as string,
+      redactString: (text: string): string => deps.redactor(text),
       ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
     },
     {

@@ -271,7 +271,7 @@ function emitAdapterDiagnostic(
       operation: "POST /api/native-file-dialog/open",
       source: "native-file-dialog",
       error,
-      redact: (message) => String(deps.redactor(message)),
+      redact: (message) => deps.redactor(message),
     }),
   );
 }

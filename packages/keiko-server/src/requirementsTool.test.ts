@@ -41,6 +41,7 @@ import {
   createKnowledgeRequirementsProvider,
   type RequirementsToolContext,
 } from "./requirementsTool.js";
+import { stringLeafRedactor } from "./_support.js";
 
 let sink: BufferedServerLogSink;
 let reports: JiraReportStore;
@@ -292,8 +293,7 @@ describe("filters and views", () => {
   it("redacts document text with the Chat content policy before it reaches the model", async () => {
     const text = specification(3).text.replace("Thema 2;", "Thema 2 mit SECRET-KEY-123;");
     const f = await fixture([{ capsuleId: "cap-a", text }], {
-      redactor: (value) =>
-        typeof value === "string" ? value.replaceAll("SECRET-KEY-123", "[REDACTED]") : value,
+      redactor: stringLeafRedactor((text) => text.replaceAll("SECRET-KEY-123", "[REDACTED]")),
     });
 
     const [page] = await readAll(f, { ids: ["LH-002"] });

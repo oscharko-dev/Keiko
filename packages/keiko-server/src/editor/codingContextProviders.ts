@@ -159,7 +159,7 @@ function basename(scopePath: string): string {
 // strip-then-redact, mirroring grounded-qa redactString: format-char stripping first (GRD-001)
 // prevents Trojan-source splits from confusing the redactor; the redactor then removes secrets.
 function redactExcerpt(deps: UiHandlerDeps, text: string): string {
-  return String(deps.redactor(stripUnsafeFormatChars(text)));
+  return deps.redactor(stripUnsafeFormatChars(text));
 }
 
 function sanitizeCitationRef(
@@ -169,7 +169,7 @@ function sanitizeCitationRef(
   if (citationRef === undefined) {
     return undefined;
   }
-  const redacted = String(ctx.deps.redactor(stripUnsafeFormatChars(citationRef)));
+  const redacted = ctx.deps.redactor(stripUnsafeFormatChars(citationRef));
   let out = "";
   let pendingSpace = false;
   for (const char of redacted) {

@@ -30,6 +30,7 @@ import {
   type BrowserEventEnvelope,
   type BrowserSessionManager,
 } from "@oscharko-dev/keiko-tools";
+import { identityRedactor } from "./_support.js";
 
 interface FakeManagerOptions {
   readonly reachable?: boolean;
@@ -714,7 +715,7 @@ describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
       const sessionId = `session-${name}`;
       return {
         open: (res, onBackpressure): void => {
-          openBrowserSseStream(res, manager, sessionId, (value) => value, onBackpressure);
+          openBrowserSseStream(res, manager, sessionId, identityRedactor, onBackpressure);
         },
         emit: (sequence): void => {
           manager.emit(sessionId, browserEvent(sessionId, "navigated", sequence));
@@ -728,7 +729,7 @@ describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
     // writeSseFrame must not drop or reorder it.
     const fake = makeFakeSseRes();
     const manager = new FakeBrowserSessionManager();
-    openBrowserSseStream(fake.res, manager, "session-close", (value) => value);
+    openBrowserSseStream(fake.res, manager, "session-close", identityRedactor);
 
     manager.emit("session-close", browserEvent("session-close", "session-closed", 1));
 
@@ -760,7 +761,7 @@ describe("openBrowserSseStream correlationId threading (#2902 audit finding 0)",
       fake.res,
       manager,
       "session-corr",
-      (value) => value,
+      identityRedactor,
       undefined,
       "corr-browser-1",
     );
@@ -779,7 +780,7 @@ describe("openBrowserSseStream correlationId threading (#2902 audit finding 0)",
     const fake = makeFakeSseRes();
     const manager = new FakeBrowserSessionManager();
 
-    openBrowserSseStream(fake.res, manager, "session-no-corr", (value) => value);
+    openBrowserSseStream(fake.res, manager, "session-no-corr", identityRedactor);
     fake.emitClose();
 
     expect(sink.events).toHaveLength(1);
@@ -851,7 +852,7 @@ describe("openBrowserSseStream session subscription ownership", () => {
     const write = fake.res.write.bind(fake.res);
     const end = fake.res.end.bind(fake.res);
     const trace: string[] = [];
-    const redactor = vi.fn((value: unknown): unknown => value);
+    const redactor = vi.fn().mockImplementation(identityRedactor);
     vi.spyOn(manager, "subscribe").mockImplementation(function (
       this: BrowserSessionManager,
       sessionId: string,
@@ -920,7 +921,7 @@ describe("openBrowserSseStream session subscription ownership", () => {
       sessionIds.push(sessionId);
       return subscribe(sessionId, listener);
     });
-    const redactor = vi.fn((value: unknown): unknown => value);
+    const redactor = vi.fn().mockImplementation(identityRedactor);
     try {
       openBrowserSseStream(first.res, manager, "session-a", redactor);
       openBrowserSseStream(second.res, manager, "session-a", redactor);

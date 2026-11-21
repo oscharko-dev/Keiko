@@ -10,6 +10,7 @@ import { extractRetrievalChannels } from "@oscharko-dev/keiko-workflows";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
 import { buildGroundedGatewayMessages } from "./grounded-qa.js";
+import { identityRedactor } from "./_support.js";
 
 let root = "";
 beforeEach(() => {
@@ -83,7 +84,7 @@ it.each([
   const { pack, semanticCalls, completion, logLines } = await retrieve(question);
   expect(semanticCalls).toBe(1);
   expect(pack.files.map((file) => file.scopePath)).toContain("source/related.ts");
-  expect(JSON.stringify(buildGroundedGatewayMessages(question, pack, (value) => value))).toContain(
+  expect(JSON.stringify(buildGroundedGatewayMessages(question, pack, identityRedactor))).toContain(
     "recoveredEnvironment",
   );
   expect(completion?.augmentationSkipReason).not.toBe("complete-exact-lookup");
@@ -96,7 +97,7 @@ it("searches the independent diagnostic question while preserving the original t
     "    at execute (node_modules/vitest/runner.js:10:3)";
   const { pack, semanticQueries, logLines } = await retrieve(question);
   expect(semanticQueries).toEqual([extractRetrievalChannels(question, 8).questionText]);
-  const prompt = JSON.stringify(buildGroundedGatewayMessages(question, pack, (value) => value));
+  const prompt = JSON.stringify(buildGroundedGatewayMessages(question, pack, identityRedactor));
   expect(prompt).toContain("node_modules/vitest/runner.js:10:3");
   expect(logLines.join("\n")).not.toContain("node_modules/vitest");
 });
@@ -129,7 +130,7 @@ it.each([
   expect(pack.files.map((file) => file.scopePath)).toContain("source/failure.ts");
   expect(pack.files.map((file) => file.scopePath)).not.toContain("package.json");
   expect(semanticQueries).toEqual(["source/failure.ts"]);
-  expect(JSON.stringify(buildGroundedGatewayMessages(trace, pack, (value) => value))).toContain(
+  expect(JSON.stringify(buildGroundedGatewayMessages(trace, pack, identityRedactor))).toContain(
     "BUILD_ERR_17",
   );
   expect(logLines.join("\n")).not.toContain("source/failure.ts");

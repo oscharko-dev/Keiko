@@ -30,6 +30,7 @@ import { createInMemoryUiStore } from "../../store/index.js";
 import { handleQiEditCandidate } from "../editRoutes.js";
 import { handleGetQiRun } from "../uiRoutes.js";
 import { applyReviewDecision, loadRunReviewState } from "../reviewStore.js";
+import { stringLeafRedactor } from "../../_support.js";
 
 type Candidate = QualityIntelligence.QualityIntelligenceTestCaseCandidate;
 
@@ -43,16 +44,7 @@ function emptyStore(): EvidenceStore {
 }
 
 // A tagging redactor that uppercases string leaves — proves the route redacts edited fields.
-const upcaseRedact = (value: unknown): unknown => {
-  if (typeof value === "string") return value.toUpperCase();
-  if (Array.isArray(value)) return value.map(upcaseRedact);
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, upcaseRedact(v)]),
-    );
-  }
-  return value;
-};
+const upcaseRedact = stringLeafRedactor((text) => text.toUpperCase());
 
 function deps(evidenceDir: string, redactor = buildRedactor({})): UiHandlerDeps {
   return {

@@ -218,7 +218,7 @@ async function localKnowledgeRetrieveResponse(
   if (outcome.kind === "not-ready") {
     return {
       status: 409,
-      body: errorBody("LOCAL_KNOWLEDGE_CONFLICT", String(deps.redactor(outcome.message))),
+      body: errorBody("LOCAL_KNOWLEDGE_CONFLICT", deps.redactor(outcome.message)),
     };
   }
   return {

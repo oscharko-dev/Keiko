@@ -11,6 +11,7 @@ import {
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { buildGroundedGatewayMessages, buildQuery } from "./grounded-qa.js";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
+import { identityRedactor } from "./_support.js";
 
 const NOW = 1_784_653_600_000;
 const QUESTION =
@@ -92,7 +93,7 @@ describe("located definitions replace redundant discovery headers", () => {
     expect(pack.files).toHaveLength(96);
     expect(pack.usage.filesRead).toBe(96);
     expectDefinitionValues(pack);
-    const messages = buildGroundedGatewayMessages(QUESTION, pack, (value) => value);
+    const messages = buildGroundedGatewayMessages(QUESTION, pack, identityRedactor);
     const prompt = JSON.stringify(messages);
     expect(pack.usage.excerptBytes).toBeLessThan(10_000);
     expect(prompt.includes(HEADER.trim())).toBe(false);

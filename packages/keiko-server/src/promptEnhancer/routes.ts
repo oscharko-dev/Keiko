@@ -259,7 +259,7 @@ async function enhancementResult(
         operation: "prompt.enhancement",
         source: "prompt.enhancement.route",
         error,
-        redact: (message) => String(deps.redactor(message)),
+        redact: (message) => deps.redactor(message),
       }),
     );
     return enhancementFailure(error);

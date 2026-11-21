@@ -30,6 +30,7 @@ import {
 import { qiRunRegistry } from "../runRegistry.js";
 import { executeQiRun, type ExecuteQiRunInput } from "../runExecution.js";
 import { SSE_STALLED_READER_TIMEOUT_MS } from "../../sse-write.js";
+import { stringLeafRedactor } from "../../_support.js";
 
 // Delegates to the real run by default; the SSE backpressure tests substitute a run that stays in
 // flight (`mockImplementationOnce`), because the real one finishes — and ends the response — before
@@ -995,10 +996,9 @@ describe("toStreamEvent — reasonSummary redaction backstop (#279 AC3)", () => 
   // free-text field before it is streamed — removing the applyRedactor call fails this test.
   it("passes the reasonSummary field through the live-payload redactor", () => {
     const marker = "https://leak.example/v1 token sk-LEAKLEAKLEAK";
-    const redactor: Redactor = (value: unknown): unknown =>
-      typeof value === "string"
-        ? value.replaceAll("sk-LEAKLEAKLEAK", "[redacted]").replaceAll("leak.example", "[redacted]")
-        : value;
+    const redactor: Redactor = stringLeafRedactor((text) =>
+      text.replaceAll("sk-LEAKLEAKLEAK", "[redacted]").replaceAll("leak.example", "[redacted]"),
+    );
     const event = {
       sequence: 1,
       payload: { kind: "run:failed", reasonSummary: marker },

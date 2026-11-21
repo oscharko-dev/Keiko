@@ -26,6 +26,7 @@ import {
   createProductionCiObservationService,
   publishCiObservation,
 } from "./productionCiObservationRuntime.js";
+import { identityRedactor } from "../_support.js";
 
 describe("production CI readiness events", () => {
   it.each(["technical-ready", "pending", "failed", "blocked", "unknown"] as const)(
@@ -168,7 +169,7 @@ describe("production CI observation service repair-budget wiring (#3384 wave-3 W
     const shared = {
       snapshots: readinessSnapshots,
       mutationDeps: {
-        redactor: (value: unknown): unknown => value,
+        redactor: identityRedactor,
         evidenceStore: {
           put: (): string => "evidence",
           get: (): undefined => undefined,

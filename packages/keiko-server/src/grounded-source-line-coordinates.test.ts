@@ -5,11 +5,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { redact } from "@oscharko-dev/keiko-security";
 import { retrieveConnectedContextPack } from "./grounded-orchestrator.js";
 import { buildAnswerCitations, buildGroundedGatewayMessages } from "./grounded-qa.js";
+import { stringLeafRedactor } from "./_support.js";
 
 const roots: string[] = [];
-function redactValue(value: unknown): unknown {
-  return typeof value === "string" ? redact(value) : value;
-}
+const redactValue = stringLeafRedactor((text) => redact(text));
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });

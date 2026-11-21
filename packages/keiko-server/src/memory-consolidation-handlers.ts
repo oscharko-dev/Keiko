@@ -37,6 +37,7 @@ import {
   MemoryStoragePreconditionError,
   type MemoryVaultStore,
 } from "@oscharko-dev/keiko-memory-vault";
+import type { DeepRedacted } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
@@ -355,7 +356,7 @@ function redactJob(
   deps: UiHandlerDeps,
   record: ConsolidationJobRecord,
   vault?: MemoryVaultStore,
-): MemoryConsolidationJobEnvelopeWire {
+): DeepRedacted<MemoryConsolidationJobEnvelopeWire> {
   const job: MemoryConsolidationJobEnvelopeWire["job"] = {
     id: record.job.id,
     state: record.job.state,
@@ -380,7 +381,7 @@ function redactJob(
     memoryCount: record.memoryCount,
     cancelRequested: record.cancelRequested,
   };
-  return deps.redactor(envelope) as MemoryConsolidationJobEnvelopeWire;
+  return deps.redactor(envelope);
 }
 
 function excerptForMemory(
@@ -711,7 +712,7 @@ function registerJobLimit(): RouteResult {
 }
 
 function createJobResponse(deps: UiHandlerDeps, record: ConsolidationJobRecord): RouteResult {
-  const body: MemoryConsolidationJobResponseWire = { job: redactJob(deps, record) };
+  const body: DeepRedacted<MemoryConsolidationJobResponseWire> = { job: redactJob(deps, record) };
   return { status: 202, body };
 }
 
@@ -768,7 +769,7 @@ export function handleGetConsolidationJob(ctx: RouteContext, deps: UiHandlerDeps
       body: errorBody("NOT_FOUND", "Consolidation job not found."),
     };
   }
-  const body: MemoryConsolidationJobResponseWire = {
+  const body: DeepRedacted<MemoryConsolidationJobResponseWire> = {
     job: redactJob(deps, record, deps.memoryVault),
   };
   return { status: 200, body };
@@ -791,12 +792,12 @@ export function handleCancelConsolidationJob(ctx: RouteContext, deps: UiHandlerD
   if (updated.job.state === "queued") {
     const canceled = transitionJob(updated.job, "canceled", { completedAt: Date.now() });
     const finalRecord = registry.complete(updated.job.id, canceled, updated.memoryCount) ?? updated;
-    const body: MemoryConsolidationJobResponseWire = {
+    const body: DeepRedacted<MemoryConsolidationJobResponseWire> = {
       job: redactJob(deps, finalRecord, deps.memoryVault),
     };
     return { status: 202, body };
   }
-  const body: MemoryConsolidationJobResponseWire = {
+  const body: DeepRedacted<MemoryConsolidationJobResponseWire> = {
     job: redactJob(deps, updated, deps.memoryVault),
   };
   return { status: 202, body };

@@ -18,6 +18,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { identityRedactor } from "../_support.js";
 
 function workspaceInfo(workspaceRoot: string): WorkspaceInfo {
   return {
@@ -78,7 +79,7 @@ beforeEach(() => {
     env: {},
     store,
     evidenceStore: createNodeEvidenceStore(join(root, "evidence")),
-    redactor: (value): unknown => value,
+    redactor: identityRedactor,
     activityLog: {
       write: (event): void => {
         events.push(event);

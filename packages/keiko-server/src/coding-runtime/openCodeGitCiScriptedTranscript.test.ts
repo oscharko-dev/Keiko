@@ -65,6 +65,7 @@ import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostic
 import { createRunRegistry } from "../runs.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { STREAMING, type RouteContext } from "../routes.js";
+import { mapEvidenceMutationDeps } from "../_support.js";
 
 const transcriptFixtureGitEnvironment: { value: NodeJS.ProcessEnv } = vi.hoisted(() => ({
   value: {},
@@ -420,20 +421,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     const options = {
       context,
       snapshots,
-      mutationDeps: {
-        redactor: (value: unknown): unknown => value,
-        evidenceStore: {
-          put: (id: string, body: string): string => {
-            evidence.set(id, body);
-            return id;
-          },
-          get: (id: string): string | undefined => evidence.get(id),
-          list: (): readonly string[] => [...evidence.keys()],
-          delete: (id: string): void => {
-            evidence.delete(id);
-          },
-        },
-      },
+      mutationDeps: mapEvidenceMutationDeps(evidence),
       messageAllowed: (message: string): Promise<boolean> =>
         Promise.resolve(message.startsWith("feat:")),
       execution: {
@@ -1108,20 +1096,7 @@ function unusedVerifiedCommitService(root: string): ReturnType<typeof createVeri
   return createVerifiedCommitService({
     context,
     snapshots: createCodingRuntimeSnapshotStore(db),
-    mutationDeps: {
-      redactor: (value: unknown): unknown => value,
-      evidenceStore: {
-        put: (id: string, body: string): string => {
-          evidence.set(id, body);
-          return id;
-        },
-        get: (id: string): string | undefined => evidence.get(id),
-        list: (): readonly string[] => [...evidence.keys()],
-        delete: (id: string): void => {
-          evidence.delete(id);
-        },
-      },
-    },
+    mutationDeps: mapEvidenceMutationDeps(evidence),
     messageAllowed: (): Promise<boolean> => Promise.resolve(true),
     execution: {
       processEnv: { PATH: process.env.PATH },

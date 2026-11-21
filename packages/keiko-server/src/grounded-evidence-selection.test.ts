@@ -20,6 +20,7 @@ import {
 } from "./grounded-evidence-selection.js";
 
 import { buildGroundedGatewayMessages } from "./grounded-qa.js";
+import { identityRedactor } from "./_support.js";
 
 const NOW = 1_784_653_600_000;
 
@@ -448,7 +449,7 @@ describe("selectGroundedCandidateFiles", () => {
       ...DEFAULT_EXPLORATION_BUDGET,
       excerptBytesMax: 100,
     });
-    const messages = buildGroundedGatewayMessages("describe the modules", pack, (value) => value);
+    const messages = buildGroundedGatewayMessages("describe the modules", pack, identityRedactor);
     const prompt = messages.map((message) => message.content).join("\n");
     expect(prompt).toContain("module src/file-00.ts");
     expect(prompt).not.toContain("module src/file-04.ts");

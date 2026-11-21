@@ -26,7 +26,38 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { GatewayVerificationState } from "@oscharko-dev/keiko-contracts";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
-import type { RuntimeGatewayConfig, VerifiedModelCapabilityObservation } from "./deps.js";
+import { deepRedactStrings } from "@oscharko-dev/keiko-security";
+import type { Redactor, RuntimeGatewayConfig, VerifiedModelCapabilityObservation } from "./deps.js";
+import type { GitDeliveryMutationDeps } from "./gitDelivery/execution.js";
+
+/**
+ * A `Redactor` that rewrites no string. Like the production redactor from `buildRedactor` it walks
+ * the value with `deepRedactStrings`, so it returns a rebuilt copy, not the input itself.
+ */
+export const identityRedactor: Redactor = (value) => deepRedactStrings(value, (text) => text);
+
+/** A `Redactor` that applies `redactText` to every string leaf, the way `buildRedactor` does. */
+export function stringLeafRedactor(redactText: (text: string) => string): Redactor {
+  return (value) => deepRedactStrings(value, redactText);
+}
+
+/** Git delivery mutation deps that keep evidence in `evidence` and redact nothing. */
+export function mapEvidenceMutationDeps(evidence: Map<string, string>): GitDeliveryMutationDeps {
+  return {
+    redactor: identityRedactor,
+    evidenceStore: {
+      put: (id, body): string => {
+        evidence.set(id, body);
+        return id;
+      },
+      get: (id): string | undefined => evidence.get(id),
+      list: (): readonly string[] => [...evidence.keys()],
+      delete: (id): void => {
+        evidence.delete(id);
+      },
+    },
+  };
+}
 
 /**
  * An onboarded gateway whose last readiness probe succeeded (F-01).

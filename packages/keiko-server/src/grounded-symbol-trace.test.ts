@@ -44,6 +44,7 @@ import {
   collectFollowSymbolTraceEvidence,
   GROUNDED_TRACE_SEARCH_LIMITS,
 } from "./grounded-symbol-trace.js";
+import { identityRedactor } from "./_support.js";
 
 const NOW = 1_784_653_600_000;
 const WORKSPACE_ROOT = "/workspace";
@@ -364,7 +365,7 @@ describe("contextual source-definition discovery", () => {
       pack.files.flatMap((file) => file.excerpts).some((view) => view.content.includes(expected)),
     ).toBe(true);
     expect(
-      buildGroundedGatewayMessages(query.text, pack, (value) => value).some((message) =>
+      buildGroundedGatewayMessages(query.text, pack, identityRedactor).some((message) =>
         message.content.includes(expected),
       ),
     ).toBe(true);
@@ -401,7 +402,7 @@ describe("contextual source-definition discovery", () => {
       pack.files.flatMap((file) => file.excerpts).some((view) => view.content.includes(expected)),
     ).toBe(true);
     expect(
-      buildGroundedGatewayMessages(query.text, pack, (value) => value).some((message) =>
+      buildGroundedGatewayMessages(query.text, pack, identityRedactor).some((message) =>
         message.content.includes(expected),
       ),
     ).toBe(true);
@@ -444,7 +445,7 @@ describe("contextual source-definition discovery", () => {
         .join("\n"),
     ).toContain(expected);
     expect(
-      buildGroundedGatewayMessages(query.text, pack, (value) => value)
+      buildGroundedGatewayMessages(query.text, pack, identityRedactor)
         .map((message) => message.content)
         .join("\n"),
     ).toContain(`2 |   ${expected}`);
@@ -485,7 +486,7 @@ describe("contextual source-definition discovery", () => {
       LITERAL_CONVERTER_BODY,
     );
     expect(
-      buildGroundedGatewayMessages(query.text, result.pack, (value) => value)
+      buildGroundedGatewayMessages(query.text, result.pack, identityRedactor)
         .map((message) => message.content)
         .join("\n"),
     ).toContain('2 |   return new TextEncoder().encode(value.normalize("NFKC"));');
@@ -575,7 +576,7 @@ describe("contextual source-definition discovery", () => {
         buildGroundedGatewayMessages(
           contextualReceiptQuery().text,
           retrieved.pack,
-          (value) => value,
+          identityRedactor,
         )
           .map((message) => message.content)
           .join("\n"),
@@ -664,7 +665,7 @@ describe("contextual source-definition discovery", () => {
     expect(converter?.excerpts.map((excerpt) => excerpt.content).join("\n")).toContain(
       CONTEXTUAL_CONVERTER_BODY,
     );
-    const prompt = buildGroundedGatewayMessages(query.text, result.pack, (value) => value)
+    const prompt = buildGroundedGatewayMessages(query.text, result.pack, identityRedactor)
       .map((message) => message.content)
       .join("\n");
     expect(prompt).toContain('2 |   return new TextEncoder().encode(value.normalize("NFKD"));');
@@ -2540,7 +2541,7 @@ function expectFixtureComparisonConsumers(
     .filter((file) => file.scopePath === "tests/scenarios/overflowValues.ts")
     .flatMap((file) => file.excerpts);
   expect(excerpts.map((excerpt) => excerpt.content).join("\n")).toContain(expected);
-  const prompt = buildGroundedGatewayMessages(query.text, result.pack, (value) => value)
+  const prompt = buildGroundedGatewayMessages(query.text, result.pack, identityRedactor)
     .map((message) => message.content)
     .join("\n");
   expect(prompt).toContain(`1 | ${expected}`);

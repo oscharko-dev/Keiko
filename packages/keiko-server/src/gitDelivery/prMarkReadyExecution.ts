@@ -617,7 +617,7 @@ function reportPostObservationFailure(input: PostTransitionObservationInput, err
       source: "pr-mark-ready-post-observation",
       error,
       summary: "The bounded status read was unavailable.",
-      redact: (value): string => String(input.deps.redactor(value)),
+      redact: (value): string => input.deps.redactor(value),
     }),
   );
 }
@@ -878,7 +878,7 @@ async function dispatchOrBlock(
       correlationId,
       continuityGuard,
       diagnostics: deps.diagnostics,
-      redact: (value): string => String(deps.redactor(value)),
+      redact: (value): string => deps.redactor(value),
     });
     if (denialCapture.result !== undefined) return denialCapture.result;
     logMarkReadyOutcome(options, correlationId, command, result);
@@ -893,7 +893,7 @@ async function dispatchOrBlock(
         source: "pr-mark-ready-dispatch",
         error,
         summary: "server-operation-failed",
-        redact: (value): string => String(deps.redactor(value)),
+        redact: (value): string => deps.redactor(value),
       }),
     );
     return errResult(502, "GIT_DELIVERY_PR_MARK_READY_EXECUTION_FAILED");

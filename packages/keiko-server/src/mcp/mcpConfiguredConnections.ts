@@ -231,9 +231,7 @@ function projectMcpResult(
   data: CatalogJsonObject,
   credentials: readonly string[],
 ): CatalogJsonObject {
-  const safe = deepRedactStrings(data, (text) =>
-    redactContent(text, "preserve", credentials),
-  ) as CatalogJsonObject;
+  const safe = deepRedactStrings(data, (text) => redactContent(text, "preserve", credentials));
   const serialized = JSON.stringify(safe);
   if (redactContent(serialized, "preserve", credentials) !== serialized)
     throw new ManagedMcpError("protocol-error");

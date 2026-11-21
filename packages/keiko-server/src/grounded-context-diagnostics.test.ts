@@ -25,9 +25,9 @@ import {
   deriveGroundedContextAssembly,
 } from "./grounded-context-diagnostics.js";
 import { buildGroundedGatewayMessages } from "./grounded-qa.js";
+import { identityRedactor } from "./_support.js";
 
 const NOW = 1_700_000_000_000;
-const identity = <T>(value: T): T => value;
 
 function basePack(): ConnectedContextPack {
   return {
@@ -159,24 +159,24 @@ describe("attachContextBudgetDiagnostics — AC5 (grounded prompt byte-identical
   it("produces a deep-equal message array with vs without the observer (files present)", () => {
     const pack = basePack();
     const observed = attachContextBudgetDiagnostics(pack, DEFAULT_CONTEXT_PROFILE);
-    expect(buildGroundedGatewayMessages("How does MyClass work?", observed, identity)).toEqual(
-      buildGroundedGatewayMessages("How does MyClass work?", pack, identity),
-    );
+    expect(
+      buildGroundedGatewayMessages("How does MyClass work?", observed, identityRedactor),
+    ).toEqual(buildGroundedGatewayMessages("How does MyClass work?", pack, identityRedactor));
   });
 
   it("produces a deep-equal message array on an empty pack", () => {
     const pack = emptyPack();
     const observed = attachContextBudgetDiagnostics(pack, DEFAULT_CONTEXT_PROFILE);
-    expect(buildGroundedGatewayMessages("q", observed, identity)).toEqual(
-      buildGroundedGatewayMessages("q", pack, identity),
+    expect(buildGroundedGatewayMessages("q", observed, identityRedactor)).toEqual(
+      buildGroundedGatewayMessages("q", pack, identityRedactor),
     );
   });
 
   it("produces a deep-equal message array when a pre-existing ranked diagnostics block exists", () => {
     const pack = packWithRanked();
     const observed = attachContextBudgetDiagnostics(pack, DEFAULT_CONTEXT_PROFILE);
-    expect(buildGroundedGatewayMessages("q", observed, identity)).toEqual(
-      buildGroundedGatewayMessages("q", pack, identity),
+    expect(buildGroundedGatewayMessages("q", observed, identityRedactor)).toEqual(
+      buildGroundedGatewayMessages("q", pack, identityRedactor),
     );
   });
 });
@@ -253,7 +253,7 @@ describe("deriveGroundedContextAssembly — evidence producer (ADR-0056 W3)", ()
       reservedOutputTokens: 0,
       safetyMarginTokens: 0,
     });
-    const sent = buildGroundedGatewayMessages("q", pack, identity);
+    const sent = buildGroundedGatewayMessages("q", pack, identityRedactor);
     const diagnostics = deriveGroundedContextAssembly(pack, profile);
     const excerpts = pack.files.flatMap((file) => file.excerpts);
     expect(diagnostics.lanes.find((lane) => lane.laneId === "repo-evidence")).toMatchObject({
@@ -269,7 +269,11 @@ describe("deriveGroundedContextAssembly — evidence producer (ADR-0056 W3)", ()
     expect(diagnostics.budgetPressure).toBe("exceeded");
     expect(diagnostics.lanes.some((lane) => lane.compactionReason !== undefined)).toBe(false);
     expect(
-      buildGroundedGatewayMessages("q", attachContextBudgetDiagnostics(pack, profile), identity),
+      buildGroundedGatewayMessages(
+        "q",
+        attachContextBudgetDiagnostics(pack, profile),
+        identityRedactor,
+      ),
     ).toEqual(sent);
     for (const excerpt of excerpts) expect(JSON.stringify(sent)).toContain(excerpt.content);
     expect(validateContextAssemblyDiagnostics(diagnostics).ok).toBe(true);

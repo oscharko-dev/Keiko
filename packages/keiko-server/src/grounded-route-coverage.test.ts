@@ -39,6 +39,7 @@ import {
   collectDiscoveredSymbolTraceEvidence,
   GROUNDED_TRACE_SEARCH_LIMITS,
 } from "./grounded-symbol-trace.js";
+import { identityRedactor } from "./_support.js";
 
 const NOW = 1_700_000_000_000;
 const CONNECTOR_FACT = "return continueProcessing(selectedRoot);";
@@ -467,7 +468,7 @@ async function sentPrompt(
   budget = { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 8192 },
 ): Promise<string> {
   const pack = await assembledCoveragePack(fixture, reads, atoms, budget);
-  return buildGroundedGatewayMessages(fixture.query.text, pack, (value) => value)
+  return buildGroundedGatewayMessages(fixture.query.text, pack, identityRedactor)
     .map((message) => message.content)
     .join("\n");
 }
@@ -1986,7 +1987,7 @@ describe("current route trace excerpt coverage", () => {
       plannedStaticCallCycleCount: 1,
     });
     expect(pack.usage.excerptBytes).toBeLessThanOrEqual(budget.excerptBytesMax);
-    const prompt = buildGroundedGatewayMessages(fixture.query.text, pack, (value) => value)
+    const prompt = buildGroundedGatewayMessages(fixture.query.text, pack, identityRedactor)
       .map((message) => message.content)
       .join("\n");
     expect(prompt).toContain("for (const child of root.children) visit(child)");
@@ -3801,7 +3802,7 @@ describe("current route trace excerpt coverage", () => {
     const messages = buildGroundedGatewayMessages(
       fixture.query.text,
       result.pack,
-      (value) => value,
+      identityRedactor,
     );
     expect(JSON.stringify(messages)).not.toContain(
       "replacement source after the initial guarded read",
@@ -3852,7 +3853,7 @@ describe("current route trace excerpt coverage", () => {
     expectCrossWaveOrdinaryViews(fixture, reads, readPack, readPrompt, range);
     expect(reads.observation?.stopReasons).toContain("byte-grant");
     const { pack } = await actualPublicRetrieval(fixture, budget);
-    const prompt = buildGroundedGatewayMessages(fixture.query.text, pack, (value) => value)
+    const prompt = buildGroundedGatewayMessages(fixture.query.text, pack, identityRedactor)
       .map((message) => message.content)
       .join("\n");
     expectCrossWaveOrdinaryViews(fixture, reads, pack, prompt, range);
@@ -4358,7 +4359,7 @@ describe("current route trace excerpt coverage", () => {
   it("sends the actual route registration through public retrieval under the existing byte grant", async () => {
     const fixture = await coverageFixture(undefined, sameFileCoverageFiles());
     const result = await actualPublicRetrieval(fixture);
-    const prompt = buildGroundedGatewayMessages(fixture.query.text, result.pack, (value) => value)
+    const prompt = buildGroundedGatewayMessages(fixture.query.text, result.pack, identityRedactor)
       .map((message) => message.content)
       .join("\n");
     expect(result.pack.usage.excerptBytes).toBeLessThanOrEqual(8192);

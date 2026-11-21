@@ -660,7 +660,7 @@ export function resolveMaintenanceAutonomyMode(
         operation: "memory.maintenance.autonomy-mode",
         source: "memory-maintenance-handlers.resolveMaintenanceAutonomyMode",
         error,
-        redact: (summary): string => String(deps.redactor(summary)),
+        redact: (summary): string => deps.redactor(summary),
       }),
     );
     return DEFAULT_MEMORY_AUTONOMY_MODE;
@@ -679,7 +679,7 @@ function reportRetentionPolicyFailure(
       operation: "memory.maintenance.retention-policy",
       source: "memory-maintenance-handlers.resolveMemoryRetentionPolicy",
       error,
-      redact: (summary): string => String(deps.redactor(summary)),
+      redact: (summary): string => deps.redactor(summary),
     }),
   );
   return correlationId;

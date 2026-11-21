@@ -16,6 +16,7 @@ import {
   _readKeptExcerptsForTests,
   retrieveConnectedContextPack,
 } from "./grounded-orchestrator.js";
+import { identityRedactor } from "./_support.js";
 
 const NOW = 1_784_653_600_000;
 const COUNT = 40;
@@ -89,7 +90,7 @@ describe("per-file evidence follows accepted total capacity", () => {
         },
       },
     );
-    const messages = buildGroundedGatewayMessages(QUESTION, pack, (value) => value);
+    const messages = buildGroundedGatewayMessages(QUESTION, pack, identityRedactor);
     assertAllValues(JSON.stringify(messages));
     expect(pack.files).toHaveLength(1);
     expect(pack.diagnostics?.coverage).toMatchObject({ filesScanned: 1, incomplete: false });

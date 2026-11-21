@@ -40,6 +40,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { identityRedactor } from "../_support.js";
 
 vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal) => {
   const actual =
@@ -199,7 +200,7 @@ async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
     store,
     env: service.env,
     evidenceStore: service.evidenceStore,
-    redactor: (value): unknown => value,
+    redactor: identityRedactor,
     managedTaskWorkspaceRoot: service.managedRoot,
     workspaceProvisioning: service.provisioning,
     workspaceLifecycle: service.lifecycle,
