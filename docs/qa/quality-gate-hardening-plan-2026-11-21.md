@@ -86,9 +86,13 @@ additional SonarCloud project, paid runner or required context is introduced.
   ran the local 4608 MiB bridge out of memory: one root-owned file made SonarJS build the whole
   6370-file program **(M)**. The changed-file scan now hands SonarJS programs rooted at the changed
   files with the owner's compiler options (615 program files for that push) and passes **(M)**.
-- **ESLint (#4202):** read `scripts/lint-repository.mjs`, measure the peak per partition, and run
-  each partition as its own process with a ceiling that fits the budget; the same budget rule as
-  Sonar.
+- **ESLint (#4202, done in this change):** `scripts/lint-repository.mjs` already ran one process
+  per partition. Each partition's peak resident memory is now measured (a preloaded
+  `process.resourceUsage()` reporter, equal to `/usr/bin/time -l` to the kilobyte on
+  `packages/keiko-security`, 4.75 GB **(M)**), written to the job summary, and held to 12 GiB, three
+  quarters of the 16 GiB runner. A partition above it fails with its name and peak instead of
+  taking the runner down. The Node heap ceiling stays in `package.json`, whose digest the design
+  evidence pins.
 - **Budget evidence for every heavy step:** record peak resident memory of the scan, lint, the
   coverage shards and the builds (`/usr/bin/time -v`) into the job summary, and fail above three
   quarters of the runner's RAM.
