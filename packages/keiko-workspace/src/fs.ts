@@ -22,6 +22,13 @@ import { lstat, open, opendir, type FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
+// Internal walk helpers share the per-entry availability classification through this subpath;
+// it is not part of the root SDK surface (#4434, #4435).
+export {
+  type WorkspaceEntryAvailability,
+  workspaceEntryAvailabilityFailure,
+} from "./entryAvailability.js";
+
 export interface WorkspaceStat {
   readonly size: number;
   readonly isFile: boolean;
@@ -355,6 +362,38 @@ export function isWorkspacePathSnapshotCurrent(
       sameWorkspaceStat(expected, fs.stat(canonicalPath))
     );
   } catch {
+    return false;
+  }
+}
+
+/**
+ * Revalidates a directory's pathname and identity without binding its membership metadata.
+ * Entries added or removed below a directory move its mtime/ctime; that churn is not an identity
+ * change (#4435). A replaced, moved or re-pointed directory changes its canonical path, device and
+ * inode or creation time, or stops being a real directory, and still fails this check.
+ */
+export function isWorkspaceDirectoryIdentityCurrent(
+  fs: WorkspaceFs,
+  requestedPath: string,
+  canonicalPath: string,
+  expected: WorkspaceStat,
+): boolean {
+  try {
+    if (
+      normalizedWorkspacePath(fs.realPath(requestedPath)) !== normalizedWorkspacePath(canonicalPath)
+    )
+      return false;
+    const current = fs.stat(canonicalPath);
+    return (
+      current.isDirectory &&
+      !current.isSymbolicLink &&
+      expected.isDirectory &&
+      expected.fileIdentity === current.fileIdentity &&
+      sameKnownSnapshotValue(expected.birthtimeNs, current.birthtimeNs)
+    );
+  } catch (error) {
+    // A filesystem refusal means the identity cannot be confirmed; anything else is a defect.
+    if (!(error instanceof Error)) throw error;
     return false;
   }
 }

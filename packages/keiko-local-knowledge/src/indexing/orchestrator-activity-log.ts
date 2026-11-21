@@ -313,6 +313,10 @@ const SOURCE_COMPLETED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
     },
+    // Benign walk churn (#4435): listed entries that vanished before inspection, and directories
+    // re-read once after their membership moved. Neither makes the walk incomplete.
+    vanishedEntryCount: { type: "integer", dataClass: "count", required: false },
+    directoryRetryCount: { type: "integer", dataClass: "count", required: false },
   },
   diagnosticWhen: [
     { field: "failedCount", positive: true },
@@ -548,6 +552,8 @@ export type IndexingActivity =
       readonly walkCompleted: boolean;
       readonly cancelled: boolean;
       readonly sawScopeError: boolean;
+      readonly vanishedEntryCount?: number;
+      readonly directoryRetryCount?: number;
     }
   | {
       readonly op: "indexing.discovery.limit-reached";
@@ -859,6 +865,12 @@ function emitSourceActivity(sink: KnowledgeLogSink | undefined, event: IndexingA
           walkCompleted: event.walkCompleted,
           cancelled: event.cancelled,
           sawScopeError: event.sawScopeError,
+          ...(event.vanishedEntryCount === undefined
+            ? {}
+            : { vanishedEntryCount: event.vanishedEntryCount }),
+          ...(event.directoryRetryCount === undefined
+            ? {}
+            : { directoryRetryCount: event.directoryRetryCount }),
         },
       ),
     );

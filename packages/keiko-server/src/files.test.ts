@@ -1,5 +1,12 @@
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import {
   link,
   mkdtemp,
   mkdir,
@@ -71,6 +78,10 @@ import { notifyHostLspWorkspaceFileChanged } from "./editor/lsp/hostLanguageOper
 import type { UiStore } from "./store/index.js";
 
 const notifyHostLspMock = vi.mocked(notifyHostLspWorkspaceFileChanged);
+
+// A directory junction is the reparse point any Windows user can create without the symbolic-link
+// privilege, so the directory-alias cases exercise it there; POSIX keeps a directory symlink (#4432).
+const DIRECTORY_LINK_TYPE = process.platform === "win32" ? "junction" : "dir";
 
 // Mirrors the (non-exported) editable size limit in files.ts; used for boundary tests.
 const MAX_TEXT_PREVIEW_BYTES = 1_000_000;
@@ -230,13 +241,13 @@ describe("desktop files browser", () => {
     "reports the actual directory after a selected alias changes target (registered: %s)",
     async (registered) => {
       const alias = join(root, "folder-link");
-      await symlink(join(root, "src"), alias, "dir");
+      await symlink(join(root, "src"), alias, DIRECTORY_LINK_TYPE);
       if (registered) store.createProject(alias, "Selected alias");
       const first = await readFilesTree(store, alias, "");
       expect(first.root).toBe(join(root, "src"));
       expect(first.entries.map((entry) => entry.name)).toContain("app.ts");
       await rm(alias);
-      await symlink(join(root, "assets"), alias, "dir");
+      await symlink(join(root, "assets"), alias, DIRECTORY_LINK_TYPE);
       const second = await readFilesTree(store, alias, "");
       expect(second.root).toBe(join(root, "assets"));
       expect(second.entries.map((entry) => entry.name)).toContain("pixel.png");
@@ -569,7 +580,7 @@ describe("desktop files browser", () => {
     extraRoot = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-outside-")));
     await writeFile(join(extraRoot, "secret.txt"), "outside\n");
     try {
-      await symlink(extraRoot, join(root, "escape"), "dir");
+      await symlink(extraRoot, join(root, "escape"), DIRECTORY_LINK_TYPE);
     } catch (error: unknown) {
       if ((error as NodeJS.ErrnoException).code === "EPERM") return;
       throw error;
@@ -687,7 +698,7 @@ describe("desktop files browser", () => {
   // (KEIKO-0633). It must report `kind: "symlink"` with `symlinkTargetKind: "directory"` instead,
   // still carrying real (not undefined) metadata.
   it("reports a readable symlink-to-directory as kind symlink with symlinkTargetKind directory, never as a metadata-free directory", async () => {
-    await symlink(join(root, "src"), join(root, "link-to-src"), "dir");
+    await symlink(join(root, "src"), join(root, "link-to-src"), DIRECTORY_LINK_TYPE);
 
     const listing = await readFilesTree(store, root, "");
     const entry = listing.entries.find((candidate) => candidate.name === "link-to-src");
@@ -926,7 +937,7 @@ describe("desktop files browser", () => {
         if (!swapped) {
           swapped = true;
           renameSync(workspace, displaced);
-          symlinkSync(outside, workspace);
+          symlinkSync(outside, workspace, DIRECTORY_LINK_TYPE);
         }
         return canonical;
       },
@@ -972,7 +983,7 @@ describe("desktop files browser", () => {
         if (!swapped) {
           swapped = true;
           renameSync(workspace, displaced);
-          symlinkSync(outside, workspace);
+          symlinkSync(outside, workspace, DIRECTORY_LINK_TYPE);
         }
         return canonical;
       },
@@ -1021,7 +1032,7 @@ describe("desktop files browser", () => {
           afterConflictCheck: (): void => {
             swapped = true;
             renameSync(workspace, displaced);
-            symlinkSync(outside, workspace);
+            symlinkSync(outside, workspace, DIRECTORY_LINK_TYPE);
           },
         },
       }),
@@ -1769,7 +1780,7 @@ describe("desktop files browser", () => {
     const call = imagePreviewCall(root, "assets/pixel.png", () => {
       swapped = true;
       rmSync(join(root, "assets"), { recursive: true, force: true });
-      symlinkSync(outsideAssets, join(root, "assets"), "dir");
+      symlinkSync(outsideAssets, join(root, "assets"), DIRECTORY_LINK_TYPE);
     });
 
     const outcome = await handleFilesPreviewImage(call.ctx, deps);
@@ -2606,7 +2617,7 @@ describe("desktop files mutations (create / rename / delete)", () => {
   });
 
   it("refuses to rename a symbolic link", async () => {
-    await symlink(join(root, "src"), join(root, "link"), "dir");
+    await symlink(join(root, "src"), join(root, "link"), DIRECTORY_LINK_TYPE);
     await expect(
       renameFilesEntry({ store, rootInput: root, pathInput: "link", newPathInput: "renamed-link" }),
     ).rejects.toMatchObject({ status: 400, code: "UNSUPPORTED" });
@@ -2677,7 +2688,7 @@ describe("desktop files mutations (create / rename / delete)", () => {
     await expect(
       deleteFilesEntry({ store, rootInput: root, pathInput: ".git" }),
     ).rejects.toMatchObject({ status: 403, code: "DENIED" });
-    await symlink(join(root, "src"), join(root, "link"), "dir");
+    await symlink(join(root, "src"), join(root, "link"), DIRECTORY_LINK_TYPE);
     await expect(
       deleteFilesEntry({ store, rootInput: root, pathInput: "link" }),
     ).rejects.toMatchObject({ status: 400, code: "UNSUPPORTED" });
@@ -2746,7 +2757,7 @@ describe("desktop files mutations (create / rename / delete)", () => {
         destPathInput: "node_modules/app.ts",
       }),
     ).rejects.toMatchObject({ status: 403, code: "DENIED" });
-    await symlink(join(root, "src"), join(root, "link"), "dir");
+    await symlink(join(root, "src"), join(root, "link"), DIRECTORY_LINK_TYPE);
     await expect(
       copyFilesEntry({
         store,
@@ -2765,10 +2776,17 @@ describe("desktop files mutations (create / rename / delete)", () => {
     ).rejects.toMatchObject({ status: 400, code: "BAD_PATH" });
   });
 
-  it("removes a copied directory if the post-copy audit finds a nested symlink", async () => {
+  // #4429: on Windows the nested link is a directory JUNCTION, which any user can create. Node's
+  // `fs.cp` with `dereference: false` copied it as a real directory holding the outside files, so the
+  // copy resolved and `src-copy/outside-link/secret.txt` carried content from outside the root.
+  it("refuses and removes a copy whose source tree holds a nested directory link", async () => {
     const outside = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-copy-outside-")));
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
     try {
-      await symlink(outside, join(root, "src", "outside-link"), "dir");
+      await writeFile(join(outside, "secret.txt"), "outside content\n");
+      await mkdir(join(root, "src", "nested"));
+      await symlink(outside, join(root, "src", "nested", "outside-link"), DIRECTORY_LINK_TYPE);
 
       await expect(
         copyFilesEntry({
@@ -2776,10 +2794,33 @@ describe("desktop files mutations (create / rename / delete)", () => {
           rootInput: root,
           sourcePathInput: "src",
           destPathInput: "src-copy",
+          correlationId: "files-copy-000001",
         }),
       ).rejects.toMatchObject({ status: 400, code: "UNSUPPORTED" });
       await expect(stat(join(root, "src-copy"))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(join(outside, "secret.txt"), "utf8")).resolves.toBe(
+        "outside content\n",
+      );
+
+      const lines = sink.events
+        .filter((event) => event.op === "files.copy.refused")
+        .map(formatActivityLogProofLine);
+      expect(lines).toHaveLength(1);
+      expectActivityLogProof("files.copy.refused.link", lines[0] ?? "");
+      expect(JSON.parse(lines[0] ?? "")).toMatchObject({
+        level: "warn",
+        errorKind: "unsafe-target",
+        correlationId: "files-copy-000001",
+        outcome: "refused",
+        stage: "copy-filter",
+        code: "UNSUPPORTED",
+        entryKind: "directory",
+        cleanup: "removed",
+      });
+      expect(lines[0]).not.toContain("outside-link");
+      expect(lines[0]).not.toContain("src-copy");
     } finally {
+      resetServerLogger();
       await rm(outside, { recursive: true, force: true });
     }
   });

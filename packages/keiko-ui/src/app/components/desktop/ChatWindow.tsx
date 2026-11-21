@@ -13,6 +13,7 @@ import { ChatJiraNames } from "./jiraNames";
 import { ChatDraftStatus } from "./ChatDraftStatus";
 import { MissingEvidenceActions } from "./MissingEvidenceActions";
 import { mergeRepositoryFileScope, MAX_REPOSITORY_FOCUS_PATHS } from "./repositoryFileScope";
+import { ChatAppDataNotice } from "./AppDataNotice";
 import { ChatScopeNotice } from "./ChatScopeNotice";
 import scopeNoticeStyles from "./ChatScopeNotice.module.css";
 import { updateGroundingScopes } from "@/lib/chat-grounding-mutation";
@@ -4880,6 +4881,7 @@ function ChatScopeHeaderImpl({
       ) : null}
       <ChatScopeNotice chat={chat} />
       <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
+      <ChatAppDataNotice chat={chat} />
       <ConnectorScopePill
         chat={chat}
         onDisconnect={onChatChanged}

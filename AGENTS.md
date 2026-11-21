@@ -641,7 +641,9 @@ system that exists, never beside it:
   reuse already guarded metadata and can address only admitted sources in the owning package.
   Structural AST, import, symbol, endpoint and source/test intake honor the actual caller file
   ceiling. A null ceiling uses the finite admitted candidate inventory, including resolver metadata
-  reservation and request-local current-source metadata capacity. Finite enrichment grants and
+  reservation and request-local current-source metadata capacity. The code intelligence build also
+  bounds the source text it parses (32 MiB) and reports the bound as a candidate limit, counted on
+  `evidence-details`, instead of exhausting the heap (#4456). Finite enrichment grants and
   bounded complete-text reuse retain their separate limits.
   Unreadable or partially observed re-export branches retain uncertainty; missing indexed exports
   cannot certify a unique runtime target when a competing branch is unobserved.
@@ -888,6 +890,8 @@ system that exists, never beside it:
   actual cold or warm request work remains visible even when saving its snapshot fails.
   Conversation continuity records only its closed referent source and source/admitted/rejected
   counts on selection-details; assistant path text never enters activity evidence.
+  A previous-answer path stays a continuity hint: it never replaces the current question's own
+  keep-one fallback, which remains low confidence beside it within the same grants (#4458).
   The closed `retrievalIntent` vocabulary is `project-metadata`, `repository-overview`,
   `targeted-code-search`, `diagnostic-search`, `conversational-follow-up` and `clarification-needed`.
   An eligible `conversational-follow-up` retains the previous targeted or diagnostic intent for
@@ -975,7 +979,10 @@ system that exists, never beside it:
   marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
   `client.scope.notice` records scope narrowing, widening and adding missing
   evidence under the notice's client correlation. Its closed `reason` is `narrowed-to-file`,
-  `narrowed-to-directory`, `widened`, `pinned-folder` or `missing-evidence-added`. `scopeKind` is
+  `narrowed-to-directory`, `widened`, `pinned-folder`, `missing-evidence-added`, or, for the
+  plain-language AppData sensitive-data notice that informs without blocking (#4437),
+  `app-data-contained` (the folder holds an `AppData` folder) and `app-data-selected` (the folder
+  is part of one). `scopeKind` is
   `workspace-root`, `directory` or `files`; `pathCount` counts selected scope-relative entries.
   `pinned-folder` is retained only for historical evidence; current Files navigation never pins a
   folder or asks for confirmation. The existing timeline carries these dispositions and counts

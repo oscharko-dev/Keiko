@@ -2302,6 +2302,8 @@ function logSourceCompleted(
     walkCompleted: progress.completed,
     cancelled: progress.cancelled,
     sawScopeError: progress.sawScopeError,
+    vanishedEntryCount: progress.vanishedEntries,
+    directoryRetryCount: progress.directoryRetries,
   });
 }
 
@@ -2314,6 +2316,8 @@ async function* runOneSource(
     cancelled: false,
     sawScopeError: false,
     completed: false,
+    vanishedEntries: 0,
+    directoryRetries: 0,
     discoveredPaths: new Set<string>(),
   };
   const sourceDigest = logDigest(String(source.id));
@@ -2353,6 +2357,8 @@ interface SourceRunProgress {
   cancelled: boolean;
   sawScopeError: boolean;
   completed: boolean;
+  vanishedEntries: number;
+  directoryRetries: number;
   readonly discoveredPaths: Set<string>;
 }
 
@@ -2382,6 +2388,8 @@ function observeSourceEvent(progress: SourceRunProgress, evt: ExtractionEvent): 
   }
   if (evt.kind === "completed") {
     progress.completed = true;
+    progress.vanishedEntries = evt.totalVanished ?? 0;
+    progress.directoryRetries = evt.totalDirectoryRetries ?? 0;
   }
 }
 

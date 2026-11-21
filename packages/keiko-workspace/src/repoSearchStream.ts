@@ -143,6 +143,7 @@ class StreamingSearchCollector {
   private readonly omissions: RetainedAtomHeap<CandidateFile>;
   private matchesFound = 0;
   public unrepresentablePaths = 0;
+  private churn: DiscoveryChurnCounts = EMPTY_DISCOVERY_CHURN;
   private readonly pending = new Set<Promise<void>>();
   private readonly failures: Error[] = [];
   private emittedFailure: Error | undefined;
@@ -323,7 +324,15 @@ class StreamingSearchCollector {
       this.state.truncated = true;
       this.state.truncationReasons?.add("unrepresentable-path");
     }
-    if (stats.ioErrors > 0) {
+    this.churn = discoveryChurnCounts(stats);
+    // A skipped locked, protected or vanished entry was listed but never read, so it is disclosed
+    // like an unreadable file. A settled membership retry saw every entry and leaves coverage
+    // complete (#4434, #4435).
+    if (
+      stats.ioErrors > 0 ||
+      this.churn.unavailableEntriesByDiscovery > 0 ||
+      this.churn.vanishedEntriesByDiscovery > 0
+    ) {
       this.state.truncated = true;
       this.state.truncationReasons?.add("io-error");
     }
@@ -340,6 +349,7 @@ class StreamingSearchCollector {
       ...(this.unrepresentablePaths > 0
         ? { unrepresentablePathsByDiscovery: this.unrepresentablePaths }
         : {}),
+      ...reportedDiscoveryChurn(this.churn),
       depthPrunedByDiscovery: 0,
       maxFilesPrunedByDiscovery: 0,
       candidateBuckets: this.bucketCounts,
@@ -370,6 +380,57 @@ class StreamingSearchCollector {
     }
     return atoms;
   }
+}
+
+interface DiscoveryChurnCounts {
+  readonly unavailableEntriesByDiscovery: number;
+  readonly vanishedEntriesByDiscovery: number;
+  readonly membershipRetriesByDiscovery: number;
+  readonly skippedSymbolicLinksByDiscovery: number;
+  readonly unavailableDirectoriesByDiscovery: number;
+  readonly oversizedDirectoriesByDiscovery: number;
+  readonly systemNoisePrunedByDiscovery: number;
+}
+
+const EMPTY_DISCOVERY_CHURN: DiscoveryChurnCounts = {
+  unavailableEntriesByDiscovery: 0,
+  vanishedEntriesByDiscovery: 0,
+  membershipRetriesByDiscovery: 0,
+  skippedSymbolicLinksByDiscovery: 0,
+  unavailableDirectoriesByDiscovery: 0,
+  oversizedDirectoriesByDiscovery: 0,
+  systemNoisePrunedByDiscovery: 0,
+};
+
+function discoveryChurnCounts(stats: StreamingDiscoveryStats): DiscoveryChurnCounts {
+  return {
+    unavailableEntriesByDiscovery: stats.unavailableEntries ?? 0,
+    vanishedEntriesByDiscovery: stats.vanishedEntries ?? 0,
+    membershipRetriesByDiscovery: stats.membershipRetries ?? 0,
+    skippedSymbolicLinksByDiscovery: stats.skippedSymbolicLinks ?? 0,
+    unavailableDirectoriesByDiscovery: stats.unavailableDirectories ?? 0,
+    oversizedDirectoriesByDiscovery: stats.oversizedDirectories ?? 0,
+    systemNoisePrunedByDiscovery: stats.systemNoisePruned ?? 0,
+  };
+}
+
+const DISCOVERY_CHURN_KEYS = [
+  "unavailableEntriesByDiscovery",
+  "vanishedEntriesByDiscovery",
+  "membershipRetriesByDiscovery",
+  "skippedSymbolicLinksByDiscovery",
+  "unavailableDirectoriesByDiscovery",
+  "oversizedDirectoriesByDiscovery",
+  "systemNoisePrunedByDiscovery",
+] as const satisfies readonly (keyof DiscoveryChurnCounts)[];
+
+// Only positive counts are reported, so a walk without drops keeps its existing diagnostics shape.
+function reportedDiscoveryChurn(churn: DiscoveryChurnCounts): Partial<DiscoveryChurnCounts> {
+  const reported: { -readonly [Key in keyof DiscoveryChurnCounts]?: number } = {};
+  for (const key of DISCOVERY_CHURN_KEYS) {
+    if (churn[key] > 0) reported[key] = churn[key];
+  }
+  return reported;
 }
 
 function collectionResult(

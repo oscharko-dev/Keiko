@@ -2,6 +2,8 @@
 // or quoted examples. The raw line remains available for ordinary lexical matching; these masked
 // views are used only for definition and route classification.
 
+import { splitSourceLines } from "./sourceLines.js";
+
 const CLASSIFIABLE_EXTENSIONS = new Set([
   "c",
   "cc",
@@ -200,6 +202,8 @@ interface TemplateLiteralFrame {
 }
 
 interface SourceMaskState {
+  /** The reference scan: visit every character and write each view as characters (#4457). */
+  readonly byCharacter: boolean;
   blockClose: string | undefined;
   blockDepth: number;
   blockOpen: string | undefined;
@@ -329,8 +333,9 @@ function syntaxFor(scopePath: string | undefined): SourceSyntax {
   return DOCUMENTATION_BASENAMES.has(basename) ? { ...syntax, classifiable: false } : syntax;
 }
 
-function initialMaskState(): SourceMaskState {
+function initialMaskState(byCharacter: boolean): SourceMaskState {
   return {
+    byCharacter,
     blockClose: undefined,
     blockDepth: 0,
     blockOpen: undefined,
@@ -353,12 +358,71 @@ function initialMaskState(): SourceMaskState {
   };
 }
 
-function mask(chars: string[], index: number): void {
-  chars[index] = " ";
+// #4457: one mask view (code or structural) of a line: the raw text with masked characters replaced
+// by spaces. Only `mask` writes a view. The scan masks left to right, so a view records ascending
+// masked runs [start, end) and builds its text from slices; a mask out of that order, or outside
+// the line, switches the view to the characters it would have written one by one.
+interface LineMask {
+  readonly raw: string;
+  readonly runs: number[];
+  chars: string[] | undefined;
 }
 
-function maskRange(chars: string[], start: number, length: number): void {
-  for (let offset = 0; offset < length; offset += 1) mask(chars, start + offset);
+function lineMask(raw: string, state: SourceMaskState): LineMask {
+  return { raw, runs: [], chars: state.byCharacter ? raw.split("") : undefined };
+}
+
+function maskedRuns(view: LineMask): string {
+  let text = "";
+  let cursor = 0;
+  for (let index = 0; index < view.runs.length; index += 2) {
+    const start = view.runs[index] ?? cursor;
+    const end = view.runs[index + 1] ?? start;
+    text += view.raw.slice(cursor, start) + " ".repeat(end - start);
+    cursor = end;
+  }
+  return text + view.raw.slice(cursor);
+}
+
+function maskedText(view: LineMask): string {
+  if (view.chars !== undefined) return view.chars.join("");
+  return view.runs.length === 0 ? view.raw : maskedRuns(view);
+}
+
+function maskedCharacters(view: LineMask): string[] {
+  const chars = view.raw.split("");
+  for (let index = 0; index < view.runs.length; index += 2) {
+    const end = view.runs[index + 1] ?? 0;
+    for (let offset = view.runs[index] ?? end; offset < end; offset += 1) chars[offset] = " ";
+  }
+  return chars;
+}
+
+// Records a mask in the runs, or returns false when the runs cannot express it.
+function extendMaskRuns(view: LineMask, index: number): boolean {
+  if (index < 0 || index >= view.raw.length) return false;
+  const runs = view.runs;
+  const count = runs.length;
+  if (count === 0) {
+    runs.push(index, index + 1);
+    return true;
+  }
+  const start = runs[count - 2] ?? 0;
+  const end = runs[count - 1] ?? 0;
+  if (index === end) runs[count - 1] = index + 1;
+  else if (index > end) runs.push(index, index + 1);
+  else return index >= start;
+  return true;
+}
+
+function mask(view: LineMask, index: number): void {
+  if (view.chars === undefined && extendMaskRuns(view, index)) return;
+  view.chars ??= maskedCharacters(view);
+  view.chars[index] = " ";
+}
+
+function maskRange(view: LineMask, start: number, length: number): void {
+  for (let offset = 0; offset < length; offset += 1) mask(view, start + offset);
 }
 
 function previousWord(line: string, endIndex: number): string {
@@ -527,21 +591,41 @@ function luaLongBlockDelimiter(
   };
 }
 
+// Fixed delimiters in their order of precedence, after the Java Unicode and Lua long forms (whose
+// open is the text at the index, so they always start there when they exist).
+const FIXED_BLOCK_COMMENT_DELIMITERS: readonly {
+  readonly enabled: (syntax: SourceSyntax) => boolean;
+  readonly delimiter: BlockCommentDelimiter;
+}[] = [
+  {
+    enabled: (syntax) => syntax.slashBlockComments,
+    delimiter: { open: "/*", close: "*/", javaUnicode: false },
+  },
+  {
+    enabled: (syntax) => syntax.fsharpComments,
+    delimiter: { open: "(*", close: "*)", javaUnicode: false },
+  },
+  {
+    enabled: (syntax) => syntax.razorComments,
+    delimiter: { open: "@*", close: "*@", javaUnicode: false },
+  },
+  {
+    enabled: (syntax) => syntax.htmlComments,
+    delimiter: { open: "<!--", close: "-->", javaUnicode: false },
+  },
+];
+
 function blockCommentDelimiter(
   line: string,
   index: number,
   syntax: SourceSyntax,
 ): BlockCommentDelimiter | undefined {
-  const candidates: readonly (BlockCommentDelimiter | undefined)[] = [
-    javaUnicodeBlockDelimiter(line, index, syntax),
-    luaLongBlockDelimiter(line, index, syntax),
-    syntax.slashBlockComments ? { open: "/*", close: "*/", javaUnicode: false } : undefined,
-    syntax.fsharpComments ? { open: "(*", close: "*)", javaUnicode: false } : undefined,
-    syntax.razorComments ? { open: "@*", close: "*@", javaUnicode: false } : undefined,
-    syntax.htmlComments ? { open: "<!--", close: "-->", javaUnicode: false } : undefined,
-  ];
-  return candidates.find(
-    (candidate) => candidate !== undefined && line.startsWith(candidate.open, index),
+  return (
+    javaUnicodeBlockDelimiter(line, index, syntax) ??
+    luaLongBlockDelimiter(line, index, syntax) ??
+    FIXED_BLOCK_COMMENT_DELIMITERS.find(
+      (candidate) => candidate.enabled(syntax) && line.startsWith(candidate.delimiter.open, index),
+    )?.delimiter
   );
 }
 
@@ -559,8 +643,8 @@ function blockCloseLength(
 function advanceBlockComment(
   line: string,
   index: number,
-  code: string[],
-  structural: string[],
+  code: LineMask,
+  structural: LineMask,
   syntax: SourceSyntax,
   state: SourceMaskState,
 ): number | undefined {
@@ -592,7 +676,7 @@ function advanceBlockComment(
 function advanceRawString(
   line: string,
   index: number,
-  structural: string[],
+  structural: LineMask,
   state: SourceMaskState,
 ): number | undefined {
   const close = state.rawStringClose;
@@ -644,7 +728,7 @@ function luaLongStringStart(
 function startRawString(
   line: string,
   index: number,
-  structural: string[],
+  structural: LineMask,
   syntax: SourceSyntax,
   state: SourceMaskState,
 ): number | undefined {
@@ -665,7 +749,7 @@ function activeTemplateFrame(state: SourceMaskState): TemplateLiteralFrame | und
 function advanceTemplateText(
   line: string,
   index: number,
-  structural: string[],
+  structural: LineMask,
   state: SourceMaskState,
 ): number | undefined {
   const frame = activeTemplateFrame(state);
@@ -700,7 +784,7 @@ function advanceTemplateExpressionBoundary(
 function startTemplateLiteral(
   line: string,
   index: number,
-  structural: string[],
+  structural: LineMask,
   syntax: SourceSyntax,
   state: SourceMaskState,
 ): number | undefined {
@@ -742,7 +826,7 @@ function updateQuotedLiteralState(
 function advanceQuotedLiteral(
   line: string,
   index: number,
-  structural: string[],
+  structural: LineMask,
   state: SourceMaskState,
 ): number | undefined {
   const quote = state.quote;
@@ -762,8 +846,8 @@ function advanceQuotedLiteral(
 function advanceRegexLiteral(
   line: string,
   index: number,
-  code: string[],
-  structural: string[],
+  code: LineMask,
+  structural: LineMask,
   state: SourceMaskState,
 ): number | undefined {
   if (!state.regexLiteral) return undefined;
@@ -794,7 +878,7 @@ function tripleQuoteAt(line: string, index: number, syntax: SourceSyntax): strin
 function startTripleQuotedLiteral(
   line: string,
   index: number,
-  structural: string[],
+  structural: LineMask,
   syntax: SourceSyntax,
   state: SourceMaskState,
 ): number | undefined {
@@ -817,7 +901,7 @@ function csharpVerbatimQuoteStarts(line: string, index: number, syntax: SourceSy
 function startCsharpVerbatimLiteral(
   line: string,
   index: number,
-  structural: string[],
+  structural: LineMask,
   syntax: SourceSyntax,
   state: SourceMaskState,
 ): number | undefined {
@@ -833,7 +917,7 @@ function startCsharpVerbatimLiteral(
 function startOrdinaryLiteral(
   line: string,
   index: number,
-  structural: string[],
+  structural: LineMask,
   state: SourceMaskState,
 ): number | undefined {
   const char = line.charAt(index);
@@ -850,8 +934,8 @@ function startOrdinaryLiteral(
 function startRegexLiteral(
   line: string,
   index: number,
-  code: string[],
-  structural: string[],
+  code: LineMask,
+  structural: LineMask,
   syntax: SourceSyntax,
   state: SourceMaskState,
 ): number | undefined {
@@ -868,8 +952,8 @@ function startRegexLiteral(
 function startLiteral(
   line: string,
   index: number,
-  code: string[],
-  structural: string[],
+  code: LineMask,
+  structural: LineMask,
   syntax: SourceSyntax,
   state: SourceMaskState,
 ): number | undefined {
@@ -886,8 +970,8 @@ function startLiteral(
 function advanceActiveMask(
   line: string,
   index: number,
-  code: string[],
-  structural: string[],
+  code: LineMask,
+  structural: LineMask,
   syntax: SourceSyntax,
   state: SourceMaskState,
 ): number | undefined {
@@ -957,7 +1041,7 @@ function heredocCloses(raw: string, delimiter: HeredocDelimiter): boolean {
   return normalized === delimiter.close || normalized === `${delimiter.close};`;
 }
 
-function heredocActive(raw: string, structural: string[], state: SourceMaskState): boolean {
+function heredocActive(raw: string, structural: LineMask, state: SourceMaskState): boolean {
   const delimiter = state.heredocs[state.heredocCursor];
   if (delimiter === undefined) return false;
   maskRange(structural, 0, raw.length);
@@ -980,7 +1064,7 @@ function clearYamlBlockScalar(state: SourceMaskState): void {
   state.yamlBlockParentIndent = undefined;
 }
 
-function yamlBlockScalarActive(raw: string, structural: string[], state: SourceMaskState): boolean {
+function yamlBlockScalarActive(raw: string, structural: LineMask, state: SourceMaskState): boolean {
   const parentIndent = state.yamlBlockParentIndent;
   if (parentIndent === undefined) return false;
   if (raw.trim().length === 0) {
@@ -1016,11 +1100,12 @@ function startYamlBlockScalar(
 
 function lineBlockCommentActive(
   raw: string,
-  code: string[],
-  structural: string[],
+  code: LineMask,
+  structural: LineMask,
   syntax: SourceSyntax,
   state: SourceMaskState,
 ): boolean {
+  if (state.lineBlockEnd === undefined && !syntax.rubyBlockComments) return false;
   const normalized = raw.trim().toLowerCase();
   if (state.lineBlockEnd === undefined) {
     if (!syntax.rubyBlockComments || normalized !== "=begin") return false;
@@ -1032,15 +1117,35 @@ function lineBlockCommentActive(
   return true;
 }
 
+// #4457: every character at which a comment, literal or regex can start (in any syntax) or a
+// template expression can change depth. While no mask is active, any other character leaves the
+// state and both views unchanged, so the scan can step over it.
+const MASK_CANDIDATE_RE = /[/\\#'"`rRb[(@<{}-]/gu;
+
+function maskInactive(state: SourceMaskState): boolean {
+  if (state.blockClose !== undefined || state.rawStringClose !== undefined) return false;
+  if (state.quote !== undefined || state.regexLiteral) return false;
+  const frame = activeTemplateFrame(state);
+  return frame === undefined || frame.expressionDepth > 0;
+}
+
+function nextMaskCandidate(raw: string, index: number, state: SourceMaskState): number {
+  if (state.byCharacter || !maskInactive(state)) return index;
+  MASK_CANDIDATE_RE.lastIndex = index;
+  return MASK_CANDIDATE_RE.exec(raw)?.index ?? raw.length;
+}
+
 function scanLineMasks(
   raw: string,
-  code: string[],
-  structural: string[],
+  code: LineMask,
+  structural: LineMask,
   syntax: SourceSyntax,
   state: SourceMaskState,
 ): void {
   let index = 0;
   while (index < raw.length) {
+    index = nextMaskCandidate(raw, index, state);
+    if (index >= raw.length) break;
     const active = advanceActiveMask(raw, index, code, structural, syntax, state);
     if (active !== undefined) {
       index = active;
@@ -1093,26 +1198,46 @@ function scanClassifiableLine(
 ): RepositorySourceLine {
   // The scanner indexes with `charAt`/`startsWith`, whose offsets are UTF-16 code units. Keep the
   // mutable views in that same coordinate system so astral identifiers cannot shift comment masks.
-  const code = raw.split("");
-  const structural = raw.split("");
+  const code = lineMask(raw, state);
+  const structural = lineMask(raw, state);
   const literalRegion =
     heredocActive(raw, structural, state) || yamlBlockScalarActive(raw, structural, state);
   if (!literalRegion && !lineBlockCommentActive(raw, code, structural, syntax, state)) {
     scanLineMasks(raw, code, structural, syntax, state);
     resetLineMaskState(state);
-    const structuralLine = structural.join("");
+    const structuralLine = maskedText(structural);
     queueHeredocStarts(raw, structuralLine, syntax, state);
     startYamlBlockScalar(structuralLine, syntax, state);
+    return { raw, code: maskedText(code), structural: structuralLine };
   }
-  return { raw, code: code.join(""), structural: structural.join("") };
+  return { raw, code: maskedText(code), structural: maskedText(structural) };
 }
 
 export function repositorySourceLines(
   text: string,
   scopePath?: string,
 ): readonly RepositorySourceLine[] {
+  return classifiedSourceLines(text, scopePath, false);
+}
+
+/**
+ * @internal The character-by-character scan `repositorySourceLines` must reproduce exactly: it
+ * visits every character and writes each view as characters (#4457).
+ */
+export function repositorySourceLinesByCharacter(
+  text: string,
+  scopePath?: string,
+): readonly RepositorySourceLine[] {
+  return classifiedSourceLines(text, scopePath, true);
+}
+
+function classifiedSourceLines(
+  text: string,
+  scopePath: string | undefined,
+  byCharacter: boolean,
+): readonly RepositorySourceLine[] {
   const syntax = syntaxFor(scopePath);
-  const lines = text.split(/\r?\n/u);
+  const lines = splitSourceLines(text);
   if (!syntax.classifiable) {
     return lines.map((raw) => ({
       raw,
@@ -1120,7 +1245,7 @@ export function repositorySourceLines(
       structural: " ".repeat(raw.length),
     }));
   }
-  const state = initialMaskState();
+  const state = initialMaskState(byCharacter);
   return lines.map((line) => scanClassifiableLine(line, syntax, state));
 }
 

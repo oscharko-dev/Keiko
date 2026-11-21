@@ -391,7 +391,9 @@ Imported targets retain exact runtime module-export identities. Explicit compile
 reuse already guarded metadata and can address only admitted sources in the owning package.
 Structural AST, import, symbol, endpoint and source/test intake honor the actual caller file
 ceiling. A null ceiling uses the finite admitted candidate inventory, including resolver metadata
-reservation and request-local current-source metadata capacity. Finite enrichment grants and
+reservation and request-local current-source metadata capacity. The code intelligence build also
+bounds the source text it parses (32 MiB) and reports the bound as a candidate limit, counted on
+`evidence-details`, instead of exhausting the heap (#4456). Finite enrichment grants and
 bounded complete-text reuse retain their separate limits.
 Unreadable or partially observed re-export branches retain uncertainty; missing indexed exports
 cannot certify a unique runtime target when a competing branch is unobserved.
@@ -421,7 +423,8 @@ excerpt assembly and final prompt fitting, an unobserved compound hint lowers se
 without removing evidence or claiming a keep-one fallback; fresh and cached packs share this rule.
 Contextual natural-language keep-one fallback retains the first lexical producer's order only for
 the same live content identities, without semantic evidence or successful reranking. It remains
-low confidence and changes no floor, exclusion or grant. Ordinary document excerpts include the
+low confidence and changes no floor, exclusion or grant. A path admitted only from the previous
+answer never counts as that fallback's own evidence, so it cannot displace it (#4458). Ordinary document excerpts include the
 complete current redacted source when it fits the existing window and total budgets; explicit
 selections, certified ranges and source-code excerpts keep their requested geometry (ADR-0022).
 Returned and persisted answers use the confidence of their actual sent source; another source cannot
@@ -653,8 +656,11 @@ marker prose cannot stand in for actual memory inclusion; no memory or answer bo
 
 `client.scope.notice` records scope narrowing, widening, folder pinning and adding missing evidence
 under the notice's client correlation. Its closed `reason` is `narrowed-to-file`,
-`narrowed-to-directory`, `widened`, `pinned-folder` or `missing-evidence-added`. `scopeKind` is
-`workspace-root`, `directory` or `files`; `pathCount` counts selected scope-relative entries.
+`narrowed-to-directory`, `widened`, `pinned-folder`, `missing-evidence-added`, or, for the
+plain-language AppData sensitive-data notice that informs without blocking (#4437),
+`app-data-contained` (the folder holds an `AppData` folder) and `app-data-selected` (the folder is
+part of one). `scopeKind` is `workspace-root`, `directory` or `files`; `pathCount` counts selected
+scope-relative entries.
 The existing timeline carries these dispositions and counts without scope paths or notice text.
 
 `client.evidence.inspected` records `summary-expanded`, `file-table-opened` or `manifest-fetch-failed`

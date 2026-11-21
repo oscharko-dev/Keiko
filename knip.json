@@ -7,7 +7,17 @@
     "fallow",
     "ws"
   ],
-  "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "pgrep", "ssh-keygen", "ditto"],
+  "ignoreBinaries": [
+    "pwsh",
+    "mkfifo",
+    "ldd",
+    "sqlite3",
+    "pgrep",
+    "ssh-keygen",
+    "ditto",
+    "attrib",
+    "icacls"
+  ],
   "workspaces": {
     ".": {
       "playwright": false,
@@ -22,6 +32,7 @@
         "scripts/testing/chat-skills-lab/run.mjs",
         "scripts/testing/chat-skills-lab/serve.mjs",
         "scripts/testing/chat-skills-lab/verify-tests.mjs",
+        "scripts/testing/measure-recursive-search.mjs",
         "scripts/testing/test-secure-read-windows-paths.mjs",
         "scripts/testing/test-windows-gateway-service.mjs",
         "tests/e2e/**/*.spec.ts!",

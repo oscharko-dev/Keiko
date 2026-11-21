@@ -52,6 +52,12 @@ the source, selection, completion, and answer siblings.
   semantic embedding alone does not invalidate a successful lexical answer.
 - Available `omissionGroups.ranking` and `.eligibility` distinguish ranking/budget loss from file
   eligibility. They require complete per-reason counters; missing historical fields stay unknown.
+- `discovery-dropped-entries` means the recursive walk never considered some entries:
+  `discoveryUnavailableEntryCount` (locked or protected files), `discoveryUnavailableDirectoryCount`
+  and `discoveryOversizedDirectoryCount` (folders whose listing could not be completed),
+  `discoverySkippedLinkCount` (symbolic links and reparse points, which are never followed) and
+  `discoveryUnrepresentablePathCount`. Close the program that holds a locked file, restore access
+  to a protected folder, or select the link target itself, then ask again.
 
 The log contains counts and identities, not source bodies or raw paths. An old report without the
 new counters cannot retroactively confirm these causes. A dependency failure or incomplete report

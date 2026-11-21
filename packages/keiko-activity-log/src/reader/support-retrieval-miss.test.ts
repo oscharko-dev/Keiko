@@ -309,3 +309,61 @@ describe("retrieval-miss projection (#3893)", () => {
     expect(JSON.stringify(result)).not.toContain("private");
   });
 });
+
+describe("discovery drops as a retrieval-miss cause (#4431)", () => {
+  const EVIDENCE = "search.connected-context.evidence-details";
+
+  it.each([
+    "discoveryUnavailableEntryCount",
+    "discoveryUnavailableDirectoryCount",
+    "discoveryOversizedDirectoryCount",
+    "discoverySkippedLinkCount",
+    "discoveryUnrepresentablePathCount",
+  ] as const)("names a positive %s as dropped discovery entries", (field) => {
+    expect(findings(line(EVIDENCE, { [field]: 2 }))).toEqual([
+      expect.objectContaining({
+        kind: "retrieval-miss",
+        reason: "discovery-dropped-entries",
+        fields: { [field]: 2 },
+      }),
+    ]);
+  });
+
+  it("carries the policy exclusions beside an actual drop", () => {
+    const text = line(EVIDENCE, {
+      discoveryUnavailableEntryCount: 1,
+      discoveryUnavailableDirectoryCount: 0,
+      discoveryDeniedCount: 4,
+      discoveryIgnoredCount: 9,
+    });
+    expect(findings(text)).toEqual([
+      expect.objectContaining({
+        reason: "discovery-dropped-entries",
+        fields: {
+          discoveryUnavailableEntryCount: 1,
+          discoveryUnavailableDirectoryCount: 0,
+          discoveryDeniedCount: 4,
+          discoveryIgnoredCount: 9,
+        },
+      }),
+    ]);
+  });
+
+  it("does not treat ordinary policy exclusions or zero drops as a miss", () => {
+    const text = line(EVIDENCE, {
+      discoveryUnavailableEntryCount: 0,
+      discoveryUnavailableDirectoryCount: 0,
+      discoveryOversizedDirectoryCount: 0,
+      discoverySkippedLinkCount: 0,
+      discoveryUnrepresentablePathCount: 0,
+      discoveryDeniedCount: 4,
+      discoveryIgnoredCount: 9,
+    });
+    expect(findings(text)).toEqual([]);
+  });
+
+  it("ignores malformed drop counts", () => {
+    expect(findings(line(EVIDENCE, { discoveryUnavailableEntryCount: -1 }))).toEqual([]);
+    expect(findings(line(EVIDENCE, { discoverySkippedLinkCount: "1" }))).toEqual([]);
+  });
+});

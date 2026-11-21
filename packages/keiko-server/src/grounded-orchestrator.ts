@@ -771,6 +771,22 @@ const SEARCH_CONNECTED_CONTEXT_SELECTION_DETAILS_OPERATION = defineActivityLogOp
   releaseImpact: "patch",
 });
 
+// Discovery churn and drops of the actual walk (#4434, #4435, #4431) and the Windows system
+// entries it pruned (#4437): by closed cause and as a count only. Absent when no coverage was
+// reported.
+const DISCOVERY_CHURN_ACTIVITY_FIELDS = {
+  discoveryUnavailableEntryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryVanishedEntryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryMembershipRetryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryIgnoredCount: { type: "integer", dataClass: "count", required: false },
+  discoveryDeniedCount: { type: "integer", dataClass: "count", required: false },
+  discoveryUnrepresentablePathCount: { type: "integer", dataClass: "count", required: false },
+  discoverySkippedLinkCount: { type: "integer", dataClass: "count", required: false },
+  discoveryUnavailableDirectoryCount: { type: "integer", dataClass: "count", required: false },
+  discoveryOversizedDirectoryCount: { type: "integer", dataClass: "count", required: false },
+  discoverySystemNoisePrunedCount: { type: "integer", dataClass: "count", required: false },
+} as const;
+
 const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -779,8 +795,11 @@ const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOpe
   owner: "keiko-server",
   emitter: "grounded-orchestrator.logSourceEvidenceDetails",
   fields: {
+    ...DISCOVERY_CHURN_ACTIVITY_FIELDS,
     scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    // #4456: code index builds whose parsed source budget ended the source list.
+    codeIndexSourceBudgetReachedCount: { type: "integer", dataClass: "count", required: false },
     activityDetailStatus: {
       type: "string",
       dataClass: "closed-enum",
@@ -1487,6 +1506,7 @@ function sumContextDiagnostics(
     candidateFileCount: sum("candidateFileCount"),
     candidateDirectoryCount: sum("candidateDirectoryCount"),
     codeIndexBuildCount: sum("codeIndexBuildCount"),
+    codeIndexSourceBudgetReachedCount: sum("codeIndexSourceBudgetReachedCount"),
     symbolGraphBuildCount: sum("symbolGraphBuildCount"),
     importGraphBuildCount: sum("importGraphBuildCount"),
     endpointGraphBuildCount: sum("endpointGraphBuildCount"),
@@ -1802,6 +1822,31 @@ function discoveryCoverageMarker(
   };
 }
 
+// A locked or protected entry was skipped, never read; the answer names it as an explicit gap
+// (#4434). The count is added only when present so ordinary coverage markers stay unchanged.
+function discoveryDropCoverageDetail(coverage: ContextCoverageDiagnostics): readonly string[] {
+  return [
+    ...positiveCoverageDetail(
+      "locked or protected entries",
+      coverage.unavailableEntriesByDiscovery,
+    ),
+    // Skipped links, unreadable and oversized directories are named the same way (#4431).
+    ...positiveCoverageDetail("skipped links", coverage.skippedSymbolicLinksByDiscovery),
+    ...positiveCoverageDetail("unreadable directories", coverage.unavailableDirectoriesByDiscovery),
+    ...positiveCoverageDetail("oversized directories", coverage.oversizedDirectoriesByDiscovery),
+  ];
+}
+
+function positiveCoverageDetail(label: string, count: number | undefined): readonly string[] {
+  return count !== undefined && count > 0 ? [`${label} ${String(count)}`] : [];
+}
+
+// Windows system entries ($Recycle.Bin, desktop.ini, ...) are pruned by policy, never read (#4437).
+function systemNoiseCoverageDetail(coverage: ContextCoverageDiagnostics): readonly string[] {
+  const count = coverage.systemNoisePrunedByDiscovery ?? 0;
+  return count > 0 ? [`system entries pruned ${String(count)}`] : [];
+}
+
 function coverageUncertainty(
   result: Awaited<ReturnType<typeof searchText>>,
   nowMs: number,
@@ -1825,6 +1870,8 @@ function coverageUncertainty(
           `ignored ${String(coverage.ignoredByDiscovery)}`,
           `denied ${String(coverage.deniedByDiscovery)}`,
           `unrepresentable entries ${String(coverage.unrepresentablePathsByDiscovery ?? 0)}`,
+          ...discoveryDropCoverageDetail(coverage),
+          ...systemNoiseCoverageDetail(coverage),
           `depth-pruned ${String(coverage.depthPrunedByDiscovery)}`,
           `max-files-pruned ${String(coverage.maxFilesPrunedByDiscovery)}`,
         ].join(", ");
@@ -9266,6 +9313,23 @@ function primaryCandidateFilter(rings: RingRunSummary): typeof DEFAULT_FILTER_OP
   };
 }
 
+// #4458: previous-answer paths the current question does not itself name or evidence. They stay
+// admitted and prioritized, but they never replace the question's own keep-one evidence.
+function continuityOnlyPaths(rings: RingRunSummary): ReadonlySet<string> {
+  const selections = rings.explicitAdmission?.selections ?? [];
+  const owned = new Set([
+    ...selections
+      .filter((selection) => selection.origin !== "assistant")
+      .map((selection) => selection.path),
+    ...primaryContentPaths(rings),
+  ]);
+  return new Set(
+    selections
+      .filter((selection) => selection.origin === "assistant" && !owned.has(selection.path))
+      .map((selection) => selection.path),
+  );
+}
+
 function explicitSelectionPaths(rings: RingRunSummary): ReadonlySet<string> {
   return new Set(
     rings.atoms
@@ -9358,6 +9422,7 @@ function finalCandidateFilter(
       args.input.scope.kind === "files"
         ? 0
         : absoluteRelevanceFloor(weightsForIntent(effectiveRetrievalIntent(args.plan))),
+    continuityOnlyPaths: continuityOnlyPaths(rings),
     nowMs: args.nowMs,
     fallbackOrder: reranker.reranked
       ? []
@@ -9408,6 +9473,7 @@ function selectRankedEvidencePool(
       selected: ordered.kept,
       absoluteFloor: options.minScore,
       fallbackOrder: options.fallbackOrder,
+      continuityOnlyPaths: options.continuityOnlyPaths,
       minScoreExemptPaths: options.minScoreExemptPaths ?? new Set(),
       scopeKind: input.scope.kind,
       relative: ordinaryRelativeFloor(selectionInput),
@@ -10166,6 +10232,7 @@ const EMPTY_STRUCTURAL_DIAGNOSTICS: StructuralRequestContextPoolDiagnostics = {
   candidateFileCount: 0,
   candidateDirectoryCount: 0,
   codeIndexBuildCount: 0,
+  codeIndexSourceBudgetReachedCount: 0,
   symbolGraphBuildCount: 0,
   importGraphBuildCount: 0,
   endpointGraphBuildCount: 0,
@@ -11110,13 +11177,31 @@ function excerptSchedulingActivityExtra(
   };
 }
 
+function discoveryChurnActivityExtra(
+  coverage: ContextCoverageDiagnostics | undefined,
+): Partial<Record<keyof typeof DISCOVERY_CHURN_ACTIVITY_FIELDS, number>> {
+  if (coverage === undefined) return {};
+  return {
+    discoveryUnavailableEntryCount: coverage.unavailableEntriesByDiscovery ?? 0,
+    discoveryVanishedEntryCount: coverage.vanishedEntriesByDiscovery ?? 0,
+    discoveryMembershipRetryCount: coverage.membershipRetriesByDiscovery ?? 0,
+    discoveryIgnoredCount: coverage.ignoredByDiscovery,
+    discoveryDeniedCount: coverage.deniedByDiscovery,
+    discoveryUnrepresentablePathCount: coverage.unrepresentablePathsByDiscovery ?? 0,
+    discoverySkippedLinkCount: coverage.skippedSymbolicLinksByDiscovery ?? 0,
+    discoveryUnavailableDirectoryCount: coverage.unavailableDirectoriesByDiscovery ?? 0,
+    discoveryOversizedDirectoryCount: coverage.oversizedDirectoriesByDiscovery ?? 0,
+    discoverySystemNoisePrunedCount: coverage.systemNoisePrunedByDiscovery ?? 0,
+  };
+}
+
 function logSourceEvidenceDetails(
   logger: ServerLogger,
   identity: ConnectedContextActivityIdentity,
-  status: ConnectedContextCompletionStatus,
+  execution: ConnectedContextExecution,
   correlationId: string,
 ): void {
-  const observed = status.sourceDecision;
+  const observed = execution.status.sourceDecision;
   const observation =
     observed === undefined
       ? { activityDetailStatus: "unavailable" as const }
@@ -11133,6 +11218,8 @@ function logSourceEvidenceDetails(
         scopeIdentitySha256: identity.scopeIdentitySha256,
         queryIdentitySha256: identity.queryIdentitySha256,
         ...observation,
+        codeIndexSourceBudgetReachedCount: execution.structural.codeIndexSourceBudgetReachedCount,
+        ...discoveryChurnActivityExtra(execution.output.pack.diagnostics?.coverage),
         completeness: "complete",
         loss: "none",
       },
@@ -11172,7 +11259,7 @@ function logConnectedContextCompletion(
       selectionDetailsActivityExtra(identity, execution.status),
     ),
   );
-  logSourceEvidenceDetails(logger, identity, execution.status, correlationId);
+  logSourceEvidenceDetails(logger, identity, execution, correlationId);
   logger.info(() =>
     activityLogEvent(
       SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION,

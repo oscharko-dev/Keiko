@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import {
   DEFAULT_EXPLORATION_BUDGET,
   validateConnectedContextPack,
@@ -122,7 +122,7 @@ describe("metadata admission before retention", () => {
         fs: {
           ...nodeWorkspaceFs,
           stat: (path) => {
-            if (path.endsWith("/package.json")) siblingStatCalls += 1;
+            if (path.endsWith(join(sep, "package.json"))) siblingStatCalls += 1;
             return nodeWorkspaceFs.stat(path);
           },
         },
@@ -216,7 +216,7 @@ it("still probes an explicit workspace manifest after wildcard-parent enumeratio
       fs: {
         ...nodeWorkspaceFs,
         iterateDirectory: async function* (path) {
-          if (path.endsWith("/services") && ++parentVisits > 1) {
+          if (path.endsWith(join(sep, "services")) && ++parentVisits > 1) {
             parentFailures += 1;
             throw new WorkspaceReadError("controlled parent enumeration failure", "services");
           }
@@ -258,7 +258,11 @@ it("does not repeat explicit manifest metadata after successful wildcard coverag
   expect(validateConnectedContextPack(result.pack).ok).toBe(true);
 });
 
-it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+// Windows has no execute-only directory mode: chmod there only toggles the read-only attribute,
+// and root bypasses the mode, so neither host can stage the unlistable parent (#4432).
+const canStageExecuteOnlyDirectory = process.platform !== "win32" && process.getuid?.() !== 0;
+
+it.runIf(canStageExecuteOnlyDirectory)(
   "reads an explicitly declared manifest through an execute-only wildcard parent",
   async () => {
     const root = workspaceManifestFixture();
@@ -361,7 +365,7 @@ it.each(manifestQuestions)(
     await retrieveManifestQuestion(workspaceManifestFixture(), text, false);
   },
 );
-it.runIf(process.platform !== "win32" && process.getuid?.() !== 0).each(manifestQuestions)(
+it.runIf(canStageExecuteOnlyDirectory).each(manifestQuestions)(
   "reads declared manifests through the default pipeline with an execute-only subtree: %s",
   async (text) => {
     const root = workspaceManifestFixture();
@@ -444,7 +448,7 @@ it.each([
           fs: {
             ...nodeWorkspaceFs,
             readDir: (absolutePath, limit) => {
-              if (absolutePath.endsWith("/services")) throw failure;
+              if (absolutePath.endsWith(join(sep, "services"))) throw failure;
               return nodeWorkspaceFs.readDir(absolutePath, limit);
             },
           },
@@ -472,7 +476,7 @@ it("does not recover descendant availability when current root access is lost", 
         fs: {
           ...nodeWorkspaceFs,
           readDir: (path, limit) => {
-            if (path.endsWith("/services")) rootUnavailable = true;
+            if (path.endsWith(join(sep, "services"))) rootUnavailable = true;
             if (rootUnavailable) throw unavailable;
             return nodeWorkspaceFs.readDir(path, limit);
           },
