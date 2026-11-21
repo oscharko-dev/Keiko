@@ -99,15 +99,22 @@ additional SonarCloud project, paid runner or required context is introduced.
 
 ### P2 — Stop paying for runs that cannot tell anything
 
-- **Install preflight:** one job installs with the lockfile and runs the cheapest gates; the heavy
-  jobs need it. A lockfile that cannot install then fails one job.
-- **npm cache in every job** that installs (restore-only, the existing key).
+- **Install preflight (measured, not pursued):** the broken installs of section 1 were the seven
+  Dependabot TypeScript 7 runs, whose cause is removed below. A preflight job in front of every heavy
+  job adds about a minute of install and setup to the critical path of every pull-request run, to
+  save the runner minutes of a lockfile that cannot install; a failing `npm ci` already ends each job
+  in under a minute **(M)**. That trades verdict time, target 4, for runner minutes that are not the
+  bottleneck.
+- **npm cache in every job (measured, not pursued):** on run 44932528367 a cold `npm ci` took
+  12–18 s in Core quality, Semantic duplication and Build, scan, SBOM, smoke, and a warm one 9–17 s
+  plus a 2–6 s restore in the coverage jobs **(M)**. The cache saves nothing measurable, so the jobs
+  without it keep installing cold.
 - **`edited` events (done in this change):** a title- or body-only edit reuses an earlier run's
-  evidence only when that run recorded the same candidate merge tree on the same base
-  (ADR-0178 D6). A matching head
-  commit alone never qualifies: `dev` may have advanced since. The edit waits in the pull request's
-  one concurrency group instead of starting a second matrix next to the push run (ADR-0157 D5,
-  amended). Without a completed green run of the same candidate tree the matrix runs.
+  evidence only when that run recorded the same candidate merge tree on the same base (ADR-0178
+  D6). A matching head commit alone never qualifies: `dev` may have advanced since. The edit waits
+  in the pull request's one concurrency group instead of starting a second matrix next to the push
+  run (ADR-0157 D5, amended). Without a completed green run of the same candidate tree the matrix
+  runs.
 - **Lost runners (measured, not pursued):** the only runner-loss annotation in the measured window
   was "The job was not acquired by Runner of type hosted even after multiple attempts", on two
   zero-step macOS jobs. Both runs also carried genuine failures, so a new ADR-0161 signature would
@@ -157,14 +164,14 @@ additional SonarCloud project, paid runner or required context is introduced.
 
 ## 4. Proof per package
 
-| Package | Proven when                                                                                                                                             |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| P1      | No pull-request run waits on a SonarCloud scan; `dev` analysis passes; lint passes in CI with a ceiling that leaves ≥ 4 GB of the runner free           |
-| P2      | A body edit on a green head starts no heavy job; a deliberately broken lockfile fails one job; cancelled-run hours fall by ≥ 80 % in the following week |
-| P3      | The repaired tests pass 50 consecutive local repeats; the nightly lane reports zero unstable tests for a week                                           |
-| P4      | Each drift gate, broken on purpose, is repaired by the one command                                                                                      |
-| P5      | Median pull-request verdict ≤ 40 min over 20 runs                                                                                                       |
-| P6      | The report reproduces section 1 from the API without manual steps                                                                                       |
+| Package | Proven when                                                                                                                                   |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1      | No pull-request run waits on a SonarCloud scan; `dev` analysis passes; lint passes in CI with a ceiling that leaves ≥ 4 GB of the runner free |
+| P2      | A body edit on a green head starts no heavy job; cancelled-run hours fall by ≥ 80 % in the following week                                     |
+| P3      | The repaired tests pass 50 consecutive local repeats; the nightly lane reports zero unstable tests for a week                                 |
+| P4      | Each drift gate, broken on purpose, is repaired by the one command                                                                            |
+| P5      | Median pull-request verdict ≤ 40 min over 20 runs                                                                                             |
+| P6      | The report reproduces section 1 from the API without manual steps                                                                             |
 
 All packages land on one branch and one pull request against `dev`, one commit series per package,
 in this order, with the local gates of AGENTS.md section 3 and `npm run gates:sonar` run before
