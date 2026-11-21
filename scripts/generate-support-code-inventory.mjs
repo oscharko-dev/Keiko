@@ -186,14 +186,14 @@ function collectOwnedVocabulary(node, tokens, source) {
 }
 
 function sameFileConstant(expression) {
-  const declarations = expression
-    .getSourceFile()
-    .statements.flatMap((statement) =>
-      ts.isVariableStatement(statement) &&
-      (statement.declarationList.flags & ts.NodeFlags.Const) !== 0
-        ? [...statement.declarationList.declarations]
-        : [],
-    );
+  const sourceFile = expression.getSourceFile();
+  // The declaration keyword itself, not a bitwise test of the node flags (javascript:S1529).
+  const declarations = sourceFile.statements.flatMap((statement) =>
+    ts.isVariableStatement(statement) &&
+    statement.declarationList.getFirstToken(sourceFile)?.kind === ts.SyntaxKind.ConstKeyword
+      ? [...statement.declarationList.declarations]
+      : [],
+  );
   return declarations.find(
     (declaration) =>
       ts.isIdentifier(declaration.name) && declaration.name.text === expression.expression.text,
