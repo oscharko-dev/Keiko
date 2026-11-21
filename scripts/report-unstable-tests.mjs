@@ -9,7 +9,7 @@
 // the unit suites several times, each with a different shuffle seed, and compares every test's
 // verdicts; the `playwright` mode reads one JSON report of a `--repeat-each` run. Both print the
 // unstable tests and the consistently failing ones, append the table to the job summary in CI, and
-// exit 1 when either list is not empty, or 2 when no verdict could be read at all.
+// exit 1 when either list is not empty, or 2 when no verdict could be read or no test executed.
 
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -28,8 +28,9 @@ export function vitestVerdicts(report, root = ROOT) {
   const verdicts = new Map();
   for (const file of report.testResults ?? []) {
     const path = relative(root, file.name);
-    if ((file.assertionResults ?? []).length === 0) {
-      // A file that failed to load has no test results; its own status is its only verdict.
+    if (file.status === "failed" || (file.assertionResults ?? []).length === 0) {
+      // A file that failed to load has no test results; its own status is its only verdict. A
+      // file-level failure, such as a failed hook, is a verdict even when every test passed.
       verdicts.set(`${path} (file)`, file.status === "failed" ? "failed" : "passed");
     }
     for (const test of file.assertionResults ?? []) {
@@ -98,6 +99,15 @@ export function classify(samples, runCount) {
     }
   }
   return { unstable, failing };
+}
+
+/** How many tests reached a decided verdict at least once: skipped-only reports test nothing. */
+export function executedTestCount(samples) {
+  let executed = 0;
+  for (const statuses of samples.values()) {
+    if (statuses.some((status) => DECIDED.has(status) || status === "flaky")) executed += 1;
+  }
+  return executed;
 }
 
 const TABLE_SEPARATOR = String.raw`\|`;
@@ -203,6 +213,8 @@ function main(argv) {
   if (!(mode in measures)) throw new TypeError("mode must be vitest or playwright");
   const { label, samples, runCount } = measures[mode](rest);
   if (samples.size === 0) throw new Error("no test verdict was reported");
+  // A report in which every test was skipped proves nothing about stability.
+  if (executedTestCount(samples) === 0) throw new Error("no test executed: every verdict skipped");
   const result = classify(samples, runCount);
   const report = formatReport(label, samples.size, runCount, result);
   console.log(report);

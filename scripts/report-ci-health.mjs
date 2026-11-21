@@ -180,16 +180,69 @@ export async function api(
   return api(path, token, { fetch, attempts, pause, attempt: attempt + 1 });
 }
 
-async function fetchRuns(repo, token, since, page = 1, runs = []) {
+function isTimestamp(value) {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+
+function isConclusion(value) {
+  return value === null || typeof value === "string";
+}
+
+function isRun(run) {
+  return (
+    Number.isInteger(run?.id) &&
+    ["event", "status", "head_sha"].every((field) => typeof run[field] === "string") &&
+    isConclusion(run.conclusion) &&
+    isTimestamp(run.created_at) &&
+    isTimestamp(run.updated_at)
+  );
+}
+
+/**
+ * The runs of one page. A body without a `workflow_runs` list, or a record without the fields the
+ * health reads, is a measurement error: read as an empty or partial window it would publish a
+ * verdict over runs that were never seen. A valid empty list stays an empty window.
+ */
+export function runPage(body, page) {
+  if (!Array.isArray(body?.workflow_runs) || !body.workflow_runs.every(isRun)) {
+    throw new TypeError(
+      `GitHub answered page ${String(page)} of the runs without a valid run list`,
+    );
+  }
+  return body.workflow_runs;
+}
+
+/** The jobs of one failed run, with the same refusal of a malformed answer. */
+export function jobList(body, runId) {
+  const valid = (job) => typeof job?.name === "string" && isConclusion(job.conclusion);
+  if (!Array.isArray(body?.jobs) || !body.jobs.every(valid)) {
+    throw new TypeError(
+      `GitHub answered the jobs of run ${String(runId)} without a valid job list`,
+    );
+  }
+  return body.jobs;
+}
+
+/**
+ * Every pull-request run of ci.yml created since `since`. The next page exists only when this one
+ * was full, so pages are read one after another; a full last page at the page limit cannot prove
+ * the window complete and fails the measurement instead of silently dropping the older runs.
+ */
+export async function fetchRuns(repo, token, since, options = {}, page = 1, runs = []) {
   const body = await api(
     `/repos/${repo}/actions/workflows/ci.yml/runs?event=pull_request&created=%3E%3D${since}&per_page=${PAGE_SIZE}&page=${page}`,
     token,
+    options,
   );
-  const batch = Array.isArray(body.workflow_runs) ? body.workflow_runs : [];
+  const batch = runPage(body, page);
   runs.push(...batch);
-  // The next page exists only when this one was full, so pages are read one after another.
-  if (batch.length < PAGE_SIZE || page >= MAX_PAGES) return runs;
-  return fetchRuns(repo, token, since, page + 1, runs);
+  if (batch.length < PAGE_SIZE) return runs;
+  if (page >= MAX_PAGES) {
+    throw new RangeError(
+      `more than ${String(PAGE_SIZE * MAX_PAGES)} runs since ${since}: shorten --days to measure a complete window`,
+    );
+  }
+  return fetchRuns(repo, token, since, options, page + 1, runs);
 }
 
 /** The `--days <n>` window (default 7) as the ISO date it starts on. */
@@ -200,15 +253,15 @@ export function windowStart(argv, now = new Date()) {
   return new Date(now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
-async function failedRunJobs(repo, token, runs) {
+export async function failedRunJobs(repo, token, runs, options = {}) {
   const failedRuns = runs
     .filter((run) => run.event === "pull_request" && run.conclusion === "failure")
     .slice(0, FAILED_RUNS_INSPECTED);
   // At most FAILED_RUNS_INSPECTED independent reads, well inside the API's concurrency limits.
   return Promise.all(
     failedRuns.map(async (run) => {
-      const body = await api(`/repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`, token);
-      return Array.isArray(body.jobs) ? body.jobs : [];
+      const path = `/repos/${repo}/actions/runs/${run.id}/jobs?per_page=100`;
+      return jobList(await api(path, token, options), run.id);
     }),
   );
 }

@@ -1,7 +1,14 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { URL, fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
   classify,
+  executedTestCount,
   formatReport,
   mergeVerdicts,
   playwrightSamples,
@@ -40,6 +47,22 @@ describe("vitestVerdicts", () => {
     );
     expect(verdicts.get("broken.test.ts (file)")).toBe("failed");
     expect(verdicts.get("empty.test.ts (file)")).toBe("passed");
+  });
+
+  it("records a file-level failure even when the file's tests passed", () => {
+    // CodeRabbit on #4513: a failed hook fails the file while its tests report passed.
+    const verdicts = vitestVerdicts(
+      vitestReport([
+        { name: "hook.test.ts", status: "failed", tests: [["adds", "passed"]] },
+        { name: "fine.test.ts", tests: [["adds", "passed"]] },
+      ]),
+      ROOT,
+    );
+    expect(verdicts.get("hook.test.ts (file)")).toBe("failed");
+    expect(verdicts.get("hook.test.ts > adds")).toBe("passed");
+    expect(verdicts.has("fine.test.ts (file)")).toBe(false);
+    const { failing } = classify(mergeVerdicts([verdicts, verdicts]), 2);
+    expect(failing.map(({ id }) => id)).toEqual(["hook.test.ts (file)"]);
   });
 });
 
@@ -181,5 +204,54 @@ describe("formatReport", () => {
     expect(report).toContain("4 tests, 3 runs each.");
     expect(report).toContain("| a > b \\| c | passed, failed, passed |");
     expect(report).toContain("| Consistently failing test | Verdicts |\n| --- | --- |\n| none | |");
+  });
+});
+
+describe("executedTestCount", () => {
+  // CodeRabbit on #4513: a report in which every test was skipped is no stability evidence.
+  it("counts no executed test in skipped-only reports of both formats", () => {
+    const vitest = mergeVerdicts([
+      vitestVerdicts(vitestReport([{ name: "a.test.ts", tests: [["x", "skipped"]] }]), ROOT),
+    ]);
+    expect(executedTestCount(vitest)).toBe(0);
+    expect(executedTestCount(playwrightSamples(playwrightReport(["skipped", "skipped"])))).toBe(0);
+  });
+
+  it("keeps intentionally skipped tests valid beside executed ones", () => {
+    const samples = mergeVerdicts([
+      vitestVerdicts(
+        vitestReport([
+          {
+            name: "a.test.ts",
+            tests: [
+              ["x", "skipped"],
+              ["y", "passed"],
+            ],
+          },
+        ]),
+        ROOT,
+      ),
+    ]);
+    expect(executedTestCount(samples)).toBe(1);
+    expect(executedTestCount(playwrightSamples(playwrightReport(["skipped", "flaky"])))).toBe(1);
+  });
+
+  it("fails the measurement of a skipped-only report instead of passing it", () => {
+    const script = fileURLToPath(new URL("../report-unstable-tests.mjs", import.meta.url));
+    const directory = mkdtempSync(join(tmpdir(), "keiko-unstable-"));
+    try {
+      const run = (statuses) => {
+        const path = join(directory, "report.json");
+        writeFileSync(path, JSON.stringify(playwrightReport(statuses)));
+        const env = { ...process.env, GITHUB_STEP_SUMMARY: "" };
+        return spawnSync(process.execPath, [script, "playwright", path], { encoding: "utf8", env });
+      };
+      const skipped = run(["skipped", "skipped"]);
+      expect(skipped.status).toBe(2);
+      expect(skipped.stderr).toContain("no test executed");
+      expect(run(["expected", "expected"]).status).toBe(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

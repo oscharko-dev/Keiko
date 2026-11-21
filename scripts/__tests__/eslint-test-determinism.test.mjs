@@ -39,11 +39,23 @@ tester.run("no-unguarded-wall-clock-assertion", rules["no-unguarded-wall-clock-a
     'if (process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1") expect(Date.now() - t).toBeLessThan(5);',
     "ENFORCE_WALL_CLOCK_BUDGETS && expect(performance.now() - t).toBeLessThan(5);",
     'it.skipIf(process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS !== "1")("x", () => { expect(performance.now() - t).toBeLessThan(5); });',
+    'it.runIf(process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1")("x", () => { expect(performance.now() - t).toBeLessThan(5); });',
+    "if (!ENFORCE_WALL_CLOCK_BUDGETS) {} else { expect(Date.now() - t).toBeLessThan(5); }",
+    "!ENFORCE_WALL_CLOCK_BUDGETS || expect(Date.now() - t).toBeLessThan(5);",
+    "ENFORCE_WALL_CLOCK_BUDGETS ? expect(Date.now() - t).toBeLessThan(5) : null;",
     // Not an expect chain.
     "assert(Date.now() - t < 5);",
     "check(Date.now()).toBeLessThan(5);",
   ],
   invalid: [
+    // CodeRabbit on #4513: the guard's polarity and branch decide, not its mere presence.
+    ...[
+      "if (ENFORCE_WALL_CLOCK_BUDGETS) {} else { expect(Date.now() - t).toBeLessThan(5); }",
+      "ENFORCE_WALL_CLOCK_BUDGETS || expect(Date.now() - t).toBeLessThan(5);",
+      'if (process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS !== "1") expect(Date.now() - t).toBeLessThan(5);',
+      'it.skipIf(process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1")("x", () => { expect(performance.now() - t).toBeLessThan(5); });',
+      "ENFORCE_WALL_CLOCK_BUDGETS ? null : expect(Date.now() - t).toBeLessThan(5);",
+    ].map((code) => ({ code, errors: [{ messageId: "unguarded" }] })),
     {
       code: "expect(Date.now() - started).toBeLessThan(5000);",
       errors: [{ messageId: "unguarded" }],
@@ -98,6 +110,7 @@ tester.run("no-fixed-sleep", rules["no-fixed-sleep"], {
     // Polling a condition with a short pause between checks is awaiting the condition.
     'import { setTimeout as delay } from "node:timers/promises"; while (!ready()) await delay(20);',
     "for (let i = 0; i < 50 && !done; i += 1) await new Promise((resolve) => setTimeout(resolve, 10));",
+    'import { setTimeout as delay } from "node:timers/promises"; for (let i = 0; i < 50; i += 1) { if (await ready()) break; await delay(20); }',
     "await page.waitForSelector('#x');",
   ],
   invalid: [
@@ -127,6 +140,15 @@ tester.run("no-fixed-sleep", rules["no-fixed-sleep"], {
       errors: [{ messageId: "fixedSleep" }],
     },
     { code: "await page.waitForTimeout(500);", errors: [{ messageId: "fixedSleep" }] },
+    {
+      // CodeRabbit on #4513: a loop that only counts sleeps a fixed total time.
+      code: 'import { setTimeout as delay } from "node:timers/promises"; for (let i = 0; i < 10; i++) await delay(100);',
+      errors: [{ messageId: "fixedSleep" }],
+    },
+    {
+      code: "for (const step of steps) { step(); await new Promise((resolve) => setTimeout(resolve, 50)); }",
+      errors: [{ messageId: "fixedSleep" }],
+    },
   ],
 });
 

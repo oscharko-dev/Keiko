@@ -3647,8 +3647,10 @@ describe("coding-sidecar gateway", () => {
       for (const streamed of [false, true]) {
         const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
         const run = new AbortController();
+        let awaitingProvider = false;
         const abortable = (request: GatewayRequest): Promise<never> =>
           new Promise((_resolve, reject) => {
+            awaitingProvider = true;
             request.cancellationSignal?.addEventListener(
               "abort",
               () => {
@@ -3686,10 +3688,15 @@ describe("coding-sidecar gateway", () => {
         } as unknown as UiHandlerDeps;
 
         const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
-        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+        // Cancel only once the handler waits on the provider, not after a guessed pause.
+        await vi.waitFor(() => {
+          expect(awaitingProvider).toBe(true);
+        });
         if (cancellation === "response-close") context.res.emit("close");
         else run.abort();
         await pending;
+        // An absence cannot be awaited: give a late diagnostic a bounded window to appear.
+        // eslint-disable-next-line keiko-test-determinism/no-fixed-sleep -- asserts that nothing arrives
         await new Promise<void>((resolve) => setTimeout(resolve, 20));
         const failures = diagnostics.record.mock.calls
           .map(([record]) => record)

@@ -5,8 +5,12 @@ import {
   ceilingViolations,
   CEILINGS,
   computeHealth,
+  failedRunJobs,
+  fetchRuns,
   formatReport,
+  jobList,
   percentile,
+  runPage,
   topFailingJobs,
   windowStart,
 } from "../report-ci-health.mjs";
@@ -15,6 +19,7 @@ const T0 = "2026-11-20T10:00:00Z";
 
 function run(overrides) {
   return {
+    id: 1,
     event: "pull_request",
     status: "completed",
     conclusion: "success",
@@ -218,5 +223,63 @@ describe("api", () => {
       "GitHub API 403",
     );
     expect(refused.calls).toHaveLength(1);
+  });
+});
+
+// CodeRabbit on #4513: gate and evidence tooling fails closed. A malformed answer or a window the
+// page limit cut short is a measurement error, never an empty or complete window.
+describe("acquisition", () => {
+  const noPause = () => Promise.resolve();
+
+  function pages(...bodies) {
+    const urls = [];
+    const fetch = async (url) => {
+      urls.push(url);
+      const body = bodies[Math.min(urls.length, bodies.length) - 1];
+      return { ok: true, status: 200, json: async () => body };
+    };
+    return { urls, fetch };
+  }
+
+  const fullPage = { workflow_runs: Array.from({ length: 100 }, (_, id) => run({ id })) };
+
+  it("reads pages until a short one, and keeps a valid empty window", async () => {
+    const { urls, fetch } = pages(fullPage, { workflow_runs: [run({ id: 7 })] });
+    expect(await fetchRuns("o/r", "t", "2026-11-14", { fetch, pause: noPause })).toHaveLength(101);
+    expect(urls).toHaveLength(2);
+    const empty = pages({ workflow_runs: [] });
+    expect(await fetchRuns("o/r", "t", "2026-11-14", { fetch: empty.fetch })).toEqual([]);
+  });
+
+  it("refuses a window the page limit would cut short", async () => {
+    const { urls, fetch } = pages(fullPage);
+    await expect(fetchRuns("o/r", "t", "2026-11-14", { fetch })).rejects.toThrow(
+      "more than 1000 runs since 2026-11-14",
+    );
+    expect(urls).toHaveLength(10);
+  });
+
+  it.each([
+    ["no run list", {}],
+    ["a run list that is not a list", { workflow_runs: { id: 1 } }],
+    ["a run without its head", { workflow_runs: [run({ head_sha: undefined })] }],
+    ["a run with an unreadable time", { workflow_runs: [run({ updated_at: "later" })] }],
+  ])("refuses an answer with %s", async (_, body) => {
+    const { fetch } = pages(body);
+    await expect(fetchRuns("o/r", "t", "2026-11-14", { fetch })).rejects.toThrow(TypeError);
+    expect(() => runPage(body, 1)).toThrow("page 1");
+  });
+
+  it("refuses a failed run's malformed job list and reads a valid one", async () => {
+    const runs = [run({ id: 9, conclusion: "failure" })];
+    const valid = pages({ jobs: [{ name: "ci", conclusion: "failure" }] });
+    expect(await failedRunJobs("o/r", "t", runs, { fetch: valid.fetch })).toEqual([
+      [{ name: "ci", conclusion: "failure" }],
+    ]);
+    for (const body of [{}, { jobs: [{ conclusion: "failure" }] }]) {
+      const { fetch } = pages(body);
+      await expect(failedRunJobs("o/r", "t", runs, { fetch })).rejects.toThrow("run 9");
+    }
+    expect(jobList({ jobs: [] }, 9)).toEqual([]);
   });
 });

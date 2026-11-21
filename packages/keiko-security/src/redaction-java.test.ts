@@ -430,7 +430,9 @@ describe("the bounded Java parser worker", () => {
           },
           { timeout: 15_000, interval: 50 },
         );
-        // The worker's exit event reaches this thread just after its exit handler ran.
+        // The worker's exit event reaches this thread just after its exit handler ran, and nothing
+        // the test can observe marks its arrival before the next parse reads it.
+        // eslint-disable-next-line keiko-test-determinism/no-fixed-sleep -- the exit event is not observable
         await new Promise((resolve) => setTimeout(resolve, 300));
         expect(parseJavaBounded(valid)).toEqual({ kind: "unavailable" });
         reasons.push(events.at(-1)?.extra?.reason);

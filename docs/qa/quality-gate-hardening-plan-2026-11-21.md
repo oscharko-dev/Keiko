@@ -194,7 +194,7 @@ additional SonarCloud project, paid runner or required context is introduced.
   hash. `scripts/lib/vitest-duration-sequencer.mjs` places the longest files first, each on the
   shard with the least time so far, from `scripts/lib/vitest-file-durations.json`: the worker
   seconds per file of a green run's hosted-runner coverage blobs, refreshed with
-  `node scripts/generate-vitest-durations.mjs <blob-*.json>`. A stale or missing time only worsens
+  `node scripts/generate-vitest-durations.mjs [--root <checkout>] <blob-*.json>`, keyed relative to the checkout the blobs were measured in. A stale or missing time only worsens
   the balance; every shard derives the same assignment, so every file still runs exactly once
   (proven through Vitest's own API on both configurations: 3641 and 546 files, none twice, none
   left out). On the blobs of run 44932528367 the package shards carried 2258, 3718, 3901 and 2999

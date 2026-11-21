@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { commonRoot, durationsFromBlobs, fileSeconds } from "../generate-vitest-durations.mjs";
+import {
+  HOSTED_CHECKOUT,
+  durationsFromBlobs,
+  fileSeconds,
+  generationPlan,
+} from "../generate-vitest-durations.mjs";
 
 const ROOT = "/home/runner/work/Keiko/Keiko";
 
@@ -31,23 +36,22 @@ describe("fileSeconds", () => {
   });
 });
 
-describe("commonRoot", () => {
-  it("finds the checkout root the run measured from", () => {
-    expect(
-      commonRoot([
-        `${ROOT}/tests/a.test.ts`,
-        `${ROOT}/packages/keiko-server/src/b.test.ts`,
-        `${ROOT}/scripts/__tests__/c.test.mjs`,
-      ]),
-    ).toBe(ROOT);
+describe("generationPlan", () => {
+  it("defaults to the hosted checkout and accepts --root anywhere", () => {
+    expect(generationPlan(["a.json", "b.json"])).toEqual({
+      root: HOSTED_CHECKOUT,
+      paths: ["a.json", "b.json"],
+    });
+    expect(generationPlan(["a.json", "--root", "/w/k", "b.json"])).toEqual({
+      root: "/w/k",
+      paths: ["a.json", "b.json"],
+    });
   });
 
-  it("does not stop inside a directory name that only shares a prefix", () => {
-    expect(commonRoot(["/r/packages-a/x.test.ts", "/r/packages-b/y.test.ts"])).toBe("/r");
-  });
-
-  it("answers nothing for no paths", () => {
-    expect(commonRoot([])).toBe("");
+  it("refuses no blobs and a missing or relative root", () => {
+    expect(() => generationPlan([])).toThrow(TypeError);
+    expect(() => generationPlan(["a.json", "--root"])).toThrow(TypeError);
+    expect(() => generationPlan(["--root", "work", "a.json"])).toThrow(TypeError);
   });
 });
 
@@ -66,6 +70,28 @@ describe("durationsFromBlobs", () => {
       "scripts/__tests__/a.test.mjs",
       "tests/z.test.ts",
     ]);
+  });
+
+  it("keeps the repository path of a scripts-only blob", () => {
+    // CodeRabbit on #4513: the measured files' common prefix would be scripts/__tests__ here, and
+    // the keys `a.test.mjs`, which the sequencer never looks up.
+    const scripts = blob([
+      ["scripts/__tests__/a.test.mjs", 1000],
+      ["scripts/__tests__/b.test.mjs", 2000],
+    ]);
+    expect(Object.keys(durationsFromBlobs([scripts]))).toEqual([
+      "scripts/__tests__/a.test.mjs",
+      "scripts/__tests__/b.test.mjs",
+    ]);
+  });
+
+  it("measures from another checkout with --root, and refuses a file outside it", () => {
+    const moved = ["4.1.12", [file("/w/k/tests/a.test.ts", 1000)]];
+    expect(durationsFromBlobs([moved], "/w/k/")).toEqual({ "tests/a.test.ts": 1 });
+    expect(() => durationsFromBlobs([moved])).toThrow(TypeError);
+    expect(() => durationsFromBlobs([["4.1.12", [file("/w/kx/a.test.ts", 1000)]]], "/w/k")).toThrow(
+      TypeError,
+    );
   });
 
   it("answers nothing for a blob without files", () => {
