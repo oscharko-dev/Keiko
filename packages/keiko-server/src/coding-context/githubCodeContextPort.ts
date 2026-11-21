@@ -233,9 +233,9 @@ function parseBoundedJson(stdout: string): CatalogJsonValue {
     throw new GitHubCodeContextPortError("gh-output-truncated");
   }
   try {
-    // SAFETY: JSON.parse without a reviver returns only null, booleans, finite numbers, strings,
-    // arrays and plain objects of those values (ECMA-262 JSON.parse), which is exactly
-    // CatalogJsonValue.
+    // SAFETY: JSON.parse without a reviver returns only null, booleans, numbers (Infinity for
+    // "1e400"), strings, arrays and plain objects of those values (ECMA-262 JSON.parse), the
+    // members of the CatalogJsonValue type.
     return JSON.parse(stdout) as CatalogJsonValue;
   } catch (error) {
     throw new GitHubCodeContextPortError("gh-invalid-json", error);

@@ -390,6 +390,11 @@ async function assertCoreDenials(
     { ...context, runtimeMount: { ...context.runtimeMount, owner: "other" as never } },
     { ...context, runtimeMount: { ...context.runtimeMount, mode: "0755" as never } },
     { ...context, runtimeMount: { ...context.runtimeMount, symlink: true as never } },
+    // The boundary re-proves the exact value: a symlink flag that is not the boolean false refuses.
+    ...[undefined, null, 0].map((symlink) => ({
+      ...context,
+      runtimeMount: { ...context.runtimeMount, symlink: symlink as never },
+    })),
     { ...context, environment: { PATH: "/opt/keiko-runtime" } },
     { ...context, environment: { ...context.environment, NODE_OPTIONS: "x" } },
   ];

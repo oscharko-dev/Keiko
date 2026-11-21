@@ -337,9 +337,9 @@ async function proveAssuredIsolation(root: string, signal: AbortSignal): Promise
 
 function readJsonReport(root: string, relativePath: string): CatalogJsonValue | undefined {
   try {
-    // SAFETY: JSON.parse without a reviver returns only null, booleans, finite numbers, strings,
-    // arrays and plain objects of those values (ECMA-262 JSON.parse), which is exactly
-    // CatalogJsonValue.
+    // SAFETY: JSON.parse without a reviver returns only null, booleans, numbers (Infinity for
+    // "1e400"), strings, arrays and plain objects of those values (ECMA-262 JSON.parse), the
+    // members of the CatalogJsonValue type.
     return JSON.parse(readFileSync(join(root, relativePath), "utf8")) as CatalogJsonValue;
   } catch {
     return undefined;

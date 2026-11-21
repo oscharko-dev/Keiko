@@ -298,17 +298,17 @@ function validateEndpoint(context: DebugLaunchRuntimeContext): void {
   const lengths =
     Buffer.byteLength(context.hostSocketPath) <= 100 &&
     Buffer.byteLength(context.capsuleSocketPath) <= 100;
-  // The inspection type pins these facts to their one valid value; reading them through their wider
-  // runtime types lets this boundary re-prove those values instead of trusting the type.
+  // The inspection type pins these facts to their one valid value; reading them as unknown lets
+  // this boundary re-prove those exact values instead of trusting the type.
   const runtimeMount: {
-    readonly mode: string;
-    readonly owner: string;
-    readonly symlink: boolean;
+    readonly mode: unknown;
+    readonly owner: unknown;
+    readonly symlink: unknown;
   } = mount;
   const validMount =
     runtimeMount.mode === "0700" &&
     runtimeMount.owner === "currentUser" &&
-    !runtimeMount.symlink &&
+    runtimeMount.symlink === false &&
     isSha256Digest(mount.identityDigest);
   if (![hostContained, capsuleContained, safeNames, lengths, validMount].every(Boolean))
     throw new DebugCapsulePlanError();

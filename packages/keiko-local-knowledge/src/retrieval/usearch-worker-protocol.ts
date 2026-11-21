@@ -1,4 +1,3 @@
-import { MessagePort } from "node:worker_threads";
 import { isNonEmptyString, isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type { ProcessScopeWorkerData } from "@oscharko-dev/keiko-security/process-scope-worker";
 
@@ -72,12 +71,16 @@ const WORKER_DATA_BUFFERS = [
   "resultDistancesBuffer",
 ] as const;
 
+// This module may not import node:worker_threads (ADR-0019 trust-9), so the port is checked by
+// shape here; bindWorkerProcessScope checks it again before it uses it.
 function isProcessScopeData(value: unknown): value is ProcessScopeWorkerData {
   return (
     isRecord(value) &&
     value.version === 1 &&
     Number.isSafeInteger(value.pid) &&
-    value.port instanceof MessagePort
+    isRecord(value.port) &&
+    "postMessage" in value.port &&
+    "unref" in value.port
   );
 }
 

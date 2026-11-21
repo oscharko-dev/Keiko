@@ -376,8 +376,9 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 // The request's JSON object, `{}` for an empty body, or `undefined` for any other text or value.
 async function readObjectBody(req: IncomingMessage): Promise<CatalogJsonObject | undefined> {
   const body = await readBody(req);
-  // SAFETY: readBody resolves only to undefined or to a non-null, non-array value of JSON.parse
-  // without a reviver (ECMA-262 JSON.parse), which is a plain object of JSON values.
+  // SAFETY: readBody resolves only to undefined, to {} for an empty body, or to a non-null,
+  // non-array value of JSON.parse without a reviver (ECMA-262 JSON.parse): a plain object of JSON
+  // values, whose numbers may be Infinity, as the CatalogJsonValue number member admits.
   return body === undefined ? undefined : (body as CatalogJsonObject);
 }
 

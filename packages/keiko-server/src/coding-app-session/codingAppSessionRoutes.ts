@@ -258,9 +258,9 @@ export function readPairingBody(req: IncomingMessage): Promise<CatalogJsonValue 
         return;
       }
       try {
-        // SAFETY: JSON.parse without a reviver returns only null, booleans, finite numbers,
-        // strings, arrays and plain objects of those values (ECMA-262 JSON.parse), which is
-        // exactly CatalogJsonValue.
+        // SAFETY: JSON.parse without a reviver returns only null, booleans, numbers (Infinity for
+        // "1e400"), strings, arrays and plain objects of those values (ECMA-262 JSON.parse), the
+        // members of the CatalogJsonValue type.
         finish(JSON.parse(raw) as CatalogJsonValue);
       } catch {
         finish(undefined);

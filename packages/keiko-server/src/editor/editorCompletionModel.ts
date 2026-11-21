@@ -133,9 +133,9 @@ export function buildModelCompletionPrompt(input: GenerateModelCompletionsInput)
 
 // Throws SyntaxError for text that is not JSON.
 function parseJsonValue(text: string): CatalogJsonValue {
-  // SAFETY: JSON.parse without a reviver returns only null, booleans, finite numbers, strings,
-  // arrays and plain objects of those values (ECMA-262 JSON.parse), which is exactly
-  // CatalogJsonValue.
+  // SAFETY: JSON.parse without a reviver returns only null, booleans, numbers (Infinity for
+  // "1e400"), strings, arrays and plain objects of those values (ECMA-262 JSON.parse), the members
+  // of the CatalogJsonValue type.
   return JSON.parse(text) as CatalogJsonValue;
 }
 

@@ -214,9 +214,9 @@ function decodeBody(body: Buffer): string {
 
 function parseJson(body: string): CatalogJsonValue {
   try {
-    // SAFETY: JSON.parse without a reviver returns only null, booleans, finite numbers, strings,
-    // arrays and plain objects of those values (ECMA-262 JSON.parse), which is exactly
-    // CatalogJsonValue.
+    // SAFETY: JSON.parse without a reviver returns only null, booleans, numbers (Infinity for
+    // "1e400"), strings, arrays and plain objects of those values (ECMA-262 JSON.parse), the
+    // members of the CatalogJsonValue type.
     return JSON.parse(body) as CatalogJsonValue;
   } catch {
     throw new DapProtocolError("MALFORMED_MESSAGE");

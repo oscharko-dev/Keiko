@@ -105,7 +105,11 @@ describe("createLspJsonRpcClient", () => {
       source: io.source,
       sendFrame: (body) => sent.push(body),
     });
-    client.onRequest((method) => ({ method }));
+    const receivedParams: unknown[] = [];
+    client.onRequest((method, params) => {
+      receivedParams.push(params);
+      return { method };
+    });
 
     io.push({ jsonrpc: "2.0", id: 77, method: "workspace/configuration", params: { items: [] } });
     await tick();
@@ -115,6 +119,7 @@ describe("createLspJsonRpcClient", () => {
       id: 77,
       result: { method: "workspace/configuration" },
     });
+    expect(receivedParams).toEqual([{ items: [] }]);
     expect(client.pendingCount()).toBe(0);
   });
 

@@ -1,3 +1,4 @@
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import { createHash } from "node:crypto";
 import type {
   CodingWorkbenchRuntimeFailureCode,
@@ -45,7 +46,6 @@ import {
   EDIT_PREPARE_ERROR_KINDS,
   EDIT_READ_REASONS,
   type CodingToolMutationGuard,
-  type CodingToolProducerBinding,
   type EditPrepareCause,
   type MaterializedPatchCharge,
 } from "./codingToolFacadePorts.js";
@@ -2298,8 +2298,8 @@ function mutationBinding(
   mutationGuard: CodingToolMutationGuard,
 ): RuntimeProducerBinding | undefined | null {
   if (!("binding" in mutationGuard)) return undefined;
-  const { binding } = mutationGuard;
-  return binding !== undefined && wellFormedProducerBinding(binding) ? binding : null;
+  const binding: unknown = mutationGuard.binding;
+  return isRuntimeProducerBinding(binding) ? binding : null;
 }
 
 function safeMutationBinding(
@@ -2314,13 +2314,25 @@ function safeMutationBinding(
 
 const PRODUCER_BINDING_DIGEST = /^[a-f0-9]{64}$/u;
 
-// Non-empty identities, two SHA-256 hex digests and a parseable expiry.
-function wellFormedProducerBinding(binding: CodingToolProducerBinding): boolean {
+// Non-empty identities, two SHA-256 hex digests and a parseable expiry. The binding is checked as
+// unknown: a guard whose binding breaks its declared type (null, a wrong-typed field) is refused as
+// binding-unavailable instead of throwing.
+function isRuntimeProducerBinding(value: unknown): value is RuntimeProducerBinding {
   return (
-    binding.runId.length > 0 &&
-    PRODUCER_BINDING_DIGEST.test(binding.envelopeDigest) &&
-    binding.workspaceId.length > 0 &&
-    PRODUCER_BINDING_DIGEST.test(binding.workspaceRootDigest) &&
-    Number.isFinite(Date.parse(binding.expiresAt))
+    isRecord(value) &&
+    nonEmptyBindingText(value.runId) &&
+    bindingDigest(value.envelopeDigest) &&
+    nonEmptyBindingText(value.workspaceId) &&
+    bindingDigest(value.workspaceRootDigest) &&
+    typeof value.expiresAt === "string" &&
+    Number.isFinite(Date.parse(value.expiresAt))
   );
+}
+
+function nonEmptyBindingText(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function bindingDigest(value: unknown): value is string {
+  return typeof value === "string" && PRODUCER_BINDING_DIGEST.test(value);
 }
