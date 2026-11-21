@@ -1148,9 +1148,9 @@ jobs:
           --require-runner-memory-budget
           --runner-swap-mb "$(awk '/^SwapTotal:/ { print int($2 / 1024) }' /proc/meminfo)"
       - name: Verify SonarCloud Banking Grade dev evidence
-        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
         env:
-          SONAR_HEAD_SHA: ${{ steps.sonar-head.outputs.sha }}
+          SONAR_HEAD_SHA: ${{ steps.sonar-head.outputs.sha || github.sha }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: node scripts/check-sonar-main-quality-gate.mjs
 

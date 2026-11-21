@@ -123,6 +123,20 @@ describe("dev quality workflows", () => {
     );
     expect(ci).not.toContain("check-sonar-pr-quality-gate.mjs");
 
+    // The Banking Grade dev evidence is the compensating gate once PRs no longer run the full
+    // analysis: it verifies every dev push at the pushed SHA and a dispatch at the verified
+    // remote-dev SHA.
+    const devEvidence = steps.find(
+      (step) => step.name === "Verify SonarCloud Banking Grade dev evidence",
+    );
+    expect(devEvidence.if).toBe(
+      "${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}",
+    );
+    expect(devEvidence.env.SONAR_HEAD_SHA).toBe(
+      "${{ steps.sonar-head.outputs.sha || github.sha }}",
+    );
+    expect(devEvidence.run).toBe("node scripts/check-sonar-main-quality-gate.mjs");
+
     const rules = ciWorkflow.jobs["core-quality"].steps.find(
       (step) => step.name === "SonarJS rules on the changed files",
     );
@@ -305,7 +319,7 @@ describe("dev quality workflows", () => {
     );
     expect(ci).toContain("Verify manual analysis is bound to remote dev");
     expect(ci).toContain('expected="$(git rev-parse refs/remotes/origin/dev)"');
-    expect(ci).toContain("SONAR_HEAD_SHA: ${{ steps.sonar-head.outputs.sha }}");
+    expect(ci).toContain("SONAR_HEAD_SHA: ${{ steps.sonar-head.outputs.sha || github.sha }}");
     expect(ci).toContain("node scripts/check-sonar-main-quality-gate.mjs");
   });
 
@@ -492,7 +506,11 @@ describe("dev quality workflows", () => {
     expect(ci).toContain('--log "$RUNNER_TEMP/sonar-scanner.log"');
     expect(ci).toContain("--require-full-analysis");
     expect(ci).not.toContain("SONAR_SCANNER_STATUS:");
-    expect(ci).toContain("if: ${{ always() && github.event_name == 'workflow_dispatch' }}");
+    // Strengthened 2026-11-21: the dev evidence verifier runs on every dev push as well as on a
+    // dispatch, because pull requests no longer run the full analysis (ADR-0131 amendment).
+    expect(ci).toContain(
+      "if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}",
+    );
   });
 
   // A SonarCloud outage answered the report upload with "503 Service Temporarily Unavailable",

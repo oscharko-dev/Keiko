@@ -81,8 +81,10 @@ cross-repository context, and post-merge features remain disabled.
 
 ### SonarCloud and Socket
 
-SonarCloud remains required both through its native App context and the exact-head validator inside
-`ci`. Socket retains its two independently App-bound required contexts. Their current plan and
+SonarCloud is no longer required (ADR-0131 amendment 2026-11-21). Its full analysis and the
+exact-SHA validator `scripts/check-sonar-main-quality-gate.mjs` run on every push to `dev` and on a
+manual dispatch; pull requests are held by `check:sonar-rules` inside `ci` and the local pre-push
+scan. Socket retains its two independently App-bound required contexts. Their current plan and
 producer identities are checked during branch-protection audits; repository secrets, endpoints, and
 finding bodies never enter committed evidence.
 

@@ -98,8 +98,10 @@ additional SonarCloud project, paid runner or required context is introduced.
 - **Install preflight:** one job installs with the lockfile and runs the cheapest gates; the heavy
   jobs need it. A lockfile that cannot install then fails one job.
 - **npm cache in every job** that installs (restore-only, the existing key).
-- **`edited` events:** extend the ADR-0178 resolver so a pull-request run whose head commit already
-  has a successful run reuses that evidence instead of starting the matrix.
+- **`edited` events:** extend the ADR-0178 resolver so a pull-request run reuses earlier evidence
+  only when that run's candidate merge tree equals the current pull-request merge commit's tree, the
+  same binding ADR-0178 D1 uses for integration runs. A matching head commit alone never qualifies:
+  `dev` may have advanced since. Without a matching candidate tree the matrix runs.
 - **Lost runners (measured, not pursued):** the only runner-loss annotation in the measured window
   was "The job was not acquired by Runner of type hosted even after multiple attempts", on two
   zero-step macOS jobs. Both runs also carried genuine failures, so a new ADR-0161 signature would

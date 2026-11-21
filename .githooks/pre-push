@@ -6,20 +6,38 @@
 # self-hosted local SonarQube (docker/gates/run-sonar.sh, docs/qa/local-sonar.md). A finding on a
 # changed file, or a scan that cannot run, stops the push.
 #
+# The scan reads the working tree, so the hook first requires that the tree IS the pushed revision:
+# every pushed commit must be HEAD and the tree must hold no uncommitted or untracked change.
+# Otherwise an uncommitted repair could hide a finding in the commit that leaves the machine.
+#
 # Installed once per checkout with `node scripts/install-git-hooks.mjs`.
 set -euo pipefail
 
 zero_sha="0000000000000000000000000000000000000000"
+head_sha="$(git rev-parse HEAD)"
 pushes_commits=0
-while read -r _local_ref local_sha _remote_ref _remote_sha; do
-  if [[ "${local_sha}" != "${zero_sha}" ]]; then
-    pushes_commits=1
+while read -r local_ref local_sha _remote_ref _remote_sha; do
+  if [[ "${local_sha}" == "${zero_sha}" ]]; then
+    continue
+  fi
+  pushes_commits=1
+  if [[ "${local_sha}" != "${head_sha}" ]]; then
+    printf 'pre-push: FAIL - %s is not the checked-out HEAD; the scan reads the working tree.\n' \
+      "${local_ref}" >&2
+    printf '  Check out the branch you push, then push again.\n' >&2
+    exit 1
   fi
 done
 
 # A push that only deletes remote refs carries no code to analyze.
 if [[ "${pushes_commits}" -eq 0 ]]; then
   exit 0
+fi
+
+if [[ -n "$(git status --porcelain --untracked-files=normal)" ]]; then
+  printf 'pre-push: FAIL - the working tree differs from the pushed commit; the scan would read it.\n' >&2
+  printf '  Commit or stash the changes, then push again.\n' >&2
+  exit 1
 fi
 
 repo_root="$(git rev-parse --show-toplevel)"

@@ -36,7 +36,8 @@ successful:
 
 - core quality: typecheck, lint, formatting, architecture, contract, package, security, retrieval,
   evidence, and regression gates;
-- sharded package/UI/script coverage, followed by one Sonar verdict over the reassembled evidence;
+- sharded package/UI/script coverage, reassembled in one job that on `dev` also runs the full Sonar
+  analysis over the reassembled evidence (ADR-0131 amendment 2026-11-21);
 - the release build, shipped-dependency audit, SBOM, package-install, and runtime smoke lane;
 - Linux/macOS cross-platform smoke, plus the same full Windows proof unless the trusted
   base-revision classifier positively identifies every changed pull-request path as
@@ -58,7 +59,9 @@ stay on every pull request.
 
 ## Hosted supplemental checks
 
-SonarCloud and Socket remain independently required. CodeRabbit uses the assertive profile on every
+Socket remains independently required. SonarCloud is no longer a protected context: pull requests
+are held by the `SonarJS rules on the changed files` step inside `ci` and the local pre-push scan,
+and `dev` is analyzed in full after integration (ADR-0131 amendment 2026-11-21). CodeRabbit uses the assertive profile on every
 `dev` pull request and every subsequent push with auto-pause disabled. Its status is not required
 because PR #2876 proved quota can omit a review while reporting success. When CodeRabbit emits an
 inline finding, GitHub's conversation-resolution requirement blocks merge until the thread is
@@ -81,7 +84,7 @@ Actual performance merge authority stays with `npm run check:retrieval-latency`,
 `npm run check:perf-evidence`. The exact pull-request E2E checks are `npm run test:e2e:smoke`,
 `npm run test:e2e:smoke:firefox`, `npm run test:e2e:smoke:webkit`,
 `npm run test:e2e:editor-run-verification-2215`, `npm run test:e2e:editor-debugging-2348`, and
-`npm run test:e2e:editor-m11-closeout-2533`. The stable protected set contains ten App-bound checks
+`npm run test:e2e:editor-m11-closeout-2533`. The stable protected set contains nine App-bound checks
 and no hosted performance dashboard or quota-paced reviewer status.
 
 Hosted products are not described as open-source merely because their service is free for a public
@@ -91,7 +94,8 @@ tooling. No payment method or paid entitlement may be introduced to restore a re
 ## Sonar independence
 
 Since the ADR-0131 amendment of 2026-11-21 the full SonarCloud analysis runs on every push to
-`dev`, and `scripts/check-sonar-main-quality-gate.mjs` verifies it on a manual dispatch; pull
+`dev`, and `scripts/check-sonar-main-quality-gate.mjs` verifies it on that push and on a manual
+dispatch; pull
 requests are held by `check:sonar-rules` inside `ci` and the local pre-push scan.
 `scripts/check-sonar-pr-quality-gate.mjs` remains the validator for a pull-request analysis that is
 run by hand; it is no longer a CI step. The repository validator binds the exact current head, native gate status,

@@ -1,10 +1,19 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HOOKS_PATH, installGitHooks, runInstall } from "../install-git-hooks.mjs";
 
@@ -13,6 +22,19 @@ import { HOOKS_PATH, installGitHooks, runInstall } from "../install-git-hooks.mj
 // the machine, so its installer and its wiring are pinned here.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const hookPath = resolve(root, ".githooks/pre-push");
+
+// Every real Git process in this file runs without the developer's global and system config, so an
+// inherited `core.hooksPath` or signing rule cannot change what the tests observe.
+function isolateGitConfig(scratch) {
+  const global = join(scratch, "gitconfig-global");
+  writeFileSync(global, "");
+  vi.stubEnv("GIT_CONFIG_GLOBAL", global);
+  vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+}
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function fakeGit(responses) {
   const calls = [];
@@ -65,11 +87,13 @@ describe("install-git-hooks", () => {
     const lines = [];
     const sink = { write: (text) => lines.push(text) };
     try {
-      expect(spawnSync("git", ["init", "-q", scratch]).status).toBe(0);
-      expect(runInstall({ repoRoot: scratch, stdout: sink, stderr: sink })).toBe(0);
-      expect(runInstall({ repoRoot: scratch, stdout: sink, stderr: sink })).toBe(0);
+      isolateGitConfig(scratch);
+      const checkout = join(scratch, "checkout");
+      expect(spawnSync("git", ["init", "-q", checkout]).status).toBe(0);
+      expect(runInstall({ repoRoot: checkout, stdout: sink, stderr: sink })).toBe(0);
+      expect(runInstall({ repoRoot: checkout, stdout: sink, stderr: sink })).toBe(0);
       const configured = spawnSync("git", ["config", "--get", "core.hooksPath"], {
-        cwd: scratch,
+        cwd: checkout,
         encoding: "utf8",
       });
       expect(configured.stdout.trim()).toBe(HOOKS_PATH);
@@ -96,6 +120,67 @@ describe("install-git-hooks", () => {
   });
 });
 
+const ZERO_SHA = "0".repeat(40);
+
+function git(cwd, args) {
+  const result = spawnSync(
+    "git",
+    [
+      "-c",
+      "user.name=Hook Test",
+      "-c",
+      "user.email=hook@test.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      ...args,
+    ],
+    { cwd, encoding: "utf8" },
+  );
+  if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+// An isolated checkout carrying the real hook and a fake scanner that records each run and exits
+// with FAKE_SCAN_STATUS.
+function hookCheckout(scratch) {
+  isolateGitConfig(scratch);
+  const checkout = join(scratch, "checkout");
+  mkdirSync(join(checkout, ".githooks"), { recursive: true });
+  mkdirSync(join(checkout, "docker/gates"), { recursive: true });
+  git(scratch, ["init", "-q", checkout]);
+  copyFileSync(hookPath, join(checkout, ".githooks/pre-push"));
+  writeFileSync(
+    join(checkout, "docker/gates/run-sonar.sh"),
+    '#!/usr/bin/env bash\necho scanned >> "$FAKE_SCAN_MARKER"\nexit "${FAKE_SCAN_STATUS:-0}"\n',
+    { mode: 0o755 },
+  );
+  git(checkout, ["add", "."]);
+  git(checkout, ["commit", "-q", "-m", "fixture"]);
+  return { checkout, head: git(checkout, ["rev-parse", "HEAD"]), marker: join(scratch, "scans") };
+}
+
+function runHook({ checkout, marker }, input, scanStatus = "0") {
+  const result = spawnSync("bash", [join(checkout, ".githooks/pre-push"), "origin", "x"], {
+    cwd: checkout,
+    input,
+    encoding: "utf8",
+    env: { ...process.env, FAKE_SCAN_MARKER: marker, FAKE_SCAN_STATUS: scanStatus },
+  });
+  const scans = existsSync(marker)
+    ? readFileSync(marker, "utf8").split("\n").filter(Boolean).length
+    : 0;
+  return { status: result.status, stderr: result.stderr, scans };
+}
+
+function withHookCheckout(test) {
+  const scratch = mkdtempSync(join(tmpdir(), "keiko-pre-push-"));
+  try {
+    test(hookCheckout(scratch));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 describe(".githooks/pre-push", () => {
   it("is executable and runs the changed-file SonarJS scan", () => {
     expect(statSync(hookPath).mode & 0o111).not.toBe(0);
@@ -107,13 +192,44 @@ describe(".githooks/pre-push", () => {
   });
 
   it("lets a push that only deletes remote refs through without a scan", () => {
-    const zero = "0".repeat(40);
-    const result = spawnSync("bash", [hookPath, "origin", "git@example.invalid:repo.git"], {
-      cwd: root,
-      input: `(delete) ${zero} refs/heads/old-branch ${"a".repeat(40)}\n`,
-      encoding: "utf8",
+    withHookCheckout((fixture) => {
+      const result = runHook(fixture, `(delete) ${ZERO_SHA} refs/heads/old ${"a".repeat(40)}\n`);
+      expect(result).toMatchObject({ status: 0, scans: 0 });
     });
-    expect(result.status).toBe(0);
-    expect(result.stdout).not.toContain("SonarJS analysis");
+  });
+
+  it("permits a commit-bearing push when the scan passes", () => {
+    withHookCheckout((fixture) => {
+      const line = `refs/heads/feat ${fixture.head} refs/heads/feat ${ZERO_SHA}\n`;
+      expect(runHook(fixture, line, "0")).toMatchObject({ status: 0, scans: 1 });
+    });
+  });
+
+  it("rejects the push when the scan reports a finding or cannot run", () => {
+    withHookCheckout((fixture) => {
+      const line = `refs/heads/feat ${fixture.head} refs/heads/feat ${ZERO_SHA}\n`;
+      const result = runHook(fixture, line, "1");
+      expect(result).toMatchObject({ status: 1, scans: 1 });
+      expect(result.stderr).toContain("pre-push: FAIL - fix the findings above");
+    });
+  });
+
+  it("rejects a push whose working tree differs from the pushed commit, before scanning", () => {
+    withHookCheckout((fixture) => {
+      writeFileSync(join(fixture.checkout, "repair.ts"), "export const repaired = true;\n");
+      const line = `refs/heads/feat ${fixture.head} refs/heads/feat ${ZERO_SHA}\n`;
+      const result = runHook(fixture, line);
+      expect(result).toMatchObject({ status: 1, scans: 0 });
+      expect(result.stderr).toContain("working tree differs from the pushed commit");
+    });
+  });
+
+  it("rejects a push of a commit that is not the checked-out HEAD, before scanning", () => {
+    withHookCheckout((fixture) => {
+      const other = "b".repeat(40);
+      const result = runHook(fixture, `refs/heads/other ${other} refs/heads/other ${ZERO_SHA}\n`);
+      expect(result).toMatchObject({ status: 1, scans: 0 });
+      expect(result.stderr).toContain("refs/heads/other is not the checked-out HEAD");
+    });
   });
 });
