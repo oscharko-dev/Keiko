@@ -25,6 +25,7 @@ import type {
   GatewayHistoryVisitor,
 } from "./types.js";
 import { invalidRequest, notFound, UiStoreError } from "./errors.js";
+import { nullableTextColumn, numberColumn, textColumn, type UiStoreSqlRow } from "./sql-row.js";
 
 const MAX_SHORT_RESULT = 200;
 const MAX_TASK_TYPE = 64;
@@ -59,6 +60,37 @@ interface MessageRow {
   readonly client_turn_content_digest: string | null;
   readonly assistant_response_versions_json: string | null;
   readonly tool_transcript_json: string | null;
+}
+
+function readMessageRow(row: UiStoreSqlRow): MessageRow {
+  return {
+    id: textColumn(row, "id"),
+    chat_id: textColumn(row, "chat_id"),
+    role: textColumn(row, "role"),
+    content: textColumn(row, "content"),
+    timestamp: numberColumn(row, "timestamp"),
+    run_id: nullableTextColumn(row, "run_id"),
+    workflow_id: nullableTextColumn(row, "workflow_id"),
+    workflow_status: nullableTextColumn(row, "workflow_status"),
+    short_result: nullableTextColumn(row, "short_result"),
+    task_type: nullableTextColumn(row, "task_type"),
+    grounded_answer_json: nullableTextColumn(row, "grounded_answer_json"),
+    grounded_preview_citations_json: nullableTextColumn(row, "grounded_preview_citations_json"),
+    client_turn_id: nullableTextColumn(row, "client_turn_id"),
+    client_turn_state: nullableTextColumn(row, "client_turn_state"),
+    client_turn_content_digest: nullableTextColumn(row, "client_turn_content_digest"),
+    assistant_response_versions_json: nullableTextColumn(row, "assistant_response_versions_json"),
+    tool_transcript_json: nullableTextColumn(row, "tool_transcript_json"),
+  };
+}
+
+function optionalMessageRow(row: UiStoreSqlRow | undefined): MessageRow | undefined {
+  return row === undefined ? undefined : readMessageRow(row);
+}
+
+function requiredMessageRow(row: UiStoreSqlRow | undefined): MessageRow {
+  if (row === undefined) throw new UiStoreError("INTERNAL", "Stored message is unavailable.", 500);
+  return readMessageRow(row);
 }
 
 const MAX_ASSISTANT_RESPONSE_VERSIONS = 50;
@@ -288,9 +320,8 @@ export function validateMessage(msg: NewChatMessage): void {
 }
 
 export function isLatestChatMessage(db: DatabaseSync, chatId: string, messageId: string): boolean {
-  const row = db.prepare(SQL_LATEST_MESSAGE_ID).get(chatId) as unknown as
-    { readonly id: string } | undefined;
-  return row?.id === messageId;
+  const row = db.prepare(SQL_LATEST_MESSAGE_ID).get(chatId);
+  return row !== undefined && textColumn(row, "id") === messageId;
 }
 
 export interface ClientTurnOwner {
@@ -312,12 +343,13 @@ export function findClientTurnOwner(
         LIMIT 1
       `,
     )
-    .get(userMessageId) as unknown as MessageRow | undefined;
-  if (typeof row?.client_turn_id !== "string") return undefined;
+    .get(userMessageId);
+  const owner = optionalMessageRow(row);
+  if (owner?.client_turn_id == null) return undefined;
   return {
-    clientTurnId: row.client_turn_id,
-    state: parseClientTurnState(row.client_turn_state),
-    userMessage: rowToMessage(db, row),
+    clientTurnId: owner.client_turn_id,
+    state: parseClientTurnState(owner.client_turn_state),
+    userMessage: rowToMessage(db, owner),
   };
 }
 
@@ -378,9 +410,10 @@ function processGroundedPreviewCitations(
 }
 
 export function listMessages(db: DatabaseSync, chatId: string): readonly ChatMessage[] {
-  return (db.prepare(SQL_LIST).all(chatId) as unknown as MessageRow[]).map((row) =>
-    rowToMessage(db, row),
-  );
+  return db
+    .prepare(SQL_LIST)
+    .all(chatId)
+    .map((row) => rowToMessage(db, readMessageRow(row)));
 }
 
 export function listMessagesLimited(
@@ -391,9 +424,10 @@ export function listMessagesLimited(
   if (!Number.isInteger(limit) || limit <= 0) {
     throw invalidRequest("limit must be a positive integer.");
   }
-  return (db.prepare(SQL_LIST_LIMITED).all(chatId, limit) as unknown as MessageRow[]).map((row) =>
-    rowToMessage(db, row),
-  );
+  return db
+    .prepare(SQL_LIST_LIMITED)
+    .all(chatId, limit)
+    .map((row) => rowToMessage(db, readMessageRow(row)));
 }
 
 export function listMessagesPrefixLimited(
@@ -404,9 +438,10 @@ export function listMessagesPrefixLimited(
   if (!Number.isInteger(limit) || limit <= 0) {
     throw invalidRequest("limit must be a positive integer.");
   }
-  return (db.prepare(SQL_LIST_PREFIX_LIMITED).all(chatId, limit) as unknown as MessageRow[]).map(
-    (row) => rowToMessage(db, row),
-  );
+  return db
+    .prepare(SQL_LIST_PREFIX_LIMITED)
+    .all(chatId, limit)
+    .map((row) => rowToMessage(db, readMessageRow(row)));
 }
 
 export function countMessages(db: DatabaseSync, chatId: string): number {
@@ -415,7 +450,7 @@ export function countMessages(db: DatabaseSync, chatId: string): number {
 }
 
 export function findMessageById(db: DatabaseSync, id: string): ChatMessage | undefined {
-  const row = db.prepare(SQL_FIND_BY_ID).get(id) as unknown as MessageRow | undefined;
+  const row = optionalMessageRow(db.prepare(SQL_FIND_BY_ID).get(id));
   return row === undefined ? undefined : rowToMessage(db, row);
 }
 
@@ -439,9 +474,7 @@ export function findClientTurn(
   chatId: string,
   clientTurnId: string,
 ): ClientTurnRecord {
-  const rows = db
-    .prepare(SQL_FIND_BY_CLIENT_TURN)
-    .all(chatId, clientTurnId) as unknown as MessageRow[];
+  const rows = db.prepare(SQL_FIND_BY_CLIENT_TURN).all(chatId, clientTurnId).map(readMessageRow);
   const userRow = rows.find((row) => row.role === "user");
   const assistantRow = rows.find((row) => row.role === "assistant");
   return {
@@ -507,6 +540,14 @@ interface GatewayMessageRow extends MessageRow {
   readonly __rowid: number;
 }
 
+function readGatewayMessageRow(row: UiStoreSqlRow): GatewayMessageRow {
+  return { ...readMessageRow(row), __rowid: numberColumn(row, "__rowid") };
+}
+
+function optionalGatewayMessageRow(row: UiStoreSqlRow | undefined): GatewayMessageRow | undefined {
+  return row === undefined ? undefined : readGatewayMessageRow(row);
+}
+
 interface GatewayScanCursor {
   readonly timestamp: number;
   readonly rowid: number;
@@ -524,17 +565,13 @@ function listGatewayScanPage(
   if (cursor === undefined) {
     return db
       .prepare(SQL_LIST_GATEWAY_PAGE)
-      .all(chatId, GATEWAY_SCAN_PAGE_SIZE) as unknown as GatewayMessageRow[];
+      .all(chatId, GATEWAY_SCAN_PAGE_SIZE)
+      .map(readGatewayMessageRow);
   }
   return db
     .prepare(SQL_LIST_GATEWAY_PAGE_BEFORE)
-    .all(
-      chatId,
-      cursor.timestamp,
-      cursor.timestamp,
-      cursor.rowid,
-      GATEWAY_SCAN_PAGE_SIZE,
-    ) as unknown as GatewayMessageRow[];
+    .all(chatId, cursor.timestamp, cursor.timestamp, cursor.rowid, GATEWAY_SCAN_PAGE_SIZE)
+    .map(readGatewayMessageRow);
 }
 
 function canonicalGatewayUnit(
@@ -544,8 +581,9 @@ function canonicalGatewayUnit(
 ): readonly GatewayMessageRow[] {
   if (row.role !== "user") return [];
   if (row.client_turn_state !== "completed") return row.id === currentUserMessageId ? [row] : [];
-  const assistant = assistantStatement.get(row.chat_id, row.client_turn_id) as unknown as
-    GatewayMessageRow | undefined;
+  const assistant = optionalGatewayMessageRow(
+    assistantStatement.get(row.chat_id, row.client_turn_id),
+  );
   return assistant === undefined ? [] : [row, assistant];
 }
 
@@ -713,16 +751,17 @@ export function gatewaySearchAdmissionSql(): string {
 
 function legacySearchUnit(db: DatabaseSync, row: GatewayMessageRow): readonly GatewayMessageRow[] {
   const following = row.role === "user";
-  const neighbor = db
-    .prepare(
-      legacyNeighborQuery(
-        `${COLUMNS}, rowid AS __rowid`,
-        [":chatId", ":at", ":rowid"],
-        following ? "ASC" : "DESC",
-      ),
-    )
-    .get({ ":chatId": row.chat_id, ":at": row.timestamp, ":rowid": row.__rowid }) as unknown as
-    GatewayMessageRow | undefined;
+  const neighbor = optionalGatewayMessageRow(
+    db
+      .prepare(
+        legacyNeighborQuery(
+          `${COLUMNS}, rowid AS __rowid`,
+          [":chatId", ":at", ":rowid"],
+          following ? "ASC" : "DESC",
+        ),
+      )
+      .get({ ":chatId": row.chat_id, ":at": row.timestamp, ":rowid": row.__rowid }),
+  );
   if (following && neighbor?.role === "assistant") return [row, neighbor];
   return !following && neighbor?.role === "user" ? [neighbor, row] : [];
 }
@@ -733,12 +772,14 @@ function searchUnit(db: DatabaseSync, row: GatewayMessageRow): readonly GatewayM
   const user =
     row.role === "user"
       ? row
-      : (db
-          .prepare(
-            `SELECT ${COLUMNS}, rowid AS __rowid
+      : optionalGatewayMessageRow(
+          db
+            .prepare(
+              `SELECT ${COLUMNS}, rowid AS __rowid
     FROM chat_messages WHERE chat_id = ? AND client_turn_id = ? AND role = 'user' LIMIT 1`,
-          )
-          .get(row.chat_id, row.client_turn_id) as unknown as GatewayMessageRow | undefined);
+            )
+            .get(row.chat_id, row.client_turn_id),
+        );
   if (user === undefined) return [];
   const assistant = db.prepare(`SELECT ${COLUMNS}, rowid AS __rowid FROM chat_messages
     WHERE chat_id = ? AND client_turn_id = ? AND role = 'assistant' LIMIT 1`);
@@ -757,7 +798,7 @@ export function visitGatewaySearchCandidates(
   const seen = new Set<number>();
   let eligibleUnits = 0;
   for (const rowid of rowids) {
-    const row = find.get(chatId, rowid) as unknown as GatewayMessageRow | undefined;
+    const row = optionalGatewayMessageRow(find.get(chatId, rowid));
     const unit = row === undefined ? [] : searchUnit(db, row);
     const anchor = unit.at(0);
     if (anchor === undefined || seen.has(anchor.__rowid)) continue;
@@ -826,8 +867,8 @@ export function insertMessage(
       clientTurnId ?? null,
       clientTurnState ?? null,
       clientTurnContentDigest ?? null,
-    ) as unknown as MessageRow;
-  return rowToMessage(db, row);
+    );
+  return rowToMessage(db, requiredMessageRow(row));
 }
 
 export function attachGroundedAnswer(
@@ -848,16 +889,16 @@ export function attachGroundedAnswer(
         RETURNING ${COLUMNS}
       `,
     )
-    .get(groundedAnswer, groundedPreviewCitations, id) as unknown as MessageRow | undefined;
+    .get(groundedAnswer, groundedPreviewCitations, id);
   if (row === undefined) throw notFound("Message");
-  return rowToMessage(db, row);
+  return rowToMessage(db, readMessageRow(row));
 }
 
 export function findGroundedPreviewCitations(
   db: DatabaseSync,
   id: string,
 ): readonly StoredPdfCitationPreviewCitation[] | undefined {
-  const row = db.prepare(SQL_FIND_BY_ID).get(id) as unknown as MessageRow | undefined;
+  const row = optionalMessageRow(db.prepare(SQL_FIND_BY_ID).get(id));
   return row === undefined
     ? undefined
     : parseGroundedPreviewCitations(row.grounded_preview_citations_json);
@@ -939,9 +980,9 @@ export function updateMessage(
     WHERE id = ? AND role = 'system' AND run_id IS NOT NULL AND length(run_id) > 0
     RETURNING ${COLUMNS}
   `;
-  const row = db.prepare(sql).get(...args, id) as unknown as MessageRow | undefined;
+  const row = db.prepare(sql).get(...args, id);
   if (row === undefined) throw notFound("Message");
-  return rowToMessage(db, row);
+  return rowToMessage(db, readMessageRow(row));
 }
 
 function initialAssistantResponseVersion(row: MessageRow): ChatAssistantResponseVersion {
@@ -955,7 +996,7 @@ export function createAssistantResponseVersion(
   timestamp: number,
 ): ChatMessage {
   if (content.length === 0) throw invalidRequest("Content is required.");
-  const current = db.prepare(SQL_FIND_BY_ID).get(id) as unknown as MessageRow | undefined;
+  const current = optionalMessageRow(db.prepare(SQL_FIND_BY_ID).get(id));
   if (current?.role !== "assistant") throw notFound("Message");
   if (current.grounded_answer_json !== null) {
     throw invalidRequest("Grounded assistant responses cannot be regenerated.");
@@ -979,7 +1020,7 @@ export function createAssistantResponseVersion(
   const versions = [...existing, next];
   const updated = db
     .prepare(SQL_VERSION_ASSISTANT_CONTENT)
-    .get(content, timestamp, JSON.stringify(versions), id) as unknown as MessageRow | undefined;
+    .get(content, timestamp, JSON.stringify(versions), id);
   if (updated === undefined) throw notFound("Message");
-  return rowToMessage(db, updated);
+  return rowToMessage(db, readMessageRow(updated));
 }

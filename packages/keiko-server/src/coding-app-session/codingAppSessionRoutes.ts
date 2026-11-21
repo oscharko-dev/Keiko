@@ -6,6 +6,7 @@
 // read authority the channel enforces on top. Every read fails closed to the byte-identical
 // content-free projection — never a 401/403 that would reveal whether protected content exists.
 
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   activityLogEvent,
@@ -230,12 +231,12 @@ function channelOpened(
 }
 
 /** Read and JSON-parse a bounded request body, resolving `undefined` on any failure (fail closed). */
-export function readPairingBody(req: IncomingMessage): Promise<unknown> {
+export function readPairingBody(req: IncomingMessage): Promise<CatalogJsonValue | undefined> {
   return new Promise((resolve): void => {
     const chunks: Buffer[] = [];
     let total = 0;
     let settled = false;
-    const finish = (value: unknown): void => {
+    const finish = (value: CatalogJsonValue | undefined): void => {
       if (!settled) {
         settled = true;
         resolve(value);
@@ -257,7 +258,10 @@ export function readPairingBody(req: IncomingMessage): Promise<unknown> {
         return;
       }
       try {
-        finish(JSON.parse(raw));
+        // SAFETY: JSON.parse without a reviver returns only null, booleans, finite numbers,
+        // strings, arrays and plain objects of those values (ECMA-262 JSON.parse), which is
+        // exactly CatalogJsonValue.
+        finish(JSON.parse(raw) as CatalogJsonValue);
       } catch {
         finish(undefined);
       }

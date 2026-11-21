@@ -255,10 +255,9 @@ export function createLspRuntimeStatePort(
       }
     },
     save: (snapshot): void => {
-      if (
-        !safeStateLocation(options) ||
-        parseSnapshot(snapshot as unknown as UnknownRecord) === undefined
-      ) {
+      // The spread copy carries the snapshot's own fields as a plain record, so the same parser
+      // that guards reads re-checks a caller-built snapshot before it is written.
+      if (!safeStateLocation(options) || parseSnapshot({ ...snapshot }) === undefined) {
         throw new Error("managed LSP runtime state is invalid or unavailable");
       }
       save(path, recordForWrite(bound, snapshot));

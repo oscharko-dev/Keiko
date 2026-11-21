@@ -5,22 +5,15 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import type { WorkspaceTrustRecordRow, WorkspaceTrustRecordRowInput } from "./types.js";
+import { numberColumn, textColumn, type UiStoreSqlRow } from "./sql-row.js";
 
-interface WorkspaceTrustRow {
-  readonly root_ref: string;
-  readonly revision: number;
-  readonly trust: string;
-  readonly record_json: string;
-  readonly updated_at: number;
-}
-
-function rowToRecord(row: WorkspaceTrustRow): WorkspaceTrustRecordRow {
+function rowToRecord(row: UiStoreSqlRow): WorkspaceTrustRecordRow {
   return {
-    rootRef: row.root_ref,
-    revision: row.revision,
-    trust: row.trust,
-    recordJson: row.record_json,
-    updatedAt: row.updated_at,
+    rootRef: textColumn(row, "root_ref"),
+    revision: numberColumn(row, "revision"),
+    trust: textColumn(row, "trust"),
+    recordJson: textColumn(row, "record_json"),
+    updatedAt: numberColumn(row, "updated_at"),
   };
 }
 
@@ -58,7 +51,7 @@ export function readWorkspaceTrustRecord(
   db: DatabaseSync,
   rootRef: string,
 ): WorkspaceTrustRecordRow | undefined {
-  const row = db.prepare(SQL_GET).get(rootRef) as unknown as WorkspaceTrustRow | undefined;
+  const row = db.prepare(SQL_GET).get(rootRef);
   return row === undefined ? undefined : rowToRecord(row);
 }
 

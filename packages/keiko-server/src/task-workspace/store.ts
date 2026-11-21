@@ -24,6 +24,7 @@ import {
   FOLDER_WORKSPACE_BRANCH,
   validateWorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import { nullableTextColumn, textColumn, type UiStoreSqlRow } from "../store/sql-row.js";
 
 export interface WorkspaceInstanceStore {
   readonly getById: (workspaceId: string) => WorkspaceInstance | undefined;
@@ -61,6 +62,45 @@ interface InstanceRow {
   readonly drift_markers_json: string;
   readonly recovery_hints_json: string;
   readonly audit_correlation_id: string;
+}
+
+// The two execution locations the schema admits; the lookup returns the typed member.
+const EXECUTION_LOCATIONS: ReadonlyMap<string, InstanceRow["execution_location"]> = new Map([
+  ["local", "local"],
+  ["worktree", "worktree"],
+]);
+
+function storedExecutionLocation(row: UiStoreSqlRow): InstanceRow["execution_location"] {
+  const location = EXECUTION_LOCATIONS.get(textColumn(row, "execution_location"));
+  if (location === undefined) {
+    throw new Error("persisted task-workspace instance has an invalid execution location");
+  }
+  return location;
+}
+
+function readInstanceRow(row: UiStoreSqlRow): InstanceRow {
+  return {
+    workspace_id: textColumn(row, "workspace_id"),
+    schema_version: textColumn(row, "schema_version"),
+    task_id: textColumn(row, "task_id"),
+    repository_id: textColumn(row, "repository_id"),
+    repository_root: textColumn(row, "repository_root"),
+    base_branch: textColumn(row, "base_branch"),
+    task_branch: textColumn(row, "task_branch"),
+    execution_location: storedExecutionLocation(row),
+    managed_worktree_path: textColumn(row, "managed_worktree_path"),
+    gitdir_identity: textColumn(row, "gitdir_identity"),
+    lifecycle_state: textColumn(row, "lifecycle_state"),
+    health: textColumn(row, "health"),
+    lock_json: nullableTextColumn(row, "lock_json"),
+    created_at: textColumn(row, "created_at"),
+    updated_at: textColumn(row, "updated_at"),
+    last_verified_at: nullableTextColumn(row, "last_verified_at"),
+    last_verified_head: nullableTextColumn(row, "last_verified_head"),
+    drift_markers_json: textColumn(row, "drift_markers_json"),
+    recovery_hints_json: textColumn(row, "recovery_hints_json"),
+    audit_correlation_id: textColumn(row, "audit_correlation_id"),
+  };
 }
 
 const COLUMNS = `
@@ -104,6 +144,10 @@ RETURNING ${READ_COLUMNS}
 function parseJsonArray(json: string): readonly unknown[] {
   const parsed: unknown = JSON.parse(json);
   return Array.isArray(parsed) ? parsed : [];
+}
+
+function storedInstance(row: UiStoreSqlRow): WorkspaceInstance {
+  return rowToInstance(readInstanceRow(row));
 }
 
 function rowToInstance(row: InstanceRow): WorkspaceInstance {
@@ -170,23 +214,19 @@ function upsertParams(instance: WorkspaceInstance): readonly (string | null)[] {
 export function buildWorkspaceInstanceStoreOverDatabase(db: DatabaseSync): WorkspaceInstanceStore {
   return {
     getById: (workspaceId: string): WorkspaceInstance | undefined => {
-      const row = db.prepare(SQL_GET_BY_ID).get(workspaceId) as unknown as InstanceRow | undefined;
-      return row === undefined ? undefined : rowToInstance(row);
+      const row = db.prepare(SQL_GET_BY_ID).get(workspaceId);
+      return row === undefined ? undefined : storedInstance(row);
     },
     findByRepositoryAndTask: (
       repositoryId: string,
       taskId: string,
     ): WorkspaceInstance | undefined => {
-      const row = db.prepare(SQL_FIND_BY_REPO_TASK).get(repositoryId, taskId) as unknown as
-        InstanceRow | undefined;
-      return row === undefined ? undefined : rowToInstance(row);
+      const row = db.prepare(SQL_FIND_BY_REPO_TASK).get(repositoryId, taskId);
+      return row === undefined ? undefined : storedInstance(row);
     },
     listByRepository: (repositoryId: string): readonly WorkspaceInstance[] =>
-      (db.prepare(SQL_LIST_BY_REPO).all(repositoryId) as unknown as InstanceRow[]).map(
-        rowToInstance,
-      ),
-    listAll: (): readonly WorkspaceInstance[] =>
-      (db.prepare(SQL_LIST_ALL).all() as unknown as InstanceRow[]).map(rowToInstance),
+      db.prepare(SQL_LIST_BY_REPO).all(repositoryId).map(storedInstance),
+    listAll: (): readonly WorkspaceInstance[] => db.prepare(SQL_LIST_ALL).all().map(storedInstance),
     upsert: (instance: WorkspaceInstance): WorkspaceInstance => {
       const validation = validateWorkspaceInstance(instance);
       if (!validation.ok) {
@@ -194,8 +234,9 @@ export function buildWorkspaceInstanceStoreOverDatabase(db: DatabaseSync): Works
           `refusing to persist invalid workspace instance: ${validation.reasons.join("; ")}`,
         );
       }
-      const row = db.prepare(SQL_UPSERT).get(...upsertParams(instance)) as unknown as InstanceRow;
-      return rowToInstance(row);
+      const row = db.prepare(SQL_UPSERT).get(...upsertParams(instance));
+      if (row === undefined) throw new Error("task-workspace instance upsert returned no row");
+      return storedInstance(row);
     },
     delete: (workspaceId: string): void => {
       db.prepare(SQL_DELETE).run(workspaceId);

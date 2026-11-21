@@ -5,6 +5,7 @@ import type {
   GatewayHistoryVisitor,
 } from "./types.js";
 import { gatewaySearchAdmissionSql, visitGatewaySearchCandidates } from "./messages.js";
+import { numberColumn } from "./sql-row.js";
 
 const CANDIDATES_PER_INDEX = 64;
 const MATCH_KINDS: ReadonlySet<string> = new Set(["word-prefix", "identifier"]);
@@ -46,7 +47,11 @@ function hits(
       AND ${gatewaySearchAdmissionSql()}
     ORDER BY ${name}.rank, m.timestamp DESC, m.rowid DESC LIMIT ?`,
     )
-    .all(query, chatId, CANDIDATES_PER_INDEX + 1) as unknown as SearchHit[];
+    .all(query, chatId, CANDIDATES_PER_INDEX + 1)
+    .map((row) => ({
+      rowid: numberColumn(row, "rowid"),
+      timestamp: numberColumn(row, "timestamp"),
+    }));
 }
 
 function mergeHits(groups: readonly (readonly SearchHit[])[]): readonly number[] {

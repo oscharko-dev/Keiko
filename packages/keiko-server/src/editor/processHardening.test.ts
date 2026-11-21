@@ -253,9 +253,8 @@ function tracker(throwSignals: readonly NodeJS.Signals[] = []): KillTracker {
 }
 
 const immediate: KillScheduler = {
-  setTimer: (callback, _delayMs): unknown => {
+  setTimer: (callback, _delayMs): void => {
     callback();
-    return 1;
   },
 };
 
@@ -270,12 +269,12 @@ describe("editor process TERM-to-KILL escalation", () => {
     vi.resetModules();
     const { productionKillScheduler } = await import("./processHardening.js");
 
-    const handle = productionKillScheduler.setTimer(callback, 321) as NodeJS.Timeout;
+    productionKillScheduler.setTimer(callback, 321);
 
     expect(Object.isFrozen(productionKillScheduler)).toBe(true);
     expect(scheduled).toHaveBeenCalledWith(callback, 321);
     expect(unref).toHaveBeenCalledTimes(1);
-    clearTimeout(handle);
+    clearTimeout(scheduled.mock.results[0]?.value as NodeJS.Timeout | undefined);
     scheduled.mockRestore();
     unref.mockRestore();
   });
@@ -305,10 +304,9 @@ describe("editor process TERM-to-KILL escalation", () => {
 
   it("sends KILL at the exact scheduler deadline while the process remains alive", async () => {
     const child = tracker();
-    const scheduler = vi.fn((callback: () => void, delayMs: number): unknown => {
+    const scheduler = vi.fn((callback: () => void, delayMs: number): void => {
       expect(delayMs).toBe(123);
       callback();
-      return 1;
     });
     await escalateKill(child, 123, () => false, { setTimer: scheduler });
     expect(scheduler).toHaveBeenCalledTimes(1);
@@ -319,10 +317,9 @@ describe("editor process TERM-to-KILL escalation", () => {
     const child = tracker();
     let exited = false;
     const scheduler: KillScheduler = {
-      setTimer: (callback): unknown => {
+      setTimer: (callback): void => {
         exited = true;
         callback();
-        return 1;
       },
     };
     await escalateKill(child, 1, () => exited, scheduler);
@@ -338,9 +335,8 @@ describe("editor process TERM-to-KILL escalation", () => {
       10,
       () => false,
       {
-        setTimer: (callback): unknown => {
+        setTimer: (callback): void => {
           timer = callback;
-          return 1;
         },
       },
       (callback) => {

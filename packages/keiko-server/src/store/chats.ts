@@ -41,6 +41,13 @@ import {
   assertJiraPodInvalidation,
 } from "./chatJiraBinding.js";
 import { withImmediateTransaction } from "./transaction.js";
+import {
+  nullableNumberColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+  type UiStoreSqlRow,
+} from "./sql-row.js";
 
 // Issue #3400 (epic #3384) — a chat rarely connects more than one Git comparison at a time; this
 // cap is deliberately far below the combined-source cap (`combinedSourceCap`, which does not
@@ -89,6 +96,26 @@ interface ChatRow {
   readonly created_at: number;
   readonly updated_at: number;
 }
+
+function readChatRow(row: UiStoreSqlRow): ChatRow {
+  return {
+    id: textColumn(row, "id"),
+    project_path: textColumn(row, "project_path"),
+    title: textColumn(row, "title"),
+    selected_model: textColumn(row, "selected_model"),
+    branch_label: nullableTextColumn(row, "branch_label"),
+    status: nullableTextColumn(row, "status"),
+    connected_scope_paths: nullableTextColumn(row, "connected_scope_paths"),
+    connected_scope_at: nullableNumberColumn(row, "connected_scope_at"),
+    local_knowledge_scope_json: nullableTextColumn(row, "local_knowledge_scope_json"),
+    git_change_scope_json: nullableTextColumn(row, "git_change_scope_json"),
+    jira_state_json: nullableTextColumn(row, "jira_state_json"),
+    created_at: numberColumn(row, "created_at"),
+    updated_at: numberColumn(row, "updated_at"),
+  };
+}
+
+const readChat = (row: UiStoreSqlRow): Chat => rowToChat(readChatRow(row));
 
 interface DecodedScopePayload {
   readonly kind: SelectedScopeKind;
@@ -635,7 +662,7 @@ function validateSelectedModel(value: string): void {
 }
 
 export function listChats(db: DatabaseSync, projectPath: string): readonly Chat[] {
-  return (db.prepare(SQL_LIST).all(projectPath) as unknown as ChatRow[]).map(rowToChat);
+  return db.prepare(SQL_LIST).all(projectPath).map(readChat);
 }
 
 export function listChatsLimited(
@@ -646,14 +673,12 @@ export function listChatsLimited(
   if (!Number.isInteger(limit) || limit <= 0) {
     throw invalidRequest("limit must be a positive integer.");
   }
-  return (db.prepare(SQL_LIST_LIMITED).all(projectPath, limit) as unknown as ChatRow[]).map(
-    rowToChat,
-  );
+  return db.prepare(SQL_LIST_LIMITED).all(projectPath, limit).map(readChat);
 }
 
 export function findChatById(db: DatabaseSync, id: string): Chat | undefined {
-  const row = db.prepare(SQL_FIND_BY_ID).get(id) as unknown as ChatRow | undefined;
-  return row === undefined ? undefined : rowToChat(row);
+  const row = db.prepare(SQL_FIND_BY_ID).get(id);
+  return row === undefined ? undefined : readChat(row);
 }
 
 export function insertChat(
@@ -674,16 +699,9 @@ export function insertChat(
   const branch = args.opts?.branchLabel ?? null;
   const row = db
     .prepare(SQL_INSERT)
-    .get(
-      args.id,
-      args.projectPath,
-      args.title,
-      args.selectedModel,
-      branch,
-      args.now,
-      args.now,
-    ) as unknown as ChatRow;
-  return rowToChat(row);
+    .get(args.id, args.projectPath, args.title, args.selectedModel, branch, args.now, args.now);
+  if (row === undefined) throw new UiStoreError("INTERNAL", "Stored chat is unavailable.", 500);
+  return readChat(row);
 }
 
 const VALID_CHAT_STATUSES: ReadonlySet<string> = new Set(["open", "closed"]);
@@ -1206,9 +1224,9 @@ function updateChatRow(
       Number(jira !== undefined),
       jira === undefined ? null : JSON.stringify(jira),
       existing.id,
-    ) as unknown as ChatRow | undefined;
+    );
   if (row === undefined) throw notFound("Chat");
-  return rowToChat(row);
+  return readChat(row);
 }
 
 export function deleteChat(db: DatabaseSync, id: string): void {
@@ -1234,7 +1252,8 @@ export function invalidateJiraPod(
       .prepare(
         `SELECT ${SELECT_COLUMNS} FROM chats WHERE CASE WHEN json_valid(jira_state_json) THEN json_extract(jira_state_json, '$.binding.podId') END = ?`,
       )
-      .all(podId) as unknown as ChatRow[];
+      .all(podId)
+      .map(readChatRow);
     const changed: { previous: Chat; current: Chat }[] = [];
     for (const row of rows) {
       const previous = rowToChat(row);

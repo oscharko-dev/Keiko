@@ -45,8 +45,9 @@ const MCP_FAILURES: Readonly<
   "deadline-exceeded": ["timeout", "deadline-exceeded"],
   aborted: ["cancelled", "parent-cancelled"],
 };
-function catalogFailure(error: unknown): unknown {
-  if (!(error instanceof ManagedMcpError)) return error;
+// A managed MCP failure becomes the catalog fault its reason maps to; callers rethrow any other
+// thrown value unchanged.
+function catalogFailure(error: ManagedMcpError): CatalogDispatchFault {
   if (error.reason === "tool-error" && error.structuredResult !== undefined)
     return new CatalogDispatchFault(
       "failed",
@@ -107,7 +108,7 @@ function bindManagedTool<Consumer extends CatalogConsumer>(
         host.catalog(); // Refuse drift before a new offer as well as before dispatch.
         return "ready";
       } catch (error) {
-        throw catalogFailure(error);
+        throw error instanceof ManagedMcpError ? catalogFailure(error) : error;
       }
     },
     previewAction: route.previewAction,
@@ -119,7 +120,7 @@ function bindManagedTool<Consumer extends CatalogConsumer>(
       try {
         return route.resultFor(await host.call(name, objectArguments(args), context), context);
       } catch (error) {
-        throw catalogFailure(error);
+        throw error instanceof ManagedMcpError ? catalogFailure(error) : error;
       }
     },
   });

@@ -118,6 +118,26 @@ describe("createFigmaConnector — scoped fetch", () => {
     const result = await connector.fetchScopedNodes(URL_OK);
     expect(result.readiness).toEqual({ source: "none", ready: false });
   });
+
+  it("reads a node without a string name as unnamed instead of failing the readiness check", async () => {
+    const document = {
+      id: "12:34",
+      name: "Board",
+      type: "FRAME",
+      children: [
+        { id: "1", type: "FRAME" },
+        { id: "2", name: 7, type: "FRAME", devStatus: { type: "READY_FOR_DEV" } },
+      ],
+    };
+    const connector = createFigmaConnector({
+      http: recordingPort(okResponse(document)).port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+
+    const result = await connector.fetchScopedNodes(URL_OK);
+    expect(result.readiness).toEqual({ source: "devStatus", ready: true, readyNodeCount: 1 });
+    expect(result.nodes).toBe(document);
+  });
 });
 
 describe("createFigmaConnector — token contract", () => {

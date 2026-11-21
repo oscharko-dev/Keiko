@@ -158,11 +158,11 @@ export function resolveOverlayPath(
 // disconnects.
 export function clientAbortSignal(ctx: RouteContext): AbortSignal {
   const controller = new AbortController();
-  // Some route-unit doubles intentionally provide only the EventEmitter subset. Production
-  // IncomingMessage always supplies this boolean; `undefined` means the double cannot prove an
+  // Some route-unit doubles intentionally provide only the EventEmitter subset, so this read can be
+  // `undefined` at runtime although IncomingMessage types it as a boolean. Production
+  // IncomingMessage always supplies the boolean; `undefined` means the double cannot prove an
   // already-aborted request and therefore must not manufacture cancellation.
-  const requestComplete = (): boolean | undefined =>
-    (ctx.req as unknown as { readonly complete?: boolean }).complete;
+  const requestComplete = (): boolean | undefined => ctx.req.complete;
   const abort = (): void => {
     if (!controller.signal.aborted) controller.abort();
   };
@@ -228,7 +228,15 @@ function evictManagedLspProcessesForRoot(realRoot: string): Promise<void> {
   ).then((): void => undefined);
 }
 
-function successBody(outcome: Exclude<LanguageServiceOutcome, { kind: "error" }>): unknown {
+type LanguageSuccessOutcome = Exclude<LanguageServiceOutcome, { kind: "error" }>;
+
+// The 200 envelope of every language operation: the operation name and its result.
+interface LanguageSuccessBody {
+  readonly operation: LanguageSuccessOutcome["kind"];
+  readonly result: LanguageSuccessOutcome["result"];
+}
+
+function successBody(outcome: LanguageSuccessOutcome): LanguageSuccessBody {
   return { operation: outcome.kind, result: outcome.result };
 }
 
@@ -237,10 +245,21 @@ function redactStringLeaf(value: string, deps: UiHandlerDeps): string {
   return typeof redacted === "string" ? redacted : "[REDACTED]";
 }
 
+type CodeActionsOutcome = Extract<LanguageServiceOutcome, { kind: "codeActions" }>;
+type CodeAction = CodeActionsOutcome["result"]["actions"][number];
+
+// Redaction can replace a code action's kind with a marker, so the redacted body types it as text.
+interface RedactedCodeActionsBody {
+  readonly operation: CodeActionsOutcome["kind"];
+  readonly result: Omit<CodeActionsOutcome["result"], "actions"> & {
+    readonly actions: readonly (Omit<CodeAction, "kind"> & { readonly kind: string })[];
+  };
+}
+
 function redactedCodeActionsBody(
-  outcome: Extract<LanguageServiceOutcome, { kind: "codeActions" }>,
+  outcome: CodeActionsOutcome,
   deps: UiHandlerDeps,
-): unknown {
+): RedactedCodeActionsBody {
   return {
     operation: outcome.kind,
     result: {

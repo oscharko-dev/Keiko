@@ -1,10 +1,22 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { JiraMutationOutcome } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_MUTATION_OPERATIONS,
+  JIRA_MUTATION_OUTCOMES,
+  type JiraMutationOperation,
+  type JiraMutationOutcome,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ServerLogSink } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { UiStoreError } from "./errors.js";
 import { withImmediateTransaction } from "./transaction.js";
+import {
+  nullableNumberColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+  type UiStoreSqlRow,
+} from "./sql-row.js";
 import {
   acknowledgedStatus,
   journalConflict,
@@ -16,6 +28,7 @@ import { recordChatToolMutation } from "./chatToolMutationActivity.js";
 import type {
   ChatToolMutationIntent,
   ChatToolMutationLinkCounts,
+  CodingToolMutationConsumer,
   ChatToolMutationRecord,
   ChatToolMutationPreparation,
   ChatToolMutationLocalRefusal,
@@ -68,46 +81,110 @@ function timestamp(now: () => number, previous = 0): number {
   if (!Number.isSafeInteger(value) || value < 0) throw journalConflict();
   return Math.max(value, previous);
 }
-function rowRecord(value: unknown): ChatToolMutationRecord | undefined {
-  if (value === undefined) return undefined;
-  const {
-    consumerKind,
-    codingRunId,
-    nativeSessionId,
-    nativeMessageId,
-    nativeCallId,
-    nativeArgumentsDigest,
-    nativeMcpActionDigest,
-    batchDigest,
-    ...fields
-  } = value as Record<string, unknown>;
-  const row = {
-    ...fields,
+type MutationPhase = ChatToolMutationRecord["phase"];
+type ProtocolOutcome = "success" | "error";
+function closedVocabulary<T extends string>(members: readonly T[]): ReadonlyMap<string, T> {
+  return new Map(members.map((member): [string, T] => [member, member]));
+}
+// The vocabularies the journal writer admits; a stored value outside them fails closed.
+const PHASES = closedVocabulary<MutationPhase>([
+  "prepared",
+  "dispatched",
+  "acknowledged",
+  "settled",
+]);
+const OUTCOMES = closedVocabulary<JiraMutationOutcome>(JIRA_MUTATION_OUTCOMES);
+const JIRA_OPERATIONS = closedVocabulary<JiraMutationOperation>(JIRA_MUTATION_OPERATIONS);
+const PROTOCOL_OUTCOMES = closedVocabulary<ProtocolOutcome>(["success", "error"]);
+function storedMember<T extends string>(vocabulary: ReadonlyMap<string, T>, value: string): T {
+  const member = vocabulary.get(value);
+  if (member === undefined) throw new UiStoreError("INTERNAL", "Stored mutation is invalid.", 500);
+  return member;
+}
+function nullableMember<T extends string>(
+  vocabulary: ReadonlyMap<string, T>,
+  row: UiStoreSqlRow,
+  column: string,
+): T | null {
+  const value = nullableTextColumn(row, column);
+  return value === null ? null : storedMember(vocabulary, value);
+}
+function storedConsumer(row: UiStoreSqlRow): CodingToolMutationConsumer | undefined {
+  if (textColumn(row, "consumerKind") !== "coding") return undefined;
+  const mcpActionDigest = nullableTextColumn(row, "nativeMcpActionDigest");
+  return {
+    kind: "coding",
+    runId: textColumn(row, "codingRunId"),
+    sessionId: textColumn(row, "nativeSessionId"),
+    messageId: textColumn(row, "nativeMessageId"),
+    callId: textColumn(row, "nativeCallId"),
+    argumentsDigest: textColumn(row, "nativeArgumentsDigest"),
+    ...(mcpActionDigest === null ? {} : { mcpActionDigest }),
+  };
+}
+// The identity and observation columns every journal row shares, whatever its source.
+interface StoredMutationCommon {
+  readonly invocationId: string;
+  readonly chatId: string;
+  readonly userMessageId: string | null;
+  readonly turnRef: string;
+  readonly actorId: string;
+  readonly authorityDigest: string;
+  readonly actionDigest: string;
+  readonly correlationId: string;
+  readonly phase: MutationPhase;
+  readonly outcome: JiraMutationOutcome | null;
+  readonly httpStatus: number | null;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly batchDigest?: string;
+  readonly consumer?: CodingToolMutationConsumer;
+}
+function storedMutationCommon(row: UiStoreSqlRow): StoredMutationCommon {
+  const batchDigest = nullableTextColumn(row, "batchDigest");
+  const consumer = storedConsumer(row);
+  return {
+    invocationId: textColumn(row, "invocationId"),
+    chatId: textColumn(row, "chatId"),
+    userMessageId: nullableTextColumn(row, "userMessageId"),
+    turnRef: textColumn(row, "turnRef"),
+    actorId: textColumn(row, "actorId"),
+    authorityDigest: textColumn(row, "authorityDigest"),
+    actionDigest: textColumn(row, "actionDigest"),
+    correlationId: textColumn(row, "correlationId"),
+    phase: storedMember(PHASES, textColumn(row, "phase")),
+    outcome: nullableMember(OUTCOMES, row, "outcome"),
+    httpStatus: nullableNumberColumn(row, "httpStatus"),
+    createdAt: numberColumn(row, "createdAt"),
+    updatedAt: numberColumn(row, "updatedAt"),
     ...(batchDigest === null ? {} : { batchDigest }),
-    ...(consumerKind === "coding"
-      ? {
-          consumer: {
-            kind: "coding",
-            runId: codingRunId,
-            sessionId: nativeSessionId,
-            messageId: nativeMessageId,
-            callId: nativeCallId,
-            argumentsDigest: nativeArgumentsDigest,
-            ...(nativeMcpActionDigest === null ? {} : { mcpActionDigest: nativeMcpActionDigest }),
-          },
-        }
-      : {}),
-  } as unknown as ChatToolMutationRecord;
-  if (row.sourceKind === "configured-mcp") return Object.freeze(row);
-  const {
-    sourceKind: _source,
-    configurationDigest: _configuration,
-    serverName: _server,
-    toolName: _tool,
-    protocolOutcome: _protocol,
-    ...legacy
-  } = row as unknown as Record<string, unknown>;
-  return Object.freeze(legacy as unknown as ChatToolMutationRecord);
+    ...(consumer === undefined ? {} : { consumer }),
+  };
+}
+function rowRecord(row: UiStoreSqlRow | undefined): ChatToolMutationRecord | undefined {
+  if (row === undefined) return undefined;
+  const common = storedMutationCommon(row);
+  if (textColumn(row, "sourceKind") === "configured-mcp") {
+    return Object.freeze({
+      ...common,
+      sourceKind: "configured-mcp",
+      podId: null,
+      bindingGeneration: null,
+      credentialGeneration: null,
+      operation: textColumn(row, "operation"),
+      configurationDigest: textColumn(row, "configurationDigest"),
+      serverName: textColumn(row, "serverName"),
+      toolName: textColumn(row, "toolName"),
+      protocolOutcome: nullableMember(PROTOCOL_OUTCOMES, row, "protocolOutcome"),
+    });
+  }
+  return Object.freeze({
+    ...common,
+    podId: textColumn(row, "podId"),
+    bindingGeneration: numberColumn(row, "bindingGeneration"),
+    credentialGeneration: numberColumn(row, "credentialGeneration"),
+    operation: storedMember(JIRA_OPERATIONS, textColumn(row, "operation")),
+  });
 }
 /** Read the already admitted canonical turn; this never prepares or dispatches an action. */
 export function readChatToolMutationTurn(

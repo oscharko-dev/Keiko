@@ -69,7 +69,9 @@ describe("opaque debug target parser security boundary", () => {
     Object.defineProperty(record, "data", { enumerable: true, value: "value" });
     const getter = vi.fn(() => "value");
     Object.defineProperty(record, "accessor", { enumerable: true, get: getter });
+    Object.defineProperty(record, "count", { enumerable: true, value: 7 });
     expect(debugOwnTargetData(record, "data")).toBe("value");
+    expect(debugOwnTargetData(record, "count")).toBeUndefined();
     expect(() => debugOwnTargetData(record, "missing")).toThrow(DebugCapsulePlanError);
     expect(() => debugOwnTargetData(record, "accessor")).toThrow(DebugCapsulePlanError);
     expect(getter).not.toHaveBeenCalled();

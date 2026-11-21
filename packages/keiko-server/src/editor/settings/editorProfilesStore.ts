@@ -105,10 +105,11 @@ function isSha(value: unknown): value is string {
 
 function parseIdempotencyRecord(value: unknown): EditorProfilesIdempotencyRecord | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, idempotencyKeys())) return undefined;
-  if (!isSha(value.keyHash) || !isSha(value.requestHash)) return undefined;
-  if (typeof value.changed !== "boolean" || !isRevision(value.revision)) return undefined;
-  return isWorkspaceProfileRef(value.profileRef)
-    ? (value as unknown as EditorProfilesIdempotencyRecord)
+  const { keyHash, requestHash, changed, revision, profileRef } = value;
+  if (!isSha(keyHash) || !isSha(requestHash)) return undefined;
+  if (typeof changed !== "boolean" || !isRevision(revision)) return undefined;
+  return isWorkspaceProfileRef(profileRef)
+    ? { keyHash, requestHash, changed, revision, profileRef }
     : undefined;
 }
 
@@ -132,12 +133,13 @@ function isProfileAction(value: unknown): value is EditorM11ProfileMutationActio
 
 function parseEvent(value: unknown): EditorProfilesChangeEvent | undefined {
   if (!isRecord(value) || !hasOnlyKeys(value, eventKeys())) return undefined;
-  if (value.schemaVersion !== EDITOR_M7_SCHEMA_VERSION || !isRevision(value.sequence)) {
+  const { sequence, action, profileRef, outcome } = value;
+  if (value.schemaVersion !== EDITOR_M7_SCHEMA_VERSION || !isRevision(sequence)) {
     return undefined;
   }
-  if (!isProfileAction(value.action) || !isWorkspaceProfileRef(value.profileRef)) return undefined;
-  return value.outcome === "accepted" || value.outcome === "noOp"
-    ? (value as unknown as EditorProfilesChangeEvent)
+  if (!isProfileAction(action) || !isWorkspaceProfileRef(profileRef)) return undefined;
+  return outcome === "accepted" || outcome === "noOp"
+    ? { schemaVersion: EDITOR_M7_SCHEMA_VERSION, sequence, action, profileRef, outcome }
     : undefined;
 }
 

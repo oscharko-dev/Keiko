@@ -13,6 +13,8 @@ import {
   MANAGED_LSP_SEMANTIC_TOKEN_TYPES,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
 
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+
 import { LspServerRequestError } from "./lspJsonRpcClient.js";
 import {
   negotiateSemanticTokenLegend,
@@ -74,7 +76,7 @@ export interface LspProtocolSession {
   initializeParams(): Record<string, unknown>;
   acceptInitializeResult(result: unknown): void;
   snapshot(): ManagedLspNegotiatedCapabilitySnapshot;
-  handleServerRequest(method: string, params: unknown): unknown;
+  handleServerRequest(method: string, params: unknown): CatalogJsonValue;
   handleServerNotification(method: string, params: unknown): void;
   notificationCounts(): Readonly<Record<string, number>>;
   semanticTokenNegotiation(): LspSemanticTokenNegotiation | undefined;
@@ -110,7 +112,7 @@ export function createLspProtocolSession(deps: LspProtocolSessionDeps): LspProto
       acceptInitializeResult(state, deps, result);
     },
     snapshot: () => buildSnapshot(state, deps),
-    handleServerRequest: (method, params): unknown =>
+    handleServerRequest: (method, params): CatalogJsonValue =>
       handleServerRequest(state, deps, method, params),
     handleServerNotification: (method, params): void => {
       handleServerNotification(state, method, params);
@@ -266,7 +268,7 @@ function handleServerRequest(
   deps: LspProtocolSessionDeps,
   method: string,
   params: unknown,
-): unknown {
+): CatalogJsonValue {
   switch (method) {
     case "workspace/configuration":
       return workspaceConfiguration(deps.configuration, params);
@@ -341,7 +343,7 @@ function parseUnregistration(state: SessionState, value: unknown): DynamicRegist
 function workspaceConfiguration(
   configuration: Readonly<Record<string, unknown>>,
   params: unknown,
-): readonly unknown[] {
+): readonly CatalogJsonValue[] {
   const items = arrayField(params, "items", MAX_CONFIGURATION_ITEMS);
   const result = items.map((item) => configurationItem(configuration, item));
   if (Buffer.byteLength(JSON.stringify(result), "utf8") > MAX_CONFIGURATION_RESPONSE_BYTES) {
@@ -353,7 +355,7 @@ function workspaceConfiguration(
 function configurationItem(
   configuration: Readonly<Record<string, unknown>>,
   item: unknown,
-): unknown {
+): CatalogJsonValue {
   if (!isRecord(item) || typeof item.section !== "string" || item.section.length > 128) {
     invalidParams();
   }
@@ -361,7 +363,9 @@ function configurationItem(
   return safeConfigurationValue(value, 0) ? value : null;
 }
 
-function safeConfigurationValue(value: unknown, depth: number): boolean {
+// Proves a configuration value is JSON a language server may read: bounded in depth and size, with no
+// sensitive key and no unsafe string anywhere in it.
+function safeConfigurationValue(value: unknown, depth: number): value is CatalogJsonValue {
   if (depth > MAX_CONFIGURATION_DEPTH) return false;
   if (value === null || typeof value === "boolean" || typeof value === "number") return true;
   if (typeof value === "string") return safeConfigurationString(value);

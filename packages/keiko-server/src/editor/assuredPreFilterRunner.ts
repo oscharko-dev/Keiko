@@ -30,6 +30,7 @@ import type {
   EditorTestGenerationWireTarget,
 } from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import { runCommand } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
@@ -175,13 +176,16 @@ export function planGateCommands(kind: AssuredVerificationKind = "vitest"): Gate
 
 // Normalises a vitest coverage summary's absolute file keys to project-relative paths so the covered
 // delta matches the relative target key regardless of where the disposable root lives.
-export function relativizeCoverageSummary(summary: unknown, root: string): unknown {
+export function relativizeCoverageSummary(
+  summary: CatalogJsonValue | undefined,
+  root: string,
+): CatalogJsonValue | undefined {
   if (typeof summary !== "object" || summary === null) {
     return summary;
   }
   const prefix = root.endsWith("/") ? root : `${root}/`;
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(summary as Record<string, unknown>)) {
+  const out: Record<string, CatalogJsonValue> = {};
+  for (const [key, value] of Object.entries(summary)) {
     out[key.startsWith(prefix) ? key.slice(prefix.length) : key] = value;
   }
   return out;
@@ -331,9 +335,12 @@ async function proveAssuredIsolation(root: string, signal: AbortSignal): Promise
   }
 }
 
-function readJsonReport(root: string, relativePath: string): unknown {
+function readJsonReport(root: string, relativePath: string): CatalogJsonValue | undefined {
   try {
-    return JSON.parse(readFileSync(join(root, relativePath), "utf8")) as unknown;
+    // SAFETY: JSON.parse without a reviver returns only null, booleans, finite numbers, strings,
+    // arrays and plain objects of those values (ECMA-262 JSON.parse), which is exactly
+    // CatalogJsonValue.
+    return JSON.parse(readFileSync(join(root, relativePath), "utf8")) as CatalogJsonValue;
   } catch {
     return undefined;
   }
@@ -428,7 +435,7 @@ function nodePorts(args: AssuredPreFilterArgs, enforced: boolean): DisposableExe
       return Promise.resolve();
     },
     run: (root, cmd): Promise<SandboxedRunResult> => runSandboxed(root, cmd, args.signal),
-    readReport: (root, relativePath): unknown =>
+    readReport: (root, relativePath): CatalogJsonValue | undefined =>
       relativePath === BASELINE_SUMMARY || relativePath === PATCHED_SUMMARY
         ? relativizeCoverageSummary(readJsonReport(root, relativePath), root)
         : readJsonReport(root, relativePath),

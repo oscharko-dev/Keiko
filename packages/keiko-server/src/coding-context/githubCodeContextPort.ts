@@ -9,6 +9,7 @@
 // read-only — mutating `gh api` invocations (method overrides or field payloads) are
 // rejected before spawn.
 
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   CommandTimeoutError,
   GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
@@ -227,12 +228,15 @@ function isTransientGhExit(result: CommandResult): boolean {
 
 // Defence in depth only: the spawn boundary already refuses to hand back more than
 // GH_API_MAX_STDOUT_BYTES. Over-cap bytes here still mean the read was cut short, not malformed.
-function parseBoundedJson(stdout: string): unknown {
+function parseBoundedJson(stdout: string): CatalogJsonValue {
   if (Buffer.byteLength(stdout, "utf8") > GH_API_MAX_STDOUT_BYTES) {
     throw new GitHubCodeContextPortError("gh-output-truncated");
   }
   try {
-    return JSON.parse(stdout);
+    // SAFETY: JSON.parse without a reviver returns only null, booleans, finite numbers, strings,
+    // arrays and plain objects of those values (ECMA-262 JSON.parse), which is exactly
+    // CatalogJsonValue.
+    return JSON.parse(stdout) as CatalogJsonValue;
   } catch (error) {
     throw new GitHubCodeContextPortError("gh-invalid-json", error);
   }

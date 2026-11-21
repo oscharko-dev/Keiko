@@ -255,7 +255,25 @@ function compareCodeUnits(left: string, right: string): number {
   return 0;
 }
 
-function integrityPayloadForCandidate(candidate: QI.QualityIntelligenceTestCaseCandidate): unknown {
+// The candidate fields the export integrity hash covers, with the id lists in code-unit order.
+type CandidateIntegrityPayload = Pick<
+  QI.QualityIntelligenceTestCaseCandidate,
+  | "id"
+  | "runId"
+  | "derivedFromAtomIds"
+  | "title"
+  | "preconditions"
+  | "steps"
+  | "expectedResults"
+  | "priority"
+  | "riskClass"
+  | "tags"
+  | "status"
+>;
+
+function integrityPayloadForCandidate(
+  candidate: QI.QualityIntelligenceTestCaseCandidate,
+): CandidateIntegrityPayload {
   return {
     id: candidate.id,
     runId: candidate.runId,
@@ -325,11 +343,9 @@ function buildBundle(
           findingRefs: [...entry.findingRefs].sort(compareCodeUnits),
         }))
         .sort((a, b) => compareCodeUnits(a.candidateId, b.candidateId)),
-      candidates: candidates.map(integrityPayloadForCandidate).sort((a, b) => {
-        const left = (a as { id: string }).id;
-        const right = (b as { id: string }).id;
-        return compareCodeUnits(left, right);
-      }),
+      candidates: candidates
+        .map(integrityPayloadForCandidate)
+        .sort((a, b) => compareCodeUnits(a.id, b.id)),
     }),
   );
   const runAdapterHash = sha256Hex(`${runId}|${adapter}`).slice(0, 24);

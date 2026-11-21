@@ -53,7 +53,7 @@ const HASH_NEUTRAL_KEYS = new Set([
 ]);
 
 const stripHashNeutralFields = (node: IrNode): Record<string, unknown> => {
-  const entries = Object.entries(node as unknown as Record<string, unknown>).filter(
+  const entries: readonly (readonly [string, unknown])[] = Object.entries(node).filter(
     ([key]) => key !== "children" && !HASH_NEUTRAL_KEYS.has(key),
   );
   return {

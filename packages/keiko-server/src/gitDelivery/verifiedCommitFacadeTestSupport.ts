@@ -6,12 +6,16 @@ import {
   requestVerifiedCommitApproval,
 } from "../coding-runtime/productionVerifiedCommitRuntime.js";
 import type {
+  CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeAuthorityEnvelope,
+  CodingWorkbenchRuntimeExecutionBinding,
   CodingWorkbenchRuntimeAuthorityFacts,
   CodingWorkbenchRuntimeEvent,
   VerificationReport,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createProductionManagedWorktreeToolFacade } from "../coding-runtime/productionManagedWorktreeTools.js";
 import {
@@ -45,6 +49,29 @@ interface CommitFacadeFixtureResult {
   >;
 }
 
+const FIXTURE_DIGEST = "a".repeat(64);
+const FIXTURE_BINDING: CodingWorkbenchRuntimeExecutionBinding = {
+  taskId: "task-1",
+  projectId: "repo-1",
+  projectDigest: FIXTURE_DIGEST,
+  workspaceId: "workspace-1",
+  workspaceRootDigest: FIXTURE_DIGEST,
+  branchRef: "codex/task",
+  branchHeadDigest: FIXTURE_DIGEST,
+};
+const FIXTURE_MODEL_PROFILE: CodingWorkbenchAuthorityEnvelope["modelProfile"] = {
+  profileId: "fixture-model",
+  source: "keiko-model-gateway",
+  supportsStreaming: true,
+  supportsToolCalling: true,
+};
+const FIXTURE_COMMAND_POLICY: CodingWorkbenchAuthorityEnvelope["commandPolicy"] = {
+  mode: "deny",
+  allow: [],
+  deny: [],
+  maxCommandTimeoutMs: 30_000,
+  requirePerCommandApproval: true,
+};
 // Derived from the same producer the real authority mint uses (runtimeAuthorityService.ts),
 // never a restated approximation (AGENTS.md §7): delivery-substrate/connector-access and the
 // source-control connector scopes are granted at every mode, not only autonomous-delivery --
@@ -54,34 +81,62 @@ interface CommitFacadeFixtureResult {
 // bypass: the port's own bug (relaxing an approved commit-execute to workspace-read in every
 // other mode) went untested because this fixture already withheld those classes/scopes from
 // every other mode for an unrelated reason, so the port's missing check was never exercised.
+function fixtureAuthority(input: CommitFacadeFixtureInput): CodingWorkbenchAuthorityEnvelope {
+  return {
+    schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+    runId: "run-1",
+    localUser: "local-operator",
+    taskRefs: ["task-1"],
+    workspace: { workspaceId: "workspace-1", rootLabel: "repo-1", rootDigest: FIXTURE_DIGEST },
+    branch: {
+      baseRef: "dev",
+      headRef: "codex/task",
+      allowDetachedHead: false,
+      allowedPrefixes: [],
+    },
+    requestedMode: input.mode,
+    deploymentCeiling: input.mode,
+    effectiveMode: input.mode,
+    runtimeSource: "keiko-sidecar",
+    actionClasses: codingRuntimeActionClassesForMode(input.mode, undefined),
+    connectorScopes: codingRuntimeConnectorScopesForMode(input.mode),
+    modelProfile: FIXTURE_MODEL_PROFILE,
+    commandPolicy: FIXTURE_COMMAND_POLICY,
+    networkPolicy:
+      input.draftDeliveryService !== undefined && input.mode === "autonomous-delivery"
+        ? {
+            mode: "connector-scoped-egress",
+            allowLoopback: false,
+            connectorScopes: ["source-control.write"],
+          }
+        : { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+    gates: [],
+    budget: {
+      maxRuntimeMs: 3_600_000,
+      maxToolCalls: 100,
+      maxPromptTokens: 1_000_000,
+      maxPatchBytes: 1_048_576,
+    },
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    approvalProofDigest: FIXTURE_DIGEST,
+  };
+}
 function fixtureEnvelope(input: CommitFacadeFixtureInput): CodingWorkbenchRuntimeAuthorityEnvelope {
   return {
-    authority: {
-      effectiveMode: input.mode,
-      actionClasses: codingRuntimeActionClassesForMode(input.mode, undefined),
-      connectorScopes: codingRuntimeConnectorScopesForMode(input.mode),
-      commandPolicy: { mode: "deny", allow: [], deny: [], requirePerCommandApproval: true },
-      networkPolicy:
-        input.draftDeliveryService !== undefined && input.mode === "autonomous-delivery"
-          ? { mode: "connector-bound", connectorScopes: ["source-control.write"] }
-          : { mode: "deny-all", connectorScopes: [] },
-    },
-  } as unknown as CodingWorkbenchRuntimeAuthorityEnvelope;
+    schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+    authority: fixtureAuthority(input),
+    binding: FIXTURE_BINDING,
+    intentDigest: FIXTURE_DIGEST,
+    nonceDigest: FIXTURE_DIGEST,
+    issuedAt: "2026-01-01T00:00:00.000Z",
+  };
 }
 function fixtureFacts(
   envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
 ): CodingWorkbenchRuntimeAuthorityFacts {
-  const digest = "a".repeat(64);
+  const digest = FIXTURE_DIGEST;
   return {
-    binding: {
-      taskId: "task-1",
-      projectId: "repo-1",
-      projectDigest: digest,
-      workspaceId: "workspace-1",
-      workspaceRootDigest: digest,
-      branchRef: "codex/task",
-      branchHeadDigest: digest,
-    },
+    binding: FIXTURE_BINDING,
     actionClasses: envelope.authority.actionClasses,
     connectorScopes: envelope.authority.connectorScopes,
     runtimeSource: "keiko-sidecar",

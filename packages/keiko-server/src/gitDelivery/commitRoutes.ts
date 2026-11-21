@@ -843,15 +843,18 @@ function unfencedJson(text: string): string {
   return trimmed.slice(firstNewline + 1, -4);
 }
 
-function parseCommitDraftJson(text: string): unknown {
+// A commit draft is a JSON object, the shape a structured output carries; text that is not JSON,
+// or JSON of another shape, is no draft.
+function parseCommitDraftJson(text: string): NormalizedResponse["structuredOutput"] {
   try {
-    return JSON.parse(unfencedJson(text)) as unknown;
+    const parsed: unknown = JSON.parse(unfencedJson(text));
+    return isPlainObject(parsed) ? parsed : null;
   } catch {
-    return undefined;
+    return null;
   }
 }
 
-function draftCandidate(response: NormalizedResponse): unknown {
+function draftCandidate(response: NormalizedResponse): NormalizedResponse["structuredOutput"] {
   return response.structuredOutput ?? parseCommitDraftJson(response.content);
 }
 

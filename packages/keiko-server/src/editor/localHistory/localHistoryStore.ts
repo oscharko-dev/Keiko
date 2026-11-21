@@ -32,6 +32,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/editor-local-history";
 import { isPortableWorkspaceRelativePath } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import type {
+  CatalogJsonObject,
+  CatalogJsonValue,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
   EditorLocalHistoryEntry,
   EditorLocalHistoryIndex,
   EditorLocalHistoryOrigin,
@@ -229,7 +233,7 @@ interface PrivateHistoryIndexDocument {
   readonly kind: typeof PRIVATE_INDEX_KIND;
   readonly schemaVersion: typeof PRIVATE_INDEX_SCHEMA_VERSION;
   readonly objectIdentityDigest: string;
-  readonly index: unknown;
+  readonly index: CatalogJsonValue;
 }
 
 interface AvailableHistoryIndex {
@@ -464,9 +468,12 @@ function readCheckedIndexText(path: string, expected: Stats): string {
   }
 }
 
-function parseIndexJson(raw: string): unknown {
+function parseIndexJson(raw: string): CatalogJsonValue {
   try {
-    return JSON.parse(raw);
+    // SAFETY: JSON.parse without a reviver returns only null, booleans, finite numbers, strings,
+    // arrays and plain objects of those values (ECMA-262 JSON.parse), which is exactly
+    // CatalogJsonValue.
+    return JSON.parse(raw) as CatalogJsonValue;
   } catch {
     return unavailableIndex();
   }
@@ -476,7 +483,9 @@ function isObjectIdentityDigest(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value);
 }
 
-function privateIndexDocument(value: unknown): value is PrivateHistoryIndexDocument {
+function privateIndexDocument(
+  value: CatalogJsonValue,
+): value is CatalogJsonObject & PrivateHistoryIndexDocument {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Readonly<Record<string, unknown>>;
   return (
@@ -923,8 +932,30 @@ function payloadMatchesEntry(
     payload.plaintextContentDigest === entry.plaintextContentDigest,
     payload.plaintextByteLength === entry.plaintextByteLength,
     payload.payloadBindingDigest === entry.payloadBindingDigest,
-    typeof payload.content === "string",
   ].every(Boolean);
+}
+
+// Builds the payload of a record that payloadMatchesEntry accepted. Every bound field equals the
+// entry's (the predecessor by its JSON form), so the payload is the entry's fields plus the content.
+function payloadFromEntry(entry: EditorLocalHistoryEntry, content: string): HistoryPayload {
+  return {
+    kind: PAYLOAD_KIND,
+    schemaVersion: PAYLOAD_SCHEMA_VERSION,
+    vaultEntryRef: entry.encryptedContent.vaultEntryRef,
+    entryRef: entry.entryRef,
+    workspaceId: entry.workspaceId,
+    rootRef: entry.rootRef,
+    rootIdentityDigest: entry.rootIdentityDigest,
+    relativePathDigest: entry.relativePathDigest,
+    predecessor: entry.predecessor,
+    sequence: entry.sequence,
+    origin: entry.origin,
+    recordedAt: entry.recordedAt,
+    plaintextContentDigest: entry.plaintextContentDigest,
+    plaintextByteLength: entry.plaintextByteLength,
+    payloadBindingDigest: entry.payloadBindingDigest,
+    content,
+  };
 }
 
 function checkedPayload(raw: string | undefined, entry: EditorLocalHistoryEntry): HistoryPayload {
@@ -934,13 +965,15 @@ function checkedPayload(raw: string | undefined, entry: EditorLocalHistoryEntry)
   } catch {
     parsed = undefined;
   }
-  if (!payloadRecord(parsed) || !payloadMatchesEntry(parsed, entry)) {
+  const content =
+    payloadRecord(parsed) && payloadMatchesEntry(parsed, entry) ? parsed.content : undefined;
+  if (typeof content !== "string") {
     throw new EditorLocalHistoryError(
       "CONTENT_UNAVAILABLE",
       "Local-history content is unavailable.",
     );
   }
-  const payload = parsed as unknown as HistoryPayload;
+  const payload = payloadFromEntry(entry, content);
   const base: HistoryPayloadBase = {
     kind: payload.kind,
     schemaVersion: payload.schemaVersion,

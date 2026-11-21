@@ -87,8 +87,8 @@ function writeEntries(
   storePath: string,
   entries: Record<string, AtlassianCredentialMetadata>,
 ): void {
-  const payload: MetadataStoreFile = { version: STORE_VERSION, credentials: entries };
-  savePrivateJson(storePath, payload as unknown as Record<string, unknown>);
+  const payload = { version: STORE_VERSION, credentials: entries } satisfies MetadataStoreFile;
+  savePrivateJson(storePath, payload);
 }
 
 export interface CreateAtlassianCredentialMetadataStoreOptions {

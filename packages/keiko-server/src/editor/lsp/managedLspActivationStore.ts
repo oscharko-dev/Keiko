@@ -171,7 +171,8 @@ function parseIdempotencyRecord(value: unknown): ManagedLspIdempotencyRecord | u
     "reasonCode",
     "policyResult",
   ] as const;
-  if (!hasOnlyKeys(value, allowed) || !validIdempotencyFields(value)) return undefined;
+  const fields = hasOnlyKeys(value, allowed) ? idempotencyFields(value) : undefined;
+  if (fields === undefined) return undefined;
   const status = parseManagedLspEvidence({
     schemaVersion: "1",
     kind: "activationChange",
@@ -187,17 +188,23 @@ function parseIdempotencyRecord(value: unknown): ManagedLspIdempotencyRecord | u
     policyResult: value.policyResult,
   });
   if (!status.ok) return undefined;
-  return value as unknown as ManagedLspIdempotencyRecord;
+  // The evidence parser has validated state, reason code and policy result as one activation status.
+  const { effectiveState, reasonCode, policyResult } = status.value;
+  return { ...fields, state: effectiveState, reasonCode, policyResult };
 }
 
-function validIdempotencyFields(value: UnknownRecord): boolean {
-  return [
-    typeof value.keyHash === "string" && SHA256_PATTERN.test(value.keyHash),
-    typeof value.requestHash === "string" && SHA256_PATTERN.test(value.requestHash),
-    value.resultKind === "ok" || value.resultKind === "denied",
-    typeof value.changed === "boolean",
-    isRevision(value.revision),
-  ].every(Boolean);
+type IdempotencyFields = Pick<
+  ManagedLspIdempotencyRecord,
+  "keyHash" | "requestHash" | "resultKind" | "changed" | "revision"
+>;
+
+function idempotencyFields(value: UnknownRecord): IdempotencyFields | undefined {
+  const { keyHash, requestHash, resultKind, changed } = value;
+  if (typeof keyHash !== "string" || !SHA256_PATTERN.test(keyHash)) return undefined;
+  if (typeof requestHash !== "string" || !SHA256_PATTERN.test(requestHash)) return undefined;
+  if (resultKind !== "ok" && resultKind !== "denied") return undefined;
+  if (typeof changed !== "boolean" || !isRevision(value.revision)) return undefined;
+  return { keyHash, requestHash, resultKind, changed, revision: value.revision };
 }
 
 function parseIdempotency(value: unknown): readonly ManagedLspIdempotencyRecord[] | undefined {

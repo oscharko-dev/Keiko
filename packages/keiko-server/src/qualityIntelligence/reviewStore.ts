@@ -144,18 +144,27 @@ const parseArtifact = (value: unknown): QiReviewStateArtifact | undefined => {
   return { ...(value as QiReviewStateArtifact), candidateStates };
 };
 
-const canonicaliseForHash = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(canonicaliseForHash);
+// The canonical JSON text of a hashed value: object keys in localeCompare order, undefined members
+// dropped, an undefined array item written as null. A `__proto__` member is dropped, as the former
+// copy-then-stringify form dropped it, so stored chains keep their hashes.
+const canonicalHashText = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    const items: readonly unknown[] = value;
+    return `[${items.map((item) => (item === undefined ? "null" : canonicalHashText(item))).join(",")}]`;
+  }
   if (value !== null && typeof value === "object") {
     const record = value as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(record).sort((left, right) => left.localeCompare(right))) {
-      const item = record[key];
-      if (item !== undefined) out[key] = canonicaliseForHash(item);
-    }
-    return out;
+    const members = Object.keys(record)
+      .sort((left, right) => left.localeCompare(right))
+      .flatMap((key) => {
+        const item = record[key];
+        return item === undefined || key === "__proto__"
+          ? []
+          : [`${JSON.stringify(key)}:${canonicalHashText(item)}`];
+      });
+    return `{${members.join(",")}}`;
   }
-  return value;
+  return JSON.stringify(value);
 };
 
 const auditEntryForHash = (
@@ -167,7 +176,7 @@ const auditEntryForHash = (
 };
 
 export const hashQiReviewAuditEntry = (entry: QiReviewAuditEntry): string =>
-  sha256Hex(JSON.stringify(canonicaliseForHash(auditEntryForHash(entry))));
+  sha256Hex(canonicalHashText(auditEntryForHash(entry)));
 
 const priorHashForAuditLog = (auditLog: readonly QiReviewAuditEntry[]): string => {
   const previous = auditLog.at(-1);

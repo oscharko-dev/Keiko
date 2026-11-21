@@ -381,7 +381,7 @@ export class DraftDeliveryFixture {
   }
   private makeMutationDeps(): DraftDeliveryServiceOptions["mutationDeps"] {
     return {
-      redactor: (value): unknown => value,
+      redactor: <T>(value: T): T => value,
       evidenceStore: {
         put: (id, body): string => {
           this.evidence.set(id, body);

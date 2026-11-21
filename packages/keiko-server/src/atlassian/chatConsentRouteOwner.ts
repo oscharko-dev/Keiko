@@ -8,9 +8,9 @@ import { recordChatAuthorityResult } from "../editor/chatAuthorityActivity.js";
 import type { AtlassianActionApprovalRegistry } from "./actionApprovals.js";
 
 type ConsentPhase = "read-grant" | "write-approval";
-export interface ChatConsentRouteOwner<Entry, Decision> {
+export interface ChatConsentRouteOwner<Entry, Decision, Projection> {
   readonly phase: ConsentPhase;
-  readonly project: (entry: Entry, correlationId: string) => unknown;
+  readonly project: (entry: Entry, correlationId: string) => Projection;
   readonly retained: (
     registry: AtlassianActionApprovalRegistry,
     id: string,
@@ -61,10 +61,10 @@ export function chatConsentFailure(
   return { status, body: errorBody(code, FAILURES[phase].message, ctx.correlationId) };
 }
 
-export function currentChatConsent<Entry, Decision>(
+export function currentChatConsent<Entry, Decision, Projection>(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  owner: ChatConsentRouteOwner<Entry, Decision>,
+  owner: ChatConsentRouteOwner<Entry, Decision, Projection>,
   nowIso: string,
 ): CurrentConsent<Entry> | undefined {
   const id = ctx.params.approvalId;
@@ -76,8 +76,8 @@ export function currentChatConsent<Entry, Decision>(
   return { entry, registry };
 }
 
-export function getChatConsent<Entry, Decision>(
-  owner: ChatConsentRouteOwner<Entry, Decision>,
+export function getChatConsent<Entry, Decision, Projection>(
+  owner: ChatConsentRouteOwner<Entry, Decision, Projection>,
 ): (ctx: RouteContext, deps: UiHandlerDeps) => RouteResult {
   return (ctx, deps): RouteResult => {
     const current = currentChatConsent(ctx, deps, owner, new Date().toISOString());
@@ -90,10 +90,10 @@ export function getChatConsent<Entry, Decision>(
 }
 
 /** The common body boundary always resolves custody/authority after awaiting all input bytes. */
-export async function readCurrentChatDecision<Entry, Decision>(
+export async function readCurrentChatDecision<Entry, Decision, Projection>(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  owner: ChatConsentRouteOwner<Entry, Decision>,
+  owner: ChatConsentRouteOwner<Entry, Decision, Projection>,
 ): Promise<
   | {
       readonly ok: true;
@@ -117,8 +117,8 @@ export async function readCurrentChatDecision<Entry, Decision>(
 }
 
 /** Both decision endpoints share parsing, custody and current-authority revalidation. */
-export function decideChatConsent<Entry, Decision>(
-  owner: ChatConsentRouteOwner<Entry, Decision>,
+export function decideChatConsent<Entry, Decision, Projection>(
+  owner: ChatConsentRouteOwner<Entry, Decision, Projection>,
   decide: (
     current: CurrentConsent<Entry> & { readonly value: Decision; readonly nowIso: string },
     ctx: RouteContext,

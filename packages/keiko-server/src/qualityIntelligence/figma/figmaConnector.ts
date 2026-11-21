@@ -93,7 +93,8 @@ export interface FigmaProvenance {
 }
 
 export interface FigmaScopedResult {
-  readonly nodes: FigmaNode;
+  /** The provider-shaped scoped node tree, handed unchanged to the IR cleaner. */
+  readonly nodes: RawFigmaNode;
   readonly provenance: FigmaProvenance;
   readonly readiness: ReadinessSignal;
   /**
@@ -142,10 +143,12 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 // generic string to the structural classifier so a 403 resolves to the most specific coded error
 // (expired / revoked / insufficient-scope) without ever surfacing the raw payload. The token is
 // never part of a response body, so this cannot leak it.
+const isText = (value: unknown): value is string => typeof value === "string";
+
 const extractFigmaReason = (body: unknown): string | undefined => {
   if (!isRecord(body)) return undefined;
   const reason = body.err ?? body.message;
-  return typeof reason === "string" ? reason : undefined;
+  return isText(reason) ? reason : undefined;
 };
 
 const statusToError = (status: number, body: unknown): FigmaConnectorError =>
@@ -241,13 +244,27 @@ const provenanceFor = (target: FigmaTarget, options: FigmaFetchOptions): FigmaPr
   fetchedAt: options.fetchedAt ?? EPOCH,
 });
 
-// RawFigmaNode → FigmaNode is a safe widening for the readiness reader (which tolerates absent fields).
+// The readiness reader's view of a provider node: a field of another type reads as absent ("" for
+// the identity strings), so a malformed node cannot reach the reader as a typed one.
+const readinessNode = (raw: RawFigmaNode): FigmaNode => {
+  const status = isRecord(raw.devStatus) ? raw.devStatus.type : undefined;
+  const devStatus = isText(status) ? status : undefined;
+  const children = Array.isArray(raw.children) ? raw.children.map(readinessNode) : undefined;
+  return {
+    id: isText(raw.id) ? raw.id : "",
+    name: isText(raw.name) ? raw.name : "",
+    type: isText(raw.type) ? raw.type : "",
+    ...(devStatus === undefined ? {} : { devStatus: { type: devStatus } }),
+    ...(children === undefined ? {} : { children }),
+  };
+};
+
 const readinessFor = (
   rt: ConnectorRuntime,
   document: RawFigmaNode,
   version: string | undefined,
 ): ReadinessSignal =>
-  resolveReadiness(document as unknown as FigmaNode, { version, releaseMarker: rt.releaseMarker });
+  resolveReadiness(readinessNode(document), { version, releaseMarker: rt.releaseMarker });
 
 const resolveTarget = (url: string): FigmaTarget => {
   const target = parseFigmaTarget(url);
@@ -272,7 +289,7 @@ const doFetchScopedNodes = async (
   );
   guardScopeSize(document, rt.maxNodeCount);
   return {
-    nodes: document as unknown as FigmaNode,
+    nodes: document,
     provenance: provenanceFor(target, options),
     readiness: readinessFor(rt, document, options.version),
   };
@@ -330,7 +347,7 @@ const doFetchScopedNodesDeep = async (
     rt.paginationLimits,
   );
   return {
-    nodes: document as unknown as FigmaNode,
+    nodes: document,
     provenance: provenanceFor(target, options),
     readiness: readinessFor(rt, document, options.version),
     coverage,
