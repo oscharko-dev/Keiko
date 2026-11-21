@@ -426,7 +426,7 @@ describe("dev quality workflows", () => {
     const scanStep = ci.slice(scanAt, verifyAt);
     const verifyStep = ci.slice(verifyAt, ci.indexOf("- name:", verifyAt + 1));
     expect(scanStep).toMatch(/^\s+SONAR_SCANNER_OPTS: "-Xmx512m"$/mu);
-    expect(scanStep).toMatch(/^\s+SONAR_SCANNER_JAVA_OPTS: "-Xmx3072m"$/mu);
+    expect(scanStep).toMatch(/^\s+SONAR_SCANNER_JAVA_OPTS: "-Xmx4352m"$/mu);
     expect(verifyStep).toContain("--require-full-analysis");
     expect(verifyStep).toContain("--require-runner-memory-budget");
     expect(localSonarCompose).toContain(

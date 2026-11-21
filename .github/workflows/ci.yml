@@ -1084,9 +1084,10 @@ jobs:
           # (sonar.scanner.javaOpts). Uncapped, the engine took a quarter of the runner (3996 MB)
           # beside the JS/TS analyzer's Node.js heap (sonar.javascript.node.maxspace) and the runner
           # was lost mid-scan (#4481). The verify step below fails the job when both ceilings leave
-          # the runner less than its reserve.
+          # the runner less than its reserve. A 3072 MB engine ran out of heap in the architecture
+          # phase (2026-11-21), so the engine keeps more than its former default quarter.
           SONAR_SCANNER_OPTS: "-Xmx512m"
-          SONAR_SCANNER_JAVA_OPTS: "-Xmx3072m"
+          SONAR_SCANNER_JAVA_OPTS: "-Xmx4352m"
         run: |
           # ADR-0139 D6: transient SonarCloud-side provisioning or network failures retry with
           # backoff before failing closed; genuine quality-gate failures are never retried.

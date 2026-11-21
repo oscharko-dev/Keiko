@@ -134,7 +134,7 @@ quarter of the VM. This keeps enough analyzer headroom while leaving space for t
 required SonarQube service inside Docker Desktop's common 8 GiB VM; the scanner's automatic heap
 choice can otherwise exceed the VM limit and terminate the bridge before it reports findings.
 
-CI runs the same two caps on a 16 GB runner: the engine at 3 GiB in `ci.yml`, the bridge at
+CI runs the same two caps on a 16 GB runner: the engine at 4.25 GiB in `ci.yml`, the bridge at
 `sonar.javascript.node.maxspace` in `sonar-project.properties`. The `Verify Sonar full-analysis
 evidence` step reads both configured ceilings from the scanner log (an engine without `-Xmx` is
 charged its default quarter of the runner) and fails when they leave the runner less than 2 GiB
