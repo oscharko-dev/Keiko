@@ -406,12 +406,13 @@ function pathDeniedResult(error: PathDeniedError): RouteResult {
   };
 }
 
-function primaryWorkspaceFailure(error: unknown): unknown {
-  if (!(error instanceof AggregateError)) return error;
+// The workspace error an AggregateError carries as its primary cause, directly or one level down.
+function aggregatedWorkspaceFailure(error: unknown): WorkspaceError | undefined {
+  if (!(error instanceof AggregateError)) return undefined;
   const primary: unknown = error.cause;
   if (primary instanceof WorkspaceError) return primary;
   if (primary instanceof Error && primary.cause instanceof WorkspaceError) return primary.cause;
-  return error;
+  return undefined;
 }
 
 function unavailableWorkspaceResult(error: unknown, correlationId?: string): RouteResult {
@@ -431,7 +432,7 @@ export function mappedWorkspaceError(
   error: unknown,
   context: WorkspaceRootDenialLogContext = {},
 ): RouteResult | undefined {
-  const failure = primaryWorkspaceFailure(error);
+  const failure = aggregatedWorkspaceFailure(error) ?? error;
   if (failure instanceof PathDeniedError) return pathDeniedResult(failure);
   if (failure instanceof WorkspaceNotFoundError) {
     recordWorkspaceRootUnavailable(failure, context);

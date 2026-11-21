@@ -66,7 +66,7 @@ import {
   resolvePersistedMemoryAutonomyMode,
 } from "./memory-capture-policy.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
-import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import { buildMemoryRecordFromProposal, memoryIdOfProposal } from "./memory-record-builders.js";
 import { exactCaptureSuppressionReason } from "./memory-suppression.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudits } from "./memory-audit-handler.js";
@@ -311,7 +311,7 @@ async function persistRecapOutcome(
   writeContext: MemoryWriteContext,
 ): Promise<RecapPersistedMemory | null> {
   if (!isPersistableMemoryCandidate(outcome)) return null;
-  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+  const proposalId = memoryIdOfProposal(outcome.proposal.proposalId);
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   if (exactCaptureSuppressionReason(vault, record) !== null) return null;
   const candidate =

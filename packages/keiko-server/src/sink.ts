@@ -30,6 +30,7 @@ import {
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
 import { machineToken, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import { logRunPatchRefusal } from "./run-patch-refusal-log.js";
 
 // The structural event envelope every harness/workflow event satisfies. Extra members vary per
@@ -98,13 +99,13 @@ const TERMINAL_DIAGNOSTICS: Readonly<Record<string, TerminalDiagnosticLabel>> = 
   },
 };
 
-// The bounded shape `terminalDiagnosticCode` reads a machine-token off of, cast once so every
-// extractor below stays a one-line, complexity-free field read rather than a repeated `as`.
+// The optional fields `terminalDiagnosticCode` reads a machine-token off of. Every envelope is
+// assignable to it, and each field stays untrusted until its extractor below has checked it.
 interface TerminalDiagnosticRaw {
   readonly errorCode?: unknown;
   readonly status?: unknown;
   readonly atState?: unknown;
-  readonly failure?: { readonly category?: unknown };
+  readonly failure?: unknown;
 }
 
 function stringOrUndefined(value: unknown): string | undefined {
@@ -127,7 +128,8 @@ function stringOrUndefined(value: unknown): string | undefined {
 const CODE_EXTRACTORS: Readonly<
   Record<string, (raw: TerminalDiagnosticRaw) => string | undefined>
 > = {
-  "run:failed": (raw) => stringOrUndefined(raw.failure?.category),
+  "run:failed": (raw) =>
+    isRecord(raw.failure) ? stringOrUndefined(raw.failure.category) : undefined,
   "run:cancelled": (raw) => stringOrUndefined(raw.atState),
   "bug:completed": (raw) => stringOrUndefined(raw.status),
   "bug:failed": (raw) => machineToken(raw.errorCode),
@@ -137,9 +139,9 @@ const CODE_EXTRACTORS: Readonly<
 
 // Reads a bounded, machine-token-shaped outcome code off a terminal event without importing any
 // concrete event union into this structurally-typed sink (see header comment).
-function terminalDiagnosticCode(event: StreamEvent): string | undefined {
+function terminalDiagnosticCode(event: StreamEvent & TerminalDiagnosticRaw): string | undefined {
   const extractor = CODE_EXTRACTORS[event.type];
-  return extractor === undefined ? undefined : extractor(event as unknown as TerminalDiagnosticRaw);
+  return extractor === undefined ? undefined : extractor(event);
 }
 
 // A single attached SSE consumer. `write` frames+sends one event; `close` ends the response.

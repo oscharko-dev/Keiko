@@ -227,13 +227,16 @@ type ParsedPersistedMemoryAuditEvent = Omit<PersistedMemoryAuditEvent, "integrit
   readonly integrity?: ParsedAuditIntegrity;
 };
 
-function withoutIntegrity(event: ParsedPersistedMemoryAuditEvent): MemoryAuditEvent {
-  const rest: Record<string, unknown> = { ...event };
-  delete rest.integrity;
-  return rest as unknown as MemoryAuditEvent;
+// The fields an event's hash covers: every persisted field except its integrity metadata. A new
+// MemoryAuditEvent has exactly these fields.
+type HashedAuditEvent = Omit<ParsedPersistedMemoryAuditEvent, "integrity">;
+
+function withoutIntegrity(event: ParsedPersistedMemoryAuditEvent): HashedAuditEvent {
+  const { integrity, ...rest } = event;
+  return rest;
 }
 
-function hashAuditEvent(event: MemoryAuditEvent, previousHash: string, sequence: number): string {
+function hashAuditEvent(event: HashedAuditEvent, previousHash: string, sequence: number): string {
   return createHash("sha256")
     .update(stableStringify({ event, previousHash, sequence, version: AUDIT_HASH_CHAIN_VERSION }))
     .digest("hex");

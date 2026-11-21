@@ -80,6 +80,7 @@ import type {
   ToolCallingVerification,
 } from "@oscharko-dev/keiko-contracts";
 import type { GatewayReadinessReport } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { CatalogJsonValue } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   classifyOutboundHost,
   gatewayFetch,
@@ -2104,7 +2105,7 @@ async function fetchDiscoveryJson(
   egress: GatewayEgressConfig | undefined,
   correlationId: string | undefined,
   signal: AbortSignal = AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
-): Promise<unknown> {
+): Promise<CatalogJsonValue> {
   signal.throwIfAborted();
   const response = await fetchDiscoveryResponse(
     url,
@@ -4176,26 +4177,26 @@ function submittedOrInheritedString(
   return trimmedSubmittedString(raw, key) ?? (preserveExisting ? (inherited ?? "") : "");
 }
 
-function setupApiKeyHeaderSource(
+function setupApiKeyHeaderName(
   raw: Record<string, unknown>,
   provider: ModelProviderConfig | undefined,
   preserveExisting: boolean,
-): unknown {
+): SetupParseResult<string> {
   if (raw.apiKeyHeaderName !== undefined || !preserveExisting) {
-    return raw.apiKeyHeaderName;
+    return normalizeSetupApiKeyHeaderName(raw.apiKeyHeaderName);
   }
-  return provider?.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
+  return normalizeSetupApiKeyHeaderName(provider?.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME);
 }
 
 function setupVoiceApiKeyHeaderSource(
   raw: Record<string, unknown>,
   provider: ModelProviderConfig | undefined,
   preserveExisting: boolean,
-): unknown {
+): SetupParseResult<string> {
   if (raw.voiceApiKeyHeaderName !== undefined || !preserveExisting) {
-    return raw.voiceApiKeyHeaderName;
+    return normalizeSetupApiKeyHeaderName(raw.voiceApiKeyHeaderName);
   }
-  return provider?.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
+  return normalizeSetupApiKeyHeaderName(provider?.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME);
 }
 
 /**
@@ -4259,8 +4260,7 @@ function readSetupGatewayCredentials(
   if (baseUrl.length === 0 || apiKey.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "baseUrl and apiKey are required.") };
   }
-  const apiKeyHeaderSource = setupApiKeyHeaderSource(raw, provider, preserveExisting);
-  const apiKeyHeaderResult = normalizeSetupApiKeyHeaderName(apiKeyHeaderSource);
+  const apiKeyHeaderResult = setupApiKeyHeaderName(raw, provider, preserveExisting);
   if (!apiKeyHeaderResult.ok) {
     return apiKeyHeaderResult.routeError;
   }
@@ -4502,11 +4502,10 @@ function setupVoiceApiKeyHeaderName(
   preserveExisting: boolean,
   sharedGatewayHeader: string | undefined,
 ): SetupParseResult<string> {
-  return normalizeSetupApiKeyHeaderName(
-    raw.voiceApiKeyHeaderName ??
-      sharedGatewayHeader ??
-      setupVoiceApiKeyHeaderSource(raw, existing, preserveExisting),
-  );
+  const submitted = raw.voiceApiKeyHeaderName ?? sharedGatewayHeader;
+  return submitted === undefined
+    ? setupVoiceApiKeyHeaderSource(raw, existing, preserveExisting)
+    : normalizeSetupApiKeyHeaderName(submitted);
 }
 
 function setupVoiceProviderLocality(
@@ -7720,11 +7719,18 @@ interface SetupErrorFields {
   readonly status?: unknown;
 }
 
-function safeErrorProperty(error: unknown, property: keyof SetupErrorFields): unknown {
+// Reads one error field and returns it only when `accepts` admits it. A throwing accessor or proxy
+// trap reads as absent.
+function safeErrorProperty<T>(
+  error: unknown,
+  property: keyof SetupErrorFields,
+  accepts: (value: unknown) => value is T,
+): T | undefined {
   if (!isObjectLike(error)) return undefined;
   const fields: SetupErrorFields = error;
   try {
-    return fields[property];
+    const value = fields[property];
+    return accepts(value) ? value : undefined;
   } catch {
     return undefined;
   }
@@ -7732,6 +7738,11 @@ function safeErrorProperty(error: unknown, property: keyof SetupErrorFields): un
 
 function isObjectLike(value: unknown): value is object {
   return (typeof value === "object" && value !== null) || typeof value === "function";
+}
+
+// An `errors` field such as `AggregateError.errors`. Its elements are thrown values themselves.
+function isErrorList(value: unknown): value is readonly unknown[] {
+  return Array.isArray(value);
 }
 
 function enqueueSetupError(value: unknown, pending: unknown[], seen: WeakSet<object>): void {
@@ -7751,14 +7762,11 @@ function setupErrorValue<T>(
   const seen = new WeakSet();
   enqueueSetupError(error, pending, seen);
   for (const current of pending) {
-    const value = safeErrorProperty(current, property);
-    if (accepts(value)) return value;
-    enqueueSetupError(safeErrorProperty(current, "cause"), pending, seen);
-    const nested = safeErrorProperty(current, "errors");
-    if (Array.isArray(nested)) {
-      for (const item of nested) {
-        enqueueSetupError(item, pending, seen);
-      }
+    const value = safeErrorProperty(current, property, accepts);
+    if (value !== undefined) return value;
+    enqueueSetupError(safeErrorProperty(current, "cause", isObjectLike), pending, seen);
+    for (const item of safeErrorProperty(current, "errors", isErrorList) ?? []) {
+      enqueueSetupError(item, pending, seen);
     }
   }
   return undefined;
@@ -8387,10 +8395,6 @@ class DeferredTemporaryChatAdmission extends Error {
   }
 }
 
-function originalSetupVerificationError(error: unknown): unknown {
-  return error instanceof DeferredTemporaryChatAdmission ? error.original : error;
-}
-
 interface SetupCandidateAttempts {
   readonly failures: SetupCandidateFailure[];
   readonly result?: RouteResult | undefined;
@@ -8411,15 +8415,16 @@ async function attemptSetupCandidates(
       return { failures, result };
     } catch (error) {
       if (request.signal?.aborted === true) return { failures: [...failures, { baseUrl, error }] };
+      const original = error instanceof DeferredTemporaryChatAdmission ? error.original : error;
       reportSetupVerificationFailure(
         deps,
-        originalSetupVerificationError(error),
+        original,
         request.correlationId,
         "gateway.setup.provider-verify",
       );
       failures.push({
         baseUrl,
-        error: originalSetupVerificationError(error),
+        error: original,
         ...(error instanceof DeferredTemporaryChatAdmission
           ? { resumeTemporaryAdmission: error.resume }
           : {}),

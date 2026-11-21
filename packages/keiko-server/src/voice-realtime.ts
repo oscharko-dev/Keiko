@@ -49,6 +49,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
+  isVoiceControlMessage,
   isVoiceReplayEligible,
   validateVoiceControlMessage,
   VOICE_REALTIME_CONTROL_TRANSPORT,
@@ -772,15 +773,11 @@ function readSessionCreateFrame(ws: WsSocket, raw: string): VoiceSessionCreateMe
     ws.close(1008, "invalid opening frame");
     return undefined;
   }
-  if (
-    !validateVoiceControlMessage(parsed).ok ||
-    !isRecord(parsed) ||
-    parsed.kind !== "session.create"
-  ) {
+  if (!isVoiceControlMessage(parsed) || parsed.kind !== "session.create") {
     ws.close(1008, "expected session.create");
     return undefined;
   }
-  return parsed as unknown as VoiceSessionCreateMessage;
+  return parsed;
 }
 
 function sessionCreateMatchesVoiceProfile(

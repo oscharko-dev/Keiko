@@ -201,7 +201,7 @@ import {
   resolveConversationMemoryContext,
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
-import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import { buildMemoryRecordFromProposal, memoryIdOfProposal } from "./memory-record-builders.js";
 import { persistCapturedMemory } from "./memory-capture-persistence.js";
 import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
@@ -1660,7 +1660,7 @@ async function candidateActionFromOutcome(
   if (!isPersistableMemoryCandidate(outcome)) {
     return { kind: "rejected", reason: SENSITIVE_MEMORY_REJECTION_REASON };
   }
-  const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+  const proposalId = memoryIdOfProposal(outcome.proposal.proposalId);
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
   if (isSuppressedByForgetTombstone(deps.memoryVault, record)) {
     return { kind: "rejected", reason: FORGOTTEN_MEMORY_SUPPRESSION_REASON };
