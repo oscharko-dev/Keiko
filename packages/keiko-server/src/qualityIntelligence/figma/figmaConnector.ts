@@ -250,13 +250,13 @@ const readinessNode = (raw: RawFigmaNode): FigmaNode => {
   const status = isRecord(raw.devStatus) ? raw.devStatus.type : undefined;
   const devStatus = isText(status) ? status : undefined;
   const children = Array.isArray(raw.children) ? raw.children.map(readinessNode) : undefined;
-  return {
+  const node: FigmaNode = {
     id: isText(raw.id) ? raw.id : "",
     name: isText(raw.name) ? raw.name : "",
     type: isText(raw.type) ? raw.type : "",
-    ...(devStatus === undefined ? {} : { devStatus: { type: devStatus } }),
-    ...(children === undefined ? {} : { children }),
   };
+  const withStatus = devStatus === undefined ? node : { ...node, devStatus: { type: devStatus } };
+  return children === undefined ? withStatus : { ...withStatus, children };
 };
 
 const readinessFor = (

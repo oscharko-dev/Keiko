@@ -133,12 +133,12 @@ interface EntryAdmission {
 function admittedEntry(value: unknown): EntryAdmission {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     return { entry: undefined, refused: 1 };
-  let entry: OpenCodeNativeFormatterEntry = {};
+  const entry: OpenCodeNativeFormatterEntry = {};
   let refused = 0;
   for (const [key, field] of Object.entries(value as Readonly<Record<string, unknown>>)) {
     const admitted = admittedField(key, field);
     if (admitted === undefined) refused += 1;
-    else entry = { ...entry, ...admitted };
+    else Object.assign(entry, admitted);
   }
   return { entry, refused };
 }
