@@ -136,9 +136,14 @@ additional SonarCloud project, paid runner or required context is introduced.
   `tests/e2e/dev-server-env-hermetic.static.test.ts`. The repeat-failing unit tests
   (`osv-scanner-workflow`, `workflow-hygiene-job`) failed on Dependabot action bumps whose pins
   must move with the bump; that is the intended review, not a flake.
-- A nightly lane that repeats the unit suites and the smoke journeys several times with shuffled
-  order and reports every test that does not give the same verdict each time. It files into the
-  existing nightly reporting; it is not a required check.
+- **Nightly lane (done in this change):** `.github/workflows/test-stability.yml` runs every night
+  each eighth of the unit suites three times with different shuffle seeds, and the chromium smoke
+  journeys with `--repeat-each=3 --retries=0`. `scripts/report-unstable-tests.mjs` names every test
+  whose verdict changed between runs, was missing from a run or was reported flaky, and every test
+  that failed each time, in the job summary, and turns the lane red, like E2E Extended; it is not a
+  required check. `node scripts/report-unstable-tests.mjs vitest --repeats 6 -- <file>` reproduces
+  one suspect locally. Proven 2026-11-21 with a coin-flip test: six shuffled runs named it unstable
+  with four failures and two passes, and left its stable neighbour out **(M)**.
 - **Lint rules (done in this change):** `scripts/lib/eslint-test-determinism.mjs` holds every test
   file of the root config to three rules: no measured wall-clock duration compared outside
   `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS` (ADR-0139 D1; a timestamp ordered against another is allowed),
