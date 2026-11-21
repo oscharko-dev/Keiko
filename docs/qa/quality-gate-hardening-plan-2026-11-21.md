@@ -96,16 +96,26 @@ additional SonarCloud project, paid runner or required context is introduced.
 - **npm cache in every job** that installs (restore-only, the existing key).
 - **`edited` events:** extend the ADR-0178 resolver so a pull-request run whose head commit already
   has a successful run reuses that evidence instead of starting the matrix.
-- **Lost runners:** extend the ADR-0161 classifier by the exact runner-loss annotations
-  ("The runner has received a shutdown signal", "lost communication with the server"), still one
-  re-run per run and only for `ci.yml` and `workflow-hygiene.yml`.
-- **Timeouts** on the five jobs that have none.
-- **Dependabot:** group or pin the update that cannot resolve, so it stops producing a daily red run.
+- **Lost runners (measured, not pursued):** the only runner-loss annotation in the measured window
+  was "The job was not acquired by Runner of type hosted even after multiple attempts", on two
+  zero-step macOS jobs. Both runs also carried genuine failures, so a new ADR-0161 signature would
+  have re-run nothing **(M)**. The mid-step runner losses were the SonarCloud scan, which leaves the
+  pull-request path in P1.
+- **Timeouts (done in this change)** on the five jobs that had none.
+- **Dependabot (done in this change):** the daily npm group failed `npm ci` with ERESOLVE in every
+  job because it proposed TypeScript 7, which typescript-eslint 8.x does not accept. The TypeScript
+  major is ignored like Vitest 5, matching its `major-deferred` closeout disposition.
 
 ### P3 — Deterministic tests
 
-- Repair the journeys and unit tests that failed in three or more runs (list in section 1), each
-  with a failing-first reproduction.
+- **Smoke journeys (done in this change):** every repeat-failing journey of section 1 (chat-send,
+  a11y, atlassian-connectors-2246, support-report-download, memory-journal, voice-dialogue) failed
+  on the same cause: the startup update preflight read the public npm registry, and whenever a
+  release newer than the checkout existed, the update notice intercepted the click. The smoke dev
+  server's outbound traffic is hermetic now (`tests/e2e/support/dev-server-env.ts`), proven by
+  `tests/e2e/dev-server-env-hermetic.static.test.ts`. The repeat-failing unit tests
+  (`osv-scanner-workflow`, `workflow-hygiene-job`) failed on Dependabot action bumps whose pins
+  must move with the bump; that is the intended review, not a flake.
 - A nightly lane that repeats the unit suites and the smoke journeys several times with shuffled
   order and reports every test that does not give the same verdict each time. It files into the
   existing nightly reporting; it is not a required check.
