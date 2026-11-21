@@ -77,7 +77,7 @@ additional SonarCloud project, paid runner or required context is introduced.
 - **Sonar (done in this change):** the full SonarCloud analysis leaves the pull-request path and
   runs after integration, on every push to `dev` (ADR-0131 amendment 2026-11-21). A pull request
   is held by `check:sonar-rules` over its changed files inside `ci` and by the pre-push hook that
-  runs the local SonarJS scan (`npm run hooks:install`, `.githooks/pre-push`). Splitting the
+  runs the local SonarJS scan (`node scripts/install-git-hooks.mjs`, `.githooks/pre-push`). Splitting the
   TypeScript program was measured first and rejected: three parts left the largest at 4518 of 6370
   program files, because imports pull the server into every part, and a 6144 MB bridge still ran
   out of memory after eight minutes **(M)**. The `dev` scan keeps the configuration that passed in

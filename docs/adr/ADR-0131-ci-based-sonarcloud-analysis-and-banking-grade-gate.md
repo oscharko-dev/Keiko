@@ -199,7 +199,7 @@ change.
 - On a pull request, Core quality runs `npm run check:sonar-rules` (the SonarJS rule engine over the
   changed files, against the pull-request base), so the `ci` aggregate still fails on a SonarJS
   finding the plugin can detect.
-- Before a push, `.githooks/pre-push` (installed with `npm run hooks:install`) runs
+- Before a push, `.githooks/pre-push` (installed with `node scripts/install-git-hooks.mjs`) runs
   `npm run gates:sonar`: the real SonarJS analyzer over the changed files in the self-hosted local
   SonarQube. It covers the rules the plugin does not ship. A hook can be skipped; the full
   analysis on `dev` is the backstop.

@@ -6,7 +6,7 @@
 # self-hosted local SonarQube (docker/gates/run-sonar.sh, docs/qa/local-sonar.md). A finding on a
 # changed file, or a scan that cannot run, stops the push.
 #
-# Installed once per checkout with `npm run hooks:install`.
+# Installed once per checkout with `node scripts/install-git-hooks.mjs`.
 set -euo pipefail
 
 zero_sha="0000000000000000000000000000000000000000"

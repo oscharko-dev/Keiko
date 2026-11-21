@@ -225,7 +225,7 @@ This shapes the product _and_ how you work on it:
 npm install               # installs all workspaces from the single root lockfile
 npm run provision:usearch # ONCE per checkout — see below; without it `npm test` is red
 npm run provision:ripgrep # ONCE per checkout for the OpenCode coding runtime's search tools — see below
-npm run hooks:install     # ONCE per checkout — the pre-push SonarJS scan (§3)
+node scripts/install-git-hooks.mjs     # ONCE per checkout — the pre-push SonarJS scan (§3)
 npm run build             # build:packages (tsc -b) then the root build
 npm run dev:start         # Node BFF + Next.js UI on ONE loopback URL (http://127.0.0.1:1983)
 npm run dev:stop
@@ -323,8 +323,8 @@ npm run gates:sonar
 
 **This is mandatory before you open or update a pull request against `dev`.** It runs a real SonarJS
 analyzer against your diff in a self-hosted, digest-pinned container and exits non-zero if it finds
-anything. It never contacts sonarcloud.io. After `npm run hooks:install`, `.githooks/pre-push` runs
-it on every push and stops the push on a finding or on a scan that cannot run.
+anything. It never contacts sonarcloud.io. After `node scripts/install-git-hooks.mjs`,
+`.githooks/pre-push` runs it on every push and stops the push on a finding or on a scan that cannot run.
 
 The full SonarCloud analysis is not a pull-request check (ADR-0131, amended 2026-11-21): the
 whole-project scan needs most of a hosted runner's memory, and its verdict depended on the runner

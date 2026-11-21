@@ -74,8 +74,8 @@ describe("install-git-hooks", () => {
       });
       expect(configured.stdout.trim()).toBe(HOOKS_PATH);
       expect(lines).toEqual([
-        "hooks:install: PASS - core.hooksPath=.githooks (was unset)\n",
-        "hooks:install: PASS - core.hooksPath=.githooks (unchanged)\n",
+        "install-git-hooks: PASS - core.hooksPath=.githooks (was unset)\n",
+        "install-git-hooks: PASS - core.hooksPath=.githooks (unchanged)\n",
       ]);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
@@ -89,15 +89,10 @@ describe("install-git-hooks", () => {
     try {
       const status = runInstall({ repoRoot: scratch, stdout: sink, stderr: sink });
       expect(status).toBe(1);
-      expect(lines.join("")).toMatch(/^hooks:install: FAIL - git config/u);
+      expect(lines.join("")).toMatch(/^install-git-hooks: FAIL - git config/u);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
-  });
-
-  it("is exposed as one npm command", () => {
-    const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-    expect(packageJson.scripts["hooks:install"]).toBe("node scripts/install-git-hooks.mjs");
   });
 });
 

@@ -938,8 +938,8 @@ The full SonarCloud analysis is not a pull-request check (ADR-0131, amended 2026
 most of a hosted runner's memory, and its verdict depended on the runner rather than on the change.
 A pull request is held by two SonarJS checks of its changed files: the `SonarJS rules on the changed
 files` step of Core quality inside `ci`, and the local pre-push scan (`npm run gates:sonar`, run by
-`.githooks/pre-push` once `npm run hooks:install` has been run in the checkout). The full
-analysis runs on every push to `dev` and on a manual dispatch; a finding there turns the `dev` run
+`.githooks/pre-push` once `node scripts/install-git-hooks.mjs` has been run in the checkout).
+The full analysis runs on every push to `dev` and on a manual dispatch; a finding there turns the `dev` run
 red and is repaired by the next pull request.
 
 `workflow hygiene` runs actionlint, the pinned-SHA verification, zizmor and the OSV lockfile scan as

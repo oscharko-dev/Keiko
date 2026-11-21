@@ -5,8 +5,8 @@ npm run gates:sonar
 ```
 
 **Run it before you open or update a pull request against `dev`. Not after. Not "if the diff looks
-risky".** After `npm run hooks:install` (once per checkout), `.githooks/pre-push` runs it on every
-push and stops the push on a finding or on a scan that cannot run.
+risky".** After `node scripts/install-git-hooks.mjs` (once per checkout), `.githooks/pre-push`
+runs it on every push and stops the push on a finding or on a scan that cannot run.
 
 Since the ADR-0131 amendment of 2026-11-21 the full SonarCloud analysis runs only after
 integration, on every push to `dev`. A pull request is held by this scan and by the

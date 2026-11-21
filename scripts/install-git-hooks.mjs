@@ -2,7 +2,9 @@
 // Points this checkout's Git hooks at the repository-owned `.githooks` directory (ADR-0131
 // amendment 2026-11-21). The full SonarCloud analysis runs only after integration, so the
 // pre-push hook runs the local SonarJS scan of the changed files before a branch leaves the
-// machine. Run once per checkout: `npm run hooks:install`.
+// machine. Run once per checkout: `node scripts/install-git-hooks.mjs`. It is not a package.json
+// script, because package.json is a pinned input of the design-system evidence
+// (docs/design-system/evidence/1300).
 
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
@@ -46,13 +48,13 @@ export function runInstall({
   };
   const outcome = installGitHooks(git);
   if (!outcome.ok) {
-    stderr.write(`hooks:install: FAIL - ${outcome.reason}\n`);
+    stderr.write(`install-git-hooks: FAIL - ${outcome.reason}\n`);
     return 1;
   }
   const { previous, current } = outcome;
   const before = previous === "" ? "unset" : previous;
   const change = previous === current ? "unchanged" : `was ${before}`;
-  stdout.write(`hooks:install: PASS - core.hooksPath=${current} (${change})\n`);
+  stdout.write(`install-git-hooks: PASS - core.hooksPath=${current} (${change})\n`);
   return 0;
 }
 
