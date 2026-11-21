@@ -1,3 +1,4 @@
+import { identityRedactor } from "../../_support.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -712,7 +713,7 @@ describe("evidenceDir wiring (issue #620)", () => {
       scope: "run",
       reviewerLabel: "tester",
       now: "2026-06-01T11:00:00.000Z",
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
 
     const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), depsWithDir));
@@ -811,7 +812,7 @@ describe("evidenceDir wiring (issue #620)", () => {
         },
       ],
       evidenceDir,
-      redact: (value: unknown): unknown => value,
+      redact: identityRedactor,
     });
     writeFileSync(
       join(evidenceDir, "qi", `${runId}.candidates.json`),
@@ -911,7 +912,7 @@ describe("evidenceDir wiring (issue #620)", () => {
         },
       ],
       evidenceDir,
-      redact: (value: unknown): unknown => value,
+      redact: identityRedactor,
     });
     writeFileSync(
       join(evidenceDir, "qi", `${runId}.candidates.json`),

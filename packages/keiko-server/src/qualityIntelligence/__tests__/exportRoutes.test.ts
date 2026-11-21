@@ -4,6 +4,7 @@
 // the handler directly. Verifies local adapters, unknown adapter, TMS dry-run/live,
 // no-candidates, and formula-injection safety. Pure function + real fs.
 
+import { identityRedactor } from "../../_support.js";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -149,7 +150,7 @@ function recordSingleCandidateRun(
     generatedAt: "2026-06-01T10:01:00.000Z",
     candidates: [candidate],
     evidenceDir,
-    redact: (v: unknown): unknown => v,
+    redact: identityRedactor,
   });
 }
 
@@ -169,7 +170,7 @@ beforeEach(() => {
     generatedAt: "2026-06-01T10:01:00.000Z",
     candidates: [makeCandidate("User can log in with valid credentials")],
     evidenceDir,
-    redact: (v: unknown): unknown => v,
+    redact: identityRedactor,
   });
 });
 
@@ -413,7 +414,7 @@ describe("handleQiExport — CSV adapter", () => {
       generatedAt: "2026-06-01T10:02:00.000Z",
       candidates: [makeCandidate("Überweisung prüfen")],
       evidenceDir,
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
     const result = asResult(
       await handleQiExport(
@@ -588,7 +589,7 @@ describe("handleQiExport — WP6 export traceability and provenance", () => {
         },
       ],
       evidenceDir,
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
 
     const { envelope } = await exportJson();
@@ -635,7 +636,7 @@ describe("handleQiExport — WP6 export traceability and provenance", () => {
         { ...makeCandidate("User can reset a password", "cand-002"), derivedFromAtomIds: [] },
       ],
       evidenceDir,
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
 
     const { envelope } = await exportJson();
@@ -683,7 +684,7 @@ describe("handleQiExport — WP6 export traceability and provenance", () => {
         { ...makeCandidate("User can reset a password", "cand-002"), derivedFromAtomIds: [] },
       ],
       evidenceDir,
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
 
     const { envelope } = await exportJson();
@@ -794,7 +795,7 @@ describe("handleQiExport — WP6 export traceability and provenance", () => {
       candidateId: "cand-001",
       editedFields: { title: "User can log in with a revised title" },
       evidenceDir,
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
       provenance: {
         editedAt: "2026-06-01T12:00:00.000Z",
         editedBy: "human",
@@ -826,7 +827,7 @@ describe("handleQiExport — TMS adapter live export disabled", () => {
       candidateId: "cand-001",
       reviewerLabel: "tester",
       now: new Date().toISOString(),
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
 
     const result = asResult(
@@ -871,7 +872,7 @@ describe("handleQiExport — TMS dryRun with approved candidate", () => {
       candidateId: "cand-001",
       reviewerLabel: "tester",
       now: new Date().toISOString(),
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
 
     const result = asResult(
@@ -957,7 +958,7 @@ describe("handleQiExport — deliverable quality gate", () => {
         candidateId,
         reviewerLabel: "auditor",
         now: "2026-08-03T10:00:00.000Z",
-        redact: (value: unknown): unknown => value,
+        redact: identityRedactor,
       });
 
       const result = asResult(
@@ -984,7 +985,7 @@ describe("handleQiExport — deliverable quality gate", () => {
         scope: "run",
         reviewerLabel: "auditor",
         now: "2026-08-03T10:00:00.000Z",
-        redact: (value: unknown): unknown => value,
+        redact: identityRedactor,
       });
 
       const result = asResult(
@@ -1022,7 +1023,7 @@ describe("handleQiExport — surfaces omitted-by-quality-gate count on partial m
         },
       ],
       evidenceDir,
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
 
     const result = asResult(
@@ -1075,7 +1076,7 @@ describe("handleQiExport — run-scope approval gates the approvedOnly filter", 
       scope: "run",
       reviewerLabel: "tester",
       now: "2026-06-01T12:00:00.000Z",
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
   };
 
@@ -1166,7 +1167,7 @@ describe("handleQiExport — formula-injection safety in CSV", () => {
         generatedAt: "2026-06-01T10:01:00.000Z",
         candidates: [makeCandidate(title, "cand-inject")],
         evidenceDir: injDir,
-        redact: (v: unknown): unknown => v,
+        redact: identityRedactor,
       });
 
       const result = asResult(
@@ -1249,7 +1250,7 @@ describe("handleQiExport — Epic #711 multi-format export", () => {
       candidateId: "cand-001",
       reviewerLabel: "tester",
       now: "2026-06-01T12:00:00.000Z",
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
   };
 
@@ -1398,7 +1399,7 @@ describe("handleQiExport — reflects an inline candidate edit", () => {
       editedFields: { title: "Curated login title", steps: ["Open app", "Authenticate"] },
       provenance: { editedAt: "2026-06-09T11:00:00.000Z", editedBy: "human", editorLabel: "Alice" },
       evidenceDir,
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
     expect(edit.ok).toBe(true);
     const result = asResult(
@@ -1590,7 +1591,7 @@ describe("handleQiExport — emits export evidence (Issue #283, AC4)", () => {
       candidateId: "cand-001",
       reviewerLabel: "tester",
       now: "2026-06-01T12:00:00.000Z",
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
   };
 
@@ -1749,7 +1750,7 @@ describe("handleQiExport — spreadsheet formula escape is explicit and whitespa
         generatedAt: "2026-06-01T10:01:00.000Z",
         candidates: [makeCandidate(title, "cand-inj2")],
         evidenceDir: injDir,
-        redact: (v: unknown): unknown => v,
+        redact: identityRedactor,
       });
       const result = asResult(
         await handleQiExport(
@@ -1805,7 +1806,7 @@ describe("handleQiExport — Issue #724 AC sweep (multi-format + QC live gate)",
       candidateId: "cand-001",
       reviewerLabel: "tester",
       now: "2026-06-01T12:00:00.000Z",
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
     const result = asResult(
       await handleQiExport(

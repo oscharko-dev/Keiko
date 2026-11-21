@@ -3,6 +3,7 @@
 // Seeds a temp evidenceDir with a run manifest carrying a coverage matrix, then exercises the
 // dedicated traceability route for CSV + Markdown, the missing-run path, and the no-coverage path.
 
+import { identityRedactor } from "../../_support.js";
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,7 +81,7 @@ beforeEach(() => {
     generatedAt: "2026-06-01T10:01:00.000Z",
     candidates: [makeCandidate("tc-1", "Traceability candidate")],
     evidenceDir,
-    redact: (value: unknown): unknown => value,
+    redact: identityRedactor,
   });
 });
 
@@ -354,7 +355,7 @@ describe("handleQiTraceabilityExport — readability (#790)", () => {
       generatedAt: "2026-06-01T10:01:00.000Z",
       candidates: [makeCandidate("tc-1", "Verify lockout engages on the fifth failed login")],
       evidenceDir,
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
     const result = await handleQiTraceabilityExport(ctx(RUN_ID, makeReq(null)), deps(evidenceDir));
     expect(result.status).toBe(200);

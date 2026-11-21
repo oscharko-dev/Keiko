@@ -6,6 +6,7 @@
 // redactor is applied; an `edit` audit entry is recorded; and the IMMUTABLE `<runId>.qi.json`
 // manifest file is byte-identical after the edit. No network or SSE — pure function + real fs.
 
+import { identityRedactor } from "../../_support.js";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -138,7 +139,7 @@ beforeEach(() => {
     generatedAt: "2026-06-08T10:00:00.000Z",
     candidates: [seedCandidate("tc-1")],
     evidenceDir,
-    redact: (v) => v,
+    redact: identityRedactor,
   });
 });
 
@@ -574,7 +575,7 @@ describe("handleQiEditCandidate — review-state preservation + observability", 
       candidateId: "tc-1",
       reviewerLabel: "Alice",
       now: "2026-06-09T10:00:00.000Z",
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
     const result = asResult(
       await handleQiEditCandidate(
@@ -610,7 +611,7 @@ describe("handleQiEditCandidate — review-state preservation + observability", 
       scope: "run",
       reviewerLabel: "Release reviewer",
       now: "2026-06-09T10:00:00.000Z",
-      redact: (v: unknown): unknown => v,
+      redact: identityRedactor,
     });
     const result = asResult(
       await handleQiEditCandidate(
@@ -794,7 +795,7 @@ describe("handleQiEditCandidate — multi-candidate isolation", () => {
       generatedAt: "2026-06-08T10:00:00.000Z",
       candidates: [seedCandidate("tc-1"), seedCandidate("tc-2")],
       evidenceDir,
-      redact: (v) => v,
+      redact: identityRedactor,
     });
     const result = asResult(
       await handleQiEditCandidate(

@@ -126,7 +126,7 @@ it("keeps identical ticket keys attributable to their original Jira instance aft
   store.close();
   const dbPath = join(project, "historical-sources.db");
   const redactor = buildRedactor({});
-  const options = { redactString: (value: string): string => String(redactor(value)) };
+  const options = { redactString: (value: string): string => redactor(value) };
   store = createNodeUiStore(dbPath, options);
   store.createProject(project);
   const chat = store.createChat(project, "Historical Jira sources", "model");
