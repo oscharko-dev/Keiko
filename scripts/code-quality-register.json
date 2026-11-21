@@ -8287,9 +8287,6 @@
     "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadArtifact.ts": {
       "anti-slop/no-unknown-parameters": 2
     },
-    "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadNodeProcess.test.ts": {
-      "anti-slop/no-unknown-returns": 2
-    },
     "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadNodeProcess.ts": {
       "anti-slop/no-conditional-empty-object-spread": 2,
       "anti-slop/no-unknown-parameters": 1
