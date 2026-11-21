@@ -161,7 +161,10 @@ say "Starting the local SonarQube (first run pulls the image and takes a few min
 printf '  waiting for the server'
 data_recreated=false
 for _ in $(seq 1 120); do
-  server_status="$(ask "${host}/api/system/status" 2>/dev/null | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p')"
+  # A server that is still starting refuses or drops the connection, so curl fails; under
+  # `set -e -o pipefail` that failure must read as "not up yet", never end the run (cold start).
+  server_status="$(ask "${host}/api/system/status" 2>/dev/null | sed -n 's/.*"status":"\([A-Z_]*\)".*/\1/p')" ||
+    server_status=""
   if [[ "${server_status}" == "UP" ]]; then
     printf ' up\n'
     break
