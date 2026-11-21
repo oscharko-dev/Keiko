@@ -249,7 +249,7 @@
       "source": "packages/keiko-ui/src/lib/browser-approval-key-store.ts",
       "observedDigest": "139d0f8d1da0fb501ef15abf96f63922df368bcf1fac891a61c226d47ad38a31",
       "change": "The private IndexedDB transaction helper became generic over the value it captures, and the existing active-record validation moved into the read callback, which now captures a valid record or an unreadable marker. Valid, missing and invalid records produce the same available, missing and unavailable outcomes. No key, crypto, timeout or abort path changed.",
-      "coverage": "The co-located browser-approval-key-store.test.ts and the full keiko-ui suite pass on the amended source. The real-browser storage runs above observed the previous source, whose digest is observedDigest; sourceHashes names the current source.",
+      "coverage": "The co-located browser-approval-key-store.test.ts and the full keiko-ui suite pass on the amended source. The real-browser storage runs above observed the previous source, whose digest is observedDigest. Only the browser-approval-key-store.ts entry of sourceHashes names the current source; the other entries keep the digests the runs observed.",
       "freshRealBrowserRun": false,
       "ownerDisposition": "Re-pinned with this amendment by owner decision on 2026-11-21. A fresh real-browser storage run against the current source is still owed."
     }
