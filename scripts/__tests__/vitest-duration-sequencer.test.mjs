@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { checkProperty, propertySettings } from "../../tests/support/property-testing.ts";
 import DurationSequencer, {
+  PER_FILE_SECONDS,
   assignShard,
   readFileDurations,
 } from "../lib/vitest-duration-sequencer.mjs";
@@ -44,6 +45,17 @@ describe("assignShard", () => {
       ["c.test.ts", "a.test.ts"],
       ["b.test.ts", "new.test.ts"],
     ]);
+  });
+
+  it("weighs every file with the per-file floor, so many short files cannot crowd one shard", () => {
+    // Without the floor, all eight 0.1 s files fill the shard beside the 4 s one. With it they
+    // cost 1.1 s each against 5 s, so two of them join the long file.
+    const durations = { "long.test.ts": 4 };
+    for (let file = 0; file < 8; file += 1) durations[`short-${String(file)}.test.ts`] = 0.1;
+    const keys = Object.keys(durations);
+    expect(assignShard(keys, durations, 2, 2, 0)).toHaveLength(8);
+    expect(assignShard(keys, durations, 2, 2)).toHaveLength(6);
+    expect(PER_FILE_SECONDS).toBe(1);
   });
 
   it("still spreads files evenly when nothing is measured", () => {
@@ -98,9 +110,12 @@ describe("assignShard properties", () => {
         const times = keys.map((key) => durations[key]).filter((value) => value !== undefined);
         const sorted = [...times].sort((a, b) => a - b);
         const fallback = sorted.length === 0 ? 1 : sorted[Math.floor(sorted.length / 2)];
-        const loads = shards.map((shard) => seconds(shard, durations, fallback));
+        const cost = Object.fromEntries(
+          keys.map((key) => [key, (durations[key] ?? fallback) + PER_FILE_SECONDS]),
+        );
+        const loads = shards.map((shard) => seconds(shard, cost));
         const total = loads.reduce((sum, load) => sum + load, 0);
-        const longest = Math.max(0, ...keys.map((key) => durations[key] ?? fallback));
+        const longest = Math.max(0, ...keys.map((key) => cost[key]));
         for (const load of loads) expect(load).toBeLessThanOrEqual(total / count + longest + 1e-9);
       },
     });

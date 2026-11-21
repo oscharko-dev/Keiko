@@ -3,10 +3,12 @@
 import { BaseSequencer } from "vitest/node";
 
 export function readFileDurations(url?: URL): Record<string, number>;
+export const PER_FILE_SECONDS: number;
 export function assignShard(
   keys: readonly string[],
   durations: Readonly<Record<string, number | undefined>>,
   index: number,
   count: number,
+  perFileSeconds?: number,
 ): string[];
 export default class DurationSequencer extends BaseSequencer {}

@@ -37,20 +37,37 @@ function median(values) {
 }
 
 /**
- * The keys of shard `index` of `count` when `keys` are spread by `durations`. Deterministic for a
- * given key set whatever its order: keys are ordered by time, longest first, ties by key.
+ * A fixed cost every file carries on top of its measured time. The first balanced CI run
+ * (44945708966) put 1135 short files on one shard and 836 on each other; that shard measured 3442
+ * worker seconds against 2681–3125 on the others, because a file measured as short tends to take
+ * longer next time. Re-assigning that run's files with this floor brings its slowest shard from
+ * 3442 to 3164 seconds on the run's own times; any floor from 0.5 to 5 s lands within runner noise.
  */
-export function assignShard(keys, durations, index, count) {
+export const PER_FILE_SECONDS = 1;
+
+function assertShard(index, count) {
   if (!Number.isInteger(count) || count < 1 || !Number.isInteger(index)) {
     throw new TypeError(`shard must be i/n with integers, got ${String(index)}/${String(count)}`);
   }
   if (index < 1 || index > count) {
     throw new RangeError(`shard index ${String(index)} is outside 1..${String(count)}`);
   }
+}
+
+/**
+ * The keys of shard `index` of `count` when `keys` are spread by `durations` plus the per-file
+ * floor. Deterministic for a given key set whatever its order: keys are ordered by cost, highest
+ * first, ties by key.
+ */
+export function assignShard(keys, durations, index, count, perFileSeconds = PER_FILE_SECONDS) {
+  assertShard(index, count);
   const known = keys.map((key) => durations[key]).filter((value) => Number.isFinite(value));
   const fallback = median(known);
   const timed = [...new Set(keys)]
-    .map((key) => ({ key, seconds: Number.isFinite(durations[key]) ? durations[key] : fallback }))
+    .map((key) => ({
+      key,
+      seconds: (Number.isFinite(durations[key]) ? durations[key] : fallback) + perFileSeconds,
+    }))
     .sort((a, b) => b.seconds - a.seconds || (a.key < b.key ? -1 : Number(a.key > b.key)));
   const load = Array.from({ length: count }, () => 0);
   const selected = [];

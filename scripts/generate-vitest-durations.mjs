@@ -50,7 +50,8 @@ export function commonRoot(paths) {
 
 /**
  * Per repository-relative file, the largest time any blob measured (a file both coverage runs
- * execute counts with its slower run), rounded to a tenth of a second, keys sorted.
+ * execute, or that several CI runs measured, counts with its slower run), rounded to a tenth of a
+ * second, keys sorted.
  */
 export function durationsFromBlobs(blobs) {
   const files = blobs.flatMap((blob) => blob[1] ?? []);

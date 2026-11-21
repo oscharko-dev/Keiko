@@ -118,7 +118,9 @@ additional SonarCloud project, paid runner or required context is introduced.
   D6). A matching head commit alone never qualifies: `dev` may have advanced since. The edit waits
   in the pull request's one concurrency group instead of starting a second matrix next to the push
   run (ADR-0157 D5, amended). Without a completed green run of the same candidate tree the matrix
-  runs.
+  runs. Proven live on this pull request: after the green run 44945708966 on head 6e0baedd5, the
+  body edit started run 44949123957, which finished in 50 seconds with `ci` green and every heavy
+  job, the WebKit shards included, skipped **(M)**.
 - **Lost runners (measured, not pursued):** the only runner-loss annotation in the measured window
   was "The job was not acquired by Runner of type hosted even after multiple attempts", on two
   zero-step macOS jobs. Both runs also carried genuine failures, so a new ADR-0161 signature would
@@ -200,6 +202,14 @@ additional SonarCloud project, paid runner or required context is introduced.
   (about 38 to about 31 minutes), level with the `ui` and Windows smoke jobs; the script shards go
   from 1428, 933 and 1112 to 1158 each **(M)**. A fifth package shard would add a runner without
   shortening the verdict.
+- **First balanced run (44945708966) (M):** the whole verdict took 38 minutes; `ui` 23 (was
+  44–53), the WebKit shards 9 and 12, the script shards 11–14 (were up to 28), the package shards
+  26–34 (were up to 38). The assignment had put 1135 short files on one package shard and 836 on
+  each other, and that shard measured 3442 worker seconds against 2681–3125: a file measured as
+  short tends to take longer next time. Every file now also carries a 1 s floor
+  (`PER_FILE_SECONDS`); re-assigned with it, that run's own times bring the slowest shard to 3164
+  seconds, and any floor from 0.5 to 5 s lands within the runners' noise of about 10 %. The times
+  were refreshed from both runs' blobs, keeping each file's larger measurement.
 - **Measured and not pursued:** building the packages once per run. `build:packages` takes 7–13 s
   per job on a hosted runner (run 44932528367), the same as uploading and downloading its output
   as an artifact, and a build job ahead of the matrix would delay every job that waits for it
