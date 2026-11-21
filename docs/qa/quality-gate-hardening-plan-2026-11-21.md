@@ -82,6 +82,10 @@ additional SonarCloud project, paid runner or required context is introduced.
   program files, because imports pull the server into every part, and a 6144 MB bridge still ran
   out of memory after eight minutes **(M)**. The `dev` scan keeps the configuration that passed in
   #4481.
+- **Local pre-push scan (done in this change):** the first push with a changed `tests/e2e` file
+  ran the local 4608 MiB bridge out of memory: one root-owned file made SonarJS build the whole
+  6370-file program **(M)**. The changed-file scan now hands SonarJS programs rooted at the changed
+  files with the owner's compiler options (615 program files for that push) and passes **(M)**.
 - **ESLint (#4202):** read `scripts/lint-repository.mjs`, measure the peak per partition, and run
   each partition as its own process with a ceiling that fits the budget; the same budget rule as
   Sonar.

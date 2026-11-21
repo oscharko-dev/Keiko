@@ -316,6 +316,21 @@ process.stdin.on("data", (d) => (s += d)).on("end", () => {
   process.stdout.write(JSON.parse(s).tests.join(","));
 });')"
     printf '  scoped analysis and verdict to %s changed file(s)\n' "${changed_count}"
+    # The configured root tsconfig owns about 6,400 files, and SonarJS builds the whole program of
+    # every tsconfig that owns an analysed file: one changed file under src/, tests/ or
+    # packages/*/src ran the bridge out of its heap. Programs rooted at the changed files keep the
+    # owner's compiler options and ambient declarations, so those files resolve the same types.
+    trap 'node "${repo_root}/scripts/local-sonar-typescript-programs.mjs" --remove "${checkout_id}" >/dev/null 2>&1 || true' EXIT
+    if changed_tsconfigs="$(printf '%s' "${changed_json}" |
+      node "${repo_root}/scripts/local-sonar-typescript-programs.mjs" --write "${checkout_id}")"; then
+      if [[ -n "${changed_tsconfigs}" ]]; then
+        printf '  type information from changed-file programs: %s\n' "${changed_tsconfigs}"
+      fi
+    else
+      changed_tsconfigs=""
+      printf '\033[33m! changed-file TypeScript programs could not be prepared\033[0m\n'
+      printf '  type information comes from the configured tsconfigs (a large program may need more heap)\n'
+    fi
   fi
 fi
 
@@ -348,6 +363,8 @@ if [[ "${analysis_scope}" == "${changed_scope}" ]]; then
     "-Dsonar.inclusions=${source_inclusions:-${empty_source_inclusion}}"
     "-Dsonar.test.inclusions=${test_inclusions:-${empty_test_inclusion}}"
   )
+  [[ -n "${changed_tsconfigs:-}" ]] &&
+    scanner_args+=("-Dsonar.typescript.tsconfigPaths=${changed_tsconfigs}")
 fi
 # SonarQube is already started and host-verified above. Do not let `compose run` reconcile the
 # dependency again: a recreation between the readiness check and scanner startup disconnects the

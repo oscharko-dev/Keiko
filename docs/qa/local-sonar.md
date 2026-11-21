@@ -148,6 +148,16 @@ instead of losing the runner mid-scan. A local checkout with built `dist` folder
 larger TypeScript programs than CI (#4481: 9074 + 4399 against 7059 + 2629 program files), so a
 local whole-project scan needs more bridge heap than CI and says nothing about CI's ceiling.
 
+A changed-file scan does not load the configured TypeScript programs. The root tsconfig owns about
+6,400 files, and SonarJS builds the whole program of every tsconfig that owns an analysed file, so
+one changed file under `src/`, `tests/` or `packages/*/src` ran the 4.5 GiB bridge out of memory
+(2026-11-21). `scripts/local-sonar-typescript-programs.mjs` writes one tsconfig per owner, rooted at
+the changed files with the owner's compiler options and ambient declarations, under the owner's
+gitignored `.keiko/` directory, and the runner removes them on exit. Imports are followed as before,
+so the changed files resolve the same types (615 instead of 6,370 program files for a changed e2e
+support file). If the programs cannot be prepared, the runner says so and falls back to the
+configured tsconfigs.
+
 A whole-project scan — requested with `--all` or required when a changed path cannot be expressed
 as an exact inclusion — needs more than 4.5 GiB on this repository. On a machine whose Docker VM
 has the room, raise the bridge heap for that run:
