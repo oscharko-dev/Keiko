@@ -17,7 +17,22 @@ import {
 // the tsconfigPaths property parser, the checkout-id guard and path-separator normalization.
 const SEGMENTS = ["src", "tests", "packages", "keiko-ui", "e2e", "a.ts", "b.tsx", "env.d.ts", "x"];
 const PADDING = ["", " ", "  ", "\t", " \t "];
-const ID_CHARACTERS = [..."0123456789abcdef", ..."ABCDEFgz/.-_ \\"];
+const HEX = [..."0123456789abcdef"];
+
+function replaceAt(id, random, characters) {
+  const at = random.integer(0, id.length - 1);
+  return `${id.slice(0, at)}${random.pick(characters)}${id.slice(at + 1)}`;
+}
+
+// Each turns a valid twelve-character lowercase hex id into one the guard must refuse.
+const ID_MUTATIONS = [
+  (id, random) => id.slice(0, random.integer(0, 11)),
+  (id, random) =>
+    `${id}${Array.from({ length: random.integer(1, 4) }, () => random.pick(HEX)).join("")}`,
+  (id, random) => replaceAt(id, random, [..."ABCDEF"]),
+  (id, random) => replaceAt(id, random, [..."gz/.-_ \\"]),
+  (id, random) => (random.chance(0.5) ? `${id}\n` : ` ${id}`),
+];
 
 function segmentPath(random, minimum, maximum) {
   const length = random.integer(minimum, maximum);
@@ -75,15 +90,16 @@ describe("generatedTsconfigPath properties", () => {
     let rejected = 0;
     await checkProperty({
       name,
+      // The expected outcome comes from how the id was built, never from the guard's own pattern:
+      // a valid id is twelve lowercase hex characters, and each mutation breaks exactly that.
       generate: (random) => {
-        const length = random.chance(0.5) ? 12 : random.integer(0, 16);
-        const hexOnly = random.chance(0.5);
-        const pool = hexOnly ? ID_CHARACTERS.slice(0, 16) : ID_CHARACTERS;
-        const id = Array.from({ length }, () => random.pick(pool)).join("");
-        return { id, owner: `${segmentPath(random, 0, 3)}/tsconfig.json`.replace(/^\//u, "") };
+        const valid = Array.from({ length: 12 }, () => random.pick(HEX)).join("");
+        const owner = `${segmentPath(random, 0, 3)}/tsconfig.json`.replace(/^\//u, "");
+        if (random.chance(0.5)) return { id: valid, owner, valid: true };
+        return { id: random.pick(ID_MUTATIONS)(valid, random), owner, valid: false };
       },
-      property: ({ id, owner }) => {
-        if (!/^[0-9a-f]{12}$/u.test(id)) {
+      property: ({ id, owner, valid }) => {
+        if (!valid) {
           rejected += 1;
           expect(() => generatedTsconfigPath(owner, id)).toThrow(TypeError);
           return;

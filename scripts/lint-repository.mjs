@@ -14,10 +14,11 @@
 // as a whole (packages/keiko-ui, which lints itself) gets no partition.
 //
 // Every partition's peak resident memory is measured and held to a budget of three quarters of the
-// 16 GiB hosted runner. A partition that grows past it fails here with its name and its peak, while
-// the runner still has room to report, instead of a later run dying of memory with no reason given
-// (quality-gate hardening plan 2026-11-21, P1). The peaks also go to the job summary in CI, so the
-// trend is visible before the budget is reached.
+// 16 GiB hosted runner, while it runs: the preloaded reporter's watchdog thread stops a partition
+// the moment it grows past the budget, and the partition then fails here with its name and the size
+// it reached, while the runner still has room to report, instead of a later run dying of memory
+// with no reason given (quality-gate hardening plan 2026-11-21, P1). The peaks also go to the job
+// summary in CI, so the trend is visible before the budget is reached.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -121,7 +122,15 @@ export function lintPartition(root, args, peakFile) {
   const result = spawnSync(
     process.execPath,
     [...process.execArgv, "--import", PEAK_REPORTER, ESLINT_BIN, "--max-warnings=0", ...args],
-    { cwd: root, stdio: "inherit", env: { ...process.env, KEIKO_PEAK_RSS_FILE: peakFile } },
+    {
+      cwd: root,
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        KEIKO_PEAK_RSS_FILE: peakFile,
+        KEIKO_PEAK_RSS_BUDGET_BYTES: String(PEAK_RSS_BUDGET_BYTES),
+      },
+    },
   );
   return result.status ?? 1;
 }

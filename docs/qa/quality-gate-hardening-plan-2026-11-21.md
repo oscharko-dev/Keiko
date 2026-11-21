@@ -90,8 +90,11 @@ additional SonarCloud project, paid runner or required context is introduced.
   per partition. Each partition's peak resident memory is now measured (a preloaded
   `process.resourceUsage()` reporter, equal to `/usr/bin/time -l` to the kilobyte on
   `packages/keiko-security`, 4.75 GB **(M)**), written to the job summary, and held to 12 GiB, three
-  quarters of the 16 GiB runner. A partition above it fails with its name and peak instead of
-  taking the runner down. The Node heap ceiling stays in `package.json`, whose digest the design
+  quarters of the 16 GiB runner, while the partition runs: a watchdog thread in the measured
+  process samples its resident memory four times a second, on its own event loop so that a long
+  synchronous program build cannot starve it, and stops the process the moment it crosses the
+  budget. The partition then fails with its name and the size it reached instead of taking the
+  runner down; a test holds a busy main thread past a 32 MiB budget and sees it stopped. The Node heap ceiling stays in `package.json`, whose digest the design
   evidence pins. Measured locally over all 28 partitions: `keiko-server` peaks at 10.3 GiB, every
   other partition at 5.9 GiB or less **(M)**; `keiko-server` is the one to split next.
 - **Budget evidence for every heavy step:** record peak resident memory of the scan, lint, the

@@ -11,7 +11,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -52,13 +52,21 @@ export const DRIFT_REPAIRS = Object.freeze([
   },
 ]);
 
-/** Paths `git status --porcelain` reports as changed or untracked. */
+/**
+ * Paths `git status --porcelain -z` reports as changed or untracked. The NUL-separated form never
+ * quotes a path (a tab, a non-ASCII byte or a quote stays as it is, whatever core.quotePath says),
+ * and a rename or copy carries its origin as the next record, which is skipped.
+ */
 export function changedPaths(porcelain) {
-  return porcelain
-    .split("\n")
-    .filter((line) => line.length > 3)
-    .map((line) => line.slice(3).replace(/^.* -> /u, ""))
-    .sort((left, right) => left.localeCompare(right));
+  const records = porcelain.split("\0");
+  const paths = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (record.length <= 3) continue;
+    paths.push(record.slice(3));
+    if (/[RC]/u.test(record.slice(0, 2))) index += 1;
+  }
+  return paths.sort((left, right) => left.localeCompare(right));
 }
 
 /**
@@ -73,15 +81,29 @@ export function newlyChanged(before, after) {
     .sort((left, right) => left.localeCompare(right));
 }
 
-function contentDigest(root, path) {
-  const file = join(root, path);
-  return existsSync(file)
-    ? createHash("sha256").update(readFileSync(file)).digest("hex")
-    : "deleted";
+function sha256(data) {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+/**
+ * What a changed path holds now: a regular file by its content, a symbolic link by its target text
+ * (a link to a directory cannot be read as a file), anything else by its kind.
+ */
+export function contentDigest(root, path) {
+  let entry;
+  try {
+    entry = lstatSync(join(root, path));
+  } catch (error) {
+    if (error?.code === "ENOENT") return "deleted";
+    throw error;
+  }
+  if (entry.isSymbolicLink()) return `link:${sha256(readlinkSync(join(root, path)))}`;
+  if (entry.isFile()) return sha256(readFileSync(join(root, path)));
+  return entry.isDirectory() ? "directory" : "other";
 }
 
 function gitStatus(root, git) {
-  const result = spawnSync(git, ["status", "--porcelain", "--untracked-files=all"], {
+  const result = spawnSync(git, ["status", "--porcelain", "-z", "--untracked-files=all"], {
     cwd: root,
     encoding: "utf8",
   });
