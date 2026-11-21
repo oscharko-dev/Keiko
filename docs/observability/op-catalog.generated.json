@@ -110163,7 +110163,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1661",
+      "site": "packages/keiko-server/src/deps.ts:1663",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111045,7 +111045,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2452",
+      "site": "packages/keiko-server/src/deps.ts:2454",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111172,7 +111172,7 @@
     {
       "op": "memory.consolidation.job.run",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/memory-consolidation-handlers.ts:558",
+      "site": "packages/keiko-server/src/memory-consolidation-handlers.ts:559",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111562,7 +111562,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4726",
+      "site": "packages/keiko-server/src/deps.ts:4728",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111722,7 +111722,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3311",
+      "site": "packages/keiko-server/src/deps.ts:3313",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
