@@ -136,9 +136,10 @@ choice can otherwise exceed the VM limit and terminate the bridge before it repo
 
 CI runs the same two caps on a 16 GB runner: the engine at 3 GiB in `ci.yml`, the bridge at
 `sonar.javascript.node.maxspace` in `sonar-project.properties`. The `Verify Sonar full-analysis
-evidence` step reads both from the scanner log and fails when they leave the runner less than
-2 GiB (`--require-runner-memory-budget`), so a raised ceiling turns the job red with a named
-reason instead of losing the runner mid-scan. A local checkout with built `dist` folders analyzes
+evidence` step reads both configured ceilings from the scanner log (an engine without `-Xmx` is
+charged its default quarter of the runner) and fails when they leave the runner less than 2 GiB
+(`--require-runner-memory-budget`), so a raised ceiling turns the job red with a named reason
+instead of losing the runner mid-scan. A local checkout with built `dist` folders analyzes
 larger TypeScript programs than CI (#4481: 9074 + 4399 against 7059 + 2629 program files), so a
 local whole-project scan needs more bridge heap than CI and says nothing about CI's ceiling.
 

@@ -453,14 +453,19 @@ export function fullAnalysisEvidenceFailures(contents) {
 }
 
 // The hosted runner runs the scanner engine JVM and the JS/TS analyzer's Node.js process side by
-// side. Their two heap ceilings must leave the operating system, the runner agent and both
-// processes' non-heap memory a fixed reserve; otherwise the runner itself is killed mid-analysis
-// and the job ends without a log (#4481, 2026-11-21: two attempts lost at 5:19 with Node.js 12480 MB
-// and an uncapped 3996 MB engine heap on a 15983 MB runner). SonarJS reports the machine and the
-// Node.js ceiling; the engine reports its committed heap on every architecture graph read.
+// side. Their two heap ceilings must leave the operating system, the runner agent, the scanner CLI
+// and both processes' non-heap memory a fixed reserve; otherwise the runner itself is killed
+// mid-analysis and the job ends without a log (#4481, 2026-11-21: two attempts lost at 5:19 with a
+// Node.js ceiling of 12480 MB and an uncapped engine on a 15983 MB runner). SonarJS reports the
+// machine and the Node.js ceiling. The CLI reports SONAR_SCANNER_JAVA_OPTS when it is set; without
+// an -Xmx there the engine JVM takes its default ceiling, a quarter of the machine. A committed
+// engine heap above the configured ceiling (`memory total=`) is never ignored.
 const RUNNER_MEMORY_RESERVE_MB = 2048;
+const JVM_DEFAULT_HEAP_FRACTION = 4;
 const NODE_MEMORY_CONFIGURATION = /Memory configuration: OS \((\d+) MB\), Node\.js \((\d+) MB\)/u;
+const ENGINE_JAVA_OPTS = /SONAR_SCANNER_JAVA_OPTS=(.*)$/u;
 const ENGINE_HEAP_TOTAL = /memory total=(\d+)(?:\s|\|)/u;
+const XMX_UNIT_MB = { g: 1024, k: 1 / 1024, m: 1 };
 
 function largestMatch(lines, pattern, group) {
   return lines.reduce((largest, line) => {
@@ -470,17 +475,26 @@ function largestMatch(lines, pattern, group) {
   }, undefined);
 }
 
+function configuredEngineHeapMb(lines) {
+  const options = lines
+    .findLast((line) => ENGINE_JAVA_OPTS.test(line))
+    ?.match(ENGINE_JAVA_OPTS)?.[1];
+  const xmx = options?.match(/(?:^|\s)-Xmx(\d+)([gkm])(?:\s|$)/iu);
+  if (xmx === undefined || xmx === null) return undefined;
+  const amount = decimalInteger(xmx[1] ?? "");
+  const unit = XMX_UNIT_MB[(xmx[2] ?? "").toLowerCase()];
+  return amount === undefined || unit === undefined ? undefined : Math.ceil(amount * unit);
+}
+
 export function runnerMemoryBudgetFailures(contents) {
   const lines = contents.split(/\r?\n/u);
   const osMb = largestMatch(lines, NODE_MEMORY_CONFIGURATION, 1);
   const nodeMb = largestMatch(lines, NODE_MEMORY_CONFIGURATION, 2);
-  const engineMb = largestMatch(lines, ENGINE_HEAP_TOTAL, 1);
   if (osMb === undefined || nodeMb === undefined) {
     return ["no SonarJS memory configuration receipt proves the runner memory budget"];
   }
-  if (engineMb === undefined) {
-    return ["no scanner engine heap receipt proves the runner memory budget"];
-  }
+  const ceilingMb = configuredEngineHeapMb(lines) ?? Math.floor(osMb / JVM_DEFAULT_HEAP_FRACTION);
+  const engineMb = Math.max(ceilingMb, largestMatch(lines, ENGINE_HEAP_TOTAL, 1) ?? 0);
   const headroomMb = osMb - nodeMb - engineMb;
   return headroomMb >= RUNNER_MEMORY_RESERVE_MB
     ? []

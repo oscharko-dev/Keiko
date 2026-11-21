@@ -609,51 +609,96 @@ describe("Sonar scanner warning gate", () => {
 // #4481, run 44873019970: two attempts lost their runner at 5:19 inside the scan. The attempt that
 // survived logged this budget: the Node.js ceiling plus the engine heap exceeded the runner itself,
 // because SONAR_SCANNER_OPTS only sizes the CLI bootstrapper, not the provisioned engine JVM.
-function hostedMemoryLog({ engineMb, nodeMb, osMb = 15983 }) {
+function hostedMemoryLog({ engineJavaOpts, engineTotalMb, nodeMb, osMb = 15983 }) {
   return [
+    ...(engineJavaOpts === undefined
+      ? []
+      : [`2026-11-21T08:43:30Z 08:43:30.120 INFO  SONAR_SCANNER_JAVA_OPTS=${engineJavaOpts}`]),
     "2026-11-21T08:44:16Z 08:44:16.904 INFO  Configured Node.js --max-old-space-size=12288.",
     `2026-11-21T08:44:18Z 08:44:18.720 INFO  Memory configuration: OS (${String(osMb)} MB), Node.js (${String(nodeMb)} MB).`,
     "2026-11-21T08:53:15Z 08:53:15.299 INFO  * Protobuf reading starting | memory total=1200 | free=403 | used=797 (MB)",
-    `2026-11-21T08:53:28Z 08:53:28.486 INFO  * Build hierarchy graph complete (filtered=false) | memory total=${String(engineMb)} | free=212 | used=1783 (MB)`,
+    ...(engineTotalMb === undefined
+      ? []
+      : [
+          `2026-11-21T08:53:28Z 08:53:28.486 INFO  * Build hierarchy graph complete (filtered=false) | memory total=${String(engineTotalMb)} | free=212 | used=1783 (MB)`,
+        ]),
   ].join("\n");
 }
 
 describe("hosted runner memory budget", () => {
   it("rejects the Node.js ceiling and uncapped engine heap that overcommitted the runner", () => {
-    expect(runnerMemoryBudgetFailures(hostedMemoryLog({ engineMb: 3996, nodeMb: 12480 }))).toEqual([
+    expect(
+      runnerMemoryBudgetFailures(hostedMemoryLog({ engineTotalMb: 3996, nodeMb: 12480 })),
+    ).toEqual([
       "runner memory budget: Node.js 12480 MB plus scanner engine 3996 MB leaves -493 MB of " +
         "15983 MB, below the 2048 MB reserve",
     ]);
   });
 
-  it("rejects a capped engine heap when the Node.js ceiling still leaves no reserve", () => {
-    expect(runnerMemoryBudgetFailures(hostedMemoryLog({ engineMb: 2048, nodeMb: 12480 }))).toEqual([
+  it("charges an uncapped engine its default quarter of the runner before it has grown", () => {
+    expect(runnerMemoryBudgetFailures(hostedMemoryLog({ nodeMb: 10432 }))).toEqual([
+      "runner memory budget: Node.js 10432 MB plus scanner engine 3995 MB leaves 1556 MB of " +
+        "15983 MB, below the 2048 MB reserve",
+    ]);
+  });
+
+  it("rejects a capped engine when the Node.js ceiling still leaves no reserve", () => {
+    expect(
+      runnerMemoryBudgetFailures(hostedMemoryLog({ engineJavaOpts: "-Xmx2048m", nodeMb: 12480 })),
+    ).toEqual([
       "runner memory budget: Node.js 12480 MB plus scanner engine 2048 MB leaves 1455 MB of " +
         "15983 MB, below the 2048 MB reserve",
     ]);
   });
 
-  it("accepts a budget that leaves exactly the reserve and judges the largest engine receipt", () => {
-    expect(runnerMemoryBudgetFailures(hostedMemoryLog({ engineMb: 2048, nodeMb: 11887 }))).toEqual(
-      [],
-    );
-    expect(runnerMemoryBudgetFailures(hostedMemoryLog({ engineMb: 2049, nodeMb: 11887 }))).toEqual([
-      "runner memory budget: Node.js 11887 MB plus scanner engine 2049 MB leaves 2047 MB of " +
+  it("accepts the configured ceilings that leave exactly the reserve, in any -Xmx unit", () => {
+    for (const engineJavaOpts of ["-Xmx3072m", "-Xmx3g", "-Xmx3145728k", "-Xss1m -Xmx3G"]) {
+      expect(
+        runnerMemoryBudgetFailures(
+          hostedMemoryLog({ engineJavaOpts, engineTotalMb: 3072, nodeMb: 10863 }),
+        ),
+      ).toEqual([]);
+    }
+    expect(
+      runnerMemoryBudgetFailures(hostedMemoryLog({ engineJavaOpts: "-Xmx3072m", nodeMb: 10864 })),
+    ).toEqual([
+      "runner memory budget: Node.js 10864 MB plus scanner engine 3072 MB leaves 2047 MB of " +
         "15983 MB, below the 2048 MB reserve",
     ]);
   });
 
-  it("fails closed when either receipt is missing", () => {
+  it("never lets a configured ceiling hide a larger committed engine heap", () => {
     expect(
-      runnerMemoryBudgetFailures("INFO * Protobuf reading starting | memory total=1200 |"),
+      runnerMemoryBudgetFailures(
+        hostedMemoryLog({ engineJavaOpts: "-Xmx1024m", engineTotalMb: 3996, nodeMb: 10432 }),
+      ),
+    ).toEqual([
+      "runner memory budget: Node.js 10432 MB plus scanner engine 3996 MB leaves 1555 MB of " +
+        "15983 MB, below the 2048 MB reserve",
+    ]);
+  });
+
+  it("falls back to the default quarter when SONAR_SCANNER_JAVA_OPTS carries no usable -Xmx", () => {
+    for (const engineJavaOpts of ["-Xss1m", "-Xmx", "-Xmx3t", "-XX:MaxRAMPercentage=10"]) {
+      expect(
+        runnerMemoryBudgetFailures(hostedMemoryLog({ engineJavaOpts, nodeMb: 10432 })),
+      ).toEqual([
+        "runner memory budget: Node.js 10432 MB plus scanner engine 3995 MB leaves 1556 MB of " +
+          "15983 MB, below the 2048 MB reserve",
+      ]);
+    }
+  });
+
+  it("fails closed without the SonarJS memory configuration receipt", () => {
+    expect(
+      runnerMemoryBudgetFailures(
+        "INFO  SONAR_SCANNER_JAVA_OPTS=-Xmx3072m\nINFO memory total=1200 |",
+      ),
     ).toEqual(["no SonarJS memory configuration receipt proves the runner memory budget"]);
-    expect(
-      runnerMemoryBudgetFailures("INFO  Memory configuration: OS (15983 MB), Node.js (8384 MB)."),
-    ).toEqual(["no scanner engine heap receipt proves the runner memory budget"]);
   });
 
   it("enforces the budget only when the CLI requests it", () => {
-    const overcommitted = () => hostedMemoryLog({ engineMb: 3996, nodeMb: 12480 });
+    const overcommitted = () => hostedMemoryLog({ engineTotalMb: 3996, nodeMb: 12480 });
     expect(
       runSonarLogCheck({ log: (message) => message, path: "/tmp/sonar.log", read: overcommitted }),
     ).toEqual([]);
