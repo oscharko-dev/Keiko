@@ -92,7 +92,8 @@ additional SonarCloud project, paid runner or required context is introduced.
   `packages/keiko-security`, 4.75 GB **(M)**), written to the job summary, and held to 12 GiB, three
   quarters of the 16 GiB runner. A partition above it fails with its name and peak instead of
   taking the runner down. The Node heap ceiling stays in `package.json`, whose digest the design
-  evidence pins.
+  evidence pins. Measured locally over all 28 partitions: `keiko-server` peaks at 10.3 GiB, every
+  other partition at 5.9 GiB or less **(M)**; `keiko-server` is the one to split next.
 - **Budget evidence for every heavy step:** record peak resident memory of the scan, lint, the
   coverage shards and the builds (`/usr/bin/time -v`) into the job summary, and fail above three
   quarters of the runner's RAM.
@@ -145,10 +146,17 @@ additional SonarCloud project, paid runner or required context is introduced.
 
 ### P4 — Drift gates repair themselves on request
 
-- One command, `npm run gates:fix-drift`, that regenerates every generated or pinned artifact that
-  has a deterministic source (op catalog, support-code inventory, tool catalog, zizmor anchors,
-  Sonar scope digests through a new `--write`, ADR index), and prints what it changed.
-- Every drift gate's failure message names that command.
+- **Done in this change:** one command, `node scripts/fix-gate-drift.mjs`, rebuilds the packages
+  the generators read and regenerates every artifact whose expected state is derived from the tree:
+  the op catalog, the support-code inventory, the tool catalog manifest and migration, zizmor
+  anchors that only shifted, and the shrink-only legacy failure-path register. It prints what each
+  repair changed. It is a script, not an npm script, because the design evidence pins the digest of
+  `package.json`. The drift gates' failure messages name it. Proven 2026-11-21: with a line inserted
+  into `ci.yml`, a reformatted op catalog and a changed support-code inventory, one run restored all
+  three and named each file **(M)**; a corrupted anchor that is not a shift is refused for a human.
+- Deliberately not in it: the Sonar scope digests and the ADR index are approvals, not drift (each
+  re-pin carries its reason in a comment), and no coverage, i18n or performance baseline is ever
+  written by it, so the command cannot bless a regression.
 
 ### P5 — Speed (#4163, remaining items)
 

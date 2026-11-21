@@ -349,6 +349,6 @@ export function failureSurfaceInventoryDrift(generatedBytes, checkedInBytes) {
   if (generatedBytes === checkedInBytes) return undefined;
   return (
     "docs/observability/failure-surface-inventory.generated.json is stale: it differs from what " +
-    "scripts/generate-op-catalog.mjs generates now. Run `npm run generate:op-catalog` and commit."
+    "scripts/generate-op-catalog.mjs generates now. Run `npm run generate:op-catalog` (or `node scripts/fix-gate-drift.mjs`) and commit."
   );
 }

@@ -46,6 +46,20 @@ both. `node_modules` deliberately lives in that volume rather than a bind mount:
 and a Linux container cannot share one install without swapping platform-native binaries under each
 other.
 
+## Repairing drift in one command
+
+When a drift gate fails because a generated artifact no longer matches the tree (the op catalog
+after moved lines, the support-code inventory, the tool catalog, a shifted zizmor anchor, a register
+entry that may now shrink), run:
+
+```bash
+node scripts/fix-gate-drift.mjs
+```
+
+It rebuilds the packages the generators read, runs every repair, and lists the files each one
+changed. Review and commit them like any other edit. It never writes a baseline or an approval pin,
+so a gate it does not repair is a finding to fix at its source.
+
 ## Pinned toolchain for a local `npm test`
 
 Run `npm test` under **Node.js 26.13.1 with npm 11.20.0**, the sole approved exact pair.
