@@ -8,6 +8,11 @@ import {
   markdownAnchors,
   markdownLinks,
 } from "../check-git-delivery-evidence.mjs";
+import {
+  LINEAR_RATIO_MAX,
+  measureScaling,
+  scalingRatio,
+} from "../../tests/support/property-testing.ts";
 
 function tempRoot() {
   return mkdtempCompat("git-delivery-evidence-");
@@ -130,20 +135,28 @@ describe("markdownAnchors / markdownLinks — bounded regex safety (S8786)", () 
   it("slugs a heading built from a pathologically long line without catastrophic backtracking", () => {
     // Shape that made the previous `(.+?)\s*$` superlinear: a long whitespace run followed by more
     // non-whitespace content, so `\s*$` cannot succeed until `.+?` has grown past the whole run.
-    const line = `## a${" ".repeat(20000)}b`;
-    const start = Date.now();
-    const anchors = markdownAnchors(line);
-    expect(Date.now() - start).toBeLessThan(300);
-    expect(anchors).toEqual(new Set(["a-b"]));
+    expect(markdownAnchors(`## a${" ".repeat(20000)}b`)).toEqual(new Set(["a-b"]));
+    // Compares two input sizes rather than one absolute time, so a loaded runner cannot fail it
+    // and a superlinear pattern still does.
+    const scaling = measureScaling({
+      build: (size) => `## a${" ".repeat(size)}b`,
+      run: (line) => markdownAnchors(line),
+      size: 1_000,
+      maximumSize: 256_000,
+    });
+    expect(scalingRatio(scaling), JSON.stringify(scaling)).toBeLessThan(LINEAR_RATIO_MAX);
   });
 
   it("scans a pathologically link-shaped line without catastrophic backtracking", () => {
     // Shape that made the previous `[^\]]+`/`[^)]+` superlinear: many repeated `[` characters, none
     // of which ever closes, forcing a full O(n) consume-then-backtrack at every position.
-    const markdown = "[".repeat(20000);
-    const start = Date.now();
-    const links = markdownLinks(markdown);
-    expect(Date.now() - start).toBeLessThan(300);
-    expect(links).toEqual([]);
+    expect(markdownLinks("[".repeat(20000))).toEqual([]);
+    const scaling = measureScaling({
+      build: (size) => "[".repeat(size),
+      run: (markdown) => markdownLinks(markdown),
+      size: 1_000,
+      maximumSize: 256_000,
+    });
+    expect(scalingRatio(scaling), JSON.stringify(scaling)).toBeLessThan(LINEAR_RATIO_MAX);
   });
 });
