@@ -19,15 +19,28 @@ import { BaseSequencer } from "vitest/node";
 
 const DURATIONS_URL = new URL("./vitest-file-durations.json", import.meta.url);
 
-/** The measured seconds per repository-relative test file, or none when the file is unreadable. */
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The measured seconds per repository-relative test file, or none when there is no document. A
+ * document that is not valid JSON, or whose `files` is not an object, fails the run: a corrupted
+ * balance must be repaired, not silently replaced by path-hash shards.
+ */
 export function readFileDurations(url = DURATIONS_URL) {
+  let text;
   try {
-    const parsed = JSON.parse(readFileSync(url, "utf8"));
-    return parsed !== null && typeof parsed.files === "object" ? parsed.files : {};
+    text = readFileSync(url, "utf8");
   } catch (error) {
     if (error?.code === "ENOENT") return {};
     throw error;
   }
+  const parsed = JSON.parse(text);
+  if (!isPlainObject(parsed) || !isPlainObject(parsed.files)) {
+    throw new TypeError("vitest-file-durations.json needs an object of files to seconds");
+  }
+  return parsed.files;
 }
 
 function median(values) {
@@ -85,17 +98,25 @@ function specKey(root, spec) {
 }
 
 export default class DurationSequencer extends BaseSequencer {
+  /** The measured times; a seam for tests, which cannot hand Vitest's constructor any. */
+  fileDurations() {
+    return readFileDurations();
+  }
+
   // Vitest awaits the result, so a plain promise keeps the base class's asynchronous contract.
   shard(files) {
     const { root, shard } = this.ctx.config;
-    const durations = readFileDurations();
-    // A file belongs to one project; the project name keeps two projects' copies of a path apart.
-    const byKey = new Map(
-      files.map((spec) => [`${spec.project.name}:${specKey(root, spec)}`, spec]),
-    );
+    const durations = this.fileDurations();
+    // The project name keeps two projects' copies of a path apart; specs that still share a key
+    // (one file collected twice in one project) move together, so none of them is dropped.
+    const byKey = new Map();
+    for (const spec of files) {
+      const key = `${spec.project.name}:${specKey(root, spec)}`;
+      byKey.set(key, [...(byKey.get(key) ?? []), spec]);
+    }
     const lookup = {};
-    for (const [key, spec] of byKey) lookup[key] = durations[specKey(root, spec)];
+    for (const [key, [spec]] of byKey) lookup[key] = durations[specKey(root, spec)];
     const keys = assignShard([...byKey.keys()], lookup, shard.index, shard.count);
-    return Promise.resolve(keys.map((key) => byKey.get(key)));
+    return Promise.resolve(keys.flatMap((key) => byKey.get(key)));
   }
 }

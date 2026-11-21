@@ -162,30 +162,34 @@ describe("lint peak memory budget", () => {
   // CodeRabbit on #4513: a budget read only after exit cannot stop a partition that takes the runner
   // down. The child below holds its main thread in synchronous work, as a TypeScript program build
   // does, so only a watchdog with its own event loop can stop it before it finishes.
-  it("stops a process the moment it grows past the budget, even while its main thread is busy", () => {
-    const directory = mkdtempSync(join(tmpdir(), "keiko-peak-"));
-    const file = join(directory, "peak.txt");
-    try {
-      const busy =
-        "const kept = [Buffer.alloc(64 * 1024 * 1024, 1)]; const end = Date.now() + 10_000;" +
-        " while (Date.now() < end) kept.length; console.log('survived');";
-      const result = spawnSync(process.execPath, ["--import", REPORTER, "-e", busy], {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          KEIKO_PEAK_RSS_FILE: file,
-          KEIKO_PEAK_RSS_BUDGET_BYTES: String(32 * 1024 * 1024),
-        },
-      });
-      expect(result.stdout).not.toContain("survived");
-      expect(result.signal).toBe("SIGKILL");
-      expect(result.stderr).toContain("exceeded the budget of 33554432");
-      // The size it reached is recorded, so the partition fails with a measured peak.
-      expect(Number(readFileSync(file, "utf8").trim())).toBeGreaterThan(32 * 1024 * 1024);
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
+  // Windows reports a killed process without a POSIX signal name.
+  it.skipIf(process.platform === "win32")(
+    "stops a process the moment it grows past the budget, even while its main thread is busy",
+    () => {
+      const directory = mkdtempSync(join(tmpdir(), "keiko-peak-"));
+      const file = join(directory, "peak.txt");
+      try {
+        const busy =
+          "const kept = [Buffer.alloc(64 * 1024 * 1024, 1)]; const end = Date.now() + 10_000;" +
+          " while (Date.now() < end) kept.length; console.log('survived');";
+        const result = spawnSync(process.execPath, ["--import", REPORTER, "-e", busy], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            KEIKO_PEAK_RSS_FILE: file,
+            KEIKO_PEAK_RSS_BUDGET_BYTES: String(32 * 1024 * 1024),
+          },
+        });
+        expect(result.stdout).not.toContain("survived");
+        expect(result.signal).toBe("SIGKILL");
+        expect(result.stderr).toContain("exceeded the budget of 33554432");
+        // The size it reached is recorded, so the partition fails with a measured peak.
+        expect(Number(readFileSync(file, "utf8").trim())).toBeGreaterThan(32 * 1024 * 1024);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("leaves a process inside its budget to finish and report its peak", () => {
     const directory = mkdtempSync(join(tmpdir(), "keiko-peak-"));

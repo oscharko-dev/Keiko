@@ -75,7 +75,10 @@ describe("changed-path accounting", () => {
 
   // CodeRabbit on #4513: line-based porcelain quotes such names, and the quoted path then read as
   // deleted, so a repair's edit to it went unreported.
-  it("reads the names git would quote exactly as they are on disk", () => {
+  // Windows forbids a tab and a double quote in a file name, and a directory link needs privileges.
+  const posixIt = it.skipIf(process.platform === "win32");
+
+  posixIt("reads the names git would quote exactly as they are on disk", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-drift-git-"));
     try {
       spawnSync("git", ["init", "-q"], { cwd: root });
@@ -94,20 +97,23 @@ describe("changed-path accounting", () => {
     }
   });
 
-  it("digests a symbolic link to a directory by its target instead of failing to read it", () => {
-    const root = mkdtempSync(join(tmpdir(), "keiko-drift-link-"));
-    try {
-      mkdirSync(join(root, "target"));
-      symlinkSync("target", join(root, "link"), "dir");
-      writeFileSync(join(root, "file.json"), "{}\n");
-      expect(contentDigest(root, "link")).toMatch(/^link:[0-9a-f]{64}$/u);
-      expect(contentDigest(root, "target")).toBe("directory");
-      expect(contentDigest(root, "file.json")).toMatch(/^[0-9a-f]{64}$/u);
-      expect(contentDigest(root, "absent.json")).toBe("deleted");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+  posixIt(
+    "digests a symbolic link to a directory by its target instead of failing to read it",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-drift-link-"));
+      try {
+        mkdirSync(join(root, "target"));
+        symlinkSync("target", join(root, "link"), "dir");
+        writeFileSync(join(root, "file.json"), "{}\n");
+        expect(contentDigest(root, "link")).toMatch(/^link:[0-9a-f]{64}$/u);
+        expect(contentDigest(root, "target")).toBe("directory");
+        expect(contentDigest(root, "file.json")).toMatch(/^[0-9a-f]{64}$/u);
+        expect(contentDigest(root, "absent.json")).toBe("deleted");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("attributes to a repair only what it changed, a restored file included", () => {
     const before = new Map([

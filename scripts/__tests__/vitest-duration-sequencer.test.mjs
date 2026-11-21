@@ -134,6 +134,10 @@ describe("readFileDurations", () => {
       writeFileSync(path, "{");
       // A corrupted document fails the run instead of silently dropping the balance.
       expect(() => readFileDurations(pathToFileURL(path))).toThrow(SyntaxError);
+      for (const document of ["null", "[]", '{"files":null}', '{"files":[]}', '{"files":3}']) {
+        writeFileSync(path, document);
+        expect(() => readFileDurations(pathToFileURL(path)), document).toThrow(TypeError);
+      }
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -146,7 +150,49 @@ describe("readFileDurations", () => {
   });
 });
 
+class FixedDurations extends DurationSequencer {
+  constructor(ctx, durations) {
+    super(ctx);
+    this.durations = durations;
+  }
+
+  fileDurations() {
+    return this.durations;
+  }
+}
+
+function shardsOf(specs, durations, count, root = "/repo") {
+  return Promise.all(
+    Array.from({ length: count }, (_, index) =>
+      new FixedDurations({ config: { root, shard: { index: index + 1, count } } }, durations).shard(
+        specs,
+      ),
+    ),
+  );
+}
+
 describe("DurationSequencer", () => {
+  it("reads a backslash module id with its repository-relative forward-slash key", async () => {
+    // On Windows Vitest reports backslash separators; the measured times are keyed with forward
+    // slashes. Were the backslashes kept, no time would match, every file would cost the same, and
+    // the 90 s file would share a shard instead of running alone.
+    const spec = (name) => ({ moduleId: `/repo/tests\\${name}`, project: { name: "" } });
+    const durations = { "tests/slow.test.ts": 90, "tests/a.test.ts": 1, "tests/b.test.ts": 1 };
+    const specs = ["slow.test.ts", "a.test.ts", "b.test.ts"].map(spec);
+    const shards = await shardsOf(specs, durations, 2);
+    expect(shards.find((shard) => shard.length === 1)).toEqual([specs[0]]);
+  });
+
+  it("keeps two projects' copies of one path, and a spec collected twice, on some shard", async () => {
+    const spec = (name) => ({ moduleId: "/repo/tests/a.test.ts", project: { name } });
+    const specs = [spec("node"), spec("jsdom"), spec("node")];
+    const shards = await shardsOf(specs, { "tests/a.test.ts": 5 }, 2);
+    expect(shards.flat()).toHaveLength(3);
+    expect(new Set(shards.flat())).toEqual(new Set(specs));
+    // The two node copies move together.
+    expect(shards.find((shard) => shard.includes(specs[0]))).toContain(specs[2]);
+  });
+
   it("shards Vitest specifications by their repository-relative path", async () => {
     const root = "/repo";
     const spec = (path) => ({ moduleId: `${root}/${path}`, project: { name: "" } });
