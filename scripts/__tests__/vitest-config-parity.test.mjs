@@ -2,6 +2,7 @@ import { globSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import DurationSequencer from "../lib/vitest-duration-sequencer.mjs";
 import { vitestMaxWorkers } from "../lib/vitest-workers.mjs";
 
 // GEN-TEST-FLAKE-001: the release-blocking coverage run (vitest.coverage.packages.config.ts) and the
@@ -71,6 +72,15 @@ describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
     // and also a worker override, and both are legitimate.
     expect(coverageWorkers).toBe(vitestMaxWorkers(process.env));
   });
+
+  // Quality-gate plan P5: the CI coverage shards split their files by measured time. A config that
+  // drops the sequencer falls back to path-hash shards, whose slowest shard was the verdict.
+  it.each([JUDGING_COVERAGE_CONFIG, "vitest.coverage.scripts.config.ts"])(
+    "%s shards its CI runs by measured file time",
+    async (path) => {
+      expect((await loadConfig(path))?.test?.sequence?.sequencer).toBe(DurationSequencer);
+    },
+  );
 
   // GEN-TEST-FLAKE-002 is a per-process guarantee, and a shard is a process. Sharding across
   // runners must not become a way to raise worker concurrency past the deliberate cap. Issue #2705

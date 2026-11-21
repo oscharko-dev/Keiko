@@ -184,7 +184,24 @@ additional SonarCloud project, paid runner or required context is introduced.
   Chromium smoke 14–18 min, WebKit smoke 15–19 min, Jira chat 2–4 min and each editor suite 1–3
   min **(M)**, so the split removes the longest serial step from the critical path: `ui` drops
   from about 47 to about 29 minutes, and each WebKit shard runs about half of its former step in
-  parallel. The rebalanced coverage shards and the single package build remain open.
+  parallel.
+- **Done in this change:** the coverage shards split their files by measured time, not by path
+  hash. `scripts/lib/vitest-duration-sequencer.mjs` places the longest files first, each on the
+  shard with the least time so far, from `scripts/lib/vitest-file-durations.json`: the worker
+  seconds per file of a green run's hosted-runner coverage blobs, refreshed with
+  `node scripts/generate-vitest-durations.mjs <blob-*.json>`. A stale or missing time only worsens
+  the balance; every shard derives the same assignment, so every file still runs exactly once
+  (proven through Vitest's own API on both configurations: 3641 and 546 files, none twice, none
+  left out). On the blobs of run 44932528367 the package shards carried 2258, 3718, 3901 and 2999
+  worker seconds; balanced, each carries 3219, so the slowest package shard drops by about 17 %
+  (about 38 to about 31 minutes), level with the `ui` and Windows smoke jobs; the script shards go
+  from 1428, 933 and 1112 to 1158 each **(M)**. A fifth package shard would add a runner without
+  shortening the verdict.
+- **Measured and not pursued:** building the packages once per run. `build:packages` takes 7–13 s
+  per job on a hosted runner (run 44932528367), the same as uploading and downloading its output
+  as an artifact, and a build job ahead of the matrix would delay every job that waits for it
+  **(M)**. The next critical path is the Windows cross-platform smoke (24–42 min), whose two
+  installable-package smokes take 539 and 493 s.
 
 ### P6 — Gate health report
 
