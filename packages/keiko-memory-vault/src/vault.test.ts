@@ -2244,6 +2244,40 @@ describe("exact body lookup by the keyed fingerprint index (v17)", () => {
     reader.close();
   });
 
+  it("reads inside a transaction the caller already holds and leaves it open", () => {
+    const dir = freshDir();
+    const first = openVault(dir);
+    first.insertMemory(makeMemory({ id: "a" as MemoryId, body: "prefers dark mode" }));
+    first.close();
+    const reader = new DatabaseSync(join(dir, MEMORY_DB_FILENAME));
+    const sealing: MemoryRowSealing = {
+      cipher: {
+        sealString: (plaintext) => plaintext,
+        openString: () => "prefers dark mode",
+        sealBytes: (buf) => buf,
+        openBytes: (envelope) => envelope,
+        isSealed: () => true,
+      },
+      bodyHash: (body) => `h:${body}`,
+    };
+    reader.exec("UPDATE memories SET body_hash = NULL");
+    reader.exec("BEGIN");
+
+    const found = listMemoryMetadataByBodyHashRows(
+      reader,
+      scope,
+      "prefers dark mode",
+      sealing,
+      {},
+      1_700_000_000_000,
+    );
+
+    expect(found.map(({ id }) => id)).toEqual(["a"]);
+    expect(reader.isTransaction).toBe(true);
+    reader.exec("ROLLBACK");
+    reader.close();
+  });
+
   it("pages over rows with one timestamp without skipping or repeating one", () => {
     const vault = openVault(freshDir());
     const wordings = ["C++", "C#", "C", "C!", "C?", "C.", "C,", "C;", "C:", "C…", "c"];
