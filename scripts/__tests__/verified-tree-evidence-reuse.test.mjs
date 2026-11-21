@@ -38,6 +38,7 @@ const GATED_JOBS = Object.freeze([
   "cross-platform-smoke",
   "portable-secure-read",
   "firefox-smoke",
+  "webkit-smoke",
   "ui",
 ]);
 
@@ -55,6 +56,7 @@ const AGGREGATOR_DEFAULTS = Object.freeze({
   BUILD_SCAN_SBOM_SMOKE_RESULT: "success",
   CROSS_PLATFORM_RESULT: "success",
   FIREFOX_RESULT: "success",
+  WEBKIT_RESULT: "success",
   PORTABLE_SECURE_READ_RESULT: "success",
   SBOM_PROVENANCE_RESULT: "skipped",
   DOCUMENTATION_ONLY: "false",
@@ -79,6 +81,7 @@ const REUSING = Object.freeze({
   BUILD_SCAN_SBOM_SMOKE_RESULT: "skipped",
   CROSS_PLATFORM_RESULT: "skipped",
   FIREFOX_RESULT: "skipped",
+  WEBKIT_RESULT: "skipped",
   PORTABLE_SECURE_READ_RESULT: "skipped",
 });
 
@@ -155,6 +158,7 @@ const EXPECTED_CONDITIONS = Object.freeze({
   "cross-platform-smoke": COND(DOC_ONLY_CLAUSE),
   "portable-secure-read": COND(DOC_ONLY_CLAUSE),
   "firefox-smoke": COND(EDITOR_CLAUSE),
+  "webkit-smoke": COND(EDITOR_CLAUSE),
   ui: COND(),
 });
 
@@ -346,35 +350,60 @@ describe("the resolver inventory covers every gated job", () => {
   });
 });
 
-describe("complete Firefox smoke shards", () => {
+// Firefox and, since the quality-gate hardening plan's P5, WebKit each run the complete @smoke
+// selection in their own two-shard job, joined in required ci. Both are held to the same pins.
+const BROWSER_SMOKE_JOBS = [
+  {
+    browser: "Firefox",
+    job: "firefox-smoke",
+    env: "FIREFOX_RESULT",
+    script: "test:e2e:smoke:firefox",
+    project: "firefox",
+    step: "Release smoke E2E (Firefox)",
+    upload: "Upload Firefox smoke traces on failure",
+    artifact: "playwright-firefox-smoke-traces-${{ matrix.shard }}",
+  },
+  {
+    browser: "WebKit",
+    job: "webkit-smoke",
+    env: "WEBKIT_RESULT",
+    script: "test:e2e:smoke:webkit",
+    project: "webkit",
+    step: "Release smoke E2E (WebKit Safari proxy)",
+    upload: "Upload WebKit smoke traces on failure",
+    artifact: "playwright-webkit-smoke-traces-${{ matrix.shard }}",
+  },
+];
+
+describe.each(BROWSER_SMOKE_JOBS)("complete $browser smoke shards", (browser) => {
   it("distributes the full selection without increasing workers or the smoke deadline", () => {
-    const job = jobs["firefox-smoke"];
+    const job = jobs[browser.job];
     expect(job.strategy).toEqual({ "fail-fast": false, matrix: { shard: [1, 2] } });
     expect(job.permissions).toEqual({ contents: "read" });
-    const smoke = job.steps.find((step) => step.name === "Release smoke E2E (Firefox)");
+    const smoke = job.steps.find((step) => step.name === browser.step);
     expect(smoke).toEqual({
-      name: "Release smoke E2E (Firefox)",
+      name: browser.step,
       "timeout-minutes": 20,
-      run: "npm run test:e2e:smoke:firefox -- --shard=${{ matrix.shard }}/2",
+      run: `npm run ${browser.script} -- --shard=\${{ matrix.shard }}/2`,
     });
     const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
-    expect(manifest.scripts["test:e2e:smoke:firefox"]).toBe(
-      "playwright test --config tests/e2e/config/playwright.config.ts --project=firefox --grep @smoke",
+    expect(manifest.scripts[browser.script]).toBe(
+      `playwright test --config tests/e2e/config/playwright.config.ts --project=${browser.project} --grep @smoke`,
     );
     expect(readFileSync(join(repoRoot, "tests/e2e/config/playwright.config.ts"), "utf8")).toMatch(
       /workers: 1,/u,
     );
-    const upload = job.steps.find((step) => step.name === "Upload Firefox smoke traces on failure");
+    const upload = job.steps.find((step) => step.name === browser.upload);
     expect(upload.if).toBe("${{ failure() }}");
-    expect(upload.with.name).toBe("playwright-firefox-smoke-traces-${{ matrix.shard }}");
+    expect(upload.with.name).toBe(browser.artifact);
     expect(jobs.ui.steps.some((step) => step.name === smoke.name)).toBe(false);
   });
 
   it("runs ui independently while required ci joins both browser results", () => {
     expect(jobs.ui.needs).toEqual(["verified-tree"]);
     expect(pullRequestJobNames(jobs.ui.name)?.admitted).toBe("ui");
-    expect(jobs.ci.needs).toEqual(expect.arrayContaining(["ui", "firefox-smoke"]));
-    expect(jobs.ci.steps[0].env.FIREFOX_RESULT).toBe("${{ needs.firefox-smoke.result }}");
+    expect(jobs.ci.needs).toEqual(expect.arrayContaining(["ui", browser.job]));
+    expect(jobs.ci.steps[0].env[browser.env]).toBe(`\${{ needs.${browser.job}.result }}`);
     expect(jobs.ui.steps[0]).toMatchObject({
       name: "Require verified-tree resolution",
       env: { VERIFIED_TREE_RESULT: "${{ needs.verified-tree.result }}" },
@@ -384,13 +413,13 @@ describe("complete Firefox smoke shards", () => {
   });
 
   it.each(["success", "failure", "cancelled", "skipped", "", "unknown"])(
-    "executes the required ci verdict for Firefox result %j",
+    "executes the required ci verdict for result %j",
     (result) => {
-      expect(runAggregator({ FIREFOX_RESULT: result })).toBe(result === "success" ? 0 : 1);
-      expect(runAggregator({ ...REUSING, FIREFOX_RESULT: result })).toBe(
+      expect(runAggregator({ [browser.env]: result })).toBe(result === "success" ? 0 : 1);
+      expect(runAggregator({ ...REUSING, [browser.env]: result })).toBe(
         result === "success" || result === "skipped" ? 0 : 1,
       );
-      expect(runAggregator({ EDITOR_FAST_PR: "true", FIREFOX_RESULT: result })).toBe(
+      expect(runAggregator({ EDITOR_FAST_PR: "true", [browser.env]: result })).toBe(
         result === "success" || result === "skipped" ? 0 : 1,
       );
       const guard = jobs.ui.steps[0].run;

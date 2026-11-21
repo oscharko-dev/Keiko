@@ -177,6 +177,14 @@ additional SonarCloud project, paid runner or required context is introduced.
 - Split the seven serial Playwright suites of `ui` into parallel legs under the same required
   context; rebalance the coverage shards by measured duration instead of file hash; build the
   packages once per run and hand the build to the jobs that need it.
+- **Done in this change:** the WebKit smoke left the `ui` job for its own two-shard
+  `webkit-smoke` matrix, the same shape as `firefox-smoke`, and its verdict joins the required `ci`
+  aggregate, which fails closed when either shard did not succeed outside an editor fast path.
+  ADR-0178 reuses it like every other gated job. Over six green runs the `ui` step durations were
+  Chromium smoke 14–18 min, WebKit smoke 15–19 min, Jira chat 2–4 min and each editor suite 1–3
+  min **(M)**, so the split removes the longest serial step from the critical path: `ui` drops
+  from about 47 to about 29 minutes, and each WebKit shard runs about half of its former step in
+  parallel. The rebalanced coverage shards and the single package build remain open.
 
 ### P6 — Gate health report
 

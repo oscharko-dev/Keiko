@@ -44,6 +44,7 @@ function runCiAggregate(overrides = {}) {
       COVERAGE_SONAR_RESULT: "success",
       CROSS_PLATFORM_RESULT: "success",
       FIREFOX_RESULT: "success",
+      WEBKIT_RESULT: "success",
       DOCUMENTATION_ONLY: "false",
       EDITOR_FAST_PR: "false",
       PORTABLE_SECURE_READ_RESULT: "success",
@@ -361,6 +362,7 @@ describe("dev quality workflows", () => {
       "build-scan-sbom-smoke",
       "cross-platform-smoke",
       "firefox-smoke",
+      "webkit-smoke",
       "ui",
     ];
 
@@ -849,6 +851,8 @@ describe("dev quality workflows", () => {
     expect(aggregateJob).toContain("- cross-platform-smoke");
     expect(aggregateJob).toContain("- firefox-smoke");
     expect(aggregateJob).toContain("FIREFOX_RESULT");
+    expect(aggregateJob).toContain("- webkit-smoke");
+    expect(aggregateJob).toContain("WEBKIT_RESULT");
     expect(aggregateJob).not.toContain("- runtime-qualification");
     expect(aggregateJob).toContain("- ui");
     expect(aggregateJob).toContain("BUILD_SCAN_SBOM_SMOKE_RESULT");

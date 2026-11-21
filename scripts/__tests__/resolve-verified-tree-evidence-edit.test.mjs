@@ -45,6 +45,8 @@ const EVERY_REUSED_JOB = [
   "Portable secure-read smoke (macos-x64)",
   "Firefox smoke (shard 1/2)",
   "Firefox smoke (shard 2/2)",
+  "WebKit smoke (shard 1/2)",
+  "WebKit smoke (shard 2/2)",
   "ui",
   "Cross-platform smoke (ubuntu-latest)",
 ].map((name) => ({ name, conclusion: "success" }));

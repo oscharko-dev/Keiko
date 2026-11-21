@@ -57,7 +57,7 @@ An integration run (`push` to a protected integration branch, or `merge_group`) 
 gate starts, whether this commit's tree is already bound to complete green evidence. When it is, the
 jobs whose verdict that evidence carries do not run: `semantic-duplication`, `core-quality`,
 `coverage-packages`, `coverage-ui`, `coverage-scripts`, `coverage-sonar`, `build-scan-sbom-smoke`,
-`cross-platform-smoke`, `portable-secure-read`, `firefox-smoke`, and `ui`.
+`cross-platform-smoke`, `portable-secure-read`, `firefox-smoke`, `webkit-smoke`, and `ui`.
 
 With Node 26 as the sole baseline (owner decision, 2026-11-15), the duplicate
 `node-26-compatibility` matrix is retired. The four package-coverage shards run the complete
