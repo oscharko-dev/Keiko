@@ -9,7 +9,8 @@
 import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { deepRedactStrings, type DeepRedacted } from "@oscharko-dev/keiko-security";
 import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   applyQualityIntelligenceCandidateEdit,
@@ -26,35 +27,19 @@ type EditProvenance = QualityIntelligence.QualityIntelligenceCandidateEditProven
 
 const RUN_ID = "run-edit-001";
 
-const identityRedact = (value: unknown): unknown => value;
+const identityRedact = <T>(value: T): DeepRedacted<T> => deepRedactStrings(value, (text) => text);
 
 // A tagging redactor that uppercases every string leaf — proves the helper redacts edited fields
 // before persist (the real server passes the live audit redactor).
-const upcaseRedact = (value: unknown): unknown => {
-  if (typeof value === "string") return value.toUpperCase();
-  if (Array.isArray(value)) return value.map(upcaseRedact);
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, upcaseRedact(v)]),
-    );
-  }
-  return value;
-};
+const upcaseRedact = <T>(value: T): DeepRedacted<T> =>
+  deepRedactStrings(value, (text) => text.toUpperCase());
 
 // A targeted redactor that scrubs only the secret token `SECRET` from every string leaf, modelling
 // the real audit redactor (which scrubs secret-shaped substrings and leaves enums / ISO dates / plain
 // labels intact). Used to assert provenance redaction without corrupting the `editedBy` enum or
 // `editedAt` timestamp the way an uppercase-everything double would.
-const tokenRedact = (value: unknown): unknown => {
-  if (typeof value === "string") return value.split("SECRET").join("[REDACTED]");
-  if (Array.isArray(value)) return value.map(tokenRedact);
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, tokenRedact(v)]),
-    );
-  }
-  return value;
-};
+const tokenRedact = <T>(value: T): DeepRedacted<T> =>
+  deepRedactStrings(value, (text) => text.split("SECRET").join("[REDACTED]"));
 
 function seedCandidate(id: string): Candidate {
   return {
@@ -691,7 +676,8 @@ describe("candidate artifact writes keep the shape the read validator accepts", 
         generatedAt: "2026-06-08T10:00:00.000Z",
         candidates: [seedCandidate("tc-1")],
         evidenceDir,
-        redact: () => "[REDACTED]",
+        // Deliberately breaks the redactor contract to reach the shape check.
+        redact: vi.fn().mockReturnValue("[REDACTED]"),
       }),
     ).toThrow(EvidenceWriteError);
     expect(loadQualityIntelligenceCandidates("run-shape-001", { evidenceDir })).toBeUndefined();
@@ -721,7 +707,8 @@ describe("candidate artifact writes keep the shape the read validator accepts", 
         editedFields: { title: "Edited title" },
         provenance: provenance(),
         evidenceDir,
-        redact: (value) => (value === "Alice" ? 7 : value),
+        // Deliberately breaks the redactor contract to reach the shape check.
+        redact: vi.fn().mockImplementation((value: unknown) => (value === "Alice" ? 7 : value)),
       }),
     ).toThrow(EvidenceWriteError);
     const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });

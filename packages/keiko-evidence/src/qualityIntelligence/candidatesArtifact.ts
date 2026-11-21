@@ -7,7 +7,7 @@
 // (Issue #284). Stored as plain rows (branded IDs collapse to strings on the wire).
 
 import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
-import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { canonicalise, sha256Hex, type DeepRedacted } from "@oscharko-dev/keiko-security";
 import {
   createNodeContainedJsonArtifactStore,
   type ContainedJsonArtifactStore,
@@ -444,7 +444,7 @@ export interface RecordQualityIntelligenceCandidatesInput {
    * passes the live audit redactor (`deps.redactor`); tests pass an explicit identity. Making it
    * mandatory keeps a forgetful caller from writing an unredacted candidate body to disk (#284).
    */
-  readonly redact: (value: unknown) => unknown;
+  readonly redact: <T>(value: T) => DeepRedacted<T>;
 }
 
 /**
@@ -512,7 +512,7 @@ export interface ApplyQualityIntelligenceCandidateEditInput {
   readonly editedFields: EditableFields;
   readonly provenance: EditProvenance;
   readonly evidenceDir: string;
-  readonly redact: (value: unknown) => unknown;
+  readonly redact: <T>(value: T) => DeepRedacted<T>;
 }
 
 const EDITABLE_KEYS = [

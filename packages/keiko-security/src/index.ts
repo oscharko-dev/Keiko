@@ -41,6 +41,7 @@ export {
   containsCredentialShape,
   createAuditRedactor,
   deepRedactStrings,
+  type DeepRedacted,
   isCredentialKeyName,
   objectContainsCredentialKey,
   REDACTION_PLACEHOLDER,

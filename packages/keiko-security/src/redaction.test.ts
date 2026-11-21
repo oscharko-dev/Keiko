@@ -518,10 +518,9 @@ describe("deepRedactStrings", () => {
       flag: true,
       missing: null,
     };
-    const result = deepRedactStrings(input, redactor) as typeof input;
+    const result = deepRedactStrings(input, redactor);
     expect(result.a).toContain("Bearer [REDACTED]");
-    expect((result.b as readonly { c: string }[])[0]?.c).toContain("[REDACTED]");
-    expect((result.b as readonly unknown[])[1]).toBe("plain");
+    expect(result.b).toEqual([{ c: "[REDACTED]" }, "plain"]);
     expect(result.n).toBe(42);
     expect(result.flag).toBe(true);
     expect(result.missing).toBeNull();
@@ -545,7 +544,7 @@ describe("deepRedactStrings", () => {
     // input, faithfully modelling data that reached the redactor from a network read.
     const rawJson = `{"a":"ok","__proto__":{"polluted":"ghp_${"x".repeat(30)}"}}`;
     const input = JSON.parse(rawJson) as { a: string };
-    const result = deepRedactStrings(input, redactor) as { readonly a: string };
+    const result = deepRedactStrings(input, redactor);
     // The result must not carry the injected key on its prototype chain — the key never became
     // a real prototype assignment, so the field cannot be read off any plain object via the
     // prototype either.
@@ -573,11 +572,71 @@ describe("deepRedactStrings", () => {
         { name: "ssh", fetchUrl: "ssh://git@github.com/o/r.git", pushUrl: undefined },
       ],
     };
-    const result = deepRedactStrings(body, redactor) as typeof body;
+    const result = deepRedactStrings(body, redactor);
     expect(result.remotes[0]?.fetchUrl).toBe("https://[REDACTED]@github.com/o/r.git");
     expect(result.remotes[0]?.fetchUrl).not.toContain("opaque-pat-value");
     // SSH login name preserved (not a credential), matching the redactor's existing intent.
     expect(result.remotes[1]?.fetchUrl).toBe("ssh://git@github.com/o/r.git");
+  });
+});
+
+// #3933: `deepRedactStrings` became generic over `DeepRedacted<T>` without changing its walk. This
+// pins the exact bytes the walk produced before that change (the golden below is the output of the
+// previous untyped implementation on the same input) for string literals, nested arrays, a
+// `__proto__` key and non-string leaves, and pins the type the result now carries.
+describe("deepRedactStrings output pin", () => {
+  const hostileJson =
+    `{"kind":"finding","token":"ghp_${"a".repeat(36)}",` +
+    `"list":["plain","Bearer ${"b".repeat(32)}",7,true,null,[{"inner":"sk-${"c".repeat(24)}"}]],` +
+    `"__proto__":{"polluted":"ghp_${"d".repeat(36)}","n":0},"count":3,"flag":false,"none":null}`;
+
+  it("keeps the redacted output byte-identical to the untyped walk", () => {
+    const input: unknown = JSON.parse(hostileJson);
+    const output = JSON.stringify(deepRedactStrings(input, createAuditRedactor({}, {})));
+    expect(output).toBe(
+      '{"kind":"finding","token":"[REDACTED]",' +
+        '"list":["plain","Bearer [REDACTED]",7,true,null,[{"inner":"[REDACTED]"}]],' +
+        '"__proto__":{"polluted":"[REDACTED]","n":0},"count":3,"flag":false,"none":null}',
+    );
+  });
+
+  it("types literal leaves as string and rebuilds null-prototype containers", () => {
+    const input = {
+      kind: "finding",
+      tags: ["a", "b"],
+      nested: { level: 2, note: "Bearer " + "e".repeat(32) },
+    } as const;
+    const result = deepRedactStrings(input, createAuditRedactor({}, {}));
+    // The literal "finding" is typed as `string`, because the redactor may rewrite any string.
+    const kind: string = result.kind;
+    const tags: string[] = result.tags;
+    const level: 2 = result.nested.level;
+    expect([kind, tags, level]).toEqual(["finding", ["a", "b"], 2]);
+    expect(result.nested.note).toBe("Bearer [REDACTED]");
+    expect(Object.getPrototypeOf(result)).toBeNull();
+    expect(Object.getPrototypeOf(result.nested)).toBeNull();
+    expect(Array.isArray(result.tags)).toBe(true);
+  });
+
+  it("does what the type says for functions, symbols and slot-only built-ins", () => {
+    const callback = (): number => 1;
+    const marker = Symbol("marker");
+    const input = {
+      callback,
+      [marker]: "dropped",
+      when: new Date(0),
+      lookup: new Map([["k", "v"]]),
+      bytes: new Uint8Array([1, 2]),
+    };
+    const result = deepRedactStrings(input, (text) => text);
+    const when: Record<string, never> = result.when;
+    const lookup: Record<string, never> = result.lookup;
+    const bytes: Record<string, number | bigint> = result.bytes;
+    expect(result.callback).toBe(callback);
+    expect(Object.getOwnPropertySymbols(result)).toEqual([]);
+    expect({ ...when }).toEqual({});
+    expect({ ...lookup }).toEqual({});
+    expect({ ...bytes }).toEqual({ "0": 1, "1": 2 });
   });
 });
 
