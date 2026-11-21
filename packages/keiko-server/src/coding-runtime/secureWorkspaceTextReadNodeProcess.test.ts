@@ -119,10 +119,12 @@ describe("Node secure workspace-read process adapter", () => {
     const observed: SecureWorkspaceReadNodeChild = {
       ...fake.child,
       stdin: {
-        end: (data?: Uint8Array): unknown => stdin.end(data),
-        on: (event, listener): unknown => {
+        end: (data?: Uint8Array): void => {
+          stdin.end(data);
+        },
+        on: (event, listener): void => {
           stdinEvents.push(event);
-          return stdin.on(event, listener);
+          stdin.on(event, listener);
         },
       },
     };
