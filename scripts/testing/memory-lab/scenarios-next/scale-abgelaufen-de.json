@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "scale-abgelaufen-de",
+  "language": "de",
+  "class": "scale-window",
+  "description": "A target fact of the person's own scope older than 550 superseded rows (validity ended) of that scope, next to a recent control. Limit: recall excludes superseded rows at the query, so they take no place in the 500-row read window, and maintenance never removes them because they are kept as history. Failure means: the target never reaches the model although accepted and reinforced, so superseded rows crowd the read window again; the control passing shows the window, not retrieval, is the cause. Maintenance: run with maintenance on or off; the seeded accepted records are reinforced or younger than 94 days, so maintenance does not archive them. Kind: control.",
+  "seed": {
+    "records": [
+      {
+        "key": "target",
+        "body": "Mein Gleitzeitkonto wird freitags um 11:35 Uhr abgeschlossen.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 120,
+        "accessCount": 4,
+        "lastAccessDays": 3,
+        "truth": "flex"
+      },
+      {
+        "key": "control",
+        "body": "Meine Urlaubsvertretung übernimmt Frau Hartmann.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 2,
+        "truth": "cover"
+      }
+    ],
+    "filler": [
+      {
+        "count": 550,
+        "status": "superseded",
+        "minAgeDays": 1,
+        "maxAgeDays": 110,
+        "seed": 203,
+        "scope": "user",
+        "type": "semantic-fact"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "flex",
+      "seed": "Mein Gleitzeitkonto wird freitags um 11:35 Uhr abgeschlossen.",
+      "must": false,
+      "terms": [["Freitag*"], ["11:35", "11.35", "11 Uhr 35"]]
+    },
+    {
+      "key": "cover",
+      "seed": "Meine Urlaubsvertretung übernimmt Frau Hartmann.",
+      "must": false,
+      "terms": [["Hartmann"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "target",
+      "question": "Wann wird mein Gleitzeitkonto abgeschlossen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Freitag*"], ["11:35", "11.35", "11 Uhr 35"]]
+      }
+    },
+    {
+      "id": "control-recent",
+      "question": "Wer übernimmt meine Urlaubsvertretung?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Hartmann"]]
+      }
+    }
+  ]
+}

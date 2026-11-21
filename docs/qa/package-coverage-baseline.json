@@ -174,7 +174,7 @@
       }
     },
     "keiko-memory-retrieval": {
-      "files": 15,
+      "files": 16,
       "uncoveredFiles": 0,
       "uncoveredLines": 10,
       "totalLines": 569,
@@ -186,7 +186,7 @@
       }
     },
     "keiko-memory-vault": {
-      "files": 24,
+      "files": 26,
       "uncoveredFiles": 0,
       "uncoveredLines": 97,
       "totalLines": 1106,
@@ -258,7 +258,7 @@
       }
     },
     "keiko-server": {
-      "files": 1219,
+      "files": 1220,
       "uncoveredFiles": 1,
       "uncoveredLines": 6338,
       "totalLines": 113259,

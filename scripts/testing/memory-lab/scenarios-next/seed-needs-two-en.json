@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "id": "seed-needs-two-en",
+  "language": "en",
+  "class": "preference",
+  "difficulty": "plain",
+  "description": "A store seeded with two project facts among unrelated filler. One question needs both facts; a control question needs one. Measures recall over a pre-existing history, not learning.",
+  "seed": {
+    "records": [
+      {
+        "key": "room-birch",
+        "body": "The planning meeting takes place in room Birch.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 40,
+        "truth": "room"
+      },
+      {
+        "key": "day-tuesday",
+        "body": "The planning meeting is held every Tuesday.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 25,
+        "accessCount": 3,
+        "lastAccessDays": 5,
+        "truth": "day"
+      }
+    ],
+    "filler": [
+      {
+        "count": 30,
+        "status": "accepted",
+        "minAgeDays": 1,
+        "maxAgeDays": 200,
+        "seed": 11,
+        "scope": "project"
+      },
+      {
+        "count": 10,
+        "status": "archived",
+        "minAgeDays": 60,
+        "maxAgeDays": 300,
+        "seed": 12,
+        "scope": "project"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "room",
+      "seed": "The planning meeting takes place in room Birch.",
+      "must": false,
+      "terms": [["Birch"]]
+    },
+    {
+      "key": "day",
+      "seed": "The planning meeting is held every Tuesday.",
+      "must": false,
+      "terms": [["Tuesday"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "both",
+      "question": "Where and when is the planning meeting?",
+      "expect": { "kind": "answer", "needs": ["room", "day"] }
+    },
+    {
+      "id": "room-only",
+      "question": "In which room is the planning meeting?",
+      "expect": { "kind": "answer", "needs": ["room"] }
+    },
+    {
+      "id": "unrelated",
+      "question": "What is Apache Kafka?",
+      "expect": { "kind": "no-memory" }
+    }
+  ]
+}

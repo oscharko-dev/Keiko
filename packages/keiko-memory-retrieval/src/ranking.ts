@@ -43,7 +43,8 @@ export interface RankMemoriesQuery {
   // Per-memory reinforcement strength in [0,1] keyed by memory id (#204 plasticity). When undefined,
   // the ranker zeroes the strength weight so output is byte-identical to pre-strength behaviour.
   readonly strengthById?: ReadonlyMap<MemoryId, number> | undefined;
-  // Signal-fusion strategy (#204, O-F2). Defaults to weighted-sum (byte-identical); "rrf" fuses ranks.
+  // Signal-fusion strategy (#204, O-F2). Defaults to weighted-sum (the legacy ranking; with edges, a tied group
+  // straddling the graph cut is left out of the high-rank set in both modes); "rrf" fuses ranks.
   readonly fusion?: RankingFusionMode | undefined;
 }
 
@@ -84,20 +85,27 @@ export function sourceImportance(record: MemoryRecord): number {
   return SOURCE_IMPORTANCE[record.provenance.sourceKind];
 }
 
+// A subscore that is not a finite number (NaN, ±Infinity) says nothing: it counts as 0. This is the
+// one place it is decided, so the fractional ranks, the weighted-sum baseline that selects the graph
+// high-rank set, the weighted sum itself and the returned subscores all see the same finite value.
+function finite(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
 function baselineSubscores(record: MemoryRecord, query: RankMemoriesQuery): IncludedSubscores {
   return {
-    relevance: lexicalRelevance(query.queryText, record),
-    recency: recencyScore(record.updatedAt, query.nowMs),
-    confidence: record.provenance.confidence,
+    relevance: finite(lexicalRelevance(query.queryText, record)),
+    recency: finite(recencyScore(record.updatedAt, query.nowMs)),
+    confidence: finite(record.provenance.confidence),
     pinned: record.pinned ? 1 : 0,
     correction:
       record.type === "correction" || record.provenance.sourceKind === "accepted-correction"
         ? 1
         : 0,
     graph: 0,
-    semantic: query.semanticById?.get(record.id) ?? 0,
-    strength: query.strengthById?.get(record.id) ?? 0,
-    importance: sourceImportance(record),
+    semantic: finite(query.semanticById?.get(record.id) ?? 0),
+    strength: finite(query.strengthById?.get(record.id) ?? 0),
+    importance: finite(sourceImportance(record)),
   };
 }
 
@@ -242,9 +250,31 @@ const SUBSCORE_KEYS: readonly (keyof IncludedSubscores)[] = [
   "importance",
 ];
 
+// The top `count` of the baseline order, never a part of a tied group: when the entry just below the
+// cut has the same (score, updatedAt) as the last one inside, every entry of that (score, updatedAt)
+// is left out. Their order is decided by the id alone, and a signal that cannot tell who is on top
+// says nothing (#4228). Without a straddling tie the set is exactly the plain top `count`.
+function highRankSet(
+  sorted: readonly IncludedMemory[],
+  count: number,
+  recordById: ReadonlyMap<MemoryId, MemoryRecord>,
+): Set<string> {
+  const top = sorted.slice(0, count);
+  const last = top.at(-1);
+  const next = sorted[count];
+  if (last === undefined || next === undefined) return new Set(top.map((e) => e.memoryId));
+  const updatedAtOf = (e: IncludedMemory): number | undefined =>
+    recordById.get(e.memoryId)?.updatedAt;
+  const tiedWithLast = (e: IncludedMemory): boolean =>
+    e.score === last.score && updatedAtOf(e) === updatedAtOf(last);
+  const kept = tiedWithLast(next) ? top.filter((e) => !tiedWithLast(e)) : top;
+  return new Set(kept.map((e) => e.memoryId));
+}
+
 // Final subscores per memory: baseline + (when edges are supplied) the graph layer. The graph
 // high-rank set is the WEIGHTED-SUM baseline top-N, so graph proximity is computed identically
-// regardless of the final fusion mode (and the weighted-sum path stays byte-identical to before).
+// regardless of the final fusion mode. A tied group that straddles the cut is left out of the set
+// (see `highRankSet`), so the id never decides which memory counts as high-rank.
 function computeFinalSubscores(
   memories: readonly MemoryRecord[],
   query: RankMemoriesQuery,
@@ -260,9 +290,7 @@ function computeFinalSubscores(
     recordById,
   );
   const highRankCount = options.graphHighRankCount ?? DEFAULT_GRAPH_HIGH_RANK_COUNT;
-  const highRankIds = new Set<string>(
-    baselineSorted.slice(0, highRankCount).map((e) => e.memoryId),
-  );
+  const highRankIds = highRankSet(baselineSorted, highRankCount, recordById);
   const edges = options.edgesByMemory;
   for (const m of memories) {
     const base = requireEntry(map, m.id);
@@ -272,10 +300,17 @@ function computeFinalSubscores(
 }
 
 // Reciprocal Rank Fusion (#204, O-F2): for each positive-weight signal, rank the memories by that
-// subscore (desc, id tiebreak) and fuse score = Σ w/(RRF_K + rank). Rank-based, so heterogeneous
-// score scales (Jaccard ~[0,0.3] vs cosine [0,1]) need no normalization, and agreement across signals
-// compounds. The fused value is normalized to [0,1] (best possible = rank 1 in every signal) to
-// honour the documented score range; ordering uses the shared (score desc, updatedAt desc, id asc) sort.
+// subscore and fuse score = Σ w/(RRF_K + rank). Rank-based, so heterogeneous score scales (Jaccard
+// ~[0,0.3] vs cosine [0,1]) need no normalization, and agreement across signals compounds.
+// Tie-aware ranks (#4228): memories with an equal subscore share ONE rank, the mean of the positions
+// the tied group occupies (fractional ranking), so a signal that does not distinguish two memories
+// contributes exactly the same to both, whatever their ids. Ranking a tied group by id handed a
+// signal that is identical for every candidate (pinned, correction, graph, often confidence and
+// importance) a 1..N spread, and on a large store that id noise outweighed the whole advantage of
+// the semantically nearest memory. Rank 1 stays the best a signal can say, so the best possible fused
+// value is still Σ w/(RRF_K + 1) and the fused value is normalized by it to honour the [0,1] range.
+// The final order uses the shared (score desc, updatedAt desc, id asc) sort: that tie-break applies
+// only between memories whose fused scores are exactly equal, and keeps the output reproducible.
 export function buildRankBySignal(
   memories: readonly MemoryRecord[],
   subscoresById: ReadonlyMap<MemoryId, IncludedSubscores>,
@@ -285,19 +320,30 @@ export function buildRankBySignal(
   if (signals.length === 0) return rankBySignal;
   const scored = memories.map(({ id }) => ({ id, subscores: requireEntry(subscoresById, id) }));
   for (const sig of signals) {
-    const ordered = [...scored].sort((a, b) => {
-      const av = a.subscores[sig];
-      const bv = b.subscores[sig];
-      if (av !== bv) return bv - av;
-      if (a.id < b.id) return -1;
-      if (a.id > b.id) return 1;
-      return 0;
-    });
-    const ranks = new Map<MemoryId, number>();
-    ordered.forEach((m, i) => ranks.set(m.id, i + 1));
-    rankBySignal.set(sig, ranks);
+    rankBySignal.set(sig, fractionalRanks(scored, sig));
   }
   return rankBySignal;
+}
+
+// Fractional ("1 2.5 2.5 4") ranking, best subscore first: an equal run occupying positions i..j
+// (1-based) gets the mean rank (i + j) / 2. The ordering inside a run is irrelevant by construction.
+function fractionalRanks(
+  scored: readonly { readonly id: MemoryId; readonly subscores: IncludedSubscores }[],
+  sig: keyof IncludedSubscores,
+): ReadonlyMap<MemoryId, number> {
+  const ordered = scored
+    .map((m) => ({ id: m.id, value: m.subscores[sig] }))
+    .sort((a, b) => b.value - a.value);
+  const ranks = new Map<MemoryId, number>();
+  let start = 0;
+  while (start < ordered.length) {
+    let end = start;
+    while (ordered[end + 1]?.value === ordered[start]?.value) end += 1;
+    const meanRank = (start + end + 2) / 2;
+    for (const member of ordered.slice(start, end + 1)) ranks.set(member.id, meanRank);
+    start = end + 1;
+  }
+  return ranks;
 }
 
 function rrfRank(
@@ -325,7 +371,7 @@ function rrfRank(
       const rank = requireEntry(requireEntry(rankBySignal, sig), m.id);
       const contrib = weights[sig] / (RRF_K + rank);
       fused += contrib;
-      // RRF gives a tied zero a rank. It supplies no evidence for an inclusion reason.
+      // A tied zero still gets a rank, but it supplies no evidence for an inclusion reason.
       if (subscores[sig] > 0 && contrib > bestContrib) {
         bestContrib = contrib;
         bestSig = sig;

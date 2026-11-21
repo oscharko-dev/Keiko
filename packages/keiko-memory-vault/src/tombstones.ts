@@ -18,6 +18,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/memory";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import type {
+  ForgetTombstoneRefusalOptions,
   MemoryEmbeddingInput,
   MemoryTombstone,
   MemoryTombstoneCursor,
@@ -26,6 +27,7 @@ import type {
 } from "./types.js";
 import type { MemoryContentCipher } from "./cipher.js";
 import { cachedPrepare } from "./statements.js";
+import { PERSON_REFUSING_TOMBSTONE_SQL, REFUSING_TOMBSTONE_SQL } from "./forgetter-surfaces.js";
 import { sanitizeMemoryTombstoneReason } from "./tombstone-reason.js";
 import { BYTES_PER_FLOAT32, decodeVectorLE, encodeVectorLE } from "./embeddings.js";
 
@@ -58,22 +60,34 @@ INSERT INTO memory_tombstones (
 // skip unrelated coordinates in SQLite before decrypting a vector.
 const MATCH_EMBEDDING_SPACE =
   "AND (? IS NULL OR body_embedding_space IS NULL OR body_embedding_space = ?)";
-const LIST_FORGET_VECTOR_PAGE_BY_SCOPE_SQL = `
+// A learned capture is refused by every tombstone that may refuse it; the person's own statement
+// only by the tombstones a person or an unclassified writer left (see forgetter-surfaces.ts).
+function refusingPredicate(personOnly: boolean): string {
+  return personOnly ? PERSON_REFUSING_TOMBSTONE_SQL : REFUSING_TOMBSTONE_SQL;
+}
+
+function listForgetVectorPageSql(personOnly: boolean): string {
+  return `
 SELECT id, forgotten_at, body_embedding FROM memory_tombstones
 WHERE scope_kind = ? AND scope_coordinate = ? AND body_embedding IS NOT NULL
   ${MATCH_EMBEDDING_SPACE}
+  AND ${refusingPredicate(personOnly)}
 ORDER BY forgotten_at DESC, id ASC
 LIMIT ?
 `;
+}
 
-const LIST_FORGET_VECTOR_PAGE_AFTER_BY_SCOPE_SQL = `
+function listForgetVectorPageAfterSql(personOnly: boolean): string {
+  return `
 SELECT id, forgotten_at, body_embedding FROM memory_tombstones
 WHERE scope_kind = ? AND scope_coordinate = ? AND body_embedding IS NOT NULL
   ${MATCH_EMBEDDING_SPACE}
+  AND ${refusingPredicate(personOnly)}
   AND (forgotten_at < ? OR (forgotten_at = ? AND id > ?))
 ORDER BY forgotten_at DESC, id ASC
 LIMIT ?
 `;
+}
 
 const LIST_BY_SCOPE_SQL = `
 SELECT * FROM memory_tombstones
@@ -98,10 +112,13 @@ WHERE scope_kind = ? AND scope_coordinate = ? AND body_hash = ?
 // performs ZERO reason decrypts and reads at most a couple of rows instead of the whole scope. Both
 // candidate hashes are always bound (never NULL — the suppression hashes are deterministic), so the
 // `IN (?, ?)` predicate stays index-eligible and matches nothing extra.
-const SELECT_SUPPRESSION_BODY_HASHES_BY_SCOPE_SQL = `
+function selectSuppressionBodyHashesSql(personOnly: boolean): string {
+  return `
 SELECT body_hash FROM memory_tombstones
 WHERE scope_kind = ? AND scope_coordinate = ? AND body_hash IN (?, ?)
+  AND ${refusingPredicate(personOnly)}
 `;
+}
 
 // `reason` is the only free-text tombstone column, so it is the only sealed one (ADR-0035).
 function rowToTombstone(row: TombstoneRow, cipher: MemoryContentCipher): MemoryTombstone {
@@ -201,11 +218,12 @@ function vectorPageRows(
   scope: MemoryScope,
   after: MemoryTombstoneCursor | undefined,
   space: string | null,
+  personOnly: boolean,
 ): readonly TombstoneVectorRow[] {
   const scopeKind = scopeKindOf(scope);
   const coordinate = scopeCoordinateOf(scope);
   if (after === undefined) {
-    return cachedPrepare(db, LIST_FORGET_VECTOR_PAGE_BY_SCOPE_SQL).all(
+    return cachedPrepare(db, listForgetVectorPageSql(personOnly)).all(
       scopeKind,
       coordinate,
       space,
@@ -213,7 +231,7 @@ function vectorPageRows(
       SEMANTIC_VECTOR_PAGE_SIZE,
     ) as unknown as readonly TombstoneVectorRow[];
   }
-  return cachedPrepare(db, LIST_FORGET_VECTOR_PAGE_AFTER_BY_SCOPE_SQL).all(
+  return cachedPrepare(db, listForgetVectorPageAfterSql(personOnly)).all(
     scopeKind,
     coordinate,
     space,
@@ -247,12 +265,14 @@ export function hasSemanticallySimilarForgetTombstoneRow(
   cipher: MemoryContentCipher,
   candidate: MemoryEmbeddingInput | Float32Array,
   threshold: number,
+  options: ForgetTombstoneRefusalOptions = {},
 ): boolean {
+  const personOnly = options.personOnly === true;
   const space = tombstoneSpaceDigest(candidate);
   const query = vectorOf(candidate);
   let after: MemoryTombstoneCursor | undefined;
   for (;;) {
-    const rows = vectorPageRows(db, scope, after, space);
+    const rows = vectorPageRows(db, scope, after, space, personOnly);
     for (const row of rows) {
       const vector = decodeSealedTombstoneVector(row.body_embedding, cipher);
       if (cosineAtLeast(query, vector, threshold)) return true;
@@ -411,8 +431,9 @@ export function selectForgetSuppressionBodyHashPresence(
   scope: MemoryScope,
   currentBodyHash: string,
   legacyBodyHash: string,
+  options: ForgetTombstoneRefusalOptions = {},
 ): { readonly current: boolean; readonly legacy: boolean } {
-  const rows = cachedPrepare(db, SELECT_SUPPRESSION_BODY_HASHES_BY_SCOPE_SQL).all(
+  const rows = cachedPrepare(db, selectSuppressionBodyHashesSql(options.personOnly === true)).all(
     scopeKindOf(scope),
     scopeCoordinateOf(scope),
     currentBodyHash,

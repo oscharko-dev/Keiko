@@ -5782,6 +5782,12 @@
               "required": true
             },
             {
+              "name": "earlierValueCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "historyDocumentCandidates",
               "type": "integer",
               "dataClass": "count",
@@ -5850,6 +5856,12 @@
             {
               "name": "retrievedMemoryCount",
               "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "semanticFloor",
+              "type": "number",
               "dataClass": "count",
               "required": false
             },
@@ -6029,6 +6041,12 @@
               "required": false
             },
             {
+              "name": "earlierValueCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "memoryContextDisposition",
               "type": "string",
               "dataClass": "closed-enum",
@@ -6061,6 +6079,12 @@
             {
               "name": "retrievedMemoryCount",
               "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "semanticFloor",
+              "type": "number",
               "dataClass": "count",
               "required": false
             },
@@ -42051,13 +42075,55 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "forgottenCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "lineageSkippedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",
               "required": true
+            },
+            {
+              "name": "scopeKind",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "selectorKind",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "surface",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "tombstoneCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "tombstoneWritten",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false
@@ -42819,18 +42885,39 @@
           "analyzerProjection": "capability",
           "safeContextFields": [
             {
+              "name": "bodyHashBackfillDeferred",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "bodyHashFilledCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "bodyHashUnreadableCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "keySource",
               "type": "string",
               "dataClass": "closed-enum",
               "required": false
             }
           ],
-          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false
           },
-          "proofIds": ["memory-vault.store.opened.key-source"],
+          "proofIds": [
+            "memory-vault.store.opened.key-source",
+            "memory-vault.store.opened.body-hash-backfill"
+          ],
           "replayReferences": [],
           "missingObligations": []
         }

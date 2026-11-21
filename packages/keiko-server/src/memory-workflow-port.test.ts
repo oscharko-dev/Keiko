@@ -66,9 +66,10 @@ function insertProjectMemory(
     readonly projectId?: string;
     readonly status?: MemoryRecord["status"];
     readonly confidence?: number;
+    readonly at?: number;
   } = {},
 ): MemoryRecord {
-  const now = 1_700_000_000_000;
+  const now = options.at ?? 1_700_000_000_000;
   return vault.insertMemory({
     id: memoryId(options.id ?? "mem-project-1"),
     schemaVersion: "1",
@@ -196,6 +197,51 @@ describe("createWorkflowMemoryPort", () => {
       reason: "suppressed-by-status",
     });
     expect(JSON.stringify(events)).not.toContain("obsolete private lesson");
+    vault.close();
+  });
+
+  it("keeps archived rows out of the recall window and still audits each omission", async () => {
+    const { dir, vault } = createVault();
+    cleanup.push(dir);
+    insertProjectMemory(vault, "Project alpha uses pnpm for installs.", { id: "mem-live" });
+    // 501 newer archived rows used to fill the 500-row read window ahead of the live fact (#4223).
+    for (let index = 0; index < 501; index += 1) {
+      insertProjectMemory(vault, `Archived note ${String(index)}.`, {
+        id: `mem-archived-${String(index)}`,
+        status: "archived",
+        at: 1_700_000_100_000 + index,
+      });
+    }
+    insertProjectMemory(vault, "Project alpha stores an obsolete private lesson.", {
+      id: "mem-rejected",
+      status: "rejected",
+      at: 1_700_000_200_000,
+    });
+    const evidenceStore = createEvidenceStore();
+    const nowMs = 1_710_000_000_000;
+    const port = createWorkflowMemoryPort({
+      vault,
+      evidenceStore,
+      runId: runId("wr-window"),
+      redactString: (value) => value,
+      now: () => nowMs,
+    });
+
+    const context = await port.getContextForWorkflow(
+      [{ kind: "project", projectId: projectId("/repo") }],
+      "pnpm installs",
+      2048,
+    );
+
+    expect(context.includedMemoryIds).toEqual(["mem-live"]);
+    const omitted = readAuditEvents(evidenceStore, nowMs).filter(
+      (event) => event.kind === "memory:workflow-omitted",
+    );
+    expect(omitted.map((event) => event.omittedMemoryId)).toContain("mem-rejected");
+    expect(omitted).toHaveLength(500);
+    expect(new Set(omitted.map((event) => event.reason))).toEqual(
+      new Set(["suppressed-by-status"]),
+    );
     vault.close();
   });
 

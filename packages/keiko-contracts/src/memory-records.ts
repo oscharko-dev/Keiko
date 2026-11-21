@@ -235,6 +235,15 @@ function suppressionByStatus(status: MemoryStatus): MemorySuppressionResult | un
   }
 }
 
+/**
+ * Whether a record in this status can ever reach recall: only `accepted`, and `superseded` history
+ * when a caller asks for it. Every other status is suppressed by status alone, so a bounded read
+ * asks for these statuses at the query and no unrecallable row takes a place in its window.
+ */
+export function isMemoryStatusRecallable(status: MemoryStatus): boolean {
+  return suppressionByStatus(status) === undefined;
+}
+
 /** Returns no decision for an invalid threshold so each caller can report its own domain error. */
 export function evaluateMemorySuppression(
   record: MemoryRecord,

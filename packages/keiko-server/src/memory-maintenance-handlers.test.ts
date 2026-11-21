@@ -25,6 +25,7 @@ import type {
 import type { ProjectId } from "@oscharko-dev/keiko-contracts/memory";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import {
+  applyForgets,
   handleRunMaintenance,
   isMaintenanceDue,
   maybeRunAutoMaintenance,
@@ -33,11 +34,13 @@ import {
   memoryRetentionPolicy,
   resolveMemoryRetentionPolicy,
   type AutoMaintenanceState,
+  type MaintenanceCounts,
 } from "./memory-maintenance-handlers.js";
 import { maybeRunChatAutoMaintenance } from "./chat-handlers.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import type { MemoryAuditSink } from "./memory-audit-handler.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 const DAY = 864e5;
@@ -375,9 +378,25 @@ describe("handleRunMaintenance", () => {
     expect(list.mock.calls.map(([, options]) => options)).toEqual([
       { includeExpired: true, status: ["proposed"], sensitivity: ["public"] },
       { includeExpired: true, status: ["accepted", "proposed", "conflicted"] },
-      { includeExpired: true },
+      {
+        includeExpired: true,
+        status: [
+          "proposed",
+          "accepted",
+          "rejected",
+          "archived",
+          "forgotten",
+          "conflicted",
+          "expired",
+        ],
+      },
     ]);
-    expect(stats.mock.calls).toEqual([[[proposal.id, expired.id]], []]);
+    // The planning snapshot excludes superseded history (#4223); its counters are read for exactly
+    // that snapshot, no longer for the whole vault.
+    const planned = list.mock.results[2];
+    const plannedIds = planned?.type === "return" ? planned.value.map(({ id }) => id) : [];
+    expect(plannedIds.length).toBeGreaterThan(0);
+    expect(stats.mock.calls).toEqual([[[proposal.id, expired.id]], [plannedIds]]);
     expect(list.mock.calls[2]?.[0]).toContainEqual(sharedProject);
 
     const op = "memory.maintenance.candidates.selected";
@@ -989,6 +1008,123 @@ describe("handleRunMaintenance — un-reviewed proposals are expired, never hard
     const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
     expect(counts(result).forgotten).toBe(1);
     expect(vault.getMemory(mid("m"))).toBeUndefined();
+  });
+});
+
+describe("a superseded record is history, not an expired belief (#4223)", () => {
+  const SCOPE = { kind: "user", userId: "u-1" as unknown as MemoryUserId } as const;
+
+  it("keeps a superseded record with its closed window and writes no tombstone", () => {
+    const vault = makeVault();
+    insert(vault, {
+      id: "m",
+      status: "superseded",
+      confidence: 0.9,
+      createdAt: Date.now() - DAY,
+      validUntil: Date.now() - 1,
+    });
+    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    expect(counts(result).forgotten).toBe(0);
+    expect(vault.getMemory(mid("m"))?.status).toBe("superseded");
+    expect(vault.listTombstonesByScope(SCOPE)).toHaveLength(0);
+  });
+});
+
+describe("applyForgets refuses to delete history even from a plan that names it (#4223, audit A8)", () => {
+  const SCOPE = { kind: "user", userId: "u-1" as unknown as MemoryUserId } as const;
+
+  function zeroCounts(): MaintenanceCounts {
+    return {
+      promoted: 0,
+      archived: 0,
+      expired: 0,
+      forgotten: 0,
+      superseded: 0,
+      edgesCreated: 0,
+      clustersInspected: 0,
+      reviewItemsCreated: 0,
+      retentionForgotten: 0,
+      tombstonesPurged: 0,
+    };
+  }
+
+  it("skips a superseded record silently, like an accepted or archived one, and forgets the rest", () => {
+    const vault = makeVault();
+    const history = insert(vault, { id: "history", status: "superseded" });
+    const accepted = insert(vault, { id: "accepted", status: "accepted" });
+    const rejected = insert(vault, { id: "rejected", status: "rejected" });
+    const puts: unknown[] = [];
+    const sink: MemoryAuditSink = {
+      evidenceStore: {
+        put: (...args: unknown[]): string => {
+          puts.push(args);
+          return "";
+        },
+        list: () => [],
+        get: () => undefined,
+        delete: () => undefined,
+      },
+      redactString: (value) => value,
+    };
+    const counts = zeroCounts();
+
+    applyForgets(
+      vault,
+      sink,
+      Date.now(),
+      [history, accepted, rejected].map((record) => ({ id: record.id, reason: "planned" })),
+      new Map([history, accepted, rejected].map((record) => [record.id, record])),
+      counts,
+    );
+
+    expect(vault.getMemory(history.id)?.status).toBe("superseded");
+    expect(vault.getMemory(accepted.id)?.status).toBe("accepted");
+    expect(vault.getMemory(rejected.id)).toBeUndefined();
+    expect(counts.forgotten).toBe(1);
+    expect(vault.listTombstonesByScope(SCOPE).map((tombstone) => tombstone.memoryId)).toEqual([
+      rejected.id,
+    ]);
+    // One audit event, for the one record that was forgotten; the skips record nothing.
+    expect(puts).toHaveLength(1);
+  });
+});
+
+describe("the maintenance pass does not read superseded records (#4223)", () => {
+  it("decodes no superseded body and loads no superseded counters, and decides as before", () => {
+    const vault = makeVault();
+    const superseded = insert(vault, {
+      id: "old",
+      status: "superseded",
+      createdAt: Date.now() - DAY,
+      validUntil: Date.now() - 1,
+    });
+    insert(vault, {
+      id: "ended",
+      status: "proposed",
+      confidence: 0.9,
+      createdAt: Date.now() - DAY,
+      validUntil: Date.now() - 1,
+    });
+    insert(vault, {
+      id: "faint",
+      status: "accepted",
+      confidence: 0.01,
+      createdAt: Date.now() - 400 * DAY,
+    });
+    const listed = vi.spyOn(vault, "listMemoriesAcrossScopes");
+    const stats = vi.spyOn(vault, "getAccessStats");
+
+    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+
+    const returned = listed.mock.results.flatMap((entry) =>
+      entry.type === "return" ? entry.value : [],
+    );
+    expect(returned.length).toBeGreaterThan(0);
+    expect(returned.map((record) => record.id)).not.toContain(superseded.id);
+    expect(stats.mock.calls.every((call) => call[0] !== undefined)).toBe(true);
+    expect(stats.mock.calls.flatMap((call) => call[0] ?? [])).not.toContain(superseded.id);
+    expect(counts(result)).toMatchObject({ forgotten: 1, archived: 1 });
+    expect(vault.getMemory(mid("old"))?.status).toBe("superseded");
   });
 });
 

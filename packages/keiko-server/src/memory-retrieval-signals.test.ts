@@ -114,6 +114,7 @@ const ALLOWED_GATE = {
   reason: "allowed",
   matchesQuery: (query: string | undefined) => query === QUERY_TEXT,
   providerIdentity: IDENTITY.provider,
+  configuredModelId: IDENTITY.modelId,
   embedQuery: embedMock,
 } as const;
 
@@ -420,5 +421,147 @@ describe("semantic candidate validity before the bounded sweep", () => {
       vault.close();
       rmSync(memoryDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("semantic candidate read window and history (#4223, audit A3)", () => {
+  it("is not filled by superseded records that are newer than the live one", async () => {
+    const memoryDir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-history-window-"));
+    const vault = createMemoryVault({
+      memoryDir,
+      vaultKey: Buffer.alloc(32, 3),
+      now: () => NOW_MS,
+    });
+    const put = (id: string, status: MemoryRecord["status"], createdAt: number): void => {
+      const record: MemoryRecord = {
+        id: memoryId(id),
+        schemaVersion: "1",
+        scope: SCOPE,
+        type: "procedural",
+        status,
+        body: "Use the published release checklist.",
+        provenance: {
+          sourceKind: "explicit-user-instruction",
+          sensitivity: "public",
+          confidence: 1,
+          capturedAt: 1,
+        },
+        validity: { validFrom: 1 },
+        createdAt,
+        updatedAt: createdAt,
+        pinned: false,
+        tags: [],
+      };
+      vault.insertMemory(record);
+      vault.upsertEmbedding(record.id, {
+        provider: IDENTITY.provider,
+        modelId: IDENTITY.modelId,
+        metric: "cosine",
+        vector: new Float32Array([1, 0]),
+      });
+    };
+    try {
+      put("live", "accepted", 1);
+      for (let index = 0; index < 501; index += 1)
+        put(`history-${String(index)}`, "superseded", 10 + index);
+      const signals = await collectSignals(vault);
+      expect([...(signals.semanticById?.keys() ?? [])]).toEqual([memoryId("live")]);
+    } finally {
+      vault.close();
+      rmSync(memoryDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("semantic floor of the embedding model (#4228)", () => {
+  // `configured` is the provider model id that selects the query instruction; `response` is the
+  // model the gateway reports for the query vector and the stored rows.
+  async function floorFor(
+    configured: string,
+    response: string = configured,
+    env: Readonly<Record<string, string | undefined>> = {},
+  ): ReturnType<typeof buildConversationRetrievalSignals> {
+    const alpha = memoryId("alpha");
+    const vault = vaultFor(
+      () => [metadata(alpha, 100)],
+      new Map([[alpha, { ...embedding(alpha, new Float32Array([1, 0])), modelId: response }]]),
+    );
+    embedMock.mockResolvedValue({ ...QUERY_EMBEDDING, modelId: response });
+    return buildConversationRetrievalSignals(
+      { env } as unknown as UiHandlerDeps,
+      vault,
+      QUERY_TEXT,
+      [SCOPE],
+      NOW_MS,
+      { ...ALLOWED_GATE, configuredModelId: configured },
+    );
+  }
+  const operator = (key: string, entry: unknown): Readonly<Record<string, string>> => ({
+    KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({ [key]: entry }),
+  });
+
+  it.each(["qwen3-embedding-8b", "Qwen/Qwen3-Embedding-8B", "openai/qwen3-embedding:8b"])(
+    "carries the built-in floor 0.4 for the configured model %s",
+    async (configured) => {
+      expect((await floorFor(configured)).semanticMinScore).toBe(0.4);
+    },
+  );
+
+  it.each(["qwen3-embedding", "qwen3-embedding-4b", "Qwen3-Embedding-0.6B", "qwen3-reranker-8b"])(
+    "carries the default 0.3 for the unmeasured configured model %s",
+    async (configured) => {
+      expect((await floorFor(configured)).semanticMinScore).toBe(0.3);
+    },
+  );
+
+  it("follows the configured model, not the response model, for the built-in floor", async () => {
+    // An alias that is not Qwen3 whose response names the 8B model: no instruction was sent.
+    expect((await floorFor("embedding-alias", "qwen3-embedding-8b")).semanticMinScore).toBe(0.3);
+    // The configured 8B id whose response names another model keeps the measured floor.
+    expect((await floorFor("qwen3-embedding-8b", "other-model")).semanticMinScore).toBe(0.4);
+  });
+
+  it.each([
+    ["qwen3-embedding-8b", "qwen3-embedding-8b"],
+    ["qwen3-embedding", "qwen3-embedding"],
+    ["qwen3-embedding-4b", "qwen3-embedding-4b"],
+    ["embedding-alias", "qwen3-embedding-8b"],
+  ])("lets an operator's semanticMinScore win (configured %s, response %s)", async (c, r) => {
+    const env = operator(r, { semanticMinScore: 0.5 });
+    expect((await floorFor(c, r, env)).semanticMinScore).toBe(0.5);
+  });
+
+  it("keeps the built-in floor when the operator's entry has no semanticMinScore", async () => {
+    const env = operator("qwen3-embedding-8b", { mmrLambda: 0.6 });
+    expect((await floorFor("qwen3-embedding-8b", undefined, env)).semanticMinScore).toBe(0.4);
+  });
+
+  it("carries retrieval's default 0.3 explicitly for another model", async () => {
+    expect((await floorFor("test-embedding")).semanticMinScore).toBe(0.3);
+  });
+
+  it("carries no floor without semantic scores", async () => {
+    const vault = vaultFor(() => [metadata(memoryId("alpha"), 100)], new Map());
+    const signals = await collectSignals(vault);
+    expect(signals.semanticById).toBeUndefined();
+    expect("semanticMinScore" in signals).toBe(false);
+  });
+
+  it("carries no floor when no embedder is available", async () => {
+    const alpha = memoryId("alpha");
+    const vault = vaultFor(
+      () => [metadata(alpha, 100)],
+      new Map([[alpha, embedding(alpha, new Float32Array([1, 0]))]]),
+    );
+    const signals = await buildConversationRetrievalSignals(
+      DEPS,
+      vault,
+      QUERY_TEXT,
+      [SCOPE],
+      NOW_MS,
+      { allowed: false, reason: "no-embedder", eligibleForAnyProvider: false } as never,
+    );
+    expect(signals.semanticById).toBeUndefined();
+    expect("semanticMinScore" in signals).toBe(false);
   });
 });

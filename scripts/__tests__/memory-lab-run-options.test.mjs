@@ -1,5 +1,6 @@
 // Negative tests for the lab's guards: weakened configuration and stale evidence must be refused
 // before any instance starts. Nothing here forks the product.
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +44,47 @@ describe("memory lab option guards", () => {
     expect(options.arms).toEqual(["product"]);
     expect(options.graceMs).toBe(3000);
     expect(options.brokenLearner).toBeUndefined();
+  });
+
+  it("records the recall trace by default, and only when it was not switched off", () => {
+    expect(normalizeOptions(values()).recallTrace).toBe(true);
+    expect(normalizeOptions(values({ "recall-trace": false })).recallTrace).toBe(false);
+  });
+
+  it.each([
+    ["--embedder", "--no-embedder"],
+    ["--no-maintenance", "--maintenance"],
+    ["--recall-trace", "--no-recall-trace"],
+  ])(
+    "refuses the contradictory pair %s %s instead of letting the last one win",
+    (first, second) => {
+      // The failure this pins: the parser kept the last flag, so the run measured what the caller did
+      // not ask for. Refused before anything starts.
+      const runner = join(REPO_ROOT, "scripts", "testing", "memory-lab", "run.mjs");
+      let stderr = "";
+      let status = 0;
+      try {
+        execFileSync(
+          process.execPath,
+          [runner, "--out", join(tmpdir(), "memory-lab-flags-out"), first, second],
+          {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        );
+      } catch (error) {
+        ({ status } = error);
+        stderr = String(error.stderr);
+      }
+      expect(status).not.toBe(0);
+      expect(stderr).toMatch(/contradict each other/u);
+    },
+  );
+
+  it("still prints its usage, which names the recall-trace switch", () => {
+    const runner = join(REPO_ROOT, "scripts", "testing", "memory-lab", "run.mjs");
+    const out = execFileSync(process.execPath, [runner, "--help"], { encoding: "utf8" });
+    expect(out).toContain("--no-recall-trace");
   });
 
   it("refuses an output directory behind a symbolic link that points into the checkout", () => {

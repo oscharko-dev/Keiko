@@ -41,23 +41,11 @@ export interface MmrItem {
   readonly score: number;
 }
 
-// Highest cosine of `vec` to any already-selected vector (0 if `vec` is absent or none selected).
-function maxSimilarity(vec: Float32Array | undefined, selected: readonly Float32Array[]): number {
-  if (vec === undefined) return 0;
-  let max = 0;
-  for (const sv of selected) {
-    const sim = cosineSimilarity(vec, sv);
-    if (sim > max) max = sim;
-  }
-  return max;
-}
-
 // Index in `remaining` of the highest MMR value. Strict `>` so ties keep the earlier (higher-ranked)
 // candidate, since `remaining` preserves the input order — that makes the result deterministic.
 function bestMmrIndex(
   remaining: readonly MmrItem[],
-  embeddingById: ReadonlyMap<MemoryId, Float32Array>,
-  selectedVectors: readonly Float32Array[],
+  maxSimilarity: readonly number[],
   lambda: number,
 ): number {
   let bestPos = 0;
@@ -65,14 +53,32 @@ function bestMmrIndex(
   for (let i = 0; i < remaining.length; i += 1) {
     const cand = remaining[i];
     if (cand === undefined) continue;
-    const sim = maxSimilarity(embeddingById.get(cand.memoryId), selectedVectors);
-    const value = lambda * cand.score - (1 - lambda) * sim;
+    const value = lambda * cand.score - (1 - lambda) * (maxSimilarity[i] ?? 0);
     if (value > bestValue) {
       bestValue = value;
       bestPos = i;
     }
   }
   return bestPos;
+}
+
+// Each candidate's highest cosine to the selected vectors is kept and raised by the one vector just
+// selected, instead of being recomputed against every selected vector on every pick: the same maxima,
+// so the same order, with one cosine per remaining candidate and pick (#4228). Recomputing made a
+// window of a few hundred admitted memories cost millions of cosines per question.
+function raiseBySelected(
+  remaining: readonly MmrItem[],
+  maxSimilarity: number[],
+  embeddingById: ReadonlyMap<MemoryId, Float32Array>,
+  selectedVector: Float32Array,
+): void {
+  for (let i = 0; i < remaining.length; i += 1) {
+    const cand = remaining[i];
+    const vec = cand === undefined ? undefined : embeddingById.get(cand.memoryId);
+    if (vec === undefined) continue;
+    const sim = cosineSimilarity(vec, selectedVector);
+    if (sim > (maxSimilarity[i] ?? 0)) maxSimilarity[i] = sim;
+  }
 }
 
 // Re-orders `ranked` by MMR. Returns a NEW array of the same items. When `embeddingById` is empty or
@@ -86,15 +92,16 @@ export function reorderByMmr<T extends MmrItem>(
     return [...ranked];
   }
   const remaining = [...ranked];
+  const maxSimilarity: number[] = remaining.map(() => 0);
   const selected: T[] = [];
-  const selectedVectors: Float32Array[] = [];
   while (remaining.length > 0) {
-    const pos = bestMmrIndex(remaining, embeddingById, selectedVectors, lambda);
+    const pos = bestMmrIndex(remaining, maxSimilarity, lambda);
     const chosen = remaining.splice(pos, 1)[0];
+    maxSimilarity.splice(pos, 1);
     if (chosen === undefined) break;
     selected.push(chosen);
     const vec = embeddingById.get(chosen.memoryId);
-    if (vec !== undefined) selectedVectors.push(vec);
+    if (vec !== undefined) raiseBySelected(remaining, maxSimilarity, embeddingById, vec);
   }
   return selected;
 }

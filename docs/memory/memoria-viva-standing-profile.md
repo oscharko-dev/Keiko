@@ -34,6 +34,16 @@ standing, and an origin the person removed from the profile passes the removal o
 correction also keeps the origin's type. The mark is written once, at supersession; nothing is
 recomputed per answer.
 
+**History.** The superseded fact stays in the vault with its closed validity window and its
+`supersedes` edge. The maintenance pass never forgets it, and returning to the earlier value in the
+same words is learned like any new statement. The profile never sends it, and recall sends it only
+as an earlier value of the fact that replaced it, for a question about what held before (see
+**Earlier values**). Only the person's own forget, or an operator's opt-in retention policy, removes
+it. A tombstone from
+unattended maintenance or retention does not refuse the person's later statement, with two
+exceptions: it removed a fact the person had rejected, or it records no status of the removed record
+(a row from before vault schema v4), where a rejection can no longer be ruled out.
+
 **Order.** Pinned first, then the number of times the person confirmed the fact, then the newest
 statement, then the id. The profile does not decay by recency; it changes only through supersession,
 forgetting, pinning and unpinning.
@@ -62,8 +72,8 @@ precedes the memory block of the answer content.
 ## Recall: only what fits the question
 
 Chat recall runs `retrieveMemoryContext` with the strict relevance floor and at most 6 memories. A
-memory is retrieved only when it has a semantic match above zero or shares at least one informative
-word with the question. Function words, modal verbs, politeness words and words of fewer than three
+memory is retrieved only when its semantic score reaches the semantic floor of the embedding model
+or it shares at least one informative word with the question. Function words, modal verbs, politeness words and words of fewer than three
 letters are not informative; inflections match through the shared German normalization; the word
 check reads the fact text only, while ranking among admitted memories still counts the person's own
 tags. Without a query signal nothing is retrieved, and pinned facts and corrections have no
@@ -74,13 +84,57 @@ claim that this question is about it. A retrieved profile fact leaves the profil
 (`standingProfileWithout`), so it is sent once, in the question's own memory context. When the
 memory budget let recall send only part of it, its full profile line stays.
 
+**Ranking among admitted memories does not follow the id until everything else is equal.** Chat recall fuses its signals (semantic
+similarity, relevance, pin, correction, recency, confidence, importance, reinforcement, graph) with
+Reciprocal Rank Fusion (`KEIKO_MEMORY_FUSION=weighted-sum` restores the weighted sum). A rule keeps
+a signal from deciding what it does not know (#4228): memories with an equal subscore share one rank
+(the mean of the positions the tied group occupies), so a signal that does not tell two memories
+apart gives both exactly the same. Before, a signal that is identical for every candidate (pin, correction, graph, often
+confidence) handed out ranks in memory-id order, and in a store of a few hundred memories that noise
+outweighed the advantage of the semantically nearest one. Only memories whose fused scores are exactly
+equal fall back to the newer update and then the id, which keeps the order reproducible. The graph
+signal follows the same principle: the set of top memories that graph proximity refers to never
+contains part of a group tied on score and update time, so a neighbour's graph score never depends on
+which of equal memories the id happened to put inside the cut (this applies to both fusion modes).
+
+**The admitted memories are ranked among themselves.** A fused rank is relative to the set it is
+computed over. Recall therefore decides admission on a ranking of the whole read window (up to 500
+records), and then ranks again over the memories the floor admitted, and orders the selection by
+that second ranking (#4228). Ranked over the window, the hundreds of records the floor then removes
+sat between two admitted memories in every signal that does not depend on the question (recency,
+strength, pin, importance); reciprocal ranks turned that distance into a lead the semantic order
+could not outweigh, and in the lab the needed memory fell to position seven or later behind newer,
+less similar ones. Now a record the question does not touch never decides the order of those it
+does: removing every refused record from the store changes neither the selection nor its order (a
+property test pins this). This applies under the strict floor Chat recall uses, whose admission
+reads no rank-relative signal. The lenient floor also admits a memory by its graph proximity to the
+window's top memories, so there one ranking of the window still decides both, and a memory admitted
+that way keeps the graph score that admitted it. Under the weighted sum the scores do not depend on
+the set, so only the graph signal's top set can differ. A score reported for an included memory
+comes from the ranking that ordered it, so under Reciprocal Rank Fusion it is relative to that set
+and not comparable across questions.
+
 **Corrections keep their topic.** Under the strict floor a standing profile fact also shares the
 informative words of the facts it superseded (`supersedes` edges, up to four steps back on each
-lineage, forgotten facts excluded). Only the match reads them; a superseded fact never reaches the
-answer. Other memories inherit nothing: they keep their semantic match, and inherited words would let
+lineage, forgotten facts excluded). Only the match reads them; a superseded fact reaches the answer
+only as a labelled earlier value (see **Earlier values**), never as a memory of its own. Other memories inherit nothing: they keep their semantic match, and inherited words would let
 a question that names only an old value ("Was macht Siemens?") retrieve the fact that replaced it.
 Inheritance follows actual profile membership: a correction the profile caps left out, or one the
 person removed from the profile, matches on its own words and semantic similarity only.
+
+**Earlier values (#4223).** A question about what held before ("Was hattest du vorher …?", "How
+were hotfixes reviewed before the current rule?") can only be answered from history. When the
+question carries a cue of time before now (a closed German and English vocabulary: früher, vorher,
+zuvor, vor meiner …, ursprünglich, before, previously, earlier, used to, at the beginning, in
+between, …), each recalled memory carries up to two superseded values it replaced, nearest first,
+rendered under it as `earlier value, since replaced:`. Only superseded records of the memory's own
+scope and of a type the request admits qualify; another scope's history is never shown. History
+fits inside the memory's own share of the token budget, so it never displaces the memory's excerpt or
+a lower-ranked memory. A question without a past cue gets the current value alone: a model shown the
+old value next to the new one can answer with the old one (lab 2026-11-11, update-lists-de). The
+same rule applies to every caller of recall with a question text, so a workflow's memory context and
+`/api/memory/context` carry history under the same cue. The `chat.context.selected` line counts the
+values sent as `earlierValueCount`.
 
 The lab showed why (2026-11-11, Gemma via LiteLLM, `update-lists-de` and `preference-tables-*`). The
 person corrected "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst." with "Ab jetzt bevorzuge ich
@@ -101,13 +155,53 @@ the query to the selected destination.
 
 The Git change description no longer retrieves memory (R10): it never sent what it retrieved.
 
+**The semantic floor belongs to the embedding model.** The retrieval default is a cosine of 0.30
+(`DEFAULT_SEMANTIC_MIN_SCORE`). For the one model that was measured, Qwen3-Embedding-8B, 0.30 lies
+inside the range of unrelated memories, so its built-in floor is 0.40. The built-in applies when the
+configured provider model id, the same signal that selects the query instruction, names the Qwen3
+embedding family and the 8B size (case-insensitive `8b`: `qwen3-embedding-8b`,
+`Qwen/Qwen3-Embedding-8B` and `openai/qwen3-embedding:8b` match; `qwen3-embedding`,
+`qwen3-embedding-4b` and `qwen3-reranker-8b` do not). Every other model keeps 0.30, so a geometry
+nobody measured is never judged at the calibrated floor.
+
+Measured 2026-11-19 with qwen3-embedding-8b in the product's own format (the question with the
+instruction, the memory raw): 54 probes of the lab's
+seeded scenarios, 34 of them with a needed memory. The 43 needed memories score 0.461 at the lowest,
+0.569 at the tenth percentile and 0.712 at the median. On the 21 probes whose store holds 60 to 560
+unrelated memories, the highest unrelated memory per probe has a median of 0.312 and a maximum of
+0.410. Replaying the production retrieval over 53 probes at the chat's limit supplied 14 unrelated
+memories at floor 0.30, 4 at 0.40 and none at 0.42, and the needed memory on 32 of 34 probes at each
+of these floors; with a higher limit the needed memory at 0.461, which shares no informative word with
+its question and is admitted by its semantic score alone, is lost from 0.48 on. Losing a needed memory
+is the worse error, so the floor sits at the low end of the gap, 0.061 below the lowest needed
+memory. It is not above every unrelated memory: four unrelated memories of one probe (0.404 to 0.410)
+still pass. The unrelated memories of the measurement are pseudo-word filler, both margins are
+in-sample on one model, and the value is a starting point an operator can override.
+
+A memory admitted by a shared word whose cosine is below the floor is ranked without a semantic
+subscore (`semanticScoresAboveFloor`), so with the 8B floor this applies to cosines up to 0.40
+instead of 0.30; its admission is unchanged.
+
+An operator sets or overrides the floor per embedding model with `semanticMinScore` (a number from 0
+to 1) in `KEIKO_MEMORY_EMBEDDING_CALIBRATION`, a JSON object keyed by `provider/model@revision`,
+`provider/model`, `model@revision` or `model` of the embedding the response names, next to
+`semanticDedupThreshold`, `relatedLinkThreshold` and `mmrLambda`. Each field resolves on its own,
+from the most specific key that names it, so a floor-only entry keeps the thresholds a broader entry
+names. The operator's field wins over the built-in value, and an invalid value is ignored. To calibrate another model, measure
+question-to-memory cosines in the product's format for memories the answer needs and for unrelated
+ones, and put the floor just above the range of the unrelated memories and below the lowest needed
+one; where the two overlap, prefer the lower floor, because a lost needed memory costs more than a
+supplied unrelated one.
+
 ## Evidence
 
 `chat.context.selected` (Chat) and `chat.response.message` (grounded answer) carry the optional
 counts `profileEntryCount`, `profileTokens`, `profileDroppedCount` (entries dropped by the caps),
 `profileRetrievedCount` (profile facts sent with recall instead), `retrievedMemoryCount` and
-`belowFloorMemoryCount`. The wire memory context carries
-`profile {entries, tokens, droppedCount}`, `profileRetrievedCount` and `belowFloorCount`. The Chat
+`belowFloorMemoryCount`, plus `semanticFloor` (the floor in force, a cosine) only when semantic
+scores were used. The wire memory context carries
+`profile {entries, tokens, droppedCount}`, `profileRetrievedCount`, `belowFloorCount` and
+`semanticFloor`. The Chat
 disclosure shows the profile entries Keiko selected as background for that answer separately from
 the memories retrieved for the question. Selection can take place even when grounded answering
 finishes without calling the model. The cap counter covers the candidates the selector examined.

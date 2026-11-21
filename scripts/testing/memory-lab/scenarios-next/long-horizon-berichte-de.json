@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "long-horizon-berichte-de",
+  "language": "de",
+  "class": "long-horizon",
+  "description": "Eight simulated weeks of history: 180 unrelated facts, a reinforced format preference, a meeting day and time corrected 10 days ago and a stable department fact stated 130 days ago. Limit: decay is a flat 45-day half-life, so a stable fact left unused for four months is archived by maintenance, and recall never supplies a replaced value. Failure means: dept-old failing is a design question (a valid but unused fact fades); day-before failing is the absent capability to recall an earlier value; the two controls (format-now, day-now) must pass. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (the stable fact, unused and old, is expected to be archived); the superseded record stays as history since #4223, and the earlier-value probe is answered from the superseded value recall sends under the current fact; failing it is not a lost record. Kind: design.",
+  "seed": {
+    "records": [
+      {
+        "key": "format",
+        "body": "Ich bevorzuge Statusberichte als Tabellen mit einer Zeile pro Kostenstelle.",
+        "type": "preference",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 50,
+        "accessCount": 6,
+        "lastAccessDays": 3,
+        "truth": "format"
+      },
+      {
+        "key": "day-old",
+        "body": "Das Teamtreffen findet dienstags um 16:30 Uhr statt.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "superseded",
+        "ageDays": 40,
+        "earlier": "day-before"
+      },
+      {
+        "key": "day-new",
+        "body": "Das Teamtreffen findet donnerstags um 7:45 Uhr statt.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 10,
+        "supersedes": "day-old",
+        "truth": "day"
+      },
+      {
+        "key": "dept",
+        "body": "Meine Abteilung heißt Kreditrisiko Mittelstand.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 130,
+        "truth": "dept"
+      }
+    ],
+    "filler": [
+      {
+        "count": 180,
+        "status": "accepted",
+        "minAgeDays": 1,
+        "maxAgeDays": 56,
+        "seed": 101,
+        "scope": "user",
+        "type": "semantic-fact"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "format",
+      "seed": "Ich bevorzuge Statusberichte als Tabellen mit einer Zeile pro Kostenstelle.",
+      "must": false,
+      "terms": [["Tabelle*"], ["Kostenstelle*"]]
+    },
+    {
+      "key": "day",
+      "seed": "Das Teamtreffen findet donnerstags um 7:45 Uhr statt.",
+      "must": false,
+      "terms": [["Donnerstag*"], ["7:45", "7.45", "7 Uhr 45", "viertel vor acht"]]
+    },
+    {
+      "key": "dept",
+      "seed": "Meine Abteilung heißt Kreditrisiko Mittelstand.",
+      "must": false,
+      "terms": [["Kreditrisiko"], ["Mittelstand*"]]
+    }
+  ],
+  "superseded": [
+    {
+      "key": "day-before",
+      "terms": [["Dienstag*"], ["16:30", "16.30", "16 Uhr 30", "halb fünf"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "format-now",
+      "question": "Wie soll ich meine Statusberichte aufbauen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabelle*", "tabellar*"], ["Kostenstelle*"]]
+      }
+    },
+    {
+      "id": "day-now",
+      "question": "An welchem Tag findet das Teamtreffen statt?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Donnerstag*"], ["7:45", "7.45", "7 Uhr 45", "viertel vor acht"]],
+        "forbidden": [["Dienstag*"]]
+      }
+    },
+    {
+      "id": "day-before",
+      "question": "An welchem Tag fand das Teamtreffen früher statt?",
+      "expect": {
+        "kind": "answer",
+        "earlier": ["day-before"]
+      }
+    },
+    {
+      "id": "dept-old",
+      "question": "Wie heißt meine Abteilung?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Kreditrisiko"], ["Mittelstand*"]]
+      }
+    }
+  ]
+}

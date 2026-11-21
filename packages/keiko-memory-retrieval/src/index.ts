@@ -69,6 +69,7 @@ export { cosineSimilarity, reorderByMmr, DEFAULT_MMR_LAMBDA, type MmrItem } from
 export {
   assembleContextBlock,
   estimateTokens,
+  renderMemoryContextEntry,
   TOKEN_PER_WORD_RATIO,
   type AssembleContextOptions,
 } from "./context.js";

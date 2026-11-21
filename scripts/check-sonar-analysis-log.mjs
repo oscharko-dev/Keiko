@@ -452,6 +452,63 @@ export function fullAnalysisEvidenceFailures(contents) {
   return failures;
 }
 
+// The hosted runner runs the scanner engine JVM and the JS/TS analyzer's Node.js process side by
+// side. Their two heap ceilings must leave the operating system, the runner agent, the scanner CLI
+// and both processes' non-heap memory a fixed reserve; otherwise the runner itself is killed
+// mid-analysis and the job ends without a log (#4481, 2026-11-21: two attempts lost at 5:19 with a
+// Node.js ceiling of 12480 MB and an uncapped engine on a 15983 MB runner). SonarJS reports the
+// machine and the Node.js ceiling. The CLI reports SONAR_SCANNER_JAVA_OPTS when it is set; without
+// an -Xmx there the engine JVM takes its default ceiling, a quarter of the machine. A committed
+// engine heap above the configured ceiling (`memory total=`) is never ignored. CI adds swap before
+// the scan and passes the measured total (--runner-swap-mb): the Node.js bridge peaks in the JS/TS
+// phase and the engine in the architecture phase, so swap absorbs the ceiling that is idle.
+const RUNNER_MEMORY_RESERVE_MB = 2048;
+const JVM_DEFAULT_HEAP_FRACTION = 4;
+const NODE_MEMORY_CONFIGURATION = /Memory configuration: OS \((\d+) MB\), Node\.js \((\d+) MB\)/u;
+const ENGINE_JAVA_OPTS = /SONAR_SCANNER_JAVA_OPTS=(.*)$/u;
+const ENGINE_HEAP_TOTAL = /memory total=(\d+)(?:\s|\|)/u;
+const XMX_UNIT_MB = { g: 1024, k: 1 / 1024, m: 1 };
+
+function largestMatch(lines, pattern, group) {
+  return lines.reduce((largest, line) => {
+    const match = line.match(pattern);
+    const value = match === null ? undefined : decimalInteger(match[group] ?? "");
+    return value === undefined ? largest : Math.max(largest ?? 0, value);
+  }, undefined);
+}
+
+function configuredEngineHeapMb(lines) {
+  const options = lines
+    .findLast((line) => ENGINE_JAVA_OPTS.test(line))
+    ?.match(ENGINE_JAVA_OPTS)?.[1];
+  const xmx = options?.match(/(?:^|\s)-Xmx(\d+)([gkm])(?:\s|$)/iu);
+  if (xmx === undefined || xmx === null) return undefined;
+  const amount = decimalInteger(xmx[1] ?? "");
+  const unit = XMX_UNIT_MB[(xmx[2] ?? "").toLowerCase()];
+  return amount === undefined || unit === undefined ? undefined : Math.ceil(amount * unit);
+}
+
+export function runnerMemoryBudgetFailures(contents, swapMb = 0) {
+  const lines = contents.split(/\r?\n/u);
+  const osMb = largestMatch(lines, NODE_MEMORY_CONFIGURATION, 1);
+  const nodeMb = largestMatch(lines, NODE_MEMORY_CONFIGURATION, 2);
+  if (osMb === undefined || nodeMb === undefined) {
+    return ["no SonarJS memory configuration receipt proves the runner memory budget"];
+  }
+  const ceilingMb = configuredEngineHeapMb(lines) ?? Math.floor(osMb / JVM_DEFAULT_HEAP_FRACTION);
+  const engineMb = Math.max(ceilingMb, largestMatch(lines, ENGINE_HEAP_TOTAL, 1) ?? 0);
+  const headroomMb = osMb + swapMb - nodeMb - engineMb;
+  const capacity =
+    swapMb > 0 ? `${String(osMb)} MB plus ${String(swapMb)} MB swap` : `${String(osMb)} MB`;
+  return headroomMb >= RUNNER_MEMORY_RESERVE_MB
+    ? []
+    : [
+        `runner memory budget: Node.js ${String(nodeMb)} MB plus scanner engine ` +
+          `${String(engineMb)} MB leaves ${String(headroomMb)} MB of ${capacity}, below ` +
+          `the ${String(RUNNER_MEMORY_RESERVE_MB)} MB reserve`,
+      ];
+}
+
 export function runSonarLogCheck(input = {}) {
   const path = input.path;
   if (path === undefined) throw new Error("--log is required");
@@ -459,20 +516,39 @@ export function runSonarLogCheck(input = {}) {
   const failures = [
     ...sonarLogFailures(contents),
     ...(input.requireFullAnalysis === true ? fullAnalysisEvidenceFailures(contents) : []),
+    ...(input.requireRunnerMemoryBudget === true
+      ? runnerMemoryBudgetFailures(contents, input.runnerSwapMb ?? 0)
+      : []),
   ];
   if (failures.length > 0) throw new Error(failures.join("\n"));
   (input.log ?? console.log)("sonar-analysis-log: PASS - no scanner warnings.");
   return failures;
 }
 
+function runnerSwapOption(argv) {
+  if (!argv.includes("--runner-swap-mb")) return undefined;
+  const swapMb = decimalInteger(optionValue(argv, "--runner-swap-mb") ?? "");
+  if (swapMb === undefined || swapMb < 0) {
+    throw new TypeError("--runner-swap-mb must be a whole number of MB");
+  }
+  return swapMb;
+}
+
+function cliCheckInput(argv) {
+  const requireFullAnalysis = argv.includes("--require-full-analysis");
+  const requireRunnerMemoryBudget = argv.includes("--require-runner-memory-budget");
+  const runnerSwapMb = runnerSwapOption(argv);
+  return {
+    path: optionValue(argv, "--log"),
+    ...(requireFullAnalysis ? { requireFullAnalysis } : {}),
+    ...(requireRunnerMemoryBudget ? { requireRunnerMemoryBudget } : {}),
+    ...(runnerSwapMb === undefined ? {} : { runnerSwapMb }),
+  };
+}
+
 export function executeSonarLogCli(input = {}) {
   try {
-    const argv = input.argv ?? process.argv.slice(2);
-    const requireFullAnalysis = argv.includes("--require-full-analysis");
-    (input.run ?? runSonarLogCheck)({
-      path: optionValue(argv, "--log"),
-      ...(requireFullAnalysis ? { requireFullAnalysis } : {}),
-    });
+    (input.run ?? runSonarLogCheck)(cliCheckInput(input.argv ?? process.argv.slice(2)));
   } catch (error) {
     (input.error ?? console.error)(
       `sonar-analysis-log: FAIL - ${error instanceof Error ? error.message : String(error)}`,

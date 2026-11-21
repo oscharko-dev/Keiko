@@ -15,6 +15,7 @@ import {
   validateMemoryScope,
 } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { isPersonForgetterSurface } from "@oscharko-dev/keiko-memory-vault";
 import type { RejectionReason, SalienceDropReason } from "@oscharko-dev/keiko-memory-capture";
 import { auditRunIdFor, RUNID_PREFIX, verifyMemoryAuditHashChain } from "./memory-audit-handler.js";
 import { memoryScopeKey, sanitizeMemoryScope } from "./memory-scope-sanitizer.js";
@@ -298,18 +299,14 @@ function buildProjectedDecision(
 // expired record) is housekeeping and stays out. The record is gone, so the entry names none.
 // #4206 audit: retention and maintenance also tombstone records. Only a forget a person asked for,
 // in the Memory Center or with a clear statement in a Chat, is the person's Journal entry.
-const PERSON_FORGETTER_SURFACES: ReadonlySet<string> = new Set(["memory-center", "chat-statement"]);
-
-function isPersonForget(forgetterSurface: string | undefined): boolean {
-  return forgetterSurface !== undefined && PERSON_FORGETTER_SURFACES.has(forgetterSurface);
-}
-
+// The classification is the vault's single one (`isPersonForgetterSurface`), shared with capture
+// suppression.
 function projectForgetEvent(
   event: Extract<MemoryAuditEvent, { readonly kind: "memory:forgotten" }>,
   ledgerOrder: number,
   allowedScopeKeys: ReadonlySet<string>,
 ): IndexedDecision | null {
-  if (!event.tombstoned || !isPersonForget(event.forgetterSurface)) return null;
+  if (!event.tombstoned || !isPersonForgetterSurface(event.forgetterSurface)) return null;
   if (!allowedScopeKeys.has(auditScopeKey(event.scope))) return null;
   return {
     decision: {

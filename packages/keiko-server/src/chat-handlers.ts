@@ -127,6 +127,7 @@ import {
   conversationFusionMode,
   retrieveMemoryWithZeroBudget,
   semanticRetrievalGateForText,
+  type ConversationRetrievalSignals,
 } from "./memory-retrieval-signals.js";
 import { memoriesUsedInAnswer } from "./memory-answer-use.js";
 import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
@@ -1353,6 +1354,7 @@ function toMemoryResult(
   retrieval: ReturnType<typeof retrieveMemoryContext>,
   profile: StandingProfile = EMPTY_STANDING_PROFILE,
   profileRetrievedCount = 0,
+  semanticFloor?: number,
 ): ConversationMemoryResultWire {
   const profileWire = standingProfileWire(profile);
   return {
@@ -1361,6 +1363,7 @@ function toMemoryResult(
         ? { profile: profileWire }
         : {}),
       ...(profileRetrievedCount > 0 ? { profileRetrievedCount } : {}),
+      ...(semanticFloor !== undefined ? { semanticFloor } : {}),
       // A fact the profile supplies anyway was not held back from the answer.
       belowFloorCount: retrieval.omitted.filter(
         (entry) =>
@@ -1379,6 +1382,7 @@ function toMemoryResult(
         confidence: item.confidence,
         status: item.status,
         capturedAt: item.capturedAt,
+        ...(item.earlierValues === undefined ? {} : { earlierValues: item.earlierValues }),
       })),
       budget: retrieval.budget,
     },
@@ -1457,6 +1461,28 @@ export function maybeRunChatAutoMaintenance(
 // over-application sets the final value (#4228).
 export const CHAT_MAX_RETRIEVED_MEMORIES = 6;
 
+// The retrieval and, when semantic scores took part, the floor those scores were judged against.
+interface ChatMemoryRetrieval {
+  readonly retrieval: ReturnType<typeof retrieveMemoryContext>;
+  readonly semanticFloor?: number;
+}
+
+// The retrieval request's signal fields. The semantic floor travels with the semantic scores it
+// judges and is absent without them, so the lexical fallback stays byte-identical.
+function retrievalSignalFields(
+  signals: ConversationRetrievalSignals,
+): Partial<Parameters<typeof retrieveMemoryContext>[0]> {
+  return {
+    ...(signals.semanticById !== undefined ? { semanticById: signals.semanticById } : {}),
+    ...(signals.semanticMinScore !== undefined
+      ? { semanticMinScore: signals.semanticMinScore }
+      : {}),
+    ...(signals.strengthById.size > 0 ? { strengthById: signals.strengthById } : {}),
+    ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
+    ...(signals.mmrLambda !== undefined ? { mmrLambda: signals.mmrLambda } : {}),
+  };
+}
+
 async function retrieveChatMemory(
   deps: UiHandlerDeps,
   vault: MemoryVaultStore,
@@ -1468,32 +1494,26 @@ async function retrieveChatMemory(
     profile,
     signal,
   }: { readonly profile: StandingProfile; readonly signal?: AbortSignal | undefined },
-): Promise<ReturnType<typeof retrieveMemoryContext>> {
+): Promise<ChatMemoryRetrieval> {
   const port = vaultAsQueryPort(vault);
-  if (budgetTokens === 0) return retrieveMemoryWithZeroBudget(deps, port, scopes, nowMs);
-  const semanticGate = semanticRetrievalGateForText(
-    deps,
-    content,
-    memoryCapturePolicyForDeps(deps),
-  );
+  if (budgetTokens === 0) {
+    return { retrieval: retrieveMemoryWithZeroBudget(deps, port, scopes, nowMs) };
+  }
   const signals = await buildConversationRetrievalSignals(
     deps,
     vault,
     content,
     scopes,
     nowMs,
-    semanticGate,
+    semanticRetrievalGateForText(deps, content, memoryCapturePolicyForDeps(deps)),
     signal,
   );
-  return retrieveMemoryContext(
+  const retrieval = retrieveMemoryContext(
     {
       scopes,
       queryText: content,
       ...(budgetTokens !== undefined ? { budgetTokens } : {}),
-      ...(signals.semanticById !== undefined ? { semanticById: signals.semanticById } : {}),
-      ...(signals.strengthById.size > 0 ? { strengthById: signals.strengthById } : {}),
-      ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
-      ...(signals.mmrLambda !== undefined ? { mmrLambda: signals.mmrLambda } : {}),
+      ...retrievalSignalFields(signals),
       fusion: conversationFusionMode(deps),
       // #4228: only memories the question is about. A profile fact the question names is
       // retrieved too and then leaves the profile for this answer (standingProfileWithout).
@@ -1507,6 +1527,10 @@ async function retrieveChatMemory(
     },
     port,
   );
+  return {
+    retrieval,
+    ...(signals.semanticMinScore !== undefined ? { semanticFloor: signals.semanticMinScore } : {}),
+  };
 }
 
 // The profile facts recall sent at least as fully as the profile would: a retrieved excerpt clipped
@@ -1549,7 +1573,6 @@ export async function buildMemoryResult(
   if (vault === undefined || !memory.enabled) {
     return emptyMemoryResult(memory.enabled);
   }
-  const scopes = conversationMemoryScopes(context);
   const budgetTokens = memory.budgetTokens;
   if (budgetTokens === 0) {
     return emptyMemoryResult(true);
@@ -1562,10 +1585,10 @@ export async function buildMemoryResult(
   // The profile is part of the person's memory budget; retrieval gets what it leaves.
   const memoryBudget = budgetTokens ?? DEFAULT_BUDGET_TOKENS;
   const profile = standingProfileForAnswer(vault, context.userId, nowMs, memoryBudget);
-  const retrieval = await retrieveChatMemory(
+  const { retrieval, semanticFloor } = await retrieveChatMemory(
     deps,
     vault,
-    scopes,
+    conversationMemoryScopes(context),
     request.content,
     Math.max(0, memoryBudget - profile.tokens),
     nowMs,
@@ -1588,6 +1611,7 @@ export async function buildMemoryResult(
     retrieval,
     answerProfile,
     currentProfile.entries.length - answerProfile.entries.length,
+    semanticFloor,
   );
   recordConversationMemoryRetrieval(deps, context, result.context.memories);
   return result;
@@ -1746,7 +1770,7 @@ async function candidateActionFromOutcome(
   }
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
   const record = buildMemoryRecordFromProposal(proposalId, outcome);
-  if (isSuppressedByForgetTombstone(deps.memoryVault, record)) {
+  if (isSuppressedByForgetTombstone(deps.memoryVault, record, { explicitStatement: explicit })) {
     return refusedCandidateAction(FORGOTTEN_MEMORY_SUPPRESSION_REASON, explicit, correlationId);
   }
   const candidate = acceptedCaptureCandidate(record, deps, mode, outcome);
@@ -1894,7 +1918,9 @@ function keepsRememberedStatement(outcome: CaptureOutcome, vault: MemoryVaultSto
   if (outcome.proposal.provenance.sourceKind !== "explicit-user-instruction") return false;
   if (!isPersistableMemoryCandidate(outcome)) return false;
   const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
-  return !isSuppressedByForgetTombstone(vault, buildMemoryRecordFromProposal(proposalId, outcome));
+  return !isSuppressedByForgetTombstone(vault, buildMemoryRecordFromProposal(proposalId, outcome), {
+    explicitStatement: true,
+  });
 }
 
 function asksToRemember(outcome: CaptureOutcome): boolean {

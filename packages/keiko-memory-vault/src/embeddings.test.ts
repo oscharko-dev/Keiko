@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MemoryId, MemoryRecord, UserId } from "@oscharko-dev/keiko-contracts/memory";
 import { insertMemoryRow } from "./memories.js";
-import { openTestDb, TEST_CIPHER } from "./_support.js";
+import { openTestDb, TEST_CIPHER, TEST_SEALING } from "./_support.js";
 import {
   deleteEmbeddingRow,
   getEmbeddingRow,
@@ -48,7 +48,7 @@ function pseudoVector(dim: number): Float32Array {
 describe("embeddings round-trip", () => {
   it("round-trips a Float32Array(384) byte-equal", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m1"), TEST_SEALING);
     const vector = pseudoVector(384);
     upsertEmbeddingRow(
       db,
@@ -80,7 +80,7 @@ describe("embeddings round-trip", () => {
 
   it("omits modelRevision on the way back when absent", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m1"), TEST_SEALING);
     upsertEmbeddingRow(
       db,
       "m1" as MemoryId,
@@ -95,7 +95,7 @@ describe("embeddings round-trip", () => {
 
   it("upsert replaces the prior row (last-write-wins per memory)", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m1"), TEST_SEALING);
     upsertEmbeddingRow(
       db,
       "m1" as MemoryId,
@@ -125,8 +125,8 @@ describe("embeddings round-trip", () => {
 
   it("rejects mixed dimensions for the same embedding identity", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
-    insertMemoryRow(db, makeMemory("m2"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m1"), TEST_SEALING);
+    insertMemoryRow(db, makeMemory("m2"), TEST_SEALING);
     upsertEmbeddingRow(
       db,
       "m1" as MemoryId,
@@ -148,8 +148,8 @@ describe("embeddings round-trip", () => {
 
   it("rejects a second active embedding model identity in the same vault", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
-    insertMemoryRow(db, makeMemory("m2"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m1"), TEST_SEALING);
+    insertMemoryRow(db, makeMemory("m2"), TEST_SEALING);
     upsertEmbeddingRow(
       db,
       "m1" as MemoryId,
@@ -181,14 +181,14 @@ describe("embeddings round-trip", () => {
 
   it("returns undefined for a memory with no embedding", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m1"), TEST_SEALING);
     expect(getEmbeddingRow(db, "m1" as MemoryId, TEST_CIPHER)).toBeUndefined();
   });
 
   it("bulk-reads available embeddings by memory id", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
-    insertMemoryRow(db, makeMemory("m2"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m1"), TEST_SEALING);
+    insertMemoryRow(db, makeMemory("m2"), TEST_SEALING);
     upsertEmbeddingRow(
       db,
       "m1" as MemoryId,
@@ -207,7 +207,7 @@ describe("embeddings round-trip", () => {
 
   it("cascades when the memory is deleted (FK ON DELETE CASCADE)", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m1"), TEST_SEALING);
     upsertEmbeddingRow(
       db,
       "m1" as MemoryId,
@@ -221,7 +221,7 @@ describe("embeddings round-trip", () => {
 
   it("deletes an embedding row without deleting the memory", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m1"), TEST_SEALING);
     upsertEmbeddingRow(
       db,
       "m1" as MemoryId,
@@ -239,7 +239,7 @@ describe("embeddings round-trip", () => {
 describe("encodeVectorLE deterministic encoding (regression)", () => {
   it("encodes a known vector as the expected LE byte sequence", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m1"), TEST_SEALING);
     // 1.0f in IEEE-754 LE = 00 00 80 3F; 2.0f LE = 00 00 00 40
     upsertEmbeddingRow(
       db,
@@ -270,7 +270,7 @@ describe("encodeVectorLE deterministic encoding (regression)", () => {
     expect(new Uint8Array(probe.buffer)[0]).toBe(0x01);
 
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m1"), TEST_SEALING);
     upsertEmbeddingRow(
       db,
       "m1" as MemoryId,
@@ -358,7 +358,7 @@ describe("gateEmbeddingInput (DoS + cast soundness)", () => {
 describe("read-side embedding soundness", () => {
   it("throws schema-mismatch on a tampered metric column", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m1"), TEST_SEALING);
     upsertEmbeddingRow(
       db,
       "m1" as MemoryId,
@@ -376,7 +376,7 @@ describe("read-side embedding soundness", () => {
 
   it("throws schema-mismatch when vector_dimensions disagrees with the BLOB byte length", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("m1"), TEST_SEALING);
     upsertEmbeddingRow(
       db,
       "m1" as MemoryId,

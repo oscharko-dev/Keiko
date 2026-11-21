@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { KEIKO_CONTRACTS_VERSION } from "./version.js";
 import {
@@ -219,6 +220,22 @@ describe("keiko-contracts package surface", () => {
   it("exports governed attachment MIME normalization through the package entrypoint", () => {
     expect(MAX_ATTACHMENT_MIME_BYTES).toBe(255);
     expect(normalizeAttachmentMime(" IMAGE/PNG ; charset=binary ")).toBe("image/png");
+  });
+
+  it("keeps the memory record validator reachable at runtime through its own subpath, not the type-only barrel", async () => {
+    // The memory lab validates its seeded records with the subject's own contract through this
+    // subpath's module; the root barrel stays type-only, so the value is not there.
+    const manifest = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { exports: Record<string, { import: string }> };
+    expect(manifest.exports["./memory-record-validation"]?.import).toBe(
+      "./dist/memory-record-validation.js",
+    );
+    const module = await import("./memory-record-validation.js");
+    expect(typeof module.validateMemoryRecord).toBe("function");
+    expect(module.validateMemoryRecord({}).ok).toBe(false);
+    const barrel: Record<string, unknown> = await import("./index.js");
+    expect(barrel.validateMemoryRecord).toBeUndefined();
   });
 
   it("exposes the version constant pinned at the package version", () => {

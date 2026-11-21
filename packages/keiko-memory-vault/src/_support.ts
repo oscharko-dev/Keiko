@@ -5,10 +5,19 @@
 import { DatabaseSync } from "node:sqlite";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 import { makeMemoryRecord } from "@oscharko-dev/keiko-contracts/memory-fixtures";
+import { memoryBodySuppressionHashForVault } from "./body-fingerprint.js";
 import { createMemoryContentCipher } from "./cipher.js";
+import type { MemoryRowSealing } from "./memories.js";
 import { runMigrations } from "./schema.js";
+import { memoryRecordToRow } from "./serialize.js";
 
 export const TEST_CIPHER = createMemoryContentCipher(Buffer.alloc(32, 7));
+
+// The row writer's sealing: the test cipher and a fixed body fingerprint key.
+export const TEST_SEALING: MemoryRowSealing = {
+  cipher: TEST_CIPHER,
+  bodyHash: (body: string): string => memoryBodySuppressionHashForVault(body, Buffer.alloc(32, 9)),
+};
 
 export function openTestDb(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -37,6 +46,9 @@ export function rewindPlaintextFixtureSchema(db: DatabaseSync): void {
   db.exec(`DROP TRIGGER memory_sources_insert;
     DROP TRIGGER memory_sources_update;
     DROP TABLE memory_message_sources;`);
+  db.exec("DROP INDEX idx_memories_scope_body_hash");
+  db.exec("DROP INDEX idx_memories_body_hash_pending");
+  db.exec("ALTER TABLE memories DROP COLUMN body_hash");
   db.exec("ALTER TABLE memories DROP COLUMN evidence_span");
   db.exec("ALTER TABLE memories DROP COLUMN source_message_ids_json");
   db.exec("DROP TABLE IF EXISTS memory_conversation_touches");
@@ -59,4 +71,14 @@ export function rewindPlaintextFixtureSchema(db: DatabaseSync): void {
     CREATE INDEX idx_tombstones_memory_id ON memory_tombstones(memory_id);
   `);
   db.exec("PRAGMA user_version = 1");
+}
+
+// A row as a vault before v17 stored it: every column it had, no body fingerprint. Seeds an older
+// schema, which the current row writer no longer fits.
+export function insertPreV17MemoryRow(db: DatabaseSync, record: MemoryRecord): void {
+  const row = memoryRecordToRow(record, TEST_CIPHER);
+  const columns = Object.keys(row);
+  db.prepare(
+    `INSERT INTO memories (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+  ).run(...(Object.values(row) as (string | number | null)[]));
 }

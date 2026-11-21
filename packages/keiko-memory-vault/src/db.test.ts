@@ -24,7 +24,13 @@ import {
   seedBrokenV12MemoryVault,
 } from "../../../tests/support/memory-migration-fixture.js";
 import { insertMemoryRow } from "./memories.js";
-import { makeRecord, memId, rewindPlaintextFixtureSchema, TEST_CIPHER } from "./_support.js";
+import {
+  makeRecord,
+  memId,
+  rewindPlaintextFixtureSchema,
+  TEST_CIPHER,
+  TEST_SEALING,
+} from "./_support.js";
 import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
 import {
   expectActivityLogProof,
@@ -338,7 +344,7 @@ describe("openMemoryDatabase — memory-vault.store.encryption-migrated wiring",
   function seedLegacyPlaintextDb(dbPath: string): void {
     openMemoryDatabase(dbPath, TEST_CIPHER).close();
     const db = new DatabaseSync(dbPath);
-    insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_CIPHER);
+    insertMemoryRow(db, makeRecord({ id: memId("m1") }), TEST_SEALING);
     db.prepare("UPDATE memories SET body = ? WHERE id = ?").run("plaintext body", "m1");
     rewindPlaintextFixtureSchema(db);
     db.close();

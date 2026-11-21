@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "scale-duplikat-en",
+  "language": "en",
+  "class": "scale-window",
+  "description": "The same statement said again after 210 newer live facts of the same scope. Limit: the duplicate check looks at the 200 newest live rows only (and without vectors compares text alone), so an old fact falls out of the novelty window. Failure means: the repeated statement is stored a second time (forbidden-fact-stored, class other), which also doubles it in recall; with an embedding model the run shows whether vectors close the gap. Maintenance: run with maintenance on or off; the seeded accepted records are reinforced or younger than 94 days, so maintenance does not archive them.",
+  "seed": {
+    "records": [
+      {
+        "key": "oncall",
+        "body": "I hand over my on-call duty every Monday morning.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 100,
+        "accessCount": 2,
+        "lastAccessDays": 20,
+        "truth": "oncall"
+      }
+    ],
+    "filler": [
+      {
+        "count": 210,
+        "status": "accepted",
+        "minAgeDays": 1,
+        "maxAgeDays": 80,
+        "seed": 202,
+        "scope": "user",
+        "type": "semantic-fact"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "oncall",
+      "seed": "I hand over my on-call duty every Monday morning.",
+      "must": false,
+      "terms": [["on-call"], ["Monday"]]
+    }
+  ],
+  "forbidden": [
+    {
+      "class": "other",
+      "terms": [["on-call"], ["Monday"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "I hand over my on-call duty every Monday morning.",
+      "learner": [
+        {
+          "body": "I hand over my on-call duty every Monday morning.",
+          "type": "fact"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "unrelated",
+      "question": "What is Apache Kafka?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    }
+  ]
+}

@@ -920,6 +920,9 @@ async function runMemoryRetrieval(
       ...(queryText !== undefined ? { queryText } : {}),
       fusion: conversationFusionMode(ctx.deps),
       ...(signals.semanticById !== undefined ? { semanticById: signals.semanticById } : {}),
+      ...(signals.semanticMinScore !== undefined
+        ? { semanticMinScore: signals.semanticMinScore }
+        : {}),
       ...(signals.strengthById.size > 0 ? { strengthById: signals.strengthById } : {}),
       ...(signals.embeddingById.size > 0 ? { embeddingById: signals.embeddingById } : {}),
       ...(signals.mmrLambda !== undefined ? { mmrLambda: signals.mmrLambda } : {}),

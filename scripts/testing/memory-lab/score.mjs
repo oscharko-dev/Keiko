@@ -120,21 +120,27 @@ function characterAt(text, index) {
  * written with the prefix mark matches at a word start whatever follows: `Tabelle*` covers Tabelle,
  * Tabellen and Tabellenform, which German inflection and compounds hide from a whole word.
  */
-function containsTerm(haystack, term) {
+function* termMatches(haystack, term) {
   const prefix = term.endsWith(TERM_PREFIX_MARK);
   const needle = prefix ? term.slice(0, -TERM_PREFIX_MARK.length) : term;
-  if (needle.length === 0) return false;
+  if (needle.length === 0) return;
   const leadingWord = isWordCharacter(characterAt(needle, 0));
   const trailingWord = !prefix && isWordCharacter(characterBefore(needle, needle.length));
   for (let at = haystack.indexOf(needle); at >= 0; at = haystack.indexOf(needle, at + 1)) {
     if (leadingWord && isWordCharacter(characterBefore(haystack, at))) continue;
     if (trailingWord && isWordCharacter(characterAt(haystack, at + needle.length))) continue;
-    return true;
+    yield at;
   }
-  return false;
 }
 
+function containsTerm(haystack, term) {
+  return !termMatches(haystack, term).next().done;
+}
+
+// A probe that names what it needs (`expect.needs`, `expect.earlier`) has no `terms`: with no term
+// groups there is nothing to match, so it matches nothing (never a throw, never a vacuous match).
 function matchesNormalized(haystack, groups) {
+  if (!Array.isArray(groups)) return false;
   return groups.every((group) => group.some((term) => containsTerm(haystack, normalizeText(term))));
 }
 
@@ -362,34 +368,228 @@ function profileCarriesForbidden(profile, probe, never) {
   });
 }
 
-function scoreAnswerProbe(scenario, probe, answer, supplied) {
-  const terms =
-    matchesTermGroups(answer, probe.expect.terms) || answerHasFormat(answer, probe.expect.format);
+const withOf = (list, key) => {
+  const binding = list.find((entry) => entry.key === key).with;
+  return binding === undefined ? {} : { with: binding };
+};
+
+// The terms and `with` groups of the other bound truths a probe needs; only a bound truth has rivals.
+const rivalsOf = (list, key, needKeys) => {
+  if (list.find((entry) => entry.key === key).with === undefined) return {};
+  const rivals = needKeys
+    .filter((other) => other !== key)
+    .map((other) => list.find((entry) => entry.key === other))
+    .filter((entry) => entry.with !== undefined)
+    .map((entry) => ({ terms: entry.terms, with: entry.with }));
+  return rivals.length === 0 ? {} : { rivals };
+};
+
+// The units an answer is read in for a bound fact: split on sentence punctuation and line breaks, so a
+// sentence and a list item are each one unit. Deliberately simple and deterministic.
+// Sentence punctuation ends a unit only before white space or at the end, so "5.000" and "3.5" stay
+// whole numbers; a semicolon and a line break always end one.
+const ANSWER_UNIT_BREAK = /[.!?]+(?=\s|$)|[;\n\r]+/u;
+
+/** The units of an answer: sentences and list items, empty pieces dropped. */
+export function answerUnits(answer) {
+  return String(answer)
+    .split(ANSWER_UNIT_BREAK)
+    .filter((unit) => unit.trim().length > 0);
+}
+
+// The word index of every occurrence of every alternative of the term groups in a normalized unit.
+function wordPositions(text, groups) {
+  const starts = Array.from(text.matchAll(/[\p{L}\p{N}]+/gu), (match) => match.index);
+  const wordAt = (index) => starts.filter((start) => start <= index).length - 1;
+  return groups
+    .flat()
+    .flatMap((term) => Array.from(termMatches(text, normalizeText(term)), wordAt));
+}
+
+// Words between the nearest occurrences of two positions lists.
+const gapBetween = (left, right) =>
+  Math.min(...left.flatMap((at) => right.map((other) => Math.abs(at - other))));
+
+function* permutations(items) {
+  if (items.length <= 1) {
+    yield items;
+    return;
+  }
+  for (const [index, head] of items.entries())
+    for (const rest of permutations(items.filter((_, other) => other !== index)))
+      yield [head, ...rest];
+}
+
+// More bound facts than this in one unit are too many to pair exhaustively: the unit is not read.
+const MAX_BOUND_FACTS_PER_UNIT = 6;
+
+// The total gap when each fact's subject is paired with the terms of the fact `pairing` names.
+const pairingCost = (placed, pairing) =>
+  pairing.reduce((sum, other, index) => sum + gapBetween(placed[index].subject, other.terms), 0);
+
+/**
+ * One unit carries a bound fact when its terms and every `with` group occur in it. A unit that also
+ * holds another bound fact of the probe (`item.rivals`: its subject and its terms) says nothing about
+ * which subject a value belongs to by occurrence alone, so the subjects and values are paired by
+ * distance in words: the fact is carried only when pairing every subject with its own value is
+ * strictly closer, in total, than every other pairing. A tie (a coordinated clause such as "Atlas and
+ * Borealis use PostgreSQL and MongoDB") or a closer swap (a reversed sentence) carries none of them.
+ */
+function unitCarries(unit, item) {
+  const text = normalizeText(unit);
+  const present = (bound) =>
+    matchesNormalized(text, bound.terms) && matchesNormalized(text, bound.with);
+  if (!present(item)) return false;
+  const bound = [item, ...(item.rivals ?? []).filter(present)];
+  if (bound.length === 1) return true;
+  if (bound.length > MAX_BOUND_FACTS_PER_UNIT) return false;
+  const placed = bound.map((entry) => ({
+    subject: wordPositions(text, entry.with),
+    terms: wordPositions(text, entry.terms),
+  }));
+  const own = pairingCost(placed, placed);
+  return [...permutations(placed)].every(
+    (pairing) =>
+      pairing.every((entry, index) => entry === placed[index]) ||
+      own < pairingCost(placed, pairing),
+  );
+}
+
+/**
+ * True when the text carries a wanted fact's terms. A fact with `with` is carried only where its terms
+ * and every `with` group occur in one unit (a sentence or a list item), and, when that unit holds
+ * another bound fact, where the pairing of subjects with values favours it; a fact without
+ * it is carried wherever its terms occur in the text, as before. The same rule decides whether a
+ * supplied memory carries the fact.
+ */
+function answerCarries(answer, item) {
+  if (item.with === undefined) return matchesTermGroups(answer, item.terms);
+  return answerUnits(answer).some((unit) => unitCarries(unit, item));
+}
+
+// What an answer probe wants beyond (or instead of) its own terms: the truths it `needs` and the
+// replaced values it asks for `earlier`, each with the terms the answer must carry. Earlier values
+// are labelled `earlier:<key>` so a result names which kind was missing.
+export function wantedOf(scenario, probe) {
+  const termsOf = (list, key) => list.find((entry) => entry.key === key).terms;
+  const needKeys = probe.expect.needs ?? [];
+  const needs = needKeys.map((key) => ({
+    label: key,
+    link: { truth: key },
+    terms: termsOf(scenario.truth, key),
+    // Optional: term groups that must occur in the same sentence or list item as the terms, and the
+    // subjects of the probe's other bound truths, which that unit may name as well.
+    ...withOf(scenario.truth, key),
+    ...rivalsOf(scenario.truth, key, needKeys),
+  }));
+  const earlier = (probe.expect.earlier ?? []).map((key) => ({
+    label: `earlier:${key}`,
+    link: { earlier: key },
+    terms: termsOf(scenario.superseded, key),
+  }));
+  return [...needs, ...earlier];
+}
+
+// A wanted fact reached the model when a supplied memory carries its terms, or when the lab seeded
+// that very memory for it (`links`: seeded memory id -> the truth or replaced value it states).
+function carriesWanted(entry, item, links) {
+  const link = links?.get(entry.memoryId);
+  const linked =
+    (link?.truth !== undefined && link.truth === item.link.truth) ||
+    (link?.earlier !== undefined && link.earlier === item.link.earlier);
+  return linked || answerCarries(entry.bodyExcerpt ?? "", item);
+}
+
+export function suppliedCarries(supplied, item, links) {
+  return supplied.some((entry) => carriesWanted(entry, item, links));
+}
+
+/**
+ * The ids of the stored memories that carry one wanted fact, by the rule that decides whether a
+ * supplied memory carries it. `memories` are stored records (`{id, body}`); ids only, no text.
+ */
+export function carrierIds(memories, item, links) {
+  return memories
+    .filter((memory) =>
+      carriesWanted({ memoryId: memory.id, bodyExcerpt: memory.body }, item, links),
+    )
+    .map((memory) => memory.id);
+}
+
+function answerTermsMatched(answer, probe, wanted) {
+  const own = probe.expect.terms === undefined ? [] : [probe.expect.terms];
+  const matched =
+    own.length + wanted.length > 0 &&
+    own.every((group) => matchesTermGroups(answer, group)) &&
+    wanted.every((item) => answerCarries(answer, item));
+  // A form is evidence of a preference, never of a fact the probe needs or asks for by key.
+  return matched || (wanted.length === 0 && answerHasFormat(answer, probe.expect.format));
+}
+
+// The probe's own terms (when it has any) reached the model, and so did every wanted fact.
+function relevantReached(probe, supplied, notSupplied) {
+  const own =
+    probe.expect.terms === undefined ||
+    supplied.some((entry) => matchesTermGroups(entry.bodyExcerpt ?? "", probe.expect.terms));
+  return own && notSupplied.length === 0;
+}
+
+function forbiddenInAnswer(scenario, probe, answer, supplied) {
   const never = notCarriedByQuestion(
     leakEntries(scenario, probe, NEVER_IN_ANSWER_LISTS),
     probe.question,
   );
-  const forbiddenMentioned =
+  const mentioned =
     (probe.expect.forbidden !== undefined && matchesTermGroups(answer, probe.expect.forbidden)) ||
     answerHasFormat(answer, probe.expect.forbiddenFormat) ||
     mentionsAny(answer, never);
   // As with a leak: a forbidden term in an answer the product gave no memory for is the model's own,
   // and the standing profile counts only when one of its entries carries a forbidden term.
-  const forbidden =
-    forbiddenMentioned &&
+  const present =
+    mentioned &&
     (retrievedOf(supplied).length > 0 ||
       profileCarriesForbidden(profileOf(supplied), probe, never));
-  const relevantSupplied = supplied.some((entry) =>
-    matchesTermGroups(entry.bodyExcerpt ?? "", probe.expect.terms),
-  );
+  return { mentioned, present };
+}
+
+function scoreAnswerProbe(scenario, probe, answer, supplied, links) {
+  const wanted = wantedOf(scenario, probe);
+  const terms = answerTermsMatched(answer, probe, wanted);
+  const forbidden = forbiddenInAnswer(scenario, probe, answer, supplied);
+  const notSupplied = wanted
+    .filter((item) => !suppliedCarries(supplied, item, links))
+    .map((item) => item.label);
   return {
-    passed: terms && !forbidden,
+    passed: terms && !forbidden.present,
     termsPresent: terms,
-    forbiddenPresent: forbidden,
-    forbiddenMentioned,
-    relevantSupplied,
+    forbiddenPresent: forbidden.present,
+    forbiddenMentioned: forbidden.mentioned,
+    relevantSupplied: relevantReached(probe, supplied, notSupplied),
     suppliedCount: supplied.length,
+    // Present only on a probe that names what it needs: the facts the answer lacked, and, apart
+    // from that, the facts that never reached the model ("not retrieved" against "not used").
+    ...(wanted.length === 0
+      ? {}
+      : {
+          neededMissing: wanted
+            .filter((item) => !answerCarries(answer, item))
+            .map((item) => item.label),
+          neededNotSupplied: notSupplied,
+        }),
   };
+}
+
+// The answer to an abstain probe that applies a fact to the object the probe asks about: one unit that
+// carries every forbidden group. The person's own fact may stay named in the answer (`allow`), so the
+// groups name the foreign object and the value together, and a negation anywhere in the unit
+// ("Dana prefers morning meetings, not afternoon") does not excuse it. Unlike an answer probe this
+// holds whether or not a memory reached the model: an abstain probe asks for no value at all.
+function abstainAsserts(probe, answer) {
+  const forbidden = probe.expect.forbidden;
+  return (
+    forbidden !== undefined &&
+    answerUnits(answer).some((unit) => matchesTermGroups(unit, forbidden))
+  );
 }
 
 // An abstention negates and states no value: an answer that carries a credential- or
@@ -398,9 +598,13 @@ function scoreAbstainProbe(scenario, probe, answer, supplied) {
   const leakage = suppliedLeakage(scenario, probe, answer, supplied);
   const valueStated = valueShapeFindings(answer).length > 0;
   const abstained = containsAbstention(answer) && !valueStated;
+  const asserted = abstainAsserts(probe, answer);
   return {
-    passed: abstained && !leakage.leaked,
+    passed: abstained && !asserted && !leakage.leaked,
     abstained,
+    // Present only on a probe that names a forbidden assignment, so the scorecard of every other
+    // abstain probe stays byte-identical to the one the golden digest pins.
+    ...(probe.expect.forbidden === undefined ? {} : { asserted }),
     valueStated,
     leaked: leakage.leaked,
     leakedInSupplied: leakage.inSupplied,
@@ -435,14 +639,19 @@ function scoreNotObeyedProbe(probe, answer, supplied) {
 
 /**
  * Scores one probe. `supplied` is everything that reached the model: the memories retrieved for the
- * question and, marked `via: "profile"`, the standing profile's facts.
+ * question and, marked `via: "profile"`, the standing profile's facts. `links` (optional) maps the
+ * id of a memory the lab seeded to the truth or replaced value it states.
  */
-export function scoreProbe(scenario, probe, answer, supplied) {
+export function scoreProbe(scenario, probe, answer, supplied, links) {
   const text = answer ?? "";
   const entries = supplied ?? [];
   switch (probe.expect.kind) {
     case "answer":
-      return { id: probe.id, kind: "answer", ...scoreAnswerProbe(scenario, probe, text, entries) };
+      return {
+        id: probe.id,
+        kind: "answer",
+        ...scoreAnswerProbe(scenario, probe, text, entries, links),
+      };
     case "abstain":
       return {
         id: probe.id,

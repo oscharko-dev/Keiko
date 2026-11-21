@@ -827,6 +827,36 @@ describe("extractSalientMemories", () => {
       });
     });
 
+    it("a correction in the sentence before the fact supersedes what it corrects (#4223)", async () => {
+      const [learned] = await learn(
+        "Das war falsch. Ich arbeite in Düsseldorf.",
+        [
+          fact("Ich arbeite in Düsseldorf.", "Ich arbeite in Düsseldorf.", {
+            relation: "contradiction",
+            related: 1,
+          }),
+        ],
+        { knownFacts: known("Ich arbeite in Köln.") },
+      );
+      expect(learned).toMatchObject({
+        relation: { kind: "supersede", memoryId: "old", basis: "stated-change" },
+      });
+    });
+
+    it("a sentence before the fact that states facts of its own changes nothing (#4223)", async () => {
+      const [learned] = await learn(
+        "Das war falsch mit dem Termin am Montag in Bonn. Ich arbeite in Düsseldorf.",
+        [
+          fact("Ich arbeite in Düsseldorf.", "Ich arbeite in Düsseldorf.", {
+            relation: "contradiction",
+            related: 1,
+          }),
+        ],
+        { knownFacts: known("Ich arbeite in Köln.") },
+      );
+      expect(learned).toMatchObject({ kind: "candidate", relation: { kind: "new" } });
+    });
+
     it("a subjectless change with nothing to change is not a fact about the person", async () => {
       expect(
         await learn("Ab jetzt lieber Listen.", [

@@ -629,7 +629,27 @@ export interface MemoryEmbeddingCalibration {
   readonly semanticDedupThreshold?: number;
   readonly relatedLinkThreshold?: number;
   readonly mmrLambda?: number;
+  // The lowest question-to-memory cosine at which recall admits a memory that shares no
+  // informative word with the question (retrieval's default is 0.3).
+  readonly semanticMinScore?: number;
 }
+
+// Built-in semantic floor of the one embedding model that was measured, Qwen3-Embedding-8B embedded
+// in the product's own format (the question with the query instruction, the memory raw). The
+// retrieval default of 0.3 lies inside the range of unrelated memories for it, so unrelated memories
+// reached the model. Measurement of 2026-11-19 (qwen3-embedding-8b; 54 probes of the lab's seeded
+// scenarios, 34 of them with a needed memory): the 43 memories an answer needs score 0.461 at the
+// lowest, 0.569 at the tenth percentile and 0.712 at the median; on the 21 probes whose store holds
+// 60 to 560 unrelated memories, the highest unrelated memory per probe has a median of 0.312 and a
+// maximum of 0.410. Replaying the production retrieval over 53 probes at the chat's limit supplied
+// 14 unrelated memories at floor 0.30, 4 at 0.40 and none at 0.42, and the needed memory on 32 of 34
+// probes at each of these floors; with a higher limit the needed memory at 0.461 is lost from 0.48
+// on. Losing a needed memory is the worse error, so the floor sits at the low end of that gap, 0.061
+// below the lowest needed memory; four unrelated memories of one probe (0.404 to 0.410) still pass.
+// The unrelated memories of the measurement are pseudo-word filler, both margins are in-sample on
+// one model, and the value is a starting point an operator overrides through
+// KEIKO_MEMORY_EMBEDDING_CALIBRATION. The 0.6B and 4B sizes are unmeasured and keep the default.
+export const QWEN3_EMBEDDING_8B_SEMANTIC_MIN_SCORE = 0.4;
 
 interface EmbeddingCalibrationIdentity {
   readonly provider: string;
@@ -648,10 +668,12 @@ function parseCalibrationEntry(value: unknown): MemoryEmbeddingCalibration | und
     semanticDedupThreshold?: number;
     relatedLinkThreshold?: number;
     mmrLambda?: number;
+    semanticMinScore?: number;
   } = {};
   if (isUnit(raw.semanticDedupThreshold)) out.semanticDedupThreshold = raw.semanticDedupThreshold;
   if (isUnit(raw.relatedLinkThreshold)) out.relatedLinkThreshold = raw.relatedLinkThreshold;
   if (isUnit(raw.mmrLambda)) out.mmrLambda = raw.mmrLambda;
+  if (isUnit(raw.semanticMinScore)) out.semanticMinScore = raw.semanticMinScore;
   return Object.keys(out).length === 0 ? undefined : out;
 }
 
@@ -665,6 +687,32 @@ function calibrationKeys(identity: EmbeddingCalibrationIdentity): readonly strin
   ];
 }
 
+// The model the built-in floor was measured on: the Qwen3 embedding family (the one that selects
+// the query instruction) at the 8B size, named by the configured provider model id. "8b" must
+// stand alone: neither a longer number ("18b", "0.8b") nor a longer word ("8bit") names that size.
+function isQwen3Embedding8bModel(modelId: string): boolean {
+  return (
+    isQwen3EmbeddingModel(modelId) &&
+    /(?<![a-z0-9.])8b(?![a-z0-9])/u.test(modelId.toLocaleLowerCase("en-US"))
+  );
+}
+
+// The semantic floor of an embedding. The built-in follows the CONFIGURED provider model id, the
+// same signal that selects the query instruction, so it applies only to a geometry that was
+// measured; the operator's entry, looked up on the response identity, wins when it names a floor.
+// Undefined when neither applies: retrieval's default then stands.
+export function memorySemanticFloorFor(
+  env: Readonly<Record<string, string | undefined>>,
+  configuredModelId: string,
+  identity: EmbeddingCalibrationIdentity,
+): number | undefined {
+  return (
+    memoryEmbeddingCalibrationFor(env, identity).semanticMinScore ??
+    (isQwen3Embedding8bModel(configuredModelId) ? QWEN3_EMBEDDING_8B_SEMANTIC_MIN_SCORE : undefined)
+  );
+}
+
+// The operator's calibration entry for an embedding identity, or {} when none applies.
 export function memoryEmbeddingCalibrationFor(
   env: Readonly<Record<string, string | undefined>>,
   identity: EmbeddingCalibrationIdentity,
@@ -679,11 +727,14 @@ export function memoryEmbeddingCalibrationFor(
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
   const table = parsed as Record<string, unknown>;
-  for (const key of calibrationKeys(identity)) {
+  // Each field resolves on its own, in key-priority order: a more specific entry that names only a
+  // floor must not hide the thresholds a broader entry names for the same model.
+  let merged: MemoryEmbeddingCalibration = {};
+  for (const key of [...calibrationKeys(identity)].reverse()) {
     const entry = parseCalibrationEntry(table[key]);
-    if (entry !== undefined) return entry;
+    if (entry !== undefined) merged = { ...merged, ...entry };
   }
-  return {};
+  return merged;
 }
 
 // Pure: the id of the nearest in-scope memory whose cosine to the candidate is at/above the
@@ -821,6 +872,64 @@ function gatherScopeEmbeddings(
   return ids.length === 0 ? new Map() : vault.getEmbeddings(ids);
 }
 
+// The same body stored live in the scope, found by the vault's fingerprint index: the neighbour set
+// above holds only the newest rows, so an exact repeat of an older fact would otherwise be stored a
+// second time. Needs no embedding. The fingerprint ignores every character but letters and digits,
+// so a hit counts only when the wording also agrees apart from case, spacing and closing marks
+// ("C++" is not "C#"). The fact a candidate replaces is never its duplicate.
+function exactLiveDuplicate(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  replaces: MemoryId | undefined,
+): MemoryId | null {
+  const wording = sameWordingKey(record.body);
+  for (let offset = 0; ; offset += EXACT_BODY_PAGE_ROWS) {
+    const page = vault.listMemoryMetadataByBody(record.scope, record.body, {
+      status: DEDUP_CORPUS_STATUSES,
+      limit: EXACT_BODY_PAGE_ROWS,
+      offset,
+    });
+    for (const { id } of page) {
+      if (id === replaces) continue;
+      const existing = vault.getMemory(id);
+      if (existing !== undefined && sameWordingKey(existing.body) === wording) return id;
+    }
+    if (page.length < EXACT_BODY_PAGE_ROWS) return null;
+  }
+}
+
+// Live rows that share one fingerprint (wordings that differ only in symbols) are read page by page
+// until none remain, so a repeat of an older one is never missed behind newer variants.
+const EXACT_BODY_PAGE_ROWS = 8;
+
+const CLOSING_MARKS = new Set([".", "!", "?", ";", ":", ",", "…"]);
+
+function sameWordingKey(body: string): string {
+  const words = body.normalize("NFKC").toLocaleLowerCase("und").split(/\s/u).filter(Boolean);
+  let key = words.join(" ");
+  while (key.length > 0 && CLOSING_MARKS.has(key.at(-1) ?? "")) key = key.slice(0, -1).trimEnd();
+  return key;
+}
+
+interface SemanticNeighbourhood {
+  readonly embedding: MemoryEmbeddingInput | null;
+  readonly neighbors: ReturnType<typeof gatherScopeEmbeddings>;
+  readonly dedupThreshold: number;
+}
+
+// The exact repeat first, whatever its age; otherwise the nearest neighbour above the threshold.
+function nearestDuplicate(
+  vault: MemoryVaultStore,
+  record: MemoryRecord,
+  near: SemanticNeighbourhood,
+  replaces: MemoryId | undefined,
+): MemoryId | null {
+  return (
+    exactLiveDuplicate(vault, record, replaces) ??
+    findSemanticDuplicate(near.embedding, near.neighbors, near.dedupThreshold)
+  );
+}
+
 // Three genuinely different endings, kept as a discriminated union so a caller cannot mistake one
 // for another. The previous shape returned `{ inserted: null, mergedInto: null }` for a SUPPRESSED
 // candidate and `{ inserted: null, mergedInto: id }` for a MERGED one; every caller discriminated on
@@ -839,6 +948,8 @@ export type NoveltyInsertOutcome =
 
 export interface NoveltyInsertOptions {
   readonly signal?: AbortSignal;
+  // The person's own statement: a forget tombstone an unattended pass left does not refuse it.
+  readonly explicitStatement?: boolean;
   // Store nothing unless a semantic duplicate confirms the candidate.
   readonly onlyConfirm?: boolean;
   // The fact this candidate replaces: it is no duplicate of what it replaces.
@@ -917,9 +1028,12 @@ function refusalMatchesCandidate(
   candidate: MemoryEmbeddingInput,
   threshold: number,
   reason: MemoryCaptureSuppressionReason,
+  explicitStatement: boolean,
 ): boolean {
   if (reason === FORGOTTEN_MEMORY_SUPPRESSION_REASON) {
-    return vault.hasSemanticallySimilarForgetTombstone(scope, candidate, threshold);
+    return vault.hasSemanticallySimilarForgetTombstone(scope, candidate, threshold, {
+      personOnly: explicitStatement,
+    });
   }
   return rejectedScopeEmbeddings(vault, scope).some(
     (row) =>
@@ -936,10 +1050,11 @@ function semanticSuppressionReason(
   scope: MemoryRecord["scope"],
   candidate: MemoryEmbeddingInput | null,
   threshold: number,
+  explicitStatement: boolean,
 ): MemoryCaptureSuppressionReason | null {
   if (candidate === null) return null;
   for (const reason of SEMANTIC_SUPPRESSION_REASONS) {
-    if (refusalMatchesCandidate(vault, scope, candidate, threshold, reason)) {
+    if (refusalMatchesCandidate(vault, scope, candidate, threshold, reason, explicitStatement)) {
       return reason;
     }
   }
@@ -998,7 +1113,13 @@ function noveltySuppression(
 ): MemoryCaptureSuppressionReason | null {
   return (
     options.refusedSinceStart?.(record) ??
-    semanticSuppressionReason(vault, record.scope, embedding, dedupThreshold)
+    semanticSuppressionReason(
+      vault,
+      record.scope,
+      embedding,
+      dedupThreshold,
+      options.explicitStatement === true,
+    )
   );
 }
 
@@ -1065,7 +1186,7 @@ export async function insertSalienceMemoryWithNoveltyGate(
   const duplicateOf = confirmedDuplicate(
     vault,
     record,
-    findSemanticDuplicate(embedding, neighbors, dedupThreshold),
+    nearestDuplicate(vault, record, { embedding, neighbors, dedupThreshold }, options.replaces),
     options.replaces,
   );
   const settled = settleDuplicate(vault, record, duplicateOf, options);

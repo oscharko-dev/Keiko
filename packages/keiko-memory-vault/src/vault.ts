@@ -50,7 +50,9 @@ import {
   deleteMemoryRow,
   getMemoryRow,
   getMemoryRowsByIds,
+  backfillMemoryBodyHashes,
   insertMemoryRow,
+  listMemoryMetadataByBodyHashRows,
   listMemoriesAcrossScopeRows,
   listMemoryScopeRows,
   listMemoryMetadataByScopeRows,
@@ -58,6 +60,8 @@ import {
   listMemoryMetadataAcrossScopeRows,
   listMemoriesByScopeRows,
   updateMemoryRow,
+  type BodyHashBackfill,
+  type MemoryRowSealing,
 } from "./memories.js";
 import {
   deleteEdgeRow,
@@ -66,6 +70,7 @@ import {
   listIncomingEdgeRows,
   listOutgoingEdgeRows,
 } from "./edges.js";
+import { bridgeSupersessionAcrossDeletes } from "./lineage-bridge.js";
 import {
   deleteEmbeddingRow,
   getEmbeddingRow,
@@ -117,11 +122,13 @@ import type {
   MemoryBatchDelete,
   DeleteMemoryOptions,
   MemoryBatchUpdate,
+  ForgetTombstoneRefusalOptions,
   ListMemoriesOptions,
   MemoryDeleteResult,
   MemoryEmbeddingInput,
   MemoryEmbeddingRow,
   MemoryEvent,
+  MemoryMetadata,
   MemoryForgottenStatement,
   MemoryUpdatePreImage,
   MemoryGraphMutation,
@@ -151,12 +158,24 @@ const MEMORY_VAULT_STORE_OPENED_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["env", "keychain", "keyfile"],
     },
+    bodyHashFilledCount: { type: "integer", dataClass: "count", required: false },
+    bodyHashUnreadableCount: { type: "integer", dataClass: "count", required: false },
+    bodyHashBackfillDeferred: { type: "boolean", dataClass: "closed-enum", required: false },
   },
+  // A stored body the vault could not open, or a fill that had to stop, is a failure fact, not
+  // routine open context.
+  diagnosticWhen: [
+    { field: "bodyHashUnreadableCount", positive: true },
+    { field: "bodyHashBackfillDeferred", values: [true] },
+  ],
   causal: "none",
   lifecycle: "end",
   analyzerProjection: "capability",
   failureClasses: ["memory-vault-open"],
-  proofIds: ["memory-vault.store.opened.key-source"],
+  proofIds: [
+    "memory-vault.store.opened.key-source",
+    "memory-vault.store.opened.body-hash-backfill",
+  ],
   releaseImpact: "patch",
 });
 
@@ -169,6 +188,7 @@ interface ResolvedOptions {
   readonly hardenSidecars: () => void;
   readonly cipher: MemoryContentCipher;
   readonly bodySuppressionHash: (body: string) => string;
+  readonly rowSealing: MemoryRowSealing;
 }
 
 const IDENTITY: (s: string) => string = (s) => s;
@@ -185,10 +205,10 @@ function defaultEnv(): Readonly<Record<string, string | undefined>> {
 
 function resolveOptions(
   opts: MemoryVaultFactoryOptions | undefined,
-  cipher: MemoryContentCipher,
   dbPath: string,
-  bodySuppressionKey: Buffer,
+  rowSealing: MemoryRowSealing,
 ): ResolvedOptions {
+  const cipher = rowSealing.cipher;
   const resolved: MemoryVaultFactoryOptions = opts ?? {};
   return {
     now: resolved.now ?? DEFAULT_NOW,
@@ -200,8 +220,15 @@ function resolveOptions(
       hardenVaultSidecars(dbPath);
     },
     cipher,
-    bodySuppressionHash: (body: string): string =>
-      memoryBodySuppressionHashForVault(body, bodySuppressionKey),
+    bodySuppressionHash: rowSealing.bodyHash,
+    rowSealing,
+  };
+}
+
+function rowSealingFor(cipher: MemoryContentCipher, bodySuppressionKey: Buffer): MemoryRowSealing {
+  return {
+    cipher,
+    bodyHash: (body: string): string => memoryBodySuppressionHashForVault(body, bodySuppressionKey),
   };
 }
 
@@ -482,17 +509,36 @@ function resolveCipherWithSource(
   return { cipher: createMemoryContentCipher(resolved.key), keySource: resolved.source };
 }
 
+// Present only when this open met rows written before v17.
+function backfillEvidence(backfill: BodyHashBackfill): Readonly<Record<string, number | boolean>> {
+  if (backfill.filled + backfill.unreadable === 0 && !backfill.deferred) return {};
+  return {
+    bodyHashFilledCount: backfill.filled,
+    bodyHashUnreadableCount: backfill.unreadable,
+    ...(backfill.deferred ? { bodyHashBackfillDeferred: true } : {}),
+  };
+}
+
+interface VaultOpenedEvidence {
+  readonly keySource: VaultKeySource | undefined;
+  readonly backfill: BodyHashBackfill;
+}
+
 function emitVaultOpened(
   sink: MemoryVaultLogSink | undefined,
-  keySource: VaultKeySource | undefined,
+  evidence: VaultOpenedEvidence,
   durationMs: number,
 ): void {
+  const { keySource, backfill } = evidence;
   emitMemoryVaultLogEvent(
     sink,
     activityLogEvent(
       MEMORY_VAULT_STORE_OPENED_OPERATION,
       { durationMs },
-      keySource === undefined ? {} : { keySource },
+      {
+        ...(keySource === undefined ? {} : { keySource }),
+        ...backfillEvidence(backfill),
+      },
     ),
   );
 }
@@ -654,6 +700,7 @@ type MemoryMutators = Pick<
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
+  | "listMemoryMetadataByBody"
   | "listStandingProfileCandidates"
   | "listMemoryIdsByStatus"
   | "listAcceptedMemoryIdsMissingEmbedding"
@@ -727,6 +774,7 @@ function runDelete(
   const ready = prepareDelete(db, id, options, opts);
   db.exec("BEGIN");
   try {
+    bridgeSupersessionAcrossDeletes(db, new Set([id]), opts.now(), opts.cipher);
     applyPreparedDelete(db, ready, opts);
     opts.beforeDeleteCommit(eventsForDeletedRecords([ready.result]));
     db.exec("COMMIT");
@@ -752,6 +800,8 @@ function runBatchDeleteMemories(
   const ready = deduped.map((entry) => prepareDelete(db, entry.id, entry.options, opts));
   db.exec("BEGIN");
   try {
+    const deleting = new Set(deduped.map((entry) => entry.id));
+    bridgeSupersessionAcrossDeletes(db, deleting, opts.now(), opts.cipher);
     for (const prepared of ready) {
       applyPreparedDelete(db, prepared, opts);
     }
@@ -783,7 +833,7 @@ function updateMemoryInPlace(
   }
   const merged = mergePatch(existing, update.patch, update.nowMs);
   const ready = preparedForWrite(merged, opts);
-  updateMemoryRow(db, ready, opts.cipher);
+  updateMemoryRow(db, ready, opts.rowSealing);
   return {
     record: ready,
     previous: { id: existing.id, status: existing.status, pinned: existing.pinned },
@@ -808,7 +858,7 @@ function runGraphMutation(
       assertGraphPrecondition(db, precondition, opts.cipher);
     }
     for (const record of inserted) {
-      insertMemoryRow(db, record, opts.cipher);
+      insertMemoryRow(db, record, opts.rowSealing);
     }
     for (const update of mutation.updates) {
       memories.push(updateMemoryInPlace(db, update, opts));
@@ -926,6 +976,7 @@ type MemoryReadOps = Pick<
   | "listMemoriesAcrossScopes"
   | "listMemoriesByScope"
   | "listMemoryMetadataByScope"
+  | "listMemoryMetadataByBody"
   | "listStandingProfileCandidates"
   | "listMemoryIdsByStatus"
   | "listAcceptedMemoryIdsMissingEmbedding"
@@ -958,7 +1009,7 @@ function buildMemoryWriteOps(db: DatabaseSync, opts: ResolvedOptions): MemoryWri
     insertMemory: (record: MemoryRecord): MemoryRecord => {
       return withSidecarHardening(opts, () => {
         const ready = preparedForWrite(record, opts);
-        insertMemoryRow(db, ready, opts.cipher);
+        insertMemoryRow(db, ready, opts.rowSealing);
         opts.emit({ kind: "memory:inserted", record: ready });
         return ready;
       });
@@ -1001,7 +1052,8 @@ function readMemoryReviewQueue(db: DatabaseSync, opts: ResolvedOptions): readonl
     for (const scope of scopes) gateMemoryScope(scope);
     const options = gateListOptions({
       status: ["proposed", "conflicted", "expired"],
-      includeStaleStatuses: ["accepted", "superseded"],
+      // A superseded record is wanted history, not an item awaiting a decision (#4223).
+      includeStaleStatuses: ["accepted"],
       includeExpired: true,
     });
     const records = listMemoriesAcrossScopeRows(db, scopes, options, opts.now(), opts.cipher);
@@ -1095,6 +1147,30 @@ function readMemoryCenterPage(
   }
 }
 
+interface BodyLookup {
+  readonly scope: MemoryScope;
+  readonly body: string;
+  readonly options?: ListMemoriesOptions | undefined;
+}
+
+function listMemoryMetadataByBody(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  lookup: BodyLookup,
+): readonly MemoryMetadata[] {
+  gateMemoryScope(lookup.scope);
+  const effective = gateListOptions(lookup.options ?? {});
+  const nowMs = effective.nowMs ?? opts.now();
+  return listMemoryMetadataByBodyHashRows(
+    db,
+    lookup.scope,
+    lookup.body,
+    opts.rowSealing,
+    effective,
+    nowMs,
+  );
+}
+
 function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryReadOps {
   const readStandingProfile = prepareStandingProfileReader(db);
   return {
@@ -1133,6 +1209,8 @@ function buildMemoryReadOps(db: DatabaseSync, opts: ResolvedOptions): MemoryRead
       const nowMs = effective.nowMs ?? opts.now();
       return listMemoryMetadataByScopeRows(db, scope, effective, nowMs);
     },
+    listMemoryMetadataByBody: (scope, body, options): readonly MemoryMetadata[] =>
+      listMemoryMetadataByBody(db, opts, { scope, body, options }),
     listMemoryIdsByStatus: (status: MemoryStatus): readonly MemoryId[] =>
       listMemoryIdsByStatusFromDb(db, status),
     listAcceptedMemoryIdsMissingEmbedding: (limit: number): readonly MemoryId[] =>
@@ -1437,6 +1515,7 @@ function hasForgetTombstoneForBodyRow(
   opts: ResolvedOptions,
   scope: MemoryScope,
   body: string,
+  options: ForgetTombstoneRefusalOptions,
 ): boolean {
   gateMemoryScope(scope);
   const currentHash = opts.bodySuppressionHash(body);
@@ -1444,13 +1523,43 @@ function hasForgetTombstoneForBodyRow(
   // GEN-PERF-PERSISTENCE-014 — presence-only check keyed on body_hash; never decrypts the sealed
   // reason column. Same suppression decision as scanning + decrypting every tombstone, but O(1)
   // rows and zero reason decrypts (strengthens confidentiality on this hot path).
-  const presence = selectForgetSuppressionBodyHashPresence(db, scope, currentHash, legacyHash);
+  const presence = selectForgetSuppressionBodyHashPresence(
+    db,
+    scope,
+    currentHash,
+    legacyHash,
+    options,
+  );
   if (presence.current) return true;
   if (!presence.legacy) return false;
   withSidecarHardening(opts, () => {
     updateTombstoneBodyHashByScopeRows(db, scope, legacyHash, currentHash);
   });
   return true;
+}
+
+interface SimilarForgetTombstoneQuery {
+  readonly scope: MemoryScope;
+  readonly candidate: MemoryEmbeddingInput | Float32Array;
+  readonly threshold: number;
+  readonly options: ForgetTombstoneRefusalOptions;
+}
+
+function hasSimilarForgetTombstone(
+  db: DatabaseSync,
+  opts: ResolvedOptions,
+  query: SimilarForgetTombstoneQuery,
+): boolean {
+  gateMemoryScope(query.scope);
+  const { scope, candidate, threshold, options } = query;
+  return hasSemanticallySimilarForgetTombstoneRow(
+    db,
+    scope,
+    opts.cipher,
+    candidate,
+    threshold,
+    options,
+  );
 }
 
 function buildTombstoneAndAccessOps(
@@ -1466,12 +1575,10 @@ function buildTombstoneAndAccessOps(
       validatedTombstonePage(db, opts, scopes, limit, after),
     recordForgottenStatements: (statements): readonly MemoryTombstone[] =>
       withSidecarHardening(opts, () => recordForgottenStatementRows(db, statements, opts)),
-    hasForgetTombstoneForBody: (scope: MemoryScope, body: string): boolean =>
-      hasForgetTombstoneForBodyRow(db, opts, scope, body),
-    hasSemanticallySimilarForgetTombstone: (scope, candidate, threshold): boolean => {
-      gateMemoryScope(scope);
-      return hasSemanticallySimilarForgetTombstoneRow(db, scope, opts.cipher, candidate, threshold);
-    },
+    hasForgetTombstoneForBody: (scope: MemoryScope, body: string, options = {}): boolean =>
+      hasForgetTombstoneForBodyRow(db, opts, scope, body, options),
+    hasSemanticallySimilarForgetTombstone: (scope, candidate, threshold, options = {}): boolean =>
+      hasSimilarForgetTombstone(db, opts, { scope, candidate, threshold, options }),
     purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number): number => {
       return withSidecarHardening(opts, () => {
         gateMemoryScope(scope);
@@ -1554,9 +1661,11 @@ export function createMemoryVault(options?: CreateMemoryVaultOptions): MemoryVau
   // without the activity log ever reporting the open as having succeeded. Emitting right after
   // `openMemoryDatabase` (as this line used to) reported a successful open even when either
   // operation below then threw and the vault never actually became usable.
-  let bodySuppressionKey: Buffer;
+  let rowSealing: MemoryRowSealing;
+  let backfill: BodyHashBackfill;
   try {
-    bodySuppressionKey = openBodySuppressionKey(db, cipher);
+    rowSealing = rowSealingFor(cipher, openBodySuppressionKey(db, cipher));
+    backfill = backfillMemoryBodyHashes(db, rowSealing);
     hardenVaultSidecars(dbPath);
   } catch (error) {
     // #4068: the failed vault is never returned, so nothing else can close its handle. Left open,
@@ -1565,6 +1674,6 @@ export function createMemoryVault(options?: CreateMemoryVaultOptions): MemoryVau
     if (db.isOpen) db.close();
     throw error;
   }
-  emitVaultOpened(options?.logSink, keySource, elapsedMs());
-  return buildStore(db, resolveOptions(options, cipher, dbPath, bodySuppressionKey));
+  emitVaultOpened(options?.logSink, { keySource, backfill }, elapsedMs());
+  return buildStore(db, resolveOptions(options, dbPath, rowSealing));
 }

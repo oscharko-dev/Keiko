@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "scale-archiviert-de",
+  "language": "de",
+  "class": "scale-window",
+  "description": "A valid, recently used project fact that is older than 550 archived rows of the same scope, next to a recent control fact. Limit: the read window per scope is 500 rows applied before eligibility, and since #4223 recall reads only statuses it can supply, so archived rows take no place in it. Failure means: the target never reaches the model although it is accepted and reinforced, so archived rows crowd the read window again; the control probe passing shows the window, not retrieval, is the cause. Maintenance: run with maintenance on or off; the seeded accepted records are reinforced or younger than 94 days, so maintenance does not archive them. Kind: control.",
+  "seed": {
+    "records": [
+      {
+        "key": "target",
+        "body": "Das Release-Fenster der Kreditplattform ist freitags ab 18:20 Uhr.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 160,
+        "accessCount": 3,
+        "lastAccessDays": 2,
+        "truth": "window"
+      },
+      {
+        "key": "control",
+        "body": "Die Retrospektive der Kreditplattform findet montags um 9:40 Uhr statt.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 3,
+        "truth": "retro"
+      }
+    ],
+    "filler": [
+      {
+        "count": 550,
+        "status": "archived",
+        "minAgeDays": 1,
+        "maxAgeDays": 150,
+        "seed": 201,
+        "scope": "project",
+        "type": "semantic-fact"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "window",
+      "seed": "Das Release-Fenster der Kreditplattform ist freitags ab 18:20 Uhr.",
+      "must": false,
+      "terms": [["Freitag*"], ["18:20", "18.20", "18 Uhr 20"]]
+    },
+    {
+      "key": "retro",
+      "seed": "Die Retrospektive der Kreditplattform findet montags um 9:40 Uhr statt.",
+      "must": false,
+      "terms": [["Montag*"], ["9:40", "9.40", "9 Uhr 40", "zwanzig vor zehn"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "target",
+      "question": "Wann ist das Release-Fenster der Kreditplattform?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Freitag*"], ["18:20", "18.20", "18 Uhr 20"]]
+      }
+    },
+    {
+      "id": "control-recent",
+      "question": "Wann findet die Retrospektive der Kreditplattform statt?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Montag*"], ["9:40", "9.40", "9 Uhr 40", "zwanzig vor zehn"]]
+      }
+    }
+  ]
+}

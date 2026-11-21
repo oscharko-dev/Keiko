@@ -36,13 +36,13 @@ never imports a memory package; what it measures is what a user would get.
 Offline, deterministic, no network, the curated set:
 
 ```bash
-node scripts/testing/memory-lab/run.mjs --out /tmp/memory-lab/offline
+node scripts/testing/memory-lab/run.mjs --out ~/keiko-memory-lab-runs/offline
 ```
 
 Live, against a local OpenAI-compatible endpoint named in an existing gateway configuration:
 
 ```bash
-node scripts/testing/memory-lab/run.mjs --mode live --out /tmp/memory-lab/live --config ~/.keiko-lab/gateway.json --answer-model gemma-4-31b-it --learn-model gemma-4-31b-it --repetitions 3
+node scripts/testing/memory-lab/run.mjs --mode live --out ~/keiko-memory-lab-runs/live --config ~/.keiko-lab/gateway.json --answer-model gemma-4-31b-it --learn-model gemma-4-31b-it --repetitions 3
 ```
 
 A product-arm turn may declare `requireStoredBefore` with the same term groups as a store check.
@@ -50,19 +50,30 @@ The driver reads the accepted vault records before sending that turn. If the tar
 the unit fails. The polite-forget journeys use this checkpoint to establish that a live fact
 existed before its removal. The off arm can still measure ordinary answers with an empty store.
 
-Useful flags: `--arms off,product,oracle`, `--memory-mode` and `--ceiling`, `--keep` to retain every
+Useful flags: `--no-recall-trace` (answer probes carry no recall trace, see "Recall trace"), `--arms off,product,oracle`, `--memory-mode` and `--ceiling`, `--keep` to retain every
 instance's state directory (refused for real conversations), `--subject-root <checkout>` to measure a
 separately attested baseline checkout, `--broken-learner whole-message|credential|invented` for the
 failure-first proofs, `--allow-folded-env` (see "Isolation"). `--out` must lie outside the checkout and
 outside every other git work tree, and a directory that already holds a scorecard is never
-overwritten.
+overwritten. A switch given both ways (`--embedder --no-embedder`, `--maintenance --no-maintenance`,
+`--recall-trace --no-recall-trace`) is refused as a contradiction instead of the last one winning.
 
-`--memory-mode` and `--ceiling` both default to `autonomous-delivery` (Full access), the
-configuration in which a learned fact is stored at all. In `governed-assist` (Ask for approval)
-every learned fact is parked as `proposed`, so recall is zero for any learner and a result there says
-nothing about extraction; that configuration is measured explicitly for the baseline of #4209 with
-`--ceiling governed-assist --memory-mode governed-assist`. The three product configurations of #4209
-are memory off (the `off` arm), `governed-assist`, and `autonomous-delivery` with the same ceiling.
+`--memory-mode` and `--ceiling` both default to `autonomous-delivery` (Full access). Since #4206 a
+routine private fact (user scope) a person states is accepted at once in every mode, and only a fact
+about a team or a project keeps the mode's rule: in `governed-assist` (Ask for approval) such a fact
+is parked as `proposed` and is not recalled (`memoryCaptureAutoAcceptEligible` in
+`memory-capture-policy.ts`; hard denials such as credentials, and confidential or restricted content,
+are refused in every mode, and an explicit "Merke dir" acts in every mode). A Memory ceiling that an
+operator configured explicitly as `governed-assist` also holds routine private facts for review, and
+then no learned fact is recalled whatever the learner does. The lab always names a ceiling (it passes
+`KEIKO_CODING_DEPLOYMENT_CEILING`), so `--ceiling governed-assist` is that explicit restriction: an
+offline check parked the user-scope preference of `preference-tables-en` as `proposed`, while
+`--memory-mode governed-assist` with the default ceiling accepted it (user scope) and holds only
+project-scope facts. A result under `--ceiling governed-assist --memory-mode governed-assist` says
+nothing about extraction when the scorecard's `live` count is zero, which is the configuration measured
+explicitly for the baseline of #4209.
+The three product configurations of #4209 are memory off (the `off` arm), `governed-assist`, and
+`autonomous-delivery` with the same ceiling.
 
 The exit code is 0 when the run completed, 4 with `--fail-on-hard-counters` when a product-arm hard
 counter is above zero, and 5 when a unit could not be measured.
@@ -71,7 +82,7 @@ The offline curated set runs in `npm test` through `scripts/__tests__/memory-lab
 (three scenarios plus one broken-learner proof, so the suite stays short); the full set is the CLI
 run above. The proof is a pair: for the same scenario the correct learner turns the store green and
 the related question is answered, and the whole-message learner turns it red with precision 0. Both
-halves run in Full access; in Ask for approval the "red" half would hold for the correct learner too.
+halves run in Full access; under an explicit `--ceiling governed-assist` the "red" half would hold for the correct learner too.
 
 ## How it works
 
@@ -178,7 +189,11 @@ An `answer` probe passes when its terms are present and no forbidden term counts
 `expect.forbidden`, and the scenario's forgotten and forbidden facts, under the rules above). An
 `abstain` probe passes when the answer abstains and no true, superseded, forgotten or forbidden fact
 of the scenario leaks; a probe may `allow` true facts by key, so the person's own preference, supplied
-when a colleague's is asked for, is no leak. A `no-memory` probe passes when nothing was retrieved
+when a colleague's is asked for, is no leak. An `abstain` probe may also name `forbidden` groups, the
+foreign assignment it exists to catch: it fails when one sentence or list item of the answer carries
+every group ("Dana prefers morning meetings, not afternoon"), with or without a memory supplied and
+whatever negation the sentence also holds. The near-miss probes use it, because `allow` alone would
+leave them measuring phrasing. A `no-memory` probe passes when nothing was retrieved
 for it and nothing leaked.
 
 What reached the model is the standing profile together with the retrieved memories; the lab reads
@@ -286,17 +301,20 @@ repetition has none), a timing table, plus the list of what the run did not meas
 gives per arm the mean turn latency (the answer, not the learning that follows it) and the mean time
 learning took to settle (`learnMs`), and, when the `off` and the `product` arm both ran, the delay
 memory adds to a turn: product mean turn minus off mean turn. Units that could not be measured are
-named at the top and left out of every figure.
+named at the top and left out of every figure. A "Failure classes" section lists the failed checks as
+counts per class and scenario (see "Failure classes").
 
 The manifest names the answering and the learning model, the corpus version, every scenario digest,
 the product head and the options. Its `metadata` records `sealed` (true for a `--holdout` run, which
 the judge requires of the holdout part), `allowFoldedEnv`, `foldedKeys`, `budgetTokens`,
-`brokenLearner` and `configDigest`: the SHA-256 of the gateway configuration file in live mode,
+`brokenLearner`, `embedder` and `embeddingModelIds` (with or without an embedding model, see
+"With and without an embedding model") and `configDigest`: the SHA-256 of the gateway configuration file in live mode,
 `offline` otherwise. It also records the **instrument**: `instrumentDigest`, a SHA-256 over the lab
 sources that decide what a run measures (`INSTRUMENT_FILES` in `instrument.mjs`: `../jira-chat-lab/requirements/work-project-lock.mjs`, `corpus/holdout.mjs`, `corpus/sequence.mjs`,
-`corpus/values.mjs`, `driver.mjs`, `evidence-scan.mjs`, `gateway-calls.mjs`, `instance.mjs`,
-`isolation.mjs`, `log-text.mjs`, `progress.mjs`, `report.mjs`, `run.mjs`, `scenario.mjs`, `score.mjs`,
-`scripted-model.mjs`, `set-files.mjs`, `unit-failure.mjs`), beside
+`corpus/values.mjs`, `driver.mjs`, `embedder.mjs`, `evidence-scan.mjs`, `failure-classes.mjs`,
+`gateway-calls.mjs`, `instance.mjs`, `isolation.mjs`, `log-text.mjs`, `progress.mjs`, `recall-stage.mjs`,
+`recall-trace.mjs`, `report.mjs`, `run.mjs`, `scenario.mjs`, `score.mjs`, `scripted-model.mjs`, `seed-plan.mjs`, `seed-store.mjs`,
+`seed-validate.mjs`, `set-files.mjs`, `unit-failure.mjs`), beside
 `labHead` and `labDirty` (the lab's commit, and whether its sources carried uncommitted changes) for
 people; and the **product build**: `productHead` and `productDistDigest`, a SHA-256 over every built
 `.js` under the subject's `packages/*/dist`, because the product runs from its built packages, which a
@@ -348,6 +366,26 @@ fail-closed by `scenario.mjs`):
   oracle arm stores, `must` (counts for recall), `private` (must never land in project scope) and
   `terms` (groups of alternative spellings; one alternative per group must match; an alternative may
   end in `*` to match at a word start).
+  An optional `with` (term groups, same shape) binds the fact to its subject for a probe that `needs`
+  it: the fact counts as carried by an answer only where its `terms` **and** every `with` group occur
+  in one unit, a sentence or a list item. Units are the pieces of the answer split on `.`, `!` and `?`
+  before white space or at the end (so "5.000" and "Atlas 2.0" stay whole), on `;` and on line breaks,
+  nothing smarter. So "Atlas uses PostgreSQL. Borealis uses MongoDB." and a list with one item per
+  project pass, while the swapped answer fails, although it carries both terms. Where one unit holds
+  the subject and the value of several bound facts of the probe ("Atlas uses PostgreSQL and Borealis
+  uses MongoDB"), the subjects and values are paired by distance in words: the facts are carried only
+  when pairing every subject with its own value is strictly closer, in total, than any other pairing.
+  The correct sentence passes; "Atlas uses MongoDB and Borealis uses PostgreSQL" fails on both facts.
+  A fact without `with` is carried wherever its terms occur in the answer, exactly as before. Limits:
+  a coordinated clause, "Atlas and Borealis use PostgreSQL and MongoDB", cannot be decided (the two
+  pairings are equally close) and is not carried; a unit with more than six bound facts is not read;
+  and a correct answer fails when subject and value fall into different units, for example a heading
+  or a parent list item above the value ("**Atlas**" on one line, "PostgreSQL" on the next) or a
+  pronoun in a later sentence. The same rule decides whether a supplied memory carries the fact, so a
+  memory that names another subject ("Atlas uses MongoDB") does not count as carrying the Borealis
+  fact; a memory the lab seeded for the fact carries it by its seed link whatever its text says. Read
+  the answer before calling such a probe a
+  failure of the product. Keys are unique within `truth`; a duplicate is refused.
 - `superseded[]`, `forgotten[]`: facts that were true and replaced, or forgotten; a surviving memory
   is stale or a hard violation.
 - `forbidden[]`: content that must never be stored, with a class (`credential`, `identifier`,
@@ -356,7 +394,376 @@ fail-closed by `scenario.mjs`):
   optional `memory: false` for a turn written with memory off.
 - `probes[]`: questions asked in new chats with an `expect` of kind `answer`, `abstain` or
   `no-memory`; an `answer` probe names its `terms` and optional `forbidden` groups, an `abstain` or
-  `no-memory` probe may `allow` true facts by key (the person's own fact, asked for a colleague's).
+  `no-memory` probe may `allow` true facts by key (the person's own fact, asked for a colleague's), and
+  an `abstain` probe may name `forbidden` groups for the foreign assignment. An
+  `answer` probe may instead (or also) name `needs` and `earlier`, see below.
+- `seed`: a store placed in the vault before the first turn, see "Seeding a store".
+
+A probe that wants something it cannot measure is refused when the scenario loads, never scored
+quietly. The loader refuses an `expect` with a key it does not know (a typo such as `earliers` would
+drop the requirement and the probe would pass); a wanted term (`terms`, a needed truth's terms, a
+replaced value asked for with `earlier`) that occurs in the probe's own question, folded the way the
+scorer folds it (`Fähre` is `fahre`), because an answer that repeats the question passes; a wanted term
+that a `forbidden` term of the probe, a `forgotten` fact or a scenario `forbidden` fact contains, which
+passes with memory off and fails with memory on and so reverses the signal; and a `with` that the
+truth's own terms already carry, or that names the subject or the value of another truth the same probe
+needs. A probe must also not pass without the memory: write the values a model would not choose
+unprompted (a common format, theme, cadence or hour is not one), or require a second detail only the
+memory holds. The corpus test of `scenarios-next` keeps the answer a model gives unprompted for every
+answer probe and fails when one passes.
+
+### Seeding a store
+
+Long histories, scale limits and correction chains cannot be learned in a lab run: replaying weeks of
+conversation is neither fast nor deterministic. A scenario may therefore carry a `seed` section, which
+the runner places in the instance's vault **before the server starts** (in the `product` and `oracle`
+arms; the `off` arm never enables memory, so it gets none). `seed-store.mjs` follows the precedent of
+`capacity-window.mjs`: it opens the subject's built vault package with the instance's own memory
+directory and vault key, inserts the records with backdated timestamps, closes the vault, and only
+then does the instance start. A scenario with a seed may have no `turns` (the history is the seed).
+
+```json
+"seed": {
+  "records": [
+    { "key": "old", "body": "...", "type": "preference", "scope": "project", "status": "superseded",
+      "ageDays": 90, "earlier": "format-before" },
+    { "key": "new", "body": "...", "type": "preference", "scope": "user", "status": "accepted",
+      "ageDays": 10, "supersedes": "old", "truth": "format-now", "pinned": true, "origin": "stated",
+      "accessCount": 3, "lastAccessDays": 2 }
+  ],
+  "filler": [
+    { "count": 500, "status": "accepted", "minAgeDays": 1, "maxAgeDays": 300, "seed": 7,
+      "scope": "user", "type": "semantic-fact" }
+  ]
+}
+```
+
+- **Origin.** By default a record is written the way the product writes a routine fact it learned from
+  conversation (`salience.ts` of keiko-memory-capture): source kind `system-default`, confidence 0.85
+  (what its checks derive for a named subject with covered evidence), public, the person's words as the
+  evidence span (which is what lets a later statement replace it), and a capture rationale.
+  `origin: "stated"` writes what an explicit "Merke dir" writes: `explicit-user-instruction`,
+  confidence 1, no evidence span, project scope by default (the explicit route stores there today);
+  it may be pinned. Filler groups take `origin` too (default learned) and follow the same scope default:
+  a `stated` group is in project scope unless it names one, a learned group in user scope.
+- **A learned record must be one the learner could write**, and loading refuses the rest: its type is
+  `semantic-fact`, `preference`, `decision` or `procedural`; it is never `pinned`; `standing` only on
+  a `semantic-fact` in user scope (the learner sets the mark on a self fact labelled identity or
+  constraint); its optional `confidence` lies between 0.4 and 0.85 (default 0.85); and its scope
+  **defaults to `user`**, the scope of a learned fact about the person (a team's fact is project
+  scope and is named explicitly). Remaining differences from a learned record: no source conversation
+  or message ids, no decision payload, and an evidence span equal to the body.
+- A seed is refused in a real-conversation scenario (class `anchor-*`) and in a sealed holdout.
+- A record has a `key` (a slug, unique in the seed), `body`, `type` (the contracts' memory types),
+  `scope` (`user` or `project`; default `project`), `status` (`accepted`, `superseded`, `archived` or
+  `proposed`) and `ageDays` (how long ago it was created; a superseded record ends when its successor
+  began). Optional: `pinned`; `origin` (`learned`, the default, or `stated`, see below) and `standing`
+  (the standing-profile mark the learner gives a fact about the person; learned records only);
+  `mustStay` (its disappearance is a failure) and `explained` (the scenario's own turns correct or
+  forget it, so its loss is not charged; a body that matches the scenario's `superseded` or
+  `forgotten` terms counts as explained without the mark); `supersedes` (the key of an older, `superseded`
+  record: a `supersedes` edge runs from that record to this one, as in the product's own correction
+  path); `accessCount` and `lastAccessDays` (reinforcement: the access counter and the age of the last
+  access); `truth` (the key of a scenario truth this record states) or `earlier` (the key of a
+  `superseded[]` entry whose value it states). A link is checked: the body must match that fact's own
+  terms, and `truth` needs status `accepted` (a superseded record is linked with `earlier`). The scope ids are the ones a Chat in the instance reads (`local-operator` for `user`, the
+  instance's registered project for `project`).
+- `filler` groups generate `count` (at most 5000 in total) unrelated records of one `status`, with
+  ages spread between `minAgeDays` and `maxAgeDays`. Bodies are invented words, deterministic in the
+  group's `seed` and index, and unique within a group; loading refuses a scenario in which any term
+  list (truth, superseded, forgotten, forbidden, poison, and the `expect.terms` and `expect.forbidden`
+  of a probe) would match a filler body, and two groups with one `seed` (identical bodies).
+- Every planned record is also run through the memory contract's own validator
+  (`validateMemoryRecord`) when the scenario
+  loads, taken from the built contracts package of the SUBJECT being measured (`--subject-root`, not the
+  lab's checkout): its `dist/memory-record-validation.js`, the package's subpath export
+  `./memory-record-validation`. The package's root barrel is deliberately type-only, so the entry is the
+  domain module, which every subject with a memory contract has, an older one included. The manifest
+  records `seedContract`: `module` or `unavailable`. Validating at load means a body the
+  learned form cannot store (its evidence span is bounded at 1,024 characters), a control character, or
+  an age that makes a timestamp negative fails with the scenario's name instead of as a storage error
+  at instance start. A seed cannot be loaded without the subject's built contracts: a contract that
+  cannot be loaded is a named error with the subject, the path and the cause. The reference time of the
+  age check is the wall clock, as at placement (`--generated-at` is a label and defaults to 0). A record is superseded by at
+  most one successor, and a `supersedes` chain may not return to a record it passed.
+- The whole section is strict: an unknown field, a bad status, a `supersedes` that names a record that
+  is not `superseded` or is newer, a link whose body does not match, or an access age older than the
+  record is a load error.
+- The accepted records are embedded when the run has an embedding model (below), through the
+  product's own built embedder, the path that embeds a record at capture. A record that cannot be
+  embedded fails the unit instead of leaving a half-embedded store. Embedding costs one request per
+  accepted record, so a large live seed is a long unit start. Records that are not accepted are
+  never embedded, because they cannot be recalled.
+- The `oracle` arm places the scenario's truths through the explicit route as before, except those
+  that a seeded record already states (`truth`), which are not placed twice.
+
+**What seeding proves, and what it does not.** A seeded record was not learned by the product. A
+scenario with a seed measures what the product does with a store it already holds: retrieval,
+ranking, the standing profile, forgetting and supersession at scale, and what the answer does with
+what was supplied. It says nothing about extraction, the learner or the ledger. The lab therefore
+never scores a seeded record as something the product stored (it is excluded from `store`, like a
+poisoned record), keeps its ids to link supplied memories to the truth, and reports counts only under
+`seed` in the unit's result: records seeded per status and scope, how many were embedded, and the
+status counts after the run (`after.byStatus`, and `after.gone` for seeded records the list route no
+longer returns). The product's own maintenance runs on the aged records during the run (the first
+memory-enabled turn is due for it), so an aged accepted record may be archived or removed by the time
+the probes ask: that is the product's behaviour and part of what a seeded scenario measures. A
+superseded record is not faded away: since #4223 it stays as history, and its removal is a loss
+(below). Seeding is
+setup; everything measured afterwards still goes through the public HTTP routes, and the lab never
+adds a route or a product seam for it.
+
+Even in its learned form a seeded record differs from a learned one in what the product records
+around it: it has no source-message membership (`sourceMessageIds`) and no row in the capture ledger,
+so nothing that reads either sees it. Timestamps are backdated, but the product's own access counters
+and the maintenance pass act on them as on any aged record.
+
+After the probes the lab checks the seed. An explicit record that was `accepted` when seeded and is
+gone or no longer accepted is the failure `seeded-record-lost` (its index is the check's key), unless
+the scenario's own turns explain it (see `explained` above); a truth-linked or `mustStay` record is
+never explained away. A seeded **superseded** record that is gone is a loss too, counted in the same
+class and never explained away: since #4223 the product keeps a superseded record as history, so its
+removal is a defect (`after.supersededRemoved` counts them). Reported only as information, never as a
+failure class: aged filler that the product's maintenance archived or removed (`after.fillerFaded`),
+as `seedInformation` in the summary and a line in `summary.md`. `--no-maintenance` sets the product's own
+`KEIKO_MEMORY_AUTO_MAINTAIN=0` for every instance (the product runs one maintenance pass on the first
+memory-enabled turn), and the manifest records `maintenance` (`on` or `off`); it is provenance like
+the embedder.
+
+`scripts/testing/memory-lab/scenarios-next/` holds two tiny demonstration scenarios of these abilities
+(`seed-needs-two-en`, `seed-earlier-value-en`), run offline by `memory-lab-seed-offline.test.mjs`
+(`--scenarios scripts/testing/memory-lab/scenarios-next`), and the 26 scenarios of the next corpus,
+described below. The curated sets in `scenarios/` and `scenarios-explicit/` are unchanged, and a new
+family belongs in a directory of its own until it is adopted into a baseline.
+
+### The next corpus (`scenarios-next/`)
+
+The next corpus (#4208) is written for headroom: each scenario probes one limit of today's product and
+says what a failure of it means, so a red result can be classified before anyone reads a log. It has six
+families, one scenario class each, in German and English (the paraphrase family also crosses the
+languages, class `paraphrase`, language `mixed`):
+
+| Family | Class           | Scenarios | What it probes                                                                                                                                                                                    |
+| ------ | --------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A      | `long-horizon`  | 5         | Eight simulated weeks of history: a stable fact left unused, a reinforced habit against a newer exception, a fact among near-topic facts, an often-used neighbour that crowds a once-stated fact. |
+| B      | `paraphrase`    | 4         | A fact asked about in other words (or the other language) with no shared content word, with a lexical control question: only an embedding model can pass the paraphrase probe.                    |
+| C      | `scale-window`  | 4         | A valid fact older than 550 archived, ended (superseded) or proposed rows of its scope, and the same statement said again after 210 newer ones.                                                   |
+| D      | `two-memories`  | 5         | An answer that needs two or three memories, direct and indirect, one of them bound to its subject with `with`.                                                                                    |
+| E      | `earlier-value` | 4         | A correction chain, a reversal and a return: the current value, and the value that held before.                                                                                                   |
+| F      | `near-miss`     | 4         | A fact stated for one object asked about for another: the abstain probe and the no-memory probe.                                                                                                  |
+
+Every scenario states the limit, the failure and the kind in its `description`. The contract is a
+sentence each, in this order, and `memory-lab-corpus-next.test.mjs` holds it:
+
+- `Limit:` the product limit the scenario probes, in the product's own terms.
+- `Failure means:` what a red probe says (`needed-memory-missing`, `fact-not-stored`, a leak, ...), so the
+  result is classified without a rerun.
+- `Maintenance:` whether the maintenance pass matters (run with maintenance on or off). It says there is
+  no seed where there is none and speaks of seeded records only where there are some; a seeded
+  accepted record is younger than the age at which maintenance archives it, or reinforced, wherever it
+  says so; a superseded record is spoken of as staying only where one is seeded, and maintenance is
+  never said to remove a superseded row, because since #4223 it keeps it as history.
+- `Kind:` one of four, so a baseline is reported per kind: `defect` (the product does something wrong
+  today), `capability` (one that does not exist yet), `design` (a design question: a valid fact that
+  fades unused is one) and `control` (expected to pass today, so a red result is a regression of the
+  lab or of the product). `long-horizon-distractors-en` and `scale-duplikat-en` are measured live with
+  their text unchanged, so their kind is recorded in the test instead.
+
+The test also scores every probe: an answer built from its own terms passes, an empty one fails, each
+abstain probe fails on a wrong answer, and every answer probe fails on the answer a model gives with no
+memory (recorded per probe in `memory-lab-corpus-next-probes.test.mjs`).
+
+The scale scenarios lean on product constants. They are the product's, the lab restates none of them
+in code, and a scenario written against a changed value is wrong, not the product:
+
+- **500 rows per scope** are read before eligibility: `DEFAULT_LIST_BY_SCOPE_MAX_RESULTS` in
+  `packages/keiko-memory-retrieval/src/types.ts`, passed as `maxResults` by `fetchScoped` in
+  `packages/keiko-memory-retrieval/src/retrieve.ts`. Since #4223 the server's read port
+  (`vaultAsQueryPort` in `packages/keiko-server/src/memory-conv-handlers.ts`) reads only statuses
+  recall can supply (`isMemoryStatusRecallable` in `packages/keiko-contracts/src/memory-records.ts`):
+  accepted rows, including those whose validity ended, and superseded ones only when history is asked
+  for. Archived, forgotten, proposed, rejected, conflicted and expired rows no longer take a place in
+  the window, so the 550 retired or parked rows of `scale-archiviert-de` and `scale-vorschlaege-en`
+  cannot push a valid one out of it; a red result there is a regression. The window still counts
+  accepted rows, which is what `scale-abgelaufen-de` and the fillers of other scenarios lean on.
+- **6 retrieved memories** reach one chat question: `CHAT_MAX_RETRIEVED_MEMORIES` in
+  `packages/keiko-server/src/chat-handlers.ts` (the retrieval default is 12,
+  `DEFAULT_MAX_INCLUDED` in the retrieval `types.ts`).
+- **200 known facts** are compared when the salience pass judges whether a statement is new:
+  `MAX_KNOWN_FACTS` in `packages/keiko-server/src/memory-salience.ts`, gathered scope by scope from
+  accepted and proposed public records. The vault lists a scope pinned first, then by confirmations,
+  then newest first (`listMemoriesByScopeRows` in `packages/keiko-memory-vault/src/memories.ts`), so
+  "the 200 newest" is an approximation. The model sees only these facts, but the novelty gate finds a
+  repeat in the same words by the vault's body fingerprint index whatever its age (vault schema v17),
+  so `scale-duplikat-en` is a regression check for that index; a paraphrase beyond the window still
+  depends on the 200 newest vectors (`MAX_DEDUP_NEIGHBORS` in `memory-embedding.ts`).
+- **94 days** is not a product constant. It is the number the scenario descriptions cite, and it
+  reproduces as the age at which `effectiveStrength` (confidence times a frequency boost, a recency
+  factor and a utility factor) drops an unused record below the archive threshold, for a type whose
+  decay multiplier is 1 and the highest confidence the lab gives a learned record:
+  45 days times log2(0.85 / 0.2), about 93.9 days, where 45 days is `halfLifeMs` and 0.2 is `archiveMaxStrength`
+  of `MEMORY_MAINTENANCE_DEFAULTS` in `packages/keiko-memory-governance/src/maintenance.ts`, 0.85 is
+  `LEARNED_CONFIDENCE_RANGE.max` in `seed-plan.mjs`, and the multipliers are
+  `MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS` in `packages/keiko-contracts/src/memory-contracts.ts`
+  (semantic facts and preferences decay more slowly, so for them the age is higher; episodic records
+  decay faster, so for them it is lower). The corpus uses 94 days as one bound for the types it seeds.
+
+Measurements made with the files of this directory before the scoring audit (the near-miss abstain
+probes without forbidden terms; values a model would pick unprompted in the probes of
+`long-horizon-berichte-de`, `long-horizon-release-en`, `long-horizon-gewohnheit-de`, `earlier-hotfix-en`, `earlier-theme-en`,
+`earlier-rueckkehr-de`, `paraphrase-pendeln-de`, `paraphrase-buero-de-en`, `scale-abgelaufen-de`, `scale-archiviert-de`,
+`scale-vorschlaege-en`, `seed-earlier-value-en`, `two-memories-batch-en`, `two-memories-compare-en` and
+`two-memories-format-de`) were taken with different expectations and are not comparable with a run of
+the current files.
+
+### Probes that need several memories, and probes about an earlier value
+
+An `answer` probe may name, in its `expect`:
+
+- `needs`: truth keys. The probe passes only when the answer satisfies the terms of **every** named
+  truth (and carries no forbidden term). `terms` becomes optional; when both are present both must hold.
+- `earlier`: keys of `superseded[]` entries, which may now carry an optional `key`. The probe passes
+  only when the answer carries the replaced value ("what did I prefer before?"). The replaced values
+  are the same `superseded[]` entries a stale memory is judged against, and the validator's rule is
+  unchanged: a true term may not occur inside a replaced value, so the old value cannot be mistaken
+  for the new one.
+
+The probe's result records, besides `passed`, `neededMissing` (the needed facts the answer lacked) and,
+separately, `neededNotSupplied` (the needed facts no supplied memory carried, by the fact's terms or by
+the seeded record's own link). Earlier values are named `earlier:<key>`. `relevantSupplied` is true
+only when all of them were supplied. So a failure reads as "not retrieved" (`neededNotSupplied` names
+it) against "retrieved but not used" (`neededMissing` names it and `neededNotSupplied` does not). A
+probe that names neither keeps exactly the fields it always had.
+
+### With and without an embedding model
+
+Memory recall has a lexical path and a semantic one; a run that does not say which it measured cannot
+be compared. `--no-embedder` removes every embedding provider (and embedding capability record) from
+the gateway configuration the instances get, so the same scenarios can be measured lexical-only and
+with embeddings. Live, the configuration's own embedding provider stays by default; `--embedder`
+requires one. Offline there is none by default, so the existing offline baselines keep measuring what
+they always did, and `--embedder` adds a scripted one: `scripted-model.mjs` serves `/v1/embeddings`
+with a hashed bag of the words of a text, normalized to length one. Texts that share words are close,
+texts that share none are orthogonal; it tells semantic recall from lexical recall in a harness test
+and says nothing about a real embedding model. The manifest records `embedder` (`none`, `scripted` or
+`configured`) and `embeddingModelIds`, the summary names it, and two runs that differ in either are
+not comparable: `compare` (like for an instrument digest or any other configuration difference) prints
+"the runs differ in ..." with the field names and still shows the deltas, and `judge` refuses to
+judge the pair (a run that never recorded it is "unrecorded" and differs from every recorded one).
+
+What is an embedding provider is decided by the SUBJECT's own resolver, never by the lab: the built
+model-gateway package of the subject root (`parseGatewayConfig`, then `listConfiguredCapabilities`,
+the functions the product uses), because the product also knows an embedder by the shape of its model
+id, so a provider entry with only `modelId` and `baseUrl` can be one. After `--no-embedder` has removed
+them, the same resolver must find none in the private configuration, or the unit fails instead of
+measuring semantic recall under a `none` label. A configuration the product would not accept is
+refused, not classified.
+
+### Failure classes
+
+Beside the pass rates, `summary.md` and `summary.json` list the failed checks as **counts** per failure
+class, per arm and, in an open run, per scenario. Every class is derived from what the run already
+records, by one rule for every run: `fact-not-stored` (a `must` truth not live in the store and not stored at all), `fact-parked` (stored
+but left `proposed` or archived), `unnecessary-fact-stored`, `stale-fact-live` (both only while the
+record is live, i.e. accepted), `forgotten-fact-returned`, the hard counters `credential-stored`, `identifier-stored` and
+`third-party-stored` (a record of that class, whatever its status: a parked credential still counts;
+a hard counter never shares a row with a soft class), `forbidden-fact-stored` (any other forbidden
+class, only while the record is live, like `stale` and `unnecessary`: a parked one passes the unit's
+store check), `private-in-project` (the hard counter, one check per counted record),
+`seeded-record-lost`, then for a failed answer probe, most
+specific first, `forbidden-term-in-answer`, `needed-memory-missing` (a `needs` or `earlier` fact never
+reached the model; with the recall trace on, each missing fact is also counted once in the class of
+its stage, `needed-not-stored` … `needed-trace-unavailable`, see "Recall trace"), `relevant-memory-not-supplied` (nothing relevant reached the model),
+`supplied-answer-wrong` (it reached the model and the answer is still wrong); for the other probes
+`fact-leaked` (an abstain probe that leaked, even when it also failed to abstain), `no-abstention`, `memory-on-unrelated-question`, `injected-instruction-obeyed`; and
+`unit-not-measured`. `rhythm.mjs compare` and `judge` add, per class, the count in the baseline and in
+the candidate and the checks (`scenario:arm:rN:probe:<id>`, `…:store:<fact>`, or `…:store:<class>:<ordinal>` for wrong records,
+which never carry a body) that newly fail in the candidate. A side that recorded no failure classes (a run older than the classes) shows `n/a`, never zero, and no
+check is called newly failing or gone against it. `repetitions` is a provenance field of a comparison (a run that never recorded it reads as
+unrecorded), and the table names the two counts beside the numbers when they differ. The totals are sums over every repetition
+of the run, so a run with three repetitions counts a failing check up to three times. Every arm that ran has an entry in `byArm` with its `units` count, so an arm that ran clean (an empty
+`total`) differs from one that did not run (no entry). A sealed run reports per-arm totals only, never a scenario or a check; its store verdicts
+are masked, so each unit is classified from its unmasked result before it is masked, and only the
+class names and whole-number counts travel on (`failureClassCounts`, also through the encrypted
+progress journal and `--resume`); the sealed totals equal what an open run without the recall trace
+reports (a sealed run never traces, so it has none of the `needed-*` stage classes).
+
+### Recall trace
+
+When a memory an answer needs never reaches the model, `neededNotSupplied` only says so. With the
+recall trace on (the default; `--no-recall-trace` switches it off) every answer probe of an arm with
+memory (`product`, `oracle`) records, per probe, where the loss happened. After the chat answer has
+been received, so that it cannot influence the answer, the lab calls the product's own route
+`POST /api/memory/context` once, for the same chat and question, and writes a body-free `recallTrace`
+on the probe in the run file: `source` (`memory-context-route`), `strictFloor` (`false`) and
+`chatRetrievedCount` (how many retrieved memories the chat supplied),
+`includedCount`, `included` (id, 1-based `position`, `score`, `subscores`, in the route's final order),
+`omittedByReason` (counts per closed reason), `durationMs` and `needed`, one entry per wanted fact:
+`{key, id, suppliedByChat, position, scoreRank, omittedReason, carrierCount, stage}`.
+
+The wanted facts are the truths a probe `needs`, the values it asks for `earlier`, and, for a probe
+that expects answer `terms`, every truth whose own terms carry the probe's complete requirement: each
+term group of the probe has an alternative that the scorer's matcher (normalisation, whole words, the
+`*` prefix) finds in one of the truth's own term spellings. So `dark` finds the truth whose term is
+"dark theme" and `abend*` finds "abends", while an unrelated truth whose body merely contains "dark"
+stays unlinked, and a probe needing two groups links only a truth that carries both (the last kind is
+followed by the trace only; the score never sees it). `id` is the stored memory that carries the fact, found by
+the rule the scorer uses (`score.mjs`: the seeded link, or the terms of the fact); `null` means **no
+stored body matches the fact's terms**, which is what `not-stored` says, not that the product never
+saw the fact. `scoreRank` is the place when the included entries are sorted by the product's `score`
+(ties keep their order). A route call that fails leaves a closed `failure` (`http-error` with its
+`status`, `malformed-response`, `request-failed`, `store-unreadable`) and the probe result stands; the
+trace never fails a unit. No memory text, question or excerpt is recorded. A sealed (`--holdout`) run
+and every real-conversation (anchor) scenario record no trace at all.
+
+**Stages.** The stage is derived in one pure function (`recall-stage.mjs`) from what the route reported
+and what the chat actually supplied (retrieved memories only, never the standing profile). In order:
+
+- `supplied`: the chat supplied it.
+- `trace-unavailable`, always with a closed `unavailableReason`: `store-unreadable` (this comes before
+  `not-stored`) or `route-failed`.
+- `not-stored`: no stored body matches the fact's terms.
+- `not-a-candidate`: the memory is in neither of the route's lists.
+- `not-admitted`: the route omitted it for a reason other than its limit (for example
+  `suppressed-by-status` for an accepted memory whose validity ended). A parked or archived memory
+  is not read at all since #4223, so it is `not-a-candidate`.
+- `admitted-not-supplied`: the route admitted it (listed, or omitted as `max-included-exceeded`) and the
+  chat did not supply it. **Always** this one stage; no cause is claimed.
+
+_Why the detailed stages were removed._ The stages `refused-by-chat`, `beyond-limit` and `moved-down`
+read a chat cut out of the route's order, and were valid only while the chat ranked over the same
+window as the route. Under the strict floor that Chat recall uses, the admitted memories are now ranked
+among themselves instead of over the whole 500-row window, while `POST /api/memory/context` uses the
+lenient floor and keeps one window ranking. A fused rank is relative to its set, so when the chat and the
+route admit different sets their orders can differ: the route's position of a needed memory no longer
+predicts its position in the chat, with or without an embedder. (Earlier the premise was kept for runs
+without an embedder only, because the diversity reorder depends on the candidate set; it is false for
+every current subject.) The route's `position` and `scoreRank` stay recorded as facts in each `needed`
+entry, and no chat stage is derived from them. The trace no longer reads the chat's limit
+(`CHAT_MAX_RETRIEVED_MEMORIES`) or records an `orderPremise`. Old run files stay readable: a run that
+recorded the three old stage names is still counted in its classes (`needed-refused-by-chat`,
+`needed-beyond-limit`, `needed-moved-down` stay in the closed class list) and rendered, and `compare`
+and `judge` show them like any other class.
+
+Every stage except `supplied` is a failure class (`needed-<stage>`, counted once per fact the chat did
+not supply, for probes that fail as `needed-memory-missing` or `relevant-memory-not-supplied`). The
+route's own token budget is made so large (1,000,000) that it cuts nothing, so the route's
+`budget-exceeded` does not occur and is counted as `not-admitted` if it ever does.
+
+Limits the trace states honestly. It is a diagnostic approximation of the chat path, not the chat
+path: (1) the route ranks with the same signals, fusion and reorder but **without the chat path's strict
+relevance floor**; (2) it has **no standing profile**, so a fact the chat supplied through the profile
+is `supplied` for the chat but not in the route's order; (3) it uses the route's **default limit of 12
+included memories** where the chat keeps fewer, and (4) it ranks over one window where the chat ranks
+its admitted memories among themselves, so its order is not the chat's. The route also costs **one extra query-embedding
+call per answer probe** when an embedder is configured, and records its usual `memory:retrieved` audit
+event; it bumps no access counter. That time is measured apart as `traceMs` (`timing`) and
+`recallTrace.durationMs`, and is not part of `probeMs`. The manifest's `recallTrace` says what the run
+actually recorded: `on` (every answer probe of an arm with memory carries a trace with at least one
+fact to follow), `partial` (some probe has no trace, or a trace with no fact, which no stage class can
+be counted for) or `off`; the summary names the probes that were traced with no fact
+(`recallTraceFactless`), and a test over the shipped corpora fails for an answer probe without one. It
+is a provenance field of a comparison, and a run that never recorded it reads as unrecorded.
 
 ## Corpus
 
@@ -822,6 +1229,16 @@ One row per measured run; raw results stay outside the repository.
 <!-- memory-lab-ledger:end -->
 
 ## Known limits of this version
+
+- **Scores of the existing scenarios are unchanged** by the seed, needs, embedder, maintenance and
+  failure-class work of #4207: the scorecard of `scenarios/` (arms off, product, oracle, offline) is
+  byte-identical (SHA-256 `c6cfbeed516e15129a5b81a91c6ff702dd8b1fa7ff63e9732c316b60dc738529`), and
+  `memory-lab-golden.test.mjs` pins the digest of a three-scenario subset in the suite. What was
+  extended: the manifest (`embedder`, `embeddingModelIds`, `maintenance`), the summary (failure
+  classes, seed information) and the failure-class keys. The instrument digest changed with them.
+- **An `earlier` probe passes on "Markdown, not PDF".** Term matching cannot tell "was" from "is not":
+  an answer that names the replaced value only to deny it still carries its terms. The validator
+  keeps the replaced terms out of the current value, but the scorer cannot read the sentence.
 
 - **Time.** Decay, validity windows and multi-day gaps cannot be exercised live: the server composes
   `now` as an injected function but exposes no override, and handlers call `Date.now()` directly.

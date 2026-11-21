@@ -126,7 +126,23 @@ const STATED_CHANGE_RE = anyWordPattern([
   "nowadays",
   "recently",
   "since this",
+  // A correction says the known value was wrong: "Das war falsch. Ich arbeite in Düsseldorf."
+  "das war falsch",
+  "das ist falsch",
+  "das stimmt nicht",
+  // Only as an introduction: "Korrektur: …", never the noun "an der Korrektur".
+  String.raw`korrektur\s*:`,
+  "ich meinte",
+  "that was wrong",
+  "that['’]s wrong",
+  "that is wrong",
+  String.raw`correction\s*:`,
+  "i meant",
 ]);
+// A return to an earlier value: "I use the Everforest theme again". It says the new value is recent,
+// not that the old one ended, so it changes only a labelled fact whose frame it repeats: "theme" and
+// "editor", not just the "plays" of "plays piano".
+const RETURN_RE = anyWordPattern(["wieder", "erneut", "again"]);
 // What the person is: "Ich bin Kreditanalystin" and "Seit diesem Monat bin ich Teamleiterin" share no
 // word and describe one thing all the same. Only a stated change with a model label gets this far.
 const SELF_DESCRIPTION_RE = anyWordPattern(["ich bin", "bin ich", "i am", "i['’]m"]);
@@ -279,13 +295,37 @@ function sharesSingleValueSlot(a: string, b: string): boolean {
   return slotValues(a).some((value, index) => value !== undefined && valuesB[index] !== undefined);
 }
 
-// A chosen preference changes when exactly one word differs on each side and the rest, its purpose
-// and context, stays: "lange Antworten in Chats" is no change of "kurze Antworten in Meetings".
+// The words that join one value of two words: "Tabellen mit Summenzeile" names one format, while
+// "Tee morgens" names a drink and a time, which no word here joins.
+const VALUE_JOINER_RE = /^(?:mit|ohne|with|without)$/u;
+
+// Where the words a statement has and the other lacks begin, counted in fact words, when they form
+// one value: a single word, or two joined by "mit" or "with". Null otherwise.
+function valuePhraseOffset(text: string, other: readonly string[]): number | null {
+  const pieces = normalizeMemoryText(text).split(/\s+/u);
+  const positions: number[] = [];
+  let offset = 0;
+  pieces.forEach((piece, index) => {
+    for (const word of factWords(piece)) {
+      if (!hasWord(other, word)) positions.push(index);
+      else if (positions.length === 0) offset += 1;
+    }
+  });
+  const [first, second, ...rest] = positions;
+  if (first === undefined || rest.length > 0) return null;
+  if (second === undefined) return offset;
+  const between = pieces.slice(first + 1, second);
+  const joined = between.length > 0 && between.every((piece) => VALUE_JOINER_RE.test(piece));
+  return joined ? offset : null;
+}
+
+// A chosen preference changes when one value differs at the same place on each side and the rest,
+// its purpose and context, stays: "lange Antworten in Chats" is no change of "kurze Antworten in
+// Meetings", while "Listen mit Nummerierung" changes "Tabellen mit Summenzeile".
 function preferenceChanged(a: string, b: string): boolean {
   if (!CHOSEN_PREFERENCE_RE.test(a) || !CHOSEN_PREFERENCE_RE.test(b)) return false;
-  const wordsA = factWords(a);
-  const wordsB = factWords(b);
-  return unmatched(wordsA, wordsB).length === 1 && unmatched(wordsB, wordsA).length === 1;
+  const offsetA = valuePhraseOffset(a, factWords(b));
+  return offsetA !== null && offsetA === valuePhraseOffset(b, factWords(a));
 }
 
 // A changed preference keeps its context: "light mode in the terminal" is no change of "dark mode in
@@ -450,6 +490,13 @@ function statesSameKind(body: string, evidence: string, knownBody: string): bool
   );
 }
 
+function statesChange(body: string, evidence: string, knownBody: string): boolean {
+  if (STATED_CHANGE_RE.test(evidence)) return true;
+  if (!RETURN_RE.test(evidence)) return false;
+  const known = factWords(knownBody);
+  return factWords(body).filter((word) => hasWord(known, word)).length >= MIN_CLAUSE_WORDS;
+}
+
 function labelledChange(
   body: string,
   evidence: string,
@@ -464,7 +511,7 @@ function labelledChange(
     return { kind: "supersede", factId: related.id, basis: "slot-changed" };
   }
   if (
-    STATED_CHANGE_RE.test(evidence) &&
+    statesChange(body, evidence, related.body) &&
     statesSameKind(body, evidence, related.body) &&
     !bringsOwnPreferenceContext(body, related.body)
   ) {
@@ -480,6 +527,18 @@ export interface FactRelationInput {
   // The known fact the model named, when it named one.
   readonly related?: KnownFact;
   readonly known: readonly KnownFact[];
+  // The person's sentence just before the evidence. A bare remark there ("Das war falsch.") states
+  // the change the fact itself does not mention.
+  readonly remark?: string | undefined;
+}
+
+// A remark that states a change and no fact of its own: "Das war falsch.", "Korrektur:".
+function changeEvidence(evidence: string, remark: string | undefined): string {
+  // A question states nothing: "Das war falsch?" asks, it does not correct.
+  if (remark === undefined || remark.trim().endsWith("?") || !STATED_CHANGE_RE.test(remark)) {
+    return evidence;
+  }
+  return factWords(remark).length <= MAX_SLOT_WORDS ? `${remark} ${evidence}` : evidence;
 }
 
 function keepingFixedFacts(
@@ -496,12 +555,12 @@ export function decideFactRelation(input: FactRelationInput): FactRelationDecisi
 }
 
 function relationOf(input: FactRelationInput): FactRelationDecision {
-  const { body, evidence, label, related, known } = input;
+  const { body, evidence, label, related, known, remark } = input;
   const certain = deterministicRelation(body, evidence, known);
   if (certain !== null) return certain;
   if (related === undefined) return { kind: "new" };
   if (label === "update" || label === "contradiction") {
-    return labelledChange(body, evidence, related) ?? { kind: "new" };
+    return labelledChange(body, changeEvidence(evidence, remark), related) ?? { kind: "new" };
   }
   if (label === "same" && sharesContentWord(body, related.body)) {
     return { kind: "same-unconfirmed" };
