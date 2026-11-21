@@ -727,4 +727,19 @@ describe("candidate artifact writes keep the shape the read validator accepts", 
     const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
     expect(reloaded?.editedRevisions).toBeUndefined();
   });
+
+  it("refuses an edit whose redacted provenance label is empty, as the load path would", () => {
+    expect(() =>
+      applyQualityIntelligenceCandidateEdit({
+        runId: RUN_ID,
+        candidateId: "tc-1",
+        editedFields: { title: "Edited title" },
+        provenance: { ...provenance(), editorLabel: "" },
+        evidenceDir,
+        redact: identityRedact,
+      }),
+    ).toThrow(EvidenceWriteError);
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    expect(reloaded?.editedRevisions).toBeUndefined();
+  });
 });

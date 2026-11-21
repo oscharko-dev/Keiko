@@ -129,7 +129,7 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/browser-approval-key-store.ts",
-      "sha256": "139d0f8d1da0fb501ef15abf96f63922df368bcf1fac891a61c226d47ad38a31"
+      "sha256": "fe78fac93491d069fa97874a7c4b29053f773feb57a02b8bce8b90a833a800ca"
     },
     {
       "path": "packages/keiko-ui/src/lib/client-diagnostics.ts",
@@ -238,10 +238,20 @@
     "containerConstraints": "Offline, UID 1000, all capabilities dropped, no-new-privileges, read-only product source/root filesystem, private tmpfs/home/profile, repository test seccomp profile, bounded CPU/memory/PIDs.",
     "telemetryCorrection": "The original private harness inspected meta.browserApproval instead of meta.stageReport.browserApproval, so its no-stored-claim assertion was vacuous. Original harnesses/receipts remain retained. These fresh runs require a genuine successful-commit positive control before testing the actual aborted-put negative; no historical telemetry credit is reassigned.",
     "sourceHashes": {
-      "browser-approval-key-store.ts": "139d0f8d1da0fb501ef15abf96f63922df368bcf1fac891a61c226d47ad38a31",
+      "browser-approval-key-store.ts": "fe78fac93491d069fa97874a7c4b29053f773feb57a02b8bce8b90a833a800ca",
       "browser-approval-crypto.ts": "4fdd0ee027092f9a0f99aa7459754342cf5a36353ae56826a27073c9bcb9965b",
       "browser-approval-evidence.ts": "b59a0a54fd254b13dde4a497441848513de17885ab685103705cad6a5171ebd7",
       "client-diagnostics.ts": "fa397f4dae8cc04291b2a481f47ddd8ef7343015e69139af1886153d13680722"
+    },
+    "sourceAmendment": {
+      "issue": 3933,
+      "commit": "5a0c1dcf9",
+      "source": "packages/keiko-ui/src/lib/browser-approval-key-store.ts",
+      "observedDigest": "139d0f8d1da0fb501ef15abf96f63922df368bcf1fac891a61c226d47ad38a31",
+      "change": "The private IndexedDB transaction helper became generic over the value it captures, and the existing active-record validation moved into the read callback, which now captures a valid record or an unreadable marker. Valid, missing and invalid records produce the same available, missing and unavailable outcomes. No key, crypto, timeout or abort path changed.",
+      "coverage": "The co-located browser-approval-key-store.test.ts and the full keiko-ui suite pass on the amended source. The real-browser storage runs above observed the previous source, whose digest is observedDigest. Only the browser-approval-key-store.ts entry of sourceHashes names the current source; the other entries keep the digests the runs observed.",
+      "freshRealBrowserRun": false,
+      "ownerDisposition": "Re-pinned with this amendment by owner decision on 2026-11-21. A fresh real-browser storage run against the current source is still owed."
     }
   },
   "failureFirst": {
