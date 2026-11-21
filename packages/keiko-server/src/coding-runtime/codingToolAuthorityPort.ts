@@ -1783,9 +1783,14 @@ function admitNativeReadInvocation(
   return started;
 }
 
-function parseNativeReadJson(body: string): unknown {
+// The body's JSON object as an own-data record whose keys are all in `keys`; `undefined` for text
+// that is no JSON or a value that is no such record.
+function parseNativeReadJson(
+  body: string,
+  keys: readonly string[],
+): ReturnType<typeof nativeDataRecord> {
   try {
-    return JSON.parse(body) as unknown;
+    return nativeDataRecord(JSON.parse(body), keys);
   } catch (error) {
     if (error instanceof SyntaxError) return undefined;
     throw error;
@@ -1795,7 +1800,7 @@ function parseNativeReadJson(body: string): unknown {
 function nativeReadInvocationRequest(
   body: string,
 ): Extract<CodingToolActionRequest, { readonly action: "read" }> | undefined {
-  const record = nativeDataRecord(parseNativeReadJson(body), [
+  const record = parseNativeReadJson(body, [
     "action",
     "actionId",
     "idempotencyKey",
@@ -1933,7 +1938,12 @@ function nativeStringRecord<const Keys extends readonly string[]>(
   return record as Readonly<Record<Keys[number], string>>;
 }
 
-function captureNativeReadBegin(
+/**
+ * One own-data snapshot of an original read's begin input, every field checked: `undefined` for an
+ * accessor, a foreign prototype, an unknown key or any malformed value. The OpenCode bridge and the
+ * admission port both take their input through it.
+ */
+export function captureNativeReadBegin(
   input: CodingToolNativeReadBeginInput,
 ): (CodingToolNativeReadBeginInput & { readonly body: string }) | undefined {
   const record = nativeDataRecord(input, [

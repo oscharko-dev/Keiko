@@ -65,7 +65,14 @@ function attemptUsage(value: CiRepairAttempt): boolean {
     value.finishedAtMs >= value.startedAtMs
   );
 }
-function attempt(value: unknown): value is CiRepairAttempt {
+const ATTEMPT_STATUSES: ReadonlySet<unknown> = new Set([
+  "active",
+  "succeeded",
+  "failed",
+  "interrupted",
+]);
+// Every member of a persisted attempt has its declared type; `attemptUsage` checks how they relate.
+function attemptShape(value: unknown): value is CiRepairAttempt {
   if (
     !object(value) ||
     !keys(value, [
@@ -84,15 +91,39 @@ function attempt(value: unknown): value is CiRepairAttempt {
     ])
   )
     return false;
+  return [
+    attemptIdentity(value),
+    charges(value.charges),
+    ATTEMPT_STATUSES.has(value.status),
+    [value.startedAtMs, value.toolCalls, value.promptTokens].every(ciRepairCount),
+    value.finishedAtMs === null || ciRepairCount(value.finishedAtMs),
+  ].every(Boolean);
+}
+function attempt(value: unknown): value is CiRepairAttempt {
+  return attemptShape(value) && attemptUsage(value);
+}
+function limits(value: unknown): value is CiRepairLimits {
+  if (!object(value) || Object.keys(value).length !== 3) return false;
+  const { maxRuntimeMs, maxToolCalls, maxPromptTokens } = value;
   return (
-    attemptIdentity(value) &&
-    charges(value.charges) &&
-    attemptUsage(value as unknown as CiRepairAttempt)
+    ciRepairCount(maxRuntimeMs) &&
+    ciRepairCount(maxToolCalls) &&
+    ciRepairCount(maxPromptTokens) &&
+    validCiRepairLimits({ maxRuntimeMs, maxToolCalls, maxPromptTokens })
   );
 }
-function recordShape(value: Record<string, unknown>): boolean {
-  return (
-    keys(value, [
+function attemptList(value: unknown): value is readonly CiRepairAttempt[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > CI_REPAIR_MAX_ATTEMPTS)
+    return false;
+  const items: unknown[] = value;
+  return items.every(attempt);
+}
+// Every member of a persisted record has its declared type; `recordCounts` and `attemptTotals`
+// check how they relate.
+function recordShape(value: unknown): value is CiRepairBudgetRecord {
+  if (
+    !object(value) ||
+    !keys(value, [
       "schemaVersion",
       "revision",
       "taskDigest",
@@ -107,12 +138,17 @@ function recordShape(value: Record<string, unknown>): boolean {
       "promptTokens",
       "failedAttempts",
       "attempts",
-    ]) &&
-    value.schemaVersion === "1" &&
-    ciRepairDigest(value.taskDigest) &&
-    ciRepairDigest(value.remoteDigest) &&
-    ciRepairDigest(value.issueBindingDigest)
-  );
+    ])
+  )
+    return false;
+  return [
+    value.schemaVersion === "1",
+    ciRepairDigest(value.taskDigest),
+    ciRepairDigest(value.remoteDigest),
+    ciRepairDigest(value.issueBindingDigest),
+    limits(value.limits),
+    attemptList(value.attempts),
+  ].every(Boolean);
 }
 function recordCounts(value: CiRepairBudgetRecord): boolean {
   return (
@@ -151,18 +187,7 @@ function attemptTotals(value: CiRepairBudgetRecord): boolean {
   ].every(Boolean);
 }
 export function isCiRepairBudgetRecord(value: unknown): value is CiRepairBudgetRecord {
-  if (!object(value) || !recordShape(value) || !object(value.limits)) return false;
-  if (!validCiRepairLimits(value.limits as unknown as CiRepairLimits)) return false;
-  if (
-    !Array.isArray(value.attempts) ||
-    value.attempts.length < 1 ||
-    value.attempts.length > CI_REPAIR_MAX_ATTEMPTS
-  )
-    return false;
-  const items: unknown[] = value.attempts;
-  if (!items.every(attempt)) return false;
-  const record = value as unknown as CiRepairBudgetRecord;
-  return recordCounts(record) && attemptTotals(record);
+  return recordShape(value) && recordCounts(value) && attemptTotals(value);
 }
 export function parseCiRepairBudgetRecord(value: string): CiRepairBudgetRecord {
   if (Buffer.byteLength(value, "utf8") > CI_REPAIR_MAX_RECORD_BYTES)

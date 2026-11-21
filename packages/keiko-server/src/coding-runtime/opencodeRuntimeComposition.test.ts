@@ -7374,6 +7374,35 @@ it("offers an inactive original read invocation owner on the existing private br
   }
 });
 
+it("refuses a malformed original read context, offset or limit at the bridge", async () => {
+  const f = nativeBridgeFixture("PRIVATE_PARENT_READ_BYTES");
+  const facet = f.facade.nativeTextRead;
+  const invocations = facet?.invocations;
+  if (facet === undefined || invocations === undefined) throw new Error("native read facet");
+  const begin = vi.fn(invocations.begin);
+  const fixture = await startBridgeFixture(
+    { ...f.facade, nativeTextRead: { ...facet, invocations: { ...invocations, begin } } },
+    { maxInFlight: 1, requestDeadlineMs: 1000 },
+    f.control,
+  );
+  const valid = nativeInvocationInput();
+  try {
+    const bridge = fixture.runtime.toolBridge.nativeTextRead?.invocations;
+    for (const input of [
+      { ...valid, context: { ...valid.context, agent: "" } },
+      { ...valid, offset: -1 },
+      { ...valid, limit: 1.5 },
+    ]) {
+      expect(await bridge?.begin(input)).toEqual({ ok: false, reason: "invalid-request" });
+    }
+    expect(begin).not.toHaveBeenCalled();
+    expect(f.process).not.toHaveBeenCalled();
+  } finally {
+    await fixture.stop();
+    f.registry.dispose();
+  }
+});
+
 it("retains private state while the actual canonical native snapshot producer remains held", async () => {
   let release!: (value: Buffer) => void;
   let physicalSettled = false;

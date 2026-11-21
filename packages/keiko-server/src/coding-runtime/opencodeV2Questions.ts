@@ -112,7 +112,10 @@ function selectedValue(field: Field, selection: string): string {
   throw new Error("opencode-v2-form-selection-invalid");
 }
 
-function fieldAnswer(field: Field, selections: readonly string[]): unknown {
+/** One form field's answer as the runtime takes it: text, a number, a flag or chosen values. */
+type FormFieldAnswer = string | number | boolean | readonly string[];
+
+function fieldAnswer(field: Field, selections: readonly string[]): FormFieldAnswer {
   if (field.type === "multiselect") return selections.map((value) => selectedValue(field, value));
   if (selections.length !== 1) throw new Error("opencode-v2-form-answer-invalid");
   const selection = selections[0];

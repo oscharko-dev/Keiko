@@ -139,7 +139,18 @@ function oauthServer(
   };
 }
 
-function remoteOAuthConfig(admitted: AdmittedMcpOAuthServer | undefined): unknown {
+/** The `oauth` value of a remote server's binding: `false`, or the admitted OAuth settings. */
+type OpenCodeRemoteOAuthConfig =
+  | false
+  | {
+      readonly auth_server_metadata_url: string;
+      readonly client_id?: string;
+      readonly scope?: string;
+    };
+
+function remoteOAuthConfig(
+  admitted: AdmittedMcpOAuthServer | undefined,
+): OpenCodeRemoteOAuthConfig {
   if (admitted === undefined) return false;
   const { oauth, metadataUrl } = admitted;
   return {

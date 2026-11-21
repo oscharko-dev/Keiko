@@ -159,7 +159,7 @@ export interface StateCodingSessionContinuityInput {
   /** The Coding History the retained entries belong to; an entry of a task it lacks is removed. */
   readonly history:
     | {
-        readonly get: (id: string) => unknown;
+        readonly get: (id: string) => { readonly id: string } | undefined;
         readonly forRun: (runId: string) => { readonly id: string } | undefined;
       }
     | undefined;

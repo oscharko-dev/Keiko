@@ -319,6 +319,17 @@ describe("OpenCode HTTP client", () => {
           raw: "secret",
         },
       ],
+      [
+        {
+          id: "per_1",
+          sessionID: "ses_1",
+          permission: "gate",
+          patterns: [],
+          metadata: {},
+          always: [],
+          tool: { messageID: ["msg_1"], callID: "call_1" },
+        },
+      ],
     ]) {
       const client = createOpenCodeHttpClient({
         endpoint: "http://127.0.0.1:43123",
@@ -351,6 +362,29 @@ describe("OpenCode HTTP client", () => {
           id: "que_1",
           sessionID: "ses_1",
           questions: [{ question: "q", header: "h", options: [], extra: true }],
+        },
+      ],
+      // An identifier is a string: an array whose text matches the pattern is refused.
+      [
+        {
+          id: ["que_1"],
+          sessionID: "ses_1",
+          questions: [{ question: "q", header: "h", options: [] }],
+        },
+      ],
+      [
+        {
+          id: "que_1",
+          sessionID: ["ses_1"],
+          questions: [{ question: "q", header: "h", options: [] }],
+        },
+      ],
+      [
+        {
+          id: "que_1",
+          sessionID: "ses_1",
+          questions: [{ question: "q", header: "h", options: [] }],
+          tool: { messageID: ["msg_1"], callID: "call_1" },
         },
       ],
     ];

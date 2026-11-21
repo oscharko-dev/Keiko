@@ -305,10 +305,11 @@ async function listQuestions(
     maxResponseBytes: CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES,
     responseName: "question",
   });
-  if (value.length > MAX_QUESTION_REQUESTS || !value.every(validQuestionRequest)) {
-    throw new Error("opencode-question-invalid");
-  }
-  return value as unknown as readonly OpenCodeQuestionRequest[];
+  if (value.length > MAX_QUESTION_REQUESTS) throw new Error("opencode-question-invalid");
+  return value.map((item): OpenCodeQuestionRequest => {
+    if (!validQuestionRequest(item)) throw new Error("opencode-question-invalid");
+    return item;
+  });
 }
 
 async function answerQuestion(
@@ -528,23 +529,6 @@ function validStatusAction(value: unknown): boolean {
   );
 }
 
-function validQuestionRequest(value: Record<string, unknown>): boolean {
-  if (
-    !(
-      exactRecord(value, ["id", "sessionID", "questions"]) ||
-      exactRecord(value, ["id", "sessionID", "questions", "tool"])
-    ) ||
-    !QUESTION_ID.test(String(value.id)) ||
-    !SESSION_ID.test(String(value.sessionID)) ||
-    !Array.isArray(value.questions) ||
-    value.questions.length < 1 ||
-    value.questions.length > MAX_QUESTIONS_PER_REQUEST ||
-    !value.questions.every(validQuestion)
-  )
-    return false;
-  return value.tool === undefined || validQuestionTool(value.tool);
-}
-
 function validPermissionRequest(value: Record<string, unknown>): boolean {
   if (
     !(
@@ -579,7 +563,31 @@ function validBoundedStrings(value: unknown, maxItems: number, maxLength: number
   );
 }
 
-function validQuestion(value: unknown): boolean {
+function validQuestionRequest(value: unknown): value is OpenCodeQuestionRequest {
+  if (
+    !isRecord(value) ||
+    !(
+      exactRecord(value, ["id", "sessionID", "questions"]) ||
+      exactRecord(value, ["id", "sessionID", "questions", "tool"])
+    ) ||
+    !patternString(value.id, QUESTION_ID) ||
+    !patternString(value.sessionID, SESSION_ID) ||
+    !validQuestionList(value.questions)
+  )
+    return false;
+  return value.tool === undefined || validQuestionTool(value.tool);
+}
+
+function validQuestionList(value: unknown): value is readonly OpenCodeQuestion[] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 1 &&
+    value.length <= MAX_QUESTIONS_PER_REQUEST &&
+    value.every(validQuestion)
+  );
+}
+
+function validQuestion(value: unknown): value is OpenCodeQuestion {
   return (
     isRecord(value) &&
     validQuestionShape(value) &&
@@ -617,7 +625,7 @@ function validQuestionFlags(value: Record<string, unknown>): boolean {
   );
 }
 
-function validQuestionOption(value: unknown): boolean {
+function validQuestionOption(value: unknown): value is OpenCodeQuestion["options"][number] {
   return (
     isRecord(value) &&
     exactRecord(value, ["label", "description"]) &&
@@ -626,11 +634,11 @@ function validQuestionOption(value: unknown): boolean {
   );
 }
 
-function validQuestionTool(value: unknown): boolean {
+function validQuestionTool(value: unknown): value is NonNullable<OpenCodeQuestionRequest["tool"]> {
   return (
     isRecord(value) &&
     exactRecord(value, ["messageID", "callID"]) &&
-    MESSAGE_ID.test(String(value.messageID)) &&
+    patternString(value.messageID, MESSAGE_ID) &&
     boundedString(value.callID, 256)
   );
 }
@@ -644,6 +652,11 @@ function validQuestionAnswers(value: readonly (readonly string[])[]): boolean {
         answer.every((selection) => boundedString(selection, 4_096)),
     )
   );
+}
+
+// Every identifier pattern bounds its length below 256, so the bound only admits the string.
+function patternString(value: unknown, pattern: RegExp): value is string {
+  return boundedString(value, 256) && pattern.test(value);
 }
 
 function boundedString(value: unknown, maxLength: number): value is string {

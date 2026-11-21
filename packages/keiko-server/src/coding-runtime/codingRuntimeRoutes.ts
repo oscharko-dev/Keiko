@@ -33,6 +33,7 @@ import { unpairedCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko
 import { unpairedCodingWorkbenchRuntimeMcpChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import { unpairedCodingWorkbenchRuntimeSkillsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { unpairedCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -234,10 +235,21 @@ interface RunChannelRead {
  * channel's one constant payload BEFORE any run resolution, so no read is an existence oracle
  * (ADR-0141 D6); an unknown run is not found. Reading consumes no revision and no request id.
  */
+/** The one constant payload each run channel answers an unpaired caller. */
+type UnpairedRunChannelPayload =
+  | ReturnType<typeof unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload>
+  | ReturnType<typeof unpairedCodingWorkbenchRuntimeCommandsChannelPayload>
+  | ReturnType<typeof unpairedCodingWorkbenchRuntimeInboxChannelPayload>
+  | ReturnType<typeof unpairedCodingWorkbenchRuntimeMcpChannelPayload>
+  | ReturnType<typeof unpairedCodingWorkbenchRuntimeQuestionsChannelPayload>
+  | ReturnType<typeof unpairedCodingWorkbenchRuntimeResearchChannelPayload>
+  | ReturnType<typeof unpairedCodingWorkbenchRuntimeRevertChannelPayload>
+  | ReturnType<typeof unpairedCodingWorkbenchRuntimeSkillsChannelPayload>;
+
 function runChannelRead(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  unpaired: () => unknown,
+  unpaired: () => UnpairedRunChannelPayload,
 ): RunChannelRead | RouteResult {
   if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
     return { status: 200, body: unpaired() };
@@ -361,6 +373,14 @@ function readBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
+// The request's JSON object, `{}` for an empty body, or `undefined` for any other text or value.
+async function readObjectBody(req: IncomingMessage): Promise<CatalogJsonObject | undefined> {
+  const body = await readBody(req);
+  // SAFETY: readBody resolves only to undefined or to a non-null, non-array value of JSON.parse
+  // without a reviver (ECMA-262 JSON.parse), which is a plain object of JSON values.
+  return body === undefined ? undefined : (body as CatalogJsonObject);
+}
+
 async function withBody(
   work: () => Promise<RouteResult>,
   correlationId?: string,
@@ -458,7 +478,7 @@ async function mutation(
   operationName: RuntimeMutationOperationName,
   invoke: (
     runtime: CodingRuntimeOrchestrator,
-    body: unknown,
+    body: CatalogJsonObject,
     correlationId?: string,
   ) => ReturnType<CodingRuntimeOrchestrator["start"]>,
   concealment?: MutationConcealment,
@@ -479,7 +499,7 @@ async function mutation(
     return notFound(ctx.correlationId);
   return withBody(
     async () => {
-      const body = await readBody(ctx.req);
+      const body = await readObjectBody(ctx.req);
       if (body === undefined) {
         logMutationRefusal(deps, ctx, operationName, runId, "invalid-intent");
         return failureResult("invalid-intent", ctx.correlationId);
@@ -902,10 +922,14 @@ export function handleCodingRuntimeMcpAuthorizationCancel(
 
 // The paired-session gate and the run's existence, as every runtime mutation; the orchestrator
 // reads the body, so a malformed one is refused with the same closed answer as an unknown server.
-async function mcpAuthorizationRoute(
+async function mcpAuthorizationRoute<Answer>(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  act: (orchestrator: CodingRuntimeOrchestrator, runId: string, body: unknown) => Promise<unknown>,
+  act: (
+    orchestrator: CodingRuntimeOrchestrator,
+    runId: string,
+    body: CatalogJsonObject | undefined,
+  ) => Promise<Answer>,
 ): Promise<RouteResult> {
   const runId = ctx.params.runId;
   const denied = requireMutationAuthority(ctx, deps, runId);
@@ -920,7 +944,7 @@ async function mcpAuthorizationRoute(
   return withBody(
     async () => ({
       status: 200,
-      body: await act(required.orchestrator, runId, await readBody(ctx.req)),
+      body: await act(required.orchestrator, runId, await readObjectBody(ctx.req)),
     }),
     ctx.correlationId,
   );
@@ -990,7 +1014,7 @@ export function handleCodingRuntimeQuestionList(
   if (isRouteResult(read)) return Promise.resolve(read);
   const { orchestrator, runId } = read;
   return withBody(async () => {
-    const body = await readBody(ctx.req);
+    const body = await readObjectBody(ctx.req);
     if (body === undefined) return failureResult("invalid-intent", ctx.correlationId);
     const result = await orchestrator.listQuestions(runId, body, ctx.correlationId);
     if (!result.ok) return failureResult(result.failureCode, ctx.correlationId);

@@ -80,9 +80,7 @@ export type SidecarEventParseResult =
 
 export function parseCodingSidecarEventLine(line: string): SidecarEventParseResult {
   if (line.length === 0) return { status: "empty" };
-  const parsed = parseJson(line);
-  if (!isRecord(parsed)) return { status: "invalid" };
-  const event = typedSidecarEvent(parsed);
+  const event = parseJson(line);
   return event === undefined ? { status: "invalid" } : { status: "parsed", event };
 }
 
@@ -312,12 +310,15 @@ function optionalApprovalToken(
     : { approvalToken: token, approvalTokenMalformed: false };
 }
 
-function parseJson(line: string): unknown {
+// The sidecar event a JSON line carries; `undefined` for text that is no JSON or no known event.
+function parseJson(line: string): SidecarHealthEvent | SidecarPermissionEvent | undefined {
+  let parsed: unknown;
   try {
-    return JSON.parse(line);
+    parsed = JSON.parse(line);
   } catch {
     return undefined;
   }
+  return isRecord(parsed) ? typedSidecarEvent(parsed) : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

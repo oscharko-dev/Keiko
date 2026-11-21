@@ -91,6 +91,7 @@ import type {
   CodingToolNativeEffectAdmission,
   CodingToolNativeSettlementInput,
 } from "./codingToolFacadePorts.js";
+import { captureNativeReadBegin } from "./codingToolAuthorityPort.js";
 import {
   codingToolEditPresentation,
   codingToolVerificationPresentation,
@@ -3390,22 +3391,17 @@ function verifiedProtocol(
 ): boolean {
   // The discovered runtime's approved version selects its own producer-derived digests (#3908).
   const pin = openCodeRuntimeVersionPin(candidate.summary.upstreamVersion);
+  // Read as a string so the value the object carries is compared, not its declared literal type.
+  const algorithm: string = candidate.protocolHandshakeAlgorithm;
   return (
     candidate === trusted &&
     candidate.summary.status === "verified" &&
     pin !== undefined &&
     candidate.availability.protocolSchemaVerified &&
     candidate.protocolSchemaRawSha256 === pin.rawSchemaSha256 &&
-    runtimeField(candidate, "protocolHandshakeAlgorithm") ===
-      OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM &&
+    algorithm === OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM &&
     candidate.protocolHandshakeDigest === pin.protocolSurfaceSha256
   );
-}
-
-function runtimeField(value: unknown, key: string): unknown {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)[key]
-    : undefined;
 }
 
 function distinctCapabilities(
@@ -3829,7 +3825,7 @@ function prepareNativeBridgeBeginInput(
   input: CodingToolNativeReadBeginInput,
 ): (CodingToolNativeReadBeginInput & { readonly body: string }) | undefined {
   try {
-    const owned = ownNativeBridgeBeginInput(input);
+    const owned = captureNativeReadBegin(input);
     if (owned === undefined) return undefined;
     const body = privateNativeToolBody(
       owned.body,
@@ -3842,39 +3838,6 @@ function prepareNativeBridgeBeginInput(
     emitFacadeFailureDiagnostic(deps.diagnostics, undefined, error);
     return undefined;
   }
-}
-
-function ownNativeBridgeBeginInput(
-  input: CodingToolNativeReadBeginInput,
-): CodingToolNativeReadBeginInput | undefined {
-  const prototype: unknown = Object.getPrototypeOf(input);
-  if (prototype !== Object.prototype && prototype !== null) return undefined;
-  const allowed = new Set([
-    "body",
-    "capability",
-    "headers",
-    "signal",
-    "context",
-    "offset",
-    "limit",
-  ]);
-  const owned: Record<string, unknown> = {};
-  for (const key of Reflect.ownKeys(input)) {
-    if (typeof key !== "string" || !allowed.has(key)) return undefined;
-    const descriptor = Object.getOwnPropertyDescriptor(input, key);
-    if (descriptor === undefined || !("value" in descriptor)) return undefined;
-    owned[key] = descriptor.value;
-  }
-  if (!nativeBridgeBeginValues(owned.body, owned.capability, owned.signal)) return undefined;
-  return owned as unknown as CodingToolNativeReadBeginInput;
-}
-
-function nativeBridgeBeginValues(body: unknown, capability: unknown, signal: unknown): boolean {
-  return (
-    (typeof body === "string" || Buffer.isBuffer(body)) &&
-    (capability === undefined || typeof capability === "string") &&
-    (signal === undefined || signal instanceof AbortSignal)
-  );
 }
 
 async function callNativeReadBegin(
@@ -3968,7 +3931,7 @@ function handleDirectToolRequest(
   }
   const read = nativeReadTransportValue(input.body);
   if (read !== undefined)
-    return handleNativeReadTransport(read, input.signal, deps, runs, nativeRead);
+    return handleNativeReadTransport(read.packet, input.signal, deps, runs, nativeRead);
   const permission = parseV2PermissionRequest(input.body);
   if (permission !== undefined) {
     return handleV2PermissionRequest(permission, input.signal, deps, approvals, runs);
@@ -5341,10 +5304,17 @@ function nativeWebSearchTransportValue(body: string): NativeWebSearchRequest | u
   return validJson(body) ? parseNativeWebSearchRequest(JSON.parse(body)) : undefined;
 }
 
-function nativeReadTransportValue(body: string): unknown {
+/** A body that names the native read action; its packet is `undefined` when the rest is malformed. */
+interface NativeReadTransportRequest {
+  readonly packet: NativeReadTransportPacket | undefined;
+}
+
+function nativeReadTransportValue(body: string): NativeReadTransportRequest | undefined {
   if (!validJson(body)) return undefined;
   const value: unknown = JSON.parse(body);
-  return v2Record(value)?.action === "native-read-invocation" ? value : undefined;
+  return v2Record(value)?.action === "native-read-invocation"
+    ? { packet: copyNativeReadTransportPacket(value) }
+    : undefined;
 }
 
 /** Capture transport data only; the existing parent owns authority, replay and physical work. */
@@ -5481,13 +5451,12 @@ function nativeReadRangeForPhase(
 }
 
 async function handleNativeReadTransport(
-  value: unknown,
+  packet: NativeReadTransportPacket | undefined,
   signal: AbortSignal | undefined,
   deps: ToolBridgeExecutionDeps,
   runs: ReadonlyMap<string, PreparedRun>,
   producer: CodingToolNativeReadInvocations | undefined,
 ): Promise<OpenCodeToolBridgeResponse> {
-  const packet = copyNativeReadTransportPacket(value);
   if (packet === undefined) return nativeTransportRefusal("invalid-request", 400);
   const run = runs.get(packet.runId);
   try {

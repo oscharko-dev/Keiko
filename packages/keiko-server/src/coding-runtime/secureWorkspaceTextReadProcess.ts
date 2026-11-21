@@ -27,12 +27,12 @@ export interface SecureWorkspaceTextReadProcessFactory {
 
 export interface SecureWorkspaceReadChild {
   readonly stdout: {
-    on(event: "data", listener: (chunk: Uint8Array) => void): unknown;
-    on(event: "error", listener: () => void): unknown;
+    on(event: "data", listener: (chunk: Uint8Array) => void): void;
+    on(event: "error", listener: () => void): void;
   };
-  readonly stderr: { on(event: "data", listener: (chunk: Uint8Array) => void): unknown };
+  readonly stderr: { on(event: "data", listener: (chunk: Uint8Array) => void): void };
   readonly stdin: { end(data: Uint8Array): void };
-  on(event: "error" | "close", listener: (code?: number | null) => void): unknown;
+  on(event: "error" | "close", listener: (code?: number | null) => void): void;
   kill(): void;
   /** Must resolve only after the process and its pipes are reaped/closed. */
   reap(): Promise<void>;
