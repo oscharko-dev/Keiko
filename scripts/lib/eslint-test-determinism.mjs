@@ -151,6 +151,14 @@ function logicalPolarity(sourceCode, condition) {
 
 const COMPARISON_POLARITY = Object.freeze({ "===": 1, "==": 1, "!==": -1, "!=": -1 });
 
+/** A comparison with the enabling value "1" only: `X === "0"` says nothing about enforcement. */
+function comparisonPolarity(condition) {
+  const enabling = [condition.left, condition.right].some(
+    (side) => side.type === "Literal" && String(side.value) === "1",
+  );
+  return enabling ? (COMPARISON_POLARITY[condition.operator] ?? 0) : 0;
+}
+
 /**
  * +1 when the condition being true means the budgets are enforced, -1 when it means they are not,
  * 0 when it says neither. `X === "1"` and `X` enforce; `!X` and `X !== "1"` do not.
@@ -161,7 +169,7 @@ function guardPolarity(sourceCode, condition) {
   }
   if (condition.type === "LogicalExpression") return logicalPolarity(sourceCode, condition);
   if (!sourceCode.getText(condition).includes(WALL_CLOCK_GUARD)) return 0;
-  if (condition.type === "BinaryExpression") return COMPARISON_POLARITY[condition.operator] ?? 0;
+  if (condition.type === "BinaryExpression") return comparisonPolarity(condition);
   return ["Identifier", "MemberExpression"].includes(condition.type) ? 1 : 0;
 }
 

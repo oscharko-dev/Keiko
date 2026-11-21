@@ -217,6 +217,15 @@ describe("executedTestCount", () => {
     expect(executedTestCount(playwrightSamples(playwrightReport(["skipped", "skipped"])))).toBe(0);
   });
 
+  it("counts no executed test when only file-level verdicts were reported", () => {
+    // CodeRabbit on #4513: a file without assertions "passes" without running a test.
+    const samples = mergeVerdicts([
+      vitestVerdicts(vitestReport([{ name: "empty.test.ts" }, { name: "other.test.ts" }]), ROOT),
+    ]);
+    expect(samples.size).toBe(2);
+    expect(executedTestCount(samples)).toBe(0);
+  });
+
   it("keeps intentionally skipped tests valid beside executed ones", () => {
     const samples = mergeVerdicts([
       vitestVerdicts(

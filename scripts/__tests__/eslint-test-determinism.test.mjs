@@ -55,6 +55,9 @@ tester.run("no-unguarded-wall-clock-assertion", rules["no-unguarded-wall-clock-a
       'if (process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS !== "1") expect(Date.now() - t).toBeLessThan(5);',
       'it.skipIf(process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1")("x", () => { expect(performance.now() - t).toBeLessThan(5); });',
       "ENFORCE_WALL_CLOCK_BUDGETS ? null : expect(Date.now() - t).toBeLessThan(5);",
+      // Only the enabling value "1" enforces the budgets.
+      'if (process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "0") expect(Date.now() - t).toBeLessThan(5);',
+      'it.skipIf(process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS !== "0")("x", () => { expect(performance.now() - t).toBeLessThan(5); });',
     ].map((code) => ({ code, errors: [{ messageId: "unguarded" }] })),
     {
       code: "expect(Date.now() - started).toBeLessThan(5000);",

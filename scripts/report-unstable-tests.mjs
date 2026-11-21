@@ -22,6 +22,8 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const VITEST_BIN = join(ROOT, "node_modules", "vitest", "vitest.mjs");
 const DECIDED = new Set(["passed", "failed"]);
+// The key suffix of a file's own verdict, which no test executed to produce.
+const FILE_VERDICT = " (file)";
 
 /** One verdict per test of a vitest JSON report, keyed by file and full name. */
 export function vitestVerdicts(report, root = ROOT) {
@@ -31,7 +33,7 @@ export function vitestVerdicts(report, root = ROOT) {
     if (file.status === "failed" || (file.assertionResults ?? []).length === 0) {
       // A file that failed to load has no test results; its own status is its only verdict. A
       // file-level failure, such as a failed hook, is a verdict even when every test passed.
-      verdicts.set(`${path} (file)`, file.status === "failed" ? "failed" : "passed");
+      verdicts.set(`${path}${FILE_VERDICT}`, file.status === "failed" ? "failed" : "passed");
     }
     for (const test of file.assertionResults ?? []) {
       verdicts.set(`${path} > ${test.fullName}`, test.status);
@@ -101,10 +103,14 @@ export function classify(samples, runCount) {
   return { unstable, failing };
 }
 
-/** How many tests reached a decided verdict at least once: skipped-only reports test nothing. */
+/**
+ * How many tests reached a decided verdict at least once. A skipped-only report tests nothing, and
+ * a file's own verdict is no executed test: a file with no assertions "passes" without running any.
+ */
 export function executedTestCount(samples) {
   let executed = 0;
-  for (const statuses of samples.values()) {
+  for (const [id, statuses] of samples) {
+    if (id.endsWith(FILE_VERDICT)) continue;
     if (statuses.some((status) => DECIDED.has(status) || status === "flaky")) executed += 1;
   }
   return executed;
@@ -214,7 +220,8 @@ function main(argv) {
   const { label, samples, runCount } = measures[mode](rest);
   if (samples.size === 0) throw new Error("no test verdict was reported");
   // A report in which every test was skipped proves nothing about stability.
-  if (executedTestCount(samples) === 0) throw new Error("no test executed: every verdict skipped");
+  if (executedTestCount(samples) === 0)
+    throw new Error("no test executed: every verdict was skipped or file-level");
   const result = classify(samples, runCount);
   const report = formatReport(label, samples.size, runCount, result);
   console.log(report);
