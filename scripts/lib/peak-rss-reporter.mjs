@@ -18,15 +18,15 @@ const SAMPLE_INTERVAL_MS = 250;
 
 // CommonJS, because an eval worker is not a module. The kill ends every thread at once, so the
 // process cannot outgrow the budget by finishing the work in hand.
-const WATCHDOG = `
+const WATCHDOG = String.raw`
 const { writeFileSync, writeSync } = require("node:fs");
 const { workerData } = require("node:worker_threads");
 setInterval(() => {
   const rss = process.memoryUsage.rss();
   if (rss <= workerData.budget) return;
-  writeFileSync(workerData.target, rss + "\\n");
+  writeFileSync(workerData.target, rss + "\n");
   // A worker's process.stderr is relayed through the busy main thread; write the descriptor itself.
-  writeSync(2, "peak-rss: resident memory " + rss + " bytes exceeded the budget of " + workerData.budget + "; stopping\\n");
+  writeSync(2, "peak-rss: resident memory " + rss + " bytes exceeded the budget of " + workerData.budget + "; stopping\n");
   process.kill(process.pid, "SIGKILL");
 }, workerData.interval);
 `;

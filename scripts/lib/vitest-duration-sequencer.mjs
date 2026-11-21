@@ -64,7 +64,7 @@ export function assignShard(keys, durations, index, count) {
 }
 
 function specKey(root, spec) {
-  return relative(root, spec.moduleId).split("\\").join("/");
+  return relative(root, spec.moduleId).replaceAll("\\", "/");
 }
 
 export default class DurationSequencer extends BaseSequencer {
