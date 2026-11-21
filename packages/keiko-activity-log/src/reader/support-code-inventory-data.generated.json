@@ -2179,6 +2179,7 @@
     "keiko-server/grounded-message-persistence",
     "keiko-server/grounded-metadata-retention",
     "keiko-server/grounded-multi-source-budget",
+    "keiko-server/grounded-named-directory-focus",
     "keiko-server/grounded-orchestrator",
     "keiko-server/grounded-overview-fallback",
     "keiko-server/grounded-pack-validation",

@@ -1143,6 +1143,23 @@ count on the existing Activity Log and correlation, separately from aggregate pr
 The source-details event already occupies its 48 contextual fields; its existing fields and
 single-row semantics remain unchanged. The small evidence sibling preserves the same field cap
 without recording descriptor words or paths.
+
+A natural-language question that names a subfolder of the selected scope, by a folder cue
+(`commands-Ordner`, `the commands folder`) or a path spelling (`components/PromptInput`), focuses
+one additional bounded subtree read (#4429). Only folders that hold files of the request's own
+admitted candidate inventory, strictly below the selected scope, qualify: at most four folders and
+2,048 observed descriptors per request. The read reuses the lexical search's guarded walk, scoped to
+those folders, and its known-fit observer; it charges one search call and retains whole-file listing
+evidence entry-first (README, then index/main/module files, then shallower paths) within the
+existing known-fit byte capacity. Files that do not fit are left out whole, never truncated, and the
+state is `partial`. Extractable documents below the folders (at most eight) join the existing
+bounded document collector and its unchanged extraction grant. Ordinary lexical evidence, relevance
+floors, sensitive-path denials, containment and every byte, file and deadline grant are unchanged;
+literal, exact-symbol and diagnostic searches never focus. The evidence sibling records the closed
+`namedDirectoryFocusState` (`no-match`, `applied`, `partial`, `empty`, `skipped-budget`,
+`skipped-stopped`, `incomplete-traversal`), folder, ambiguous-term, candidate, observed, retained
+and document counts and the charged bytes; never a folder name or path. A question that names no
+folder records none of these fields, so existing evidence lines keep their shape.
 The existing source admission, freshness, excerpt reads, selection floors and cumulative grants
 still apply. Same-query validated match records may preserve the observation; token-hash inventories
 alone cannot manufacture it. The existing runner prepares that pure query derivation once per scan.

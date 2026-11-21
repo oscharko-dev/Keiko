@@ -352,7 +352,10 @@ final sent evidence are distinct: `answer-details.filesInPrompt` describes what 
 The correlated `search.connected-context.evidence-details` sibling carries certified descriptor
 counts within the same unchanged contextual-field cap. Existing source-detail rows retain all
 their fields. Only counts, closed dispositions and digests enter the log, never paths, declarations
-or answers.
+or answers. A question that names a subfolder (`commands-Ordner`, `components/PromptInput`) reads
+that subtree as bounded whole-file listing evidence within the known-fit capacity, plus at most
+eight of its documents; the same sibling records `namedDirectoryFocusState` and its counts (#4429,
+ADR-0022).
 The six-reference intake preserves the primary local trace frame and explicitly named question
 paths before secondary frames or conversation referents. Prompt fitting preserves a complete
 matching line when it fits the remaining UTF-8 byte grant, rebinding source ranges and stable

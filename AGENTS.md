@@ -645,6 +645,11 @@ system that exists, never beside it:
   bounds the source text it parses (32 MiB) and reports the bound as a candidate limit, counted on
   `evidence-details`, instead of exhausting the heap (#4456). Finite enrichment grants and
   bounded complete-text reuse retain their separate limits.
+  A question naming a subfolder of the admitted inventory (`commands-Ordner`, `the X folder`,
+  `components/PromptInput`) reads that subtree once more, entry files first, as whole-file listing
+  evidence within the known-fit capacity plus at most eight of its documents; ordinary evidence,
+  floors and grants are unchanged. `evidence-details` records `namedDirectoryFocusState` and counts,
+  never a folder name (#4429, ADR-0022).
   Unreadable or partially observed re-export branches retain uncertainty; missing indexed exports
   cannot certify a unique runtime target when a competing branch is unobserved.
   A guarded current definition reached through an observed inline-callable reference retains its

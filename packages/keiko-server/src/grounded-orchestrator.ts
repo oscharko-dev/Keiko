@@ -303,6 +303,20 @@ import { directDefinitionSymbol } from "./grounded-query-shape.js";
 
 import { KnownFitScopeContext, type ScopeContextObservation } from "./grounded-scope-context.js";
 import {
+  emptyNamedDirectoryFocus,
+  FocusDescriptorCollector,
+  focusDocumentPaths,
+  isWithinDirectories,
+  NAMED_DIRECTORY_FOCUS_MAX_OBSERVED_FILES,
+  namedDirectoryTerms,
+  namedScopeDirectories,
+  retainFocusFiles,
+  type FocusRetention,
+  type NamedDirectoryFocusObservation,
+  type NamedDirectoryFocusState,
+  type NamedDirectoryMatch,
+} from "./grounded-named-directory-focus.js";
+import {
   attachContextBudgetDiagnostics,
   deriveGroundedContextAssembly,
 } from "./grounded-context-diagnostics.js";
@@ -808,6 +822,28 @@ const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOpe
     },
     codeRedactionRevision: { type: "integer", dataClass: "count", required: false },
     sourceDescriptorPathCount: { type: "integer", dataClass: "count", required: false },
+    // #4429: the subfolder a question named, read as its own bounded subtree. Counts only.
+    namedDirectoryFocusState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "no-match",
+        "applied",
+        "partial",
+        "empty",
+        "skipped-budget",
+        "skipped-stopped",
+        "incomplete-traversal",
+      ],
+    },
+    namedDirectoryCount: { type: "integer", dataClass: "count", required: false },
+    namedDirectoryAmbiguousTermCount: { type: "integer", dataClass: "count", required: false },
+    namedDirectoryCandidateFileCount: { type: "integer", dataClass: "count", required: false },
+    namedDirectoryObservedFileCount: { type: "integer", dataClass: "count", required: false },
+    namedDirectoryRetainedFileCount: { type: "integer", dataClass: "count", required: false },
+    namedDirectoryDocumentCount: { type: "integer", dataClass: "count", required: false },
+    namedDirectoryChargedBytes: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1343,6 +1379,7 @@ interface SourceDecisionObservation {
   semanticRejectedAtomCount: number;
   primaryContentPathCount: number;
   sourceDescriptorPathCount: number;
+  namedDirectoryFocus?: NamedDirectoryFocusObservation | undefined;
 }
 
 function emptySourceDecision(disposition: SemanticProviderDisposition): SourceDecisionObservation {
@@ -1759,6 +1796,7 @@ function createStructuralRequestContextPool(
 interface RingResult {
   readonly contextualFallbackCandidates?: readonly ContextualFallbackCandidate[] | undefined;
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
+  readonly focusDocumentPaths?: readonly string[] | undefined;
   readonly endpointContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly primaryContentIdentities?: readonly ContentEvidenceIdentity[];
   readonly atoms: readonly EvidenceAtom[];
@@ -2536,6 +2574,7 @@ function lexicalSearchOptions(inputs: SearchInputs): {
 interface ContextSearchResult extends SearchResult {
   readonly sourceDecision?: SourceDecisionObservation | undefined;
   readonly knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
+  readonly focusDocumentPaths?: readonly string[] | undefined;
 }
 
 function lexicalQuery(
@@ -2704,17 +2743,146 @@ async function lexicalRingSearch(
   const result = await searchLexicalTerms(ring, inputs);
   const decision = result.sourceDecision ?? emptySourceDecision("not-evaluated");
   decision.overviewListingFallback = overviewListingDecision(result, inputs);
-  if (decision.overviewListingFallback !== "used") return { ...result, sourceDecision: decision };
+  if (decision.overviewListingFallback !== "used")
+    return withNamedDirectoryFocus(ring, inputs, { ...result, sourceDecision: decision });
   const listing = await findFiles(
     inputs.searchScope,
     { ...inputs.query, kind: "file-pattern", text: "**/*" },
     ring.searchLimits,
     lexicalSearchOptions(inputs),
   );
-  return {
+  return withNamedDirectoryFocus(ring, inputs, {
     ...mergeOverviewListing(result, listing),
     sourceDecision: decision,
+  });
+}
+
+interface NamedDirectoryFocusRequest {
+  readonly match?: NamedDirectoryMatch | undefined;
+  readonly candidatePaths: readonly string[];
+  readonly observation?: NamedDirectoryFocusObservation | undefined;
+}
+
+function namedDirectoryFocusRequested(inputs: SearchInputs, result: ContextSearchResult): boolean {
+  return (
+    inputs.query.kind === "natural-language" &&
+    inputs.targetDecision.kind !== "literal-search" &&
+    inputs.retrievalIntent !== "diagnostic-search" &&
+    (result.knownFitFileBytes?.size ?? 0) === 0 &&
+    namedDirectoryTerms(inputs.query.text).length > 0
+  );
+}
+
+function namedDirectoryFocusRequest(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  result: ContextSearchResult,
+): NamedDirectoryFocusRequest {
+  if (!namedDirectoryFocusRequested(inputs, result))
+    return { candidatePaths: [], observation: emptyNamedDirectoryFocus("not-requested") };
+  const candidatePaths = inputs.structuralContexts.forLimits(ring.searchLimits).candidatePaths();
+  const match = namedScopeDirectories(
+    inputs.query.text,
+    candidatePaths,
+    inputs.searchScope.relativePaths,
+  );
+  const refused = (state: NamedDirectoryFocusState): NamedDirectoryFocusRequest => ({
+    candidatePaths,
+    observation: emptyNamedDirectoryFocus(state, match),
+  });
+  if (match.directories.length === 0) return refused("no-match");
+  throwIfCancelled(inputs.signal);
+  if (inputs.nowMs() >= inputs.deadlineAtMs) return refused("skipped-stopped");
+  if (inputs.tryReserveAdditionalSearchCall?.() !== true) return refused("skipped-budget");
+  return { match, candidatePaths };
+}
+
+// #4429: a question naming a subfolder reads that subtree; ordinary evidence stays unchanged.
+async function withNamedDirectoryFocus(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  result: ContextSearchResult & { readonly sourceDecision: SourceDecisionObservation },
+): Promise<ContextSearchResult> {
+  const request = namedDirectoryFocusRequest(ring, inputs, result);
+  if (request.match === undefined) {
+    if (request.observation?.state !== "not-requested")
+      result.sourceDecision.namedDirectoryFocus = request.observation;
+    return result;
+  }
+  const focus = await scanNamedDirectories(ring, inputs, request.match, request.candidatePaths);
+  result.sourceDecision.namedDirectoryFocus = focus.observation;
+  if (focus.atoms.length === 0 && focus.documents.length === 0) return result;
+  return {
+    ...result,
+    atoms: [...result.atoms, ...focus.atoms],
+    knownFitFileBytes: new Map([...(result.knownFitFileBytes ?? []), ...focus.fileBytes]),
+    focusDocumentPaths: focus.documents,
   };
+}
+
+interface NamedDirectoryFocusScan {
+  readonly atoms: readonly EvidenceAtom[];
+  readonly fileBytes: ReadonlyMap<string, number>;
+  readonly documents: readonly string[];
+  readonly observation: NamedDirectoryFocusObservation;
+}
+
+async function scanNamedDirectories(
+  ring: RetrievalRing,
+  inputs: SearchInputs,
+  match: NamedDirectoryMatch,
+  candidatePaths: readonly string[],
+): Promise<NamedDirectoryFocusScan> {
+  const collector = new FocusDescriptorCollector(match.directories);
+  const scan = await searchText(
+    { ...inputs.searchScope, relativePaths: match.directories },
+    inputs.query,
+    ring.searchLimits,
+    { ...lexicalSearchOptions(inputs), onEligibleTextFile: collector.observe },
+  );
+  const readable = allowsReadableScopeContext(scan.coverage);
+  const documents = readable
+    ? focusDocumentPaths(candidatePaths, match.directories, isExtractableConnectedDocumentPath)
+    : [];
+  const retention = retainFocusFiles(
+    readable ? collector.descriptors() : [],
+    inputs.scopeContextBytesMax,
+    {
+      scopeId: inputs.searchScope.scopeId,
+      queryFingerprint: projectMetadataQueryFingerprint(inputs.query),
+      emittedAtMs: inputs.nowMs(),
+    },
+  );
+  const state = namedDirectoryFocusState(readable, retention, documents, collector);
+  return {
+    atoms: retention.atoms,
+    fileBytes: retention.fileBytes,
+    documents,
+    observation: {
+      ...emptyNamedDirectoryFocus(state, match),
+      candidateFileCount: candidatePaths.filter((path) =>
+        isWithinDirectories(path, match.directories),
+      ).length,
+      observedFileCount: collector.observedCount(),
+      retainedFileCount: retention.atoms.length,
+      documentCount: documents.length,
+      chargedBytes: retention.chargedBytes,
+    },
+  };
+}
+
+function namedDirectoryFocusState(
+  readable: boolean,
+  retention: FocusRetention,
+  documents: readonly string[],
+  collector: FocusDescriptorCollector,
+): NamedDirectoryFocusState {
+  if (!readable) return "incomplete-traversal";
+  if (retention.atoms.length === 0 && documents.length === 0) return "empty";
+  return retention.droppedFileCount > 0 ||
+    collector.observedCount() >= NAMED_DIRECTORY_FOCUS_MAX_OBSERVED_FILES
+    ? "partial"
+    : "applied";
 }
 
 function overviewListingDecision(
@@ -2789,6 +2957,7 @@ async function runLexicalRing(ring: RetrievalRing, inputs: SearchInputs): Promis
   // It does NOT consume the excerpt budget; excerpt reads are charged later by the assembler.
   return {
     knownFitFileBytes: result.knownFitFileBytes,
+    focusDocumentPaths: result.focusDocumentPaths,
     contextualFallbackCandidates:
       inputs.query.kind === "natural-language" && inputs.targetDecision.kind === "contextual"
         ? captureContextualFallbackCandidates(result.atoms, diagnostics)
@@ -3068,6 +3237,7 @@ interface RingDecisionAudit {
 
 interface RingRunSummary {
   readonly contextualDefinitionSeedCount?: number | undefined;
+  readonly focusDocumentPaths?: readonly string[] | undefined;
   readonly contextualFallbackCandidates?: readonly ContextualFallbackCandidate[] | undefined;
   readonly routeCoverage?: RouteTraceCoverage | undefined;
   readonly explicitAdmission?: ExplicitPathAdmission;
@@ -3413,6 +3583,7 @@ interface RingEvidenceAccumulator {
   symbolDiscovery?: SymbolDiscoveryResult;
   verifiedDefinitionContext?: boolean;
   knownFitFileBytes?: ReadonlyMap<string, number> | undefined;
+  focusDocumentPaths?: readonly string[] | undefined;
   atoms: EvidenceAtom[];
   omitted: OmittedContextEntry[];
   uncertainty: UncertaintyMarker[];
@@ -3432,6 +3603,7 @@ function newRingEvidence(): RingEvidenceAccumulator {
 }
 function appendRingEvidence(evidence: RingEvidenceAccumulator, result: RingResult): void {
   evidence.knownFitFileBytes ??= result.knownFitFileBytes;
+  evidence.focusDocumentPaths ??= result.focusDocumentPaths;
   evidence.endpointContentIdentities =
     result.endpointContentIdentities ?? evidence.endpointContentIdentities;
   if (evidence.diagnostics === undefined) {
@@ -9910,7 +10082,11 @@ async function prepareGroundedAssembly(
   // Bounded small-document extraction for explicit `files` scopes (Issue #1285). Returns empty
   // evidence for every other scope kind, leaving the code-first path byte-identical.
   const documentEvidence = await collectConnectedDocumentEvidence({
-    scope: documentSelectionScope(input.scope, augmentedRings.explicitAdmission),
+    scope: documentSelectionScope(
+      input.scope,
+      augmentedRings.explicitAdmission,
+      augmentedRings.focusDocumentPaths,
+    ),
     query: input.query,
     searchScope,
     fs,
@@ -9955,11 +10131,14 @@ async function prepareGroundedAssembly(
 function documentSelectionScope(
   scope: SelectedScope,
   admission: ExplicitPathAdmission | undefined,
+  focusDocumentPaths: readonly string[] = [],
 ): SelectedScope {
-  const paths =
-    admission?.selections
+  const paths = [
+    ...(admission?.selections
       .map((selection) => selection.path)
-      .filter(isExtractableConnectedDocumentPath) ?? [];
+      .filter(isExtractableConnectedDocumentPath) ?? []),
+    ...focusDocumentPaths,
+  ];
   if (paths.length === 0) return scope;
   return {
     ...scope,
@@ -10879,8 +11058,12 @@ function sourceReferenceActivityExtra(
 
 function sourceDecisionActivityExtra(
   observation: SourceDecisionObservation,
-): Omit<SourceDecisionObservation, "sourceDescriptorPathCount"> {
-  const { sourceDescriptorPathCount: _sourceDescriptorPathCount, ...source } = observation;
+): Omit<SourceDecisionObservation, "sourceDescriptorPathCount" | "namedDirectoryFocus"> {
+  const {
+    sourceDescriptorPathCount: _sourceDescriptorPathCount,
+    namedDirectoryFocus: _namedDirectoryFocus,
+    ...source
+  } = observation;
   return source;
 }
 
@@ -11195,6 +11378,23 @@ function discoveryChurnActivityExtra(
   };
 }
 
+function namedDirectoryFocusActivityExtra(
+  focus: NamedDirectoryFocusObservation | undefined,
+): Readonly<Record<string, unknown>> {
+  return focus === undefined
+    ? {}
+    : {
+        namedDirectoryFocusState: focus.state,
+        namedDirectoryCount: focus.directoryCount,
+        namedDirectoryAmbiguousTermCount: focus.ambiguousTermCount,
+        namedDirectoryCandidateFileCount: focus.candidateFileCount,
+        namedDirectoryObservedFileCount: focus.observedFileCount,
+        namedDirectoryRetainedFileCount: focus.retainedFileCount,
+        namedDirectoryDocumentCount: focus.documentCount,
+        namedDirectoryChargedBytes: focus.chargedBytes,
+      };
+}
+
 function logSourceEvidenceDetails(
   logger: ServerLogger,
   identity: ConnectedContextActivityIdentity,
@@ -11208,6 +11408,7 @@ function logSourceEvidenceDetails(
       : {
           activityDetailStatus: "complete" as const,
           sourceDescriptorPathCount: observed.sourceDescriptorPathCount,
+          ...namedDirectoryFocusActivityExtra(observed.namedDirectoryFocus),
         };
   logger.info(() =>
     activityLogEvent(
