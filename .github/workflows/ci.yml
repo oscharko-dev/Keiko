@@ -63,12 +63,14 @@ permissions: {}
 # indistinguishable from a real defect, and that evidence binds an integration commit nothing else
 # re-measures (Issue #2704).
 concurrency:
-  # Code-head and metadata events cannot displace one another before either starts. Each class
-  # coalesces independently per PR; pushes supersede stale code evidence, while repeated metadata
-  # edits supersede stale metadata evidence. Non-PR integration runs remain groups of one. Both
-  # classes analyze the same SonarCloud pull request, so `coverage-sonar` serializes that per PR.
-  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.action == 'edited' && 'metadata' || 'code-head') || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One group per pull request (ADR-0157 D5, amended 2026-11-21). A push or a base retarget cancels
+  # the run in flight, whose candidate it replaced. A title or body edit cancels nothing: it waits
+  # as the pending run until the run in flight finishes and then reuses that run's evidence when the
+  # candidate merge tree is unchanged (ADR-0178 D6), so an edit right after a push costs one short
+  # run instead of a second full matrix. Every pull-request run checks the title and body it carries,
+  # so a run that replaces a pending one loses no metadata verdict. Non-PR runs remain groups of one.
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action != 'edited' || github.event.changes.base != null) }}
 
 jobs:
   protected-branch-gate:
@@ -218,8 +220,43 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      # The review-bot suppression gate reads only the title and body of this event, so it runs
+      # here, before the resolver: a title- or body-only edit that reuses the earlier evidence of
+      # its candidate merge tree (ADR-0178 D6) still has its metadata checked (Core quality runs
+      # the same gate in a full matrix).
+      - name: Reject review-bot suppression in the pull-request metadata
+        if: ${{ github.event_name == 'pull_request' }}
+        run: node scripts/check-review-bot-suppression.mjs
+      # The name of this artifact records the candidate merge tree this run measures and the base it
+      # was built on. A later title- or body-only edit reuses this run's evidence only when it would
+      # measure exactly the same tree on the same base; a moved `dev` changes both.
+      - name: Record the candidate merge tree
+        id: candidate
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          if [ "$(git rev-parse HEAD)" != "${KEIKO_CANDIDATE_SHA}" ]; then
+            echo "The checkout is not the candidate merge commit of this event."
+            exit 1
+          fi
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          mkdir -p "${RUNNER_TEMP}/candidate-tree"
+          printf '%s\n' "${tree}" > "${RUNNER_TEMP}/candidate-tree/tree.txt"
+          echo "tree=${tree}" >> "${GITHUB_OUTPUT}"
+      - name: Bind this run's evidence to its candidate merge tree
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-candidate-tree-${{ steps.candidate.outputs.tree }}-base-${{ github.event.pull_request.base.sha }}
+          path: ${{ runner.temp }}/candidate-tree/tree.txt
+          if-no-files-found: error
+          # A re-run of every job uploads the same name in the same run; the tree is the same.
+          overwrite: true
+          retention-days: 30
       - id: resolve
         env:
+          KEIKO_CANDIDATE_TREE_SHA: ${{ steps.candidate.outputs.tree }}
           KEIKO_EVENT_NAME: ${{ github.event_name }}
           KEIKO_HEAD_SHA: ${{ github.sha }}
           KEIKO_REPOSITORY: ${{ github.repository }}
@@ -867,16 +904,17 @@ jobs:
       - coverage-scripts
       - coverage-ui
     runs-on: ubuntu-latest
-    # One SonarCloud analysis per pull request at a time (ADR-0157 D5). A title or body edit reruns
-    # the matrix on the unchanged head in the separate `metadata` group, and SonarCloud refuses a
-    # report whose analysis is older than one it has already processed for the pull request: on
-    # PR #3679 the push run's scan started first, finished last, was refused, and left the required
-    # `SonarCloud Code Analysis` check on the head `cancelled` with the quality gate OK. Serialized, a
-    # scan starts only after the previous one has submitted, so reports arrive in analysis order.
-    # Keyed on the pull request, not the head: a superseded run's scan files under the same pull
-    # request. Not cancelled: the waiting run still owes its own verdict. One pending slot suffices,
-    # because each workflow-level group holds one live run per pull request. Everything that is not
-    # a pull request keeps a group of one, for the reason the workflow-level `concurrency` records.
+    # One SonarCloud analysis per pull request at a time (ADR-0157 D5). SonarCloud refuses a report
+    # whose analysis is older than one it has already processed for the pull request: on PR #3679 a
+    # body edit's run scanned next to the push run, the push run's scan finished last, was refused,
+    # and left the required `SonarCloud Code Analysis` check on the head `cancelled`. Pull-request
+    # runs no longer scan (ADR-0131, amended 2026-11-21) and share one workflow-level group per pull
+    # request, but the group stays: should a pull-request scan ever return, reports still arrive in
+    # analysis order. Keyed on the pull request, not the head: a superseded run's scan files under
+    # the same pull request. Not cancelled: the waiting run still owes its own verdict. One pending
+    # slot suffices, because the workflow-level group holds one live run per pull request.
+    # Everything that is not a pull request keeps a group of one, for the reason the workflow-level
+    # `concurrency` records.
     concurrency:
       group: ci-sonar-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
       cancel-in-progress: false

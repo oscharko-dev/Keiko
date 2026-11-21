@@ -221,7 +221,9 @@ describe("every expensive job is gated on proven-tree evidence", () => {
 describe("the resolver refuses every event that may not reuse", () => {
   // An EMPTY event name is refused one step earlier, by the required-variable check, so it is
   // asserted separately below rather than here.
-  it.each(["pull_request", "workflow_dispatch", "schedule", "pushy", "Push", "MERGE_GROUP"])(
+  // `pull_request` is admitted only for a title- or body-only edit (ADR-0178 D6); every other
+  // pull-request event is refused before any lookup by the describe block that follows.
+  it.each(["workflow_dispatch", "schedule", "pushy", "Push", "MERGE_GROUP"])(
     "refuses event %s on the event itself, before any lookup",
     (event) => {
       const outcome = runResolver({
@@ -251,6 +253,49 @@ describe("the resolver refuses every event that may not reuse", () => {
     });
     expect(outcome.verified).toBe("false");
     expect(outcome.reason).toContain("missing required environment variable");
+  });
+});
+
+// ADR-0178 D6 admits exactly one pull-request event, a title- or body-only edit. Every other
+// pull-request event, a base retarget included, is refused on its payload before any lookup; the
+// unusable token would otherwise change the reason.
+describe("the resolver refuses every pull-request event but a title or body edit", () => {
+  const head = { sha: "1".repeat(40) };
+  it.each([
+    ["opened", { action: "opened", pull_request: { head } }],
+    ["synchronize", { action: "synchronize", pull_request: { head } }],
+    ["reopened", { action: "reopened", pull_request: { head } }],
+    ["ready_for_review", { action: "ready_for_review", pull_request: { head } }],
+    ["a base retarget", { action: "edited", changes: { base: {} }, pull_request: { head } }],
+    [
+      "a base and body edit",
+      { action: "edited", changes: { base: {}, body: {} }, pull_request: { head } },
+    ],
+  ])("refuses %s on the payload, before any lookup", (_label, event) => {
+    const eventPath = join(mkdtempSync(join(tmpdir(), "keiko-resolver-event-")), "event.json");
+    writeFileSync(eventPath, JSON.stringify(event));
+    const outcome = runResolver({
+      GITHUB_EVENT_PATH: eventPath,
+      KEIKO_CANDIDATE_TREE_SHA: "2".repeat(40),
+      KEIKO_EVENT_NAME: "pull_request",
+      KEIKO_REPOSITORY: "oscharko-dev/Keiko",
+      KEIKO_HEAD_SHA: "0".repeat(40),
+      KEIKO_TOKEN: "unused-the-event-is-refused-first",
+    });
+    expect(outcome.verified).toBe("false");
+    expect(outcome.reason).toContain("only a title or body edit may reuse pull-request evidence");
+  });
+
+  it("refuses a pull-request event without a payload", () => {
+    const outcome = runResolver({
+      GITHUB_EVENT_PATH: "",
+      KEIKO_EVENT_NAME: "pull_request",
+      KEIKO_REPOSITORY: "oscharko-dev/Keiko",
+      KEIKO_HEAD_SHA: "0".repeat(40),
+      KEIKO_TOKEN: "unused",
+    });
+    expect(outcome.verified).toBe("false");
+    expect(outcome.reason).toContain("pull-request event payload is unavailable");
   });
 });
 

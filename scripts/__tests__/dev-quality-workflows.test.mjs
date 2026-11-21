@@ -58,14 +58,43 @@ function runCiAggregate(overrides = {}) {
 }
 
 describe("dev quality workflows", () => {
+  // ADR-0157 D5 (amended 2026-11-21): a metadata edit still produces its own required verdict, and
+  // it never cancels the code-head run in flight. It waits in the pull request's one group and then
+  // reuses that run's evidence for an unchanged candidate merge tree (ADR-0178 D6). A push or a base
+  // retarget replaces the candidate and cancels the run that measures the old one.
   it("reruns CI for metadata edits without displacing code-head evidence", () => {
     expect(ciWorkflow.on.pull_request.types).toContain("edited");
     expect(ciWorkflow.concurrency.group).toBe(
-      "ci-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.action == 'edited' && 'metadata' || 'code-head') || github.run_id }}",
+      "ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}",
     );
     expect(ciWorkflow.concurrency["cancel-in-progress"]).toBe(
-      "${{ github.event_name == 'pull_request' }}",
+      "${{ github.event_name == 'pull_request' && (github.event.action != 'edited' || github.event.changes.base != null) }}",
     );
+  });
+
+  // The reuse is only sound while the edit run checks the metadata it carries and every
+  // pull-request run records the candidate merge tree it measured.
+  it("checks the metadata and records the candidate merge tree before the resolver", () => {
+    const steps = ciWorkflow.jobs["verified-tree"].steps;
+    const index = (name) => steps.findIndex((step) => step.name === name);
+    const suppression = index("Reject review-bot suppression in the pull-request metadata");
+    const record = index("Record the candidate merge tree");
+    const bind = index("Bind this run's evidence to its candidate merge tree");
+    const resolve = steps.findIndex((step) => step.id === "resolve");
+    expect(suppression).toBeGreaterThan(-1);
+    expect(steps[suppression].run).toBe("node scripts/check-review-bot-suppression.mjs");
+    expect(steps[suppression].if).toBe("${{ github.event_name == 'pull_request' }}");
+    expect(record).toBeGreaterThan(suppression);
+    expect(steps[record].run).toContain('"$(git rev-parse HEAD)" != "${KEIKO_CANDIDATE_SHA}"');
+    expect(steps[record].env.KEIKO_CANDIDATE_SHA).toBe("${{ github.sha }}");
+    expect(bind).toBeGreaterThan(record);
+    expect(steps[bind].with.name).toBe(
+      "ci-candidate-tree-${{ steps.candidate.outputs.tree }}-base-${{ github.event.pull_request.base.sha }}",
+    );
+    expect(steps[bind].with["if-no-files-found"]).toBe("error");
+    expect(steps[bind].with.overwrite).toBe(true);
+    expect(resolve).toBeGreaterThan(bind);
+    expect(steps[resolve].env.KEIKO_CANDIDATE_TREE_SHA).toBe("${{ steps.candidate.outputs.tree }}");
   });
 
   // PR #3679: a body edit 48 s after a push put two scans of one pull request in flight, SonarCloud
@@ -85,15 +114,14 @@ describe("dev quality workflows", () => {
     // Outside the workflow-level namespace: a job-level group equal to a run's group would queue the
     // job behind runs, its own included.
     expect(concurrency.group.startsWith("ci-sonar-")).toBe(true);
-    // One pending slot holds only while each pull request has exactly two workflow-level classes that
-    // each cancel their superseded run. A third scan in the group would make GitHub cancel the older
-    // pending one, and that run's required `ci` would turn red.
-    expect(ciWorkflow.concurrency.group.match(/'(?:metadata|code-head)'/gu)).toEqual([
-      "'metadata'",
-      "'code-head'",
-    ]);
-    expect(ciWorkflow.concurrency["cancel-in-progress"]).toBe(
-      "${{ github.event_name == 'pull_request' }}",
+    // One pending slot holds only while a pull request has at most one live workflow-level run, so
+    // at most one scan can wait. A second contender in the group would make GitHub cancel the older
+    // pending one, and that run's required `ci` would turn red. Since 2026-11-21 the workflow-level
+    // group is ONE per pull request, never keyed on the event action, which is stricter than the
+    // two classes this pin first held.
+    expect(ciWorkflow.concurrency.group).not.toContain("github.event.action");
+    expect(ciWorkflow.concurrency.group).toContain(
+      "format('pr-{0}', github.event.pull_request.number)",
     );
   });
 

@@ -21,7 +21,19 @@
 //   * any API error, malformed payload, or unreadable field -> no reuse
 // Because a workflow file lives inside the tree, editing CI itself changes the tree and forces a
 // full run by construction. There is no path by which reuse can outlive the evidence it cites.
+//
+// One pull-request event may reuse evidence too (ADR-0178 D6): an `edited` event that changed only
+// the title or the body. It changes no byte a gate reads except the metadata the review-bot
+// suppression gate checks, and the `Verified tree` job runs that gate itself before this resolver.
+// The binding is the candidate MERGE tree, not the head commit: `dev` may have moved since the
+// earlier run, and a merge candidate built on another base is another tree. Every pull-request run
+// records its merge tree and its base as the name of an artifact, so a later edit run reuses an
+// earlier run only when that run measured exactly the tree, on the base, this run would measure:
+//   * any other pull-request action, a base retarget or an unreadable payload -> no reuse
+//   * no completed green `pull_request` run on this head that executed every reused job -> no reuse
+//   * that run recorded a different candidate merge tree or base, or none -> no reuse
 
+import { readFileSync } from "node:fs";
 import { appendFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
@@ -52,6 +64,13 @@ export const REUSED_JOB_NAMES = Object.freeze([
 export const REUSED_JOB_PREFIXES = Object.freeze(["Cross-platform smoke"]);
 
 const API_ROOT = "https://api.github.com";
+
+/** Prefix of the artifact whose name records the candidate merge tree a pull-request run measured. */
+export const CANDIDATE_TREE_ARTIFACT_PREFIX = "ci-candidate-tree-";
+
+/** The only `changes` keys of an `edited` event whose evidence a pull-request run may reuse. */
+const METADATA_ONLY_CHANGES = new Set(["title", "body"]);
+const SHA = /^[0-9a-f]{40}$/u;
 
 /** @typedef {{ verified: false, reason: string }} NotVerified */
 /** @typedef {{ verified: true, runId: number, headSha: string, treeSha: string }} Verified */
@@ -100,7 +119,7 @@ export async function resolveTreeSha(repo, sha, token) {
   const commit = await api(`/repos/${repo}/commits/${sha}`, token);
   const treeSha = /** @type {{ commit?: { tree?: { sha?: unknown } } }} */ (commit).commit?.tree
     ?.sha;
-  if (typeof treeSha !== "string" || !/^[0-9a-f]{40}$/.test(treeSha)) {
+  if (typeof treeSha !== "string" || !SHA.test(treeSha)) {
     throw new Error(`commit ${sha} returned no usable tree sha`);
   }
   return treeSha;
@@ -167,9 +186,16 @@ export function acceptMergedPullCandidate(pull, sha) {
  * @param {string} headSha
  * @param {string} workflowFile
  * @param {string} token
+ * @param {(runId: number) => Promise<boolean>} [alsoRequired] a further binding the run must prove
  * @returns {Promise<{ runId: number } | null>}
  */
-export async function resolveGreenPullRequestRun(repo, headSha, workflowFile, token) {
+export async function resolveGreenPullRequestRun(
+  repo,
+  headSha,
+  workflowFile,
+  token,
+  alsoRequired = async () => true,
+) {
   const runs = await api(
     `/repos/${repo}/actions/workflows/${workflowFile}/runs?head_sha=${headSha}&event=pull_request&status=success&per_page=20`,
     token,
@@ -183,7 +209,10 @@ export async function resolveGreenPullRequestRun(repo, headSha, workflowFile, to
     if (typeof run.id !== "number" || run.conclusion !== "success") {
       continue;
     }
-    if (await candidateProvedEveryReusedJob(repo, run.id, token)) {
+    if (
+      (await candidateProvedEveryReusedJob(repo, run.id, token)) &&
+      (await alsoRequired(run.id))
+    ) {
       return { runId: run.id };
     }
   }
@@ -219,18 +248,140 @@ export async function candidateProvedEveryReusedJob(repo, runId, token) {
 }
 
 /**
+ * Decide whether a pull-request event changed nothing but its title or body, and return the head
+ * and base it binds. Pure, so every refusal is directly provable: any other action, a base
+ * retarget, an empty or malformed `changes` object, or an unusable head or base yields `null`.
+ * @param {unknown} event
+ * @returns {{ headSha: string, baseSha: string } | null}
+ */
+export function acceptMetadataOnlyEdit(event) {
+  const payload =
+    /** @type {{ action?: unknown, changes?: unknown, pull_request?: { head?: { sha?: unknown }, base?: { sha?: unknown } } }} */ (
+      event
+    );
+  if (payload?.action !== "edited" || !changesOnlyMetadata(payload.changes)) {
+    return null;
+  }
+  const headSha = payload.pull_request?.head?.sha;
+  const baseSha = payload.pull_request?.base?.sha;
+  return isSha(headSha) && isSha(baseSha) ? { headSha, baseSha } : null;
+}
+
+/**
+ * @param {unknown} value
+ * @returns {value is string}
+ */
+function isSha(value) {
+  return typeof value === "string" && SHA.test(value);
+}
+
+/**
+ * @param {unknown} changes
+ * @returns {boolean}
+ */
+function changesOnlyMetadata(changes) {
+  if (changes === null || typeof changes !== "object" || Array.isArray(changes)) {
+    return false;
+  }
+  const keys = Object.keys(changes);
+  return keys.length > 0 && keys.every((key) => METADATA_ONLY_CHANGES.has(key));
+}
+
+/**
+ * The artifact name that records a candidate merge tree and the base it was built on. The base is
+ * part of the binding because some gates read the event's base sha (the changed-file ranges), so
+ * an identical tree on another base is not the same measurement.
+ * @param {string} treeSha
+ * @param {string} baseSha
+ * @returns {string}
+ */
+export function candidateTreeArtifactName(treeSha, baseSha) {
+  if (!isSha(treeSha) || !isSha(baseSha)) {
+    throw new TypeError("candidate tree and base sha must be 40 lowercase hex characters");
+  }
+  return `${CANDIDATE_TREE_ARTIFACT_PREFIX}${treeSha}-base-${baseSha}`;
+}
+
+/**
+ * Whether a run recorded exactly this candidate merge tree on exactly this base.
+ * @param {string} repo
+ * @param {number} runId
+ * @param {{ treeSha: string, baseSha: string }} candidate
+ * @param {string} token
+ * @returns {Promise<boolean>}
+ */
+export async function runRecordedCandidateTree(repo, runId, candidate, token) {
+  const name = candidateTreeArtifactName(candidate.treeSha, candidate.baseSha);
+  const payload = await api(
+    `/repos/${repo}/actions/runs/${runId}/artifacts?name=${name}&per_page=100`,
+    token,
+  );
+  const artifacts = /** @type {{ artifacts?: unknown }} */ (payload).artifacts;
+  if (!Array.isArray(artifacts)) {
+    return false;
+  }
+  return artifacts.some(
+    (artifact) =>
+      /** @type {{ name?: unknown, workflow_run?: { id?: unknown } }} */ (artifact).name === name &&
+      /** @type {{ workflow_run?: { id?: unknown } }} */ (artifact).workflow_run?.id === runId,
+  );
+}
+
+/**
+ * Decide whether a title- or body-only edit may reuse an earlier run's evidence for the same
+ * candidate merge tree.
+ * @param {string} repo
+ * @param {string} token
+ * @param {string} workflowFile
+ * @returns {Promise<Verified | NotVerified>}
+ */
+export async function resolvePullRequestEditEvidence(repo, token, workflowFile) {
+  const eventPath = process.env.GITHUB_EVENT_PATH?.trim() ?? "";
+  if (eventPath === "") {
+    return { verified: false, reason: "pull-request event payload is unavailable" };
+  }
+  const edit = acceptMetadataOnlyEdit(JSON.parse(readFileSync(eventPath, "utf8")));
+  if (edit === null) {
+    return {
+      verified: false,
+      reason: "only a title or body edit may reuse pull-request evidence",
+    };
+  }
+  const treeSha = requireEnv("KEIKO_CANDIDATE_TREE_SHA");
+  const candidate = { treeSha, baseSha: edit.baseSha };
+  candidateTreeArtifactName(candidate.treeSha, candidate.baseSha);
+  const green = await resolveGreenPullRequestRun(repo, edit.headSha, workflowFile, token, (runId) =>
+    runRecordedCandidateTree(repo, runId, candidate, token),
+  );
+  if (green === null) {
+    return {
+      verified: false,
+      reason: `head ${edit.headSha} has no complete green CI run on candidate tree ${treeSha} and base ${edit.baseSha}`,
+    };
+  }
+  return { verified: true, runId: green.runId, headSha: edit.headSha, treeSha };
+}
+
+/**
  * Decide whether this run may reuse pull-request evidence for its exact tree.
  * @returns {Promise<Verified | NotVerified>}
  */
 export async function resolveEvidence() {
   const eventName = requireEnv("KEIKO_EVENT_NAME");
+  const workflowFile = process.env.KEIKO_WORKFLOW_FILE?.trim() || "ci.yml";
+  if (eventName === "pull_request") {
+    return resolvePullRequestEditEvidence(
+      requireEnv("KEIKO_REPOSITORY"),
+      requireEnv("KEIKO_TOKEN"),
+      workflowFile,
+    );
+  }
   if (eventName !== "push" && eventName !== "merge_group") {
     return { verified: false, reason: `event ${eventName} always runs the full matrix` };
   }
   const repo = requireEnv("KEIKO_REPOSITORY");
   const sha = requireEnv("KEIKO_HEAD_SHA");
   const token = requireEnv("KEIKO_TOKEN");
-  const workflowFile = process.env.KEIKO_WORKFLOW_FILE?.trim() || "ci.yml";
 
   const pull = await resolveMergedPullRequest(repo, sha, token);
   if (pull === null) {

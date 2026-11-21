@@ -266,6 +266,10 @@ describe("resolveEvidence", () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
+    // A CI runner sets GITHUB_EVENT_PATH to its own event; an `edited` run would otherwise drive
+    // the pull-request branch with that payload instead of the fixture below.
+    delete process.env.GITHUB_EVENT_PATH;
+    delete process.env.KEIKO_CANDIDATE_TREE_SHA;
     process.env.KEIKO_EVENT_NAME = "push";
     process.env.KEIKO_REPOSITORY = REPO;
     process.env.KEIKO_HEAD_SHA = SHA;
