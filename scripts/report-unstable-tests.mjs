@@ -168,9 +168,24 @@ export function vitestPlan(argv) {
   return { shard, seeds, filters: end === -1 ? [] : argv.slice(end + 1) };
 }
 
+/**
+ * The verdicts of one run, once its exit is explained. Vitest exits 1 when a test failed, which the
+ * report carries; an exit without a failed verdict (an unhandled error, a teardown failure) or a
+ * killed run is a measurement failure, since its report can show every test passed.
+ */
+export function explainedVerdicts(result, verdicts, seed) {
+  const failed = [...verdicts.values()].includes("failed");
+  if (result.status === 0 || (result.status === 1 && failed)) return verdicts;
+  const exit =
+    result.status === null ? `signal ${String(result.signal)}` : `exit ${String(result.status)}`;
+  throw new Error(
+    `the run with seed ${String(seed)} ended with ${exit} that no failed test explains`,
+  );
+}
+
 function runVitest({ shard, filters }, seed, directory) {
   const output = join(directory, `run-${String(seed)}.json`);
-  spawnSync(
+  const result = spawnSync(
     process.execPath,
     [
       VITEST_BIN,
@@ -185,7 +200,7 @@ function runVitest({ shard, filters }, seed, directory) {
     ],
     { cwd: ROOT, stdio: "inherit" },
   );
-  return vitestVerdicts(JSON.parse(readFileSync(output, "utf8")));
+  return explainedVerdicts(result, vitestVerdicts(JSON.parse(readFileSync(output, "utf8"))), seed);
 }
 
 function measureVitest(argv) {

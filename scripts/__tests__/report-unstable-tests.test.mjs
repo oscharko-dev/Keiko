@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   classify,
   executedTestCount,
+  explainedVerdicts,
   formatReport,
   mergeVerdicts,
   playwrightSamples,
@@ -262,5 +263,26 @@ describe("executedTestCount", () => {
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("explainedVerdicts", () => {
+  const passing = new Map([["a.test.ts > x", "passed"]]);
+  const failing = new Map([["a.test.ts > x", "failed"]]);
+
+  it("keeps a clean run and a run whose exit a failed test explains", () => {
+    expect(explainedVerdicts({ status: 0, signal: null }, passing, 1)).toBe(passing);
+    expect(explainedVerdicts({ status: 1, signal: null }, failing, 1)).toBe(failing);
+  });
+
+  it("refuses a nonzero exit while every reported test passed, and a killed run", () => {
+    // CodeRabbit on #4513: an unhandled error or a teardown failure fails the run, not a test.
+    expect(() => explainedVerdicts({ status: 1, signal: null }, passing, 7)).toThrow(
+      "seed 7 ended with exit 1",
+    );
+    expect(() => explainedVerdicts({ status: 2, signal: null }, failing, 7)).toThrow("exit 2");
+    expect(() => explainedVerdicts({ status: null, signal: "SIGKILL" }, failing, 7)).toThrow(
+      "signal SIGKILL",
+    );
   });
 });
