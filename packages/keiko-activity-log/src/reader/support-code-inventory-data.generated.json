@@ -786,6 +786,7 @@
     "keiko-local-knowledge/retrieval/vector-index",
     "keiko-local-knowledge/retrieval/vector-scoring",
     "keiko-local-knowledge/section-path-hash",
+    "keiko-local-knowledge/seed-lexical-rows",
     "keiko-local-knowledge/source-lifecycle",
     "keiko-local-knowledge/source-routing-validation",
     "keiko-local-knowledge/sql-row",

@@ -23,11 +23,10 @@ import {
   insertParsedUnitRow,
 } from "./discovery/persist.js";
 import { embedChunkBatch } from "./indexing/embedding-batcher.js";
-import { replaceLexicalRowsForDocument } from "./indexing/lexical-index-persist.js";
 import type { ChunkToEmbed } from "./indexing/types.js";
 import { addSourceToCapsule, type AddCapsuleSourceInput } from "./source-lifecycle.js";
-import { nullableNumberColumn, textColumn, type KnowledgeSqlRow } from "./sql-row.js";
 import type { KnowledgeStore } from "./store.js";
+import { indexSeedLexicalRows } from "./seed-lexical-rows.js";
 
 const DEFAULT_EMBEDDING: EmbeddingModelIdentity = {
   provider: "openai",
@@ -295,66 +294,6 @@ async function embedSeedChunks(
       return `storage-${String(counter)}`;
     },
   });
-}
-
-interface SeedChunkSpanRow {
-  readonly id: string;
-  readonly source_id: string;
-  readonly character_start: number | null;
-  readonly character_end: number | null;
-}
-
-function seedChunkSpanRow(row: KnowledgeSqlRow): SeedChunkSpanRow {
-  return {
-    id: textColumn(row, "id"),
-    source_id: textColumn(row, "source_id"),
-    character_start: nullableNumberColumn(row, "character_start"),
-    character_end: nullableNumberColumn(row, "character_end"),
-  };
-}
-
-function indexSeedLexicalRows(
-  store: KnowledgeStore,
-  options: ResolvedSeedOptions,
-  chunkIds: readonly ChunkId[],
-): void {
-  if (chunkIds.length === 0) {
-    replaceLexicalRowsForDocument(store._internal.db, options.capsuleId, options.documentId, []);
-    return;
-  }
-  const rows = store._internal.db
-    .prepare(
-      [
-        "SELECT id, source_id, character_start, character_end",
-        "FROM chunks",
-        "WHERE capsule_id = :c AND document_id = :d",
-        "ORDER BY order_index ASC",
-      ].join(" "),
-    )
-    .all({
-      c: String(options.capsuleId),
-      d: String(options.documentId),
-    })
-    .map(seedChunkSpanRow);
-  replaceLexicalRowsForDocument(
-    store._internal.db,
-    options.capsuleId,
-    options.documentId,
-    rows.map((row) => {
-      const start = row.character_start ?? 0;
-      const end = row.character_end ?? options.text.length;
-      const text = options.text.slice(start, end);
-      return {
-        capsuleId: options.capsuleId,
-        sourceId: row.source_id as KnowledgeSourceId,
-        documentId: options.documentId,
-        chunkId: row.id as ChunkId,
-        text,
-        exactText: text,
-        updatedAt: 1_700_000_000_000,
-      };
-    }),
-  );
 }
 
 export async function seedCapsuleWithVectors(

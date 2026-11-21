@@ -4303,9 +4303,8 @@
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-local-knowledge/src/retrieval/_support.ts": {
-      "anti-slop/no-chained-type-assertions": 1,
       "anti-slop/no-conditional-empty-object-spread": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 7
+      "anti-slop/require-safety-comment-for-type-assertion": 3
     },
     "packages/keiko-local-knowledge/src/retrieval/answer-grounding.test.ts": {
       "anti-slop/require-safety-comment-for-type-assertion": 6
@@ -4447,7 +4446,7 @@
     "packages/keiko-local-knowledge/src/testing.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1,
       "anti-slop/no-known-value-widening": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 5
+      "anti-slop/require-safety-comment-for-type-assertion": 3
     },
     "packages/keiko-local-knowledge/src/yauzl-version-consistency.test.ts": {
       "anti-slop/no-runtime-typeof": 1,
