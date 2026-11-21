@@ -553,6 +553,9 @@ contract suites pass 634 tests. The full UI follow-up passes 10774 tests with on
 including nineteen deterministic storage lifetime controls. The unchanged original updater
 browser producer passes all nine cases and regenerates its existing evidence.
 `browser-approval-client.json` binds sources, failure-first observations and these scope limits.
+Its `sourceAmendment` records the #3933 type-only change to `browser-approval-key-store.ts`
+(5a0c1dcf9). The owner re-pinned the source digest on 2026-11-21. The real-browser storage runs
+above observed the previous source, and a fresh run against the current source is still owed.
 
 The first private storage harness read the wrong diagnostic metadata path. Its negative telemetry
 assertion was vacuous. The original harness and receipts remain retained; the corrected actual
