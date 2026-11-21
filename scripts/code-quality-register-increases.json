@@ -7578,6 +7578,14 @@
       "issue": 3914
     },
     {
+      "path": "packages/keiko-server/src/store/sql-row.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 2,
+      "reason": "pending-boundary-migration",
+      "issue": 3933
+    },
+    {
       "path": "packages/keiko-server/src/terminal-routes.test.ts",
       "rule": "anti-slop/no-unknown-parameters",
       "from": 1,

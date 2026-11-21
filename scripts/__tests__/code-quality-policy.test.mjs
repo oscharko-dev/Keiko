@@ -81,6 +81,7 @@ const ZERO_FINDING_SCOPES = {
     "evaluations",
     "git",
     "harness",
+    "local-knowledge",
     "mcp",
     "memory-capture",
     "memory-consolidation",
