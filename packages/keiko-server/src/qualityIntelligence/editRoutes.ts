@@ -7,6 +7,7 @@
 // manifest (`<runId>.qi.json`) is never touched. CSRF is enforced by the dispatch layer for POST
 // (mirrors reviewRoutes); the body is capped at 16KB and every field is validated before persist.
 
+import { deepRedactStrings } from "@oscharko-dev/keiko-security";
 import type { IncomingMessage } from "node:http";
 import {
   applyQualityIntelligenceCandidateEdit,
@@ -335,7 +336,8 @@ function recordEdit(
             })),
             editedRevisions: before.editedRevisions,
             evidenceDir,
-            redact: <T>(value: T): T => value,
+            // The rollback rewrites the already redacted artifact as it was.
+            redact: (value) => deepRedactStrings(value, (text) => text),
           });
         } catch {
           // The handler still returns failure below; a rollback failure must not look successful.
