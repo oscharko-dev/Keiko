@@ -452,6 +452,45 @@ export function fullAnalysisEvidenceFailures(contents) {
   return failures;
 }
 
+// The hosted runner runs the scanner engine JVM and the JS/TS analyzer's Node.js process side by
+// side. Their two heap ceilings must leave the operating system, the runner agent and both
+// processes' non-heap memory a fixed reserve; otherwise the runner itself is killed mid-analysis
+// and the job ends without a log (#4481, 2026-11-21: two attempts lost at 5:19 with Node.js 12480 MB
+// and an uncapped 3996 MB engine heap on a 15983 MB runner). SonarJS reports the machine and the
+// Node.js ceiling; the engine reports its committed heap on every architecture graph read.
+const RUNNER_MEMORY_RESERVE_MB = 2048;
+const NODE_MEMORY_CONFIGURATION = /Memory configuration: OS \((\d+) MB\), Node\.js \((\d+) MB\)/u;
+const ENGINE_HEAP_TOTAL = /memory total=(\d+)(?:\s|\|)/u;
+
+function largestMatch(lines, pattern, group) {
+  return lines.reduce((largest, line) => {
+    const match = line.match(pattern);
+    const value = match === null ? undefined : decimalInteger(match[group] ?? "");
+    return value === undefined ? largest : Math.max(largest ?? 0, value);
+  }, undefined);
+}
+
+export function runnerMemoryBudgetFailures(contents) {
+  const lines = contents.split(/\r?\n/u);
+  const osMb = largestMatch(lines, NODE_MEMORY_CONFIGURATION, 1);
+  const nodeMb = largestMatch(lines, NODE_MEMORY_CONFIGURATION, 2);
+  const engineMb = largestMatch(lines, ENGINE_HEAP_TOTAL, 1);
+  if (osMb === undefined || nodeMb === undefined) {
+    return ["no SonarJS memory configuration receipt proves the runner memory budget"];
+  }
+  if (engineMb === undefined) {
+    return ["no scanner engine heap receipt proves the runner memory budget"];
+  }
+  const headroomMb = osMb - nodeMb - engineMb;
+  return headroomMb >= RUNNER_MEMORY_RESERVE_MB
+    ? []
+    : [
+        `runner memory budget: Node.js ${String(nodeMb)} MB plus scanner engine ` +
+          `${String(engineMb)} MB leaves ${String(headroomMb)} MB of ${String(osMb)} MB, below ` +
+          `the ${String(RUNNER_MEMORY_RESERVE_MB)} MB reserve`,
+      ];
+}
+
 export function runSonarLogCheck(input = {}) {
   const path = input.path;
   if (path === undefined) throw new Error("--log is required");
@@ -459,6 +498,7 @@ export function runSonarLogCheck(input = {}) {
   const failures = [
     ...sonarLogFailures(contents),
     ...(input.requireFullAnalysis === true ? fullAnalysisEvidenceFailures(contents) : []),
+    ...(input.requireRunnerMemoryBudget === true ? runnerMemoryBudgetFailures(contents) : []),
   ];
   if (failures.length > 0) throw new Error(failures.join("\n"));
   (input.log ?? console.log)("sonar-analysis-log: PASS - no scanner warnings.");
@@ -469,9 +509,11 @@ export function executeSonarLogCli(input = {}) {
   try {
     const argv = input.argv ?? process.argv.slice(2);
     const requireFullAnalysis = argv.includes("--require-full-analysis");
+    const requireRunnerMemoryBudget = argv.includes("--require-runner-memory-budget");
     (input.run ?? runSonarLogCheck)({
       path: optionValue(argv, "--log"),
       ...(requireFullAnalysis ? { requireFullAnalysis } : {}),
+      ...(requireRunnerMemoryBudget ? { requireRunnerMemoryBudget } : {}),
     });
   } catch (error) {
     (input.error ?? console.error)(
