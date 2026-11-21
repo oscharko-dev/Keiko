@@ -49,9 +49,11 @@ describe("npm-lane runtime approvals", () => {
   // helper instead of a separate local build, so both install kinds share one set of native bytes.
   it("pins one set of Windows native bytes for the npm and the desktop package", () => {
     expect(WINDOWS_PORTABLE_RUNTIME_APPROVAL).toMatchObject({
-      helperSha256: "65cc98c377f0e82494c54a1dd68a5be85fcd7b80272679638579aff23f4ab9e6",
-      helperSizeBytes: 129_024,
-      helperSourceCommit: "1906b6a5f28a4ec51fa93a18a3affade7194a126",
+      // #4068: the bytes the 1.5.4 release build actually shipped (runner image windows-2025-vs2026
+      // 20261116); the release build now refuses to stage helpers that differ from this pin.
+      helperSha256: "8699612eabadc70f95ab969ed259edca8b18a5381c2c577acd2ca835c226ac64",
+      helperSizeBytes: 128_512,
+      helperSourceCommit: "d88ac1cb81652776af37590014afb8482d3cb764",
       helperSourceTreeSha256: "88fb376091f406c3fa63c05d0f963d7ba038f650c0824f893ac77089bb30b28b",
       upstreamVersion: "2.2.5",
       adapterName: "keiko-coding-sidecar",
@@ -78,10 +80,14 @@ describe("npm-lane runtime approvals", () => {
       expect(npm[field], field).toBe(WINDOWS_PORTABLE_RUNTIME_APPROVAL[field]);
     }
     expect(WINDOWS_PORTABLE_RUNTIME_APPROVAL.runtimeSupervisor).toBe(npm.runtimeSupervisor);
-    // The retired local MSVC 14.44 build approves nothing any more.
-    expect(npm.helperSha256).not.toBe(
+    // The retired local MSVC 14.44 build approves nothing any more, and neither does the earlier
+    // runner image's build that no release can reproduce (#4068).
+    for (const retired of [
       "1318171b0544702ef5f0f9f201084767b3182279c99012278812a5dfe27ede4d",
-    );
+      "65cc98c377f0e82494c54a1dd68a5be85fcd7b80272679638579aff23f4ab9e6",
+    ]) {
+      expect(npm.helperSha256).not.toBe(retired);
+    }
     // The service-brokered supervisor that needed an administrator approves nothing any more.
     expect(npm.runtimeSupervisor?.sha256).not.toBe(
       "888130331e49b71d3c29f81cdb0dbae97f4c062d9eea4914a576ee06a8bada52",

@@ -1010,13 +1010,17 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
   package's supervisor; the outcome line names the `npm-runtime-package` lane. Its evidence stays
   `functional-not-platform-qualified`.
   The owner-authorized Windows repair of 2026-11-16 (#4404) additionally admits the independently
-  pinned public 1.5.0 Windows artifact set through this same broker. Discovery must match both
+  pinned public Windows artifact set through this same broker. Discovery must match both
   native-helper digests and sizes, the current OpenCode executable tree, adapter, protocol schema,
   license and SBOM against `WINDOWS_PORTABLE_RUNTIME_APPROVAL` in the existing approvals owner.
   The published manifest was authenticated with Keiko's compiled portable-release key; its helper
   bytes were independently measured in the installed public package. A coherent manifest alone
-  cannot confer this approval. The portable secure-read image differs from the npm image, so its
-  admission is additive and does not replace the npm or dev pins. The CLI outcome records
+  cannot confer this approval. Since 2026-11-17 the npm package carries the same Windows helper and
+  supervisor bytes as the desktop package. A runner image update changed the release build's
+  secure-read bytes for 1.5.4 without a source change, and that release refused every Windows
+  Coding run; the release build (`scripts/stage-portable-runtime.mjs`) now stops when a built
+  Windows helper differs from this approval, so the pin and the shipped bytes cannot drift apart
+  unnoticed (#4068, 2026-11-20). The CLI outcome records
   `portable-evaluation`; `platformAssurance` remains `evaluation-unqualified` and readiness remains
   `functional-not-platform-qualified`. Unapproved artifacts, signed-install downgrade attempts,
   changed bytes and unsupported install volumes retain their refusals. No platform qualification,
