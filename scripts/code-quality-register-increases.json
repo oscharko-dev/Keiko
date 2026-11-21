@@ -47,7 +47,7 @@
       "from": 0,
       "to": 2,
       "reason": "pending-boundary-migration",
-      "issue": 3933
+      "issue": 3955
     },
     {
       "path": "packages/keiko-cli/src/error-code.ts",
@@ -55,7 +55,7 @@
       "from": 0,
       "to": 1,
       "reason": "pending-boundary-migration",
-      "issue": 3933
+      "issue": 3955
     },
     {
       "path": "packages/keiko-connectors/src/atlassian-write-http.ts",

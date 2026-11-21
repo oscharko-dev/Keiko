@@ -34,7 +34,6 @@ import {
   type VaultSqlRow,
 } from "./statements.js";
 import {
-  isAdmittedIdText,
   memoryIdColumn,
   STORED_MEMORY_SCOPE_KINDS,
   STORED_MEMORY_STATUSES,
@@ -43,8 +42,9 @@ import {
 import { sanitizeMemoryTombstoneReason } from "./tombstone-reason.js";
 import { BYTES_PER_FLOAT32, decodeVectorLE, encodeVectorLE } from "./embeddings.js";
 
+// The vault's delete-option gate admits a reviewer id that is merely non-empty (validate.ts).
 function isStoredMemoryReviewerId(value: string): value is MemoryReviewerId {
-  return isAdmittedIdText(value);
+  return value.length > 0;
 }
 
 interface TombstoneRow {
