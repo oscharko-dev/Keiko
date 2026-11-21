@@ -1,4 +1,4 @@
-# Public API surface — 1.5.4
+# Public API surface — 1.5.5
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -111,6 +111,8 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 
 ## Stability notes
 
+- 1.5.5: CLI entrypoints, root exports and UI stores are unchanged; the Windows coding-runtime
+  package pin moves to 1.1.7 (#4068).
 - 1.5.4: CLI entrypoints remain stable, and no root export is removed. The root barrel adds the
   constant `ISOLATION_UNAVAILABLE_DENIAL_PREFIX`, the closed opening of a verification step denied
   because no enforcing isolation backend is qualified on the computer. Windows coding runs are confined without an

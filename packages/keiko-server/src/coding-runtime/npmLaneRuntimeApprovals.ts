@@ -62,14 +62,18 @@ const HELPER_MACOS_X64 = {
 } as const;
 
 // The Windows release build (owner decision 2026-11-17, "Ja, umstellen"): the portable release's
-// secure-read image, built by the release workflow with MSVC 14.51 and `/Brepro` at
-// `1906b6a5f28a…` from the unchanged helper source tree. The npm package and the desktop package now
-// carry the same Windows helper and supervisor bytes. The earlier local MSVC 14.44 build
-// (`1318171b…`) is no longer approved; no package with it was ever published.
+// secure-read image, built by the release workflow with `/Brepro` from the unchanged helper source
+// tree. The npm package and the desktop package carry the same Windows helper and supervisor bytes.
+// The 1.5.4 release build (`d88ac1cb8…`, runner image windows-2025-vs2026 20261116) produced these
+// bytes; the earlier image's `65cc98c3…` (129,024 bytes, built at `1906b6a5f28a…`) no longer
+// matched what a release ships, so 1.5.4's Windows Workbench refused to start (#4068). The release
+// build now stops when its helpers differ from these pins (scripts/stage-portable-runtime.mjs).
+// The local MSVC 14.44 build (`1318171b…`) and `65cc98c3…` approve nothing any more. `65cc98c3…` is
+// the helper of the npm runtime package 1.1.6, which Keiko 1.5.4 approves and this version refuses.
 const HELPER_WINDOWS_X64 = {
-  helperSha256: "65cc98c377f0e82494c54a1dd68a5be85fcd7b80272679638579aff23f4ab9e6",
-  helperSizeBytes: 129_024,
-  helperSourceCommit: "1906b6a5f28a4ec51fa93a18a3affade7194a126",
+  helperSha256: "8699612eabadc70f95ab969ed259edca8b18a5381c2c577acd2ca835c226ac64",
+  helperSizeBytes: 128_512,
+  helperSourceCommit: "d88ac1cb81652776af37590014afb8482d3cb764",
 } as const;
 
 const RUNTIME_SUPERVISOR_WINDOWS_X64: NpmLaneRuntimeSupervisorApproval = Object.freeze({
@@ -115,12 +119,13 @@ export const NPM_LANE_RUNTIME_APPROVALS: Readonly<
 });
 
 /**
- * The published Windows 1.5.0 artifact set (#4404), independently authenticated with the existing
+ * The Windows desktop artifact set (#4404), independently authenticated with the existing
  * portable-release key. Its supervisor, secure-read image and OpenCode are the same approved bytes
  * as the npm lane (one set of Windows native bytes for both install kinds, 2026-11-17).
- * Source: v1.5.0/windows-x64-portable-manifest.json, release metadata 446705441, commit
- * 1906b6a5f28a4ec51fa93a18a3affade7194a126. These pins permit the existing functional broker lane;
- * they are not Authenticode or platform-qualification evidence.
+ * Source: v1.5.4/windows-x64-portable-manifest.json, commit
+ * d88ac1cb81652776af37590014afb8482d3cb764. The release build refuses to stage helpers that differ
+ * from these pins. These pins permit the existing functional broker lane; they are not Authenticode
+ * or platform-qualification evidence.
  */
 export const WINDOWS_PORTABLE_RUNTIME_APPROVAL: CodingRuntimeArtifactApproval = Object.freeze({
   ...SHARED,

@@ -426,3 +426,14 @@ The release changes the same three of the 29 declared shared inputs (`package.js
 as for release 1.5.3. The other 26 digests match the 1.5.3 input inventory. The proofs retain
 their Linux captures, rendered CSS digest, measurements, tolerances and accessibility records; no
 producer was rerun for this metadata change.
+
+## Release 1.5.5 input metadata — 2026-11-20
+
+The release changes the same three of the 29 declared shared inputs (`package.json`,
+`package-lock.json` and `packages/keiko-ui/package.json`): their version fields and, in the two
+root files, the new optional dependency `@oscharko-dev/keiko-coding-runtime-win32-x64` (#4068),
+which no stylesheet or capture reads. The
+`designEvidenceSourceHashes` producer recalculates the ordered list for each of the four proofs,
+as for release 1.5.4. The other 26 digests match the 1.5.4 input inventory. The proofs retain
+their Linux captures, rendered CSS digest, measurements, tolerances and accessibility records; no
+producer was rerun for this metadata change.

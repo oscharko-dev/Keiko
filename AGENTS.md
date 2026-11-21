@@ -164,7 +164,8 @@ This shapes the product _and_ how you work on it:
   administrator's access step (`Zugang speichern`) writes `keiko.config.json` from the
   configuration Gateway Setup saved and gives the team token only to the gateway connection Gateway
   Setup verified; a provider or reranker with its own connection is refused, never given that token.
-  Windows has no npm coding-runtime package, so this form offers no Coding Workbench on Windows.
+  The Windows form locks `@oscharko-dev/keiko-coding-runtime-win32-x64` exactly like the macOS
+  forms (published 2026-11-20, #4068).
   The folder carries the release's Node.js runtime without `include/`, `share/`, CHANGELOG.md and
   README.md; every kept file stays the archive's, byte for byte. `keiko start` prints one line when
   the running Node.js is outside the `engines` range of the package's own manifest and records the
