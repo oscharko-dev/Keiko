@@ -204,7 +204,11 @@ additional SonarCloud project, paid runner or required context is introduced.
   per job on a hosted runner (run 44932528367), the same as uploading and downloading its output
   as an artifact, and a build job ahead of the matrix would delay every job that waits for it
   **(M)**. The next critical path is the Windows cross-platform smoke (24–42 min), whose two
-  installable-package smokes take 539 and 493 s.
+  installable-package smokes take 539–638 and 493–590 s and whose native-source check takes
+  392–468 s (runs 44932528367 and 44938784607). Splitting it into an install leg and a native leg
+  would bring it to about 25 minutes, but with `ui` and the balanced package shards at about 30
+  that shortens the verdict by about five minutes for a second Windows runner per run; it is the
+  next step once the 20-run median shows Windows alone on the critical path.
 
 ### P6 — Gate health report
 
