@@ -34,7 +34,13 @@ import {
   type KnowledgeLogSink,
 } from "./knowledge-log.js";
 import { sectionPathHashFromJson } from "./section-path-hash.js";
-import { numberColumn } from "./sql-row.js";
+import {
+  blobColumn,
+  type KnowledgeSqlRow,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+} from "./sql-row.js";
 import type { StoreContentCipher } from "./store-content-cipher.js";
 
 // Sentinel `fromScope` reported on a store that had never been encrypted before this migration —
@@ -110,14 +116,9 @@ const ENCRYPTION_PROBE_PLAINTEXT = "keiko-local-knowledge-content-encryption-v1"
 
 const BYTES_PER_FLOAT32 = 4;
 
-interface MetaRow {
-  readonly value: string;
-}
-
 function readSchemaMeta(db: DatabaseSync, key: string): string | undefined {
-  const row = db.prepare("SELECT value FROM schema_meta WHERE key = :k").get({ k: key }) as
-    MetaRow | undefined;
-  return row?.value;
+  const row = db.prepare("SELECT value FROM schema_meta WHERE key = :k").get({ k: key });
+  return row === undefined ? undefined : textColumn(row, "value");
 }
 
 function writeSchemaMeta(db: DatabaseSync, key: string, value: string): void {
@@ -163,8 +164,9 @@ const PATH_TEXT_TARGETS: readonly TextTarget[] = [
 
 const TEXT_TARGETS: readonly TextTarget[] = [...LEGACY_TEXT_TARGETS, ...PATH_TEXT_TARGETS];
 
-interface TextSweepRow {
-  readonly value: string | null;
+// The swept TEXT column of one row, or undefined when the row is gone.
+function sweptText(row: KnowledgeSqlRow | undefined): string | null | undefined {
+  return row === undefined ? undefined : nullableTextColumn(row, "value");
 }
 
 function isAlreadySealed(cipher: StoreContentCipher, value: string): boolean {
@@ -190,8 +192,7 @@ function sealTextColumn(db: DatabaseSync, target: TextTarget, cipher: StoreConte
   );
   const update = db.prepare(`UPDATE ${target.table} SET ${target.column} = :t WHERE rowid = :id`);
   for (const id of collectRowIds(db, target.table)) {
-    const row = select.get({ id }) as TextSweepRow | undefined;
-    const value = row?.value;
+    const value = sweptText(select.get({ id }));
     if (value === undefined || value === null || isAlreadySealed(cipher, value)) continue;
     update.run({ t: cipher.sealText(value), id });
   }
@@ -202,14 +203,22 @@ interface SectionHashRow {
   readonly section_path_hash: string | null;
 }
 
+function readSectionHashRow(row: KnowledgeSqlRow): SectionHashRow {
+  return {
+    section_path_json: textColumn(row, "section_path_json"),
+    section_path_hash: nullableTextColumn(row, "section_path_hash"),
+  };
+}
+
 function ensureSectionPathHashes(db: DatabaseSync, cipher: StoreContentCipher): void {
   const select = db.prepare(
     "SELECT section_path_json, section_path_hash FROM sections WHERE rowid = :id",
   );
   const update = db.prepare("UPDATE sections SET section_path_hash = :h WHERE rowid = :id");
   for (const id of collectRowIds(db, "sections")) {
-    const row = select.get({ id }) as SectionHashRow | undefined;
-    if (row === undefined) continue;
+    const stored = select.get({ id });
+    if (stored === undefined) continue;
+    const row = readSectionHashRow(stored);
     const canonicalJson = openMaybeSealedText(cipher, row.section_path_json);
     const hash = sectionPathHashFromJson(canonicalJson);
     if (row.section_path_hash !== hash) update.run({ h: hash, id });
@@ -237,8 +246,7 @@ function assertTextColumnSealed(
     `SELECT ${target.column} AS value FROM ${target.table} WHERE rowid = :id`,
   );
   for (const id of collectRowIds(db, target.table)) {
-    const row = select.get({ id }) as TextSweepRow | undefined;
-    const value = row?.value;
+    const value = sweptText(select.get({ id }));
     if (value === undefined || value === null) continue;
     if (isAlreadySealed(cipher, value)) continue;
     throw new KnowledgeStoreError(
@@ -269,7 +277,7 @@ function sealVectorColumn(db: DatabaseSync, cipher: StoreContentCipher): void {
   const select = db.prepare("SELECT embedding, vector_dimensions FROM vectors WHERE rowid = :id");
   const update = db.prepare("UPDATE vectors SET embedding = :e WHERE rowid = :id");
   for (const id of collectRowIds(db, "vectors")) {
-    const row = select.get({ id }) as VectorSweepRow | undefined;
+    const row = readVectorSweepRow(select.get({ id }));
     if (row === undefined) continue;
     if (row.embedding.byteLength === row.vector_dimensions * BYTES_PER_FLOAT32) {
       update.run({ e: cipher.sealVector(row.embedding), id });
@@ -287,6 +295,22 @@ interface VectorSweepRow {
 interface BlobSweepRow {
   readonly blob_bytes: Uint8Array;
   readonly byte_length: number;
+}
+
+function readVectorSweepRow(row: KnowledgeSqlRow | undefined): VectorSweepRow | undefined {
+  if (row === undefined) return undefined;
+  return {
+    embedding: blobColumn(row, "embedding"),
+    vector_dimensions: numberColumn(row, "vector_dimensions"),
+  };
+}
+
+function readBlobSweepRow(row: KnowledgeSqlRow | undefined): BlobSweepRow | undefined {
+  if (row === undefined) return undefined;
+  return {
+    blob_bytes: blobColumn(row, "blob_bytes"),
+    byte_length: numberColumn(row, "byte_length"),
+  };
 }
 
 function assertBlobOpens(row: BlobSweepRow, cipher: StoreContentCipher): void {
@@ -312,7 +336,7 @@ function sealBlobColumn(db: DatabaseSync, cipher: StoreContentCipher): void {
     "UPDATE document_blobs SET blob_bytes = :b, storage_kind = 'sealed', seal_version = 'aes-256-gcm/v1' WHERE rowid = :id",
   );
   for (const id of collectRowIds(db, "document_blobs")) {
-    const row = select.get({ id }) as BlobSweepRow | undefined;
+    const row = readBlobSweepRow(select.get({ id }));
     if (row === undefined) continue;
     if (row.blob_bytes.byteLength === row.byte_length) {
       update.run({ b: cipher.sealBlob(row.blob_bytes), id });
@@ -325,7 +349,7 @@ function sealBlobColumn(db: DatabaseSync, cipher: StoreContentCipher): void {
 function assertVectorColumnSealed(db: DatabaseSync, cipher: StoreContentCipher): void {
   const select = db.prepare("SELECT embedding, vector_dimensions FROM vectors WHERE rowid = :id");
   for (const id of collectRowIds(db, "vectors")) {
-    const row = select.get({ id }) as VectorSweepRow | undefined;
+    const row = readVectorSweepRow(select.get({ id }));
     if (row !== undefined) assertVectorOpens(row, cipher);
   }
 }
@@ -333,7 +357,7 @@ function assertVectorColumnSealed(db: DatabaseSync, cipher: StoreContentCipher):
 function assertBlobColumnSealed(db: DatabaseSync, cipher: StoreContentCipher): void {
   const select = db.prepare("SELECT blob_bytes, byte_length FROM document_blobs WHERE rowid = :id");
   for (const id of collectRowIds(db, "document_blobs")) {
-    const row = select.get({ id }) as BlobSweepRow | undefined;
+    const row = readBlobSweepRow(select.get({ id }));
     if (row !== undefined) assertBlobOpens(row, cipher);
   }
 }
@@ -367,12 +391,21 @@ type WalCheckpointAttempt =
   // marker without a verified WAL truncation. Mirrors keiko-memory-vault's schema.ts "malformed" kind.
   | { readonly kind: "malformed" };
 
-function isWellFormedCheckpointRow(
-  row: Partial<WalCheckpointResult> | undefined,
-): row is WalCheckpointResult {
-  return (
-    Number.isInteger(row?.busy) && Number.isInteger(row?.log) && Number.isInteger(row?.checkpointed)
-  );
+// Number.isInteger holds only for a value of type number, so it narrows a stored column.
+function isIntegerColumn(value: KnowledgeSqlRow[string] | undefined): value is number {
+  return Number.isInteger(value);
+}
+
+function wellFormedCheckpointResult(
+  row: KnowledgeSqlRow | undefined,
+): WalCheckpointResult | undefined {
+  const busy = row?.busy;
+  const log = row?.log;
+  const checkpointed = row?.checkpointed;
+  if (!isIntegerColumn(busy) || !isIntegerColumn(log) || !isIntegerColumn(checkpointed)) {
+    return undefined;
+  }
+  return { busy, log, checkpointed };
 }
 
 // The PRAGMA itself is also a possible failure mode, not only its returned `busy` row: depending on
@@ -381,10 +414,9 @@ function isWellFormedCheckpointRow(
 // identically below.
 function attemptWalCheckpointTruncate(db: WalCheckpointConnection): WalCheckpointAttempt {
   try {
-    const row = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
-      Partial<WalCheckpointResult> | undefined;
-    if (!isWellFormedCheckpointRow(row)) return { kind: "malformed" };
-    return { kind: "ok", result: row };
+    const result = wellFormedCheckpointResult(db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get());
+    if (result === undefined) return { kind: "malformed" };
+    return { kind: "ok", result };
   } catch (cause) {
     return { kind: "threw", cause };
   }

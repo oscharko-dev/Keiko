@@ -13,6 +13,8 @@ import type {
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createCapsule } from "../capsule-lifecycle.js";
+import { KnowledgeStoreError } from "../errors.js";
+import { isDocumentId, mintedId } from "../knowledge-ids.js";
 import { freshStore, sampleCapsuleInput } from "../_support.js";
 import type { KnowledgeStore } from "../store.js";
 
@@ -143,6 +145,41 @@ describe("extraction checkpoint persistence", () => {
     expect(
       selectExtractionCheckpoint(fixture.store._internal.db, fixture.capsuleId, doc),
     ).toBeUndefined();
+  });
+
+  it("refuses a stored checkpoint whose columns no longer match the checkpoint contract", () => {
+    const doc = mintedId("doc-tampered", isDocumentId);
+    upsertExtractionCheckpoint(fixture.store._internal.db, checkpoint(fixture.capsuleId, doc));
+    const tamper = (assignment: string): void => {
+      fixture.store._internal.db
+        .prepare(`UPDATE extraction_checkpoints SET ${assignment} WHERE document_id = :d`)
+        .run({ d: String(doc) });
+    };
+    tamper("phase = 'mystery'");
+    expect(() =>
+      selectExtractionCheckpoint(fixture.store._internal.db, fixture.capsuleId, doc),
+    ).toThrow(KnowledgeStoreError);
+    tamper("phase = 'embedding', terminal_diagnostics_json = '[{\"severity\":\"fatal\"}]'");
+    expect(() =>
+      selectExtractionCheckpoint(fixture.store._internal.db, fixture.capsuleId, doc),
+    ).toThrow(KnowledgeStoreError);
+    tamper("terminal_diagnostics_json = '[]', embedding_identity_json = '{\"provider\":\"\"}'");
+    expect(() => listExtractionCheckpoints(fixture.store._internal.db, fixture.capsuleId)).toThrow(
+      KnowledgeStoreError,
+    );
+  });
+
+  it("keeps reading unparseable stored diagnostics as no diagnostics", () => {
+    const doc = mintedId("doc-diagnostics", isDocumentId);
+    upsertExtractionCheckpoint(fixture.store._internal.db, checkpoint(fixture.capsuleId, doc));
+    fixture.store._internal.db
+      .prepare(
+        "UPDATE extraction_checkpoints SET terminal_diagnostics_json = 'not json' WHERE document_id = :d",
+      )
+      .run({ d: String(doc) });
+    const read = selectExtractionCheckpoint(fixture.store._internal.db, fixture.capsuleId, doc);
+    expect(read?.terminalDiagnostics).toEqual([]);
+    expect(read?.phase).toBe("embedding");
   });
 
   it("cascades on capsule deletion", () => {

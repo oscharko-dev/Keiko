@@ -245,17 +245,14 @@ type DiscoveryFailureCode = `DISCOVERY_FAILED:${DiscoveryErrorCode}`;
 // A discovery failure preserves completeness only when it rejects one known entry without
 // interrupting enumeration. Deny by default so a new DiscoveryErrorCode cannot silently permit
 // baseline replacement or destructive pruning.
-const COMPLETE_DISCOVERY_FAILURE_CODES: ReadonlySet<DiscoveryFailureCode> = new Set([
+const COMPLETE_DISCOVERY_FAILURE_CODES: ReadonlySet<string> = new Set([
   "DISCOVERY_FAILED:PATH_ESCAPE",
   "DISCOVERY_FAILED:OVERSIZED_FILE",
   "DISCOVERY_FAILED:UNSUPPORTED_FORMAT",
-]);
+] satisfies readonly DiscoveryFailureCode[]);
 
 function marksEnumerationIncomplete(code: string): boolean {
-  return (
-    code.startsWith("DISCOVERY_FAILED:") &&
-    !COMPLETE_DISCOVERY_FAILURE_CODES.has(code as DiscoveryFailureCode)
-  );
+  return code.startsWith("DISCOVERY_FAILED:") && !COMPLETE_DISCOVERY_FAILURE_CODES.has(code);
 }
 
 function terminalIndexingResult(event: IndexingEvent): IndexingResult | undefined {

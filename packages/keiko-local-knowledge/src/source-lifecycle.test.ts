@@ -90,6 +90,30 @@ describe("addSourceToCapsule + listCapsuleSources", () => {
   });
 });
 
+describe("reading a stored source", () => {
+  it("fails closed when the stored scope no longer passes the scope validator", () => {
+    addSourceToCapsule(store, capsuleId, sampleSourceInput("src-tampered"));
+    store._internal.db
+      .prepare("UPDATE knowledge_sources SET scope_json = :json WHERE id = :id")
+      .run({ id: "src-tampered", json: JSON.stringify({ rootPath: 5, recursive: "yes" }) });
+
+    expect(() => listCapsuleSources(store, capsuleId)).toThrow(KnowledgeStoreError);
+  });
+
+  it("fails closed when a stored source id is blank", () => {
+    addSourceToCapsule(store, capsuleId, sampleSourceInput("src-blank"));
+    store._internal.db.exec("PRAGMA foreign_keys = OFF");
+    for (const table of ["capsule_sources", "knowledge_sources"]) {
+      store._internal.db
+        .prepare(`UPDATE ${table} SET id = '   ' WHERE id = :id`)
+        .run({ id: "src-blank" });
+    }
+    store._internal.db.exec("PRAGMA foreign_keys = ON");
+
+    expect(() => listCapsuleSources(store, capsuleId)).toThrow(/does not admit/u);
+  });
+});
+
 describe("updateSourceScopeInCapsule", () => {
   it("updates a source scope without changing the source id", () => {
     addSourceToCapsule(store, capsuleId, sampleSourceInput("src-rebind"));

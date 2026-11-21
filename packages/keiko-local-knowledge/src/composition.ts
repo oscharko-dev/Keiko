@@ -51,7 +51,20 @@ import {
 } from "./source-lifecycle.js";
 import { validateSourceRoutingForCapsule } from "./source-routing-validation.js";
 import type { KnowledgeStore } from "./store.js";
-import { type KnowledgeSqlRow, nullableTextColumn, numberColumn, textColumn } from "./sql-row.js";
+import {
+  capsuleIdColumn,
+  isCapsuleSetId,
+  mintedId,
+  nullableSourceIdColumn,
+} from "./knowledge-ids.js";
+import {
+  admittedTextColumn,
+  type KnowledgeSqlRow,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+  vocabularyAdmission,
+} from "./sql-row.js";
 
 // ─── Errors ────────────────────────────────────────────────────────────────────
 
@@ -107,7 +120,12 @@ export interface RetrievalScopeDisclosure {
   readonly sourceSummaries: readonly RetrievalSourceSummary[];
 }
 
-export type CapsuleMembershipChangeKind = "add-source" | "remove-source" | "compose-set";
+// The members the capsule_membership_changes CHECK constraint admits for change_kind.
+const CAPSULE_MEMBERSHIP_CHANGE_KINDS = ["add-source", "remove-source", "compose-set"] as const;
+
+export type CapsuleMembershipChangeKind = (typeof CAPSULE_MEMBERSHIP_CHANGE_KINDS)[number];
+
+const isMembershipChangeKind = vocabularyAdmission(CAPSULE_MEMBERSHIP_CHANGE_KINDS);
 
 export interface CapsuleMembershipChange {
   readonly id: string;
@@ -476,7 +494,7 @@ function runComposeTransaction(store: KnowledgeStore, opts: ComposeCapsulesOptio
 function buildCreateCapsuleSetInput(
   opts: ComposeCapsulesOptions,
 ): Parameters<typeof createCapsuleSet>[1] {
-  const id = randomUUID() as CapsuleSetId;
+  const id = mintedId(randomUUID(), isCapsuleSetId);
   const base: Parameters<typeof createCapsuleSet>[1] = {
     id,
     displayName: opts.displayName,
@@ -490,9 +508,9 @@ function buildCreateCapsuleSetInput(
 
 interface AuditRow {
   readonly id: string;
-  readonly capsule_id: string;
-  readonly change_kind: string;
-  readonly source_id: string | null;
+  readonly capsule_id: KnowledgeCapsuleId;
+  readonly change_kind: CapsuleMembershipChangeKind;
+  readonly source_id: KnowledgeSourceId | null;
   readonly details_json: string | null;
   readonly occurred_at: number;
 }
@@ -500,9 +518,9 @@ interface AuditRow {
 function readAuditRow(row: KnowledgeSqlRow): AuditRow {
   return {
     id: textColumn(row, "id"),
-    capsule_id: textColumn(row, "capsule_id"),
-    change_kind: textColumn(row, "change_kind"),
-    source_id: nullableTextColumn(row, "source_id"),
+    capsule_id: capsuleIdColumn(row, "capsule_id"),
+    change_kind: admittedTextColumn(row, "change_kind", isMembershipChangeKind),
+    source_id: nullableSourceIdColumn(row, "source_id"),
     details_json: nullableTextColumn(row, "details_json"),
     occurred_at: numberColumn(row, "occurred_at"),
   };
@@ -522,9 +540,9 @@ export function listCapsuleMembershipChanges(
 function mapAuditRow(row: AuditRow): CapsuleMembershipChange {
   return {
     id: row.id,
-    capsuleId: row.capsule_id as KnowledgeCapsuleId,
-    changeKind: row.change_kind as CapsuleMembershipChangeKind,
-    sourceId: row.source_id === null ? undefined : (row.source_id as KnowledgeSourceId),
+    capsuleId: row.capsule_id,
+    changeKind: row.change_kind,
+    sourceId: row.source_id ?? undefined,
     detailsJson: row.details_json ?? undefined,
     occurredAt: row.occurred_at,
   };

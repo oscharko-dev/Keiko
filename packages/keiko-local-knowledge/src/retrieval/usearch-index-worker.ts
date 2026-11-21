@@ -21,6 +21,7 @@ import {
   USEARCH_CONTROL,
   USEARCH_ERROR,
   USEARCH_STATE,
+  isUsearchWorkerData,
   type UsearchWorkerData,
   type UsearchWorkerMessage,
 } from "./usearch-worker-protocol.js";
@@ -52,10 +53,9 @@ interface NativeUsearchModule {
 
 function isNativeUsearchModule(value: unknown): value is NativeUsearchModule {
   if (typeof value !== "object" || value === null) return false;
-  const record = value as Record<string, unknown>;
+  if (!("CompiledIndex" in value) || typeof value.CompiledIndex !== "function") return false;
   return (
-    typeof record.CompiledIndex === "function" &&
-    (record.version === undefined || typeof record.version === "function")
+    !("version" in value) || value.version === undefined || typeof value.version === "function"
   );
 }
 
@@ -302,6 +302,7 @@ function serve(index: NativeCompiledIndex, data: UsearchWorkerData): void {
   Atomics.notify(control, USEARCH_CONTROL.state);
 }
 
-const data = workerData as UsearchWorkerData;
+const data: unknown = workerData;
+if (!isUsearchWorkerData(data)) throw new TypeError("USearch worker data refused");
 const index = buildIndex(data);
 if (index !== undefined) serve(index, data);

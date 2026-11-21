@@ -117,13 +117,17 @@ export class TokenizerLoadError extends Error {
   }
 }
 
+// A tokenizer's id list is foreign: an array whose members are counted, never read as ids.
+function isTokenIdList(value: unknown): value is readonly unknown[] {
+  return Array.isArray(value);
+}
+
 function tokenIdsFromEncoded(encoded: unknown): readonly unknown[] | undefined {
-  if (Array.isArray(encoded)) return encoded as readonly unknown[];
+  if (isTokenIdList(encoded)) return encoded;
   if (encoded instanceof Uint32Array || encoded instanceof Int32Array) return Array.from(encoded);
   if (typeof encoded !== "object" || encoded === null) return undefined;
-  const candidate = encoded as { readonly ids?: unknown; readonly inputIds?: unknown };
-  if (Array.isArray(candidate.ids)) return candidate.ids as readonly unknown[];
-  if (Array.isArray(candidate.inputIds)) return candidate.inputIds as readonly unknown[];
+  if ("ids" in encoded && isTokenIdList(encoded.ids)) return encoded.ids;
+  if ("inputIds" in encoded && isTokenIdList(encoded.inputIds)) return encoded.inputIds;
   return undefined;
 }
 

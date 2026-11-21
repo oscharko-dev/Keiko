@@ -117,6 +117,18 @@ describe("connector source metadata", () => {
     ).toBeUndefined();
   });
 
+  it("ignores an unknown persisted failure reason instead of surfacing it", () => {
+    persistConnectorSourceMetadata(store, CAPSULE_ID, SOURCE_ID, definition());
+    store._internal.db
+      .prepare(
+        "UPDATE connector_sources SET last_failure_reason = 'exploded' WHERE capsule_id = :c AND source_id = :s",
+      )
+      .run({ c: CAPSULE_ID, s: SOURCE_ID });
+    expect(
+      readConnectorSourceMetadata(store, CAPSULE_ID, SOURCE_ID)?.lastFailureReason,
+    ).toBeUndefined();
+  });
+
   it("fails closed on unreadable persisted scope keys and on widened bounds", () => {
     persistConnectorSourceMetadata(store, CAPSULE_ID, SOURCE_ID, definition());
     store._internal.db

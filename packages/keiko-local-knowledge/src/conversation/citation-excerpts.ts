@@ -5,10 +5,6 @@ import type { KnowledgeStore } from "../store.js";
 
 const DEFAULT_MAX_EXCERPT_CHARS = 900;
 
-interface DocumentTextRow {
-  readonly normalized_text?: string;
-}
-
 function readDocumentText(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
@@ -21,7 +17,7 @@ function readDocumentText(
     .get({
       capsule_id: capsuleId,
       document_id: citation.documentId,
-    }) as DocumentTextRow | undefined;
+    });
   const stored = row?.normalized_text;
   return typeof stored === "string" ? store._internal.contentCipher.openText(stored) : undefined;
 }

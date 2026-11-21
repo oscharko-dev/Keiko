@@ -9,6 +9,18 @@ import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-cont
 
 import { KnowledgeStoreError } from "./errors.js";
 import type { KnowledgeStore } from "./store.js";
+import {
+  admittedTextColumn,
+  blobColumn,
+  type KnowledgeSqlRow,
+  nullableAdmittedTextColumn,
+  nullableBlobColumn,
+  nullableNumberColumn,
+  nullableTextColumn,
+  numberColumn,
+  textColumn,
+  vocabularyAdmission,
+} from "./sql-row.js";
 
 export const PDF_DOCUMENT_BLOB_MEDIA_TYPE = "application/pdf";
 export const MAX_PDF_DOCUMENT_BLOB_BYTES =
@@ -128,6 +140,44 @@ interface DocumentBlobByHashRow {
   readonly created_document_id: string;
 }
 
+// The members the document_blobs CHECK constraint admits for storage_kind.
+const isBlobStorageKind = vocabularyAdmission(["plaintext", "sealed"] as const);
+
+function readDocumentBlobRow(row: KnowledgeSqlRow): DocumentBlobRow {
+  return {
+    document_id: textColumn(row, "document_id"),
+    source_id: textColumn(row, "source_id"),
+    document_content_hash: textColumn(row, "document_content_hash"),
+    document_size_bytes: numberColumn(row, "document_size_bytes"),
+    document_media_type: textColumn(row, "document_media_type"),
+    safe_display_name: textColumn(row, "safe_display_name"),
+    blob_ref: nullableTextColumn(row, "blob_ref"),
+    blob_content_hash: nullableTextColumn(row, "blob_content_hash"),
+    blob_byte_length: nullableNumberColumn(row, "blob_byte_length"),
+    blob_media_type: nullableTextColumn(row, "blob_media_type"),
+    storage_kind: nullableAdmittedTextColumn(row, "storage_kind", isBlobStorageKind),
+    seal_version: nullableTextColumn(row, "seal_version"),
+    blob_bytes: nullableBlobColumn(row, "blob_bytes"),
+    created_at: nullableNumberColumn(row, "created_at"),
+    created_source_id: nullableTextColumn(row, "created_source_id"),
+    created_document_id: nullableTextColumn(row, "created_document_id"),
+  };
+}
+
+function readDocumentBlobByHashRow(row: KnowledgeSqlRow): DocumentBlobByHashRow {
+  return {
+    blob_byte_length: numberColumn(row, "blob_byte_length"),
+    blob_content_hash: textColumn(row, "blob_content_hash"),
+    blob_media_type: textColumn(row, "blob_media_type"),
+    storage_kind: admittedTextColumn(row, "storage_kind", isBlobStorageKind),
+    seal_version: nullableTextColumn(row, "seal_version"),
+    blob_bytes: blobColumn(row, "blob_bytes"),
+    created_at: numberColumn(row, "created_at"),
+    created_source_id: textColumn(row, "created_source_id"),
+    created_document_id: textColumn(row, "created_document_id"),
+  };
+}
+
 function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -210,7 +260,10 @@ export function writePdfDocumentBlob(
   }
 }
 
-function openedBlobBytes(store: KnowledgeStore, row: DocumentBlobRow): Uint8Array {
+function openedBlobBytes(
+  store: KnowledgeStore,
+  row: Pick<DocumentBlobRow, "blob_bytes" | "storage_kind">,
+): Uint8Array {
   if (row.blob_bytes === null || row.storage_kind === null) {
     throw new KnowledgeStoreError("PDF document blob row is incomplete");
   }
@@ -325,10 +378,7 @@ function verifiedBlobBytesByHash(
 ): PdfDocumentBlobReadResult | Uint8Array {
   let bytes: Uint8Array;
   try {
-    bytes = openedBlobBytes(store, {
-      blob_bytes: row.blob_bytes,
-      storage_kind: row.storage_kind,
-    } as DocumentBlobRow);
+    bytes = openedBlobBytes(store, row);
   } catch {
     return { kind: "unreadable", reason: "malformed" };
   }
@@ -387,10 +437,11 @@ export function readPdfDocumentBlob(
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId | string,
 ): PdfDocumentBlobReadResult {
-  const row = store._internal.db.prepare(SELECT_DOCUMENT_BLOB_SQL).get({
+  const stored = store._internal.db.prepare(SELECT_DOCUMENT_BLOB_SQL).get({
     capsule_id: String(capsuleId),
     document_id: String(documentId),
-  }) as DocumentBlobRow | undefined;
+  });
+  const row = stored === undefined ? undefined : readDocumentBlobRow(stored);
   if (row?.blob_ref == null || row.blob_content_hash === null) {
     return { kind: "missing" };
   }
@@ -411,11 +462,12 @@ export function readPdfDocumentBlobByContentHash(
     readonly sourceId?: KnowledgeSourceId | string;
   },
 ): PdfDocumentBlobReadResult {
-  const row = store._internal.db.prepare(SELECT_DOCUMENT_BLOB_BY_HASH_SQL).get({
+  const stored = store._internal.db.prepare(SELECT_DOCUMENT_BLOB_BY_HASH_SQL).get({
     capsule_id: String(capsuleId),
     content_hash: contentHash,
-  }) as DocumentBlobByHashRow | undefined;
-  if (row === undefined) return { kind: "missing" };
+  });
+  if (stored === undefined) return { kind: "missing" };
+  const row = readDocumentBlobByHashRow(stored);
   if (row.blob_media_type !== PDF_DOCUMENT_BLOB_MEDIA_TYPE) {
     return { kind: "unreadable", reason: "malformed" };
   }

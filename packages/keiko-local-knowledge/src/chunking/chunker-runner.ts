@@ -29,6 +29,7 @@ import {
   selectParsedUnitsForDocument,
   type ParsedUnitRow,
 } from "./chunker-persist.js";
+import { isChunkId, mintedId } from "../knowledge-ids.js";
 import type { KnowledgeStore } from "../store.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
 import type {
@@ -219,14 +220,15 @@ export function composeChunkId(
   unit: ParsedUnit,
   chunk: ChunkingResult,
 ): ChunkId {
-  return `${String(documentId)}#ch_${chunkIdDigest({
+  const chunkId = `${String(documentId)}#ch_${chunkIdDigest({
     version: 2,
     documentId: String(documentId),
     unit: stableUnitAnchor(unit),
     characterStart: chunk.characterStart,
     characterEnd: chunk.characterEnd,
     safeExcerptHash: chunk.safeExcerptHash,
-  })}` as ChunkId;
+  })}`;
+  return mintedId(chunkId, isChunkId);
 }
 
 // ─── Top-level entrypoint ────────────────────────────────────────────────────

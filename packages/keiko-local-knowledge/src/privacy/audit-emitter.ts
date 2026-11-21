@@ -9,7 +9,7 @@
 // table that #263 already introduced for composition history.
 
 import { createHash, randomUUID } from "node:crypto";
-import type { StatementResultingChanges } from "node:sqlite";
+import type { StatementSync } from "node:sqlite";
 
 import type { KnowledgeStore } from "../store.js";
 
@@ -24,13 +24,6 @@ const INSERT_MEMBERSHIP_SQL =
   "INSERT INTO capsule_membership_changes (id, capsule_id, change_kind, source_id, details_json, occurred_at) VALUES (:id, :capsule_id, :change_kind, :source_id, :details_json, :occurred_at)";
 const INSERT_AUDIT_SQL =
   "INSERT INTO capsule_audit_events (id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents, deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at) VALUES (:id, :capsule_id, :kind, :source_id, :job_id, :error_code, :processed_documents, :failed_documents, :deleted_vector_count, :deleted_extracted_text_count, :details_json, :occurred_at)";
-
-type SqlValue = string | number | null;
-type SqlParams = Record<string, SqlValue>;
-
-interface RunStatement {
-  readonly run: (params?: SqlParams) => StatementResultingChanges;
-}
 
 type SourceOnlyAuditEvent = Extract<
   CapsuleAuditEvent,
@@ -61,8 +54,8 @@ export function emitCapsuleAuditEvent(event: CapsuleAuditEvent, sink: AuditEvent
 }
 
 export function createSqliteAuditSink(store: KnowledgeStore): AuditEventSink {
-  const insertAudit = store._internal.db.prepare(INSERT_AUDIT_SQL) as RunStatement;
-  const insertMembership = store._internal.db.prepare(INSERT_MEMBERSHIP_SQL) as RunStatement;
+  const insertAudit = store._internal.db.prepare(INSERT_AUDIT_SQL);
+  const insertMembership = store._internal.db.prepare(INSERT_MEMBERSHIP_SQL);
   return {
     emit: (event: CapsuleAuditEvent): void => {
       insertAuditEventRow(insertAudit, event);
@@ -77,7 +70,7 @@ export function createSqliteAuditSink(store: KnowledgeStore): AuditEventSink {
   };
 }
 
-function insertAuditEventRow(statement: RunStatement, event: CapsuleAuditEvent): void {
+function insertAuditEventRow(statement: StatementSync, event: CapsuleAuditEvent): void {
   statement.run({
     id: randomUUID(),
     capsule_id: event.capsuleId,
@@ -208,7 +201,7 @@ function buildAuditDetailsJson(event: CapsuleAuditEvent): string | null {
 }
 
 function insertMembershipRow(
-  statement: RunStatement,
+  statement: StatementSync,
   event: CapsuleSourceAddedEvent | CapsuleSourceRemovedEvent,
   changeKind: "add-source" | "remove-source",
 ): void {

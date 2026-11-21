@@ -54,12 +54,23 @@ export const USEARCH_RUNTIME_MANIFEST = Object.freeze({
 
 export type UsearchRuntimeTargetKey = keyof typeof USEARCH_RUNTIME_MANIFEST.targets;
 
+// The Record type makes the compiler reject a missing or an extra target key, so this lookup names
+// exactly the manifest's targets. Scripts load this file directly, so it stays free of imports.
+const USEARCH_RUNTIME_TARGET_KEYS: ReadonlyMap<string, UsearchRuntimeTargetKey> = new Map(
+  Object.entries({
+    "darwin-arm64": "darwin-arm64",
+    "darwin-x64": "darwin-x64",
+    "linux-arm64": "linux-arm64",
+    "linux-x64": "linux-x64",
+    "win32-x64": "win32-x64",
+  } satisfies Readonly<Record<UsearchRuntimeTargetKey, UsearchRuntimeTargetKey>>),
+);
+
 export function usearchRuntimeTargetKey(
   platform: NodeJS.Platform,
   architecture: string,
 ): UsearchRuntimeTargetKey | undefined {
-  const key = `${platform}-${architecture}`;
-  return key in USEARCH_RUNTIME_MANIFEST.targets ? (key as UsearchRuntimeTargetKey) : undefined;
+  return USEARCH_RUNTIME_TARGET_KEYS.get(`${platform}-${architecture}`);
 }
 
 export interface UsearchRuntimeApproval extends UsearchRuntimeSourceApproval {

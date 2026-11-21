@@ -11,7 +11,7 @@ import {
   getCapsuleSet,
   listCapsuleSets,
 } from "./capsule-set-lifecycle.js";
-import { KnowledgeNotFoundError } from "./errors.js";
+import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import { freshStore, sampleCapsuleInput } from "./_support.js";
 import type { KnowledgeStore } from "./store.js";
 
@@ -91,6 +91,28 @@ describe("listCapsuleSets", () => {
     });
     const ids = listCapsuleSets(store).map((s) => s.id);
     expect(ids).toStrictEqual(["s1", "s2"]);
+  });
+});
+
+describe("reading stored capsule sets", () => {
+  it("fails closed when a stored set key names a blank capsule set id", () => {
+    store._internal.db.prepare("INSERT INTO schema_meta (key, value) VALUES (:k, :v)").run({
+      k: "capsule_set:  ",
+      v: JSON.stringify({ displayName: "Blank", tags: [], composedAt: 1 }),
+    });
+
+    expect(() => listCapsuleSets(store)).toThrow(KnowledgeStoreError);
+  });
+
+  it("keeps reading payload fields from the stored JSON object", () => {
+    store._internal.db.prepare("INSERT INTO schema_meta (key, value) VALUES (:k, :v)").run({
+      k: "capsule_set:set-json",
+      v: JSON.stringify({ displayName: "Json", description: 7, tags: ["a", 1], composedAt: 2 }),
+    });
+
+    expect(listCapsuleSets(store)).toStrictEqual([
+      expect.objectContaining({ id: "set-json", displayName: "Json", tags: ["a"], composedAt: 2 }),
+    ]);
   });
 });
 

@@ -165,6 +165,14 @@ import {
   numberColumn,
   textColumn,
 } from "../sql-row.js";
+import {
+  capsuleIdColumn,
+  chunkIdColumn,
+  documentIdColumn,
+  isChunkId,
+  mintedId,
+  sourceIdColumn,
+} from "../knowledge-ids.js";
 
 // ─── Abort helper ─────────────────────────────────────────────────────────────
 // Reads `signal?.aborted` through a function call so TypeScript's control-flow analysis
@@ -536,7 +544,7 @@ function insertRawRow(db: DatabaseSync, table: string, row: RawTableRow): void {
   const sql = `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns
     .map((column) => `:${column}`)
     .join(", ")})`;
-  db.prepare(sql).run(row as Record<string, SqlCellValue>);
+  db.prepare(sql).run(row);
 }
 
 // Reverts a document to its last known-good state after this run's (re-)processing of it
@@ -609,10 +617,10 @@ function restoreSnapshotOnCancellation(state: RunState, documentId: DocumentId):
 // chunk span (NULL), so COALESCE falls back to the parsed_unit span — byte-identical to the
 // pre-fix behaviour until the capsule is reindexed.
 interface ChunkProjectionRow {
-  readonly id: string;
-  readonly capsule_id: string;
-  readonly source_id: string;
-  readonly document_id: string;
+  readonly id: ChunkId;
+  readonly capsule_id: KnowledgeCapsuleId;
+  readonly source_id: KnowledgeSourceId;
+  readonly document_id: DocumentId;
   readonly parsed_unit_id: string;
   readonly order_index: number;
   readonly safe_excerpt_hash: string;
@@ -626,10 +634,10 @@ interface ChunkProjectionRow {
 
 function readChunkProjectionRow(row: KnowledgeSqlRow): ChunkProjectionRow {
   return {
-    id: textColumn(row, "id"),
-    capsule_id: textColumn(row, "capsule_id"),
-    source_id: textColumn(row, "source_id"),
-    document_id: textColumn(row, "document_id"),
+    id: chunkIdColumn(row, "id"),
+    capsule_id: capsuleIdColumn(row, "capsule_id"),
+    source_id: sourceIdColumn(row, "source_id"),
+    document_id: documentIdColumn(row, "document_id"),
     parsed_unit_id: textColumn(row, "parsed_unit_id"),
     order_index: numberColumn(row, "order_index"),
     safe_excerpt_hash: textColumn(row, "safe_excerpt_hash"),
@@ -689,9 +697,9 @@ function readStoredChunkToEmbed(
   );
   if (text === undefined) return undefined;
   return {
-    id: row.id as ChunkId,
-    capsuleId: row.capsule_id as ChunkToEmbed["capsuleId"],
-    sourceId: row.source_id as KnowledgeSourceId,
+    id: row.id,
+    capsuleId: row.capsule_id,
+    sourceId: row.source_id,
     documentId,
     text,
   };
@@ -725,7 +733,7 @@ async function contextualizedChunkToEmbed(
   const result = await contextualizeChunk(
     {
       documentId,
-      chunkId: row.id as ChunkId,
+      chunkId: row.id,
       originalText,
       safeExcerptHash: row.safe_excerpt_hash,
       documentText: boundedDocumentContext(
@@ -743,7 +751,7 @@ async function contextualizedChunkToEmbed(
     state.options.store._internal.contentCipher,
     {
       capsuleId: state.capsule.id,
-      chunkId: row.id as ChunkId,
+      chunkId: row.id,
       contextualRetrievalKey: result.contextualRetrievalKey,
       contextPrefix: result.contextPrefix,
       augmentedText: result.augmentedText,
@@ -752,9 +760,9 @@ async function contextualizedChunkToEmbed(
     },
   );
   return {
-    id: row.id as ChunkId,
-    capsuleId: row.capsule_id as ChunkToEmbed["capsuleId"],
-    sourceId: row.source_id as KnowledgeSourceId,
+    id: row.id,
+    capsuleId: row.capsule_id,
+    sourceId: row.source_id,
     documentId,
     text: result.augmentedText,
   };
@@ -800,8 +808,12 @@ async function prepareChunksToEmbed(
     .prepare(
       "SELECT COUNT(*) AS n FROM chunks WHERE capsule_id = :c AND document_id = :d AND context_status = 'degraded'",
     )
-    .get({ c: String(state.capsule.id), d: String(documentId) }) as { readonly n: number };
-  persistContextualRetrievalDiagnostic(state, documentId, degraded.n);
+    .get({ c: String(state.capsule.id), d: String(documentId) });
+  persistContextualRetrievalDiagnostic(
+    state,
+    documentId,
+    degraded === undefined ? 0 : numberColumn(degraded, "n"),
+  );
   return chunks;
 }
 
@@ -1060,8 +1072,8 @@ async function embedDocumentChunks(
 // ─── Document handlers ────────────────────────────────────────────────────────
 function handleExtractionSkipped(state: RunState, result: ExtractionResult): IndexingEvent {
   state.skippedDocuments += 1;
-  const documentId =
-    result.outcome.kind === "skipped" ? result.outcome.document.id : ("" as DocumentId);
+  // Only reached for a skipped outcome; every outcome kind carries the document it describes.
+  const documentId = result.outcome.document.id;
   emitIndexingActivity(state.options.logSink, {
     op: "indexing.document.skipped",
     context: documentLogContext(state, documentId),
@@ -1504,7 +1516,7 @@ function completeEmbeddedDocument(
     sourceId,
     documentId,
     vectorCount: embedResult.vectorCount,
-    resumeToken: embedResult.lastChunkId ?? (`${String(documentId)}#empty` as ChunkId),
+    resumeToken: embedResult.lastChunkId ?? mintedId(`${String(documentId)}#empty`, isChunkId),
   });
   return { events };
 }
@@ -1786,10 +1798,10 @@ function boundedChunkPreparationFailure(
     });
     return { events: [] };
   }
-  const error =
+  const error: IndexingJobError =
     cause instanceof BoundedIndexingPolicyError
       ? cause.toIndexingError()
-      : ({ code: "CHUNKING_FAILED", message: "document chunking failed" } as IndexingJobError);
+      : { code: "CHUNKING_FAILED", message: "document chunking failed" };
   writeBoundedCheckpoint({
     state,
     checkpoint,

@@ -1,3 +1,5 @@
+import { MessagePort } from "node:worker_threads";
+import { isNonEmptyString, isRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type { ProcessScopeWorkerData } from "@oscharko-dev/keiko-security/process-scope-worker";
 
 export const USEARCH_CONTROL = Object.freeze({
@@ -51,4 +53,41 @@ export interface UsearchWorkerData {
   readonly queryBuffer: SharedArrayBuffer;
   readonly resultKeysBuffer: SharedArrayBuffer;
   readonly resultDistancesBuffer: SharedArrayBuffer;
+}
+
+const WORKER_DATA_TEXT = ["binaryPath", "binarySha256", "expectedVersion"] as const;
+const WORKER_DATA_INTEGERS = [
+  "dimensions",
+  "rowCount",
+  "connectivity",
+  "expansionAdd",
+  "expansionSearch",
+] as const;
+const WORKER_DATA_BUFFERS = [
+  "controlBuffer",
+  "keysBuffer",
+  "vectorsBuffer",
+  "queryBuffer",
+  "resultKeysBuffer",
+  "resultDistancesBuffer",
+] as const;
+
+function isProcessScopeData(value: unknown): value is ProcessScopeWorkerData {
+  return (
+    isRecord(value) &&
+    value.version === 1 &&
+    Number.isSafeInteger(value.pid) &&
+    value.port instanceof MessagePort
+  );
+}
+
+/** The worker's startup data arrives as a structured clone; every field is checked before use. */
+export function isUsearchWorkerData(value: unknown): value is UsearchWorkerData {
+  if (!isRecord(value)) return false;
+  return (
+    (value.processScope === undefined || isProcessScopeData(value.processScope)) &&
+    WORKER_DATA_TEXT.every((key) => isNonEmptyString(value[key])) &&
+    WORKER_DATA_INTEGERS.every((key) => Number.isSafeInteger(value[key])) &&
+    WORKER_DATA_BUFFERS.every((key) => value[key] instanceof SharedArrayBuffer)
+  );
 }

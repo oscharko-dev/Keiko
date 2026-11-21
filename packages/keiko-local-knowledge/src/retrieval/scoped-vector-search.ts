@@ -21,6 +21,8 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
   RetrievalReference,
+  ChunkId,
+  DocumentId,
 } from "@oscharko-dev/keiko-contracts";
 // One canonical identity key, owned by contracts (ADR-0152 D1). This module used to carry its own
 // byte-equivalent copy; a third copy is forbidden, because a drifting key silently compares vectors
@@ -65,6 +67,12 @@ import {
   type VectorIndexOptions,
 } from "./vector-index.js";
 import { dotProduct, scoreVector, vectorNorm } from "./vector-scoring.js";
+import {
+  capsuleIdColumn,
+  chunkIdColumn,
+  documentIdColumn,
+  sourceIdColumn,
+} from "../knowledge-ids.js";
 import {
   blobColumn,
   type KnowledgeSqlRow,
@@ -556,10 +564,10 @@ function readDecodedVectorsForCapsule(
 // cannot cross tenants. The `chunk_id IN (…)` list is bounded by the surviving top-K
 // candidate set, so the IN clause is never larger than `topK * scope.capsuleIds.length`.
 interface CitationRow {
-  readonly chunk_id: string;
-  readonly capsule_id: string;
-  readonly source_id: string;
-  readonly document_id: string;
+  readonly chunk_id: ChunkId;
+  readonly capsule_id: KnowledgeCapsuleId;
+  readonly source_id: KnowledgeSourceId;
+  readonly document_id: DocumentId;
   readonly parsed_unit_id: string | null;
   readonly safe_display_name: string | null;
   readonly page_number: number | null;
@@ -575,10 +583,10 @@ interface CitationRow {
 
 function readCitationRow(row: KnowledgeSqlRow): CitationRow {
   return {
-    chunk_id: textColumn(row, "chunk_id"),
-    capsule_id: textColumn(row, "capsule_id"),
-    source_id: textColumn(row, "source_id"),
-    document_id: textColumn(row, "document_id"),
+    chunk_id: chunkIdColumn(row, "chunk_id"),
+    capsule_id: capsuleIdColumn(row, "capsule_id"),
+    source_id: sourceIdColumn(row, "source_id"),
+    document_id: documentIdColumn(row, "document_id"),
     parsed_unit_id: nullableTextColumn(row, "parsed_unit_id"),
     safe_display_name: nullableTextColumn(row, "safe_display_name"),
     page_number: nullableNumberColumn(row, "page_number"),
@@ -842,7 +850,7 @@ function parseSectionPath(
   if (json === null) return undefined;
   const opened = cipher.openText(json);
   try {
-    const parsed = JSON.parse(opened) as unknown;
+    const parsed: unknown = JSON.parse(opened);
     if (!Array.isArray(parsed)) return undefined;
     const out: string[] = [];
     for (const item of parsed) {
@@ -892,10 +900,10 @@ function rowToCitation(row: CitationRow, cipher: StoreContentCipher): CitationRe
   // happy. The contract permits omission of each optional field but rejects the explicit
   // `undefined` value.
   return {
-    documentId: row.document_id as CitationReference["documentId"],
-    capsuleId: row.capsule_id as CitationReference["capsuleId"],
-    sourceId: row.source_id as CitationReference["sourceId"],
-    chunkId: row.chunk_id as CitationReference["chunkId"],
+    documentId: row.document_id,
+    capsuleId: row.capsule_id,
+    sourceId: row.source_id,
+    chunkId: row.chunk_id,
     safeDisplayName: row.safe_display_name ?? row.document_id,
     ...rowCitationPageMetadata(row),
     ...rowCitationStructuredMetadata(row, sectionPath, anchorId),
@@ -1047,20 +1055,16 @@ function scoreCapsuleVectors(
 
 interface LexicalIndexCandidateRow {
   readonly chunk_id: string;
-  readonly capsule_id: string;
+  readonly capsule_id: KnowledgeCapsuleId;
   readonly bm25_score: number;
 }
 
 function readLexicalIndexCandidateRow(row: KnowledgeSqlRow): LexicalIndexCandidateRow {
   return {
     chunk_id: textColumn(row, "chunk_id"),
-    capsule_id: textColumn(row, "capsule_id"),
+    capsule_id: capsuleIdColumn(row, "capsule_id"),
     bm25_score: numberColumn(row, "bm25_score"),
   };
-}
-
-interface LexicalIndexCountRow {
-  readonly n: number;
 }
 
 interface ExactLexicalIndexCandidateRow extends LexicalIndexCandidateRow {
@@ -1119,8 +1123,9 @@ function countLexicalRowsForCapsuleScope(
       capsule_id: String(capsuleId),
       ...sourceParams(sourceFilter),
       ...chunkParams(chunkFilter),
-    }) as LexicalIndexCountRow | undefined;
-  return typeof row?.n === "number" ? row.n : 0;
+    });
+  const count = row?.n;
+  return typeof count === "number" ? count : 0;
 }
 
 function lexicalFtsSql(
@@ -1195,7 +1200,7 @@ function readFtsCandidatesForCapsule(
   });
   return rows.map(readLexicalIndexCandidateRow).map((row) => ({
     chunkId: row.chunk_id,
-    capsuleId: row.capsule_id as KnowledgeCapsuleId,
+    capsuleId: row.capsule_id,
     bm25Score: row.bm25_score,
     lexicalPriority: 0,
     // Overwritten by `collectLexicalCandidatesPass` with the actual per-pass fallback status.
@@ -1296,7 +1301,7 @@ function readExactLexicalCandidatesForCapsule(
       if (matchCount === 0) return undefined;
       return {
         chunkId: row.chunk_id,
-        capsuleId: row.capsule_id as KnowledgeCapsuleId,
+        capsuleId: row.capsule_id,
         bm25Score: row.exact_text.length / 1_000_000,
         lexicalPriority: matchCount,
         // Overwritten by `collectLexicalCandidatesPass` with the actual per-pass fallback status.
@@ -1835,7 +1840,7 @@ interface SearchState {
 interface EmbeddingLaneState {
   readonly laneId: string;
   readonly laneKey: string;
-  readonly capsuleIds: Set<string>;
+  readonly capsuleIds: Set<KnowledgeCapsuleId>;
   status: RetrievalEmbeddingLaneStatus;
   queryEmbeddingRequested: boolean;
   vectorCount: number;
@@ -1863,13 +1868,13 @@ function laneStateFor(state: SearchState, capsule: KnowledgeCapsule): EmbeddingL
   const laneId = embeddingLaneId(capsule.embeddingModelIdentity);
   const existing = state.lanes.get(laneKey);
   if (existing !== undefined) {
-    existing.capsuleIds.add(String(capsule.id));
+    existing.capsuleIds.add(capsule.id);
     return existing;
   }
   const created: EmbeddingLaneState = {
     laneId,
     laneKey,
-    capsuleIds: new Set([String(capsule.id)]),
+    capsuleIds: new Set([capsule.id]),
     status: "no-vectors",
     queryEmbeddingRequested: false,
     vectorCount: 0,
@@ -2415,9 +2420,7 @@ function embeddingLaneDiagnostics(
     .sort((left, right) => left.laneId.localeCompare(right.laneId))
     .map((lane) => ({
       laneId: lane.laneId,
-      capsuleIds: [...lane.capsuleIds]
-        .sort((a, b) => a.localeCompare(b))
-        .map((id) => id as KnowledgeCapsuleId),
+      capsuleIds: [...lane.capsuleIds].sort((a, b) => a.localeCompare(b)),
       status: finalLaneStatus(lane),
       queryEmbeddingRequested: lane.queryEmbeddingRequested,
       vectorCount: lane.vectorCount,
@@ -2613,22 +2616,21 @@ function buildReferences(
     orderByKey.set(`${String(candidate.capsuleId)}|${candidate.chunkId}`, index);
   });
   // Group surviving candidates by capsule so we can issue one citation-read per capsule.
-  const byCapsule = new Map<string, FusedCandidate[]>();
+  const byCapsule = new Map<KnowledgeCapsuleId, FusedCandidate[]>();
   for (const candidate of candidates) {
-    const key = String(candidate.capsuleId);
-    const bucket = byCapsule.get(key);
+    const bucket = byCapsule.get(candidate.capsuleId);
     if (bucket === undefined) {
-      byCapsule.set(key, [candidate]);
+      byCapsule.set(candidate.capsuleId, [candidate]);
     } else {
       bucket.push(candidate);
     }
   }
 
   const citationByChunk = new Map<string, CitationReference>();
-  for (const [capsuleKey, bucket] of byCapsule.entries()) {
+  for (const [capsuleId, bucket] of byCapsule.entries()) {
     const rows = readCitationRows(
       store,
-      capsuleKey as KnowledgeCapsuleId,
+      capsuleId,
       bucket.map((c) => c.chunkId),
     );
     for (const row of rows) {

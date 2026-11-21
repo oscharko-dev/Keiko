@@ -7,9 +7,10 @@ import type { DocumentId } from "@oscharko-dev/keiko-contracts";
 import { Buffer } from "node:buffer";
 import { deflateRawSync } from "node:zlib";
 
+import { isDocumentId, mintedId } from "../knowledge-ids.js";
 import type { ParserSelectionInput } from "./types.js";
 
-export const FIXTURE_DOCUMENT_ID = "doc-fixture" as DocumentId;
+export const FIXTURE_DOCUMENT_ID: DocumentId = mintedId("doc-fixture", isDocumentId);
 
 export function encode(text: string): Uint8Array {
   return new TextEncoder().encode(text);

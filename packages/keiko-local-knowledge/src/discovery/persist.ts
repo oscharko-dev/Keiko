@@ -16,11 +16,12 @@ import type {
   ParserDiagnostic,
   SectionRecord,
 } from "@oscharko-dev/keiko-contracts";
-import type { DatabaseSync, SQLOutputValue, StatementResultingChanges } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 
 import { sectionPathHash } from "../section-path-hash.js";
 import type { StoreContentCipher } from "../store-content-cipher.js";
-import { type KnowledgeSqlRow, numberColumn, textColumn } from "../sql-row.js";
+import { documentIdColumn } from "../knowledge-ids.js";
+import { type KnowledgeSqlRow, nullableTextColumn, numberColumn, textColumn } from "../sql-row.js";
 
 const INSERT_DOCUMENT_SQL = [
   "INSERT INTO documents (",
@@ -162,45 +163,34 @@ const DELETE_UNREFERENCED_DOCUMENT_BLOBS_SQL = [
   "  )",
 ].join(" ");
 
-type SqlValue = string | number | null | Uint8Array;
-type SqlParams = Record<string, SqlValue>;
+type DiscoveryStatementName =
+  | "insertDocument"
+  | "insertDocumentText"
+  | "insertPage"
+  | "insertSection"
+  | "insertParsedUnit"
+  | "insertDiagnostic"
+  | "deletePages"
+  | "deleteSections"
+  | "deleteDocumentText"
+  | "deleteParsedUnits"
+  | "deleteDiagnostics"
+  | "deleteCapsuleDiagnosticsByCode"
+  | "deleteDocument"
+  | "deleteDocumentById"
+  | "deleteUnreferencedDocumentBlobs"
+  | "selectDocumentCapsuleById"
+  | "selectDocumentText"
+  | "insertDocumentTextWindow"
+  | "deleteDocumentTextWindows"
+  | "deleteExtractionCheckpoint"
+  | "selectDocumentTextSpan"
+  | "selectDocumentTextWindowSpan"
+  | "selectDocumentTextWindowFull"
+  | "selectDocumentsForSource";
 
-interface RunStatement {
-  readonly run: (params?: SqlParams) => StatementResultingChanges;
-}
-
-interface GetStatement {
-  readonly get: (params?: SqlParams) => Record<string, SQLOutputValue> | undefined;
-}
-
-interface DiscoveryStatements {
-  readonly insertDocument: RunStatement;
-  readonly insertDocumentText: RunStatement;
-  readonly insertPage: RunStatement;
-  readonly insertSection: RunStatement;
-  readonly insertParsedUnit: RunStatement;
-  readonly insertDiagnostic: RunStatement;
-  readonly deletePages: RunStatement;
-  readonly deleteSections: RunStatement;
-  readonly deleteDocumentText: RunStatement;
-  readonly deleteParsedUnits: RunStatement;
-  readonly deleteDiagnostics: RunStatement;
-  readonly deleteCapsuleDiagnosticsByCode: RunStatement;
-  readonly deleteDocument: RunStatement;
-  readonly deleteDocumentById: RunStatement;
-  readonly deleteUnreferencedDocumentBlobs: RunStatement;
-  readonly selectDocumentCapsuleById: GetStatement;
-  readonly selectDocumentText: GetStatement;
-  readonly insertDocumentTextWindow: RunStatement;
-  readonly deleteDocumentTextWindows: RunStatement;
-  readonly deleteExtractionCheckpoint: RunStatement;
-  readonly selectDocumentTextSpan: GetStatement;
-  readonly selectDocumentTextWindowSpan: GetStatement;
-  readonly selectDocumentTextWindowFull: GetStatement;
-  readonly selectDocumentsForSource: {
-    readonly all: (params?: SqlParams) => readonly unknown[];
-  };
-}
+// Every discovery statement is a prepared node:sqlite statement; rows are read through sql-row.
+type DiscoveryStatements = Readonly<Record<DiscoveryStatementName, StatementSync>>;
 
 const statementsByDb = new WeakMap<DatabaseSync, DiscoveryStatements>();
 
@@ -210,36 +200,30 @@ function statements(db: DatabaseSync): DiscoveryStatements {
     return cached;
   }
   const prepared: DiscoveryStatements = {
-    insertDocument: db.prepare(INSERT_DOCUMENT_SQL) as RunStatement,
-    insertDocumentText: db.prepare(INSERT_DOCUMENT_TEXT_SQL) as RunStatement,
-    insertPage: db.prepare(INSERT_PAGE_SQL) as RunStatement,
-    insertSection: db.prepare(INSERT_SECTION_SQL) as RunStatement,
-    insertParsedUnit: db.prepare(INSERT_PARSED_UNIT_SQL) as RunStatement,
-    insertDiagnostic: db.prepare(INSERT_DIAGNOSTIC_SQL) as RunStatement,
-    deletePages: db.prepare(DELETE_PAGES_SQL) as RunStatement,
-    deleteSections: db.prepare(DELETE_SECTIONS_SQL) as RunStatement,
-    deleteDocumentText: db.prepare(DELETE_DOCUMENT_TEXT_SQL) as RunStatement,
-    deleteParsedUnits: db.prepare(DELETE_PARSED_UNITS_SQL) as RunStatement,
-    deleteDiagnostics: db.prepare(DELETE_DIAGNOSTICS_SQL) as RunStatement,
-    deleteCapsuleDiagnosticsByCode: db.prepare(
-      DELETE_CAPSULE_DIAGNOSTICS_BY_CODE_SQL,
-    ) as RunStatement,
-    deleteDocument: db.prepare(DELETE_DOCUMENT_SQL) as RunStatement,
-    deleteDocumentById: db.prepare(DELETE_DOCUMENT_BY_ID_SQL) as RunStatement,
-    deleteUnreferencedDocumentBlobs: db.prepare(
-      DELETE_UNREFERENCED_DOCUMENT_BLOBS_SQL,
-    ) as RunStatement,
-    selectDocumentCapsuleById: db.prepare(SELECT_DOCUMENT_CAPSULE_BY_ID_SQL) as GetStatement,
-    selectDocumentText: db.prepare(SELECT_DOCUMENT_TEXT_SQL) as GetStatement,
-    insertDocumentTextWindow: db.prepare(INSERT_DOCUMENT_TEXT_WINDOW_SQL) as RunStatement,
-    deleteDocumentTextWindows: db.prepare(DELETE_DOCUMENT_TEXT_WINDOWS_SQL) as RunStatement,
-    deleteExtractionCheckpoint: db.prepare(DELETE_EXTRACTION_CHECKPOINT_SQL) as RunStatement,
-    selectDocumentTextSpan: db.prepare(SELECT_DOCUMENT_TEXT_SPAN_SQL) as GetStatement,
-    selectDocumentTextWindowSpan: db.prepare(SELECT_DOCUMENT_TEXT_WINDOW_SPAN_SQL) as GetStatement,
-    selectDocumentTextWindowFull: db.prepare(SELECT_DOCUMENT_TEXT_WINDOW_FULL_SQL) as GetStatement,
-    selectDocumentsForSource: db.prepare(SELECT_DOCUMENTS_FOR_SOURCE_SQL) as {
-      readonly all: (params?: SqlParams) => readonly unknown[];
-    },
+    insertDocument: db.prepare(INSERT_DOCUMENT_SQL),
+    insertDocumentText: db.prepare(INSERT_DOCUMENT_TEXT_SQL),
+    insertPage: db.prepare(INSERT_PAGE_SQL),
+    insertSection: db.prepare(INSERT_SECTION_SQL),
+    insertParsedUnit: db.prepare(INSERT_PARSED_UNIT_SQL),
+    insertDiagnostic: db.prepare(INSERT_DIAGNOSTIC_SQL),
+    deletePages: db.prepare(DELETE_PAGES_SQL),
+    deleteSections: db.prepare(DELETE_SECTIONS_SQL),
+    deleteDocumentText: db.prepare(DELETE_DOCUMENT_TEXT_SQL),
+    deleteParsedUnits: db.prepare(DELETE_PARSED_UNITS_SQL),
+    deleteDiagnostics: db.prepare(DELETE_DIAGNOSTICS_SQL),
+    deleteCapsuleDiagnosticsByCode: db.prepare(DELETE_CAPSULE_DIAGNOSTICS_BY_CODE_SQL),
+    deleteDocument: db.prepare(DELETE_DOCUMENT_SQL),
+    deleteDocumentById: db.prepare(DELETE_DOCUMENT_BY_ID_SQL),
+    deleteUnreferencedDocumentBlobs: db.prepare(DELETE_UNREFERENCED_DOCUMENT_BLOBS_SQL),
+    selectDocumentCapsuleById: db.prepare(SELECT_DOCUMENT_CAPSULE_BY_ID_SQL),
+    selectDocumentText: db.prepare(SELECT_DOCUMENT_TEXT_SQL),
+    insertDocumentTextWindow: db.prepare(INSERT_DOCUMENT_TEXT_WINDOW_SQL),
+    deleteDocumentTextWindows: db.prepare(DELETE_DOCUMENT_TEXT_WINDOWS_SQL),
+    deleteExtractionCheckpoint: db.prepare(DELETE_EXTRACTION_CHECKPOINT_SQL),
+    selectDocumentTextSpan: db.prepare(SELECT_DOCUMENT_TEXT_SPAN_SQL),
+    selectDocumentTextWindowSpan: db.prepare(SELECT_DOCUMENT_TEXT_WINDOW_SPAN_SQL),
+    selectDocumentTextWindowFull: db.prepare(SELECT_DOCUMENT_TEXT_WINDOW_FULL_SQL),
+    selectDocumentsForSource: db.prepare(SELECT_DOCUMENTS_FOR_SOURCE_SQL),
   };
   statementsByDb.set(db, prepared);
   return prepared;
@@ -262,15 +246,15 @@ export interface DocumentInsertRow {
 
 export function insertDocumentRow(db: DatabaseSync, row: DocumentInsertRow): void {
   const prepared = statements(db);
-  const existing = prepared.selectDocumentCapsuleById.get({ id: row.id }) as
-    { readonly capsule_id: string; readonly content_hash: string } | undefined;
-  if (existing !== undefined && existing.capsule_id !== row.capsuleId) {
+  const existing = prepared.selectDocumentCapsuleById.get({ id: row.id });
+  const existingCapsuleId = existing === undefined ? undefined : textColumn(existing, "capsule_id");
+  if (existingCapsuleId !== undefined && existingCapsuleId !== row.capsuleId) {
     // Document ids are globally primary-keyed in the current schema. Production ids include the
     // capsule/source lineage, but older tests and seeds can collide across capsules; preserve the
     // legacy replacement behavior for that impossible production state while keeping same-capsule
     // re-extraction non-destructive for document_blobs.
     prepared.deleteDocumentById.run({ id: row.id });
-    prepared.deleteUnreferencedDocumentBlobs.run({ c: existing.capsule_id });
+    prepared.deleteUnreferencedDocumentBlobs.run({ c: existingCapsuleId });
   }
   prepared.insertDocument.run({
     id: row.id,
@@ -317,10 +301,6 @@ export function insertDocumentTextRow(
   });
 }
 
-interface DocumentTextRow {
-  readonly normalized_text: string;
-}
-
 export function readDocumentTextRow(
   db: DatabaseSync,
   cipher: StoreContentCipher,
@@ -330,8 +310,8 @@ export function readDocumentTextRow(
   const row = statements(db).selectDocumentText.get({
     c: capsuleId,
     d: documentId,
-  }) as DocumentTextRow | undefined;
-  return row === undefined ? undefined : cipher.openText(row.normalized_text);
+  });
+  return row === undefined ? undefined : cipher.openText(textColumn(row, "normalized_text"));
 }
 
 // ─── Bounded large-document text windows (Epic #1160, Issue #1286) ─────────────
@@ -367,15 +347,6 @@ export function deleteDocumentTextWindows(
   statements(db).deleteDocumentTextWindows.run({ c: capsuleId, d: documentId });
 }
 
-interface SpanRow {
-  readonly span: string | null;
-}
-
-interface WindowFullRow {
-  readonly normalized_text: string;
-  readonly character_start: number;
-}
-
 // Reads a bounded, document-relative character span without ever materializing the whole
 // document text. Resolves from the one `document_text_windows` row that contains the span
 // when a large document has bounded windows, otherwise falls back to `document_texts` for
@@ -399,24 +370,22 @@ export function readDocumentTextSpan(
   const c = String(capsuleId);
   const d = String(documentId);
   if (!cipher.isEncrypted) {
-    const windowed = statements(db).selectDocumentTextWindowSpan.get({ c, d, start, end, len }) as
-      SpanRow | undefined;
+    const windowed = statements(db).selectDocumentTextWindowSpan.get({ c, d, start, end, len });
     if (windowed !== undefined) {
-      return windowed.span ?? "";
+      return nullableTextColumn(windowed, "span") ?? "";
     }
-    const single = statements(db).selectDocumentTextSpan.get({ c, d, start, len }) as
-      SpanRow | undefined;
-    return single === undefined ? undefined : (single.span ?? "");
+    const single = statements(db).selectDocumentTextSpan.get({ c, d, start, len });
+    return single === undefined ? undefined : (nullableTextColumn(single, "span") ?? "");
   }
-  const windowed = statements(db).selectDocumentTextWindowFull.get({ c, d, start, end }) as
-    WindowFullRow | undefined;
+  const windowed = statements(db).selectDocumentTextWindowFull.get({ c, d, start, end });
   if (windowed !== undefined) {
-    const offset = start - windowed.character_start;
-    return cipher.openText(windowed.normalized_text).slice(offset, offset + len);
+    const offset = start - numberColumn(windowed, "character_start");
+    const text = cipher.openText(textColumn(windowed, "normalized_text"));
+    return text.slice(offset, offset + len);
   }
-  const single = statements(db).selectDocumentText.get({ c, d }) as DocumentTextRow | undefined;
+  const single = statements(db).selectDocumentText.get({ c, d });
   if (single !== undefined) {
-    return cipher.openText(single.normalized_text).slice(start, start + len);
+    return cipher.openText(textColumn(single, "normalized_text")).slice(start, start + len);
   }
   return undefined;
 }
@@ -424,6 +393,13 @@ export function readDocumentTextSpan(
 export interface PersistedSourceDocumentRow {
   readonly id: DocumentId;
   readonly document_path: string;
+}
+
+function readPersistedSourceDocumentRow(row: KnowledgeSqlRow): PersistedSourceDocumentRow {
+  return {
+    id: documentIdColumn(row, "id"),
+    document_path: textColumn(row, "document_path"),
+  };
 }
 
 export function listPersistedDocumentsForSource(
@@ -435,7 +411,7 @@ export function listPersistedDocumentsForSource(
     c: capsuleId,
     s: sourceId,
   });
-  return rows as readonly PersistedSourceDocumentRow[];
+  return rows.map(readPersistedSourceDocumentRow);
 }
 
 export function deleteDocumentRow(
