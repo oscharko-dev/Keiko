@@ -45024,6 +45024,12 @@
           "analyzerProjection": "process-lifecycle",
           "safeContextFields": [
             {
+              "name": "healthRetries",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "launchBound",
               "type": "boolean",
               "dataClass": "closed-enum",

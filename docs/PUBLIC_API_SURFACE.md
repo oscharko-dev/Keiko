@@ -1,4 +1,4 @@
-# Public API surface — 1.5.5
+# Public API surface — 1.5.6
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -111,6 +111,8 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 
 ## Stability notes
 
+- 1.5.6: CLI entrypoints, root exports and UI stores are unchanged. A second `keiko start` while
+  Keiko runs leaves a live, verified instance running when its health answers late (#4504).
 - 1.5.5: CLI entrypoints, root exports and UI stores are unchanged; the Windows coding-runtime
   package pin moves to 1.1.7 (#4068).
 - 1.5.4: CLI entrypoints remain stable, and no root export is removed. The root barrel adds the
