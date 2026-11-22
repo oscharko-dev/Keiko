@@ -91,7 +91,10 @@ describe("resolveAtlassianTargetAdmission", () => {
       expect(await resolveAtlassianTargetAdmission(store, saved, undefined, true)).toEqual(
         expected,
       );
-      expect(lookup).toHaveBeenCalledExactlyOnceWith("jira.example", { all: true, verbatim: true });
+      expect(lookup).toHaveBeenCalledExactlyOnceWith("jira.example", {
+        all: true,
+        order: "verbatim",
+      });
       lookup.mockRejectedValue(new Error("DNS must not redefine an established class"));
       const restarted = createAtlassianCredentialMetadataStore({ configPath });
       expect(await resolveAtlassianTargetAdmission(restarted, saved, undefined, false)).toEqual(
