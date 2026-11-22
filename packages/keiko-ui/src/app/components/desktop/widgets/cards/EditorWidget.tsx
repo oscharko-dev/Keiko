@@ -614,10 +614,6 @@ function useAddressedRevealFile(
   return resolved;
 }
 
-/**
- * @public Reached outside this module only by `SelectionAwareWorkspaceHosts.test.tsx` through
- * `vi.importActual`, which static export analysis cannot follow.
- */
 export function buildEditorWorkspacePatch(
   nextRoot: string,
   nextLayout: EditorLayoutStateV2,

@@ -46,7 +46,7 @@ import { useKnowledgeCatalog } from "../../knowledge-catalog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface ConnectorPickerCfg {
+export interface ConnectorPickerCfg {
   readonly selectedKind?: string;
   readonly selectedId?: string;
 }

@@ -80,7 +80,7 @@ function replaceBreakpoint(
   return next === undefined ? withoutLine : [...withoutLine, next];
 }
 
-interface TextPromptRequest {
+export interface TextPromptRequest {
   readonly kind: "condition" | "logpoint";
   readonly line: number;
 }

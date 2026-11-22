@@ -54,6 +54,13 @@ updates:
       # PDF.js 6.4+ fails the unchanged browser-baseline gate; its separate qualification is #4518.
       - dependency-name: pdfjs-dist
         versions: [">=6.4.0"]
+      # Playwright 1.65's Firefox build crashes the memory-journal Firefox smoke page (#4524).
+      - dependency-name: "@playwright/test"
+        versions: [">=1.65.0"]
+      # knip past 6.41.0 reports UI dead exports whose removal touches five large UI files; the
+      # changed-file SonarJS step reports their legacy findings although SonarCloud does not (#4525).
+      - dependency-name: knip
+        versions: [">6.41.0"]
     cooldown:
       default-days: 7
 

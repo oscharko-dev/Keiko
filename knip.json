@@ -7,7 +7,7 @@
     "fallow",
     "ws"
   ],
-  "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "ssh-keygen", "ditto"],
+  "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "pgrep", "ssh-keygen", "ditto"],
   "workspaces": {
     ".": {
       "playwright": false,
