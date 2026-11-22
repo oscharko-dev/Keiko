@@ -5963,13 +5963,13 @@ function copyNativeReadIO(
   const purpose = record.purpose;
   if (purpose !== "native-tool-io" && purpose !== "native-instructions") return undefined;
   const keys = ["action", "phase", "runId", "identity", "ordinal", "relativePath", "purpose"];
-  const range = copyInitializationRange(record, keys);
-  if (!nativeReadRangeForPhase(phase, range)) return undefined;
+  const copied = copyInitializationRange(record, keys);
+  if (!nativeReadRangeForPhase(phase, copied)) return undefined;
   const input: CodingToolNativeReadFilePacket = Object.freeze({
     ordinal: record.ordinal,
     relativePath: record.relativePath,
     purpose,
-    ...(range === undefined ? {} : { range }),
+    ...(copied.range === undefined ? {} : { range: copied.range }),
   });
   return Object.freeze({ ...common, phase, identity, input });
 }
@@ -5980,11 +5980,12 @@ function nativeReadOrdinal(value: unknown): value is number {
 
 function nativeReadRangeForPhase(
   phase: string,
-  range: ReturnType<typeof copyInitializationRange>,
-): range is Exclude<ReturnType<typeof copyInitializationRange>, false> {
+  copied: InitializationRange,
+): copied is CopiedInitializationRange {
   return (
-    range !== false &&
-    (range === undefined || (phase === "readBytes" && isSecureWorkspaceNativeRange(range)))
+    copied.ok &&
+    (copied.range === undefined ||
+      (phase === "readBytes" && isSecureWorkspaceNativeRange(copied.range)))
   );
 }
 
@@ -6194,20 +6195,38 @@ function initialFields(
   );
 }
 
+/** A copied optional `range` field: refused, absent, or the exact offset and length sent. */
+interface CopiedInitializationRange {
+  readonly ok: true;
+  readonly range: { readonly offset: number; readonly length: number } | undefined;
+}
+type InitializationRange = CopiedInitializationRange | { readonly ok: false };
+
+const REFUSED_INITIALIZATION_RANGE: InitializationRange = Object.freeze({ ok: false });
+const ABSENT_INITIALIZATION_RANGE: InitializationRange = Object.freeze({
+  ok: true,
+  range: undefined,
+});
+
 function copyInitializationRange(
   record: Readonly<Record<string, unknown>>,
   keys: readonly string[],
-): { readonly offset: number; readonly length: number } | false | undefined {
-  if (!Object.hasOwn(record, "range")) return initialFields(record, keys) ? undefined : false;
+): InitializationRange {
+  if (!Object.hasOwn(record, "range"))
+    return initialFields(record, keys) ? ABSENT_INITIALIZATION_RANGE : REFUSED_INITIALIZATION_RANGE;
   const range = initializationData(record.range);
   if (
     range === undefined ||
     !initialFields(record, [...keys, "range"]) ||
     !initialFields(range, ["offset", "length"])
   )
-    return false;
-  if (typeof range.offset !== "number" || typeof range.length !== "number") return false;
-  return Object.freeze({ offset: range.offset, length: range.length });
+    return REFUSED_INITIALIZATION_RANGE;
+  if (typeof range.offset !== "number" || typeof range.length !== "number")
+    return REFUSED_INITIALIZATION_RANGE;
+  return Object.freeze({
+    ok: true,
+    range: Object.freeze({ offset: range.offset, length: range.length }),
+  });
 }
 
 function initializationRootCurrent(deps: ToolBridgeExecutionDeps, run: PreparedRun): boolean {
