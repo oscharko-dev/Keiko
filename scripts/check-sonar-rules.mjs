@@ -85,17 +85,19 @@ export function summarise(results, readSource = (path) => readFileSync(path, "ut
       : suppressedLines(result, readSource);
     for (const message of sonarMessages) {
       if (message.fatal !== true && suppressed.has(message.line)) continue;
-      findings.push({
-        line: message.line,
-        message: message.message,
-        path: result.filePath.startsWith(repoRoot)
-          ? result.filePath.slice(repoRoot.length + 1)
-          : result.filePath,
-        rule: message.fatal === true ? "parse-error" : String(message.ruleId),
-      });
+      findings.push(finding(result.filePath, message));
     }
   }
   return findings;
+}
+
+function finding(filePath, message) {
+  return {
+    line: message.line,
+    message: message.message,
+    path: filePath.startsWith(repoRoot) ? filePath.slice(repoRoot.length + 1) : filePath,
+    rule: message.fatal === true ? "parse-error" : String(message.ruleId),
+  };
 }
 
 // SonarCloud analyses with the organisation's quality profile, not the plugin's `recommended` set:

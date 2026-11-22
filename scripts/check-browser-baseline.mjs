@@ -716,14 +716,16 @@ function declaredNames(root) {
   while (pending.length > 0) {
     const node = pending.pop();
     addDeclaredNames(node, names);
-    for (const [key, value] of Object.entries(node)) {
-      if (key === "loc" || key === "extra") continue;
-      for (const child of Array.isArray(value) ? value : [value]) {
-        if (typeof child?.type === "string") pending.push(child);
-      }
-    }
+    pending.push(...childNodes(node));
   }
   return names;
+}
+
+function childNodes(node) {
+  return Object.entries(node)
+    .filter(([key]) => key !== "loc" && key !== "extra")
+    .flatMap(([, value]) => (Array.isArray(value) ? value : [value]))
+    .filter((child) => typeof child?.type === "string");
 }
 
 function directRequireBindings(statements, factories, shadowed) {
