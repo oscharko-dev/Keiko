@@ -2038,6 +2038,16 @@ function FocusRestoreHarness({
 // opened, every time -- the Coding Workbench covered the Pull Request window its own "Review exact
 // draft" had opened, and nothing in that window could be clicked. Two things hold now: an opened
 // window receives focus, and a deferred raise yields to wherever focus has moved.
+// jsdom 31 schedules its focus fixup on a Node `setInterval` whenever the document changes while an
+// element holds focus. Created under fake timers, that interval is fake; switching back to real timers
+// leaves jsdom believing a rendering update is still scheduled, so no later `requestAnimationFrame`
+// callback in this file ever runs. Running the pending fake timers first lets the fixup finish and
+// jsdom stop its interval before the real timers return.
+function restoreRealTimers(): void {
+  vi.runOnlyPendingTimers();
+  vi.useRealTimers();
+}
+
 describe("WindowFrame windows opened from inside a window (#3390)", () => {
   it("does not let the deferred raise cover a window that took focus in the meantime", () => {
     vi.useFakeTimers();
@@ -2066,7 +2076,7 @@ describe("WindowFrame windows opened from inside a window (#3390)", () => {
     screen.getByRole("button", { name: "Pull Request" }).focus();
     vi.advanceTimersByTime(1);
     expect(focus).not.toHaveBeenCalled();
-    vi.useRealTimers();
+    restoreRealTimers();
   });
 
   it("still raises the window one tick after a click on a control that kept focus inside it", () => {
@@ -2088,7 +2098,7 @@ describe("WindowFrame windows opened from inside a window (#3390)", () => {
     fireEvent.pointerDown(refresh, { button: 0 });
     vi.advanceTimersByTime(1);
     expect(focus).toHaveBeenCalledWith("coding-1");
-    vi.useRealTimers();
+    restoreRealTimers();
   });
 
   it("moves focus into a window opened through the render context", () => {
@@ -2119,7 +2129,7 @@ describe("WindowFrame windows opened from inside a window (#3390)", () => {
     expect(add).toHaveBeenCalledWith("governedPullRequest", undefined);
     vi.advanceTimersByTime(20);
     expect(document.activeElement).toHaveAttribute("data-window-id", "pr-1");
-    vi.useRealTimers();
+    restoreRealTimers();
   });
 });
 

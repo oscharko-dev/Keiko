@@ -96,13 +96,13 @@ const COMPONENT_LICENSE_DECISIONS = new Map([
     // `node_modules/axe-core/axe.min.js`), a development dependency only: it is never bundled into,
     // linked with or shipped with Keiko, so MPL-2.0's file-level terms never reach a Keiko file
     // (owner decision of 2026-11-22). One exact artifact; every other MPL-2.0 package still fails.
-    "pkg:npm/axe-core@4.14.1",
+    "pkg:npm/axe-core@4.14.0",
     {
       name: "axe-core",
-      version: "4.14.1",
+      version: "4.14.0",
       integrity:
-        "sha512-FHfa+lmNjQZfJz1q8wKqIDwC6DExcHt/pkjNQb09a3NPjCKg2rhu5qb2S4r76ASyFNNtuFooJpZe37OgudVGtQ==",
-      resolved: "https://registry.npmjs.org/axe-core/-/axe-core-4.14.1.tgz",
+        "sha512-9WTZxEjsZ7b13TH8JPmbV2z8CHbl80/2hm3XPEG4JgNdQLK81IBRXmSxHfMAOkSqQeRxT/0dwNDz2GOm3zzpcQ==",
+      resolved: "https://registry.npmjs.org/axe-core/-/axe-core-4.14.0.tgz",
       declaredLicense: "MPL-2.0",
       licenses: ["MPL-2.0"],
       developmentOnly: true,

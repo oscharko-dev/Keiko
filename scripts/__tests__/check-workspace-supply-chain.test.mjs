@@ -270,8 +270,8 @@ describe("version-bound component license decisions", () => {
     expect(
       offendersForComponent({
         name: "axe-core",
-        version: "4.14.1",
-        purl: "pkg:npm/axe-core@4.14.1",
+        version: "4.14.0",
+        purl: "pkg:npm/axe-core@4.14.0",
         licenses: [{ license: { id: "MPL-2.0" } }],
       }),
     ).not.toEqual([]);
@@ -341,7 +341,7 @@ describe("reviewed dependency license preflight", () => {
       ["elkjs", { version: "0.13.0" }],
       ["elkjs", { license: "GPL-3.0-or-later" }],
       ["elkjs", { integrity: `sha512-${Buffer.alloc(64, 9).toString("base64")}` }],
-      ["axe-core", { version: "4.14.2" }],
+      ["axe-core", { version: "4.14.1" }],
       ["axe-core", { license: "MPL-2.0 AND GPL-3.0-only" }],
       ["axe-core", { dev: undefined }],
       ["axe-core", { dev: false }],

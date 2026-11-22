@@ -71,6 +71,26 @@ function workspace(partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
 
 // Issue #2723 — otherConnectionEndpoint's three outcomes: windowId on the `a` side, on the `b`
 // side, and a connection that doesn't touch windowId at all.
+
+// jsdom 31 serializes CSS numbers to six significant digits, as browsers do, so a transform is
+// compared by its parsed translate and scale values rather than by the full-precision string.
+function expectSceneTransform(
+  transform: string,
+  expected: { readonly x: number; readonly y: number; readonly scale?: number },
+): void {
+  const match = /^translate\((-?[\d.e+-]+)px, (-?[\d.e+-]+)px\)(?: scale\((-?[\d.e+-]+)\))?$/u.exec(
+    transform,
+  );
+  expect(match, transform).not.toBeNull();
+  expect(Number(match?.[1])).toBeCloseTo(expected.x, 4);
+  expect(Number(match?.[2])).toBeCloseTo(expected.y, 4);
+  if (expected.scale === undefined) {
+    expect(match?.[3]).toBeUndefined();
+  } else {
+    expect(Number(match?.[3])).toBeCloseTo(expected.scale, 4);
+  }
+}
+
 describe("otherConnectionEndpoint (S3358)", () => {
   function connection(overrides: Partial<Connection> = {}): Connection {
     return { id: "conn-1", a: "win-a", b: "win-b", ...overrides };
@@ -311,7 +331,7 @@ describe("Workspace card connections", () => {
     expect(scene).not.toBeNull();
     const style = (scene as HTMLElement).style;
     expect(style.zoom).toBe("1.75");
-    expect(style.transform).toBe("translate(6.857142857142857px, 19.428571428571427px)");
+    expectSceneTransform(style.transform, { x: 12 / 1.75, y: 34 / 1.75 });
     expect(style.transform).not.toContain("scale(");
   });
 

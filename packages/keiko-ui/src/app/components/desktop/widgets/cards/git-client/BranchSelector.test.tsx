@@ -30,12 +30,12 @@ describe("BranchSelector", () => {
     });
     const newButton = screen.getByRole("button", { name: "New branch" });
 
-    expect(branchButton).toHaveStyle({ height: "var(--control-height)" });
-    expect(newButton).toHaveStyle({
-      height: "var(--control-height)",
-    });
-    expect(branchButton.querySelector("svg")).toHaveStyle({ color: "var(--text-accent)" });
-    expect(newButton.querySelector("svg")).toHaveStyle({ color: "var(--text-accent)" });
+    // The controls name the shared tokens inline; jsdom resolves an undefined custom property in a
+    // computed style to its fallback, so the declared value is the evidence, not the computed one.
+    expect(branchButton.style.height).toBe("var(--control-height)");
+    expect(newButton.style.height).toBe("var(--control-height)");
+    expect(branchButton.querySelector("svg")?.style.color).toBe("var(--text-accent)");
+    expect(newButton.querySelector("svg")?.style.color).toBe("var(--text-accent)");
   });
 
   // #3651: a failed branch-list read must not disable switching/creation as though the
