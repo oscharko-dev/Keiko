@@ -52,6 +52,7 @@ import {
   jiraMutationUnchanged,
   jiraToolOnlyReads,
 } from "./jira-tool-presentation";
+import { connectedFolderToolOutcomeView } from "./connected-folder-tool-presentation";
 import { JIRA_DIRECTORY_TOOLS, jiraDirectoryDetails } from "./jira-directory-presentation";
 import { JIRA_ACCESS_TOOLS, jiraAccessDetails } from "./jira-access-presentation";
 import {
@@ -1631,8 +1632,8 @@ function catalogLookupLabels(
 }
 /** A display projection of the immutable receipt, shared by the live turn and restored history. */
 export function jiraToolOutcomeView(exchange: ChatToolExchange): JiraToolOutcomeView {
-  const knowledge = knowledgeToolOutcomeView(exchange);
-  if (knowledge !== undefined) return knowledge;
+  const source = knowledgeToolOutcomeView(exchange) ?? connectedFolderToolOutcomeView(exchange);
+  if (source !== undefined) return source;
   const data = storedOutcomeData(exchange);
   return {
     ...resultItemsView(exchange, data),

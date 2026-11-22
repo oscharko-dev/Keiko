@@ -204,6 +204,16 @@ and Node 26.13.1, `npm run check:update-ui-evidence` passes and the Linux Editor
 unchanged. Only the three records were kept; the 14 committed screenshots, updater assertions and
 harness inputs retain their existing values.
 
+The connected-folder Chat tool (`folder.files`, owner proposal 2026-11-21, ADR-0181) added its step
+labels, card labels, result summary and one sentence per closed refusal reason to both optional
+catalogs, so the freshness gate rejected their digests. On 2026-11-21 (UTC) the original nine
+Chromium cases passed in 1.7 minutes in the Linux gates image with an init process and Node
+26.13.1, and `npm run check:update-ui-evidence` passes. The run used the image's own filesystem: on
+a bind mount from a Windows host the same nine cases took 6.2 minutes and the real BFF start of the
+`@real-bff-outage` case exceeded its 90 s lifecycle timeout. Only the three records were kept; the
+14 committed screenshots, updater assertions and harness inputs retain their existing values.
+`npm run check:editor-release-evidence` passes in the same image.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:

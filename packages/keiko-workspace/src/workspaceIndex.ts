@@ -2288,6 +2288,164 @@ export function createWorkspaceIndex(
   };
 }
 
+export interface TurnScopedWorkspaceIndexUsage {
+  /** Loads answered by the base index, and loads answered from this turn's memory. */
+  readonly baseLoads: number;
+  readonly reusedLoads: number;
+  /** Saves that reached the base through `flush`, and saves held in this turn. */
+  readonly baseSaves: number;
+  readonly deferredSaves: number;
+}
+
+export interface TurnScopedWorkspaceIndexFlush {
+  readonly saved: number;
+  /** Saves the base rejected; each cause went to the flush's reporter. */
+  readonly failed: number;
+}
+
+export interface TurnScopedWorkspaceIndex extends WorkspaceIndex {
+  /**
+   * Writes the newest held snapshot of every scope key to the base, once. A save the base rejects
+   * hands its cause to `reportFailure`, so the owning layer logs it, and the flush goes on with the
+   * next key.
+   */
+  readonly flush: (
+    reportFailure: (cause: unknown) => void,
+    isActive?: () => boolean,
+  ) => Promise<TurnScopedWorkspaceIndexFlush>;
+  readonly usage: () => TurnScopedWorkspaceIndexUsage;
+}
+
+interface TurnScopedIndexState {
+  readonly base: WorkspaceIndex;
+  readonly loaded: Map<string, Promise<WorkspaceIndexSnapshot | undefined>>;
+  readonly held: Map<
+    string,
+    { readonly scopeKey: WorkspaceIndexScopeKey; readonly snapshot: WorkspaceIndexSnapshot }
+  >;
+  baseLoads: number;
+  reusedLoads: number;
+  baseSaves: number;
+  deferredSaves: number;
+}
+
+async function turnScopedLoad(
+  state: TurnScopedIndexState,
+  scopeKey: WorkspaceIndexScopeKey,
+  isActive: (() => boolean) | undefined,
+): Promise<WorkspaceIndexSnapshot | undefined> {
+  if (isActive?.() === false) return undefined;
+  const key = storageKey(scopeKey);
+  const known = state.loaded.get(key);
+  if (known !== undefined) {
+    state.reusedLoads += 1;
+    const snapshot = await known;
+    return isActive?.() === false ? undefined : snapshot;
+  }
+  state.baseLoads += 1;
+  const pending = state.base.loadSnapshot(scopeKey, isActive);
+  state.loaded.set(key, pending);
+  const forget = (): void => {
+    if (state.loaded.get(key) === pending) state.loaded.delete(key);
+  };
+  try {
+    const snapshot = await pending;
+    // A load the request abandoned says nothing about the store; do not keep its answer.
+    if (isActive?.() === false) forget();
+    return snapshot;
+  } catch (error) {
+    forget();
+    throw error;
+  }
+}
+
+function turnScopedSave(
+  state: TurnScopedIndexState,
+  scopeKey: WorkspaceIndexScopeKey,
+  snapshot: WorkspaceIndexSnapshot,
+  isActive: (() => boolean) | undefined,
+): Promise<void> {
+  if (isActive?.() === false) return Promise.resolve();
+  // Same admission as the base: a snapshot it would drop is not held either.
+  const normalized = normalizeSnapshot(snapshot);
+  if (normalized === undefined || !snapshotMatchesScopeKey(normalized, scopeKey)) {
+    return Promise.resolve();
+  }
+  const key = storageKey(scopeKey);
+  state.deferredSaves += 1;
+  state.held.set(key, { scopeKey, snapshot: normalized });
+  state.loaded.set(key, Promise.resolve(normalized));
+  return Promise.resolve();
+}
+
+async function turnScopedFlush(
+  state: TurnScopedIndexState,
+  reportFailure: (cause: unknown) => void,
+  isActive: (() => boolean) | undefined,
+): Promise<TurnScopedWorkspaceIndexFlush> {
+  let saved = 0;
+  let failed = 0;
+  // A copy of the held entries: a save that arrives during the flush waits for the next one.
+  const pending = Array.from(state.held);
+  for (const [key, entry] of pending) {
+    if (isActive?.() === false) break;
+    state.held.delete(key);
+    try {
+      await state.base.saveSnapshot(entry.scopeKey, entry.snapshot, isActive); // NOSONAR typescript:S9382 -- one sealed write at a time: each is synced to disk, parallel writes would only queue there
+      state.baseSaves += 1;
+      saved += 1;
+    } catch (error) {
+      failed += 1;
+      reportFailure(error);
+    }
+  }
+  return { saved, failed };
+}
+
+/**
+ * A view of `base` for the calls of one Chat turn that searches several times.
+ *
+ * The sealed store decrypts and parses a snapshot on every load and seals, writes and syncs one on
+ * every save. One search loads every shard and rewrites every query-match shard, because those
+ * shards cache the matches of the query that just ran; a search narrowed to a directory builds and
+ * writes the shards of that narrower scope. A turn that asks several different queries would pay
+ * that for each call and overwrite its own writes. This view answers repeated loads of a scope key
+ * from memory and holds every save until `flush`, where only the newest snapshot of each key
+ * reaches the base.
+ *
+ * A held snapshot passed the same admission the base applies, so a load inside the turn returns
+ * what an in-memory store would. The owner must call `flush` when the turn ends, also after a
+ * failure: without it the index work of this turn is lost and the next turn repeats it. The index
+ * is an acceleration layer, so that costs time, never a wrong result. A turn whose first retrieval
+ * may build a large index from nothing should run that retrieval on the base, which persists at
+ * once. A concurrent request that saves the same key is not seen until the turn ends; every record
+ * is still checked against the file's current identity when it is used. The view keeps redacted
+ * file text in memory, so it must not outlive its turn.
+ */
+export function createTurnScopedWorkspaceIndex(base: WorkspaceIndex): TurnScopedWorkspaceIndex {
+  const state: TurnScopedIndexState = {
+    base,
+    loaded: new Map(),
+    held: new Map(),
+    baseLoads: 0,
+    reusedLoads: 0,
+    baseSaves: 0,
+    deferredSaves: 0,
+  };
+  return {
+    loadSnapshot: (scopeKey, isActive) => turnScopedLoad(state, scopeKey, isActive),
+    saveSnapshot: (scopeKey, snapshot, isActive) =>
+      turnScopedSave(state, scopeKey, snapshot, isActive),
+    flush: (reportFailure, isActive) => turnScopedFlush(state, reportFailure, isActive),
+    usage: (): TurnScopedWorkspaceIndexUsage => ({
+      baseLoads: state.baseLoads,
+      reusedLoads: state.reusedLoads,
+      baseSaves: state.baseSaves,
+      deferredSaves: state.deferredSaves,
+    }),
+  };
+}
+
 const WORKSPACE_INDEX_TEXT_TOKEN_RE = /[\p{L}\p{N}_$@./:-]+/gu;
 const WORKSPACE_INDEX_TOKEN_SEPARATOR_RE = /[/@.:\-_]+/u;
 const MAX_WORKSPACE_INDEX_LEXICAL_LINES = 256;
