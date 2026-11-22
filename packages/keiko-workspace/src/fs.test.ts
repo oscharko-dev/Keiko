@@ -573,9 +573,14 @@ describe("nodeWorkspaceFs", () => {
         symlinkSync(privateFile, file);
       },
       async () => {
+        // POSIX refuses the link in the open itself (O_NOFOLLOW). Windows has no such flag: the
+        // open follows the link and the read is refused because the opened file is not the entry
+        // that was named. Either way no outside byte is returned.
         await expect(
           nodeWorkspaceFs.readFileRange?.(file, 0, 64, "reject", expected),
-        ).rejects.toMatchObject({ reason: "symbolic-link" });
+        ).rejects.toMatchObject({
+          reason: process.platform === "win32" ? "changed" : "symbolic-link",
+        });
       },
     );
 

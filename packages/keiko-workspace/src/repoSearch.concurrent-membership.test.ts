@@ -49,7 +49,7 @@ function putFiles(): void {
 
 describe("recursive search under concurrent directory membership changes", () => {
   beforeEach(() => {
-    root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-membership-")));
+    root = realpathSync.native(mkdtempSync(join(tmpdir(), "keiko-membership-")));
     putFiles();
   });
   afterEach(() => {

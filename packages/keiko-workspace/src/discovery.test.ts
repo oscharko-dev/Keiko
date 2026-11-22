@@ -742,7 +742,7 @@ describe("discoverFiles", () => {
   it("drops an enumeration when its directory is replaced after entries are returned", () => {
     file("docs/safe.ts", "SAFE");
     const outside = mkdtempSync(join(tmpdir(), "keiko-directory-race-outside-"));
-    const documentDirectory = realpathSync(join(dir, "docs"));
+    const documentDirectory = realpathSync.native(join(dir, "docs"));
     let swapped = false;
     try {
       writeFileSync(join(outside, "private.ts"), "OUTSIDE_PRIVATE_BYTES", "utf8");
@@ -1231,7 +1231,7 @@ describe("readWorkspaceFile", () => {
   });
 
   it("still reads an admitted Codex worktree below its denied internal-state ancestor", () => {
-    const nested = join(dir, ".codex", "worktrees", "task", "project");
+    const nested = join(realpathSync.native(dir), ".codex", "worktrees", "task", "project");
     mkdirSync(nested, { recursive: true });
     writeFileSync(join(nested, "notes.md"), "ordinary project notes", "utf8");
     const content = readWorkspaceFile(detectWorkspaceAt(nested), "notes.md");

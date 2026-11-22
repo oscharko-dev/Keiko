@@ -589,7 +589,7 @@ describe("boundWorkspaceFs", () => {
   }
 
   it("returns the fallback for a WorkspaceInfo no prover bound", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bound-plain-")));
+    const root = realpathSync.native(mkdtempSync(join(tmpdir(), "keiko-bound-plain-")));
     try {
       expect(boundWorkspaceFs(workspaceInfo(root), nodeWorkspaceFs)).toBe(nodeWorkspaceFs);
     } finally {
@@ -598,7 +598,7 @@ describe("boundWorkspaceFs", () => {
   });
 
   it("returns the exact owned-root port the prover bound, and admits the denied root through it", () => {
-    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bound-owned-")));
+    const base = realpathSync.native(mkdtempSync(join(tmpdir(), "keiko-bound-owned-")));
     const root = join(base, ".keiko", "ui", "task-workspaces", "repo_1", "ws_1");
     mkdirSync(root, { recursive: true });
     try {
@@ -617,7 +617,7 @@ describe("boundWorkspaceFs", () => {
   });
 
   it("refuses to bind a port whose authority names another root, or none", () => {
-    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bound-foreign-")));
+    const base = realpathSync.native(mkdtempSync(join(tmpdir(), "keiko-bound-foreign-")));
     const root = join(base, "a");
     const other = join(base, "b");
     mkdirSync(root);

@@ -79,7 +79,7 @@ function iterate(): NonNullable<WorkspaceFs["iterateDirectory"]> {
 }
 
 beforeEach(() => {
-  root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-entry-availability-")));
+  root = realpathSync.native(mkdtempSync(join(tmpdir(), "keiko-entry-availability-")));
   mkdirSync(join(root, "docs"));
   for (const name of ["locked.docx.txt", "protected.txt", "readable.txt"])
     writeFileSync(join(root, "docs", name), `EntryAvailabilityProbe ${name}`);

@@ -2,6 +2,7 @@ import { createHash, createHmac, hkdfSync } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
+  promises as fsPromises,
   readdirSync,
   readFileSync,
   renameSync,
@@ -12,11 +13,12 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { openString, sealString } from "@oscharko-dev/keiko-security";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DIRECTORY_LINK_TYPE, memFs, memoryFixturePath } from "./_memfs.js";
 import { PathDeniedError } from "./errors.js";
 import {
@@ -2447,6 +2449,46 @@ describe("workspaceIndex", () => {
     } finally {
       removeRuntimeDir(runtimeDir);
       removeRuntimeDir(targetDir);
+    }
+  });
+
+  // Windows has no O_NOFOLLOW, so the store binds the opened file to the entry it named. A file
+  // that takes the name between the two is another file, on every platform.
+  it("does not load a snapshot file replaced between the name check and the open", async () => {
+    const runtimeDir = tempRuntimeDir();
+    const movedDir = tempRuntimeDir();
+    const originalOpen = fsPromises.open;
+    try {
+      const store = createFileWorkspaceIndexStore({ runtimeDir });
+      await store.saveSnapshot("safe-key", sampleSnapshot("needle"));
+      const [fileName] = runtimeFiles(runtimeDir);
+      if (fileName === undefined) {
+        throw new Error("expected persisted snapshot file");
+      }
+      const snapshotPath = join(runtimeDir, fileName);
+      let swapped = false;
+      const openSpy = vi.spyOn(fsPromises, "open").mockImplementation(async (path, flags, mode) => {
+        if (!swapped && basename(String(path)) === fileName) {
+          swapped = true;
+          const sameBytes = readFileSync(snapshotPath);
+          renameSync(snapshotPath, join(movedDir, fileName));
+          writeFileSync(snapshotPath, sameBytes);
+        }
+        return await originalOpen(path, flags, mode);
+      });
+      syncBuiltinESMExports();
+      try {
+        await expect(Promise.resolve(store.loadSnapshot("safe-key"))).resolves.toBeUndefined();
+      } finally {
+        openSpy.mockRestore();
+        syncBuiltinESMExports();
+      }
+      expect(swapped).toBe(true);
+      // Positive control: the same bytes under the same name load once nothing moves under the read.
+      await expect(Promise.resolve(store.loadSnapshot("safe-key"))).resolves.toBeDefined();
+    } finally {
+      removeRuntimeDir(runtimeDir);
+      removeRuntimeDir(movedDir);
     }
   });
 

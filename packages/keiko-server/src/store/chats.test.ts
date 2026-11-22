@@ -136,16 +136,21 @@ describe("project path separators", () => {
     },
   );
 
+  // A POSIX backslash is a character of a file name, never a separator. A canonical workspace root
+  // cannot carry one (workspace-contract-primitives), so no project is registered under such a
+  // name; what the store owes is that the name never resolves to the nested project `a/b`.
   it.runIf(process.platform !== "win32")(
-    "keeps a literal backslash in a POSIX project directory name",
+    "keeps a literal POSIX backslash apart from the path separator",
     () => {
+      const nested = join(tmp, "a", "b");
+      mkdirSync(nested, { recursive: true });
+      store.createProject(nested);
+      const chat = store.createChat(nested, "Nested", "example-chat-model");
       const literal = join(tmp, "a\\b");
-      mkdirSync(literal);
-      store.createProject(literal);
-      const chat = store.createChat(literal, "Literal", "example-chat-model");
-      expect(chat.projectPath).toBe(literal);
-      expect(store.listChats(literal).map((c) => c.id)).toEqual([chat.id]);
-      expect(store.listChats(join(tmp, "a/b"))).toEqual([]);
+      expect(chat.projectPath).toBe(nested);
+      expect(store.listChats(nested).map((c) => c.id)).toEqual([chat.id]);
+      expect(store.listChats(literal)).toEqual([]);
+      expect(store.listChats(literal, 10)).toEqual([]);
     },
   );
 });

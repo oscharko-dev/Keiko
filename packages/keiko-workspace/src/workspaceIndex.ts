@@ -978,13 +978,39 @@ function parseRuntimeDirMarker(raw: string): string | undefined {
   return isRuntimeDirMarker(marker) ? marker : undefined;
 }
 
+function storeFileLinkRefusal(): Error {
+  return Object.assign(new Error("workspace index file is not the named regular entry"), {
+    code: "ELOOP",
+  });
+}
+
+// Windows has no O_NOFOLLOW; Node leaves the constant undefined there and the open follows a link.
+const STORE_READ_FLAGS =
+  process.platform === "win32"
+    ? fsConstants.O_RDONLY
+    : fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW;
+
+// The flag refuses a link in the open itself, but only where it exists. So the link is refused by
+// name first, and the opened file must be the entry that was named, which also refuses an entry
+// swapped in between the two. One path on every platform; both callers read a refusal as "no file".
+async function openStoreFileNoFollow(path: string): Promise<FileHandle> {
+  const named = await lstat(path, { bigint: true });
+  if (named.isSymbolicLink()) throw storeFileLinkRefusal();
+  const handle = await open(path, STORE_READ_FLAGS);
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (opened.dev !== named.dev || opened.ino !== named.ino) throw storeFileLinkRefusal();
+    return handle;
+  } catch (error) {
+    await handle.close();
+    throw error;
+  }
+}
+
 async function readRuntimeDirMarker(realPath: string): Promise<string | undefined> {
   let handle: FileHandle | undefined;
   try {
-    handle = await open(
-      runtimeDirMarkerPath(realPath),
-      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
-    );
+    handle = await openStoreFileNoFollow(runtimeDirMarkerPath(realPath));
     const markerStat = await handle.stat();
     if (!markerStat.isFile() || markerStat.size > 128) {
       return undefined;
@@ -1260,7 +1286,7 @@ async function safeReadSnapshotFile(
   let handle: FileHandle | undefined;
   try {
     if (!snapshotOperationActive(isActive)) return undefined;
-    handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    handle = await openStoreFileNoFollow(path);
     if (!snapshotOperationActive(isActive)) return undefined;
     const fileStat = await handle.stat();
     if (!fileStat.isFile() || fileStat.size > maxSnapshotBytes) {
@@ -1726,7 +1752,7 @@ async function committedSnapshotMatches(
   let handle: FileHandle | undefined;
   try {
     if (!snapshotOperationActive(isActive)) return false;
-    handle = await open(snapshot.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    handle = await open(snapshot.path, STORE_READ_FLAGS);
     if (!snapshotOperationActive(isActive)) return false;
     const stat = await handle.stat();
     const expected = Buffer.from(expectedRaw, "utf8");
