@@ -3,7 +3,7 @@
 // A suite gated on an environment flag or a platform skips silently when the gate is not met, and
 // vitest then exits 0. This reads the run's JSON report (`--reporter=json --outputFile=<file>`)
 // and requires a successful run with at least one passed test, no failed test, and no skipped or
-// todo test.
+// placeholder test.
 //
 //   node scripts/check-vitest-report-ran.mjs <report.json>
 

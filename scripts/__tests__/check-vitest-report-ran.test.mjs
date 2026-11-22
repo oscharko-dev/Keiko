@@ -17,7 +17,7 @@ describe("vitestReportVerdict (#4530)", () => {
     expect(vitestReportVerdict(skipped)).toEqual({ ok: false, reason: "17 tests were skipped" });
   });
 
-  it("refuses a partly skipped run and todo tests", () => {
+  it("refuses a partly skipped run and placeholder tests", () => {
     expect(vitestReportVerdict({ ...RAN, numPendingTests: 1 }).ok).toBe(false);
     expect(vitestReportVerdict({ ...RAN, numTodoTests: 2 }).reason).toBe("2 tests were skipped");
   });
