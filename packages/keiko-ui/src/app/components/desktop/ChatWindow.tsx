@@ -561,7 +561,7 @@ function carriesOwnAssessment(message: ChatMessage): boolean {
 }
 
 /** The answer as reading text for copying and speech: a grounded answer's assessment tags go. */
-export function answerReadingText(message: ChatMessage): string {
+function answerReadingText(message: ChatMessage): string {
   return carriesOwnAssessment(message) ? ownAssessmentPlainText(message.content) : message.content;
 }
 
@@ -691,7 +691,7 @@ function highestCitedMarker(markers: readonly (string | number | undefined)[]): 
  * never fewer than its attached citations or their own markers (answers that predate the prompt
  * context). Undefined answer: 0, so an ordinary answer keeps every bracket.
  */
-export function groundedCitationCeiling(answer: GroundedAnswerWire | undefined): number {
+function groundedCitationCeiling(answer: GroundedAnswerWire | undefined): number {
   if (answer === undefined) return 0;
   const knowledge = "knowledgeCitations" in answer ? answer.knowledgeCitations : [];
   const citations = [...answer.citations, ...knowledge];
@@ -1675,6 +1675,7 @@ function ConversationQuestionMapImpl({
               aria-label={t("chat.questionMap.jump", {
                 index: item.index,
                 preview: item.preview,
+                time: item.time,
               })}
               onFocus={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();
@@ -1685,7 +1686,7 @@ function ConversationQuestionMapImpl({
             >
               <span className="chat-question-map-mark" aria-hidden="true" />
               <span className="chat-question-map-card" aria-hidden="true">
-                <span className="chat-question-map-card-title">{item.preview}</span>
+                <span className="chat-question-map-card-title">{item.preview}</span>{" "}
                 <span className="chat-question-map-card-time">{item.time}</span>
               </span>
             </button>

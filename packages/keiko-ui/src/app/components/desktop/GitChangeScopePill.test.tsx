@@ -265,7 +265,7 @@ describe("GitChangeScopePill", () => {
     expect(screen.getByText("main...feature/x")).toBeInTheDocument();
     const current = screen.getByText("Current");
     expect(current.style.background).toBe("var(--surface-primary)");
-    expect(current).toHaveStyle({ color: "var(--text-accent)" });
+    expect(current.style.color).toBe("var(--text-accent)");
     expect(screen.getByText("3 files changed")).toBeInTheDocument();
   });
 

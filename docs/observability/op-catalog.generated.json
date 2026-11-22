@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a148fe3bec6c5379335c7477741a9fc9bd1ce5d54a99a4c4105aa7e6dd7451d0",
+    "catalogDigest": "adbceff48fd6a41365513fb86511b0496b644104d92443b63303bf8901cbab6c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -5215,7 +5215,8 @@
               "state-dir-unavailable",
               "busy",
               "stale-version",
-              "stale-unreachable"
+              "stale-unreachable",
+              "stale-foreign"
             ]
           },
           "healthRetries": {
@@ -5245,8 +5246,8 @@
         "failureClasses": ["process-startup"],
         "proofIds": ["cli.lifecycle.health.decision"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/lifecycle-health-activity.ts:22",
-        "emitterSites": ["packages/keiko-cli/src/lifecycle-health-activity.ts:84"]
+        "registrationSite": "packages/keiko-cli/src/lifecycle-health-activity.ts:25",
+        "emitterSites": ["packages/keiko-cli/src/lifecycle-health-activity.ts:88"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -121071,7 +121072,7 @@
     {
       "op": "cli.lifecycle.health",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/lifecycle-health-activity.ts:25",
+      "site": "packages/keiko-cli/src/lifecycle-health-activity.ts:28",
       "package": "keiko-cli"
     },
     {

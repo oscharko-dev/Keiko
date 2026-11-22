@@ -243,8 +243,13 @@ test("two roots retain independent editor and trust state through focused-root c
   await seedFilesWindow(page, a.root);
   await page.goto("/");
 
-  const rootA = page.getByRole("treeitem", { name: "Multi-root A" });
-  const rootB = page.getByRole("treeitem", { name: "Multi-root B" });
+  // Each root is a disclosure entry (WCAG 2.5.3): its toggle names it, the entry holds its tree.
+  const rootGroup = (name: string): Locator =>
+    page.locator("[data-root-group]").filter({
+      has: page.getByRole("button", { name: new RegExp(`^${name} `, "u") }),
+    });
+  const rootA = rootGroup("Multi-root A");
+  const rootB = rootGroup("Multi-root B");
   await expect(rootA).toBeVisible();
   await expect(rootB).toBeVisible();
   await openFileFromRoot(page, rootA, "a.txt");
@@ -264,7 +269,7 @@ test("two roots retain independent editor and trust state through focused-root c
 
   await page.getByRole("tab", { name: /Multi-root B/u }).click();
   await editor.locator('[role="treeitem"].tr-file[data-path="b.txt"]').click();
-  await expect(rootB).toHaveAttribute("aria-selected", "true");
+  await expect(rootB.getByRole("button", { name: "Focused: root Multi-root B" })).toBeVisible();
   await expect(editor).toContainText("b.txt");
   await expect.poll(() => storedWorkspace(page)).toContain("b.txt");
   await expect(trustPrompt).toHaveCount(0);

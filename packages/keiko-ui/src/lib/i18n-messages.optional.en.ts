@@ -2963,7 +2963,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "editor.fileHistory.pinFailed": "The pinned state could not be changed.",
   "editor.fileHistory.deleteFailed": "The restore point could not be deleted.",
   "editor.fileHistory.sizeDelta": "Size change: {delta}",
-  "editor.fileHistory.entryLabel": "Restore point {sequence}, {origin}, {timestamp}",
+  "editor.fileHistory.entryLabel": "{summary}, restore point {sequence}",
 
   "attachment.rejection.deliveryRefused":
     "The image could not be stored or authorized for delivery. Add it again and retry.",
@@ -4416,7 +4416,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.repository.notVerified": "Not verified yet",
   "chat.repository.removeReference": "Remove repository reference {path}",
   "chat.questionMap.label": "Conversation questions",
-  "chat.questionMap.jump": "Jump to question {index}: {preview}",
+  "chat.questionMap.jump": "{preview} {time}: Jump to question {index}",
   "chat.answer.expand": "Expand answer",
   "chat.answer.collapse": "Collapse answer",
   "chat.messageLabel": "Chat message",
@@ -5805,6 +5805,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "filesWidget.multiRoot.add": "Add root",
   "filesWidget.multiRoot.focus": "Focus root: {name}",
   "filesWidget.multiRoot.focused": "Focused",
+  "filesWidget.multiRoot.focusedAria": "Focused: root {name}",
   "filesWidget.multiRoot.focusAction": "Focus",
   "filesWidget.multiRoot.moveUp": "Move root up: {name}",
   "filesWidget.multiRoot.moveDown": "Move root down: {name}",

@@ -315,7 +315,17 @@ process.stdin.on("data", (d) => (s += d)).on("end", () => {
 process.stdin.on("data", (d) => (s += d)).on("end", () => {
   process.stdout.write(JSON.parse(s).tests.join(","));
 });')"
+    excluded_count="$(printf '%s' "${partition_json}" | node -e 'let s = "";
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  process.stdout.write(String(JSON.parse(s).excluded.length));
+});')"
     printf '  scoped analysis and verdict to %s changed file(s)\n' "${changed_count}"
+    # The scanner command line replaces sonar.exclusions below; the partition already applied the
+    # project's own exclusions, so a file SonarCloud never analyses is named here and not scanned.
+    if [[ "${excluded_count}" != "0" ]]; then
+      printf '  %s changed file(s) not analysed: excluded in sonar-project.properties, as in SonarCloud\n' \
+        "${excluded_count}"
+    fi
     # The configured root tsconfig owns about 6,400 files, and SonarJS builds the whole program of
     # every tsconfig that owns an analysed file: one changed file under src/, tests/ or
     # packages/*/src ran the bridge out of its heap. Programs rooted at the changed files keep the
@@ -372,6 +382,11 @@ fi
 # scanner_args empty, and macOS's bash 3.2 treats an empty array as unbound under `set -u`, so the
 # expansion is guarded (PR #3678: the full-scan path aborted with "scanner_args[@]: unbound").
 scanner_volume_args=()
+# The command line below replaces the project's sonar.exclusions, so the project's own list is
+# carried along. Without it a whole-project scan would analyse tests/** and
+# docs/design-system/evidence/**, which SonarCloud never analyses (#4525).
+local_exclusions="**/node_modules/**,**/dist/**,**/coverage/**,**/.next/**,**/out/**,**/.keiko/**,**/.codex/**,**/.claude/**,**/.portable-runtime/**,**/*.min.*"
+project_exclusions="$(sed -n 's/^sonar\.exclusions=//p' "${repo_root}/sonar-project.properties" | head -n 1)"
 [[ -n "${node_modules_volume}" ]] &&
   scanner_volume_args+=(-v "${node_modules_volume}:/usr/src/node_modules:ro")
 KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm --no-deps \
@@ -382,7 +397,7 @@ KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm --no-deps \
   -Dsonar.projectKey="${project}" \
   -Dsonar.projectName="Keiko (local pre-push scan)" \
   -Dsonar.scm.disabled=true \
-  -Dsonar.exclusions="**/node_modules/**,**/dist/**,**/coverage/**,**/.next/**,**/out/**,**/.keiko/**,**/.codex/**,**/.claude/**,**/.portable-runtime/**,**/*.min.*"
+  -Dsonar.exclusions="${local_exclusions}${project_exclusions:+,${project_exclusions}}"
 
 # SonarQube Community carries no shell analyzer — `api/languages/list` has no shell entry, and
 # `shelldre:*` rules do not exist there — while SonarCloud runs them. A clean scan here therefore

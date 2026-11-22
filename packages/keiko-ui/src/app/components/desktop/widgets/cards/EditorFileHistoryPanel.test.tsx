@@ -143,13 +143,31 @@ describe("EditorFileHistoryPanel", () => {
   it("renders distinct origin labels, pinned state, and an axe-clean keyboard path", async () => {
     const view = renderPanel();
     expect(
-      await screen.findByRole("button", { name: /Restore point 3, Restore,/u }),
+      await screen.findByRole("button", { name: /^Restore .*, restore point 3$/u }),
     ).toBeInTheDocument();
     expect(screen.getByText("Agent apply")).toBeInTheDocument();
     expect(screen.getByText("Pinned")).toBeInTheDocument();
     expect(screen.queryByText("Timeline")).not.toBeInTheDocument();
 
-    const rows = screen.getAllByRole("button", { name: /Restore point/u });
+    const rows = screen.getAllByRole("button", { name: /restore point \d+$/u });
+    // WCAG 2.5.3 (axe 4.14 `label-content-name-mismatch`, serious): each row's name starts with
+    // its visible words, in reading order; the restore point number follows them.
+    const words = (text: string | null): string[] =>
+      (text ?? "")
+        .normalize("NFKD")
+        .toLowerCase()
+        .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
+        .trim()
+        .split(" ")
+        .filter((word) => word.length > 0);
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      // axe joins a button's text nodes exactly as written, so textContent is its visible text.
+      const visible = row.textContent;
+      expect(words(row.getAttribute("aria-label")).slice(0, words(visible).length)).toEqual(
+        words(visible),
+      );
+    }
     rows[0]?.focus();
     fireEvent.keyDown(rows[0]!, { key: "ArrowDown" });
     expect(rows[1]).toHaveFocus();
@@ -302,23 +320,23 @@ describe("EditorFileHistoryPanel keyboard and dialog focus", () => {
   it("traverses the whole chain with Home and End, not only the virtualized window", async () => {
     const entries = Array.from({ length: 60 }, (_, index) => entry(59 - index));
     renderPanel({ entries });
-    const newest = await screen.findByRole("button", { name: /^Restore point 59,/u });
-    expect(screen.queryByRole("button", { name: /^Restore point 0,/u })).toBeNull();
+    const newest = await screen.findByRole("button", { name: /, restore point 59$/u });
+    expect(screen.queryByRole("button", { name: /, restore point 0$/u })).toBeNull();
 
     newest.focus();
     fireEvent.keyDown(newest, { key: "End" });
-    const oldest = await screen.findByRole("button", { name: /^Restore point 0,/u });
+    const oldest = await screen.findByRole("button", { name: /, restore point 0$/u });
     await waitFor(() => expect(oldest).toHaveFocus());
 
     fireEvent.keyDown(oldest, { key: "Home" });
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /^Restore point 59,/u })).toHaveFocus(),
+      expect(screen.getByRole("button", { name: /, restore point 59$/u })).toHaveFocus(),
     );
   });
 
   it("leaves a key it does not act on to the browser", async () => {
     renderPanel({ entries: [entry(3), entry(2)] });
-    const rows = await screen.findAllByRole("button", { name: /^Restore point/u });
+    const rows = await screen.findAllByRole("button", { name: /restore point \d+$/u });
     const first = rows[0] as HTMLElement;
     first.focus();
 

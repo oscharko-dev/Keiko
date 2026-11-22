@@ -353,11 +353,17 @@ async function restrictBetaAndExpectAlphaTrusted(
   await expect(page.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(0);
   await expect(page.getByTestId("workspace-trust-banner-editor")).toHaveCount(0);
   await expect(
-    page.getByRole("treeitem", { name: "M11 Root Beta" }).getByLabel("Restricted Mode"),
+    page
+      .locator("[data-root-group]")
+      .filter({ has: page.getByRole("button", { name: /^M11 Root Beta /u }) })
+      .getByLabel("Restricted Mode"),
   ).toBeVisible();
   await selectRootTab(rootTab(page, "M11 Root Alpha"));
   await expect(
-    page.getByRole("treeitem", { name: "M11 Root Alpha" }).getByLabel("Trusted workspace"),
+    page
+      .locator("[data-root-group]")
+      .filter({ has: page.getByRole("button", { name: /^M11 Root Alpha /u }) })
+      .getByLabel("Trusted workspace"),
   ).toBeVisible();
   await expectRootTrust(page.request, harness.alpha.root, "trusted");
 }
@@ -502,8 +508,8 @@ async function expectAxeGreen(page: Page, selector: string): Promise<void> {
 }
 
 // Until #2605 this surface had a tolerated critical finding: the scan asserted the exact known
-// violation on exactly two nodes. The defect is fixed — the tree role now owns only treeitem rows —
-// so the Explorer is held to the same zero-violation bar as Settings and history. This is
+// violation on exactly two nodes. The defect is fixed — no tree role owns anything but treeitem
+// rows, and each root is a disclosure that holds its own file tree (#4378) — so the Explorer is held to the same zero-violation bar as Settings and history. This is
 // deliberately a strengthening: the previous form would have FAILED once the surface became clean.
 
 /**

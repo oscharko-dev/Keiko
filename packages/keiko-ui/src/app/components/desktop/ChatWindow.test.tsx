@@ -4819,6 +4819,14 @@ describe("ChatWindow message copy", () => {
       expect.stringContaining("Second question has enough words"),
     );
     expect(secondButton).not.toHaveAttribute("title");
+    // WCAG 2.5.3 (axe label-content-name-mismatch): the card a marker reveals is its
+    // visible text, so every accessible name starts with that title and time.
+    // axe joins text nodes exactly as written, so the card's textContent is its visible text.
+    for (const button of buttons) {
+      const card = button.querySelector(".chat-question-map-card")?.textContent ?? "";
+      expect(card.trim()).not.toBe("");
+      expect(button.getAttribute("aria-label")?.startsWith(card)).toBe(true);
+    }
     expect(document.querySelector('[data-chat-question-id="m3"]')).not.toBeNull();
 
     fireEvent.click(secondButton);

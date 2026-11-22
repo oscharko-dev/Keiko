@@ -3130,7 +3130,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "editor.fileHistory.pinFailed": "Der Anheftungsstatus konnte nicht geändert werden.",
   "editor.fileHistory.deleteFailed": "Der Wiederherstellungspunkt konnte nicht gelöscht werden.",
   "editor.fileHistory.sizeDelta": "Größenänderung: {delta}",
-  "editor.fileHistory.entryLabel": "Wiederherstellungspunkt {sequence}, {origin}, {timestamp}",
+  "editor.fileHistory.entryLabel": "{summary}, Wiederherstellungspunkt {sequence}",
 
   "attachment.rejection.deliveryRefused":
     "Das Bild konnte nicht sicher gespeichert oder für die Übertragung autorisiert werden. Füge es erneut hinzu und versuche es noch einmal.",
@@ -4639,7 +4639,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.repository.notVerified": "Referenz noch nicht verifiziert",
   "chat.repository.removeReference": "Repository-Referenz {path} entfernen",
   "chat.questionMap.label": "Fragen im Chatverlauf",
-  "chat.questionMap.jump": "Zu Frage {index} springen: {preview}",
+  "chat.questionMap.jump": "{preview} {time}: Zu Frage {index} springen",
   "chat.answer.expand": "Antwort ausklappen",
   "chat.answer.collapse": "Antwort einklappen",
   "chat.messageLabel": "Chatnachricht",
@@ -6077,6 +6077,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "filesWidget.multiRoot.add": "Wurzel hinzufügen",
   "filesWidget.multiRoot.focus": "Wurzel fokussieren: {name}",
   "filesWidget.multiRoot.focused": "Fokussiert",
+  "filesWidget.multiRoot.focusedAria": "Fokussiert: Wurzel {name}",
   "filesWidget.multiRoot.focusAction": "Fokussieren",
   "filesWidget.multiRoot.moveUp": "Wurzel nach oben verschieben: {name}",
   "filesWidget.multiRoot.moveDown": "Wurzel nach unten verschieben: {name}",

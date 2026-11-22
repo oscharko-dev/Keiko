@@ -250,20 +250,20 @@ test("Files reflects conflict, folder, ignored, and post-save status", async ({ 
   const files = page.getByRole("region", { name: /^Files/u });
   await expect(files).toBeVisible();
   const src = files.locator(`${EDITOR_SELECTORS.treeRow}[data-path="src"]`);
-  await expect(src.getByLabel(/conflict/u)).toBeVisible();
+  await expect(src.getByTitle(/conflict/u)).toBeVisible();
   // The caret is aria-hidden since #2605 (role="tree" may own only treeitem/group), so it is
   // addressed by selector rather than by role. Expansion is also reachable via Arrow Right.
   await files.locator('button.tr-caret-btn[aria-label="Expand folder: src"]').click();
   const merge = files.locator(`${EDITOR_SELECTORS.treeRow}[data-path="src/merge"]`);
-  await expect(merge.getByLabel(/conflict/u)).toBeVisible();
+  await expect(merge.getByTitle(/conflict/u)).toBeVisible();
   const nested = files.locator(`${EDITOR_SELECTORS.treeRow}[data-path="src/nested"]`);
-  await expect(nested.getByLabel(/Git change/u)).toBeVisible();
+  await expect(nested.getByTitle(/Git change/u)).toBeVisible();
   await files.locator('button.tr-caret-btn[aria-label="Expand folder: merge"]').click();
-  await expect(files.getByLabel(`Git conflict: ${fixture.conflictPath}`)).toBeVisible();
+  await expect(files.getByTitle(`Git conflict: ${fixture.conflictPath}`)).toBeVisible();
 
   await files.locator('button.tr-caret-btn[aria-label="Expand folder: tmp"]').click();
   await expect(
-    files.getByRole("treeitem", { name: /ignored\.log, Ignored by Git/u }),
+    files.getByRole("treeitem", { name: /^ignored\.log .*Ignored by Git/u }),
   ).toBeVisible();
   const beforeSave = statusReads;
   const workspace = page.locator(EDITOR_SELECTORS.workspace).first();
@@ -272,7 +272,7 @@ test("Files reflects conflict, folder, ignored, and post-save status", async ({ 
   await page.keyboard.press("Control+KeyS");
   await expect(workspace.locator(EDITOR_SELECTORS.saveField)).toHaveText("Saved");
   await expect.poll(() => statusReads).toBeGreaterThan(beforeSave);
-  await expect(nested.getByLabel(/Git change/u)).toBeVisible();
+  await expect(nested.getByTitle(/Git change/u)).toBeVisible();
   expect(errors).toEqual([]);
 });
 

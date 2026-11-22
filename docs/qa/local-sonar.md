@@ -85,6 +85,18 @@ and regression evidence; retain necessary sequencing and record any evidenced fa
 analyzer. Do not replace a bounded loop with unbounded parallelism or a promise chain merely to
 change its syntax. Rules, gate thresholds and the zero-unresolved requirement remain unchanged.
 
+Within the rules the plugin does carry, `check:sonar-rules` reports what SonarCloud reports and
+nothing it would not (#4525). It enables only the plugin's recommended rules that SonarCloud's
+TypeScript or JavaScript profile activates, from the snapshot in `scripts/sonar-quality-profile.json`
+(the organisation's "Sonar way comprehensive", 2026-11-22); 19 recommended rules, among them
+`no-unused-vars`, `function-return-type` and `different-types-comparison`, are inactive for
+TypeScript there. UI files are linted with `packages/keiko-ui/tsconfig.json`, as SonarCloud analyses
+them, so a type-aware rule such as `S4782` sees `exactOptionalPropertyTypes`. A `NOSONAR` line is
+skipped, as SonarCloud skips it, and a file the engine cannot parse fails the gate instead of
+passing unanalysed. When the organisation changes its profile, refresh the snapshot from
+`api/qualityprofiles/search?project=oscharko-dev_Keiko&organization=oscharko-dev` and
+`api/rules/search?qprofile=<key>&activation=true`, keeping each language's own rule keys.
+
 A green `check:sonar-rules` therefore says **nothing** about these. Only a real analyzer does, which
 is what this command runs. The full analysis on `dev` demands **zero** unresolved issues, so a
 single MINOR of this class turns `dev` red after the merge.
@@ -108,6 +120,10 @@ location after formatting rather than assuming the `await` or `async` line is al
 3. Partitions committed branch changes plus staged, unstaged, and untracked working-tree files into
    disjoint main-code and test inventories before analysis. A production path is never also passed
    through `sonar.test.inclusions`, because that would suppress main-code rules on the file.
+   The scanner command line replaces `sonar.exclusions`, so the partition applies the project's own
+   `sonar.exclusions` to main-code paths and `sonar.test.exclusions` to test paths, with Sonar's
+   wildcard semantics. A changed file SonarCloud never analyses (for example an evidence producer
+   under `docs/design-system/evidence/**`) is counted as not analysed and is not scanned.
 4. Analyses those files under
    a checkout-scoped project key (`keiko-local-<hash>`), so several checkouts or agent sessions on
    one machine can run the lane concurrently without overwriting each other's analysis state or

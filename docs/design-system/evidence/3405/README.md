@@ -860,3 +860,19 @@ process and Node 26.13.1, with `KEIKO_WRITE_TRACKED_EVIDENCE=1`, and
 `npm run check:update-ui-evidence` and `npm run check:editor-release-evidence` passed. Only the
 three producer records were kept; the fourteen committed captures, updater assertions and other
 harness inputs retain their existing values.
+
+## Question-map marker name — 2026-11-22 (#4378)
+
+axe-core 4.14 reports `label-content-name-mismatch` for the Chat question-map markers: the card a
+marker reveals shows the question preview and its time, while the accessible name began with "Jump
+to question". The English and German optional catalogs now start that name with the preview and
+time, which changed two catalog digests. On 2026-11-22 (UTC) all nine updater cases passed in 1.5
+minutes in the Linux arm64 gates container with Node 26.13.1 and `KEIKO_WRITE_TRACKED_EVIDENCE=1`,
+and `npm run check:update-ui-evidence` and `npm run check:editor-release-evidence` passed. Only the
+three producer records were kept; the fourteen committed captures, updater assertions and harness
+inputs retain their existing values.
+
+The same rule then reported the multi-root Files roots and the Editor file history rows. The Focus
+action of the focused root and every file history row now name themselves by their visible words
+first, which moved the same two optional-catalog digests again; the producer was rerun on the final
+sources the same way and only the three records were kept.

@@ -5028,6 +5028,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "busy",
           "stale-version",
           "stale-unreachable",
+          "stale-foreign",
         ],
       },
       healthRetries: {

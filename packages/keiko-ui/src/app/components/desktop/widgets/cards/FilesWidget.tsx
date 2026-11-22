@@ -766,13 +766,25 @@ function canMoveEntry(source: string, target: string | null, next: string): bool
 function directoryPath(path: string | null): string {
   return path ?? "";
 }
+function gitDirectoryBadge(aggregate: GitDirectoryAggregate): string {
+  return aggregate.conflicted ? "U" : "Δ";
+}
+
+// WCAG 2.5.3 (axe `label-content-name-mismatch`): a row's accessible name starts with its visible
+// text, in reading order, and only then adds the states the row does not show as text.
 function directoryEntryLabel(
+  entry: FilesTreeEntry,
   visibility: EntryVisibility,
   aggregate: GitDirectoryAggregate | undefined,
   t: FilesWidgetTranslate,
 ): string | undefined {
-  if (visibility.label === undefined) return undefined;
-  return [visibility.label, aggregate === undefined ? undefined : gitDirectoryLabel(aggregate, t)]
+  if (visibility.label === undefined && aggregate === undefined) return undefined;
+  return [
+    entry.name,
+    aggregate === undefined ? undefined : gitDirectoryBadge(aggregate),
+    ...entryVisibilityLabels(entry, visibility, t),
+    aggregate === undefined ? undefined : gitDirectoryLabel(aggregate, t),
+  ]
     .filter(Boolean)
     .join(" ");
 }
@@ -788,10 +800,12 @@ function fileVisibilityLabel(
 ): string | undefined {
   if (visibility.label === undefined) return undefined;
   return [
-    visibility.label,
+    entry.name,
     entry.kind === "symlink" ? t("filesWidget.tree.symlinkBadge") : undefined,
-    decoration === null ? undefined : tGit(decoration.labelKey, { path: entry.path }),
+    decoration?.badge,
     formatBytes(entry.sizeBytes ?? 0),
+    ...entryVisibilityLabels(entry, visibility, tGit),
+    decoration === null ? undefined : tGit(decoration.labelKey, { path: entry.path }),
   ]
     .filter(Boolean)
     .join(" ");
@@ -1943,7 +1957,6 @@ export function FilesWidget({
       <span
         className="tr-badge tr-git"
         data-git-state={gitAggregate.conflicted ? "conflicted" : "aggregate"}
-        aria-label={gitDirectoryLabel(gitAggregate, tGit)}
         title={gitDirectoryLabel(gitAggregate, tGit)}
         style={
           gitAggregate.conflicted
@@ -1951,7 +1964,7 @@ export function FilesWidget({
             : undefined
         }
       >
-        {gitAggregate.conflicted ? "U" : "Δ"}
+        {gitDirectoryBadge(gitAggregate)}
       </span>
     ) : null;
 
@@ -1993,7 +2006,7 @@ export function FilesWidget({
             className={`tr-row tr-dir-enter ${presentationStyles.cmpEntry}`}
             role="treeitem"
             aria-level={depth + 1}
-            aria-label={directoryEntryLabel(visibility, gitAggregate, tGit)}
+            aria-label={directoryEntryLabel(entry, visibility, gitAggregate, tGit)}
             data-hidden={visibility.hidden || undefined}
             data-git-ignored={visibility.ignored || undefined}
             data-unversioned={visibility.unversioned || undefined}
@@ -2038,6 +2051,7 @@ export function FilesWidget({
               <FolderIcon size={14} />
             </span>
             <span className={`tr-name tr-folder ${presentationStyles.cmpName}`}>{entry.name}</span>
+            {/* Not rendered in the flex row; it keeps the name and the badge two words. */}{" "}
             {renderDirectoryBadge(gitAggregate)}
           </button>
         </div>
@@ -2053,6 +2067,7 @@ export function FilesWidget({
     nameId: string;
     symlinkId: string;
     gitBadgeId: string;
+    gitLabelId: string;
     metaId: string;
     labelledBy: string;
   } => {
@@ -2060,14 +2075,16 @@ export function FilesWidget({
     const nameId = `${labelIdBase}-name`;
     const symlinkId = `${labelIdBase}-symlink`;
     const gitBadgeId = `${labelIdBase}-git`;
+    const gitLabelId = `${labelIdBase}-git-label`;
     const metaId = `${labelIdBase}-meta`;
     const labelledBy = [
       nameId,
       ...(entry.kind === "symlink" ? [symlinkId] : []),
       ...(decoration === null ? [] : [gitBadgeId]),
       metaId,
+      ...(decoration === null ? [] : [gitLabelId]),
     ].join(" ");
-    return { nameId, symlinkId, gitBadgeId, metaId, labelledBy };
+    return { nameId, symlinkId, gitBadgeId, gitLabelId, metaId, labelledBy };
   };
 
   const renderFileEntry = (entry: FilesTreeEntry, depth: number, entryTip: string): ReactNode => {
@@ -2075,7 +2092,10 @@ export function FilesWidget({
     const visibility = visibilityOf(entry);
     const ignored = visibility.ignored;
     const decoration = change === undefined ? null : gitChangeDecoration(change);
-    const { nameId, symlinkId, gitBadgeId, metaId, labelledBy } = fileEntryIds(entry, decoration);
+    const { nameId, symlinkId, gitBadgeId, gitLabelId, metaId, labelledBy } = fileEntryIds(
+      entry,
+      decoration,
+    );
     return (
       <div
         className={`tr-row tr-file ${presentationStyles.cmpEntry}`}
@@ -2129,17 +2149,18 @@ export function FilesWidget({
         <span className={`tr-name ${presentationStyles.cmpName}`} id={nameId}>
           {entry.name}
         </span>
+        {/* The spaces are not rendered in the flex row; they keep the visible text separate
+            words, so the accessible name can start with it (WCAG 2.5.3). */}{" "}
         {entry.kind === "symlink" ? (
           <span className="tr-badge" id={symlinkId}>
             {t("filesWidget.tree.symlinkBadge")}
           </span>
-        ) : null}
+        ) : null}{" "}
         {decoration !== null ? (
           <span
             className="tr-badge tr-git"
             id={gitBadgeId}
             data-git-state={decoration.state}
-            aria-label={tGit(decoration.labelKey, { path: entry.path })}
             title={tGit(decoration.labelKey, { path: entry.path })}
             style={
               decoration.state === "conflicted"
@@ -2149,10 +2170,15 @@ export function FilesWidget({
           >
             {decoration.badge}
           </span>
-        ) : null}
+        ) : null}{" "}
         <span className="tr-meta mono" id={metaId}>
           {formatBytes(entry.sizeBytes ?? 0)}
         </span>
+        {decoration !== null ? (
+          <span className={presentationStyles.cmpScreenReaderOnly} id={gitLabelId}>
+            {tGit(decoration.labelKey, { path: entry.path })}
+          </span>
+        ) : null}
         {change !== undefined && entry.readable ? (
           <button
             className="tr-git-diff"

@@ -236,6 +236,8 @@ export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
                       {expandable ? <ChevronRIcon size={11} /> : null}
                     </span>
                     <span className={styles.outlineName}>{node.symbol.name}</span>
+                    {/* Not rendered in the grid row; it keeps the visible name and kind two words,
+                        as the accessible name has them (WCAG 2.5.3). */}{" "}
                     <span className={styles.outlineKind}>{rowKind}</span>
                   </button>
                 );

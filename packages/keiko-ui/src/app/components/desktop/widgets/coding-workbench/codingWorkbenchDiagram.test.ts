@@ -13,7 +13,7 @@ import {
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg"><g><rect width="1" height="1"/></g></svg>';
 const here = dirname(fileURLToPath(import.meta.url));
 // What Mermaid really draws with this surface's configuration (see mermaid-fixtures/README.md).
-const MERMAID_VERSION = "11.17.2";
+const MERMAID_VERSION = "12.3.0";
 const FIXTURES = join(here, "mermaid-fixtures", MERMAID_VERSION);
 
 function realDrawing(name: string): string {
@@ -102,6 +102,17 @@ describe("drawing a Mermaid diagram (#3906)", () => {
     expect(document.querySelector('[id^="dkeiko-diagram-"]')).toBeNull();
   });
 
+  // Mermaid 12 defaults to ELK and the `neo` look (#4378). The production initialization pins the
+  // dagre layout and the classic look and names both secure, so a diagram's own directive cannot
+  // switch them back on.
+  it("initializes Mermaid with the dagre layout and the classic look as secure keys", async () => {
+    const mermaid = renderer();
+    await drawDiagram(mermaid, "graph TD\n A-->B");
+    const config = mermaid.initialize.mock.lastCall?.[0];
+    expect(config).toMatchObject({ layout: "dagre", look: "classic", securityLevel: "strict" });
+    expect(config?.secure).toEqual(expect.arrayContaining(["layout", "look", "secure"]));
+  });
+
   it("follows the page theme: dark unless the page is light", async () => {
     const mermaid = renderer();
     await drawDiagram(mermaid, "graph TD\n A-->B");
@@ -133,8 +144,28 @@ describe("the SVG allowlist", () => {
     const names = readdirSync(FIXTURES)
       .filter((file) => file.endsWith(".svg"))
       .map((file) => file.slice(0, -".svg".length));
-    expect(names.sort()).toEqual(["flowchart", "journey", "pie", "sankey", "sequence", "treemap"]);
+    expect(names.sort()).toEqual([
+      "flowchart",
+      "journey",
+      "pie",
+      "requested-elk-neo",
+      "sankey",
+      "sequence",
+      "treemap",
+    ]);
     for (const name of names) expect(inertSvgNodes(realDrawing(name)), name).not.toBeNull();
+  });
+
+  // Mermaid 12 defaults to ELK and the `neo` look (#4378). A diagram that asks for both in its own
+  // configuration is still drawn with the dagre layout and the classic look the allowlist was proven
+  // against, because `layout` and `look` are secure keys.
+  it("draws a diagram that asks for ELK and the neo look in the classic look", () => {
+    const drawing = drawnSvg(realDrawing("requested-elk-neo"));
+    const looks = new Set(
+      [...drawing.querySelectorAll("[data-look]")].map((node) => node.getAttribute("data-look")),
+    );
+    expect(looks).toEqual(new Set(["classic"]));
+    expect(drawing.querySelector("[marker-end]")).not.toBeNull();
   });
 
   it("keeps the references Mermaid ties markers, gradients and clip paths with", () => {

@@ -155,7 +155,7 @@ test("#2531 file history compares, pins, restores safely, and stays accessible",
   await page.getByRole("alertdialog").getByRole("button", { name: "Restore version" }).click();
   expect((await restoreSave).ok()).toBe(true);
   await expect(
-    historyRows(pane).getByRole("button", { name: /Restore point \d+, Restore,/u }),
+    historyRows(pane).getByRole("button", { name: /^Restore .*, restore point \d+$/u }),
   ).toHaveCount(1);
   expect(readFileSync(join(root, FILE), "utf8")).toBe(oldestContent);
   await expect(pane.locator(".view-lines")).toContainText("historyValue");
