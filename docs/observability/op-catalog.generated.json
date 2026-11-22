@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a646ebbc3f125bb4a6479ca0d9412738448cc0aa31c43f063003106b36ae0f53",
+    "catalogDigest": "81807274e75b414834427bb1c5f6f986c18e7219e96ebc5a52210dc12b6b213f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -13446,8 +13446,8 @@
         "failureClasses": ["coding-runtime-native-policy"],
         "proofIds": ["coding-runtime.native-build-settings.admitted.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:275",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:701"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:276",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:706"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -124079,14 +124079,14 @@
     {
       "op": "coding-runtime.native-build-settings",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:412",
+      "site": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:413",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.native-build-settings.admitted",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:278",
+      "site": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:279",
       "package": "keiko-server"
     },
     {
