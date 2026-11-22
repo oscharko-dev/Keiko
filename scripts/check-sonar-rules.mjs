@@ -61,7 +61,7 @@ function suppressedLines(result, readSource) {
     loc: true,
     ecmaVersion: "latest",
     sourceType: "module",
-    ecmaFeatures: { jsx: /x$/u.test(result.filePath) },
+    ecmaFeatures: { jsx: result.filePath.endsWith("x") },
   });
   return new Set(
     ast.comments
