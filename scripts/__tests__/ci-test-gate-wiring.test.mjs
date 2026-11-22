@@ -577,7 +577,7 @@ describe("CI test/gate wiring guard", () => {
   });
 
   it("keeps the supported UI compiler and TypeScript 7 compatibility check separate", () => {
-    expect(uiManifest.devDependencies.typescript).toBe("5.7.3");
+    expect(uiManifest.devDependencies.typescript).toBe("5.9.3");
     expect(uiManifest.scripts.typecheck).toBe("tsc --noEmit");
     expect(uiManifest.scripts["typecheck:native"]).toContain(
       "node ../../node_modules/@typescript/native/bin/tsc",
