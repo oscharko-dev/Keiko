@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d397f1416c33ef406757273f31d33fc90cd63da7e04ef9120389b04117ea463b",
+    "catalogDigest": "da4351227171b078aae8ad2470374a42bfad6cd31106e832b543093de78348c8",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -15769,6 +15769,7 @@
               "path-unsupported",
               "budget-exhausted",
               "redirect-refused",
+              "redirect-network-refused",
               "response-too-large",
               "upstream-failed",
               "upstream-rejected",
@@ -15784,7 +15785,10 @@
               "secret-too-short",
               "bindings-exhausted",
               "run-aborted",
-              "relay-unavailable"
+              "own-origin-invalid",
+              "relay-busy",
+              "client-stalled",
+              "upstream-timeout"
             ]
           },
           "ecosystem": {
@@ -15888,9 +15892,9 @@
         "failureClasses": ["coding-runtime-repository-relay"],
         "proofIds": ["coding-runtime.repository-relay.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/repository-relay/repositoryRelayActivity.ts:61",
+        "registrationSite": "packages/keiko-server/src/repository-relay/repositoryRelayActivity.ts:65",
         "emitterSites": [
-          "packages/keiko-server/src/repository-relay/repositoryRelayActivity.ts:163"
+          "packages/keiko-server/src/repository-relay/repositoryRelayActivity.ts:167"
         ]
       },
       {
@@ -124324,7 +124328,7 @@
     {
       "op": "coding-runtime.repository-relay",
       "category": "security",
-      "site": "packages/keiko-server/src/repository-relay/repositoryRelayActivity.ts:64",
+      "site": "packages/keiko-server/src/repository-relay/repositoryRelayActivity.ts:68",
       "package": "keiko-server"
     },
     {
@@ -126728,6 +126732,13 @@
       "package": "keiko-server"
     },
     {
+      "op": "relay.binding.revoke",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/relay/relayCapabilityStore.ts:102",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "request",
       "category": "http",
       "site": "packages/keiko-server/src/server.ts:487",
@@ -128274,6 +128285,7 @@
     "quality-intelligence.capsule-source",
     "reference-id.exhausted",
     "reference-id.issued",
+    "relay.binding.revoke",
     "repository.fingerprint-diff.completed",
     "request",
     "retrieval-activity.tryBuild",

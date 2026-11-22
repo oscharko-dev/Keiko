@@ -97,6 +97,30 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set(
   ).split(" "),
 );
 
+// A route pattern may end in a `*name` rest segment that stands for one or more path segments
+// (the repository relay's `*path`, #4522). Like a `:param` it is never a literal. The reducer folds
+// everything under such a route into ONE placeholder, so neither an artifact coordinate nor the
+// depth of the path reaches a log line, and a deep repository path is not refused for its length.
+// `route-template.test.ts` derives these heads from `API_ROUTES`, so a new rest route cannot be
+// added without the reducer learning it.
+export const REST_ROUTE_HEADS: readonly (readonly string[])[] = [
+  // `<head>/<one parameter segment>/<rest>`
+  ["api", "coding-sidecar", "repository"],
+];
+
+function foldRestSegments(segments: readonly string[]): readonly string[] {
+  for (const head of REST_ROUTE_HEADS) {
+    const restStart = head.length + 1;
+    if (
+      segments.length > restStart &&
+      head.every((literal, index) => segments[index] === literal)
+    ) {
+      return [...segments.slice(0, restStart), "*"];
+    }
+  }
+  return segments;
+}
+
 function isStaticRouteSegment(segment: string): boolean {
   return API_ROUTE_LITERAL_SEGMENTS.has(segment) || UI_ASSET_ROOT_SEGMENTS.has(segment);
 }
@@ -141,7 +165,10 @@ export const ROUTE_TEMPLATE_REDACTOR_ID = "keiko-server/route-template";
 export function redactRoutePath(pathname: string, maxLength: number): string | undefined {
   if (!pathname.startsWith("/")) return undefined;
   if (pathname === "/") return "/";
-  const segments = routeSegments(pathname);
+  const all = routeSegments(pathname);
+  // A traversal segment anywhere, even inside a rest segment, declines the whole value.
+  if (all.some((segment) => TRAVERSAL_SEGMENT_PATTERN.test(segment))) return undefined;
+  const segments = foldRestSegments(all);
   if (!isTemplatableRoute(segments)) return undefined;
   const template = segments
     .map((segment) => (isStaticRouteSegment(segment) ? segment : elidedSegment()))

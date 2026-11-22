@@ -75,8 +75,28 @@ const RUNTIME_MCP_ROUTE_PREFIX = "/api/coding-sidecar/mcp/";
 const RUNTIME_REPOSITORY_ROUTE_PREFIX = "/api/coding-sidecar/repository/";
 const PORT_PATTERN = /^[1-9]\d{0,4}$/u;
 
+// A dot segment in any spelling: `.`, `..`, `%2e`, `.%2E`, … and with an encoded separator
+// (`%2f`, `%5c`) or a backslash between segments, the spellings a path normaliser or a decoding
+// handler downstream may collapse.
+function hasDotSegment(pathname: string): boolean {
+  return pathname
+    .replaceAll(/%2f|%5c|\\/giu, "/")
+    .split("/")
+    .some((segment) => /^(?:\.|%2e){1,2}$/iu.test(segment));
+}
+
+/**
+ * The pathname a runtime-route exception is judged on, or "" when it is not one the router would
+ * also see unchanged. The router matches on `new URL(req.url).pathname`, which collapses dot
+ * segments (in any spelling) and turns a backslash into a slash; an exception judged on the raw text
+ * would admit a request whose raw form names a runtime route while the router serves another one
+ * (`…/repository/<id>/../../../chats` reaching `/api/chats` on a foreign Host). A path the URL
+ * parser would rewrite in any way, or that carries a dot segment, names no runtime route.
+ */
 function runtimePathname(url: string | undefined): string {
-  return (url ?? "").split("?", 1)[0] ?? "";
+  const raw = (url ?? "").split("?", 1)[0] ?? "";
+  if (hasDotSegment(raw) || !URL.canParse(raw, "http://127.0.0.1")) return "";
+  return new URL(raw, "http://127.0.0.1").pathname === raw ? raw : "";
 }
 
 function isRepositoryRelayRoute(url: string | undefined): boolean {

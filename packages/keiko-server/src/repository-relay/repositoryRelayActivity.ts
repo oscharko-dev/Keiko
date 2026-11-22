@@ -37,6 +37,7 @@ const REASONS = [
   "path-unsupported",
   "budget-exhausted",
   "redirect-refused",
+  "redirect-network-refused",
   "response-too-large",
   "upstream-failed",
   "upstream-rejected",
@@ -52,7 +53,10 @@ const REASONS = [
   "secret-too-short",
   "bindings-exhausted",
   "run-aborted",
-  "relay-unavailable",
+  "own-origin-invalid",
+  "relay-busy",
+  "client-stalled",
+  "upstream-timeout",
 ] as const;
 export type RepositoryRelayReason = (typeof REASONS)[number];
 

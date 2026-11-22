@@ -5,6 +5,9 @@ import {
 } from "@oscharko-dev/keiko-security";
 import type { RepositoryRelayReason } from "./repositoryRelayActivity.js";
 
+/** A client that drains nothing for this long is cut off, as a stalled SSE reader is. */
+export const REPOSITORY_RELAY_CLIENT_STALL_MS = 30_000;
+
 /**
  * How a repository relay hands an upstream body to the run (#4522): checked for a credential echo
  * before the run receives the bytes that spell it, streamed with back-pressure, and bounded.
@@ -86,17 +89,34 @@ export function refuseCredentialInHeader(
   );
 }
 
-async function writeChunk(response: ServerResponse, chunk: Uint8Array): Promise<void> {
+/**
+ * Writes one chunk and, when the socket's buffer is full, waits for it to drain. A client that
+ * drains nothing for `stallMs` is cut off as `client-stalled`, so one run that stops reading cannot
+ * pin a connection and the bytes queued for it (the stalled-reader rule of the SSE writer).
+ */
+export async function writeChunk(
+  response: ServerResponse,
+  chunk: Uint8Array,
+  stallMs: number,
+): Promise<void> {
   if (chunk.byteLength === 0 || response.write(chunk)) return;
-  await new Promise<void>((resolve) => {
-    const settle = (): void => {
-      response.off("drain", settle);
-      response.off("close", settle);
-      resolve();
+  const stalled = await new Promise<boolean>((resolve) => {
+    const settle = (didStall: boolean): void => {
+      clearTimeout(timer);
+      response.off("drain", onDrain);
+      response.off("close", onDrain);
+      resolve(didStall);
     };
-    response.once("drain", settle);
-    response.once("close", settle);
+    const onDrain = (): void => {
+      settle(false);
+    };
+    const timer = setTimeout(() => {
+      settle(true);
+    }, stallMs);
+    response.once("drain", onDrain);
+    response.once("close", onDrain);
   });
+  if (stalled) throw new RelayRefusal(408, "client-stalled");
 }
 
 export interface ResponseBudget {
@@ -104,6 +124,12 @@ export interface ResponseBudget {
   readonly responseMaxBytes: number;
   /** Charges the binding's total; throws a refusal when that is exhausted. */
   readonly charge: (bytes: number) => void;
+  /** Upstream progress, for the idle limit. */
+  readonly touch?: (() => void) | undefined;
+  /** Holds the buffered total of a text body against the process budget before it grows. */
+  readonly reserve?: ((totalBytes: number) => void) | undefined;
+  /** How long a client may leave a write undrained; the relay's default when absent. */
+  readonly stallMs?: number | undefined;
 }
 
 function chargeChunk(budget: ResponseBudget, total: number, size: number): number {
@@ -126,17 +152,19 @@ export async function pipeBinaryBody(
 ): Promise<number> {
   if (upstream.body === null) return 0;
   const holdBack = Math.max(0, ...byteForms.map((form) => form.length)) - 1;
+  const stallMs = budget.stallMs ?? REPOSITORY_RELAY_CLIENT_STALL_MS;
   let carry: Buffer = Buffer.alloc(0);
   let total = 0;
   for await (const chunk of upstream.body as unknown as AsyncIterable<Uint8Array>) {
+    budget.touch?.();
     total = chargeChunk(budget, total, chunk.byteLength);
     const window = Buffer.concat([carry, chunk]);
     if (containsForm(window, byteForms)) throw new RelayRefusal(502, "credential-in-response");
     const keep = Math.min(holdBack, window.length);
-    await writeChunk(response, window.subarray(0, window.length - keep));
+    await writeChunk(response, window.subarray(0, window.length - keep), stallMs);
     carry = Buffer.from(window.subarray(window.length - keep));
   }
-  await writeChunk(response, carry);
+  await writeChunk(response, carry, stallMs);
   return total;
 }
 
@@ -150,8 +178,10 @@ export async function readBoundedBody(
   const chunks: Uint8Array[] = [];
   let total = 0;
   for await (const chunk of upstream.body as unknown as AsyncIterable<Uint8Array>) {
+    budget.touch?.();
     total = chargeChunk(budget, total, chunk.byteLength);
     if (total > maxBytes) throw new RelayRefusal(502, "response-too-large");
+    budget.reserve?.(total);
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);

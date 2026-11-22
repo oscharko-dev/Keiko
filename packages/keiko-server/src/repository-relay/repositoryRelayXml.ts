@@ -15,8 +15,11 @@ export interface XmlElement {
 
 const XML_MAX_CHARS = 1024 * 1024;
 const XML_MAX_DEPTH = 64;
+// A tag's attributes are read as XML defines them, a quoted value that may hold `>` but no `<`: a
+// reader that ended the tag at the first `>` would take the rest of the value for character data
+// and resolve a different credential than Maven does. A tag whose attributes do not fit is refused.
 const TOKEN =
-  /<!\[CDATA\[(?<cdata>[\s\S]*?)\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<(?<close>\/)?(?<name>[A-Za-z_][\w.:-]*)(?:\s[^<>]*?)?(?<self>\/)?>|(?<text>[^<]+)/uy;
+  /<!\[CDATA\[(?<cdata>[\s\S]*?)\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<(?<close>\/)?(?<name>[A-Za-z_][\w.:-]*)(?:\s+[^\s=<>/"']+\s*=\s*(?:"[^"<]*"|'[^'<]*'))*\s*(?<self>\/)?>|(?<text>[^<]+)/uy;
 const REFERENCE =
   /&(?:(?<named>amp|lt|gt|quot|apos)|#(?<decimal>\d{1,7})|#x(?<hex>[0-9a-fA-F]{1,6}));/gu;
 const NAMED_ENTITIES: Readonly<Record<string, string>> = {

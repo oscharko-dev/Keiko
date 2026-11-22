@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import {
   base64Cores,
   RelayCapabilityStore,
@@ -13,8 +14,10 @@ interface Target extends RelayStoreTarget {
 function store(
   onRevoke?: (target: Target) => void,
   maxBindings?: number,
+  diagnostics?: ServerDiagnosticSink,
 ): RelayCapabilityStore<Target> {
   return new RelayCapabilityStore<Target>({
+    ...(diagnostics === undefined ? {} : { diagnostics }),
     freeze: (target) => Object.freeze({ ...target }),
     ...(onRevoke === undefined ? {} : { onRevoke }),
     ...(maxBindings === undefined ? {} : { maxBindings }),
@@ -71,6 +74,58 @@ describe("RelayCapabilityStore", () => {
     expect(relay.wasRevoked(first.relayId, undefined)).toBe(false);
     expect(relay.wasRevoked(other.relayId, other.capability)).toBe(false);
     expect(relay.authenticate(other.relayId, other.capability)).toBeDefined();
+  });
+
+  it("revokes every binding of a run before a throwing callback is reported, and reports each", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const seen: string[] = [];
+    const relay = store(
+      (target) => {
+        seen.push(target.label);
+        throw new TypeError("callback failed");
+      },
+      undefined,
+      { record: (record) => records.push(record) },
+    );
+    const first = bound(relay, "run-0001-aaaa", "a");
+    const second = bound(relay, "run-0001-aaaa", "b");
+    const other = bound(relay, "run-0002-bbbb", "c");
+    expect(() => {
+      relay.releaseRun("run-0001-aaaa");
+    }).not.toThrow();
+    // Both bindings of the run are revoked although the first callback threw.
+    expect(relay.authenticate(first.relayId, first.capability)).toBeUndefined();
+    expect(relay.authenticate(second.relayId, second.capability)).toBeUndefined();
+    expect(relay.wasRevoked(second.relayId, second.capability)).toBe(true);
+    expect(relay.authenticate(other.relayId, other.capability)).toBeDefined();
+    expect(seen).toEqual(["a", "b"]);
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({
+      correlationId: "run-0001-aaaa",
+      operation: "relay.binding.revoke",
+      source: "relay.relayCapabilityStore",
+      errorClass: "TypeError",
+    });
+    expect(records[0]?.frames).toBeDefined();
+    expect(JSON.stringify(records)).not.toContain("callback failed");
+  });
+
+  it("isolates a throwing callback of a binding revoked by its own signal", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const relay = store(
+      () => {
+        throw new Error("callback failed");
+      },
+      undefined,
+      { record: (record) => records.push(record) },
+    );
+    const controller = new AbortController();
+    const binding = bound(relay, "run-1", "a", controller.signal);
+    expect(() => {
+      controller.abort();
+    }).not.toThrow();
+    expect(relay.wasRevoked(binding.relayId, binding.capability)).toBe(true);
+    expect(records).toHaveLength(1);
   });
 
   it("revokes a binding whose own signal aborts, and refuses one already aborted", () => {
