@@ -28,7 +28,10 @@ import type {
   MemoryScope,
   MemoryStatus,
 } from "@oscharko-dev/keiko-contracts";
-import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  MEMORY_RETENTION_FORGETTER_SURFACE,
+  type MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
 import { memoryScopeKey } from "./memory-scope-sanitizer.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
@@ -93,23 +96,35 @@ function isProposalExpired(
   return nowMs - record.updatedAt > policy.expireProposalsAfterMs;
 }
 
+function historyRank(record: MemoryRecord): number {
+  return record.status === "superseded" ? 0 : 1;
+}
+
 // Returns the records that should be evicted by `maxRecordsPerScope`. Pinned records are
 // excluded from the count entirely so the cap applies to the non-pinned working set.
+// Records another rule already deletes count toward the cap, so the cap selects only among the
+// records that would remain.
 function selectOverflowEvictions(
   records: readonly MemoryRecord[],
   policy: MemoryRetentionPolicy,
+  alreadyDeleted: ReadonlySet<MemoryId>,
 ): readonly MemoryRecord[] {
   if (policy.maxRecordsPerScope === undefined) {
     return [];
   }
-  const nonPinned = records.filter((r) => !r.pinned);
+  const nonPinned = records.filter((r) => !r.pinned && !alreadyDeleted.has(r.id));
   if (nonPinned.length <= policy.maxRecordsPerScope) {
     return [];
   }
-  // Oldest-first by updatedAt, then by id so same-timestamp retention is deterministic
-  // across vault implementations and insertion orders.
+  // History (superseded) goes first, so the cap never evicts a fact the person still relies on
+  // while replaced values remain; the cap itself still counts every record, because it bounds
+  // storage. Oldest-first by updatedAt within each group, then by id so same-timestamp retention
+  // is deterministic across vault implementations and insertion orders.
   const sorted = [...nonPinned].sort(
-    (a, b) => a.updatedAt - b.updatedAt || String(a.id).localeCompare(String(b.id)),
+    (a, b) =>
+      historyRank(a) - historyRank(b) ||
+      a.updatedAt - b.updatedAt ||
+      String(a.id).localeCompare(String(b.id)),
   );
   const overflowCount = nonPinned.length - policy.maxRecordsPerScope;
   return sorted.slice(0, overflowCount);
@@ -158,7 +173,7 @@ function classifyScope(
       status: record.status,
     });
   }
-  for (const record of selectOverflowEvictions(records, policy)) {
+  for (const record of selectOverflowEvictions(records, policy, new Set(decisions.keys()))) {
     if (decisions.has(record.id)) {
       continue;
     }
@@ -200,7 +215,7 @@ export function applyMemoryRetention(options: ApplyMemoryRetentionOptions): Memo
   for (const decision of forgotten) {
     vault.deleteMemory(decision.memoryId, {
       tombstone: true,
-      forgetterSurface: "retention",
+      forgetterSurface: MEMORY_RETENTION_FORGETTER_SURFACE,
       reason: decision.reason,
       nowMs,
     });

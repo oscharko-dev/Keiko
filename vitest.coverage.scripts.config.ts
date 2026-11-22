@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import DurationSequencer from "./scripts/lib/vitest-duration-sequencer.mjs";
 import { vitestMaxWorkers } from "./scripts/lib/vitest-workers.mjs";
 
 import { PACKAGE_COVERAGE_GATE_SCRIPTS } from "./scripts/lib/package-coverage-gate-scripts.mjs";
@@ -28,6 +29,10 @@ export default defineConfig({
     // The shared bound (2 under CI, 4 locally, KEIKO_VITEST_MAX_WORKERS to choose); GEN-TEST-FLAKE-002.
     maxWorkers: vitestMaxWorkers(),
     testTimeout: 15_000,
+    // Quality-gate plan P5: the CI shards split the files by measured time, not by path hash, so
+    // no shard draws all the slow suites (scripts/lib/vitest-duration-sequencer.mjs). Every file
+    // still runs on exactly one shard; a stale time only worsens the balance.
+    sequence: { sequencer: DurationSequencer },
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "json-summary", "lcov"],

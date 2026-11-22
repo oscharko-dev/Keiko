@@ -271,11 +271,13 @@ function stopFile(folder, os) {
   return join(folder, os === "win32" ? "Stop Keiko.cmd" : "Stop Keiko.command");
 }
 
-// A person double-clicks the file; the shell (sh, cmd) runs it. cmd is given the quoted path
-// verbatim, as Explorer does, so a space in the path cannot split it.
-function shellInvocation(file, os) {
+// A person double-clicks the file; the shell (sh, cmd) runs it. cmd is given the path verbatim.
+// `/s` makes cmd remove the first and the last quote of everything after `/c`, so the path is
+// quoted twice: what remains is the path in one pair of quotes, and a space in it cannot split it.
+// Quoted once, cmd ran the path up to its first space (#4503).
+export function shellInvocation(file, os) {
   return os === "win32"
-    ? { command: "cmd.exe", args: ["/d", "/s", "/c", `"${file}"`], verbatim: true }
+    ? { command: "cmd.exe", args: ["/d", "/s", "/c", `""${file}""`], verbatim: true }
     : { command: "sh", args: [file], verbatim: false };
 }
 
@@ -455,20 +457,36 @@ async function qualify(options, session) {
   if (!checks.failed) await startStopChecks(session, options, os);
 }
 
-async function startStopChecks(session, options, os) {
-  const { checks, folder } = session;
-  const { target, version } = options;
-  const wrapper = (file, name, timeoutMs) =>
-    runWrapper(file, {
+/**
+ * Runs the session's start and stop files and keeps each one's output in `session.outputs`, so a
+ * failed run can show every start and stop in order (#4503). `run` is a seam for the test.
+ */
+export function recordingWrapper(session, os, run = runWrapper) {
+  return async (file, name, timeoutMs) => {
+    const result = await run(file, {
       env: session.env,
       cwd: homedir(),
       logPath: join(session.work, name),
       timeoutMs,
       os,
     });
+    session.outputs.push({ name, status: result.status, output: result.output });
+    return result;
+  };
+}
+
+/** Prints every start's and stop's output when a check of the run failed; silent otherwise. */
+export function reportFailedRun(session, log = console.log) {
+  if (session.checks.results.some((result) => !result.ok))
+    log(wrapperOutputReport(session.outputs));
+}
+
+async function startStopChecks(session, options, os) {
+  const { checks, folder } = session;
+  const { target, version } = options;
+  const wrapper = recordingWrapper(session, os);
   await checks.run("first-start-installs", async () => {
     const first = await wrapper(startFile(folder, os), "start-1.log", START_TIMEOUT_MS);
-    session.firstOutput = first.output;
     ensure(first.status === 0, `exit ${String(first.status)}`);
   });
   await checks.run("health-reports-version", async () => {
@@ -624,6 +642,7 @@ export async function runQualification(options) {
     parent: join(root, FOLDER_NAME_WITH_SPACE),
     state: join(homedir(), `.keiko-qualify-${token}`),
     port: await freePort(),
+    outputs: [],
   };
   session.env = {
     ...process.env,
@@ -638,9 +657,7 @@ export async function runQualification(options) {
     session.checks.results.push({ name: "run", ok: false, durationMs: 0, detail: String(error) });
     session.checks.print(`FAIL run: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
-    if (session.firstOutput !== undefined && session.checks.results.some((r) => !r.ok)) {
-      console.log(`--- last output of the first start (tail) ---\n${tail(session.firstOutput)}`);
-    }
+    reportFailedRun(session);
     cleanup(session, os);
   }
   return buildEvidence({
@@ -655,6 +672,20 @@ export async function runQualification(options) {
 
 function tail(text = "") {
   return text.split(/\r?\n/u).slice(-25).join("\n");
+}
+
+/**
+ * The output of every start and stop of a failed run, in the order they ran, each with its exit
+ * status. A second start that failed is explained only by what it printed (#4503).
+ */
+export function wrapperOutputReport(outputs) {
+  if (outputs.length === 0) return "--- no start or stop ran ---";
+  return outputs
+    .map(
+      ({ name, status, output }) =>
+        `--- output of ${name} (exit ${String(status)}, tail) ---\n${tail(output)}`,
+    )
+    .join("\n");
 }
 
 async function main(argv) {

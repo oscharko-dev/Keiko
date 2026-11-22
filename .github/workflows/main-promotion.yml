@@ -10,6 +10,7 @@ jobs:
   only-dev-may-merge-to-main:
     name: Only dev may merge to main
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions: {}
     steps:
       - name: Confirm promotion source

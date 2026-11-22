@@ -931,7 +931,7 @@ describe("natural connected-folder context", () => {
         .join("\n");
       for (const interval of [731, 1193, 1687, 428])
         expect(content).toContain(`${String(interval)} Betriebsstunden`);
-      expect(content).not.toContain("9999");
+      expect(content).not.toMatch(/\b9999\b/u);
       expect(out.pack.usage.filesRead).toBe(4);
       expect(out.pack.diagnostics?.coverage).toMatchObject({
         filesDiscovered: 5,
@@ -944,7 +944,10 @@ describe("natural connected-folder context", () => {
       const prompt = sent.messages.map((message) => message.content).join("\n");
       expect(prompt).toContain("Candidate file evidence unavailable for reading/retrieval: 1.");
       expect(prompt).toContain("Current traversal incomplete: true; reasons: io-error.");
-      expect(prompt).not.toContain("9999");
+      // The prompt carries a per-run SHA-256 digest; a bare "9999" substring matched its hex by
+      // chance (#4481, run 44908385088). The unreadable file's number and its sentence stay out.
+      expect(prompt).not.toMatch(/\b9999\b/u);
+      expect(prompt).not.toContain("Unverified interval");
       expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(
         out.pack.budget.modelInputTokensMax,
       );

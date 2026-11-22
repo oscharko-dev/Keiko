@@ -1,0 +1,219 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "long-horizon-distractors-en",
+  "language": "en",
+  "class": "long-horizon",
+  "description": "A target fact among 300 unrelated facts and 20 newer near-topic facts that repeat more of the question's words than the target does. Limit: recall ranks by word overlap and recency and sends at most six memories, so verbose near-topic facts can push out the short exact one. Failure means: the exact fact never reaches the model although it is stored and valid. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (aged, unused accepted records are expected to be archived by maintenance).",
+  "seed": {
+    "records": [
+      {
+        "key": "target",
+        "body": "The audit review is in room Sycamore.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 30,
+        "truth": "room"
+      },
+      {
+        "key": "distractor-1",
+        "body": "The second quarter audit planning is booked in room Alder for the second quarter audit.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 2
+      },
+      {
+        "key": "distractor-2",
+        "body": "The second quarter audit kickoff is booked in room Birch for the second quarter audit.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 3
+      },
+      {
+        "key": "distractor-3",
+        "body": "The second quarter audit briefing is booked in room Cedar for the second quarter audit.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 4
+      },
+      {
+        "key": "distractor-4",
+        "body": "The second quarter audit workshop is booked in room Elm for the second quarter audit.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 5
+      },
+      {
+        "key": "distractor-5",
+        "body": "The second quarter audit debrief is booked in room Fir for the second quarter audit.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 6
+      },
+      {
+        "key": "distractor-6",
+        "body": "The second quarter audit training is booked in room Hazel for the second quarter audit.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 7
+      },
+      {
+        "key": "distractor-7",
+        "body": "The second quarter audit rehearsal is booked in room Larch for the second quarter audit.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 8
+      },
+      {
+        "key": "distractor-8",
+        "body": "The second quarter audit handover is booked in room Maple for the second quarter audit.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 9
+      },
+      {
+        "key": "distractor-9",
+        "body": "The second quarter audit preparation is booked in room Oak for the second quarter audit.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 10
+      },
+      {
+        "key": "distractor-10",
+        "body": "The second quarter audit followup is booked in room Pine for the second quarter audit.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 11
+      },
+      {
+        "key": "distractor-11",
+        "body": "The second quarter audit planning is booked in room Rowan for the second quarter booking.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 12
+      },
+      {
+        "key": "distractor-12",
+        "body": "The second quarter audit kickoff is booked in room Spruce for the second quarter booking.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 13
+      },
+      {
+        "key": "distractor-13",
+        "body": "The second quarter audit briefing is booked in room Willow for the second quarter booking.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 14
+      },
+      {
+        "key": "distractor-14",
+        "body": "The second quarter audit workshop is booked in room Yew for the second quarter booking.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 15
+      },
+      {
+        "key": "distractor-15",
+        "body": "The second quarter audit debrief is booked in room Aspen for the second quarter booking.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 16
+      },
+      {
+        "key": "distractor-16",
+        "body": "The second quarter audit training is booked in room Beech for the second quarter booking.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 17
+      },
+      {
+        "key": "distractor-17",
+        "body": "The second quarter audit rehearsal is booked in room Cypress for the second quarter booking.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 18
+      },
+      {
+        "key": "distractor-18",
+        "body": "The second quarter audit handover is booked in room Dogwood for the second quarter booking.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 19
+      },
+      {
+        "key": "distractor-19",
+        "body": "The second quarter audit preparation is booked in room Hickory for the second quarter booking.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 20
+      },
+      {
+        "key": "distractor-20",
+        "body": "The second quarter audit followup is booked in room Juniper for the second quarter booking.",
+        "type": "semantic-fact",
+        "scope": "project",
+        "status": "accepted",
+        "ageDays": 21
+      }
+    ],
+    "filler": [
+      {
+        "count": 300,
+        "status": "accepted",
+        "minAgeDays": 1,
+        "maxAgeDays": 80,
+        "seed": 104,
+        "scope": "project",
+        "type": "semantic-fact"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "room",
+      "seed": "The audit review is in room Sycamore.",
+      "must": false,
+      "terms": [["Sycamore"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "room",
+      "question": "Which room is booked for the audit review in the second quarter?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Sycamore"]]
+      }
+    },
+    {
+      "id": "room-plain",
+      "question": "Where is the audit review?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Sycamore"]]
+      }
+    }
+  ]
+}

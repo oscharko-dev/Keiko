@@ -1,0 +1,119 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "long-horizon-gewohnheit-de",
+  "language": "de",
+  "class": "long-horizon",
+  "description": "Reinforcement against recency: a standing habit confirmed six times 54 days ago and a one-week exception stated once two days ago, among 60 unrelated facts and four further preferences. Limit: what is sent is ranked by overlap, recency and use; both reach the model and a natural answer names the habit and the exception. Failure means: either the habit or the exception does not reach the answer; both passing is the expected result today, so the scenario is a control for the combination. Maintenance: run with maintenance on; fading of the aged records is part of what is measured (aged, unused accepted records are expected to be archived by maintenance). Kind: control.",
+  "seed": {
+    "records": [
+      {
+        "key": "habit",
+        "body": "Ich lese Berichte morgens vor dem ersten Termin.",
+        "type": "preference",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 54,
+        "accessCount": 6,
+        "lastAccessDays": 4,
+        "truth": "habit"
+      },
+      {
+        "key": "exception",
+        "body": "Diese Woche lese ich Berichte ausnahmsweise abends im Zug.",
+        "type": "semantic-fact",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 2,
+        "truth": "exception"
+      },
+      {
+        "key": "p1",
+        "body": "Ich trinke zum Arbeiten am liebsten grünen Tee.",
+        "type": "preference",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 30
+      },
+      {
+        "key": "p2",
+        "body": "Ich bevorzuge kurze Besprechungen mit klarer Tagesordnung.",
+        "type": "preference",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 22
+      },
+      {
+        "key": "p3",
+        "body": "Ich arbeite am liebsten mit zwei Bildschirmen.",
+        "type": "preference",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 15
+      },
+      {
+        "key": "p4",
+        "body": "Ich plane meine Woche am liebsten am Freitagnachmittag.",
+        "type": "preference",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 8
+      }
+    ],
+    "filler": [
+      {
+        "count": 60,
+        "status": "accepted",
+        "minAgeDays": 1,
+        "maxAgeDays": 56,
+        "seed": 103,
+        "scope": "user",
+        "type": "semantic-fact"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "habit",
+      "seed": "Ich lese Berichte morgens vor dem ersten Termin.",
+      "must": false,
+      "terms": [["morgens"], ["ersten Termin", "erstem Termin"]]
+    },
+    {
+      "key": "exception",
+      "seed": "Diese Woche lese ich Berichte ausnahmsweise abends im Zug.",
+      "must": false,
+      "terms": [["abend*"], ["Zug", "Bahn"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "standing",
+      "question": "Wann lese ich normalerweise meine Berichte?",
+      "expect": {
+        "kind": "answer",
+        "terms": [
+          ["morgens", "am morgen", "fruh*"],
+          ["ersten Termin", "erstem Termin"]
+        ]
+      }
+    },
+    {
+      "id": "this-week",
+      "question": "Wann lese ich diese Woche meine Berichte?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["abend*"], ["Zug", "Bahn"]]
+      }
+    },
+    {
+      "id": "both",
+      "question": "Wann lese ich normalerweise meine Berichte, und was gilt diese Woche?",
+      "expect": {
+        "kind": "answer",
+        "needs": ["habit", "exception"]
+      }
+    }
+  ]
+}

@@ -3,10 +3,15 @@ import type {
   MemoryAuditEvent,
   MemoryId,
   MemoryScope,
+  MemoryStatus,
   MemoryWorkflowContext,
   MemoryWorkflowPort,
 } from "@oscharko-dev/keiko-contracts";
-import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
+import { MEMORY_STATUSES, isMemoryStatusRecallable } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
+  retrieveMemoryContext,
+} from "@oscharko-dev/keiko-memory-retrieval";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { recordMemoryAudit, recordMemoryAudits } from "./memory-audit-handler.js";
@@ -117,6 +122,28 @@ function recordWorkflowRetrievalAudits(
   );
 }
 
+// Recall never reads rows whose status keeps them out (#4223), so they cannot crowd a live record
+// out of its bounded window. The workflow-omitted audit still names each of them, from its own read
+// bounded like the recall window.
+const RETIRED_STATUSES: readonly MemoryStatus[] = MEMORY_STATUSES.filter(
+  (status) => !isMemoryStatusRecallable(status),
+);
+
+function listRetiredOmissions(
+  vault: MemoryVaultStore,
+  scopes: readonly MemoryScope[],
+): readonly { readonly memoryId: MemoryId; readonly reason: string }[] {
+  return scopes.flatMap((scope) =>
+    vault
+      .listMemoriesByScope(scope, {
+        includeExpired: true,
+        status: RETIRED_STATUSES,
+        limit: DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
+      })
+      .map((record) => ({ memoryId: record.id, reason: "suppressed-by-status" })),
+  );
+}
+
 function recordWorkflowUsedAudit(
   options: WorkflowMemoryPortOptions,
   now: () => number,
@@ -168,7 +195,7 @@ function createWorkflowContextGetter(
       now,
       scopes,
       result.included.map((item) => item.memoryId),
-      result.omitted,
+      [...result.omitted, ...listRetiredOmissions(options.vault, scopes)],
     );
     return Promise.resolve({
       text: result.contextBlock.text,

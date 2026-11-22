@@ -268,6 +268,7 @@ interface SendResult {
         readonly tokens: number;
       };
       readonly budget: { readonly used: number };
+      readonly semanticFloor?: number;
     };
   };
 }
@@ -648,6 +649,79 @@ describe("semantic memory retrieval (#204)", () => {
     expect(ids[0]).toBe("mem-product");
     vault.close();
   });
+
+  it.each([
+    {
+      configured: "text-embedding-3-large",
+      model: "text-embedding-3-large",
+      floor: 0.3,
+      supplied: ["mem-product", "mem-weather"],
+    },
+    {
+      configured: "qwen3-embedding-8b",
+      model: "qwen3-embedding-8b",
+      floor: 0.4,
+      supplied: ["mem-product"],
+    },
+    // The size is unmeasured when the configured id names none, whatever the response names.
+    {
+      configured: "qwen3-embedding",
+      model: "qwen3-embedding-8b",
+      floor: 0.3,
+      supplied: ["mem-product", "mem-weather"],
+    },
+  ])(
+    "judges semantic scores against the floor of configured $configured ($model): $floor (#4228)",
+    async ({ configured, model, floor, supplied }) => {
+      const memoryDir = join(tmp, "vault-semantic-floor");
+      mkdirSync(memoryDir);
+      const vault = createMemoryVault({ memoryDir, redactString: (v) => v });
+      try {
+        insertAccepted(vault, "mem-product", "The user is building a product named Keiko");
+        insertAccepted(vault, "mem-weather", "a completely unrelated note about the weather");
+        for (const [id, text, cosine] of [
+          ["mem-product", "The user is building a product named Keiko", 0.6],
+          ["mem-weather", "a completely unrelated note about the weather", 0.35],
+        ] as const) {
+          storeEmbedding(vault, id, text, undefined, model);
+          const stored = vault.getEmbedding(id as MemoryId);
+          if (stored === undefined) throw new TypeError("Missing test vector");
+          const vector = new Float32Array(DIMENSIONS);
+          vector[0] = cosine;
+          vector[1] = Math.sqrt(1 - cosine * cosine);
+          vault.upsertEmbedding(id as MemoryId, { ...stored, vector });
+        }
+        const base = embeddingConfig(true);
+        await restart(
+          deps(
+            {
+              memoryVault: vault,
+              config: {
+                ...base,
+                providers: base.providers.map((provider) =>
+                  provider.modelId === EMBEDDING_MODEL
+                    ? { ...provider, modelId: configured }
+                    : provider,
+                ),
+              },
+              localKnowledgeEmbeddingRequest: () =>
+                Promise.resolve({
+                  ok: true,
+                  value: { vector: vectorFor("Produkt"), modelId: model },
+                }),
+            },
+            true,
+          ),
+        );
+        const result = await sendChat(await createChat(), "Wie heißt mein Produkt");
+        const ids = result.memory?.context.memories.map((m) => m.memoryId) ?? [];
+        expect(ids).toEqual(supplied);
+        expect(result.memory?.context.semanticFloor).toBe(floor);
+      } finally {
+        vault.close();
+      }
+    },
+  );
 
   it.each([true, false])(
     "resolves a same-endpoint display alias from the actual model response (compatible=%s)",

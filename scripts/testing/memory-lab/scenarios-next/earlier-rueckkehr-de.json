@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "earlier-rueckkehr-de",
+  "language": "de",
+  "class": "earlier-value",
+  "description": "The person returns to an earlier preference in the same words: Tabellen mit Summenzeile (seeded, superseded 60 days ago), Listen mit Nummerierung (seeded, accepted 30 days ago), and now Tabellen mit Summenzeile again in conversation. Limit: since #4223 the product keeps a superseded record as history, so it stays in the store and the return to the earlier preference is learned as a new statement; a question about the earlier value is answered from the superseded values recall sends under the current fact (at most two, nearest first, only for a question with a past cue). Failure means: the final value is not learned (fact-not-stored) or not answered although the person said it last; the earlier-value probe failing means the earlier value was not sent or not used, not a lost record. A superseded seeded record that disappears is a loss (seeded-record-lost). Maintenance: meaningful both ways; with maintenance on the superseded record is expected to stay, with --no-maintenance it shows whether retrieval could answer at all. Kind: defect.",
+  "seed": {
+    "records": [
+      {
+        "key": "tables-old",
+        "body": "Ich bevorzuge Tabellen mit Summenzeile, wenn du mir Zahlen zeigst.",
+        "type": "preference",
+        "scope": "user",
+        "status": "superseded",
+        "ageDays": 60
+      },
+      {
+        "key": "lists",
+        "body": "Ab jetzt bevorzuge ich Listen mit Nummerierung, wenn du mir Zahlen zeigst.",
+        "type": "preference",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 30,
+        "supersedes": "tables-old"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "now",
+      "seed": "Ich bevorzuge Tabellen mit Summenzeile, wenn du mir Zahlen zeigst.",
+      "must": true,
+      "terms": [["Tabelle*"], ["Summenzeile*"]]
+    }
+  ],
+  "superseded": [
+    {
+      "key": "lists",
+      "terms": [["Liste*"], ["Nummerier*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich bevorzuge Tabellen mit Summenzeile, wenn du mir Zahlen zeigst.",
+      "learner": [
+        {
+          "body": "Ich bevorzuge Tabellen mit Summenzeile, wenn du mir Zahlen zeigst.",
+          "type": "preference",
+          "relation": "update",
+          "related": 1
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "current",
+      "question": "Wie sollst du mir Zahlen zeigen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabelle*"], ["Summenzeile*"]],
+        "forbidden": [["Liste*"]]
+      }
+    },
+    {
+      "id": "previous",
+      "question": "Was habe ich dir vor meiner Rückkehr zu Tabellen für Zahlen genannt?",
+      "expect": {
+        "kind": "answer",
+        "earlier": ["lists"]
+      }
+    }
+  ]
+}

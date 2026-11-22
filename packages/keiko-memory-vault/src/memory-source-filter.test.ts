@@ -1,7 +1,14 @@
 import { DatabaseSync } from "node:sqlite";
 import { MIGRATIONS, runMigrations } from "./schema.js";
 import { describe, expect, it, vi } from "vitest";
-import { makeRecord, memId, openTestDb, TEST_CIPHER } from "./_support.js";
+import {
+  insertPreV17MemoryRow,
+  makeRecord,
+  memId,
+  openTestDb,
+  TEST_CIPHER,
+  TEST_SEALING,
+} from "./_support.js";
 import {
   deleteMemoryRow,
   insertMemoryRow,
@@ -20,7 +27,7 @@ describe("persisted source message filter", () => {
         ...base,
         provenance: { ...base.provenance, sourceMessageIds: ["message-1", "message-2"] },
       };
-      insertMemoryRow(db, target, TEST_CIPHER);
+      insertMemoryRow(db, target, TEST_SEALING);
       insertMemoryRow(
         db,
         {
@@ -30,12 +37,12 @@ describe("persisted source message filter", () => {
           updatedAt: base.updatedAt + 1,
           provenance: { ...base.provenance, sourceMessageIds: ["message-10"] },
         },
-        TEST_CIPHER,
+        TEST_SEALING,
       );
       insertMemoryRow(
         db,
         { ...target, id: memId("source-other-scope"), scope: { kind: "global" } },
-        TEST_CIPHER,
+        TEST_SEALING,
       );
       const options = { sourceMessageId: "message-1", limit: 1, includeExpired: true };
       expect(
@@ -69,7 +76,7 @@ describe("persisted source message filter", () => {
           validity: { validFrom: 100, validUntil: 200 },
           provenance: { ...base.provenance, sourceMessageIds: ["historical-source"] },
         },
-        TEST_CIPHER,
+        TEST_SEALING,
       );
       expect(
         listMemoriesByScopeRows(
@@ -120,7 +127,7 @@ describe("indexed source membership lifecycle", () => {
       insertMemoryRow(
         db,
         { ...record, provenance: { ...record.provenance, sourceMessageIds: ["sought"] } },
-        TEST_CIPHER,
+        TEST_SEALING,
       );
       const prepare = vi.spyOn(db, "prepare");
       expect(
@@ -162,7 +169,7 @@ describe("indexed source membership lifecycle", () => {
           sourceMessageIds: ["duplicate", "duplicate", 'escaped"source'],
         },
       };
-      insertMemoryRow(db, record, TEST_CIPHER);
+      insertPreV17MemoryRow(db, record);
       const sealed = (): unknown =>
         db.prepare("SELECT body FROM memories WHERE id=?").get(record.id)?.body;
       const originalBody = sealed();
@@ -182,13 +189,13 @@ describe("indexed source membership lifecycle", () => {
         provenance: { ...record.provenance, sourceMessageIds: ["replacement"] },
       };
       db.exec("BEGIN");
-      updateMemoryRow(db, changed, TEST_CIPHER);
+      updateMemoryRow(db, changed, TEST_SEALING);
       expect(sources()).toEqual(["replacement"]);
       db.exec("ROLLBACK");
       expect(sources()).toEqual(["duplicate", 'escaped"source']);
-      updateMemoryRow(db, changed, TEST_CIPHER);
+      updateMemoryRow(db, changed, TEST_SEALING);
       expect(sources()).toEqual(["replacement"]);
-      updateMemoryRow(db, { ...changed, body: "Edited body." }, TEST_CIPHER);
+      updateMemoryRow(db, { ...changed, body: "Edited body." }, TEST_SEALING);
       expect(sources()).toEqual(["replacement"]);
       expect(deleteMemoryRow(db, record.id)).toBe(true);
       expect(sources()).toEqual([]);
@@ -207,8 +214,8 @@ describe("indexed source membership lifecycle", () => {
         scope: { kind: "global" } as const,
         provenance: { ...base.provenance, sourceMessageIds: ["readable"] },
       };
-      insertMemoryRow(db, base, TEST_CIPHER);
-      insertMemoryRow(db, healthy, TEST_CIPHER);
+      insertPreV17MemoryRow(db, base);
+      insertPreV17MemoryRow(db, healthy);
       db.prepare("UPDATE memories SET source_message_ids_json = ? WHERE id = ?").run("[", base.id);
       runMigrations(db, TEST_CIPHER);
       expect(
@@ -230,7 +237,7 @@ describe("indexed source membership lifecycle", () => {
       updateMemoryRow(
         db,
         { ...base, provenance: { ...base.provenance, sourceMessageIds: ["repaired"] } },
-        TEST_CIPHER,
+        TEST_SEALING,
       );
       expect(
         listMemoryMetadataByScopeRows(

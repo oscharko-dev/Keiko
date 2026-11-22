@@ -11,6 +11,7 @@ import {
 } from "./browser-approval-client";
 import { createBrowserApprovalKey } from "./browser-approval-crypto";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
+import { createOriginLocksFixture } from "../test-utils/origin-locks-fixture";
 
 const ORIGIN = "http://127.0.0.1:1983";
 const AT = 1_800_000_000_000;
@@ -256,6 +257,20 @@ describe("browser approval client orchestration", () => {
     expect(h.store.save).not.toHaveBeenCalled();
     expect(h.store.forget).not.toHaveBeenCalled();
     expect(h.changed).toHaveBeenCalledOnce();
+  });
+
+  it("restores under the origin-wide renewal lock and returns the task's own result", async () => {
+    const locks = createOriginLocksFixture();
+    const lockRequest = vi.spyOn(locks, "request");
+    vi.stubGlobal("navigator", { locks });
+    const h = harness();
+    vi.mocked(h.api.inspect).mockResolvedValue({ state: "active", requests: [], approvals: [] });
+    await expect(createBrowserApprovalClient(h.options).restore()).resolves.toBe(true);
+    expect(lockRequest).toHaveBeenCalledOnce();
+    expect(lockRequest.mock.calls[0]?.[0]).toBe("keiko-browser-approval-renewal");
+    vi.mocked(h.api.inspect).mockResolvedValue({ state: "unavailable" });
+    await expect(createBrowserApprovalClient(h.options).restore()).resolves.toBe(false);
+    expect(lockRequest).toHaveBeenCalledTimes(2);
   });
 
   it("stops an aborted restoration wait without letting a late key start a challenge", async () => {

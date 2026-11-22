@@ -112,6 +112,40 @@ function integerFromEnv(name: string, min: number, max: number): number | undefi
   return value;
 }
 
+// A frequency floor ("vacuity guard") says that a generator reached a situation often enough for a
+// property to mean something. The exact share is asserted from `validatedRuns` upwards, the run
+// count the author validated it at. A shorter but still substantial run (KEIKO_PROPERTY_RUNS lowered
+// on purpose) must at least have reached the situation once, so it cannot pass vacuously. A handful
+// of runs is the replay of one seed (KEIKO_PROPERTY_RUNS=1 with KEIKO_PROPERTY_SEED): there the
+// property's own assertions decide, and a sampling quota must never replace the counterexample.
+export const MIN_RUNS_FOR_ANY_FLOOR = 50;
+
+export interface FrequencyFloor {
+  /** What was reached, for the message. */
+  readonly what: string;
+  /** How many of the runs reached it (or a count that grows with the runs). */
+  readonly count: number;
+  /** The runs actually made (`propertySettings(...).runs`). */
+  readonly runs: number;
+  /** The share of the runs that must be exceeded, validated at `validatedRuns`. */
+  readonly share: number;
+  /** The run count the share was validated at. */
+  readonly validatedRuns: number;
+}
+
+export function assertFrequencyFloor(floor: FrequencyFloor): void {
+  const { what, count, runs, share, validatedRuns } = floor;
+  if (runs >= validatedRuns) {
+    if (count > runs * share) return;
+    throw new Error(
+      `Vacuous property: "${what}" was reached ${String(count)} times in ${String(runs)} runs; more than ${String(runs * share)} are required.`,
+    );
+  }
+  if (runs >= MIN_RUNS_FOR_ANY_FLOOR && count === 0) {
+    throw new Error(`Vacuous property: "${what}" was never reached in ${String(runs)} runs.`);
+  }
+}
+
 export function propertySettings(options: {
   readonly name: string;
   readonly runs?: number;

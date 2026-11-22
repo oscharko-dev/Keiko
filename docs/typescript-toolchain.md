@@ -15,7 +15,7 @@ stable TypeScript 7 API and the dependent ecosystem have parity evidence.
 | ---------------------------------------- | ---------------------------------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | Root and package-reference compiler      | `@typescript/native`, an npm alias for stable TypeScript `7.0.x` | root `devDependencies`                          | TypeScript 7 provides the native multithreaded compiler but no programmatic API in 7.0.                                                    |
 | Productive compiler/language-service API | `typescript` `6.0.x`                                             | root and API-consuming workspace `dependencies` | Keiko Editor language services, workspace code intelligence, typed ESLint, and release scripts import this API.                            |
-| Embedded UI toolchain                    | `typescript` `5.7.3`                                             | `packages/keiko-ui`                             | Next.js and its embedded TypeScript integration remain version-isolated until the UI compatibility child issue proves a supported upgrade. |
+| Embedded UI toolchain                    | `typescript` `5.9.3`                                             | `packages/keiko-ui`                             | Next.js and its embedded TypeScript integration remain version-isolated until the UI compatibility child issue proves a supported upgrade. |
 
 The upstream rationale and compatibility package guidance are documented in the
 [TypeScript 7.0 announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#running-side-by-side-with-typescript-60).
@@ -50,7 +50,7 @@ the package suite cannot mutate the shared `dist` graph concurrently.
 
 The UI additionally runs `npm run typecheck:native --workspace @oscharko-dev/keiko-ui`. This checks
 every Keiko-owned UI TypeScript surface with the native 7.0 compiler while leaving the supported
-Next.js build and plugin integration on the workspace's TypeScript 5.7.3 package. Web API boundaries
+Next.js build and plugin integration on the workspace's TypeScript 5.9.3 package. Web API boundaries
 normalize binary data to exact, non-shared `ArrayBuffer` values; this preserves byte identity and
 avoids unsafe `BlobPart` or `BufferSource` casts.
 
@@ -128,7 +128,7 @@ Readiness was re-evaluated on 2026-07-11 after completing the compiler and UI co
 | Official stable API migration path | The 7.0 transition guidance requires side-by-side TypeScript 6 API use.          | blocked  |
 | Typed ESLint support               | The installed `typescript-eslint` peer contract supports TypeScript below 6.1.0. | blocked  |
 | Keiko UI source compatibility      | Supported UI typecheck and native 7.0 compatibility typecheck both pass.         | ready    |
-| Framework-supported UI API upgrade | Next.js remains isolated on the supported TypeScript 5.7.3 workspace toolchain.  | blocked  |
+| Framework-supported UI API upgrade | Next.js remains isolated on the supported TypeScript 5.9.3 workspace toolchain.  | blocked  |
 
 Issue #2269 therefore remains blocked by its mandatory readiness gate. Keiko retains the supported
 TypeScript 6.0 API without an internal or prerelease shim. Issue #2270 remains blocked by its entry

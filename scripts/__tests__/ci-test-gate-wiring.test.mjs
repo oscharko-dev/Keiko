@@ -492,8 +492,9 @@ describe("CI test/gate wiring guard", () => {
     // It uses the same pinned Node 26 setup and toolchain verification before staging the package.
     // The portable secure-read matrix adds one governed Node 26 lane for all four native targets.
     // Firefox's isolated smoke matrix retains its own pinned setup and verification.
+    // WebKit's isolated smoke matrix, split out of the ui job (quality-gate plan P5), adds one more.
     // The Node 26-only baseline retires the duplicate compatibility matrix.
-    expect(nodeSetupCount).toBe(33);
+    expect(nodeSetupCount).toBe(34);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "(?:22|24)\./u);
     expect(ci).not.toContain("RUNTIME_QUALIFICATION_RESULT");
@@ -576,7 +577,7 @@ describe("CI test/gate wiring guard", () => {
   });
 
   it("keeps the supported UI compiler and TypeScript 7 compatibility check separate", () => {
-    expect(uiManifest.devDependencies.typescript).toBe("5.7.3");
+    expect(uiManifest.devDependencies.typescript).toBe("5.9.3");
     expect(uiManifest.scripts.typecheck).toBe("tsc --noEmit");
     expect(uiManifest.scripts["typecheck:native"]).toContain(
       "node ../../node_modules/@typescript/native/bin/tsc",

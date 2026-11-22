@@ -882,7 +882,7 @@ function joinDnsLookup(hostname: string): PendingDnsLookup {
   }
   if (abandonedDnsLookupCount() >= ABANDONED_DNS_LOOKUP_LIMIT) throw dnsSaturatedError();
   const pending: PendingDnsLookup = {
-    result: dnsLookup(hostname, { all: true, verbatim: true }),
+    result: dnsLookup(hostname, { all: true, order: "verbatim" }),
     waiters: 1,
   };
   pendingDnsLookups.set(hostname, pending);

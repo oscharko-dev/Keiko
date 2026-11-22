@@ -35,6 +35,7 @@ import {
   findSemanticDuplicate,
   insertSalienceMemoryWithNoveltyGate,
   memoryEmbeddingCalibrationFor,
+  memorySemanticFloorFor,
   type NoveltyInsertOutcome,
   memoryEmbeddingProviderIdentity,
   refreshMemoryEmbeddingAfterBodyEdit,
@@ -522,6 +523,79 @@ describe("memoryEmbeddingCalibrationFor", () => {
     ).toEqual({ semanticDedupThreshold: 0.95 });
   });
 
+  it("keeps a broader entry's thresholds when a more specific entry names only a floor (#4228)", () => {
+    const env = {
+      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+        "openai/text-embedding-3-large": { semanticMinScore: 0.5 },
+        "text-embedding-3-large": { mmrLambda: 0.6, semanticDedupThreshold: 0.95 },
+      }),
+    };
+    expect(
+      memoryEmbeddingCalibrationFor(env, { provider: "openai", modelId: "text-embedding-3-large" }),
+    ).toEqual({ semanticMinScore: 0.5, mmrLambda: 0.6, semanticDedupThreshold: 0.95 });
+  });
+
+  it("lets the more specific entry win a field both entries name", () => {
+    const env = {
+      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+        "openai/text-embedding-3-large": { mmrLambda: 0.5 },
+        "text-embedding-3-large": { mmrLambda: 0.6 },
+      }),
+    };
+    expect(
+      memoryEmbeddingCalibrationFor(env, { provider: "openai", modelId: "text-embedding-3-large" }),
+    ).toEqual({ mmrLambda: 0.5 });
+  });
+
+  it("parses semanticMinScore as a unit number and ignores invalid values (#4228)", () => {
+    const entry = (value: unknown): Readonly<Record<string, string>> => ({
+      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+        "openai/text-embedding-3-large": { semanticMinScore: value },
+      }),
+    });
+    const identity = { provider: "openai", modelId: "text-embedding-3-large" };
+    expect(memoryEmbeddingCalibrationFor(entry(0.37), identity)).toEqual({
+      semanticMinScore: 0.37,
+    });
+    expect(memoryEmbeddingCalibrationFor(entry(0), identity)).toEqual({ semanticMinScore: 0 });
+    expect(memoryEmbeddingCalibrationFor(entry(1.2), identity)).toEqual({});
+    expect(memoryEmbeddingCalibrationFor(entry(-0.1), identity)).toEqual({});
+    expect(memoryEmbeddingCalibrationFor(entry("0.4"), identity)).toEqual({});
+  });
+
+  it.each([
+    ["qwen3-embedding-8b", 0.4],
+    ["Qwen/Qwen3-Embedding-8B", 0.4],
+    ["openai/qwen3-embedding:8b", 0.4],
+    ["qwen3-embedding-8b-q4", 0.4],
+    ["qwen3_embedding_8B", 0.4],
+    ["qwen3-embedding", undefined],
+    ["qwen3-embedding-4b", undefined],
+    ["Qwen3-Embedding-0.6B", undefined],
+    ["qwen3-embedding-0.8b", undefined],
+    ["qwen3-embedding-18b", undefined],
+    ["qwen3-embedding-8bit", undefined],
+    ["qwen3-reranker-8b", undefined],
+    ["text-embedding-3-large", undefined],
+  ])("memorySemanticFloorFor the configured model %s is %s", (configured, expected) => {
+    const identity = { provider: "p", modelId: "response-model" };
+    expect(memorySemanticFloorFor({}, configured, identity)).toBe(expected);
+  });
+
+  it("lets the operator's floor, looked up on the response identity, win (#4228)", () => {
+    const env = {
+      KEIKO_MEMORY_EMBEDDING_CALIBRATION: JSON.stringify({
+        "response-model": { semanticMinScore: 0.5 },
+        "other-model": { mmrLambda: 0.6 },
+      }),
+    };
+    const floorOf = (configured: string, modelId: string): number | undefined =>
+      memorySemanticFloorFor(env, configured, { provider: "p", modelId });
+    expect(floorOf("qwen3-embedding-8b", "response-model")).toBe(0.5);
+    expect(floorOf("qwen3-embedding-8b", "other-model")).toBe(0.4);
+    expect(floorOf("text-embedding-3-large", "response-model")).toBe(0.5);
+  });
+
   it("ignores malformed calibration config and out-of-range values", () => {
     expect(
       memoryEmbeddingCalibrationFor(
@@ -805,6 +879,45 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     expect(kept.kind).toBe("inserted");
   });
 
+  // #4223: an unattended pass (retention) removed a REJECTED record. Its tombstone keeps refusing
+  // learned paraphrases, but the person's own statement outranks it, as the rejection did while the
+  // record existed; a tombstone the person wrote refuses both.
+  it.each([
+    ["retention", "learned capture", false, "suppressed-by-forget"],
+    ["retention", "the person's statement", true, undefined],
+    ["memory-center", "the person's statement", true, "suppressed-by-forget"],
+  ] as const)(
+    "after a %s tombstone, a paraphrase through %s settles as the person's refusal allows",
+    async (surface, _path, explicitStatement, reason) => {
+      const vDark = Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]);
+      const keyed = vi.fn((_request: OpenAIEmbeddingRequest) =>
+        Promise.resolve({
+          ok: true as const,
+          value: { vector: vDark, modelId: EMBEDDING_MODEL },
+        }),
+      );
+      const deps = makeDeps({ embeddingRequest: keyed });
+      const vault = makeVault();
+      const original = makeRecord("the user prefers dark mode", "id-original");
+      await insertSalienceMemoryWithNoveltyGate(deps, vault, original);
+      vault.updateMemory(original.id, { status: "rejected", staleReason: "no" }, Date.now());
+      vault.deleteMemory(original.id, {
+        tombstone: true,
+        forgetterSurface: surface,
+        reason: "user-request",
+        nowMs: Date.now(),
+      });
+
+      const paraphrase = makeRecord("a dark interface is what the user likes", "id-paraphrase");
+      const outcome = await insertSalienceMemoryWithNoveltyGate(deps, vault, paraphrase, {
+        explicitStatement,
+      });
+
+      if (reason === undefined) expect(outcome.kind).toBe("inserted");
+      else expect(outcome).toEqual({ kind: "suppressed", reason });
+    },
+  );
+
   it("merges into a live PROPOSED near-duplicate instead of queueing a second review item", async () => {
     // The dedup corpus is live records, not accepted-only: a proposal already occupies the review
     // queue, so a re-capture of the same fact reinforces it rather than asking the operator twice.
@@ -843,6 +956,79 @@ describe("insertSalienceMemoryWithNoveltyGate (#204, O-F1)", () => {
     const bob = makeRecord("shared body text", "id-bob", "bob");
     const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, bob);
     expectInserted(result, bob.id);
+  });
+
+  // #4223: the neighbour window holds the 200 newest live rows, so a repeat of an older fact was
+  // stored a second time.
+  function insertNewerFillers(vault: MemoryVaultStore, count: number): void {
+    const start = Date.now() + 1;
+    for (let index = 0; index < count; index += 1) {
+      vault.insertMemory({
+        ...makeRecord(`filler fact number ${String(index)}`, `filler-${String(index)}`),
+        createdAt: start + index,
+        updatedAt: start + index,
+      });
+    }
+  }
+
+  it("merges an exact repeat of a fact older than the neighbour window (#4223)", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const canonical = makeRecord("I hand over my on-call duty every Monday morning.", "id-oncall");
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, canonical);
+    insertNewerFillers(vault, 210);
+
+    const repeat = makeRecord("i hand over my on-call duty every monday morning", "id-repeat");
+    const result = await insertSalienceMemoryWithNoveltyGate(deps, vault, repeat);
+
+    expect(result).toEqual({ kind: "merged", mergedInto: canonical.id });
+    expect(vault.getMemory(repeat.id)).toBeUndefined();
+  });
+
+  it("merges an exact repeat without an embedding model, and never into the fact it replaces", async () => {
+    const deps = makeDeps({ modelId: CHAT_MODEL });
+    const vault = makeVault();
+    const canonical = makeRecord("the user works in Leeds", "id-leeds");
+    vault.insertMemory(canonical);
+    insertNewerFillers(vault, 3);
+
+    const repeat = makeRecord("The user works in Leeds.", "id-repeat");
+    expect(await insertSalienceMemoryWithNoveltyGate(deps, vault, repeat)).toEqual({
+      kind: "merged",
+      mergedInto: canonical.id,
+    });
+    const replacement = makeRecord("The user works in Leeds.", "id-replacement");
+    expectInserted(
+      await insertSalienceMemoryWithNoveltyGate(deps, vault, replacement, {
+        replaces: canonical.id,
+      }),
+      replacement.id,
+    );
+  });
+
+  it("does not merge a fact whose fingerprint agrees but whose wording differs in symbols (#4223)", async () => {
+    const deps = makeDeps({ modelId: CHAT_MODEL });
+    const vault = makeVault();
+    vault.insertMemory(makeRecord("the user prefers C++", "id-cpp"));
+
+    const other = makeRecord("the user prefers C#", "id-csharp");
+    expectInserted(await insertSalienceMemoryWithNoveltyGate(deps, vault, other), other.id);
+  });
+
+  it("merges a repeat of an older fact behind more newer variants than one page holds (#4223)", async () => {
+    const deps = makeDeps({ modelId: CHAT_MODEL });
+    const vault = makeVault();
+    const oldest = makeRecord("the user prefers C++", "id-cpp");
+    vault.insertMemory({ ...oldest, createdAt: oldest.createdAt - 60_000 });
+    ["C#", "C", "C!", "C?", "C;", "C:", "C…", "C*", "C/", "C--", "C@"].forEach((suffix, index) => {
+      vault.insertMemory(makeRecord(`the user prefers ${suffix}`, `id-variant-${String(index)}`));
+    });
+
+    const repeat = makeRecord("The user prefers C++.", "id-repeat");
+    expect(await insertSalienceMemoryWithNoveltyGate(deps, vault, repeat)).toEqual({
+      kind: "merged",
+      mergedInto: oldest.id,
+    });
   });
 
   it("inserts without reading the neighborhood when no embedding model is configured", async () => {

@@ -48,7 +48,18 @@ const roots = [];
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
-const corpus = scenarioSetManifest([scenario]);
+// A probe that names the truths it needs and carries no `terms` of its own (#4207).
+const needsScenario = validateScenario({
+  ...scenario,
+  id: "synthetic-needs-control-en",
+  probes: [
+    {
+      id: "needs-only",
+      question: "When do we release?",
+      expect: { kind: "answer", needs: ["release-day"] },
+    },
+  ],
+});
 const counters = {
   credential: 0,
   identifier: 0,
@@ -62,9 +73,9 @@ function writeJson(file, value) {
 function readJson(file) {
   return JSON.parse(readFileSync(file, "utf8"));
 }
-function makeUnit(arm, repetition) {
+function makeUnit(arm, repetition, spec = scenario) {
   return {
-    scenario: scenario.id,
+    scenario: spec.id,
     arm,
     repetition,
     language: "en",
@@ -85,7 +96,7 @@ function makeUnit(arm, repetition) {
       ],
       memories: [],
     },
-    probes: scenario.probes.map((probe) => ({
+    probes: spec.probes.map((probe) => ({
       id: probe.id,
       kind: probe.expect.kind,
       passed: true,
@@ -109,12 +120,12 @@ function rebuild(dir) {
   writeJson(join(dir, "summary.json"), summarizeLabRun(results));
   writeJson(join(dir, "scorecard.json"), buildLabScorecard(results, "2026-11-18T00:00:00.000Z"));
 }
-function fixture({ mode = "live", arms = ["product"] } = {}) {
+function fixture({ mode = "live", arms = ["product"], spec = scenario } = {}) {
   const root = mkdtempSync(join(tmpdir(), "keiko-recall-analyzer-selftest-"));
   roots.push(root);
   const scenarioDir = join(root, "scenarios");
   mkdirSync(scenarioDir);
-  writeJson(join(scenarioDir, "control.json"), scenario);
+  writeJson(join(scenarioDir, "control.json"), spec);
   const pair = ["before", "after"].map((side) => {
     const dir = join(root, side);
     mkdirSync(join(dir, "runs"), { recursive: true });
@@ -136,12 +147,12 @@ function fixture({ mode = "live", arms = ["product"] } = {}) {
       sealed: false,
       holdout: false,
     };
-    writeJson(join(dir, "manifest.json"), { ...corpus, metadata });
+    writeJson(join(dir, "manifest.json"), { ...scenarioSetManifest([spec]), metadata });
     for (const arm of arms)
       for (let repetition = 0; repetition < 3; repetition += 1) {
         writeJson(
-          join(dir, "runs", `${scenario.id}.${arm}.r${repetition}.json`),
-          makeUnit(arm, repetition),
+          join(dir, "runs", `${spec.id}.${arm}.r${repetition}.json`),
+          makeUnit(arm, repetition, spec),
         );
       }
     rebuild(dir);
@@ -179,6 +190,13 @@ test("live pair uses manifest mode/model/config; extra control and three repetit
   assert.equal(result.negativeTransitions.introducedCount, 0);
   assert.deepEqual(result.repetitionsPresent, [0, 1, 2]);
   assert.equal(result.byRepetition[0].after.negativeProbeCount, 2);
+});
+test("a probe that names what it needs and has no terms of its own is analyzed, not a crash", () => {
+  const { pair } = fixture({ spec: needsScenario });
+  const result = analyze(pair);
+  assert.equal(result.after.positiveProbeCount, 3);
+  // Its needs are not read as terms: no store target is named for it (reported as unknown, not false).
+  assert.equal(result.after.availableTargetProbeCount, 0);
 });
 test("offline pair is explicitly labelled scripted echo", () => {
   const { pair } = fixture({ mode: "offline" });

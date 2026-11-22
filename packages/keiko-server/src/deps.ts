@@ -4536,7 +4536,7 @@ function composePersistenceTaskWorkspaceServices(
       workspaceLifecycle: withOptionalLocalCheckout(persistence, services, {
         evidenceStore,
         redactString,
-        now: Date.now,
+        now: () => Date.now(),
         activityLog: options.activityLog,
       }),
     },
@@ -4774,7 +4774,7 @@ function atlassianConnectorRegistryFields(
 } {
   const approvalRegistry =
     options.atlassianActionApprovalRegistry ??
-    new AtlassianActionApprovalRegistry(Date.now, store.chatToolReadGrants);
+    new AtlassianActionApprovalRegistry(() => Date.now(), store.chatToolReadGrants);
   const syncRegistry = options.atlassianSyncJobRegistry ?? new AtlassianSyncJobRegistry();
   return {
     atlassianActionApprovalRegistry: approvalRegistry,
@@ -4843,7 +4843,7 @@ function createComposedDapRouteService(
   return createDapDebugRouteService({
     production,
     stateDir: dirname(args.resolvedUiDbPath),
-    now: Date.now,
+    now: () => Date.now(),
     activation: async (realRoot) => {
       runtime.workspaceRoots.set(inspectDebugWorkspaceIdentity(realRoot).identityDigest, realRoot);
       const snapshot = await peripherals.editorSettingsControl.read(realRoot);
@@ -4956,7 +4956,7 @@ function createQualifiedDapProductionService(
         );
         return Promise.resolve();
       },
-      now: Date.now,
+      now: () => Date.now(),
       epoch: () => 0,
       activationCurrent: (partition, revision): boolean =>
         dapActivationCurrent(runtime, peripherals.debugActivationControl, partition, revision),

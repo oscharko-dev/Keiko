@@ -11,7 +11,13 @@ export type LifecycleHealthOutcome =
   | "health-timeout"
   | "identity-mismatch"
   | "spawn-refused"
-  | "state-dir-unavailable";
+  | "state-dir-unavailable"
+  // A second start found its tracked UI (#4504): alive and verified but not answering in time, so
+  // it was left running; answering with another version; or not answering without a verified
+  // launch identity. The two stale outcomes restart it.
+  | "busy"
+  | "stale-version"
+  | "stale-unreachable";
 
 const LIFECYCLE_HEALTH_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -38,8 +44,13 @@ const LIFECYCLE_HEALTH_OPERATION = defineActivityLogOperation({
         "identity-mismatch",
         "spawn-refused",
         "state-dir-unavailable",
+        "busy",
+        "stale-version",
+        "stale-unreachable",
       ],
     },
+    // How often a second start asked its tracked UI's health again after the first probe (#4504).
+    healthRetries: { type: "integer", dataClass: "count", required: false },
     // How often the starting UI process's sign of life restarted the start window (#4358).
     lifeSigns: { type: "integer", dataClass: "count", required: false },
     // How often a sign-of-life record was present but unreadable (a link, not a regular file).
@@ -62,10 +73,11 @@ export function emitLifecycleHealth(
   outcome: LifecycleHealthOutcome,
   launchBound: boolean,
   signs?: { readonly lifeSigns: number; readonly unreadableSigns: number },
+  healthRetries?: number,
 ): void {
   let errorKind: ActivityLogErrorKind = "unavailable";
-  if (outcome === "health-timeout") errorKind = "timeout";
-  if (outcome === "identity-mismatch") errorKind = "conflict";
+  if (outcome === "health-timeout" || outcome === "busy") errorKind = "timeout";
+  if (outcome === "identity-mismatch" || outcome === "stale-version") errorKind = "conflict";
   if (outcome === "state-dir-unavailable") errorKind = "permission-denied";
   emitSecurityLogEvent(
     sink,
@@ -84,6 +96,7 @@ export function emitLifecycleHealth(
         ...(signs === undefined
           ? {}
           : { lifeSigns: signs.lifeSigns, unreadableSigns: signs.unreadableSigns }),
+        ...(healthRetries === undefined ? {} : { healthRetries }),
       },
     ),
   );

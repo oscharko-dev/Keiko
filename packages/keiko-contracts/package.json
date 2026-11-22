@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-contracts",
-  "version": "1.5.5",
+  "version": "1.5.6",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: shared Keiko contracts. Not published independently.",
@@ -898,6 +898,10 @@
     "./runtime/bounded-concurrency": {
       "types": "./dist/bounded-concurrency.d.ts",
       "import": "./dist/bounded-concurrency.js"
+    },
+    "./memory-record-validation": {
+      "types": "./dist/memory-record-validation.d.ts",
+      "import": "./dist/memory-record-validation.js"
     }
   },
   "scripts": {

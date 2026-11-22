@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "difficulty": "plain",
+  "id": "near-miss-kollege-en",
+  "language": "en",
+  "class": "near-miss",
+  "description": "The person's own meeting-time preference, asked about for a colleague. Limit: recall admits a memory that shares one informative word with the question, with no check whose preference it is. Failure means: no-abstention or memory-on-unrelated-question; the person's own preference is supplied for a colleague's question. The abstain probe fails on an answer that applies the stored fact to the other object, whatever else it says; the no-memory probe fails only when a memory is retrieved at all, so the two measure different things and can fail apart. Maintenance: run with maintenance on or off; the seeded record is younger than 94 days. Kind: defect.",
+  "seed": {
+    "records": [
+      {
+        "key": "pref",
+        "body": "I prefer morning meetings.",
+        "type": "preference",
+        "scope": "user",
+        "status": "accepted",
+        "ageDays": 14,
+        "truth": "pref"
+      }
+    ]
+  },
+  "truth": [
+    {
+      "key": "pref",
+      "seed": "I prefer morning meetings.",
+      "must": false,
+      "terms": [["morning"]]
+    }
+  ],
+  "turns": [],
+  "probes": [
+    {
+      "id": "colleague",
+      "question": "What meeting time did I tell you my colleague Dana prefers?",
+      "expect": {
+        "kind": "abstain",
+        "allow": ["pref"],
+        "forbidden": [["Dana", "colleague"], ["morning"]]
+      }
+    },
+    {
+      "id": "colleague-unrelated",
+      "question": "How long should a meeting with Dana last?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    }
+  ]
+}

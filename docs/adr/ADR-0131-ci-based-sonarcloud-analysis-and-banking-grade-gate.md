@@ -3,7 +3,8 @@
 ## Status
 
 Accepted (2026-07-11); amended 2026-09-03 to require dev-equivalent full-project analysis on every
-pull request targeting `dev`.
+pull request targeting `dev`; amended 2026-11-21 to run the full analysis after integration only
+(see "Amendment 2026-11-21" below, which supersedes the pull-request parts of D1 and D2).
 
 ## Context
 
@@ -52,9 +53,8 @@ aggregate that runs with `always()` and succeeds only when the protected-branch 
 and coverage/Sonar jobs all report `success`. Missing, cancelled, skipped, or failed dependencies
 therefore keep the required `ci` check red without forcing Sonar to wait behind unrelated package,
 retrieval, editor, and architecture gates. The scan itself still runs after "Coverage quality
-gates" so both LCOV reports exist. It runs only for pull requests targeting `dev` and pushes to
-`dev`; unrelated PR targets emit a successful not-applicable coverage/Sonar job rather than
-silently omitting the required aggregate evidence.
+gates" so both LCOV reports exist. It runs only for pushes to `dev` and manual dispatches
+(amendment 2026-11-21); on a pull request the job carries coverage evidence only.
 
 The scanner cache is disabled for the required analysis. This is deliberate even though it makes a
 pull-request scan take approximately as long as the subsequent `dev` scan: a cached pull-request
@@ -181,6 +181,30 @@ there is no API path to automate them even with an admin token:
 - Any change to the "Administer Issues" permission template (who may reclassify issues as Won't
   Fix/False Positive) — a governance decision, not a technical one, and never an action this ADR's
   automation performs regardless of API availability.
+
+## Amendment 2026-11-21 — full analysis after integration only
+
+Owner decision of 2026-11-21. The whole-project analysis outgrew the hosted runner: one TypeScript
+program over 6359 root files needed a Node.js bridge heap of about 10 GB beside a 4–6 GB scanner
+engine on a 15983 MB runner, so the pull-request verdict depended on swap and on which runner ran
+the job (#4481). Splitting the program into three parts left the largest part at 4518 of 6370
+program files, because imports pull the server into every part, and a 6144 MB bridge still ran out
+of memory. The gate had become the dominant source of pull-request runs that said nothing about the
+change.
+
+- The full SonarCloud analysis, its log verifier and the dev-evidence verifier run on every push
+  to `dev` and on a manual dispatch, never on a pull request. `scripts/check-sonar-pr-quality-gate.mjs`
+  is no longer a CI step. A finding on `dev` turns that run red and is repaired by the next pull
+  request.
+- On a pull request, Core quality runs `npm run check:sonar-rules` (the SonarJS rule engine over the
+  changed files, against the pull-request base), so the `ci` aggregate still fails on a SonarJS
+  finding the plugin can detect.
+- Before a push, `.githooks/pre-push` (installed with `node scripts/install-git-hooks.mjs`) runs
+  `npm run gates:sonar`: the real SonarJS analyzer over the changed files in the self-hosted local
+  SonarQube. It covers the rules the plugin does not ship. A hook can be skipped; the full
+  analysis on `dev` is the backstop.
+- `SonarCloud Code Analysis` is no longer a required status check of `dev`; it was removed from the
+  branch protection on 2026-11-21, which now requires nine checks.
 
 ## Consequences
 

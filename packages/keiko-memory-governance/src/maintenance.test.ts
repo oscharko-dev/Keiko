@@ -514,6 +514,19 @@ describe("planMemoryMaintenance — forget", () => {
     expect(planFor([r], emptyStats()).forget.map((f) => f.id)).toEqual(["m"]);
   });
 
+  it("keeps a superseded memory whose window was closed by its replacement (#4223)", () => {
+    const r = makeRecord({
+      id: "m",
+      status: "superseded",
+      confidence: 0.9,
+      createdAt: NOW - DAY,
+      validUntil: NOW - 1,
+    });
+    const plan = planFor([r], emptyStats());
+    expect(plan.forget).toEqual([]);
+    expect(plan.expire).toEqual([]);
+  });
+
   it("bounds forget to 25 per run in strength-ascending order", () => {
     const records: MemoryRecord[] = [];
     for (let i = 0; i < 40; i += 1) {

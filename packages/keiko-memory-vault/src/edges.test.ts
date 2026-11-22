@@ -7,7 +7,7 @@ import type {
   UserId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { insertMemoryRow } from "./memories.js";
-import { openTestDb, TEST_CIPHER } from "./_support.js";
+import { openTestDb, TEST_CIPHER, TEST_SEALING } from "./_support.js";
 import {
   deleteEdgeRow,
   insertEdgeRow,
@@ -58,9 +58,9 @@ function makeEdge(
 describe("edges insert + list", () => {
   it("inserts and lists outgoing/incoming edges", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("a"), TEST_CIPHER);
-    insertMemoryRow(db, makeMemory("b"), TEST_CIPHER);
-    insertMemoryRow(db, makeMemory("c"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("a"), TEST_SEALING);
+    insertMemoryRow(db, makeMemory("b"), TEST_SEALING);
+    insertMemoryRow(db, makeMemory("c"), TEST_SEALING);
     insertEdgeRow(db, makeEdge("e1", "a", "b", "supersedes", 1), TEST_CIPHER);
     insertEdgeRow(db, makeEdge("e2", "b", "c", "related", 2), TEST_CIPHER);
     expect(listOutgoingEdgeRows(db, "a" as MemoryId, TEST_CIPHER)).toEqual([
@@ -74,8 +74,8 @@ describe("edges insert + list", () => {
 
   it("orders by created_at ASC", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("a"), TEST_CIPHER);
-    insertMemoryRow(db, makeMemory("b"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("a"), TEST_SEALING);
+    insertMemoryRow(db, makeMemory("b"), TEST_SEALING);
     insertEdgeRow(db, makeEdge("e2", "a", "b", "related", 200), TEST_CIPHER);
     insertEdgeRow(db, makeEdge("e1", "a", "b", "supersedes", 100), TEST_CIPHER);
     const out = listOutgoingEdgeRows(db, "a" as MemoryId, TEST_CIPHER);
@@ -85,8 +85,8 @@ describe("edges insert + list", () => {
 
   it("round-trips confidence and provenanceSummary when set", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("a"), TEST_CIPHER);
-    insertMemoryRow(db, makeMemory("b"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("a"), TEST_SEALING);
+    insertMemoryRow(db, makeMemory("b"), TEST_SEALING);
     const edge: MemoryEdge = {
       ...makeEdge("e1", "a", "b", "supersedes"),
       confidence: 0.42,
@@ -99,10 +99,10 @@ describe("edges insert + list", () => {
 
   it("lists incident edges for a candidate set in one grouped result", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("a"), TEST_CIPHER);
-    insertMemoryRow(db, makeMemory("b"), TEST_CIPHER);
-    insertMemoryRow(db, makeMemory("c"), TEST_CIPHER);
-    insertMemoryRow(db, makeMemory("outside"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("a"), TEST_SEALING);
+    insertMemoryRow(db, makeMemory("b"), TEST_SEALING);
+    insertMemoryRow(db, makeMemory("c"), TEST_SEALING);
+    insertMemoryRow(db, makeMemory("outside"), TEST_SEALING);
     insertEdgeRow(db, makeEdge("e1", "a", "b", "supersedes", 1), TEST_CIPHER);
     insertEdgeRow(db, makeEdge("e2", "c", "b", "related", 2), TEST_CIPHER);
     insertEdgeRow(db, makeEdge("e3", "outside", "a", "related", 3), TEST_CIPHER);
@@ -118,7 +118,7 @@ describe("edges insert + list", () => {
 describe("edges FK enforcement", () => {
   it("rejects an edge whose from_memory_id does not exist", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("b"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("b"), TEST_SEALING);
     expect(() => {
       insertEdgeRow(db, makeEdge("e1", "missing", "b", "supersedes"), TEST_CIPHER);
     }).toThrow();
@@ -127,7 +127,7 @@ describe("edges FK enforcement", () => {
 
   it("rejects an edge whose to_memory_id does not exist", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("a"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("a"), TEST_SEALING);
     expect(() => {
       insertEdgeRow(db, makeEdge("e1", "a", "missing", "supersedes"), TEST_CIPHER);
     }).toThrow();
@@ -138,9 +138,9 @@ describe("edges FK enforcement", () => {
 describe("edges ON DELETE CASCADE", () => {
   it("removes incident edges when an endpoint memory is deleted", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("a"), TEST_CIPHER);
-    insertMemoryRow(db, makeMemory("b"), TEST_CIPHER);
-    insertMemoryRow(db, makeMemory("c"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("a"), TEST_SEALING);
+    insertMemoryRow(db, makeMemory("b"), TEST_SEALING);
+    insertMemoryRow(db, makeMemory("c"), TEST_SEALING);
     insertEdgeRow(db, makeEdge("e1", "a", "b", "supersedes", 1), TEST_CIPHER);
     insertEdgeRow(db, makeEdge("e2", "b", "c", "related", 2), TEST_CIPHER);
     db.prepare("DELETE FROM memories WHERE id = ?").run("b");
@@ -155,8 +155,8 @@ describe("edges ON DELETE CASCADE", () => {
 describe("deleteEdgeRow", () => {
   it("returns true when an edge is removed and false otherwise", () => {
     const db = openTestDb();
-    insertMemoryRow(db, makeMemory("a"), TEST_CIPHER);
-    insertMemoryRow(db, makeMemory("b"), TEST_CIPHER);
+    insertMemoryRow(db, makeMemory("a"), TEST_SEALING);
+    insertMemoryRow(db, makeMemory("b"), TEST_SEALING);
     insertEdgeRow(db, makeEdge("e1", "a", "b", "supersedes"), TEST_CIPHER);
     expect(deleteEdgeRow(db, "e1" as MemoryEdgeId)).toBe(true);
     expect(deleteEdgeRow(db, "e1" as MemoryEdgeId)).toBe(false);

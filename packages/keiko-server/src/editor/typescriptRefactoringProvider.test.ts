@@ -139,8 +139,29 @@ function missingImportDiagnostic(projectHandle: TypescriptProjectHandle): Langua
   return diagnostic;
 }
 
+// The provider calls only the `UserPreferences` overloads of the rename members. Declaring just those
+// keeps a fake's `getRenameInfo` / `findRenameLocations` keys from binding to the deprecated overloads.
+interface FakeRenameService {
+  readonly getRenameInfo: (
+    fileName: string,
+    position: number,
+    preferences: ts.UserPreferences,
+  ) => ts.RenameInfo;
+  readonly findRenameLocations: (
+    fileName: string,
+    position: number,
+    findInStrings: boolean,
+    findInComments: boolean,
+    preferences: ts.UserPreferences,
+  ) => readonly ts.RenameLocation[] | undefined;
+}
+
+type FakeLanguageService = Partial<
+  Omit<ts.LanguageService, keyof FakeRenameService> & FakeRenameService
+>;
+
 function fakeProject(
-  service: Partial<ts.LanguageService>,
+  service: FakeLanguageService,
   sourceByFile: Readonly<Record<string, string>>,
   limits: LanguageServiceLimits = DEFAULT_LANGUAGE_SERVICE_LIMITS,
 ): TypescriptProjectHandle {

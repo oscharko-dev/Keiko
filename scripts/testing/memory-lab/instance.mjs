@@ -12,7 +12,14 @@ import { readActivityEvents } from "../coding-workbench-lab/activity-log-events.
 import { buildDevBffEnv } from "../../lib/dev-bff-env.mjs";
 import { openCallKeys } from "./gateway-calls.mjs";
 import { LabConfigurationError } from "./isolation.mjs";
-import { ANSWERER_MODEL_ID, LEARNER_MODEL_ID } from "./scripted-model.mjs";
+import {
+  embeddingModelIds,
+  loadSubjectGateway,
+  scriptedEmbedderProvider,
+  withoutEmbedders,
+} from "./embedder.mjs";
+import { placeSeed } from "./seed-store.mjs";
+import { ANSWERER_MODEL_ID, EMBEDDER_MODEL_ID, LEARNER_MODEL_ID } from "./scripted-model.mjs";
 
 export const CEILINGS = Object.freeze([
   "governed-assist",
@@ -65,16 +72,19 @@ function offlineCapability() {
 }
 
 /** Gateway configuration pointing both lab model ids at the scripted model server. */
-function offlineGatewayConfig(baseUrl) {
+function offlineGatewayConfig(baseUrl, embedder) {
   return {
-    providers: [ANSWERER_MODEL_ID, LEARNER_MODEL_ID].map((modelId) => ({
-      modelId,
-      baseUrl,
-      timeoutMs: 60000,
-      maxRetries: 0,
-      retryBaseDelayMs: 100,
-      capability: offlineCapability(),
-    })),
+    providers: [
+      ...[ANSWERER_MODEL_ID, LEARNER_MODEL_ID].map((modelId) => ({
+        modelId,
+        baseUrl,
+        timeoutMs: 60000,
+        maxRetries: 0,
+        retryBaseDelayMs: 100,
+        capability: offlineCapability(),
+      })),
+      ...(embedder === "scripted" ? [scriptedEmbedderProvider(baseUrl)] : []),
+    ],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 1 },
   };
 }
@@ -118,6 +128,10 @@ async function labEnvironment(dir, options, source = process.env) {
     KEIKO_LOG_LEVEL: "info",
     [apiKeyEnvName(options.answerModelId)]: source[apiKeyEnvName(options.answerModelId)] ?? "lab",
     [apiKeyEnvName(options.learnModelId)]: source[apiKeyEnvName(options.learnModelId)] ?? "lab",
+    ...(options.embedder === "scripted" ? { [apiKeyEnvName(EMBEDDER_MODEL_ID)]: "lab" } : {}),
+    // The product runs one maintenance pass on the first memory-enabled turn of an instance; its own
+    // switch turns that off, so a run can measure a store the maintenance did not touch.
+    ...(options.maintenance === "off" ? { KEIKO_MEMORY_AUTO_MAINTAIN: "0" } : {}),
     [await launcherSecretEnvName()]: randomBytes(32).toString("hex"),
   };
   const folded = buildDevBffEnv({
@@ -214,16 +228,41 @@ function assertNoFoldedEnvironment(foldedKeys, allowed) {
   );
 }
 
-function writePrivateGatewayConfig(options, offline) {
+// The bytes of the private configuration: the scripted one offline; live, the operator's file as it
+// is, unless the run measures without an embedding model and the file names one.
+// Whether a run without an embedding model got one is decided by the subject's own resolver, before
+// and after: a configuration it still resolves an embedder from fails the unit. The lab's own offline
+// configuration names no embedder unless the scripted one is asked for.
+async function privateGatewayConfig(options, offline) {
+  if (offline)
+    return JSON.stringify(offlineGatewayConfig(options.fixture.baseUrl, options.embedder));
+  const original = readFileSync(options.configPath);
+  if (options.embedder !== "none") return original;
+  const gateway = options.gateway ?? (await loadSubjectGateway(options.subjectRoot));
+  const parsed = JSON.parse(original.toString("utf8"));
+  return embeddingModelIds(parsed, gateway).length > 0
+    ? JSON.stringify(withoutEmbedders(parsed, gateway))
+    : original;
+}
+
+async function writePrivateGatewayConfig(options, offline) {
   const configPath = join(options.dir, "gateway.json");
-  writeFileSync(
-    configPath,
-    offline
-      ? JSON.stringify(offlineGatewayConfig(options.fixture.baseUrl))
-      : readFileSync(options.configPath),
-    { mode: 0o600 },
-  );
+  writeFileSync(configPath, await privateGatewayConfig(options, offline), { mode: 0o600 });
   return configPath;
+}
+
+// The scenario's seed goes into the vault before the server opens it. The embedding model, when the
+// run has one, embeds the accepted records through the instance's own configuration.
+function seedFor(options, prepared, configPath) {
+  if (options.seed === undefined) return undefined;
+  return placeSeed({
+    seed: options.seed,
+    subjectRoot: options.subjectRoot,
+    memoryDir: prepared.env.KEIKO_MEMORY_DIR,
+    memoryKey: prepared.env.KEIKO_MEMORY_KEY,
+    project: prepared.project,
+    embedding: options.embedder === "none" ? undefined : { configPath, env: prepared.env },
+  });
 }
 
 /**
@@ -239,7 +278,7 @@ export async function startLabInstance(options) {
   // The product writes its configuration file back (credentials it persists at start, a context
   // window it adopts), so every instance gets a private copy and the operator's file is never
   // written; the runner checks that file's digest before each unit. Paths inside it must be absolute.
-  const configPath = writePrivateGatewayConfig(options, offline);
+  const configPath = await writePrivateGatewayConfig(options, offline);
   const answerModelId = offline ? ANSWERER_MODEL_ID : options.answerModelId;
   const learnModelId = offline ? LEARNER_MODEL_ID : options.learnModelId;
   const prepared = await labEnvironment(options.dir, {
@@ -248,8 +287,11 @@ export async function startLabInstance(options) {
     learnModelId,
     ceiling: options.ceiling,
     subjectRoot: options.subjectRoot,
+    embedder: options.embedder,
+    maintenance: options.maintenance,
   });
   assertNoFoldedEnvironment(prepared.foldedKeys, options.allowFoldedEnv);
+  const seed = await seedFor(options, prepared, configPath);
   const runtime = await subjectRuntime(options.subjectRoot);
   const started = await runtime.startObservedBff(
     options.dir,
@@ -272,6 +314,7 @@ export async function startLabInstance(options) {
     ...(learnsInPasses(options.subjectRoot) ? { learningIdleMs: LAB_LEARNING_IDLE_MS } : {}),
     project: prepared.project,
     foldedKeys: prepared.foldedKeys,
+    ...(seed === undefined ? {} : { seed }),
     answerModelId,
     learnModelId,
     baseUrl: started.bff.baseUrl,

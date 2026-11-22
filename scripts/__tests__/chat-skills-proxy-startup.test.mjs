@@ -4,8 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listenProxy, MODEL, startRuntime } from "../testing/chat-skills-lab/runtime.mjs";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  canonicalCompactionPrompts,
+  listenProxy,
+  MODEL,
+  startRuntime,
+} from "../testing/chat-skills-lab/runtime.mjs";
 
 const ports = vi.hoisted(() => ({ proxy: vi.fn(), fork: vi.fn(), session: vi.fn() }));
 vi.mock("../testing/coding-workbench-lab/chaos-proxy.mjs", async (original) => ({
@@ -19,6 +24,14 @@ vi.mock("../testing/coding-workbench-lab/lab-common.mjs", async (original) => ({
 }));
 
 let directory, proxy, listening, callback, child, runtime;
+
+// startRuntime reads the canonical compaction prompts from the built server on its first call. Cold,
+// that import took 6.8 s of the first case's 15 s on a quiet machine and the whole budget on a
+// loaded coverage runner (CI run 44952862116), while every later case took milliseconds. Paying it
+// once here keeps each case measuring the construction it tests.
+beforeAll(async () => {
+  await canonicalCompactionPrompts();
+}, 120_000);
 
 beforeEach(() => {
   directory = mkdtempSync(join(tmpdir(), "keiko-proxy-startup-"));

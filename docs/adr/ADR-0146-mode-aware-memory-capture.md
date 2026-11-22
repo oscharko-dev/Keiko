@@ -232,9 +232,29 @@ looked up by its name alone and keeps the question when nothing matches. Any oth
 reaches a memory only through the same word or an inflection of it, so "Java" does not reach
 "JavaScript".
 
+A pin protects a fact from every forget that does not come from a row the person picked. In the
+Memory window a forget by id names exactly the entry the person selected and confirmed, so it
+ignores the pin (#4214). In a Chat, and in the pending-forget replay of a learning pass, the id comes
+from a word match or from what "das" refers to; the pin keeps protecting there, the forget is not
+applied and the Chat says so (#4223). The exemption belongs to the call site, never to the selector
+kind. A forget by id names its entry, in the Memory window by a pick and in a Chat by the person's
+own words, and that naming is the acknowledgement an archived entry needs: both forget an archived
+memory, with its archived history. A sweep by scope or type names no entry and is refused (400),
+not failed, while it contains an archived memory (#4223).
+
+A forget tombstone the person wrote refuses every capture path. A tombstone an unattended pass wrote
+(the maintenance pass, an operator's retention policy) never makes a rejection stronger than it was
+while the rejected record existed: it refuses learned capture only where it removed a rejected
+record or records no status, and the person's own "Merke dir …" ignores it altogether (#4223). An
+unclassified writer still refuses every path.
+
 Saying a statement again confirms the existing memory through `recordAccess`, naming the chat,
 instead of storing a second record: in the same words without an embedder, and as a paraphrase through the existing
-novelty gate with one. A paraphrase of a forgotten fact is suppressed the same way.
+novelty gate with one. A paraphrase of a forgotten fact is suppressed the same way. The same words
+are found by the vault's body fingerprint index however old the stored fact is, also without an
+embedder, and so is an earlier rejection of them; only the paraphrase check reads the 200 newest live
+rows of the scope. The fingerprint ignores everything but letters and digits, so a repeat merges only
+when its wording also agrees apart from case, spacing and closing marks ("C++" is not "C#") (#4223).
 
 "Vergiss das" reaches what the last turn left behind, in any scope of the conversation and
 including a parked proposal, and goes through the one forget implementation with its audit preflight
@@ -258,7 +278,12 @@ carries a credential keeps only its hash and never reaches the embedding endpoin
 mean several memories, or there is nothing it could mean, the person is asked in one short sentence
 and nothing is deleted. A named forget that matches no memory is asked about the same way, because a
 clear request is never ignored. Each decision is recorded body-free as `memory.explicit.forget` or
-`memory.explicit.remember`.
+`memory.explicit.remember`. A forget line that reached a selection also carries the closed
+`selectorKind` (`by-id`, a sweep kind, or `statement` for words nothing was stored from), the
+`scopeKind`, `tombstoneWritten`, `forgottenCount` (memories deleted, including the earlier values of
+a corrected fact) and `tombstoneCount`, on the Chat and on the Memory window alike, so one entry, a
+sweep and a lineage can be told apart from the log alone. `failed` is a technical fault only; a
+governance refusal is `refused` and a missing memory is `not-found` (#4223).
 
 Only such a statement gets an answer in the chat, because the person asked. `explicitStatement` on the
 candidate or rejected action carries that; what is only learned, or a refusal of an ordinary message,
@@ -362,13 +387,45 @@ doubt Keiko learns too little rather than too much, because nobody approves what
 - **Relation.** The model labels `new`, `same`, `update` or `contradiction`; checks confirm it. A
   reversal, a changed number or a changed polarity replaces the older fact on its own. A new value
   in the same slot, or a stated change ("ab jetzt", "from now on"), replaces it only with the
-  model's label. A shared preference verb alone is no slot, so "Tabellen" and "Tee" both stand.
+  model's label. A clear correction ("Das war falsch", "I meant") is a stated change, also as a bare remark in the sentence just before the fact; a return to
+  an earlier value ("wieder", "again") is one only for a labelled fact whose frame it repeats, never
+  for a statement without a label (#4223). A shared preference verb alone is no slot, so
+  "Tabellen" and "Tee" both stand.
   The model's label alone replaces only a one-at-a-time value: an employer ("arbeitet bei"), a home
-  ("wohnt in"), a name, or a chosen preference for the same purpose. Another tool or liking needs a
+  ("wohnt in"), a name, or a chosen preference for the same purpose, whose value is one word or two
+  joined by "mit" or "with" at the same place ("Tabellen mit Summenzeile", not "Tee morgens").
+  Another tool or liking needs a
   stated change, and a statement that only adds ("auch", "also") never replaces. A claim of sameness that neither the lexical
   nor the semantic duplicate gate confirms stores nothing. A changed value is never a duplicate.
 - **Supersession** reuses the `supersedes` edge, the `superseded` status and the closed validity of
-  the human correction path, in one transaction with a precondition on the older fact. In every mode
+  the human correction path, in one transaction with a precondition on the older fact. A superseded
+  record is history (#4223): the maintenance pass never forgets it, even though its closed window has
+  ended, and only the person's own forget, or an operator's opt-in retention policy, deletes it. A
+  fact and the earlier values it replaced are one fact to the person: forgetting a live record, by a
+  statement in a Chat or by picking it in the Memory window, forgets with it every predecessor still
+  stored in its scope that is reachable over its `supersedes` edges, whatever its status now
+  (replaced, archived, expired, rejected), each with its own tombstone, so no earlier value is
+  learned again unattended. An edge into another scope is not followed and is counted as
+  `lineageSkippedCount`; the walk does not pass through such a record, so an earlier value reachable
+  only behind it stays, and that count is the signal (a trust boundary, pinned by a test). A named
+  forget counts a live record and its own predecessors as one match (the lineage collapses to the
+  newest matching record); two different facts that both match are still asked about. A record
+  counts as a history row only when a stored successor that is not rejected exists (an archived or
+  expired successor still counts: both can return to accepted). A rejected successor is passed
+  through: a value that replaced it again still makes the record history. A successor in another
+  scope counts too, so picking such a row forgets only that row and leaves the other owner's chain
+  intact. Picking a history row in the Memory
+  window, or naming only the old value, forgets exactly that record and the newer value stays; the
+  chain is kept whole around it. The vault keeps it whole on every delete, in the delete's own
+  transaction: each surviving predecessor of a deleted record is linked to each surviving successor,
+  through every other record the same transaction deletes, so a sweep, retention or maintenance that
+  removes a middle value cannot split one fact into two either. The bridge walks and links only records
+  of the deleted record's own scope, so a record behind a foreign-scope link is never pulled into reach
+  of a later forget. A pin that protects the live record in a Chat protects its history
+  too (#4223). A maintenance pass still forgets a record whose AUTHOR-STATED validity ended, but only
+  one in a status `shouldForget` forgets: `proposed`, `rejected`, `conflicted` or `expired`. An
+  `accepted` or `archived` record with an ended validity is kept (recall hides it), as is a
+  `superseded` one. In every mode
   the correction replaces the old fact in that transaction; only under an operator restriction (D2)
   does the new fact wait as a `correction` with its `corrects` edge, written in the same single
   transaction. A learned fact replaces only what Keiko learned in the person's own scope:
@@ -452,7 +509,30 @@ bodies or user text.
   until project memory (step 3) decides otherwise.
 - The Journal shows a forget only when a person asked for it (Memory Center, a clear statement in a
   Chat). The `memory:forgotten` audit event carries the tombstone's `forgetterSurface`, so retention
-  and maintenance tombstones never read as the person's decision.
+  and maintenance tombstones never read as the person's decision. Who refuses is defined once, in the
+  vault package (`forgetter-surfaces.ts`), and used by capture suppression and by this Journal
+  projection alike (#4223). A tombstone refuses a later statement, exact and semantic, when its
+  surface is the person's forget in a Chat (`chat-statement`) or in the Memory window
+  (`memory-center`), and also when the surface is unknown: a new or mistyped writer fails closed, so
+  a forgotten fact never comes back. Only the explicitly unattended surfaces do not refuse:
+  `memory-maintenance` and operator `retention`, a storage policy that records that Keiko removed a
+  record, not that a person refused the fact. Their tombstones stay in the ledger.
+
+  Operator retention tombstones therefore no longer refuse a statement, which reverses what the
+  first #4223 change recorded. Retention and maintenance never revive a fact the person rejected: an
+  unattended tombstone still refuses when it removed a `rejected` record (its stored original
+  status). It also refuses when it records no original status at all: such a row was written before
+  vault schema v4 added the column, a rejection can no longer be ruled out for it, and the predicate
+  fails closed. The cost is that a fact whose only tombstone is such a legacy row is not learned
+  again from conversation; every tombstone a record deletion has written since schema v4 carries
+  the status and is unaffected. A test scans every production source for
+  expressions that carry a surface literal or a classification constant (a property, a default
+  parameter or a positional argument), fails for an unclassified literal, requires the four known
+  writers by name and requires every exported surface constant to have a production use. A bare
+  variable or an unlisted helper that carries a surface is not recognised by the scan; the fail-closed
+  refusal is what protects such a writer. Superseded records are kept as
+  history until the person deletes them or an operator's opt-in retention removes them, and history
+  is never sent to the model: default recall and the standing profile hide closed validity windows.
 - Every capture decision the Journal shows is also one registered `memory.capture.decision`
   Activity Log line under the deciding turn's or request's correlation, written by the same
   writer: closed outcome, reason, effective mode, surface, scope kind and source kind, never a

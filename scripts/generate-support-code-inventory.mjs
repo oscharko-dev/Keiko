@@ -186,14 +186,14 @@ function collectOwnedVocabulary(node, tokens, source) {
 }
 
 function sameFileConstant(expression) {
-  const declarations = expression
-    .getSourceFile()
-    .statements.flatMap((statement) =>
-      ts.isVariableStatement(statement) &&
-      (statement.declarationList.flags & ts.NodeFlags.Const) !== 0
-        ? [...statement.declarationList.declarations]
-        : [],
-    );
+  const sourceFile = expression.getSourceFile();
+  // The declaration keyword itself, not a bitwise test of the node flags (javascript:S1529).
+  const declarations = sourceFile.statements.flatMap((statement) =>
+    ts.isVariableStatement(statement) &&
+    statement.declarationList.getFirstToken(sourceFile)?.kind === ts.SyntaxKind.ConstKeyword
+      ? [...statement.declarationList.declarations]
+      : [],
+  );
   return declarations.find(
     (declaration) =>
       ts.isIdentifier(declaration.name) && declaration.name.text === expression.expression.text,
@@ -470,11 +470,11 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(
   if (process.argv.includes("--check")) {
     if (readFileSync(join(repoRoot, target), "utf8") !== generated)
       throw new Error(
-        "Support code inventory is stale; run npm run generate:support-code-inventory",
+        "Support code inventory is stale; run npm run generate:support-code-inventory (or node scripts/fix-gate-drift.mjs)",
       );
     if (readFileSync(join(repoRoot, dataTarget), "utf8") !== data)
       throw new Error(
-        "Support code inventory data is stale; run npm run generate:support-code-inventory",
+        "Support code inventory data is stale; run npm run generate:support-code-inventory (or node scripts/fix-gate-drift.mjs)",
       );
   } else {
     writeFileSync(join(repoRoot, dataTarget), data);

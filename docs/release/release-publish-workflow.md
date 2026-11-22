@@ -50,11 +50,16 @@ A stable release starts from a reviewed, unpublished version already integrated 
    GitHub prerelease `npm-folder-<version>` (tag on the commit of `v<version>`, never marked latest).
    The prerelease is a transport for the tested ZIPs and grants no update trust. No product release
    workflow reads this one, so a failure here never blocks or alters a release; a failed run is
-   repeated by running it again, since nothing is published before every check passed. The publish
-   job runs in the deployment environment `npm-folder-publish`, which holds no secrets (the job uses
-   only `github.token`). The owner can add deployment protection rules to it (deployment branch
-   `dev`, required reviewer); the actor allowlist is the gate the workflow itself enforces. A draft
-   left by a failed run is deleted by the owner (`gh release delete npm-folder-<version> --yes`)
+   repeated by running it again, since nothing is published before every check passed. The tag
+   ruleset lets only the release-tag App and the owner create tags, so after the three legs pass
+   the `reserve-tag` job, in the `release-tagging` environment that holds the App credentials,
+   creates `npm-folder-<version>` at the commit of `v<version>`; it handles no downloaded artifact.
+   A tag with no release at exactly that commit is this publication's reservation: a repeated run
+   keeps it, and a tag at another commit is refused. The publish job runs in the deployment
+   environment `npm-folder-publish`, which holds no secrets (the job uses only `github.token` and
+   publishes on the existing tag). The owner can add deployment protection rules to it (deployment
+   branch `dev`, required reviewer); the actor allowlist is the gate the workflow itself enforces. A
+   draft left by a failed run is deleted by the owner (`gh release delete npm-folder-<version> --yes`)
    before the run is repeated; the run names it.
    [npm Folder Package: Download From GitHub](standalone-npm-package.md#download-from-github)
    has the verification commands.

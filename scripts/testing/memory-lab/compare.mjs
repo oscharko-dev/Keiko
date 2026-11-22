@@ -10,6 +10,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { compareStrings } from "../../lib/compare-strings.mjs";
+import { FAILURE_CLASSES } from "./failure-classes.mjs";
 import { HARD_COUNTERS } from "./score.mjs";
 
 const COMPARED_METRICS = Object.freeze([
@@ -25,8 +26,10 @@ const ROUND = 10000;
 // at least three of them.
 const MIN_REPETITIONS = 3;
 // What must be equal between two runs for their difference to mean anything: the kind of run, the
-// product configuration, the arms, the two models, the gateway configuration, the environment the
-// instance ran in and the lab code that measured.
+// product configuration, the arms, the two models, the gateway configuration, whether and with which
+// embedding model memory recall ran, the environment the instance ran in and the lab code that
+// measured. A run that does not record its embedding model (older than #4207's embedder option) is
+// "unrecorded" and compares with no recorded run.
 const PROVENANCE_FIELDS = Object.freeze([
   "mode",
   "memoryMode",
@@ -37,6 +40,11 @@ const PROVENANCE_FIELDS = Object.freeze([
   "budgetTokens",
   "brokenLearner",
   "configDigest",
+  "embedder",
+  "embeddingModelIds",
+  "maintenance",
+  "recallTrace",
+  "repetitions",
   "foldedKeys",
   "instrumentDigest",
 ]);
@@ -173,8 +181,16 @@ function metricDelta(baseline, candidate, arm, metric) {
   return { metric, before, after, delta, halfRange, minimumDetectable: floor, beyondNoise };
 }
 
+const RECORDED_SINCE_EMBEDDER = new Set([
+  "embedder",
+  "embeddingModelIds",
+  "maintenance",
+  "recallTrace",
+]);
+
 function provenanceOf(run, field) {
   const value = run.manifest.metadata?.[field];
+  if (value === undefined && RECORDED_SINCE_EMBEDDER.has(field)) return "unrecorded";
   return Array.isArray(value) ? JSON.stringify(value.toSorted(compareStrings)) : value;
 }
 
@@ -208,7 +224,68 @@ export function compareRuns(baseline, candidate, arm = "product") {
     noiseUnknown: deltas
       .filter((row) => row.beyondNoise === null && row.delta !== null && row.delta !== 0)
       .map((row) => row.metric),
+    failureClasses: compareFailureClasses(baseline, candidate, arm),
+    failureClassesUnavailable: missingFailureEvidence(baseline, candidate),
+    repetitions: {
+      baseline: baseline.manifest.metadata?.repetitions,
+      candidate: candidate.manifest.metadata?.repetitions,
+    },
   };
+}
+
+const NO_FAILURES = Object.freeze({ total: {}, keys: {} });
+
+function failureArm(run, arm) {
+  return run.summary.failureClasses?.byArm?.[arm];
+}
+
+/**
+ * Which side recorded no failure classes at all (a run older than the classes): `"baseline"`,
+ * `"candidate"`, or `undefined` when both recorded them or neither did. Such a side is unavailable
+ * evidence, not zero failures.
+ */
+export function missingFailureEvidence(baseline, candidate) {
+  const before = baseline.summary.failureClasses !== undefined;
+  const after = candidate.summary.failureClasses !== undefined;
+  if (before === after) return undefined;
+  return before ? "candidate" : "baseline";
+}
+
+/**
+ * The failed checks of one arm per failure class: the count in each run and the checks (unit and
+ * probe or fact) that fail in the candidate and did not fail in the baseline. Counts only. `null`
+ * when neither run recorded failure classes (a run older than the classes), so an old pair keeps its
+ * old rendering. A class that neither run has is left out. When only one run recorded them, the other
+ * side is unavailable (`null` count) and no check is called newly failing or gone: zero stays
+ * reserved for a run that recorded the classes and had no failure of that class.
+ */
+export function compareFailureClasses(baseline, candidate, arm = "product") {
+  const missing = missingFailureEvidence(baseline, candidate);
+  if (
+    baseline.summary.failureClasses === undefined &&
+    candidate.summary.failureClasses === undefined
+  )
+    return null;
+  const before = failureArm(baseline, arm) ?? NO_FAILURES;
+  const after = failureArm(candidate, arm) ?? NO_FAILURES;
+  return FAILURE_CLASSES.flatMap((name) => failureRow(name, before, after, missing));
+}
+
+// A side's count of one class: `null` when that run recorded no failure classes at all.
+function sideCount(arm, name, unavailable) {
+  return unavailable ? null : (arm.total[name] ?? 0);
+}
+
+// One class's row, or none when no recorded run has a failed check of it.
+function failureRow(name, before, after, missing) {
+  const baselineCount = sideCount(before, name, missing === "baseline");
+  const candidateCount = sideCount(after, name, missing === "candidate");
+  if ((baselineCount ?? 0) === 0 && (candidateCount ?? 0) === 0) return [];
+  // Without both sides there is no basis to call a check newly failing or gone.
+  const known = new Set(missing === undefined ? (before.keys[name] ?? []) : []);
+  const newlyFailing =
+    missing === undefined ? (after.keys[name] ?? []).filter((key) => !known.has(key)) : [];
+  return [{ class: name, baseline: baselineCount, candidate: candidateCount, newlyFailing }];
 }
 
 function meetsTargets(candidate, targets, arm) {
@@ -327,10 +404,60 @@ export function renderComparison(comparison, label) {
   return `${label}: ${comparison.deltas.map(deltaText).join(", ")}; hard counters ${hard}${differs}`;
 }
 
+const MAX_LISTED_KEYS = 10;
+
+function keyList(keys) {
+  const listed = keys.slice(0, MAX_LISTED_KEYS).join(", ");
+  const more = keys.length - MAX_LISTED_KEYS;
+  return more > 0 ? `${listed}, and ${String(more)} more` : listed;
+}
+
+/**
+ * The failure-class section of a comparison, one line per class that fails in either run:
+ * `class: baseline -> candidate` and, when the candidate fails checks the baseline did not, which
+ * ones. Empty when the runs recorded no failure classes. Counts only, never a rate.
+ */
+export function renderFailureClasses(comparison, label) {
+  const rows = comparison.failureClasses;
+  if (rows === null || rows === undefined) return [];
+  const missing = comparison.failureClassesUnavailable;
+  const note = [
+    ...(missing === undefined
+      ? []
+      : [`  (the ${missing} run recorded no failure classes: n/a, not zero)`]),
+    ...repetitionNote(comparison.repetitions),
+  ];
+  if (rows.length === 0 && note.length === 0)
+    return [`${label} failure classes: no failed check in either run`];
+  return [
+    `${label} failure classes (${comparison.arm} arm, failed checks):`,
+    ...note,
+    ...rows.map((row) => {
+      const added =
+        row.newlyFailing.length === 0 ? "" : `; newly failing: ${keyList(row.newlyFailing)}`;
+      return `  ${row.class}: ${countText(row.baseline)} -> ${countText(row.candidate)}${added}`;
+    }),
+  ];
+}
+
+// Counts are sums over every repetition, so a pair with different repetition counts is not comparable
+// by its raw totals: the table says so beside the numbers.
+function repetitionNote(repetitions) {
+  if (repetitions === undefined || repetitions.baseline === repetitions.candidate) return [];
+  const text = (value) => (value === undefined ? "unrecorded" : String(value));
+  return [
+    `  (counts are sums over repetitions: ${text(repetitions.baseline)} in the baseline, ${text(repetitions.candidate)} in the candidate; they are not comparable as they stand)`,
+  ];
+}
+
+const countText = (count) => (count === null ? "n/a" : String(count));
+
 /** Deterministic lines a person reads; the first word is the verdict. */
 export function renderJudgement(judgement) {
   const lines = [judgement.progress ? "PROGRESS" : `NO PROGRESS: ${judgement.reasons.join("; ")}`];
-  for (const row of judgement.comparisons)
+  for (const row of judgement.comparisons) {
     lines.push(renderComparison(row, `${row.model} ${row.part}`));
+    lines.push(...renderFailureClasses(row, `${row.model} ${row.part}`));
+  }
   return lines.join("\n");
 }

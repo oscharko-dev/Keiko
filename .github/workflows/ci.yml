@@ -63,18 +63,21 @@ permissions: {}
 # indistinguishable from a real defect, and that evidence binds an integration commit nothing else
 # re-measures (Issue #2704).
 concurrency:
-  # Code-head and metadata events cannot displace one another before either starts. Each class
-  # coalesces independently per PR; pushes supersede stale code evidence, while repeated metadata
-  # edits supersede stale metadata evidence. Non-PR integration runs remain groups of one. Both
-  # classes analyze the same SonarCloud pull request, so `coverage-sonar` serializes that per PR.
-  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.action == 'edited' && 'metadata' || 'code-head') || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # One group per pull request (ADR-0157 D5, amended 2026-11-21). A push or a base retarget cancels
+  # the run in flight, whose candidate it replaced. A title or body edit cancels nothing: it waits
+  # as the pending run until the run in flight finishes and then reuses that run's evidence when the
+  # candidate merge tree is unchanged (ADR-0178 D6), so an edit right after a push costs one short
+  # run instead of a second full matrix. Every pull-request run checks the title and body it carries,
+  # so a run that replaces a pending one loses no metadata verdict. Non-PR runs remain groups of one.
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action != 'edited' || github.event.changes.base != null) }}
 
 jobs:
   protected-branch-gate:
     name: Protected branch gate
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions: {}
     steps:
       - name: Confirm dev branch gate
@@ -127,6 +130,7 @@ jobs:
     name: Change scope
     if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -216,8 +220,43 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      # The review-bot suppression gate reads only the title and body of this event, so it runs
+      # here, before the resolver: a title- or body-only edit that reuses the earlier evidence of
+      # its candidate merge tree (ADR-0178 D6) still has its metadata checked (Core quality runs
+      # the same gate in a full matrix).
+      - name: Reject review-bot suppression in the pull-request metadata
+        if: ${{ github.event_name == 'pull_request' }}
+        run: node scripts/check-review-bot-suppression.mjs
+      # The name of this artifact records the candidate merge tree this run measures and the base it
+      # was built on. A later title- or body-only edit reuses this run's evidence only when it would
+      # measure exactly the same tree on the same base; a moved `dev` changes both.
+      - name: Record the candidate merge tree
+        id: candidate
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_SHA: ${{ github.sha }}
+        run: |
+          if [ "$(git rev-parse HEAD)" != "${KEIKO_CANDIDATE_SHA}" ]; then
+            echo "The checkout is not the candidate merge commit of this event."
+            exit 1
+          fi
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          mkdir -p "${RUNNER_TEMP}/candidate-tree"
+          printf '%s\n' "${tree}" > "${RUNNER_TEMP}/candidate-tree/tree.txt"
+          echo "tree=${tree}" >> "${GITHUB_OUTPUT}"
+      - name: Bind this run's evidence to its candidate merge tree
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-candidate-tree-${{ steps.candidate.outputs.tree }}-base-${{ github.event.pull_request.base.sha }}
+          path: ${{ runner.temp }}/candidate-tree/tree.txt
+          if-no-files-found: error
+          # A re-run of every job uploads the same name in the same run; the tree is the same.
+          overwrite: true
+          retention-days: 30
       - id: resolve
         env:
+          KEIKO_CANDIDATE_TREE_SHA: ${{ steps.candidate.outputs.tree }}
           KEIKO_EVENT_NAME: ${{ github.event_name }}
           KEIKO_HEAD_SHA: ${{ github.sha }}
           KEIKO_REPOSITORY: ${{ github.repository }}
@@ -435,6 +474,14 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=12288
       - run: npm run format:check
+      # ADR-0131 amendment (2026-11-21): the full SonarCloud analysis left the pull-request path, so
+      # the SonarJS rule engine runs here over the files this pull request changed. Unlike the
+      # pre-push hook, a pull request cannot skip this step.
+      - name: SonarJS rules on the changed files
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_NEW_CODE_BASE_REF: ${{ github.event.pull_request.base.sha }}
+        run: npm run check:sonar-rules
       - name: UI i18n guard
         env:
           KEIKO_I18N_GUARD_BASE_REF: ${{ github.base_ref }}
@@ -865,16 +912,17 @@ jobs:
       - coverage-scripts
       - coverage-ui
     runs-on: ubuntu-latest
-    # One SonarCloud analysis per pull request at a time (ADR-0157 D5). A title or body edit reruns
-    # the matrix on the unchanged head in the separate `metadata` group, and SonarCloud refuses a
-    # report whose analysis is older than one it has already processed for the pull request: on
-    # PR #3679 the push run's scan started first, finished last, was refused, and left the required
-    # `SonarCloud Code Analysis` check on the head `cancelled` with the quality gate OK. Serialized, a
-    # scan starts only after the previous one has submitted, so reports arrive in analysis order.
-    # Keyed on the pull request, not the head: a superseded run's scan files under the same pull
-    # request. Not cancelled: the waiting run still owes its own verdict. One pending slot suffices,
-    # because each workflow-level group holds one live run per pull request. Everything that is not
-    # a pull request keeps a group of one, for the reason the workflow-level `concurrency` records.
+    # One SonarCloud analysis per pull request at a time (ADR-0157 D5). SonarCloud refuses a report
+    # whose analysis is older than one it has already processed for the pull request: on PR #3679 a
+    # body edit's run scanned next to the push run, the push run's scan finished last, was refused,
+    # and left the required `SonarCloud Code Analysis` check on the head `cancelled`. Pull-request
+    # runs no longer scan (ADR-0131, amended 2026-11-21) and share one workflow-level group per pull
+    # request, but the group stays: should a pull-request scan ever return, reports still arrive in
+    # analysis order. Keyed on the pull request, not the head: a superseded run's scan files under
+    # the same pull request. Not cancelled: the waiting run still owes its own verdict. One pending
+    # slot suffices, because the workflow-level group holds one live run per pull request.
+    # Everything that is not a pull request keeps a group of one, for the reason the workflow-level
+    # `concurrency` records.
     concurrency:
       group: ci-sonar-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
       cancel-in-progress: false
@@ -1035,8 +1083,15 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: node scripts/check-lcov-source-mapping.mjs --base "$BASE_SHA" --head "$HEAD_SHA"
+      # ADR-0131 amendment (2026-11-21): the full SonarCloud analysis runs after integration only, on
+      # every push to `dev` and on a manual dispatch, never on a pull request. The whole-project scan
+      # needs most of a hosted runner's memory and was the one gate whose verdict depended on the
+      # runner rather than on the change. Pull requests are held by the pre-push SonarJS scan of the
+      # changed files (`.githooks/pre-push`, `npm run gates:sonar`) and by `check:sonar-rules` in
+      # Core quality; a finding this analysis reports on `dev` turns the `dev` run red and is
+      # repaired by the next pull request.
       - name: Resolve project version for SonarCloud
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         id: sonar-version
         run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Verify manual analysis is bound to remote dev
@@ -1051,7 +1106,7 @@ jobs:
           fi
           echo "sha=$actual" >> "$GITHUB_OUTPUT"
       - name: Restore the pinned Sonar Scanner CLI archive
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           # Keyed on the archive's own pinned digest, so a new scanner version or a corrected
@@ -1063,7 +1118,7 @@ jobs:
       - name: Download Sonar Scanner CLI
         # Downloaded and checksum-verified directly rather than through a marketplace action whose
         # license is denied by the repository dependency-review policy.
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         run: |
           set -euo pipefail
           scanner_zip="$RUNNER_TEMP/sonar-scanner-cli.zip"
@@ -1077,7 +1132,7 @@ jobs:
           unzip -q "$scanner_zip" -d "$RUNNER_TEMP"
           echo "SONAR_SCANNER_HOME=$RUNNER_TEMP/sonar-scanner-8.1.0.6389-linux-x64" >> "$GITHUB_ENV"
       - name: SonarCloud CI-based analysis (ADR-0131 / ADR-0134)
-        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
         id: sonar-scan
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -1087,11 +1142,22 @@ jobs:
           # SonarCloud SCM sensor attributes changed lines to the real head instead of warning "detected
           # as changed but without having changed lines". Push/dispatch runs analyze their own head.
           SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.sonar-head.outputs.sha || github.sha }}
-          # The scanner JVM otherwise takes up to a quarter of the runner's memory, which the JS/TS
-          # analyzer's Node.js heap (sonar.javascript.node.maxspace) needs (#2360). The local gate
-          # runs the same full analysis with 768 MB.
-          SONAR_SCANNER_OPTS: "-Xmx1536m"
+          # Two JVMs run here. SONAR_SCANNER_OPTS sizes only the CLI bootstrapper; the provisioned
+          # scanner engine that holds the analysis reads SONAR_SCANNER_JAVA_OPTS
+          # (sonar.scanner.javaOpts). Uncapped, the engine took a quarter of the runner (3996 MB)
+          # beside the JS/TS analyzer's Node.js heap (sonar.javascript.node.maxspace) and the runner
+          # was lost mid-scan (#4481). The verify step below fails the job when both ceilings leave
+          # the runner less than its reserve. In CI a 9216 MB bridge ran out in the JS/TS phase and a
+          # 3072 MB engine in the architecture phase (2026-11-21); the ceilings that fit both exceed
+          # the runner's RAM, so the step adds swap first: the two heaps peak in different phases.
+          SONAR_SCANNER_OPTS: "-Xmx512m"
+          SONAR_SCANNER_JAVA_OPTS: "-Xmx6144m"
         run: |
+          sudo fallocate -l 8G /sonar-extra.swap
+          sudo chmod 600 /sonar-extra.swap
+          sudo mkswap /sonar-extra.swap >/dev/null
+          sudo swapon /sonar-extra.swap
+          free -m
           # ADR-0139 D6: transient SonarCloud-side provisioning or network failures retry with
           # backoff before failing closed; genuine quality-gate failures are never retried.
           for attempt in 1 2 3; do
@@ -1125,18 +1191,12 @@ jobs:
           node scripts/check-sonar-analysis-log.mjs
           --log "$RUNNER_TEMP/sonar-scanner.log"
           --require-full-analysis
-      - name: Verify SonarCloud Banking Grade PR evidence
-        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' }}
-        env:
-          SONAR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          SONAR_PULL_REQUEST: ${{ github.event.pull_request.number }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: node scripts/check-sonar-pr-quality-gate.mjs
+          --require-runner-memory-budget
+          --runner-swap-mb "$(awk '/^SwapTotal:/ { print int($2 / 1024) }' /proc/meminfo)"
       - name: Verify SonarCloud Banking Grade dev evidence
-        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
         env:
-          SONAR_HEAD_SHA: ${{ steps.sonar-head.outputs.sha }}
+          SONAR_HEAD_SHA: ${{ steps.sonar-head.outputs.sha || github.sha }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: node scripts/check-sonar-main-quality-gate.mjs
 
@@ -1196,12 +1256,14 @@ jobs:
       - coverage-sonar
       - cross-platform-smoke
       - firefox-smoke
+      - webkit-smoke
       - portable-secure-read
       - secret-scan
       - semantic-duplication
       - ui
       - sbom-provenance
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions: {}
     steps:
       - name: Aggregate required CI results fail closed
@@ -1214,6 +1276,7 @@ jobs:
           DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
           EDITOR_FAST_PR: ${{ github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor' }}
           FIREFOX_RESULT: ${{ needs.firefox-smoke.result }}
+          WEBKIT_RESULT: ${{ needs.webkit-smoke.result }}
           PORTABLE_SECURE_READ_RESULT: ${{ needs.portable-secure-read.result }}
           PROTECTED_BRANCH_RESULT: ${{ needs.protected-branch-gate.result }}
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
@@ -1252,7 +1315,7 @@ jobs:
                          "SECRET_SCAN:${SECRET_SCAN_RESULT:-}" "SEMANTIC_DUPLICATION:${SEMANTIC_DUPLICATION_RESULT:-}" \
                          "UI:${UI_RESULT:-}" "BUILD_SCAN_SBOM_SMOKE:${BUILD_SCAN_SBOM_SMOKE_RESULT:-}" \
                          "CROSS_PLATFORM:${CROSS_PLATFORM_RESULT:-}" \
-                         "FIREFOX:${FIREFOX_RESULT:-}" \
+                         "FIREFOX:${FIREFOX_RESULT:-}" "WEBKIT:${WEBKIT_RESULT:-}" \
                          "PORTABLE_SECURE_READ:${PORTABLE_SECURE_READ_RESULT:-}" \
                          "SBOM_PROVENANCE:${SBOM_PROVENANCE_RESULT:-}"; do
               state="${named#*:}"
@@ -1296,6 +1359,15 @@ jobs:
             fi
           elif [ "$FIREFOX_RESULT" != "success" ]; then
             echo "Both required Firefox smoke shards must succeed: $FIREFOX_RESULT"
+            exit 1
+          fi
+          if [ "$WEBKIT_RESULT" = "skipped" ]; then
+            if [ "$EDITOR_FAST_PR" != "true" ]; then
+              echo "WebKit smoke was skipped outside an editor fast-path PR."
+              exit 1
+            fi
+          elif [ "$WEBKIT_RESULT" != "success" ]; then
+            echo "Both required WebKit smoke shards must succeed: $WEBKIT_RESULT"
             exit 1
           fi
           # The cross-platform matrix is the only dependency allowed to be skipped, and only when the
@@ -1492,6 +1564,7 @@ jobs:
           scripts/__tests__/host-executable.test.mjs
           scripts/__tests__/host-npm-invocation.test.mjs
           scripts/__tests__/check-activity-log.test.mjs
+          scripts/__tests__/qualify-npm-folder-package.test.mjs
       - name: Build
         run: npm run build
       # Two separate steps (not one multi-line run): on the Windows runner the default shell is
@@ -1658,9 +1731,65 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  # Quality-gate hardening plan 2026-11-21, P5: the WebKit smoke ran serially inside `ui` for
+  # about 18 of its 47 minutes. Like Firefox, it runs the complete @smoke selection on its own
+  # runners, two shards, joined in required `ci`. This is a Safari engine proxy: Playwright's patched
+  # Linux WebKit is not byte-identical to Safari on Apple platforms, so it makes no Safari-only
+  # OS/media integration claim.
+  webkit-smoke:
+    name: WebKit smoke (shard ${{ matrix.shard }}/2)
+    needs: verified-tree
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && (github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor') && needs.verified-tree.outputs.tree-verified != 'true' }}
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install workspaces (single root lockfile after #167)
+        run: npm ci --ignore-scripts
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
+      - name: Build internal packages so contracts dist resolves for UI tsc
+        run: npm run build:packages
+      - name: Install Playwright WebKit
+        run: ./node_modules/.bin/playwright install --with-deps webkit
+      # Distribute the complete original selection across isolated runners. Each shard retains
+      # the existing single worker and 20-minute boundary; no journey or assertion is omitted.
+      - name: Release smoke E2E (WebKit Safari proxy)
+        timeout-minutes: 20
+        run: npm run test:e2e:smoke:webkit -- --shard=${{ matrix.shard }}/2
+      - name: Upload WebKit smoke traces on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-webkit-smoke-traces-${{ matrix.shard }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
   ui:
     name: ${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ui' || 'inactive PR - ui' }}
-    # Both browser verdicts join in required `ci`; Firefox is not an input to this job's work.
+    # Every browser verdict joins in required `ci`; Firefox and WebKit are not inputs to this job.
     needs: [verified-tree]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && needs.verified-tree.outputs.tree-verified != 'true' }}
     timeout-minutes: 60
@@ -1751,16 +1880,15 @@ jobs:
       - name: Install Playwright browser
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         # Chromium remains the reference browser for perf evidence. Firefox and WebKit run the same
-        # required functional @smoke journeys: Gecko covers a real second engine and Playwright's
-        # patched Linux WebKit is the executable Safari proxy. It is not byte-identical to Safari on
-        # Apple platforms, so this lane makes no Safari-only OS/media integration claim.
+        # required functional @smoke journeys in their own sharded jobs (firefox-smoke,
+        # webkit-smoke), joined in required `ci`, so this job installs Chromium only.
         # The LOCKFILE-resolved CLI, not `npx playwright@<version>`: a pinned version literal here is
         # a second source of truth that silently drifts from `package-lock.json` (it already said
         # 1.62.0 while the lockfile resolved 1.62.1). Browser revisions are chosen by the Playwright
         # version, so a mismatch installs browsers the runner's own test library never asked for and
         # decouples the CI evidence from the dependency graph the tests actually execute against.
         # `npm ci` above already installed this binary at the locked version.
-        run: ./node_modules/.bin/playwright install --with-deps chromium webkit
+        run: ./node_modules/.bin/playwright install --with-deps chromium
       - name: Release smoke E2E
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:smoke
@@ -1774,12 +1902,6 @@ jobs:
         run: |
           npm run check:update-ui-evidence
           npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage
-      # Same functional @smoke journeys on WebKit. This is a Safari engine proxy, not evidence for
-      # Apple-platform integration that Playwright's patched Linux runtime cannot reproduce.
-      - name: Release smoke E2E (WebKit Safari proxy)
-        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        timeout-minutes: 20
-        run: npm run test:e2e:smoke:webkit
       # The Playwright config records a trace for every failed test (`trace: "retain-on-failure"`),
       # and until now the runner threw it away: a browser smoke failure left only the truncated call
       # log in the check annotation, so the same failure had to be re-run to be understood. AGENTS.md
@@ -1851,6 +1973,42 @@ jobs:
           name: ui-sbom-cyclonedx
           path: ui-sbom.cdx.json
           retention-days: 90
+
+  # ADR-0178 D6: a title- or body-only edit reuses the evidence of an earlier green run on the same
+  # candidate merge tree, so `ui` and `build-scan-sbom-smoke` are skipped. GitHub does not evaluate a
+  # skipped job's name expression, so their checks carry that raw expression instead of the
+  # protected names, and branch protection waits for `ui` and `Build, scan, SBOM, smoke` forever.
+  # This job reports those two protected names for exactly that reuse, and fails closed unless the
+  # resolver verified the tree and named the run whose evidence it reuses.
+  reused-required-checks:
+    name: ${{ matrix.check }}
+    needs: verified-tree
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.state == 'open' && needs.verified-tree.outputs.tree-verified == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        check: ["Build, scan, SBOM, smoke", "ui"]
+    steps:
+      - name: Require the verified evidence this check reuses
+        env:
+          VERIFIED_TREE_RESULT: ${{ needs.verified-tree.result }}
+          TREE_VERIFIED: ${{ needs.verified-tree.outputs.tree-verified }}
+          EVIDENCE_RUN_ID: ${{ needs.verified-tree.outputs.evidence-run-id }}
+          EVIDENCE_TREE_SHA: ${{ needs.verified-tree.outputs.evidence-tree-sha }}
+          CHECK_NAME: ${{ matrix.check }}
+        run: |
+          if [ "$VERIFIED_TREE_RESULT" != "success" ] || [ "$TREE_VERIFIED" != "true" ]; then
+            echo "Verified-tree resolution did not verify this candidate tree."
+            exit 1
+          fi
+          if ! printf '%s' "$EVIDENCE_RUN_ID" | grep -Eq '^[0-9]+$' || ! printf '%s' "$EVIDENCE_TREE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Verified-tree resolution named no evidence run or tree."
+            exit 1
+          fi
+          echo "${CHECK_NAME}: reused from run ${EVIDENCE_RUN_ID}, which proved tree ${EVIDENCE_TREE_SHA}."
 
   sbom-provenance:
     name: Attest trusted SBOM provenance

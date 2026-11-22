@@ -44,6 +44,7 @@ function runCiAggregate(overrides = {}) {
       COVERAGE_SONAR_RESULT: "success",
       CROSS_PLATFORM_RESULT: "success",
       FIREFOX_RESULT: "success",
+      WEBKIT_RESULT: "success",
       DOCUMENTATION_ONLY: "false",
       EDITOR_FAST_PR: "false",
       PORTABLE_SECURE_READ_RESULT: "success",
@@ -58,14 +59,43 @@ function runCiAggregate(overrides = {}) {
 }
 
 describe("dev quality workflows", () => {
+  // ADR-0157 D5 (amended 2026-11-21): a metadata edit still produces its own required verdict, and
+  // it never cancels the code-head run in flight. It waits in the pull request's one group and then
+  // reuses that run's evidence for an unchanged candidate merge tree (ADR-0178 D6). A push or a base
+  // retarget replaces the candidate and cancels the run that measures the old one.
   it("reruns CI for metadata edits without displacing code-head evidence", () => {
     expect(ciWorkflow.on.pull_request.types).toContain("edited");
     expect(ciWorkflow.concurrency.group).toBe(
-      "ci-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.action == 'edited' && 'metadata' || 'code-head') || github.run_id }}",
+      "ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}",
     );
     expect(ciWorkflow.concurrency["cancel-in-progress"]).toBe(
-      "${{ github.event_name == 'pull_request' }}",
+      "${{ github.event_name == 'pull_request' && (github.event.action != 'edited' || github.event.changes.base != null) }}",
     );
+  });
+
+  // The reuse is only sound while the edit run checks the metadata it carries and every
+  // pull-request run records the candidate merge tree it measured.
+  it("checks the metadata and records the candidate merge tree before the resolver", () => {
+    const steps = ciWorkflow.jobs["verified-tree"].steps;
+    const index = (name) => steps.findIndex((step) => step.name === name);
+    const suppression = index("Reject review-bot suppression in the pull-request metadata");
+    const record = index("Record the candidate merge tree");
+    const bind = index("Bind this run's evidence to its candidate merge tree");
+    const resolve = steps.findIndex((step) => step.id === "resolve");
+    expect(suppression).toBeGreaterThan(-1);
+    expect(steps[suppression].run).toBe("node scripts/check-review-bot-suppression.mjs");
+    expect(steps[suppression].if).toBe("${{ github.event_name == 'pull_request' }}");
+    expect(record).toBeGreaterThan(suppression);
+    expect(steps[record].run).toContain('"$(git rev-parse HEAD)" != "${KEIKO_CANDIDATE_SHA}"');
+    expect(steps[record].env.KEIKO_CANDIDATE_SHA).toBe("${{ github.sha }}");
+    expect(bind).toBeGreaterThan(record);
+    expect(steps[bind].with.name).toBe(
+      "ci-candidate-tree-${{ steps.candidate.outputs.tree }}-base-${{ github.event.pull_request.base.sha }}",
+    );
+    expect(steps[bind].with["if-no-files-found"]).toBe("error");
+    expect(steps[bind].with.overwrite).toBe(true);
+    expect(resolve).toBeGreaterThan(bind);
+    expect(steps[resolve].env.KEIKO_CANDIDATE_TREE_SHA).toBe("${{ steps.candidate.outputs.tree }}");
   });
 
   // PR #3679: a body edit 48 s after a push put two scans of one pull request in flight, SonarCloud
@@ -85,16 +115,66 @@ describe("dev quality workflows", () => {
     // Outside the workflow-level namespace: a job-level group equal to a run's group would queue the
     // job behind runs, its own included.
     expect(concurrency.group.startsWith("ci-sonar-")).toBe(true);
-    // One pending slot holds only while each pull request has exactly two workflow-level classes that
-    // each cancel their superseded run. A third scan in the group would make GitHub cancel the older
-    // pending one, and that run's required `ci` would turn red.
-    expect(ciWorkflow.concurrency.group.match(/'(?:metadata|code-head)'/gu)).toEqual([
-      "'metadata'",
-      "'code-head'",
-    ]);
-    expect(ciWorkflow.concurrency["cancel-in-progress"]).toBe(
-      "${{ github.event_name == 'pull_request' }}",
+    // One pending slot holds only while a pull request has at most one live workflow-level run, so
+    // at most one scan can wait. A second contender in the group would make GitHub cancel the older
+    // pending one, and that run's required `ci` would turn red. Since 2026-11-21 the workflow-level
+    // group is ONE per pull request, never keyed on the event action, which is stricter than the
+    // two classes this pin first held.
+    expect(ciWorkflow.concurrency.group).not.toContain("github.event.action");
+    expect(ciWorkflow.concurrency.group).toContain(
+      "format('pr-{0}', github.event.pull_request.number)",
     );
+  });
+
+  // ADR-0131 amendment (2026-11-21): the whole-project SonarCloud scan needs most of a hosted
+  // runner's memory and was the one gate whose verdict depended on the runner. It runs after
+  // integration only; a pull request is held by the SonarJS rules on its changed files in Core
+  // quality and by the pre-push hook.
+  it("runs the full SonarCloud analysis after integration only and the SonarJS rules on every PR", () => {
+    const steps = ciWorkflow.jobs["coverage-sonar"].steps;
+    const sonarSteps = steps.filter(
+      (step) =>
+        /Sonar/u.test(step.name ?? "") && !/Verify governed Sonar analysis scope/u.test(step.name),
+    );
+    expect(sonarSteps.map((step) => step.name)).toEqual([
+      "Resolve project version for SonarCloud",
+      "Restore the pinned Sonar Scanner CLI archive",
+      "Download Sonar Scanner CLI",
+      "SonarCloud CI-based analysis (ADR-0131 / ADR-0134)",
+      "Verify Sonar full-analysis evidence",
+      "Verify SonarCloud Banking Grade dev evidence",
+    ]);
+    for (const step of sonarSteps) {
+      expect(step.if ?? "").not.toContain("pull_request");
+    }
+    expect(steps.find((step) => step.id === "sonar-scan").if).toBe(
+      "${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev') }}",
+    );
+    expect(ci).not.toContain("check-sonar-pr-quality-gate.mjs");
+
+    // The Banking Grade dev evidence is the compensating gate once PRs no longer run the full
+    // analysis: it verifies every dev push at the pushed SHA and a dispatch at the verified
+    // remote-dev SHA.
+    const devEvidence = steps.find(
+      (step) => step.name === "Verify SonarCloud Banking Grade dev evidence",
+    );
+    expect(devEvidence.if).toBe(
+      "${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}",
+    );
+    expect(devEvidence.env.SONAR_HEAD_SHA).toBe(
+      "${{ steps.sonar-head.outputs.sha || github.sha }}",
+    );
+    expect(devEvidence.run).toBe("node scripts/check-sonar-main-quality-gate.mjs");
+
+    const rules = ciWorkflow.jobs["core-quality"].steps.find(
+      (step) => step.name === "SonarJS rules on the changed files",
+    );
+    expect(rules).toEqual({
+      name: "SonarJS rules on the changed files",
+      if: "${{ github.event_name == 'pull_request' }}",
+      env: { KEIKO_NEW_CODE_BASE_REF: "${{ github.event.pull_request.base.sha }}" },
+      run: "npm run check:sonar-rules",
+    });
   });
 
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
@@ -255,22 +335,20 @@ describe("dev quality workflows", () => {
     );
   });
 
-  it("runs PR analysis on dev and binds manual full analysis to remote dev", () => {
+  it("analyzes dev after integration and binds manual full analysis to remote dev", () => {
     const scanner = ci.indexOf("SonarCloud CI-based analysis");
-    const verifier = ci.indexOf("Verify SonarCloud Banking Grade PR evidence");
     const mainVerifier = ci.indexOf("Verify SonarCloud Banking Grade dev evidence");
     expect(scanner).toBeGreaterThan(-1);
-    expect(verifier).toBeGreaterThan(scanner);
-    expect(mainVerifier).toBeGreaterThan(verifier);
+    expect(mainVerifier).toBeGreaterThan(scanner);
+    expect(ci).not.toContain("Verify SonarCloud Banking Grade PR evidence");
     expect(ci).toContain("github.base_ref == 'dev'");
-    expect(ci).toContain("SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}");
     expect(ci).toContain("Verify changed production sources are mapped into LCOV");
     expect(ci).toContain(
       "ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}",
     );
     expect(ci).toContain("Verify manual analysis is bound to remote dev");
     expect(ci).toContain('expected="$(git rev-parse refs/remotes/origin/dev)"');
-    expect(ci).toContain("SONAR_HEAD_SHA: ${{ steps.sonar-head.outputs.sha }}");
+    expect(ci).toContain("SONAR_HEAD_SHA: ${{ steps.sonar-head.outputs.sha || github.sha }}");
     expect(ci).toContain("node scripts/check-sonar-main-quality-gate.mjs");
   });
 
@@ -284,6 +362,7 @@ describe("dev quality workflows", () => {
       "build-scan-sbom-smoke",
       "cross-platform-smoke",
       "firefox-smoke",
+      "webkit-smoke",
       "ui",
     ];
 
@@ -330,7 +409,10 @@ describe("dev quality workflows", () => {
     );
     expect(sonarEvidence).toMatchObject({
       if: "${{ always() && steps.sonar-scan.outcome != 'skipped' }}",
-      run: 'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log" --require-full-analysis',
+      run:
+        'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log" ' +
+        "--require-full-analysis --require-runner-memory-budget " +
+        `--runner-swap-mb "$(awk '/^SwapTotal:/ { print int($2 / 1024) }' /proc/meminfo)"`,
     });
     expect(ci).not.toContain("oscharko-dev/Keiko/.github/actions/verify-");
     expect(ciWorkflow.jobs["coverage-sonar"]["timeout-minutes"]).toBe(50);
@@ -415,13 +497,23 @@ describe("dev quality workflows", () => {
     expect(unsafePathFallback).not.toContain('report_scope="all"');
   });
 
-  it("caps the scanner JVM so the JS/TS analyzer's Node.js heap keeps the runner memory (#2360)", () => {
+  // #2360 capped SONAR_SCANNER_OPTS, which sizes only the CLI bootstrapper; the provisioned engine
+  // JVM stayed at a quarter of the runner and the runner was lost mid-scan (#4481). Pin the engine
+  // cap itself and the log check that proves both heaps fit the runner on every analysis.
+  it("caps the scanner engine JVM and proves the runner memory budget (#2360, #4481)", () => {
     const scanAt = ci.indexOf("SonarCloud CI-based analysis");
-    const scanStep = ci.slice(
-      scanAt,
-      ci.indexOf("- name: Verify Sonar full-analysis evidence", scanAt),
+    const verifyAt = ci.indexOf("- name: Verify Sonar full-analysis evidence", scanAt);
+    const scanStep = ci.slice(scanAt, verifyAt);
+    const verifyStep = ci.slice(verifyAt, ci.indexOf("- name:", verifyAt + 1));
+    expect(scanStep).toMatch(/^\s+SONAR_SCANNER_OPTS: "-Xmx512m"$/mu);
+    expect(scanStep).toMatch(/^\s+SONAR_SCANNER_JAVA_OPTS: "-Xmx6144m"$/mu);
+    expect(scanStep).toMatch(/^\s+sudo swapon \/sonar-extra\.swap$/mu);
+    expect(verifyStep).toContain("--require-full-analysis");
+    expect(verifyStep).toContain("--require-runner-memory-budget");
+    expect(verifyStep).toContain("--runner-swap-mb");
+    expect(localSonarCompose).toContain(
+      'SONAR_SCANNER_JAVA_OPTS: "${KEIKO_LOCAL_SONAR_ENGINE_JAVA_OPTS:--Xmx2048m}"',
     );
-    expect(scanStep).toMatch(/^\s+SONAR_SCANNER_OPTS: "-Xmx1536m"$/mu);
   });
 
   it("keeps scanner files, logs, and working data outside the repository", () => {
@@ -444,7 +536,11 @@ describe("dev quality workflows", () => {
     expect(ci).toContain('--log "$RUNNER_TEMP/sonar-scanner.log"');
     expect(ci).toContain("--require-full-analysis");
     expect(ci).not.toContain("SONAR_SCANNER_STATUS:");
-    expect(ci).toContain("if: ${{ always() && github.event_name == 'workflow_dispatch' }}");
+    // Strengthened 2026-11-21: the dev evidence verifier runs on every dev push as well as on a
+    // dispatch, because pull requests no longer run the full analysis (ADR-0131 amendment).
+    expect(ci).toContain(
+      "if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}",
+    );
   });
 
   // A SonarCloud outage answered the report upload with "503 Service Temporarily Unavailable",
@@ -755,6 +851,8 @@ describe("dev quality workflows", () => {
     expect(aggregateJob).toContain("- cross-platform-smoke");
     expect(aggregateJob).toContain("- firefox-smoke");
     expect(aggregateJob).toContain("FIREFOX_RESULT");
+    expect(aggregateJob).toContain("- webkit-smoke");
+    expect(aggregateJob).toContain("WEBKIT_RESULT");
     expect(aggregateJob).not.toContain("- runtime-qualification");
     expect(aggregateJob).toContain("- ui");
     expect(aggregateJob).toContain("BUILD_SCAN_SBOM_SMOKE_RESULT");

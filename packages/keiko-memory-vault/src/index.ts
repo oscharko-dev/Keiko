@@ -22,6 +22,13 @@ export {
 } from "./paths.js";
 export { MEMORY_VAULT_SCHEMA_VERSION } from "./schema.js";
 export { memoryBodySuppressionHash } from "./body-fingerprint.js";
+export {
+  MEMORY_CENTER_FORGETTER_SURFACE,
+  MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE,
+  MEMORY_MAINTENANCE_FORGETTER_SURFACE,
+  MEMORY_RETENTION_FORGETTER_SURFACE,
+  isPersonForgetterSurface,
+} from "./forgetter-surfaces.js";
 // `resolveVaultKey` (mutating: can mint and persist `vault.key`) and `openMemoryDatabase`
 // (mutating: can migrate, re-encrypt, or quarantine-and-reopen a store) are deliberately NOT
 // re-exported here (Finding: Thread 6). No package outside this one imports either — every
@@ -42,6 +49,7 @@ export type {
   MemoryCenterPage,
   MemoryCenterPageOptions,
   MemoryDeleteResult,
+  ForgetTombstoneRefusalOptions,
   MemoryEmbeddingInput,
   MemoryEmbeddingMetric,
   MemoryEmbeddingRow,

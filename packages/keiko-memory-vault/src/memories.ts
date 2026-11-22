@@ -30,8 +30,8 @@ INSERT INTO memories (
   tags_json, source_kind, source_conversation_id, source_workflow_run_id,
   source_evidence_manifest_id, captured_at, capture_rationale, model_provider,
   model_id, model_revision, retention_policy_key, retention_retain_until,
-  retention_notes, evidence_span, source_message_ids_json, created_at, updated_at
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  retention_notes, evidence_span, source_message_ids_json, created_at, updated_at, body_hash
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 `;
 
 const SELECT_BY_ID_SQL = "SELECT * FROM memories WHERE id = ?";
@@ -91,14 +91,23 @@ UPDATE memories SET
   retention_notes = ?,
   evidence_span = ?,
   source_message_ids_json = ?,
-  updated_at = ?
+  updated_at = ?,
+  body_hash = ?
 WHERE id = ?
 `;
 
+// How a row is written: its content sealed, its body also kept as the vault's keyed fingerprint so an
+// exact repeat is found by index however old the stored fact is (v17).
+export interface MemoryRowSealing {
+  readonly cipher: MemoryContentCipher;
+  readonly bodyHash: (body: string) => string;
+}
+
 function bindValues(
   record: MemoryRecord,
-  cipher: MemoryContentCipher,
+  sealing: MemoryRowSealing,
 ): readonly (string | number | null)[] {
+  const cipher = sealing.cipher;
   const r = memoryRecordToRow(record, cipher);
   return [
     r.id,
@@ -132,15 +141,16 @@ function bindValues(
     r.source_message_ids_json,
     r.created_at,
     r.updated_at,
+    sealing.bodyHash(record.body),
   ];
 }
 
 export function insertMemoryRow(
   db: DatabaseSync,
   record: MemoryRecord,
-  cipher: MemoryContentCipher,
+  sealing: MemoryRowSealing,
 ): void {
-  cachedPrepare(db, INSERT_SQL).run(...bindValues(record, cipher));
+  cachedPrepare(db, INSERT_SQL).run(...bindValues(record, sealing));
 }
 
 function decodeMemoryRow(row: MemoryRow, cipher: MemoryContentCipher): MemoryRecord {
@@ -179,9 +189,9 @@ export function getMemoryRowsByIds(
 export function updateMemoryRow(
   db: DatabaseSync,
   record: MemoryRecord,
-  cipher: MemoryContentCipher,
+  sealing: MemoryRowSealing,
 ): void {
-  const r = memoryRecordToRow(record, cipher);
+  const r = memoryRecordToRow(record, sealing.cipher);
   const info = cachedPrepare(db, UPDATE_SQL).run(
     r.type,
     r.body,
@@ -209,6 +219,7 @@ export function updateMemoryRow(
     r.evidence_span,
     r.source_message_ids_json,
     r.updated_at,
+    sealing.bodyHash(record.body),
     r.id,
   );
   if (info.changes === 0) {
@@ -320,6 +331,7 @@ function buildListSql(
   where: readonly string[],
   options: ListMemoriesOptions,
   select = "*",
+  tiebreak?: string,
 ): string {
   const { column, dir } = resolveOrderBy(options);
   // Seek the source first, then the memory PK, even when a scope index could satisfy ORDER BY.
@@ -334,6 +346,7 @@ function buildListSql(
     sql += ` WHERE ${where.join(" AND ")}`;
   }
   sql += ` ORDER BY ${column} ${dir}`;
+  if (tiebreak !== undefined) sql += `, ${tiebreak} ${dir}`;
   if (typeof options.limit === "number") {
     sql += " LIMIT ?";
     if (typeof options.offset === "number") {
@@ -508,6 +521,192 @@ export function listMemoryMetadataByScopeRows(
     ...params,
   ) as unknown as readonly MemoryMetadataRow[];
   return rows.map(metadataRowToMemoryMetadata);
+}
+
+// The stored memories of one scope whose body is the given one, found by the keyed fingerprint index
+// rather than by reading a window of bodies, so an exact repeat is recognised however many newer
+// facts the scope holds. A row whose fingerprint the open could not fill yet is compared by its
+// opened body, so a deferred fill never lets a rejected or stored fact through. The list filters
+// apply as for any scope read, and the id breaks ties so pages over equal timestamps stay disjoint.
+// The pending scan and the final query read one snapshot, so a row another connection edits between
+// them is returned as it stood when its body matched.
+export function listMemoryMetadataByBodyHashRows(
+  db: DatabaseSync,
+  scope: MemoryScope,
+  body: string,
+  sealing: MemoryRowSealing,
+  options: ListMemoriesOptions,
+  nowMs: number,
+): readonly MemoryMetadata[] {
+  return inOneReadSnapshot(db, () =>
+    readMemoryMetadataByBodyHash(db, { scope, body, sealing, options, nowMs }),
+  );
+}
+
+function inOneReadSnapshot<T>(db: DatabaseSync, read: () => T): T {
+  if (db.isTransaction) return read();
+  db.exec("BEGIN");
+  let result: T;
+  try {
+    result = read();
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+  db.exec("COMMIT");
+  return result;
+}
+
+interface BodyHashRead {
+  readonly scope: MemoryScope;
+  readonly body: string;
+  readonly sealing: MemoryRowSealing;
+  readonly options: ListMemoriesOptions;
+  readonly nowMs: number;
+}
+
+function readMemoryMetadataByBodyHash(
+  db: DatabaseSync,
+  { scope, body, sealing, options, nowMs }: BodyHashRead,
+): readonly MemoryMetadata[] {
+  const bodyHash = sealing.bodyHash(body);
+  const pending = pendingScopeIdsWithBodyHash(db, scope, bodyHash, sealing);
+  const params: (string | number)[] = [scopeKindOf(scope), scopeCoordinateOf(scope), bodyHash];
+  const where: string[] = ["scope_kind = ?", "scope_coordinate = ?"];
+  if (pending.length === 0) {
+    where.push("body_hash = ?");
+  } else {
+    where.push("(body_hash = ? OR memories.id IN (SELECT value FROM json_each(?)))");
+    params.push(JSON.stringify(pending));
+  }
+  appendListFilters(where, params, options, nowMs);
+  const sql = buildListSql(where, options, METADATA_COLUMNS, "memories.id");
+  const rows = cachedPrepare(db, sql).all(...params) as unknown as readonly MemoryMetadataRow[];
+  return rows.map(metadataRowToMemoryMetadata);
+}
+
+const PENDING_SCOPE_BODIES_SQL = `SELECT id, body FROM memories
+WHERE body_hash IS NULL AND scope_kind = ? AND scope_coordinate = ?`;
+
+// The pending set is empty once the open has filled every fingerprint; it is read only while a
+// deferred fill or an unreadable body leaves rows without one.
+function pendingScopeIdsWithBodyHash(
+  db: DatabaseSync,
+  scope: MemoryScope,
+  bodyHash: string,
+  sealing: MemoryRowSealing,
+): readonly string[] {
+  const rows = cachedPrepare(db, PENDING_SCOPE_BODIES_SQL).all(
+    scopeKindOf(scope),
+    scopeCoordinateOf(scope),
+  ) as unknown as readonly PendingBodyRow[];
+  const ids: string[] = [];
+  for (const row of rows) {
+    const opened = openedBody(row.body, sealing.cipher, unreadableBodyCountedAtOpen);
+    if (opened !== undefined && sealing.bodyHash(opened) === bodyHash) ids.push(row.id);
+  }
+  return ids;
+}
+
+function unreadableBodyCountedAtOpen(): void {
+  // An unreadable body is counted on the vault's open line (bodyHashUnreadableCount); a lookup
+  // cannot compare it and leaves it out.
+}
+
+export interface BodyHashBackfill {
+  readonly filled: number;
+  readonly unreadable: number;
+  // The fill stopped at a storage failure (a lock held by another process, for example); the rows
+  // left are filled at a later open.
+  readonly deferred: boolean;
+}
+
+const BODY_HASH_PAGE_ROWS = 500;
+const BODY_HASH_PENDING_SQL = `SELECT id, body FROM memories
+WHERE body_hash IS NULL AND id > ? ORDER BY id LIMIT ${String(BODY_HASH_PAGE_ROWS)}`;
+const BODY_HASH_FILL_SQL = "UPDATE memories SET body_hash = ? WHERE id = ? AND body_hash IS NULL";
+
+interface PendingBodyRow {
+  readonly id: string;
+  readonly body: string;
+}
+
+interface BackfillTally {
+  filled: number;
+  unreadable: number;
+  deferred: boolean;
+}
+
+// A vault written before v17 holds no fingerprints. They are filled when the vault opens with its
+// key, one page per transaction through the partial index of the rows still missing one, so a large
+// vault is never read whole and a failure keeps the pages already written. A body that cannot be
+// opened keeps no fingerprint: that row is only absent from the exact lookup, and it is counted at
+// every open, never guessed.
+export function backfillMemoryBodyHashes(
+  db: DatabaseSync,
+  sealing: MemoryRowSealing,
+): BodyHashBackfill {
+  const tally: BackfillTally = { filled: 0, unreadable: 0, deferred: false };
+  const recordDeferredBackfill = (): void => {
+    tally.deferred = true;
+  };
+  let after = "";
+  for (;;) {
+    const page = cachedPrepare(db, BODY_HASH_PENDING_SQL).all(
+      after,
+    ) as unknown as readonly PendingBodyRow[];
+    const last = page.at(-1);
+    if (last === undefined || !fillBodyHashPage(db, sealing, page, tally, recordDeferredBackfill)) {
+      return { ...tally };
+    }
+    after = last.id;
+  }
+}
+
+// One page in one transaction. Its counts join the tally only once it is committed; a failure rolls
+// it back and records the deferral, which the vault reports on its open line.
+function fillBodyHashPage(
+  db: DatabaseSync,
+  sealing: MemoryRowSealing,
+  page: readonly PendingBodyRow[],
+  tally: BackfillTally,
+  recordDeferredBackfill: () => void,
+): boolean {
+  let filled = 0;
+  let unreadable = 0;
+  const recordUnreadableBody = (): void => {
+    unreadable += 1;
+  };
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    const fill = cachedPrepare(db, BODY_HASH_FILL_SQL);
+    for (const row of page) {
+      const body = openedBody(row.body, sealing.cipher, recordUnreadableBody);
+      if (body !== undefined) filled += Number(fill.run(sealing.bodyHash(body), row.id).changes);
+    }
+    db.exec("COMMIT");
+  } catch {
+    if (db.isTransaction) db.exec("ROLLBACK");
+    recordDeferredBackfill();
+    return false;
+  }
+  tally.filled += filled;
+  tally.unreadable += unreadable;
+  return true;
+}
+
+// An unreadable body is counted; the vault reports the count on its open line as a diagnostic.
+function openedBody(
+  sealed: string,
+  cipher: MemoryContentCipher,
+  recordUnreadableBody: () => void,
+): string | undefined {
+  try {
+    return cipher.openString(sealed);
+  } catch {
+    recordUnreadableBody();
+    return undefined;
+  }
 }
 
 // Only profile IDs and counters leave this query. The body and its sealed exclusion tags are

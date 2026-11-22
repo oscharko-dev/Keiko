@@ -1262,6 +1262,11 @@ export interface ConversationMemoryContextEntryWire {
   readonly confidence: number;
   readonly status: MemoryStatus;
   readonly capturedAt: number;
+  /**
+   * Excerpts of the superseded values this memory replaced, nearest first (#4223), sent to the model
+   * under the memory for a question about what held before. The answer marker shows `bodyExcerpt`.
+   */
+  readonly earlierValues?: readonly string[] | undefined;
 }
 
 /** One fact of the standing profile (#4228): supplied with every answer, not marked per answer. */
@@ -1290,6 +1295,8 @@ export interface ConversationMemoryContextWire {
   readonly profile?: ConversationStandingProfileWire;
   /** How many candidate memories the relevance floor held back for this question. */
   readonly belowFloorCount?: number;
+  /** The semantic floor this question's recall was judged against; absent without semantic scores. */
+  readonly semanticFloor?: number;
   /** Standing profile facts this question is about: sent once, with the retrieved memories. */
   readonly profileRetrievedCount?: number;
 }

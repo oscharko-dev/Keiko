@@ -244,7 +244,7 @@ describe("Atlassian browser client through the real credential route (#4082)", (
     expect(await verifyAtlassianConnector(metadata.authRef)).toMatchObject({ status: "ok" });
     expect(fixtureDnsLookup).toHaveBeenCalledWith("jira.example", {
       all: true,
-      verbatim: true,
+      order: "verbatim",
     });
     expect(outbound.map((request) => request.url)).toEqual([
       "https://jira.example/context/rest/api/2/serverInfo",

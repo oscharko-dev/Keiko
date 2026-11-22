@@ -12,8 +12,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodingWorkbenchMode, NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type {
   ConversationId,
+  MemoryEdgeId,
   MemoryId,
   MemoryRecord,
+  MemoryReviewerId,
   ProjectId,
   UserId,
   WorkspaceId,
@@ -28,7 +30,11 @@ import {
   planMemoryMaintenance,
   type MemoryMaintenancePlan,
 } from "@oscharko-dev/keiko-memory-governance";
-import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  createMemoryVault,
+  type MemoryForgottenStatement,
+  type MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -48,6 +54,8 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { handleAcceptMemoryProposal } from "./memory-handlers.js";
+import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
+import { applyMemoryRetention } from "./memory-retention.js";
 import {
   MEMORY_LEARN_CHANGE_BASES,
   MEMORY_LEARN_DROP_REASONS,
@@ -1361,4 +1369,501 @@ describe("learning leaves body-free evidence", () => {
     const text = sink.lines().join("\n");
     for (const word of ["PostgreSQL", "Hamburg"]) expect(text).not.toContain(word);
   });
+});
+
+// #4223: a corrected fact stays as history; maintenance never forgets it and the person's own later
+// statement of it is never refused.
+function maintain(vault: MemoryVaultStore): void {
+  const ctx = {
+    req: {} as RouteContext["req"],
+    res: { socket: new Socket() } as unknown as RouteContext["res"],
+    params: {},
+    url: new URL("http://127.0.0.1/api/memory/maintenance"),
+    correlationId: undefined,
+  } as RouteContext;
+  expect(handleRunMaintenance(ctx, makeDeps(vault, [])).status).toBe(200);
+}
+
+function seedTombstone(
+  vault: MemoryVaultStore,
+  ctx: ConversationMemoryRuntimeContext,
+  body: string,
+  forgetterSurface: string,
+  reason: string,
+): void {
+  const statements: MemoryForgottenStatement[] = conversationMemoryScopes(ctx).map((scope) => ({
+    scope,
+    body,
+    forgetterSurface,
+    reviewerId: "local-operator" as MemoryReviewerId,
+    reason,
+    nowMs: Date.now(),
+  }));
+  vault.recordForgottenStatements(statements);
+}
+
+describe("a corrected fact stays as history (#4223)", () => {
+  const first = "Ich bevorzuge Tabs über Spaces";
+  const second = "Ich bevorzuge Spaces über Tabs";
+
+  it("keeps the superseded record and its edge through a maintenance pass", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    await say(vault, ctx, second, [stated(second)]);
+    const [before] = recordsWith(vault, ctx, "superseded");
+    if (before === undefined) throw new Error("expected the superseded fact");
+
+    maintain(vault);
+
+    const after = vault.getMemory(before.id);
+    expect(after?.status).toBe("superseded");
+    expect(after?.validity.validUntil).toBeDefined();
+    expect(vault.listOutgoingEdges(before.id).map((edge) => edge.kind)).toEqual(["supersedes"]);
+    const tombstones = conversationMemoryScopes(ctx).flatMap((scope) =>
+      vault.listTombstonesByScope(scope),
+    );
+    expect(tombstones).toEqual([]);
+  });
+
+  it("learns an earlier value again when the person returns to it in the same words", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    await say(vault, ctx, second, [stated(second)]);
+    maintain(vault);
+
+    await say(vault, ctx, first, [stated(first)]);
+
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+    expect(recordsWith(vault, ctx, "superseded").map((record) => record.body)).toContain(second);
+  });
+
+  it("is not refused by a maintenance tombstone left by an earlier version", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    // What the earlier maintenance pass did: it deleted the superseded record itself, so its
+    // tombstone records the removed record's status (deleteMemory has written it since schema v4).
+    await say(vault, ctx, first, [stated(first)]);
+    await say(vault, ctx, second, [stated(second)]);
+    const [superseded] = recordsWith(vault, ctx, "superseded");
+    if (superseded === undefined) throw new Error("expected the superseded fact");
+    vault.deleteMemory(superseded.id, {
+      tombstone: true,
+      forgetterSurface: "memory-maintenance",
+      reason: "validity-expired",
+      nowMs: Date.now(),
+    });
+    expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+  });
+
+  it("is still refused by an unattended tombstone that records no status", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    // A row from before vault schema v4 carries no status of the removed record. A rejection can
+    // no longer be ruled out for it, so the refusal fails closed.
+    seedTombstone(vault, ctx, first, "memory-maintenance", "validity-expired");
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([]);
+  });
+
+  it("is still refused by a tombstone the person's own forget wrote", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    seedTombstone(vault, ctx, first, "memory-center", "user-request");
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([]);
+  });
+
+  it("is not refused after operator retention removed the record, and is still refused for an unknown surface", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    applyMemoryRetention({
+      vault,
+      scopes: conversationMemoryScopes(ctx),
+      policy: { maxAgeMs: 30 * DAY_MS },
+      nowMs: Date.now() + 400 * DAY_MS,
+    });
+    expect(liveBodies(vault, ctx)).toEqual([]);
+    const surfaces = conversationMemoryScopes(ctx).flatMap((scope) =>
+      vault.listTombstonesByScope(scope).map((tombstone) => tombstone.forgetterSurface),
+    );
+    expect(surfaces).toContain("retention");
+
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+
+    const other = makeVault();
+    const otherCtx = context();
+    seedTombstone(other, otherCtx, first, "a-surface-nobody-classified", "user-request");
+    await say(other, otherCtx, first, [stated(first)]);
+    expect(liveBodies(other, otherCtx)).toEqual([]);
+  });
+
+  it("still refuses a statement the person rejected after retention removed the rejected record", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    const [live] = recordsWith(vault, ctx, "accepted");
+    if (live === undefined) throw new Error("expected the learned fact");
+    vault.updateMemory(live.id, { status: "rejected" }, Date.now());
+    applyMemoryRetention({
+      vault,
+      scopes: conversationMemoryScopes(ctx),
+      policy: { maxAgeMs: 30 * DAY_MS },
+      nowMs: Date.now() + 400 * DAY_MS,
+    });
+    expect(vault.getMemory(live.id)).toBeUndefined();
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([]);
+  });
+
+  it("does not refuse a statement after retention removed superseded history", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    await say(vault, ctx, second, [stated(second)]);
+    applyMemoryRetention({
+      vault,
+      scopes: conversationMemoryScopes(ctx),
+      policy: { maxAgeMs: 30 * DAY_MS },
+      nowMs: Date.now() + 400 * DAY_MS,
+    });
+    expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+  });
+
+  it("still refuses a rejected statement after maintenance removed it for a stated end", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    const [live] = recordsWith(vault, ctx, "accepted");
+    if (live === undefined) throw new Error("expected the learned fact");
+    const endedAt = live.validity.validFrom + 1;
+    vault.updateMemory(
+      live.id,
+      { status: "rejected", validity: { ...live.validity, validUntil: endedAt } },
+      endedAt,
+    );
+    maintain(vault);
+    expect(vault.getMemory(live.id)).toBeUndefined();
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([]);
+  });
+
+  it("chains old-A, B and new-A after a return, with recall supplying A once", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    await say(vault, ctx, second, [stated(second)]);
+    maintain(vault);
+    await say(vault, ctx, first, [stated(first)]);
+
+    const live = recordsWith(vault, ctx, "accepted");
+    expect(live.map((record) => record.body)).toEqual([first]);
+    const superseded = recordsWith(vault, ctx, "superseded");
+    const oldA = superseded.find((record) => record.body === first);
+    const b = superseded.find((record) => record.body === second);
+    const newA = live[0];
+    if (oldA === undefined || b === undefined || newA === undefined) {
+      throw new Error("expected old-A, B and new-A");
+    }
+    expect(newA.id).not.toBe(oldA.id);
+    const edgeTargets = (id: MemoryId): readonly MemoryId[] =>
+      vault
+        .listOutgoingEdges(id)
+        .filter((edge) => edge.kind === "supersedes")
+        .map((edge) => edge.toMemoryId);
+    expect(edgeTargets(oldA.id)).toEqual([b.id]);
+    expect(edgeTargets(b.id)).toEqual([newA.id]);
+
+    const request = {
+      content: "Was bevorzuge ich bei Tabs und Spaces?",
+      memory: { enabled: true, budgetTokens: 900, context: {} },
+    } as unknown as SendDesktopChatRequest;
+    const text = suppliedMemoryText(await buildMemoryResult(request, makeDeps(vault, []), ctx));
+    expect(text.split(first)).toHaveLength(2);
+    expect(text).not.toContain(second);
+  });
+
+  it("leaves one live record and no duplicate live body after flip-flopping twice", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    for (const body of [first, second, first, second]) {
+      await say(vault, ctx, body, [stated(body)]);
+      maintain(vault);
+    }
+    expect(liveBodies(vault, ctx)).toEqual([second]);
+    expect(recordsWith(vault, ctx, "accepted")).toHaveLength(1);
+    expect(
+      recordsWith(vault, ctx, "superseded")
+        .map((record) => record.body)
+        .sort(),
+    ).toEqual([first, first, second].sort());
+  });
+
+  it("never sends the earlier value to an answer once the fact changed", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    await say(vault, ctx, second, [stated(second)]);
+    maintain(vault);
+
+    const request = {
+      content: "Was bevorzuge ich bei Tabs und Spaces?",
+      memory: { enabled: true, budgetTokens: 900, context: {} },
+    } as unknown as SendDesktopChatRequest;
+    const text = suppliedMemoryText(await buildMemoryResult(request, makeDeps(vault, []), ctx));
+    expect(text).toContain(second);
+    expect(text).not.toContain(first);
+  });
+});
+
+// #4223: what a forget covers. A fact and the values it replaced are one fact.
+function forgetByWords(
+  vault: MemoryVaultStore,
+  ctx: ConversationMemoryRuntimeContext,
+  content: string,
+): ReturnType<typeof collectMemoryActions> {
+  return collectMemoryActions(
+    makeDeps(vault, []),
+    { content, memory: { enabled: true } } as SendDesktopChatRequest,
+    ctx,
+  );
+}
+
+describe("what a forget covers (#4223)", () => {
+  const first = "Ich bevorzuge Tabs über Spaces";
+
+  it("keeps a pinned fact the person's words resolved to", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await say(vault, ctx, first, [stated(first)]);
+    const [live] = recordsWith(vault, ctx, "accepted");
+    if (live === undefined) throw new Error("expected the learned fact");
+    vault.updateMemory(live.id, { pinned: true }, Date.now());
+
+    const actions = await forgetByWords(vault, ctx, "Vergiss, dass ich Tabs über Spaces bevorzuge");
+
+    expect(actions).toEqual([
+      { kind: "rejected", reason: "forget-not-applied", explicitStatement: true },
+    ]);
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+  });
+
+  function tombstonedSurfaces(
+    vault: MemoryVaultStore,
+    ctx: ConversationMemoryRuntimeContext,
+  ): readonly string[] {
+    return conversationMemoryScopes(ctx).flatMap((scope) =>
+      vault.listTombstonesByScope(scope).map((tombstone) => tombstone.forgetterSurface),
+    );
+  }
+
+  // A corrected fact stays as history, so its name occurs in the live record and in every earlier
+  // value. Naming it forgets all of them: the fact and what it replaced are one fact.
+  it.each([
+    [
+      "German",
+      "Ich bevorzuge Tabs über Spaces",
+      "Ich bevorzuge Spaces über Tabs",
+      "Vergiss, dass ich Spaces über Tabs bevorzuge",
+    ],
+    [
+      "English",
+      "I prefer tabs over spaces",
+      "I prefer spaces over tabs",
+      "Forget that I prefer spaces over tabs",
+    ],
+    [
+      "a changed number, named by the topic",
+      "I use PostgreSQL 14",
+      "I use PostgreSQL 16",
+      "Forget that I use PostgreSQL",
+    ],
+  ])(
+    "forgets a corrected fact and every earlier value when its name is said (%s)",
+    async (_name, older, newer, forget) => {
+      const vault = makeVault();
+      const ctx = context();
+      await say(vault, ctx, older, [stated(older)]);
+      await say(vault, ctx, newer, [stated(newer)]);
+      maintain(vault);
+      expect(recordsWith(vault, ctx, "superseded").map((record) => record.body)).toEqual([older]);
+
+      const actions = await forgetByWords(vault, ctx, forget);
+
+      expect(actions).toEqual([
+        {
+          kind: "forget",
+          memoryId: expect.any(String) as string,
+          requiresConfirmation: false,
+          forgotten: true,
+        },
+      ]);
+      expect(liveBodies(vault, ctx)).toEqual([]);
+      expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+      expect(tombstonedSurfaces(vault, ctx)).toEqual(["chat-statement", "chat-statement"]);
+      // Neither value is learned again unattended.
+      await say(vault, ctx, older, [stated(older)]);
+      await say(vault, ctx, newer, [stated(newer)]);
+      expect(liveBodies(vault, ctx)).toEqual([]);
+    },
+  );
+
+  it("forgets only the old value when the person's words name only the old value", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const older = "I use PostgreSQL 14";
+    const newer = "I use PostgreSQL 16";
+    await say(vault, ctx, older, [stated(older)]);
+    await say(vault, ctx, newer, [stated(newer)]);
+    maintain(vault);
+
+    const actions = await forgetByWords(vault, ctx, "Forget that I use PostgreSQL 14");
+
+    expect(actions).toEqual([
+      {
+        kind: "forget",
+        memoryId: expect.any(String) as string,
+        requiresConfirmation: false,
+        forgotten: true,
+      },
+    ]);
+    expect(liveBodies(vault, ctx)).toEqual([newer]);
+    expect(recordsWith(vault, ctx, "superseded")).toEqual([]);
+    expect(tombstonedSurfaces(vault, ctx)).toEqual(["chat-statement"]);
+  });
+
+  // The vault stores edges one at a time, so a lineage can hold a cycle. Its members cover each other
+  // and must still compete: the forget must not fall to an unrelated match the person did not mean.
+  it("asks rather than forgetting an unrelated match when a lineage holds a cycle", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    const older = "I use PostgreSQL 14";
+    const newer = "I use PostgreSQL 16";
+    await say(vault, ctx, older, [stated(older)]);
+    await say(vault, ctx, newer, [stated(newer)]);
+    await say(vault, ctx, "I use PostgreSQL extensions", [stated("I use PostgreSQL extensions")]);
+    maintain(vault);
+    const [oldRecord] = recordsWith(vault, ctx, "superseded");
+    const live = recordsWith(vault, ctx, "accepted").find((record) => record.body === newer);
+    if (oldRecord === undefined || live === undefined) throw new Error("lineage not stored");
+    vault.insertEdge({
+      id: "cycle-edge" as MemoryEdgeId,
+      schemaVersion: "1",
+      fromMemoryId: live.id,
+      toMemoryId: oldRecord.id,
+      kind: "supersedes",
+      createdAt: Date.now(),
+    });
+
+    const actions = await forgetByWords(vault, ctx, "Forget that I use PostgreSQL");
+
+    expect(actions).toEqual([
+      { kind: "rejected", reason: "ambiguous-forget", explicitStatement: true },
+    ]);
+    expect(liveBodies(vault, ctx)).toHaveLength(2);
+  });
+
+  it("still asks when two different facts match, each with its own history", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    for (const [older, newer] of [
+      ["I use Vim 8", "I use Vim 9"],
+      ["I use Vim plugins 2", "I use Vim plugins 3"],
+    ] as const) {
+      await say(vault, ctx, older, [stated(older)]);
+      await say(vault, ctx, newer, [stated(newer)]);
+    }
+    maintain(vault);
+    expect(recordsWith(vault, ctx, "superseded")).toHaveLength(2);
+
+    const actions = await forgetByWords(vault, ctx, "Forget that I use Vim");
+
+    expect(actions).toEqual([
+      { kind: "rejected", reason: "ambiguous-forget", explicitStatement: true },
+    ]);
+    expect(liveBodies(vault, ctx)).toHaveLength(2);
+    expect(recordsWith(vault, ctx, "superseded")).toHaveLength(2);
+  });
+});
+
+// An unattended removal (maintenance, retention) must not make a rejection stronger than it was while
+// the rejected record existed: the person's own "Merke dir" outranks it, learned capture does not.
+describe("a statement after an unattended removal (#4223)", () => {
+  const first = "Ich bevorzuge Tabs über Spaces";
+
+  function remember(
+    vault: MemoryVaultStore,
+    ctx: ConversationMemoryRuntimeContext,
+  ): ReturnType<typeof collectMemoryActions> {
+    return collectMemoryActions(
+      makeDeps(vault, []),
+      { content: `Merke dir: ${first}`, memory: { enabled: true } } as SendDesktopChatRequest,
+      ctx,
+    );
+  }
+
+  async function rejectAndRetain(
+    vault: MemoryVaultStore,
+    ctx: ConversationMemoryRuntimeContext,
+  ): Promise<void> {
+    await say(vault, ctx, first, [stated(first)]);
+    const [live] = recordsWith(vault, ctx, "accepted");
+    if (live === undefined) throw new Error("expected the learned fact");
+    vault.updateMemory(live.id, { status: "rejected" }, Date.now());
+    applyMemoryRetention({
+      vault,
+      scopes: conversationMemoryScopes(ctx),
+      policy: { maxAgeMs: 30 * DAY_MS },
+      nowMs: Date.now() + 400 * DAY_MS,
+    });
+    expect(vault.getMemory(live.id)).toBeUndefined();
+  }
+
+  it("admits the person's statement after retention removed a rejected record, and still refuses learning it", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    await rejectAndRetain(vault, ctx);
+
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([]);
+
+    await remember(vault, ctx);
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+  });
+
+  it("admits the person's statement after an unattended tombstone that records no status, and still refuses learning it", async () => {
+    const vault = makeVault();
+    const ctx = context();
+    seedTombstone(vault, ctx, first, "memory-maintenance", "validity-expired");
+
+    await say(vault, ctx, first, [stated(first)]);
+    expect(liveBodies(vault, ctx)).toEqual([]);
+
+    await remember(vault, ctx);
+    expect(liveBodies(vault, ctx)).toEqual([first]);
+  });
+
+  it.each(["memory-center", "chat-statement", "a-surface-nobody-classified"])(
+    "still refuses the person's statement after a tombstone %s wrote",
+    async (surface) => {
+      const vault = makeVault();
+      const ctx = context();
+      seedTombstone(vault, ctx, first, surface, "user-request");
+
+      const actions = await remember(vault, ctx);
+
+      expect(actions).toEqual([
+        { kind: "rejected", reason: "suppressed-by-forget", explicitStatement: true },
+      ]);
+      expect(liveBodies(vault, ctx)).toEqual([]);
+    },
+  );
 });

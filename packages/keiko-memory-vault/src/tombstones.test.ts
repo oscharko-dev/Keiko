@@ -7,9 +7,11 @@ import type {
   MemoryRecord,
   MemoryReviewerId,
   MemoryScope,
+  MemoryStatus,
   UserId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
+import { MEMORY_STATUSES } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryEmbeddingInput, MemoryTombstone } from "./types.js";
 import {
   deleteTombstonesByScopeBeforeRows,
@@ -19,6 +21,12 @@ import {
   listTombstonesPageRows,
   selectForgetSuppressionBodyHashPresence,
 } from "./tombstones.js";
+import {
+  MEMORY_CENTER_FORGETTER_SURFACE,
+  MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE,
+  MEMORY_MAINTENANCE_FORGETTER_SURFACE,
+  MEMORY_RETENTION_FORGETTER_SURFACE,
+} from "./forgetter-surfaces.js";
 import { memoryBodySuppressionHash } from "./body-fingerprint.js";
 import { createMemoryVault } from "./index.js";
 import { MemoryStorageValidationError } from "./errors.js";
@@ -48,6 +56,32 @@ function requiredFirstTombstone(page: ReturnType<typeof listTombstonesPageRows>)
   if (tombstone === undefined) throw new Error("expected a tombstone page row");
   return tombstone;
 }
+
+const UNATTENDED_SURFACES = [
+  MEMORY_MAINTENANCE_FORGETTER_SURFACE,
+  MEMORY_RETENTION_FORGETTER_SURFACE,
+] as const;
+const REFUSING_SURFACES = [
+  MEMORY_CENTER_FORGETTER_SURFACE,
+  MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE,
+  "a-surface-nobody-classified",
+] as const;
+// Every status the contract knows, plus a legacy row written before the status was recorded.
+const STATUS_CASES: readonly (MemoryStatus | undefined)[] = [undefined, ...MEMORY_STATUSES];
+
+// An unattended tombstone refuses only for a rejected record or a legacy row without a status.
+function refusesWhenUnattended(status: MemoryStatus | undefined): boolean {
+  return status === undefined || status === "rejected";
+}
+
+const REFUSAL_MATRIX: readonly (readonly [string, MemoryStatus | undefined, boolean])[] = [
+  ...UNATTENDED_SURFACES.flatMap((surface) =>
+    STATUS_CASES.map((status) => [surface, status, refusesWhenUnattended(status)] as const),
+  ),
+  ...REFUSING_SURFACES.flatMap((surface) =>
+    STATUS_CASES.map((status) => [surface, status, true] as const),
+  ),
+];
 
 describe("tombstones", () => {
   it("binds new tombstones to their space and preserves suppression for a pre-identity vector", () => {
@@ -134,6 +168,149 @@ describe("tombstones", () => {
       vault.close();
     }
   });
+
+  // #4223: a tombstone written by an unattended surface (maintenance, operator retention) records
+  // that Keiko removed a record, not that the person refused the fact. It stays in the ledger and
+  // does not refuse a statement when it records that the removed record was not rejected. It still
+  // refuses for a rejected record, and for a legacy row without a recorded status (written before
+  // vault schema v4), where a rejection can no longer be ruled out: the predicate fails closed.
+  // Every other surface, including an unknown one, still refuses.
+  it.each(REFUSAL_MATRIX)(
+    "a %s tombstone of a %s record refuses a statement: %s (exact and semantic)",
+    (surface, originalStatus, refuses) => {
+      const db = openTestDb();
+      try {
+        const hash = memoryBodySuppressionHash("Ich bevorzuge Tabellen");
+        const legacyHash = memoryBodySuppressionHash("Ich bevorzuge Listen");
+        const vector = Float32Array.from([1, 0, 0]);
+        // One row per suppression hash, so the current and the legacy parameter are each asserted.
+        for (const [id, bodyHash] of [
+          ["t-current", hash],
+          ["t-legacy", legacyHash],
+        ] as const) {
+          insertTombstoneRow(
+            db,
+            makeTombstone({
+              id,
+              memoryId: `m-${id}` as MemoryId,
+              bodyHash,
+              forgetterSurface: surface,
+              ...(originalStatus === undefined ? {} : { originalStatus }),
+            }),
+            TEST_CIPHER,
+            vector,
+          );
+        }
+        expect(selectForgetSuppressionBodyHashPresence(db, userScope, hash, legacyHash)).toEqual({
+          current: refuses,
+          legacy: refuses,
+        });
+        expect(selectForgetSuppressionBodyHashPresence(db, userScope, hash, "absent")).toEqual({
+          current: refuses,
+          legacy: false,
+        });
+        expect(
+          hasSemanticallySimilarForgetTombstoneRow(db, userScope, TEST_CIPHER, vector, 0.95),
+        ).toBe(refuses);
+        expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER)).toHaveLength(2);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  // The scan reads 200 tombstones per page; the second page has its own copy of the predicate.
+  // #4223, audit A7: without it, an unattended tombstone behind a full page of refusing ones would
+  // refuse the person again.
+  it.each(
+    UNATTENDED_SURFACES.flatMap((surface) =>
+      STATUS_CASES.map((status) => [surface, status, refusesWhenUnattended(status)] as const),
+    ),
+  )(
+    "a %s tombstone of a %s record on the second scan page refuses: %s",
+    (surface, originalStatus, refuses) => {
+      const db = openTestDb();
+      try {
+        for (let index = 0; index < 205; index += 1) {
+          insertTombstoneRow(
+            db,
+            makeTombstone({
+              id: `newer-${String(index)}`,
+              memoryId: `newer-memory-${String(index)}` as MemoryId,
+              forgottenAt: 1_000 + index,
+            }),
+            TEST_CIPHER,
+            Float32Array.from([0, 1, 0]),
+          );
+        }
+        insertTombstoneRow(
+          db,
+          makeTombstone({
+            id: "older-unattended",
+            memoryId: "older-memory" as MemoryId,
+            forgottenAt: 1,
+            forgetterSurface: surface,
+            ...(originalStatus === undefined ? {} : { originalStatus }),
+          }),
+          TEST_CIPHER,
+          Float32Array.from([1, 0, 0]),
+        );
+        expect(
+          hasSemanticallySimilarForgetTombstoneRow(
+            db,
+            userScope,
+            TEST_CIPHER,
+            Float32Array.from([1, 0, 0]),
+            0.95,
+          ),
+        ).toBe(refuses);
+      } finally {
+        db.close();
+      }
+    },
+  );
+
+  // The person's own statement ignores an unattended tombstone altogether, whatever status its
+  // record had, including a rejected record and a legacy row without a status (#4223).
+  it.each([
+    [MEMORY_MAINTENANCE_FORGETTER_SURFACE, undefined, false],
+    [MEMORY_MAINTENANCE_FORGETTER_SURFACE, "rejected", false],
+    [MEMORY_RETENTION_FORGETTER_SURFACE, "rejected", false],
+    [MEMORY_RETENTION_FORGETTER_SURFACE, "superseded", false],
+    [MEMORY_CENTER_FORGETTER_SURFACE, "rejected", true],
+    [MEMORY_CHAT_STATEMENT_FORGETTER_SURFACE, undefined, true],
+    ["a-surface-nobody-classified", "rejected", true],
+  ] as const)(
+    "a %s tombstone of a %s record refuses the person's own statement: %s (exact and semantic)",
+    (surface, originalStatus, refuses) => {
+      const db = openTestDb();
+      try {
+        const hash = memoryBodySuppressionHash("Ich bevorzuge Tabellen");
+        const vector = Float32Array.from([1, 0, 0]);
+        insertTombstoneRow(
+          db,
+          makeTombstone({
+            id: "t-1",
+            memoryId: "m-1" as MemoryId,
+            bodyHash: hash,
+            forgetterSurface: surface,
+            ...(originalStatus === undefined ? {} : { originalStatus }),
+          }),
+          TEST_CIPHER,
+          vector,
+        );
+        const own = { personOnly: true };
+        expect(
+          selectForgetSuppressionBodyHashPresence(db, userScope, hash, hash, own).current,
+        ).toBe(refuses);
+        expect(
+          hasSemanticallySimilarForgetTombstoneRow(db, userScope, TEST_CIPHER, vector, 0.95, own),
+        ).toBe(refuses);
+      } finally {
+        db.close();
+      }
+    },
+  );
 
   it("finds an older semantic refusal through bounded indexed pages", () => {
     const db = openTestDb();

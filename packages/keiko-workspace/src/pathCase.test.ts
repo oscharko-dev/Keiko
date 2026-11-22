@@ -82,6 +82,8 @@ describe("parseGitCoreIgnoreCase", () => {
     const hostile = `[core${" ".repeat(50_000)}\n\tignorecase = ${'"'.repeat(50_000)}\n`;
     const started = performance.now();
     expect(parseGitCoreIgnoreCase(hostile)).toBeUndefined();
-    expect(performance.now() - started).toBeLessThan(2_000);
+    const elapsed = performance.now() - started;
+    // A loaded required runner must not fail on wall-clock time (ADR-0139 D1).
+    if (process.env.KEIKO_ENFORCE_WALL_CLOCK_BUDGETS === "1") expect(elapsed).toBeLessThan(2_000);
   });
 });

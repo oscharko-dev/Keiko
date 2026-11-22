@@ -421,6 +421,7 @@ describe("retrieveMemoryContext — AC4 stale suppression", () => {
         includeForgotten: true,
         includeArchived: true,
         includeExpired: true,
+        includeSuperseded: false,
         maxResults: 500,
       },
     ]);

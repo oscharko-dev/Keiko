@@ -5,8 +5,16 @@ npm run gates:sonar
 ```
 
 **Run it before you open or update a pull request against `dev`. Not after. Not "if the diff looks
-risky".** A finding SonarCloud reports is a full CI round and a review round; a finding this command
-reports costs a minute.
+risky".** After `node scripts/install-git-hooks.mjs` (once per checkout), `.githooks/pre-push`
+runs it on every push and stops the push on a finding or on a scan that cannot run. The scan reads
+the working tree, so the hook first refuses a push whose commit is not the checked-out `HEAD` or
+whose tree holds an uncommitted or untracked change: the tree it analyzes is then exactly the commit
+that leaves the machine.
+
+Since the ADR-0131 amendment of 2026-11-21 the full SonarCloud analysis runs only after
+integration, on every push to `dev`. A pull request is held by this scan and by the
+`SonarJS rules on the changed files` step inside `ci`; a finding SonarCloud reports on `dev` turns
+`dev` red and costs a repair pull request, while a finding this command reports costs a minute.
 
 ## Why this exists — the gap it closes
 
@@ -78,8 +86,8 @@ analyzer. Do not replace a bounded loop with unbounded parallelism or a promise 
 change its syntax. Rules, gate thresholds and the zero-unresolved requirement remain unchanged.
 
 A green `check:sonar-rules` therefore says **nothing** about these. Only a real analyzer does, which
-is what this command runs. The `Coverage and SonarCloud` job demands **zero** unresolved issues, so a
-single MINOR of this class fails the required `ci` context.
+is what this command runs. The full analysis on `dev` demands **zero** unresolved issues, so a
+single MINOR of this class turns `dev` red after the merge.
 
 PR #4276 also confirmed that `NOSONAR` must be on the diagnostic's **primary start line**, not a
 later line in its range. For an object-property async function, S7503 starts at the property name,
@@ -126,10 +134,32 @@ npm run gates:sonar:stop     # stop the server, keep its cache
 Both local containers are limited to 2 CPUs each from startup (up to 4 CPUs combined) for controlled
 load without performance qualification.
 
-The local runner gives the SonarJS bridge 4.5 GiB and caps the scanner coordinator at 768 MiB. This
-keeps enough analyzer headroom while leaving space for the concurrently required SonarQube service
-inside Docker Desktop's common 8 GiB VM; the scanner's automatic heap choice can otherwise exceed
-the VM limit and terminate the bridge before it reports findings.
+The local runner gives the SonarJS bridge 4.5 GiB, caps the scanner CLI at 768 MiB
+(`SONAR_SCANNER_OPTS`) and the scanner engine that runs the analysis at 2 GiB
+(`SONAR_SCANNER_JAVA_OPTS`; override with `KEIKO_LOCAL_SONAR_ENGINE_JAVA_OPTS`). `SONAR_SCANNER_OPTS`
+sizes only the CLI that provisions and starts the engine; without its own cap the engine takes a
+quarter of the VM. This keeps enough analyzer headroom while leaving space for the concurrently
+required SonarQube service inside Docker Desktop's common 8 GiB VM; the scanner's automatic heap
+choice can otherwise exceed the VM limit and terminate the bridge before it reports findings.
+
+CI runs the same two caps on a 16 GB runner: the engine at 6 GiB in `ci.yml` (after adding 8 GiB swap), the bridge at
+`sonar.javascript.node.maxspace` in `sonar-project.properties`. The `Verify Sonar full-analysis
+evidence` step reads both configured ceilings from the scanner log (an engine without `-Xmx` is
+charged its default quarter of the runner) and fails when they leave less than 2 GiB of the runner's RAM plus its measured swap
+(`--require-runner-memory-budget`), so a raised ceiling turns the job red with a named reason
+instead of losing the runner mid-scan. A local checkout with built `dist` folders analyzes
+larger TypeScript programs than CI (#4481: 9074 + 4399 against 7059 + 2629 program files), so a
+local whole-project scan needs more bridge heap than CI and says nothing about CI's ceiling.
+
+A changed-file scan does not load the configured TypeScript programs. The root tsconfig owns about
+6,400 files, and SonarJS builds the whole program of every tsconfig that owns an analysed file, so
+one changed file under `src/`, `tests/` or `packages/*/src` ran the 4.5 GiB bridge out of memory
+(2026-11-21). `scripts/local-sonar-typescript-programs.mjs` writes one tsconfig per owner, rooted at
+the changed files with the owner's compiler options and ambient declarations, under the owner's
+gitignored `.keiko/` directory, and the runner removes them on exit. Imports are followed as before,
+so the changed files resolve the same types (615 instead of 6,370 program files for a changed e2e
+support file). If the programs cannot be prepared, the runner says so and falls back to the
+configured tsconfigs.
 
 A whole-project scan — requested with `--all` or required when a changed path cannot be expressed
 as an exact inclusion — needs more than 4.5 GiB on this repository. On a machine whose Docker VM
@@ -163,8 +193,8 @@ complete substitute: SonarCloud's `shelldre:S7679` (bind a positional parameter 
 `shelldre:S7688` (`[[` over `[`) have no shellcheck equivalent, so review changed shell by hand
 against those two as well.
 
-**It is not the gate.** The verdict stays with SonarCloud on the pull request
-([`local-gates.md`](local-gates.md)). These things differ by construction:
+**It is not the full analysis.** The complete verdict stays with SonarCloud on `dev` after
+integration ([`local-gates.md`](local-gates.md)). These things differ by construction:
 
 - the quality **profile** is SonarQube's built-in "Sonar way comprehensive", the one SonarCloud
   applies to this project for JavaScript, TypeScript, CSS, JSON and YAML. A fresh SonarQube defaults
@@ -185,7 +215,7 @@ against those two as well.
   by two lines since long before that branch; the repair was a smaller diff, not a reworded one.
 
 So read a clean run as _"no known rule violation on my diff"_ — which is exactly the local question
-you need answered before pushing — and never as _"SonarCloud will be green"_. Required PR CI uses
+you need answered before pushing — and never as _"SonarCloud will be green"_. The `dev` analysis uses
 the cloud profile and, since incidents #3377 and #3380, disables both the analysis cache and
 Cloud's injected sensor cache. The direct repository validator requires zero cache hits, an exact
 miss receipt for Sonar's eligible JS/TS inventory, and completed fresh inventories covering at

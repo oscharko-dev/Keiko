@@ -27,6 +27,11 @@ import type {
 export type { MemoryAccessStat, MemoryConversationTouch } from "./access.js";
 export type { MemoryUpdatePreImage } from "@oscharko-dev/keiko-contracts/memory";
 
+export interface ForgetTombstoneRefusalOptions {
+  /** The person's own statement: tombstones an unattended pass left do not refuse it. */
+  readonly personOnly?: boolean;
+}
+
 export type MemoryEmbeddingMetric = "cosine" | "euclidean" | "dot";
 
 export interface MemoryEmbeddingInput {
@@ -247,6 +252,14 @@ export interface MemoryVaultStore {
     scope: MemoryScope,
     options?: ListMemoriesOptions,
   ) => readonly MemoryMetadata[];
+  // The memories of one scope whose body is this one, after the same normalisation a forget
+  // tombstone is keyed on (case, punctuation and spacing do not count). Found by index, so the
+  // answer does not depend on how many newer facts the scope holds.
+  readonly listMemoryMetadataByBody: (
+    scope: MemoryScope,
+    body: string,
+    options?: ListMemoriesOptions,
+  ) => readonly MemoryMetadata[];
   /** Eligible personal profile rows in pin, confirmation, recency and UTF-16 ID order. */
   readonly listStandingProfileCandidates: (
     userId: UserId,
@@ -344,7 +357,13 @@ export interface MemoryVaultStore {
   readonly recordForgottenStatements: (
     statements: readonly MemoryForgottenStatement[],
   ) => readonly MemoryTombstone[];
-  readonly hasForgetTombstoneForBody: (scope: MemoryScope, body: string) => boolean;
+  // `personOnly` is the person's own statement: a tombstone an unattended pass (maintenance,
+  // retention) left does not refuse it, whatever status its record had (#4223).
+  readonly hasForgetTombstoneForBody: (
+    scope: MemoryScope,
+    body: string,
+    options?: ForgetTombstoneRefusalOptions,
+  ) => boolean;
   // Sealed embeddings of forgotten memories in this scope (GEN-AI-MEMORY-003, RB-4). Lets a capture
   // boundary suppress a semantic paraphrase of a forgotten fact — cosine-similar but a different
   // body_hash — without ever exposing the forgotten body text itself.
@@ -352,6 +371,7 @@ export interface MemoryVaultStore {
     scope: MemoryScope,
     candidate: MemoryEmbeddingInput | Float32Array,
     threshold: number,
+    options?: ForgetTombstoneRefusalOptions,
   ) => boolean;
   readonly purgeTombstonesByScopeBefore: (scope: MemoryScope, forgottenBeforeMs: number) => number;
   // Access tracking (#204). `recordAccess` upserts an insert-or-increment counter for each id

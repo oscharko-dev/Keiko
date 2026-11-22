@@ -35,7 +35,8 @@ export const ACTIVITY_LOG_GATE_CHECKS = Object.freeze([
       "typed registrations and emitters, closed fields and vocabularies, exemptions, " +
       "failure-class coverage, the failure-surface inventory, and proof and scenario resolution",
     remediation:
-      "Run `npm run generate:op-catalog`, repair each reported violation at its site, " +
+      "Run `npm run generate:op-catalog` (or `node scripts/fix-gate-drift.mjs` for every " +
+      "generated artifact at once), repair each reported violation at its site, " +
       "and commit the regenerated files.",
   }),
   Object.freeze({

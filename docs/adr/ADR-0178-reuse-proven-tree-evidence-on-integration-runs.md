@@ -4,6 +4,9 @@
 
 Accepted (owner decision, 2026-09-20). Amended 2026-09-25 (owner decision): the coverage chain and
 the SonarCloud analysis run on every push to `dev` even for a proven tree — see D1 and Consequences.
+Amended 2026-11-21 (owner order to stop paying for runs that cannot tell anything, PR #4513): a
+pull-request run of a title- or body-only edit reuses the evidence of an earlier run that measured
+the same candidate merge tree — see D6.
 
 ## Amends
 
@@ -54,7 +57,7 @@ An integration run (`push` to a protected integration branch, or `merge_group`) 
 gate starts, whether this commit's tree is already bound to complete green evidence. When it is, the
 jobs whose verdict that evidence carries do not run: `semantic-duplication`, `core-quality`,
 `coverage-packages`, `coverage-ui`, `coverage-scripts`, `coverage-sonar`, `build-scan-sbom-smoke`,
-`cross-platform-smoke`, `portable-secure-read`, `firefox-smoke`, and `ui`.
+`cross-platform-smoke`, `portable-secure-read`, `firefox-smoke`, `webkit-smoke`, and `ui`.
 
 With Node 26 as the sole baseline (owner decision, 2026-11-15), the duplicate
 `node-26-compatibility` matrix is retired. The four package-coverage shards run the complete
@@ -124,18 +127,60 @@ Workflow files live inside the tree, so any edit to `ci.yml`, to the resolver, o
 gate invokes changes the tree sha and forecloses reuse for that commit. This decision cannot outlive
 the evidence it cites, and needs no expiry, allowlist, or manual invalidation.
 
+### D6 — A title- or body-only edit reuses the evidence of its unchanged merge candidate
+
+A `pull_request` `edited` event whose `changes` name only `title` and `body` changes no byte a gate
+reads except the metadata `check:review-bot-suppression` checks. Before this amendment every such
+edit started the whole matrix again on the unchanged head; measured 2026-11-18 to 2026-11-21, 86 of
+173 head commits were run more than once.
+
+The binding is the candidate merge tree, the same binding D1 uses, never the head commit alone: a
+pull-request run measures `refs/pull/<n>/merge`, and `dev` may have moved since the earlier run.
+Every pull-request run therefore records the tree of the commit it checked out, and the event's base
+sha, as the name of an artifact, `ci-candidate-tree-<tree sha>-base-<base sha>`, after confirming
+that the checkout is the event's merge commit. The base is part of the binding because some gates
+read it directly (the changed-file ranges), so an identical tree on another base is a different
+measurement. The resolver reuses an earlier run only when all of these hold:
+
+- the event is `edited` and its `changes` keys are a non-empty subset of `title` and `body`; a base
+  retarget, any other key, an empty or malformed payload, or any other pull-request action runs the
+  full matrix before any lookup;
+- a completed, successful `pull_request` run of `ci.yml` on the edited head executed every reused
+  job (D2 unchanged, so a run that itself reused evidence never qualifies);
+- that same run recorded exactly this run's candidate merge tree and base.
+
+The `Verified tree` job runs `check:review-bot-suppression` on every pull-request event before the
+resolver, so the edited metadata is checked whether or not the matrix is reused. The `ci`
+aggregate's D4 checks apply unchanged.
+
+On a pull request, unlike on `dev`, the skipped jobs' names are protected checks. GitHub does not
+evaluate a skipped job's name expression, so a skipped `ui` or `build-scan-sbom-smoke` reports its
+raw expression and branch protection waits for `ui` and `Build, scan, SBOM, smoke` without end
+(observed on #4513, 2026-11-22). The `reused-required-checks` job therefore reports exactly those
+two protected names, for an open pull request's verified reuse only, and fails closed unless
+`Verified tree` succeeded, verified the tree and named the evidence run and tree it reuses.
+
+An edit cancels nothing (ADR-0157 D5, amended 2026-11-21): it waits as the pending run of the pull
+request's one concurrency group until the run in flight finishes, and then resolves against it. An
+edit right after a push therefore costs one short run once that push's run is green, instead of a
+second full matrix next to it. When the earlier run failed, was cancelled or measured another tree,
+the edit run measures the full matrix itself. GitHub keeps one pending run per group, so an edit
+that arrives while a push's run is still pending replaces it; the edit run carries the same new
+head, finds no green run for it, and measures the full matrix in the push run's place.
+
 ## Consequences
 
 - An integration run of an already-proven tree completes in about two minutes for the reused gates
   instead of 48; on `dev` the coverage chain and the SonarCloud analysis still run (about 25
   minutes, amendment of 2026-09-25), and the reused gates cannot be turned red by infrastructure
   flake against code that is already proven.
-- The pull-request run is unchanged and remains the complete arbiter. The quality bar is untouched:
-  the same gates decide, once, on the bytes they actually judge.
+- The pull-request run remains the complete arbiter. A title- or body-only edit run reuses it only
+  for the identical candidate merge tree (D6). The quality bar is untouched: the same gates decide,
+  once, on the bytes they actually judge.
 - The packaging job's attestations are not re-emitted for an identical tree; they remain reachable
   on demand via `workflow_dispatch`, which never reuses evidence. SonarCloud's `dev` branch analysis
   IS re-emitted on every push to `dev` (amendment of 2026-09-25), because an analysis filed under a
-  pull request does not advance the branch. The `dev` Banking Grade verification already ran only
-  under `workflow_dispatch` before this decision.
+  pull request does not advance the branch. The `dev` Banking Grade verification runs with that
+  analysis on every push to `dev` (ADR-0131, amended 2026-11-21).
 - `scripts/__tests__/verified-tree-evidence-reuse.test.mjs` pins both halves: that every job in D1
   carries the guard and can resolve it, and that the aggregate's fail-closed verdicts in D4 hold.

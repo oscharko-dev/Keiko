@@ -3,6 +3,7 @@
 // person reads. Timing never enters the scorecard, so two offline runs serialize identically.
 import { createScorecard, serializeScorecard } from "../../../tests/memory-eval/scorecard.ts";
 import { compareStrings } from "../../lib/compare-strings.mjs";
+import { FAILURE_CLASSES, summarizeFailureClasses } from "./failure-classes.mjs";
 import { HARD_COUNTERS, aggregate, hardCountersViolated } from "./score.mjs";
 import { isFailedUnit } from "./unit-failure.mjs";
 
@@ -58,7 +59,10 @@ function recordStore(card, prefix, result) {
 function probeEvidence(probe) {
   const parts = Object.entries(probe)
     .filter(
-      ([key]) => !["id", "kind", "passed", "elapsedMs", "answer", "suppliedIds"].includes(key),
+      ([key]) =>
+        !["id", "kind", "passed", "elapsedMs", "answer", "suppliedIds", "recallTrace"].includes(
+          key,
+        ),
     )
     .map(([key, value]) => `${key}=${String(value)}`);
   return `kind=${probe.kind} ${parts.join(" ")}`;
@@ -328,6 +332,18 @@ function failedUnitList(results) {
     }));
 }
 
+// What the product's maintenance did to seeded records: faded filler is information, not a failure. A
+// seeded superseded record it removed is a loss (`seeded-record-lost`) and is only counted here. A
+// sealed run carries no seed, so it reports none.
+function seedInformation(results, sealed) {
+  const after = sealed ? [] : results.map((result) => result.seed?.after ?? {});
+  return {
+    supersededRemoved: sum(after.map((entry) => entry.supersededRemoved ?? 0)),
+    fillerArchived: sum(after.map((entry) => entry.fillerFaded?.archived ?? 0)),
+    fillerRemoved: sum(after.map((entry) => entry.fillerFaded?.removed ?? 0)),
+  };
+}
+
 function oracleScopes(results) {
   const totals = {};
   for (const result of results)
@@ -369,6 +385,8 @@ export function summarizeLabRun(results, { sealed = false } = {}) {
     oracleArmRan: results.some((result) => result.arm === "oracle"),
     oracleRuns: results.filter((result) => result.oracle !== undefined).length,
     oracleScopes: oracleScopes(results),
+    failureClasses: summarizeFailureClasses(results, { sealed }),
+    seedInformation: seedInformation(results, sealed),
     oraclePreconditionFailures: results
       .filter((result) => result.oracle !== undefined && !result.oracle.preconditionMet)
       .map((result) => result.scenario),
@@ -446,6 +464,76 @@ function oracleLines(summary) {
   return ["Oracle precondition: met for every scenario that ran.", scopeLine];
 }
 
+const MAX_LISTED_SCENARIOS = 40;
+
+function classCell(counts, name) {
+  return String(counts[name] ?? 0);
+}
+
+function failureClassTable(byArm) {
+  const arms = Object.keys(byArm);
+  const present = FAILURE_CLASSES.filter((name) =>
+    arms.some((arm) => byArm[arm].total[name] !== undefined),
+  );
+  return [
+    `| Class | ${arms.join(" | ")} |`,
+    `| --- | ${arms.map(() => "---").join(" | ")} |`,
+    ...present.map(
+      (name) => `| ${name} | ${arms.map((arm) => classCell(byArm[arm].total, name)).join(" | ")} |`,
+    ),
+  ];
+}
+
+function scenarioClassLines(arm, byScenario) {
+  const scenarios = Object.keys(byScenario);
+  const lines = scenarios.slice(0, MAX_LISTED_SCENARIOS).map((scenario) => {
+    const counts = Object.entries(byScenario[scenario])
+      .map(([name, count]) => `${name}=${String(count)}`)
+      .join(" ");
+    return `- ${arm} ${scenario}: ${counts}`;
+  });
+  const more = scenarios.length - lines.length;
+  return more > 0 ? [...lines, `- ${arm}: and ${String(more)} more scenarios`] : lines;
+}
+
+// Answer probes traced with no fact to follow: they have no stage class, and the line says so.
+function factlessLines(factless) {
+  if ((factless ?? []).length === 0) return [];
+  return [
+    `Recall trace: ${String(factless.length)} answer probe(s) were traced with no fact to follow, so no stage class counts for them: ${factless.join(", ")}.`,
+    "",
+  ];
+}
+
+function seedInformationLines(information) {
+  const { fillerArchived = 0, fillerRemoved = 0 } = information ?? {};
+  const lines = [];
+  if (fillerArchived + fillerRemoved > 0)
+    lines.push(
+      `Information, not a failure: the product's maintenance faded seeded filler (${String(fillerArchived)} archived, ${String(fillerRemoved)} removed).`,
+    );
+  return lines.length === 0 ? [] : [...lines, ""];
+}
+
+// The failed checks of the run as counts per class (and per scenario in an open run), never a rate.
+function failureClassLines(summary) {
+  const { byArm } = summary.failureClasses;
+  const header = ["### Failure classes (counts of failed checks)", ""];
+  const info = [
+    ...seedInformationLines(summary.seedInformation),
+    ...factlessLines(summary.recallTraceFactless),
+  ];
+  const ran = `Arms that ran: ${Object.keys(byArm)
+    .map((arm) => `${arm} (${String(byArm[arm].units)} unit${byArm[arm].units === 1 ? "" : "s"})`)
+    .join(", ")}.`;
+  if (Object.values(byArm).every((arm) => Object.keys(arm.total).length === 0))
+    return [...header, "No failed check.", "", ran, "", ...info];
+  const scenarios = Object.keys(byArm).flatMap((arm) =>
+    scenarioClassLines(arm, byArm[arm].byScenario),
+  );
+  return [...header, ran, "", ...failureClassTable(byArm), "", ...scenarios, "", ...info];
+}
+
 function failureLines(summary) {
   if (summary.failedUnits === 0) return [];
   const listed = summary.failedUnitList
@@ -458,12 +546,18 @@ function failureLines(summary) {
   ];
 }
 
+function embedderText(metadata) {
+  const kind = String(metadata.embedder ?? "unrecorded");
+  const ids = metadata.embeddingModelIds ?? [];
+  return ids.length === 0 ? kind : `${kind} (${ids.join(", ")})`;
+}
+
 /** The Markdown a person reads: what was measured, per group, and what was not. */
 export function renderLabSummary(summary, manifest, metadata) {
   return [
     "# MemoriaViva lab run",
     "",
-    `Mode: ${metadata.mode}. Product head: ${metadata.productHead}, built packages \`${String(metadata.productDistDigest ?? "unknown")}\`. Corpus: ${manifest.count} scenarios, set digest \`${manifest.setDigest}\`. Arms: ${metadata.arms.join(", ")}. Repetitions: ${String(metadata.repetitions)}. Memory mode: ${metadata.memoryMode}, ceiling: ${metadata.ceiling}, memory budget ${String(metadata.budgetTokens ?? "unknown")} tokens.`,
+    `Mode: ${metadata.mode}. Product head: ${metadata.productHead}, built packages \`${String(metadata.productDistDigest ?? "unknown")}\`. Corpus: ${manifest.count} scenarios, set digest \`${manifest.setDigest}\`. Arms: ${metadata.arms.join(", ")}. Repetitions: ${String(metadata.repetitions)}. Memory mode: ${metadata.memoryMode}, ceiling: ${metadata.ceiling}, memory budget ${String(metadata.budgetTokens ?? "unknown")} tokens. Embedding model: ${embedderText(metadata)}.`,
     `Instrument: lab digest \`${String(metadata.instrumentDigest ?? "unknown")}\` at lab head ${String(metadata.labHead ?? "unknown")}${metadata.labDirty === true ? " (uncommitted lab changes)" : ""}; gateway configuration \`${String(metadata.configDigest ?? "unknown")}\`. Two runs compare only when their instrument digests and configurations agree.`,
     "",
     ...failureLines(summary),
@@ -482,6 +576,7 @@ export function renderLabSummary(summary, manifest, metadata) {
     "",
     timingTable(summary.timing),
     "",
+    ...failureClassLines(summary),
     "### Not measured in this run",
     "",
     ...summary.unmeasured.map((line) => `- ${line}`),

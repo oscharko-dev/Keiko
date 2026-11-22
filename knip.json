@@ -60,7 +60,8 @@
         "scripts/testing/jira-chat-lab/session.mjs",
         "scripts/testing/jira-chat-lab/verify-connection.mjs",
         "scripts/testing/jira-chat-lab/tls-front.mjs",
-        "scripts/__tests__/fixtures/work-lock-lane/lane.mjs"
+        "scripts/__tests__/fixtures/work-lock-lane/lane.mjs",
+        "scripts/lib/peak-rss-reporter.mjs"
       ],
       "project": ["src/**/*.ts", "scripts/**/*.mjs", "tests/**/*.{ts,mts,mjs}", "native/**/*.mjs"],
       "ignore": [

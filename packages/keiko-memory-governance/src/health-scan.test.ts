@@ -205,21 +205,20 @@ describe("findMissingCrossReferences (AC2)", () => {
 });
 
 describe("findStaleNotArchived (AC3)", () => {
-  it("flags a superseded record unchanged for longer than the window", () => {
-    const r = makeRecord({ id: "m-1", status: "superseded", updatedAt: NOW - 40 * DAY });
-    const findings = findStaleNotArchived([r], NOW, 30 * DAY, newFindingId);
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.kind).toBe("stale-not-archived");
+  it("does not flag superseded history however old it is (#4223, audit A5)", () => {
+    const r = makeRecord({ id: "m-1", status: "superseded", updatedAt: NOW - 400 * DAY });
+    expect(findStaleNotArchived([r], NOW, 30 * DAY, newFindingId)).toHaveLength(0);
   });
 
   it("flags a conflicted record unchanged for longer than the window", () => {
     const r = makeRecord({ id: "m-1", status: "conflicted", updatedAt: NOW - 40 * DAY });
     const findings = findStaleNotArchived([r], NOW, 30 * DAY, newFindingId);
     expect(findings).toHaveLength(1);
+    expect(findings[0]?.kind).toBe("stale-not-archived");
   });
 
-  it("does not flag a superseded record within the window", () => {
-    const r = makeRecord({ id: "m-1", status: "superseded", updatedAt: NOW - 10 * DAY });
+  it("does not flag a conflicted record within the window", () => {
+    const r = makeRecord({ id: "m-1", status: "conflicted", updatedAt: NOW - 10 * DAY });
     const findings = findStaleNotArchived([r], NOW, 30 * DAY, newFindingId);
     expect(findings).toHaveLength(0);
   });

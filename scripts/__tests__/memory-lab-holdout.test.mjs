@@ -622,6 +622,33 @@ describe("a sealed run against the real product", () => {
   );
 
   it(
+    "reports the failure classes of a sealed run as an open run of the same scenario does",
+    async () => {
+      const scenarios = join(root, "scenarios");
+      mkdirSync(scenarios);
+      writeFileSync(join(scenarios, "leak.json"), JSON.stringify(leakScenario()));
+      const holdout = join(root, "sealed", "holdout.json");
+      const keyFile = join(root, "keys", "holdout.key");
+      sealHoldout({ scenarios, out: holdout, keyFile });
+      const open = await runLab(
+        runOptions("open-classes", { scenarios, arms: "product", "recall-trace": false }),
+        () => undefined,
+      );
+      const sealed = await runLab(
+        runOptions("sealed-classes", { holdout, "key-file": keyFile, arms: "product" }),
+        () => undefined,
+      );
+      const openTotal = open.failureClasses.byArm.product.total;
+      // Not vacuous: the product parks the learned fact under Ask for approval, which the mask's
+      // emptied verdicts could not tell from a fact that was never stored.
+      expect(Object.keys(openTotal).length).toBeGreaterThan(0);
+      expect(sealed.failureClasses.byArm.product.total).toEqual(openTotal);
+      expect(sealed.failureClasses.byArm.product.byScenario).toEqual({});
+    },
+    RUN_TIMEOUT_MS,
+  );
+
+  it(
     "finds the same words in an ordinary run of the same scenario, so the scan can fail",
     async () => {
       const scenarios = join(root, "scenarios");
