@@ -168,6 +168,17 @@ closed outcome and reason, the upstream status class, counts, bytes and duration
 a URL, host, path, artifact coordinate, username or credential. A successful artifact request is
 not logged one by one; the settled summary counts it.
 
+### D9 — Network class of the first hop, and memory
+
+The credential-bearing first hop keeps the network class of the person's own configured
+repository: private and loopback addresses are allowed, and Keiko's own ports and metadata and
+link-local addresses are denied. It carries the trust the person gave that host in their own Maven
+or npm settings, which is the same exposure as running Maven on the host. A DNS change of that
+configured host is outside what the relay can judge. Cross-origin hops are narrowed to the
+upstream's class (D3). A text body is buffered whole, up to 64 MiB per answer, and the process
+holds at most a 512 MiB text budget; the budget counts buffered bytes once, so peak memory during
+the credential scan and a packument rewrite can be a small multiple of it.
+
 ## Limits
 
 - **Credential in a served file.** A password of eight or nine characters that also occurs in a
