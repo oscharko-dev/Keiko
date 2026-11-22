@@ -7,8 +7,9 @@
 //
 //   node scripts/check-vitest-report-ran.mjs <report.json>
 
-import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+
+import { readJsonArgument } from "./lib/json-argument.mjs";
 
 const NAME = "check-vitest-report-ran";
 
@@ -31,20 +32,9 @@ export function vitestReportVerdict(report) {
 
 /** Reads the report named by `argv[2]` and returns the process exit code. */
 export function runCheck(argv, io = console) {
-  const file = argv[2];
-  if (file === undefined || file === "") {
-    io.error(`${NAME}: FAIL usage: node scripts/${NAME}.mjs <report.json>`);
-    return 2;
-  }
-  let report;
-  try {
-    report = JSON.parse(readFileSync(file, "utf8"));
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    io.error(`${NAME}: FAIL the report could not be read (${detail})`);
-    return 1;
-  }
-  const verdict = vitestReportVerdict(report);
+  const read = readJsonArgument(argv, io, { name: NAME, input: "report" });
+  if ("exitCode" in read) return read.exitCode;
+  const verdict = vitestReportVerdict(read.value);
   if (!verdict.ok) {
     io.error(`${NAME}: FAIL ${verdict.reason}`);
     return 1;

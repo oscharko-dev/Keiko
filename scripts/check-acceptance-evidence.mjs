@@ -9,8 +9,9 @@
 //
 //   node scripts/check-acceptance-evidence.mjs <evidence.json>
 
-import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+
+import { readJsonArgument } from "./lib/json-argument.mjs";
 
 const NAME = "check-acceptance-evidence";
 const SCHEMA_VERSION = 4;
@@ -106,19 +107,9 @@ export function acceptanceEvidenceSummary(evidence) {
 
 /** Reads the evidence named by `argv[2]` and returns the process exit code. */
 export function runCheck(argv, io = console) {
-  const file = argv[2];
-  if (file === undefined || file === "") {
-    io.error(`${NAME}: FAIL usage: node scripts/${NAME}.mjs <evidence.json>`);
-    return 2;
-  }
-  let evidence;
-  try {
-    evidence = JSON.parse(readFileSync(file, "utf8"));
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    io.error(`${NAME}: FAIL the evidence could not be read (${detail})`);
-    return 1;
-  }
+  const read = readJsonArgument(argv, io, { name: NAME, input: "evidence" });
+  if ("exitCode" in read) return read.exitCode;
+  const evidence = read.value;
   for (const line of acceptanceEvidenceSummary(evidence)) io.log(`${NAME}: ${line}`);
   const failures = acceptanceEvidenceFailures(evidence);
   if (failures.length > 0) {
