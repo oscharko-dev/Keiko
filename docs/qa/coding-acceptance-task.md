@@ -4,7 +4,7 @@ Issue [#4492](https://github.com/oscharko-dev/Keiko/issues/4492), parent epic
 [#4491](https://github.com/oscharko-dev/Keiko/issues/4491). This document describes the instrument
 the epic uses to check its promise on every platform. It runs one fixed task. The tester checks
 the end state outside Keiko wherever that is possible: the project's own tests, the files outside
-`src/` and the project's own count of its checks. The run's outcome and its Activity Log lines are
+`src/` (`src/main` for the Maven project) and the project's own count of its checks. The run's outcome and its Activity Log lines are
 what Keiko reports. The tester compares them with those facts and never takes them on trust alone.
 
 ## The task
@@ -33,7 +33,7 @@ source the run may change.
 
 ## What counts as passed
 
-Before the run, the project's `npm test` must fail. After the run, the tester checks five things:
+Before the run, the project's own check must fail, because its tests ran and failed. After the run, the tester checks five things:
 
 1. The run ended `succeeded`: in the run's snapshot and in its `coding-runtime.run.settled` line.
 2. The tester's own check (`npm test`, or `mvn -B -q test` for the Maven project) in the folder
@@ -47,7 +47,7 @@ Before the run, the project's `npm test` must fail. After the run, the tester ch
    project's own ignore file names it, so it is no change to the project. Nothing else in the
    project may differ.
 4. The project counted as many checks during the run as the run reported. The tester reads
-   `.acceptance-checks` before its own `npm test`, which the recorder counts too.
+   `.acceptance-checks` before its own `npm test`, which the recorder counts too (the Maven test class's `@BeforeClass` method for the Maven project).
 5. The Activity Log lines of the run (correlation: the run's id) say:
    - `runtime.confinement.spawned`: the run's runtime process started inside the platform's
      boundary. On macOS that is backend `seatbelt`, profile `keiko-native` and workspace access
@@ -68,15 +68,15 @@ means "no passing check after the final edit":
 - **Denied:** the person denies the check in Ask for approval. The run also records the blocked
   reason `verification-command-denied`.
 
-In the skipped, stale and denied cases the fix is right, so the tester's own `npm test` passes.
+In the skipped, stale and denied cases the fix is right, so the tester's own check passes.
 Keiko must still not report success: the outcome follows what the run verified, not the file's
 true state.
 
 Before a run ends this way, Keiko sends the model back to verify, up to its bound of two
 continuations (`coding-runtime.run.verification-continuation`, state `continued`). A check the
 person denied blocks that continuation. Either way the last continuation line has state
-`not-evidenced`. In every case, whatever the outcome, the entries outside `src/` stay unchanged, the
-project's count matches the reported checks and the runtime started inside the boundary.
+`not-evidenced`. In every case, whatever the outcome, the entries outside the source (`src/`, or `src/main`)
+stay unchanged, the project's count matches the reported checks and the runtime started inside the boundary.
 
 ## Two ways to run it
 
@@ -104,13 +104,12 @@ Only the model is scripted
 ([`functional-acceptance-model.ts`](../../packages/keiko-server/src/test-support/functional-acceptance-model.ts)).
 The scripted model:
 
-1. runs `npm test`,
+1. runs the project's check (`npm test`, or `mvn -B -q test` for the Maven project),
 2. reads the target file,
 3. replaces it through the runtime's own `edit`,
-4. runs `npm test` again, unless the case skips that check or makes it stale.
+4. runs the check again, unless the case skips that check or makes it stale.
 
-The script carries its own check command and target file, so the Maven cases run `mvn -B -q test`
-and edit `Invoice.java`. The production policy reads that command as a test check
+The script carries its own check command and target file, so the Maven cases edit `Invoice.java`. The production policy reads that command as a test check
 (`openCodeNativeVerificationKind`), and a unit test pins that.
 
 Its replacement comes from `variants/`. In the Maven cases the internal repository is played by
@@ -336,7 +335,7 @@ and Keiko admits only a sanitized copy to the run (`nativeBuildSettings`), which
 | `maven-supervised-coding`   | Supervised       | `succeeded`                            | red: `failed`, `verification-not-evidenced`              |
 | `maven-autonomous-delivery` | Full access      | `succeeded`                            | red: `failed`, `verification-not-evidenced`              |
 | `maven-governed-assist`     | Ask for approval | `succeeded`                            | red: `failed`, `verification-not-evidenced`, 3 approvals |
-| `maven-wrong-password`      | Supervised       | `failed`, `verification-not-evidenced` | green: as expected (a negative control, see below)       |
+| `maven-wrong-password`      | Full access      | `failed`, `verification-not-evidenced` | green: as expected, with 2 `401` and no `200` (control)  |
 
 What each red case shows (the checks were `test:failed`, `test:failed`; the model was sent back to
 verify twice; the edit had landed; the tester's own `mvn -B -q test` with the right login exited 0;
@@ -358,9 +357,12 @@ repository accepted any login: the Full access case then ran to `succeeded`, so 
 build, JUnit, the check count and the unchanged-files comparison work, and the credential is the
 only gap.
 
-`maven-wrong-password` already passes today, because every build fails before the fix. It is the
-negative control for the future relay: a wrong password must still end `failed`, with the tester's
-right-login check passing. It must stay green when the three cases above turn green.
+`maven-wrong-password` already passes today. It runs at Full access, the one mode where Maven goes
+online, and it asserts that the repository answered the run with at least one `401` and never a
+`200`, so the login is really tried (below Full access Maven is offline and would never ask). The
+observed answers were two `401`. It is the negative control for the future relay: a wrong password
+must still end `failed`, with the tester's right-login check passing. It must stay green when the
+three cases above turn green.
 
 ## What this baseline does not prove yet
 

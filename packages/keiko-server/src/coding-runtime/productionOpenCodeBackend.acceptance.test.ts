@@ -382,22 +382,27 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
       expectVerifiedInMode(observed, mode);
     },
   })),
-  // The negative control of the login: a wrong password must never become a pass. The build cannot
-  // start, so the project counts no check; the tester's own login is right, so its build passes.
+  // The negative control of the login: a wrong password must never become a pass. It runs at Full
+  // access, the one mode where the build goes online, so the repository is asked and answers 401
+  // (below Full access Maven is offline and would never ask). The build cannot start, so the
+  // project counts no check; the tester's own login is right, so its build passes.
   {
     id: "maven-wrong-password",
     title: "never reports success for a maven project when the person's login is wrong",
     acceptanceCase: {
-      ...verified("maven-internal-repository", "supervised-coding"),
+      ...verified("maven-internal-repository", "autonomous-delivery"),
       login: "wrong",
       expected: "not-succeeded",
     },
     check: (observed): void => {
-      expectNotVerified(observed, "supervised-coding", {
+      expectNotVerified(observed, "autonomous-delivery", {
         testsPassOutsideKeiko: true,
         projectCheckCount: 0,
       });
       expect(observed.verificationSummaries).toEqual(["test:failed", "test:failed"]);
+      // The login was actually tried: the repository answered the run, and never with a 200.
+      expect(observed.repositoryRequests["401"] ?? 0, JSON.stringify(observed)).toBeGreaterThan(0);
+      expect(observed.repositoryRequests["200"], JSON.stringify(observed)).toBeUndefined();
     },
   },
 ];

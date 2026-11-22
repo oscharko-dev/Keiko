@@ -3,7 +3,8 @@
 // refuse a cache that does not match its lock by naming the command that provisions it.
 
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { get } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -51,16 +52,30 @@ function fixtureCache(): { readonly cache: string; readonly lock: string } {
   return { cache, lock };
 }
 
-async function started(): Promise<FunctionalMavenRepository> {
+async function started(): Promise<{
+  readonly repository: FunctionalMavenRepository;
+  readonly cache: string;
+}> {
   const { cache, lock } = fixtureCache();
   const repository = await startFunctionalMavenRepository(verifiedMavenCache(cache, lock));
   repositories.push(repository);
-  return repository;
+  return { repository, cache };
+}
+
+/** The status of a request whose path is sent exactly as given, which `fetch` would normalize. */
+function rawStatus(url: string, path: string): Promise<number> {
+  const { hostname, port } = new URL(url);
+  return new Promise((settled, failed) => {
+    get({ hostname, port, path, headers: { Authorization: RIGHT } }, (response) => {
+      response.resume();
+      settled(response.statusCode ?? 0);
+    }).on("error", failed);
+  });
 }
 
 describe("acceptance Maven repository (#4492)", () => {
   it("answers 401 with a Basic challenge to a request without or with a wrong login", async () => {
-    const repository = await started();
+    const { repository } = await started();
     const anonymous = await fetch(`${repository.url}${PARENT}`);
     expect(anonymous.status).toBe(401);
     expect(anonymous.headers.get("www-authenticate")).toMatch(/^Basic /u);
@@ -74,7 +89,7 @@ describe("acceptance Maven repository (#4492)", () => {
   });
 
   it("serves the private parent POM and the cache with the right login, and counts by status", async () => {
-    const repository = await started();
+    const { repository } = await started();
     const headers = { Authorization: RIGHT };
     const pom = await fetch(`${repository.url}${PARENT}`, { headers });
     expect(pom.status).toBe(200);
@@ -88,13 +103,36 @@ describe("acceptance Maven repository (#4492)", () => {
     expect(repository.statusCounts()).toEqual({ "200": 4 });
   });
 
-  it("answers 404 for a missing file, a directory and a path that leaves the repository", async () => {
-    const repository = await started();
+  it("answers 404 for a missing file, a directory and a cache file the lock does not list", async () => {
+    const { repository, cache } = await started();
+    writeFileSync(join(cache, "unlisted.txt"), "not in the lock");
     const headers = { Authorization: RIGHT };
-    for (const path of ["/missing.pom", "/org/example/", "/%2e%2e/%2e%2e/package.json"]) {
+    for (const path of ["/missing.pom", "/org/example/", "/unlisted.txt"]) {
       const response = await fetch(`${repository.url}${path}`, { headers });
       expect([path, response.status]).toEqual([path, 404]);
     }
+  });
+
+  it("never serves a file outside its roots, however the path reaches it", async () => {
+    const { repository, cache } = await started();
+    // The repository's own package.json lies four levels above the private fixture root; the
+    // fixture cache's lock lies one level above the cache. Both exist, so only the guard stops them.
+    const outside = ["/../../../../package.json", "/../../../../../../../../package.json"];
+    const encoded = [
+      "/%2e%2e/%2e%2e/%2e%2e/%2e%2e/package.json",
+      "/..%2f..%2f..%2f..%2fpackage.json",
+    ];
+    const cacheEscape = ["/../lock.json", "/org/../../lock.json", "/%2e%2e/lock.json"];
+    for (const path of [...outside, ...encoded, ...cacheEscape]) {
+      expect([path, await rawStatus(repository.url, path)]).toEqual([path, 404]);
+    }
+    // Positive controls: the same helper reaches a legitimate file of each root.
+    expect(await rawStatus(repository.url, PARENT)).toBe(200);
+    expect(await rawStatus(repository.url, CACHED)).toBe(200);
+    // A symbolic link in the cache never leads out of it.
+    const lockOutside = join(cache, "..", "lock.json");
+    symlinkSync(lockOutside, join(cache, "link.txt"));
+    expect(await rawStatus(repository.url, "/link.txt")).toBe(404);
   });
 
   it("refuses a missing cache and a cache that differs from its lock, naming the command", () => {

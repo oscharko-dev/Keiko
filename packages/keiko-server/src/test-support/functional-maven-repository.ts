@@ -8,10 +8,18 @@
 // ephemeral loopback port, ready before `start` returns, closed by `close()`.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -49,7 +57,7 @@ export interface FunctionalMavenRepository {
 export function verifiedMavenCache(
   cacheDirectory: string = MAVEN_CACHE_DIRECTORY,
   lockFile: string = MAVEN_CACHE_LOCK,
-): string {
+): ServedCache {
   if (!existsSync(cacheDirectory)) {
     throw new Error(`acceptance-maven-cache-missing: run \`${PROVISION_COMMAND}\` once`);
   }
@@ -69,7 +77,7 @@ export function verifiedMavenCache(
       `acceptance-maven-cache-mismatch: ${String(mismatched)} artifacts differ from the lock; run \`${PROVISION_COMMAND}\``,
     );
   }
-  return cacheDirectory;
+  return { directory: cacheDirectory, locked: new Set(Object.keys(lock.files)) };
 }
 
 function cachedArtifacts(directory: string): readonly string[] {
@@ -91,25 +99,43 @@ function digest(algorithm: "sha1" | "sha256", bytes: Uint8Array): string {
   return createHash(algorithm).update(bytes).digest("hex");
 }
 
-/** The file a repository path names, in the private repository first and then the cache. */
-function servedFile(cache: string, urlPath: string): string | undefined {
+/** The cache directory a repository serves, and the only files of it that it serves. */
+export interface ServedCache {
+  readonly directory: string;
+  readonly locked: ReadonlySet<string>;
+}
+
+/** The real file a path names below `root`, or undefined when it leaves `root` or is no file. */
+function fileInside(root: string, decoded: string): string | undefined {
+  const candidate = resolve(root, `.${decoded}`);
+  if (!existsSync(candidate)) return undefined;
+  const real = realpathSync(candidate);
+  const inside = relative(realpathSync(root), real);
+  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return undefined;
+  return statSync(real).isFile() ? real : undefined;
+}
+
+/**
+ * The file a repository path names: any file of the private repository first, then a file of the
+ * cache that the lock lists. A symbolic link counts only when its real path stays in its root.
+ */
+function servedFile(cache: ServedCache, urlPath: string): string | undefined {
   let decoded: string;
   try {
     decoded = decodeURIComponent(urlPath.split("?", 1)[0] ?? "");
   } catch {
     return undefined;
   }
-  for (const root of [PRIVATE_REPOSITORY, cache]) {
-    const candidate = resolve(root, `.${decoded}`);
-    const inside = relative(root, candidate);
-    if (inside === "" || inside.startsWith("..") || resolve(root, inside) !== candidate) continue;
-    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate;
-  }
-  return undefined;
+  const privateFile = fileInside(PRIVATE_REPOSITORY, decoded);
+  if (privateFile !== undefined) return privateFile;
+  const cached = fileInside(cache.directory, decoded);
+  if (cached === undefined) return undefined;
+  const name = relative(realpathSync(cache.directory), cached).split(sep).join("/");
+  return cache.locked.has(name) ? cached : undefined;
 }
 
 /** Maven's checksum requests: the digest of the file the repository serves, computed on demand. */
-function checksumOf(cache: string, urlPath: string): string | undefined {
+function checksumOf(cache: ServedCache, urlPath: string): string | undefined {
   const match = /^(.*)\.(sha1|sha256)$/u.exec(urlPath);
   const file = match?.[1] === undefined ? undefined : servedFile(cache, match[1]);
   if (file === undefined || match?.[2] === undefined) return undefined;
@@ -117,7 +143,7 @@ function checksumOf(cache: string, urlPath: string): string | undefined {
 }
 
 /** The bytes a repository path names: a served file, or the checksum of one. */
-function bodyFor(cache: string, urlPath: string): Buffer | undefined {
+function bodyFor(cache: ServedCache, urlPath: string): Buffer | undefined {
   const file = servedFile(cache, urlPath);
   if (file !== undefined) return readFileSync(file);
   const checksum = checksumOf(cache, urlPath.split("?", 1)[0] ?? "");
@@ -142,7 +168,7 @@ function answer(
 }
 
 function handle(
-  cache: string,
+  cache: ServedCache,
   request: IncomingMessage,
   response: ServerResponse,
   counts: Map<string, number>,
@@ -169,7 +195,7 @@ function handle(
  * another verified cache directory, for the repository's own tests.
  */
 export async function startFunctionalMavenRepository(
-  cache: string = verifiedMavenCache(),
+  cache: ServedCache = verifiedMavenCache(),
 ): Promise<FunctionalMavenRepository> {
   const counts = new Map<string, number>();
   const server: Server = createServer((request, response) => {

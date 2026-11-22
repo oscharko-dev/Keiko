@@ -60,9 +60,11 @@ const FIXED_TARGET = join("src", "main", "java", "com", "example", "invoice", "I
 const LOCK_SCHEMA_VERSION = 1;
 const BUILD_TIMEOUT_MS = 600_000;
 
-export function fail(message, { error = console.error, exit = process.exit } = {}) {
-  error(`provision-acceptance-maven: ${message}`);
-  exit(1);
+/** A refusal of this script. It is thrown, never exited on, so cleanup in `finally` runs. */
+export class ProvisionError extends Error {}
+
+export function fail(message) {
+  throw new ProvisionError(message);
 }
 
 /** Every `.pom` and `.jar` below `directory`, as sorted forward-slash relative paths. */
@@ -148,6 +150,9 @@ export function buildCache() {
     copyFileSync(FIXED_VARIANT, join(project, FIXED_TARGET));
     const settings = join(scratch, "settings.xml");
     writeFileSync(settings, "<settings></settings>\n");
+    // Maven's own global settings (`conf/settings.xml` of the installation) are replaced as well.
+    const globalSettings = join(scratch, "global-settings.xml");
+    writeFileSync(globalSettings, "<settings></settings>\n");
     rmSync(CACHE_DIRECTORY, { recursive: true, force: true });
     mkdirSync(CACHE_DIRECTORY, { recursive: true });
     // The private parent POM first, so the build can read it from the cache.
@@ -159,7 +164,15 @@ export function buildCache() {
       },
     );
     runMaven(
-      ["-B", "-s", settings, `-Dmaven.repo.local=${CACHE_DIRECTORY}`, "test"],
+      [
+        "-B",
+        "-s",
+        settings,
+        "-gs",
+        globalSettings,
+        `-Dmaven.repo.local=${CACHE_DIRECTORY}`,
+        "test",
+      ],
       project,
       home,
     );
@@ -185,6 +198,9 @@ function verifyAgainstLock() {
 
 function main(argv) {
   const flags = new Set(argv);
+  if (flags.has("--verify") && flags.has("--write-lock")) {
+    fail("--verify and --write-lock exclude each other");
+  }
   if (flags.has("--verify")) return verifyAgainstLock();
   buildCache();
   if (flags.has("--write-lock")) {
@@ -194,4 +210,12 @@ function main(argv) {
   return verifyAgainstLock();
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main(process.argv.slice(2));
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  try {
+    main(process.argv.slice(2));
+  } catch (error) {
+    if (!(error instanceof ProvisionError)) throw error;
+    console.error(`provision-acceptance-maven: ${error.message}`);
+    process.exit(1);
+  }
+}

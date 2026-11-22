@@ -24,7 +24,7 @@ ignored `.acceptance-maven/`; `maven-cache.lock.json` pins the path and SHA-256 
 `.jar` of that cache. Never point these files at a real repository or a real `~/.m2`.
 
 `variants/<project>/` holds the replacement files a scripted model writes: `*.fixed.*` repairs the
-defect, `*.wrong.*` changes the code without repairing it. A real model writes its own fix;
+defect, `*.wrong.*` changes the code without repairing it (the Maven project has a fixed variant only). A real model writes its own fix;
 the end-state checks are the same.
 
 ## The task
