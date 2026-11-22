@@ -213,20 +213,60 @@ export function isTestPath(input) {
   return testScopeRules.some(([, matches]) => matches(path));
 }
 
-export function partitionSonarInclusions(paths) {
+// Sonar's WildcardPattern: `**/` spans any number of directories, a trailing `/**` everything
+// below a directory, `*` any characters except `/` and `?` one such character.
+export function sonarWildcardMatcher(pattern) {
+  let source = "";
+  for (let index = 0; index < pattern.length; index += 1) {
+    if (pattern.startsWith("**/", index)) {
+      source += "(?:[^/]*/)*";
+      index += 2;
+    } else if (pattern.startsWith("/**", index) && index + 3 === pattern.length) {
+      source += "(?:/.*)?";
+      index += 2;
+    } else if (pattern.startsWith("**", index)) {
+      source += ".*";
+      index += 1;
+    } else {
+      source += wildcardCharacterSource(pattern.charAt(index));
+    }
+  }
+  const expression = new RegExp(`^${source}$`, "u");
+  return (path) => expression.test(path);
+}
+
+function wildcardCharacterSource(character) {
+  if (character === "*") return "[^/]*";
+  if (character === "?") return "[^/]";
+  return character.replaceAll(/[.+^${}()|[\]\\]/gu, String.raw`\$&`);
+}
+
+// The local scan replaces sonar.exclusions on the scanner command line, so the partition applies the
+// project's own exclusions: a changed file SonarCloud never analyses is not analysed here either.
+export function sonarExclusionMatchers(properties) {
+  const matchers = (key) =>
+    propertyPatterns(properties, key)
+      .filter((pattern) => pattern.length > 0)
+      .map((pattern) => sonarWildcardMatcher(pattern));
+  return { sources: matchers("sonar.exclusions"), tests: matchers("sonar.test.exclusions") };
+}
+
+export function partitionSonarInclusions(paths, exclusions = { sources: [], tests: [] }) {
   if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string")) {
     throw new TypeError("Sonar inclusion paths must be an array of strings");
   }
   if (sonarInclusionPathsNeedFullScan(paths)) {
     throw new TypeError("Sonar inclusion paths cannot be represented exactly");
   }
-  const partitions = { sources: [], tests: [] };
+  const partitions = { sources: [], tests: [], excluded: [] };
   const normalizedPaths = [...new Set(paths.map((path) => normalizePath(path)))].sort(
     (left, right) => left.localeCompare(right),
   );
   if (normalizedPaths.includes("")) throw new TypeError("Sonar inclusion paths must not be empty");
   for (const path of normalizedPaths) {
-    (isTestPath(path) ? partitions.tests : partitions.sources).push(path);
+    const side = isTestPath(path) ? "tests" : "sources";
+    const excluded = exclusions[side].some((matches) => matches(path));
+    partitions[excluded ? "excluded" : side].push(path);
   }
   return partitions;
 }
@@ -243,9 +283,11 @@ export function sonarInclusionPathsNeedFullScan(paths) {
   );
 }
 
-export function serializeSonarInclusionPartition(source) {
+export function serializeSonarInclusionPartition(source, properties = "") {
   try {
-    return JSON.stringify(partitionSonarInclusions(JSON.parse(source)));
+    return JSON.stringify(
+      partitionSonarInclusions(JSON.parse(source), sonarExclusionMatchers(properties)),
+    );
   } catch {
     throw new TypeError("Sonar inclusion payload is invalid");
   }
@@ -254,7 +296,10 @@ export function serializeSonarInclusionPartition(source) {
 export function executeSonarInclusionPartitionCli(input = {}) {
   try {
     const source = input.source ?? readFileSync(0, "utf8");
-    (input.log ?? console.log)(serializeSonarInclusionPartition(source));
+    const properties =
+      input.properties ??
+      readFileSync(resolve(import.meta.dirname, "..", "sonar-project.properties"), "utf8");
+    (input.log ?? console.log)(serializeSonarInclusionPartition(source, properties));
     return 0;
   } catch {
     (input.error ?? console.error)("sonar-inclusion-partition: FAIL - invalid path inventory");

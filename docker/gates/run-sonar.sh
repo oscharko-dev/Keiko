@@ -315,7 +315,17 @@ process.stdin.on("data", (d) => (s += d)).on("end", () => {
 process.stdin.on("data", (d) => (s += d)).on("end", () => {
   process.stdout.write(JSON.parse(s).tests.join(","));
 });')"
+    excluded_inclusions="$(printf '%s' "${partition_json}" | node -e 'let s = "";
+process.stdin.on("data", (d) => (s += d)).on("end", () => {
+  process.stdout.write(JSON.parse(s).excluded.join("\n"));
+});')"
     printf '  scoped analysis and verdict to %s changed file(s)\n' "${changed_count}"
+    # The scanner command line replaces sonar.exclusions below; the partition already applied the
+    # project's own exclusions, so a file SonarCloud never analyses is named here and not scanned.
+    if [[ -n "${excluded_inclusions}" ]]; then
+      printf '  not analysed, excluded in sonar-project.properties as in SonarCloud:\n'
+      printf '%s\n' "${excluded_inclusions}" | sed 's/^/    /'
+    fi
     # The configured root tsconfig owns about 6,400 files, and SonarJS builds the whole program of
     # every tsconfig that owns an analysed file: one changed file under src/, tests/ or
     # packages/*/src ran the bridge out of its heap. Programs rooted at the changed files keep the

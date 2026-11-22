@@ -19,7 +19,9 @@ import {
   readNativeScope,
   runAnalysisScopeCheck,
   serializeSonarInclusionPartition,
+  sonarExclusionMatchers,
   sonarInclusionPathsNeedFullScan,
+  sonarWildcardMatcher,
   sourceEncodingFailures,
   systemGitExecutable,
 } from "../sonar-analysis-scope.mjs";
@@ -146,6 +148,7 @@ describe("Sonar analysis scope", () => {
         "scripts/__tests__/check-external-quality-config.test.mjs",
         "tests/e2e/smoke.spec.ts",
       ],
+      excluded: [],
     });
     expect(partitionSonarInclusions(["scripts/check-external-quality-config.mjs"]).tests).toEqual(
       [],
@@ -166,19 +169,93 @@ describe("Sonar analysis scope", () => {
     );
     expect(partition.sources.some((path) => partition.tests.includes(path))).toBe(false);
     expect(serializeSonarInclusionPartition('["tests/a.test.ts","src/main.ts"]')).toBe(
-      '{"sources":["src/main.ts"],"tests":["tests/a.test.ts"]}',
+      '{"sources":["src/main.ts"],"tests":["tests/a.test.ts"],"excluded":[]}',
     );
     const log = vi.fn();
     const error = vi.fn();
     expect(
       executeSonarInclusionPartitionCli({
         source: '["tests/a.test.ts","src/main.ts"]',
+        properties: "",
         log,
         error,
       }),
     ).toBe(0);
-    expect(log).toHaveBeenCalledWith('{"sources":["src/main.ts"],"tests":["tests/a.test.ts"]}');
+    expect(log).toHaveBeenCalledWith(
+      '{"sources":["src/main.ts"],"tests":["tests/a.test.ts"],"excluded":[]}',
+    );
     expect(error).not.toHaveBeenCalled();
+  });
+
+  it("matches paths with Sonar's wildcard semantics", () => {
+    const evidence = sonarWildcardMatcher("docs/design-system/evidence/**");
+    expect(evidence("docs/design-system/evidence/1300/a11y/axe-proof.mjs")).toBe(true);
+    expect(evidence("docs/design-system/evidence")).toBe(true);
+    expect(evidence("docs/design-system/evidence-other/a.mjs")).toBe(false);
+    const dist = sonarWildcardMatcher("**/dist/**");
+    expect(dist("dist/ui/a.js")).toBe(true);
+    expect(dist("packages/keiko-ui/dist/a.js")).toBe(true);
+    expect(dist("packages/distro/a.js")).toBe(false);
+    const testFile = sonarWildcardMatcher("**/*.test.*");
+    expect(testFile("a.test.ts")).toBe(true);
+    expect(testFile("src/deep/a.test.mjs")).toBe(true);
+    expect(testFile("src/a.tests/b.ts")).toBe(false);
+    const single = sonarWildcardMatcher("scripts/a?.mjs");
+    expect(single("scripts/ab.mjs")).toBe(true);
+    expect(single("scripts/a/.mjs")).toBe(false);
+    const literal = sonarWildcardMatcher("scripts/arch-check-negative.mjs");
+    expect(literal("scripts/arch-check-negative.mjs")).toBe(true);
+    expect(literal("scripts/arch-check-negativeXmjs")).toBe(false);
+    expect(sonarWildcardMatcher("src/a(b)+.ts")("src/a(b)+.ts")).toBe(true);
+    expect(sonarWildcardMatcher("src/**/x.ts")("src/a/b/x.ts")).toBe(true);
+    expect(sonarWildcardMatcher("src/*")("src/a/b.ts")).toBe(false);
+  });
+
+  it("leaves out changed files the project's own exclusions keep out of SonarCloud", () => {
+    // The local scan replaces sonar.exclusions on the scanner command line. A changed evidence
+    // producer under docs/design-system/evidence/** was therefore scanned and reported although
+    // SonarCloud never analyses it.
+    const properties = readFileSync(
+      resolve(import.meta.dirname, "..", "..", "sonar-project.properties"),
+      "utf8",
+    );
+    const partition = partitionSonarInclusions(
+      [
+        "docs/design-system/evidence/1300/a11y/axe-proof.mjs",
+        "scripts/check-sonar-rules.mjs",
+        "scripts/__tests__/check-sonar-rules.test.mjs",
+        "native/portable-launcher/__tests__/launcher.test.mjs",
+      ],
+      sonarExclusionMatchers(properties),
+    );
+    expect(partition).toEqual({
+      sources: ["scripts/check-sonar-rules.mjs"],
+      tests: ["scripts/__tests__/check-sonar-rules.test.mjs"],
+      excluded: [
+        "docs/design-system/evidence/1300/a11y/axe-proof.mjs",
+        "native/portable-launcher/__tests__/launcher.test.mjs",
+      ],
+    });
+    // A test path is judged by sonar.test.exclusions only: tests/** excludes it from main code,
+    // not from test analysis.
+    expect(
+      partitionSonarInclusions(["tests/e2e/smoke.spec.ts"], sonarExclusionMatchers(properties)),
+    ).toEqual({ sources: [], tests: ["tests/e2e/smoke.spec.ts"], excluded: [] });
+    expect(sonarExclusionMatchers("sonar.exclusions=,a/**\n")).toEqual({
+      sources: [expect.any(Function)],
+      tests: [],
+    });
+    const log = vi.fn();
+    expect(
+      executeSonarInclusionPartitionCli({
+        source: '["docs/design-system/evidence/1300/README.md","src/main.ts"]',
+        log,
+        error: vi.fn(),
+      }),
+    ).toBe(0);
+    expect(log).toHaveBeenCalledWith(
+      '{"sources":["src/main.ts"],"tests":[],"excluded":["docs/design-system/evidence/1300/README.md"]}',
+    );
   });
 
   it("fails closed when the local inclusion inventory is malformed", () => {
@@ -215,6 +292,7 @@ describe("Sonar analysis scope", () => {
         "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-detail-state.test.tsx",
         "packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-detail.test.tsx",
       ],
+      excluded: [],
     });
     expect(new Set([...partition.sources, ...partition.tests])).toEqual(new Set(paths));
     expect(partition.sources.some((path) => partition.tests.includes(path))).toBe(false);

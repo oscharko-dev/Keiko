@@ -120,6 +120,10 @@ location after formatting rather than assuming the `await` or `async` line is al
 3. Partitions committed branch changes plus staged, unstaged, and untracked working-tree files into
    disjoint main-code and test inventories before analysis. A production path is never also passed
    through `sonar.test.inclusions`, because that would suppress main-code rules on the file.
+   The scanner command line replaces `sonar.exclusions`, so the partition applies the project's own
+   `sonar.exclusions` to main-code paths and `sonar.test.exclusions` to test paths, with Sonar's
+   wildcard semantics. A changed file SonarCloud never analyses (for example an evidence producer
+   under `docs/design-system/evidence/**`) is named as not analysed and is not scanned.
 4. Analyses those files under
    a checkout-scoped project key (`keiko-local-<hash>`), so several checkouts or agent sessions on
    one machine can run the lane concurrently without overwriting each other's analysis state or
