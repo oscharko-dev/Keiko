@@ -13,6 +13,11 @@ Amends:
   Keiko resolves from its own process environment is the one limit on macOS (D2).
 - #4522: the planned host-side npm bootstrap is replaced by this relay. ADR-0043 D17 stays as it is
   for the governed verifier.
+- [ADR-0129](ADR-0129-product-wide-authority-and-autonomy-model.md) D1 and
+  [ADR-0138](ADR-0138-monotonic-product-wide-autonomy-semantics-and-code-task-terminology.md) D1:
+  their mode descriptions name this relay as the one path to the person's own repositories below
+  Full access, beside the read-only Maven cache (owner decision 2026-11-22, D6). The policy matrix
+  is unchanged.
 
 Builds on [ADR-0181](ADR-0181-shared-managed-mcp-host.md) and its MCP credential relay (#3903 AC3).
 On Windows it relies on the loopback relay of [ADR-0043](ADR-0043-enforced-execution-isolation.md)
@@ -154,7 +159,10 @@ to a file of the run.
   `aether.transport.http.preemptiveAuth=true` (Maven 3.10, resolver 2) and
   `aether.connector.http.preemptiveAuth=true` (Maven 3.9, resolver 1.9) in the run's
   `JAVA_TOOL_OPTIONS`. Verified against Maven 3.10.0: with only the connector property the first
-  request carried no `Authorization`; with the transport property it did.
+  request carried no `Authorization`; with the transport property it did. Verified against Maven
+  3.9.9 (#4530): without the connector property its first request carried no `Authorization`; with
+  it every request did. The real-client test names the Maven it proves
+  (`KEIKO_REPOSITORY_RELAY_MAVEN_VERSION`) and fails on any other.
 - **Cache.** Unchanged by the relay. Below Full access the person's read-only Maven cache stays
   chained behind the run's writable repository (`maven.repo.local.tail`) and answers before the
   relay is asked; at Full access the run has its private repository only.
@@ -191,7 +199,9 @@ to a file of the run.
 
 The relay is available in every mode. It only reads, only reaches repositories the person
 configured, and never hands out a credential. Whether a build command may run is still decided by
-the mode's command rule. Below Full access the run gets dependency access without internet access.
+the mode's command rule; the relay read itself needs no approval. Below Full access the run gets
+dependency access without a network route of its own: it reaches only Keiko's loopback origin, and
+Keiko reads from the configured repository.
 
 ### D7 — Platforms
 
@@ -220,6 +230,29 @@ configured host is outside what the relay can judge. Cross-origin hops are narro
 upstream's class (D3). A text body is buffered whole, up to 64 MiB per answer, and the process
 holds at most a 512 MiB text budget; the budget counts buffered bytes once, so peak memory during
 the credential scan and a packument rewrite can be a small multiple of it.
+
+### D10 — Private targets and redirects, unlike the MCP credential relay
+
+The MCP credential relay refuses loopback and private-network targets and every redirect
+(`mcpCredentialRelay.ts`, `redirect-refused`). This relay admits private and loopback targets (D2,
+D9) and up to three redirects (D3). The difference follows from what each relay forwards:
+
+- **What a request can carry.** The MCP relay forwards a request body the model wrote to a tool
+  server. Forwarding it to an internal address would give the model a credentialed write path into
+  the person's network. This relay forwards no body and no query string, only `GET` and `HEAD` on a
+  path in the ecosystem's layout grammar (D3), so it can only read what the configured repository
+  serves. The coordinate channel that remains is named under Limits.
+- **Where the target lives.** An authenticated Maven or npm repository is usually internal: a
+  company repository manager on a private address. Refusing private targets would refuse the case
+  this relay exists for. The target still comes only from the person's own settings, never from the
+  project or the run (D2), and Keiko's own ports, metadata and link-local addresses stay denied (D9).
+- **Redirects.** A repository manager or registry can answer an ordinary read with a redirect, for
+  example to the storage that holds the artifact or tarball, and Maven and npm follow it. Refusing
+  every redirect would break such builds. The relay follows at most three. It keeps the credential
+  only on the same origin, follows a cross-origin redirect only to `https` and without the
+  credential, never to Keiko's own origin, and never into a more private network class than the
+  configured upstream (D3). Following a redirect in the MCP relay could replay a model-written body
+  to a location the operator never registered, so it refuses them.
 
 ## Limits
 
@@ -255,7 +288,8 @@ the credential scan and a packument rewrite can be a small multiple of it.
 ## Consequences
 
 - A Maven or npm project behind an authenticated internal repository builds and tests in its run,
-  in every mode, without the password entering the run.
+  in every mode, without a password from the person's settings files entering the run (D2 names the
+  limit for an environment credential on macOS).
 - The #4492 acceptance task carries a Maven case behind a login, in all three modes, plus a wrong
   password case; each case also scans the run's state, private home, task workspace and Activity Log
   lines for the password and its base64 forms.

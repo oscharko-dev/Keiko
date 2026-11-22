@@ -45,8 +45,12 @@ import { prepareNativeBuildSettings } from "./nativeBuildSettings.js";
 //   KEIKO_REPOSITORY_RELAY_REAL_CLIENTS=1 npx vitest run \
 //     packages/keiko-server/src/coding-runtime/nativeRepositoryRelay.clients.test.ts
 //
-// A missing client fails the suite when it is enabled; it never skips quietly.
+// A missing client fails the suite when it is enabled; it never skips quietly. Maven 3.9 (resolver
+// 1.9) and 3.10 (resolver 2) read different preemptive-auth properties (#4530 item 4): put the Maven
+// to prove first on PATH and name it in KEIKO_REPOSITORY_RELAY_MAVEN_VERSION (`3.9`, `3.10`), so a
+// run meant for one version fails on another instead of passing.
 const ENABLED = process.env.KEIKO_REPOSITORY_RELAY_REAL_CLIENTS === "1";
+const EXPECTED_MAVEN_VERSION = process.env.KEIKO_REPOSITORY_RELAY_MAVEN_VERSION;
 const MAVEN_PROJECT = fileURLToPath(
   new URL(
     "../../../../tests/fixtures/coding-acceptance/maven-internal-repository",
@@ -252,6 +256,16 @@ function runClient(
   });
 }
 
+async function mavenVersion(project: string): Promise<string> {
+  const result = await runClient("mvn", ["-v"], project, 60_000);
+  return /Apache Maven (\d+\.\d+\.\d+)/u.exec(result.output)?.[1] ?? "unknown";
+}
+
+function isExpectedMaven(version: string): boolean {
+  if (EXPECTED_MAVEN_VERSION === undefined) return true;
+  return version === EXPECTED_MAVEN_VERSION || version.startsWith(`${EXPECTED_MAVEN_VERSION}.`);
+}
+
 function mavenBuild(project: string): Promise<Finished> {
   return runClient("mvn", ["-B", "-q", "test-compile"], project, 170_000);
 }
@@ -277,6 +291,8 @@ describe.skipIf(!ENABLED)("the real Maven and npm against the repository relay (
   it("builds a Maven project whose parent POM and plugins only the credentialed repository serves", async () => {
     const project = join(temp(), "project");
     cpSync(MAVEN_PROJECT, project, { recursive: true });
+    const version = await mavenVersion(project);
+    expect(isExpectedMaven(version), `mvn on PATH is ${version}`).toBe(true);
     const before = scene.server.received.length;
     const result = await mavenBuild(project);
     expect(result.status, result.output).toBe(0);

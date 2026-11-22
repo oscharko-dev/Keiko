@@ -100,6 +100,16 @@ task's latest run, under the same deployment ceiling and hard denials. Creating 
 the existing risky contained-work disposition (asked in Ask for approval and Supervised workspace,
 allowed in Full access), and the person can pause or delete it in the Workbench.
 
+**Owner amendment, 2026-11-22 (repository credential relay, #4530):** a native Coding run reaches
+the Maven and npm repositories the person configured in their own user-level settings through
+Keiko's repository credential relay in every mode
+([ADR-0184](ADR-0184-repository-credential-relay-for-coding-runs.md) D6). Below Full access it is
+the one path to those repositories, beside the person's read-only Maven cache, and it gives the run
+no network route of its own: the run asks Keiko's attested loopback origin, and Keiko reads from
+the configured repository with `GET` and `HEAD` only and adds the credential on the host. Whether a
+build command may run is still decided by the mode's command rule; the relay read itself needs no
+approval, and the policy matrix is unchanged.
+
 ### D2 — One policy vocabulary, mapped through action classes
 
 A surface expresses its operations as action or effect classes that map onto the shared workbench

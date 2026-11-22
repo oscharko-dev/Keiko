@@ -25,13 +25,13 @@ import { RelayCapabilityStore, relayCredentialSpellings } from "../relay/relayCa
 /**
  * Static credentials of a remote MCP server (#3903 AC3), kept out of the runtime. A registry entry
  * names, for each header the server expects, a `KEIKO_MCP_SECRET_*` variable of Keiko's own
- * environment; the run never receives that value. Its binding addresses this relay on Keiko's
+ * environment; Keiko never hands that value to the run. Its binding addresses this relay on Keiko's
  * attested loopback origin instead of the server, with a capability minted for the one run and the
  * one server. The relay authenticates that capability, adds the credential headers and forwards the
  * request to exactly the registered URL through Keiko's egress (no redirect, loopback and private
  * targets refused). A leaked capability reaches only that server for that run's lifetime, through
- * Keiko; the credential itself cannot leave Keiko through the run. A server that answers with the
- * credential it received has it replaced in the response before the run reads it.
+ * Keiko. On macOS a value exported into the environment that starts Keiko stays readable to a run's
+ * shell (ADR-0137 D10). A credential echoed in a response is replaced before the run reads it.
  */
 export const MCP_RELAY_ROUTE = "/api/coding-sidecar/mcp/:relayId";
 export const MCP_RELAY_PATH_PREFIX = "/api/coding-sidecar/mcp/";

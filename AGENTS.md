@@ -63,6 +63,12 @@ monotonic semantics fixed by
   capability-availability clarification: a surface still needs an implemented execution path
   before a given mode's `allowed` verdict can act.)
 
+In every mode a native Coding run reads dependencies from the Maven and npm repositories the person
+configured, through Keiko's repository credential relay (owner decision 2026-11-22, ADR-0184 D6).
+Below Full access it is the one path to those repositories, beside the read-only Maven cache, and
+gives the run no network route of its own: Keiko makes the read. The build command keeps its mode's
+disposition; the relay read itself needs no approval.
+
 **Coding Workbench availability (owner decision, 2026-09-27):** a normal installation offers all
 three modes without extra configuration; its Coding ceiling defaults to `autonomous-delivery`.
 The selected mode defaults to **Ask for approval**, and a saved human mode selection remains a
