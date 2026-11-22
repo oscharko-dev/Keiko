@@ -30,7 +30,7 @@ Before the run, `npm test` in the project fails. After the run, these all hold:
 
 - the run ended `succeeded`;
 - the tester's own `npm test` in the same folder exits 0;
-- every file outside `src/` is unchanged;
+- every entry outside `src/`, installed dependencies included, is unchanged;
 - the project counted as many checks as the run reported;
 - the run's Activity Log shows its confinement, a passing check after the final edit and its
   settlement.

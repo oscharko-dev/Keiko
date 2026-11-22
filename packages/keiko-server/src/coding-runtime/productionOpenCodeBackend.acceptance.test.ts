@@ -4,10 +4,10 @@
 // runtime process Keiko spawned inside the Seatbelt boundary, and no container runtime is
 // involved. The tester then checks the end state outside Keiko: the run's outcome, the project's
 // own `npm test`, the untouched files outside `src/`, the number of checks the project itself
-// counted and the Activity Log. The model is scripted
-// (`acceptance` mode), so this proves the product's part of the promise, not a model's skill; a
-// real-model run of the same task closes the acceptance criteria. Proving each boundary statement
-// from the model's own shell belongs to #4521.
+// counted and the Activity Log. The model is scripted (`test-support/functional-acceptance-model`),
+// so this proves the product's part of the promise, not a model's skill; a real-model run of the
+// same task closes the acceptance criteria. Proving each boundary statement from the model's own
+// shell belongs to #4521.
 //
 // Runs where the dev-lane functional suite runs: macOS with `KEIKO_OPENCODE_DEV_LANE_FUNCTIONAL=1`
 // and the staged payload (`npm run dev:coding-runtime:stage`). Set `KEIKO_ACCEPTANCE_EVIDENCE_FILE`
@@ -27,15 +27,16 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   writeSync,
 } from "node:fs";
 import { homedir, release, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { CodingWorkbenchRuntimeStateName } from "@oscharko-dev/keiko-contracts";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -49,6 +50,7 @@ import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { withLocalCheckout } from "../task-workspace/local-checkout.js";
 import {
+  functionalChatModelId,
   functionalPost,
   startFunctionalDiscoveryServer,
   type FunctionalDiscoveryServer,
@@ -62,11 +64,15 @@ import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
   ACCEPTANCE_CHECK_COMMAND,
   ACCEPTANCE_STALE_SUFFIX,
+  acceptanceResponse,
+  type AcceptanceModelScript,
+} from "../test-support/functional-acceptance-model.js";
+import {
   createFunctionalTaskWorkspaceOwners,
   provisionFunctionalTaskWorkspace,
   type FunctionalTaskWorkspaceOwners,
-  type ScriptState,
-} from "./productionOpenCodeBackend.functional/_support.js";
+} from "../test-support/functional-task-workspace.js";
+import type { ScriptState } from "./productionOpenCodeBackend.functional/_support.js";
 
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const FIXTURES = join(REPOSITORY_ROOT, "tests", "fixtures", "coding-acceptance");
@@ -88,9 +94,13 @@ const NOT_VERIFIED = "verification-not-evidenced";
  * tester compares with the checks the run reported.
  */
 const CHECK_RECORD = ".acceptance-checks";
-/** What the run may change: the source. Everything else in the project must stay byte for byte. */
+/**
+ * What the run may change: the source. Everything else in the project, the installed
+ * dependencies included, must stay byte for byte, with its mode and its link targets. Only the
+ * project's Git metadata and its check record are left out, both at the project root.
+ */
 const SOURCE_DIRECTORY = "src";
-const OUTSIDE_SOURCE_IGNORED: ReadonlySet<string> = new Set([".git", "node_modules", CHECK_RECORD]);
+const OUTSIDE_SOURCE_IGNORED: ReadonlySet<string> = new Set([".git", CHECK_RECORD]);
 
 type AcceptanceProject = "no-dependencies" | "with-dependency";
 type AcceptanceMode = "governed-assist" | "supervised-coding" | "autonomous-delivery";
@@ -175,10 +185,18 @@ afterEach(async () => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-afterAll(() => {
+/** Where the evidence goes, validated before any case runs so a bad target fails first. */
+let evidenceTarget: string | undefined;
+
+beforeAll(() => {
   const file = process.env.KEIKO_ACCEPTANCE_EVIDENCE_FILE;
-  if (file === undefined || file === "" || evidence.length === 0) return;
-  writeOwnerPrivate(file, `${JSON.stringify(acceptanceEvidence(), null, 2)}\n`);
+  if (file === undefined || file === "") return;
+  evidenceTarget = ownerPrivateEvidenceTarget(file);
+});
+
+afterAll(() => {
+  if (evidenceTarget === undefined || evidence.length === 0) return;
+  writeOwnerPrivate(evidenceTarget, `${JSON.stringify(acceptanceEvidence(), null, 2)}\n`);
 });
 
 function acceptanceEnabled(): boolean {
@@ -452,19 +470,24 @@ async function observeAcceptanceCase(
 function acceptanceScript(
   acceptanceCase: AcceptanceCase,
   prepared: PreparedAcceptanceCase,
-): ScriptState {
+): AcceptanceModelScript {
   return {
-    mode: "acceptance",
-    calls: 0,
+    modelId: functionalChatModelId(),
+    target: TARGETS[acceptanceCase.project],
     old: prepared.original,
     next: prepared.replacement,
-    acceptanceTarget: TARGETS[acceptanceCase.project],
-    acceptancePlan:
+    plan:
       acceptanceCase.check === "skip-check" || acceptanceCase.check === "stale-check"
         ? acceptanceCase.check
         : "verify",
   };
 }
+
+/**
+ * The functional script the composition requires. The acceptance model answers every
+ * coding-sidecar call in its place, so this script is never asked.
+ */
+const UNUSED_FUNCTIONAL_SCRIPT: ScriptState = { mode: "productive", calls: 0, old: "", next: "" };
 
 async function prepareAcceptanceCase(
   acceptanceCase: AcceptanceCase,
@@ -548,7 +571,7 @@ function installSemver(folder: string): void {
 
 async function serveAcceptance(
   prepared: PreparedAcceptanceCase,
-  script: ScriptState,
+  script: AcceptanceModelScript,
 ): Promise<FunctionalDiscoveryServer & { readonly orchestrator: CodingRuntimeOrchestrator }> {
   const served = await startFunctionalDiscoveryServer({
     stateRoot: join(prepared.root, "bff-state"),
@@ -560,7 +583,8 @@ async function serveAcceptance(
           codingRuntimeSnapshotStore: createCodingRuntimeSnapshotStore(prepared.owners.db),
         }),
     workspaceProvisioning: prepared.owners.provisioning,
-    script,
+    script: UNUSED_FUNCTIONAL_SCRIPT,
+    respond: (request) => acceptanceResponse(script, request),
     staticRoot: prepared.root,
   });
   disposers.push(served.close);
@@ -640,24 +664,25 @@ function recordedChecks(folder: string): number {
     .filter((line) => line !== "").length;
 }
 
-/** A digest of every file outside `src/`, by relative path and bytes, in a stable order. */
+/**
+ * A digest of every entry outside `src/`, in a stable order: its relative path, its kind and
+ * mode, and its bytes or, for a symbolic link, its target.
+ */
 function outsideSourceDigest(folder: string): string {
   const hash = createHash("sha256");
   const visit = (directory: string, prefix: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
-      a.name.localeCompare(b.name),
-    )) {
-      const path = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
-      if (OUTSIDE_SOURCE_IGNORED.has(entry.name) || path === SOURCE_DIRECTORY) continue;
-      if (entry.isDirectory()) {
-        visit(join(directory, entry.name), path);
+    const names = readdirSync(directory).sort((a, b) => a.localeCompare(b));
+    for (const name of names) {
+      const path = prefix === "" ? name : `${prefix}/${name}`;
+      if (path === SOURCE_DIRECTORY || (prefix === "" && OUTSIDE_SOURCE_IGNORED.has(name))) {
         continue;
       }
-      hash
-        .update(path)
-        .update("\0")
-        .update(readFileSync(join(directory, entry.name)))
-        .update("\0");
+      const full = join(directory, name);
+      const entry = lstatSync(full);
+      hash.update(`${path}\0${String(entry.mode)}\0`);
+      if (entry.isDirectory()) visit(full, path);
+      else hash.update(entry.isSymbolicLink() ? readlinkSync(full) : readFileSync(full));
+      hash.update("\0");
     }
   };
   visit(folder, "");
@@ -751,9 +776,10 @@ function acceptanceEvidence(): Record<string, unknown> {
 }
 
 /**
- * Whether a container runtime is installed, conservatively: a client on `PATH`, a configured
- * `DOCKER_HOST`, or a socket of Docker Desktop, Colima, OrbStack or a Podman machine. Presence
- * counts, whether or not the runtime is running.
+ * Signs that a container runtime is installed, conservatively: a client on `PATH`, a configured
+ * `DOCKER_HOST`, a Docker socket, the state directory of Colima, OrbStack, Lima, Rancher Desktop
+ * or a Podman machine, or the application bundle of Docker Desktop, OrbStack, Podman Desktop or
+ * Rancher Desktop. Presence counts, whether or not the runtime is running.
  */
 function containerRuntimeFacts(): Readonly<Record<string, boolean>> {
   const home = homedir();
@@ -762,6 +788,9 @@ function containerRuntimeFacts(): Readonly<Record<string, boolean>> {
     join(home, ".docker", "run", "docker.sock"),
     join(home, ".orbstack", "run", "docker.sock"),
   ];
+  const applications = ["Docker", "OrbStack", "Podman Desktop", "Rancher Desktop"].flatMap(
+    (name) => [join("/Applications", `${name}.app`), join(home, "Applications", `${name}.app`)],
+  );
   return {
     dockerOnPath: onPath("docker"),
     podmanOnPath: onPath("podman"),
@@ -771,21 +800,39 @@ function containerRuntimeFacts(): Readonly<Record<string, boolean>> {
     runtimeStatePresent: [
       join(home, ".colima"),
       join(home, ".orbstack"),
+      join(home, ".lima"),
+      join(home, ".rd"),
       join(home, ".local", "share", "containers", "podman", "machine"),
     ].some((path) => existsSync(path)),
+    applicationPresent: applications.some((path) => existsSync(path)),
   };
 }
 
 /**
- * Writes the evidence file owner-private: never inside this checkout, never through a symbolic
- * link, into a directory only its owner can enter, with mode 0600 whatever existed before.
+ * The evidence file's absolute path, refused when it lies inside this checkout. Symbolic links in
+ * the existing part of the path are resolved first, so a link into the checkout is refused too.
  */
-function writeOwnerPrivate(file: string, content: string): void {
-  const target = resolve(file);
-  const fromCheckout = relative(resolve(REPOSITORY_ROOT), target);
-  if (!fromCheckout.startsWith("..") && !isAbsolute(fromCheckout)) {
-    throw new Error("acceptance-evidence-inside-checkout");
+function ownerPrivateEvidenceTarget(file: string): string {
+  const requested = resolve(file);
+  let existing = requested;
+  const missing: string[] = [];
+  while (!existsSync(existing) && dirname(existing) !== existing) {
+    missing.unshift(basename(existing));
+    existing = dirname(existing);
   }
+  const target = join(realpathSync(existing), ...missing);
+  const fromCheckout = relative(realpathSync(REPOSITORY_ROOT), target);
+  const outside =
+    fromCheckout === ".." || fromCheckout.startsWith(`..${sep}`) || isAbsolute(fromCheckout);
+  if (!outside) throw new Error("acceptance-evidence-inside-checkout");
+  return target;
+}
+
+/**
+ * Writes the evidence file owner-private: never through a symbolic link, into a directory only
+ * its owner can enter, with mode 0600 whatever existed before.
+ */
+function writeOwnerPrivate(target: string, content: string): void {
   const directory = dirname(target);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const stat = lstatSync(directory);

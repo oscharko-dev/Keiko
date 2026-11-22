@@ -85,7 +85,7 @@ import {
   createFunctionalTaskWorkspaceOwners,
   provisionFunctionalTaskWorkspace,
   type FunctionalTaskWorkspaceOwners,
-} from "./productionOpenCodeBackend.functional/_support.js";
+} from "../test-support/functional-task-workspace.js";
 import {
   functionalPost,
   functionalSessionCookie,

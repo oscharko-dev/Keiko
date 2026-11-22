@@ -9,9 +9,15 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
+import type {
+  GatewayRequest,
+  GatewayStreamChunk,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
+
 import { fakePairingRequestBody } from "../coding-app-session/_support.js";
 import {
-  FUNCTIONAL_MODEL_ACTIVATION,
+  functionalGatewayConfig,
   productionDiscoveryBffDeps,
   type DiscoveryBffDepsInput,
 } from "../coding-runtime/productionOpenCodeBackend.functional/_support.js";
@@ -19,6 +25,50 @@ import type { UiHandlerDeps } from "../deps.js";
 import { createUiServer, UI_HOST } from "../server.js";
 
 export const FUNCTIONAL_PAIR_PATH = "/api/coding-workbench/app-session/pair";
+
+/**
+ * The one chat model of the functional gateway configuration, which owns its id. A test-support
+ * module imports no other test-support module (ADR-0019 trust rule 8), so this one owns it for the
+ * pipeline, its scripted models and the e2e suites.
+ */
+export function functionalChatModelId(): string {
+  const chat = functionalGatewayConfig().capabilities?.find(
+    (capability) => capability.kind === "chat",
+  );
+  if (chat === undefined) throw new Error("functional-chat-model-missing");
+  return chat.id;
+}
+
+/**
+ * The body of the explicit check Settings > Models sends to activate the chat model. Since
+ * ADR-0171 D2 (amended 2026-11-16) every chat model is inactive in a fresh server process.
+ */
+const FUNCTIONAL_MODEL_ACTIVATION = Object.freeze({
+  modelId: functionalChatModelId(),
+  options: Object.freeze({ probes: Object.freeze(["chat"]) }),
+});
+
+/**
+ * The deps with their coding-sidecar chat seams answered by `respond`, streamed as a real model
+ * streams: the content as a delta before the terminal chunk.
+ */
+export function withFunctionalChat(
+  deps: UiHandlerDeps,
+  respond: (request: GatewayRequest) => NormalizedResponse,
+): UiHandlerDeps {
+  const chat = (request: GatewayRequest): Promise<NormalizedResponse> =>
+    Promise.resolve(respond(request));
+  return {
+    ...deps,
+    codingSidecarGatewayChatFactory: () => chat,
+    codingSidecarGatewayChatStreamFactory: () =>
+      async function* (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> {
+        const response = await chat(request);
+        if (response.content.length > 0) yield { type: "delta" as const, token: response.content };
+        yield { type: "done" as const, response };
+      },
+  };
+}
 
 /** A check every response of a pipeline passes, such as a suite's redaction canaries. */
 export type FunctionalResponseCheck = (response: Response) => void;
@@ -142,6 +192,8 @@ const FUNCTIONAL_LISTEN_ATTEMPTS = 3;
 type FunctionalDiscoveryServerInput = Omit<DiscoveryBffDepsInput, "uiPort"> & {
   readonly staticRoot: string;
   readonly check?: FunctionalResponseCheck;
+  /** Answers the coding-sidecar model calls in place of the functional script (`withFunctionalChat`). */
+  readonly respond?: (request: GatewayRequest) => NormalizedResponse;
 };
 
 /**
@@ -152,14 +204,18 @@ export async function startFunctionalDiscoveryServer(
   input: FunctionalDiscoveryServerInput,
   attempt = 1,
 ): Promise<FunctionalDiscoveryServer> {
-  const { staticRoot, check, ...depsInput } = input;
+  const { staticRoot, check, respond, ...depsInput } = input;
   const port = await reserveLoopbackPort();
-  const deps = productionDiscoveryBffDeps({ ...depsInput, uiPort: port });
+  const composed = productionDiscoveryBffDeps({ ...depsInput, uiPort: port });
+  const deps = respond === undefined ? composed : withFunctionalChat(composed, respond);
   const server = createUiServer({ staticRoot, csp: "default-src 'none'", port, handlerDeps: deps });
   try {
     await listenOnLoopback(server, port);
   } catch (error) {
-    await disposeFunctionalDeps(deps);
+    // A failed disposal must not hide why the server could not listen.
+    await disposeFunctionalDeps(deps).catch((disposeError: unknown) => {
+      throw new AggregateError([error, disposeError], "functional-server-listen-failed");
+    });
     const taken = (error as NodeJS.ErrnoException).code === "EADDRINUSE";
     if (taken && attempt < FUNCTIONAL_LISTEN_ATTEMPTS) {
       return startFunctionalDiscoveryServer(input, attempt + 1);

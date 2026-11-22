@@ -23,8 +23,6 @@ import { openCodeNativeVerificationKind } from "../opencodeNativePolicy.js";
 import type { ProductionCodingRuntimeResolverInput } from "../productionCodingRuntimeResolver.js";
 import type { ServerDiagnosticRecord } from "../../diagnostics-log.js";
 import {
-  ACCEPTANCE_CHECK_COMMAND,
-  ACCEPTANCE_STALE_SUFFIX,
   FUNCTIONAL_PLAN_STEP_READ,
   FUNCTIONAL_PLAN_STEP_VERIFY,
   functionalWorkspaceRead,
@@ -122,82 +120,6 @@ describe("native journey verification (#3901)", () => {
     // The real-binary journey verifies through the runtime's own `shell`; the run is evidenced only
     // when the production classifier reads the scripted line as a project check.
     expect(openCodeNativeVerificationKind([NATIVE_VERIFICATION_COMMAND])).toBe("typecheck");
-  });
-});
-
-// #4492: the acceptance turn advances by the tool replies the runtime resends, never by how often
-// the model was called, so a title request or a repeated call cannot skip or repeat a step.
-describe("functional acceptance turn (#4492)", () => {
-  function acceptanceScript(plan?: ScriptState["acceptancePlan"]): ScriptState {
-    return {
-      mode: "acceptance",
-      calls: 0,
-      old: "before\n",
-      next: "after\n",
-      acceptanceTarget: "src/target.js",
-      ...(plan === undefined ? {} : { acceptancePlan: plan }),
-    };
-  }
-
-  function afterReplies(count: number): string {
-    return JSON.stringify([
-      { role: "user", content: "task" },
-      ...Array.from({ length: count }, () => ({ role: "tool", content: "done" })),
-    ]);
-  }
-
-  function plannedCalls(script: ScriptState): readonly unknown[] {
-    return Array.from({ length: 7 }, (_, replies) => {
-      const call = scriptedResponse(script, afterReplies(replies)).toolCalls[0];
-      return call === undefined ? "answer" : [call.name, call.arguments];
-    });
-  }
-
-  it("runs a check the production policy reads as the project's tests", () => {
-    expect(openCodeNativeVerificationKind([ACCEPTANCE_CHECK_COMMAND])).toBe("test");
-  });
-
-  it("fails the check, reads, repairs and checks again", () => {
-    const check = ["shell", { command: ACCEPTANCE_CHECK_COMMAND, timeout: 60_000 }];
-    expect(plannedCalls(acceptanceScript())).toEqual([
-      check,
-      ["read", { path: "src/target.js" }],
-      ["edit", { path: "src/target.js", oldString: "before\n", newString: "after\n" }],
-      check,
-      "answer",
-      "answer",
-      "answer",
-    ]);
-  });
-
-  it("leaves the check out, or makes it stale with one more edit", () => {
-    expect(plannedCalls(acceptanceScript("skip-check")).slice(2, 4)).toEqual([
-      ["edit", { path: "src/target.js", oldString: "before\n", newString: "after\n" }],
-      "answer",
-    ]);
-    expect(plannedCalls(acceptanceScript("stale-check")).slice(3, 6)).toEqual([
-      ["shell", { command: ACCEPTANCE_CHECK_COMMAND, timeout: 60_000 }],
-      [
-        "edit",
-        {
-          path: "src/target.js",
-          oldString: "after\n",
-          newString: `after\n${ACCEPTANCE_STALE_SUFFIX}`,
-        },
-      ],
-      "answer",
-    ]);
-  });
-
-  it("answers a title request, and a turn without a target, without a tool", () => {
-    const script = acceptanceScript();
-    const title = JSON.stringify([
-      { role: "user", content: "Generate a title for this conversation: task" },
-    ]);
-    expect(scriptedResponse(script, title).toolCalls).toEqual([]);
-    expect(scriptedResponse(script, afterReplies(0)).toolCalls[0]?.name).toBe("shell");
-    const { acceptanceTarget: _omitted, ...untargeted } = script;
-    expect(scriptedResponse(untargeted, afterReplies(0)).toolCalls).toEqual([]);
   });
 });
 

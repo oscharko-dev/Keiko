@@ -40,7 +40,7 @@ import {
   activityLogDirectory,
   readActivityLogText,
 } from "../../scripts/lib/activity-log-files.mjs";
-import { FUNCTIONAL_MODEL_ID } from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
+import { functionalChatModelId } from "../../packages/keiko-server/src/test-support/functional-bff-server.js";
 import { FUNCTIONAL_REPOSITORY_SKILL_NAME } from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/skillDiscoveryProof.js";
 
 import {
@@ -663,7 +663,7 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   await registerTrustedRepositoryProject(page);
   // The journey's model starts inactive, as every chat model of a fresh server does; a person
   // activates it in Settings > Models before the Workbench offers Start (ADR-0171 D2).
-  await activateChatModel(page.request, FUNCTIONAL_MODEL_ID);
+  await activateChatModel(page.request, functionalChatModelId());
   await openWorkbench(page, launcherPairingFragment());
   await bindFixtureWorkspace(page);
 
