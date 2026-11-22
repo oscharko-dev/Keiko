@@ -1685,7 +1685,7 @@ function ConversationQuestionMapImpl({
             >
               <span className="chat-question-map-mark" aria-hidden="true" />
               <span className="chat-question-map-card" aria-hidden="true">
-                <span className="chat-question-map-card-title">{item.preview}</span>
+                <span className="chat-question-map-card-title">{item.preview}</span>{" "}
                 <span className="chat-question-map-card-time">{item.time}</span>
               </span>
             </button>

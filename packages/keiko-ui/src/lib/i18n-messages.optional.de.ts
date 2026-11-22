@@ -3130,7 +3130,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "editor.fileHistory.pinFailed": "Der Anheftungsstatus konnte nicht geändert werden.",
   "editor.fileHistory.deleteFailed": "Der Wiederherstellungspunkt konnte nicht gelöscht werden.",
   "editor.fileHistory.sizeDelta": "Größenänderung: {delta}",
-  "editor.fileHistory.entryLabel": "Wiederherstellungspunkt {sequence}, {origin}, {timestamp}",
+  "editor.fileHistory.entryLabel": "{summary}, Wiederherstellungspunkt {sequence}",
 
   "attachment.rejection.deliveryRefused":
     "Das Bild konnte nicht sicher gespeichert oder für die Übertragung autorisiert werden. Füge es erneut hinzu und versuche es noch einmal.",
@@ -6077,6 +6077,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "filesWidget.multiRoot.add": "Wurzel hinzufügen",
   "filesWidget.multiRoot.focus": "Wurzel fokussieren: {name}",
   "filesWidget.multiRoot.focused": "Fokussiert",
+  "filesWidget.multiRoot.focusedAria": "Fokussiert: Wurzel {name}",
   "filesWidget.multiRoot.focusAction": "Fokussieren",
   "filesWidget.multiRoot.moveUp": "Wurzel nach oben verschieben: {name}",
   "filesWidget.multiRoot.moveDown": "Wurzel nach unten verschieben: {name}",

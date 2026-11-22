@@ -5,6 +5,7 @@ import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widge
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useMemo,
   useState,
@@ -76,7 +77,7 @@ function focusSiblingRootGroup(event: KeyboardEvent<HTMLElement>): void {
   );
   if (event.key === "Home") target = 0;
   else if (event.key === "End") target = groups.length - 1;
-  groups[target]?.focus();
+  groups[target]?.querySelector<HTMLButtonElement>("button[data-root-group-header]")?.focus();
 }
 
 function RootGroup({
@@ -97,6 +98,7 @@ function RootGroup({
 }): ReactNode {
   const t = useTranslate();
   const trust = useWorkspaceTrust(root.canonicalRoot);
+  const idBase = useId();
   const [expanded, setExpanded] = useState(true);
   const focused = manifest.focusedRootRef === root.rootRef;
   // One Files window owns ONE cfg, and `onActiveFileChange` is its writer: it sets
@@ -153,27 +155,24 @@ function RootGroup({
     }
     focusSiblingRootGroup(event);
   };
+  const focusText = focused
+    ? t("filesWidget.multiRoot.focused")
+    : t("filesWidget.multiRoot.focusAction");
+  const filesId = `${idBase}-files`;
+  // Each root is a disclosure (WCAG 2.5.3, axe 4.14): a treeitem's visible text is its whole
+  // subtree, nested file trees included, so no name could start with it, and a tree may not own
+  // another tree. The toggle names the root by its visible name and path and is the roving stop.
   return (
-    <div
-      className={styles.cmpRootGroup}
-      role="treeitem"
-      aria-expanded={expanded}
-      aria-selected={focused}
-      // WCAG 2.5.3: the name contains the visible name and path, in that order.
-      aria-label={`${root.displayName} ${root.canonicalRoot}`}
-      data-root-group
-      tabIndex={rovingTabIndex}
-      onFocus={(): void => onRovingFocus(root.rootRef)}
-      onKeyDown={(event): void => {
-        if (event.target === event.currentTarget) handleRootGroupKeyDown(event);
-      }}
-    >
+    <div className={styles.cmpRootEntry} role="listitem" data-root-group>
       <div className={styles.cmpRootHeader} data-focused={focused}>
         <button
           type="button"
-          className={styles.cmpRootToggle}
+          className={`${styles.cmpRootGroup} ${styles.cmpRootToggle}`}
           data-root-group-header
           aria-expanded={expanded}
+          aria-controls={expanded ? filesId : undefined}
+          tabIndex={rovingTabIndex}
+          onFocus={(): void => onRovingFocus(root.rootRef)}
           onKeyDown={handleRootGroupKeyDown}
           onClick={() => setExpanded((current) => !current)}
         >
@@ -189,10 +188,13 @@ function RootGroup({
           type="button"
           className={styles.cmpAction}
           disabled={focused || workspace.mutating}
-          aria-label={t("filesWidget.multiRoot.focus", { name: root.displayName })}
+          aria-label={t(
+            focused ? "filesWidget.multiRoot.focusedAria" : "filesWidget.multiRoot.focus",
+            { name: root.displayName },
+          )}
           onClick={() => void workspace.focusRoot(root.rootRef)}
         >
-          {focused ? t("filesWidget.multiRoot.focused") : t("filesWidget.multiRoot.focusAction")}
+          {focusText}
         </button>
         <button
           type="button"
@@ -223,7 +225,7 @@ function RootGroup({
         </button>
       </div>
       {expanded ? (
-        <div className={styles.cmpRootTree} role="group">
+        <div id={filesId} className={styles.cmpRootTree}>
           <FilesWidget
             root={root.canonicalRoot}
             watchActive={focused}
@@ -323,7 +325,7 @@ export function MultiRootFilesWidget(props: MultiRootFilesWidgetProps): ReactNod
           {t("filesWidget.multiRoot.error")}
         </p>
       )}
-      <div className={styles.cmpRootList} role="tree" aria-label={t("filesWidget.multiRoot.label")}>
+      <div className={styles.cmpRootList} role="list" aria-label={t("filesWidget.multiRoot.label")}>
         {props.manifest.roots.map((root, index) => (
           <RootGroup
             {...props}

@@ -338,10 +338,20 @@ function HistoryRow(props: HistoryRowProps): ReactNode {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(new Date(props.entry.recordedAt));
+  const sizeDelta = t("editor.fileHistory.sizeDelta", {
+    delta: sizeDeltaLabel(props.delta, locale),
+  });
+  // WCAG 2.5.3: the name starts with the row's visible words in reading order (origin, pinned
+  // state, time, size change); the restore point number follows them.
+  const summary = [
+    origin,
+    ...(props.entry.pinned ? [t("editor.fileHistory.pinned")] : []),
+    timestamp,
+    sizeDelta,
+  ].join(" ");
   const label = t("editor.fileHistory.entryLabel", {
     sequence: props.entry.sequence,
-    origin,
-    timestamp,
+    summary,
   });
   return (
     <li className={styles.row} data-entry-ref={props.entry.entryRef}>
@@ -359,18 +369,20 @@ function HistoryRow(props: HistoryRowProps): ReactNode {
           if (props.onFocusRelative(props.index, event.key)) event.preventDefault();
         }}
       >
+        {/* The spaces between the parts are not rendered in the grid; they keep the visible words
+            apart, as the accessible name has them (WCAG 2.5.3: axe joins text nodes as written). */}
         <span className={styles.rowTitle}>
           <span>{origin}</span>
           {props.entry.pinned ? (
-            <span className={styles.pinnedBadge}>
-              <PinIcon size={12} /> {t("editor.fileHistory.pinned")}
-            </span>
+            <>
+              {" "}
+              <span className={styles.pinnedBadge}>
+                <PinIcon size={12} /> {t("editor.fileHistory.pinned")}
+              </span>
+            </>
           ) : null}
-        </span>
-        <time dateTime={props.entry.recordedAt}>{timestamp}</time>
-        <span>
-          {t("editor.fileHistory.sizeDelta", { delta: sizeDeltaLabel(props.delta, locale) })}
-        </span>
+        </span>{" "}
+        <time dateTime={props.entry.recordedAt}>{timestamp}</time> <span>{sizeDelta}</span>
       </button>
       <div className={styles.actions}>
         <button type="button" onClick={() => props.onCompareCurrent(props.entry)}>

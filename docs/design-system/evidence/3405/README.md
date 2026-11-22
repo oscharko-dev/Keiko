@@ -871,3 +871,8 @@ minutes in the Linux arm64 gates container with Node 26.13.1 and `KEIKO_WRITE_TR
 and `npm run check:update-ui-evidence` and `npm run check:editor-release-evidence` passed. Only the
 three producer records were kept; the fourteen committed captures, updater assertions and harness
 inputs retain their existing values.
+
+The same rule then reported the multi-root Files roots and the Editor file history rows. The Focus
+action of the focused root and every file history row now name themselves by their visible words
+first, which moved the same two optional-catalog digests again; the producer was rerun on the final
+sources the same way and only the three records were kept.
