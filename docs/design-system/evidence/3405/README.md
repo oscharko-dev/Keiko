@@ -214,6 +214,11 @@ a bind mount from a Windows host the same nine cases took 6.2 minutes and the re
 14 committed screenshots, updater assertions and harness inputs retain their existing values.
 `npm run check:editor-release-evidence` passes in the same image.
 
+The tool then moved to its own branch on top of current `dev`, where both optional catalogs differ
+from either earlier record. On 2026-11-22 (UTC) the producer was rerun the same way on those final
+sources: the nine cases passed in 1.7 minutes, both evidence checks pass, and only the three
+records were kept.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
