@@ -421,6 +421,13 @@ transitive release inside the seven-day cooldown entered. Hoisted Babel stays on
 reason recorded under PR #4375 (`@stryker-mutator/instrumenter` requires `~8.0.0`). The root
 `postcss`, `vite` and `@napi-rs/canvas` overrides follow their workspace declarations.
 
+ESLint 10.15's `@eslint/config-array` 0.23.6 requires `minimatch@^11.0.5`, which the reviewed
+`minimatch@^10` override no longer caught; npm nested a second modern copy beside the hoisted
+11.0.3, and `check:osv-waiver-scope` rightly refused the unreviewed path. The reviewed pin moves to
+11.0.8 (published 2026-11-11, outside the cooldown, still past the advisory's `<11.0.1` range), so
+the graph again holds one modern matcher beside the audited dev-only 3.1.5. The gate keeps its
+single exact reviewed version; the staged `@tufjs/models` peer follows the pin.
+
 **Taken: 16 updates.**
 
 - TypeScript 5.9.3 as the `keiko-ui` compiler
