@@ -499,6 +499,86 @@ describe("main", () => {
       });
     }
 
+    // PDF.js 6.4+ ships webpack's concatenation wrap: every module is a lazy accessor declared as
+    // `var name = __webpack_require__.cw(() => { ... })` and reached by calling it with no arguments.
+    function concatenationWrapProviderFixture(options = {}) {
+      const providerBinding = options.providerBinding ?? "var $ = (export_namespaceFn());";
+      const providerCall =
+        options.providerCall ??
+        "$({ target: 'Promise', stat: true }, " +
+          "{ withResolvers: function withResolvers() {} });";
+      const rootImport = options.rootImport ?? "es_promise_with_resolvers_namespaceFn();";
+      const wrap = options.wrap ?? "__webpack_require__.cw";
+      const applicationCall = "export const value = Promise.withResolvers();";
+      const rootStatements = ordered(rootImport, applicationCall, options.rootImportFirst ?? true);
+      return dependencyFixture({
+        "entry.mjs": `
+          var __webpack_require__ = {};
+          __webpack_require__.cw = (body) => {
+            var mod;
+            return () => {
+              if (body) { var fn = body; body = 0; mod = { exports: {} }; fn.call(mod.exports, mod, mod.exports); }
+              return mod.exports;
+            };
+          };
+          var define_built_in_namespaceFn = /*#__PURE__*/__webpack_require__.cw((module) => {
+            module.exports = function(target, key, value) { target[key] = value; };
+          });
+          var other_namespaceFn = /*#__PURE__*/__webpack_require__.cw((module) => {
+            module.exports = function() {};
+          });
+          var export_namespaceFn = /*#__PURE__*/__webpack_require__.cw((module) => {
+            var defineBuiltIn = (define_built_in_namespaceFn());
+            module.exports = function(options, source) {
+              var targetName = options.target;
+              var stat = options.stat;
+              var target = globalThis[targetName];
+              if (stat && target) for (var key in source) {
+                defineBuiltIn(target, key, source[key], options);
+              }
+            };
+          });
+          var es_promise_with_resolvers_namespaceFn = /*#__PURE__*/${wrap}(() => {
+            ${providerBinding}
+            ${providerCall}
+          });
+          ${rootStatements.join("\n")}
+        `,
+      });
+    }
+
+    it("accepts a concatenation-wrapped core-js provider reached before the first call", () => {
+      const fx = fixture({ browserslist: ["chrome >= 100"] });
+      const result = run({ ...fx, dependencyFiles: [concatenationWrapProviderFixture()] });
+      expect(result.errors).toEqual([]);
+      expect(result.exitCode).toBeUndefined();
+    });
+
+    it.each([
+      ["a provider module that is never reached", { rootImport: "" }],
+      [
+        "a provider reached only inside a function",
+        { rootImport: "function later() { es_promise_with_resolvers_namespaceFn(); }" },
+      ],
+      ["a provider reached after the first call", { rootImportFirst: false }],
+      ["a binding to a non-exporter module", { providerBinding: "var $ = (other_namespaceFn());" }],
+      ["a local dollar function", { providerBinding: "var $ = function() {};" }],
+      ["a wrap that is not webpack's runtime", { wrap: "lookalike.cw" }],
+      [
+        "a dead conditional provider call",
+        {
+          providerCall:
+            "if (false) { $({ target: 'Promise', stat: true }, " +
+            "{ withResolvers: function withResolvers() {} }); }",
+        },
+      ],
+    ])("fails closed for a concatenation-wrapped bundle with %s", (_label, options) => {
+      const fx = fixture({ browserslist: ["chrome >= 100"] });
+      const result = run({ ...fx, dependencyFiles: [concatenationWrapProviderFixture(options)] });
+      expect(result.exitCode).toBe(1);
+      expect(result.errors.join("\n")).toContain("Promise.withResolvers needs chrome >= 119");
+    });
+
     it("follows a transitive JS import and reports its guarded API", () => {
       const fx = fixture({ browserslist: ["chrome >= 100"] });
       const dep = dependencyFixture({

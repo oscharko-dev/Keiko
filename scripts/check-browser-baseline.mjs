@@ -164,7 +164,8 @@ export const GUARDED_APIS = [
     minimum: { chrome: 87, edge: 87, firefox: 125, safari: 14.1 },
   },
   // PDF.js's legacy bundle retains these call sites but executes bundled core-js implementations
-  // before them. `providedBy` is satisfied only when an unconditionally reached webpack module
+  // before them. `providedBy` is satisfied only when an unconditionally reached webpack module (a
+  // `__webpack_modules__` table entry, or since PDF.js 6.4 a `__webpack_require__.cw` accessor)
   // imports a semantically verified core-js exporter and calls it at module top level before the
   // guarded API's first use — not by a comment, string, local `$`, dead branch, or similarly-shaped
   // arbitrary call. A modern bundle (or a broken legacy update) still fails at the declared floor. The
@@ -660,13 +661,21 @@ function providedApiFromCall(node) {
   return undefined;
 }
 
-function webpackModuleId(node) {
-  if (
-    node?.type !== "CallExpression" ||
-    node.callee?.type !== "Identifier" ||
-    node.callee.name !== "__webpack_require__"
-  ) {
-    return undefined;
+// A concatenated module wrapped by webpack's `__webpack_require__.cw` runtime (the format PDF.js
+// ships since 6.4) is reached by calling its accessor with no arguments, not through
+// `__webpack_require__(id)`. Its key carries a prefix so it can never collide with a numeric id.
+const CONCATENATION_WRAP_PREFIX = "cw:";
+
+function concatenationWrapId(node, factories) {
+  if (node.callee?.type !== "Identifier" || node.arguments.length !== 0) return undefined;
+  const id = `${CONCATENATION_WRAP_PREFIX}${node.callee.name}`;
+  return factories.has(id) ? id : undefined;
+}
+
+function webpackModuleId(node, factories) {
+  if (node?.type !== "CallExpression") return undefined;
+  if (node.callee?.type !== "Identifier" || node.callee.name !== "__webpack_require__") {
+    return concatenationWrapId(node, factories);
   }
   const value = node.arguments[0];
   return value?.type === "NumericLiteral" || value?.type === "StringLiteral"
@@ -674,12 +683,12 @@ function webpackModuleId(node) {
     : undefined;
 }
 
-function directRequireBindings(statements) {
+function directRequireBindings(statements, factories) {
   const bindings = new Map();
   for (const statement of statements) {
     if (statement.type !== "VariableDeclaration") continue;
     for (const declaration of statement.declarations) {
-      const id = webpackModuleId(declaration.init);
+      const id = webpackModuleId(declaration.init, factories);
       if (declaration.id?.type === "Identifier" && id !== undefined) {
         bindings.set(declaration.id.name, {
           moduleId: id,
@@ -691,16 +700,16 @@ function directRequireBindings(statements) {
   return bindings;
 }
 
-function directRequirePositions(statements) {
+function directRequirePositions(statements, factories) {
   const positions = new Map();
   for (const statement of statements) {
     if (statement.type === "ExpressionStatement") {
-      const id = webpackModuleId(statement.expression);
+      const id = webpackModuleId(statement.expression, factories);
       if (id !== undefined) positions.set(id, statement.start ?? 0);
     }
     if (statement.type !== "VariableDeclaration") continue;
     for (const declaration of statement.declarations) {
-      const id = webpackModuleId(declaration.init);
+      const id = webpackModuleId(declaration.init, factories);
       if (id !== undefined) positions.set(id, declaration.start ?? statement.start ?? 0);
     }
   }
@@ -728,7 +737,28 @@ function webpackModuleFactories(ast) {
     const key = webpackFactoryKey(property);
     if (key !== undefined && property.type === "ObjectMethod") factories.set(key, property);
   }
+  addConcatenationWrapFactories(declarators, factories);
   return factories;
+}
+
+function addConcatenationWrapFactories(declarators, factories) {
+  for (const declaration of declarators) {
+    const factory = concatenationWrapFactory(declaration.init);
+    if (declaration.id?.type === "Identifier" && factory !== undefined) {
+      factories.set(`${CONCATENATION_WRAP_PREFIX}${declaration.id.name}`, factory);
+    }
+  }
+}
+
+/** The module body of a root `var name = __webpack_require__.cw(function body)` declaration. */
+function concatenationWrapFactory(init) {
+  if (init?.type !== "CallExpression" || !isMember(init.callee, "__webpack_require__", "cw")) {
+    return undefined;
+  }
+  const body = init.arguments[0];
+  const isFunction =
+    body?.type === "ArrowFunctionExpression" || body?.type === "FunctionExpression";
+  return isFunction && body.body?.type === "BlockStatement" ? body : undefined;
 }
 
 function isMember(node, objectName, propertyName) {
@@ -810,7 +840,7 @@ function coreJsExporterSignals(exporter, bindings, factories) {
 function isCoreJsExporterFactory(factory, factories) {
   const exporter = factory === undefined ? undefined : exportedFunction(factory);
   if (exporter === undefined || exporter.params.length < 2) return false;
-  const bindings = directRequireBindings(factory.body.body);
+  const bindings = directRequireBindings(factory.body.body, factories);
   const signals = coreJsExporterSignals(exporter, bindings, factories);
   return Object.values(signals).every(Boolean);
 }
@@ -828,7 +858,7 @@ function providedApiForStatement(statement, bindings, factories) {
 
 function providedApisForFactory(factory, factories) {
   const positions = new Map();
-  const bindings = directRequireBindings(factory.body.body);
+  const bindings = directRequireBindings(factory.body.body, factories);
   for (const statement of factory.body.body) {
     const provided = providedApiForStatement(statement, bindings, factories);
     if (provided !== undefined) positions.set(provided.name, provided.position);
@@ -840,7 +870,7 @@ export function providedRuntimeApiPositions(path, text = readFileSync(path, "utf
   const ast = babelParse(text, { sourceType: "unambiguous", plugins: parserPlugins(path) });
   const positions = new Map();
   const factories = webpackModuleFactories(ast);
-  const rootImports = directRequirePositions(ast.program.body);
+  const rootImports = directRequirePositions(ast.program.body, factories);
   for (const [moduleId, factory] of factories) {
     const importPosition = rootImports.get(moduleId);
     if (importPosition === undefined) continue;

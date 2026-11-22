@@ -400,7 +400,7 @@ Every SHA resolves to its tag. The zizmor step still pins `version: "1.26.1"`, s
 | `knip` 6.44.1                         | 6.41.0        | Its changed dynamic `import()` tracking reports six UI exports that 6.41.0 accepts, at least two of them false positives. The fixes are in 6.45, still inside the cooldown.  |
 | `pdfjs-dist` 6.5.438                  | 6.3.289       | The separate PDF.js qualification above still applies. Since 6.4 the bundle format fails the unchanged browser-baseline gate, and 6.5 also moves canvas drawing to a worker. |
 
-### Mermaid 12, axe-core 4.14.0, entities 9, jsdom 31 and the held Babel 8.1 (2026-11-22)
+### Mermaid 12, axe-core 4.14.0, entities 9, jsdom 31, knip 6.45.1, PDF.js 6.5 and the held Babel 8.1 and Playwright 1.65 (2026-11-22)
 
 The owner decided to take Mermaid and axe-core current. Both had been retained because the
 permissive-only dependency review rejects their licenses; neither gets a license-family allowance.
@@ -432,6 +432,31 @@ under that lock still produces the same mutants (146 on `debug-launch-policy.ts`
 lock), because npm nests Stryker's own `~8.0.0` copy. The update therefore breaks nothing, but it moves
 only the hoisted copy of a development-only toolchain and adds a third Babel tree, the reason recorded
 under PR #4375. It is held with a Dependabot ignore until Stryker accepts 8.1.
+
+jsdom 31 also changed seven `keiko-ui` test outcomes, none a product change: computed style resolves
+an undefined custom property to its fallback (the tests now read the declared inline token), CSS
+numbers serialize to six significant digits (transforms are compared by parsed value), and its focus
+fixup runs on a Node interval that a fake timer swallows (the `#3390` window tests run their pending
+fake timers before real timers return, so later `requestAnimationFrame` callbacks still run).
+
+knip 6.45.1 (#4525) is taken after `check:sonar-rules` was made to report what SonarCloud reports:
+the plugin's recommended rules filtered by SonarCloud's profile, UI files linted with their own
+tsconfig, `NOSONAR` lines skipped and unparseable files failed. Its six UI findings were four dead
+exports, an inline `import()` type (now a static `import type`) and an export reached only through
+`vi.importActual` (marked `@public`).
+
+PDF.js 6.5.438 (#4518) ships webpack's concatenation wrap: every module is a lazy accessor declared as
+`var name = __webpack_require__.cw(...)` and reached by calling it, instead of a `__webpack_modules__`
+table. `check:browser-baseline` now recognises that format with the same proof it requires of the
+table format (a semantically verified core-js exporter, called at module top level from an
+unconditionally reached root call that precedes the first use), and still fails closed for an
+unreached, function-nested, late, non-exporter, local or lookalike provider. No browserslist floor
+moved. The legacy runtime smoke, which removes the host `Promise.try` and `URL.parse` in both realms
+before parsing a PDF, passes in Chromium and Firefox, and the Local Knowledge PDF parser suites pass.
+
+`@playwright/test` 1.65.1 stays held (#4524). In the Linux gates container its Firefox 159.0 (build 1572) content process exits on signal 11 when the memory-journal smoke renders the captured Journal
+rows; 1.64.1 passes the same tree. That is a native browser crash with no newer Playwright release to
+take, so the Dependabot ignore stays until a release ships a newer Firefox build.
 
 ### Dependabot #4514 integration in PR #4514 (2026-11-22)
 

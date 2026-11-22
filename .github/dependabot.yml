@@ -63,10 +63,8 @@ updates:
         versions: [">=8.1.0"]
       - dependency-name: "@babel/parser"
         versions: [">=8.1.0"]
-      # PDF.js 6.4+ fails the unchanged browser-baseline gate; its separate qualification is #4518.
-      - dependency-name: pdfjs-dist
-        versions: [">=6.4.0"]
-      # Playwright 1.65's Firefox build crashes the memory-journal Firefox smoke page (#4524).
+      # Playwright 1.65's Firefox 159 build exits on signal 11 rendering the memory-journal Journal
+      # rows (#4524); revisit with a Playwright release that ships a newer Firefox build.
       - dependency-name: "@playwright/test"
         versions: [">=1.65.0"]
     cooldown:
