@@ -10,7 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createServer, type IncomingMessage, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -116,10 +116,7 @@ async function startNpmRegistry(root: string): Promise<Npmfixture> {
   const seen: Seen[] = [];
   const tarball = packageTarball(root);
   let base = "";
-  const handler = (
-    request: IncomingMessage,
-    response: import("node:http").ServerResponse,
-  ): void => {
+  const handler = (request: IncomingMessage, response: ServerResponse): void => {
     seen.push({
       method: request.method ?? "",
       url: request.url ?? "",
@@ -165,6 +162,8 @@ interface RelayServer {
   readonly relay: RepositoryCredentialRelay;
   /** Every request Keiko's server received, before any routing. */
   readonly received: Seen[];
+  /** The status of every answer Keiko's server gave, in order. */
+  readonly answered: number[];
 }
 
 /** The real server (router, host check, request log) with the relay mounted, as the run reaches it. */
@@ -212,7 +211,11 @@ async function startRelayServer(root: string): Promise<RelayServer> {
     activityLog: { write: () => undefined },
   });
   const received: Seen[] = [];
-  server.prependListener("request", (request: IncomingMessage) => {
+  const answered: number[] = [];
+  server.prependListener("request", (request: IncomingMessage, response: ServerResponse) => {
+    response.once("finish", () => {
+      answered.push(response.statusCode);
+    });
     received.push({
       method: request.method ?? "",
       url: request.url ?? "",
@@ -220,7 +223,7 @@ async function startRelayServer(root: string): Promise<RelayServer> {
     });
   });
   await listen(server, port);
-  return { origin: `http://${UI_HOST}:${String(port)}`, relay, received };
+  return { origin: `http://${UI_HOST}:${String(port)}`, relay, received, answered };
 }
 
 interface Scene {
@@ -349,6 +352,8 @@ describe.skipIf(!ENABLED)("the real Maven and npm against the repository relay (
     // Everything Maven fetched came through the relay, which is the only holder of the login: a
     // request that bypassed it would have been answered 401 by the repository.
     expect(scene.server.received.slice(before)).toHaveLength(requests.length);
+    // The clients' own parallelism stays below the relay's concurrency caps: never a `relay-busy`.
+    expect(scene.server.answered.filter((status) => status === 503 || status === 429)).toEqual([]);
     expect(scene.maven.statusCounts()["401"]).toBeUndefined();
     expect(scene.maven.statusCounts()["200"]).toBeGreaterThan(5);
     // Preemptive authentication: the very first request already carries the capability, and no

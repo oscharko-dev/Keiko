@@ -84,11 +84,21 @@ authenticates the capability itself.
   binary.
 - **Redirects.** At most three. A same-origin redirect keeps the credential. A cross-origin
   redirect is followed only to `https`, never to Keiko's own origin, and without the credential.
-  A public upstream may only be redirected to public addresses.
+  The network rule: a public upstream may be redirected only to public addresses, a private one
+  only from a private upstream, and loopback only from a loopback upstream
+  (`redirect-network-refused`).
+- **Own origin.** A binding names Keiko's own origin, which must be an `http://` loopback origin
+  with an explicit port (`own-origin-invalid` otherwise). The run binding passes the gateway URL's
+  origin, which is the attested one.
 - **Responses.** A compressed answer (`Content-Encoding`) is refused, because its content cannot be
   scanned (`content-encoding-refused`). The relay never forwards an upstream error body or status
   text: an upstream `401`, `403` or `5xx` is answered with Keiko's own closed refusal.
-- **Budgets.** Each binding has a request count and a byte budget, and each response has a byte cap.
+- **Budgets and caps.** Each binding has a request count and a byte budget, and each response has
+  a byte cap. At most 16 requests per binding and 32 per process are in flight; a request beyond
+  that is answered `503` with `Retry-After: 1` (`relay-busy`), which Maven and npm retry. Their
+  default parallelism (Maven resolver threads, npm sockets) stays below the per-binding cap: the
+  real-client test sees no `relay-busy`. A stalled client (`client-stalled`) and an upstream that
+  does not answer in time (`upstream-timeout`) end the exchange with a closed refusal.
 
 ### D4 — Responses never return a credential
 
