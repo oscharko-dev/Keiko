@@ -1,4 +1,9 @@
+import { rmSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { ESLint } from "eslint";
+import sonarjs from "eslint-plugin-sonarjs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -6,9 +11,15 @@ import {
   createEngine,
   evaluate,
   existsInTree,
+  isUiTypeScriptFile,
+  profileRules,
+  QUALITY_PROFILE,
   resolveBaseRef,
+  sonarRuleKey,
   summarise,
 } from "../check-sonar-rules.mjs";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
 describe("resolveBaseRef", () => {
   it("prefers an explicit --base argument", () => {
@@ -59,7 +70,11 @@ describe("changedLintableFiles", () => {
 });
 
 describe("summarise", () => {
-  const result = (messages) => ({ filePath: "/repo/src/a.ts", messages });
+  const result = (messages, source = "\n".repeat(20)) => ({
+    filePath: "/repo/src/a.ts",
+    messages,
+    source,
+  });
 
   it("keeps only SonarCloud rule findings", () => {
     const findings = summarise([
@@ -83,6 +98,101 @@ describe("summarise", () => {
       result([{ line: 9, message: "super-linear runtime", ruleId: "sonarjs/super-linear-regex" }]),
     ]);
     expect(findings[0].message).toBe("super-linear runtime");
+  });
+
+  // SonarCloud raises nothing on a line carrying NOSONAR, so neither may the gate (#4525).
+  it("drops a finding on a NOSONAR line and keeps one on the next line", () => {
+    const source = ["const a = 1;", "x = 1; // NOSONAR typescript:S1874 -- reason", "y = 2;"];
+    const findings = summarise([
+      result(
+        [
+          { line: 2, message: "deprecated", ruleId: "sonarjs/deprecation" },
+          { line: 3, message: "deprecated", ruleId: "sonarjs/deprecation" },
+        ],
+        source.join("\n"),
+      ),
+    ]);
+    expect(findings.map((finding) => finding.line)).toEqual([3]);
+  });
+
+  it("reads the file when the engine omitted its source", () => {
+    const reads = [];
+    const findings = summarise(
+      [{ filePath: "/repo/src/a.ts", messages: [{ line: 1, message: "m", ruleId: "sonarjs/x" }] }],
+      (path) => {
+        reads.push(path);
+        return "f(); // NOSONAR";
+      },
+    );
+    expect(reads).toEqual(["/repo/src/a.ts"]);
+    expect(findings).toEqual([]);
+  });
+
+  // A file the engine could not parse was never analysed; a silent pass would hide all of it.
+  it("fails a file the engine could not parse, even on a NOSONAR line", () => {
+    const findings = summarise([
+      result(
+        [{ fatal: true, line: 1, message: "Parsing error: not found", ruleId: null }],
+        "// NOSONAR",
+      ),
+    ]);
+    expect(findings).toEqual([
+      { line: 1, message: "Parsing error: not found", path: "/repo/src/a.ts", rule: "parse-error" },
+    ]);
+  });
+});
+
+describe("the SonarCloud quality profile (#4525)", () => {
+  it("reads a rule's SonarCloud key from its documentation link", () => {
+    expect(sonarRuleKey(sonarjs.rules["no-redundant-optional"])).toBe("S4782");
+    expect(sonarRuleKey({ meta: { docs: { url: "https://example.test/no-key" } } })).toBe(
+      undefined,
+    );
+    expect(sonarRuleKey(undefined)).toBe(undefined);
+  });
+
+  it("keeps only the recommended rules the profile activates for the language", () => {
+    const typescript = profileRules("typescript");
+    // Active in SonarCloud's TypeScript profile.
+    expect(typescript["sonarjs/no-redundant-optional"]).toBeDefined();
+    expect(typescript["sonarjs/deprecation"]).toBeDefined();
+    // Recommended by the plugin, inactive in SonarCloud's TypeScript profile.
+    for (const inactive of ["no-unused-vars", "function-return-type", "different-types-comparison"])
+      expect(typescript[`sonarjs/${inactive}`], inactive).toBeUndefined();
+    expect(profileRules("javascript")["sonarjs/no-unused-vars"]).toBeDefined();
+  });
+
+  it("drops a recommended rule that is off, has no key, or is outside the profile", () => {
+    const plugin = {
+      configs: {
+        recommended: {
+          rules: { "sonarjs/a": "error", "sonarjs/b": "off", "sonarjs/c": 0, "sonarjs/d": "error" },
+        },
+      },
+      rules: {
+        a: { meta: { docs: { url: "https://rules.test/S1/javascript" } } },
+        b: { meta: { docs: { url: "https://rules.test/S1/javascript" } } },
+        c: { meta: { docs: { url: "https://rules.test/S1/javascript" } } },
+        d: { meta: { docs: { url: "https://rules.test/S2/javascript" } } },
+      },
+    };
+    expect(profileRules("typescript", plugin, { typescript: ["S1"] })).toEqual({
+      "sonarjs/a": "error",
+    });
+  });
+
+  it("records the profile it was taken from and both languages", () => {
+    expect(QUALITY_PROFILE.profile).toBe("Sonar way comprehensive");
+    expect(QUALITY_PROFILE.typescript).toContain("S4782");
+    expect(QUALITY_PROFILE.javascript.length).toBeGreaterThan(100);
+  });
+
+  it("gives type information to UI TypeScript files only", () => {
+    expect(isUiTypeScriptFile(resolve(repoRoot, "packages/keiko-ui/src/a.tsx"))).toBe(true);
+    expect(isUiTypeScriptFile(resolve(repoRoot, "packages/keiko-ui/src/a.ts"))).toBe(true);
+    expect(isUiTypeScriptFile(resolve(repoRoot, "packages/keiko-ui/next.config.mjs"))).toBe(false);
+    expect(isUiTypeScriptFile(resolve(repoRoot, "packages/keiko-uix/src/a.ts"))).toBe(false);
+    expect(isUiTypeScriptFile(resolve(repoRoot, "packages/keiko-cli/src/a.ts"))).toBe(false);
   });
 });
 
@@ -134,6 +244,7 @@ describe("evaluate", () => {
         {
           filePath: "scripts/x.mjs",
           messages: [{ line: 3, message: "too complex", ruleId: "sonarjs/cognitive-complexity" }],
+          source: "a\nb\nc\n",
         },
       ],
       run,
@@ -175,4 +286,36 @@ describe("createEngine", () => {
   it("builds the engine the entry point lints with", () => {
     expect(createEngine()).toBeInstanceOf(ESLint);
   });
+
+  // #4525: the UI's own ESLint config is untyped, so S4782 could not see exactOptionalPropertyTypes
+  // and reported every `?: T | undefined`, and the plugin's recommended set added rules SonarCloud's
+  // profile leaves inactive. A UI file must report what SonarCloud reports, and nothing else.
+  it("reports in a UI file what SonarCloud reports, and nothing it would not", async () => {
+    const path = resolve(repoRoot, "packages/keiko-ui/src/lib/sonar-rules-gate-probe.ts");
+    const code = [
+      "export interface Probe {",
+      "  readonly label?: string | undefined;",
+      "}",
+      "",
+      "export function probe(flag: boolean): number {",
+      "  const unused = 1;",
+      "  if (flag) {",
+      "    return 1;",
+      "  } else {",
+      "    return 1;",
+      "  }",
+      "}",
+      "",
+    ].join("\n");
+    writeFileSync(path, code);
+    try {
+      const findings = summarise(await createEngine().lintFiles([path]));
+      expect(findings.map((finding) => `${finding.rule}@${String(finding.line)}`).sort()).toEqual([
+        "sonarjs/no-all-duplicated-branches@7",
+        "sonarjs/no-invariant-returns@5",
+      ]);
+    } finally {
+      rmSync(path, { force: true });
+    }
+  }, 120_000);
 });

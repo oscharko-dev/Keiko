@@ -85,6 +85,18 @@ and regression evidence; retain necessary sequencing and record any evidenced fa
 analyzer. Do not replace a bounded loop with unbounded parallelism or a promise chain merely to
 change its syntax. Rules, gate thresholds and the zero-unresolved requirement remain unchanged.
 
+Within the rules the plugin does carry, `check:sonar-rules` reports what SonarCloud reports and
+nothing it would not (#4525). It enables only the plugin's recommended rules that SonarCloud's
+TypeScript or JavaScript profile activates, from the snapshot in `scripts/sonar-quality-profile.json`
+(the organisation's "Sonar way comprehensive", 2026-11-22); 19 recommended rules, among them
+`no-unused-vars`, `function-return-type` and `different-types-comparison`, are inactive for
+TypeScript there. UI files are linted with `packages/keiko-ui/tsconfig.json`, as SonarCloud analyses
+them, so a type-aware rule such as `S4782` sees `exactOptionalPropertyTypes`. A `NOSONAR` line is
+skipped, as SonarCloud skips it, and a file the engine cannot parse fails the gate instead of
+passing unanalysed. When the organisation changes its profile, refresh the snapshot from
+`api/qualityprofiles/search?project=oscharko-dev_Keiko&organization=oscharko-dev` and
+`api/rules/search?qprofile=<key>&activation=true`, keeping each language's own rule keys.
+
 A green `check:sonar-rules` therefore says **nothing** about these. Only a real analyzer does, which
 is what this command runs. The full analysis on `dev` demands **zero** unresolved issues, so a
 single MINOR of this class turns `dev` red after the merge.

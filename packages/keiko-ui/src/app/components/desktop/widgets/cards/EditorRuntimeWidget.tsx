@@ -244,6 +244,7 @@ import {
   IDLE_EXTERNAL_CHANGE_STATE,
   type EditorExternalChangeState,
 } from "./editorExternalChangeState";
+import type { DebugSessionState, EditorDebugSessionHostProps } from "./EditorDebugSessionHost";
 import type { EditorFileHistoryPanelProps } from "./EditorFileHistoryPanel";
 import { EditorGitHunkPeek } from "./EditorGitHunkPeek";
 import {
@@ -288,11 +289,12 @@ const EditorSurface = dynamic<EditorSurfaceProps>(() => import("./EditorSurface"
   loading: EditorSurfaceLoading,
 });
 
-const EditorDebugSessionHost = dynamic<
-  import("./EditorDebugSessionHost").EditorDebugSessionHostProps
->(() => import("./EditorDebugSessionHost").then((mod) => mod.EditorDebugSessionHost), {
-  ssr: false,
-});
+const EditorDebugSessionHost = dynamic<EditorDebugSessionHostProps>(
+  () => import("./EditorDebugSessionHost").then((mod) => mod.EditorDebugSessionHost),
+  {
+    ssr: false,
+  },
+);
 
 const EditorFileHistoryPanel = dynamic<EditorFileHistoryPanelProps>(
   () => import("./EditorFileHistoryPanel").then((module) => module.EditorFileHistoryPanel),
@@ -1700,9 +1702,7 @@ function EditorRuntimeWidget({
   const debugEnabled = debugActivation?.state === "available";
   const debugWorkspaceId = editorSettings.snapshot?.debugWorkspaceId;
   const [debugEditorHost, setDebugEditorHost] = useState<EditorSurfaceProps["debug"]>(undefined);
-  const [debugSessionState, setDebugSessionState] = useState<
-    import("./EditorDebugSessionHost").DebugSessionState | null
-  >(null);
+  const [debugSessionState, setDebugSessionState] = useState<DebugSessionState | null>(null);
   // Distinguishes an exception pause from an ordinary breakpoint/step pause for the shared status
   // bar live region (status-bar.ts's isExceptionPause); DebugPanel renders the same distinction
   // visually but deliberately never announces it (see its no-duplicate-live-region rationale).
