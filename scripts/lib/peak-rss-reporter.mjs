@@ -11,9 +11,6 @@
 import { writeFileSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 
-const target = process.env.KEIKO_PEAK_RSS_FILE;
-const budget = Number(process.env.KEIKO_PEAK_RSS_BUDGET_BYTES);
-
 const SAMPLE_INTERVAL_MS = 250;
 
 // CommonJS, because an eval worker is not a module. The kill ends every thread at once, so the
@@ -31,16 +28,30 @@ setInterval(() => {
 }, workerData.interval);
 `;
 
-if (typeof target === "string" && target !== "") {
-  process.on("exit", () => {
-    writeFileSync(target, `${process.resourceUsage().maxRSS * 1024}\n`);
+/**
+ * Installs the reporter for the variables in `env`. `host` is the process whose exit writes the
+ * peak and `startWorker` starts the watchdog; both are seams for the in-process test, and the
+ * preload passes the real process and worker. Returns what it installed.
+ */
+export function installPeakReporter({
+  env = process.env,
+  host = process,
+  startWorker = (source, options) => new Worker(source, options),
+} = {}) {
+  const target = env.KEIKO_PEAK_RSS_FILE;
+  const budget = Number(env.KEIKO_PEAK_RSS_BUDGET_BYTES);
+  if (typeof target !== "string" || target === "") return { exitHook: false, watchdog: false };
+  host.on("exit", () => {
+    writeFileSync(target, `${host.resourceUsage().maxRSS * 1024}\n`);
   });
-  if (Number.isFinite(budget) && budget > 0) {
-    const watchdog = new Worker(WATCHDOG, {
-      eval: true,
-      workerData: { budget, target, interval: SAMPLE_INTERVAL_MS },
-    });
-    // The watchdog never keeps a finished process alive.
-    watchdog.unref();
-  }
+  if (!Number.isFinite(budget) || budget <= 0) return { exitHook: true, watchdog: false };
+  const watchdog = startWorker(WATCHDOG, {
+    eval: true,
+    workerData: { budget, target, interval: SAMPLE_INTERVAL_MS },
+  });
+  // The watchdog never keeps a finished process alive.
+  watchdog.unref();
+  return { exitHook: true, watchdog: true };
 }
+
+installPeakReporter();

@@ -141,6 +141,30 @@ describe("generated programs on this repository", () => {
     expect(errors.join("\n")).toMatch(/JSON array of strings/u);
   });
 
+  it("writes through the command line, prints the programs and removes them again", async () => {
+    const out = [];
+    const errors = [];
+    const io = {
+      repoRoot: root,
+      stdout: (text) => out.push(text),
+      stderr: (text) => errors.push(text),
+    };
+    const generated = join(root, generatedTsconfigPath("tsconfig.json", checkoutId));
+    try {
+      const stdin = () => JSON.stringify([changedFile]);
+      expect(await runCli({ ...io, argv: ["--write", checkoutId], stdin })).toBe(0);
+      expect(out).toEqual([generatedTsconfigPath("tsconfig.json", checkoutId)]);
+      expect(existsSync(generated)).toBe(true);
+    } finally {
+      expect(await runCli({ ...io, argv: ["--remove", checkoutId], stdin: () => "" })).toBe(0);
+    }
+    expect(existsSync(generated)).toBe(false);
+    expect(await runCli({ ...io, argv: ["--list"], stdin: () => "[]" })).toBe(1);
+    expect(errors).toEqual([
+      "local-sonar-typescript-programs: FAIL - usage: --write <checkout id> | --remove <id>",
+    ]);
+  });
+
   it("is wired into the local runner for the changed-file scope", () => {
     const runner = readFileSync(join(root, "docker/gates/run-sonar.sh"), "utf8");
     expect(runner).toContain('local-sonar-typescript-programs.mjs" --write "${checkout_id}"');

@@ -1,14 +1,20 @@
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
   api,
   ceilingViolations,
   CEILINGS,
+  cli,
   computeHealth,
   failedRunJobs,
   fetchRuns,
   formatReport,
   jobList,
+  main,
   percentile,
   runPage,
   topFailingJobs,
@@ -281,5 +287,71 @@ describe("acquisition", () => {
       await expect(failedRunJobs("o/r", "t", runs, { fetch })).rejects.toThrow("run 9");
     }
     expect(jobList({ jobs: [] }, 9)).toEqual([]);
+  });
+});
+
+describe("command line", () => {
+  // Routes the two endpoints the report reads: the run window and a failed run's jobs.
+  function github(runs) {
+    const urls = [];
+    const fetch = async (url) => {
+      urls.push(url);
+      const body = url.includes("/jobs?")
+        ? { jobs: [{ name: "Core quality", conclusion: "failure" }] }
+        : { workflow_runs: runs };
+      return { ok: true, status: 200, json: async () => body };
+    };
+    return { urls, fetch };
+  }
+
+  function capture() {
+    const lines = [];
+    return { lines, log: (line) => lines.push(line) };
+  }
+
+  const healthy = [run({ id: 1 }), run({ id: 2 })];
+  const failing = [
+    run({ id: 3, conclusion: "failure" }),
+    run({ id: 4, conclusion: "failure" }),
+    run({ id: 5 }),
+  ];
+
+  it("publishes a healthy window as exit 0 into the step summary", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-ci-health-"));
+    try {
+      const summary = join(directory, "summary.md");
+      const { fetch, urls } = github(healthy);
+      const { lines, log } = capture();
+      const env = { GH_TOKEN: "t", GITHUB_REPOSITORY: "o/r", GITHUB_STEP_SUMMARY: summary };
+      expect(await main(["--days", "3"], { env, log, fetch })).toBe(0);
+      expect(urls[0]).toContain("/repos/o/r/actions/workflows/ci.yml/runs?");
+      expect(lines).toHaveLength(1);
+      expect(readFileSync(summary, "utf8")).toBe(lines[0]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a crossed ceiling as exit 1 and names the failing job in JSON", async () => {
+    const { fetch, urls } = github(failing);
+    const { lines, log } = capture();
+    expect(await main(["--json"], { env: { GITHUB_TOKEN: "t" }, log, fetch })).toBe(1);
+    expect(urls[0]).toContain("/repos/oscharko-dev/Keiko/");
+    expect(urls.filter((url) => url.includes("/jobs?"))).toHaveLength(2);
+    const report = JSON.parse(lines[0]);
+    expect(report.violations.length).toBeGreaterThan(0);
+    expect(report.failingJobs[0]).toMatchObject({ name: "Core quality" });
+  });
+
+  it("exits 2 with the cause when the report cannot be produced", async () => {
+    const errors = [];
+    const error = (line) => errors.push(line);
+    expect(await cli([], { env: {}, error })).toBe(2);
+    expect(errors).toEqual([
+      "report-ci-health: could not measure — GH_TOKEN or GITHUB_TOKEN is required",
+    ]);
+    const { fetch } = github(failing);
+    const { log } = capture();
+    expect(await cli(["--json"], { env: { GH_TOKEN: "t" }, log, fetch, error })).toBe(1);
   });
 });

@@ -102,8 +102,8 @@ export function contentDigest(root, path) {
   return entry.isDirectory() ? "directory" : "other";
 }
 
-function gitStatus(root, git) {
-  const result = spawnSync(git, ["status", "--porcelain", "-z", "--untracked-files=all"], {
+export function gitStatus(root, git, spawn = spawnSync) {
+  const result = spawn(git, ["status", "--porcelain", "-z", "--untracked-files=all"], {
     cwd: root,
     encoding: "utf8",
   });
@@ -126,23 +126,34 @@ export function runRepairs({ repairs, run, status, log }) {
   return failed;
 }
 
-function main() {
-  const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+/**
+ * Runs the repairs and returns the exit code. `root`, `git`, `spawn`, `repairs`, `log` and `error`
+ * are seams for the in-process tests; the command line uses this checkout, the trusted Git binary,
+ * `spawnSync`, DRIFT_REPAIRS and the console.
+ */
+export function main({
+  root = resolve(dirname(fileURLToPath(import.meta.url)), ".."),
   // Resolved through the trusted-root helper rather than PATH (javascript:S4036), and every repair
   // runs with this process's own Node.js binary.
-  const git = resolveHostExecutable("git");
+  git = resolveHostExecutable("git"),
+  spawn = spawnSync,
+  repairs = DRIFT_REPAIRS,
+  log = console.log,
+  error = console.error,
+} = {}) {
   const failed = runRepairs({
-    repairs: DRIFT_REPAIRS,
+    repairs,
     run: ({ script, args }) =>
-      spawnSync(process.execPath, [script, ...args], { cwd: root, stdio: "inherit" }).status ?? 1,
-    status: () => gitStatus(root, git),
-    log: (line) => console.log(line),
+      spawn(process.execPath, [script, ...args], { cwd: root, stdio: "inherit" }).status ?? 1,
+    status: () => gitStatus(root, git, spawn),
+    log,
   });
   if (failed.length > 0) {
-    console.error(`fix-gate-drift: FAIL — ${failed.join(", ")}`);
-    process.exit(1);
+    error(`fix-gate-drift: FAIL — ${failed.join(", ")}`);
+    return 1;
   }
-  console.log("fix-gate-drift: PASS — review the changed files, then commit them");
+  log("fix-gate-drift: PASS — review the changed files, then commit them");
+  return 0;
 }
 
-if (isMainModule(import.meta.url)) main();
+if (isMainModule(import.meta.url)) process.exitCode = main();

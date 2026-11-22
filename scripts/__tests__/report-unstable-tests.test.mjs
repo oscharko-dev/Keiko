@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { URL, fileURLToPath } from "node:url";
@@ -8,9 +8,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   classify,
+  cli,
   executedTestCount,
   explainedVerdicts,
   formatReport,
+  main,
   mergeVerdicts,
   playwrightSamples,
   vitestPlan,
@@ -284,5 +286,94 @@ describe("explainedVerdicts", () => {
     expect(() => explainedVerdicts({ status: null, signal: "SIGKILL" }, failing, 7)).toThrow(
       "signal SIGKILL",
     );
+  });
+});
+
+describe("command line", () => {
+  // Stands in for vitest: each run writes the report its seed maps to and exits as given.
+  function vitestRuns(reports, exit = () => ({ status: 0, signal: null })) {
+    const calls = [];
+    const spawn = (_node, args) => {
+      calls.push(args);
+      const output = args.find((arg) => arg.startsWith("--outputFile.json="));
+      const report = reports[calls.length - 1];
+      writeFileSync(output.slice("--outputFile.json=".length), JSON.stringify(report));
+      return exit(report);
+    };
+    return { calls, spawn };
+  }
+
+  const absolute = (name, status) => ({
+    testResults: [
+      { name: `/abs/${name}`, status: "passed", assertionResults: [{ fullName: "x", status }] },
+    ],
+  });
+
+  function capture() {
+    const lines = [];
+    return { lines, log: (line) => lines.push(line) };
+  }
+
+  it("runs one shuffled seed per repeat and passes a stable suite into the summary", () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-unstable-cli-"));
+    try {
+      const summary = join(directory, "summary.md");
+      const { calls, spawn } = vitestRuns([
+        absolute("a.test.ts", "passed"),
+        absolute("a.test.ts", "passed"),
+      ]);
+      const { lines, log } = capture();
+      const argv = ["vitest", "--shard", "2/3", "--repeats", "2", "--", "scripts/a"];
+      expect(main(argv, { env: { GITHUB_STEP_SUMMARY: summary }, log, spawn })).toBe(0);
+      expect(calls.map((args) => args.find((arg) => arg.startsWith("--sequence.seed=")))).toEqual([
+        "--sequence.seed=2001",
+        "--sequence.seed=2002",
+      ]);
+      expect(calls[0]).toContain("--shard=2/3");
+      expect(calls[0].at(-1)).toBe("scripts/a");
+      expect(readFileSync(summary, "utf8")).toBe(lines[0]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a test whose verdict changes between seeds as exit 1", () => {
+    const failedExit = (report) => ({
+      status: report.testResults[0].assertionResults[0].status === "failed" ? 1 : 0,
+      signal: null,
+    });
+    const { spawn } = vitestRuns(
+      [absolute("a.test.ts", "passed"), absolute("a.test.ts", "failed")],
+      failedExit,
+    );
+    const { lines, log } = capture();
+    expect(main(["vitest", "--repeats", "2"], { env: {}, log, spawn })).toBe(1);
+    expect(lines[0]).toContain("a.test.ts > x");
+  });
+
+  it("measures a Playwright report and refuses an unknown mode or an empty report", () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-unstable-cli-"));
+    try {
+      const write = (report) => {
+        const path = join(directory, "report.json");
+        writeFileSync(path, JSON.stringify(report));
+        return path;
+      };
+      const { log } = capture();
+      const errors = [];
+      const error = (line) => errors.push(line);
+      const passing = write(playwrightReport(["expected", "expected"]));
+      expect(cli(["playwright", passing], { env: {}, log, error })).toBe(0);
+      expect(cli(["toString"], { env: {}, log, error })).toBe(2);
+      expect(cli(["playwright"], { env: {}, log, error })).toBe(2);
+      expect(cli(["playwright", write({ suites: [] })], { env: {}, log, error })).toBe(2);
+      expect(errors).toEqual([
+        "report-unstable-tests: could not measure — mode must be vitest or playwright",
+        "report-unstable-tests: could not measure — playwright mode needs the JSON report path",
+        "report-unstable-tests: could not measure — no test verdict was reported",
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
