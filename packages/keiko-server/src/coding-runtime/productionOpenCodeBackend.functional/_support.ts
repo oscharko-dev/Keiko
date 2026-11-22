@@ -81,6 +81,20 @@ export const FUNCTIONAL_PLAN_STEP_VERIFY = "PLAN_STEP_VERIFY_2480";
 /** The fixture file the native journeys read and edit with the runtime's own tools (#3897). */
 const NATIVE_TARGET_PATH = "src/example.ts";
 
+/** The one chat model of the functional gateway configuration. */
+export const FUNCTIONAL_MODEL_ID = "functional-model";
+
+/**
+ * The body of the explicit check Settings > Models sends to activate a chat model. Since ADR-0171
+ * D2 (amended 2026-11-16) every chat model is inactive in a fresh server process, and a coding run
+ * for an inactive model is refused `CODING_RUNTIME_MODEL_UNAVAILABLE`; a pipeline that starts a run
+ * posts this to `/api/gateway/readiness` first, as a person activates the model before a first run.
+ */
+export const FUNCTIONAL_MODEL_ACTIVATION = Object.freeze({
+  modelId: FUNCTIONAL_MODEL_ID,
+  options: Object.freeze({ probes: Object.freeze(["chat"]) }),
+});
+
 export interface ScriptState {
   mode:
     | "productive"
@@ -1091,7 +1105,7 @@ function digest(value: string): string {
 
 function normal(): NormalizedResponse {
   return {
-    modelId: "functional-model",
+    modelId: FUNCTIONAL_MODEL_ID,
     // Exceed the owning message-byte bound with actual model output. Both the scripted child
     // and V2 must truncate the same tail without artificially expanding ordinary progress.
     content: `${FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX}${"x".repeat(
@@ -1170,7 +1184,7 @@ export function functionalReadinessFetch(input: string | URL | Request): Promise
 
 export function functionalGatewayConfig(): GatewayConfig {
   const provider = {
-    modelId: "functional-model",
+    modelId: FUNCTIONAL_MODEL_ID,
     baseUrl: `${FUNCTIONAL_PROVIDER_ORIGIN}/v1`,
     apiKey: "functional-provider-secret",
     apiKeyHeaderName: "api-key",
@@ -1185,7 +1199,7 @@ export function functionalGatewayConfig(): GatewayConfig {
     circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
     capabilities: [
       {
-        id: "functional-model",
+        id: FUNCTIONAL_MODEL_ID,
         kind: "chat",
         contextWindow: 128_000,
         // Admit the deliberately oversized display sample through the gateway, then prove

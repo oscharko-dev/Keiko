@@ -88,6 +88,7 @@ import {
   FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
   FUNCTIONAL_PLAN_STEP_READ,
   FUNCTIONAL_PLAN_STEP_VERIFY,
+  FUNCTIONAL_MODEL_ACTIVATION,
   type ScriptState,
 } from "./productionOpenCodeBackend.functional/_support.js";
 
@@ -377,6 +378,7 @@ async function bootDiscoveryPipeline(
   });
   servers.push(server);
   await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+  await activateFunctionalModel(`http://${UI_HOST}:${String(port)}`);
   const orchestrator = deps.codingRuntimeOrchestrator;
   const eventHub = deps.codingRuntimeEventHub;
   if (orchestrator === undefined || eventHub === undefined) {
@@ -404,6 +406,14 @@ async function bootDiscoveryPipeline(
   };
 }
 
+// A fresh server process starts with its chat model inactive, and a run for an inactive model is
+// refused (ADR-0171 D2, amended 2026-11-16). The pipeline activates it the way a person does in
+// Settings > Models before a first run, through the same explicit check.
+async function activateFunctionalModel(baseUrl: string): Promise<void> {
+  const activated = await post(baseUrl, "/api/gateway/readiness", FUNCTIONAL_MODEL_ACTIVATION);
+  expect(activated.status, await activated.clone().text()).toBe(200);
+}
+
 async function assertLiveReadiness(baseUrl: string): Promise<void> {
   const response = await fetch(
     `${baseUrl}/api/coding-workbench/runtime/readiness?requestedMode=autonomous-delivery`,
@@ -426,6 +436,8 @@ async function assertLiveReadiness(baseUrl: string): Promise<void> {
     // Derived from the production entry points, not restated: the platform picks the profile.
     selectableAgents: openCodeSelectableAgents(productionOpenCodeToolProfile()),
     promptInputs: openCodePromptInputs(productionOpenCodeToolProfile()),
+    // The dev lane runs on macOS only, where the run gets the runtime's own tools (#4068 W12).
+    toolProfile: "native",
   });
 }
 

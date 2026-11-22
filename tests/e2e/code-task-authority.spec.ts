@@ -40,6 +40,7 @@ import {
   activityLogDirectory,
   readActivityLogText,
 } from "../../scripts/lib/activity-log-files.mjs";
+import { FUNCTIONAL_MODEL_ID } from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
 import { FUNCTIONAL_REPOSITORY_SKILL_NAME } from "../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/skillDiscoveryProof.js";
 
 import {
@@ -51,6 +52,7 @@ import {
   authorityRepositoryRoot,
   authorityStateDir,
 } from "./support/coding-runtime-2386-authority.js";
+import { activateChatModel } from "./support/chat-model-activation.js";
 import { openEditorWorkspace, openTreeFile } from "./support/editorWorkspace.js";
 import { activateWindow } from "./support/window-chrome.js";
 
@@ -659,6 +661,9 @@ test("#2386 authority: question, sticky pause, widening rejection, follow-up, se
   // #2478: the boot URL carries the launcher-minted pairing attestation; question text is served
   // only to this paired window from here on.
   await registerTrustedRepositoryProject(page);
+  // The journey's model starts inactive, as every chat model of a fresh server does; a person
+  // activates it in Settings > Models before the Workbench offers Start (ADR-0171 D2).
+  await activateChatModel(page.request, FUNCTIONAL_MODEL_ID);
   await openWorkbench(page, launcherPairingFragment());
   await bindFixtureWorkspace(page);
 
