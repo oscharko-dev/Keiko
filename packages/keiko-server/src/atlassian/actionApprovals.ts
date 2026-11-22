@@ -248,7 +248,9 @@ export class AtlassianActionApprovalRegistry {
   private readonly now: () => number;
 
   public constructor(
-    now: () => number = Date.now,
+    // Read at each check rather than captured: a registry built before the clock is replaced (a
+    // test's system time) must follow it, or a grant issued on that clock expires on the real one.
+    now: () => number = () => Date.now(),
     private readonly readGrants?: ChatReadGrantStore,
   ) {
     this.now = now;

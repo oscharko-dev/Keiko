@@ -266,36 +266,48 @@ export async function failedRunJobs(repo, token, runs, options = {}) {
   );
 }
 
-function publish(argv, result) {
+function publish(argv, result, { env, log }) {
   if (argv.includes("--json")) {
-    console.log(JSON.stringify(result, null, 2));
+    log(JSON.stringify(result, null, 2));
     return;
   }
   const report = formatReport(result.health, result.failingJobs, result.violations, result.since);
-  console.log(report);
-  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
+  log(report);
+  if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, report);
 }
 
-async function main(argv) {
-  const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN;
+/**
+ * Measures the window and publishes the report. `env`, `log` and `fetch` are seams for the
+ * in-process tests; the command line uses the process environment, the console and global fetch.
+ */
+export async function main(argv, { env = process.env, log = console.log, fetch } = {}) {
+  const token = env.GH_TOKEN || env.GITHUB_TOKEN;
   if (!token) throw new Error("GH_TOKEN or GITHUB_TOKEN is required");
-  const repo = process.env.GITHUB_REPOSITORY || "oscharko-dev/Keiko";
+  const repo = env.GITHUB_REPOSITORY || "oscharko-dev/Keiko";
+  const options = fetch === undefined ? {} : { fetch };
   const since = windowStart(argv);
-  const runs = await fetchRuns(repo, token, since);
+  const runs = await fetchRuns(repo, token, since, options);
   const health = computeHealth(runs);
-  const failingJobs = topFailingJobs(await failedRunJobs(repo, token, runs));
+  const failingJobs = topFailingJobs(await failedRunJobs(repo, token, runs, options));
   const violations = ceilingViolations(health);
-  publish(argv, { since, health, failingJobs, violations });
+  publish(argv, { since, health, failingJobs, violations }, { env, log });
   return violations.length === 0 ? 0 : 1;
 }
 
-if (isMainModule(import.meta.url)) {
-  // Exit 1 is a crossed ceiling; exit 2 is a report that could not be produced at all (token,
-  // network, API), so a broken run never reads as a measured regression.
+/**
+ * The exit code of one command-line run. Exit 1 is a crossed ceiling; exit 2 is a report that
+ * could not be produced at all (token, network, API), so a broken run never reads as a measured
+ * regression.
+ */
+export async function cli(argv, { error = console.error, ...deps } = {}) {
   try {
-    process.exitCode = await main(process.argv.slice(2));
-  } catch (error) {
-    console.error(`report-ci-health: could not measure — ${error.message}`);
-    process.exitCode = 2;
+    return await main(argv, deps);
+  } catch (error_) {
+    error(`report-ci-health: could not measure — ${error_.message}`);
+    return 2;
   }
+}
+
+if (isMainModule(import.meta.url)) {
+  process.exitCode = await cli(process.argv.slice(2));
 }

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -12,11 +12,13 @@ import {
   forwardedArgs,
   globalIgnores,
   lintPartitions,
+  main,
   peakBudgetFailures,
   peakSummary,
   runPartitions,
   workspacePackages,
 } from "../lint-repository.mjs";
+import { installPeakReporter } from "../lib/peak-rss-reporter.mjs";
 
 const GIB = 1024 ** 3;
 const REPORTER = pathToFileURL(
@@ -247,4 +249,155 @@ describe("lint argument forwarding", () => {
       expect(() => forwardedArgs([arg])).toThrow(TypeError);
     },
   );
+});
+
+describe("main", () => {
+  // A repository of two linted packages, one package the global ignores leave out, and a
+  // directory that is no workspace package.
+  function repository() {
+    const root = mkdtempSync(join(tmpdir(), "keiko-lint-main-"));
+    writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module" }));
+    writeFileSync(
+      join(root, "eslint.config.js"),
+      'export default [{ ignores: ["packages/ignored/**"] }, { files: ["**/*.js"], rules: {} }];\n',
+    );
+    for (const name of ["alpha", "beta", "ignored"]) {
+      mkdirSync(join(root, "packages", name), { recursive: true });
+      writeFileSync(join(root, "packages", name, "package.json"), "{}");
+    }
+    mkdirSync(join(root, "packages", "notes"));
+    return root;
+  }
+
+  function run(root, { argv = [], env = {}, peak = () => String(GIB), status = () => 0 } = {}) {
+    const calls = [];
+    const logs = [];
+    const errors = [];
+    const lint = (cwd, args, peakFile) => {
+      calls.push({ cwd, args });
+      const bytes = peak(args[0]);
+      if (bytes !== null) writeFileSync(peakFile, `${bytes}\n`);
+      return status(args[0]);
+    };
+    const log = (line) => logs.push(line);
+    const error = (line) => errors.push(line);
+    return main({ root, argv, env, lint, log, error }).then((code) => ({
+      code,
+      calls,
+      logs,
+      errors,
+    }));
+  }
+
+  it("lints each partition with the forwarded flags and records every peak", async () => {
+    const root = repository();
+    try {
+      const summary = join(root, "summary.md");
+      const result = await run(root, {
+        argv: ["--prune-suppressions"],
+        env: { GITHUB_STEP_SUMMARY: summary },
+      });
+      expect(result.code).toBe(0);
+      expect(result.calls.map((call) => call.args[0])).toEqual([
+        "packages/alpha",
+        "packages/beta",
+        ".",
+      ]);
+      expect(result.calls.every((call) => call.cwd === root)).toBe(true);
+      expect(result.calls.every((call) => call.args.at(-1) === "--prune-suppressions")).toBe(true);
+      expect(result.logs.at(-1)).toBe("lint-repository: PASS — 3 partitions");
+      expect(readFileSync(summary, "utf8")).toContain("| packages/beta | 1.0 |");
+      expect(result.errors).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails on a failed partition, an unmeasured one, and one above the budget", async () => {
+    const root = repository();
+    try {
+      const failed = await run(root, { status: (dir) => Number(dir === "packages/alpha") });
+      expect(failed.code).toBe(1);
+      expect(failed.errors).toEqual(["lint-repository: FAIL — packages/alpha"]);
+      const unmeasured = await run(root, { peak: (dir) => (dir === "." ? null : String(GIB)) });
+      expect(unmeasured.code).toBe(1);
+      expect(unmeasured.errors).toEqual([
+        "lint-repository: FAIL — repository root: no peak was measured",
+      ]);
+      const above = await run(root, { peak: () => String(PEAK_RSS_BUDGET_BYTES + GIB) });
+      expect(above.code).toBe(1);
+      expect(above.errors).toHaveLength(3);
+      await expect(run(root, { argv: ["--fix"] })).rejects.toThrow("unsupported argument --fix");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("installPeakReporter", () => {
+  function host(maxRSS) {
+    const handlers = [];
+    return {
+      handlers,
+      on: (event, handler) => handlers.push({ event, handler }),
+      resourceUsage: () => ({ maxRSS }),
+    };
+  }
+
+  it("does nothing without a target file", () => {
+    const child = host(1);
+    const startWorker = () => {
+      throw new Error("no watchdog without a target");
+    };
+    expect(installPeakReporter({ env: {}, host: child, startWorker })).toEqual({
+      exitHook: false,
+      watchdog: false,
+    });
+    expect(installPeakReporter({ env: { KEIKO_PEAK_RSS_FILE: "" }, host: child })).toEqual({
+      exitHook: false,
+      watchdog: false,
+    });
+    expect(child.handlers).toEqual([]);
+  });
+
+  it("writes the peak in bytes on exit, and starts an unreferenced watchdog for a budget", () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-peak-reporter-"));
+    try {
+      const target = join(directory, "peak.txt");
+      const child = host(2048);
+      expect(installPeakReporter({ env: { KEIKO_PEAK_RSS_FILE: target }, host: child })).toEqual({
+        exitHook: true,
+        watchdog: false,
+      });
+      expect(child.handlers.map((entry) => entry.event)).toEqual(["exit"]);
+      child.handlers[0].handler();
+      expect(readFileSync(target, "utf8")).toBe(`${String(2048 * 1024)}\n`);
+
+      const started = [];
+      const startWorker = (source, options) => {
+        const worker = { unreferenced: false, unref: () => (worker.unreferenced = true) };
+        started.push({ source, options, worker });
+        return worker;
+      };
+      const env = { KEIKO_PEAK_RSS_FILE: target, KEIKO_PEAK_RSS_BUDGET_BYTES: "4096" };
+      expect(installPeakReporter({ env, host: host(1), startWorker })).toEqual({
+        exitHook: true,
+        watchdog: true,
+      });
+      expect(started).toHaveLength(1);
+      expect(started[0].options).toEqual({
+        eval: true,
+        workerData: { budget: 4096, target, interval: 250 },
+      });
+      expect(started[0].source).toContain('process.kill(process.pid, "SIGKILL")');
+      expect(started[0].worker.unreferenced).toBe(true);
+      const invalid = { KEIKO_PEAK_RSS_FILE: target, KEIKO_PEAK_RSS_BUDGET_BYTES: "-1" };
+      expect(installPeakReporter({ env: invalid, host: host(1), startWorker })).toEqual({
+        exitHook: true,
+        watchdog: false,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });

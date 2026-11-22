@@ -20,7 +20,8 @@ interface ServerState {
 export class McpReconnectPolicy {
   readonly #state = new Map<string, ServerState>();
 
-  public constructor(private readonly now: () => number = Date.now) {}
+  // Read at each check rather than captured, so the policy follows a replaced clock.
+  public constructor(private readonly now: () => number = () => Date.now()) {}
 
   public static delayAfter(failures: number): number {
     if (failures < 2) return 0;
