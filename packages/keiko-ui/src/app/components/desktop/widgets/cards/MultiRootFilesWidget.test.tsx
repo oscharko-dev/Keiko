@@ -131,7 +131,7 @@ describe("MultiRootFilesWidget", () => {
     );
     await screen.findByRole("option", { name: "Repo C" });
 
-    expect(screen.getByRole("treeitem", { name: "Repo A" })).toHaveAttribute(
+    expect(screen.getByRole("treeitem", { name: "Repo A /repo-a" })).toHaveAttribute(
       "aria-expanded",
       "true",
     );
@@ -199,8 +199,8 @@ describe("MultiRootFilesWidget", () => {
       </I18nProvider>,
     );
     await screen.findByRole("option", { name: "Repo C" });
-    const rootA = screen.getByRole("treeitem", { name: "Repo A" });
-    const rootB = screen.getByRole("treeitem", { name: "Repo B" });
+    const rootA = screen.getByRole("treeitem", { name: "Repo A /repo-a" });
+    const rootB = screen.getByRole("treeitem", { name: "Repo B /repo-b" });
 
     expect(rootA).toHaveAttribute("tabindex", "0");
     expect(rootB).toHaveAttribute("tabindex", "-1");
@@ -242,8 +242,8 @@ describe("MultiRootFilesWidget", () => {
     const headers = Array.from(
       container.querySelectorAll<HTMLButtonElement>("button[data-root-group-header]"),
     );
-    const rootA = screen.getByRole("treeitem", { name: "Repo A" });
-    const rootB = screen.getByRole("treeitem", { name: "Repo B" });
+    const rootA = screen.getByRole("treeitem", { name: "Repo A /repo-a" });
+    const rootB = screen.getByRole("treeitem", { name: "Repo B /repo-b" });
     const rootBHeader = headers[1]!;
 
     rootBHeader.focus();
@@ -292,8 +292,8 @@ describe("MultiRootFilesWidget", () => {
       </I18nProvider>,
     );
     await screen.findByRole("option", { name: "Repo C" });
-    const rootA = screen.getByRole("treeitem", { name: "Repo A" });
-    const rootB = screen.getByRole("treeitem", { name: "Repo B" });
+    const rootA = screen.getByRole("treeitem", { name: "Repo A /repo-a" });
+    const rootB = screen.getByRole("treeitem", { name: "Repo B /repo-b" });
     const next = {
       ...current,
       revision: current.revision + 1,

@@ -159,7 +159,8 @@ function RootGroup({
       role="treeitem"
       aria-expanded={expanded}
       aria-selected={focused}
-      aria-label={root.displayName}
+      // WCAG 2.5.3: the name contains the visible name and path, in that order.
+      aria-label={`${root.displayName} ${root.canonicalRoot}`}
       data-root-group
       tabIndex={rovingTabIndex}
       onFocus={(): void => onRovingFocus(root.rootRef)}
@@ -180,8 +181,7 @@ function RootGroup({
             <ChevronRightIcon size={12} />
           </span>
           <span className={styles.cmpRootName}>
-            {root.displayName}
-            <span className={styles.cmpRootPath}>{root.canonicalRoot}</span>
+            {root.displayName} <span className={styles.cmpRootPath}>{root.canonicalRoot}</span>
           </span>
         </button>
         <WorkspaceTrustBadge status={trust.status} issue={trust.issue} />

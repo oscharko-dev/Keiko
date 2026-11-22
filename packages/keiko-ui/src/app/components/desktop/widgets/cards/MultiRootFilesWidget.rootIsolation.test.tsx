@@ -200,7 +200,7 @@ describe("MultiRootFilesWidget root isolation over the real file tree", () => {
 
     // Collapsing and re-expanding remounts that group's FilesWidget, which re-fires its lifecycle
     // reports. None of them belong to the focused root, so none may reach the shared writer.
-    const group = screen.getByRole("treeitem", { name: "Empty" });
+    const group = screen.getByRole("treeitem", { name: `Empty ${EMPTY_ROOT}` });
     const toggle = group.querySelector("button");
     if (toggle === null) throw new Error("root group toggle missing");
     await userEvent.click(toggle);
