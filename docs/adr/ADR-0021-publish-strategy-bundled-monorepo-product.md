@@ -104,7 +104,7 @@ bundle/archive representation. Their existing edges to delivered siblings and pi
 exact peers. Unchanged children remain registry dependencies and are promoted from the actual
 lockfile owner, retaining required or optional reachability; a required origin wins. The current
 exception contains five Java parser ancestors and the three Sigstore TUF ancestors
-(`@sigstore/tuf`, `tuf-js`, `@tufjs/models`) of the reviewed `minimatch` 11.0.3 pin, not the
+(`@sigstore/tuf`, `tuf-js`, `@tufjs/models`) of the reviewed `minimatch` 11.0.8 pin, not the
 complete third-party runtime closure. The planner accepts only exact pins selected by the reviewed
 lockfile: a flat `name` key, or a `name@range` key whose range covers every version the original
 descriptor admits; unsupported alias identity changes fail closed. Upstream source and license bytes are preserved, lifecycle scripts
