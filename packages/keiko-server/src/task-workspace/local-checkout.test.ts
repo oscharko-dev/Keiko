@@ -263,6 +263,21 @@ describe("local checkout selection", () => {
     expect(execFileSync).not.toHaveBeenCalled();
   });
 
+  it("starts every Git child hidden so Windows opens no console window per call", () => {
+    const service = fixture();
+    vi.mocked(execFileSync).mockClear();
+    service.selectLocal({ root, branch: "feature", requestedBy: "test" });
+    const keikoGitCalls = vi
+      .mocked(execFileSync)
+      .mock.calls.filter(
+        ([, args]) => Array.isArray(args) && args.includes("core.fsmonitor=false"),
+      );
+    expect(keikoGitCalls.length).toBeGreaterThan(0);
+    for (const call of keikoGitCalls) {
+      expect(call[2]).toMatchObject({ windowsHide: true });
+    }
+  });
+
   it("keeps request correlation after an uncorrelated background invalidation", () => {
     const log = createBufferedServerLogSink();
     const service = fixture(log);
