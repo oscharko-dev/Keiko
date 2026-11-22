@@ -3,7 +3,6 @@ import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -19,7 +18,6 @@ import type {
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { GatewayRequest } from "@oscharko-dev/keiko-model-gateway";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 
 import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import {
@@ -28,7 +26,6 @@ import {
 } from "../../../../tests/support/buffered-server-log.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
 import { createUiServer, UI_HOST } from "../server.js";
-import { fakePairingRequestBody } from "../coding-app-session/_support.js";
 import { productionOpenCodeToolProfile, type UiHandlerDeps } from "../deps.js";
 import {
   defaultServerDiagnosticSink,
@@ -40,16 +37,10 @@ import { createInMemoryUiStore } from "../store/index.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
 import { createVerificationRunnerManager } from "../editor/verificationRunner.js";
 import type { VerificationRunnerManager } from "../editor/verificationRunner.js";
-import { buildActiveWorkspacePointerStoreOverDatabase } from "../task-workspace/active-store.js";
 import {
   withLocalCheckout,
   type LocalCheckoutLifecycle,
 } from "../task-workspace/local-checkout.js";
-import { createWorkspaceLifecycleService } from "../task-workspace/lifecycle.js";
-import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
-import { createWorkspaceProvisioningService } from "../task-workspace/provisioning.js";
-import { reconcileSingleInstance } from "../task-workspace/reconciliation.js";
-import { buildWorkspaceInstanceStoreOverDatabase } from "../task-workspace/store.js";
 import { createCodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
 import { createCodingRuntimeEditorMutationLeaseBroker } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
@@ -88,9 +79,19 @@ import {
   FUNCTIONAL_LIFECYCLE_FOREGROUND_COMMAND,
   FUNCTIONAL_PLAN_STEP_READ,
   FUNCTIONAL_PLAN_STEP_VERIFY,
-  FUNCTIONAL_MODEL_ACTIVATION,
   type ScriptState,
 } from "./productionOpenCodeBackend.functional/_support.js";
+import {
+  createFunctionalTaskWorkspaceOwners,
+  provisionFunctionalTaskWorkspace,
+  type FunctionalTaskWorkspaceOwners,
+} from "./productionOpenCodeBackend.functional/_support.js";
+import {
+  functionalPost,
+  functionalSessionCookie,
+  reserveLoopbackPort,
+  startFunctionalDiscoveryServer,
+} from "../test-support/functional-bff-server.js";
 
 const SECRET = "TASK_SECRET_2258";
 const OLD = "export const value = 'ORIGINAL_SECRET_2258';\n";
@@ -105,11 +106,11 @@ interface FunctionalWorkspaceFixture {
   readonly root: string;
   readonly repository: string;
   readonly db: DatabaseSync;
-  readonly lifecycle: ReturnType<typeof createWorkspaceLifecycleService>;
-  readonly provisioning: ReturnType<typeof createWorkspaceProvisioningService>;
+  readonly lifecycle: FunctionalTaskWorkspaceOwners["lifecycle"];
+  readonly provisioning: FunctionalTaskWorkspaceOwners["provisioning"];
   /** The persistence a Local checkout of the same repository is selected over (#3907). */
-  readonly instances: ReturnType<typeof buildWorkspaceInstanceStoreOverDatabase>;
-  readonly activePointerStore: ReturnType<typeof buildActiveWorkspacePointerStoreOverDatabase>;
+  readonly instances: FunctionalTaskWorkspaceOwners["instances"];
+  readonly activePointerStore: FunctionalTaskWorkspaceOwners["activePointerStore"];
   readonly evidenceStore: EvidenceStore;
   readonly managedRoot: string;
   readonly workspace: string;
@@ -348,8 +349,7 @@ async function bootDiscoveryPipeline(
   localCheckout?: FunctionalLocalCheckout,
 ): Promise<FunctionalPipeline> {
   const verification = createVerification(localCheckout?.root ?? fixture.workspace);
-  const port = await reserveLoopbackPort();
-  const deps = productionDiscoveryBffDeps({
+  const served = await startFunctionalDiscoveryServer({
     stateRoot: join(fixture.root, "bff-state"),
     workspaceLifecycle: localCheckout?.lifecycle ?? fixture.lifecycle,
     ...(localCheckout === undefined
@@ -362,23 +362,13 @@ async function bootDiscoveryPipeline(
     // owner that created it, as the composed server does.
     workspaceProvisioning: fixture.provisioning,
     script: fixture.script,
-    uiPort: port,
     ...(observeGatewayRequest === undefined ? {} : { observeGatewayRequest }),
     ...(operatorEnv === undefined ? {} : { operatorEnv }),
-  });
-  disposers.push(async () => {
-    await deps.codingRuntimeOrchestrator?.shutdown();
-    await deps.dispose?.();
-  });
-  const server = createUiServer({
     staticRoot: fixture.root,
-    csp: "default-src 'none'",
-    port,
-    handlerDeps: deps,
+    check: assertResponseMetadata,
   });
-  servers.push(server);
-  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
-  await activateFunctionalModel(`http://${UI_HOST}:${String(port)}`);
+  disposers.push(served.close);
+  const { deps } = served;
   const orchestrator = deps.codingRuntimeOrchestrator;
   const eventHub = deps.codingRuntimeEventHub;
   if (orchestrator === undefined || eventHub === undefined) {
@@ -386,7 +376,7 @@ async function bootDiscoveryPipeline(
   }
   const timeline: CodingWorkbenchRuntimeSseEvent[] = [];
   return {
-    baseUrl: `http://${UI_HOST}:${String(port)}`,
+    baseUrl: served.baseUrl,
     deps,
     orchestrator,
     timeline,
@@ -404,14 +394,6 @@ async function bootDiscoveryPipeline(
       expect(subscribed.ok).toBe(true);
     },
   };
-}
-
-// A fresh server process starts with its chat model inactive, and a run for an inactive model is
-// refused (ADR-0171 D2, amended 2026-11-16). The pipeline activates it the way a person does in
-// Settings > Models before a first run, through the same explicit check.
-async function activateFunctionalModel(baseUrl: string): Promise<void> {
-  const activated = await post(baseUrl, "/api/gateway/readiness", FUNCTIONAL_MODEL_ACTIVATION);
-  expect(activated.status, await activated.clone().text()).toBe(200);
 }
 
 async function assertLiveReadiness(baseUrl: string): Promise<void> {
@@ -650,14 +632,6 @@ async function runProductiveScenario(
     schemaVersion: "1",
     content: null,
   });
-}
-
-async function pairAppSession(baseUrl: string): Promise<string> {
-  const response = await post(baseUrl, PAIR_PATH, fakePairingRequestBody());
-  expect(response.status).toBe(200);
-  const cookie = response.headers.get("set-cookie")?.split(";", 1)[0];
-  if (cookie === undefined) throw new Error("functional-app-session-pairing-failed");
-  return cookie;
 }
 
 async function codingAppSessionSnapshot(
@@ -911,7 +885,7 @@ function assertResponseMetadata(response: Response): void {
   for (const canary of rawActivityCanaries()) expect(response.url).not.toContain(canary);
 }
 
-function setupWorkspace(
+async function setupWorkspace(
   managedRootSegments: readonly string[] = ["managed"],
 ): Promise<FunctionalWorkspaceFixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-opencode-functional-")));
@@ -935,87 +909,29 @@ function setupWorkspace(
   );
   git(repository, ["add", "."]);
   git(repository, ["commit", "-q", "-m", "fixture"]);
-  const db = new DatabaseSync(":memory:");
-  runMigrations(db);
-  const store = buildWorkspaceInstanceStoreOverDatabase(db);
   const evidence = memoryEvidence(new Map());
-  const mutex = createWorkspaceMutexRegistry();
-  const activePointerStore = buildActiveWorkspacePointerStoreOverDatabase(db);
-  const adapter = (
-    workspace: Parameters<typeof createNodeGitWorktreeAdapter>[0]["workspace"],
-  ): ReturnType<typeof createNodeGitWorktreeAdapter> =>
-    createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
-  const provisioning = createWorkspaceProvisioningService({
-    store,
-    evidenceStore: evidence,
-    managedRoot,
-    createAdapter: adapter,
-    redactString: (value) => value,
-    now: () => 1_700_000_000_000,
-    newId: () => "functional-id",
-    mutex,
-  });
-  const lifecycle = createWorkspaceLifecycleService({
-    store,
-    activePointerStore,
-    managedRoot,
-    provisioning,
-    evidenceStore: evidence,
-    redactString: (value) => value,
-    now: () => 1_700_000_000_000,
-    newId: () => "functional-lifecycle-id",
-    mutex,
-  });
+  const owners = createFunctionalTaskWorkspaceOwners(managedRoot, evidence);
   const script: ScriptState = { mode: "productive", calls: 0, old: OLD, next: NEW };
-  return provisioning
-    .provision({
-      repositoryRequestPath: repository,
-      taskId: "task-2258",
-      baseBranch: "main",
-      requestedBy: "functional",
-    })
-    .then(async (provisioned) => {
-      await lifecycle.setActive({
-        workspaceId: provisioned.instance.workspaceId,
-        requestedBy: "functional",
-        acquireLock: false,
-      });
-      await reconcileSingleInstance(
-        {
-          store,
-          activePointerStore,
-          evidenceStore: evidence,
-          managedRoot,
-          createAdapter: adapter,
-          redactString: (value) => value,
-          now: () => 1_700_000_000_000,
-          newId: () => "functional-reconcile-id",
-          mutex,
-        },
-        provisioned.instance,
-        1_700_000_000_000,
-      );
-      const workspace = provisioned.instance.managedWorktreePath;
-      const target = join(workspace, "src", "example.ts");
-      const outside = join(root, "outside.txt");
-      writeFileSync(outside, OUTSIDE);
-      return {
-        root,
-        repository,
-        db,
-        lifecycle,
-        provisioning,
-        instances: store,
-        activePointerStore,
-        evidenceStore: evidence,
-        managedRoot,
-        workspace,
-        target,
-        outside,
-        script,
-        drifted: false,
-      };
-    });
+  const workspace = await provisionFunctionalTaskWorkspace(owners, repository, "task-2258");
+  const target = join(workspace, "src", "example.ts");
+  const outside = join(root, "outside.txt");
+  writeFileSync(outside, OUTSIDE);
+  return {
+    root,
+    repository,
+    db: owners.db,
+    lifecycle: owners.lifecycle,
+    provisioning: owners.provisioning,
+    instances: owners.instances,
+    activePointerStore: owners.activePointerStore,
+    evidenceStore: evidence,
+    managedRoot,
+    workspace,
+    target,
+    outside,
+    script,
+    drifted: false,
+  };
 }
 
 function createVerification(workspace: string): FunctionalVerificationFixture {
@@ -1040,35 +956,13 @@ function startBody(requestId: string): {
   return { requestId, taskIntent: SECRET, requestedMode: "autonomous-delivery" };
 }
 
-// Every state-changing coding-runtime route binds to the launcher-attested app session
-// (ADR-0141 D1/D2), so the functional transport behaves like the paired browser: one session per
-// booted pipeline, redeemed lazily and presented on every subsequent POST. The pair endpoint itself
-// is the one path that must not present a cookie — it is what mints one.
-const PAIR_PATH = "/api/coding-workbench/app-session/pair";
-const pipelineSessions = new Map<string, Promise<string>>();
-
-function pipelineSessionCookie(base: string): Promise<string> {
-  const existing = pipelineSessions.get(base);
-  if (existing !== undefined) return existing;
-  const minted = pairAppSession(base);
-  pipelineSessions.set(base, minted);
-  return minted;
+// The paired browser's transport, with this suite's redaction canaries checked on every response.
+function post(base: string, path: string, body: unknown): Promise<Response> {
+  return functionalPost(base, path, body, assertResponseMetadata);
 }
 
-async function post(base: string, path: string, body: unknown): Promise<Response> {
-  const cookie = path === PAIR_PATH ? undefined : await pipelineSessionCookie(base);
-  const response = await fetch(`${base}${path}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Keiko-CSRF": "1",
-      Origin: base,
-      ...(cookie === undefined ? {} : { Cookie: cookie }),
-    },
-    body: JSON.stringify(body),
-  });
-  assertResponseMetadata(response);
-  return response;
+function pipelineSessionCookie(base: string): Promise<string> {
+  return functionalSessionCookie(base, assertResponseMetadata);
 }
 
 async function stopRun(base: string, runId: string): Promise<void> {
@@ -1088,19 +982,6 @@ async function stopRun(base: string, runId: string): Promise<void> {
   assertResponseMetadata(settled);
   expect(settled.status).toBe(200);
   await expect(settled.json()).resolves.toMatchObject({ runId, state: "succeeded" });
-}
-
-async function reserveLoopbackPort(): Promise<number> {
-  const reservation = createServer();
-  await new Promise<void>((resolve) => reservation.listen(0, UI_HOST, resolve));
-  const port = (reservation.address() as AddressInfo).port;
-  await new Promise<void>((resolve, reject) =>
-    reservation.close((error) => {
-      if (error) reject(error);
-      else resolve();
-    }),
-  );
-  return port;
 }
 
 let questionPollSequence = 0;
