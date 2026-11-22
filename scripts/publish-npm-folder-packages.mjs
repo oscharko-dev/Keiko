@@ -192,7 +192,9 @@ function gh(runner, args, label = args.slice(0, 2).join(" ")) {
 }
 
 // "absent" only on a clear 404: any other failure to read is no proof that the tag is free. A draft
-// is told apart because it is the leftover of a failed run, which the owner can delete.
+// is told apart because it is the leftover of a failed run, which the owner can delete. A tag with no
+// release is "reserved" at the commit it points to: the release-tag App creates it before the
+// publication (#4503), because the tag ruleset lets only the App and the owner create tags.
 function releaseTagState(runner, repository, tag) {
   const listed = JSON.parse(
     gh(runner, [
@@ -207,17 +209,41 @@ function releaseTagState(runner, repository, tag) {
     ]),
   );
   const entry = listed.find((candidate) => candidate.tagName === tag);
-  if (entry !== undefined) return entry.isDraft === true ? "draft" : "published";
+  if (entry !== undefined) return { state: entry.isDraft === true ? "draft" : "published" };
   const ref = runner(["api", `repos/${repository}/git/ref/tags/${tag}`]);
-  if (ref.status === 0) return "published";
-  if (/\bHTTP 404\b/u.test(ref.stderr)) return "absent";
+  if (ref.status === 0) return tagRefState(ref.stdout);
+  if (/\bHTTP 404\b/u.test(ref.stderr)) return { state: "absent" };
   return refuse(
     `${tag} could not be checked (${ref.stderr.trim().slice(-200)}); nothing was changed`,
   );
 }
 
-function refuseExisting(runner, repository, tag) {
-  const state = releaseTagState(runner, repository, tag);
+// A lightweight tag pointing at a commit names that commit; anything else (an annotated tag, an
+// unreadable answer) proves nothing and is treated as taken.
+function tagRefState(body) {
+  let ref;
+  try {
+    ref = JSON.parse(body);
+  } catch {
+    ref = undefined;
+  }
+  const sha = ref?.object?.type === "commit" ? ref.object.sha : undefined;
+  return COMMIT_PATTERN.test(String(sha))
+    ? { state: "reserved", commit: sha }
+    : { state: "published" };
+}
+
+/**
+ * Refuses a companion that exists: a release, a draft, or a tag at another commit than `commit`. A
+ * tag without a release at exactly `commit` is the reservation of this publication and is allowed;
+ * without a `commit` to compare, no tag is allowed.
+ */
+function refuseExisting(runner, repository, tag, commit) {
+  const { state, commit: tagged } = releaseTagState(runner, repository, tag);
+  if (state === "reserved") {
+    if (tagged === commit) return "reserved";
+    refuse(`${tag} already exists as a tag at another commit; a tag is never moved`);
+  }
   if (state === "draft") {
     refuse(
       `${tag} exists as an unpublished DRAFT left by an earlier failed run; delete that draft ` +
@@ -227,6 +253,7 @@ function refuseExisting(runner, repository, tag) {
   if (state === "published") {
     refuse(`${tag} already exists; a release is immutable, so it is never replaced`);
   }
+  return "absent";
 }
 
 /**
@@ -235,7 +262,6 @@ function refuseExisting(runner, repository, tag) {
  */
 export function preflight({ version, repository, runner = runGh }) {
   const tag = companionTag(version);
-  refuseExisting(runner, repository, tag);
   const product = JSON.parse(
     gh(runner, [
       "release",
@@ -255,7 +281,39 @@ export function preflight({ version, repository, runner = runGh }) {
     ".sha",
   ]).trim();
   if (!COMMIT_PATTERN.test(commit)) refuse(`v${version} does not resolve to a commit`);
+  refuseExisting(runner, repository, tag, commit);
   return { tag, commit };
+}
+
+/**
+ * Creates the companion tag at `commit`, run with the release-tag App's token: the tag ruleset
+ * refuses a tag the workflow token creates (HTTP 422, #4503). A reservation at the same commit is
+ * kept, so a repeated run after a failed publication goes on; anything else is refused. The ref POST
+ * fails on an existing ref, so two runs cannot both create it.
+ */
+export function reserveTag({ version, commit, repository, runner = runGh }) {
+  const tag = companionTag(version);
+  if (!COMMIT_PATTERN.test(String(commit))) refuse("--commit must be a full commit sha");
+  if (refuseExisting(runner, repository, tag, commit) === "reserved")
+    return { tag, created: false };
+  const written = gh(
+    runner,
+    [
+      "api",
+      "--method",
+      "POST",
+      `repos/${repository}/git/refs`,
+      "-f",
+      `ref=refs/tags/${tag}`,
+      "-f",
+      `sha=${commit}`,
+    ],
+    "tag create",
+  );
+  if (tagRefState(written).commit !== commit) {
+    refuse(`${tag} was created but GitHub does not report it at ${commit}; inspect the tag`);
+  }
+  return { tag, created: true };
 }
 
 // GitHub records a SHA-256 digest for every asset; a missing or different one is a refusal, for the
@@ -408,7 +466,7 @@ export function publish(options) {
   const tag = companionTag(version);
   if (!COMMIT_PATTERN.test(String(commit))) refuse("--commit must be a full commit sha");
   const packages = verifyNpmFolderAssets({ dir, version });
-  refuseExisting(runner, repository, tag);
+  refuseExisting(runner, repository, tag, commit);
   const id = createDraft(runner, { tag, commit, version, notesPath, repository });
   try {
     uploadVerifyPublish(runner, { repository, tag, id, dir, packages }, sleep);
@@ -436,8 +494,8 @@ const FLAGS = Object.freeze({
 /** Parses `<mode> --flag value ...`; anything unknown is refused. */
 export function parsePublishArgs(argv) {
   const [mode, ...rest] = argv;
-  if (!["verify", "preflight", "publish"].includes(mode)) {
-    refuse("the first argument must be verify, preflight or publish");
+  if (!["verify", "preflight", "reserve-tag", "publish"].includes(mode)) {
+    refuse("the first argument must be verify, preflight, reserve-tag or publish");
   }
   const options = { mode, repository: DEFAULT_REPOSITORY };
   readFlagPairs(rest, FLAGS, options, refuse);
@@ -446,7 +504,8 @@ export function parsePublishArgs(argv) {
   return options;
 }
 
-function runMode(options) {
+/** Runs one parsed mode; `options.runner` is the in-process tests' seam for gh. */
+export function runMode(options) {
   const dir = options.dir === undefined ? undefined : resolve(options.dir);
   if (options.mode === "preflight") {
     const { tag, commit } = preflight(options);
@@ -454,6 +513,11 @@ function runMode(options) {
       appendFileSync(process.env.GITHUB_OUTPUT, `commit=${commit}\ntag=${tag}\n`);
     }
     console.log(`PASS preflight ${tag} is free; v${options.version} is ${commit}`);
+    return;
+  }
+  if (options.mode === "reserve-tag") {
+    const { tag, created } = reserveTag(options);
+    console.log(`PASS ${tag} ${created ? "created" : "already reserved"} at ${options.commit}`);
     return;
   }
   if (dir === undefined || options.notesPath === undefined)
