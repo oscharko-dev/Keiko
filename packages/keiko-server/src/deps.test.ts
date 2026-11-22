@@ -292,6 +292,59 @@ describe("portable updater startup recovery composition", () => {
   });
 });
 
+describe("composed clocks", () => {
+  // PR #4515 CI: the composed approval registry kept the real Date.now while a test had set the
+  // system time, so a Jira read grant issued on that clock expired early on a slow runner.
+  it("reads the clock at each check, so the composed approval registry follows a replaced clock", async () => {
+    vi.useRealTimers();
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("keiko-composed-clock-evidence-"),
+      env: { KEIKO_STATE_DIR: tmp("keiko-composed-clock-state-") },
+      store: createInMemoryUiStore(),
+    });
+    try {
+      const registry = deps.atlassianActionApprovalRegistry;
+      if (registry === undefined) throw new TypeError("Missing approval registry");
+      const requestedAt = 1_700_000_000_000;
+      vi.setSystemTime(requestedAt);
+      const approval = {
+        schemaVersion: "1",
+        approvalId: "composed-clock",
+        connectorId: "cred-abc",
+        provider: "jira",
+        actionType: "create-issue",
+        actionClass: "connector-write",
+        requiredScope: "issue-tracker.write",
+        risk: "high",
+        reviewReason: "deterministic-risk-approval-required",
+        targetRef: "PROJ",
+        correlationId: "corr-composed-clock",
+        requestedAt,
+        expiresAt: requestedAt + 60_000,
+      } as const;
+      expect(
+        registry.create({
+          approval,
+          authority: { runId: "run-1", envelopeDigest: "d".repeat(64), workspaceRoot: "/repo" },
+          authRef: "atlassian-cred:AbCdEfGhIjKlMnOpQrStUv",
+          payload: {
+            kind: "write-action",
+            action: { type: "create-issue", projectKey: "PROJ", issueTypeId: "1", summary: "s" },
+          },
+        }).ok,
+      ).toBe(true);
+      vi.setSystemTime(requestedAt + 59_999);
+      expect(registry.get("composed-clock")).toBeDefined();
+      vi.setSystemTime(requestedAt + 60_000);
+      expect(registry.get("composed-clock")).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      await deps.dispose?.();
+    }
+  });
+});
+
 describe("update candidate remediation gate", () => {
   it("blocks an immutable candidate while migration review is required", () => {
     const stateDir = tmp("keiko-update-candidate-gate-");

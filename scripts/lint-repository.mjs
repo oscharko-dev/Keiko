@@ -110,9 +110,9 @@ export function workspacePackages(root) {
     .map((entry) => entry.name);
 }
 
-export function runPartitions(partitions, run) {
+export function runPartitions(partitions, run, log = console.log) {
   const failed = partitions.filter((partition) => {
-    console.log(`lint-repository: ${partition.label}`);
+    log(`lint-repository: ${partition.label}`);
     return run(partition.args) !== 0;
   });
   return failed.map((partition) => partition.label);
@@ -149,29 +149,47 @@ export function forwardedArgs(argv) {
   return [...new Set(argv)];
 }
 
-async function main() {
-  const root = process.cwd();
-  const extra = forwardedArgs(process.argv.slice(2));
+/**
+ * Lints every partition and returns the exit code: 1 when a partition failed or its peak is not
+ * shown to fit the budget. `root`, `argv`, `env`, `lint`, `log` and `error` are seams for the
+ * in-process tests; the command line uses the working directory, its arguments, the process
+ * environment, `lintPartition` and the console.
+ */
+export async function main(deps = {}) {
+  const { root, argv, env, lint, log, error } = {
+    root: process.cwd(),
+    argv: process.argv.slice(2),
+    env: process.env,
+    lint: lintPartition,
+    log: console.log,
+    error: console.error,
+    ...deps,
+  };
+  const extra = forwardedArgs(argv);
   const { default: config } = await import(pathToFileURL(join(root, "eslint.config.js")).href);
   const partitions = lintPartitions(workspacePackages(root), globalIgnores(config));
   const peakDirectory = mkdtempSync(join(tmpdir(), "keiko-lint-peak-"));
   const peaks = [];
-  const failed = runPartitions(partitions, (args) => {
-    const peakFile = join(peakDirectory, `${peaks.length}.txt`);
-    const status = lintPartition(root, [...args, ...extra], peakFile);
-    const label = partitions[peaks.length].label;
-    peaks.push({ label, peakBytes: readPeak(peakFile) });
-    console.log(`lint-repository: ${label} peak ${gib(peaks.at(-1).peakBytes)} GiB`);
-    return status;
-  });
+  const failed = runPartitions(
+    partitions,
+    (args) => {
+      const peakFile = join(peakDirectory, `${peaks.length}.txt`);
+      const status = lint(root, [...args, ...extra], peakFile);
+      const label = partitions[peaks.length].label;
+      peaks.push({ label, peakBytes: readPeak(peakFile) });
+      log(`lint-repository: ${label} peak ${gib(peaks.at(-1).peakBytes)} GiB`);
+      return status;
+    },
+    log,
+  );
   rmSync(peakDirectory, { recursive: true, force: true });
-  if (process.env.GITHUB_STEP_SUMMARY)
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, peakSummary(peaks));
+  if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, peakSummary(peaks));
   const overBudget = peakBudgetFailures(peaks);
-  for (const problem of overBudget) console.error(`lint-repository: FAIL — ${problem}`);
-  if (failed.length > 0) console.error(`lint-repository: FAIL — ${failed.join(", ")}`);
-  if (failed.length > 0 || overBudget.length > 0) process.exit(1);
-  console.log(`lint-repository: PASS — ${partitions.length} partitions`);
+  for (const problem of overBudget) error(`lint-repository: FAIL — ${problem}`);
+  if (failed.length > 0) error(`lint-repository: FAIL — ${failed.join(", ")}`);
+  if (failed.length > 0 || overBudget.length > 0) return 1;
+  log(`lint-repository: PASS — ${partitions.length} partitions`);
+  return 0;
 }
 
-if (isMainModule(import.meta.url)) await main();
+if (isMainModule(import.meta.url)) process.exitCode = await main();

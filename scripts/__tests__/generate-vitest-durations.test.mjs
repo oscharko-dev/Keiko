@@ -1,3 +1,8 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -5,9 +10,12 @@ import {
   durationsFromBlobs,
   fileSeconds,
   generationPlan,
+  main,
 } from "../generate-vitest-durations.mjs";
 
 const ROOT = "/home/runner/work/Keiko/Keiko";
+// The serialization Vitest writes its blob reports in, read back the way the generator reads it.
+const { stringify } = createRequire(import.meta.url)("flatted");
 
 // The shape a Vitest 4 blob report carries: [version, files, errors, modules, coverage, ...].
 function blob(files) {
@@ -96,5 +104,42 @@ describe("durationsFromBlobs", () => {
 
   it("answers nothing for a blob without files", () => {
     expect(durationsFromBlobs([["4.1.12"]])).toEqual({});
+  });
+});
+
+describe("main", () => {
+  it("writes the durations of the given blobs and refuses a blob it cannot place", () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-vitest-durations-"));
+    try {
+      const write = (name, report) => {
+        const path = join(directory, name);
+        writeFileSync(path, stringify(report));
+        return path;
+      };
+      const output = join(directory, "durations.json");
+      const logs = [];
+      const errors = [];
+      const io = { output, log: (line) => logs.push(line), error: (line) => errors.push(line) };
+      const blobs = [
+        write("blob-1.json", blob([["scripts/__tests__/a.test.mjs", 2400]])),
+        write("blob-2.json", blob([["scripts/__tests__/b.test.mjs", 1200]])),
+      ];
+      expect(main(blobs, io)).toBe(0);
+      const document = JSON.parse(readFileSync(output, "utf8"));
+      expect(document.files).toEqual({
+        "scripts/__tests__/a.test.mjs": 2.4,
+        "scripts/__tests__/b.test.mjs": 1.2,
+      });
+      expect(logs).toEqual([`vitest-durations: 2 files written to ${output}`]);
+
+      expect(main(["--root", "/elsewhere", blobs[0]], io)).toBe(1);
+      expect(main([], io)).toBe(1);
+      expect(errors).toEqual([
+        `vitest-durations: could not generate — a measured file lies outside the checkout /elsewhere: ${ROOT}/scripts/__tests__/a.test.mjs`,
+        "vitest-durations: could not generate — pass the blob-*.json reports of a green run",
+      ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
