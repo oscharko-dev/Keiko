@@ -438,21 +438,11 @@ as for release 1.5.4. The other 26 digests match the 1.5.4 input inventory. The 
 their Linux captures, rendered CSS digest, measurements, tolerances and accessibility records; no
 producer was rerun for this metadata change.
 
-## PR #4514 dependency input refresh — 2026-11-22
+## Release 1.5.6 input metadata — 2026-11-22
 
-Dependabot #4514 changes three of the 29 declared shared inputs (`package.json`, `package-lock.json`
-and `packages/keiko-ui/package.json`) with real producer inputs: Next.js 16.4.6, Vite 8.3.8,
-PostCSS 8.5.33, Playwright 1.65.1 and the keiko-ui TypeScript compiler 5.9.3 among them. All four
-original producers were rerun from `877ade201369d252e8a2f8a1b97ee27531130fe3` in the isolated Linux
-arm64 gates container with Node 26.13.1, npm 11.20.0 and the locked Playwright 1.65.1 Chromium.
-
-Component fidelity passed all 427 probes with zero gated or recorded differences and no missing
-selectors. Editor fidelity passed 160 gated probes and all 14 reference captures with no capture
-errors; its previously documented accent and reference-only differences remain recorded. The seven
-accessibility modes reported zero serious or critical violations and zero unresolved incomplete
-findings. All 108 browser captures have zero page errors, unexpected API requests, missing
-selectors, crashed windows, visible error notices or unavailable workspace-trust states. The
-rendered CSS bundle digest moved with the Next.js/PostCSS update; the shared stylesheet digest is
-unchanged. The 52 recaptured PNGs were committed as produced, and representative captures were
-inspected without a visible difference. No producer assertion, tolerance, disposition, fixture or
-budget changed. These remain synthetic fixture proofs.
+The release changes the same three of the 29 declared shared inputs (`package.json`,
+`package-lock.json` and `packages/keiko-ui/package.json`), only in their version fields (#4504),
+which no stylesheet or capture reads. The `designEvidenceSourceHashes` producer recalculates the
+ordered list for each of the four proofs, as for release 1.5.5. The other 26 digests match the
+1.5.5 input inventory. The proofs retain their Linux captures, rendered CSS digest, measurements,
+tolerances and accessibility records; no producer was rerun for this metadata change.
