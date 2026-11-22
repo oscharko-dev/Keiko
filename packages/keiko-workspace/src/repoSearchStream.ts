@@ -494,7 +494,7 @@ async function collectPrimaryStream(
           // Admission backpressure completes before discovery advances to another file.
           const admissions = collectorAdmissions(collectors, file)[Symbol.asyncIterator]();
           let admission = await admissions.next();
-          while (admission.done !== true) admission = await admissions.next();
+          while (admission.done !== true) admission = await admissions.next(); // NOSONAR typescript:S9382 -- backpressure: an admission settles before the next one is requested
         },
         onStats: (stats): void => {
           ignored = stats.ignored;

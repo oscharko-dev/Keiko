@@ -5857,7 +5857,7 @@ async function projectMetadataAtoms(
   // One root at a time: the traversal records what it retains, its atoms are not used here.
   for (const root of roots) {
     if (!metadataTraversalCanContinue(control)) break;
-    await projectMetadataRootAtoms(root, context);
+    await projectMetadataRootAtoms(root, context); // NOSONAR typescript:S9382 -- one root at a time: retention and the stop check follow the previous root
   }
   await workspacePackageMetadataAtoms(context);
   return retained

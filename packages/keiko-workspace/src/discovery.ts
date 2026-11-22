@@ -1139,7 +1139,7 @@ export async function visitWorkspaceFiles(
     // Drain one selected root at a time; traversal records its counts in state.
     const visits = selectedStreamingVisits(state, selected)[Symbol.asyncIterator]();
     let visit = await visits.next();
-    while (visit.done !== true) visit = await visits.next();
+    while (visit.done !== true) visit = await visits.next(); // NOSONAR typescript:S9382 -- one selected root at a time: the traversal keeps its counts in shared state
     return streamingDiscoveryStats(state);
   } finally {
     callbacks.onStats?.(streamingDiscoveryStats(state));
