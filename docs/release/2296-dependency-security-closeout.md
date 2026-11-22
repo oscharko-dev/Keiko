@@ -473,12 +473,17 @@ guaranteed version-mismatch failure.
 | `actions/setup-dotnet`             | v6.1.0  | 0f4a354dd5547a28c70b7853dbd95d5b67886e73 | current     |
 | `actions/dependency-review-action` | v5.0.0  | a1d282b36b6f3519aa1f3fc636f609c47dddb294 | current     |
 | `github/codeql-action`             | v4.39.3 | 33d7b85da1a04171e211befe2c739303b9a4c066 | current     |
-| `google/osv-scanner-action`        | v2.7.0  | b1d267aea5211fa648d9d442fa64b90dbdcbdd36 | current     |
+| `google/osv-scanner-action`        | v2.7.1  | 32d3cd482bdadfb38b186c0ad1b031902d55d932 | current     |
 | `zizmorcore/zizmor-action`         | v0.8.1  | 45d7276c9ca790aabd705e31ca99c6185c3e76dd | current     |
 
 The 2026-10-23 owner-requested consolidation includes the ten action updates in #4058, including
 checkout v7.0.1 and attest v4.2.2. Credential-bound Azure signing actions remain retired under #3403;
 Keiko-owned release signatures remain the mandatory cross-platform trust anchor.
+
+Dependabot #4463 (2026-11-22) moves `google/osv-scanner-action` from v2.7.0 to v2.7.1 in both
+workflows that run it (`osv-scanner.yml` and the bundled `workflow hygiene` job); the annotated
+`v2.7.1` tag resolves to the pinned commit. The two workflow tests that fingerprint the pinned
+invocation follow the new commit.
 
 ## Runtime and toolchain
 
