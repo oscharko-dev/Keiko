@@ -1232,7 +1232,9 @@ async function actOnTrackedHealth(
       ? 0
       : startFailed(deps, "browser-handoff");
   }
-  if (!health.reachable && trackedUiIsVerified(options, deps, running)) {
+  // The caller confirmed ownership after the last probe, so a modern launch is verified here. A
+  // second identity read would let one transient read failure turn a busy UI into a restart.
+  if (!health.reachable && launchBound) {
     record("busy");
     io.err(
       `keiko start: Keiko UI (pid ${String(running.pid)}) is running but did not answer its health check in time; it was left running. ${BUSY_SENTENCE}\n`,

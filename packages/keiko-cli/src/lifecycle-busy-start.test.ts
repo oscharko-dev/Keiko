@@ -30,7 +30,10 @@ afterEach(() => {
 
 function fixture(
   answers: readonly Answer[],
-  { launchBound = true }: { readonly launchBound?: boolean } = {},
+  {
+    launchBound = true,
+    verify = (): boolean => true,
+  }: { readonly launchBound?: boolean; readonly verify?: () => boolean } = {},
 ): {
   deps: LifecycleCliDeps;
   events: SecurityLogEvent[];
@@ -73,7 +76,7 @@ function fixture(
     killProcess: killed,
     isPortAvailable: () => Promise.resolve(true),
     isProcessAlive: () => alive,
-    verifyLaunchIdentity: () => true,
+    verifyLaunchIdentity: verify,
     platform: () => "linux",
     securityLogSink: {
       write: (event): void => {
@@ -154,6 +157,26 @@ describe("a second start while Keiko runs (#4504)", () => {
       outcome: "busy",
       healthRetries: 10,
     });
+  });
+
+  it("never stops a busy, verified UI when one identity read fails, wherever that read falls", async () => {
+    // Every position of one transient failed read, past the last read a start makes. A failed read
+    // may end the wait early or retain ownership, but it must never reach the stop path.
+    for (let failing = 1; failing <= 14; failing += 1) {
+      let reads = 0;
+      const setup = fixture(["down"], {
+        verify: (): boolean => {
+          reads += 1;
+          return reads !== failing;
+        },
+      });
+      expect(await start(setup)).toBe(1);
+      expect(setup.killed, `failed read ${String(failing)}`).not.toHaveBeenCalled();
+      expect(setup.spawned, `failed read ${String(failing)}`).not.toHaveBeenCalled();
+      expect(setup.out.join(""), `failed read ${String(failing)}`).not.toContain("stale");
+      expect(["busy", "identity-mismatch"]).toContain(trackedDecision(setup.events).outcome);
+      vi.restoreAllMocks();
+    }
   });
 
   it("still restarts a UI that answers with another version, and records why", async () => {
