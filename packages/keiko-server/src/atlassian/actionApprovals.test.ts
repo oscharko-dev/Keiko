@@ -93,6 +93,23 @@ describe("AtlassianActionApprovalRegistry", () => {
     expect(registry.listPending()).toEqual([]);
   });
 
+  it("reads the clock at each check, so a registry built before the clock changes follows it", () => {
+    // PR #4515 CI: a server built before a test set the system time kept the real clock, so an
+    // approval issued on the set clock expired early on a slow runner.
+    vi.useRealTimers();
+    const registry = new AtlassianActionApprovalRegistry();
+    try {
+      vi.setSystemTime(T0);
+      registry.create(entry("a1"));
+      vi.setSystemTime(T0 + ATLASSIAN_ACTION_APPROVAL_TTL_MS - 1);
+      expect(registry.get("a1")).toBeDefined();
+      vi.setSystemTime(T0 + ATLASSIAN_ACTION_APPROVAL_TTL_MS);
+      expect(registry.get("a1")).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("is bounded: refuses past capacity and frees capacity through expiry", () => {
     let now = T0;
     const registry = new AtlassianActionApprovalRegistry(() => now);
