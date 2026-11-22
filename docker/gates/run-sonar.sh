@@ -315,16 +315,16 @@ process.stdin.on("data", (d) => (s += d)).on("end", () => {
 process.stdin.on("data", (d) => (s += d)).on("end", () => {
   process.stdout.write(JSON.parse(s).tests.join(","));
 });')"
-    excluded_inclusions="$(printf '%s' "${partition_json}" | node -e 'let s = "";
+    excluded_count="$(printf '%s' "${partition_json}" | node -e 'let s = "";
 process.stdin.on("data", (d) => (s += d)).on("end", () => {
-  process.stdout.write(JSON.parse(s).excluded.join("\n"));
+  process.stdout.write(String(JSON.parse(s).excluded.length));
 });')"
     printf '  scoped analysis and verdict to %s changed file(s)\n' "${changed_count}"
     # The scanner command line replaces sonar.exclusions below; the partition already applied the
     # project's own exclusions, so a file SonarCloud never analyses is named here and not scanned.
-    if [[ -n "${excluded_inclusions}" ]]; then
-      printf '  not analysed, excluded in sonar-project.properties as in SonarCloud:\n'
-      printf '%s\n' "${excluded_inclusions}" | sed 's/^/    /'
+    if [[ "${excluded_count}" != "0" ]]; then
+      printf '  %s changed file(s) not analysed: excluded in sonar-project.properties, as in SonarCloud\n' \
+        "${excluded_count}"
     fi
     # The configured root tsconfig owns about 6,400 files, and SonarJS builds the whole program of
     # every tsconfig that owns an analysed file: one changed file under src/, tests/ or

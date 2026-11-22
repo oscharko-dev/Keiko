@@ -251,7 +251,9 @@ export function sonarExclusionMatchers(properties) {
   return { sources: matchers("sonar.exclusions"), tests: matchers("sonar.test.exclusions") };
 }
 
-export function partitionSonarInclusions(paths, exclusions = { sources: [], tests: [] }) {
+const NO_SONAR_EXCLUSIONS = Object.freeze({ sources: [], tests: [] });
+
+export function partitionSonarInclusions(paths, exclusions = NO_SONAR_EXCLUSIONS) {
   if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string")) {
     throw new TypeError("Sonar inclusion paths must be an array of strings");
   }
