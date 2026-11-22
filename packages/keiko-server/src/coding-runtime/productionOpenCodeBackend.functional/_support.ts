@@ -141,6 +141,11 @@ export interface ScriptState {
   probeCommand?: string;
   /** The workspace-relative file an `acceptance` turn reads and repairs (#4492). */
   acceptanceTarget?: string;
+  /**
+   * How an `acceptance` turn treats its check after the edit (#4492): `verify` reruns it (the
+   * default), `skip-check` never reruns it, `stale-check` reruns it and then edits once more.
+   */
+  acceptancePlan?: "verify" | "skip-check" | "stale-check";
   verificationIssued?: boolean;
 }
 
@@ -864,23 +869,41 @@ function processResponse(script: ScriptState, transcript: string): NormalizedRes
 /** The project check an acceptance run runs in its own shell, before and after its edit (#4492). */
 export const ACCEPTANCE_CHECK_COMMAND = "npm test";
 
+/** What a `stale-check` acceptance turn appends after its check passed (#4492). */
+export const ACCEPTANCE_STALE_SUFFIX = "// Reviewed after the tests passed.\n";
+
 // #4492: the acceptance task worked the way a careful model works it with the runtime's own tools:
 // run the project's tests and see them fail, read the file the task names, replace its defect with
 // `script.next`, and run the same tests again. Whether that edit is the right one is the fixture's
-// business; the run's outcome must follow the second test run, not the model's word. A
-// verification continuation resends the whole conversation, so its turn counts four replies and
-// answers plainly, as a model that has nothing left to try.
+// business; the run's outcome must follow its own check after the final edit, not the model's word
+// and not the file's true state. The other plans leave that check out or make it stale. A
+// verification continuation resends the whole conversation, so its turn finds every step answered
+// and replies plainly, as a model that has nothing left to try.
 function acceptanceResponse(script: ScriptState, transcript: string): NormalizedResponse {
   const target = script.acceptanceTarget;
   if (transcript.includes(TITLE_GENERATION_PREFIX) || target === undefined) return normal();
-  const replies = toolReplyCount(transcript);
-  if (replies === 0) return tool("shell", { command: ACCEPTANCE_CHECK_COMMAND, timeout: 60_000 });
-  if (replies === 1) return tool("read", { path: target });
-  if (replies === 2)
-    return tool("edit", { path: target, oldString: script.old, newString: script.next });
-  if (replies > 3) return normal();
-  script.verificationIssued = true;
-  return tool("shell", { command: ACCEPTANCE_CHECK_COMMAND, timeout: 60_000 });
+  const step = acceptanceSteps(script, target)[toolReplyCount(transcript)];
+  return step === undefined ? normal() : step();
+}
+
+function acceptanceSteps(
+  script: ScriptState,
+  target: string,
+): readonly (() => NormalizedResponse)[] {
+  const check = (): NormalizedResponse =>
+    tool("shell", { command: ACCEPTANCE_CHECK_COMMAND, timeout: 60_000 });
+  const repair = (): NormalizedResponse =>
+    tool("edit", { path: target, oldString: script.old, newString: script.next });
+  const opening = [check, (): NormalizedResponse => tool("read", { path: target }), repair];
+  if (script.acceptancePlan === "skip-check") return opening;
+  if (script.acceptancePlan !== "stale-check") return [...opening, check];
+  const touchAgain = (): NormalizedResponse =>
+    tool("edit", {
+      path: target,
+      oldString: script.next,
+      newString: `${script.next}${ACCEPTANCE_STALE_SUFFIX}`,
+    });
+  return [...opening, check, touchAgain];
 }
 
 /** The query a web search journey asks the original `websearch` tool. */

@@ -22,14 +22,11 @@ the end-state checks are the same.
 
 ## What counts as passed
 
-Before the run, `npm test` in the project fails. After the run:
+Before the run, `npm test` in the project fails. After the run, the run ended `succeeded`, the
+tester's own `npm test` in the same folder exits 0, every file under `test/` is unchanged, and the
+run's Activity Log shows its confinement, a passing check after the final edit and its settlement.
+A failed, skipped, stale or denied check never counts as passed. The full rule, the procedure and
+the baseline are in [`docs/qa/coding-acceptance-task.md`](../../../docs/qa/coding-acceptance-task.md).
 
-1. the run ended `succeeded`;
-2. `npm test`, run by the tester outside Keiko in the same folder, exits 0;
-3. every file under `test/` is byte-identical to the copy the run started from;
-4. the Activity Log shows `runtime.confinement.spawned` (backend `seatbelt` on macOS),
-   `coding-runtime.verification-summarized` with `verifierId` `test` and status `passed`, and
-   `coding-runtime.run.settled` with state `succeeded`.
-
-A wrong fix must not end `succeeded`. `with-dependency` has no lockfile; a governed dependency
-installation that needs one (#4522) adds it from the public registry's integrity.
+`with-dependency` has no lockfile. A governed dependency installation that needs one (#4522) adds
+it with the public registry's integrity.

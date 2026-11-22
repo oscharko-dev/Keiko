@@ -136,7 +136,10 @@ export async function startFunctionalDiscoveryServer(
   const deps = productionDiscoveryBffDeps({ ...depsInput, uiPort: port });
   const server = createUiServer({ staticRoot, csp: "default-src 'none'", port, handlerDeps: deps });
   await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+  const baseUrl = `http://${UI_HOST}:${String(port)}`;
   const close = async (): Promise<void> => {
+    // A later server may bind the same port; it must pair its own session, not reuse this one's.
+    sessions.delete(baseUrl);
     await deps.codingRuntimeOrchestrator?.shutdown();
     await deps.dispose?.();
     await new Promise<void>((resolve) => {
@@ -145,7 +148,6 @@ export async function startFunctionalDiscoveryServer(
       });
     });
   };
-  const baseUrl = `http://${UI_HOST}:${String(port)}`;
   try {
     await activateFunctionalModel(baseUrl, check);
   } catch (error) {
