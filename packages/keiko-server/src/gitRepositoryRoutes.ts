@@ -252,7 +252,7 @@ class RepositoryDnsError extends Error {
 
 type RepositoryDnsLookup = (host: string) => Promise<readonly { readonly address: string }[]>;
 const defaultRepositoryDnsLookup: RepositoryDnsLookup = async (host) =>
-  lookupHost(host, { all: true, verbatim: true });
+  lookupHost(host, { all: true, order: "verbatim" });
 
 async function repositoryDnsAllowed(input: string, lookup: RepositoryDnsLookup): Promise<boolean> {
   const host = repositoryHost(input);
