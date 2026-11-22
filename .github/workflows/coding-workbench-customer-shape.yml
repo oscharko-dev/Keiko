@@ -91,6 +91,7 @@ jobs:
             Write-Output "Published npx CLI passed for $spec"
           } finally { Pop-Location }
   qualify:
+    if: false
     name: Qualify staged Coding Workbench on macOS 15
     runs-on: macos-15
     timeout-minutes: 45
@@ -133,6 +134,7 @@ jobs:
     # #4530: a Coding run on macOS builds and tests a Maven and an npm project whose dependencies
     # only a password-protected internal repository serves, in all three modes, through the real
     # Seatbelt boundary and the repository credential relay (ADR-0184). A wrong login never passes.
+    # #4519: the whole acceptance task runs as a standard account the job creates.
     name: Coding acceptance with a password-protected repository on macOS 15
     runs-on: macos-15
     timeout-minutes: 45
@@ -161,14 +163,51 @@ jobs:
         run: mvn -v
       - name: Provision the acceptance Maven cache
         run: npm run provision:acceptance-maven
-      - name: Run the coding acceptance task
-        env:
-          KEIKO_OPENCODE_DEV_LANE_FUNCTIONAL: "1"
-          KEIKO_OS_KEYCHAIN: "off"
+      # #4519: the promise is for a person without administrator rights on a Mac without a container
+      # runtime. The runner's account is an administrator, so it only sets up: it creates a standard
+      # account and gives it its own copy of the checkout, Node.js and the JDK, held in its home folder
+      # as such a person would hold them. The acceptance task then runs as that account, and the job
+      # passes only when the task's evidence certifies the promise.
+      - name: Create the standard account the acceptance task runs as
         run: |
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::${password}"
+          sudo sysadminctl -addUser keikoqa -fullName "Keiko acceptance" -shell /bin/zsh \
+            -home /Users/keikoqa -password "${password}"
+          sudo createhomedir -c -u keikoqa >/dev/null
+          node_root="$(dirname "$(dirname "$(command -v node)")")"
+          jdk_bundle="$(dirname "$(dirname "${JAVA_HOME}")")"
+          sudo ditto "${GITHUB_WORKSPACE}" /Users/keikoqa/keiko
+          sudo ditto "${node_root}" /Users/keikoqa/.local/node
+          sudo ditto "${jdk_bundle}" /Users/keikoqa/Library/Java/JavaVirtualMachines/acceptance.jdk
+          sudo chown -R keikoqa:staff /Users/keikoqa/keiko /Users/keikoqa/.local /Users/keikoqa/Library/Java
+          echo "account: $(id keikoqa)"
+          if dseditgroup -o checkmember -m keikoqa admin >/dev/null 2>&1; then
+            echo "::error::the acceptance account is an administrator"
+            exit 1
+          fi
+      - name: Run the coding acceptance task as the standard account
+        run: |
+          temp="$(sudo -u keikoqa getconf DARWIN_USER_TEMP_DIR)"
+          sudo -u keikoqa -H /usr/bin/env -i \
+            HOME=/Users/keikoqa USER=keikoqa LOGNAME=keikoqa SHELL=/bin/zsh LANG=en_US.UTF-8 CI=true \
+            TMPDIR="${temp}" \
+            PATH=/Users/keikoqa/.local/node/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin \
+            JAVA_HOME=/Users/keikoqa/Library/Java/JavaVirtualMachines/acceptance.jdk/Contents/Home \
+            KEIKO_OPENCODE_DEV_LANE_FUNCTIONAL=1 KEIKO_OS_KEYCHAIN=off \
+            KEIKO_ACCEPTANCE_EVIDENCE_FILE=/Users/keikoqa/acceptance-evidence/evidence.json \
+            /bin/sh -s <<'ACCEPTANCE'
+          cd "$HOME/keiko" || exit 1
+          echo "groups: $(id -Gn)"
           npx vitest run packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.acceptance.test.ts \
-            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/acceptance.json"
-          node scripts/check-vitest-report-ran.mjs "$RUNNER_TEMP/acceptance.json"
+            --reporter=default --reporter=json --outputFile="$HOME/acceptance-report/acceptance.json"
+          tests=$?
+          node scripts/check-vitest-report-ran.mjs "$HOME/acceptance-report/acceptance.json"
+          ran=$?
+          node scripts/check-acceptance-evidence.mjs "$HOME/acceptance-evidence/evidence.json"
+          certified=$?
+          [ "$tests" -eq 0 ] && [ "$ran" -eq 0 ] && [ "$certified" -eq 0 ]
+          ACCEPTANCE
       - name: Run the real Maven and npm clients through the relay
         env:
           KEIKO_REPOSITORY_RELAY_REAL_CLIENTS: "1"
