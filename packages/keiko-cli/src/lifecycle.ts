@@ -1180,21 +1180,50 @@ function commandLineEndpoint(
   return host !== undefined && LOOPBACK_UI_HOSTS.has(host) ? { host, port } : undefined;
 }
 
+function trackedCommandLine(deps: LifecycleRuntimeDeps, pid: number): string | undefined {
+  const read =
+    deps.readCommandLine ??
+    ((id: number): string | undefined =>
+      defaultReadProcessCommandLine(
+        id,
+        deps.platform,
+        deps.securityLogSink ?? unwiredSecurityLogSink(),
+      ));
+  return read(pid);
+}
+
+/**
+ * Whether the tracked record outlived its UI and its process id now names another program: a
+ * Keiko that ended without its stop (a power cut, a shut-down laptop) leaves its record behind,
+ * and the system may give that id to any later process. Every modern UI carries its launch
+ * identity on its command line (`uiProcessArguments`), so a READABLE command line without it is
+ * proof. An unreadable one, an older record without a launch identity and a native runtime
+ * record prove nothing and keep the existing refusal.
+ */
+function trackedRecordNamesForeignProcess(
+  options: LifecycleOptions,
+  deps: LifecycleRuntimeDeps,
+  record: PidRecord,
+): boolean {
+  if (record.launchId === undefined || record.nativeAppRuntime === true) return false;
+  const current = readPidRecord(pidFile(options), false);
+  if (!sameTrackedUiRecord(current, record) || !deps.isProcessAlive(record.pid)) return false;
+  const commandLine = trackedCommandLine(deps, record.pid);
+  if (commandLine === undefined || liveIdentityTextHasLaunchId(commandLine, record.launchId)) {
+    return false;
+  }
+  // The full identity check (environment and command line) must agree before a record is dropped.
+  const verify = deps.verifyLaunchIdentity ?? liveProcessHasLaunchId;
+  return !verify(record.pid, record.launchId);
+}
+
 function trackedEndpointOptions(
   options: LifecycleOptions,
   deps: LifecycleRuntimeDeps,
   record: PidRecord,
 ): LifecycleOptions {
   if (record.launchId === undefined) return options;
-  const read =
-    deps.readCommandLine ??
-    ((pid: number): string | undefined =>
-      defaultReadProcessCommandLine(
-        pid,
-        deps.platform,
-        deps.securityLogSink ?? unwiredSecurityLogSink(),
-      ));
-  const commandLine = read(record.pid);
+  const commandLine = trackedCommandLine(deps, record.pid);
   if (commandLine === undefined || !liveIdentityTextHasLaunchId(commandLine, record.launchId)) {
     return options;
   }
@@ -1210,6 +1239,14 @@ async function handleStaleRunning(
 ): Promise<number | "start"> {
   // Health, the "already running" report and the browser handoff address the tracked instance's
   // own endpoint, never the port this invocation asked for (L1).
+  if (trackedRecordNamesForeignProcess(requested, deps, running)) {
+    emitLifecycleHealth(deps.securityLogSink, "tracked", "stale-foreign", true);
+    io.out(
+      `Keiko UI record is stale (pid ${String(running.pid)} now belongs to another program); starting Keiko.\n`,
+    );
+    rmSync(pidFile(requested), { force: true });
+    return "start";
+  }
   const options = trackedEndpointOptions(requested, deps, running);
   const { health, retries } = await probeTrackedHealth(options, deps, running);
   if (

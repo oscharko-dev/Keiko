@@ -74,12 +74,49 @@ const COMPONENT_LICENSE_DECISIONS = new Map([
       licenses: [],
     },
   ],
+  [
+    // Mermaid 12's layout engine, bundled unmodified and loaded lazily for a diagram (#4378, owner
+    // decision of 2026-11-22: take Mermaid and axe-core current). The artifact is dual licensed
+    // `EPL-2.0 OR GPL-3.0-or-later`; Keiko takes it under EPL-2.0 only. EPL-2.0 is file-level weak
+    // copyleft: it binds elkjs's own files, which ship unchanged with their LICENSE.md, and no Keiko
+    // source. GPL-3.0 is never admitted.
+    "pkg:npm/elkjs@0.12.1",
+    {
+      name: "elkjs",
+      version: "0.12.1",
+      integrity:
+        "sha512-IhMYKHE4S2vtx0QrhBP3lYOIKDeIiJXBrdq9MGYkuB8ZHqhrBnHNfSUndjXFewrX1CPK8chwq+2NA0K0hliYuw==",
+      resolved: "https://registry.npmjs.org/elkjs/-/elkjs-0.12.1.tgz",
+      declaredLicense: "EPL-2.0 OR GPL-3.0-or-later",
+      licenses: ["EPL-2.0"],
+    },
+  ],
+  [
+    // The accessibility engine of the UI tests and the design-system evidence harnesses (jest-axe,
+    // `node_modules/axe-core/axe.min.js`), a development dependency only: it is never bundled into,
+    // linked with or shipped with Keiko, so MPL-2.0's file-level terms never reach a Keiko file
+    // (owner decision of 2026-11-22). One exact artifact; every other MPL-2.0 package still fails.
+    "pkg:npm/axe-core@4.14.1",
+    {
+      name: "axe-core",
+      version: "4.14.1",
+      integrity:
+        "sha512-FHfa+lmNjQZfJz1q8wKqIDwC6DExcHt/pkjNQb09a3NPjCKg2rhu5qb2S4r76ASyFNNtuFooJpZe37OgudVGtQ==",
+      resolved: "https://registry.npmjs.org/axe-core/-/axe-core-4.14.1.tgz",
+      declaredLicense: "MPL-2.0",
+      licenses: ["MPL-2.0"],
+      developmentOnly: true,
+    },
+  ],
 ]);
 
-function approvedLicensesForComponent(component) {
+function approvedLicensesForComponent(component, scope = "shipped") {
   const decision = COMPONENT_LICENSE_DECISIONS.get(component.purl);
+  // A development-only decision never admits its license in a shipped component's SBOM; only the
+  // lock check, which also requires the record to be a development dependency, applies it.
   if (
     decision === undefined ||
+    (decision.developmentOnly === true && scope !== "development") ||
     decision.name !== component.name ||
     decision.version !== component.version
   ) {
@@ -110,20 +147,31 @@ function recordLicenseDecision(path, entry) {
   );
 }
 
-function reviewedRecordMatches(path, entry, decision) {
+function reviewedRecordIdentityMatches(path, entry, decision) {
   return (
     lockPackageName(path) === decision.name &&
     (entry.name === undefined || entry.name === decision.name) &&
     entry.version === decision.version &&
     entry.integrity === decision.integrity &&
     entry.resolved === decision.resolved &&
-    entry.license === decision.declaredLicense &&
-    offendersForComponent({
-      name: decision.name,
-      version: decision.version,
-      purl: `pkg:npm/${decision.name}@${decision.version}`,
-      licenses: entry.license === undefined ? [] : [{ expression: entry.license }],
-    }).length === 0
+    entry.license === decision.declaredLicense
+  );
+}
+
+function reviewedRecordMatches(path, entry, decision) {
+  const developmentOnly = decision.developmentOnly === true;
+  return (
+    reviewedRecordIdentityMatches(path, entry, decision) &&
+    (!developmentOnly || entry.dev === true) &&
+    offendersForComponent(
+      {
+        name: decision.name,
+        version: decision.version,
+        purl: `pkg:npm/${decision.name}@${decision.version}`,
+        licenses: entry.license === undefined ? [] : [{ expression: entry.license }],
+      },
+      developmentOnly ? "development" : "shipped",
+    ).length === 0
   );
 }
 
@@ -383,7 +431,7 @@ function entryLicenseOffense(entry, approvedLicenses) {
   return approvedLicenses.has(candidate) ? null : candidate;
 }
 
-export function offendersForComponent(component) {
+export function offendersForComponent(component, scope = "shipped") {
   const id = `${component.name}@${component.version}`;
   const licenses = Array.isArray(component.licenses) ? component.licenses : [];
   // CycloneDX entries without an explicit `licenses` array are treated as offenders — we cannot
@@ -394,7 +442,7 @@ export function offendersForComponent(component) {
   }
   const offenders = [];
   for (const entry of licenses) {
-    const offense = entryLicenseOffense(entry, approvedLicensesForComponent(component));
+    const offense = entryLicenseOffense(entry, approvedLicensesForComponent(component, scope));
     if (offense !== null) {
       offenders.push({ id, license: offense });
     }
