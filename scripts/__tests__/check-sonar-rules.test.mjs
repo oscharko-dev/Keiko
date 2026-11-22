@@ -71,7 +71,7 @@ describe("changedLintableFiles", () => {
 
 describe("summarise", () => {
   const result = (messages, source = "\n".repeat(20)) => ({
-    filePath: "/repo/src/a.ts",
+    filePath: "/outside-the-repository/src/a.ts",
     messages,
     source,
   });
@@ -118,13 +118,18 @@ describe("summarise", () => {
   it("reads the file when the engine omitted its source", () => {
     const reads = [];
     const findings = summarise(
-      [{ filePath: "/repo/src/a.ts", messages: [{ line: 1, message: "m", ruleId: "sonarjs/x" }] }],
+      [
+        {
+          filePath: "/outside-the-repository/src/a.ts",
+          messages: [{ line: 1, message: "m", ruleId: "sonarjs/x" }],
+        },
+      ],
       (path) => {
         reads.push(path);
         return "f(); // NOSONAR";
       },
     );
-    expect(reads).toEqual(["/repo/src/a.ts"]);
+    expect(reads).toEqual(["/outside-the-repository/src/a.ts"]);
     expect(findings).toEqual([]);
   });
 
@@ -137,7 +142,12 @@ describe("summarise", () => {
       ),
     ]);
     expect(findings).toEqual([
-      { line: 1, message: "Parsing error: not found", path: "/repo/src/a.ts", rule: "parse-error" },
+      {
+        line: 1,
+        message: "Parsing error: not found",
+        path: "/outside-the-repository/src/a.ts",
+        rule: "parse-error",
+      },
     ]);
   });
 });
