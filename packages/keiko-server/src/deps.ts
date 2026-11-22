@@ -43,6 +43,12 @@ import {
   type McpCredentialRelay,
   type McpRelayUpstream,
 } from "./mcp/mcpCredentialRelay.js";
+import {
+  createRepositoryCredentialRelay,
+  egressRepositoryRelayUpstream,
+  type RepositoryCredentialRelay,
+  type RepositoryRelayUpstream,
+} from "./repository-relay/repositoryCredentialRelay.js";
 import { createRuntimeChangesetApplyPort } from "./editor/agentRoutes.js";
 import {
   DEFAULT_OWN_ASSESSMENT_POLICY,
@@ -964,6 +970,12 @@ export interface UiHandlerDeps extends AgentAuthorityRegistryDependency {
   // the SAME attested loopback port; the runtime host binds it, coding-sidecar-mcp-relay.ts serves it.
   readonly mcpRelay?:
     { readonly relay: McpCredentialRelay; readonly upstream: McpRelayUpstream } | undefined;
+  // #4522: the repository credential relay a native run's authenticated Maven and npm repositories
+  // are read through, on the SAME attested loopback port; coding-sidecar-repository-relay.ts serves
+  // it and the run binding mints each run's capability from `relay`.
+  readonly repositoryRelay?:
+    | { readonly relay: RepositoryCredentialRelay; readonly upstream: RepositoryRelayUpstream }
+    | undefined;
   readonly codingSidecarGatewayCancellationRegistry?:
     { readonly signalFor: (runId: string) => AbortSignal | undefined } | undefined;
   readonly codingSidecarGatewayEvidenceAggregator?:
@@ -4712,6 +4724,8 @@ interface UiHandlerDepsAssemblyArgs {
   readonly codingSessionContinuity: CodingSessionContinuity;
   /** The one MCP relay the runtime host binds and the relay route serves (#3903 AC3). */
   readonly mcpCredentialRelay?: McpCredentialRelay | undefined;
+  /** The one repository credential relay the run binding mints capabilities from (#4522). */
+  readonly repositoryCredentialRelay?: RepositoryCredentialRelay | undefined;
   readonly mcpConnections?: ConfiguredMcpConnections | undefined;
   /** The Jira Pods a Coding run may be started with; absent without the managed MCP relay. */
   readonly codingJiraPods?: CodingJiraPods | undefined;
@@ -5129,6 +5143,24 @@ function mcpRelayDeps(args: UiHandlerDepsAssemblyArgs): Pick<UiHandlerDeps, "mcp
   };
 }
 
+// One repository credential relay per deps graph, reached by the run binding as
+// `deps.repositoryRelay.relay`; an assembly may inject its own. Relayed repository reads leave through
+// Keiko's own egress configuration (proxy and CA) as well.
+function repositoryRelayDeps(
+  args: UiHandlerDepsAssemblyArgs,
+): Pick<UiHandlerDeps, "repositoryRelay"> {
+  return {
+    repositoryRelay: {
+      relay:
+        args.repositoryCredentialRelay ??
+        createRepositoryCredentialRelay({ activityLog: () => processServerLogSink() }),
+      upstream: egressRepositoryRelayUpstream(() =>
+        resolveOutboundHttpEgressConfig(undefined, args.options.env),
+      ),
+    },
+  };
+}
+
 function buildMcpSettings(args: UiHandlerDepsAssemblyArgs): McpSettingsStore {
   return createMcpSettingsStore({
     stateDir: dirname(args.resolvedUiDbPath),
@@ -5210,6 +5242,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     ...(prDescriptionGeneration === undefined ? {} : { prDescriptionGeneration }),
     voiceRecapContentAttestations: createVoiceRecapContentAttestationStore(),
     ...mcpRelayDeps(args),
+    ...repositoryRelayDeps(args),
     ...(args.options.gatewayReadinessFetch === undefined
       ? {}
       : { gatewayReadinessFetch: args.options.gatewayReadinessFetch }),

@@ -70,13 +70,39 @@ const RUNTIME_ROUTES: ReadonlySet<string> = new Set([
   "/api/coding-sidecar/tool",
 ]);
 const RUNTIME_MCP_ROUTE_PREFIX = "/api/coding-sidecar/mcp/";
+// #4522: the repository relay's reads, `<prefix><relayId>/<repository path>`. A Maven client presents
+// its capability as the HTTP Basic password, so this prefix alone also accepts `Basic`.
+const RUNTIME_REPOSITORY_ROUTE_PREFIX = "/api/coding-sidecar/repository/";
 const PORT_PATTERN = /^[1-9]\d{0,4}$/u;
 
+function runtimePathname(url: string | undefined): string {
+  return (url ?? "").split("?", 1)[0] ?? "";
+}
+
+function isRepositoryRelayRoute(url: string | undefined): boolean {
+  const pathname = runtimePathname(url);
+  if (!pathname.startsWith(RUNTIME_REPOSITORY_ROUTE_PREFIX)) return false;
+  const [relayId, ...path] = pathname.slice(RUNTIME_REPOSITORY_ROUTE_PREFIX.length).split("/");
+  return relayId !== undefined && relayId !== "" && path.length > 0;
+}
+
 function isRuntimeRoute(url: string | undefined): boolean {
-  const pathname = (url ?? "").split("?", 1)[0] ?? "";
+  const pathname = runtimePathname(url);
   if (RUNTIME_ROUTES.has(pathname)) return true;
   const relayId = pathname.slice(RUNTIME_MCP_ROUTE_PREFIX.length);
-  return pathname.startsWith(RUNTIME_MCP_ROUTE_PREFIX) && relayId !== "" && !relayId.includes("/");
+  return (
+    (pathname.startsWith(RUNTIME_MCP_ROUTE_PREFIX) && relayId !== "" && !relayId.includes("/")) ||
+    isRepositoryRelayRoute(url)
+  );
+}
+
+function hasRuntimeCredential(req: IncomingMessage): boolean {
+  const authorization = req.headers.authorization;
+  if (typeof authorization !== "string") return false;
+  return (
+    authorization.startsWith("Bearer ") ||
+    (authorization.startsWith("Basic ") && isRepositoryRelayRoute(req.url))
+  );
 }
 
 /**
@@ -89,14 +115,12 @@ function isRuntimeRoute(url: string | undefined): boolean {
  */
 function isRelayedRuntimeRequest(req: IncomingMessage, host: string): boolean {
   const { host: name, port } = splitAuthority(host);
-  const authorization = req.headers.authorization;
   return (
     LOOPBACK_HOSTS.has(name) &&
     port !== undefined &&
     PORT_PATTERN.test(port) &&
     req.headers.origin === undefined &&
-    typeof authorization === "string" &&
-    authorization.startsWith("Bearer ") &&
+    hasRuntimeCredential(req) &&
     isRuntimeRoute(req.url)
   );
 }
