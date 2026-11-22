@@ -502,7 +502,11 @@ node scripts/build-standalone-npm-package.mjs \
 
 ### Verify A Package
 
+Run it in the folder that holds the ZIP and its `.sha256`: `out/` after
+[Build A Package](#build-a-package), or the download folder.
+
 ```bash
+cd out
 shasum -a 256 -c keiko-windows-x64.npm.zip.sha256
 unzip -p keiko-windows-x64.npm.zip Keiko/system/npm-package.json
 ```
