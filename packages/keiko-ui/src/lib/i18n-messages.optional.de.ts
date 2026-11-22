@@ -4639,7 +4639,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.repository.notVerified": "Referenz noch nicht verifiziert",
   "chat.repository.removeReference": "Repository-Referenz {path} entfernen",
   "chat.questionMap.label": "Fragen im Chatverlauf",
-  "chat.questionMap.jump": "Zu Frage {index} springen: {preview}",
+  "chat.questionMap.jump": "{preview} {time}: Zu Frage {index} springen",
   "chat.answer.expand": "Antwort ausklappen",
   "chat.answer.collapse": "Antwort einklappen",
   "chat.messageLabel": "Chatnachricht",

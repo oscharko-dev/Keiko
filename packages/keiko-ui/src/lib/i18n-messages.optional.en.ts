@@ -4416,7 +4416,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.repository.notVerified": "Not verified yet",
   "chat.repository.removeReference": "Remove repository reference {path}",
   "chat.questionMap.label": "Conversation questions",
-  "chat.questionMap.jump": "Jump to question {index}: {preview}",
+  "chat.questionMap.jump": "{preview} {time}: Jump to question {index}",
   "chat.answer.expand": "Expand answer",
   "chat.answer.collapse": "Collapse answer",
   "chat.messageLabel": "Chat message",

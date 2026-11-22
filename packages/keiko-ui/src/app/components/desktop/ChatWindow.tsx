@@ -1674,6 +1674,7 @@ function ConversationQuestionMapImpl({
               aria-label={t("chat.questionMap.jump", {
                 index: item.index,
                 preview: item.preview,
+                time: item.time,
               })}
               onFocus={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();
