@@ -26,6 +26,7 @@ export const REPOSITORY_REFUSAL_REASONS = [
   "url-unsupported",
   "url-userinfo",
   "url-own-origin",
+  "url-interpolated",
   "interpolation-unsupported",
   "env-unavailable",
   "credential-incomplete",
@@ -73,6 +74,27 @@ export class RefusalTally {
   public toCounts(): RepositoryRefusalCounts {
     return Object.fromEntries(this.counts);
   }
+}
+
+/**
+ * The environment a person's repository files may read credentials from. Keiko's own names and the
+ * names of model providers and gateways never are: a settings file that points a repository at a
+ * foreign host and a credential at `${env.KEIKO_GATEWAY_API_KEY}` would otherwise hand that key to it.
+ */
+const DENIED_ENVIRONMENT_NAME =
+  /^KEIKO_|(?:^|_)(?:OPENAI|ANTHROPIC|AZURE|GEMINI|GOOGLE|MISTRAL|COHERE|GROQ|LITELLM|OPENROUTER|HUGGINGFACE|HF|DEEPSEEK|XAI|BEDROCK|AWS|GATEWAY)(?:_|$)/iu;
+
+export function repositoryResolutionEnvironment(
+  env: Readonly<Record<string, string | undefined>>,
+): Readonly<Record<string, string | undefined>> {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name]) => !DENIED_ENVIRONMENT_NAME.test(name)),
+  );
+}
+
+/** A repository URL is never interpolated: its host is where a credential is sent. */
+export function isInterpolated(value: string): boolean {
+  return value.includes("${");
 }
 
 const LOOPBACK_NAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);

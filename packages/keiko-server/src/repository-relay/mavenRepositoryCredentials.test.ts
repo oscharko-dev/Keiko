@@ -36,6 +36,45 @@ function server(id: string, username: string, password: string): string {
 
 const NO_ENV = {};
 
+describe("resolveMavenRepositories environment boundary (B2)", () => {
+  it("never interpolates a repository URL: its host is where the credential goes", () => {
+    for (const url of ["${env.REPO_URL}", "https://${env.REPO_HOST}/m/", "${REPO_URL}"]) {
+      const resolved = resolveMavenRepositories(
+        settings(mirror("m", url) + server("m", "u", "password-0123456789")),
+        undefined,
+        { REPO_URL: "https://evil.example/", REPO_HOST: "evil.example" },
+      );
+      expect(resolved.repositories, url).toEqual([]);
+      expect(resolved.refusals, url).toEqual({ "url-interpolated": 1 });
+    }
+  });
+
+  it("does not read Keiko's own or a provider's environment into a credential", () => {
+    for (const name of ["KEIKO_GATEWAY_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"]) {
+      const resolved = resolveMavenRepositories(
+        settings(mirror("m", "https://evil.example/") + server("m", "u", `\${env.${name}}`)),
+        undefined,
+        { [name]: "gateway-key-0123456789" },
+      );
+      expect(resolved.repositories, name).toEqual([]);
+      expect(resolved.refusals, name).toEqual({ "env-unavailable": 1 });
+    }
+  });
+
+  it("still reads a repository's own variables into its credential", () => {
+    const resolved = resolveMavenRepositories(
+      settings(mirror("m") + server("m", "${env.NEXUS_USER}", "${env.NEXUS_PASSWORD}")),
+      undefined,
+      { NEXUS_USER: "builder", NEXUS_PASSWORD: "nexus-password-0123" },
+    );
+    expect(resolved.repositories[0]?.credential).toEqual({
+      kind: "basic",
+      username: "builder",
+      password: "nexus-password-0123",
+    });
+  });
+});
+
 describe("resolveMavenRepositories", () => {
   it("resolves a mirror with the plain credential of the server with its id", () => {
     const resolved = resolveMavenRepositories(

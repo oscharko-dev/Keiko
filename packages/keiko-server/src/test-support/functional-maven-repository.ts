@@ -123,8 +123,10 @@ function servedFile(cache: ServedCache, urlPath: string): string | undefined {
   let decoded: string;
   try {
     decoded = decodeURIComponent(urlPath.split("?", 1)[0] ?? "");
-  } catch {
-    return undefined;
+  } catch (error) {
+    // A malformed escape names no file; anything else is a defect of the fixture and propagates.
+    if (error instanceof URIError) return undefined;
+    throw error;
   }
   const privateFile = fileInside(PRIVATE_REPOSITORY, decoded);
   if (privateFile !== undefined) return privateFile;

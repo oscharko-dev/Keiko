@@ -1,7 +1,9 @@
 import {
   admitRepositoryUrl,
   interpolateEnvironment,
+  isInterpolated,
   RefusalTally,
+  repositoryResolutionEnvironment,
   REPOSITORY_SECRET_MIN_CHARS,
   type RepositoryCredential,
   type RepositoryRefusalReason,
@@ -199,20 +201,20 @@ export function resolveNpmRegistries(
 ): RepositoryResolution {
   const tally = new RefusalTally();
   const entries = npmrcEntries(npmrc);
+  const allowedEnv = repositoryResolutionEnvironment(env);
   const repositories: ResolvedRepository[] = [];
   for (const declared of declaredRegistries(entries)) {
-    const interpolated = interpolateEnvironment(declared.url, env, NPM_ENV);
-    if (!interpolated.ok) {
-      tally.add(interpolated.reason);
+    if (isInterpolated(declared.url)) {
+      tally.add("url-interpolated");
       continue;
     }
-    const admitted = admitRepositoryUrl(interpolated.value, ownOrigin);
+    const admitted = admitRepositoryUrl(declared.url, ownOrigin);
     if (!admitted.ok) {
       tally.add(admitted.reason);
       continue;
     }
     const auth = authForRegistry(authByPrefix(entries, admitted.url.protocol), admitted.url);
-    const credential = resolveCredential(auth, env);
+    const credential = resolveCredential(auth, allowedEnv);
     if (!credential.ok) {
       tally.add(credential.reason);
       continue;

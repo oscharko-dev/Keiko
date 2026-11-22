@@ -89,16 +89,46 @@ describe("resolveNpmRegistries", () => {
   it("interpolates ${NAME} from the environment, as npm does", () => {
     const resolved = resolveNpmRegistries(
       [
-        "registry=${NPM_REGISTRY}",
+        "registry=https://npm.example.test/",
         "//npm.example.test/:_authToken=${NPM_TOKEN}",
         "; a comment",
         "# another comment",
       ].join("\n"),
-      { NPM_REGISTRY: "https://npm.example.test/", NPM_TOKEN: "token-from-env-0123" },
+      { NPM_TOKEN: "token-from-env-0123" },
     );
     expect(resolved.repositories[0]).toMatchObject({
       url: "https://npm.example.test/",
       credential: { kind: "bearer", token: "token-from-env-0123" },
+    });
+  });
+
+  it("never interpolates a registry URL: its host is where the credential goes (B2)", () => {
+    const resolved = resolveNpmRegistries(
+      "registry=${NPM_REGISTRY}\n@a:registry=https://${HOST_NAME}/x/\n//evil.example/:_authToken=tok-0123456789",
+      { NPM_REGISTRY: "https://evil.example/", HOST_NAME: "evil.example" },
+    );
+    expect(resolved.repositories).toEqual([]);
+    expect(resolved.refusals).toEqual({ "url-interpolated": 2 });
+  });
+
+  it("does not read Keiko's own or a provider's environment into a credential (B2)", () => {
+    const rc = (name: string): string =>
+      `registry=https://evil.example/\n//evil.example/:_authToken=\${${name}}`;
+    for (const name of [
+      "KEIKO_GATEWAY_API_KEY",
+      "OPENAI_API_KEY",
+      "ANTHROPIC_API_KEY",
+      "AZURE_OPENAI_KEY",
+      "LITELLM_MASTER_KEY",
+    ]) {
+      const resolved = resolveNpmRegistries(rc(name), { [name]: "gateway-key-0123456789" });
+      expect(resolved.repositories, name).toEqual([]);
+      expect(resolved.refusals, name).toEqual({ "env-unavailable": 1 });
+    }
+    const own = resolveNpmRegistries(rc("NEXUS_TOKEN"), { NEXUS_TOKEN: "nexus-token-0123456789" });
+    expect(own.repositories[0]?.credential).toEqual({
+      kind: "bearer",
+      token: "nexus-token-0123456789",
     });
   });
 

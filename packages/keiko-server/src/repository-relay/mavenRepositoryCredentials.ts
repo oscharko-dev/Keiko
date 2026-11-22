@@ -8,7 +8,9 @@ import {
 import {
   admitRepositoryUrl,
   interpolateEnvironment,
+  isInterpolated,
   RefusalTally,
+  repositoryResolutionEnvironment,
   REPOSITORY_SECRET_MIN_CHARS,
   type RepositoryCredential,
   type RepositoryRefusalReason,
@@ -218,6 +220,20 @@ function declaredRepositories(root: XmlElement): readonly Declared[] {
   ];
 }
 
+/**
+ * The normalised URL a declared repository URL resolves to (environment placeholders filled in,
+ * user info refused), or undefined when the resolution would have left it out. The run binding
+ * uses it to find the `<url>` of the settings element a resolved repository came from.
+ */
+export function normalizedMavenRepositoryUrl(
+  declared: string,
+  ownOrigin: string | undefined,
+): string | undefined {
+  if (isInterpolated(declared)) return undefined;
+  const admitted = admitRepositoryUrl(declared, ownOrigin);
+  return admitted.ok ? admitted.url.href : undefined;
+}
+
 export interface MavenResolutionContext {
   readonly servers: ReadonlyMap<string, ServerEntry>;
   readonly master: MasterPassword;
@@ -234,12 +250,11 @@ function resolveDeclared(
     tally.add("url-missing");
     return undefined;
   }
-  const interpolated = interpolateEnvironment(declared.url, context.env, MAVEN_ENV);
-  if (!interpolated.ok) {
-    tally.add(interpolated.reason);
+  if (isInterpolated(declared.url)) {
+    tally.add("url-interpolated");
     return undefined;
   }
-  const admitted = admitRepositoryUrl(interpolated.value, context.ownOrigin);
+  const admitted = admitRepositoryUrl(declared.url, context.ownOrigin);
   if (!admitted.ok) {
     tally.add(admitted.reason);
     return undefined;
@@ -283,7 +298,7 @@ export function resolveMavenRepositories(
   const context: MavenResolutionContext = {
     servers: serverEntries(root),
     master: masterPassword(settingsSecurityXml),
-    env,
+    env: repositoryResolutionEnvironment(env),
     ownOrigin,
   };
   const repositories = declaredRepositories(root).flatMap((declared) => {
