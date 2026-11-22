@@ -43,7 +43,7 @@ import {
   hasExactOpenCodeVisibleToolContract,
 } from "./opencodeToolSchemas.js";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
-import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
+import { OPENCODE_PINNED_VERSION, openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import {
   createOpenCodeV2HttpClient,
   parseOpenCodeV2ChildEndpoint,
@@ -234,6 +234,9 @@ function answerPolicy(facade: FacadeStub, body: unknown, response: ServerRespons
     planRoot: facade.planRoot,
     request,
     nowMs: Date.now(),
+    // As the composition derives it from the run's verified version (#4359).
+    codeModeNestedEffectsDecided:
+      openCodeRuntimeVersionPin(OPENCODE_PINNED_VERSION)?.decidesNestedEffects === true,
   });
   facade.decisions.push(decision);
   // An `ask` would wait for the operator in production; the fixture records it and lets it pass

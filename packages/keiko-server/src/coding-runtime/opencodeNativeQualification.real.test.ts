@@ -61,7 +61,7 @@ import {
   openCodeNativeMcpAdmission,
   type OpenCodeNativeMcpAdmission,
 } from "./opencodeNativeMcp.js";
-import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
+import { OPENCODE_PINNED_VERSION, openCodeRuntimeVersionPin } from "./opencodeRuntimeVersions.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import {
   createOpenCodeNativeToolAdvertisement,
@@ -261,6 +261,14 @@ interface Governance {
   readonly externalRoots?: readonly string[] | undefined;
 }
 
+/**
+ * The composition derives this from the run's verified version (#4359); this suite asserts that the
+ * binary is the pinned one. Without it a Code Mode program in Ask for approval reached the policy
+ * with nothing to review and was refused, which production never does.
+ */
+const CODE_MODE_NESTED_EFFECTS_DECIDED =
+  openCodeRuntimeVersionPin(OPENCODE_PINNED_VERSION)?.decidesNestedEffects === true;
+
 /** Keiko's own native policy answers every ask the generated hook sends. */
 async function startFacade(governance: Governance): Promise<FacadeStub> {
   const decisions: PolicyDecision[] = [];
@@ -278,6 +286,7 @@ async function startFacade(governance: Governance): Promise<FacadeStub> {
         ...(governance.externalRoots === undefined
           ? {}
           : { externalRoots: governance.externalRoots }),
+        codeModeNestedEffectsDecided: CODE_MODE_NESTED_EFFECTS_DECIDED,
       });
       decisions.push({
         permission: request.permission,
