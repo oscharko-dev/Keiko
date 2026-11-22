@@ -230,6 +230,7 @@ export interface ProductionOpenCodeActivationInput {
   readonly sessionContinuity?: ProductionOpenCodeBackendInput["sessionContinuity"];
   /** The server's MCP relay for credentialed remote servers (#3903 AC3); absent admits none. */
   readonly mcpRelay?: ProductionOpenCodeBackendInput["mcpRelay"];
+  readonly repositoryRelay?: ProductionOpenCodeBackendInput["repositoryRelay"];
   readonly mcpMutations?: ProductionOpenCodeBackendInput["mcpMutations"];
   readonly mcpConnections?: ConfiguredMcpConnections | undefined;
   /** The Jira Pods a Coding run may be started with (owner decision 2026-10-30). */
@@ -369,6 +370,7 @@ function nativeMcpBackendInputs(
 ): Partial<Parameters<typeof createProductionOpenCodeBackend>[0]> {
   return {
     ...(input.mcpRelay ? { mcpRelay: input.mcpRelay } : {}),
+    ...(input.repositoryRelay ? { repositoryRelay: input.repositoryRelay } : {}),
     ...(input.mcpMutations ? { mcpMutations: input.mcpMutations } : {}),
     ...(input.mcpConnections ? { mcpConnections: input.mcpConnections } : {}),
     ...(input.codingJiraPods ? { codingJiraPods: input.codingJiraPods } : {}),

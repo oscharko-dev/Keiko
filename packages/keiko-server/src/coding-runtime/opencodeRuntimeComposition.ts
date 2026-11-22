@@ -45,6 +45,7 @@ import {
   prepareNativeBuildSettings,
   type NativeBuildSettingsResult,
 } from "./nativeBuildSettings.js";
+import type { NativeRepositoryRelayInput } from "./nativeRepositoryRelayBinding.js";
 import { DatabaseSync } from "node:sqlite";
 import type {
   CodingWorkbenchNativeJiraWriteReview,
@@ -672,6 +673,12 @@ export interface OpenCodeRuntimeCompositionInput {
    * is not admitted.
    */
   readonly mcpRelay?: OpenCodeMcpRelayInput | undefined;
+  /**
+   * Keiko's repository credential relay (#4522): the person's Maven and npm repositories are bound
+   * to it for each native run, and the run's build settings carry capabilities instead of the
+   * person's credentials. Absent, the build settings carry no repository access.
+   */
+  readonly repositoryRelay?: NativeRepositoryRelayInput | undefined;
   /**
    * Managed MCP servers the human chose for this run (a Jira Pod picked in the composer): the choice
    * is the grant of their read tools, in every mode. Absent, the run grants nothing.
@@ -1959,6 +1966,15 @@ function lifecycleAdapter(
   };
 }
 
+/**
+ * The run's relayed MCP exchanges and repository reads (#4522) end with it, before its runtime is
+ * reaped: no capability outlives its run.
+ */
+function releaseRunRelays(input: OpenCodeRuntimeCompositionInput, runId: string): void {
+  input.mcpRelay?.relay.releaseRun(runId);
+  input.repositoryRelay?.relay.releaseRun(runId);
+}
+
 async function disposeRun(
   input: OpenCodeRuntimeCompositionInput,
   bridge: ToolBridgeController,
@@ -1976,8 +1992,7 @@ async function disposeRun(
     const drained = bridge.close(signal);
     input.safeActivity?.clear();
     input.gatewayReadiness.clear(runId);
-    // The run's relayed MCP exchanges end with it, before its runtime is reaped.
-    input.mcpRelay?.relay.releaseRun(runId);
+    releaseRunRelays(input, runId);
     if (!(await drained)) return false;
     if (run === undefined) return true;
     if (!currentDisposal(runs, run, signal)) return false;
@@ -2197,6 +2212,8 @@ function admitNativeBuildSettings(
     stateRoot: runRoot,
     readOnlyMavenRepository: offline ? nativeBuildCacheReadRoots(realHome)[0] : undefined,
     readOnlyMavenWrapperDists: offline ? nativeBuildWrapperReadRoots(realHome)[0] : undefined,
+    repositoryRelay: input.repositoryRelay,
+    inheritedNoProxy: request.env.NO_PROXY ?? request.env.no_proxy,
     activityLog: input.activityLog,
   });
 }

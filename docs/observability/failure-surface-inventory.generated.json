@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f7ebd51931a3a0a93bdd4e2422d51b702867a79e6fc5d8749ea3bbdaeb6bfaa2"
+    "catalogDigest": "d397f1416c33ef406757273f31d33fc90cd63da7e04ef9120389b04117ea463b"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1905,6 +1905,7 @@
       "packages/keiko-server/src/coding-runtime/opencodeCommands.test.ts"
     ],
     "coding-runtime.native-build-settings.admitted.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/nativeBuildSettings.relay.test.ts",
       "packages/keiko-server/src/coding-runtime/nativeBuildSettings.test.ts"
     ],
     "coding-runtime.native-certificates.admitted.emitted-line": [

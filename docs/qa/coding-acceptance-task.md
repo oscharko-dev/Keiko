@@ -364,6 +364,37 @@ observed answers were two `401`. It is the negative control for the future relay
 must still end `failed`, with the tester's right-login check passing. It must stay green when the
 three cases above turn green.
 
+## Maven project behind a login: green baseline with the repository relay, 2026-11-22
+
+The repository credential relay ([ADR-0184](../adr/ADR-0184-repository-credential-relay-for-coding-runs.md),
+#4522) binds the person's mirrors to Keiko's loopback relay for each run: the run's `settings.xml`
+carries a per-run capability as the `<server>` password, Maven runs online and sends it with its
+first request (`aether.transport.http.preemptiveAuth` for Maven 3.10, `aether.connector.http.preemptiveAuth`
+for Maven 3.9), and the relay adds the person's login. Same machine, same branch plus the relay and
+its binding. Schema version 4 of the evidence adds a `credentialFootprint` to the Maven cases: while
+the run lives, the case scans everything below its root except the person's and the tester's homes
+(the run's state root and private home, the task workspace) for the password and its two base64
+forms, and counts the Activity Log lines of the case that carry one. Every Maven case asserts at
+least one `settings.xml` was scanned and no file and no line matched.
+
+The full file ran 13 cases, 13 passed, in 156 s (`caseSetComplete` true, `everyCaseMetExpectation`
+true on the platform without a container runtime):
+
+| Case                        | Mode             | Expected                               | Observed (duration)                                          |
+| --------------------------- | ---------------- | -------------------------------------- | ------------------------------------------------------------ |
+| `maven-supervised-coding`   | Supervised       | `succeeded`                            | green: `succeeded` (26.6 s)                                  |
+| `maven-autonomous-delivery` | Full access      | `succeeded`                            | green: `succeeded` (26.5 s)                                  |
+| `maven-governed-assist`     | Ask for approval | `succeeded`                            | green: `succeeded`, 3 approvals (27.0 s)                     |
+| `maven-wrong-password`      | Full access      | `failed`, `verification-not-evidenced` | green: as expected, with `401` answers and no `200` (23.1 s) |
+
+The nine other cases stayed green (4.6 s to 5.4 s each). The wrong password is still never turned
+into a pass: the relay forwards the repository's rejection as its own closed refusal, the run's build
+cannot start, and the tester's own right-login build passes. The hermetic companion is
+`nativeRepositoryRelay.clients.test.ts` (opt in with `KEIKO_REPOSITORY_RELAY_REAL_CLIENTS=1`): the
+real Maven and the real npm against the relay with the settings the binding writes, the first request
+already carrying the capability, nothing reaching the repository around the relay, and both builds
+failing once the run's bindings are released.
+
 ## What this baseline does not prove yet
 
 These points stay open:
@@ -375,8 +406,9 @@ These points stay open:
   for the delivery forms, to #4520.
 - **Dependencies in a managed worktree.** The last row is the expected baseline. A managed task
   worktree is a fresh checkout without `node_modules`, and below Full access the run's shell has no
-  registry. [#4522](https://github.com/oscharko-dev/Keiko/issues/4522) installs dependencies under
-  governance and turns that row into a success.
+  registry. The relay reaches the person's configured registries (npm) and mirrors (Maven); that row
+  stays an expected failure here because the fixture's npm project has no registry behind it.
+  [#4522](https://github.com/oscharko-dev/Keiko/issues/4522) covers the credentialed case.
 - **CI.** No workflow runs this test yet. That belongs to #4521.
 - **Real model.** The scripted form closes no criterion. The real-model run on macOS is still to do.
 - **Windows.** The Windows half of #4492 runs after the macOS gate. See the

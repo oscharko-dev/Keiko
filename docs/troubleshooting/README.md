@@ -76,6 +76,11 @@ context, instead of resuming the retained native session, are covered in
 [Coding Workbench task continues with context only](coding-workbench-session-not-resumed.md),
 including the closed reasons on the `coding-runtime.session-continuity` line.
 
+Coding Workbench runs whose Maven or npm build cannot resolve dependencies from an internal
+repository are covered in
+[Coding Workbench run cannot resolve dependencies from an internal repository](coding-workbench-repository-dependencies.md),
+including the closed reasons of the repository credential relay.
+
 Scheduled continuations that wait or were paused after missed wakes are covered in
 [Coding Workbench scheduled continuation does not run](coding-workbench-scheduled-continuation.md).
 

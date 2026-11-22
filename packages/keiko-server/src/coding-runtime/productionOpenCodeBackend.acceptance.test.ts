@@ -37,6 +37,7 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  statSync,
   writeSync,
 } from "node:fs";
 import { homedir, release, tmpdir } from "node:os";
@@ -77,6 +78,7 @@ import {
 } from "../test-support/functional-acceptance-model.js";
 import {
   FUNCTIONAL_MAVEN_PASSWORD,
+  FUNCTIONAL_MAVEN_USERNAME,
   mavenSettingsXml,
   startFunctionalMavenRepository,
   withPersonHome,
@@ -187,7 +189,21 @@ interface AcceptanceObservation {
   readonly buildSettings: readonly BuildSettingsFacts[];
   /** What the internal repository answered while the run worked, by status code. */
   readonly repositoryRequests: Readonly<Record<string, number>>;
+  /** Where the person's repository login appeared in what the run could read; Maven cases only. */
+  readonly credentialFootprint?: CredentialFootprint;
   readonly durationMs: number;
+}
+
+/**
+ * The person's repository login (#4522) must never reach the run: not as the password, not as
+ * either base64 form of it, in the run's state, its private home, the task workspace or the
+ * Activity Log lines of the case. `settingsFilesScanned` keeps the scan from being vacuous.
+ */
+interface CredentialFootprint {
+  readonly scanCount: number;
+  readonly settingsFilesScanned: number;
+  readonly leakedFileCount: number;
+  readonly leakedLogLineCount: number;
 }
 
 /** Closed dispositions of the sanitized build settings a run was admitted with. */
@@ -380,6 +396,7 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
     acceptanceCase: verified("maven-internal-repository", mode),
     check: (observed): void => {
       expectVerifiedInMode(observed, mode);
+      expectLoginNeverReachedTheRun(observed);
     },
   })),
   // The negative control of the login: a wrong password must never become a pass. It runs at Full
@@ -403,6 +420,7 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
       // The login was actually tried: the repository answered the run, and never with a 200.
       expect(observed.repositoryRequests["401"] ?? 0, JSON.stringify(observed)).toBeGreaterThan(0);
       expect(observed.repositoryRequests["200"], JSON.stringify(observed)).toBeUndefined();
+      expectLoginNeverReachedTheRun(observed);
     },
   },
 ];
@@ -421,6 +439,14 @@ describe.skipIf(!acceptanceEnabled())(
     }
   },
 );
+
+/** The scan saw the run's own settings, and found the person's login in none of what it read. */
+function expectLoginNeverReachedTheRun(observed: AcceptanceObservation): void {
+  const context = JSON.stringify(observed.credentialFootprint);
+  expect(observed.credentialFootprint?.settingsFilesScanned, context).toBeGreaterThan(0);
+  expect(observed.credentialFootprint?.leakedFileCount, context).toBe(0);
+  expect(observed.credentialFootprint?.leakedLogLineCount, context).toBe(0);
+}
 
 function expectVerifiedInMode(observed: AcceptanceObservation, mode: AcceptanceMode): void {
   expectSucceeded(observed, mode);
@@ -559,6 +585,7 @@ async function observeAcceptanceCase(
   const requestsBefore = prepared.maven?.repository.statusCounts() ?? {};
   const script = acceptanceScript(acceptanceCase, prepared);
   const log = recordActivityLog();
+  const footprint = credentialScanner(prepared, acceptanceCase);
   const startedAt = Date.now();
   // The run's build settings read the home of the process that composes the server, so a Maven
   // case holds the person's home around the run alone and puts the real one back afterwards.
@@ -566,9 +593,13 @@ async function observeAcceptanceCase(
     const served = await serveAcceptance(prepared, script);
     const runId = await startAcceptanceRun(served, acceptanceCase);
     const editDone = (): boolean => readFileSync(target, "utf8") !== prepared.original;
-    const asks = await settleAnsweringEveryAsk(served.orchestrator, runId, () =>
-      acceptanceCase.check === "denied" && editDone() ? "denied" : "approved",
+    const asks = await settleAnsweringEveryAsk(
+      served.orchestrator,
+      runId,
+      () => (acceptanceCase.check === "denied" && editDone() ? "denied" : "approved"),
+      footprint.scan,
     );
+    footprint.scan();
     return { runId, asks, state: served.orchestrator.getSnapshot(runId)?.state };
   });
   const { runId, asks } = run;
@@ -586,11 +617,80 @@ async function observeAcceptanceCase(
     denialCount: asks.denied,
     runCheckCount,
     repositoryRequests: requestDifference(requestsBefore, requestsAfter),
+    ...(prepared.maven === undefined ? {} : { credentialFootprint: footprint.result(log) }),
     testerCheckExitCode: await testerCheck(acceptanceCase, prepared),
     outsideSourceUnchanged:
       outsideSourceDigest(acceptanceCase.project, prepared.runRoot) === outsideSourceBefore,
     editLanded: readFileSync(target, "utf8") === finalContent,
     durationMs: Date.now() - startedAt,
+  };
+}
+
+/** The login's password and its base64 spellings: alone, and as `user:password`. */
+function credentialSpellings(login: "valid" | "wrong"): readonly string[] {
+  const password =
+    login === "valid" ? FUNCTIONAL_MAVEN_PASSWORD : `${FUNCTIONAL_MAVEN_PASSWORD}-wrong`;
+  return [
+    password,
+    Buffer.from(password).toString("base64"),
+    Buffer.from(`${FUNCTIONAL_MAVEN_USERNAME}:${password}`).toString("base64"),
+  ];
+}
+
+const SCAN_FILE_BYTES_MAX = 16 * 1024 * 1024;
+/** Homes the login is written to on purpose: the person's, and the tester's own. */
+const CREDENTIAL_HOMES = new Set(["person-home", "tester-home"]);
+
+function filesBelow(directory: string, visit: (path: string) => void): void {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (CREDENTIAL_HOMES.has(entry.name)) continue;
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) filesBelow(path, visit);
+    else if (entry.isFile()) visit(path);
+  }
+}
+
+/**
+ * Looks for the person's login in everything the run can read: the case's state and the task
+ * workspace (both below the case's root, which the run's private home and state root are part of),
+ * sampled while the run lives because its state root is removed when it ends.
+ */
+function credentialScanner(
+  prepared: PreparedAcceptanceCase,
+  acceptanceCase: AcceptanceCase,
+): {
+  readonly scan: () => void;
+  readonly result: (log: BufferedServerLogSink) => CredentialFootprint;
+} {
+  const spellings = (
+    acceptanceCase.login === undefined ? [] : credentialSpellings(acceptanceCase.login)
+  ).map((form) => Buffer.from(form));
+  const leaked = new Set<string>();
+  const settings = new Set<string>();
+  let scans = 0;
+  let lastScanMs = 0;
+  const scan = (): void => {
+    if (prepared.maven === undefined || Date.now() - lastScanMs < 1_000) return;
+    lastScanMs = Date.now();
+    scans += 1;
+    filesBelow(prepared.root, (path) => {
+      if (path.endsWith(`${sep}.m2${sep}settings.xml`)) settings.add(path);
+      if (statSync(path).size > SCAN_FILE_BYTES_MAX) return;
+      const bytes = readFileSync(path);
+      if (spellings.some((form) => bytes.includes(form))) leaked.add(path);
+    });
+  };
+  return {
+    scan,
+    result: (log) => ({
+      scanCount: scans,
+      settingsFilesScanned: settings.size,
+      leakedFileCount: leaked.size,
+      leakedLogLineCount: log.events.filter((event) => {
+        const line = JSON.stringify(event);
+        return spellings.some((form) => line.includes(form.toString("utf8")));
+      }).length,
+    }),
   };
 }
 
@@ -784,10 +884,12 @@ async function settleAnsweringEveryAsk(
   orchestrator: CodingRuntimeOrchestrator,
   runId: string,
   decide: () => "approved" | "denied",
+  onPoll: () => void = () => undefined,
 ): Promise<{ readonly approved: number; readonly denied: number }> {
   const answered = { approved: 0, denied: 0 };
   await vi.waitFor(
     async () => {
+      onPoll();
       const snapshot = orchestrator.getSnapshot(runId);
       const pending = snapshot?.pendingPermission;
       if (snapshot?.state === "awaiting-approval" && pending !== undefined) {
@@ -974,7 +1076,7 @@ function acceptanceEvidence(): Record<string, unknown> {
     (entry) => "metExpectation" in entry && entry.metExpectation,
   );
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     issue: 4492,
     platform: process.platform,
     arch: process.arch,

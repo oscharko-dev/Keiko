@@ -2486,7 +2486,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   unmatched quote, so a malformed inherited value stops the JVM instead of absorbing the run's
   options. These settings decide what a build reads and writes by default; the sandbox stays the
   boundary: a project's `.mvn/maven.config` or `MAVEN_OPTS` naming another `user.home` or local
-  repository still meets the read-only kernel root. The admission line records the cache
+  repository still meets the read-only kernel root. Credentialed repositories are the exception to
+  the offline rule above ([ADR-0184](ADR-0184-repository-credential-relay-for-coding-runs.md)): the
+  person's mirrors, repositories and npm registries are bound to Keiko's repository credential relay,
+  Maven then runs online in every mode (the read-only cache tail stays where it applies), the run's
+  settings carry a per-run capability and never the credential, and a run with nothing resolved
+  keeps the behaviour described here. The admission line records the cache
   and wrapper dispositions (`mavenCache`, `mavenWrapper`). An in-repo `.npmrc` stays kernel-denied: no sanitized view is
   possible without rewriting a workspace read, and registry routing is available through the user
   config instead. The launch gate that keeps a host secret out of the child compares the

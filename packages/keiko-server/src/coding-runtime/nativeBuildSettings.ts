@@ -9,6 +9,16 @@ import {
 
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import {
+  bindRepositoryRelays,
+  MAVEN_PREEMPTIVE_AUTH_PROPERTIES,
+  NATIVE_RELAY_REFUSAL_REASONS,
+  relayMavenSettings,
+  relayNpmConfig,
+  withLoopbackNoProxy,
+  type BoundRepositories,
+  type NativeRepositoryRelayInput,
+} from "./nativeRepositoryRelayBinding.js";
 
 // The native run's private HOME hides `~/.m2/settings.xml` (mirrors, proxies), `~/.npmrc` (registry)
 // and `~/.gradle/gradle.properties`, so a build behind a corporate mirror cannot resolve anything
@@ -307,6 +317,17 @@ const NATIVE_BUILD_SETTINGS_OPERATION = defineActivityLogOperation({
     },
     strippedElementCount: { type: "integer", dataClass: "count", required: true },
     droppedLineCount: { type: "integer", dataClass: "count", required: true },
+    // The repository credential relay (#4522): present when the run was offered one.
+    relayMavenBoundCount: { type: "integer", dataClass: "count", required: false },
+    relayNpmBoundCount: { type: "integer", dataClass: "count", required: false },
+    relayRefusedCount: { type: "integer", dataClass: "count", required: false },
+    relayRefusalReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 20,
+      values: [...NATIVE_RELAY_REFUSAL_REASONS],
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -327,7 +348,21 @@ export interface NativeBuildSettingsInput {
   readonly readOnlyMavenRepository?: string | undefined;
   /** The Maven wrapper's distributions when admitted read-only (`nativeBuildWrapperReadRoots`). */
   readonly readOnlyMavenWrapperDists?: string | undefined;
+  /**
+   * Keiko's repository credential relay for this run (#4522): the person's repositories are bound
+   * to it and the run's settings carry capabilities instead of the person's credentials.
+   */
+  readonly repositoryRelay?: NativeRepositoryRelayInput | undefined;
+  /** The run's inherited `NO_PROXY`, which the relay's loopback exemption extends. */
+  readonly inheritedNoProxy?: string | undefined;
   readonly activityLog?: ServerLogSink | undefined;
+}
+
+/** What the relay binding did for a run: counts and closed reasons only. */
+export interface NativeRelayBindingSummary {
+  readonly mavenBoundCount: number;
+  readonly npmBoundCount: number;
+  readonly refusals: readonly string[];
 }
 
 export interface NativeBuildSettingsResult {
@@ -343,6 +378,8 @@ export interface NativeBuildSettingsResult {
   readonly gradleProperties: FileDisposition;
   readonly strippedElementCount: number;
   readonly droppedLineCount: number;
+  /** Present when the run was offered the relay. */
+  readonly relay?: NativeRelayBindingSummary;
 }
 
 type Source =
@@ -413,38 +450,135 @@ export function prepareNativeBuildSettings(
 ): NativeBuildSettingsResult {
   const home = join(input.stateRoot, "home");
   const run = mavenRunBinding(input, home);
-  const maven = admit(
-    readSettingsFile(join(input.realHome, ".m2", "settings.xml"), input.runId),
-    (text) => {
-      const sanitized = sanitizeMavenSettings(text, run);
-      return sanitized === undefined
-        ? undefined
-        : { text: sanitized.xml, dropped: sanitized.strippedCount };
-    },
-  );
-  const npm = admit(readSettingsFile(join(input.realHome, ".npmrc"), input.runId), sanitizeNpmrc);
+  const mavenSource = readSettingsFile(join(input.realHome, ".m2", "settings.xml"), input.runId);
+  const npmSource = readSettingsFile(join(input.realHome, ".npmrc"), input.runId);
   const gradle = admit(
     readSettingsFile(join(input.realHome, ".gradle", "gradle.properties"), input.runId),
     sanitizeGradleProperties,
   );
+  const maven = admit(mavenSource, (text) => sanitizedMaven(text, run));
+  const npm = admit(npmSource, sanitizeNpmrc);
+  const bound = boundRelays(input, { mavenSource, maven, npmSource, npm });
+  const relayed = relayedAdmissions(input, run, { mavenSource, maven, npm }, bound);
   const userConfig = join(input.stateRoot, "config", "npm-user-config");
-  writePrivate(join(home, ".m2", "settings.xml"), maven.value?.text ?? emptyMavenSettings(run));
+  writePrivate(join(home, ".m2", "settings.xml"), relayed.maven ?? emptyMavenSettings(run));
   writeAdmitted(join(home, ".gradle", "gradle.properties"), gradle);
-  writeAdmitted(userConfig, npm);
+  if (relayed.npm !== undefined) writePrivate(userConfig, relayed.npm);
   linkMavenWrapperDists(home, input);
   const result: NativeBuildSettingsResult = {
     env: {
       GRADLE_USER_HOME: join(home, ".gradle"),
       ...(npm.value === undefined ? {} : { NPM_CONFIG_USERCONFIG: userConfig }),
+      ...relayEnvironment(input, bound),
     },
-    javaProperties: javaProperties(home, input),
+    javaProperties: javaProperties(home, input, bound),
     mavenSettings: maven.disposition,
     npmConfig: npm.disposition,
     gradleProperties: gradle.disposition,
     ...droppedCounts(maven, npm, gradle),
+    ...(bound === undefined
+      ? {}
+      : {
+          relay: {
+            mavenBoundCount: bound.maven.length,
+            npmBoundCount: bound.npm.length,
+            refusals: bound.refusals,
+          },
+        }),
   };
   recordNativeBuildSettingsAdmitted(input, result);
   return result;
+}
+
+function sanitizedMaven(text: string, run: MavenRunBinding): Sanitized | undefined {
+  const sanitized = sanitizeMavenSettings(text, run);
+  return sanitized === undefined
+    ? undefined
+    : { text: sanitized.xml, dropped: sanitized.strippedCount };
+}
+
+interface AdmittedSources {
+  readonly mavenSource: Source;
+  readonly maven: Admitted<Sanitized>;
+  readonly npmSource: Source;
+  readonly npm: Admitted<Sanitized>;
+}
+
+function sourceText(source: Source, admitted: Admitted<Sanitized>): string | undefined {
+  return source.state === "read" && admitted.value !== undefined ? source.text : undefined;
+}
+
+/**
+ * The person's repositories bound to the relay for this run. A file the sanitizer refuses binds
+ * nothing: there would be no settings to carry the capability.
+ */
+function boundRelays(
+  input: NativeBuildSettingsInput,
+  sources: AdmittedSources,
+): BoundRepositories | undefined {
+  const relay = input.repositoryRelay;
+  if (relay === undefined) return undefined;
+  const mavenSettings = sourceText(sources.mavenSource, sources.maven);
+  const securitySource =
+    mavenSettings === undefined
+      ? undefined
+      : readSettingsFile(join(input.realHome, ".m2", "settings-security.xml"), input.runId);
+  return bindRepositoryRelays(relay, {
+    runId: input.runId,
+    mavenSettings,
+    mavenSecurity: securitySource?.state === "read" ? securitySource.text : undefined,
+    npmrc: sourceText(sources.npmSource, sources.npm),
+  });
+}
+
+/**
+ * The files the run receives once the relay is bound: Maven's settings online (a bound repository
+ * is reached through the relay in every mode) and npm's config on the relay. Undefined for a file
+ * with nothing bound, which stays exactly as the sanitizer wrote it.
+ */
+function relayedAdmissions(
+  input: NativeBuildSettingsInput,
+  run: MavenRunBinding,
+  sources: Pick<AdmittedSources, "mavenSource" | "maven" | "npm">,
+  bound: BoundRepositories | undefined,
+): { readonly maven: string | undefined; readonly npm: string | undefined } {
+  const relay = input.repositoryRelay;
+  if (relay === undefined || bound === undefined) {
+    return { maven: sources.maven.value?.text, npm: sources.npm.value?.text };
+  }
+  return {
+    maven: relayedMaven(sources, run, bound, relay),
+    npm:
+      bound.npm.length === 0
+        ? sources.npm.value?.text
+        : relayNpmConfig(sources.npm.value?.text ?? "", bound.npm, relay),
+  };
+}
+
+function relayedMaven(
+  sources: Pick<AdmittedSources, "mavenSource" | "maven">,
+  run: MavenRunBinding,
+  bound: BoundRepositories,
+  relay: NativeRepositoryRelayInput,
+): string | undefined {
+  const text = sourceText(sources.mavenSource, sources.maven);
+  const online =
+    text === undefined || bound.maven.length === 0
+      ? undefined
+      : sanitizeMavenSettings(text, { ...run, offline: false });
+  return online === undefined
+    ? sources.maven.value?.text
+    : relayMavenSettings(online.xml, bound.maven, relay);
+}
+
+/** Loopback is never proxied for a run whose repositories are reached through the relay. */
+function relayEnvironment(
+  input: NativeBuildSettingsInput,
+  bound: BoundRepositories | undefined,
+): Record<string, string> {
+  if (bound === undefined || bound.maven.length + bound.npm.length === 0) return {};
+  const noProxy = withLoopbackNoProxy(input.inheritedNoProxy);
+  return { NO_PROXY: noProxy, no_proxy: noProxy };
 }
 
 /**
@@ -465,10 +599,15 @@ function mavenRunBinding(input: NativeBuildSettingsInput, home: string): MavenRu
  * repository (Maven 3.9+ `maven.repo.local.tail`): artifacts resolve from it, and everything Maven
  * writes lands in the run's own repository.
  */
-function javaProperties(home: string, input: NativeBuildSettingsInput): Record<string, string> {
+function javaProperties(
+  home: string,
+  input: NativeBuildSettingsInput,
+  bound: BoundRepositories | undefined,
+): Record<string, string> {
   const tail = chainedMavenCache(input);
   return {
     "user.home": home,
+    ...(bound === undefined || bound.maven.length === 0 ? {} : MAVEN_PREEMPTIVE_AUTH_PROPERTIES),
     ...(tail === undefined
       ? {}
       : { "maven.repo.local.tail": tail, "maven.repo.local.tail.ignoreAvailability": "true" }),
@@ -539,7 +678,20 @@ function recordNativeBuildSettingsAdmitted(
         mavenWrapper: readOnlyDisposition(input.mode, input.readOnlyMavenWrapperDists),
         strippedElementCount: result.strippedElementCount,
         droppedLineCount: result.droppedLineCount,
+        ...relayCounts(result.relay),
       },
     ),
   );
+}
+
+function relayCounts(relay: NativeRelayBindingSummary | undefined): Record<string, unknown> {
+  if (relay === undefined) return {};
+  return {
+    relayMavenBoundCount: relay.mavenBoundCount,
+    relayNpmBoundCount: relay.npmBoundCount,
+    relayRefusedCount: relay.refusals.length,
+    ...(relay.refusals.length === 0
+      ? {}
+      : { relayRefusalReasons: [...new Set(relay.refusals)].sort() }),
+  };
 }

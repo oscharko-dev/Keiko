@@ -6643,6 +6643,34 @@ function nativeMcpMutationJournalFor(
   return createNativeMcpMutationJournal({ store, snapshots, log: processServerLogSink() });
 }
 
+/** The credential relays a native run binds (MCP, and repositories of #4522), when the assembly has them. */
+function credentialRelayInputs(
+  args: UiHandlerDepsAssemblyArgs,
+): Pick<Parameters<typeof resolveProductionOpenCodeActivation>[0], "mcpRelay" | "repositoryRelay"> {
+  return {
+    ...(args.mcpCredentialRelay === undefined ? {} : { mcpRelay: args.mcpCredentialRelay }),
+    ...(args.repositoryCredentialRelay === undefined
+      ? {}
+      : { repositoryRelay: args.repositoryCredentialRelay }),
+  };
+}
+
+/**
+ * The one MCP relay and the one repository relay (#4522) of the deps graph: the run binding mints
+ * capabilities from them and their routes authenticate against them.
+ */
+function createProcessCredentialRelays(): Pick<
+  UiHandlerDepsAssemblyArgs,
+  "mcpCredentialRelay" | "repositoryCredentialRelay"
+> {
+  return {
+    mcpCredentialRelay: createMcpCredentialRelay(),
+    repositoryCredentialRelay: createRepositoryCredentialRelay({
+      activityLog: () => processServerLogSink(),
+    }),
+  };
+}
+
 // The attested-portable activation path supplies Keiko's own confirmation plane; injected
 // ports never receive a fallback consumer, so external composition stays fail-closed (#2377).
 function resolveProductionRuntimePorts(
@@ -6666,7 +6694,7 @@ function resolveProductionRuntimePorts(
   const activation = resolveProductionOpenCodeActivation({
     historyCapture: createNativeHistoryCapture(args.bundle.uiStore, processServerLogSink()),
     sessionContinuity: args.codingSessionContinuity,
-    ...(args.mcpCredentialRelay === undefined ? {} : { mcpRelay: args.mcpCredentialRelay }),
+    ...credentialRelayInputs(args),
     ...(args.mcpConnections === undefined ? {} : { mcpConnections: args.mcpConnections }),
     ...(args.codingJiraPods === undefined ? {} : { codingJiraPods: args.codingJiraPods }),
     mcpMutations: nativeMcpMutationJournalFor(args),
@@ -7163,7 +7191,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bootstrapCorrelationId,
     contentPolicy: projections.contentPolicy,
     codingSessionContinuity: buildCodingSessionContinuity(options, resolvedUiDbPath, bundle),
-    mcpCredentialRelay: createMcpCredentialRelay(),
+    ...createProcessCredentialRelays(),
   });
 }
 
