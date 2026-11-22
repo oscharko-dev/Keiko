@@ -217,6 +217,8 @@ interface AcceptanceObservation {
   readonly buildSettings: readonly BuildSettingsFacts[];
   /** What the internal repository answered while the run worked, by status code. */
   readonly repositoryRequests: Readonly<Record<string, number>>;
+  /** The run's `coding-runtime.repository-relay` lines as `action:outcome:reason`, in order. */
+  readonly relayLines: readonly string[];
   /**
    * Where the person's repository login (#4522) appeared in what the run could read; Maven cases
    * only. It must never reach the run in any spelling; `settingsFilesScanned` keeps the scan from
@@ -231,6 +233,9 @@ interface BuildSettingsFacts {
   readonly launchMode: unknown;
   readonly mavenSettings: unknown;
   readonly mavenCache: unknown;
+  readonly relayMavenBoundCount: unknown;
+  readonly relayNpmBoundCount: unknown;
+  readonly relayRefusalReasons: unknown;
 }
 
 /** One case of the acceptance task and what it must show. */
@@ -1098,6 +1103,7 @@ function settledFacts(
   | "verificationSummaries"
   | "continuations"
   | "buildSettings"
+  | "relayLines"
 > {
   const settled = log.events.find(
     (event) => event.op === "coding-runtime.run.settled" && event.extra?.runId === runId,
@@ -1133,7 +1139,21 @@ function settledFacts(
               launchMode: event.extra.launchMode,
               mavenSettings: event.extra.mavenSettings,
               mavenCache: event.extra.mavenCache,
+              relayMavenBoundCount: event.extra.relayMavenBoundCount,
+              relayNpmBoundCount: event.extra.relayNpmBoundCount,
+              relayRefusalReasons: event.extra.relayRefusalReasons,
             },
+          ]
+        : [],
+    ),
+    // Whether a build reached the relay at all, and how each request ended: closed values only.
+    // A request line carries its request's correlation, so every relay line of the case counts.
+    relayLines: log.events.flatMap((event) =>
+      event.op === "coding-runtime.repository-relay"
+        ? [
+            [event.extra?.action, event.extra?.outcome, event.extra?.reason ?? "-"]
+              .map(String)
+              .join(":"),
           ]
         : [],
     ),
