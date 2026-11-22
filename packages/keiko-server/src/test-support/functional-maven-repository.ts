@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
@@ -105,19 +105,37 @@ export interface ServedCache {
   readonly locked: ReadonlySet<string>;
 }
 
-/** The real file a path names below `root`, or undefined when it leaves `root` or is no file. */
-function fileInside(root: string, decoded: string): string | undefined {
-  const candidate = resolve(root, `.${decoded}`);
-  if (!existsSync(candidate)) return undefined;
-  const real = realpathSync(candidate);
-  const inside = relative(realpathSync(root), real);
-  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return undefined;
-  return statSync(real).isFile() ? real : undefined;
+/**
+ * Every regular file below `root`, by its repository path. A symbolic link counts only when its real
+ * path stays in `root`. A request is answered by looking its path up here, so the file served is
+ * always one this walk found and never a path built from the request.
+ */
+function servableFiles(root: string): ReadonlyMap<string, string> {
+  const files = new Map<string, string>();
+  if (!existsSync(root)) return files;
+  const realRoot = realpathSync(root);
+  const visit = (current: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) visit(full);
+      else if (entry.isFile() || entry.isSymbolicLink()) admitFile(files, root, realRoot, full);
+    }
+  };
+  visit(root);
+  return files;
+}
+
+function admitFile(files: Map<string, string>, root: string, realRoot: string, full: string): void {
+  if (!existsSync(full)) return;
+  const real = realpathSync(full);
+  const inside = relative(realRoot, real);
+  if (inside === "" || inside.startsWith("..") || isAbsolute(inside)) return;
+  if (statSync(real).isFile()) files.set(relative(root, full).split(sep).join("/"), real);
 }
 
 /**
  * The file a repository path names: any file of the private repository first, then a file of the
- * cache that the lock lists. A symbolic link counts only when its real path stays in its root.
+ * cache that the lock lists.
  */
 function servedFile(cache: ServedCache, urlPath: string): string | undefined {
   let decoded: string;
@@ -128,12 +146,10 @@ function servedFile(cache: ServedCache, urlPath: string): string | undefined {
     if (error instanceof URIError) return undefined;
     throw error;
   }
-  const privateFile = fileInside(PRIVATE_REPOSITORY, decoded);
+  const name = decoded.startsWith("/") ? decoded.slice(1) : decoded;
+  const privateFile = servableFiles(PRIVATE_REPOSITORY).get(name);
   if (privateFile !== undefined) return privateFile;
-  const cached = fileInside(cache.directory, decoded);
-  if (cached === undefined) return undefined;
-  const name = relative(realpathSync(cache.directory), cached).split(sep).join("/");
-  return cache.locked.has(name) ? cached : undefined;
+  return cache.locked.has(name) ? servableFiles(cache.directory).get(name) : undefined;
 }
 
 /** Maven's checksum requests: the digest of the file the repository serves, computed on demand. */

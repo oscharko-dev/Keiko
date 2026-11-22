@@ -68,7 +68,7 @@ function npmPackument(path: string): RepositoryPathAdmission | undefined {
       : npmPackageName([encoded[1] ?? "", encoded[2] ?? ""]);
   // For a plain path the name must be the whole path: `pkg/extra` names `pkg` and is not a packument.
   if (name === undefined || (encoded === null && name !== path)) return undefined;
-  return { ok: true, kind: "npm-packument", upstreamPath: name.replace("/", "%2F") };
+  return { ok: true, kind: "npm-packument", upstreamPath: name.replaceAll("/", "%2F") };
 }
 
 // `name/-/name-1.0.0.tgz`, `@scope/name/-/name-1.0.0.tgz`, and the `@scope/name-1.0.0.tgz` file path

@@ -196,11 +196,12 @@ describe("the run's Maven settings with the repository relay (#4522)", () => {
       ),
     ];
     expect(servers.map((match) => match[1]).sort()).toEqual(["corp", "plugins"]);
-    for (const [, , username, password] of servers) {
+    // The `<password>` of a relayed server is the run's capability, never the person's password.
+    for (const [, , username, capability] of servers) {
       expect(username).toBe("keiko-relay");
-      expect(password).not.toBe(MAVEN_PASSWORD);
+      expect(capability).not.toBe(MAVEN_PASSWORD);
       const ids = relayIdsOf(settings);
-      expect(ids.some((id) => run.relay.authenticate(id, password) !== undefined)).toBe(true);
+      expect(ids.some((id) => run.relay.authenticate(id, capability) !== undefined)).toBe(true);
     }
   });
 
@@ -389,14 +390,14 @@ describe("release and refusal (#4522)", () => {
   it("revokes every binding of the run when it is released, and no other run's", () => {
     const run = prepare(person({ maven: MAVEN_SETTINGS, npm: NPMRC }));
     const settings = run.settings();
-    const mavenPassword = /<password>([^<]+)<\/password>/u.exec(settings)?.[1];
+    const relayCapability = /<password>([^<]+)<\/password>/u.exec(settings)?.[1];
     const id = relayIdsOf(settings)[0] ?? "";
-    expect(run.relay.authenticate(id, mavenPassword)).toBeDefined();
+    expect(run.relay.authenticate(id, relayCapability)).toBeDefined();
     run.relay.releaseRun("another-run");
-    expect(run.relay.authenticate(id, mavenPassword)).toBeDefined();
+    expect(run.relay.authenticate(id, relayCapability)).toBeDefined();
     run.relay.releaseRun("run-relay-1");
-    expect(run.relay.authenticate(id, mavenPassword)).toBeUndefined();
-    expect(run.relay.wasRevoked(id, mavenPassword)).toBe(true);
+    expect(run.relay.authenticate(id, relayCapability)).toBeUndefined();
+    expect(run.relay.wasRevoked(id, relayCapability)).toBe(true);
     expect(run.relayLines.filter((line) => line.extra?.action === "release")).toHaveLength(4);
   });
 
@@ -647,12 +648,12 @@ describe("an aborted run revokes its bindings before it is released (#4522)", ()
       signal: controller.signal,
     });
     const settings = run.settings();
-    const mavenPassword = /<password>([^<]+)<\/password>/u.exec(settings)?.[1];
+    const relayCapability = /<password>([^<]+)<\/password>/u.exec(settings)?.[1];
     const id = relayIdsOf(settings)[0] ?? "";
-    expect(run.relay.authenticate(id, mavenPassword)).toBeDefined();
+    expect(run.relay.authenticate(id, relayCapability)).toBeDefined();
     controller.abort();
-    expect(run.relay.authenticate(id, mavenPassword)).toBeUndefined();
-    expect(run.relay.wasRevoked(id, mavenPassword)).toBe(true);
+    expect(run.relay.authenticate(id, relayCapability)).toBeUndefined();
+    expect(run.relay.wasRevoked(id, relayCapability)).toBe(true);
     expect(run.relayLines.filter((line) => line.extra?.action === "release")).toHaveLength(4);
   });
 
