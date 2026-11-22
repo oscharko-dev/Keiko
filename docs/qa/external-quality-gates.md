@@ -7,7 +7,7 @@ satisfies a required check.
 
 ## Current topology
 
-The stable protected set contains ten checks:
+The stable protected set contains nine checks:
 
 1. `ci`
 2. `workflow hygiene`
@@ -16,11 +16,13 @@ The stable protected set contains ten checks:
 5. `Build, scan, SBOM, smoke`
 6. `Review dependency diff (dev/main)`
 7. `ui`
-8. `SonarCloud Code Analysis`
-9. `Socket Security: Project Report`
-10. `Socket Security: Pull Request Alerts`
+8. `Socket Security: Project Report`
+9. `Socket Security: Pull Request Alerts`
 
-SonarCloud and Socket are independently required. CodeRabbit is supplemental: its provider status
+Socket is independently required. The full SonarCloud analysis runs after integration on every push
+to `dev`, not on pull requests (ADR-0131, amended 2026-11-21); a pull request is held by the
+`SonarJS rules on the changed files` step inside `ci`; the local pre-push scan supplements it and can
+be skipped. CodeRabbit is supplemental: its provider status
 is not required because quota can omit current-head review. When it emits an inline finding, the
 defect must be repaired and GitHub's required conversation-resolution rule blocks merge until the
 thread is resolved. Ignore, pause, bulk-resolution, dismissal, threshold relaxation, and admin
@@ -80,8 +82,10 @@ cross-repository context, and post-merge features remain disabled.
 
 ### SonarCloud and Socket
 
-SonarCloud remains required both through its native App context and the exact-head validator inside
-`ci`. Socket retains its two independently App-bound required contexts. Their current plan and
+SonarCloud is no longer required (ADR-0131 amendment 2026-11-21). Its full analysis and the
+exact-SHA validator `scripts/check-sonar-main-quality-gate.mjs` run on every push to `dev` and on a
+manual dispatch; pull requests are held by `check:sonar-rules` inside `ci`, supplemented by the
+skippable local pre-push scan. Socket retains its two independently App-bound required contexts. Their current plan and
 producer identities are checked during branch-protection audits; repository secrets, endpoints, and
 finding bodies never enter committed evidence.
 

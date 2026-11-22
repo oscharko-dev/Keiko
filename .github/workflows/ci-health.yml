@@ -1,0 +1,49 @@
+# Quality-gate hardening plan 2026-11-21, P6: the gates' own health, measured on a schedule.
+#
+# The plan's baseline (cancelled runs, failed verdicts, heads measured twice, verdict times, the
+# jobs that fail most) was taken once, by hand, from the Actions API. Nothing re-asked the question,
+# so a gate drifting back towards that state would only surface when it broke someone's pull
+# request. This lane re-measures the last seven days of ci.yml pull-request runs every week, writes
+# the report to the job summary, and fails when a no-regression ceiling in
+# scripts/report-ci-health.mjs is crossed.
+#
+# Detection only: it reads run and job metadata (no log, artifact or code), changes nothing and
+# files nothing. No `npm ci`: the report imports only Node builtins and `scripts/lib`.
+name: CI gate health
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ci-health
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Measure the pull-request gates
+    runs-on: ubuntu-latest
+    # A healthy report reads about a thousand runs and forty job lists in under two minutes; 10
+    # bounds a stalled API without truncating a healthy run.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Report gate health against its ceilings
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: node scripts/report-ci-health.mjs --days 7

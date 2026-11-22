@@ -4,6 +4,8 @@ import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
 import prettier from "eslint-config-prettier";
 
+import { testDeterminismPlugin } from "./scripts/lib/eslint-test-determinism.mjs";
+
 const sonarCompatibilityPlugin = {
   rules: {
     "no-fractional-numeric-separators": {
@@ -164,6 +166,18 @@ export default defineConfig(
   {
     files: ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs", "**/*.spec.ts", "**/*.spec.tsx"],
     rules: { "max-lines-per-function": "off" },
+  },
+  // Quality-gate hardening plan 2026-11-21, P3: the three test patterns whose verdict depends on the
+  // machine, the clock or chance. Existing occurrences are held in the shrink-only register
+  // eslint-suppressions.json; prune it with `node scripts/lint-repository.mjs --prune-suppressions`.
+  {
+    files: ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs", "**/*.spec.ts", "**/*.spec.tsx"],
+    plugins: { "keiko-test-determinism": testDeterminismPlugin },
+    rules: {
+      "keiko-test-determinism/no-unguarded-wall-clock-assertion": "error",
+      "keiko-test-determinism/no-fixed-sleep": "error",
+      "keiko-test-determinism/no-short-hex-negative-substring": "error",
+    },
   },
   // KEIKO-0761 shipped the exemption above, which makes any `// eslint-disable-next-line
   // max-lines-per-function` comment inside a spec file dead — ESLint reports each as unused

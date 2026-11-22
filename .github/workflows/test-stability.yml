@@ -1,0 +1,99 @@
+# Quality-gate hardening plan 2026-11-21, P3: find non-deterministic tests before a pull request does.
+#
+# Vitest and Playwright run with zero retries, so a test whose verdict depends on order, load or
+# chance fails an unrelated pull request, and its author pays a full matrix to learn nothing. This
+# lane runs the same tree several times every night: each unit-suite shard three times with
+# different shuffle seeds, and the smoke journeys three times each. scripts/report-unstable-tests.mjs
+# names every test whose verdict changed between runs, and every one that failed each time, in the
+# job summary, and turns the lane red. It is intentionally NOT a required check: a nightly red is a
+# signal to fix the named test, not a merge blocker.
+name: Test stability
+
+on:
+  schedule:
+    - cron: "40 2 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: test-stability
+  cancel-in-progress: false
+
+jobs:
+  unit:
+    name: Unit-suite stability (shard ${{ matrix.shard }}/8)
+    runs-on: ubuntu-latest
+    # Three shuffled passes of one eighth of the unit suites take about 30 minutes on a hosted
+    # runner; 90 bounds a hung pass without truncating a healthy one.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install workspaces
+        run: npm ci --ignore-scripts
+      # The verification runner enforces its network:none boundary or fails closed, exactly as in
+      # the coverage shards; never weaken it to inherited networking for a test run.
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
+      - name: Provision the USearch HNSW runtime (Epic #2556)
+        run: npm run provision:usearch
+      - name: Build internal packages
+        run: npm run build:packages
+      - name: Run the shard three times in shuffled order and compare verdicts
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+          MATRIX_SHARD: ${{ matrix.shard }}
+        run: node scripts/report-unstable-tests.mjs vitest --shard "${MATRIX_SHARD}/8" --repeats 3
+
+  smoke:
+    name: Smoke-journey stability
+    runs-on: ubuntu-latest
+    # The chromium smoke takes about 12 minutes on the ui job; three repetitions and the UI build
+    # fit well inside 75.
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install workspaces
+        run: npm ci --ignore-scripts
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
+      - name: Build internal packages
+        run: npm run build:packages
+      - name: Build UI (static export)
+        run: npm run build --workspace @oscharko-dev/keiko-ui
+      - name: Install Playwright browser
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+      - name: Run every smoke journey three times
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/smoke-stability.json
+        # A failing journey is the lane's input, not its verdict: the report below decides, so a
+        # red repetition must not end the step before the report is read.
+        run: npm run test:e2e:smoke -- --repeat-each=3 --retries=0 --reporter=json || true
+      - name: Compare the smoke verdicts
+        env:
+          SMOKE_REPORT: ${{ runner.temp }}/smoke-stability.json
+        run: node scripts/report-unstable-tests.mjs playwright "${SMOKE_REPORT}"

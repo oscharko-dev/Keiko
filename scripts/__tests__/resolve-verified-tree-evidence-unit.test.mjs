@@ -158,6 +158,8 @@ describe("candidateProvedEveryReusedJob", () => {
     "Portable secure-read smoke (macos-x64)",
     "Firefox smoke (shard 1/2)",
     "Firefox smoke (shard 2/2)",
+    "WebKit smoke (shard 1/2)",
+    "WebKit smoke (shard 2/2)",
     "ui",
     "Cross-platform smoke (ubuntu-latest)",
     "Coverage shard (scripts 1/3)",
@@ -209,8 +211,13 @@ describe("candidateProvedEveryReusedJob", () => {
     await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
   });
 
-  it.each([1, 2])("requires successful exact evidence for Firefox shard %s", async (shard) => {
-    const name = `Firefox smoke (shard ${shard}/2)`;
+  it.each([
+    ["Firefox", 1],
+    ["Firefox", 2],
+    ["WebKit", 1],
+    ["WebKit", 2],
+  ])("requires successful exact evidence for %s shard %s", async (browser, shard) => {
+    const name = `${browser} smoke (shard ${shard}/2)`;
     const missing = everyJob.filter((job) => job.name !== name);
     for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
       const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
@@ -266,6 +273,10 @@ describe("resolveEvidence", () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
+    // A CI runner sets GITHUB_EVENT_PATH to its own event; an `edited` run would otherwise drive
+    // the pull-request branch with that payload instead of the fixture below.
+    delete process.env.GITHUB_EVENT_PATH;
+    delete process.env.KEIKO_CANDIDATE_TREE_SHA;
     process.env.KEIKO_EVENT_NAME = "push";
     process.env.KEIKO_REPOSITORY = REPO;
     process.env.KEIKO_HEAD_SHA = SHA;

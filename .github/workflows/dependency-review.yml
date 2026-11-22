@@ -36,6 +36,7 @@ jobs:
     name: Review dependency diff (dev/main)
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:

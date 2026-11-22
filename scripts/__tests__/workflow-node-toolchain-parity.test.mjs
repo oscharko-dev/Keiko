@@ -211,8 +211,11 @@ describe("workflow Node toolchain parity", () => {
     // The sole Node 26 baseline retires one duplicate compatibility-job setup.
     // The owner-dispatched npm folder lane (ADR-0121 D9) adds three: its native-hardware qualify
     // matrix and the publisher's prepare and publish jobs. The pipe-relay supervisor build and
-    // proof of ADR-0043 D21 (windows-gateway-confinement.yml relay-confinement) adds one.
-    expect(withSetupNode).toHaveLength(41);
+    // proof of ADR-0043 D21 (windows-gateway-confinement.yml relay-confinement) adds one. The
+    // weekly gate health report (ci-health.yml, quality-gate hardening plan P6) adds one. The
+    // nightly test-stability lane (P3) adds two: its unit-shard matrix and its smoke job. WebKit's
+    // isolated smoke matrix (P5), split out of the ui job, adds one.
+    expect(withSetupNode).toHaveLength(45);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

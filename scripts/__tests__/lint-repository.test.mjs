@@ -1,12 +1,27 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import config from "../../eslint.config.js";
 import {
+  PEAK_RSS_BUDGET_BYTES,
+  forwardedArgs,
   globalIgnores,
   lintPartitions,
+  peakBudgetFailures,
+  peakSummary,
   runPartitions,
   workspacePackages,
 } from "../lint-repository.mjs";
+
+const GIB = 1024 ** 3;
+const REPORTER = pathToFileURL(
+  join(dirname(fileURLToPath(import.meta.url)), "..", "lib", "peak-rss-reporter.mjs"),
+).href;
 
 // #4182 (2026-11-02): one `eslint .` over the monorepo died with "JavaScript heap out of memory" at
 // the 12 GiB ceiling. The repository lint now runs one ESLint process per workspace package and one
@@ -78,4 +93,158 @@ describe("lint partitions", () => {
     expect(seen).toStrictEqual(["packages/a", "packages/b", "."]);
     expect(failed).toStrictEqual(["packages/a"]);
   });
+});
+
+// Quality-gate hardening plan 2026-11-21, P1: a partition that outgrows the runner must fail with
+// its name and peak while the runner can still report, not die of memory with no reason given.
+describe("lint peak memory budget", () => {
+  it("is three quarters of the 16 GiB hosted runner", () => {
+    expect(PEAK_RSS_BUDGET_BYTES).toBe(12 * GIB);
+  });
+
+  it("accepts a peak at the budget and names one above it", () => {
+    expect(
+      peakBudgetFailures([
+        { label: "packages/a", peakBytes: 8.7 * GIB },
+        { label: "packages/b", peakBytes: PEAK_RSS_BUDGET_BYTES },
+        { label: "packages/c", peakBytes: PEAK_RSS_BUDGET_BYTES + 1 },
+      ]),
+    ).toStrictEqual(["packages/c: peaked at 12.0 GiB, above the 12.0 GiB budget"]);
+  });
+
+  it.each([Number.NaN, 0, -1, Number.POSITIVE_INFINITY])(
+    "treats an unmeasured peak (%s) as a failure",
+    (peakBytes) => {
+      expect(peakBudgetFailures([{ label: "repository root", peakBytes }])).toStrictEqual([
+        "repository root: no peak was measured",
+      ]);
+    },
+  );
+
+  it("summarizes every partition for the job summary", () => {
+    expect(
+      peakSummary([
+        { label: "packages/a", peakBytes: 2 * GIB },
+        { label: "repository root", peakBytes: Number.NaN },
+      ]),
+    ).toBe(
+      [
+        "### Lint peak resident memory (budget 12.0 GiB)",
+        "",
+        "| Partition | Peak GiB |",
+        "| --- | --- |",
+        "| packages/a | 2.0 |",
+        "| repository root | unmeasured |",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("measures a child process's real peak through the preloaded reporter", () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-peak-"));
+    const file = join(directory, "peak.txt");
+    try {
+      const allocate =
+        "const kept = []; for (let i = 0; i < 16; i += 1) kept.push(Buffer.alloc(8 * 1024 * 1024, 1));";
+      const result = spawnSync(process.execPath, ["--import", REPORTER, "-e", allocate], {
+        env: { ...process.env, KEIKO_PEAK_RSS_FILE: file },
+      });
+      expect(result.status).toBe(0);
+      const peak = Number(readFileSync(file, "utf8").trim());
+      // 128 MiB were kept resident; the peak is reported in bytes, not kibibytes.
+      expect(peak).toBeGreaterThan(128 * 1024 * 1024);
+      expect(peak).toBeLessThan(4 * GIB);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  // CodeRabbit on #4513: a budget read only after exit cannot stop a partition that takes the runner
+  // down. The child below holds its main thread in synchronous work, as a TypeScript program build
+  // does, so only a watchdog with its own event loop can stop it before it finishes.
+  // Windows reports a killed process without a POSIX signal name.
+  it.skipIf(process.platform === "win32")(
+    "stops a process the moment it grows past the budget, even while its main thread is busy",
+    () => {
+      const directory = mkdtempSync(join(tmpdir(), "keiko-peak-"));
+      const file = join(directory, "peak.txt");
+      try {
+        const busy =
+          "const kept = [Buffer.alloc(64 * 1024 * 1024, 1)]; const end = Date.now() + 10_000;" +
+          " while (Date.now() < end) kept.length; console.log('survived');";
+        const result = spawnSync(process.execPath, ["--import", REPORTER, "-e", busy], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            KEIKO_PEAK_RSS_FILE: file,
+            KEIKO_PEAK_RSS_BUDGET_BYTES: String(32 * 1024 * 1024),
+          },
+        });
+        expect(result.stdout).not.toContain("survived");
+        expect(result.signal).toBe("SIGKILL");
+        expect(result.stderr).toContain("exceeded the budget of 33554432");
+        // The size it reached is recorded, so the partition fails with a measured peak.
+        expect(Number(readFileSync(file, "utf8").trim())).toBeGreaterThan(32 * 1024 * 1024);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("leaves a process inside its budget to finish and report its peak", () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-peak-"));
+    const file = join(directory, "peak.txt");
+    try {
+      const result = spawnSync(
+        process.execPath,
+        ["--import", REPORTER, "-e", "console.log('ok')"],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            KEIKO_PEAK_RSS_FILE: file,
+            KEIKO_PEAK_RSS_BUDGET_BYTES: String(4 * GIB),
+          },
+        },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("ok\n");
+      expect(Number(readFileSync(file, "utf8").trim())).toBeGreaterThan(0);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("writes nothing without a target file", () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-peak-"));
+    try {
+      const env = { ...process.env };
+      delete env.KEIKO_PEAK_RSS_FILE;
+      const result = spawnSync(process.execPath, ["--import", REPORTER, "-e", "0"], {
+        cwd: directory,
+        env,
+      });
+      expect(result.status).toBe(0);
+      expect(existsSync(join(directory, "peak.txt"))).toBe(false);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("lint argument forwarding", () => {
+  it("forwards pruning, once, and nothing by default", () => {
+    expect(forwardedArgs([])).toEqual([]);
+    expect(forwardedArgs(["--prune-suppressions", "--prune-suppressions"])).toEqual([
+      "--prune-suppressions",
+    ]);
+  });
+
+  // The test-determinism register may only shrink through this command.
+  it.each([["--suppress-all"], ["--suppress-rule"], ["--fix"], ["packages/keiko-server"]])(
+    "refuses %s",
+    (arg) => {
+      expect(() => forwardedArgs([arg])).toThrow(TypeError);
+    },
+  );
 });

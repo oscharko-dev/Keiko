@@ -11,6 +11,10 @@
   code-head and metadata runs, because SonarCloud refuses the older of two overlapping reports and
   a body edit right after a push left the required `SonarCloud Code Analysis` check `cancelled` on
   an unchanged, clean head (PR #3679). The rest of D5 is unchanged.
+- D5 amended 2026-11-21: a pull request has one workflow-level concurrency group. A push or a base
+  retarget cancels the run in flight; a title or body edit cancels nothing and waits as the pending
+  run, then reuses the evidence of an unchanged candidate merge tree
+  ([ADR-0178](ADR-0178-reuse-proven-tree-evidence-on-integration-runs.md) D6).
 - Amends: [ADR-0131](ADR-0131-ci-based-sonarcloud-analysis-and-banking-grade-gate.md) (D1, the
   topology of the `coverage-sonar` job; every other ADR-0131 decision stands)
 - Extends: [ADR-0156](ADR-0156-measurement-and-verdict-separation.md) (D1, the producer/judge
@@ -134,16 +138,29 @@ merge-relevant metadata: `check:review-bot-suppression` reads the title and body
 changes the candidate boundary. Reusing the preceding green `ci` result would therefore let changed
 metadata bypass the required verdict. The complete pipeline reruns because publishing a lightweight
 success under the same required context could mask a failed code-head run on the same commit.
+Since 2026-11-21 (amendment below) an edit run checks the metadata itself and reuses only a
+*completed, successful* run of the identical candidate merge tree, so neither bypass nor masking
+is possible: an earlier run that failed or is still in flight is never evidence.
 Closed/merged metadata edits are excluded at every candidate job and the aggregate before checkout
 (ADR-0139 D4, #4042). They have no live merge candidate and cannot reuse a stale event base/head
 to judge the squash commit. This admission does not change the two concurrency classes below.
 
-The two event classes use separate per-pull-request concurrency groups. Code-head runs supersede
-older code-head evidence, while metadata runs supersede older metadata evidence; an edit cannot
-evict a queued exact-head measurement, and a push cannot discard a metadata verdict before the
-metadata gate observes it. The event payload still binds every run to an immutable head SHA, so a
-later push makes an older metadata run irrelevant to the new merge candidate even if that run is
-already executing.
+**Amendment (2026-11-21) — one group per pull request; an edit waits instead of re-measuring.**
+Until 2026-11-21 the two event classes used separate per-pull-request groups, so an edit right after
+a push ran a second full matrix next to the push run on the same head. Pull requests now share one
+group, `ci-pr-<number>`. `cancel-in-progress` is true for every pull-request event except an `edited`
+event without a `base` change: a push or a base retarget replaces the merge candidate and cancels
+the run that measures the old one, while a title or body edit cancels nothing, waits as the pending
+run until the run in flight finishes, and then reuses that run's evidence when the candidate merge
+tree is unchanged (ADR-0178 D6). Nothing is lost when a newer run replaces a pending one: every
+pull-request run checks the title and body its own payload carries, and measures the full matrix
+whenever it cannot reuse evidence for its exact tree. The event payload still binds every run to an
+immutable head SHA, so a later push makes an older edit run irrelevant to the new merge candidate.
+
+The superseded text, kept for the record: the two event classes used separate per-pull-request
+concurrency groups. Code-head runs superseded older code-head evidence, while metadata runs
+superseded older metadata evidence; an edit could not evict a queued exact-head measurement, and a
+push could not discard a metadata verdict before the metadata gate observed it.
 
 Cancellation only reaches a job whose `if:` lets it. To cancel a run, GitHub re-evaluates the `if:`
 of every running job and keeps any job whose condition is still true, and `always()` always is. The

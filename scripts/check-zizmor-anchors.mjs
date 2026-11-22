@@ -347,7 +347,7 @@ export function main(io = {}) {
   if (failures.length > 0) {
     for (const failure of failures) console.error(`zizmor-anchors: FAIL — ${failure}`);
     console.error(
-      "zizmor-anchors: run `npm run check:zizmor-anchors -- --fix` to re-pin anchors that only shifted.",
+      "zizmor-anchors: run `npm run check:zizmor-anchors -- --fix` (or `node scripts/fix-gate-drift.mjs`) to re-pin anchors that only shifted.",
     );
     process.exitCode = 1;
     return;

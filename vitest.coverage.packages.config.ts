@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import DurationSequencer from "./scripts/lib/vitest-duration-sequencer.mjs";
 import { vitestMaxWorkers } from "./scripts/lib/vitest-workers.mjs";
 
 import { PACKAGE_COVERAGE_GATE_SCRIPTS } from "./scripts/lib/package-coverage-gate-scripts.mjs";
@@ -35,6 +36,10 @@ export default defineConfig({
     // likely to exceed vitest's 5s default under scheduler load, so a drift here false-REDs the
     // release-blocking coverage gate. scripts/__tests__/vitest-config-parity.test.mjs enforces parity.
     testTimeout: 15_000,
+    // Quality-gate plan P5: the CI shards split the files by measured time, not by path hash, so
+    // no shard draws all the slow suites (scripts/lib/vitest-duration-sequencer.mjs). Every file
+    // still runs on exactly one shard; a stale time only worsens the balance.
+    sequence: { sequencer: DurationSequencer },
     coverage: {
       provider: "v8",
       // "lcov" feeds SonarCloud CI-based analysis (ADR-0134, sonar.javascript.lcov.reportPaths);

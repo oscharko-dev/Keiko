@@ -13,7 +13,9 @@ to this decision's delivery rules; and amended 2026-09-03 so the PR Sonar check 
 full candidate tree with the same cache posture as the `dev` push. The protected set is unchanged
 by those amendments. Amended by owner decision on 2026-10-10: only the `oscharko` account may
 authorize and execute `dev` integration, including native auto-merge; owner-authored PRs remain
-possible without an additional approving review.
+possible without an additional approving review. Amended by owner decision on 2026-11-21 with the
+ADR-0131 amendment of that date: SonarCloud leaves the protected set and the pull-request path, and
+the full analysis runs on `dev` after integration.
 
 ## Amends
 
@@ -90,8 +92,8 @@ identify the unreviewed files. It must not issue a clean verdict by omission.
 
 Branch protection requires direct, exact-head checks whose producers are app-bound and whose
 workloads are deterministic and bounded. The required set covers CI aggregation, action security,
-CodeQL, build/SBOM/smoke, dependency review, UI functionality and accessibility, OSV, SonarQube
-Cloud, and Socket Security. Integration additionally requires owner authority under D1 and D6.
+CodeQL, build/SBOM/smoke, dependency review, UI functionality and accessibility, OSV, and Socket
+Security. SonarQube Cloud left that set with the ADR-0131 amendment of 2026-11-21 (see below). Integration additionally requires owner authority under D1 and D6.
 GitHub native auto-merge may integrate only after those checks succeed and every review conversation
 is resolved.
 
@@ -114,6 +116,15 @@ target-branch sensor cache and proves full-project breadth from its own scanner 
 or cache-restored PR analysis cannot authorize integration merely because the same workflow performs
 a fresh scan after merge. This closes incident #3377, where an already-red `dev` was followed by a
 green incremental PR verdict and another red post-merge scan.
+
+The ADR-0131 amendment of 2026-11-21 retires that required Sonar run. The full-project scan needs a
+bridge heap of about 10 GB beside the scanner engine on a 16 GB hosted runner, and its verdict
+depended on the runner rather than on the change (#4481); splitting the TypeScript program was
+measured and did not fit either. A pull request is now held by `check:sonar-rules` over its changed
+files inside the required `ci`; the local pre-push scan supplements it, can be skipped and is no
+pull-request check. Neither is represented as full-project merge evidence: the full analysis and its Banking Grade validator run on every push to
+`dev`, a finding there turns the `dev` run red, and the next pull request repairs it. The #3377
+sequence is therefore possible again and is accepted by the owner; the red `dev` run is its signal.
 
 The required `ci` aggregate also owns native secure-read qualification on Linux x64, Windows x64,
 macOS arm64, and macOS x64. Each leg freshly compiles the product helper and executes the same
@@ -178,7 +189,7 @@ repair path.
 
 Full mutation testing remains strict but runs daily and through explicit dispatch. Focused mutation
 is a pre-publication tool for critical changes when its scope is tractable. The synchronous PR path
-instead requires deterministic coverage ratchets, Sonar New Code analysis, architecture and sandbox
+instead requires deterministic coverage ratchets, changed-file SonarJS rules, architecture and sandbox
 gates, security scans, and affected behavior/E2E tests. Mutation debt may never be hidden or lowered
 to obtain green status.
 

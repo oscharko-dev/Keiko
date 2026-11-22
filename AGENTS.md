@@ -225,6 +225,7 @@ This shapes the product _and_ how you work on it:
 npm install               # installs all workspaces from the single root lockfile
 npm run provision:usearch # ONCE per checkout — see below; without it `npm test` is red
 npm run provision:ripgrep # ONCE per checkout for the OpenCode coding runtime's search tools — see below
+node scripts/install-git-hooks.mjs     # ONCE per checkout — the pre-push SonarJS scan (§3)
 npm run build             # build:packages (tsc -b) then the root build
 npm run dev:start         # Node BFF + Next.js UI on ONE loopback URL (http://127.0.0.1:1983)
 npm run dev:stop
@@ -322,7 +323,14 @@ npm run gates:sonar
 
 **This is mandatory before you open or update a pull request against `dev`.** It runs a real SonarJS
 analyzer against your diff in a self-hosted, digest-pinned container and exits non-zero if it finds
-anything. It never contacts sonarcloud.io.
+anything. It never contacts sonarcloud.io. After `node scripts/install-git-hooks.mjs`,
+`.githooks/pre-push` runs it on every push and stops the push on a finding or on a scan that cannot run.
+
+The full SonarCloud analysis is not a pull-request check (ADR-0131, amended 2026-11-21): the
+whole-project scan needs most of a hosted runner's memory, and its verdict depended on the runner
+rather than on the change. It runs on every push to `dev`; a finding there turns the `dev` run red
+and the next pull request repairs it. On a pull request, `ci` runs `check:sonar-rules` over the
+changed files, and this local scan covers the rules that gate cannot see.
 
 Run it because `npm run check:sonar-rules` cannot answer the question. That gate runs
 `eslint-plugin-sonarjs`, which carries 279 rules in every published version up to 4.2.0; SonarCloud
@@ -330,8 +338,8 @@ runs the full analyzer, which carries hundreds more. `S7786` (throw `TypeError`,
 type check), `S7755` (`.at(-1)`, not `[x.length - 1]`), `S7778` (one `push` with several arguments)
 and `S7776` (a `Set`, not `.includes()` on a constant array) are in that gap and exist in **no**
 version of the plugin. Each of them has already cost this repository a full CI round, and the
-`Coverage and SonarCloud` job demands zero unresolved issues — so one MINOR of that class fails the
-required `ci` context. A green `check:sonar-rules` says nothing about any of them.
+full analysis on `dev` demands zero unresolved issues — so one MINOR of that class turns `dev` red
+after the merge. A green `check:sonar-rules` says nothing about any of them.
 
 What it is and is not, and how to read a disagreement with CI:
 [`docs/qa/local-sonar.md`](docs/qa/local-sonar.md).
@@ -1626,6 +1634,13 @@ second root review-policy file.
 - **E2E** lives in `tests/e2e/` and runs on Playwright (chromium is the reference browser; WebKit
   timing/render on CI is a software-render artifact — don't gate on it). Smoke: `npm run
 test:e2e:smoke`. Performance-evidence and per-feature suites have their own `test:e2e:*` scripts.
+- **Test files are held to three determinism rules** (`scripts/lib/eslint-test-determinism.mjs`):
+  no measured wall-clock duration compared outside `KEIKO_ENFORCE_WALL_CLOCK_BUDGETS`, no fixed
+  sleep outside a polling loop, and no negative substring assertion of at most four hexadecimal
+  characters, which a digest contains by chance (#4481). Older occurrences sit in the shrink-only
+  root `eslint-suppressions.json`; after removing one, run
+  `node scripts/lint-repository.mjs --prune-suppressions` and lower the ceiling in
+  `scripts/__tests__/test-determinism-register.test.mjs`.
 - Cover the input space, not one happy path: empty, boundary, malformed, and hostile inputs;
   both branches of every guard you add.
 - **Pure text rules also get seeded property tests** (`*.property.test.ts`) on the repo-owned
@@ -1675,8 +1690,7 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 
   `ci` · `workflow hygiene` · `Analyze (actions)` · `Analyze (javascript-typescript)` ·
   `Build, scan, SBOM, smoke` · `Review dependency diff (dev/main)` · `ui` ·
-  `SonarCloud Code Analysis` · `Socket Security: Project Report` ·
-  `Socket Security: Pull Request Alerts`.
+  `Socket Security: Project Report` · `Socket Security: Pull Request Alerts`.
 
   `workflow hygiene` is one context running actionlint, the pinned-SHA grep, zizmor and the OSV
   lockfile scan as serial steps of one job (ADR-0159) — same tools, same pinned versions, same rule
@@ -1696,7 +1710,8 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   repository variable, credential consumer, or protected context here.
   The hosted performance dashboard and quota-paced reviewer evaluated in ADR-0169 are fully
   retired: neither has repository configuration, an installed App, a workflow, or a protected
-  context. Sonar remains independently required and revalidated inside `ci`. Full mutation and
+  context. Sonar holds a pull request through the SonarJS rule step inside `ci`; the pre-push scan
+  is a skippable local supplement, and the full analysis runs on `dev` after integration (ADR-0131). Full mutation and
   reference-machine performance evidence run outside the PR critical path; fast OSS duplicate,
   secret, and deterministic performance proxies run inside `ci` in parallel.
 

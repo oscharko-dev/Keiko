@@ -449,7 +449,11 @@ export async function startObservedBff(
   }
 }
 
-async function canonicalCompactionPrompts() {
+/**
+ * The canonical compaction system prompts, read from the built server. The first call imports the
+ * built modules, which takes seconds; tests call it once before their cases for that reason.
+ */
+export async function canonicalCompactionPrompts() {
   const { SUMMARY_SYSTEM_PROMPT } = await importBuilt(
     "keiko-server",
     "chat-compaction-model-summary.js",

@@ -3,8 +3,12 @@ import { readFileSync, mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MODEL, startRuntime } from "../testing/chat-skills-lab/runtime.mjs";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  MODEL,
+  canonicalCompactionPrompts,
+  startRuntime,
+} from "../testing/chat-skills-lab/runtime.mjs";
 
 const ports = vi.hoisted(() => ({ fork: vi.fn(), session: vi.fn() }));
 vi.mock("node:child_process", async (original) => ({ ...(await original()), fork: ports.fork }));
@@ -13,6 +17,14 @@ vi.mock("../testing/coding-workbench-lab/lab-common.mjs", async (original) => ({
   openApiSession: ports.session,
 }));
 let directory, upstream, runtime, proxyUrl;
+
+// startRuntime reads the canonical compaction prompts from the built server on its first call. Cold,
+// that import took 6.8 s of the first case's 15 s on a quiet machine and the whole budget on a
+// loaded coverage runner (CI run 44952862116), while every later case took milliseconds. Paying it
+// once here keeps each case measuring the construction it tests.
+beforeAll(async () => {
+  await canonicalCompactionPrompts();
+}, 120_000);
 
 beforeEach(async () => {
   directory = mkdtempSync(join(tmpdir(), "keiko-physical-retention-"));
