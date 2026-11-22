@@ -2446,7 +2446,13 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   reach a second destination or reuse an ssh-agent or container socket; at Full access
   (`autonomous-delivery`) egress is inherited and stays bounded by the accepted Authority Envelope
   and the per-action policy. An absent disposition means loopback-only (fail closed); the
-  disposition is part of the policy digest. The child inherits the launcher's allowlisted
+  disposition is part of the policy digest. Loopback stays open as a whole below Full access
+  (decision 2026-11-22, #4521): narrowing it to Keiko's own ports, the rule the mapped profile
+  enforces, breaks a project's own checks. A test suite that serves and fetches on an ephemeral port
+  and a dev server a second process of the run calls both run natively and are refused `EPERM` under
+  that rule (`runtime-gateway.test.ts`, "loopback decision"). What follows is published as a limit:
+  below Full access a run's shell can reach any port a program on this machine serves on loopback,
+  a local forwarding proxy included. The child inherits the launcher's allowlisted
   environment (`PATH`, locale, `TZ`, `TERM`, `SHELL`) with the attested Git directory first, so the
   agent's shell finds the project's toolchains the way it does standalone; the mapped profiles
   still inherit nothing. An operator's explicit OpenSSL and FIPS configuration is kept as a

@@ -100,9 +100,9 @@ describe("release dispatch guard (#3505, ADR-0177 D9)", () => {
   });
 
   it("starts the publish only after authorization and macOS qualification succeeded", () => {
-    expect(publish.needs).toStrictEqual(["authorize", "qualify-customer-shape"]);
+    expect(publish.needs).toStrictEqual(["authorize", "qualify-customer-shape", "native-boundary"]);
     expect(normalized(publish.if)).toBe(
-      "${{ !cancelled() && needs.authorize.result == 'success' && needs.qualify-customer-shape.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}",
+      "${{ !cancelled() && needs.authorize.result == 'success' && needs.qualify-customer-shape.result == 'success' && needs.native-boundary.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}",
     );
     expect(impliedSuccessTraps(release)).toStrictEqual([]);
   });

@@ -494,13 +494,21 @@ security block that omits `verificationChecks`, or asserts any single platform c
 `signatureVerified`, is refused — a half-truthful mix is not a lane.
 
 **What is genuinely given up.** On **macOS** the Endpoint Security system extension is not active:
-it requires an Apple-entitled, notarized, user-approved install. Descendant containment is therefore
-NOT proven, and process supervision is weaker — the runtime declares the `macos-app-sandbox` backend
-and spawns through the dev-lane process backend rather than claiming an Endpoint Security
-containment it does not have. On **Windows** the Job Object supervisor needs no signature, so the
-native backend and its `windows-job-object` containment are unchanged and real. No integrity
-guarantee is given up on either platform; what is given up is platform provenance on both, and
-descendant containment on macOS only.
+it requires an Apple-entitled, notarized, user-approved install. The runtime therefore declares the
+`macos-app-sandbox` backend and spawns through the dev-lane process backend rather than claiming an
+Endpoint Security containment it does not have. Descendants are ended through the run's Seatbelt
+sandbox instance instead (amended 2026-11-22, #4521; `darwinRuntimeDescendants.ts`): when the
+runtime ends, a member inside the run's sandbox identifies every remaining process of that instance,
+including one that left the process group, started a new session or was adopted by launchd, and the
+sweep ends them until the kernel answers that none remains. An end it cannot prove is recorded as
+unproven, never as clean (`coding-runtime.descendants.swept`). A settled run keeps its runtime for
+the undo window (#3904 AC3), and what its shell started lives with it; the next run, Stop, takeover,
+the window's end, a crash or Keiko's shutdown ends the runtime and with it every process of its
+tree. The macOS native boundary lane proves this from a run's shell for a process that ignores
+SIGHUP, a double fork, a new session and a file watcher. On **Windows** the Job Object supervisor
+needs no signature, so the native backend and its `windows-job-object` containment are unchanged
+and real. No integrity guarantee is given up on either platform; what is given up is platform
+provenance on both, and the Endpoint Security layer on macOS only.
 
 **How an unsigned install launches at all (first-run mechanics).** Amended after v0.3.0-beta.0
 shipped: its first customer double-click found three dead ends, each of which is now governed here.

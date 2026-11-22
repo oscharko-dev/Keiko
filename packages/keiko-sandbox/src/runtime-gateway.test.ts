@@ -1060,6 +1060,42 @@ function connectProbe(host: string, port: number): string {
   ].join("");
 }
 
+// #4521: a test suite's own server, served and fetched by one process on an ephemeral port.
+const SELF_SERVED_FETCH = [
+  "const http = require('node:http');",
+  "const server = http.createServer((q, r) => r.end('ok'));",
+  "const done = (fact) => { process.stdout.write(fact); server.close(); };",
+  "server.on('error', (e) => done('LISTEN:' + e.code));",
+  "server.listen(0, '127.0.0.1', () => {",
+  "  const q = http.get({ host: '127.0.0.1', port: server.address().port, timeout: 2500 }, (r) => {",
+  "    r.resume(); r.on('end', () => done('SERVED'));",
+  "  });",
+  "  q.on('error', (e) => done('BLOCKED:' + e.code));",
+  "  q.on('timeout', () => { q.destroy(); done('TIMEOUT'); });",
+  "});",
+].join("\n");
+
+// #4521: a dev server one process starts, called by a second process of the same tree.
+const SECOND_PROCESS_FETCH = [
+  "const { spawn, spawnSync } = require('node:child_process');",
+  "const serve = \"const s = require('node:http').createServer((q, r) => r.end('ok'));\" +",
+  "  \"s.on('error', (e) => { process.stdout.write('LISTEN:' + e.code + '\\\\n'); process.exit(0); });\" +",
+  "  \"s.listen(0, '127.0.0.1', () => process.stdout.write(String(s.address().port) + '\\\\n'));\";",
+  "const server = spawn(process.execPath, ['-e', serve], { stdio: ['ignore', 'pipe', 'ignore'] });",
+  "let line = '';",
+  "server.stdout.on('data', (chunk) => {",
+  "  line += chunk; if (!line.includes('\\n')) return;",
+  "  const answer = line.trim();",
+  "  if (answer.startsWith('LISTEN:')) { process.stdout.write(answer); server.kill(); return; }",
+  "  const fetch = \"const q = require('node:http').get({ host: '127.0.0.1', port: \" + answer +",
+  "    \", timeout: 2500 }, (r) => { r.resume(); r.on('end', () => process.stdout.write('SERVED')); });\" +",
+  "    \"q.on('error', (e) => process.stdout.write('BLOCKED:' + e.code));\" +",
+  "    \"q.on('timeout', () => { q.destroy(); process.stdout.write('TIMEOUT'); });\";",
+  "  process.stdout.write(spawnSync(process.execPath, ['-e', fetch], { encoding: 'utf8' }).stdout);",
+  "  server.kill();",
+  "});",
+].join("\n");
+
 function connectUnixProbe(path: string): string {
   return [
     "const net = require('node:net');",
@@ -1668,6 +1704,42 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
       }
     },
     20_000,
+  );
+
+  // #4521, the loopback decision. Below Full access the native profile keeps every loopback port
+  // open, so a run's shell also reaches whatever another program on this machine serves there, a
+  // local forwarding proxy included (the test above). Narrowing loopback to Keiko's own ports is the
+  // rule the mapped profile already enforces; measured here on the two shapes a project's own
+  // checks take: a test suite that serves and fetches in one process, and a dev server one process
+  // of the run starts and a second one calls. Both run natively and both break under the narrowed
+  // rule, so loopback stays open and the published text names what follows from it.
+  it.skipIf(!canProveOnThisHost)(
+    "loopback decision: a project's own local servers work natively and break under a Keiko-ports-only rule",
+    () => {
+      const tree = createNativeProofTree();
+      const narrowed = createRuntimeGatewayConfinement(input);
+      const measured: string[] = [];
+      try {
+        for (const workload of [SELF_SERVED_FETCH, SECOND_PROCESS_FETCH]) {
+          expect(run(process.execPath, ["-e", workload]).stdout).toBe("SERVED");
+          for (const egress of ["loopback-only", "inherited"] as const)
+            expect(runNative(tree, nativeConfinement(tree, egress), workload).stdout).toBe(
+              "SERVED",
+            );
+          const wrapped = buildRuntimeGatewaySeatbeltCommand(narrowed, process.execPath, [
+            "-e",
+            workload,
+          ]);
+          const broken = run(wrapped.command, wrapped.args).stdout;
+          expect(broken).toMatch(/^(LISTEN|BLOCKED):E[A-Z]+$|^TIMEOUT$/u);
+          measured.push(broken);
+        }
+        note(`loopback decision (#4521): native SERVED, Keiko ports only ${measured.join(", ")}`);
+      } finally {
+        tree.cleanup();
+      }
+    },
+    30_000,
   );
 
   // The destination is 192.0.2.1 (RFC 5737 TEST-NET-1): routable in form, answered by nobody. The
