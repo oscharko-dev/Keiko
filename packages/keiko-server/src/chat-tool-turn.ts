@@ -7,10 +7,7 @@ import {
   gatewayToolDefinitions,
   ToolCatalogError,
 } from "@oscharko-dev/keiko-tool-catalog";
-import {
-  deriveContextProfileFromCapability,
-  effectiveContextWindow,
-} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { chatKnowledgeScopes } from "./requirement-inventory.js";
 import { randomUUID } from "node:crypto";
 import { createCatalogToolBinder } from "./tool-catalog/catalogToolDispatch.js";
@@ -149,7 +146,6 @@ import {
 } from "./store/chatToolTranscript.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ManagedProviderCatalog } from "./tool-catalog/managedProviderCatalog.js";
-import type { ConnectedFolderToolWindow } from "./connectedFolderTool.js";
 import { requireNoJiraPodRefusal } from "./chat-jira-pod-refusal.js";
 import { CatalogDispatchFault, requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 import { isGatewayAdmissionRefusal } from "./grounded-gateway-error-status.js";
@@ -1709,10 +1705,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         )?.reasoningHistoryField,
       },
     );
-    // The window a surface plans with: the raw `contextWindow` of a model whose window nobody
-    // declared is the setup placeholder, and fitting to it elides every earlier result each round.
-    const window = effectiveContextWindow(capability);
-    const budget = Math.floor((window - output) * CONTINUATION_WINDOW_SHARE);
+    const budget = Math.floor((capability.contextWindow - output) * CONTINUATION_WINDOW_SHARE);
     const fitted = fitToolContinuation(continuation, this.settledExchanges, budget - fixed);
     if (fitted.elidedCount > this.elidedResults) {
       this.elidedResults = fitted.elidedCount;
@@ -2326,21 +2319,7 @@ export type ChatToolTurnPort = Pick<
   | "readOnlySynthesisRequest"
   | "settleRetryFailure"
   | "bindEvidenceSources"
-> & {
-  /** Present only on a turn whose source is the connected-folder tool. */
-  readonly connectedFolder?: ConnectedFolderTurnReadout | undefined;
-};
-
-/** What a connected-folder turn reports about itself to the grounded answer that owns it. */
-export interface ConnectedFolderTurnReadout {
-  /** Every line window the tool returned to the model in this turn, in the order returned. */
-  readonly returnedWindows: () => readonly ConnectedFolderToolWindow[];
-  /**
-   * Settles when the index work of the calls finished so far has reached the store. The answer never
-   * waits for it; it never rejects, and a rejected write is reported as a diagnostic.
-   */
-  readonly indexFlushed: () => Promise<void>;
-}
+>;
 
 /** Source-specific authority adapters use the same catalog/log/budget and invocation registry wiring. */
 export function bindChatToolCatalog<Consumer extends CatalogConsumer>(options: {

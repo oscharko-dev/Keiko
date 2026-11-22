@@ -14,7 +14,6 @@ import type { UiHandlerDeps } from "./deps.js";
 import type { ChatToolAuthorityResolution } from "./editor/agentAuthorityRegistry.js";
 import { chatToolTurnBudget } from "./chat-tool-turn-budget.js";
 import type { ToolConsumerContext } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
-import { chatToolAuthorityActionClasses } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 
 type AuthorityFailure = Extract<ChatToolAuthorityResolution, { readonly ok: false }>;
 type CurrentChatToolAuthority =
@@ -72,7 +71,10 @@ export function acceptedChatToolAuthorityEnvelope<
     requestedMode,
     deploymentCeiling,
     effectiveMode: resolveEffectiveCodingWorkbenchMode(requestedMode, deploymentCeiling),
-    actionClasses: chatToolAuthorityActionClasses(subject),
+    actionClasses:
+      "kind" in subject && subject.kind === "knowledge-pods"
+        ? ["connector-access"]
+        : ["connector-access", "network-egress"],
     connectorScopes,
     budget,
     expiresAt: new Date(turn.startedAtMs + budget.maxRuntimeMs).toISOString(),

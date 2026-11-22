@@ -184,7 +184,7 @@ function subjectFields(
   subject: ChatToolAuthoritySubject | undefined,
 ): Record<string, string | number> {
   if (!validateChatToolAuthoritySubject(subject).ok || subject === undefined) return {};
-  if (subject.kind !== undefined)
+  if (subject.kind === "configured-mcp" || subject.kind === "knowledge-pods")
     return {
       actorDigest: subject.actorDigest,
       chatDigest: sha256Hex(subject.chatId),

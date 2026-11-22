@@ -1,9 +1,5 @@
 import { chatKnowledgeScopes } from "./requirement-inventory.js";
 import { createKnowledgeChatToolTurn } from "./knowledge-chat-turn.js";
-import {
-  createConnectedFolderChatToolTurn,
-  type ConnectedFolderToolSourceAdmission,
-} from "./connected-folder-chat-turn.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ChatMessage } from "./store/index.js";
 import type { ChatToolTurnPort } from "./chat-tool-turn.js";
@@ -17,12 +13,6 @@ import { openTraceSession } from "./requirement-trace.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 export type { ChatToolTurnPort } from "./chat-tool-turn.js";
 
-/** Sources only the calling route can admit; a route that names none keeps its behaviour. */
-export interface ChatToolTurnSources {
-  /** The grounded route's admission of the Chat's one connected folder for the folder tool. */
-  readonly connectedFolder?: ConnectedFolderToolSourceAdmission | undefined;
-}
-
 /** Both normal and grounded Chat enter the same bounded orchestration before model work. */
 export async function createChatToolTurn(
   deps: UiHandlerDeps,
@@ -30,11 +20,10 @@ export async function createChatToolTurn(
   message: ChatMessage,
   signal: AbortSignal,
   correlationId: string | undefined,
-  sources?: ChatToolTurnSources,
 ): Promise<ChatToolTurnPort | undefined> {
   const chat = deps.store.findChatById(message.chatId);
   if (chat?.jiraPodBinding === undefined)
-    return createUnboundChatToolTurn(deps, modelId, message, signal, correlationId, sources);
+    return createUnboundChatToolTurn(deps, modelId, message, signal, correlationId);
   const mcp = await deps.mcpChatCatalog?.get(
     correlationIdOrUnknown(correlationId),
     chat.mcpServers,
@@ -55,25 +44,10 @@ async function createUnboundChatToolTurn(
   message: ChatMessage,
   signal: AbortSignal,
   correlationId: string | undefined,
-  sources: ChatToolTurnSources | undefined,
 ): Promise<ChatToolTurnPort | undefined> {
   const chat = deps.store.findChatById(message.chatId);
-  if (chatKnowledgeScopes(chat).length === 0) {
-    // A Chat with a configured MCP catalog keeps its MCP turn; without one, a Chat connected to
-    // exactly one folder gets the folder tool, and every other Chat gets no tool turn, as before.
-    const mcpTurn = await createMcpChatToolTurn(deps, modelId, message, signal, correlationId);
-    return (
-      mcpTurn ??
-      createConnectedFolderChatToolTurn(
-        deps,
-        modelId,
-        message,
-        signal,
-        correlationId,
-        sources?.connectedFolder,
-      )
-    );
-  }
+  if (chatKnowledgeScopes(chat).length === 0)
+    return createMcpChatToolTurn(deps, modelId, message, signal, correlationId);
   const mcp = await deps.mcpChatCatalog?.get(
     correlationIdOrUnknown(correlationId),
     chat?.mcpServers,

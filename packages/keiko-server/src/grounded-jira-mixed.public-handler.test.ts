@@ -2704,10 +2704,7 @@ it.each([29_000, 29_500, 30_000, 30_500, 31_000])(
   },
 );
 
-// A Data-only Chat with one folder offers exactly the read-only folder tool since the
-// connected-folder Chat tool (ADR-0181, owner proposal 2026-11-21). What this pin protects stays:
-// no Jira tool is offered, no Jira request is made, and an answer that needs no look-up is one call.
-it("preserves Data-only desktop refusal and offers grounded synthesis only the folder read", async () => {
+it("preserves Data-only desktop refusal and tool-free grounded synthesis", async () => {
   const f = runtime();
   f.deps.store.updateChat(f.chatId, { jiraPodId: null });
   const requests = provider(["answer"]);
@@ -2721,12 +2718,7 @@ it("preserves Data-only desktop refusal and offers grounded synthesis only the f
   expect(f.deps.store.listMessages(f.chatId)).toHaveLength(0);
   expect((await handleGroundedAsk(context(body), f.deps)).status).toBe(200);
   expect(requests).toHaveLength(1);
-  const sent = JSON.parse(requests[0] ?? "{}") as {
-    readonly tools?: readonly { readonly function?: { readonly name?: string } }[];
-  };
-  expect(sent.tools?.map((tool) => tool.function?.name)).toEqual(["folder_files"]);
-  expect(requests[0]).not.toContain("jira_");
-  expect(requests[0]).not.toContain("you cannot invoke workspace tools");
+  expect(requests[0]).not.toContain('"tools":');
   expect(f.jiraRequests).toHaveLength(0);
 });
 

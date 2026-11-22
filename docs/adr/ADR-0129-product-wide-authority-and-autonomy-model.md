@@ -303,10 +303,7 @@ provider dispatch through the turn's own signal and the synthesis grants but the
 answer (200, persisted, turn completed) instead of a 499. Older tool results in the copy sent to the model are
 compacted, oldest first and never the newest, to a closed record (status, reason, mutation outcome,
 issue key, and each draft item's key and state) when the continuation would exceed its share of the model window;
-`chat.tool-turn.context-fitted` records the count. That share is taken from the window every
-surface plans with (`effectiveContextWindow`), never from the raw `contextWindow` of a model whose
-window nobody declared: fitted to that setup placeholder, every earlier result was compacted each
-round and the model repeated its reads (corrected 2026-11-21). The stored transcript is unchanged. A dispatch
+`chat.tool-turn.context-fitted` records the count. The stored transcript is unchanged. A dispatch
 fault on the grounded route maps to the same closed response as the desktop route. A deterministic identity derived from the stored Chat/message pair makes duplicate minting
 idempotent, with the registry refusing any changed envelope under that identity. The stored human
 message must still be the latest accepted pending turn (or the current legacy user message); its

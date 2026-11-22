@@ -13,14 +13,9 @@ import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/run
 // no-secret guardrails.
 export const GROUNDED_SYSTEM_PROMPT_VERSION = "connected-evidence-v3";
 
-/** The clause a folder tool turn replaces: there the model is offered one read-only folder tool. */
-export const GROUNDED_NO_WORKSPACE_TOOLS_CLAUSE = "you cannot invoke workspace tools.";
-export const GROUNDED_FOLDER_TOOL_CLAUSE =
-  "the one offered folder tool lets you list, search and read more of the same folder.";
-
 export const GROUNDED_SYSTEM_PROMPT =
   "You are Keiko answering from supplied evidence in read-only Files scopes: Git repositories or ordinary folders without Git. " +
-  `The server-owned retrieval searches recursively and reads excerpts; ${GROUNDED_NO_WORKSPACE_TOOLS_CLAUSE} ` +
+  "The server-owned retrieval searches recursively and reads excerpts; you cannot invoke workspace tools. " +
   `Text files are eligible up to ${String(MAX_RECURSIVE_TEXT_FILE_BYTES / (1024 * 1024))} MiB (${new Intl.NumberFormat("en-US").format(MAX_RECURSIVE_TEXT_FILE_BYTES)} bytes); unsupported binary formats and images are excluded. ` +
   "PDF/DOCX/XLSX evidence requires supported text extraction and supplied excerpts. " +
   "If omission metadata is supplied, use it only for exclusions, never as unread contents or citations. " +

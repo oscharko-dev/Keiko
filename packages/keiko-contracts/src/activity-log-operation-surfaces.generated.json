@@ -319,8 +319,6 @@
   "figma.snapshot.captured": "bff",
   "files.copy.refused": "bff",
   "files.search.completed": "bff",
-  "folder.files.operation": "memory-knowledge",
-  "folder.files.turn-selected": "memory-knowledge",
   "gateway.catalog.automatic.completed": "model-gateway",
   "gateway.catalog.metadata.wait": "model-gateway",
   "gateway.chat.completed": "model-gateway",

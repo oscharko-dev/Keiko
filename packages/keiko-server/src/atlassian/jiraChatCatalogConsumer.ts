@@ -2,11 +2,6 @@ import { chatCapabilityMatches } from "../chat-tool-authority.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { KNOWLEDGE_CHAT_TOOLS, type KnowledgeChatToolName } from "../requirementsToolName.js";
 import {
-  CONNECTED_FOLDER_CHAT_TOOLS,
-  type ConnectedFolderChatToolName,
-} from "../connectedFolderToolName.js";
-import type { ConnectedFolderToolSession } from "../connectedFolderTool.js";
-import {
   createChatToolAuthorityPort,
   renewRunningReadGrant,
   reserveChatToolInvocation,
@@ -119,15 +114,12 @@ export interface JiraChatCatalogContext extends ToolConsumerContext {
   readonly meterModel?: (model: ModelPort) => ModelPort;
   /** Releases the provisional synthesis charge of a nested call whose answer was used. */
   readonly confirmModelOperation?: (response: NormalizedResponse) => void;
-  /** Server-private state of the connected-folder tool for this turn; never serialized. */
-  readonly connectedFolder?: ConnectedFolderToolSession | undefined;
 }
 export interface JiraChatCatalogAction extends ToolConsumerActionIdentity {
   readonly tool:
     | JiraManagedReadToolName
     | JiraMutationOperation
     | KnowledgeChatToolName
-    | ConnectedFolderChatToolName
     | JiraCatalogDiscoveryToolName;
   readonly argumentsDigest: string;
   /** Required for Jira operations; local Knowledge/discovery reads carry no Jira binding. */
@@ -151,7 +143,6 @@ export interface JiraChatCatalogConsumer extends CatalogConsumer {
 const READ_TOOLS: ReadonlySet<string> = new Set([
   ...JIRA_MANAGED_READ_TOOLS,
   ...KNOWLEDGE_CHAT_TOOLS,
-  ...CONNECTED_FOLDER_CHAT_TOOLS,
   ...JIRA_CATALOG_DISCOVERY_TOOLS,
 ]);
 export const JIRA_CHAT_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
@@ -162,14 +153,6 @@ export const CHAT_CATALOG_TOOLS: readonly JiraChatCatalogAction["tool"][] = [
   ...JIRA_CATALOG_DISCOVERY_TOOLS,
 ];
 const CHAT_TOOLS: ReadonlySet<string> = new Set(CHAT_CATALOG_TOOLS);
-/**
- * Every action identity the shared Chat consumer decodes. The connected-folder read is hosted by
- * its own catalog and admitted by its own authority owner, never by the Jira admission above.
- */
-const CAPTURED_ACTION_TOOLS: readonly JiraChatCatalogAction["tool"][] = [
-  ...CHAT_CATALOG_TOOLS,
-  ...CONNECTED_FOLDER_CHAT_TOOLS,
-];
 function isLocalCatalogRead(
   tool: string,
 ): tool is KnowledgeChatToolName | JiraCatalogDiscoveryToolName {
@@ -219,7 +202,7 @@ function actionBinding(tool: string): Pick<JiraChatCatalogAction, "operationBind
 function captureAction(value: CatalogJsonValue): JiraChatCatalogAction | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const action = value as CatalogJsonObject;
-  const tool = CAPTURED_ACTION_TOOLS.find((name) => name === action.tool);
+  const tool = CHAT_CATALOG_TOOLS.find((name) => name === action.tool);
   if (tool === undefined || !validActionFields(action) || !validActionBinding(tool, action))
     return undefined;
   return {
@@ -383,25 +366,6 @@ function continuationIsLive(
   );
 }
 
-/**
- * Whether the Jira action policy admits a tool of this admission. The connected-folder read is
- * hosted by its own catalog under its own authority owner and is never admitted here.
- */
-function jiraPolicyAdmits(
-  tool: Exclude<
-    JiraChatCatalogAction["tool"],
-    KnowledgeChatToolName | JiraCatalogDiscoveryToolName
-  >,
-  envelope: Parameters<typeof decideAtlassianEnvelopeAction>[1],
-): boolean {
-  if (isConnectedFolderRead(tool)) return false;
-  const policy = decideAtlassianEnvelopeAction(JIRA_MANAGED_ACTION_TYPES[tool], envelope);
-  return policy.kind === "allowed" || policy.kind === "review-required";
-}
-function isConnectedFolderRead(tool: string): tool is ConnectedFolderChatToolName {
-  return (CONNECTED_FOLDER_CHAT_TOOLS as readonly string[]).includes(tool);
-}
-
 function readPermission(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
@@ -427,7 +391,11 @@ function readPermission(
   // current Chat authority admits it, no Jira consent is involved (#4179).
   if (isLocalCatalogRead(action.tool))
     return continuationIsLive(options, context) ? ALLOWED : DENIED;
-  if (!jiraPolicyAdmits(action.tool, current.envelope)) return DENIED;
+  const policy = decideAtlassianEnvelopeAction(
+    JIRA_MANAGED_ACTION_TYPES[action.tool],
+    current.envelope,
+  );
+  if (policy.kind !== "allowed" && policy.kind !== "review-required") return DENIED;
   const entry = registry.findChatReadGrantForRequest(
     current.envelope.subject,
     context.authorityReference,

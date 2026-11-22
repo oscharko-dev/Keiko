@@ -77,7 +77,6 @@ import {
   type OrchestratorInput,
   type RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
-import { answerEvidencePacks } from "./connected-folder-tool-evidence.js";
 import {
   nodeWorkspaceFs,
   type WorkspaceDescriptorReadCompleteness,
@@ -4536,62 +4535,6 @@ describe("runGroundedExploration", () => {
     expect(out.pack.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(true);
     expect(out.pack.uncertainty.some((marker) => marker.claim.includes("matched"))).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
-  });
-
-  it("drops that marker when the model read the lines it cites through the folder tool", async () => {
-    const content = "export function MyClass() {\n  return 'foo body';";
-    // The answerer of a folder tool turn: retrieval sent nothing, the model read two lines itself.
-    const toolReadAnswerer: GroundedAnswerer = {
-      answer: (_question, pack) =>
-        Promise.resolve({
-          content: "MyClass returns the foo body [src/foo.ts:1-2].",
-          usage: { promptTokens: 10, completionTokens: 5 },
-          sentEvidencePacks: answerEvidencePacks([{ ...pack, files: [] }], pack, [
-            {
-              path: "src/foo.ts",
-              startLine: 1,
-              endLine: 2,
-              excerpt: {
-                atom: {
-                  schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
-                  stableId: "a-tool-read",
-                  scopePath: "src/foo.ts",
-                  lineRange: { startLine: 1, endLine: 2 },
-                  score: 1,
-                  provenance: {
-                    kind: "excerpt-read",
-                    tool: "repo.readExcerpt",
-                    queryFingerprint: "fp",
-                  },
-                  redactionState: "redacted",
-                  emittedAtMs: NOW,
-                  ledgerRef: undefined,
-                },
-                content,
-                contentBytes: Buffer.byteLength(content, "utf8"),
-              },
-            },
-          ]),
-        }),
-    };
-    const out = await runGroundedExploration(
-      input({
-        scope: happyScope({ kind: "files", relativePaths: ["src/bar.ts"] }),
-        query: happyQuery({ text: "Investigate `CompletelyMissingSymbol`" }),
-        // A tool turn is answer-only context: the model is asked although retrieval found nothing.
-        answerOnlyContextAvailable: true,
-      }),
-      {
-        correlationId: undefined,
-        answerer: toolReadAnswerer,
-        nowMs: () => NOW,
-        detectWorkspace: () => fakeWorkspace(),
-      },
-    );
-    const kinds = out.pack.uncertainty.map((marker) => marker.kind);
-    expect(kinds).not.toContain("no-evidence");
-    expect(kinds).not.toContain("unsupported-citation");
-    expect(out.assistantContent).toContain("[src/foo.ts:1-2]");
   });
 
   it.each([

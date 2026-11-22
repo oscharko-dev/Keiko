@@ -129,16 +129,6 @@ export type {
 } from "./repoSearch.js";
 export { DEFAULT_SEARCH_LIMITS, searchText, findFiles, readExcerpt } from "./repoSearch.js";
 export type {
-  ConnectedFolderToolBudget,
-  ConnectedFolderToolBudgetLimits,
-  ConnectedFolderToolOptions,
-  ConnectedFolderToolUsage,
-} from "./connectedFolderTool.js";
-export {
-  createConnectedFolderToolBudget,
-  executeConnectedFolderToolRequest,
-} from "./connectedFolderTool.js";
-export type {
   CandidateBucket,
   RankedCandidateDiagnostic,
   SearchDiagnostics,
@@ -185,9 +175,6 @@ export type {
   WorkspaceIndexScopeKey,
   WorkspaceIndexSnapshot,
   WorkspaceIndexStore,
-  TurnScopedWorkspaceIndex,
-  TurnScopedWorkspaceIndexFlush,
-  TurnScopedWorkspaceIndexUsage,
 } from "./workspaceIndex.js";
 export {
   WORKSPACE_INDEX_SNAPSHOT_VERSION,
@@ -195,7 +182,6 @@ export {
   buildWorkspaceIndexSnapshot,
   createFileWorkspaceIndexStore,
   createInMemoryWorkspaceIndexStore,
-  createTurnScopedWorkspaceIndex,
   createWorkspaceIndex,
   prepareWorkspaceIndexSnapshot,
   workspaceIndexCandidateSet,

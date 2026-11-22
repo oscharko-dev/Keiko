@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { CODING_WORKBENCH_MODES, resolveEffectiveCodingWorkbenchMode } from "./coding-workbench.js";
 import { validateCodingWorkbenchAuthorityEnvelope } from "./coding-workbench-validation.js";
 import {
-  chatToolAuthorityActionClasses,
   validateChatToolAuthorityEnvelope,
   validateChatToolAuthoritySubject,
   validateChatToolReadGrant,
@@ -348,115 +347,6 @@ describe("Knowledge-only Chat authority subject", () => {
     expect(validateChatToolAuthoritySubject({ ...value.subject, kind: "knowledge" }).ok).toBe(
       false,
     );
-    expect(
-      validateChatToolReadGrant({
-        schemaVersion: "1",
-        kind: "jira-chat-read-grant",
-        grantId: "fabricated",
-        subject: value.subject,
-        disclosureVersion: "jira-chat-read-v1",
-        state: "pending",
-        consentProofDigest: null,
-        requestedAt: 1,
-        expiresAt: 2,
-      }).ok,
-    ).toBe(false);
-  });
-});
-
-describe("Connected-folder Chat authority subject", () => {
-  function folderEnvelope(): ChatToolAuthorityEnvelope {
-    return {
-      ...envelope(),
-      subject: {
-        kind: "connected-folder",
-        actorDigest: "a".repeat(64),
-        chatId: "folder-chat",
-        configurationDigest: "d".repeat(64),
-      },
-      actionClasses: ["connector-access"],
-      connectorScopes: ["folder.read"],
-    };
-  }
-  it("accepts exactly the scope digest and the read-only folder scope", () => {
-    const value = folderEnvelope();
-    expect(validateChatToolAuthorityEnvelope(value)).toEqual({ ok: true, value });
-    expect(validateChatToolAuthoritySubject(value.subject)).toEqual({
-      ok: true,
-      value: value.subject,
-    });
-  });
-  it("derives local action classes from the subject for every local source", () => {
-    expect(chatToolAuthorityActionClasses(folderEnvelope().subject)).toEqual(["connector-access"]);
-    expect(chatToolAuthorityActionClasses({ kind: "knowledge-pods" })).toEqual([
-      "connector-access",
-    ]);
-    for (const subject of [
-      envelope().subject,
-      { kind: "configured-mcp" },
-      { kind: "folder" },
-      null,
-    ])
-      expect(chatToolAuthorityActionClasses(subject)).toEqual([
-        "connector-access",
-        "network-egress",
-      ]);
-  });
-  it.each([
-    [],
-    ["network-egress"],
-    ["connector-access", "network-egress"],
-    ["connector-access", "file-edit"],
-    ["connector-access", "connector-access"],
-  ])("refuses widened or missing action classes %j", (...actionClasses) => {
-    expect(validateChatToolAuthorityEnvelope({ ...folderEnvelope(), actionClasses }).ok).toBe(
-      false,
-    );
-  });
-  it.each([
-    ["knowledge.read"],
-    ["mcp.tools"],
-    ["issue-tracker.read"],
-    ["issue-tracker.admin"],
-    ["folder.write"],
-    ["folder.read", "knowledge.read"],
-    ["folder.read", "folder.read"],
-    [],
-  ])("refuses a foreign, widened, repeated or missing scope %j", (...connectorScopes) => {
-    expect(validateChatToolAuthorityEnvelope({ ...folderEnvelope(), connectorScopes }).ok).toBe(
-      false,
-    );
-  });
-  it("keeps the folder scope away from every other subject", () => {
-    const scopes = { connectorScopes: ["folder.read"] };
-    expect(validateChatToolAuthorityEnvelope({ ...envelope(), ...scopes }).ok).toBe(false);
-    for (const kind of ["configured-mcp", "knowledge-pods"]) {
-      const subject = { ...folderEnvelope().subject, kind };
-      expect(validateChatToolAuthorityEnvelope({ ...folderEnvelope(), subject }).ok).toBe(false);
-    }
-  });
-  it.each([
-    { configurationDigest: "gsi-v1:" + "d".repeat(64) },
-    { configurationDigest: "D".repeat(64) },
-    { configurationDigest: undefined },
-    { actorDigest: "short" },
-    { chatId: "" },
-    { kind: "connected-folders" },
-    { kind: "Connected-Folder" },
-    { podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018" },
-    { bindingGeneration: 1 },
-    { authenticationGeneration: 1 },
-    { root: "/workspace" },
-    { relativePaths: ["docs"] },
-  ])("refuses a hostile or widened subject %j", (patch) => {
-    const subject = { ...folderEnvelope().subject, ...patch };
-    expect(validateChatToolAuthoritySubject(subject).ok).toBe(false);
-    expect(validateChatToolAuthorityEnvelope({ ...folderEnvelope(), subject }).ok).toBe(false);
-  });
-  it("refuses inherited subject fields and a fabricated consent grant", () => {
-    const value = folderEnvelope();
-    const inherited: unknown = Object.create(value.subject);
-    expect(validateChatToolAuthoritySubject(inherited).ok).toBe(false);
     expect(
       validateChatToolReadGrant({
         schemaVersion: "1",

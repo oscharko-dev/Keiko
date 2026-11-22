@@ -24,7 +24,6 @@ export type {
   JiraChatToolAuthoritySubject,
   McpChatToolAuthoritySubject,
   KnowledgeChatToolAuthoritySubject,
-  ConnectedFolderChatToolAuthoritySubject,
   McpChatToolReadGrantView,
   McpChatToolWriteApprovalView,
   ChatToolReadGrant,

@@ -447,53 +447,6 @@ provider `nextStep` prose cannot supply UI instructions. Persisted receipts rema
 reload. The existing `knowledge.documents.operation` line records the same closed `sourceRefusal`
 reason without source text, document references or cursor values.
 
-**Connected-folder Chat tool (owner proposal 2026-11-21).** A single automatic retrieval cannot
-answer reliably from a large folder: which few excerpts reach the model is decided before the model
-has seen anything, so a question whose words differ from the source, or that needs a second file,
-depends on luck. A Chat that is connected to exactly one folder and to nothing else (no Jira Pod, no
-Knowledge selection, no Git change, no configured MCP catalog) therefore offers its model one
-read-only tool, `folder.files`, through the same managed host, catalog, binder and Chat tool loop.
-Its three views list a directory, search the folder by keywords or a literal string, and read a line
-window of a file; the model may call it repeatedly within the turn budget. The automatic first
-retrieval stays and seeds the prompt, so a model that never calls the tool answers as before.
-
-Its private authority subject is `connected-folder`, bound to the current actor, Chat and a digest
-of the Chat's server-issued grounding scope identity, and carries only `folder.read`. Like
-`knowledge-pods` it is a local source: the action classes carry no network egress, a read grant for
-it is refused, and modifying tools are always denied. Knowledge Pods and the folder share one
-parameterized authority lifecycle, admission and turn (`local-chat-source-*`); neither reuses nor
-widens the other's subject. A changed folder scope changes the digest, so a retained authority
-cannot serve another folder; each call rechecks the current authority before the workspace is read
-and again before its content is returned.
-
-The tool can reach nothing the automatic retrieval of the same request could not. Only the grounded
-route admits it, with the root admission, selected scope, workspace detection, content policy and
-filesystem of that retrieval; containment, the deny-list, redaction and binary refusal are those of
-the existing `searchText`, `readExcerpt` and `discoverWorkspacePaths`. Model arguments are
-untrusted: the strict request contract (`connected-folder-tool.ts` at the contracts leaf) refuses
-unknown fields, absolute or escaping paths, control characters and unbounded counts before any
-workspace work. There is no regular-expression mode. One turn spends at most 60 s of search time and
-262,144 result bytes across all calls on top of the shared tool-call budget; a refused call returns
-one closed reason and no content.
-
-A model that is not verified for tool calling keeps the single retrieval and is answered without an
-error; `folder.files.turn-selected` records which way the turn went (`tool-turn` or one closed
-`one-shot-*` reason). Every other Chat composition keeps its existing behaviour.
-
-Lines the model received through the tool are evidence of the answer: each returned window is merged
-into the folder's sent pack with the atom and redacted text of exactly those lines, so citation
-reconciliation, the support check and the evidence manifest read it like an excerpt of the
-automatic retrieval. A line the tool did not return stays an unsupported citation. Retrieval budget,
-usage and omissions remain those of the retrieval; the tool's own work is recorded per call on
-`folder.files.operation` (view, outcome, closed reason, counts, bytes and the turn's cumulative
-usage, never a path, query or text).
-
-The searches of one turn share a turn-scoped view of the workspace index: loads are answered from
-memory and every save is held until the turn ends, then written once per key after the answer has
-been returned. The index is an acceleration layer, so a lost flush costs time, never a wrong result;
-a rejected write is reported as a diagnostic. Office documents inside a connected folder are still
-skipped as binary by search and read; extracting them for the tool is a separate decision.
-
 Before synthesis, a turn with selected Knowledge Pods obtains one bounded metadata inventory page
 through the existing catalog offer, binder and dispatch path. It consumes the same authority and
 tool budget as a model-requested read; no extra synthesis allowance or semantic review is implicit.

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "bc3a04b2ec0cc18cb687efc331700733a6c3a91f6346585d1fb148dc07bbb1b5"
+    "catalogDigest": "a148fe3bec6c5379335c7477741a9fc9bd1ce5d54a99a4c4105aa7e6dd7451d0"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -75,10 +75,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 723,
-    "proofCount": 747,
-    "resolvedProofCount": 747,
-    "failureClassCount": 415,
+    "operationCount": 721,
+    "proofCount": 745,
+    "resolvedProofCount": 745,
+    "failureClassCount": 414,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -593,8 +593,6 @@
         "embedding.preflight.identity-refreshed",
         "embedding.preflight.identity-rejected",
         "embedding.preflight.started",
-        "folder.files.operation",
-        "folder.files.turn-selected",
         "indexing.cancel.accepted",
         "indexing.cancel.refused",
         "indexing.cancel.requested",
@@ -1201,7 +1199,6 @@
     "knowledge-citation-reconciliation": ["memory-knowledge.dependency-failure"],
     "grounded-entailment-verdict": ["memory-knowledge.dependency-failure"],
     "requirement-inventory": ["memory-knowledge.dependency-failure"],
-    "connected-folder-tool": ["memory-knowledge.dependency-failure"],
     "knowledge-store-corruption": ["memory-knowledge.dependency-failure"],
     "knowledge-store-encryption": ["memory-knowledge.rejection"],
     "knowledge-store-reopen": ["memory-knowledge.dependency-failure"],
@@ -2342,10 +2339,6 @@
     ],
     "files.copy.refused.link": ["packages/keiko-server/src/files.test.ts"],
     "files.search.completed.line": ["packages/keiko-server/src/files.search-availability.test.ts"],
-    "folder.files.operation.line": ["packages/keiko-server/src/connectedFolderTool.test.ts"],
-    "folder.files.turn-selected.line": [
-      "packages/keiko-server/src/connected-folder-chat-turn.test.ts"
-    ],
     "gateway.catalog.automatic.completed.line": [
       "packages/keiko-server/src/gateway-startup-catalog.test.ts"
     ],

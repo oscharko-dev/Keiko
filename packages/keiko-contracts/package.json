@@ -839,10 +839,6 @@
       "types": "./dist/coding-repository-search.d.ts",
       "default": "./dist/coding-repository-search.js"
     },
-    "./runtime/connected-folder-tool": {
-      "types": "./dist/connected-folder-tool.d.ts",
-      "default": "./dist/connected-folder-tool.js"
-    },
     "./runtime/coding-skill-discovery": {
       "types": "./dist/coding-skill-discovery.d.ts",
       "import": "./dist/coding-skill-discovery.js"
