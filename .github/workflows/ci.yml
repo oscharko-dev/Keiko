@@ -1947,6 +1947,42 @@ jobs:
           path: ui-sbom.cdx.json
           retention-days: 90
 
+  # ADR-0178 D6: a title- or body-only edit reuses the evidence of an earlier green run on the same
+  # candidate merge tree, so `ui` and `build-scan-sbom-smoke` are skipped. GitHub does not evaluate a
+  # skipped job's name expression, so their checks carry that raw expression instead of the
+  # protected names, and branch protection waits for `ui` and `Build, scan, SBOM, smoke` forever.
+  # This job reports those two protected names for exactly that reuse, and fails closed unless the
+  # resolver verified the tree and named the run whose evidence it reuses.
+  reused-required-checks:
+    name: ${{ matrix.check }}
+    needs: verified-tree
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.state == 'open' && needs.verified-tree.outputs.tree-verified == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        check: ["Build, scan, SBOM, smoke", "ui"]
+    steps:
+      - name: Require the verified evidence this check reuses
+        env:
+          VERIFIED_TREE_RESULT: ${{ needs.verified-tree.result }}
+          TREE_VERIFIED: ${{ needs.verified-tree.outputs.tree-verified }}
+          EVIDENCE_RUN_ID: ${{ needs.verified-tree.outputs.evidence-run-id }}
+          EVIDENCE_TREE_SHA: ${{ needs.verified-tree.outputs.evidence-tree-sha }}
+          CHECK_NAME: ${{ matrix.check }}
+        run: |
+          if [ "$VERIFIED_TREE_RESULT" != "success" ] || [ "$TREE_VERIFIED" != "true" ]; then
+            echo "Verified-tree resolution did not verify this candidate tree."
+            exit 1
+          fi
+          if ! printf '%s' "$EVIDENCE_RUN_ID" | grep -Eq '^[0-9]+$' || ! printf '%s' "$EVIDENCE_TREE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "Verified-tree resolution named no evidence run or tree."
+            exit 1
+          fi
+          echo "${CHECK_NAME}: reused from run ${EVIDENCE_RUN_ID}, which proved tree ${EVIDENCE_TREE_SHA}."
+
   sbom-provenance:
     name: Attest trusted SBOM provenance
     if: ${{ github.event_name == 'push' }}

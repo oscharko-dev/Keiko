@@ -153,6 +153,13 @@ The `Verified tree` job runs `check:review-bot-suppression` on every pull-reques
 resolver, so the edited metadata is checked whether or not the matrix is reused. The `ci`
 aggregate's D4 checks apply unchanged.
 
+On a pull request, unlike on `dev`, the skipped jobs' names are protected checks. GitHub does not
+evaluate a skipped job's name expression, so a skipped `ui` or `build-scan-sbom-smoke` reports its
+raw expression and branch protection waits for `ui` and `Build, scan, SBOM, smoke` without end
+(observed on #4513, 2026-11-22). The `reused-required-checks` job therefore reports exactly those
+two protected names, for an open pull request's verified reuse only, and fails closed unless
+`Verified tree` succeeded, verified the tree and named the evidence run and tree it reuses.
+
 An edit cancels nothing (ADR-0157 D5, amended 2026-11-21): it waits as the pending run of the pull
 request's one concurrency group until the run in flight finishes, and then resolves against it. An
 edit right after a push therefore costs one short run once that push's run is green, instead of a

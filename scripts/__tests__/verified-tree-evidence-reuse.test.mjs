@@ -669,3 +669,63 @@ describe("acceptMergedPullCandidate", () => {
     },
   );
 });
+
+// #4513: a title- or body-only edit reused the evidence and skipped `ui` and
+// `build-scan-sbom-smoke`. GitHub does not evaluate a skipped job's name expression, so their checks
+// carried the raw expression and branch protection waited for both protected names forever.
+describe("protected checks on a reused pull-request edit", () => {
+  const PROTECTED_NAME = /&& '([^']+)' \|\| 'inactive PR - /u;
+  const skippedOnReuse = Object.entries(jobs)
+    .filter(([, job]) => PROTECTED_NAME.test(String(job.name)))
+    .filter(([, job]) => String(job.if ?? "").includes("tree-verified != 'true'"))
+    .map(([id, job]) => ({ id, name: PROTECTED_NAME.exec(job.name)[1] }));
+  const standIn = jobs["reused-required-checks"];
+
+  it("finds the protected jobs that a verified tree skips", () => {
+    expect(skippedOnReuse.map(({ id }) => id).sort()).toEqual(["build-scan-sbom-smoke", "ui"]);
+  });
+
+  it("reports every such protected name for exactly an open pull request's verified reuse", () => {
+    expect(standIn?.name).toBe("${{ matrix.check }}");
+    expect([...standIn.strategy.matrix.check].sort()).toEqual(
+      skippedOnReuse.map(({ name }) => name).sort(),
+    );
+    expect(standIn.needs).toBe("verified-tree");
+    expect(standIn.if).toBe(
+      "${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.state == 'open' && needs.verified-tree.outputs.tree-verified == 'true' }}",
+    );
+    expect(standIn.permissions).toEqual({});
+  });
+
+  it("fails closed unless the resolver verified the tree and named its evidence", () => {
+    const [step] = standIn.steps;
+    expect(step.env).toMatchObject({
+      VERIFIED_TREE_RESULT: "${{ needs.verified-tree.result }}",
+      TREE_VERIFIED: "${{ needs.verified-tree.outputs.tree-verified }}",
+      EVIDENCE_RUN_ID: "${{ needs.verified-tree.outputs.evidence-run-id }}",
+      EVIDENCE_TREE_SHA: "${{ needs.verified-tree.outputs.evidence-tree-sha }}",
+    });
+    const run = (env) =>
+      spawnSync("bash", ["-c", step.run], {
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, ...env },
+      });
+    const verified = {
+      VERIFIED_TREE_RESULT: "success",
+      TREE_VERIFIED: "true",
+      EVIDENCE_RUN_ID: "44954604344",
+      EVIDENCE_TREE_SHA: "a".repeat(40),
+      CHECK_NAME: "ui",
+    };
+    expect(run(verified).status).toBe(0);
+    for (const broken of [
+      { VERIFIED_TREE_RESULT: "failure" },
+      { TREE_VERIFIED: "false" },
+      { EVIDENCE_RUN_ID: "" },
+      { EVIDENCE_RUN_ID: "12; echo" },
+      { EVIDENCE_TREE_SHA: "abc" },
+    ]) {
+      expect(run({ ...verified, ...broken }).status, JSON.stringify(broken)).toBe(1);
+    }
+  });
+});
