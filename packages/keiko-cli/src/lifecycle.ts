@@ -340,25 +340,34 @@ function isLifecycleFlag(arg: string): arg is LifecycleFlag {
   return Object.hasOwn(LIFECYCLE_FLAG_SETTERS, arg);
 }
 
-function collectLifecycleOptions(args: readonly string[]): RawLifecycleOptions | "help" | null {
+// What the command line asked for: its options, the usage text, or nothing usable.
+type CollectedArgs =
+  | { readonly kind: "raw"; readonly raw: RawLifecycleOptions }
+  | { readonly kind: "help" }
+  | { readonly kind: "usage" };
+
+const USAGE_REQUESTED = { kind: "help" } as const;
+const USAGE_ERROR = { kind: "usage" } as const;
+
+function collectLifecycleOptions(args: readonly string[]): CollectedArgs {
   const raw: RawLifecycleOptions = {};
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === undefined) return null;
+    if (arg === undefined) return USAGE_ERROR;
     if (arg === "--help" || arg === "-h") {
-      return "help";
+      return USAGE_REQUESTED;
     }
     if (arg === "--open" || arg === "--no-open") {
       raw.openBrowser = arg === "--open";
       continue;
     }
-    if (!isLifecycleFlag(arg)) return null;
+    if (!isLifecycleFlag(arg)) return USAGE_ERROR;
     const value = readFlagValue(args, i);
-    if (value === null) return null;
+    if (value === null) return USAGE_ERROR;
     LIFECYCLE_FLAG_SETTERS[arg](raw, value);
     i += 1;
   }
-  return raw;
+  return { kind: "raw", raw };
 }
 
 // An order flag that is given must be whole milliseconds; an absent one stays absent.
@@ -417,10 +426,12 @@ function parseLifecycleArgs(
   cwd: string,
   env: EnvSource,
   home: string,
-): LifecycleOptions | "help" | null {
-  const raw = collectLifecycleOptions(args);
-  if (raw === "help" || raw === null) return raw;
-  return buildLifecycleOptions(raw, cwd, env, home);
+): Exclude<ParseOutcome, { readonly kind: "refuse" }> {
+  const collected = collectLifecycleOptions(args);
+  if (collected.kind === "help") return USAGE_REQUESTED;
+  if (collected.kind === "usage") return USAGE_ERROR;
+  const options = buildLifecycleOptions(collected.raw, cwd, env, home);
+  return options === null ? USAGE_ERROR : { kind: "options", value: options };
 }
 
 function pidFile(options: LifecycleOptions): string {
@@ -1928,16 +1939,12 @@ function parseWithStateDirGuard(
   env: EnvSource,
   home: string,
 ): ParseOutcome {
-  let parsed: LifecycleOptions | "help" | null;
   try {
-    parsed = parseLifecycleArgs(args, cwd, env, home);
+    return parseLifecycleArgs(args, cwd, env, home);
   } catch (e) {
     if (e instanceof LauncherError) return { kind: "refuse", message: `${e.message}\n` };
     throw e;
   }
-  if (parsed === "help") return { kind: "help" };
-  if (parsed === null) return { kind: "usage" };
-  return { kind: "options", value: parsed };
 }
 
 function lifecycleInvocationCorrelationId(env: EnvSource): string {
