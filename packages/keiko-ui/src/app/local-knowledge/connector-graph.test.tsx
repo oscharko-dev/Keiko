@@ -465,6 +465,46 @@ describe("ConnectorGraph — with capsules", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("names the set delete button by its visible busy text while the deletion is pending", async () => {
+    const id = makeCapsuleSetId("delete-pending");
+    const capsuleSet = makeCapsuleSet({ id, displayName: "Quarterly Review" });
+    let settle: (value: CapsuleSetActionResponse) => void = () => undefined;
+    const deleteCapsuleSetImpl = vi.fn().mockImplementation(
+      () =>
+        new Promise<CapsuleSetActionResponse>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule()])}
+        fetchCapsuleSetsImpl={fetchSetsWith([capsuleSet])}
+        deleteCapsuleSetImpl={deleteCapsuleSetImpl}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Delete: Knowledge Pod Set Quarterly Review" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: /delete Knowledge Pod Set/i });
+    await user.click(within(dialog).getByRole("button", { name: /^delete$/i }));
+
+    const busy = await screen.findByRole("button", {
+      name: "Deleting: Knowledge Pod Set Quarterly Review",
+    });
+    expect(busy).toBeDisabled();
+    expect(busy.textContent).toContain("Deleting");
+
+    settle(await okSetAction(id));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Deleting: Knowledge Pod Set Quarterly Review" }),
+      ).toBeNull();
+    });
+  });
+
   it("does NOT call deleteCapsuleSet when the confirmation is cancelled", async () => {
     const id = makeCapsuleSetId("keep-me");
     const capsuleSet = makeCapsuleSet({ id, displayName: "Keep Set" });
