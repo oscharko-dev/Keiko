@@ -96,6 +96,8 @@ function gitOutput(
     timeout: options.timeout ?? GIT_TIMEOUT_MS,
     maxBuffer: options.maxBuffer ?? 4_096,
     stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "ignore"],
+    // Without it every Git call opens a console window on Windows when the server has no console.
+    windowsHide: true,
     ...(options.input === undefined ? {} : { input: options.input }),
   }).trim();
 }
@@ -107,7 +109,7 @@ function gitSwitch(root: string, branch: string): void {
   execFileSync(
     trustedGitExecutable(root, env),
     trustedGitArgs(root, ["switch", "--quiet", "--no-guess", branch]),
-    { env, timeout: 0, stdio: "ignore" },
+    { env, timeout: 0, stdio: "ignore", windowsHide: true },
   );
 }
 
