@@ -1009,7 +1009,10 @@ function CapsuleSetRow({
           className="lk-btn lk-btn-ghost"
           onClick={onDelete}
           disabled={deleteBusy}
-          aria-label={t("localKnowledge.set.deleteAria", { name: capsuleSet.displayName })}
+          aria-label={t(
+            deleteBusy ? "localKnowledge.set.deletingAria" : "localKnowledge.set.deleteAria",
+            { name: capsuleSet.displayName },
+          )}
           aria-describedby={describedBy}
         >
           {deleteBusy ? t("localKnowledge.set.deleting") : t("localKnowledge.set.deleteConfirm")}
