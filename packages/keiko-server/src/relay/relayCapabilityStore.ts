@@ -1,4 +1,9 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 
 /**
  * The capability bookkeeping every credential relay shares (the MCP relay of #3903 AC3 and the
@@ -34,6 +39,8 @@ export interface RelayCapabilityStoreOptions<Target extends RelayStoreTarget> {
   readonly maxBindings?: number;
   /** Called once per binding, after it was revoked by its signal or by `releaseRun`. */
   readonly onRevoke?: (target: Target) => void;
+  /** Where a failing `onRevoke` is reported; the default server diagnostic sink when absent. */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 interface StoredBinding<Target extends RelayStoreTarget> {
@@ -64,14 +71,42 @@ export class RelayCapabilityStore<Target extends RelayStoreTarget> {
     }
   }
 
-  private revoke(relayId: string): void {
+  // Ends one binding and returns its target; it calls nobody, so a caller can end every binding it
+  // means to end before any callback of an unrelated owner runs.
+  private end(relayId: string): Target | undefined {
     const stored = this.bindings.get(relayId);
-    if (stored === undefined) return;
+    if (stored === undefined) return undefined;
     stored.controller.abort();
     stored.detach();
     this.remember(relayId, stored);
     this.bindings.delete(relayId);
-    this.options.onRevoke?.(stored.target);
+    return stored.target;
+  }
+
+  private revoke(relayId: string): void {
+    const target = this.end(relayId);
+    if (target !== undefined) this.notify([target]);
+  }
+
+  // A callback that throws is reported and never propagates: by now every binding it could have
+  // prevented from ending has ended, and the next callback must still run.
+  private notify(targets: readonly Target[]): void {
+    for (const target of targets) {
+      try {
+        this.options.onRevoke?.(target);
+      } catch (error) {
+        emitServerDiagnostic(
+          this.options.diagnostics,
+          serverDiagnosticFromError({
+            correlationId: target.runId,
+            operation: "relay.binding.revoke",
+            source: "relay.relayCapabilityStore",
+            error,
+            redact: (message) => message,
+          }),
+        );
+      }
+    }
   }
 
   /**
@@ -117,9 +152,13 @@ export class RelayCapabilityStore<Target extends RelayStoreTarget> {
   }
 
   public releaseRun(runId: string): void {
+    const ended: Target[] = [];
     for (const [relayId, stored] of [...this.bindings]) {
-      if (stored.target.runId === runId) this.revoke(relayId);
+      if (stored.target.runId !== runId) continue;
+      const target = this.end(relayId);
+      if (target !== undefined) ended.push(target);
     }
+    this.notify(ended);
   }
 }
 
@@ -133,8 +172,10 @@ export function relayCredentialSpellings(values: readonly string[]): readonly st
 }
 
 // The characters every base64 text holding `value` contains, at each of the three byte alignments:
-// the characters that depend on a neighbouring byte at either end are left out. An admitted
-// credential has at least 16 characters, so each core has at least 20.
+// the characters that depend on a neighbouring byte at either end are left out. Each relay admits
+// only a credential of its own minimum length: the MCP relay at least 16 characters (each core at
+// least 20), the repository relay at least 8 (each core at least 10). A shorter credential is
+// refused at bind, because a core that short cannot be told apart from ordinary bytes.
 export function base64Cores(value: string): readonly string[] {
   const bytes = Buffer.from(value, "utf8");
   return [0, 1, 2].flatMap((offset) => {
