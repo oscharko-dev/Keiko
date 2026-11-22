@@ -19,21 +19,33 @@ The projects are under
 
 - `no-dependencies` needs only Node.js.
 - `with-dependency` needs the `semver` package installed.
+- `maven-internal-repository` is a Maven project whose parent POM only an internal repository
+  serves, behind a login. It needs Maven and a JDK, and a one-time provisioning step (see below).
 
-Each project's `npm test` first runs `scripts/record-check.js`, which appends one line to
-`.acceptance-checks` (ignored by Git). That line is the project's own record that a check ran.
+Each Node.js project's `npm test` first runs `scripts/record-check.js`, which appends one line to
+`.acceptance-checks` (ignored by Git). That line is the project's own record that a check ran. The
+Maven project's JUnit test appends the same line from a `@BeforeClass` method, so a build that never
+reaches its tests counts no check.
+
+For the Maven project the run is told the same task with `mvn -B -q test` in place of `npm test`
+and `src/main` in place of `src/`. Its tests live under `src/test`, so only `src/main` is the
+source the run may change.
 
 ## What counts as passed
 
 Before the run, the project's `npm test` must fail. After the run, the tester checks five things:
 
 1. The run ended `succeeded`: in the run's snapshot and in its `coding-runtime.run.settled` line.
-2. The tester's own `npm test` in the folder the run worked in exits 0. A check that cannot run
+2. The tester's own check (`npm test`, or `mvn -B -q test` for the Maven project) in the folder
+   the run worked in exits 0. A check that cannot run
    at all (no `npm`, a timeout) is an error of the procedure, never a red or a green result.
 3. Every entry outside `src/` is unchanged from the copy the run started from: the tests,
    `package.json`, the recorder and any installed `node_modules`. That covers its bytes, its mode
    and, for a symbolic link, its target. Only the project's `.git` and `.acceptance-checks` are
-   left out.
+   left out. For the Maven project the source is `src/main` and the build output `target/` is also
+   left out. Maven writes it on every build, the run and the tester both create it, and the
+   project's own ignore file names it, so it is no change to the project. Nothing else in the
+   project may differ.
 4. The project counted as many checks during the run as the run reported. The tester reads
    `.acceptance-checks` before its own `npm test`, which the recorder counts too.
 5. The Activity Log lines of the run (correlation: the run's id) say:
@@ -71,6 +83,20 @@ project's count matches the reported checks and the runtime started inside the b
 **Scripted model, automatic.** This form checks Keiko's part of the job. It does not check any
 model's skill.
 
+Once per checkout, provision the Maven cache of the internal-repository project. It needs Maven,
+a JDK and network access, and it never reads or writes the real `~/.m2`:
+
+```bash
+npm run provision:acceptance-maven
+```
+
+The script builds the fixed project with an empty settings file and a temporary home into the
+ignored `.acceptance-maven/repository`, removes the private `com/example/acceptance` artifacts from
+that cache, and checks every `.pom` and `.jar` against the committed lock
+`tests/fixtures/coding-acceptance/maven-cache.lock.json`. `-- --write-lock` rewrites the lock,
+`-- --verify` only checks an existing cache. Without a matching cache the Maven cases fail, naming
+this command. They never skip.
+
 The test is
 [`productionOpenCodeBackend.acceptance.test.ts`](../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.acceptance.test.ts).
 It uses production composition only, the staged dev-lane runtime and the real Seatbelt boundary.
@@ -83,7 +109,21 @@ The scripted model:
 3. replaces it through the runtime's own `edit`,
 4. runs `npm test` again, unless the case skips that check or makes it stale.
 
-Its replacement comes from `variants/`. For the denied case the test denies every ask that comes
+The script carries its own check command and target file, so the Maven cases run `mvn -B -q test`
+and edit `Invoice.java`. The production policy reads that command as a test check
+(`openCodeNativeVerificationKind`), and a unit test pins that.
+
+Its replacement comes from `variants/`. In the Maven cases the internal repository is played by
+[`functional-maven-repository.ts`](../../packages/keiko-server/src/test-support/functional-maven-repository.ts):
+HTTP on loopback, an ephemeral port, Basic auth, `401` with `WWW-Authenticate` for a request without
+the right login and `404` for a missing file. It serves the private parent POM from
+`tests/fixtures/coding-acceptance/maven-repository/` and everything else from the provisioned
+cache. The person's `settings.xml` names it as a mirror of `*` with the login in `<servers>`. The
+case holds a temporary "person home" with that file as the test process's `HOME` for the run alone,
+because Keiko reads the person's Maven settings from `os.homedir()`, and puts the real value back
+in `finally`. The tester's own Maven runs with a home of its own whose settings carry the right
+login, whatever the person's file says.
+For the denied case the test denies every ask that comes
 after the edit landed, the way a person would press Deny.
 
 Run it on macOS:
@@ -111,7 +151,7 @@ It records:
   `harnessError` when a case did not complete;
 - `certifiesPromise`. It is true only when all three hold:
   - the account is a standard user and no container runtime is installed;
-  - all nine cases are recorded (`caseSetComplete`), so a filtered or interrupted run never
+  - all thirteen cases are recorded (`caseSetComplete`), so a filtered or interrupted run never
     certifies;
   - every case met its expectation (`everyCaseMetExpectation`).
 
@@ -126,6 +166,11 @@ These signs are conservative, not complete. A runtime installed somewhere else s
 ruled out by the person running the lab.
 
 The scripted form has limits:
+
+- While a Maven case runs, the test process's `HOME` is the temporary person home. Keiko's
+  confinement denies the home it reads (`homedir()`) to the run, so for that time the real home is
+  not the denied one. The scripted model runs only `mvn`, so this does not weaken the proof, but a
+  real-model run must not use this form.
 
 - The scripted model edits only the target file. The checks of the files outside `src/` and of the
   edit guard the product, not a model. The real-model run is what tests a model that is tempted to
@@ -244,7 +289,7 @@ Scripted form on branch `feat/4491-macos-promise`. The machine was an Apple sili
 - `docker` is on `PATH` (no socket present), `podman` is not.
 
 The evidence therefore says `certifiesPromise: false`, with unmet preconditions `administrator` and
-`container-runtime-present`. All nine cases passed in 52 s, and the evidence recorded
+`container-runtime-present`. All nine cases of that set passed in 52 s, and the evidence recorded
 `caseSetComplete` and `everyCaseMetExpectation` as true.
 
 | Project           | Mode             | Folder           | Fix   | Check after the edit | Outcome                                                       |
@@ -272,6 +317,50 @@ In every case:
 A negative control proves that the count is not vacuous. With the recorder disabled, the
 skipped-check case failed on that count, and the evidence recorded `caseSetComplete`,
 `metExpectation` and `certifiesPromise` as false.
+
+## Maven project behind a login: red baseline, 2026-11-22
+
+The `maven-internal-repository` project adds four cases (schema version 3 of the evidence, which
+also records each run's `coding-runtime.native-build-settings.admitted` dispositions and the
+internal repository's request counts by status). Same machine and branch as above, product code
+unchanged. The full file ran 13 cases in 102 s: the nine of the table above passed, and three of
+the four Maven cases failed as intended. The evidence has `caseSetComplete` true,
+`everyCaseMetExpectation` false and `certifiesPromise` false.
+
+The defect class: a project whose parent POM only an internal repository serves, behind a login,
+cannot be built by a run in any mode. The person's `settings.xml` carries the login in `<servers>`,
+and Keiko admits only a sanitized copy to the run (`nativeBuildSettings`), which drops `<servers>`.
+
+| Case                        | Mode             | Expected                               | Observed                                                 |
+| --------------------------- | ---------------- | -------------------------------------- | -------------------------------------------------------- |
+| `maven-supervised-coding`   | Supervised       | `succeeded`                            | red: `failed`, `verification-not-evidenced`              |
+| `maven-autonomous-delivery` | Full access      | `succeeded`                            | red: `failed`, `verification-not-evidenced`              |
+| `maven-governed-assist`     | Ask for approval | `succeeded`                            | red: `failed`, `verification-not-evidenced`, 3 approvals |
+| `maven-wrong-password`      | Supervised       | `failed`, `verification-not-evidenced` | green: as expected (a negative control, see below)       |
+
+What each red case shows (the checks were `test:failed`, `test:failed`; the model was sent back to
+verify twice; the edit had landed; the tester's own `mvn -B -q test` with the right login exited 0;
+the entries outside `src/main` were unchanged):
+
+- Below Full access the build settings were `sanitized` with Maven cache `none`: Maven runs offline.
+  The internal repository saw no request. The run's Maven said it could not access the repository
+  "in offline mode" for the parent POM.
+- At Full access the settings were `sanitized` with a `private` cache: Maven went online, reached
+  the repository and got `HTTP 401` for the parent POM (two `401` answers, no `200`).
+- In all three the project counted no check (0 against the 2 the run reported): the build died while
+  reading the parent POM, before any test ran. That count is a second, independent failure of the
+  same cause; the outcome assertion fails first.
+
+The reasons were read from the run's own Maven output in a one-off probe (not part of the suite):
+the scripted check wrote its output to a file in the workspace. That rules out Java not being
+reachable in the sandbox, the classifier and the harness as causes. In a second probe the
+repository accepted any login: the Full access case then ran to `succeeded`, so the sandboxed
+build, JUnit, the check count and the unchanged-files comparison work, and the credential is the
+only gap.
+
+`maven-wrong-password` already passes today, because every build fails before the fix. It is the
+negative control for the future relay: a wrong password must still end `failed`, with the tester's
+right-login check passing. It must stay green when the three cases above turn green.
 
 ## What this baseline does not prove yet
 

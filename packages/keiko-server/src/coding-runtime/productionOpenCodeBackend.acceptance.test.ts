@@ -9,11 +9,18 @@
 // same task closes the acceptance criteria. Proving each boundary statement from the model's own
 // shell belongs to #4521.
 //
+// A third project (`maven-internal-repository`) has a Maven parent POM that only an internal
+// repository serves, behind a login (#4492): the repository is played on loopback by
+// `test-support/functional-maven-repository` and needs `npm run provision:acceptance-maven` once.
+// The person's `settings.xml` names it as a mirror with the login in `<servers>`; Keiko admits only
+// a sanitized copy of that file to a run (`nativeBuildSettings`), so these cases measure whether a
+// run can build such a project at all.
+//
 // Runs where the dev-lane functional suite runs: macOS with `KEIKO_OPENCODE_DEV_LANE_FUNCTIONAL=1`
 // and the staged payload (`npm run dev:coding-runtime:stage`). Set `KEIKO_ACCEPTANCE_EVIDENCE_FILE`
 // to keep the body-free evidence of every case (platform, user class, container runtime, versions
 // and outcomes; no paths, no content), owner-private and outside the checkout.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   closeSync,
@@ -63,10 +70,19 @@ import { devLaneEnvEnabled } from "./devLanePortableCodingRuntime.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
   ACCEPTANCE_CHECK_COMMAND,
+  ACCEPTANCE_MAVEN_CHECK_COMMAND,
   ACCEPTANCE_STALE_SUFFIX,
   acceptanceResponse,
   type AcceptanceModelScript,
 } from "../test-support/functional-acceptance-model.js";
+import {
+  FUNCTIONAL_MAVEN_PASSWORD,
+  mavenSettingsXml,
+  startFunctionalMavenRepository,
+  withPersonHome,
+  writeMavenPersonSettings,
+  type FunctionalMavenRepository,
+} from "../test-support/functional-maven-repository.js";
 import {
   createFunctionalTaskWorkspaceOwners,
   provisionFunctionalTaskWorkspace,
@@ -77,8 +93,10 @@ import type { ScriptState } from "./productionOpenCodeBackend.functional/_suppor
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 const FIXTURES = join(REPOSITORY_ROOT, "tests", "fixtures", "coding-acceptance");
 /** The task text a person gives the run (tests/fixtures/coding-acceptance/README.md). */
-const ACCEPTANCE_TASK =
+const NODE_TASK =
   "The tests in this project fail. Find the cause in src/, fix it there and run npm test until it passes. Do not change the tests.";
+const MAVEN_TASK =
+  "The tests in this project fail. Find the cause in src/main, fix it there and run mvn -B -q test until it passes. Do not change the tests.";
 const TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
   "succeeded",
   "failed",
@@ -97,12 +115,25 @@ const CHECK_RECORD = ".acceptance-checks";
 /**
  * What the run may change: the source. Everything else in the project, the installed
  * dependencies included, must stay byte for byte, with its mode and its link targets. Only the
- * project's Git metadata and its check record are left out, both at the project root.
+ * project's Git metadata and its check record are left out, both at the project root. A Maven
+ * project keeps its tests under `src/test`, so its source is `src/main` alone.
+ *
+ * A Maven build also writes its own output to `target/`. The project's own ignore file names it, so
+ * it is no change to the project: only that ignored build output is left out of the comparison,
+ * never a file the person keeps. The run and the tester each create it, and neither can avoid it.
  */
-const SOURCE_DIRECTORY = "src";
-const OUTSIDE_SOURCE_IGNORED: ReadonlySet<string> = new Set([".git", CHECK_RECORD]);
+const SOURCE_DIRECTORIES: Readonly<Record<AcceptanceProject, string>> = {
+  "no-dependencies": "src",
+  "with-dependency": "src",
+  "maven-internal-repository": "src/main",
+};
+const BUILD_OUTPUT: Readonly<Record<AcceptanceProject, readonly string[]>> = {
+  "no-dependencies": [],
+  "with-dependency": [],
+  "maven-internal-repository": ["target"],
+};
 
-type AcceptanceProject = "no-dependencies" | "with-dependency";
+type AcceptanceProject = "no-dependencies" | "with-dependency" | "maven-internal-repository";
 type AcceptanceMode = "governed-assist" | "supervised-coding" | "autonomous-delivery";
 
 interface AcceptanceCase {
@@ -119,6 +150,11 @@ interface AcceptanceCase {
    */
   readonly check: "verify" | "skip-check" | "stale-check" | "denied";
   readonly expected: "succeeded" | "not-succeeded";
+  /**
+   * The login the person's Maven `settings.xml` carries for the internal repository; only the Maven
+   * project has one. A wrong login lets no build start, so the project counts no check.
+   */
+  readonly login?: "valid" | "wrong";
 }
 
 /** The confinement the run's runtime process was spawned with, as its Activity Log line says. */
@@ -147,7 +183,18 @@ interface AcceptanceObservation {
   readonly verificationSummaries: readonly string[];
   /** The states of the run's verification continuations, in order. */
   readonly continuations: readonly string[];
+  /** The `coding-runtime.native-build-settings.admitted` dispositions of the run, in order. */
+  readonly buildSettings: readonly BuildSettingsFacts[];
+  /** What the internal repository answered while the run worked, by status code. */
+  readonly repositoryRequests: Readonly<Record<string, number>>;
   readonly durationMs: number;
+}
+
+/** Closed dispositions of the sanitized build settings a run was admitted with. */
+interface BuildSettingsFacts {
+  readonly launchMode: unknown;
+  readonly mavenSettings: unknown;
+  readonly mavenCache: unknown;
 }
 
 /** One case of the acceptance task and what it must show. */
@@ -174,6 +221,12 @@ type EvidenceEntry =
 const TARGETS: Readonly<Record<AcceptanceProject, string>> = {
   "no-dependencies": "src/invoice.js",
   "with-dependency": "src/release.js",
+  "maven-internal-repository": "src/main/java/com/example/invoice/Invoice.java",
+};
+const CHECK_COMMANDS: Readonly<Record<AcceptanceProject, string>> = {
+  "no-dependencies": ACCEPTANCE_CHECK_COMMAND,
+  "with-dependency": ACCEPTANCE_CHECK_COMMAND,
+  "maven-internal-repository": ACCEPTANCE_MAVEN_CHECK_COMMAND,
 };
 
 const roots: string[] = [];
@@ -216,9 +269,10 @@ function verified(
     mode,
     workspace,
     variant: "fixed",
-    dependencies: project === "no-dependencies" ? "none-needed" : "installed",
+    dependencies: project === "with-dependency" ? "installed" : "none-needed",
     check: "verify",
     expected: "succeeded",
+    ...(project === "maven-internal-repository" ? { login: "valid" as const } : {}),
   };
 }
 
@@ -246,11 +300,7 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
     title: `repairs the defect and verifies it with the project's own tests in ${mode}`,
     acceptanceCase: verified("no-dependencies", mode),
     check: (observed): void => {
-      expectSucceeded(observed, mode);
-      // Ask for approval asks before each command and before the edit: the failing check, the
-      // edit, the passing check. The other modes ask for none of this workspace-contained work.
-      expect(observed.approvalCount).toBe(mode === "governed-assist" ? 3 : 0);
-      expect(observed.denialCount).toBe(0);
+      expectVerifiedInMode(observed, mode);
     },
   })),
   {
@@ -320,6 +370,36 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
       expect(observed.verificationSummaries).toEqual(["test:failed", "test:failed"]);
     },
   },
+  // #4492: a Maven project whose parent POM only an internal repository serves, behind a login the
+  // person keeps in their own `settings.xml`. A run must build it in every mode like any other
+  // project. Keiko's sanitized run settings drop `<servers>`: below Full access Maven runs offline,
+  // at Full access it has no login and the repository answers 401.
+  ...VERIFIED_MODES.map((mode): AcceptanceExpectation => ({
+    id: `maven-${mode}`,
+    title: `repairs a maven project whose parent POM needs the internal repository's login in ${mode}`,
+    acceptanceCase: verified("maven-internal-repository", mode),
+    check: (observed): void => {
+      expectVerifiedInMode(observed, mode);
+    },
+  })),
+  // The negative control of the login: a wrong password must never become a pass. The build cannot
+  // start, so the project counts no check; the tester's own login is right, so its build passes.
+  {
+    id: "maven-wrong-password",
+    title: "never reports success for a maven project when the person's login is wrong",
+    acceptanceCase: {
+      ...verified("maven-internal-repository", "supervised-coding"),
+      login: "wrong",
+      expected: "not-succeeded",
+    },
+    check: (observed): void => {
+      expectNotVerified(observed, "supervised-coding", {
+        testsPassOutsideKeiko: true,
+        projectCheckCount: 0,
+      });
+      expect(observed.verificationSummaries).toEqual(["test:failed", "test:failed"]);
+    },
+  },
 ];
 
 describe.skipIf(!acceptanceEnabled())(
@@ -337,6 +417,14 @@ describe.skipIf(!acceptanceEnabled())(
   },
 );
 
+function expectVerifiedInMode(observed: AcceptanceObservation, mode: AcceptanceMode): void {
+  expectSucceeded(observed, mode);
+  // Ask for approval asks before each command and before the edit: the failing check, the
+  // edit, the passing check. The other modes ask for none of this workspace-contained work.
+  expect(observed.approvalCount).toBe(mode === "governed-assist" ? 3 : 0);
+  expect(observed.denialCount).toBe(0);
+}
+
 function expectSucceeded(observed: AcceptanceObservation, mode: AcceptanceMode): void {
   const context = JSON.stringify(observed);
   expect(observed.state, context).toBe("succeeded");
@@ -352,7 +440,11 @@ function expectSucceeded(observed: AcceptanceObservation, mode: AcceptanceMode):
 function expectNotVerified(
   observed: AcceptanceObservation,
   mode: AcceptanceMode,
-  expected: { readonly testsPassOutsideKeiko: boolean; readonly continued?: boolean },
+  expected: {
+    readonly testsPassOutsideKeiko: boolean;
+    readonly continued?: boolean;
+    readonly projectCheckCount?: number;
+  },
 ): void {
   const context = JSON.stringify(observed);
   expect(observed.state, context).toBe("failed");
@@ -369,17 +461,25 @@ function expectNotVerified(
     ...Array.from({ length: continued }, () => "continued"),
     "not-evidenced",
   ]);
-  expectEveryCase(observed, mode);
+  expectEveryCase(observed, mode, expected.projectCheckCount);
 }
 
 /**
- * What holds in every case, whatever its outcome: the run changed nothing outside `src/`, every
- * check it reported is one the project itself counted, and its runtime ran inside the boundary.
+ * What holds in every case, whatever its outcome: the run changed nothing outside its source,
+ * every check it reported is one the project itself counted, and its runtime ran inside the
+ * boundary. A build that could not start (no login) is the one case where the project counts
+ * fewer checks than the run reported: `projectCheckCount` names that number.
  */
-function expectEveryCase(observed: AcceptanceObservation, mode: AcceptanceMode): void {
+function expectEveryCase(
+  observed: AcceptanceObservation,
+  mode: AcceptanceMode,
+  projectCheckCount?: number,
+): void {
   const context = JSON.stringify(observed);
   expect(observed.outsideSourceUnchanged, context).toBe(true);
-  expect(observed.runCheckCount, context).toBe(observed.verificationSummaries.length);
+  expect(observed.runCheckCount, context).toBe(
+    projectCheckCount ?? observed.verificationSummaries.length,
+  );
   expectNativeConfinement(observed, mode);
 }
 
@@ -400,8 +500,18 @@ function expectNativeConfinement(observed: AcceptanceObservation, mode: Acceptan
   }
 }
 
+/** The internal repository and the two homes a Maven case needs, besides the run's own. */
+interface MavenSurroundings {
+  readonly repository: FunctionalMavenRepository;
+  /** The home whose `.m2/settings.xml` is the person's: the run's build settings read it. */
+  readonly personHome: string;
+  /** The tester's own home, whose settings always carry the right login. */
+  readonly testerHome: string;
+}
+
 interface PreparedAcceptanceCase {
   readonly root: string;
+  readonly maven?: MavenSurroundings;
   readonly owners: FunctionalTaskWorkspaceOwners;
   /** The folder the run works in, which the tester checks afterwards. */
   readonly runRoot: string;
@@ -436,18 +546,28 @@ async function observeAcceptanceCase(
   const prepared = await prepareAcceptanceCase(acceptanceCase);
   const target = join(prepared.runRoot, TARGETS[acceptanceCase.project]);
   // The precondition: the project's own tests fail before the run.
-  expect(testerCheck(prepared.runRoot)).toBeGreaterThan(0);
+  expect(await testerCheck(acceptanceCase, prepared)).toBeGreaterThan(0);
+  // ... and it fails because the project's tests ran and failed, not because the build died first.
+  expect(recordedChecks(prepared.runRoot)).toBe(1);
   const checksBefore = recordedChecks(prepared.runRoot);
-  const outsideSourceBefore = outsideSourceDigest(prepared.runRoot);
+  const outsideSourceBefore = outsideSourceDigest(acceptanceCase.project, prepared.runRoot);
+  const requestsBefore = prepared.maven?.repository.statusCounts() ?? {};
   const script = acceptanceScript(acceptanceCase, prepared);
   const log = recordActivityLog();
-  const served = await serveAcceptance(prepared, script);
   const startedAt = Date.now();
-  const runId = await startAcceptanceRun(served, acceptanceCase);
-  const editDone = (): boolean => readFileSync(target, "utf8") !== prepared.original;
-  const asks = await settleAnsweringEveryAsk(served.orchestrator, runId, () =>
-    acceptanceCase.check === "denied" && editDone() ? "denied" : "approved",
-  );
+  // The run's build settings read the home of the process that composes the server, so a Maven
+  // case holds the person's home around the run alone and puts the real one back afterwards.
+  const run = await withPersonHomeOf(prepared, async () => {
+    const served = await serveAcceptance(prepared, script);
+    const runId = await startAcceptanceRun(served, acceptanceCase);
+    const editDone = (): boolean => readFileSync(target, "utf8") !== prepared.original;
+    const asks = await settleAnsweringEveryAsk(served.orchestrator, runId, () =>
+      acceptanceCase.check === "denied" && editDone() ? "denied" : "approved",
+    );
+    return { runId, asks, state: served.orchestrator.getSnapshot(runId)?.state };
+  });
+  const { runId, asks } = run;
+  const requestsAfter = prepared.maven?.repository.statusCounts() ?? {};
   const finalContent =
     acceptanceCase.check === "stale-check"
       ? `${prepared.replacement}${ACCEPTANCE_STALE_SUFFIX}`
@@ -456,15 +576,33 @@ async function observeAcceptanceCase(
   const runCheckCount = recordedChecks(prepared.runRoot) - checksBefore;
   return {
     ...settledFacts(log, runId),
-    state: served.orchestrator.getSnapshot(runId)?.state,
+    state: run.state,
     approvalCount: asks.approved,
     denialCount: asks.denied,
     runCheckCount,
-    testerCheckExitCode: testerCheck(prepared.runRoot),
-    outsideSourceUnchanged: outsideSourceDigest(prepared.runRoot) === outsideSourceBefore,
+    repositoryRequests: requestDifference(requestsBefore, requestsAfter),
+    testerCheckExitCode: await testerCheck(acceptanceCase, prepared),
+    outsideSourceUnchanged:
+      outsideSourceDigest(acceptanceCase.project, prepared.runRoot) === outsideSourceBefore,
     editLanded: readFileSync(target, "utf8") === finalContent,
     durationMs: Date.now() - startedAt,
   };
+}
+
+function withPersonHomeOf<T>(prepared: PreparedAcceptanceCase, work: () => Promise<T>): Promise<T> {
+  return prepared.maven === undefined ? work() : withPersonHome(prepared.maven.personHome, work);
+}
+
+/** The requests the repository answered between two readings of its counters, by status. */
+function requestDifference(
+  before: Readonly<Record<string, number>>,
+  after: Readonly<Record<string, number>>,
+): Readonly<Record<string, number>> {
+  return Object.fromEntries(
+    Object.entries(after)
+      .map(([status, count]): [string, number] => [status, count - (before[status] ?? 0)])
+      .filter(([, count]) => count > 0),
+  );
 }
 
 function acceptanceScript(
@@ -474,6 +612,7 @@ function acceptanceScript(
   return {
     modelId: functionalChatModelId(),
     target: TARGETS[acceptanceCase.project],
+    checkCommand: CHECK_COMMANDS[acceptanceCase.project],
     old: prepared.original,
     next: prepared.replacement,
     plan:
@@ -509,8 +648,10 @@ async function prepareAcceptanceCase(
   const runRoot = own ? repository : worktree;
   if (acceptanceCase.dependencies === "installed") installSemver(runRoot);
   const target = TARGETS[acceptanceCase.project];
+  const maven = await prepareMavenSurroundings(root, acceptanceCase);
   return {
     root,
+    ...(maven === undefined ? {} : { maven }),
     owners,
     runRoot,
     lifecycle: selected.lifecycle,
@@ -522,8 +663,32 @@ async function prepareAcceptanceCase(
 
 function variantFile(acceptanceCase: AcceptanceCase): string {
   const target = TARGETS[acceptanceCase.project];
-  const name = target.replace(/\.js$/u, `.${acceptanceCase.variant}.js`);
+  const name = target.replace(/\.(js|java)$/u, `.${acceptanceCase.variant}.$1`);
   return join(FIXTURES, "variants", acceptanceCase.project, name);
+}
+
+/**
+ * The internal repository and the homes of a Maven case: the person's `settings.xml` names the
+ * repository as a mirror with its login in `<servers>` (a wrong password for the wrong-login case),
+ * and the tester's own home always carries the right login.
+ */
+async function prepareMavenSurroundings(
+  root: string,
+  acceptanceCase: AcceptanceCase,
+): Promise<MavenSurroundings | undefined> {
+  if (acceptanceCase.login === undefined) return undefined;
+  const repository = await startFunctionalMavenRepository();
+  disposers.push(repository.close);
+  const personHome = join(root, "person-home");
+  const testerHome = join(root, "tester-home");
+  const right = mavenSettingsXml({ url: repository.url });
+  const person =
+    acceptanceCase.login === "valid"
+      ? right
+      : mavenSettingsXml({ url: repository.url, password: `${FUNCTIONAL_MAVEN_PASSWORD}-wrong` });
+  writeMavenPersonSettings(personHome, person);
+  writeMavenPersonSettings(testerHome, right);
+  return { repository, personHome, testerHome };
 }
 
 function commitFixture(repository: string): void {
@@ -598,8 +763,8 @@ async function startAcceptanceRun(
   acceptanceCase: AcceptanceCase,
 ): Promise<string> {
   const started = await functionalPost(served.baseUrl, "/api/coding-workbench/runtime/runs", {
-    requestId: `acceptance-${acceptanceCase.project}-${acceptanceCase.mode}`,
-    taskIntent: ACCEPTANCE_TASK,
+    requestId: `acceptance-${acceptanceCase.project}-${acceptanceCase.mode}-${String(acceptanceCase.login)}`,
+    taskIntent: acceptanceCase.project === "maven-internal-repository" ? MAVEN_TASK : NODE_TASK,
     requestedMode: acceptanceCase.mode,
   });
   const text = await started.clone().text();
@@ -638,21 +803,55 @@ async function settleAnsweringEveryAsk(
   return answered;
 }
 
-/** The tester's own check, outside Keiko, in the folder the run worked in. */
-function testerCheck(folder: string): number {
-  const [program = "npm", ...args] = ACCEPTANCE_CHECK_COMMAND.split(" ");
-  const result = spawnSync(program, args, {
-    cwd: folder,
-    encoding: "utf8",
-    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", npm_config_offline: "true" },
-    timeout: 60_000,
-  });
-  // A check that could not run (no `npm`, a timeout, a signal) has no exit code; it is never a
-  // red result and never a green one.
-  if (typeof result.status !== "number") {
-    throw new TypeError(`acceptance-tester-check-did-not-run:${String(result.signal)}`);
+/**
+ * The tester's own check, outside Keiko, in the folder the run worked in. A Maven check runs with
+ * a home of its own whose `settings.xml` carries the right login, whatever the person's file says.
+ */
+async function testerCheck(
+  acceptanceCase: AcceptanceCase,
+  prepared: PreparedAcceptanceCase,
+): Promise<number> {
+  const [program = "npm", ...args] = CHECK_COMMANDS[acceptanceCase.project].split(" ");
+  // Asynchronous on purpose: the internal repository answers from this very process, which a
+  // synchronous spawn would block while Maven waits for it.
+  const outcome = await new Promise<{ status: number | null; signal: string | null }>(
+    (settled, failed) => {
+      const child = spawn(program, args, {
+        cwd: prepared.runRoot,
+        env: testerEnvironment(prepared),
+        stdio: "ignore",
+        timeout: prepared.maven === undefined ? 60_000 : 180_000,
+      });
+      child.once("error", failed);
+      child.once("close", (status, signal) => {
+        settled({ status, signal });
+      });
+    },
+  );
+  // A check that could not run (no `npm`, no `mvn`, a timeout, a signal) has no exit code; it is
+  // never a red result and never a green one.
+  if (typeof outcome.status !== "number") {
+    throw new TypeError(`acceptance-tester-check-did-not-run:${String(outcome.signal)}`);
   }
-  return result.status;
+  return outcome.status;
+}
+
+function testerEnvironment(prepared: PreparedAcceptanceCase): Record<string, string> {
+  if (prepared.maven === undefined) {
+    return {
+      PATH: process.env.PATH ?? "",
+      HOME: process.env.HOME ?? "",
+      npm_config_offline: "true",
+    };
+  }
+  // Java takes `user.home` from the account, not from `HOME`: Maven finds the tester's settings
+  // and local repository only when the property is set as well.
+  return {
+    PATH: process.env.PATH ?? "",
+    HOME: prepared.maven.testerHome,
+    MAVEN_OPTS: `-Duser.home=${prepared.maven.testerHome}`,
+    ...(process.env.JAVA_HOME === undefined ? {} : { JAVA_HOME: process.env.JAVA_HOME }),
+  };
 }
 
 /** The checks the project's recorder counted in `folder` so far. */
@@ -668,15 +867,15 @@ function recordedChecks(folder: string): number {
  * A digest of every entry outside `src/`, in a stable order: its relative path, its kind and
  * mode, and its bytes or, for a symbolic link, its target.
  */
-function outsideSourceDigest(folder: string): string {
+function outsideSourceDigest(project: AcceptanceProject, folder: string): string {
   const hash = createHash("sha256");
+  const source = SOURCE_DIRECTORIES[project];
+  const ignored: ReadonlySet<string> = new Set([".git", CHECK_RECORD, ...BUILD_OUTPUT[project]]);
   const visit = (directory: string, prefix: string): void => {
     const names = readdirSync(directory).sort((a, b) => a.localeCompare(b));
     for (const name of names) {
       const path = prefix === "" ? name : `${prefix}/${name}`;
-      if (path === SOURCE_DIRECTORY || (prefix === "" && OUTSIDE_SOURCE_IGNORED.has(name))) {
-        continue;
-      }
+      if (path === source || (prefix === "" && ignored.has(name))) continue;
       const full = join(directory, name);
       const entry = lstatSync(full);
       hash.update(`${path}\0${String(entry.mode)}\0`);
@@ -700,6 +899,7 @@ function settledFacts(
   | "confinement"
   | "verificationSummaries"
   | "continuations"
+  | "buildSettings"
 > {
   const settled = log.events.find(
     (event) => event.op === "coding-runtime.run.settled" && event.extra?.runId === runId,
@@ -726,6 +926,17 @@ function settledFacts(
     continuations: log.events.flatMap((event) =>
       event.op === "coding-runtime.run.verification-continuation" && event.extra?.runId === runId
         ? [String(event.extra.state)]
+        : [],
+    ),
+    buildSettings: log.events.flatMap((event) =>
+      event.op === "coding-runtime.native-build-settings.admitted" && event.extra?.runId === runId
+        ? [
+            {
+              launchMode: event.extra.launchMode,
+              mavenSettings: event.extra.mavenSettings,
+              mavenCache: event.extra.mavenCache,
+            },
+          ]
         : [],
     ),
   };
@@ -758,7 +969,7 @@ function acceptanceEvidence(): Record<string, unknown> {
     (entry) => "metExpectation" in entry && entry.metExpectation,
   );
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     issue: 4492,
     platform: process.platform,
     arch: process.arch,

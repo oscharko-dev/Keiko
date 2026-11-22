@@ -13,8 +13,14 @@ import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-mod
 
 import { scriptedTranscript } from "../coding-runtime/productionOpenCodeBackend.functional/_support.js";
 
-/** The project check an acceptance run runs in its own shell, before and after its edit. */
+/** The Node.js projects' check an acceptance run runs in its own shell, before and after its edit. */
 export const ACCEPTANCE_CHECK_COMMAND = "npm test";
+
+/** The Maven project's check: quiet, so a passing run prints nothing, and non-interactive. */
+export const ACCEPTANCE_MAVEN_CHECK_COMMAND = "mvn -B -q test";
+
+/** A cold Maven build resolves its plugins first; a Node.js check needs far less. */
+const CHECK_TIMEOUT_MS = 120_000;
 
 /** What a `stale-check` acceptance turn appends after its check passed. */
 export const ACCEPTANCE_STALE_SUFFIX = "// Reviewed after the tests passed.\n";
@@ -27,6 +33,8 @@ export interface AcceptanceModelScript {
   readonly modelId: string;
   /** The workspace-relative file the turn reads and repairs. */
   readonly target: string;
+  /** The project's own check, run in the runtime's shell before and after the edit. */
+  readonly checkCommand: string;
   readonly old: string;
   readonly next: string;
   readonly plan: AcceptancePlan;
@@ -39,7 +47,7 @@ export type AcceptanceToolCall = readonly [name: "shell" | "read" | "edit", args
 export function acceptanceToolCalls(script: AcceptanceModelScript): readonly AcceptanceToolCall[] {
   const check: AcceptanceToolCall = [
     "shell",
-    { command: ACCEPTANCE_CHECK_COMMAND, timeout: 60_000 },
+    { command: script.checkCommand, timeout: CHECK_TIMEOUT_MS },
   ];
   const opening: readonly AcceptanceToolCall[] = [
     check,

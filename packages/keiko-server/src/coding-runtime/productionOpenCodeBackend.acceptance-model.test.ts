@@ -8,6 +8,7 @@ import type { GatewayRequest } from "@oscharko-dev/keiko-model-gateway";
 
 import {
   ACCEPTANCE_CHECK_COMMAND,
+  ACCEPTANCE_MAVEN_CHECK_COMMAND,
   ACCEPTANCE_STALE_SUFFIX,
   acceptanceResponse,
   type AcceptanceModelScript,
@@ -20,6 +21,7 @@ function script(plan: AcceptanceModelScript["plan"] = "verify"): AcceptanceModel
   return {
     modelId: functionalChatModelId(),
     target: "src/target.js",
+    checkCommand: ACCEPTANCE_CHECK_COMMAND,
     old: "before\n",
     next: "after\n",
     plan,
@@ -45,12 +47,26 @@ function plannedCalls(acceptance: AcceptanceModelScript): readonly unknown[] {
   });
 }
 
-const CHECK = ["shell", { command: ACCEPTANCE_CHECK_COMMAND, timeout: 60_000 }];
+const CHECK = ["shell", { command: ACCEPTANCE_CHECK_COMMAND, timeout: 120_000 }];
 const REPAIR = ["edit", { path: "src/target.js", oldString: "before\n", newString: "after\n" }];
 
 describe("acceptance model (#4492)", () => {
   it("runs a check the production policy reads as the project's tests", () => {
     expect(openCodeNativeVerificationKind([ACCEPTANCE_CHECK_COMMAND])).toBe("test");
+  });
+
+  it("runs the Maven project's own check, which the production policy reads as its tests", () => {
+    expect(openCodeNativeVerificationKind([ACCEPTANCE_MAVEN_CHECK_COMMAND])).toBe("test");
+    const maven: AcceptanceModelScript = {
+      ...script(),
+      target: "src/main/java/Invoice.java",
+      checkCommand: ACCEPTANCE_MAVEN_CHECK_COMMAND,
+    };
+    const calls = plannedCalls(maven);
+    const check = ["shell", { command: "mvn -B -q test", timeout: 120_000 }];
+    expect(calls[0]).toEqual(check);
+    expect(calls[1]).toEqual(["read", { path: "src/main/java/Invoice.java" }]);
+    expect(calls[3]).toEqual(check);
   });
 
   it("answers as the functional gateway's own chat model", () => {
