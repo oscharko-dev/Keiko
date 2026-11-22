@@ -106,7 +106,7 @@ function decodedBase64(value: string): string | undefined {
   if (!/^[A-Za-z0-9+/_-]+={0,2}$/u.test(value)) return undefined;
   const decoded = Buffer.from(value, "base64").toString("utf8");
   // A replacement character means the bytes were not UTF-8: not a credential.
-  return decoded.includes("�") ? undefined : decoded;
+  return decoded.includes("\uFFFD") ? undefined : decoded;
 }
 
 type CredentialResolution =
