@@ -199,6 +199,7 @@ function safeRealPath(fs: WorkspaceFs, absolutePath: string): Inspection<string 
 // target is itself a denied locus (e.g. a source lexically admitted as safe, then retargeted via
 // symlink to `~/.ssh` before this call runs). Only the root needs this: every descendant is
 // already re-checked against `ctx.realRootPath` and the deny list on every subsequent snapshot.
+/** @returns the admitted canonical root, or the discovery error that refuses the source root. */
 function resolveAdmittedRealRoot(fs: WorkspaceFs, rootPath: string): string | DiscoveryError {
   try {
     return resolveExistingAllowedWorkspaceRealRoot(fs, rootPath);
@@ -585,6 +586,7 @@ function* walkFilesScope(ctx: WalkContext, files: readonly string[]): Generator<
 
 const MAX_GITIGNORE_BYTES = 1024 * 1024;
 
+/** @returns whether the path exists, or the read failure when that could not be asked. */
 function pathExists(
   fs: WorkspaceFs,
   absolutePath: string,

@@ -1474,6 +1474,10 @@ function canUseCachedLexicalMatches(runner: SearchTextRunner, scopePath: string)
   );
 }
 
+/**
+ * @returns the matches the cached record proves, "handled" when the file is settled without
+ *   matches, or undefined when the file has to be read.
+ */
 function cachedFileMatches(
   runner: SearchTextRunner,
   file: DiscoveredFile,

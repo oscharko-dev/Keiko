@@ -3420,12 +3420,17 @@ function transparentReturnedExpression(node: ts.Node): boolean {
   );
 }
 
+/** AST node identity; the operands are positions of unrelated declared node kinds. */
+function sameNode(left: ts.Node | undefined, right: ts.Node): boolean {
+  return left === right;
+}
+
 function callReturnsOwnValue(node: ts.CallExpression): boolean {
   let expression: ts.Node = node;
   while (transparentReturnedExpression(expression.parent)) expression = expression.parent;
   const parent = expression.parent;
   return (
-    (typeScriptCompiler().isReturnStatement(parent) && parent.expression === expression) ||
+    (typeScriptCompiler().isReturnStatement(parent) && sameNode(parent.expression, expression)) ||
     (typeScriptCompiler().isArrowFunction(parent) && parent.body === expression)
   );
 }
@@ -3592,7 +3597,7 @@ function callableDeclaration(node: ts.Node): ts.Node | undefined {
   let expression: ts.Node = node;
   while (transparentReturnedExpression(expression.parent)) expression = expression.parent;
   const parent = expression.parent;
-  return (compiler.isVariableDeclaration(parent) && parent.initializer === expression) ||
+  return (compiler.isVariableDeclaration(parent) && sameNode(parent.initializer, expression)) ||
     (compiler.isExportAssignment(parent) &&
       !parent.isExportEquals &&
       parent.expression === expression)

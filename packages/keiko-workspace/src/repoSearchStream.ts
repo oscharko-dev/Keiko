@@ -491,9 +491,10 @@ async function collectPrimaryStream(
       control,
       {
         onFile: async (file): Promise<void> => {
-          for await (const _admission of collectorAdmissions(collectors, file)) {
-            // Admission backpressure completes before discovery advances to another file.
-          }
+          // Admission backpressure completes before discovery advances to another file.
+          const admissions = collectorAdmissions(collectors, file)[Symbol.asyncIterator]();
+          let admission = await admissions.next();
+          while (admission.done !== true) admission = await admissions.next();
         },
         onStats: (stats): void => {
           ignored = stats.ignored;

@@ -801,6 +801,13 @@ const DISCOVERY_CHURN_ACTIVITY_FIELDS = {
   discoverySystemNoisePrunedCount: { type: "integer", dataClass: "count", required: false },
 } as const;
 
+// #4429: every count of the named-subfolder read is optional; absent when no folder was named.
+const NAMED_DIRECTORY_COUNT_FIELD = {
+  type: "integer",
+  dataClass: "count",
+  required: false,
+} as const;
+
 const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -837,13 +844,13 @@ const SEARCH_CONNECTED_CONTEXT_EVIDENCE_DETAILS_OPERATION = defineActivityLogOpe
         "incomplete-traversal",
       ],
     },
-    namedDirectoryCount: { type: "integer", dataClass: "count", required: false },
-    namedDirectoryAmbiguousTermCount: { type: "integer", dataClass: "count", required: false },
-    namedDirectoryCandidateFileCount: { type: "integer", dataClass: "count", required: false },
-    namedDirectoryObservedFileCount: { type: "integer", dataClass: "count", required: false },
-    namedDirectoryRetainedFileCount: { type: "integer", dataClass: "count", required: false },
-    namedDirectoryDocumentCount: { type: "integer", dataClass: "count", required: false },
-    namedDirectoryChargedBytes: { type: "integer", dataClass: "count", required: false },
+    namedDirectoryCount: NAMED_DIRECTORY_COUNT_FIELD,
+    namedDirectoryAmbiguousTermCount: NAMED_DIRECTORY_COUNT_FIELD,
+    namedDirectoryCandidateFileCount: NAMED_DIRECTORY_COUNT_FIELD,
+    namedDirectoryObservedFileCount: NAMED_DIRECTORY_COUNT_FIELD,
+    namedDirectoryRetainedFileCount: NAMED_DIRECTORY_COUNT_FIELD,
+    namedDirectoryDocumentCount: NAMED_DIRECTORY_COUNT_FIELD,
+    namedDirectoryChargedBytes: NAMED_DIRECTORY_COUNT_FIELD,
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -5847,12 +5854,10 @@ async function projectMetadataAtoms(
     PROJECT_METADATA_FILENAMES,
   );
   inputs.existsCache.metadataRetention = retained;
-  for await (const _atoms of iterateSequentialResults(roots, (root) =>
-    metadataTraversalCanContinue(control)
-      ? projectMetadataRootAtoms(root, context)
-      : Promise.resolve([]),
-  )) {
+  // One root at a time: the traversal records what it retains, its atoms are not used here.
+  for (const root of roots) {
     if (!metadataTraversalCanContinue(control)) break;
+    await projectMetadataRootAtoms(root, context);
   }
   await workspacePackageMetadataAtoms(context);
   return retained
@@ -10980,7 +10985,7 @@ function completionActivityExtra(
 function completedRingDecisions(
   decisions: RingDecisionAudit | undefined,
 ): Partial<Omit<RingDecisionAudit, "augmentationSkipReason">> {
-  const { augmentationSkipReason: _reason, ...completed } = decisions ?? {};
+  const { augmentationSkipReason, ...completed } = decisions ?? {};
   return completed;
 }
 
@@ -11045,12 +11050,12 @@ function sourceReferenceActivityExtra(
 > {
   if (observation === undefined) return {};
   const {
-    stackTraceFrameCount: _all,
-    stackTraceExternalFrameCount: _external,
-    continuityReferentSource: _source,
-    continuityReferentCount: _referents,
-    continuityAdmittedCount: _admitted,
-    continuityRejectedCount: _rejected,
+    stackTraceFrameCount,
+    stackTraceExternalFrameCount,
+    continuityReferentSource,
+    continuityReferentCount,
+    continuityAdmittedCount,
+    continuityRejectedCount,
     ...fields
   } = observation;
   return fields;
@@ -11059,11 +11064,7 @@ function sourceReferenceActivityExtra(
 function sourceDecisionActivityExtra(
   observation: SourceDecisionObservation,
 ): Omit<SourceDecisionObservation, "sourceDescriptorPathCount" | "namedDirectoryFocus"> {
-  const {
-    sourceDescriptorPathCount: _sourceDescriptorPathCount,
-    namedDirectoryFocus: _namedDirectoryFocus,
-    ...source
-  } = observation;
+  const { sourceDescriptorPathCount, namedDirectoryFocus, ...source } = observation;
   return source;
 }
 

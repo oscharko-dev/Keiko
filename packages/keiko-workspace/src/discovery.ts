@@ -1136,9 +1136,10 @@ export async function visitWorkspaceFiles(
   const selected =
     relativePaths.length === 0 ? [""] : canonicalSearchScopeRelativePaths(relativePaths);
   try {
-    for await (const _visit of selectedStreamingVisits(state, selected)) {
-      // Drain one selected root at a time; traversal records its counts in state.
-    }
+    // Drain one selected root at a time; traversal records its counts in state.
+    const visits = selectedStreamingVisits(state, selected)[Symbol.asyncIterator]();
+    let visit = await visits.next();
+    while (visit.done !== true) visit = await visits.next();
     return streamingDiscoveryStats(state);
   } finally {
     callbacks.onStats?.(streamingDiscoveryStats(state));
