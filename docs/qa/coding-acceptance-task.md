@@ -404,6 +404,25 @@ real Maven and the real npm against the relay with the settings the binding writ
 already carrying the capability, nothing reaching the repository around the relay, and both builds
 failing once the run's bindings are released.
 
+## npm project behind a token in a managed worktree, 2026-11-22
+
+The npm cases run in a Keiko-managed task worktree (`provisionFunctionalTaskWorkspace`, the
+production provisioning), a fresh checkout without `node_modules`, in each mode (#4530 items 1 and
+5). The run's `npm install` reaches the registry only through the repository credential relay;
+below Full access the runtime keeps `loopback-only` egress. Same machine as above, head 36cf1cc51,
+scripted model, 4 cases, 4 met their expectation:
+
+| Case                      | Mode             | Observed                                                                  |
+| ------------------------- | ---------------- | ------------------------------------------------------------------------- |
+| `npm-supervised-coding`   | Supervised       | `succeeded`; check `passed`; registry `200` twice; tester's test green    |
+| `npm-autonomous-delivery` | Full access      | `succeeded`; check `passed`; registry `200` twice; tester's test green    |
+| `npm-governed-assist`     | Ask for approval | `succeeded` after 3 approvals; check `passed`; registry `200` twice       |
+| `npm-wrong-token`         | Supervised       | `failed`, `verification-not-evidenced`; registry `401`; tester's test red |
+
+Every case scanned the run's state root, private home and task workspace and found the token in no
+file and no Activity Log line. Every file outside `src/`, `node_modules` and `package-lock.json`
+stayed unchanged, and each case asserts that its worktree starts without `node_modules`.
+
 ## What this baseline does not prove yet
 
 These points stay open:
@@ -416,8 +435,9 @@ These points stay open:
 - **Dependencies in a managed worktree.** The last row is the expected baseline. A managed task
   worktree is a fresh checkout without `node_modules`, and below Full access the run's shell has no
   registry. The relay reaches the person's configured registries (npm) and mirrors (Maven); that row
-  stays an expected failure here because the fixture's npm project has no registry behind it.
-  [#4522](https://github.com/oscharko-dev/Keiko/issues/4522) covers the credentialed case.
+  stays an expected failure here because the fixture's npm project has no registry behind it
+  ([#4522](https://github.com/oscharko-dev/Keiko/issues/4522)). With a configured registry the npm
+  cases above pass in a managed worktree in every mode.
 - **CI.** No workflow runs this test yet. That belongs to #4521.
 - **Real model.** The scripted form closes no criterion. The real-model run on macOS is still to do.
 - **Windows.** The Windows half of #4492 runs after the macOS gate. See the

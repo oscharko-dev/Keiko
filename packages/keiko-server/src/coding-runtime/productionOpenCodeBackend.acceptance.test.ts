@@ -800,6 +800,10 @@ async function prepareAcceptanceCase(
     : { lifecycle: owners.lifecycle, store: undefined };
   const runRoot = own ? repository : worktree;
   if (acceptanceCase.dependencies === "installed") installSemver(runRoot);
+  // A case without its dependencies must start without them, or a pass could come from a leftover
+  // install instead of the run's own (#4530 item 5).
+  if (acceptanceCase.dependencies === "missing" && existsSync(join(runRoot, "node_modules")))
+    throw new Error("acceptance-precondition-node-modules-present");
   const target = TARGETS[acceptanceCase.project];
   const surroundings = await prepareRepositorySurroundings(root, acceptanceCase);
   return {
