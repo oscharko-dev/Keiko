@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "c4cd52e2eb7345456625633410dad5130bc5e89b6ecdb1742465450512a85d3c",
+    "catalogDigest": "62697c21956499a4160feb4d746362c2983a9b1090879a8e0a641d1a01c5263f",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -5212,8 +5212,16 @@
               "health-timeout",
               "identity-mismatch",
               "spawn-refused",
-              "state-dir-unavailable"
+              "state-dir-unavailable",
+              "busy",
+              "stale-version",
+              "stale-unreachable"
             ]
+          },
+          "healthRetries": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           },
           "lifeSigns": {
             "type": "integer",
@@ -5237,8 +5245,8 @@
         "failureClasses": ["process-startup"],
         "proofIds": ["cli.lifecycle.health.decision"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/lifecycle-health-activity.ts:16",
-        "emitterSites": ["packages/keiko-cli/src/lifecycle-health-activity.ts:72"]
+        "registrationSite": "packages/keiko-cli/src/lifecycle-health-activity.ts:22",
+        "emitterSites": ["packages/keiko-cli/src/lifecycle-health-activity.ts:84"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -109678,6 +109686,12 @@
               "analyzerProjection": "process-lifecycle",
               "safeContextFields": [
                 {
+                  "name": "healthRetries",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "launchBound",
                   "type": "boolean",
                   "dataClass": "closed-enum",
@@ -120358,7 +120372,7 @@
     {
       "op": "cli.lifecycle.health",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/lifecycle-health-activity.ts:19",
+      "site": "packages/keiko-cli/src/lifecycle-health-activity.ts:25",
       "package": "keiko-cli"
     },
     {

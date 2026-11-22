@@ -1556,6 +1556,7 @@ jobs:
           scripts/__tests__/host-executable.test.mjs
           scripts/__tests__/host-npm-invocation.test.mjs
           scripts/__tests__/check-activity-log.test.mjs
+          scripts/__tests__/qualify-npm-folder-package.test.mjs
       - name: Build
         run: npm run build
       # Two separate steps (not one multi-line run): on the Windows runner the default shell is
