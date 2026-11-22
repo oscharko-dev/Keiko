@@ -37,6 +37,23 @@ updates:
       # other updates never got measured. Minor and patch updates on the 6.x line stay proposed.
       - dependency-name: typescript
         update-types: ["version-update:semver-major"]
+      # Majors with their own child of epic #4377 ("one child, one major; never in a routine batch").
+      # Folded into group PR #4514 they turned the whole day's batch red: mermaid 12 (#4378) also adds
+      # elkjs, whose EPL-2.0 OR GPL-3.0-or-later license the dependency review rejects; entities 9
+      # (#4379); jsdom 31 (#4517) changes two keiko-editor test outcomes. Minor and patch stay proposed.
+      - dependency-name: mermaid
+        update-types: ["version-update:semver-major"]
+      - dependency-name: entities
+        update-types: ["version-update:semver-major"]
+      - dependency-name: jsdom
+        update-types: ["version-update:semver-major"]
+      # axe-core is MPL-2.0. The unchanged permissive-only dependency review rejects every changed
+      # version, so the closeout document retains 4.12.1 (`axe-core` row). No license exception is added.
+      - dependency-name: axe-core
+        versions: [">4.12.1"]
+      # PDF.js 6.4+ fails the unchanged browser-baseline gate; its separate qualification is #4518.
+      - dependency-name: pdfjs-dist
+        versions: [">=6.4.0"]
     cooldown:
       default-days: 7
 

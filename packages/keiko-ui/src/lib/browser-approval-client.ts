@@ -78,13 +78,16 @@ export interface BrowserApprovalClient {
   readonly restore: (signal?: AbortSignal) => Promise<boolean>;
 }
 
-function withRenewalLock(task: () => Promise<boolean>): Promise<boolean> {
+async function withRenewalLock(task: () => Promise<boolean>): Promise<boolean> {
   if (typeof navigator === "undefined" || navigator.locks === undefined) return task();
-  return navigator.locks.request(
+  // The DOM lib types the lock's result as the callback's return value without unwrapping it, so
+  // the granted promise is awaited here; at runtime `request` already resolves to the task result.
+  const renewed = await navigator.locks.request(
     "keiko-browser-approval-renewal",
     { signal: AbortSignal.timeout(15_000) },
     task,
   );
+  return renewed;
 }
 
 function refuseResponseBinding(correlationId: string): never {
