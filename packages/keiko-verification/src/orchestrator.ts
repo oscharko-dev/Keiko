@@ -693,6 +693,20 @@ function dependenciesReady(outcome: DependencyBootstrapOutcome | undefined): boo
   );
 }
 
+// Whether any planned step would execute on this host: not skipped, and not refused for an isolation
+// the host cannot enforce. The bootstrap prepares dependencies only for such a step (#4519): with no
+// enforcing backend every isolated step is refused, and installing for it would spend a registry
+// read and could name missing dependencies as the cause instead of the missing isolation.
+function someStepCanRun(plan: VerificationPlan, deps: VerificationDeps): boolean {
+  const mode = deps.networkEnforcement ?? "enforce-or-fail-closed";
+  const available = deps.enforcedNetworkAvailable ?? false;
+  return plan.steps.some(
+    (step) =>
+      step.skipReason === undefined &&
+      resolveStepNetwork(step.limits, mode, available).kind === "run",
+  );
+}
+
 // ADR-0043 D17: decide about, and if needed install, the workspace's dependencies before the first
 // script step. Nothing is done for a plan without a runnable step, or when the caller left the
 // bootstrap off; a bootstrap that did not succeed hands its redacted output tail to the caller's
@@ -702,7 +716,7 @@ async function bootstrapDependencies(
   deps: VerificationDeps,
   baseSpawn: SpawnFn,
 ): Promise<DependencyBootstrapOutcome | undefined> {
-  if (plan.steps.every((step) => step.skipReason !== undefined)) return undefined;
+  if (!someStepCanRun(plan, deps)) return undefined;
   // The bootstrap installs with npm only. A package that names Yarn or pnpm is never installed by
   // it: its steps are already skipped as `native shell required` while its tree is missing.
   if (plan.packageManager !== undefined && plan.packageManager !== "npm") return undefined;

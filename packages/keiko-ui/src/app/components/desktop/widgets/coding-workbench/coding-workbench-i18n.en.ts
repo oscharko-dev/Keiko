@@ -1371,7 +1371,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.verification.not-run":
     "Verification did not run to completion: a step was skipped, denied or cancelled. That is not a failing check.",
   "codingWorkbench.activity.verification.isolation-unavailable":
-    "Verification could not run on this computer: it has no container runtime (Docker or Podman), which Keiko needs here to run project commands safely. The change is kept. Start a container runtime and run the check again, or check the change yourself.",
+    "Verification could not run on this computer: for this run Keiko runs project commands only inside a container runtime (Docker or Podman), and none is running. The change is kept. Start a container runtime and run the check again, or check the change yourself.",
   "codingWorkbench.activity.git.waiting-for-approval":
     "Waiting for a decision before this step is carried out.",
   "codingWorkbench.activity.git.verification-failed":

@@ -31,6 +31,12 @@ export const ACCEPTANCE_STALE_SUFFIX = "// Reviewed after the tests passed.\n";
 /** Whether the turn reruns the check after its edit, never does, or edits again after it. */
 export type AcceptancePlan = "verify" | "skip-check" | "stale-check";
 
+/**
+ * Where a `verify` turn also calls Keiko's governed verifier (#4519): directly after its edit, so
+ * its own shell check follows the governed answer, or after that shell check.
+ */
+export type AcceptanceGovernedCall = "after-edit" | "after-check";
+
 export interface AcceptanceModelScript {
   /** The model the answers name: the pipeline's own chat model. */
   readonly modelId: string;
@@ -46,10 +52,21 @@ export interface AcceptanceModelScript {
    * read and edit; a turn with one skips the check before its edit. Only the `verify` plan runs it.
    */
   readonly installCommand?: string;
+  /** The turn's governed verifier call, if any; only the `verify` plan without an install has one. */
+  readonly governedVerification?: AcceptanceGovernedCall;
 }
 
 /** One tool call of the turn: the runtime tool's name and its arguments. */
-export type AcceptanceToolCall = readonly [name: "shell" | "read" | "edit", args: object];
+export type AcceptanceToolCall = readonly [
+  name: "shell" | "read" | "edit" | "keiko_verification",
+  args: object,
+];
+
+/** The governed verifier call: the project's configured test verifier, found from the root. */
+const GOVERNED_TEST: AcceptanceToolCall = [
+  "keiko_verification",
+  { verifierId: "test", targetPath: "", packageDir: "" },
+];
 
 /** The turn's tool calls, in order; after the last one the model answers without a tool. */
 export function acceptanceToolCalls(script: AcceptanceModelScript): readonly AcceptanceToolCall[] {
@@ -64,7 +81,9 @@ export function acceptanceToolCalls(script: AcceptanceModelScript): readonly Acc
   ];
   if (script.plan === "skip-check") return opening;
   if (script.plan === "verify") {
-    if (script.installCommand === undefined) return [...opening, check];
+    if (script.installCommand === undefined) {
+      return verifyCalls(opening, check, script.governedVerification);
+    }
     // The dependencies are missing, so a check before the install says nothing. The install comes
     // first on purpose: the runtime weighs the files a shell command wrote only after the step
     // ended, so an install directly before the check is counted as an edit the check did not
@@ -88,6 +107,16 @@ export function acceptanceToolCalls(script: AcceptanceModelScript): readonly Acc
       },
     ],
   ];
+}
+
+function verifyCalls(
+  opening: readonly AcceptanceToolCall[],
+  check: AcceptanceToolCall,
+  governed: AcceptanceGovernedCall | undefined,
+): readonly AcceptanceToolCall[] {
+  if (governed === "after-edit") return [...opening, GOVERNED_TEST, check];
+  if (governed === "after-check") return [...opening, check, GOVERNED_TEST];
+  return [...opening, check];
 }
 
 /**

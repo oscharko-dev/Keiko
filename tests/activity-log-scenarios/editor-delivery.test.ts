@@ -30,6 +30,9 @@ import { runtimeGitDiff } from "../../packages/keiko-server/src/gitDelivery/runt
 import type { GitDeliveryExecutionSeams } from "../../packages/keiko-server/src/gitDelivery/execution.js";
 import type { VerifiedCommitRunContext } from "../../packages/keiko-server/src/gitDelivery/verifiedCommitTypes.js";
 import { processServerLogSink } from "../../packages/keiko-server/src/process-log-sink.js";
+import { createVerificationRunnerManager } from "../../packages/keiko-server/src/editor/verificationRunner.js";
+import { createInMemoryUiStore } from "../../packages/keiko-server/src/store/index.js";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   expectActivityLogProof,
   persistedActivityLogLines,
@@ -244,6 +247,60 @@ describe("Activity Log scenario: editor-delivery", () => {
         errorKind: "unavailable",
       });
     }, 60_000);
+
+    // #4519: on a Mac without a running container runtime the governed verifier runs no step. Its
+    // selection and completion lines carry the host's verdict (`isolationAvailable`, the stopped
+    // engine's closed answer) on the request's correlation, so the analyzer shows why nothing ran.
+    it("reconstructs a verification the host could not isolate to a dependency-failure trace", async () => {
+      const root = realpathSync(makeTempDir("keiko-scenario-editor-isolation-"));
+      writeFileSync(
+        join(root, "package.json"),
+        JSON.stringify({ name: "fixture", scripts: { test: "node --version" } }),
+      );
+      const isolation = {
+        probe: { available: false, backend: "container-docker", engine: "refused" },
+        durationMs: 2,
+      } as const;
+      const store = createInMemoryUiStore();
+      cleanups.push(() => {
+        store.close();
+      });
+      store.createProject(root, "fixture");
+      const manager = createVerificationRunnerManager({
+        store,
+        evidenceStore: createInMemoryEvidenceStore(),
+        activityLog: processServerLogSink(),
+        isWorkspaceTrustedForPackageScripts: () => false,
+        probeIsolation: () => Promise.resolve(isolation),
+      });
+      const startedAtMs = Date.now();
+
+      const result = await manager.runToReport(
+        { projectId: root, kinds: ["test"], correlationId: "editor-delivery-isolation-0001" },
+        new AbortController().signal,
+      );
+      expect(result.report.results.map((step) => step.status)).toEqual(["denied"]);
+
+      const op = "editor.verification.execute";
+      const trace = await expectActivityLogScenario("editor-delivery.dependency-failure", {
+        stateDir,
+        startedAtMs,
+        expectedOps: [op, op],
+      });
+      expect(trace.failureClasses).toEqual(expect.arrayContaining(["verification-runner-refusal"]));
+      const lines = persistedActivityLogLines(readPersistedActivityLog(stateDir), op).map((line) =>
+        expectActivityLogProof("editor.verification.execute.emitted-line", line),
+      );
+      expect(lines).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            state: "selected",
+            isolationAvailable: false,
+            isolationEngine: "refused",
+          }),
+        ]),
+      );
+    });
 
     it("reconstructs a failed git process to a complete dependency-failure trace", async () => {
       const startedAtMs = Date.now();

@@ -274,7 +274,12 @@ Unix socket outside the execution root, or a Windows named pipe under the local 
 unavailable contexts fail closed with a body-free reason. Like a missing socket, a well-formed
 local pipe that no engine serves (Docker Desktop installed but stopped) is unavailable; it is never
 reported as an enforcing backend whose `docker run` then fails as the verified step (#4068,
-2026-11-09). The CLI receives the local endpoint
+2026-11-09). A Unix socket file a crashed or stopped engine left behind still stats as a socket,
+so a verification run also asks it for `/_ping` once (two seconds) before it counts the engine:
+only an engine that answers `200` is available. A refused connection, no answer or another status
+is unavailable, the server never runs the Docker client for it, and the verification's completion
+line records the closed answer as `isolationEngine` (`answered`, `refused`, `unanswered`,
+`rejected`; #4519, 2026-11-22). The CLI receives the local endpoint
 explicitly while HOME stays empty; Docker configuration and credentials are never forwarded.
 Container commands use the allowlisted executable name from the image's PATH, not a host symlink
 target such as `npm-cli.js`. Native wrappers continue to use the validated absolute host executable.
@@ -635,7 +640,10 @@ coding run (Coding Workbench run 15, 2026-09-10, PR #3452). Verification of a pr
 nothing was impossible by construction.
 
 The dependency bootstrap (`packages/keiko-verification/src/dependencies.ts`) closes that gap at the
-layer that owns the plan. Before the first script step of a plan that has one, the orchestrator
+layer that owns the plan. It prepares only a plan with a step that would run on this host: where
+no enforcing backend is available every `network: "none"` step is refused, so nothing is installed
+for it and the steps are reported as isolation unavailable, never as missing dependencies (#4519,
+2026-11-22). Before the first script step of a plan that has one, the orchestrator
 reads the workspace's `package.json`; when it declares dependencies and npm's own hidden lockfile
 (`node_modules/.package-lock.json`) is absent or older than the manifest or a lockfile, or Keiko
 has not recorded a completed install for that tree, it runs

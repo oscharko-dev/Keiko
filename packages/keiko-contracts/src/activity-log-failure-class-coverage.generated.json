@@ -53367,6 +53367,12 @@
               "required": false
             },
             {
+              "name": "isolationEngine",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "lintDurationMs",
               "type": "integer",
               "dataClass": "duration",
@@ -53697,6 +53703,12 @@
             },
             {
               "name": "isolationBackend",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "isolationEngine",
               "type": "string",
               "dataClass": "closed-enum",
               "required": false

@@ -447,7 +447,9 @@ describe("CodingWorkbenchTimeline", () => {
     expect(noIsolation.querySelector('[data-state="isolation-unavailable"]')).toHaveTextContent(
       "Cannot run here",
     );
-    expect(noIsolation).toHaveTextContent("has no container runtime (Docker or Podman)");
+    expect(noIsolation).toHaveTextContent(
+      "container runtime (Docker or Podman), and none is running",
+    );
     expect(noIsolation).toHaveTextContent("The change is kept");
     expect(noIsolation).toHaveTextContent("run the check again, or check the change yourself");
 
@@ -639,7 +641,9 @@ describe("CodingWorkbenchTimeline", () => {
       expect(text("failed")).toContain("Fehlgeschlagen");
       expect(text("succeeded")).toContain("bestanden");
       expect(text("isolation-unavailable")).toContain("Hier nicht möglich");
-      expect(text("isolation-unavailable")).toContain("keine Container-Laufzeit");
+      expect(text("isolation-unavailable")).toContain(
+        "Container-Laufzeit (Docker oder Podman) aus, und keine läuft",
+      );
       expect(text("isolation-unavailable")).toContain("Deine Änderung bleibt erhalten");
       for (const state of [
         "waiting-for-trust",

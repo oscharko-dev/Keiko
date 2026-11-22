@@ -118,6 +118,16 @@ The scripted model:
 3. replaces it through the runtime's own `edit`,
 4. runs the check again, unless the case skips that check or makes it stale.
 
+In the #4519 cases it also calls Keiko's governed verifier (`keiko_verification`, the `test`
+verifier) directly after its edit or after its second check. On macOS that verifier needs a
+running container runtime, so without one it runs none of the project's commands. It must then
+answer at once that it cannot run here: it asks no one to allow the package scripts, installs
+nothing, and the run's own shell check counts as the verification. One case puts a `docker` client
+on `PATH` that only reports a stopped engine and points `DOCKER_HOST` at a socket file nobody
+serves, as a Docker Desktop that is installed and not running can leave behind; it passes only when
+Keiko never calls that client. These cases run in Supervised workspace only: the verifier's
+refusal does not depend on the mode, and the cases without it cover all three modes.
+
 The script carries its own check command and target file, so the Maven cases edit `Invoice.java`. The production policy reads that command as a test check
 (`openCodeNativeVerificationKind`), and a unit test pins that.
 
@@ -159,11 +169,24 @@ It records:
   `harnessError` when a case did not complete;
 - `certifiesPromise`. It is true only when all three hold:
   - the account is a standard user and no container runtime is installed;
-  - all thirteen cases are recorded (`caseSetComplete`), so a filtered or interrupted run never
+  - every case of the set is recorded (`caseSetComplete`), so a filtered or interrupted run never
     certifies;
   - every case met its expectation (`everyCaseMetExpectation`).
 
 It records no path, no task text, no model answer and no other content.
+
+[`scripts/check-acceptance-evidence.mjs`](../../scripts/check-acceptance-evidence.mjs) reads that
+file, prints the platform, the user class, every sign of a container runtime and the case count,
+and passes only when the evidence certifies the promise. It recomputes each precondition from the
+facts instead of trusting `certifiesPromise`, and it names every precondition that failed.
+
+**CI.** The job `repository-relay` of
+[`coding-workbench-customer-shape.yml`](../../.github/workflows/coding-workbench-customer-shape.yml)
+runs the whole set on a hosted macOS 15 runner (#4519). The runner's account is an administrator,
+so it only sets up: it creates a standard account, gives it its own copy of the checkout, Node.js
+and the JDK in its home folder, prints the account's groups and fails if the account is in
+`admin`. The test then runs as that account with the evidence file in its home, and the job passes
+only when `check-acceptance-evidence.mjs` certifies the promise.
 
 The test checks the evidence file's location before any case runs. It resolves symbolic links in
 the part of the path that exists and refuses a file inside the checkout. When it writes the file,
@@ -205,7 +228,7 @@ fix, so `variants/` plays no part.
 | npm folder package                              | lab              | lab                  | lab         |
 | Standalone folder package                       | lab              | lab                  | lab         |
 
-The automated form covers all four never-a-pass cases. The three delivery forms are lab-only for
+The automated form covers all nine never-a-pass cases. The three delivery forms are lab-only for
 now:
 
 - They are installed release artifacts, and the promise is about what a standard user without
@@ -423,22 +446,51 @@ Every case scanned the run's state root, private home and task workspace and fou
 file and no Activity Log line. Every file outside `src/`, `node_modules` and `package-lock.json`
 stayed unchanged, and each case asserts that its worktree starts without `node_modules`.
 
+## Standard account without a container runtime on a hosted runner, 2026-11-22
+
+The job `repository-relay` ran the whole file as a standard account on a hosted macOS 15 runner
+([job 137340919753](https://github.com/oscharko-dev/Keiko/actions/runs/45065598162/job/137340919753),
+#4519). Scripted model, this checkout. The job printed the account's groups (`staff everyone
+localaccounts _lpoperator com.apple.sharepoint.group.1`, no `admin`), and
+`check-acceptance-evidence.mjs` recorded:
+
+| Fact                    | Value                      |
+| ----------------------- | -------------------------- |
+| Platform                | darwin 24.6.0 arm64        |
+| Node.js, OpenCode       | 26.13.1, 2.2.5             |
+| User class              | standard                   |
+| Container runtime signs | none                       |
+| Cases                   | 23 of 23 met, set complete |
+| Certifies the promise   | true                       |
+
+The four #4519 cases passed with the governed verifier refused for isolation and nothing waiting
+on it (8 s to 10 s each, the same as the cases without it). In `docker-stopped` Keiko never called
+the stopped engine's client. Two repairs made them pass; each case failed before its repair:
+
+- Without isolation the runner asked the person to allow package scripts and held the run for the
+  whole decision window, and the orchestrator prepared dependencies for steps it then refused. Now
+  a coding run probes the host first, asks for nothing and installs nothing when no step can run
+  (ADR-0043 D17, ADR-0147). The probe also asks a local Docker engine for `/_ping`, so a stale socket
+  file is unavailable instead of a backend (ADR-0043).
+- A refusal after a failing shell check settled the run as blocked and sent the model no repair
+  continuation. In a run with its own shell such a refusal is now no evidence and no blocker
+  (`evidence-only`, ADR-0137).
+
 ## What this baseline does not prove yet
 
 These points stay open:
 
-- **No container runtime installed.** The machine had `docker` on `PATH`. The case without one, and
-  the case with Docker installed but not running, belong to
-  [#4519](https://github.com/oscharko-dev/Keiko/issues/4519).
-- **Standard user.** The account was an administrator. The standard-user run belongs to #4519 and,
-  for the delivery forms, to #4520.
+- **Delivery forms.** The standard-account run above covers this checkout. The three delivery
+  forms as a standard user belong to [#4520](https://github.com/oscharko-dev/Keiko/issues/4520).
 - **Dependencies in a managed worktree.** The last row is the expected baseline. A managed task
   worktree is a fresh checkout without `node_modules`, and below Full access the run's shell has no
   registry. The relay reaches the person's configured registries (npm) and mirrors (Maven); that row
   stays an expected failure here because the fixture's npm project has no registry behind it
   ([#4522](https://github.com/oscharko-dev/Keiko/issues/4522)). With a configured registry the npm
   cases above pass in a managed worktree in every mode.
-- **CI.** No workflow runs this test yet. That belongs to #4521.
+- **CI as a gate.** The job runs on every pull request to `dev` that touches the server, and on
+  dispatch. It is not yet a required check: that belongs to
+  [#4521](https://github.com/oscharko-dev/Keiko/issues/4521).
 - **Real model.** The scripted form closes no criterion. The real-model run on macOS is still to do.
 - **Windows.** The Windows half of #4492 runs after the macOS gate. See the
   [Windows qualification](opencode-windows-qualification.md).

@@ -742,6 +742,13 @@ nothing runs unconfined. The run settles through the existing not-verified outco
 `coding-runtime.run.settled` records the closed `verificationBlockedReason`. A continuation for a run
 whose tool profile has no shell tool (the mapped profiles) never tells the model to use a shell. A
 dedicated failure code for this outcome would need a snapshot-store migration and is not taken.
+A run whose model has a shell of its own (the native profile) is instead told
+`VERIFICATION_NOT_RUN` with the step reason and to run the check in that shell, where its result
+counts. For it a governed check whose every unrun step is `isolation-unavailable` or
+`native-shell-required` is no evidence either way and no blocker: it enters the ledger with the
+`evidence-only` scope, so its empty summary changes no target, an earlier shell pass stands, and a
+failing shell check still gets its repair continuation instead of settling as blocked (#4519,
+2026-11-22). Every other unrun step keeps the default `blocks-repair` scope.
 
 The same projection carries a governed Git step's closed outcome (`gitOutcome`: `completed`,
 `waiting-for-approval`, `verification-failed`, `verification-missing`, `not-staged`,

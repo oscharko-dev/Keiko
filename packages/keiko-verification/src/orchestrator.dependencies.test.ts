@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { classifyScripts } from "./detect.js";
-import { buildVerificationPlan } from "./plan.js";
+import { buildVerificationPlan, ISOLATION_UNAVAILABLE_DENIAL_PREFIX } from "./plan.js";
 import {
   runVerification,
   type VerificationDeps,
@@ -246,6 +246,64 @@ describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", 
     expect(spawn.calls()[0]?.args.slice(-2)).toEqual(["/abs/npm", "test"]);
     expect(report.dependencies).toBeUndefined();
     expect("dependencies" in report).toBe(false);
+  });
+
+  // #4519: on a Mac without a container runtime no step can run isolated. Installing for steps that
+  // are refused anyway spent a registry read, and a failed install then named missing dependencies
+  // as the cause instead of the missing isolation.
+  it("never bootstraps dependencies when no step can run without isolation (#4519)", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    const catalog = {
+      scripts: { test: "vitest run" },
+      mapping: classifyScripts({ test: "vitest run" }),
+    };
+    const plan = buildVerificationPlan(workspace, catalog, { only: ["test"] });
+
+    const spawn = sequencedSpawn([{ stdout: "added 1 package\n", exitCode: 0 }]);
+    const report = await runVerification(
+      plan,
+      testDeps(workspace, spawn.fn, {
+        dependencyBootstrap: "auto",
+        networkEnforcement: "enforce-or-fail-closed",
+        enforcedNetworkAvailable: false,
+      }),
+    );
+
+    expect(spawn.calls()).toEqual([]);
+    expect(report.dependencies).toBeUndefined();
+    expect(report.results.map((result) => result.status)).toEqual(["denied"]);
+    expect(report.results[0]?.detail).toMatch(
+      new RegExp(`^${ISOLATION_UNAVAILABLE_DENIAL_PREFIX}`),
+    );
+  });
+
+  it("still bootstraps dependencies for a step the host can isolate (#4519)", async () => {
+    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+    const catalog = {
+      scripts: { test: "vitest run" },
+      mapping: classifyScripts({ test: "vitest run" }),
+    };
+    const plan = buildVerificationPlan(workspace, catalog, { only: ["test"] });
+
+    const spawn = sequencedSpawn([
+      { stdout: "added 1 package\n", exitCode: 0 },
+      { stdout: "1 passed\n", exitCode: 0 },
+    ]);
+    const npm: SpawnFn = (command, args, options) => {
+      if (args[0] === "install") writeInstalledTree(workspace.root);
+      return spawn.fn(command, args, options);
+    };
+    const report = await runVerification(
+      plan,
+      testDeps(workspace, npm, {
+        dependencyBootstrap: "auto",
+        networkEnforcement: "enforce-or-fail-closed",
+        enforcedNetworkAvailable: true,
+      }),
+    );
+
+    expect(spawn.calls()[0]?.args[0]).toBe("install");
+    expect(report.dependencies?.state).toBe("installed");
   });
 
   it("forwards onStepOutput for a failing script step and stays silent for a passing one", async () => {

@@ -15,7 +15,9 @@ import {
   type AcceptanceModelScript,
 } from "../test-support/functional-acceptance-model.js";
 import { functionalChatModelId } from "../test-support/functional-bff-server.js";
+import { isOpenCodeNativeDeliveryToolName } from "./opencodeNativeDeliveryTools.js";
 import { openCodeNativeVerificationKind } from "./opencodeNativePolicy.js";
+import { isOpenCodeVerificationId } from "./opencodeToolSchemas.js";
 import { functionalGatewayConfig } from "./productionOpenCodeBackend.functional/_support.js";
 
 function script(plan: AcceptanceModelScript["plan"] = "verify"): AcceptanceModelScript {
@@ -103,6 +105,25 @@ describe("acceptance model (#4492)", () => {
     expect(
       plannedCalls({ ...script("skip-check"), installCommand: ACCEPTANCE_NPM_INSTALL_COMMAND }),
     ).not.toContainEqual(install);
+  });
+
+  it("calls Keiko's governed verifier after its edit or after its own check (#4519)", () => {
+    const governed = ["keiko_verification", { verifierId: "test", targetPath: "", packageDir: "" }];
+    expect(plannedCalls({ ...script(), governedVerification: "after-edit" }).slice(2, 6)).toEqual([
+      REPAIR,
+      governed,
+      CHECK,
+      "answer",
+    ]);
+    expect(plannedCalls({ ...script(), governedVerification: "after-check" }).slice(2, 6)).toEqual([
+      REPAIR,
+      CHECK,
+      governed,
+      "answer",
+    ]);
+    // The call is one the native run registers, for a verifier its schema admits.
+    expect(isOpenCodeNativeDeliveryToolName(governed[0])).toBe(true);
+    expect(isOpenCodeVerificationId("test")).toBe(true);
   });
 
   it("leaves the check out, or makes it stale with one more edit", () => {

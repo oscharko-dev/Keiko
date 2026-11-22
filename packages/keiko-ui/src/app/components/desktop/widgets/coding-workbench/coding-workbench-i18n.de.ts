@@ -1416,7 +1416,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.verification.not-run":
     "Die Verifizierung ist nicht vollständig gelaufen: Ein Schritt wurde übersprungen, abgelehnt oder abgebrochen. Das ist keine fehlgeschlagene Prüfung.",
   "codingWorkbench.activity.verification.isolation-unavailable":
-    "Die Verifizierung konnte auf diesem Computer nicht laufen: Er hat keine Container-Laufzeit (Docker oder Podman), die Keiko hier braucht, um Projektbefehle sicher auszuführen. Deine Änderung bleibt erhalten. Starte eine Container-Laufzeit und führe die Prüfung erneut aus, oder prüfe die Änderung selbst.",
+    "Die Verifizierung konnte auf diesem Computer nicht laufen: Für diesen Run führt Keiko Projektbefehle nur in einer Container-Laufzeit (Docker oder Podman) aus, und keine läuft. Deine Änderung bleibt erhalten. Starte eine Container-Laufzeit und führe die Prüfung erneut aus, oder prüfe die Änderung selbst.",
   "codingWorkbench.activity.git.waiting-for-approval":
     "Wartet auf eine Entscheidung, bevor dieser Schritt ausgeführt wird.",
   "codingWorkbench.activity.git.verification-failed":

@@ -46,8 +46,9 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
+import { connect } from "node:net";
 import { homedir, release, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -81,6 +82,7 @@ import {
   ACCEPTANCE_NPM_INSTALL_COMMAND,
   ACCEPTANCE_STALE_SUFFIX,
   acceptanceResponse,
+  type AcceptanceGovernedCall,
   type AcceptanceModelScript,
 } from "../test-support/functional-acceptance-model.js";
 import {
@@ -185,6 +187,13 @@ interface AcceptanceCase {
    * no build start, so the project counts no check.
    */
   readonly login?: "valid" | "wrong";
+  /** #4519: where the run also calls Keiko's governed verifier beside its own shell check. */
+  readonly governed?: AcceptanceGovernedCall;
+  /**
+   * #4519: Docker installed and not running, as the server process sees it: a `docker` client on
+   * `PATH` that cannot reach its daemon, and `DOCKER_HOST` naming a socket file nobody serves.
+   */
+  readonly docker?: "stopped";
 }
 
 /** The confinement the run's runtime process was spawned with, as its Activity Log line says. */
@@ -219,6 +228,13 @@ interface AcceptanceObservation {
   readonly repositoryRequests: Readonly<Record<string, number>>;
   /** The run's `coding-runtime.repository-relay` lines as `action:outcome:reason`, in order. */
   readonly relayLines: readonly string[];
+  /**
+   * The run's governed `coding-runtime.verification` lines as `state step…`, in order. A shell
+   * check's `native-proof` line belongs to its shell command, not to the governed verifier.
+   */
+  readonly governedVerifications: readonly string[];
+  /** How often the server ran the stopped Docker's client; the `docker: "stopped"` cases only. */
+  readonly dockerClientCalls?: number;
   /**
    * Where the person's repository login (#4522) appeared in what the run could read; Maven cases
    * only. It must never reach the run in any spelling; `settingsFilesScanned` keeps the scan from
@@ -346,6 +362,9 @@ function unverified(
 
 const VERIFIED_MODES = ["supervised-coding", "autonomous-delivery", "governed-assist"] as const;
 
+/** The `coding-runtime.verification` line of a governed test verifier refused for want of isolation. */
+const ISOLATION_REFUSED = "not-run test:isolation-unavailable";
+
 const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
   ...VERIFIED_MODES.map((mode): AcceptanceExpectation => ({
     id: `verify-${mode}`,
@@ -398,14 +417,16 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
       expect([observed.approvalCount, observed.denialCount]).toEqual([2, 1]);
     },
   },
-  {
-    id: "dependency-own-folder",
-    title: "verifies a project whose dependencies are installed in the person's own folder",
-    acceptanceCase: verified("with-dependency", "supervised-coding", "own-folder"),
+  // #4519: the person's own folder, where the dependencies are already installed, in every mode;
+  // with the managed-worktree cases above, both work locations are covered in all three.
+  ...VERIFIED_MODES.map((mode): AcceptanceExpectation => ({
+    id: `dependency-own-folder-${mode}`,
+    title: `verifies a project whose dependencies are installed in the person's own folder in ${mode}`,
+    acceptanceCase: verified("with-dependency", mode, "own-folder"),
     check: (observed): void => {
-      expectSucceeded(observed, "supervised-coding");
+      expectVerifiedInMode(observed, mode);
     },
-  },
+  })),
   // Baseline until #4522: a managed task worktree is a fresh checkout without `node_modules`, and
   // below Full access the run's shell has no registry, so its tests cannot load the dependency.
   // The run must say so honestly rather than succeed; #4522 turns this case into a success.
@@ -420,6 +441,66 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
     check: (observed): void => {
       expectNotVerified(observed, "supervised-coding", { testsPassOutsideKeiko: false });
       expect(observed.verificationSummaries).toEqual(["test:failed", "test:failed"]);
+    },
+  },
+  // #4519: Keiko's governed verifier needs an enforcing isolation backend, which a Mac without a
+  // running container runtime does not have, so it runs none of the project's commands. In the
+  // native profile that refusal does not block the run: its own shell check is the verification.
+  {
+    id: "governed-refused-then-shell",
+    title: "verifies through its shell check after the governed verifier is refused for isolation",
+    acceptanceCase: { ...verified("no-dependencies", "supervised-coding"), governed: "after-edit" },
+    check: (observed): void => {
+      expectVerifiedInMode(observed, "supervised-coding");
+      expect(observed.governedVerifications).toEqual([ISOLATION_REFUSED]);
+    },
+  },
+  {
+    id: "shell-failed-then-governed-refused",
+    title:
+      "never reports success for a failing shell check followed by a refused governed verifier",
+    acceptanceCase: {
+      ...unverified("supervised-coding", "wrong", "verify"),
+      governed: "after-check",
+    },
+    check: (observed): void => {
+      // The refusal leaves the failing shell check the run's last word: Keiko still sends the
+      // model back to repair it and never settles the run as blocked by the refused verifier.
+      expectNotVerified(observed, "supervised-coding", { testsPassOutsideKeiko: false });
+      expect(observed.governedVerifications).toEqual([ISOLATION_REFUSED]);
+      expect(observed.verificationBlockedReason).toBeUndefined();
+    },
+  },
+  {
+    id: "docker-stopped",
+    title: "verifies through its shell check while Docker is installed and not running",
+    acceptanceCase: {
+      ...verified("no-dependencies", "supervised-coding"),
+      governed: "after-edit",
+      docker: "stopped",
+    },
+    check: (observed): void => {
+      expectVerifiedInMode(observed, "supervised-coding");
+      expect(observed.governedVerifications).toEqual([ISOLATION_REFUSED]);
+      // The leftover socket answers no connection, so Keiko never hands a step to the stopped
+      // engine's client: a step it ran there would fail as if the project's own check had failed.
+      expect(observed.dockerClientCalls).toBe(0);
+    },
+  },
+  // Without isolation the governed verifier installs nothing, so the run must not hear that an
+  // installation failed (#4519); the dependencies themselves are #4522's.
+  {
+    id: "dependency-missing-governed",
+    title: "does not report a failed installation when the governed verifier attempted none",
+    acceptanceCase: {
+      ...verified("with-dependency", "supervised-coding"),
+      dependencies: "missing",
+      expected: "not-succeeded",
+      governed: "after-edit",
+    },
+    check: (observed): void => {
+      expectNotVerified(observed, "supervised-coding", { testsPassOutsideKeiko: false });
+      expect(observed.governedVerifications).toEqual([ISOLATION_REFUSED]);
     },
   },
   // #4492: a Maven project whose parent POM only an internal repository serves, behind a login the
@@ -571,7 +652,8 @@ function expectNotVerified(
  * What holds in every case, whatever its outcome: the run changed nothing outside its source,
  * every check it reported is one the project itself counted, and its runtime ran inside the
  * boundary. A build that could not start (no login) is the one case where the project counts
- * fewer checks than the run reported: `projectCheckCount` names that number.
+ * fewer checks than the run reported: `projectCheckCount` names that number. A governed check the
+ * host refused ran nothing, so its summary is no check the project could count.
  */
 function expectEveryCase(
   observed: AcceptanceObservation,
@@ -579,9 +661,12 @@ function expectEveryCase(
   projectCheckCount?: number,
 ): void {
   const context = JSON.stringify(observed);
+  const refusedGoverned = observed.governedVerifications.filter((line) =>
+    line.startsWith("not-run "),
+  ).length;
   expect(observed.outsideSourceUnchanged, context).toBe(true);
   expect(observed.runCheckCount, context).toBe(
-    projectCheckCount ?? observed.verificationSummaries.length,
+    projectCheckCount ?? observed.verificationSummaries.length - refusedGoverned,
   );
   expectNativeConfinement(observed, mode);
 }
@@ -662,7 +747,7 @@ async function observeAcceptanceCase(
   const startedAt = Date.now();
   // The run's build settings read the home of the process that composes the server, so a Maven
   // case holds the person's home around the run alone and puts the real one back afterwards.
-  const run = await withPersonHomeOf(prepared, async () => {
+  const run = await aroundRun(prepared, acceptanceCase, async () => {
     const served = await serveAcceptance(prepared, script);
     const runId = await startAcceptanceRun(served, acceptanceCase);
     const editDone = (): boolean => readFileSync(target, "utf8") !== prepared.original;
@@ -695,6 +780,9 @@ async function observeAcceptanceCase(
     outsideSourceUnchanged:
       outsideSourceDigest(acceptanceCase.project, prepared.runRoot) === outsideSourceBefore,
     editLanded: readFileSync(target, "utf8") === finalContent,
+    ...(acceptanceCase.docker === undefined
+      ? {}
+      : { dockerClientCalls: dockerClientCalls(prepared.root) }),
     durationMs: Date.now() - startedAt,
   };
 }
@@ -742,6 +830,86 @@ function loginSpellings(acceptanceCase: AcceptanceCase): readonly string[] {
   return credentialSpellings(password, FUNCTIONAL_MAVEN_USERNAME);
 }
 
+/** What a case holds around its run alone: the person's home, a stopped Docker installation. */
+function aroundRun<T>(
+  prepared: PreparedAcceptanceCase,
+  acceptanceCase: AcceptanceCase,
+  work: () => Promise<T>,
+): Promise<T> {
+  const inHome = (): Promise<T> => withPersonHomeOf(prepared, work);
+  return acceptanceCase.docker === "stopped" ? withStoppedDocker(prepared.root, inHome) : inHome();
+}
+
+const DOCKER_CALLS_FILE = "docker-calls";
+
+/**
+ * Docker installed and not running, as the server process sees it for the length of one run: its
+ * client first on `PATH`, answering as the real client does when no daemon serves its socket, and
+ * `DOCKER_HOST` naming a socket file left behind by a process that is gone. Short names: a Unix
+ * socket path has at most 104 bytes on macOS.
+ */
+async function withStoppedDocker<T>(root: string, work: () => Promise<T>): Promise<T> {
+  const bin = join(root, "docker-bin");
+  const socket = join(root, "d.sock");
+  mkdirSync(bin);
+  writeFileSync(
+    join(bin, "docker"),
+    [
+      "#!/bin/sh",
+      `echo call >> '${join(root, DOCKER_CALLS_FILE)}'`,
+      `echo 'Cannot connect to the Docker daemon at unix://${socket}. Is the docker daemon running?' >&2`,
+      "exit 1",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  leaveStaleSocket(socket);
+  await expectConnectionRefused(socket);
+  const saved = { PATH: process.env.PATH, DOCKER_HOST: process.env.DOCKER_HOST };
+  process.env.PATH = `${bin}${delimiter}${saved.PATH ?? ""}`;
+  process.env.DOCKER_HOST = `unix://${socket}`;
+  try {
+    return await work();
+  } finally {
+    restoreEnv("PATH", saved.PATH);
+    restoreEnv("DOCKER_HOST", saved.DOCKER_HOST);
+  }
+}
+
+/** A socket file whose process exited without closing it: the file stays, nobody serves it. */
+function leaveStaleSocket(socket: string): void {
+  const listener =
+    "require('node:net').createServer().listen(process.argv.at(-1), () => process.exit(0));";
+  const result = spawnSync(process.execPath, ["-e", listener, socket], { timeout: 10_000 });
+  if (result.status !== 0 || !lstatSync(socket).isSocket()) {
+    throw new Error("acceptance-precondition-stale-socket");
+  }
+}
+
+function expectConnectionRefused(socket: string): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    const client = connect(socket);
+    client.once("connect", () => {
+      client.destroy();
+      reject(new Error("acceptance-precondition-socket-served"));
+    });
+    client.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "ECONNREFUSED") resolvePromise();
+      else reject(error);
+    });
+  });
+}
+
+function restoreEnv(name: "PATH" | "DOCKER_HOST", value: string | undefined): void {
+  if (value === undefined) Reflect.deleteProperty(process.env, name);
+  else process.env[name] = value;
+}
+
+function dockerClientCalls(root: string): number {
+  const file = join(root, DOCKER_CALLS_FILE);
+  return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).length : 0;
+}
+
 function withPersonHomeOf<T>(prepared: PreparedAcceptanceCase, work: () => Promise<T>): Promise<T> {
   return prepared.surroundings === undefined
     ? work()
@@ -777,6 +945,9 @@ function acceptanceScript(
     ...(acceptanceCase.project === "npm-internal-registry"
       ? { installCommand: ACCEPTANCE_NPM_INSTALL_COMMAND }
       : {}),
+    ...(acceptanceCase.governed === undefined
+      ? {}
+      : { governedVerification: acceptanceCase.governed }),
   };
 }
 
@@ -1104,6 +1275,7 @@ function settledFacts(
   | "continuations"
   | "buildSettings"
   | "relayLines"
+  | "governedVerifications"
 > {
   const settled = log.events.find(
     (event) => event.op === "coding-runtime.run.settled" && event.extra?.runId === runId,
@@ -1146,6 +1318,11 @@ function settledFacts(
           ]
         : [],
     ),
+    governedVerifications: log.events.flatMap((event) =>
+      event.op === "coding-runtime.verification" && event.extra?.state !== "native-proof"
+        ? [[event.extra?.state, ...stepList(event.extra?.steps)].map(String).join(" ")]
+        : [],
+    ),
     // Whether a build reached the relay at all, and how each request ended: closed values only.
     // A request line carries its request's correlation, so every relay line of the case counts.
     relayLines: log.events.flatMap((event) =>
@@ -1167,6 +1344,10 @@ function recordActivityLog(): BufferedServerLogSink {
     resetServerLogger();
   });
   return sink;
+}
+
+function stepList(steps: unknown): readonly unknown[] {
+  return Array.isArray(steps) ? steps : [];
 }
 
 function acceptanceEvidence(): Record<string, unknown> {

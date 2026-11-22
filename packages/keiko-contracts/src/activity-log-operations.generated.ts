@@ -20823,6 +20823,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
       },
+      isolationEngine: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["answered", "refused", "unanswered", "rejected"],
+      },
       networkEnforcement: {
         type: "string",
         dataClass: "closed-enum",

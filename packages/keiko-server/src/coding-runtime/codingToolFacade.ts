@@ -951,7 +951,7 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
     // and the model kept asking for a shell the profile does not have. The cause is the computer's,
     // not the model's or the policy's: no number of retries or other verifiers changes it.
     VERIFICATION_ISOLATION_UNAVAILABLE:
-      "Verification could not run because this computer has no container runtime (Docker or Podman), which Keiko needs to run project commands safely. This is not a failing check and no policy denied it. Do not retry verification, do not try another verifier and do not look for another way to run the command. Tell the person that the change is applied but not verified, and that they can start a container runtime and verify again, or check the change themselves.",
+      "Verification could not run because this computer has no running container runtime (Docker or Podman), which Keiko needs to run project commands safely. This is not a failing check and no policy denied it. Do not retry verification, do not try another verifier and do not look for another way to run the command. Tell the person that the change is applied but not verified, and that they can start a container runtime and verify again, or check the change themselves.",
     // #4271 lab (T39): a verifier with no step for the package it resolved answered a bare code,
     // and the model gave up instead of running the build tool the repository already uses.
     NO_RUNNABLE_STEPS: `This verifier has nothing to run for that package. Where the detail names several packages, pass one as packageDir. Otherwise run the repository's own test command for the changed code in your shell (for example mvn test, ./gradlew test, npm test or pytest), where its result counts as that verification. ${SHELL_VERIFICATION_STATUS_RULE} Never add a script or build file only to satisfy this verifier, and do not retry the same verifier unchanged.`,
@@ -1006,7 +1006,7 @@ const NOT_RUN_WORDS: Readonly<Record<VerificationNotRunReason, string>> = {
   "native-shell-required":
     "the isolated verifier cannot install dependencies for this host; run this check in your own shell",
   "isolation-unavailable":
-    "this computer has no container runtime (Docker or Podman), so Keiko cannot run project commands safely here",
+    "this computer has no running container runtime (Docker or Podman), so Keiko cannot run project commands safely here",
   denied: "denied by policy",
   cancelled: "cancelled",
   skipped: "skipped",
@@ -1047,7 +1047,7 @@ function verificationNotRunDetail(
 // VERIFICATION_ISOLATION_UNAVAILABLE instead), and there the same check still counts: the model is
 // told to run it in that shell, as for a step the verifier cannot install for.
 const ISOLATION_UNAVAILABLE_WITH_SHELL =
-  "the isolated verifier has no container runtime (Docker or Podman) on this computer; run this check in your own shell";
+  "the isolated verifier has no running container runtime (Docker or Podman) on this computer; run this check in your own shell";
 
 function notRunWords(reason: VerificationNotRunReason, shell: boolean): string {
   return shell && reason === "isolation-unavailable"

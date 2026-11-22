@@ -257,6 +257,7 @@ import {
   createVerificationRunnerManager,
   type VerificationRunnerManager,
 } from "./editor/verificationRunner.js";
+import { timedNetworkIsolationProbe } from "./editor/verificationExecution.js";
 import {
   createOrdinaryWorkspaceRootAccess,
   grantedWorkspaceRootAccess,
@@ -2548,6 +2549,9 @@ function buildVerificationRunner(options: {
       options.workspaceScriptTrust.holdsHumanGrantForRoot(canonicalRoot),
     isWorktreeManifestRunAdmitted: (canonicalRoot): boolean =>
       options.workspaceScriptTrust.holdsRunAdmissionForRoot(canonicalRoot),
+    // #4519: an agent run asks for package-script trust only where a step can run isolated.
+    probeIsolation: (cwd, correlationId) =>
+      timedNetworkIsolationProbe(cwd, options.diagnostics, correlationId),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
