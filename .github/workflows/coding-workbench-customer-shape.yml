@@ -129,3 +129,51 @@ jobs:
       - name: Run customer-shape qualification
         timeout-minutes: 25
         run: npm run qualify:coding-workbench:customer-shape
+  repository-relay:
+    # #4530: a Coding run on macOS builds and tests a Maven and an npm project whose dependencies
+    # only a password-protected internal repository serves, in all three modes, through the real
+    # Seatbelt boundary and the repository credential relay (ADR-0184). A wrong login never passes.
+    name: Coding acceptance with a password-protected repository on macOS 15
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Build workspace packages
+        run: npm run build:packages
+      - name: Stage approved OpenCode dev-lane payload
+        run: npm run dev:coding-runtime:stage
+      - name: Provision the pinned ripgrep runtime
+        run: npm run provision:ripgrep
+      - name: Show the Maven and Java the builds use
+        run: mvn -v
+      - name: Provision the acceptance Maven cache
+        run: npm run provision:acceptance-maven
+      - name: Run the coding acceptance task
+        env:
+          KEIKO_OPENCODE_DEV_LANE_FUNCTIONAL: "1"
+          KEIKO_OS_KEYCHAIN: "off"
+        run: |
+          npx vitest run packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.acceptance.test.ts \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/acceptance.json"
+          node scripts/check-vitest-report-ran.mjs "$RUNNER_TEMP/acceptance.json"
+      - name: Run the real Maven and npm clients through the relay
+        env:
+          KEIKO_REPOSITORY_RELAY_REAL_CLIENTS: "1"
+          KEIKO_OS_KEYCHAIN: "off"
+        run: |
+          npx vitest run packages/keiko-server/src/coding-runtime/nativeRepositoryRelay.clients.test.ts \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/relay-clients.json"
+          node scripts/check-vitest-report-ran.mjs "$RUNNER_TEMP/relay-clients.json"
