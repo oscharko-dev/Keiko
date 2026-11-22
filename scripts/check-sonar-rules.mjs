@@ -11,11 +11,13 @@
 // untouched code is not this diff's to answer for, exactly as Sonar's new-code period decides.
 
 import { execFileSync } from "node:child_process";
-import { dirname, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { ESLint } from "eslint";
 import sonarjs from "eslint-plugin-sonarjs";
+import tseslint from "typescript-eslint";
 
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { isTestPath } from "./sonar-analysis-scope.mjs";
@@ -46,34 +48,113 @@ export function changedLintableFiles(names, exists) {
     .filter((entry) => exists(entry));
 }
 
-export function summarise(results) {
+// SonarCloud raises no issue on a line that carries a `NOSONAR` comment, whatever the rule (#4525).
+// Only a comment token counts: the word inside a string literal suppresses nothing there, so the
+// comments come from the parser, never from the raw line. A comment suppresses the line it starts
+// on.
+const NOSONAR = /\bNOSONAR\b/u;
+
+function suppressedLines(result, readSource) {
+  const source = result.source ?? readSource(result.filePath);
+  const { ast } = tseslint.parser.parseForESLint(source, {
+    comment: true,
+    loc: true,
+    ecmaVersion: "latest",
+    sourceType: "module",
+    ecmaFeatures: { jsx: /x$/u.test(result.filePath) },
+  });
+  return new Set(
+    ast.comments
+      .filter((comment) => NOSONAR.test(comment.value))
+      .map((comment) => comment.loc.start.line),
+  );
+}
+
+export function summarise(results, readSource = (path) => readFileSync(path, "utf8")) {
   const findings = [];
   for (const result of results) {
-    for (const message of result.messages) {
-      const rule = String(message.ruleId ?? "");
-      if (!rule.startsWith("sonarjs/")) continue;
-      findings.push({
-        line: message.line,
-        message: message.message,
-        path: result.filePath.startsWith(repoRoot)
-          ? result.filePath.slice(repoRoot.length + 1)
-          : result.filePath,
-        rule,
-      });
+    // A file the engine could not parse (or type) was not analysed at all; passing it would hide
+    // every finding it holds, so it fails like a finding.
+    const sonarMessages = result.messages.filter(
+      (message) => message.fatal === true || String(message.ruleId ?? "").startsWith("sonarjs/"),
+    );
+    if (sonarMessages.length === 0) continue;
+    // A fatal message is never suppressed, and a file that did not parse has no comment tokens.
+    const suppressed = sonarMessages.some((message) => message.fatal === true)
+      ? new Set()
+      : suppressedLines(result, readSource);
+    for (const message of sonarMessages) {
+      if (message.fatal !== true && suppressed.has(message.line)) continue;
+      findings.push(finding(result.filePath, message));
     }
   }
   return findings;
 }
 
-// The repository's own flat config still applies; these rules are layered on top, so parsing,
-// globals and type information stay exactly as `npm run lint` sees them.
+function finding(filePath, message) {
+  return {
+    line: message.line,
+    message: message.message,
+    path: filePath.startsWith(repoRoot) ? filePath.slice(repoRoot.length + 1) : filePath,
+    rule: message.fatal === true ? "parse-error" : String(message.ruleId),
+  };
+}
+
+// SonarCloud analyses with the organisation's quality profile, not the plugin's `recommended` set:
+// 19 recommended rules are inactive for TypeScript there (#4525). The snapshot lists the rule keys
+// each language's profile activates; refresh it when the organisation changes its profile
+// (docs/qa/local-sonar.md).
+export const QUALITY_PROFILE = JSON.parse(
+  readFileSync(resolve(repoRoot, "scripts/sonar-quality-profile.json"), "utf8"),
+);
+
+const TYPESCRIPT_FILES = ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"];
+const UI_ROOT = resolve(repoRoot, "packages/keiko-ui");
+const JAVASCRIPT_FILES = ["**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs"];
+
+/** The SonarCloud rule key (`S4782`) a plugin rule implements, read from its documentation link. */
+export function sonarRuleKey(rule) {
+  return /\/(S\d+)(?:\/|$)/u.exec(String(rule?.meta?.docs?.url ?? ""))?.[1];
+}
+
+/** The plugin's recommended rules that the given profile language actually activates. */
+export function profileRules(language, plugin = sonarjs, profile = QUALITY_PROFILE) {
+  const active = new Set(profile[language]);
+  return Object.fromEntries(
+    Object.entries(plugin.configs.recommended.rules).filter(([name, level]) => {
+      if (level === "off" || level === 0) return false;
+      const key = sonarRuleKey(plugin.rules[name.slice("sonarjs/".length)]);
+      return key !== undefined && active.has(key);
+    }),
+  );
+}
+
+/** A TypeScript file under the UI package, whose own ESLint config carries no type information. */
+export function isUiTypeScriptFile(path) {
+  return path.startsWith(UI_ROOT + sep) && /\.tsx?$/u.test(path);
+}
+
+// The repository's own flat configs still apply; these rules are layered on top, so parsing and
+// globals stay exactly as `npm run lint` sees them. The UI's own config lints without type
+// information, but SonarCloud analyses UI files with `packages/keiko-ui/tsconfig.json`; without it
+// a type-aware rule such as S4782 cannot see `exactOptionalPropertyTypes` and reports what
+// SonarCloud does not (#4525).
 export function createEngine() {
   return new ESLint({
+    cwd: repoRoot,
     overrideConfig: [
+      { files: TYPESCRIPT_FILES, plugins: { sonarjs }, rules: profileRules("typescript") },
+      { files: JAVASCRIPT_FILES, plugins: { sonarjs }, rules: profileRules("javascript") },
       {
-        files: ["**/*.{ts,tsx,mjs,cjs,js,jsx}"],
-        plugins: { sonarjs },
-        rules: sonarjs.configs.recommended.rules,
+        // A function, not a glob: override globs resolve against the config that owns the file,
+        // which for UI files is the UI's own directory.
+        files: [isUiTypeScriptFile],
+        languageOptions: {
+          parserOptions: {
+            projectService: true,
+            tsconfigRootDir: UI_ROOT,
+          },
+        },
       },
     ],
   });

@@ -34,7 +34,8 @@ export function ProjectTreeRoot({
         aria-selected={false}
         aria-level={1}
         aria-expanded={expanded}
-        aria-label={t("tree.projectRoot", { name })}
+        // WCAG 2.5.3: the name contains the visible name and path, in that order.
+        aria-label={`${t("tree.projectRoot", { name })} ${root}`}
         className={`tr-row ${styles.cmpProjectRoot}`}
         data-path=""
         onKeyDown={(event) => {
@@ -54,6 +55,7 @@ export function ProjectTreeRoot({
         </span>
         <FolderIcon size={14} />
         <span className={styles.cmpRootName}>{name}</span>
+        {/* Not rendered in the flex row; it keeps the name and the path two words. */}{" "}
         <span className={styles.cmpRootPath} title={root}>
           {root}
         </span>

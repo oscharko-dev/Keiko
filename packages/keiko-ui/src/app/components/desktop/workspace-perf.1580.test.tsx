@@ -92,6 +92,25 @@ function workspace(api: WorkspaceApi, partial: Partial<UseWorkspaceResult>): Use
   };
 }
 
+// jsdom 31 serializes CSS numbers to six significant digits, as browsers do, so a transform is
+// compared by its parsed translate and scale values rather than by the full-precision string.
+function expectSceneTransform(
+  transform: string,
+  expected: { readonly x: number; readonly y: number; readonly scale?: number },
+): void {
+  const match = /^translate\((-?[\d.e+-]+)px, (-?[\d.e+-]+)px\)(?: scale\((-?[\d.e+-]+)\))?$/u.exec(
+    transform,
+  );
+  expect(match, transform).not.toBeNull();
+  expect(Number(match?.[1])).toBeCloseTo(expected.x, 4);
+  expect(Number(match?.[2])).toBeCloseTo(expected.y, 4);
+  if (expected.scale === undefined) {
+    expect(match?.[3]).toBeUndefined();
+  } else {
+    expect(Number(match?.[3])).toBeCloseTo(expected.scale, 4);
+  }
+}
+
 describe("Issue #1580 — workspace re-render performance", () => {
   let bodyRenders: string[];
   let capturedRoots: { id: string; root: string | null }[];
@@ -354,13 +373,13 @@ describe("Issue #1580 — scene zoom rendering mode", () => {
     // and expresses the in-flight zoom as a compositor-only scale correction.
     setView({ x: 12, y: 8, zoom: 1.6 });
     expect(scene().style.zoom).toBe("1.4");
-    expect(scene().style.transform).toContain(`scale(${String(1.6 / 1.4)})`);
+    expectSceneTransform(scene().style.transform, { x: 12 / 1.4, y: 8 / 1.4, scale: 1.6 / 1.4 });
     act(() => {
       vi.advanceTimersByTime(80); // still inside the settle window
     });
     setView({ x: 20, y: 14, zoom: 1.8 });
     expect(scene().style.zoom).toBe("1.4");
-    expect(scene().style.transform).toContain(`scale(${String(1.8 / 1.4)})`);
+    expectSceneTransform(scene().style.transform, { x: 20 / 1.4, y: 14 / 1.4, scale: 1.8 / 1.4 });
 
     // Settle: exactly one flip of the layout-affecting zoom, scale dropped.
     act(() => {
@@ -394,16 +413,12 @@ describe("Issue #1580 — scene zoom rendering mode", () => {
   it("keeps pan translate anchored to the settled zoom during a gesture (#2004)", () => {
     const { scene, setView } = renderScene({ x: 12, y: 34, zoom: 1.75 });
     // Settled mapping (#305): translate divided by the zoom the CSS property holds.
-    expect(scene().style.transform).toBe(
-      `translate(${String(12 / 1.75)}px, ${String(34 / 1.75)}px)`,
-    );
+    expectSceneTransform(scene().style.transform, { x: 12 / 1.75, y: 34 / 1.75 });
 
     // During the gesture the divisor must stay the SETTLED zoom (the CSS zoom that
     // multiplies the translate), not the in-flight zoom — otherwise the scene
     // drifts while the compositor scale is applied.
     setView({ x: 40, y: 60, zoom: 2 });
-    expect(scene().style.transform).toBe(
-      `translate(${String(40 / 1.75)}px, ${String(60 / 1.75)}px) scale(${String(2 / 1.75)})`,
-    );
+    expectSceneTransform(scene().style.transform, { x: 40 / 1.75, y: 60 / 1.75, scale: 2 / 1.75 });
   });
 });

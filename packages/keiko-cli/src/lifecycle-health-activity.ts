@@ -17,7 +17,10 @@ export type LifecycleHealthOutcome =
   // launch identity. The two stale outcomes restart it.
   | "busy"
   | "stale-version"
-  | "stale-unreachable";
+  | "stale-unreachable"
+  // The tracked record's process id now names another program: its readable command line carries
+  // no launch identity. The record is dropped and Keiko starts; the other program is never touched.
+  | "stale-foreign";
 
 const LIFECYCLE_HEALTH_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -47,6 +50,7 @@ const LIFECYCLE_HEALTH_OPERATION = defineActivityLogOperation({
         "busy",
         "stale-version",
         "stale-unreachable",
+        "stale-foreign",
       ],
     },
     // How often a second start asked its tracked UI's health again after the first probe (#4504).

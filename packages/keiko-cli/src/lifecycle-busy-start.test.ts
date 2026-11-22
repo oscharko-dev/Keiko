@@ -33,7 +33,12 @@ function fixture(
   {
     launchBound = true,
     verify = (): boolean => true,
-  }: { readonly launchBound?: boolean; readonly verify?: () => boolean } = {},
+    commandLine = (): string | undefined => undefined,
+  }: {
+    readonly launchBound?: boolean;
+    readonly verify?: () => boolean;
+    readonly commandLine?: () => string | undefined;
+  } = {},
 ): {
   deps: LifecycleCliDeps;
   events: SecurityLogEvent[];
@@ -77,6 +82,7 @@ function fixture(
     isPortAvailable: () => Promise.resolve(true),
     isProcessAlive: () => alive,
     verifyLaunchIdentity: verify,
+    readCommandLine: commandLine,
     platform: () => "linux",
     securityLogSink: {
       write: (event): void => {
@@ -203,5 +209,58 @@ describe("a second start while Keiko runs (#4504)", () => {
       healthRetries: 0,
       launchBound: false,
     });
+  });
+});
+
+// A Keiko that ended without its stop leaves its record, and the system may hand its process id to
+// any later program (seen on Windows after a restart: the first start refused with "ownership is
+// retained" until that program happened to exit).
+describe("a record whose process id now names another program", () => {
+  it("drops the record and starts Keiko when the other program's command line is readable", async () => {
+    const setup = fixture(["down", "current"], {
+      verify: (): boolean => false,
+      commandLine: (): string => "C:\\Windows\\System32\\svchost.exe -k netsvcs -p",
+    });
+    expect(await start(setup)).toBe(0);
+    expect(setup.out.join("")).toContain(
+      `Keiko UI record is stale (pid ${String(TRACKED_PID)} now belongs to another program)`,
+    );
+    expect(setup.killed).not.toHaveBeenCalled();
+    expect(setup.spawned).toHaveBeenCalledTimes(1);
+    expect(trackedDecision(setup.events)).toMatchObject({
+      phase: "tracked",
+      outcome: "stale-foreign",
+      launchBound: true,
+    });
+  });
+
+  it("keeps the refusal while the process's command line cannot be read", async () => {
+    const setup = fixture(["down"], { verify: (): boolean => false });
+    expect(await start(setup)).toBe(1);
+    expect(setup.err.join("")).toContain("ownership is retained");
+    expect(setup.killed).not.toHaveBeenCalled();
+    expect(setup.spawned).not.toHaveBeenCalled();
+    expect(trackedDecision(setup.events)).toMatchObject({ outcome: "identity-mismatch" });
+  });
+
+  it("never reads its own launch identity on the command line as another program", async () => {
+    const setup = fixture(["current"], {
+      commandLine: (): string =>
+        `node keiko ui --port 1983 --host 127.0.0.1 --launch-id ${LAUNCH_ID}`,
+    });
+    expect(await start(setup)).toBe(0);
+    expect(setup.out.join("")).toContain("already running");
+    expect(setup.spawned).not.toHaveBeenCalled();
+    expect(trackedDecision(setup.events)).toMatchObject({ outcome: "healthy" });
+  });
+
+  it("keeps an older record without a launch identity on the existing restart path", async () => {
+    const setup = fixture(["down", "current"], {
+      launchBound: false,
+      commandLine: (): string => "C:\\Windows\\explorer.exe",
+    });
+    await start(setup);
+    expect(setup.out.join("")).not.toContain("belongs to another program");
+    expect(trackedDecision(setup.events)).toMatchObject({ outcome: "stale-unreachable" });
   });
 });

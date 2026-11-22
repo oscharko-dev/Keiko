@@ -837,7 +837,7 @@ describe("FilesWidget", () => {
       name: "View Git diff for package.json",
     });
     const fileItem = screen.getByRole("treeitem", {
-      name: "package.json Git modified: package.json 18 B",
+      name: "package.json M 18 B Git modified: package.json",
     });
     expect(diffButton.closest('[role="treeitem"]')).toBe(fileItem);
     expect(fileItem).toHaveAttribute("tabindex", "0");
@@ -917,16 +917,16 @@ describe("FilesWidget", () => {
 
     render(<FilesWidget root="/repo" />);
 
-    expect(await screen.findByLabelText("Git modified: modified.ts")).toHaveTextContent("M");
-    expect(screen.getByLabelText("Git added: added.ts")).toHaveTextContent("A");
-    expect(screen.getByLabelText("Git untracked: untracked.ts")).toHaveTextContent("?");
-    expect(screen.getByLabelText("Git renamed: renamed.ts")).toHaveTextContent("R");
-    const conflict = screen.getByLabelText("Git conflict: conflicted.ts");
+    expect(await screen.findByTitle("Git modified: modified.ts")).toHaveTextContent("M");
+    expect(screen.getByTitle("Git added: added.ts")).toHaveTextContent("A");
+    expect(screen.getByTitle("Git untracked: untracked.ts")).toHaveTextContent("?");
+    expect(screen.getByTitle("Git renamed: renamed.ts")).toHaveTextContent("R");
+    const conflict = screen.getByTitle("Git conflict: conflicted.ts");
     expect(conflict).toHaveTextContent("U");
     expect(conflict).toHaveAttribute("data-git-state", "conflicted");
-    expect(screen.getByLabelText("Folder contains 1 Git changes")).toHaveTextContent("Δ");
+    expect(screen.getByTitle("Folder contains 1 Git changes")).toHaveTextContent("Δ");
     expect(
-      screen.getByLabelText("Folder contains 1 Git changes, including deleted files"),
+      screen.getByTitle("Folder contains 1 Git changes, including deleted files"),
     ).toHaveTextContent("Δ");
     expect(screen.getByText("src").closest("button")).toHaveAttribute("aria-expanded", "false");
     expect(fetchGitStatus).toHaveBeenCalledTimes(1);
@@ -954,9 +954,9 @@ describe("FilesWidget", () => {
 
     render(<FilesWidget root="/repo" openFilesDirectly onOpenFile={onOpenFile} />);
 
-    const row = await screen.findByRole("treeitem", { name: /ignored\.log, Ignored by Git/u });
+    const row = await screen.findByRole("treeitem", { name: /^ignored\.log .*Ignored by Git/u });
     expect(row).toHaveAttribute("data-git-ignored", "true");
-    expect(screen.queryByLabelText(/Git changed: ignored\.log/iu)).toBeNull();
+    expect(screen.queryByTitle(/Git changed: ignored\.log/iu)).toBeNull();
     await userEvent.click(row);
     expect(onOpenFile).toHaveBeenCalledWith("/repo", "ignored.log");
   });
@@ -1479,7 +1479,7 @@ describe("FilesWidget", () => {
     });
     render(<FilesWidget root="/repo" presentation="project" />);
     const file = await screen.findByRole("treeitem", { name: /\.gitignore.*Hidden/u });
-    await waitFor(() => expect(file).toHaveAccessibleName(/Git modified.*1\.00 KB/u));
+    await waitFor(() => expect(file).toHaveAccessibleName(/1\.00 KB.*Git modified/u));
     expect(screen.getByRole("treeitem", { name: /\.github.*Hidden/u })).toHaveAccessibleName(
       /Git changes/u,
     );
@@ -1493,7 +1493,7 @@ describe("FilesWidget", () => {
       entries: [],
     });
     render(<FilesWidget root="/repo" presentation="project" />);
-    const project = await screen.findByRole("treeitem", { name: "Project: repo" });
+    const project = await screen.findByRole("treeitem", { name: "Project: repo /repo" });
     await screen.findByText("Empty folder.");
     await userEvent.click(project);
     expect(screen.queryByText("Empty folder.")).toBeNull();
@@ -1519,7 +1519,7 @@ describe("FilesWidget", () => {
     await userEvent.click(await screen.findByRole("treeitem", { name: /^src$/i }));
     expect(await screen.findByText("inside.ts")).toBeInTheDocument();
     expect(screen.getByText("README.md")).toBeInTheDocument();
-    expect(screen.getByRole("treeitem", { name: "Project: repo" })).toHaveAttribute(
+    expect(screen.getByRole("treeitem", { name: "Project: repo /repo" })).toHaveAttribute(
       "aria-expanded",
       "true",
     );
@@ -1565,17 +1565,17 @@ describe("FilesWidget", () => {
     render(
       <FilesWidget root="/repo" presentation="project" openFilesDirectly onOpenFile={onOpenFile} />,
     );
-    const hidden = await screen.findByRole("treeitem", { name: /\.github, Hidden/u });
+    const hidden = await screen.findByRole("treeitem", { name: /^\.github .*Hidden/u });
     expect(hidden).toHaveAttribute("data-hidden", "true");
     expect(hidden).not.toHaveAttribute("data-git-ignored");
-    const ignored = await screen.findByRole("treeitem", { name: /generated, Ignored by Git/u });
+    const ignored = await screen.findByRole("treeitem", { name: /^generated .*Ignored by Git/u });
     expect(ignored).toHaveAttribute("data-git-ignored", "true");
     expect(ignored).not.toHaveAttribute("data-hidden");
-    const blocked = screen.getByRole("treeitem", { name: "blocked, Unavailable" });
+    const blocked = screen.getByRole("treeitem", { name: "blocked Unavailable" });
     expect(blocked).toHaveAttribute("aria-disabled", "true");
     expect(blocked).toHaveTextContent(/^blocked$/u);
     await userEvent.click(ignored);
-    const child = await screen.findByRole("treeitem", { name: /inside\.ts, Ignored by Git/u });
+    const child = await screen.findByRole("treeitem", { name: /^inside\.ts .*Ignored by Git/u });
     expect(child).toHaveAttribute("data-git-ignored", "true");
     await userEvent.click(child);
     expect(onOpenFile).toHaveBeenCalledWith("/repo", "generated/inside.ts");
@@ -1589,14 +1589,14 @@ describe("FilesWidget", () => {
       entries: [{ ...treeEntryBase, name: ".notes.md", path: ".notes.md", kind: "file" }],
     });
     const files = render(<FilesWidget root="/notes" />);
-    const row = await screen.findByRole("treeitem", { name: /\.notes\.md, Hidden/u });
+    const row = await screen.findByRole("treeitem", { name: /^\.notes\.md .*Hidden/u });
     expect(row).not.toHaveAttribute("data-git-ignored");
     expect(row).toHaveAttribute("data-muted", "true");
     expect(screen.queryByText("Git unavailable")).toBeNull();
     expect(screen.queryByText("This link can't be opened from this folder.")).toBeNull();
     files.unmount();
     render(<FilesWidget root="/notes" presentation="project" />);
-    expect(await screen.findByRole("treeitem", { name: /\.notes\.md, Hidden/u })).toHaveAttribute(
+    expect(await screen.findByRole("treeitem", { name: /^\.notes\.md .*Hidden/u })).toHaveAttribute(
       "data-muted",
       "false",
     );
@@ -1606,12 +1606,12 @@ describe("FilesWidget", () => {
     mockProjectVersioningTree();
     const project = render(<FilesWidget root="/repo" presentation="project" />);
     const trackedHidden = await screen.findByRole("treeitem", {
-      name: /\.coderabbit\.yaml, Hidden/u,
+      name: /^\.coderabbit\.yaml .*Hidden/u,
     });
     expect(trackedHidden).toHaveAttribute("data-hidden", "true");
     expect(trackedHidden).toHaveAttribute("data-muted", "false");
     expect(trackedHidden.querySelector("img.fi-img")).not.toBeNull();
-    expect(screen.getByRole("treeitem", { name: /\.github, Hidden/u })).toHaveAttribute(
+    expect(screen.getByRole("treeitem", { name: /^\.github .*Hidden/u })).toHaveAttribute(
       "data-muted",
       "false",
     );
@@ -1628,7 +1628,7 @@ describe("FilesWidget", () => {
     expect((await screen.findByText("inside.md")).closest("[data-muted='true']")).not.toBeNull();
     project.unmount();
     render(<FilesWidget root="/repo" />);
-    expect(await screen.findByRole("treeitem", { name: /\.gitignore, Hidden/u })).toHaveAttribute(
+    expect(await screen.findByRole("treeitem", { name: /^\.gitignore .*Hidden/u })).toHaveAttribute(
       "data-muted",
       "true",
     );
@@ -2010,9 +2010,9 @@ describe("FilesWidget", () => {
       }),
     );
     render(<FilesWidget root="/repo" />);
-    await userEvent.click(await screen.findByRole("treeitem", { name: /dist, Ignored by Git/u }));
+    await userEvent.click(await screen.findByRole("treeitem", { name: /^dist .*Ignored by Git/u }));
     expect(
-      await screen.findByRole("treeitem", { name: /inside.md, Ignored by Git/u }),
+      await screen.findByRole("treeitem", { name: /^inside.md .*Ignored by Git/u }),
     ).toHaveAttribute("data-git-ignored", "true");
   });
 
@@ -2193,7 +2193,7 @@ describe("FilesWidget", () => {
     expect(await screen.findByRole("treeitem", { name: /broken/i })).toHaveAccessibleDescription(
       description,
     );
-    await userEvent.click(screen.getByRole("treeitem", { name: "Project: repo" }));
+    await userEvent.click(screen.getByRole("treeitem", { name: "Project: repo /repo" }));
     expect(screen.queryByText(description)).toBeNull();
   });
 

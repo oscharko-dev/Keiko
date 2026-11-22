@@ -234,9 +234,35 @@ describe("a routine fact needs no approval (#4206)", () => {
 const RANDOM_IDENTIFIER_RE =
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b(?=\d*[a-f])[0-9a-f]{12,}\b/gu;
 
+// Clock readings and durations are numbers a wall clock produces ("occurredAt":1795330471122 spells
+// "4711", #4526). Only a JSON number under a clock-shaped key is removed; customer words always
+// arrive as strings, so a leaked "4711" inside any string value still fails the match.
+const CLOCK_FIELD_RE = /"(?:[A-Za-z]*At|[A-Za-z]*Ms|ts|timestamp|seq|pid)":-?\d+(?:\.\d+)?/gu;
+
 function withoutRandomIdentifiers(evidence: string): string {
-  return evidence.replace(RANDOM_IDENTIFIER_RE, "<id>");
+  return evidence.replace(CLOCK_FIELD_RE, '"<clock>":0').replace(RANDOM_IDENTIFIER_RE, "<id>");
 }
+
+describe("the refusal evidence filter (#4526)", () => {
+  const leak = /example\.com|DE89|4711|1234 5678|medication/u;
+
+  it("ignores a clock reading that spells a refused number by chance", () => {
+    const evidence = JSON.stringify({ occurredAt: 1795330471122, durationMs: 4711, seq: 47110 });
+    expect(evidence).toMatch(leak);
+    expect(withoutRandomIdentifiers(evidence)).not.toMatch(leak);
+  });
+
+  it("still finds a refused number that leaked into a string, even beside a clock field", () => {
+    for (const evidence of [
+      JSON.stringify({ occurredAt: 1, summary: "card ends 4711" }),
+      JSON.stringify({ occurredAt: "4711" }),
+      JSON.stringify({ reason: "pid 4711" }),
+      JSON.stringify({ count: 4711 }),
+    ]) {
+      expect(withoutRandomIdentifiers(evidence)).toMatch(leak);
+    }
+  });
+});
 
 describe("refusals are mode-independent and visible (#4206)", () => {
   const refusals = [
