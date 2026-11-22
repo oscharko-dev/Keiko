@@ -106,6 +106,7 @@ import {
   validateSingleAnswerEvidence,
   withSentSelectionDiagnostics,
 } from "./grounded-answer-evidence.js";
+import { uncertaintyForSentEvidence } from "./connected-folder-tool-evidence.js";
 import {
   rerankGroundedCandidates,
   type PreselectionRerankerResult,
@@ -12213,7 +12214,7 @@ function detectConnectedContextWorkspace(root: string, fs: WorkspaceFs): Workspa
 // The workspace a Chat retrieval reads carries the retrieval's content policy, so every read,
 // search hit, excerpt and index of that workspace follows it (#4098).
 function connectedContextDetector(
-  deps: OrchestratorDeps,
+  deps: Pick<OrchestratorDeps, "detectWorkspace" | "contentRedaction" | "contentSecrets">,
 ): (root: string, fs: WorkspaceFs) => WorkspaceInfo {
   const detect = deps.detectWorkspace ?? detectConnectedContextWorkspace;
   if (deps.contentRedaction !== "preserve") return detect;
@@ -12806,7 +12807,7 @@ async function executeConnectedContextRetrieval(
 function assertGroundedWorkspaceRootAllowed(
   fs: WorkspaceFs,
   workspaceRoot: string,
-  deps: OrchestratorDeps,
+  deps: Pick<OrchestratorDeps, "activityLog" | "correlationId">,
 ): string {
   try {
     return resolveRecordedWorkspaceRoot(fs, workspaceRoot, deps);
@@ -12827,6 +12828,23 @@ function assertGroundedWorkspaceRootAllowed(
     unavailable.cause = error;
     throw unavailable;
   }
+}
+
+/**
+ * The search scope of a connected folder exactly as retrieval builds it: the same root admission,
+ * workspace detection and content policy. A model-driven read of that folder runs on this scope, so
+ * it can reach nothing the automatic retrieval of the same turn could not.
+ */
+export function connectedContextSearchScope(
+  scope: SelectedScope,
+  fs: WorkspaceFs,
+  deps: Pick<
+    OrchestratorDeps,
+    "detectWorkspace" | "contentRedaction" | "contentSecrets" | "activityLog" | "correlationId"
+  >,
+): SearchScope {
+  const root = assertGroundedWorkspaceRootAllowed(fs, scope.workspaceRoot, deps);
+  return buildSearchScope(scope, connectedContextDetector(deps)(root, fs));
 }
 
 function recordConnectedContextFailureOutcome(
@@ -13009,8 +13027,10 @@ function answerApplicableUncertainty(
   markers: readonly UncertaintyMarker[],
   answer: GroundedAnswerResult,
 ): readonly UncertaintyMarker[] {
-  if (!isGroundedAssessmentOnly(answer.content)) return markers;
-  return markers.filter(
+  // The retrieval's own "nothing found" does not hold once a folder tool read supplied lines.
+  const applicable = uncertaintyForSentEvidence(markers, answer.sentEvidencePacks);
+  if (!isGroundedAssessmentOnly(answer.content)) return applicable;
+  return applicable.filter(
     (marker) => marker.kind !== "no-evidence" && marker.kind !== "low-confidence-selection",
   );
 }

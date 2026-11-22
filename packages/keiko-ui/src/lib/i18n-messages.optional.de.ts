@@ -2407,6 +2407,36 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.batch.failedIssues": "Vorgänge, die nicht entworfen werden konnten: {count}",
   "chat.processing.draftBatch": "Entwurf erstellen",
   "chat.documents.tool": "Dokumente",
+  "chat.folder.tool": "Verbundener Ordner",
+  "chat.folder.details": "Ergebnis aus dem Ordner ansehen",
+  "chat.folder.more.list": "In diesem Ordner gibt es noch mehr Einträge, als hier stehen.",
+  "chat.folder.more.listIncomplete":
+    "Der Ordner konnte nicht ganz gelesen werden. Es können Einträge fehlen.",
+  "chat.folder.more.search": "Es gibt mehr Treffer, als hier stehen.",
+  "chat.folder.more.searchUnavailable": "Einige Treffer konnten nicht mehr gelesen werden.",
+  "chat.folder.more.read": "Die Datei kann nach diesen Zeilen weitergehen.",
+  "chat.folder.outcome.results": "Ergebnisse aus dem Ordner",
+  "chat.folder.outcome.directory": "Ordner",
+  "chat.folder.outcome.entries": "Einträge",
+  "chat.folder.outcome.hits": "Treffer",
+  "chat.folder.outcome.filesSearched": "Durchsuchte Dateien",
+  "chat.folder.outcome.lines": "Zeilen",
+  "chat.folder.outcome.subfolder": "Unterordner",
+  "chat.folder.refusal.invalidRequest":
+    "Keiko hat im Ordner auf eine Weise nachgesehen, die nicht geht. Dabei wurde nichts gelesen.",
+  "chat.folder.refusal.scopeDenied":
+    "Das liegt außerhalb des verbundenen Ordners oder darf nicht gelesen werden.",
+  "chat.folder.refusal.outOfRange":
+    "Die Datei ist kürzer als die Stelle, ab der Keiko lesen wollte.",
+  "chat.folder.refusal.notText": "Diese Datei ist kein Text. Keiko kann sie nicht lesen.",
+  "chat.folder.refusal.unreadable": "Die Datei konnte gerade nicht gelesen werden.",
+  "chat.folder.refusal.budgetExhausted":
+    "Keiko hat für diese Antwort schon so oft im Ordner nachgesehen, wie erlaubt ist.",
+  "chat.folder.refusal.failed": "Das Nachsehen im Ordner hat nicht geklappt.",
+  "chat.folder.refusal.authorityDenied":
+    "Der verbundene Ordner wurde geändert, oder die Antwort war schon beendet.",
+  "chat.folder.refusal.resultBound":
+    "Das war zu viel Text auf einmal. Keiko muss weniger Zeilen lesen.",
   "chat.review.tool": "Dokumentenbewertung",
   "chat.knowledge.partial": "Teilergebnis. Nicht alle Dokumentinformationen sind enthalten.",
   "chat.knowledge.failure.cursorStale":
@@ -2509,6 +2539,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.processing.documents": "Dokumentübersicht lesen",
   "chat.processing.source": "Quelle lesen",
   "chat.processing.search": "Quelle durchsuchen",
+  "chat.processing.folder": "Im Ordner nachsehen",
+  "chat.processing.folderList": "Ordner ansehen",
+  "chat.processing.folderSearch": "Ordner durchsuchen",
+  "chat.processing.folderRead": "Datei lesen",
   "chat.processing.requirements": "Anforderungen lesen",
   "chat.processing.review": "Inhaltlich prüfen",
   "chat.processing.changes": "Anforderungen vergleichen",

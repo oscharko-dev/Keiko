@@ -58,8 +58,24 @@ export interface KnowledgeChatToolAuthoritySubject {
   readonly bindingGeneration?: never;
   readonly authenticationGeneration?: never;
 }
+/**
+ * A folder a person connected to the Chat, read locally. The digest binds the Chat's current
+ * server-issued grounding scope, so a changed folder scope never reuses a retained authority.
+ */
+export interface ConnectedFolderChatToolAuthoritySubject {
+  readonly kind: "connected-folder";
+  readonly actorDigest: string;
+  readonly chatId: string;
+  readonly configurationDigest: string;
+  readonly podId?: never;
+  readonly bindingGeneration?: never;
+  readonly authenticationGeneration?: never;
+}
 export type ChatToolAuthoritySubject =
-  JiraChatToolAuthoritySubject | McpChatToolAuthoritySubject | KnowledgeChatToolAuthoritySubject;
+  | JiraChatToolAuthoritySubject
+  | McpChatToolAuthoritySubject
+  | KnowledgeChatToolAuthoritySubject
+  | ConnectedFolderChatToolAuthoritySubject;
 
 /** Ordinary Chat authority has no repository, branch, Editor session or Coding runtime. */
 export interface ChatToolAuthorityEnvelope {
@@ -78,6 +94,7 @@ export interface ChatToolAuthorityEnvelope {
     | "issue-tracker.admin"
     | "mcp.tools"
     | "knowledge.read"
+    | "folder.read"
   )[];
   readonly budget: CodingWorkbenchBudget & { readonly maxPatchBytes: 0 };
   readonly expiresAt: string;
@@ -86,6 +103,18 @@ export interface ChatToolAuthorityEnvelope {
 }
 
 const MCP_SUBJECT_KEYS = ["kind", "actorDigest", "chatId", "configurationDigest"] as const;
+/** Local sources: read on this device, no network egress, no consent grant and no write approval. */
+const LOCAL_SUBJECT_SCOPES: ReadonlyMap<unknown, string> = new Map([
+  ["knowledge-pods", "knowledge.read"],
+  ["connected-folder", "folder.read"],
+]);
+function localSubjectScope(subject: unknown): string | undefined {
+  return isRecord(subject) ? LOCAL_SUBJECT_SCOPES.get(subject.kind) : undefined;
+}
+/** Subjects identified by one server-derived configuration digest instead of Jira generations. */
+function isDigestSubject(value: Record<string, unknown>): boolean {
+  return value.kind === "configured-mcp" || LOCAL_SUBJECT_SCOPES.has(value.kind);
+}
 const SUBJECT_KEYS = [
   "actorDigest",
   "chatId",
@@ -143,16 +172,10 @@ export function validateChatToolAuthoritySubject(
 ): CodingWorkbenchValidationResult<ChatToolAuthoritySubject> {
   if (!isRecord(value)) return invalid("chatAuthority.subject must be an object");
   const errors: string[] = [];
-  validateKeys(
-    value,
-    value.kind === "configured-mcp" || value.kind === "knowledge-pods"
-      ? MCP_SUBJECT_KEYS
-      : SUBJECT_KEYS,
-    errors,
-  );
+  validateKeys(value, isDigestSubject(value) ? MCP_SUBJECT_KEYS : SUBJECT_KEYS, errors);
   validateDigest(value.actorDigest, "chatAuthority.subject.actorDigest", errors);
   validateSafeId(value.chatId, "chatAuthority.subject.chatId", errors, 128);
-  if (value.kind === "configured-mcp" || value.kind === "knowledge-pods") {
+  if (isDigestSubject(value)) {
     validateDigest(value.configurationDigest, "chatAuthority.subject.configurationDigest", errors);
     return result(value, errors);
   }
@@ -177,17 +200,23 @@ function validateModes(value: Record<string, unknown>, errors: string[]): void {
 }
 
 function scopesFor(subject: unknown): ReadonlySet<string> {
-  if (isRecord(subject) && subject.kind === "knowledge-pods") return new Set(["knowledge.read"]);
+  const local = localSubjectScope(subject);
+  if (local !== undefined) return new Set([local]);
   return isRecord(subject) && subject.kind === "configured-mcp"
     ? new Set(["mcp.tools"])
     : CONNECTOR_SCOPES;
 }
+/** The one rule for a subject's action classes: a local source carries no network egress. */
+export function chatToolAuthorityActionClasses(
+  subject: unknown,
+): ChatToolAuthorityEnvelope["actionClasses"] {
+  return localSubjectScope(subject) === undefined
+    ? ["connector-access", "network-egress"]
+    : ["connector-access"];
+}
 function validActionClasses(subject: unknown, actions: unknown): boolean {
   if (!Array.isArray(actions)) return false;
-  const expected =
-    isRecord(subject) && subject.kind === "knowledge-pods"
-      ? ["connector-access"]
-      : ["connector-access", "network-egress"];
+  const expected: readonly string[] = chatToolAuthorityActionClasses(subject);
   return (
     actions.length === expected.length &&
     expected.every((action, index) => actions[index] === action)
@@ -342,8 +371,7 @@ function readGrantFamily(subject: unknown): { kind: string; disclosure: ReadDisc
     : { kind: "jira-chat-read-grant", disclosure: CHAT_TOOL_READ_DISCLOSURE_VERSION };
 }
 function validateReadGrantSubject(value: unknown, errors: string[]): void {
-  if (isRecord(value) && value.kind === "knowledge-pods")
-    errors.push("chatReadGrant.subject is invalid");
+  if (localSubjectScope(value) !== undefined) errors.push("chatReadGrant.subject is invalid");
   const subject = validateChatToolAuthoritySubject(value);
   if (!subject.ok) errors.push(...subject.errors);
 }

@@ -19,6 +19,8 @@ import {
   createChatToolTurn,
   scopeChatToolTurn,
 } from "./chat-tool-runtime.js";
+import type { ConnectedFolderToolSource } from "./connected-folder-chat-turn.js";
+import { answerEvidencePacks } from "./connected-folder-tool-evidence.js";
 import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import { chatAuthenticationInterruption } from "./chat-authentication-interruption.js";
 import {
@@ -178,6 +180,7 @@ import {
   type GroundedAnswerOptions,
   ClarificationNeededError,
   clarificationUserMessage,
+  connectedContextSearchScope,
   runGroundedExploration,
   type GroundedAnswerer,
   type OrchestratorInput,
@@ -1791,7 +1794,12 @@ async function gatewayGroundedAnswer(
     ...settledSynthesisFields(ctx, remainingBefore, reservedBefore, completedBefore),
     finishReason: response.finishReason,
     modelInvoked: true,
-    sentEvidencePacks: attempt.sent.sentEvidencePacks ?? [],
+    // On a folder tool turn the model also received the lines it read through the tool.
+    sentEvidencePacks: answerEvidencePacks(
+      attempt.sent.sentEvidencePacks ?? [],
+      pack,
+      ctx.deps.chatToolTurn?.connectedFolder?.returnedWindows() ?? [],
+    ),
     ...sentPromptContextField(
       attempt.sent,
       response,
@@ -2880,6 +2888,60 @@ function firstScopeWorkspaceFs(
   return first === undefined ? undefined : groundedScopeWorkspaceFs(first);
 }
 
+/** The selected scope of the single-source folder path, from a Chat whose folders are canonical. */
+function singleFolderSelectedScope(
+  chat: Chat,
+  scopes: ReturnType<typeof buildConnectedScopes>,
+): SelectedScope | undefined {
+  return buildSelectedScope(chat) ?? singleScopeFromList(chat, scopes);
+}
+
+/**
+ * The connected-folder tool's source for a Chat with one folder: the root admission, the selected
+ * scope and the search scope of the single retrieval this request also runs, so the tool can reach
+ * nothing that retrieval could not. Undefined when the folder is not admitted exactly once; the
+ * retrieval then reports that refusal itself.
+ */
+export function admitConnectedFolderToolSource(
+  chat: Chat,
+  deps: UiHandlerDeps,
+  request: IncomingMessage | undefined,
+  correlationId: string | undefined,
+): ConnectedFolderToolSource | undefined {
+  const { canonical, skipped } = canonicalizeGroundedFolderScopes(
+    chat,
+    deps,
+    buildConnectedScopes(chat),
+    request,
+    correlationId,
+  );
+  if (canonical.length !== 1 || skipped.length > 0) return undefined;
+  const selected = singleFolderSelectedScope(withCanonicalFolderScopes(chat, canonical), canonical);
+  if (selected === undefined) return undefined;
+  const fs = firstScopeWorkspaceFs(canonical) ?? nodeWorkspaceFs;
+  const { contentRedaction, contentSecrets } = groundedExplorationPolicies(deps);
+  try {
+    const scope = connectedContextSearchScope(selected, fs, {
+      contentRedaction,
+      contentSecrets,
+      correlationId,
+    });
+    // A whole folder without a single entry has nothing a look-up could find: the request keeps
+    // the single retrieval, which abstains before any model call.
+    if (scope.relativePaths.length === 0 && fs.readDir(scope.workspace.root, 1).length === 0) {
+      return undefined;
+    }
+    return { scope, fs };
+  } catch (error) {
+    // The root was admitted a moment ago and is gone or denied now. The denial is already recorded
+    // by the root resolver, and the retrieval of this request reports the same state as its answer.
+    if (error instanceof PathDeniedError || error instanceof WorkspaceNotFoundError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 // Epic #532 — the folder-only branch (0 handled by caller; 1 → single-source runner unless
 // there are pre-skipped folders, in which case multi-source carries the skip notice; 2+ → the
 // multi-source merge). Extracted so handleGroundedAsk stays the thin count-based dispatcher.
@@ -2920,7 +2982,7 @@ async function dispatchFolderAsk(
   if (scopes.length >= 2 || (scopes.length === 1 && skippedFolders.length > 0)) {
     return dispatchMultiSourceAsk(prepared, deps, scopes, skippedFolders, multiSource);
   }
-  const scope = buildSelectedScope(chat) ?? singleScopeFromList(chat, scopes);
+  const scope = singleFolderSelectedScope(chat, scopes);
   if (scope === undefined) {
     return badRequest("Chat has no connected scope.");
   }
@@ -3526,6 +3588,15 @@ async function admitGroundedJiraTurn(
       admittedGroundedUser(admitted),
       admitted.signal,
       admitted.correlationId,
+      {
+        connectedFolder: () =>
+          admitConnectedFolderToolSource(
+            admitted.chat,
+            deps,
+            admitted.request,
+            admitted.correlationId,
+          ),
+      },
     );
   } catch (error) {
     failGroundedChatTurn(admitted, deps, error instanceof CancelledError);

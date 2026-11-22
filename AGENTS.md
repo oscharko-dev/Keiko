@@ -1381,6 +1381,19 @@ a stale identity returns 409 `GROUNDING_SCOPE_CHANGED`. Git-change description a
 checked separately, and ordinary regeneration refuses connected folder, knowledge and Git-change
 scopes with 409 `NOT_APPLIABLE`. See ADR-0057 for the identity and admission boundaries.
 
+A Chat connected to exactly one folder and to nothing else offers its model the read-only tool
+`folder.files` (list a directory, search, read a line window) for repeated use within one turn; the
+automatic first retrieval stays (owner proposal 2026-11-21, ADR-0181). `folder.files.turn-selected`
+records once per turn whether the tool turn ran (`tool-turn`) or the single retrieval was kept
+(`one-shot-model-not-tool-ready`, `one-shot-scope-unavailable`, `one-shot-catalog-unavailable`).
+`folder.files.operation` records each call under the request correlation: the `view`, `outcome`,
+the closed `reason` of a refusal, returned count, result and payload bytes, scanned files,
+unavailable hits, whether more exists, and the turn's cumulative calls, search time and result
+bytes. Never a path, a query or file text. Lines the tool returned are merged into the sent pack and
+may be cited; any other line stays an unsupported citation. The tool runs on the search scope of
+the request's own retrieval, under the `connected-folder` authority subject with `folder.read`
+only. Never give it a regular-expression mode, a write, or a scope the retrieval does not have.
+
 Chat context selection emits `chat.context.selected` before the provider call for buffered,
 streaming and regenerated turns. Its request correlation joins the compacted/retained history
 counts, estimated removed-prefix and summary costs, savings, final estimated prompt cost,
