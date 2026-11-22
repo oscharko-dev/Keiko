@@ -374,6 +374,33 @@ describe("Sonar analysis scope", () => {
     expect(log).toHaveBeenCalledWith("yes");
   });
 
+  it("carries the project's own exclusions into the scanner command line", () => {
+    // The scanner's -Dsonar.exclusions replaces the project's list, so a whole-project scan
+    // would otherwise analyse tests/** and the #1300 evidence producers (#4525).
+    const readLine = localSonarGate
+      .split("\n")
+      .find((line) => line.startsWith("project_exclusions="));
+    expect(readLine).toBeDefined();
+    expect(localSonarGate).toContain(
+      '-Dsonar.exclusions="${local_exclusions}${project_exclusions:+,${project_exclusions}}"',
+    );
+    const result = spawnSync(
+      "bash",
+      ["-c", `set -euo pipefail; ${readLine}; printf '%s' "\${project_exclusions}"`],
+      {
+        encoding: "utf8",
+        env: { ...process.env, repo_root: resolve(import.meta.dirname, "..", "..") },
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(
+      [...propertyPatterns(repositorySonarProperties, "sonar.exclusions")].join(","),
+    );
+    expect(result.stdout.split(",")).toEqual(
+      expect.arrayContaining(["tests/**", "docs/design-system/evidence/**"]),
+    );
+  });
+
   it("keeps the macOS runtime protocol harness in the Sonar test lane", () => {
     const protocolHarness = "native/runtime-supervisor/macos/test-protocol.mjs";
 
