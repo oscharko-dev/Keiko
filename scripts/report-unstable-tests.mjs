@@ -183,9 +183,9 @@ export function explainedVerdicts(result, verdicts, seed) {
   );
 }
 
-function runVitest({ shard, filters }, seed, directory) {
+function runVitest({ shard, filters }, seed, directory, spawn) {
   const output = join(directory, `run-${String(seed)}.json`);
-  const result = spawnSync(
+  const result = spawn(
     process.execPath,
     [
       VITEST_BIN,
@@ -203,12 +203,12 @@ function runVitest({ shard, filters }, seed, directory) {
   return explainedVerdicts(result, vitestVerdicts(JSON.parse(readFileSync(output, "utf8"))), seed);
 }
 
-function measureVitest(argv) {
+function measureVitest(argv, { spawn }) {
   const plan = vitestPlan(argv);
   const { shard, seeds } = plan;
   const directory = mkdtempSync(join(tmpdir(), "keiko-unstable-"));
   try {
-    const runs = seeds.map((seed) => runVitest(plan, seed, directory));
+    const runs = seeds.map((seed) => runVitest(plan, seed, directory, spawn));
     return {
       label: `unit suites, shard ${shard}`,
       samples: mergeVerdicts(runs),
@@ -228,27 +228,39 @@ function measurePlaywright(argv) {
   return { label: "smoke journeys", samples, runCount };
 }
 
-function main(argv) {
+const MEASURES = Object.freeze({ vitest: measureVitest, playwright: measurePlaywright });
+
+/**
+ * Measures one mode and publishes the report; 0 is a stable suite, 1 an unstable or failing one.
+ * `env`, `log` and `spawn` are seams for the in-process tests; the command line uses the process
+ * environment, the console and `spawnSync`.
+ */
+export function main(argv, deps = {}) {
+  const { env, log, spawn } = { env: process.env, log: console.log, spawn: spawnSync, ...deps };
   const [mode, ...rest] = argv;
-  const measures = { vitest: measureVitest, playwright: measurePlaywright };
-  if (!(mode in measures)) throw new TypeError("mode must be vitest or playwright");
-  const { label, samples, runCount } = measures[mode](rest);
+  if (!Object.hasOwn(MEASURES, mode)) throw new TypeError("mode must be vitest or playwright");
+  const { label, samples, runCount } = MEASURES[mode](rest, { spawn });
   if (samples.size === 0) throw new Error("no test verdict was reported");
   // A report in which every test was skipped proves nothing about stability.
   if (executedTestCount(samples) === 0)
     throw new Error("no test executed: every verdict was skipped or file-level");
   const result = classify(samples, runCount);
   const report = formatReport(label, samples.size, runCount, result);
-  console.log(report);
-  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
+  log(report);
+  if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, report);
   return result.unstable.length === 0 && result.failing.length === 0 ? 0 : 1;
 }
 
-if (isMainModule(import.meta.url)) {
+/** The exit code of one command-line run; 2 is a measurement that could not be made at all. */
+export function cli(argv, { error = console.error, ...deps } = {}) {
   try {
-    process.exitCode = main(process.argv.slice(2));
-  } catch (error) {
-    console.error(`report-unstable-tests: could not measure — ${error.message}`);
-    process.exitCode = 2;
+    return main(argv, deps);
+  } catch (error_) {
+    error(`report-unstable-tests: could not measure — ${error_.message}`);
+    return 2;
   }
+}
+
+if (isMainModule(import.meta.url)) {
+  process.exitCode = cli(process.argv.slice(2));
 }

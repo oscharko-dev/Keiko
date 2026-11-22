@@ -18,6 +18,8 @@ import {
   DRIFT_REPAIRS,
   changedPaths,
   contentDigest,
+  gitStatus,
+  main,
   newlyChanged,
   runRepairs,
 } from "../fix-gate-drift.mjs";
@@ -109,6 +111,10 @@ describe("changed-path accounting", () => {
         expect(contentDigest(root, "target")).toBe("directory");
         expect(contentDigest(root, "file.json")).toMatch(/^[0-9a-f]{64}$/u);
         expect(contentDigest(root, "absent.json")).toBe("deleted");
+        // A path below a file is no deletion: its error is not ENOENT and is passed on.
+        expect(() => contentDigest(root, "file.json/inner")).toThrow(/ENOTDIR/u);
+        expect(spawnSync("mkfifo", [join(root, "pipe")]).status).toBe(0);
+        expect(contentDigest(root, "pipe")).toBe("other");
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
@@ -164,5 +170,72 @@ describe("runRepairs", () => {
       "fix-gate-drift: third",
       "fix-gate-drift:   changed y.json",
     ]);
+  });
+});
+
+describe("main", () => {
+  // Stands in for git and the repair scripts: each repair writes its file, and git status reports
+  // every file in the directory as untracked.
+  function checkout(statuses) {
+    const root = mkdtempSync(join(tmpdir(), "keiko-drift-main-"));
+    const calls = [];
+    const spawn = (command, args, options) => {
+      calls.push({ command, args, cwd: options.cwd });
+      if (command === "git") {
+        const files = ["a.json", "b.json"].filter((name) => existsSync(join(root, name)));
+        return { status: 0, stdout: files.map((name) => `?? ${name}\0`).join("") };
+      }
+      const [script] = args;
+      writeFileSync(join(root, script), "{}\n");
+      return { status: statuses[script] ?? null };
+    };
+    return { root, calls, spawn };
+  }
+
+  const repairs = [
+    { label: "first", script: "a.json", args: ["--write"] },
+    { label: "second", script: "b.json", args: [] },
+  ];
+
+  function capture() {
+    const lines = [];
+    return { lines, sink: (line) => lines.push(line) };
+  }
+
+  it("runs every repair with this Node.js binary and names what each one changed", () => {
+    const { root, calls, spawn } = checkout({ "a.json": 0, "b.json": 0 });
+    try {
+      const log = capture();
+      const error = capture();
+      expect(main({ root, git: "git", spawn, repairs, log: log.sink, error: error.sink })).toBe(0);
+      const node = calls.filter((call) => call.command === process.execPath);
+      expect(node.map((call) => call.args)).toEqual([["a.json", "--write"], ["b.json"]]);
+      expect(calls.every((call) => call.cwd === root)).toBe(true);
+      expect(log.lines).toEqual([
+        "fix-gate-drift: first",
+        "fix-gate-drift:   changed a.json",
+        "fix-gate-drift: second",
+        "fix-gate-drift:   changed b.json",
+        "fix-gate-drift: PASS — review the changed files, then commit them",
+      ]);
+      expect(error.lines).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails with every failed repair, a killed one included, and a failed git status", () => {
+    const { root, spawn } = checkout({ "a.json": 3 });
+    try {
+      const log = capture();
+      const error = capture();
+      expect(main({ root, git: "git", spawn, repairs, log: log.sink, error: error.sink })).toBe(1);
+      expect(error.lines).toEqual(["fix-gate-drift: FAIL — first, second"]);
+      expect(() => gitStatus(root, "git", () => ({ status: 128, stdout: "" }))).toThrow(
+        "git status failed",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
