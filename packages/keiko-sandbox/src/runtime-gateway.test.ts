@@ -712,6 +712,7 @@ interface NativeProofTree {
   readonly canary: string;
   readonly sibling: string;
   readonly temporaryCanary: string;
+  readonly personHome: string;
   readonly cleanup: () => void;
 }
 
@@ -742,6 +743,15 @@ function createNativeProofTree(): NativeProofTree {
   writeFileSync(join(workspaceRoot, ".env.example"), "SYNTHETIC_ENV=\n");
   writeFileSync(join(workspaceRoot, "config", ".env.local"), "SYNTHETIC_ENV=2\n");
   writeFileSync(join(workspaceRoot, ".aws", "credentials"), "synthetic\n");
+  // An `.npmrc` is a credential name the kernel denies wherever it lies; it sits in a subfolder so
+  // that npm run from the workspace root still reads no project config.
+  writeFileSync(join(workspaceRoot, "config", ".npmrc"), "synthetic\n");
+  // The person's own npm and Maven settings, the files Keiko's repository relay reads on the host
+  // (#4530). They lie under HOME, outside every root the run may read.
+  const personHome = join(root, "person");
+  mkdirSync(join(personHome, ".m2"), { recursive: true });
+  writeFileSync(join(personHome, ".npmrc"), "synthetic\n");
+  writeFileSync(join(personHome, ".m2", "settings.xml"), "<settings/>\n");
   writeFileSync(join(workspaceRoot, "package.json"), '{"name":"proof","version":"1.0.0"}');
   symlinkSync(canary, join(workspaceRoot, "escape.txt"));
   symlinkSync(canaryDirectory, join(workspaceRoot, "escape-dir"));
@@ -755,6 +765,7 @@ function createNativeProofTree(): NativeProofTree {
     canary,
     sibling,
     temporaryCanary,
+    personHome,
     cleanup: (): void => {
       rmSync(root, { recursive: true, force: true });
       rmSync(temporaryRoot, { recursive: true, force: true });
@@ -988,6 +999,10 @@ function nativeReadProbes(tree: NativeProofTree): Readonly<Record<string, string
     envRead: readFact(join(ws, ".env")),
     envLocalRead: readFact(join(ws, "config", ".env.local")),
     credentialDirectoryRead: readFact(join(ws, ".aws", "credentials")),
+    npmrcRead: readFact(join(ws, "config", ".npmrc")),
+    personNpmrcRead: readFact(join(tree.personHome, ".npmrc")),
+    personMavenSettingsRead: readFact(join(tree.personHome, ".m2", "settings.xml")),
+    shellCatPersonNpmrc: shellFact(`cat ${JSON.stringify(join(tree.personHome, ".npmrc"))}`, ws),
     envWrite: `fs.writeFileSync(${JSON.stringify(join(ws, ".env"))}, 'x')`,
     externalCanaryRead: readFact(tree.canary),
     externalSiblingRead: readFact(tree.sibling),
@@ -1013,6 +1028,10 @@ const NATIVE_READ_FACTS = {
   envRead: false,
   envLocalRead: false,
   credentialDirectoryRead: false,
+  npmrcRead: false,
+  personNpmrcRead: false,
+  personMavenSettingsRead: false,
+  shellCatPersonNpmrc: false,
   envWrite: false,
   externalCanaryRead: false,
   externalSiblingRead: false,
@@ -1397,6 +1416,10 @@ describe("real OS-level gateway confinement (macOS Seatbelt, #2951)", () => {
           envRead: true,
           envLocalRead: true,
           credentialDirectoryRead: true,
+          npmrcRead: true,
+          personNpmrcRead: true,
+          personMavenSettingsRead: true,
+          shellCatPersonNpmrc: true,
           externalCanaryRead: true,
           externalSiblingRead: true,
           temporaryCanaryRead: true,

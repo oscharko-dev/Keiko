@@ -9,7 +9,8 @@ Amends:
 
 - [ADR-0137](ADR-0137-server-owned-coding-runtime-contracts.md): the native build-settings
   admission (#4271) no longer leaves a run without dependency access. Its credential rule is
-  unchanged: the run never holds a repository credential.
+  unchanged: the run never holds a repository credential that Keiko read from a file. A credential
+  Keiko resolves from its own process environment is the one limit on macOS (D2).
 - #4522: the planned host-side npm bootstrap is replaced by this relay. ADR-0043 D17 stays as it is
   for the governed verifier.
 
@@ -69,6 +70,23 @@ authenticates the capability itself.
   environment: names starting with `KEIKO_` and the names of model providers and gateways are
   never visible to a resolver. The resolved credential stays in the relay; the run's settings carry
   the capability instead.
+- **An environment credential is as private as Keiko's exec environment.** `${env.NAME}` (Maven)
+  and `${NAME}` (npm) are read from Keiko's own process environment. A variable the person exported
+  in the shell that starts Keiko sits in the server's exec environment, and Node cannot scrub that
+  copy. On macOS a run's shell can read it with `sysctl(KERN_PROCARGS2)`, which the kernel answers
+  for any process of the same user in every mode and no Seatbelt rule gates
+  ([ADR-0137](ADR-0137-server-owned-coding-runtime-contracts.md) D10; the kernel rule belongs to
+  #4521). The qualification case "pins the KERN_PROCARGS2 limit" in
+  `opencodeNativeQualification.real.test.ts` records it: a Node process started with a credential
+  shaped variable shows it to the shell of a real native run in Ask for approval, Supervised
+  workspace and Full access. The remedy is to keep the credential in `~/.m2/settings.xml` (plain
+  or Maven-encrypted) or in the user `~/.npmrc` and never to export it into the environment that
+  starts Keiko. Keiko reads those files itself and never writes the credential into a file or
+  variable of the run (D5), and the run cannot read them: the native read boundary of
+  `runtime-gateway.test.ts` ("native profile: denies a workspace .env, an external canary …")
+  proves on the real kernel that a run's interpreter and shell read neither the person's
+  `~/.npmrc` nor `~/.m2/settings.xml`, and no `.npmrc` anywhere, while the same reads succeed
+  without the boundary.
 - **Minimum length.** A credential shorter than eight characters is not bound
   (`credential-too-short`): it could not be told apart from ordinary bytes of an artifact, so the
   relay could not keep D4's promise for it.

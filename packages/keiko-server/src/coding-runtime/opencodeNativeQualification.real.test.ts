@@ -1651,6 +1651,50 @@ describe("pinned native OpenCode plan tool (T19)", () => {
     120_000,
   );
 
+  // A recorded limit, not a defence (ADR-0137 D10, ADR-0184, #4521 owns the kernel rule): an
+  // environment credential of a repository (`${env.NAME}`, `${NAME}`) is resolved from Keiko's own
+  // process environment, which Node cannot scrub from the exec environment. macOS answers
+  // KERN_PROCARGS2 for any process of the same user and no Seatbelt rule gates it, so the model's
+  // shell reads it. The stand-in is the Node binary Keiko runs on, idle, started with the variable.
+  it.skipIf(skip)(
+    "pins the KERN_PROCARGS2 limit: a run's shell reads another same-user process's exec environment, in every mode",
+    async () => {
+      const sentinel = `sentinel-${randomUUID()}`;
+      const keikoStandIn = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], {
+        env: { PATH: process.env.PATH ?? "", KEIKO_QUAL_REGISTRY_TOKEN: sentinel },
+        stdio: "ignore",
+      });
+      try {
+        const pid = keikoStandIn.pid;
+        if (pid === undefined) throw new Error("fixture-stand-in-not-started");
+        // Reads only the stand-in's exec environment and reports a closed verdict, never the value.
+        // The control searches the same environment for a value it never carried, so a reader that
+        // matched anything could not pass.
+        const search = (value: string, label: string): string =>
+          `/usr/bin/perl -e '${READ_PROCESS_ARGUMENTS}' ${String(pid)} | /usr/bin/grep -a -q -F ${value} && echo "${label}=yes" || echo "${label}=no"`;
+        const probe = `${search(sentinel, "visible")}; ${search(`absent-${randomUUID()}`, "control")}`;
+        const modes = ["governed-assist", "supervised-coding", "autonomous-delivery"] as const;
+        const measured: Record<string, string> = {};
+        for (const mode of modes) {
+          await withRun({ mode }, async (run) => {
+            const result = await scriptedTurn(run, shell(probe));
+            const visible = /visible=(yes|no)/u.exec(result)?.[0] ?? "no-verdict";
+            const control = /control=(yes|no)/u.exec(result)?.[0] ?? "no-verdict";
+            measured[mode] = `${visible} ${control}`;
+          });
+        }
+        expect(measured).toEqual({
+          "governed-assist": "visible=yes control=no",
+          "supervised-coding": "visible=yes control=no",
+          "autonomous-delivery": "visible=yes control=no",
+        });
+      } finally {
+        if (keikoStandIn.pid !== undefined) killProcess(keikoStandIn.pid);
+      }
+    },
+    240_000,
+  );
+
   it.skipIf(skip)(
     "governs a model's bash alias as the shell tool it runs, in every mode",
     async () => {

@@ -1195,7 +1195,9 @@ title or path ever enters the line (ADR-0137 D4).
 
 `coding-runtime.repository-relay` records Keiko's repository credential relay (#4522, ADR-0184): a
 native run reads the Maven and npm repositories the person configured through a per-run, read-only
-capability on the attested loopback origin and never holds the credential. The line records `bind`
+capability on the attested loopback origin and never holds a credential Keiko read from a file. A
+credential Keiko takes from its own environment stays readable to a macOS shell (ADR-0184 D2). The
+line records `bind`
 (`bound` or `refused` with a closed `reason`), a refused or `failed` request, and one `settled`
 summary per binding when its run is released (request, relayed, refused, failed, cancelled,
 upstream client and server error and redirect counts, bytes, duration), under the run's

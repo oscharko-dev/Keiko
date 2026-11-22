@@ -1500,8 +1500,10 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   registry entry may carry `headers: { "<Name>": { secretEnv, prefix? } }` (at most 8, never with
   `oauth`): each value is read from the named `KEIKO_MCP_SECRET_*` variable of Keiko's own
   environment, so no credential is written in the registry and no other variable can be named;
-  transport, connection, cookie and Keiko headers are refused. The run never holds the value: its
-  binding addresses `/api/coding-sidecar/mcp/:relayId` on the same attested loopback origin as the
+  transport, connection, cookie and Keiko headers are refused. Keiko never hands the value to the
+  run, though on macOS a variable exported into the environment that starts Keiko stays readable
+  to a run's shell through `sysctl(KERN_PROCARGS2)` ("Launch secrets leave the exec environment"
+  below, ADR-0184 D2). The run's binding addresses `/api/coding-sidecar/mcp/:relayId` on the same attested loopback origin as the
   Model Gateway, with `oauth: false` and two headers the runtime sends on every request,
   `X-Keiko-CSRF` (so the route keeps the ordinary CSRF guard, no exemption) and
   `X-Keiko-Mcp-Relay`, a capability minted for that run and that server (`mcpCredentialRelay.ts`,
