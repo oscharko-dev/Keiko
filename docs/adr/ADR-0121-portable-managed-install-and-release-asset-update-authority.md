@@ -1461,6 +1461,10 @@ byte for byte the one its leg tested (the evidence digest, the `.sha256` file an
 does `scripts/publish-npm-folder-packages.mjs` attest the ZIPs and publish them with their
 `.sha256` files as the GitHub prerelease `npm-folder-<version>`, created as a draft, checked asset
 by asset and published last, tagged on the product release's commit and never marked latest. The
+tag ruleset lets only the release-tag App and the owner create tags, so a separate job holding the
+App token reserves the tag at that commit first, and the publication, which handles the artifacts,
+keeps the workflow token; a tag without a release at exactly that commit is the reservation a
+repeated run keeps, and a tag at another commit is refused. The
 prerelease is a transport for the tested ZIPs and grants no update trust: no updater reads it, it is
 not a release-trust candidate and no product release workflow depends on it. The asset names keep
 the dot before the form.
@@ -1732,6 +1736,11 @@ Security review for implementation under this ADR must cover:
   on its own platform on native hardware and publishes the exact tested ZIPs and their `.sha256`
   files as the attested prerelease `npm-folder-<version>`. The prerelease is a transport; the
   product release, the updaters and D1 to D8 are unchanged.
+- **2026-11-22 — D9, companion tag:** The first run (1.5.6) failed at its last step with HTTP 422:
+  the tag ruleset refuses a tag the workflow token creates. A `reserve-tag` job in the
+  `release-tagging` environment now creates `npm-folder-<version>` with the release-tag App token
+  before the publication, which keeps the workflow token and handles the artifacts; preflight and
+  publication accept only a release-free tag at the product release's commit (#4503).
 - **2026-11-18 — D1 and D9, release assets:** Stable releases carry the generic standalone folder
   package of `macos-arm64`, `macos-x64` and `windows-x64` with its `.sha256` file. The stable-tag
   run builds them from the archives it assembled and attests them; the publisher refuses a bundle

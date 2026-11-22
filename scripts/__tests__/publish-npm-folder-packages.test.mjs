@@ -1,7 +1,7 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { sha256 } from "../lib/digest.mjs";
 import { FOLDER_RELEASE_TARGETS, folderChecksumText } from "../lib/folder-package-release.mjs";
@@ -13,6 +13,8 @@ import {
   preflight,
   publish,
   releaseNotes,
+  reserveTag,
+  runMode,
   verifyNpmFolderAssets,
 } from "../publish-npm-folder-packages.mjs";
 import { CHECK_NAMES } from "../lib/npm-folder-qualification.mjs";
@@ -269,6 +271,103 @@ describe("preflight", () => {
   });
 });
 
+// The ref body GitHub answers for a lightweight tag, or for the ref POST that created one.
+const tagRef = (sha, type = "commit") =>
+  JSON.stringify({ ref: `refs/tags/${TAG}`, object: { type, sha } });
+const reservedAt = (sha, type) => ({
+  gitRef: { status: 0, stderr: "", stdout: tagRef(sha, type) },
+});
+
+describe("a companion tag the release-tag App reserved (#4503)", () => {
+  const OTHER = "b".repeat(40);
+
+  it("lets preflight go on when the tag has no release and points at the product commit", () => {
+    const { runner } = fakeGh(reservedAt(COMMIT));
+    expect(preflight({ version: VERSION, repository: "o/r", runner })).toEqual({
+      tag: TAG,
+      commit: COMMIT,
+    });
+  });
+
+  it("refuses a tag at another commit and an annotated tag, which prove nothing", () => {
+    const at = (options) => () =>
+      preflight({ version: VERSION, repository: "o/r", runner: fakeGh(options).runner });
+    expect(at(reservedAt(OTHER))).toThrow(/as a tag at another commit; a tag is never moved/u);
+    expect(at(reservedAt(COMMIT, "tag"))).toThrow(/already exists; a release is immutable/u);
+    expect(at({ gitRef: { status: 0, stderr: "", stdout: "not json" } })).toThrow(
+      /already exists/u,
+    );
+  });
+
+  it("creates the tag at the commit when it is free and checks what GitHub wrote", () => {
+    const { runner, calls } = fakeGh({ createBody: tagRef(COMMIT) });
+    expect(reserveTag({ version: VERSION, commit: COMMIT, repository: "o/r", runner })).toEqual({
+      tag: TAG,
+      created: true,
+    });
+    expect(calls.find(isCall("POST"))).toEqual([
+      "api",
+      "--method",
+      "POST",
+      "repos/o/r/git/refs",
+      "-f",
+      `ref=refs/tags/${TAG}`,
+      "-f",
+      `sha=${COMMIT}`,
+    ]);
+  });
+
+  it("keeps a reservation at the same commit, so a repeated run goes on without a second write", () => {
+    const { runner, calls } = fakeGh(reservedAt(COMMIT));
+    expect(reserveTag({ version: VERSION, commit: COMMIT, repository: "o/r", runner })).toEqual({
+      tag: TAG,
+      created: false,
+    });
+    expect(calls.some(isCall("POST"))).toBe(false);
+  });
+
+  it("refuses a release, a draft, another commit, a bad commit and an unconfirmed write", () => {
+    const attempt =
+      (options, commit = COMMIT) =>
+      () =>
+        reserveTag({ version: VERSION, commit, repository: "o/r", runner: fakeGh(options).runner });
+    expect(attempt({ listed: [{ tagName: TAG }] })).toThrow(/already exists/u);
+    expect(attempt({ listed: [{ tagName: TAG, isDraft: true }] })).toThrow(/unpublished DRAFT/u);
+    expect(attempt(reservedAt(OTHER))).toThrow(/at another commit/u);
+    expect(attempt({}, "main")).toThrow(/--commit must be a full commit sha/u);
+    expect(attempt({ createBody: tagRef(OTHER) })).toThrow(/does not report it at/u);
+    expect(attempt({ createStatus: 1 })).toThrow(/gh tag create failed/u);
+  });
+
+  it("runs as the reserve-tag mode of the command line", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      const options = parsePublishArgs(["reserve-tag", "--version", VERSION, "--commit", COMMIT]);
+      runMode({ ...options, runner: fakeGh(reservedAt(COMMIT)).runner });
+      runMode({ ...options, runner: fakeGh({ createBody: tagRef(COMMIT) }).runner });
+      expect(log.mock.calls.map(([line]) => line)).toEqual([
+        `PASS ${TAG} already reserved at ${COMMIT}`,
+        `PASS ${TAG} created at ${COMMIT}`,
+      ]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("leaves the verify mode of the command line to write the notes", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      const dir = artifactDir();
+      const notes = join(dir, "notes.md");
+      runMode(parsePublishArgs(["verify", "--version", VERSION, "--dir", dir, "--notes", notes]));
+      expect(readFileSync(notes, "utf8")).toContain(VERSION);
+      expect(log.mock.calls).toHaveLength(FOLDER_RELEASE_TARGETS.length);
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
+
 describe("publish", () => {
   function inputs(extra = {}) {
     const dir = artifactDir();
@@ -290,6 +389,12 @@ describe("publish", () => {
       runner,
       sleep,
     });
+
+  it("publishes on the tag the release-tag App reserved at the commit (#4503)", () => {
+    const { dir, assets } = inputs();
+    const { runner } = fakeGh({ uploaded: () => assets, ...reservedAt(COMMIT) });
+    expect(run(dir, runner).tag).toBe(TAG);
+  });
 
   it("creates a draft prerelease on the commit, uploads, checks and publishes it, never latest", () => {
     const { dir, assets } = inputs();
