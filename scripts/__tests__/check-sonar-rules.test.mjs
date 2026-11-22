@@ -115,6 +115,25 @@ describe("summarise", () => {
     expect(findings.map((finding) => finding.line)).toEqual([3]);
   });
 
+  // SonarCloud suppresses only a line that carries a NOSONAR comment; the word in a string literal
+  // or a template suppresses nothing.
+  it("keeps a finding whose line holds NOSONAR only inside a string", () => {
+    const source = [
+      'legacy(); const label = "NOSONAR";',
+      "const text = `NOSONAR ${label}`;",
+      "/* NOSONAR",
+      "   spans lines */ legacy();",
+      "legacy(); // NOSONAR",
+    ];
+    const findings = summarise([
+      result(
+        [1, 2, 3, 4, 5].map((line) => ({ line, message: "m", ruleId: "sonarjs/x" })),
+        source.join("\n"),
+      ),
+    ]);
+    expect(findings.map((finding) => finding.line)).toEqual([1, 2, 4]);
+  });
+
   it("reads the file when the engine omitted its source", () => {
     const reads = [];
     const findings = summarise(

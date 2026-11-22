@@ -102,6 +102,17 @@ describe("drawing a Mermaid diagram (#3906)", () => {
     expect(document.querySelector('[id^="dkeiko-diagram-"]')).toBeNull();
   });
 
+  // Mermaid 12 defaults to ELK and the `neo` look (#4378). The production initialization pins the
+  // dagre layout and the classic look and names both secure, so a diagram's own directive cannot
+  // switch them back on.
+  it("initializes Mermaid with the dagre layout and the classic look as secure keys", async () => {
+    const mermaid = renderer();
+    await drawDiagram(mermaid, "graph TD\n A-->B");
+    const config = mermaid.initialize.mock.lastCall?.[0];
+    expect(config).toMatchObject({ layout: "dagre", look: "classic", securityLevel: "strict" });
+    expect(config?.secure).toEqual(expect.arrayContaining(["layout", "look", "secure"]));
+  });
+
   it("follows the page theme: dark unless the page is light", async () => {
     const mermaid = renderer();
     await drawDiagram(mermaid, "graph TD\n A-->B");

@@ -509,6 +509,7 @@ describe("main", () => {
           "{ withResolvers: function withResolvers() {} });";
       const rootImport = options.rootImport ?? "es_promise_with_resolvers_namespaceFn();";
       const wrap = options.wrap ?? "__webpack_require__.cw";
+      const wrapperHead = options.wrapperHead ?? "() =>";
       const applicationCall = "export const value = Promise.withResolvers();";
       const rootStatements = ordered(rootImport, applicationCall, options.rootImportFirst ?? true);
       return dependencyFixture({
@@ -538,7 +539,7 @@ describe("main", () => {
               }
             };
           });
-          var es_promise_with_resolvers_namespaceFn = /*#__PURE__*/${wrap}(() => {
+          var es_promise_with_resolvers_namespaceFn = /*#__PURE__*/${wrap}(${wrapperHead} {
             ${providerBinding}
             ${providerCall}
           });
@@ -564,6 +565,27 @@ describe("main", () => {
       ["a binding to a non-exporter module", { providerBinding: "var $ = (other_namespaceFn());" }],
       ["a local dollar function", { providerBinding: "var $ = function() {};" }],
       ["a wrap that is not webpack's runtime", { wrap: "lookalike.cw" }],
+      // A call names a local, not the root accessor, once the module body rebinds the name.
+      [
+        "an accessor name rebound by a local function",
+        {
+          providerBinding:
+            "function export_namespaceFn() { return function () {}; }\n" +
+            "var $ = export_namespaceFn();",
+        },
+      ],
+      ["an accessor name rebound by a parameter", { wrapperHead: "(export_namespaceFn) =>" }],
+      [
+        "an accessor name rebound by a hoisted block variable",
+        {
+          providerBinding:
+            "if (0) { var export_namespaceFn = () => function () {}; }\n" +
+            "var $ = export_namespaceFn();",
+        },
+      ],
+      // A generator body does not run when called; an async body defers what follows an await.
+      ["a generator wrapper body", { wrapperHead: "function* ()" }],
+      ["an async wrapper body", { wrapperHead: "async () =>" }],
       [
         "a dead conditional provider call",
         {

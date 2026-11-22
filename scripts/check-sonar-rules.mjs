@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 
 import { ESLint } from "eslint";
 import sonarjs from "eslint-plugin-sonarjs";
+import tseslint from "typescript-eslint";
 
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { isTestPath } from "./sonar-analysis-scope.mjs";
@@ -48,12 +49,24 @@ export function changedLintableFiles(names, exists) {
 }
 
 // SonarCloud raises no issue on a line that carries a `NOSONAR` comment, whatever the rule (#4525).
+// Only a comment token counts: the word inside a string literal suppresses nothing there, so the
+// comments come from the parser, never from the raw line. A comment suppresses the line it starts
+// on.
 const NOSONAR = /\bNOSONAR\b/u;
 
 function suppressedLines(result, readSource) {
   const source = result.source ?? readSource(result.filePath);
+  const { ast } = tseslint.parser.parseForESLint(source, {
+    comment: true,
+    loc: true,
+    ecmaVersion: "latest",
+    sourceType: "module",
+    ecmaFeatures: { jsx: /x$/u.test(result.filePath) },
+  });
   return new Set(
-    source.split("\n").flatMap((text, index) => (NOSONAR.test(text) ? [index + 1] : [])),
+    ast.comments
+      .filter((comment) => NOSONAR.test(comment.value))
+      .map((comment) => comment.loc.start.line),
   );
 }
 
@@ -66,7 +79,10 @@ export function summarise(results, readSource = (path) => readFileSync(path, "ut
       (message) => message.fatal === true || String(message.ruleId ?? "").startsWith("sonarjs/"),
     );
     if (sonarMessages.length === 0) continue;
-    const suppressed = suppressedLines(result, readSource);
+    // A fatal message is never suppressed, and a file that did not parse has no comment tokens.
+    const suppressed = sonarMessages.some((message) => message.fatal === true)
+      ? new Set()
+      : suppressedLines(result, readSource);
     for (const message of sonarMessages) {
       if (message.fatal !== true && suppressed.has(message.line)) continue;
       findings.push({
