@@ -645,11 +645,25 @@ function javaProperties(
   const tail = chainedMavenCache(input);
   return {
     "user.home": home,
+    ...loopbackStackProperties(input),
     ...(bound === undefined || bound.maven.length === 0 ? {} : MAVEN_PREEMPTIVE_AUTH_PROPERTIES),
     ...(tail === undefined
       ? {}
       : { "maven.repo.local.tail": tail, "maven.repo.local.tail.ignoreAvailability": "true" }),
   };
+}
+
+/**
+ * Below Full access the kernel admits loopback only. macOS 15 refuses a JVM's default dual-stack
+ * (IPv6) socket even for `127.0.0.1` under that rule ("Operation not permitted"), so Maven could not
+ * reach the relay; on its IPv4 stack the same connection is admitted. A run whose relay is on the
+ * IPv6 loopback keeps the default stack, which that origin needs.
+ */
+function loopbackStackProperties(input: NativeBuildSettingsInput): Record<string, string> {
+  if (!nativeBuildCacheAdmitted(input.mode)) return {};
+  const origin = input.repositoryRelay?.origin;
+  if (origin !== undefined && new URL(origin).hostname.startsWith("[")) return {};
+  return { "java.net.preferIPv4Stack": "true" };
 }
 
 /** The read-only cache Maven chains, when one is admitted; Maven splits the tail at commas. */

@@ -69,6 +69,11 @@ In the timeline, find the run's `coding-runtime.native-build-settings.admitted` 
   above.
 - No relay line at all and no bound repository: the repository is not in your user-level files, or
   it belongs to a profile that is not active.
+- `relayMavenBoundCount` above zero, but no `request` line and a `settled` line with no requests,
+  below Full access on macOS: Java could not open a connection to the relay. Keiko runs every JVM
+  of such a run on its IPv4 stack (`java.net.preferIPv4Stack=true`), because macOS 15 refuses the
+  default IPv6 socket under the loopback-only rule. A project whose `.mvn/jvm.config` or
+  `MAVEN_OPTS` sets `-Djava.net.preferIPv4Stack=false` overrides that and brings the failure back.
 
 **Resolution**
 

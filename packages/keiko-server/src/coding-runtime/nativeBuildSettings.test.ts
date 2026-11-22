@@ -224,6 +224,7 @@ describe("prepareNativeBuildSettings (#4271)", () => {
     expect(settings).not.toContain(`<localRepository>${cache}</localRepository>`);
     expect(result.javaProperties).toEqual({
       "user.home": home,
+      "java.net.preferIPv4Stack": "true",
       "maven.repo.local.tail": cache,
       "maven.repo.local.tail.ignoreAvailability": "true",
     });
@@ -241,8 +242,35 @@ describe("prepareNativeBuildSettings (#4271)", () => {
       readOnlyMavenRepository: join(realHome, "a,b", ".m2", "repository"),
       activityLog: log.sink,
     });
-    expect(result.javaProperties).toEqual({ "user.home": join(stateRoot, "home") });
+    expect(result.javaProperties).toEqual({
+      "user.home": join(stateRoot, "home"),
+      "java.net.preferIPv4Stack": "true",
+    });
     expect(log.events[0]?.extra).toMatchObject({ mavenCache: "refused" });
+  });
+
+  it("runs every JVM on its IPv4 stack below Full access, where the kernel admits loopback only", () => {
+    // #4530: macOS 15 refuses a JVM's dual-stack socket to 127.0.0.1 under the loopback-only rule,
+    // so Maven never reached the repository relay; at Full access the network is open.
+    const { realHome, stateRoot } = fixture();
+    for (const mode of ["governed-assist", "supervised-coding"]) {
+      const result = prepareNativeBuildSettings({
+        runId: `run-ipv4-${mode}`,
+        mode,
+        realHome,
+        stateRoot,
+        activityLog: sink().sink,
+      });
+      expect(result.javaProperties["java.net.preferIPv4Stack"]).toBe("true");
+    }
+    const full = prepareNativeBuildSettings({
+      runId: "run-ipv4-full",
+      mode: "autonomous-delivery",
+      realHome,
+      stateRoot,
+      activityLog: sink().sink,
+    });
+    expect(full.javaProperties).not.toHaveProperty("java.net.preferIPv4Stack");
   });
 
   it("leaves Maven's own default repository when the run home spells an interpolation", () => {

@@ -235,6 +235,27 @@ describe("the run's Maven settings with the repository relay (#4522)", () => {
       activityLog: { write: () => undefined },
     });
     expect(result.javaProperties["maven.repo.local.tail"]).toBe(cache);
+    // #4530: Maven reaches an IPv4 relay origin only on the JVM's IPv4 stack on macOS 15.
+    expect(result.javaProperties["java.net.preferIPv4Stack"]).toBe("true");
+  });
+
+  it("keeps the JVM's default stack when the relay is on the IPv6 loopback", () => {
+    const realHome = person({ maven: MAVEN_SETTINGS });
+    const stateRoot = join(temp(), "run");
+    mkdirSync(stateRoot, { recursive: true });
+    const result = prepareNativeBuildSettings({
+      runId: "run-relay-ipv6",
+      mode: "supervised-coding",
+      realHome,
+      stateRoot,
+      repositoryRelay: {
+        relay: createRepositoryCredentialRelay({ activityLog: () => undefined }),
+        origin: "http://[::1]:41999",
+        env: {},
+      },
+      activityLog: { write: () => undefined },
+    });
+    expect(result.javaProperties).not.toHaveProperty("java.net.preferIPv4Stack");
   });
 
   it("exempts loopback from every proxy, extending an existing list", () => {

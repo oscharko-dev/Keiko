@@ -205,7 +205,13 @@ Keiko reads from the configured repository.
 
 ### D7 — Platforms
 
-- **macOS.** The native shell reaches the relay on the attested loopback origin.
+- **macOS.** The native shell reaches the relay on the attested loopback origin. Below Full access
+  every JVM of the run gets `java.net.preferIPv4Stack=true` in its `JAVA_TOOL_OPTIONS` when the
+  origin is `127.0.0.1` (#4530): macOS 15.8 refuses a JVM's default dual-stack socket to
+  `127.0.0.1` under the loopback-only Seatbelt rule ("Operation not permitted"), while Node.js,
+  curl and the same JVM on its IPv4 stack connect. Without the property Maven never reached the
+  relay there (no request on the relay, `relayMavenBoundCount` 1). An IPv6 origin (`::1`) keeps
+  the default stack. Full access has no loopback-only rule and keeps the default.
 - **Windows.** The relay is server code on the attested origin that the D21 relay already forwards.
   The host-admission allowlist of runtime routes includes the relay prefix, with its capability
   required. It takes effect for a Windows run once project commands run there (#4493, #4496).

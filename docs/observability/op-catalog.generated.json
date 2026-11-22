@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "81807274e75b414834427bb1c5f6f986c18e7219e96ebc5a52210dc12b6b213f",
+    "catalogDigest": "c86fbb913ba95f154adc04202c1e28f4542327327f0368186d8d28f4aeaca148",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -13447,7 +13447,7 @@
         "proofIds": ["coding-runtime.native-build-settings.admitted.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:276",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:706"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/nativeBuildSettings.ts:720"]
       },
       {
         "contractKind": "activity-log-operation",
