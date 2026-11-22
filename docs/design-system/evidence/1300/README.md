@@ -466,3 +466,10 @@ rendered CSS bundle digest moved with the Next.js/PostCSS update; the shared sty
 unchanged. The 56 recaptured PNGs were committed as produced, and representative captures were
 inspected without a visible difference. No producer assertion, tolerance, disposition, fixture or
 budget changed. These remain synthetic fixture proofs.
+
+## PR #4523 acceptance provisioning script — 2026-11-22
+
+The Coding acceptance task (#4492) adds the `provision:acceptance-maven` script to the root
+`package.json`, whose digest these four proofs bind. Only that input digest was updated in the
+proofs; the producers were not rerun, because no stylesheet, fixture, token, component or dependency
+changed and the captures bind nothing but those source bytes. No gate, fixture or rule was changed.
