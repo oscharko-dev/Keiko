@@ -291,8 +291,6 @@ const NATIVE_LOOPBACK_ONLY_NETWORK_RULES =
 // tools.
 const NATIVE_HOST_SECRET_SERVICE_RULE =
   "(deny mach-lookup" +
-  ' (global-name "com.apple.pasteboard.1")' +
-  ' (global-name "com.apple.pboard")' +
   ' (global-name "com.apple.SecurityServer")' +
   ' (global-name "com.apple.secd")' +
   ' (global-name "com.apple.securityd.xpc")' +
