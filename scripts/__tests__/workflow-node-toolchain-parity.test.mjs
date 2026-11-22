@@ -214,8 +214,9 @@ describe("workflow Node toolchain parity", () => {
     // proof of ADR-0043 D21 (windows-gateway-confinement.yml relay-confinement) adds one. The
     // weekly gate health report (ci-health.yml, quality-gate hardening plan P6) adds one. The
     // nightly test-stability lane (P3) adds two: its unit-shard matrix and its smoke job. WebKit's
-    // isolated smoke matrix (P5), split out of the ui job, adds one.
-    expect(withSetupNode).toHaveLength(45);
+    // isolated smoke matrix (P5), split out of the ui job, adds one. The npm folder publisher's
+    // reserve-tag job (#4503), which alone holds the release-tag App token, adds one.
+    expect(withSetupNode).toHaveLength(46);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

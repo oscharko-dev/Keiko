@@ -73,14 +73,51 @@ jobs:
     permissions:
       contents: read
 
+  reserve-tag:
+    name: Reserve the prerelease tag at the release commit
+    needs: [prepare, qualify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The tag ruleset lets only the release-tag App and the owner create tags, so the workflow token
+    # cannot publish a release whose tag does not exist yet (HTTP 422, #4503). This job, and only
+    # this one, holds the App token: it creates npm-folder-<version> at the product release's commit
+    # and handles no downloaded artifact. The App credentials exist only in this environment, and
+    # only dev may deploy to it, as for release-candidate.yml.
+    environment: release-tagging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Mint the release tag token
+        id: tag-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.KEIKO_RELEASE_TAG_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KEIKO_RELEASE_TAG_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Create the tag at the release commit, or keep this commit's reservation
+        env:
+          GH_TOKEN: ${{ steps.tag-token.outputs.token }}
+          NPM_FOLDER_VERSION: ${{ inputs.version }}
+          NPM_FOLDER_COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: node scripts/publish-npm-folder-packages.mjs reserve-tag --version "$NPM_FOLDER_VERSION" --commit "$NPM_FOLDER_COMMIT" --repository "$GITHUB_REPOSITORY"
+
   publish:
     name: Publish the tested packages as a prerelease
-    needs: [prepare, qualify]
+    needs: [prepare, qualify, reserve-tag]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # A deployment environment of its own, as release.yml and coding-runtime-publish.yml have one. It
-    # holds no secrets (the job uses only github.token), and no existing environment is named, so no
-    # secret's reach grows. The owner may add protection rules to it.
+    # holds no secrets (the job uses only github.token; the tag exists already, reserve-tag created
+    # it), so no secret's reach grows. The owner may add protection rules to it.
     environment: npm-folder-publish
     permissions:
       attestations: write
