@@ -3,7 +3,8 @@
 // with the runtime's own `edit` and runs `npm test` in its own shell. That shell is a child of the
 // runtime process Keiko spawned inside the Seatbelt boundary, and no container runtime is
 // involved. The tester then checks the end state outside Keiko: the run's outcome, the project's
-// own `npm test`, the untouched test files and the Activity Log. The model is scripted
+// own `npm test`, the untouched files outside `src/`, the number of checks the project itself
+// counted and the Activity Log. The model is scripted
 // (`acceptance` mode), so this proves the product's part of the promise, not a model's skill; a
 // real-model run of the same task closes the acceptance criteria. Proving each boundary statement
 // from the model's own shell belongs to #4521.
@@ -11,22 +12,27 @@
 // Runs where the dev-lane functional suite runs: macOS with `KEIKO_OPENCODE_DEV_LANE_FUNCTIONAL=1`
 // and the staged payload (`npm run dev:coding-runtime:stage`). Set `KEIKO_ACCEPTANCE_EVIDENCE_FILE`
 // to keep the body-free evidence of every case (platform, user class, container runtime, versions
-// and outcomes; no paths, no content).
+// and outcomes; no paths, no content), owner-private and outside the checkout.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  closeSync,
+  constants,
   cpSync,
   existsSync,
+  fchmodSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
-  writeFileSync,
+  writeSync,
 } from "node:fs";
 import { homedir, release, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -50,6 +56,7 @@ import {
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
+import { VERIFICATION_CONTINUATION_MAX } from "./codingRuntimeVerificationContinuation.js";
 import { devLaneEnvEnabled } from "./devLanePortableCodingRuntime.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
@@ -75,6 +82,15 @@ const TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
 ]);
 /** The closed failure code for "no passing check after the final edit", whatever the cause. */
 const NOT_VERIFIED = "verification-not-evidenced";
+/**
+ * Every `npm test` of a fixture appends one line here before its tests run
+ * (`scripts/record-check.js`, ignored by Git): the project's own count of the checks, which the
+ * tester compares with the checks the run reported.
+ */
+const CHECK_RECORD = ".acceptance-checks";
+/** What the run may change: the source. Everything else in the project must stay byte for byte. */
+const SOURCE_DIRECTORY = "src";
+const OUTSIDE_SOURCE_IGNORED: ReadonlySet<string> = new Set([".git", "node_modules", CHECK_RECORD]);
 
 type AcceptanceProject = "no-dependencies" | "with-dependency";
 type AcceptanceMode = "governed-assist" | "supervised-coding" | "autonomous-delivery";
@@ -112,16 +128,38 @@ interface AcceptanceObservation {
   readonly approvalCount: number;
   readonly denialCount: number;
   readonly testerCheckExitCode: number;
-  readonly testFilesUnchanged: boolean;
+  /** The checks the project counted while the run worked, before the tester's own check. */
+  readonly runCheckCount: number;
+  /** Every file outside `src/` (the tests, `package.json`, the recorder) is byte-identical. */
+  readonly outsideSourceUnchanged: boolean;
   readonly editLanded: boolean;
   readonly confinement: readonly ConfinementFacts[];
   readonly verificationSummaries: readonly string[];
+  /** The states of the run's verification continuations, in order. */
+  readonly continuations: readonly string[];
   readonly durationMs: number;
 }
 
+/** One case of the acceptance task and what it must show. */
+interface AcceptanceExpectation {
+  readonly id: string;
+  readonly title: string;
+  readonly acceptanceCase: AcceptanceCase;
+  readonly check: (observed: AcceptanceObservation) => void;
+}
+
 type EvidenceEntry =
-  | { readonly acceptanceCase: AcceptanceCase; readonly observed: AcceptanceObservation }
-  | { readonly acceptanceCase: AcceptanceCase; readonly harnessError: true };
+  | {
+      readonly caseId: string;
+      readonly acceptanceCase: AcceptanceCase;
+      readonly observed: AcceptanceObservation;
+      readonly metExpectation: boolean;
+    }
+  | {
+      readonly caseId: string;
+      readonly acceptanceCase: AcceptanceCase;
+      readonly harnessError: true;
+    };
 
 const TARGETS: Readonly<Record<AcceptanceProject, string>> = {
   "no-dependencies": "src/invoice.js",
@@ -140,8 +178,7 @@ afterEach(async () => {
 afterAll(() => {
   const file = process.env.KEIKO_ACCEPTANCE_EVIDENCE_FILE;
   if (file === undefined || file === "" || evidence.length === 0) return;
-  mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  writeFileSync(file, `${JSON.stringify(acceptanceEvidence(), null, 2)}\n`, { mode: 0o600 });
+  writeOwnerPrivate(file, `${JSON.stringify(acceptanceEvidence(), null, 2)}\n`);
 });
 
 function acceptanceEnabled(): boolean {
@@ -183,73 +220,102 @@ function unverified(
   };
 }
 
-describe.skipIf(!acceptanceEnabled())(
-  "Coding acceptance task on macOS without a container runtime (#4492)",
-  () => {
-    it.each(["supervised-coding", "autonomous-delivery", "governed-assist"] as const)(
-      "repairs the defect and verifies it with the project's own tests in %s",
-      async (mode) => {
-        const observed = await runAcceptanceCase(verified("no-dependencies", mode));
-        expectSucceeded(observed, mode);
-        // Ask for approval asks before each command and before the edit: the failing check, the
-        // edit, the passing check. The other modes ask for none of this workspace-contained work.
-        expect(observed.approvalCount).toBe(mode === "governed-assist" ? 3 : 0);
-        expect(observed.denialCount).toBe(0);
-      },
-      240_000,
-    );
+const VERIFIED_MODES = ["supervised-coding", "autonomous-delivery", "governed-assist"] as const;
 
-    it("never reports success for an edit that leaves the tests red", async () => {
-      const observed = await runAcceptanceCase(unverified("supervised-coding", "wrong", "verify"));
-      expectNotVerified(observed, { testsPassOutsideKeiko: false });
+const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
+  ...VERIFIED_MODES.map((mode): AcceptanceExpectation => ({
+    id: `verify-${mode}`,
+    title: `repairs the defect and verifies it with the project's own tests in ${mode}`,
+    acceptanceCase: verified("no-dependencies", mode),
+    check: (observed): void => {
+      expectSucceeded(observed, mode);
+      // Ask for approval asks before each command and before the edit: the failing check, the
+      // edit, the passing check. The other modes ask for none of this workspace-contained work.
+      expect(observed.approvalCount).toBe(mode === "governed-assist" ? 3 : 0);
+      expect(observed.denialCount).toBe(0);
+    },
+  })),
+  {
+    id: "wrong-fix",
+    title: "never reports success for an edit that leaves the tests red",
+    acceptanceCase: unverified("supervised-coding", "wrong", "verify"),
+    check: (observed): void => {
+      expectNotVerified(observed, "supervised-coding", { testsPassOutsideKeiko: false });
       expect(observed.verificationSummaries).toEqual(["test:failed", "test:failed"]);
-    }, 240_000);
-
-    // The other three never-a-pass cases use the right fix, so the project's tests pass when the
-    // tester runs them; the outcome must still follow what the run itself verified.
-    it("never reports success when the run skips its check after the edit", async () => {
-      const observed = await runAcceptanceCase(
-        unverified("supervised-coding", "fixed", "skip-check"),
-      );
-      expectNotVerified(observed, { testsPassOutsideKeiko: true });
+    },
+  },
+  // The other three never-a-pass cases use the right fix, so the project's tests pass when the
+  // tester runs them; the outcome must still follow what the run itself verified.
+  {
+    id: "skip-check",
+    title: "never reports success when the run skips its check after the edit",
+    acceptanceCase: unverified("supervised-coding", "fixed", "skip-check"),
+    check: (observed): void => {
+      expectNotVerified(observed, "supervised-coding", { testsPassOutsideKeiko: true });
       expect(observed.verificationSummaries).toEqual(["test:failed"]);
-    }, 240_000);
-
-    it("never counts a check that passed before the final edit", async () => {
-      const observed = await runAcceptanceCase(
-        unverified("autonomous-delivery", "fixed", "stale-check"),
-      );
-      expectNotVerified(observed, { testsPassOutsideKeiko: true });
+    },
+  },
+  {
+    id: "stale-check",
+    title: "never counts a check that passed before the final edit",
+    acceptanceCase: unverified("autonomous-delivery", "fixed", "stale-check"),
+    check: (observed): void => {
+      expectNotVerified(observed, "autonomous-delivery", { testsPassOutsideKeiko: true });
       expect(observed.verificationSummaries).toEqual(["test:failed", "test:passed"]);
-    }, 240_000);
-
-    it("never reports success when the person denies the check after the edit", async () => {
-      const observed = await runAcceptanceCase(unverified("governed-assist", "fixed", "denied"));
-      expectNotVerified(observed, { testsPassOutsideKeiko: true });
+    },
+  },
+  {
+    id: "denied-check",
+    title: "never reports success when the person denies the check after the edit",
+    acceptanceCase: unverified("governed-assist", "fixed", "denied"),
+    check: (observed): void => {
+      expectNotVerified(observed, "governed-assist", {
+        testsPassOutsideKeiko: true,
+        continued: false,
+      });
       expect(observed.verificationSummaries).toEqual(["test:failed"]);
       expect(observed.verificationBlockedReason).toBe("verification-command-denied");
       expect([observed.approvalCount, observed.denialCount]).toEqual([2, 1]);
-    }, 240_000);
-
-    it("verifies a project whose dependencies are installed in the person's own folder", async () => {
-      const observed = await runAcceptanceCase(
-        verified("with-dependency", "supervised-coding", "own-folder"),
-      );
+    },
+  },
+  {
+    id: "dependency-own-folder",
+    title: "verifies a project whose dependencies are installed in the person's own folder",
+    acceptanceCase: verified("with-dependency", "supervised-coding", "own-folder"),
+    check: (observed): void => {
       expectSucceeded(observed, "supervised-coding");
-    }, 240_000);
-
-    // Baseline until #4522: a managed task worktree is a fresh checkout without `node_modules`, and
-    // below Full access the run's shell has no registry, so its tests cannot load the dependency.
-    // The run must say so honestly rather than succeed; #4522 turns this case into a success.
-    it("does not report success while a managed worktree lacks the project's dependencies", async () => {
-      const observed = await runAcceptanceCase({
-        ...verified("with-dependency", "supervised-coding"),
-        dependencies: "missing",
-        expected: "not-succeeded",
-      });
-      expectNotVerified(observed, { testsPassOutsideKeiko: false });
+    },
+  },
+  // Baseline until #4522: a managed task worktree is a fresh checkout without `node_modules`, and
+  // below Full access the run's shell has no registry, so its tests cannot load the dependency.
+  // The run must say so honestly rather than succeed; #4522 turns this case into a success.
+  {
+    id: "dependency-missing-worktree",
+    title: "does not report success while a managed worktree lacks the project's dependencies",
+    acceptanceCase: {
+      ...verified("with-dependency", "supervised-coding"),
+      dependencies: "missing",
+      expected: "not-succeeded",
+    },
+    check: (observed): void => {
+      expectNotVerified(observed, "supervised-coding", { testsPassOutsideKeiko: false });
       expect(observed.verificationSummaries).toEqual(["test:failed", "test:failed"]);
-    }, 240_000);
+    },
+  },
+];
+
+describe.skipIf(!acceptanceEnabled())(
+  "Coding acceptance task on macOS without a container runtime (#4492)",
+  () => {
+    for (const expectation of ACCEPTANCE_CASES) {
+      it(
+        expectation.title,
+        async () => {
+          await runAcceptanceCase(expectation);
+        },
+        240_000,
+      );
+    }
   },
 );
 
@@ -259,23 +325,44 @@ function expectSucceeded(observed: AcceptanceObservation, mode: AcceptanceMode):
   expect(observed.settledState, context).toBe("succeeded");
   expect(observed.editLanded, context).toBe(true);
   expect(observed.testerCheckExitCode, context).toBe(0);
-  expect(observed.testFilesUnchanged, context).toBe(true);
   expect(observed.verificationSummaries.at(-1), context).toBe("test:passed");
-  expectNativeConfinement(observed, mode);
+  // A run that verified its edit needs no nudge to do so.
+  expect(observed.continuations, context).toEqual([]);
+  expectEveryCase(observed, mode);
 }
 
 function expectNotVerified(
   observed: AcceptanceObservation,
-  expected: { readonly testsPassOutsideKeiko: boolean },
+  mode: AcceptanceMode,
+  expected: { readonly testsPassOutsideKeiko: boolean; readonly continued?: boolean },
 ): void {
   const context = JSON.stringify(observed);
   expect(observed.state, context).toBe("failed");
   expect(observed.settledState, context).toBe("failed");
   expect(observed.failureCode, context).toBe(NOT_VERIFIED);
   expect(observed.editLanded, context).toBe(true);
-  expect(observed.testFilesUnchanged, context).toBe(true);
   if (expected.testsPassOutsideKeiko) expect(observed.testerCheckExitCode, context).toBe(0);
   else expect(observed.testerCheckExitCode, context).toBeGreaterThan(0);
+  // Before it gives up, the product sends the model back to verify, up to its bound; a check the
+  // person denied blocks that continuation. Either way the run ends not evidenced.
+  expect(VERIFICATION_CONTINUATION_MAX).toBeGreaterThan(0);
+  const continued = expected.continued === false ? 0 : VERIFICATION_CONTINUATION_MAX;
+  expect(observed.continuations, context).toEqual([
+    ...Array.from({ length: continued }, () => "continued"),
+    "not-evidenced",
+  ]);
+  expectEveryCase(observed, mode);
+}
+
+/**
+ * What holds in every case, whatever its outcome: the run changed nothing outside `src/`, every
+ * check it reported is one the project itself counted, and its runtime ran inside the boundary.
+ */
+function expectEveryCase(observed: AcceptanceObservation, mode: AcceptanceMode): void {
+  const context = JSON.stringify(observed);
+  expect(observed.outsideSourceUnchanged, context).toBe(true);
+  expect(observed.runCheckCount, context).toBe(observed.verificationSummaries.length);
+  expectNativeConfinement(observed, mode);
 }
 
 /**
@@ -306,16 +393,23 @@ interface PreparedAcceptanceCase {
   readonly replacement: string;
 }
 
-async function runAcceptanceCase(acceptanceCase: AcceptanceCase): Promise<AcceptanceObservation> {
+async function runAcceptanceCase(expectation: AcceptanceExpectation): Promise<void> {
+  const { id: caseId, acceptanceCase } = expectation;
+  let observed: AcceptanceObservation;
   try {
-    const observed = await observeAcceptanceCase(acceptanceCase);
-    evidence.push({ acceptanceCase, observed });
-    return observed;
+    observed = await observeAcceptanceCase(acceptanceCase);
   } catch (error) {
     // The case did not complete; its record says so without the error's text.
-    evidence.push({ acceptanceCase, harnessError: true });
+    evidence.push({ caseId, acceptanceCase, harnessError: true });
     throw error;
   }
+  try {
+    expectation.check(observed);
+  } catch (error) {
+    evidence.push({ caseId, acceptanceCase, observed, metExpectation: false });
+    throw error;
+  }
+  evidence.push({ caseId, acceptanceCase, observed, metExpectation: true });
 }
 
 async function observeAcceptanceCase(
@@ -325,7 +419,8 @@ async function observeAcceptanceCase(
   const target = join(prepared.runRoot, TARGETS[acceptanceCase.project]);
   // The precondition: the project's own tests fail before the run.
   expect(testerCheck(prepared.runRoot)).toBeGreaterThan(0);
-  const testsBefore = testFilesDigest(prepared.runRoot);
+  const checksBefore = recordedChecks(prepared.runRoot);
+  const outsideSourceBefore = outsideSourceDigest(prepared.runRoot);
   const script = acceptanceScript(acceptanceCase, prepared);
   const log = recordActivityLog();
   const served = await serveAcceptance(prepared, script);
@@ -339,13 +434,16 @@ async function observeAcceptanceCase(
     acceptanceCase.check === "stale-check"
       ? `${prepared.replacement}${ACCEPTANCE_STALE_SUFFIX}`
       : prepared.replacement;
+  // Counted before the tester's own check, which the recorder counts too.
+  const runCheckCount = recordedChecks(prepared.runRoot) - checksBefore;
   return {
     ...settledFacts(log, runId),
     state: served.orchestrator.getSnapshot(runId)?.state,
     approvalCount: asks.approved,
     denialCount: asks.denied,
+    runCheckCount,
     testerCheckExitCode: testerCheck(prepared.runRoot),
-    testFilesUnchanged: testFilesDigest(prepared.runRoot) === testsBefore,
+    outsideSourceUnchanged: outsideSourceDigest(prepared.runRoot) === outsideSourceBefore,
     editLanded: readFileSync(target, "utf8") === finalContent,
     durationMs: Date.now() - startedAt,
   };
@@ -500,12 +598,14 @@ async function settleAnsweringEveryAsk(
       const pending = snapshot?.pendingPermission;
       if (snapshot?.state === "awaiting-approval" && pending !== undefined) {
         const decision = decide();
-        answered[decision] += 1;
-        await orchestrator.decideApproval(runId, {
+        const result = await orchestrator.decideApproval(runId, {
           requestId: pending.requestId,
           decision,
           expectedRevision: snapshot.revision,
         });
+        // A decision the orchestrator refused (a newer revision) is not an answer; the next
+        // poll answers the ask again.
+        if (result.ok) answered[decision] += 1;
       }
       expect(TERMINAL_STATES.has(orchestrator.getSnapshot(runId)?.state ?? "idle")).toBe(true);
     },
@@ -526,21 +626,41 @@ function testerCheck(folder: string): number {
   // A check that could not run (no `npm`, a timeout, a signal) has no exit code; it is never a
   // red result and never a green one.
   if (typeof result.status !== "number") {
-    throw new Error(`acceptance-tester-check-did-not-run:${String(result.signal)}`);
+    throw new TypeError(`acceptance-tester-check-did-not-run:${String(result.signal)}`);
   }
   return result.status;
 }
 
-function testFilesDigest(folder: string): string {
-  const directory = join(folder, "test");
+/** The checks the project's recorder counted in `folder` so far. */
+function recordedChecks(folder: string): number {
+  const record = join(folder, CHECK_RECORD);
+  if (!existsSync(record)) return 0;
+  return readFileSync(record, "utf8")
+    .split("\n")
+    .filter((line) => line !== "").length;
+}
+
+/** A digest of every file outside `src/`, by relative path and bytes, in a stable order. */
+function outsideSourceDigest(folder: string): string {
   const hash = createHash("sha256");
-  for (const name of readdirSync(directory).sort()) {
-    hash
-      .update(name)
-      .update("\0")
-      .update(readFileSync(join(directory, name)))
-      .update("\0");
-  }
+  const visit = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true }).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    )) {
+      const path = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      if (OUTSIDE_SOURCE_IGNORED.has(entry.name) || path === SOURCE_DIRECTORY) continue;
+      if (entry.isDirectory()) {
+        visit(join(directory, entry.name), path);
+        continue;
+      }
+      hash
+        .update(path)
+        .update("\0")
+        .update(readFileSync(join(directory, entry.name)))
+        .update("\0");
+    }
+  };
+  visit(folder, "");
   return hash.digest("hex");
 }
 
@@ -554,6 +674,7 @@ function settledFacts(
   | "verificationBlockedReason"
   | "confinement"
   | "verificationSummaries"
+  | "continuations"
 > {
   const settled = log.events.find(
     (event) => event.op === "coding-runtime.run.settled" && event.extra?.runId === runId,
@@ -577,6 +698,11 @@ function settledFacts(
         ? [`${String(event.extra.verifierId)}:${String(event.extra.verificationStatus)}`]
         : [],
     ),
+    continuations: log.events.flatMap((event) =>
+      event.op === "coding-runtime.run.verification-continuation" && event.extra?.runId === runId
+        ? [String(event.extra.state)]
+        : [],
+    ),
   };
 }
 
@@ -590,23 +716,24 @@ function recordActivityLog(): BufferedServerLogSink {
 }
 
 function acceptanceEvidence(): Record<string, unknown> {
-  const administrator = groups().includes("admin");
-  const containerRuntime = {
-    dockerOnPath: onPath("docker"),
-    podmanOnPath: onPath("podman"),
-    dockerSocketPresent: [
-      join(homedir(), ".docker", "run", "docker.sock"),
-      "/var/run/docker.sock",
-    ].some((socket) => existsSync(socket)),
-  };
+  const administrator = process.getuid?.() === 0 || groups().includes("admin");
+  const containerRuntime = containerRuntimeFacts();
   // The promise is for a standard user on a machine without a container runtime; evidence taken
   // anywhere else describes the product, but it does not certify that promise.
   const unmetPreconditions = [
     ...(administrator ? ["administrator"] : []),
     ...(Object.values(containerRuntime).some(Boolean) ? ["container-runtime-present"] : []),
   ];
+  // Nor does a partial run (a filtered or interrupted suite) or one with a case that failed.
+  const recorded = new Set(evidence.map((entry) => entry.caseId));
+  const caseSetComplete =
+    evidence.length === ACCEPTANCE_CASES.length &&
+    ACCEPTANCE_CASES.every((expectation) => recorded.has(expectation.id));
+  const everyCaseMetExpectation = evidence.every(
+    (entry) => "metExpectation" in entry && entry.metExpectation,
+  );
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     issue: 4492,
     platform: process.platform,
     arch: process.arch,
@@ -615,10 +742,67 @@ function acceptanceEvidence(): Record<string, unknown> {
     opencode: OPENCODE_PINNED_VERSION,
     userClass: administrator ? "administrator" : "standard",
     containerRuntime,
-    certifiesPromise: unmetPreconditions.length === 0,
+    caseSetComplete,
+    everyCaseMetExpectation,
+    certifiesPromise: unmetPreconditions.length === 0 && caseSetComplete && everyCaseMetExpectation,
     unmetPreconditions,
     cases: evidence,
   };
+}
+
+/**
+ * Whether a container runtime is installed, conservatively: a client on `PATH`, a configured
+ * `DOCKER_HOST`, or a socket of Docker Desktop, Colima, OrbStack or a Podman machine. Presence
+ * counts, whether or not the runtime is running.
+ */
+function containerRuntimeFacts(): Readonly<Record<string, boolean>> {
+  const home = homedir();
+  const sockets = [
+    "/var/run/docker.sock",
+    join(home, ".docker", "run", "docker.sock"),
+    join(home, ".orbstack", "run", "docker.sock"),
+  ];
+  return {
+    dockerOnPath: onPath("docker"),
+    podmanOnPath: onPath("podman"),
+    otherClientOnPath: ["nerdctl", "colima", "orb", "limactl"].some((program) => onPath(program)),
+    dockerHostConfigured: (process.env.DOCKER_HOST ?? "") !== "",
+    dockerSocketPresent: sockets.some((socket) => existsSync(socket)),
+    runtimeStatePresent: [
+      join(home, ".colima"),
+      join(home, ".orbstack"),
+      join(home, ".local", "share", "containers", "podman", "machine"),
+    ].some((path) => existsSync(path)),
+  };
+}
+
+/**
+ * Writes the evidence file owner-private: never inside this checkout, never through a symbolic
+ * link, into a directory only its owner can enter, with mode 0600 whatever existed before.
+ */
+function writeOwnerPrivate(file: string, content: string): void {
+  const target = resolve(file);
+  const fromCheckout = relative(resolve(REPOSITORY_ROOT), target);
+  if (!fromCheckout.startsWith("..") && !isAbsolute(fromCheckout)) {
+    throw new Error("acceptance-evidence-inside-checkout");
+  }
+  const directory = dirname(target);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(directory);
+  if (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) {
+    throw new Error("acceptance-evidence-directory-not-owner-private");
+  }
+  const descriptor = openSync(
+    target,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    fchmodSync(descriptor, 0o600);
+    writeSync(descriptor, content);
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function groups(): readonly string[] {

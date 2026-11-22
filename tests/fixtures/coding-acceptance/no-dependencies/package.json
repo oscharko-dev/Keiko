@@ -5,6 +5,6 @@
   "description": "Coding Workbench acceptance fixture without dependencies (#4492)",
   "type": "module",
   "scripts": {
-    "test": "node --test"
+    "test": "node scripts/record-check.js && node --test"
   }
 }

@@ -89,6 +89,7 @@ import {
 import {
   functionalPost,
   functionalSessionCookie,
+  listenOnLoopback,
   reserveLoopbackPort,
   startFunctionalDiscoveryServer,
 } from "../test-support/functional-bff-server.js";
@@ -517,7 +518,7 @@ async function bootPipeline(
     handlerDeps: deps,
   });
   servers.push(server);
-  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+  await listenOnLoopback(server, port);
   const orchestrator = deps.codingRuntimeOrchestrator;
   const eventHub = deps.codingRuntimeEventHub;
   if (orchestrator === undefined || eventHub === undefined) {

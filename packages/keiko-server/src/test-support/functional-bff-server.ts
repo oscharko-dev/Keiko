@@ -6,7 +6,7 @@
 // build, coverage and Sonar scope, and outside the coding-runtime egress rule, which binds product
 // code that must never open a socket of its own.
 
-import { createServer } from "node:http";
+import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 
 import { fakePairingRequestBody } from "../coding-app-session/_support.js";
@@ -77,7 +77,11 @@ export async function functionalPost(
   return response;
 }
 
-/** A loopback port that was free a moment ago, for a server the pipeline starts next. */
+/**
+ * A loopback port that was free a moment ago, for a server the pipeline starts next. Another
+ * process can take it before that server binds; `listenOnLoopback` then rejects instead of
+ * leaving an unhandled `error` event, and `startFunctionalDiscoveryServer` tries a new port.
+ */
 export async function reserveLoopbackPort(): Promise<number> {
   const reservation = createServer();
   await new Promise<void>((resolve) => reservation.listen(0, UI_HOST, resolve));
@@ -89,6 +93,17 @@ export async function reserveLoopbackPort(): Promise<number> {
     }),
   );
   return port;
+}
+
+/** Binds `server` to `port` on loopback; rejects when the bind fails (such as `EADDRINUSE`). */
+export function listenOnLoopback(server: Server, port: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, UI_HOST, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
 }
 
 /**
@@ -121,27 +136,41 @@ export interface FunctionalDiscoveryServer {
   readonly close: () => Promise<void>;
 }
 
+/** How often a server start tries a new port after another process took the reserved one. */
+const FUNCTIONAL_LISTEN_ATTEMPTS = 3;
+
+type FunctionalDiscoveryServerInput = Omit<DiscoveryBffDepsInput, "uiPort"> & {
+  readonly staticRoot: string;
+  readonly check?: FunctionalResponseCheck;
+};
+
 /**
  * Boots the BFF with production composition only (`productionDiscoveryBffDeps`) on a loopback
  * port, serves it, and activates its chat model the way a person does before a first run.
  */
 export async function startFunctionalDiscoveryServer(
-  input: Omit<DiscoveryBffDepsInput, "uiPort"> & {
-    readonly staticRoot: string;
-    readonly check?: FunctionalResponseCheck;
-  },
+  input: FunctionalDiscoveryServerInput,
+  attempt = 1,
 ): Promise<FunctionalDiscoveryServer> {
   const { staticRoot, check, ...depsInput } = input;
   const port = await reserveLoopbackPort();
   const deps = productionDiscoveryBffDeps({ ...depsInput, uiPort: port });
   const server = createUiServer({ staticRoot, csp: "default-src 'none'", port, handlerDeps: deps });
-  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+  try {
+    await listenOnLoopback(server, port);
+  } catch (error) {
+    await disposeFunctionalDeps(deps);
+    const taken = (error as NodeJS.ErrnoException).code === "EADDRINUSE";
+    if (taken && attempt < FUNCTIONAL_LISTEN_ATTEMPTS) {
+      return startFunctionalDiscoveryServer(input, attempt + 1);
+    }
+    throw error;
+  }
   const baseUrl = `http://${UI_HOST}:${String(port)}`;
   const close = async (): Promise<void> => {
     // A later server may bind the same port; it must pair its own session, not reuse this one's.
     sessions.delete(baseUrl);
-    await deps.codingRuntimeOrchestrator?.shutdown();
-    await deps.dispose?.();
+    await disposeFunctionalDeps(deps);
     await new Promise<void>((resolve) => {
       server.close(() => {
         resolve();
@@ -155,4 +184,9 @@ export async function startFunctionalDiscoveryServer(
     throw error;
   }
   return { baseUrl, deps, close };
+}
+
+async function disposeFunctionalDeps(deps: UiHandlerDeps): Promise<void> {
+  await deps.codingRuntimeOrchestrator?.shutdown();
+  await deps.dispose?.();
 }

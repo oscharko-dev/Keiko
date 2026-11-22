@@ -11,6 +11,10 @@ collection.
 | `no-dependencies` | `invoiceTotal` drops the first line (`slice(1)`)                 | Node.js only                    |
 | `with-dependency` | `newestStable` sorts ascending and returns the oldest stable one | the `semver` package, installed |
 
+Each project's `npm test` first runs `scripts/record-check.js`, which appends one line to
+`.acceptance-checks` (ignored by Git). The tester compares that count with the checks the run
+reported.
+
 `variants/<project>/` holds the replacement files a scripted model writes: `*.fixed.js` repairs the
 defect, `invoice.wrong.js` changes the code without repairing it. A real model writes its own fix;
 the end-state checks are the same.
@@ -22,9 +26,15 @@ the end-state checks are the same.
 
 ## What counts as passed
 
-Before the run, `npm test` in the project fails. After the run, the run ended `succeeded`, the
-tester's own `npm test` in the same folder exits 0, every file under `test/` is unchanged, and the
-run's Activity Log shows its confinement, a passing check after the final edit and its settlement.
+Before the run, `npm test` in the project fails. After the run, these all hold:
+
+- the run ended `succeeded`;
+- the tester's own `npm test` in the same folder exits 0;
+- every file outside `src/` is unchanged;
+- the project counted as many checks as the run reported;
+- the run's Activity Log shows its confinement, a passing check after the final edit and its
+  settlement.
+
 A failed, skipped, stale or denied check never counts as passed. The full rule, the procedure and
 the baseline are in [`docs/qa/coding-acceptance-task.md`](../../../docs/qa/coding-acceptance-task.md).
 
