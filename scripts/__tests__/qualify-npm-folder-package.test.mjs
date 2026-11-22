@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { platform, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -15,9 +15,14 @@ import {
   hostTarget,
   logHasLine,
   parseQualifyArgs,
+  recordingWrapper,
   releaseAssetUrls,
+  reportFailedRun,
+  runWrapper,
+  shellInvocation,
   snapshotOutsideNodeModules,
   windowsProcessListCommand,
+  wrapperOutputReport,
 } from "../testing/qualify-npm-folder-package.mjs";
 import {
   CHECK_NAMES,
@@ -327,5 +332,126 @@ describe("windowsProcessListCommand", () => {
     expect(command).toContain("[WildcardPattern]::Escape($env:KEIKO_QUALIFY_FOLDER)");
     expect(command).not.toMatch(/-like[^|]*\$env:KEIKO_QUALIFY_FOLDER/u);
     expect(command.match(/-like \(/gu)).toHaveLength(2);
+  });
+});
+
+// cmd.exe with /s takes everything after /c and removes its first and its last quote character
+// ("cmd /?"). What is left is the command it runs.
+function commandCmdRuns(args) {
+  const after = args.slice(args.indexOf("/c") + 1).join(" ");
+  const first = after.indexOf('"');
+  const last = after.lastIndexOf('"');
+  return after.slice(0, first) + after.slice(first + 1, last) + after.slice(last + 1);
+}
+
+describe("shellInvocation (#4503)", () => {
+  const file = String.raw`C:\Users\kstd\Keiko npm folder\Keiko\Start Keiko.cmd`;
+
+  it("leaves the start file quoted after cmd /s removed the outer quotes", () => {
+    const { command, args, verbatim } = shellInvocation(file, "win32");
+    expect(command).toBe("cmd.exe");
+    expect(args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+    expect(verbatim).toBe(true);
+    expect(commandCmdRuns(args)).toBe(`"${file}"`);
+  });
+
+  it("would leave the path bare in the single-quoted form, which cmd splits at the first space", () => {
+    expect(commandCmdRuns(["/d", "/s", "/c", `"${file}"`])).toBe(file);
+  });
+
+  it("hands the path to sh as one argument elsewhere", () => {
+    expect(shellInvocation("/a b/Start Keiko.command", "darwin")).toEqual({
+      command: "sh",
+      args: ["/a b/Start Keiko.command"],
+      verbatim: false,
+    });
+  });
+});
+
+describe("runWrapper with the host's real shell (#4503)", () => {
+  it("runs a start file whose path contains spaces", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-wrapper-"));
+    temporary.push(root);
+    const folder = join(root, "Keiko npm folder", "Keiko");
+    mkdirSync(folder, { recursive: true });
+    const windows = platform() === "win32";
+    const file = join(folder, windows ? "Start Keiko.cmd" : "Start Keiko.command");
+    writeFileSync(
+      file,
+      windows ? "@echo started from the folder\r\n" : "echo started from the folder\n",
+    );
+    const result = await runWrapper(file, {
+      env: process.env,
+      cwd: root,
+      logPath: join(root, "start.log"),
+      timeoutMs: 30_000,
+    });
+    expect(result.output).toContain("started from the folder");
+    expect(result.status).toBe(0);
+  });
+});
+
+describe("wrapperOutputReport (#4503)", () => {
+  it("shows every start and stop in the order they ran, with its exit status", () => {
+    const report = wrapperOutputReport([
+      { name: "start-1.log", status: 0, output: "Keiko UI running" },
+      { name: "start-2.log", status: 0, output: "Keiko UI process is stale; restarting" },
+      { name: "stop.log", status: 1, output: "not running" },
+    ]);
+    const first = report.indexOf("start-1.log (exit 0");
+    const second = report.indexOf("start-2.log (exit 0");
+    const stop = report.indexOf("stop.log (exit 1");
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(second).toBeGreaterThan(first);
+    expect(stop).toBeGreaterThan(second);
+    expect(report).toContain("process is stale");
+  });
+
+  it("keeps only the tail of a long output", () => {
+    const output = Array.from({ length: 40 }, (_, line) => `line ${String(line)}`).join("\n");
+    const report = wrapperOutputReport([{ name: "start-1.log", status: 1, output }]);
+    expect(report).not.toContain("line 14\n");
+    expect(report).toContain("line 15");
+    expect(report).toContain("line 39");
+  });
+
+  it("says so when no start or stop ran", () => {
+    expect(wrapperOutputReport([])).toBe("--- no start or stop ran ---");
+  });
+});
+
+describe("recordingWrapper and reportFailedRun (#4503)", () => {
+  it("keeps every start and stop with its exit status, in the order they ran", async () => {
+    const session = { env: { A: "1" }, work: "/work", outputs: [] };
+    const calls = [];
+    const run = (file, options) => {
+      calls.push({ file, options });
+      return Promise.resolve({ status: calls.length === 2 ? 1 : 0, output: `out ${file}` });
+    };
+    const wrapper = recordingWrapper(session, "darwin", run);
+    await wrapper("/f/Start Keiko.command", "start-1.log", 5);
+    await wrapper("/f/Start Keiko.command", "start-2.log", 5);
+    expect(calls[0].options).toMatchObject({
+      env: { A: "1" },
+      logPath: join("/work", "start-1.log"),
+      timeoutMs: 5,
+      os: "darwin",
+    });
+    expect(session.outputs).toEqual([
+      { name: "start-1.log", status: 0, output: "out /f/Start Keiko.command" },
+      { name: "start-2.log", status: 1, output: "out /f/Start Keiko.command" },
+    ]);
+  });
+
+  it("prints the outputs only when a check failed", () => {
+    const outputs = [{ name: "start-2.log", status: 0, output: "restarting" }];
+    const printed = [];
+    reportFailedRun({ checks: { results: [{ ok: true }] }, outputs }, (line) => printed.push(line));
+    expect(printed).toEqual([]);
+    reportFailedRun({ checks: { results: [{ ok: true }, { ok: false }] }, outputs }, (line) =>
+      printed.push(line),
+    );
+    expect(printed).toHaveLength(1);
+    expect(printed[0]).toContain("output of start-2.log (exit 0");
   });
 });

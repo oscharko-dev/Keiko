@@ -5025,7 +5025,15 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "identity-mismatch",
           "spawn-refused",
           "state-dir-unavailable",
+          "busy",
+          "stale-version",
+          "stale-unreachable",
         ],
+      },
+      healthRetries: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
       },
       lifeSigns: {
         type: "integer",

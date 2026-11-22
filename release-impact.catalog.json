@@ -4673,6 +4673,64 @@
         "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4068#7036639008",
         "rationale": "On 2026-11-20 the repository owner approved the merge of PR #4487 and the release of Keiko 1.5.5 once all checks are green, after seeing the Windows test guest results: 1.5.4 with the Windows coding-runtime package 1.1.6 completes a Coding run as a standard user from registry packages, the 1.5.4 standalone package cannot start one, and the standalone package built from PR #4487 can. 1.5.5 carries the corrected helper pin, a release-build guard, and the dependency on the Windows coding-runtime package 1.1.7. The protected dev checks, resolved reviews, and exact-commit release workflow govern publication; real Windows x64 hardware qualification remains tracked in #4068."
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-11-22-keiko-1.5.6-second-start-and-memory",
+      "packageVersion": "1.5.6",
+      "releaseTag": "v1.5.6",
+      "supportedFrom": ["0.2.0", "1.5.0", "1.5.1", "1.5.2", "1.5.3", "1.5.4", "1.5.5"],
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Starting Keiko a second time no longer restarts a running Keiko that was briefly slow to answer, so running chats and coding runs continue. With memory switched on, Keiko keeps replaced facts as history, answers what held before, takes corrections, finds repeats of older facts, and recalls the memories that fit a question instead of ones picked by chance.",
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "affectedStateStores": ["memory-vault-store"],
+      "stateImpact": [
+        {
+          "store": "memory-vault-store",
+          "description": "Memory vault schema 17 adds a keyed body fingerprint column and two indexes to the memories table. When the vault opens with its key, it fills the column for older rows, one page per transaction; a page it cannot write waits for a later open, and the vault still opens. Rows carry forward. A Keiko before 1.5.6 refuses a schema-17 vault as newer than it supports.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Starting Keiko while it runs no longer stops it when its health check answers late. A running Keiko whose process is alive and whose launch is verified is asked again for up to about half a minute and is never restarted for being slow; another version or an older launch without a verifiable identity is still restarted. The decision is recorded on the Activity Log. #4504",
+        "Memory (when switched on): a fact replaced by a newer one stays as history, a question about what held before is answered with the earlier value, a clear correction replaces the old value, an exact repeat of an older fact is no longer stored twice, and recall ranks the memories that fit the question rather than by chance. On the lab corpus with the local model, probe passes rose from 229 to 270 of 309. #4481",
+        "Release tooling: the npm folder package qualification quotes the start file correctly for cmd on Windows and prints every start and stop of a failed run. #4503"
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-11-22",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4504#7074334559",
+        "rationale": "On 2026-11-22 the repository owner approved repairing #4503 and #4504 and publishing the npm folder packages, after being told that the macOS folder qualifies only on a Keiko release carrying the #4504 fix (1.5.6). 1.5.6 also carries #4481 (MemoriaViva) and the quality-gate changes of #4513 and #4515, which change no product behaviour. The protected dev checks, resolved reviews, and exact-commit release workflow govern publication."
+      }
     }
   ]
 }

@@ -51,7 +51,7 @@ import {
   parseLaunchOrder,
   recordLaunchOrder,
 } from "./launch-order.js";
-import { emitLifecycleHealth } from "./lifecycle-health-activity.js";
+import { emitLifecycleHealth, type LifecycleHealthOutcome } from "./lifecycle-health-activity.js";
 import { emitNativeUiOwnership } from "./lifecycle-native-activity.js";
 import {
   nativeUiGenerationReaped,
@@ -303,6 +303,13 @@ interface HealthProbeResult {
 
 const HEALTH_PROBE_TIMEOUT_MS = 1_000;
 const HEALTH_RESPONSE_MAX_BYTES = 64 * 1024;
+// A tracked Keiko whose process is alive and whose launch identity is verified is busy, not stale,
+// when its health does not answer: a second start asks again a bounded number of times and never
+// stops it for being slow (#4504). Ten probes of two seconds with a second between them bound the
+// wait to about half a minute.
+const BUSY_HEALTH_RETRIES = 10;
+const BUSY_HEALTH_PROBE_TIMEOUT_MS = 2_000;
+const BUSY_HEALTH_RETRY_DELAY_MS = 1_000;
 
 function staleProcessReason(health: HealthProbeResult): string {
   if (!health.reachable) return "health check is unreachable";
@@ -1193,7 +1200,7 @@ async function handleStaleRunning(
   // Health, the "already running" report and the browser handoff address the tracked instance's
   // own endpoint, never the port this invocation asked for (L1).
   const options = trackedEndpointOptions(requested, deps, running);
-  const health = await deps.healthProbe(healthUrl(options));
+  const { health, retries } = await probeTrackedHealth(options, deps, running);
   if (
     !trackedUiStillOwned(options, deps, running) ||
     healthConflictsWithTracked(health, running.launchId)
@@ -1204,18 +1211,90 @@ async function handleStaleRunning(
     );
     return startFailed(deps, "identity-mismatch");
   }
+  return actOnTrackedHealth(options, io, deps, running, { health, retries });
+}
+
+/** What a second start does with its tracked UI's settled health (#4504): keep, wait out or restart. */
+async function actOnTrackedHealth(
+  options: LifecycleOptions,
+  io: CliIo,
+  deps: LifecycleRuntimeDeps,
+  running: PidRecord,
+  { health, retries }: { readonly health: HealthProbeResult; readonly retries: number },
+): Promise<number | "start"> {
+  const launchBound = running.launchId !== undefined;
+  const record = (outcome: LifecycleHealthOutcome): void => {
+    emitLifecycleHealth(deps.securityLogSink, "tracked", outcome, launchBound, undefined, retries);
+  };
   if (health.version === SDK_VERSION) {
-    emitLifecycleHealth(deps.securityLogSink, "tracked", "healthy", running.launchId !== undefined);
+    record("healthy");
     return keepAlreadyRunningUi(options, io, deps, running)
       ? 0
       : startFailed(deps, "browser-handoff");
   }
+  if (!health.reachable && trackedUiIsVerified(options, deps, running)) {
+    record("busy");
+    io.err(
+      `keiko start: Keiko UI (pid ${String(running.pid)}) is running but did not answer its health check in time; it was left running. ${BUSY_SENTENCE}\n`,
+    );
+    return startFailed(deps, "health-timeout");
+  }
+  record(health.reachable ? "stale-version" : "stale-unreachable");
   io.out(
     `Keiko UI process is stale (${staleProcessReason(health)}); restarting pid ${String(running.pid)}.\n`,
   );
   const stopped = await cmdStop(options, io, deps);
   if (stopped !== 0) return stopFailed(deps, stopped);
   return "start";
+}
+
+const BUSY_SENTENCE =
+  "It is still starting or busy. Wait a moment and open Keiko again; if it happens again, create the support report with `keiko support export` and send it to support.";
+
+/**
+ * Whether a tracked UI that does not answer is busy rather than stale: its record still names it,
+ * its process is alive and its launch identity was verified. A record without a launch identity
+ * (an older launch) cannot be verified and keeps the restart.
+ */
+function trackedUiIsVerified(
+  options: LifecycleOptions,
+  deps: LifecycleRuntimeDeps,
+  running: PidRecord,
+): boolean {
+  return running.launchId !== undefined && trackedUiStillOwned(options, deps, running);
+}
+
+/**
+ * The tracked UI's health, asked again while a verified, live UI does not answer (#4504). Every
+ * answer ends the wait, whatever it says; the caller decides on it. `retries` counts the probes
+ * after the first.
+ */
+async function probeTrackedHealth(
+  options: LifecycleOptions,
+  deps: LifecycleRuntimeDeps,
+  running: PidRecord,
+): Promise<{ readonly health: HealthProbeResult; readonly retries: number }> {
+  const first = await deps.healthProbe(healthUrl(options));
+  return retryWhileTrackedBusy(options, deps, running, { health: first, retries: 0 });
+}
+
+// One wait, then one probe, then the next decision: strictly sequential and bounded by the count.
+async function retryWhileTrackedBusy(
+  options: LifecycleOptions,
+  deps: LifecycleRuntimeDeps,
+  running: PidRecord,
+  seen: { readonly health: HealthProbeResult; readonly retries: number },
+): Promise<{ readonly health: HealthProbeResult; readonly retries: number }> {
+  if (
+    seen.health.reachable ||
+    seen.retries >= BUSY_HEALTH_RETRIES ||
+    !trackedUiIsVerified(options, deps, running)
+  ) {
+    return seen;
+  }
+  await deps.sleep(BUSY_HEALTH_RETRY_DELAY_MS);
+  const health = await deps.healthProbe(healthUrl(options), BUSY_HEALTH_PROBE_TIMEOUT_MS);
+  return retryWhileTrackedBusy(options, deps, running, { health, retries: seen.retries + 1 });
 }
 
 function trackedUiStillOwned(
