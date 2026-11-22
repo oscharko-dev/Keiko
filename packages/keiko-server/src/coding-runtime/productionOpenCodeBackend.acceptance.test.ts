@@ -16,6 +16,12 @@
 // a sanitized copy of that file to a run (`nativeBuildSettings`), so these cases measure whether a
 // run can build such a project at all.
 //
+// A fourth project (`npm-internal-registry`, #4530) depends on a package that only a registry behind
+// a token serves; `test-support/functional-npm-registry` plays that registry on loopback. The
+// person's `~/.npmrc` names it with the token; a run reaches it only through Keiko's repository
+// credential relay (ADR-0184), in every autonomy mode, and the token never reaches what the run can
+// read. The model installs the dependency in its own shell call, then runs the project's tests.
+//
 // Runs where the dev-lane functional suite runs: macOS with `KEIKO_OPENCODE_DEV_LANE_FUNCTIONAL=1`
 // and the staged payload (`npm run dev:coding-runtime:stage`). Set `KEIKO_ACCEPTANCE_EVIDENCE_FILE`
 // to keep the body-free evidence of every case (platform, user class, container runtime, versions
@@ -37,6 +43,7 @@ import {
   readlinkSync,
   realpathSync,
   rmSync,
+  writeFileSync,
   writeSync,
 } from "node:fs";
 import { homedir, release, tmpdir } from "node:os";
@@ -71,6 +78,7 @@ import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import {
   ACCEPTANCE_CHECK_COMMAND,
   ACCEPTANCE_MAVEN_CHECK_COMMAND,
+  ACCEPTANCE_NPM_INSTALL_COMMAND,
   ACCEPTANCE_STALE_SUFFIX,
   acceptanceResponse,
   type AcceptanceModelScript,
@@ -82,8 +90,11 @@ import {
   startFunctionalMavenRepository,
   withPersonHome,
   writeMavenPersonSettings,
-  type FunctionalMavenRepository,
 } from "../test-support/functional-maven-repository.js";
+import {
+  startFunctionalNpmRegistry,
+  type FunctionalNpmRegistry,
+} from "../test-support/functional-npm-registry.js";
 import {
   createCredentialScanner,
   credentialSpellings,
@@ -103,6 +114,14 @@ const NODE_TASK =
   "The tests in this project fail. Find the cause in src/, fix it there and run npm test until it passes. Do not change the tests.";
 const MAVEN_TASK =
   "The tests in this project fail. Find the cause in src/main, fix it there and run mvn -B -q test until it passes. Do not change the tests.";
+const NPM_TASK =
+  "The tests in this project fail. Find the cause in src/, fix it there, install the dependencies with npm install and run npm test until it passes. Do not change the tests.";
+/** The internal npm registry's package, scoped on purpose: it takes the scoped tarball path. */
+const NPM_REGISTRY_PACKAGE = "@acceptance/ledger";
+const NPM_REGISTRY_PACKAGE_SOURCE =
+  "module.exports = { formatCents: (cents) => (cents / 100).toFixed(2) };\n";
+/** Built at run time: a credential-shaped literal in a new path would be flagged by gitleaks. */
+const NPM_REGISTRY_TOKEN = ["npm", "token", "planted", "5521"].join("-");
 const TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
   "succeeded",
   "failed",
@@ -132,14 +151,18 @@ const SOURCE_DIRECTORIES: Readonly<Record<AcceptanceProject, string>> = {
   "no-dependencies": "src",
   "with-dependency": "src",
   "maven-internal-repository": "src/main",
+  "npm-internal-registry": "src",
 };
 const BUILD_OUTPUT: Readonly<Record<AcceptanceProject, readonly string[]>> = {
   "no-dependencies": [],
   "with-dependency": [],
   "maven-internal-repository": ["target"],
+  // The run installs the project's dependencies, so they and the lockfile npm writes are its output.
+  "npm-internal-registry": ["node_modules", "package-lock.json"],
 };
 
-type AcceptanceProject = "no-dependencies" | "with-dependency" | "maven-internal-repository";
+type AcceptanceProject =
+  "no-dependencies" | "with-dependency" | "maven-internal-repository" | "npm-internal-registry";
 type AcceptanceMode = "governed-assist" | "supervised-coding" | "autonomous-delivery";
 
 interface AcceptanceCase {
@@ -157,8 +180,9 @@ interface AcceptanceCase {
   readonly check: "verify" | "skip-check" | "stale-check" | "denied";
   readonly expected: "succeeded" | "not-succeeded";
   /**
-   * The login the person's Maven `settings.xml` carries for the internal repository; only the Maven
-   * project has one. A wrong login lets no build start, so the project counts no check.
+   * The login the person's repository settings carry for the internal repository (the Maven
+   * `settings.xml`, the npm `.npmrc` token); only those two projects have one. A wrong login lets
+   * no build start, so the project counts no check.
    */
   readonly login?: "valid" | "wrong";
 }
@@ -234,11 +258,13 @@ const TARGETS: Readonly<Record<AcceptanceProject, string>> = {
   "no-dependencies": "src/invoice.js",
   "with-dependency": "src/release.js",
   "maven-internal-repository": "src/main/java/com/example/invoice/Invoice.java",
+  "npm-internal-registry": "src/statement.js",
 };
 const CHECK_COMMANDS: Readonly<Record<AcceptanceProject, string>> = {
   "no-dependencies": ACCEPTANCE_CHECK_COMMAND,
   "with-dependency": ACCEPTANCE_CHECK_COMMAND,
   "maven-internal-repository": ACCEPTANCE_MAVEN_CHECK_COMMAND,
+  "npm-internal-registry": ACCEPTANCE_CHECK_COMMAND,
 };
 
 const roots: string[] = [];
@@ -281,11 +307,20 @@ function verified(
     mode,
     workspace,
     variant: "fixed",
-    dependencies: project === "with-dependency" ? "installed" : "none-needed",
+    dependencies: dependenciesOf(project),
     check: "verify",
     expected: "succeeded",
-    ...(project === "maven-internal-repository" ? { login: "valid" as const } : {}),
+    ...(hasRepositoryLogin(project) ? { login: "valid" as const } : {}),
   };
+}
+
+function dependenciesOf(project: AcceptanceProject): AcceptanceCase["dependencies"] {
+  if (project === "with-dependency") return "installed";
+  return project === "npm-internal-registry" ? "missing" : "none-needed";
+}
+
+function hasRepositoryLogin(project: AcceptanceProject): boolean {
+  return project === "maven-internal-repository" || project === "npm-internal-registry";
 }
 
 function unverified(
@@ -419,6 +454,42 @@ const ACCEPTANCE_CASES: readonly AcceptanceExpectation[] = [
       expectLoginNeverReachedTheRun(observed);
     },
   },
+  // #4530: an npm project whose dependency only an internal registry serves, behind a token the
+  // person keeps in their own `.npmrc`. Keiko binds that registry to its repository credential
+  // relay, so the run's `npm install` reaches it in every mode with a capability and never the
+  // token. Below Full access npm's offline setting must not stop that install.
+  ...VERIFIED_MODES.map((mode): AcceptanceExpectation => ({
+    id: `npm-${mode}`,
+    title: `repairs an npm project whose dependency needs the internal registry's token in ${mode}`,
+    acceptanceCase: verified("npm-internal-registry", mode),
+    check: (observed): void => {
+      expectVerifiedInMode(observed, mode);
+      expect(observed.verificationSummaries, JSON.stringify(observed)).toEqual(["test:passed"]);
+      // The registry answered the run's install and never refused it.
+      expect(observed.repositoryRequests["200"] ?? 0, JSON.stringify(observed)).toBeGreaterThan(0);
+      expect(observed.repositoryRequests["401"], JSON.stringify(observed)).toBeUndefined();
+      expectLoginNeverReachedTheRun(observed);
+    },
+  })),
+  // The negative control of the token: a wrong token must never become a pass. The registry is
+  // asked through the relay and answers 401 to every request; the install fails, so the project
+  // has no dependency, its check fails and the tester's own check fails too.
+  {
+    id: "npm-wrong-token",
+    title: "never reports success for an npm project when the person's token is wrong",
+    acceptanceCase: {
+      ...verified("npm-internal-registry", "supervised-coding"),
+      login: "wrong",
+      expected: "not-succeeded",
+    },
+    check: (observed): void => {
+      expectNotVerified(observed, "supervised-coding", { testsPassOutsideKeiko: false });
+      expect(observed.verificationSummaries).toEqual(["test:failed"]);
+      expect(observed.repositoryRequests["401"] ?? 0, JSON.stringify(observed)).toBeGreaterThan(0);
+      expect(observed.repositoryRequests["200"], JSON.stringify(observed)).toBeUndefined();
+      expectLoginNeverReachedTheRun(observed);
+    },
+  },
 ];
 
 describe.skipIf(!acceptanceEnabled())(
@@ -527,18 +598,19 @@ function expectNativeConfinement(observed: AcceptanceObservation, mode: Acceptan
   }
 }
 
-/** The internal repository and the two homes a Maven case needs, besides the run's own. */
-interface MavenSurroundings {
-  readonly repository: FunctionalMavenRepository;
-  /** The home whose `.m2/settings.xml` is the person's: the run's build settings read it. */
+/** The internal repository and the two homes a Maven or npm case needs, besides the run's own. */
+interface RepositorySurroundings {
+  /** The requests the repository answered so far, by status code. */
+  readonly statusCounts: () => Readonly<Record<string, number>>;
+  /** The home whose `.m2/settings.xml` or `.npmrc` is the person's: the run's build settings read it. */
   readonly personHome: string;
-  /** The tester's own home, whose settings always carry the right login. */
+  /** The tester's own home, whose Maven settings always carry the right login. */
   readonly testerHome: string;
 }
 
 interface PreparedAcceptanceCase {
   readonly root: string;
-  readonly maven?: MavenSurroundings;
+  readonly surroundings?: RepositorySurroundings;
   readonly owners: FunctionalTaskWorkspaceOwners;
   /** The folder the run works in, which the tester checks afterwards. */
   readonly runRoot: string;
@@ -578,7 +650,7 @@ async function observeAcceptanceCase(
   expect(recordedChecks(prepared.runRoot)).toBe(1);
   const checksBefore = recordedChecks(prepared.runRoot);
   const outsideSourceBefore = outsideSourceDigest(acceptanceCase.project, prepared.runRoot);
-  const requestsBefore = prepared.maven?.repository.statusCounts() ?? {};
+  const requestsBefore = prepared.surroundings?.statusCounts() ?? {};
   const script = acceptanceScript(acceptanceCase, prepared);
   const log = recordActivityLog();
   const footprint = credentialScanner(prepared, acceptanceCase);
@@ -599,7 +671,7 @@ async function observeAcceptanceCase(
     return { runId, asks, state: served.orchestrator.getSnapshot(runId)?.state };
   });
   const { runId, asks } = run;
-  const requestsAfter = prepared.maven?.repository.statusCounts() ?? {};
+  const requestsAfter = prepared.surroundings?.statusCounts() ?? {};
   const finalContent =
     acceptanceCase.check === "stale-check"
       ? `${prepared.replacement}${ACCEPTANCE_STALE_SUFFIX}`
@@ -613,7 +685,7 @@ async function observeAcceptanceCase(
     denialCount: asks.denied,
     runCheckCount,
     repositoryRequests: requestDifference(requestsBefore, requestsAfter),
-    ...(prepared.maven === undefined ? {} : { credentialFootprint: footprint.result(log) }),
+    ...(prepared.surroundings === undefined ? {} : { credentialFootprint: footprint.result(log) }),
     testerCheckExitCode: await testerCheck(acceptanceCase, prepared),
     outsideSourceUnchanged:
       outsideSourceDigest(acceptanceCase.project, prepared.runRoot) === outsideSourceBefore,
@@ -638,29 +710,37 @@ function credentialScanner(
   readonly scan: () => void;
   readonly result: (log: BufferedServerLogSink) => CredentialFootprint;
 } {
-  const password =
-    acceptanceCase.login === "wrong"
-      ? `${FUNCTIONAL_MAVEN_PASSWORD}-wrong`
-      : FUNCTIONAL_MAVEN_PASSWORD;
+  const npm = acceptanceCase.project === "npm-internal-registry";
   const scanner = createCredentialScanner({
     root: prepared.root,
-    spellings:
-      acceptanceCase.login === undefined
-        ? []
-        : credentialSpellings(password, FUNCTIONAL_MAVEN_USERNAME),
+    spellings: loginSpellings(acceptanceCase),
     skipDirectories: CREDENTIAL_HOMES,
-    settingsSuffix: join(".m2", "settings.xml"),
+    // The run's own copy of the person's settings: Maven's, or the npm user config the relay binds.
+    settingsSuffix: npm ? join("config", "npm-user-config") : join(".m2", "settings.xml"),
   });
   return {
     scan: (): void => {
-      if (prepared.maven !== undefined) scanner.scan();
+      if (prepared.surroundings !== undefined) scanner.scan();
     },
     result: (log) => scanner.result(log.events),
   };
 }
 
+/** The secret the person's own settings hold for the case, in every spelling a leak could take. */
+function loginSpellings(acceptanceCase: AcceptanceCase): readonly string[] {
+  if (acceptanceCase.login === undefined) return [];
+  const wrong = acceptanceCase.login === "wrong";
+  if (acceptanceCase.project === "npm-internal-registry") {
+    return credentialSpellings(wrong ? `${NPM_REGISTRY_TOKEN}-wrong` : NPM_REGISTRY_TOKEN);
+  }
+  const password = wrong ? `${FUNCTIONAL_MAVEN_PASSWORD}-wrong` : FUNCTIONAL_MAVEN_PASSWORD;
+  return credentialSpellings(password, FUNCTIONAL_MAVEN_USERNAME);
+}
+
 function withPersonHomeOf<T>(prepared: PreparedAcceptanceCase, work: () => Promise<T>): Promise<T> {
-  return prepared.maven === undefined ? work() : withPersonHome(prepared.maven.personHome, work);
+  return prepared.surroundings === undefined
+    ? work()
+    : withPersonHome(prepared.surroundings.personHome, work);
 }
 
 /** The requests the repository answered between two readings of its counters, by status. */
@@ -689,6 +769,9 @@ function acceptanceScript(
       acceptanceCase.check === "skip-check" || acceptanceCase.check === "stale-check"
         ? acceptanceCase.check
         : "verify",
+    ...(acceptanceCase.project === "npm-internal-registry"
+      ? { installCommand: ACCEPTANCE_NPM_INSTALL_COMMAND }
+      : {}),
   };
 }
 
@@ -718,10 +801,10 @@ async function prepareAcceptanceCase(
   const runRoot = own ? repository : worktree;
   if (acceptanceCase.dependencies === "installed") installSemver(runRoot);
   const target = TARGETS[acceptanceCase.project];
-  const maven = await prepareMavenSurroundings(root, acceptanceCase);
+  const surroundings = await prepareRepositorySurroundings(root, acceptanceCase);
   return {
     root,
-    ...(maven === undefined ? {} : { maven }),
+    ...(surroundings === undefined ? {} : { surroundings }),
     owners,
     runRoot,
     lifecycle: selected.lifecycle,
@@ -742,11 +825,14 @@ function variantFile(acceptanceCase: AcceptanceCase): string {
  * repository as a mirror with its login in `<servers>` (a wrong password for the wrong-login case),
  * and the tester's own home always carries the right login.
  */
-async function prepareMavenSurroundings(
+async function prepareRepositorySurroundings(
   root: string,
   acceptanceCase: AcceptanceCase,
-): Promise<MavenSurroundings | undefined> {
+): Promise<RepositorySurroundings | undefined> {
   if (acceptanceCase.login === undefined) return undefined;
+  if (acceptanceCase.project === "npm-internal-registry") {
+    return prepareNpmSurroundings(root, acceptanceCase.login);
+  }
   const repository = await startFunctionalMavenRepository();
   disposers.push(repository.close);
   const personHome = join(root, "person-home");
@@ -758,7 +844,35 @@ async function prepareMavenSurroundings(
       : mavenSettingsXml({ url: repository.url, password: `${FUNCTIONAL_MAVEN_PASSWORD}-wrong` });
   writeMavenPersonSettings(personHome, person);
   writeMavenPersonSettings(testerHome, right);
-  return { repository, personHome, testerHome };
+  return { statusCounts: repository.statusCounts, personHome, testerHome };
+}
+
+/**
+ * The internal npm registry, and the person's `~/.npmrc` that names it for its scope with the token
+ * (a wrong token for the wrong-login case). The tester's check needs no registry: the run installed
+ * the dependency, or the check must fail.
+ */
+async function prepareNpmSurroundings(
+  root: string,
+  login: "valid" | "wrong",
+): Promise<RepositorySurroundings> {
+  const registry: FunctionalNpmRegistry = await startFunctionalNpmRegistry({
+    packageName: NPM_REGISTRY_PACKAGE,
+    token: NPM_REGISTRY_TOKEN,
+    moduleSource: NPM_REGISTRY_PACKAGE_SOURCE,
+  });
+  disposers.push(registry.close);
+  const personHome = join(root, "person-home");
+  const testerHome = join(root, "tester-home");
+  const token = login === "valid" ? NPM_REGISTRY_TOKEN : `${NPM_REGISTRY_TOKEN}-wrong`;
+  const scope = NPM_REGISTRY_PACKAGE.split("/", 1)[0] ?? "";
+  mkdirSync(personHome, { recursive: true });
+  writeFileSync(
+    join(personHome, ".npmrc"),
+    `${scope}:registry=${registry.url}/\n//${new URL(registry.url).host}/:_authToken=${token}\n`,
+    { mode: 0o600 },
+  );
+  return { statusCounts: registry.statusCounts, personHome, testerHome };
 }
 
 function commitFixture(repository: string): void {
@@ -834,7 +948,7 @@ async function startAcceptanceRun(
 ): Promise<string> {
   const started = await functionalPost(served.baseUrl, "/api/coding-workbench/runtime/runs", {
     requestId: `acceptance-${acceptanceCase.project}-${acceptanceCase.mode}-${String(acceptanceCase.login)}`,
-    taskIntent: acceptanceCase.project === "maven-internal-repository" ? MAVEN_TASK : NODE_TASK,
+    taskIntent: taskOf(acceptanceCase.project),
     requestedMode: acceptanceCase.mode,
   });
   const text = await started.clone().text();
@@ -842,6 +956,11 @@ async function startAcceptanceRun(
   const run = (await started.json()) as { readonly runId: string; readonly state: string };
   expect(run.state, text).toBe("running");
   return run.runId;
+}
+
+function taskOf(project: AcceptanceProject): string {
+  if (project === "maven-internal-repository") return MAVEN_TASK;
+  return project === "npm-internal-registry" ? NPM_TASK : NODE_TASK;
 }
 
 /** Waits for the run to settle, answering every ask the way the person in front of it would. */
@@ -890,9 +1009,9 @@ async function testerCheck(
     (settled, failed) => {
       const child = spawn(program, args, {
         cwd: prepared.runRoot,
-        env: testerEnvironment(prepared),
+        env: testerEnvironment(acceptanceCase.project, prepared),
         stdio: "ignore",
-        timeout: prepared.maven === undefined ? 60_000 : 180_000,
+        timeout: acceptanceCase.project === "maven-internal-repository" ? 180_000 : 60_000,
       });
       child.once("error", failed);
       child.once("close", (status, signal) => {
@@ -908,8 +1027,11 @@ async function testerCheck(
   return outcome.status;
 }
 
-function testerEnvironment(prepared: PreparedAcceptanceCase): Record<string, string> {
-  if (prepared.maven === undefined) {
+function testerEnvironment(
+  project: AcceptanceProject,
+  prepared: PreparedAcceptanceCase,
+): Record<string, string> {
+  if (prepared.surroundings === undefined || project !== "maven-internal-repository") {
     return {
       PATH: process.env.PATH ?? "",
       HOME: process.env.HOME ?? "",
@@ -920,8 +1042,8 @@ function testerEnvironment(prepared: PreparedAcceptanceCase): Record<string, str
   // and local repository only when the property is set as well.
   return {
     PATH: process.env.PATH ?? "",
-    HOME: prepared.maven.testerHome,
-    MAVEN_OPTS: `-Duser.home=${prepared.maven.testerHome}`,
+    HOME: prepared.surroundings.testerHome,
+    MAVEN_OPTS: `-Duser.home=${prepared.surroundings.testerHome}`,
     ...(process.env.JAVA_HOME === undefined ? {} : { JAVA_HOME: process.env.JAVA_HOME }),
   };
 }

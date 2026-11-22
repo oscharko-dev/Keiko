@@ -21,6 +21,15 @@ The projects are under
 - `with-dependency` needs the `semver` package installed.
 - `maven-internal-repository` is a Maven project whose parent POM only an internal repository
   serves, behind a login. It needs Maven and a JDK, and a one-time provisioning step (see below).
+- `npm-internal-registry` (#4530) depends on `@acceptance/ledger`, which only an npm registry behind
+  a token serves. The test plays that registry on loopback; the person's `~/.npmrc` names it with
+  the token, and a run's `npm install` reaches it through Keiko's repository credential relay in
+  every mode. The scripted model installs first and then reads, repairs and checks: the runtime
+  counts the files a shell command wrote only after its step ended, so a check directly after an
+  install is taken for a check before an edit and the run needs a second one (#4519). The run's installed
+  `node_modules` and `package-lock.json` are its output and are left out of the unchanged-entries
+  comparison. Cases `npm-governed-assist`, `npm-supervised-coding`, `npm-autonomous-delivery` and
+  `npm-wrong-token`.
 
 Each Node.js project's `npm test` first runs `scripts/record-check.js`, which appends one line to
 `.acceptance-checks` (ignored by Git). That line is the project's own record that a check ran. The

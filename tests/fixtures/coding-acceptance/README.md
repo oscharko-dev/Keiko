@@ -1,16 +1,17 @@
 # Coding Workbench acceptance projects (#4492)
 
-Three small projects that a Coding run repairs and tests. The acceptance test
+Four small projects that a Coding run repairs and tests. The acceptance test
 (`packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.acceptance.test.ts`) copies one
 into a scratch Git repository, gives a run the task below and checks the end state itself. These
 files are data, not product code: they are excluded from lint and from the repository's test
 collection.
 
-| Project                     | Defect                                                                                                                | Needs                                                      |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `no-dependencies`           | `invoiceTotal` drops the first line (`slice(1)`)                                                                      | Node.js only                                               |
-| `with-dependency`           | `newestStable` sorts ascending and returns the oldest stable one                                                      | the `semver` package, installed                            |
-| `maven-internal-repository` | `Invoice.total` drops the first line (`skip(1)`); the parent POM exists only in an internal repository behind a login | Maven, a JDK and `npm run provision:acceptance-maven` once |
+| Project                     | Defect                                                                                                                                          | Needs                                                      |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `no-dependencies`           | `invoiceTotal` drops the first line (`slice(1)`)                                                                                                | Node.js only                                               |
+| `with-dependency`           | `newestStable` sorts ascending and returns the oldest stable one                                                                                | the `semver` package, installed                            |
+| `npm-internal-registry`     | `statementTotal` returns the largest line instead of the sum; its dependency `@acceptance/ledger` exists only in an npm registry behind a token | the test's loopback registry; the run's own `npm install`  |
+| `maven-internal-repository` | `Invoice.total` drops the first line (`skip(1)`); the parent POM exists only in an internal repository behind a login                           | Maven, a JDK and `npm run provision:acceptance-maven` once |
 
 Each Node.js project's `npm test` first runs `scripts/record-check.js`, which appends one line to
 `.acceptance-checks` (ignored by Git). The tester compares that count with the checks the run
@@ -24,7 +25,7 @@ ignored `.acceptance-maven/`; `maven-cache.lock.json` pins the path and SHA-256 
 `.jar` of that cache. Never point these files at a real repository or a real `~/.m2`.
 
 `variants/<project>/` holds the replacement files a scripted model writes: `*.fixed.*` repairs the
-defect, `*.wrong.*` changes the code without repairing it (the Maven project has a fixed variant only). A real model writes its own fix;
+defect, `*.wrong.*` changes the code without repairing it (the Maven project has a fixed variant only; the npm project's `wrong` variant is unused so far). A real model writes its own fix;
 the end-state checks are the same.
 
 ## The task

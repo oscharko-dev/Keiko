@@ -9,6 +9,7 @@ import type { GatewayRequest } from "@oscharko-dev/keiko-model-gateway";
 import {
   ACCEPTANCE_CHECK_COMMAND,
   ACCEPTANCE_MAVEN_CHECK_COMMAND,
+  ACCEPTANCE_NPM_INSTALL_COMMAND,
   ACCEPTANCE_STALE_SUFFIX,
   acceptanceResponse,
   type AcceptanceModelScript,
@@ -85,6 +86,23 @@ describe("acceptance model (#4492)", () => {
       "answer",
       "answer",
     ]);
+  });
+
+  it("installs the dependencies in its own shell call before it reads and repairs (#4530)", () => {
+    const install = ["shell", { command: ACCEPTANCE_NPM_INSTALL_COMMAND, timeout: 120_000 }];
+    expect(plannedCalls({ ...script(), installCommand: ACCEPTANCE_NPM_INSTALL_COMMAND })).toEqual([
+      install,
+      ["read", { path: "src/target.js" }],
+      REPAIR,
+      CHECK,
+      "answer",
+      "answer",
+      "answer",
+    ]);
+    // Only the verifying plan installs.
+    expect(
+      plannedCalls({ ...script("skip-check"), installCommand: ACCEPTANCE_NPM_INSTALL_COMMAND }),
+    ).not.toContainEqual(install);
   });
 
   it("leaves the check out, or makes it stale with one more edit", () => {

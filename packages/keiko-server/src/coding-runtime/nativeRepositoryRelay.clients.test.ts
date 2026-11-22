@@ -1,11 +1,9 @@
-import { execFileSync, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import {
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -32,6 +30,10 @@ import {
   writeMavenPersonSettings,
   type FunctionalMavenRepository,
 } from "../test-support/functional-maven-repository.js";
+import {
+  startFunctionalNpmRegistry,
+  type FunctionalNpmRegistry,
+} from "../test-support/functional-npm-registry.js";
 import { javaToolOptions } from "./javaToolOptions.js";
 import { prepareNativeBuildSettings } from "./nativeBuildSettings.js";
 
@@ -61,11 +63,6 @@ interface Seen {
   readonly authorization: string | undefined;
 }
 
-interface Npmfixture {
-  readonly url: string;
-  readonly seen: Seen[];
-}
-
 const roots: string[] = [];
 const closers: (() => Promise<void>)[] = [];
 
@@ -90,71 +87,6 @@ function listen(server: Server, port = 0): Promise<number> {
       resolve((server.address() as AddressInfo).port);
     });
   });
-}
-
-/** A package tarball with the metadata npm verifies it against. */
-function packageTarball(root: string): { bytes: Buffer; integrity: string; shasum: string } {
-  const directory = join(root, "tarball", "package");
-  mkdirSync(directory, { recursive: true });
-  writeFileSync(
-    join(directory, "package.json"),
-    JSON.stringify({ name: NPM_PACKAGE, version: "1.0.0", main: "index.js" }),
-  );
-  writeFileSync(join(directory, "index.js"), "module.exports = 'from the relay';\n");
-  const file = join(root, "fixture.tgz");
-  execFileSync("tar", ["-czf", file, "-C", join(root, "tarball"), "package"]);
-  const bytes = readFileSync(file);
-  return {
-    bytes,
-    integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
-    shasum: createHash("sha1").update(bytes).digest("hex"),
-  };
-}
-
-/** A registry that answers only to the person's bearer token. */
-async function startNpmRegistry(root: string): Promise<Npmfixture> {
-  const seen: Seen[] = [];
-  const tarball = packageTarball(root);
-  let base = "";
-  const handler = (request: IncomingMessage, response: ServerResponse): void => {
-    seen.push({
-      method: request.method ?? "",
-      url: request.url ?? "",
-      authorization: request.headers.authorization,
-    });
-    if (request.headers.authorization !== `Bearer ${NPM_TOKEN}`) {
-      response.writeHead(401).end();
-      return;
-    }
-    if (request.url === `/${NPM_PACKAGE}`) {
-      const body = JSON.stringify({
-        name: NPM_PACKAGE,
-        "dist-tags": { latest: "1.0.0" },
-        versions: {
-          "1.0.0": {
-            name: NPM_PACKAGE,
-            version: "1.0.0",
-            dist: {
-              tarball: `${base}/${NPM_PACKAGE}/-/${NPM_PACKAGE}-1.0.0.tgz`,
-              integrity: tarball.integrity,
-              shasum: tarball.shasum,
-            },
-          },
-        },
-      });
-      response.writeHead(200, { "content-type": "application/json" }).end(body);
-      return;
-    }
-    if (request.url === `/${NPM_PACKAGE}/-/${NPM_PACKAGE}-1.0.0.tgz`) {
-      response.writeHead(200, { "content-type": "application/octet-stream" }).end(tarball.bytes);
-      return;
-    }
-    response.writeHead(404).end();
-  };
-  const server = createServer(handler);
-  const port = await listen(server);
-  base = `http://${UI_HOST}:${String(port)}`;
-  return { url: base, seen };
 }
 
 interface RelayServer {
@@ -228,7 +160,7 @@ async function startRelayServer(root: string): Promise<RelayServer> {
 
 interface Scene {
   readonly maven: FunctionalMavenRepository;
-  readonly npm: Npmfixture;
+  readonly npm: FunctionalNpmRegistry;
   readonly server: RelayServer;
   readonly prepared: ReturnType<typeof prepareNativeBuildSettings>;
   readonly stateRoot: string;
@@ -243,7 +175,8 @@ beforeAll(async () => {
   const root = temp();
   const maven = await startFunctionalMavenRepository();
   closers.push(maven.close);
-  const npm = await startNpmRegistry(root);
+  const npm = await startFunctionalNpmRegistry({ packageName: NPM_PACKAGE, token: NPM_TOKEN });
+  closers.push(npm.close);
   const server = await startRelayServer(root);
   const personHome = join(root, "person-home");
   writeMavenPersonSettings(personHome, mavenSettingsXml({ url: maven.url }));

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createGeneratedOpenCodeNativePolicyPlugin,
+  OPENCODE_NATIVE_NPM_RELAY_ENV,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCE_CHARS,
   OPENCODE_NATIVE_POLICY_MAX_RESOURCES,
 } from "./opencodeNativePolicyPlugin.js";
@@ -66,6 +67,7 @@ interface Harness {
 async function pluginHarness(
   mode = "supervised-coding",
   answer: { readonly effect: "allow" | "deny"; readonly message?: string } = { effect: "allow" },
+  extraEnv: Readonly<Record<string, string>> = {},
 ): Promise<Harness> {
   const requests: unknown[] = [];
   const fetch = (_url: string, init: { body: string }): Promise<Response> => {
@@ -83,6 +85,7 @@ async function pluginHarness(
         KEIKO_CODING_RUN_ID: "run-plugin",
         KEIKO_CODING_MODE: mode,
         OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp: { servers: { synthetic: {} } } }),
+        ...extraEnv,
       },
     },
     fetch,
@@ -251,6 +254,34 @@ describe("generated native policy plugin forwarding and precedence (#3897 audit)
     const atFull = { env: env() };
     full.shell(atFull);
     expect(atFull.env).toEqual({ PATH: "/usr/bin" });
+  });
+
+  it("lifts npm offline mode below Full access only when an npm registry is bound to the relay (#4530)", async () => {
+    const env = (): Record<string, string> => ({
+      PATH: "/usr/bin",
+      npm_config_offline: "true",
+      [OPENCODE_NATIVE_NPM_RELAY_ENV]: "bound",
+    });
+    for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+      const bound = await pluginHarness(
+        mode,
+        { effect: "allow" },
+        { [OPENCODE_NATIVE_NPM_RELAY_ENV]: "bound" },
+      );
+      const shell = { env: env() };
+      bound.shell(shell);
+      // The offline setting is gone and the marker itself never reaches the shell.
+      expect(shell.env).toEqual({ PATH: "/usr/bin" });
+    }
+    // Any other value of the marker binds nothing: the shell stays offline below Full access.
+    const other = await pluginHarness(
+      "supervised-coding",
+      { effect: "allow" },
+      { [OPENCODE_NATIVE_NPM_RELAY_ENV]: "yes" },
+    );
+    const shell = { env: env() };
+    other.shell(shell);
+    expect(shell.env).toEqual({ PATH: "/usr/bin", npm_config_offline: "true" });
   });
 });
 

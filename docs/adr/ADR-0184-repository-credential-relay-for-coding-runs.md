@@ -145,6 +145,15 @@ to a file of the run.
   capability under the exact host spelling npm derives from the relay URL. `audit=false`, because
   the relay refuses a POST. `NO_PROXY` and `no_proxy` gain `127.0.0.1,localhost` for the run, extending
   the inherited list.
+  The runtime's environment carries `npm_config_offline=true` below Full access, and npm reads the
+  environment before its user config, so the config alone would leave a shell's `npm install` offline.
+  When at least one npm target is bound, the run's environment therefore also carries the marker
+  `KEIKO_NATIVE_NPM_RELAY=bound`, and the generated native policy plugin lifts `npm_config_offline`
+  from the environment of a shell it starts at every mode; without a bound npm target a shell below
+  Full access stays offline. The marker never reaches a shell (the plugin's `KEIKO_` strip removes
+  it), and the runtime's own environment keeps `npm_config_offline=true`, so its package manager
+  (plugin dependencies, formatter installs) stays offline below Full access. The shell reaches only
+  loopback below Full access, so the relay is the one registry an install can reach.
 - **Nothing resolved.** The run's settings, environment and Java properties stay exactly as ADR-0137
   describes.
 - **Release.** `releaseRun` revokes every binding of a run when the run is disposed; no capability

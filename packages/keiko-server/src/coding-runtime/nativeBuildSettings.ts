@@ -21,6 +21,7 @@ import {
   type BoundRepositories,
   type NativeRepositoryRelayInput,
 } from "./nativeRepositoryRelayBinding.js";
+import { OPENCODE_NATIVE_NPM_RELAY_ENV } from "./opencodeNativePolicyPlugin.js";
 
 // The native run's private HOME hides `~/.m2/settings.xml` (mirrors, proxies), `~/.npmrc` (registry)
 // and `~/.gradle/gradle.properties`, so a build behind a corporate mirror cannot resolve anything
@@ -611,7 +612,11 @@ function relayEnvironment(
 ): Record<string, string> {
   if (bound === undefined || bound.maven.length + bound.npm.length === 0) return {};
   const noProxy = withLoopbackNoProxy(input.inheritedNoProxy);
-  return { NO_PROXY: noProxy, no_proxy: noProxy };
+  return {
+    NO_PROXY: noProxy,
+    no_proxy: noProxy,
+    ...(bound.npm.length > 0 ? { [OPENCODE_NATIVE_NPM_RELAY_ENV]: "bound" } : {}),
+  };
 }
 
 /**

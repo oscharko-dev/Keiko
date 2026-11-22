@@ -19,6 +19,9 @@ export const ACCEPTANCE_CHECK_COMMAND = "npm test";
 /** The Maven project's check: quiet, so a passing run prints nothing, and non-interactive. */
 export const ACCEPTANCE_MAVEN_CHECK_COMMAND = "mvn -B -q test";
 
+/** The command of a project whose dependency only a registry behind a token serves (#4530). */
+export const ACCEPTANCE_NPM_INSTALL_COMMAND = "npm install";
+
 /** A cold Maven build resolves its plugins first; a Node.js check needs far less. */
 const CHECK_TIMEOUT_MS = 120_000;
 
@@ -38,6 +41,11 @@ export interface AcceptanceModelScript {
   readonly old: string;
   readonly next: string;
   readonly plan: AcceptancePlan;
+  /**
+   * The installation of the project's dependencies, run in its own shell call before the turn's
+   * read and edit; a turn with one skips the check before its edit. Only the `verify` plan runs it.
+   */
+  readonly installCommand?: string;
 }
 
 /** One tool call of the turn: the runtime tool's name and its arguments. */
@@ -55,7 +63,19 @@ export function acceptanceToolCalls(script: AcceptanceModelScript): readonly Acc
     ["edit", { path: script.target, oldString: script.old, newString: script.next }],
   ];
   if (script.plan === "skip-check") return opening;
-  if (script.plan === "verify") return [...opening, check];
+  if (script.plan === "verify") {
+    if (script.installCommand === undefined) return [...opening, check];
+    // The dependencies are missing, so a check before the install says nothing. The install comes
+    // first on purpose: the runtime weighs the files a shell command wrote only after the step
+    // ended, so an install directly before the check is counted as an edit the check did not
+    // see and the run would need a second check.
+    const [, ...repair] = opening;
+    return [
+      ["shell", { command: script.installCommand, timeout: CHECK_TIMEOUT_MS }],
+      ...repair,
+      check,
+    ];
+  }
   return [
     ...opening,
     check,

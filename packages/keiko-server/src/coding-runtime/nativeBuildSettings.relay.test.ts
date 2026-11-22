@@ -25,6 +25,7 @@ import {
   type RepositoryCredentialRelay,
 } from "../repository-relay/repositoryCredentialRelay.js";
 import { prepareNativeBuildSettings } from "./nativeBuildSettings.js";
+import { OPENCODE_NATIVE_NPM_RELAY_ENV } from "./opencodeNativePolicyPlugin.js";
 
 // #4522: the run's build settings carry capabilities of Keiko's repository credential relay, never
 // the person's repository credentials.
@@ -325,6 +326,22 @@ describe("the run's npm config with the repository relay (#4522)", () => {
     expect(lines).not.toContain("audit=true");
     expect(lines).toContain("strict-ssl=true");
     expect(run.result.relay).toMatchObject({ mavenBoundCount: 0, npmBoundCount: 2 });
+  });
+
+  it("marks the run's environment only when an npm registry is bound to the relay (#4530)", () => {
+    // The marker lifts npm's offline setting of a shell below Full access: it is set only when the
+    // run's npm config names the relay, so a run without one keeps its shell offline.
+    for (const mode of ["governed-assist", "supervised-coding", "autonomous-delivery"]) {
+      const npmBound = prepare(person({ npm: NPMRC }), { mode });
+      expect(npmBound.result.env[OPENCODE_NATIVE_NPM_RELAY_ENV]).toBe("bound");
+      const mavenOnly = prepare(person({ maven: MAVEN_SETTINGS }), { mode });
+      expect(mavenOnly.result.relay?.mavenBoundCount).toBeGreaterThan(0);
+      expect(OPENCODE_NATIVE_NPM_RELAY_ENV in mavenOnly.result.env).toBe(false);
+    }
+    const nothing = prepare(person({}));
+    expect(OPENCODE_NATIVE_NPM_RELAY_ENV in nothing.result.env).toBe(false);
+    const noRelay = prepare(person({ npm: NPMRC }), { relay: false });
+    expect(OPENCODE_NATIVE_NPM_RELAY_ENV in noRelay.result.env).toBe(false);
   });
 
   it("gives an anonymous registry a capability too", () => {

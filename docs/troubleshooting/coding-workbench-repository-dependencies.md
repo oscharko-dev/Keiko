@@ -53,6 +53,9 @@ In the timeline, find the run's `coding-runtime.native-build-settings.admitted` 
   activates the profile with `-P` fails with a 401 for exactly this reason.
 - `upstream-rejected`: the repository answered the credential with an authentication failure.
 - `credential-in-response`: a served file contains the credential.
+- `npm_config_offline` / `ENOTCACHED` below Full access with `relayNpmBoundCount` above zero: not
+  expected, because a bound npm registry lifts the shell's offline setting. With `relayNpmBoundCount`
+  at zero no registry was bound, so the shell stays offline below Full access.
 - No relay line at all and no bound repository: the repository is not in your user-level files, or
   it belongs to a profile that is not active.
 
