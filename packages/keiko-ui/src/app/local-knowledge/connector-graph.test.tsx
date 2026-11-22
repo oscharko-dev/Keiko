@@ -412,7 +412,7 @@ describe("ConnectorGraph — with capsules", () => {
     expect(screen.getByRole("status")).toHaveTextContent("1 Knowledge Pod, 1 Knowledge Pod Set");
 
     const addButton = screen.getByRole("button", {
-      name: /add Knowledge Pod Set Release Readiness to workspace/i,
+      name: /add to workspace: Knowledge Pod Set Release Readiness/i,
     });
     expect(addButton).toHaveAccessibleDescription(/embedding mismatch, no vectors/i);
 
@@ -448,7 +448,7 @@ describe("ConnectorGraph — with capsules", () => {
     );
 
     const deleteBtn = await screen.findByRole("button", {
-      name: /delete Knowledge Pod Set Quarterly Review/i,
+      name: /delete: Knowledge Pod Set Quarterly Review/i,
     });
     await user.click(deleteBtn);
 
@@ -463,6 +463,46 @@ describe("ConnectorGraph — with capsules", () => {
       expect(deleteCapsuleSetImpl).toHaveBeenCalledWith(id);
     });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("names the set delete button by its visible busy text while the deletion is pending", async () => {
+    const id = makeCapsuleSetId("delete-pending");
+    const capsuleSet = makeCapsuleSet({ id, displayName: "Quarterly Review" });
+    let settle: (value: CapsuleSetActionResponse) => void = () => undefined;
+    const deleteCapsuleSetImpl = vi.fn().mockImplementation(
+      () =>
+        new Promise<CapsuleSetActionResponse>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    const user = userEvent.setup();
+
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([makeCapsule()])}
+        fetchCapsuleSetsImpl={fetchSetsWith([capsuleSet])}
+        deleteCapsuleSetImpl={deleteCapsuleSetImpl}
+      />,
+    );
+
+    await user.click(
+      await screen.findByRole("button", { name: "Delete: Knowledge Pod Set Quarterly Review" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: /delete Knowledge Pod Set/i });
+    await user.click(within(dialog).getByRole("button", { name: /^delete$/i }));
+
+    const busy = await screen.findByRole("button", {
+      name: "Deleting: Knowledge Pod Set Quarterly Review",
+    });
+    expect(busy).toBeDisabled();
+    expect(busy.textContent).toContain("Deleting");
+
+    settle(await okSetAction(id));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("button", { name: "Deleting: Knowledge Pod Set Quarterly Review" }),
+      ).toBeNull();
+    });
   });
 
   it("does NOT call deleteCapsuleSet when the confirmation is cancelled", async () => {
@@ -480,7 +520,7 @@ describe("ConnectorGraph — with capsules", () => {
     );
 
     await user.click(
-      await screen.findByRole("button", { name: /delete Knowledge Pod Set Keep Set/i }),
+      await screen.findByRole("button", { name: /delete: Knowledge Pod Set Keep Set/i }),
     );
     const dialog = screen.getByRole("dialog", { name: /delete Knowledge Pod Set/i });
     await user.click(within(dialog).getByRole("button", { name: /cancel/i }));
@@ -676,7 +716,7 @@ describe("ConnectorGraph — localized row actions", () => {
     });
     expect(
       within(actions).getByRole("button", {
-        name: "Knowledge Pod Fachkonzept zum Arbeitsbereich hinzufügen",
+        name: "Zum Arbeitsbereich hinzufügen: Knowledge Pod Fachkonzept",
       }),
     ).toBeInTheDocument();
     await userEvent.setup().click(
@@ -918,7 +958,7 @@ describe("ConnectorGraph — LK-02 keyboard add-to-workspace", () => {
     });
 
     const addBtn = screen.getByRole("button", {
-      name: /add Knowledge Pod KB Capsule to workspace/i,
+      name: /add to workspace: Knowledge Pod KB Capsule/i,
     });
     await user.click(addBtn);
 
@@ -953,7 +993,7 @@ describe("ConnectorGraph — LK-02 keyboard add-to-workspace", () => {
 
     // No main.workspace in the DOM — click should silently no-op
     const addBtn = screen.getByRole("button", {
-      name: /add Knowledge Pod No WS Capsule to workspace/i,
+      name: /add to workspace: Knowledge Pod No WS Capsule/i,
     });
     await user.click(addBtn);
 
@@ -1066,7 +1106,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     );
     expect(onOpenCapsule).toHaveBeenCalledExactlyOnceWith(emptyId);
     expect(
-      within(row).queryByRole("button", { name: "Add Knowledge Pod Migration to workspace" }),
+      within(row).queryByRole("button", { name: "Add to workspace: Knowledge Pod Migration" }),
     ).toBeNull();
   });
 
@@ -1079,7 +1119,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     const row = await screen.findByRole("article", { name: "Knowledge Pod: Ready documents" });
     expect(within(row).queryByRole("button", { name: /start indexing/i })).toBeNull();
     expect(
-      within(row).getByRole("button", { name: "Add Knowledge Pod Ready documents to workspace" }),
+      within(row).getByRole("button", { name: "Add to workspace: Knowledge Pod Ready documents" }),
     ).toBeEnabled();
   });
 
@@ -1632,7 +1672,7 @@ describe("ConnectorGraph — drag handle keyboard semantics (GEN-UI-KEYBOARD-004
     expect(handle).toHaveAttribute("tabindex", "-1");
     // The keyboard control that actually performs the action is a real button.
     expect(
-      screen.getByRole("button", { name: /add Knowledge Pod Handle Cap to workspace/i }),
+      screen.getByRole("button", { name: /add to workspace: Knowledge Pod Handle Cap/i }),
     ).toBeInTheDocument();
   });
 });

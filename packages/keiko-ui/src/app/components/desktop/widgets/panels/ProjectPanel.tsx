@@ -223,7 +223,9 @@ function ProjectHeadButton({
         aria-selected={isActiveProject}
         data-active={isActiveProject ? "true" : "false"}
         aria-current={isActiveProject ? "true" : undefined}
-        aria-label={`${project.name} (${availabilityLabel})`}
+        // WCAG 2.5.3: the visible name and availability, in reading order, without parentheses
+        // that would drop the availability from the comparison.
+        aria-label={`${project.name} ${availabilityLabel}`}
         tabIndex={isActiveProject ? 0 : -1}
         onClick={() => {
           onActivate();
@@ -231,7 +233,7 @@ function ProjectHeadButton({
         }}
       >
         <FolderIcon size={15} aria-hidden="true" />
-        <span className="proj-name">{project.name}</span>
+        <span className="proj-name">{project.name}</span>{" "}
         <span className="chat-time">{availabilityLabel}</span>
       </button>
     </div>

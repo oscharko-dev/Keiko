@@ -131,7 +131,7 @@ describe("MultiRootFilesWidget", () => {
     );
     await screen.findByRole("option", { name: "Repo C" });
 
-    expect(screen.getByRole("treeitem", { name: "Repo A" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Repo A /repo-a" })).toHaveAttribute(
       "aria-expanded",
       "true",
     );
@@ -145,6 +145,50 @@ describe("MultiRootFilesWidget", () => {
     expect(view.removeRoot).toHaveBeenCalledWith("root-b", "root-b");
     await user.click(screen.getByRole("treeitem", { name: "Open /repo-b" }));
     expect(onOpenFile).toHaveBeenCalledWith("/repo-b", "src/app.ts");
+  });
+
+  it("starts every root toggle's and action's accessible name with its visible text", async () => {
+    // WCAG 2.5.3 (axe 4.14 `label-content-name-mismatch`, serious). A treeitem's visible text is
+    // its whole DOM subtree, so a root that holds its own file tree cannot be a treeitem: each
+    // root is a disclosure whose toggle is named by its visible name and path.
+    const current = manifest();
+    const { container } = render(
+      <I18nProvider>
+        <MultiRootFilesWidget
+          manifest={current}
+          workspace={workspace(current)}
+          onActiveFileChange={vi.fn()}
+          onOpenFile={vi.fn()}
+          onOpenGitDelivery={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+    await screen.findByRole("option", { name: "Repo C" });
+    const words = (text: string | null): string[] =>
+      (text ?? "")
+        .normalize("NFKD")
+        .toLowerCase()
+        .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
+        .trim()
+        .split(" ")
+        .filter((word) => word.length > 0);
+    const groups = Array.from(container.querySelectorAll<HTMLElement>("[data-root-group]"));
+    expect(groups).toHaveLength(2);
+    expect(container.querySelector("[role='treeitem'][data-root-group]")).toBeNull();
+    for (const group of groups) {
+      expect(group).toHaveAttribute("role", "listitem");
+      for (const button of Array.from(group.querySelectorAll<HTMLElement>("button[aria-label]"))) {
+        const visible = words(button.textContent);
+        expect(words(button.getAttribute("aria-label")).slice(0, visible.length)).toEqual(visible);
+      }
+      const toggle = group.querySelector<HTMLElement>("button[data-root-group-header]");
+      expect(toggle).not.toHaveAttribute("aria-label");
+      const controlled = toggle?.getAttribute("aria-controls") ?? "";
+      expect(document.getElementById(controlled)?.querySelector("[role='tree']")).not.toBeNull();
+    }
+    expect(screen.getByRole("button", { name: "Focused: root Repo A" })).toHaveTextContent(
+      "Focused",
+    );
   });
 
   it("does not offer a project the server refuses to read as a root to add", async () => {
@@ -199,8 +243,8 @@ describe("MultiRootFilesWidget", () => {
       </I18nProvider>,
     );
     await screen.findByRole("option", { name: "Repo C" });
-    const rootA = screen.getByRole("treeitem", { name: "Repo A" });
-    const rootB = screen.getByRole("treeitem", { name: "Repo B" });
+    const rootA = screen.getByRole("button", { name: "Repo A /repo-a" });
+    const rootB = screen.getByRole("button", { name: "Repo B /repo-b" });
 
     expect(rootA).toHaveAttribute("tabindex", "0");
     expect(rootB).toHaveAttribute("tabindex", "-1");
@@ -242,8 +286,8 @@ describe("MultiRootFilesWidget", () => {
     const headers = Array.from(
       container.querySelectorAll<HTMLButtonElement>("button[data-root-group-header]"),
     );
-    const rootA = screen.getByRole("treeitem", { name: "Repo A" });
-    const rootB = screen.getByRole("treeitem", { name: "Repo B" });
+    const rootA = screen.getByRole("button", { name: "Repo A /repo-a" });
+    const rootB = screen.getByRole("button", { name: "Repo B /repo-b" });
     const rootBHeader = headers[1]!;
 
     rootBHeader.focus();
@@ -292,8 +336,8 @@ describe("MultiRootFilesWidget", () => {
       </I18nProvider>,
     );
     await screen.findByRole("option", { name: "Repo C" });
-    const rootA = screen.getByRole("treeitem", { name: "Repo A" });
-    const rootB = screen.getByRole("treeitem", { name: "Repo B" });
+    const rootA = screen.getByRole("button", { name: "Repo A /repo-a" });
+    const rootB = screen.getByRole("button", { name: "Repo B /repo-b" });
     const next = {
       ...current,
       revision: current.revision + 1,

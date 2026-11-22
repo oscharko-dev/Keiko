@@ -1319,12 +1319,16 @@ describe("KeikoCodeEditor — diagnostic overview markers", () => {
     await flushMount();
 
     const overview = await screen.findByTestId("keiko-editor-diagnostic-overview");
-    expect(overview).toHaveStyle({
-      right: "0px",
-      width: "8px",
-      pointerEvents: "none",
-      zIndex: "var(--z-tooltip)",
-    });
+    expect(overview).toHaveStyle({ right: "0px", width: "8px", pointerEvents: "none" });
+    // The overview stacks through the design token. jsdom 31 resolves a custom property in computed
+    // style like a browser (#4517), so the authored declaration is pinned and its resolution proven.
+    expect(overview.style.zIndex).toBe("var(--z-tooltip)");
+    document.documentElement.style.setProperty("--z-tooltip", "40");
+    try {
+      expect(getComputedStyle(overview).zIndex).toBe("40");
+    } finally {
+      document.documentElement.style.removeProperty("--z-tooltip");
+    }
     await waitFor(() => {
       expect(
         screen.getByRole("button", { name: /error diagnostic on line 2 .* type error/i }),

@@ -614,6 +614,7 @@ function useAddressedRevealFile(
   return resolved;
 }
 
+/** @public Used through `vi.importActual` in SelectionAwareWorkspaceHosts.test.tsx. */
 export function buildEditorWorkspacePatch(
   nextRoot: string,
   nextLayout: EditorLayoutStateV2,

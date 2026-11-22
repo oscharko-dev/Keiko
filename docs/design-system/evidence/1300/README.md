@@ -467,9 +467,31 @@ unchanged. The 56 recaptured PNGs were committed as produced, and representative
 inspected without a visible difference. No producer assertion, tolerance, disposition, fixture or
 budget changed. These remain synthetic fixture proofs.
 
+## Held-update refresh: Mermaid 12, axe-core 4.14, jsdom 31, PDF.js 6.5 — 2026-11-22
+
+This change takes the updates #4514 held: Mermaid 12.3.0, axe-core 4.14.0, jsdom 31, entities 9,
+knip 6.45.1 and PDF.js 6.5.438 (#4378, #4379, #4517, #4525, #4518). Playwright stays on 1.64.1
+(#4524). All four original producers were rerun from `f99e9382a1ef8369396092c3222475a23137b208`
+in the isolated Linux arm64 gates container with Node 26.13.1, npm 11.20.0 and the locked
+Playwright 1.64.1 Chromium.
+
+One fixture changed, not a disposition: axe-core 4.14 reports `label-content-name-mismatch` as
+incomplete when an icon-only button's visible text is a single symbol ("×", "‹", "›"), even when the
+symbol is `aria-hidden`. The accessibility proof's three icon-only controls now draw their icon as an
+`aria-hidden` SVG, as the product's icon buttons do. No rule, threshold, tolerance or budget changed.
+
+Component fidelity passed all 427 probes with zero gated or recorded differences and no missing
+selectors. Editor fidelity passed 160 gated probes and all 14 reference captures with no capture
+errors; its previously documented accent and reference-only differences remain recorded. The seven
+accessibility modes reported zero serious or critical violations and zero unresolved incomplete
+findings. All 108 browser captures were written without page errors. The 60 recaptured PNGs were
+committed as produced. These remain synthetic fixture proofs.
+
 ## PR #4523 acceptance provisioning script — 2026-11-22
 
 The Coding acceptance task (#4492) adds the `provision:acceptance-maven` script to the root
 `package.json`, whose digest these four proofs bind. Only that input digest was updated in the
 proofs; the producers were not rerun, because no stylesheet, fixture, token, component or dependency
 changed and the captures bind nothing but those source bytes. No gate, fixture or rule was changed.
+After the merge with the held-update refresh above, the proofs bind the digest of the merged
+`package.json`, which carries both changes.

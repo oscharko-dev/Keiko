@@ -46,11 +46,6 @@ import { useKnowledgeCatalog } from "../../knowledge-catalog";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export interface ConnectorPickerCfg {
-  readonly selectedKind?: string;
-  readonly selectedId?: string;
-}
-
 export interface ConnectorPickerWidgetProps {
   /** Current cfg from the window (may be undefined on first render). */
   readonly selectedKind?: string | undefined;

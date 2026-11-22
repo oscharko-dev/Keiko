@@ -234,24 +234,33 @@ describe("a routine fact needs no approval (#4206)", () => {
 const RANDOM_IDENTIFIER_RE =
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|\b(?=\d*[a-f])[0-9a-f]{12,}\b/gu;
 
-// A wall-clock value in milliseconds, by the name of its field (`occurredAt`, `recordedAt`, `ts`).
-// Counts and sequence numbers stay searchable; only a clock spells a refused number by chance.
-const CLOCK_VALUE_RE = /"(\w*At|ts|timestamp)":\d+/gu;
+// Clock readings and durations are numbers a wall clock produces ("occurredAt":1795330471122 spells
+// "4711", #4526). Only a JSON number under a clock-shaped key is removed; customer words always
+// arrive as strings, so a leaked "4711" inside any string value still fails the match.
+const CLOCK_FIELD_RE = /"(?:[A-Za-z]*At|[A-Za-z]*Ms|ts|timestamp|seq|pid)":-?\d+(?:\.\d+)?/gu;
 
 function withoutRandomIdentifiers(evidence: string): string {
-  return evidence.replace(RANDOM_IDENTIFIER_RE, "<id>").replace(CLOCK_VALUE_RE, '"$1":"<clock>"');
+  return evidence.replace(CLOCK_FIELD_RE, '"<clock>":0').replace(RANDOM_IDENTIFIER_RE, "<id>");
 }
 
-// #4526: the refusal test below searches the evidence for "4711". A wall-clock `occurredAt` in
-// milliseconds spelled it by chance (1795330471122) and failed the test with nothing leaked.
-describe("evidence searched for refused words (#4526)", () => {
-  it("masks a clock value that spells a refused number and keeps a real leak searchable", () => {
-    const byChance = JSON.stringify({ occurredAt: 1795330471122, sequence: 2, count: 1 });
-    expect(withoutRandomIdentifiers(byChance)).toBe(
-      '{"occurredAt":"<clock>","sequence":2,"count":1}',
-    );
-    const leaked = JSON.stringify({ occurredAt: 1795330400000, detail: "Kundennummer 4711-0815" });
-    expect(withoutRandomIdentifiers(leaked)).toContain("Kundennummer 4711-0815");
+describe("the refusal evidence filter (#4526)", () => {
+  const leak = /example\.com|DE89|4711|1234 5678|medication/u;
+
+  it("ignores a clock reading that spells a refused number by chance", () => {
+    const evidence = JSON.stringify({ occurredAt: 1795330471122, durationMs: 4711, seq: 47110 });
+    expect(evidence).toMatch(leak);
+    expect(withoutRandomIdentifiers(evidence)).not.toMatch(leak);
+  });
+
+  it("still finds a refused number that leaked into a string, even beside a clock field", () => {
+    for (const evidence of [
+      JSON.stringify({ occurredAt: 1, summary: "card ends 4711" }),
+      JSON.stringify({ occurredAt: "4711" }),
+      JSON.stringify({ reason: "pid 4711" }),
+      JSON.stringify({ count: 4711 }),
+    ]) {
+      expect(withoutRandomIdentifiers(evidence)).toMatch(leak);
+    }
   });
 });
 
@@ -287,10 +296,9 @@ describe("refusals are mode-independent and visible (#4206)", () => {
         const lines = JSON.stringify(sink.events);
         for (const evidence of [ledger, lines]) {
           expect(evidence).not.toContain(sentence);
-          // Random event ids, hex digests and wall-clock values may spell "4711" by chance
-          // ("…-475782484711", "occurredAt":1795330471122); they carry no content, so only the
-          // evidence without them is searched for the refused words. Any other run of digits,
-          // a count or a sequence number included, stays searchable.
+          // Random event ids and hex digests may spell "4711" by chance ("…-475782484711"); they
+          // carry no content, so only the evidence without them is searched for the refused words.
+          // A run of digits alone is never treated as an id.
           expect(withoutRandomIdentifiers(evidence)).not.toMatch(
             /example\.com|DE89|4711|1234 5678|medication/u,
           );

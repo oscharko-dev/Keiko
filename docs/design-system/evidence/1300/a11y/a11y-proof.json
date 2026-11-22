@@ -1,7 +1,7 @@
 {
   "issue": 1300,
   "epic": 1290,
-  "tool": "axe-core 4.12.1",
+  "tool": "axe-core 4.14.0",
   "sourceFiles": [
     {
       "path": "design-system/keiko-ai.css",
@@ -41,7 +41,7 @@
     },
     {
       "path": "docs/design-system/evidence/1300/a11y/axe-proof.mjs",
-      "sha256": "f03a4e24ff464eee950efe4171361fa2513f2eebf41e127e37d7e8920ff54f47"
+      "sha256": "3e8c8e918e47f3bb8745abca009440f42f184db20bd10f265939627fa8dc2f06"
     },
     {
       "path": "docs/design-system/evidence/1300/browser/capture.mjs",
@@ -65,11 +65,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "2d43e7df37582b6714fdfa8a250325ff1fe39ddc36c28a6972f9e2737b02c8d4"
+      "sha256": "47c216f31e8ad9144b05a1de50af2c41b48e60f292b74ffd58489be563cdab1d"
     },
     {
       "path": "package.json",
-      "sha256": "bc8f81ba59d3609a8c529ac3229ba374daa8429d30a14e2522868ed2a2e33247"
+      "sha256": "ac0ed52a3fb17749fe5f2fed05b20c190eb726a18513c5f2e5d3835a5906ff2c"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -81,7 +81,7 @@
     },
     {
       "path": "packages/keiko-ui/package.json",
-      "sha256": "0f0ab14c4fa299e07a46ab4b026b716de13e0b0a814fc7b3b58d1f9d81c74d1f"
+      "sha256": "4473c2381eddeea01fa6fb76d086f14c2044cb9ccb496fb0346b6b998630955e"
     },
     {
       "path": "packages/keiko-ui/read-stylesheet.mjs",
@@ -122,8 +122,8 @@
   ],
   "postCssSha256": "2d5a5e54e208fcf54bfdb3e3612f38403b4207f5baf526c6a918829991b9616b",
   "run": {
-    "generatedAt": "2026-11-22T07:09:09.288Z",
-    "repoHeadSha": "88f98466a0dc38f79796fc4a3506e4831451d89f"
+    "generatedAt": "2026-11-22T11:21:42.540Z",
+    "repoHeadSha": "f99e9382a1ef8369396092c3222475a23137b208"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
   "coverage": "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",
@@ -884,7 +884,7 @@
     "01-dark": {
       "seriousCriticalCount": 0,
       "violationCount": 0,
-      "passCount": 40,
+      "passCount": 41,
       "incompleteCount": 1,
       "passRules": [
         {
@@ -995,7 +995,7 @@
             "RGAAv4",
             "RGAA-10.8.1"
           ],
-          "nodes": 10,
+          "nodes": 13,
           "targets": [
             ".ic",
             ".n",
@@ -1371,6 +1371,24 @@
           ]
         },
         {
+          "id": "label-content-name-mismatch",
+          "impact": null,
+          "tags": [
+            "cat.semantics",
+            "wcag21a",
+            "wcag253",
+            "EN-301-549",
+            "EN-9.2.5.3",
+            "RGAAv4",
+            "RGAA-6.1.5"
+          ],
+          "nodes": 2,
+          "targets": [
+            "button[aria-label=\"Page 1\"]",
+            "button[aria-label=\"Page 2\"]"
+          ]
+        },
+        {
           "id": "label-title-only",
           "impact": null,
           "tags": [
@@ -1636,7 +1654,7 @@
             "RGAAv4",
             "RGAA-3.2.1"
           ],
-          "nodes": 6,
+          "nodes": 5,
           "targets": [
             ".ic",
             ".bx",
@@ -1650,7 +1668,7 @@
     "02-light": {
       "seriousCriticalCount": 0,
       "violationCount": 0,
-      "passCount": 40,
+      "passCount": 41,
       "incompleteCount": 1,
       "passRules": [
         {
@@ -1761,7 +1779,7 @@
             "RGAAv4",
             "RGAA-10.8.1"
           ],
-          "nodes": 10,
+          "nodes": 13,
           "targets": [
             ".ic",
             ".n",
@@ -2137,6 +2155,24 @@
           ]
         },
         {
+          "id": "label-content-name-mismatch",
+          "impact": null,
+          "tags": [
+            "cat.semantics",
+            "wcag21a",
+            "wcag253",
+            "EN-301-549",
+            "EN-9.2.5.3",
+            "RGAAv4",
+            "RGAA-6.1.5"
+          ],
+          "nodes": 2,
+          "targets": [
+            "button[aria-label=\"Page 1\"]",
+            "button[aria-label=\"Page 2\"]"
+          ]
+        },
+        {
           "id": "label-title-only",
           "impact": null,
           "tags": [
@@ -2402,7 +2438,7 @@
             "RGAAv4",
             "RGAA-3.2.1"
           ],
-          "nodes": 6,
+          "nodes": 5,
           "targets": [
             ".ic",
             ".bx",
@@ -2416,7 +2452,7 @@
     "03-dark-hc": {
       "seriousCriticalCount": 0,
       "violationCount": 0,
-      "passCount": 40,
+      "passCount": 41,
       "incompleteCount": 1,
       "passRules": [
         {
@@ -2527,7 +2563,7 @@
             "RGAAv4",
             "RGAA-10.8.1"
           ],
-          "nodes": 10,
+          "nodes": 13,
           "targets": [
             ".ic",
             ".n",
@@ -2903,6 +2939,24 @@
           ]
         },
         {
+          "id": "label-content-name-mismatch",
+          "impact": null,
+          "tags": [
+            "cat.semantics",
+            "wcag21a",
+            "wcag253",
+            "EN-301-549",
+            "EN-9.2.5.3",
+            "RGAAv4",
+            "RGAA-6.1.5"
+          ],
+          "nodes": 2,
+          "targets": [
+            "button[aria-label=\"Page 1\"]",
+            "button[aria-label=\"Page 2\"]"
+          ]
+        },
+        {
           "id": "label-title-only",
           "impact": null,
           "tags": [
@@ -3168,7 +3222,7 @@
             "RGAAv4",
             "RGAA-3.2.1"
           ],
-          "nodes": 6,
+          "nodes": 5,
           "targets": [
             ".ic",
             ".bx",
@@ -3182,7 +3236,7 @@
     "04-light-hc": {
       "seriousCriticalCount": 0,
       "violationCount": 0,
-      "passCount": 40,
+      "passCount": 41,
       "incompleteCount": 1,
       "passRules": [
         {
@@ -3293,7 +3347,7 @@
             "RGAAv4",
             "RGAA-10.8.1"
           ],
-          "nodes": 10,
+          "nodes": 13,
           "targets": [
             ".ic",
             ".n",
@@ -3669,6 +3723,24 @@
           ]
         },
         {
+          "id": "label-content-name-mismatch",
+          "impact": null,
+          "tags": [
+            "cat.semantics",
+            "wcag21a",
+            "wcag253",
+            "EN-301-549",
+            "EN-9.2.5.3",
+            "RGAAv4",
+            "RGAA-6.1.5"
+          ],
+          "nodes": 2,
+          "targets": [
+            "button[aria-label=\"Page 1\"]",
+            "button[aria-label=\"Page 2\"]"
+          ]
+        },
+        {
           "id": "label-title-only",
           "impact": null,
           "tags": [
@@ -3934,7 +4006,7 @@
             "RGAAv4",
             "RGAA-3.2.1"
           ],
-          "nodes": 6,
+          "nodes": 5,
           "targets": [
             ".ic",
             ".bx",
@@ -3948,7 +4020,7 @@
     "05-prefers-contrast": {
       "seriousCriticalCount": 0,
       "violationCount": 0,
-      "passCount": 40,
+      "passCount": 41,
       "incompleteCount": 1,
       "passRules": [
         {
@@ -4059,7 +4131,7 @@
             "RGAAv4",
             "RGAA-10.8.1"
           ],
-          "nodes": 10,
+          "nodes": 13,
           "targets": [
             ".ic",
             ".n",
@@ -4435,6 +4507,24 @@
           ]
         },
         {
+          "id": "label-content-name-mismatch",
+          "impact": null,
+          "tags": [
+            "cat.semantics",
+            "wcag21a",
+            "wcag253",
+            "EN-301-549",
+            "EN-9.2.5.3",
+            "RGAAv4",
+            "RGAA-6.1.5"
+          ],
+          "nodes": 2,
+          "targets": [
+            "button[aria-label=\"Page 1\"]",
+            "button[aria-label=\"Page 2\"]"
+          ]
+        },
+        {
           "id": "label-title-only",
           "impact": null,
           "tags": [
@@ -4700,7 +4790,7 @@
             "RGAAv4",
             "RGAA-3.2.1"
           ],
-          "nodes": 6,
+          "nodes": 5,
           "targets": [
             ".ic",
             ".bx",
@@ -4714,7 +4804,7 @@
     "06-forced-colors": {
       "seriousCriticalCount": 0,
       "violationCount": 0,
-      "passCount": 40,
+      "passCount": 41,
       "incompleteCount": 1,
       "passRules": [
         {
@@ -4825,7 +4915,7 @@
             "RGAAv4",
             "RGAA-10.8.1"
           ],
-          "nodes": 10,
+          "nodes": 13,
           "targets": [
             ".ic",
             ".n",
@@ -5201,6 +5291,24 @@
           ]
         },
         {
+          "id": "label-content-name-mismatch",
+          "impact": null,
+          "tags": [
+            "cat.semantics",
+            "wcag21a",
+            "wcag253",
+            "EN-301-549",
+            "EN-9.2.5.3",
+            "RGAAv4",
+            "RGAA-6.1.5"
+          ],
+          "nodes": 2,
+          "targets": [
+            "button[aria-label=\"Page 1\"]",
+            "button[aria-label=\"Page 2\"]"
+          ]
+        },
+        {
           "id": "label-title-only",
           "impact": null,
           "tags": [
@@ -5466,7 +5574,7 @@
             "RGAAv4",
             "RGAA-3.2.1"
           ],
-          "nodes": 6,
+          "nodes": 5,
           "targets": [
             ".ic",
             ".bx",
@@ -5480,7 +5588,7 @@
     "07-reduced-motion": {
       "seriousCriticalCount": 0,
       "violationCount": 0,
-      "passCount": 40,
+      "passCount": 41,
       "incompleteCount": 1,
       "passRules": [
         {
@@ -5591,7 +5699,7 @@
             "RGAAv4",
             "RGAA-10.8.1"
           ],
-          "nodes": 10,
+          "nodes": 13,
           "targets": [
             ".ic",
             ".n",
@@ -5967,6 +6075,24 @@
           ]
         },
         {
+          "id": "label-content-name-mismatch",
+          "impact": null,
+          "tags": [
+            "cat.semantics",
+            "wcag21a",
+            "wcag253",
+            "EN-301-549",
+            "EN-9.2.5.3",
+            "RGAAv4",
+            "RGAA-6.1.5"
+          ],
+          "nodes": 2,
+          "targets": [
+            "button[aria-label=\"Page 1\"]",
+            "button[aria-label=\"Page 2\"]"
+          ]
+        },
+        {
           "id": "label-title-only",
           "impact": null,
           "tags": [
@@ -6232,7 +6358,7 @@
             "RGAAv4",
             "RGAA-3.2.1"
           ],
-          "nodes": 6,
+          "nodes": 5,
           "targets": [
             ".ic",
             ".bx",

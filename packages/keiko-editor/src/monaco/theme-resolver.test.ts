@@ -269,19 +269,31 @@ describe("resolveEditorThemeTokensFromDom against real jsdom (KEIKO-0528, KEIKO-
     }
   });
 
-  it("throws via the two-sentinel guard when jsdom cannot resolve a --ed-* token to a concrete colour", () => {
-    // jsdom's computed style never resolves var(...) to a concrete colour (unlike a real browser),
-    // so every probe read below stays the literal "var(--token)" string. Seeding the tokens on
-    // documentElement satisfies resolveEditorThemeTokens' presence check (the raw custom property is
-    // non-empty), so resolution reaches the real canvas normaliser in vitest.setup.ts's shared
-    // facade, whose fillStyle accept/reject semantics silently reject "var(--token)" (it matches
-    // none of hex/rgb/oklch/lab) and trip the two-sentinel guard — exercising the exact guard that,
-    // before the facade had fillStyle accept/reject semantics, no jsdom-backed test but
-    // theme-resolver.test.ts's own hand-rolled mock could reach.
+  // KEIKO-0528/KEIKO-0581 pin, relocated for jsdom 31 (#4517), never relaxed. Up to jsdom 30 the
+  // probe's computed colour stayed the literal "var(--token)", which the shared canvas facade in
+  // vitest.setup.ts rejected. jsdom 31 resolves custom properties in computed style the way a browser
+  // does, so the same real probe path is now driven with a token whose COMPUTED form the canvas cannot
+  // parse: `color-mix()` computes to `color(srgb …)`, which the facade's accept/reject semantics
+  // silently reject, so the two distinct reset sentinels survive and the guard must throw instead of
+  // returning a black fallback.
+  it("throws via the two-sentinel guard when a --ed-* token's computed colour cannot be parsed", () => {
+    for (const tokenName of EDITOR_THEME_TOKEN_NAMES) {
+      document.documentElement.style.setProperty(
+        tokenName,
+        "color-mix(in srgb, #112233 50%, #445566)",
+      );
+    }
+    expect(() => resolveEditorThemeTokensFromDom(document.body)).toThrow(/could not parse/);
+  });
+
+  it("resolves every --ed-* token through the real probe to its concrete colour", () => {
     for (const tokenName of EDITOR_THEME_TOKEN_NAMES) {
       document.documentElement.style.setProperty(tokenName, "#112233");
     }
-    expect(() => resolveEditorThemeTokensFromDom(document.body)).toThrow(/could not parse/);
+    const resolved = resolveEditorThemeTokensFromDom(document.body);
+    for (const tokenName of EDITOR_THEME_TOKEN_NAMES) {
+      expect(resolved[tokenName], tokenName).toBe("#112233");
+    }
   });
 });
 

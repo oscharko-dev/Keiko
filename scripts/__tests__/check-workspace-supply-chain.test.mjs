@@ -242,6 +242,41 @@ describe("version-bound component license decisions", () => {
     ).not.toEqual([]);
   });
 
+  // #4378, owner decision of 2026-11-22: elkjs is taken under its EPL-2.0 option only.
+  it("accepts the EPL-2.0 option of the reviewed elkjs artifact and nothing beyond it", () => {
+    const elk = { name: "elkjs", version: "0.12.1", purl: "pkg:npm/elkjs@0.12.1" };
+    const declared = [{ expression: "EPL-2.0 OR GPL-3.0-or-later" }];
+    expect(offendersForComponent({ ...elk, licenses: declared })).toEqual([]);
+    for (const drift of [
+      { licenses: [{ license: { id: "GPL-3.0-or-later" } }] },
+      { licenses: [{ expression: "EPL-2.0 AND GPL-3.0-or-later" }] },
+      { version: "0.13.0", purl: "pkg:npm/elkjs@0.13.0", licenses: declared },
+      { name: "other", purl: "pkg:npm/other@0.12.1", licenses: declared },
+    ]) {
+      expect(offendersForComponent({ ...elk, ...drift }), JSON.stringify(drift)).not.toEqual([]);
+    }
+    expect(
+      offendersForComponent({
+        name: "other",
+        version: "1.0.0",
+        purl: "pkg:npm/other@1.0.0",
+        licenses: [{ license: { id: "EPL-2.0" } }],
+      }),
+    ).not.toEqual([]);
+  });
+
+  // axe-core is a development dependency only: its MPL-2.0 is never admitted in a shipped SBOM.
+  it("never admits the development-only axe-core decision in a shipped component", () => {
+    expect(
+      offendersForComponent({
+        name: "axe-core",
+        version: "4.14.0",
+        purl: "pkg:npm/axe-core@4.14.0",
+        licenses: [{ license: { id: "MPL-2.0" } }],
+      }),
+    ).not.toEqual([]);
+  });
+
   it("still chooses the existing BSD option of json-schema without a local exception", () => {
     expect(
       offendersForComponent({
@@ -301,19 +336,44 @@ describe("reviewed dependency license preflight", () => {
     }
   });
 
-  it.each(["khroma", "robust-predicates"])("rejects missing %s metadata", (name) => {
-    const locks = canonicalLicenseLocks();
-    Reflect.deleteProperty(locks[0].packages, `node_modules/${name}`);
-    expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
+  it("rejects artifact, declaration and scope drift for elkjs and axe-core", () => {
+    for (const [name, drift] of [
+      ["elkjs", { version: "0.13.0" }],
+      ["elkjs", { license: "GPL-3.0-or-later" }],
+      ["elkjs", { integrity: `sha512-${Buffer.alloc(64, 9).toString("base64")}` }],
+      ["axe-core", { version: "4.14.1" }],
+      ["axe-core", { license: "MPL-2.0 AND GPL-3.0-only" }],
+      ["axe-core", { dev: undefined }],
+      ["axe-core", { dev: false }],
+    ]) {
+      const locks = canonicalLicenseLocks();
+      Object.assign(locks[0].packages[`node_modules/${name}`], drift);
+      expect(
+        reviewedDependencyLicenseFailures(locks),
+        `${name} ${JSON.stringify(drift)}`,
+      ).not.toEqual([]);
+    }
   });
 
-  it.each(["khroma", "robust-predicates"])("rejects npm aliases of %s", (name) => {
-    const locks = canonicalLicenseLocks();
-    const entry = locks[0].packages[`node_modules/${name}`];
-    Reflect.deleteProperty(locks[0].packages, `node_modules/${name}`);
-    locks[0].packages["node_modules/alias"] = { ...entry, name };
-    expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
-  });
+  it.each(["khroma", "robust-predicates", "elkjs", "axe-core"])(
+    "rejects missing %s metadata",
+    (name) => {
+      const locks = canonicalLicenseLocks();
+      Reflect.deleteProperty(locks[0].packages, `node_modules/${name}`);
+      expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
+    },
+  );
+
+  it.each(["khroma", "robust-predicates", "elkjs", "axe-core"])(
+    "rejects npm aliases of %s",
+    (name) => {
+      const locks = canonicalLicenseLocks();
+      const entry = locks[0].packages[`node_modules/${name}`];
+      Reflect.deleteProperty(locks[0].packages, `node_modules/${name}`);
+      locks[0].packages["node_modules/alias"] = { ...entry, name };
+      expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
+    },
+  );
 
   it("inspects nested root records in addition to the top-level instance", () => {
     const locks = canonicalLicenseLocks();
@@ -364,7 +424,9 @@ describe("required GitHub license exclusion preflight", () => {
     const locks = canonicalLicenseLocks();
     const result = runLicensePreflight(locks);
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe("pkg:npm/khroma, pkg:npm/robust-predicates");
+    expect(result.stdout.trim()).toBe(
+      "pkg:npm/khroma, pkg:npm/robust-predicates, pkg:npm/elkjs, pkg:npm/axe-core",
+    );
     expect(result.stderr).toBe("");
     locks[0].packages["node_modules/khroma"].version = "99.0.0";
     const refused = runLicensePreflight(locks);

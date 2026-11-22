@@ -39,7 +39,9 @@ function git(args) {
 }
 
 // Accessible component union. Every interactive control has an accessible name; decorative glyphs are
-// aria-hidden; live regions and ARIA contracts match the DS 0.4.0 reference components.
+// aria-hidden, and an icon-only control draws its icon as an aria-hidden SVG: axe 4.14 cannot judge
+// whether a visible text symbol such as "›" matches its aria-label (label-content-name-mismatch);
+// live regions and ARIA contracts match the DS 0.4.0 reference components.
 const BODY = `
 <main>
 <h1 class="sr-only">Design System 0.4.0 accessibility proof</h1>
@@ -66,12 +68,12 @@ const BODY = `
   <label class="c-form-row"><span>Opacity</span><div class="c-slider"><input type="range" min="0" max="100" value="60" aria-label="Opacity"/></div></label>
   <div class="c-combo"><div class="c-combo-input"><input placeholder="Search" aria-label="Model" role="combobox" aria-expanded="true" aria-controls="ev-list" aria-autocomplete="list"/><span class="chev" aria-hidden="true">▾</span></div>
     <div class="c-combo-list" id="ev-list" role="listbox" aria-label="Models"><div class="c-combo-opt" role="option" aria-selected="true">gpt-oss-120b</div><div class="c-combo-opt" role="option">claude-sonnet</div></div></div>
-  <div class="c-tagfield"><span class="c-tag">backend<button aria-label="Remove backend">×</button></span><input placeholder="Add" aria-label="Tags"/></div>
+  <div class="c-tagfield"><span class="c-tag">backend<button aria-label="Remove backend"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="12" height="12"><path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></span><input placeholder="Add" aria-label="Tags"/></div>
 </section>
 <section aria-label="Navigation">
   <nav class="c-crumbs" aria-label="Breadcrumb"><a href="#a">workspace</a><span class="sep" aria-hidden="true">/</span><a href="#b">src</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">app.ts</span></nav>
   <div class="c-utabs" role="tablist" aria-label="Evidence tabs"><button class="c-utab" role="tab" aria-selected="true">Overview</button><button class="c-utab" role="tab" aria-selected="false" tabindex="-1">Runs</button></div>
-  <nav class="c-pager" aria-label="Pagination"><button aria-label="Previous page">‹</button><button aria-current="page" aria-label="Page 1">1</button><button aria-label="Page 2">2</button><button aria-label="Next page">›</button></nav>
+  <nav class="c-pager" aria-label="Pagination"><button aria-label="Previous page"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="12" height="12"><path d="M10 3 5 8l5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><button aria-current="page" aria-label="Page 1">1</button><button aria-label="Page 2">2</button><button aria-label="Next page"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" width="12" height="12"><path d="M6 3l5 5-5 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></nav>
   <div class="c-steps"><div class="c-step done"><span class="dot" aria-hidden="true">✓</span><span class="lb">Connect (done)</span></div><div class="c-step active"><span class="dot" aria-hidden="true">2</span><span class="lb">Configure (current)</span></div></div>
 </section>
 </main>`;

@@ -130,6 +130,10 @@ function mermaidConfig(dark: boolean): MermaidConfig {
     suppressErrorRendering: true,
     deterministicIds: true,
     theme: dark ? "dark" : "neutral",
+    // Mermaid 12 defaults to the ELK layout and the `neo` look (#4378). Keiko keeps the layout and
+    // look its SVG allowlist and the design system were proven against; ELK is never loaded.
+    layout: "dagre",
+    look: "classic",
   };
 }
 

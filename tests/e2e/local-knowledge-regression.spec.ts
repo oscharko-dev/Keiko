@@ -1208,7 +1208,9 @@ async function uiAddAndDragPayload(page: Page, capsuleName: string): Promise<voi
   // before the click has landed, and it fails loudly if the add ever stops adding.
   const connectorWindows = page.locator('.window[data-window-id^="connector-"]');
   const connectorWindowsBefore = await connectorWindows.count();
-  await page.getByRole("button", { name: `Add Knowledge Pod ${capsuleName} to workspace` }).click();
+  await page
+    .getByRole("button", { name: `Add to workspace: Knowledge Pod ${capsuleName}` })
+    .click();
   await expect(connectorWindows).toHaveCount(connectorWindowsBefore + 1);
   const payload = await page
     .getByRole("button", { name: `Drag Knowledge Pod ${capsuleName} to the workspace` })
@@ -1510,7 +1512,7 @@ test("keeps document selection and indexing bound to the newly created Knowledge
     await expect(currentRow.getByRole("button", { name: /start indexing/u })).toHaveCount(0);
     await expect(
       currentRow.getByRole("button", {
-        name: `Add Knowledge Pod ${current.displayName} to workspace`,
+        name: `Add to workspace: Knowledge Pod ${current.displayName}`,
       }),
     ).toBeEnabled();
   } finally {
