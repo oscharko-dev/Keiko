@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "62697c21956499a4160feb4d746362c2983a9b1090879a8e0a641d1a01c5263f",
+    "catalogDigest": "f7ebd51931a3a0a93bdd4e2422d51b702867a79e6fc5d8749ea3bbdaeb6bfaa2",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -13257,8 +13257,8 @@
         "failureClasses": ["coding-runtime-mcp-relay"],
         "proofIds": ["coding-runtime.mcp-relay.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:239",
-        "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:329"]
+        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:185",
+        "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:275"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -15683,6 +15683,176 @@
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryItems.ts:106",
         "emitterSites": [
           "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryItems.ts:720"
+        ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-runtime.repository-relay",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "repository-relay.repositoryRelayActivity.recordRepositoryRelay",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "action": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["bind", "request", "release"]
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["bound", "refused", "failed", "settled"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "origin-not-allowed",
+              "capability-missing",
+              "capability-invalid",
+              "binding-revoked",
+              "method-not-allowed",
+              "query-refused",
+              "path-invalid",
+              "path-too-long",
+              "path-unsupported",
+              "budget-exhausted",
+              "redirect-refused",
+              "response-too-large",
+              "upstream-failed",
+              "upstream-rejected",
+              "content-encoding-refused",
+              "packument-invalid",
+              "credential-in-response",
+              "credential-in-response-header",
+              "credential-spelling-unbounded",
+              "url-unsupported",
+              "url-userinfo",
+              "url-own-origin",
+              "secret-invalid",
+              "secret-too-short",
+              "bindings-exhausted",
+              "run-aborted",
+              "relay-unavailable"
+            ]
+          },
+          "ecosystem": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["maven", "npm"]
+          },
+          "method": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["GET", "HEAD"]
+          },
+          "credentialKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["none", "basic", "bearer"]
+          },
+          "upstreamStatusClass": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["2xx", "3xx", "4xx", "5xx"]
+          },
+          "requestCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "relayedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "refusedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "failedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "cancelledCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "upstreamClientErrorCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "upstreamServerErrorCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "redirectCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "responseBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "safe-platform-class",
+            "required": false,
+            "maxLength": 512,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 128,
+            "maxItems": 5
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "diagnosticWhen": [
+          {
+            "field": "outcome",
+            "values": ["failed"]
+          }
+        ],
+        "failureClasses": ["coding-runtime-repository-relay"],
+        "proofIds": ["coding-runtime.repository-relay.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/repository-relay/repositoryRelayActivity.ts:61",
+        "emitterSites": [
+          "packages/keiko-server/src/repository-relay/repositoryRelayActivity.ts:163"
         ]
       },
       {
@@ -55459,6 +55629,34 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "coding-runtime-repository-relay",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": ["coding-runtime.repository-relay"],
+          "end": [],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": ["coding-runtime.repository-relay"],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["coding-runtime.repository-relay"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": ["coding-runtime.repository-relay"],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "error-kind",
+          "loss-state",
+          "safe-platform-class"
+        ],
+        "requiredFrameOperations": ["coding-runtime.repository-relay"],
+        "requiredCauseOperations": ["coding-runtime.repository-relay"]
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "coding-runtime-jira-pod",
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
@@ -64277,8 +64475,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 411,
-      "completeClassCount": 411,
+      "supportedClassCount": 412,
+      "completeClassCount": 412,
       "completeness": "complete",
       "classes": [
         {
@@ -81117,6 +81315,171 @@
                 "causeChain": true
               },
               "proofIds": ["coding-runtime.repository-items.admitted.emitted-line"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "coding-runtime-repository-relay",
+          "requirementContract": "coding-runtime-repository-relay",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["state"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": ["coding-runtime.repository-relay"],
+            "end": [],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "coding-runtime.repository-relay",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["coding-runtime.repository-relay"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "coding-runtime.repository-relay",
+              "owner": "keiko-server",
+              "category": "security",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "action",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "cancelledCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "causeChain",
+                  "type": "string-array",
+                  "dataClass": "error-kind",
+                  "required": false
+                },
+                {
+                  "name": "credentialKind",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "ecosystem",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "failedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "frames",
+                  "type": "string-array",
+                  "dataClass": "safe-platform-class",
+                  "required": false
+                },
+                {
+                  "name": "method",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "redirectCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "refusedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "relayedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "requestCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "responseBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "upstreamClientErrorCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "upstreamServerErrorCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "upstreamStatusClass",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "error-kind",
+                "loss-state",
+                "safe-platform-class"
+              ],
+              "frameCauseEvidence": {
+                "frames": true,
+                "causeChain": true
+              },
+              "proofIds": ["coding-runtime.repository-relay.emitted-line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -123397,7 +123760,7 @@
     {
       "op": "coding-runtime.composition.retired-setting",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:6548",
+      "site": "packages/keiko-server/src/deps.ts:6581",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -123622,7 +123985,7 @@
     {
       "op": "coding-runtime.mcp-relay",
       "category": "security",
-      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:242",
+      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:188",
       "package": "keiko-server"
     },
     {
@@ -123894,6 +124257,12 @@
       "op": "coding-runtime.repository-items.admitted",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/codingRuntimeRepositoryItems.ts:109",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.repository-relay",
+      "category": "security",
+      "site": "packages/keiko-server/src/repository-relay/repositoryRelayActivity.ts:64",
       "package": "keiko-server"
     },
     {
@@ -124799,7 +125168,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1720",
+      "site": "packages/keiko-server/src/deps.ts:1732",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -125884,7 +126253,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2558",
+      "site": "packages/keiko-server/src/deps.ts:2570",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126493,7 +126862,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4914",
+      "site": "packages/keiko-server/src/deps.ts:4928",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -126659,7 +127028,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3461",
+      "site": "packages/keiko-server/src/deps.ts:3473",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -127398,6 +127767,7 @@
     "coding-runtime.remote-skills.admitted",
     "coding-runtime.repository-instructions.context",
     "coding-runtime.repository-items.admitted",
+    "coding-runtime.repository-relay",
     "coding-runtime.repository-rerank",
     "coding-runtime.revert.applied",
     "coding-runtime.revert.dispatch-failed",
